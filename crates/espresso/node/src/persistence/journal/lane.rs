@@ -8,16 +8,105 @@
 use std::{
     io::{self, Read},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Instant,
 };
 
 use anyhow::Context;
+use hotshot_types::traits::metrics::{Gauge, Histogram, Metrics, NoMetrics};
 use parking_lot::Mutex;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
 use crate::persistence::journal::format::{
     self, Class, FrameHeader, Kind, Lsn, ScanEnd, SegmentHeader, Stream,
 };
+
+/// Per-stream journal metrics. A lane's writer thread starts recording into this before any real
+/// `Metrics` implementation exists (`enable_metrics` runs only after `Persistence::open` returns),
+/// so every field starts as the `NoMetrics` no-op and `install` swaps in the real thing later;
+/// every call site keeps the same `&LaneMetrics` handle across that swap.
+pub struct LaneMetrics {
+    batch_records: Mutex<Box<dyn Histogram>>,
+    batch_bytes: Mutex<Box<dyn Histogram>>,
+    fsync_seconds: Mutex<Box<dyn Histogram>>,
+    queue_bytes: Mutex<Box<dyn Gauge>>,
+    total_bytes: Mutex<Box<dyn Gauge>>,
+}
+
+impl LaneMetrics {
+    fn noop() -> Self {
+        Self {
+            batch_records: Mutex::new(Box::new(NoMetrics)),
+            batch_bytes: Mutex::new(Box::new(NoMetrics)),
+            fsync_seconds: Mutex::new(Box::new(NoMetrics)),
+            queue_bytes: Mutex::new(Box::new(NoMetrics)),
+            total_bytes: Mutex::new(Box::new(NoMetrics)),
+        }
+    }
+
+    /// Installs real histograms/gauges labelled `stream = "wal"|"data"`.
+    fn install(&self, metrics: &dyn Metrics, stream: Stream) {
+        let label = vec![stream.label().to_string()];
+        *self.batch_records.lock() = metrics
+            .histogram_family(
+                "journal_batch_records".to_string(),
+                vec!["stream".to_string()],
+            )
+            .create(label.clone());
+        *self.batch_bytes.lock() = metrics
+            .histogram_family(
+                "journal_batch_bytes".to_string(),
+                vec!["stream".to_string()],
+            )
+            .create(label.clone());
+        *self.fsync_seconds.lock() = metrics
+            .histogram_family(
+                "journal_fsync_seconds".to_string(),
+                vec!["stream".to_string()],
+            )
+            .create(label.clone());
+        *self.queue_bytes.lock() = metrics
+            .gauge_family(
+                "journal_queue_bytes".to_string(),
+                vec!["stream".to_string()],
+            )
+            .create(label.clone());
+        *self.total_bytes.lock() = metrics
+            .gauge_family("journal_bytes".to_string(), vec!["stream".to_string()])
+            .create(label);
+    }
+
+    fn record_batch(&self, records: usize, bytes: usize) {
+        self.batch_records.lock().add_point(records as f64);
+        self.batch_bytes.lock().add_point(bytes as f64);
+    }
+
+    fn record_fsync(&self, seconds: f64) {
+        self.fsync_seconds.lock().add_point(seconds);
+    }
+
+    fn set_queue_bytes(&self, bytes: u64) {
+        self.queue_bytes.lock().set(bytes as usize);
+    }
+
+    /// Total bytes on disk across every live segment of this stream; the caller (writer thread or
+    /// `Persistence::gc`) computes the sum from `SegmentSet`.
+    fn set_total_bytes(&self, bytes: u64) {
+        self.total_bytes.lock().set(bytes as usize);
+    }
+}
+
+/// Times `file.sync_data()` and records it into `metrics`, regardless of the outcome: an error is
+/// about to abort the process anyway, but the sample still belongs in the histogram.
+fn timed_sync<Fh: JournalFile>(file: &mut Fh, metrics: &LaneMetrics) -> io::Result<()> {
+    let start = Instant::now();
+    let result = file.sync_data();
+    metrics.record_fsync(start.elapsed().as_secs_f64());
+    result
+}
 
 /// Abstraction over the filesystem so tests can inject a crash model (`MemFs`).
 pub trait JournalFs: Send + Sync + 'static {
@@ -234,7 +323,9 @@ struct Write {
     _permit: Option<OwnedSemaphorePermit>,
 }
 
+#[derive(Clone)]
 pub struct Lane {
+    stream: Stream,
     tx: mpsc::UnboundedSender<Write>,
     /// Guards lsn allocation *and* the channel send together, so a data-stream caller racing
     /// another can't allocate lsn N, then lose the race to send before lsn N+1. Shared with the
@@ -243,6 +334,11 @@ pub struct Lane {
     alloc: Arc<Mutex<Lsn>>,
     durable: watch::Receiver<Lsn>,
     in_flight: Arc<Semaphore>,
+    /// Bytes enqueued (sent to the writer thread) but not yet picked up into a batch; mirrors
+    /// `journal_queue_bytes`. Shared with the writer thread, which subtracts a batch's bytes once
+    /// it drains them off the channel.
+    queue_bytes: Arc<AtomicU64>,
+    metrics: Arc<LaneMetrics>,
 }
 
 impl Lane {
@@ -259,6 +355,11 @@ impl Lane {
         let mut next = self.alloc.lock();
         let lsn = *next;
         *next += 1;
+        let queued = self
+            .queue_bytes
+            .fetch_add(body.len() as u64, Ordering::Relaxed)
+            + body.len() as u64;
+        self.metrics.set_queue_bytes(queued);
         // The writer thread may already have exited (process is aborting); a dropped receiver
         // just means this record never lands, which is moot since the process is on its way down.
         let _ = self.tx.send(Write {
@@ -270,6 +371,12 @@ impl Lane {
             _permit: permit,
         });
         lsn
+    }
+
+    /// Installs real metrics for this lane, replacing the no-op placeholders every writer-thread
+    /// call already holds a handle to.
+    pub fn install_metrics(&self, metrics: &dyn Metrics) {
+        self.metrics.install(metrics, self.stream);
     }
 
     /// Data-stream backpressure: blocks until `bytes` of the 128 MiB in-flight budget are free.
@@ -288,6 +395,11 @@ impl Lane {
             .await
             .context("journal writer thread exited before acking a durable write")?;
         Ok(())
+    }
+
+    /// Reports `journal_bytes`: the caller (`Persistence::gc`) sums `SegmentSet` after unlinking.
+    pub fn set_total_bytes(&self, bytes: u64) {
+        self.metrics.set_total_bytes(bytes);
     }
 }
 
@@ -315,6 +427,7 @@ fn open_new_segment<F: JournalFs>(
     seq: u64,
     first_lsn: Lsn,
     prev_max_view: u64,
+    metrics: &LaneMetrics,
 ) -> anyhow::Result<ActiveSegment<F::File>> {
     let path = segment_path(dir, seq);
     let mut file = fs
@@ -328,7 +441,7 @@ fn open_new_segment<F: JournalFs>(
     }
     .encode();
     file.write_all_at(0, &header)?;
-    file.sync_data()?;
+    timed_sync(&mut file, metrics)?;
     fs.sync_dir(dir)?;
     Ok(ActiveSegment {
         file,
@@ -696,12 +809,21 @@ pub fn spawn_lane<F: JournalFs>(
     segments: Arc<Mutex<SegmentSet>>,
 ) -> anyhow::Result<(Lane, std::thread::JoinHandle<()>)> {
     let (next_seq, next_lsn) = start;
+    let metrics = Arc::new(LaneMetrics::noop());
     let prev_max_view = segments
         .lock()
         .list(cfg.stream)
         .last()
         .map_or(0, |m| m.max_view);
-    let mut active = open_new_segment(&*fs, &dir, cfg.stream, next_seq, next_lsn, prev_max_view)?;
+    let mut active = open_new_segment(
+        &*fs,
+        &dir,
+        cfg.stream,
+        next_seq,
+        next_lsn,
+        prev_max_view,
+        &metrics,
+    )?;
 
     // The seed snapshot's lsn is consumed synchronously here, before `Lane` (and its lsn counter)
     // is handed to any caller, so there's no race with the writer thread's own send of it.
@@ -716,6 +838,7 @@ pub fn spawn_lane<F: JournalFs>(
     let (durable_tx, durable_rx) = watch::channel(active.last_lsn);
     let in_flight = Arc::new(Semaphore::new(cfg.in_flight_bytes));
     let alloc = Arc::new(Mutex::new(counter_start));
+    let queue_bytes = Arc::new(AtomicU64::new(0));
 
     if let Some(body) = seed {
         check_snapshot_size(cfg.stream, &body, cfg.max_snapshot_bytes);
@@ -728,10 +851,7 @@ pub fn spawn_lane<F: JournalFs>(
         active.offset += frame.len() as u64;
         active.last_lsn = next_lsn;
         active.snapshot_end = active.offset;
-        active
-            .file
-            .sync_data()
-            .context("fsyncing initial wal snapshot")?;
+        timed_sync(&mut active.file, &metrics).context("fsyncing initial wal snapshot")?;
         durable_tx.send(active.last_lsn).ok();
     }
 
@@ -753,8 +873,11 @@ pub fn spawn_lane<F: JournalFs>(
         hook,
         segments,
         alloc: alloc.clone(),
+        queue_bytes: queue_bytes.clone(),
+        metrics: metrics.clone(),
         frame_buf,
     };
+    let stream = writer.cfg.stream;
     let handle = std::thread::Builder::new()
         .name(format!("journal-{:?}", writer.cfg.stream).to_lowercase())
         .spawn(move || abort_on_panic(std::panic::AssertUnwindSafe(|| writer.run())))
@@ -762,10 +885,13 @@ pub fn spawn_lane<F: JournalFs>(
 
     Ok((
         Lane {
+            stream,
             tx,
             alloc,
             durable: durable_rx,
             in_flight,
+            queue_bytes,
+            metrics,
         },
         handle,
     ))
@@ -784,6 +910,9 @@ struct Writer<F: JournalFs> {
     segments: Arc<Mutex<SegmentSet>>,
     /// Shared with `Lane::enqueue`; see the field doc on `Lane::alloc`.
     alloc: Arc<Mutex<Lsn>>,
+    /// Shared with `Lane::enqueue`; see the field doc on `Lane::queue_bytes`.
+    queue_bytes: Arc<AtomicU64>,
+    metrics: Arc<LaneMetrics>,
     frame_buf: Vec<u8>,
 }
 
@@ -816,6 +945,11 @@ impl<F: JournalFs> Writer<F> {
                     Err(_) => break,
                 }
             }
+            self.metrics.record_batch(batch.len(), batch_bytes);
+            self.queue_bytes
+                .fetch_sub(batch_bytes as u64, Ordering::Relaxed);
+            self.metrics
+                .set_queue_bytes(self.queue_bytes.load(Ordering::Relaxed));
 
             self.frame_buf.clear();
             let mut durable_in_batch = false;
@@ -839,18 +973,19 @@ impl<F: JournalFs> Writer<F> {
             drop(batch);
 
             if durable_in_batch {
-                if let Err(err) = self.active.file.sync_data() {
+                if let Err(err) = timed_sync(&mut self.active.file, &self.metrics) {
                     tracing::error!(stream = ?self.cfg.stream, %err, "journal: fsync failed");
                     std::process::abort();
                 }
                 self.durable_tx.send(self.active.last_lsn).ok();
             }
 
-            self.segments.lock().update_active(
-                self.cfg.stream,
-                self.active.offset,
-                self.active.max_view,
-            );
+            let total_bytes = {
+                let mut segments = self.segments.lock();
+                segments.update_active(self.cfg.stream, self.active.offset, self.active.max_view);
+                segments.list(self.cfg.stream).iter().map(|m| m.bytes).sum()
+            };
+            self.metrics.set_total_bytes(total_bytes);
 
             let over_bytes = self.active.offset.saturating_sub(self.active.snapshot_end)
                 >= self.cfg.segment_bytes;
@@ -875,6 +1010,8 @@ impl<F: JournalFs> Writer<F> {
         let max_snapshot_bytes = self.cfg.max_snapshot_bytes;
 
         let mut drain_buf = Vec::new();
+        let mut drained_records = 0usize;
+        let mut drained_bytes = 0usize;
         let mut new_first_lsn = self.active.last_lsn + 1;
         let rx = &mut self.rx;
         let active = &mut self.active;
@@ -882,8 +1019,12 @@ impl<F: JournalFs> Writer<F> {
         let snapshot = self.hook.as_deref().map(|h| {
             h.snapshot_locked(&mut || {
                 drain_buf.clear();
+                drained_records = 0;
+                drained_bytes = 0;
                 while let Ok(w) = rx.try_recv() {
                     format::encode_frame(&mut drain_buf, w.lsn, w.view, w.kind, &w.body);
+                    drained_records += 1;
+                    drained_bytes += w.body.len();
                     apply_write_to_active(active, &w);
                 }
                 if !drain_buf.is_empty() {
@@ -900,8 +1041,15 @@ impl<F: JournalFs> Writer<F> {
                 *next += 1;
             })
         });
+        if drained_records > 0 {
+            self.metrics.record_batch(drained_records, drained_bytes);
+            self.queue_bytes
+                .fetch_sub(drained_bytes as u64, Ordering::Relaxed);
+            self.metrics
+                .set_queue_bytes(self.queue_bytes.load(Ordering::Relaxed));
+        }
 
-        if let Err(err) = active.file.sync_data() {
+        if let Err(err) = timed_sync(&mut active.file, &self.metrics) {
             tracing::error!(?stream, %err, "journal: roll fsync of old segment failed");
             std::process::abort();
         }
@@ -918,6 +1066,7 @@ impl<F: JournalFs> Writer<F> {
             new_seq,
             new_first_lsn,
             active.max_view,
+            &self.metrics,
         ) {
             Ok(seg) => seg,
             Err(err) => {
@@ -934,7 +1083,7 @@ impl<F: JournalFs> Writer<F> {
                 .file
                 .write_all_at(new_active.offset, &frame)
                 .is_err()
-                || new_active.file.sync_data().is_err()
+                || timed_sync(&mut new_active.file, &self.metrics).is_err()
             {
                 tracing::error!(?stream, "journal: writing rolled snapshot failed");
                 std::process::abort();
@@ -945,12 +1094,17 @@ impl<F: JournalFs> Writer<F> {
             self.durable_tx.send(new_active.last_lsn).ok();
         }
 
-        self.segments.lock().push_active(SegmentMeta {
-            stream,
-            seq: new_seq,
-            bytes: new_active.offset,
-            max_view: new_active.max_view,
-        });
+        let total_bytes = {
+            let mut segments = self.segments.lock();
+            segments.push_active(SegmentMeta {
+                stream,
+                seq: new_seq,
+                bytes: new_active.offset,
+                max_view: new_active.max_view,
+            });
+            segments.list(stream).iter().map(|m| m.bytes).sum()
+        };
+        self.metrics.set_total_bytes(total_bytes);
 
         self.active = new_active;
     }

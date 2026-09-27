@@ -51,6 +51,7 @@ use crate::{
             lane::{JournalFs, Lane, LaneConfig, SegmentSet, SnapshotHook, StdFs},
             state::{Record, State},
         },
+        persistence_metrics::PersistenceMetricsValue,
         storage_probe::{self, StorageProbe},
     },
 };
@@ -147,6 +148,10 @@ impl PersistenceOptions for Options {
 #[derive(Clone)]
 pub struct Persistence {
     inner: Arc<Inner>,
+    /// Per-method timing histograms; replaced wholesale by `enable_metrics`, same as fs/sql. Not
+    /// inside `Inner`: it starts as a `NoMetrics`-backed default and only this clone (the one
+    /// `enable_metrics` is called on) observes the swap, matching fs/sql's existing behaviour.
+    metrics: Arc<PersistenceMetricsValue>,
 }
 
 struct Inner {
@@ -345,6 +350,7 @@ impl Persistence {
                 replay_seconds,
                 _lock: lock_file,
             }),
+            metrics: Arc::new(PersistenceMetricsValue::default()),
         })
     }
 
@@ -475,12 +481,14 @@ impl Persistence {
         let segments = self.inner.segments.clone();
         let wal_dir = self.inner.wal_dir.clone();
         let data_dir = self.inner.data_dir.clone();
+        let wal_lane = self.inner.wal.clone();
+        let data_lane = self.inner.data.clone();
         let decided = decided.u64();
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             // Drop from the in-memory set before unlinking: an overlapping GC pass never sees the
             // same segment twice, so a `NotFound` below is always benign.
-            let to_unlink = {
+            let (to_unlink, wal_bytes, data_bytes) = {
                 let mut segments = segments.lock();
                 let to_unlink = segments.to_unlink(decided, view_retention, max_bytes);
                 segments.wal.retain(|m| {
@@ -493,7 +501,9 @@ impl Persistence {
                         .iter()
                         .any(|u| u.stream == Stream::Data && u.seq == m.seq)
                 });
-                to_unlink
+                let wal_bytes: u64 = segments.wal.iter().map(|m| m.bytes).sum();
+                let data_bytes: u64 = segments.data.iter().map(|m| m.bytes).sum();
+                (to_unlink, wal_bytes, data_bytes)
             };
             if to_unlink.is_empty() {
                 return Ok(());
@@ -519,9 +529,11 @@ impl Persistence {
             }
             if wal_touched {
                 std_fs.sync_dir(&wal_dir)?;
+                wal_lane.set_total_bytes(wal_bytes);
             }
             if data_touched {
                 std_fs.sync_dir(&data_dir)?;
+                data_lane.set_total_bytes(data_bytes);
             }
             Ok(())
         })
@@ -582,7 +594,11 @@ impl SequencerPersistence for Persistence {
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
+        let now = Instant::now();
         self.gc(decided_view).await?;
+        self.metrics
+            .internal_process_decided_events_duration
+            .add_point(now.elapsed().as_secs_f64());
         Ok(Some(decided_view))
     }
 
@@ -608,8 +624,14 @@ impl SequencerPersistence for Persistence {
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        self.put_data(Record::Vid(proposal.clone()), Class::Durable)
-            .await
+        let now = Instant::now();
+        let res = self
+            .put_data(Record::Vid(proposal.clone()), Class::Durable)
+            .await;
+        self.metrics
+            .internal_append_vid_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn append_da(
@@ -640,8 +662,14 @@ impl SequencerPersistence for Persistence {
         &self,
         proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        self.put_wal(Record::Proposal(proposal.clone()), Class::Durable)
-            .await
+        let now = Instant::now();
+        let res = self
+            .put_wal(Record::Proposal(proposal.clone()), Class::Durable)
+            .await;
+        self.metrics
+            .internal_append_quorum2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn append_cert2(
@@ -736,8 +764,14 @@ impl SequencerPersistence for Persistence {
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         _vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
-        self.put_data(Record::Da(proposal.clone()), Class::Enqueue)
-            .await
+        let now = Instant::now();
+        let res = self
+            .put_data(Record::Da(proposal.clone()), Class::Enqueue)
+            .await;
+        self.metrics
+            .internal_append_da2_duration
+            .add_point(now.elapsed().as_secs_f64());
+        res
     }
 
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
@@ -790,6 +824,7 @@ impl SequencerPersistence for Persistence {
     }
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics) {
+        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
         metrics
             .create_histogram(
                 "journal_replay_seconds".to_string(),
@@ -797,6 +832,8 @@ impl SequencerPersistence for Persistence {
             )
             .add_point(self.inner.replay_seconds);
         self.inner.probe.register(&*metrics.subgroup("disk".into()));
+        self.inner.wal.install_metrics(metrics);
+        self.inner.data.install_metrics(metrics);
     }
 }
 

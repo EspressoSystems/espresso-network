@@ -13,6 +13,16 @@ pub enum Stream {
     Data = 1,
 }
 
+impl Stream {
+    /// Metric label value: `"wal"` or `"data"`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Wal => "wal",
+            Self::Data => "data",
+        }
+    }
+}
+
 /// Durability class of a record: `Durable` records are acked only after an `fdatasync` covers
 /// their LSN; `Enqueue` records only need to survive a process crash, not an OS crash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
