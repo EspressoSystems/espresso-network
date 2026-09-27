@@ -47,36 +47,24 @@ impl LaneMetrics {
         }
     }
 
-    /// Installs real histograms/gauges labelled `stream = "wal"|"data"`.
-    fn install(&self, metrics: &dyn Metrics, stream: Stream) {
-        let label = vec![stream.label().to_string()];
-        *self.batch_records.lock() = metrics
-            .histogram_family(
-                "journal_batch_records".to_string(),
-                vec!["stream".to_string()],
-            )
-            .create(label.clone());
-        *self.batch_bytes.lock() = metrics
-            .histogram_family(
-                "journal_batch_bytes".to_string(),
-                vec!["stream".to_string()],
-            )
-            .create(label.clone());
-        *self.fsync_seconds.lock() = metrics
-            .histogram_family(
-                "journal_fsync_seconds".to_string(),
-                vec!["stream".to_string()],
-            )
-            .create(label.clone());
-        *self.queue_bytes.lock() = metrics
-            .gauge_family(
-                "journal_queue_bytes".to_string(),
-                vec!["stream".to_string()],
-            )
-            .create(label.clone());
-        *self.total_bytes.lock() = metrics
-            .gauge_family("journal_bytes".to_string(), vec!["stream".to_string()])
-            .create(label);
+    /// Installs real histograms/gauges labelled `stream = "wal"|"data"` on every lane. Each family
+    /// is registered once: registering a name twice fails with Prometheus.
+    pub fn install(metrics: &dyn Metrics, lanes: &[&Lane]) {
+        let labels = || vec!["stream".to_string()];
+        let batch_records = metrics.histogram_family("journal_batch_records".into(), labels());
+        let batch_bytes = metrics.histogram_family("journal_batch_bytes".into(), labels());
+        let fsync_seconds = metrics.histogram_family("journal_fsync_seconds".into(), labels());
+        let queue_bytes = metrics.gauge_family("journal_queue_bytes".into(), labels());
+        let total_bytes = metrics.gauge_family("journal_bytes".into(), labels());
+        for lane in lanes {
+            let label = vec![lane.stream.label().to_string()];
+            let m = &lane.metrics;
+            *m.batch_records.lock() = batch_records.create(label.clone());
+            *m.batch_bytes.lock() = batch_bytes.create(label.clone());
+            *m.fsync_seconds.lock() = fsync_seconds.create(label.clone());
+            *m.queue_bytes.lock() = queue_bytes.create(label.clone());
+            *m.total_bytes.lock() = total_bytes.create(label);
+        }
     }
 
     fn record_batch(&self, records: usize, bytes: usize) {
@@ -372,12 +360,6 @@ impl Lane {
             _permit: permit,
         });
         lsn
-    }
-
-    /// Installs real metrics for this lane, replacing the no-op placeholders every writer-thread
-    /// call already holds a handle to.
-    pub fn install_metrics(&self, metrics: &dyn Metrics) {
-        self.metrics.install(metrics, self.stream);
     }
 
     /// Data-stream backpressure: blocks until `bytes` of the in-flight budget are free. Capped at

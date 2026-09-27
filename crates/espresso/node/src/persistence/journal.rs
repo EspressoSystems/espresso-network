@@ -48,7 +48,7 @@ use crate::{
         fs as side_fs,
         journal::{
             format::{Class, Kind, ScanEnd, SegmentHeader, Stream},
-            lane::{JournalFs, Lane, LaneConfig, SegmentSet, SnapshotHook, StdFs},
+            lane::{JournalFs, Lane, LaneConfig, LaneMetrics, SegmentSet, SnapshotHook, StdFs},
             state::{Record, State},
         },
         persistence_metrics::PersistenceMetricsValue,
@@ -876,8 +876,7 @@ impl SequencerPersistence for Persistence {
             )
             .add_point(self.inner.replay_seconds);
         self.inner.probe.register(&*metrics.subgroup("disk".into()));
-        self.inner.wal.install_metrics(metrics);
-        self.inner.data.install_metrics(metrics);
+        LaneMetrics::install(metrics, &[&self.inner.wal, &self.inner.data]);
     }
 }
 
@@ -986,6 +985,7 @@ mod tests {
     use espresso_types::{NodeState, ValidatedState};
     use hotshot::types::{BLSPubKey, SignatureKey};
     use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_query_service::metrics::PrometheusMetrics;
     use hotshot_types::{traits::EncodeBytes, utils::EpochTransitionIndicator};
     use tempfile::TempDir;
 
@@ -1129,6 +1129,18 @@ mod tests {
             signature: BLSPubKey::sign(&privkey, &payload.encode()).unwrap(),
             _pd: Default::default(),
         })
+    }
+
+    // Regression test: both lanes share one metric family per name; registering a family per lane
+    // panicked with Prometheus `AlreadyReg` at node start.
+    #[tokio::test]
+    async fn enables_prometheus_metrics() {
+        let tmp = TempDir::new().unwrap();
+        let mut storage = Persistence::open(options(&tmp)).await.unwrap();
+        let metrics = PrometheusMetrics::default();
+        storage.enable_metrics(&metrics);
+        let exported = metrics.export().unwrap();
+        assert!(exported.contains("journal_batch_records"), "{exported}");
     }
 
     // Regression test: the existing-layout guard must actually see the sql layout, not the
