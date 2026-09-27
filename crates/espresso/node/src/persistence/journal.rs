@@ -64,6 +64,9 @@ const DATA_MAX_BATCH_BYTES: usize = 64 << 20;
 /// Bound on a regular wal/data record, enforced in `put_wal`/`put_data` before it ever reaches a
 /// lane.
 const MAX_RECORD_BYTES: u32 = 64 << 20;
+/// Bound on a data record. VID shares and DA payloads scale with block size and stake, up to the
+/// chain's `max_block_size`; a record over `IN_FLIGHT_BYTES` takes the whole in-flight budget.
+const DATA_MAX_RECORD_BYTES: u32 = 1 << 30;
 /// Bound on a wal `Snapshot` frame specifically: `State` (particularly `proposals`) is not pruned,
 /// so it needs more headroom than a single consensus record.
 const MAX_SNAPSHOT_BYTES: u32 = 1 << 30;
@@ -72,12 +75,12 @@ const IN_FLIGHT_BYTES: usize = 128 << 20;
 const _: () = assert!(MAX_RECORD_BYTES as usize <= IN_FLIGHT_BYTES);
 
 /// The frame-length bound to scan a stream with: wal can hold a `Snapshot` frame up to
-/// `MAX_SNAPSHOT_BYTES`; data never writes one, so `MAX_RECORD_BYTES` (already enforced on every
+/// `MAX_SNAPSHOT_BYTES`; data never writes one, so `DATA_MAX_RECORD_BYTES` (already enforced on every
 /// record in `put_data`) covers it.
 fn max_frame_bytes(stream: Stream) -> u32 {
     match stream {
         Stream::Wal => MAX_SNAPSHOT_BYTES,
-        Stream::Data => MAX_RECORD_BYTES,
+        Stream::Data => DATA_MAX_RECORD_BYTES,
     }
 }
 /// Default `--max-bytes`: 100 GiB. Clap can't parse a `"100gb"` default into a plain `u64`
@@ -392,14 +395,17 @@ impl Persistence {
         let kind = rec.kind();
         let view = rec.view();
         let body = rec.encode()?;
-        // `MAX_RECORD_BYTES <= IN_FLIGHT_BYTES` (asserted above) means this alone also bounds
-        // `reserve` below to less than the whole in-flight budget, so it can't block forever.
         ensure!(
-            body.len() <= MAX_RECORD_BYTES as usize,
-            "data record of kind {kind:?} is {} bytes, over the {MAX_RECORD_BYTES}-byte limit",
+            body.len() <= DATA_MAX_RECORD_BYTES as usize,
+            "data record of kind {kind:?} is {} bytes, over the {DATA_MAX_RECORD_BYTES}-byte limit",
             body.len()
         );
-        let permit = self.inner.data.reserve(body.len() as u32).await;
+        // Capped at the whole budget so an oversized record cannot block forever.
+        let permit = self
+            .inner
+            .data
+            .reserve(body.len().min(IN_FLIGHT_BYTES) as u32)
+            .await;
         let lsn = self
             .inner
             .data
@@ -939,9 +945,55 @@ impl DhtPersistentStorage for Persistence {
 
 #[cfg(test)]
 mod tests {
+    use espresso_types::{NodeState, ValidatedState};
+    use hotshot::types::{BLSPubKey, SignatureKey};
+    use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_types::{traits::EncodeBytes, utils::EpochTransitionIndicator};
     use tempfile::TempDir;
 
     use super::*;
+
+    // Regression test: VID shares and DA payloads grow with block size and stake (78 MB shares at
+    // 40% stake with 1 MB txs), past the 64 MiB wal record bound.
+    #[tokio::test]
+    async fn stores_data_record_larger_than_wal_record_limit() {
+        let tmp = TempDir::new().unwrap();
+        let storage = Persistence::open(Options {
+            path: tmp.path().to_path_buf(),
+            view_retention: DEFAULT_VIEW_RETENTION,
+            max_bytes: DEFAULT_MAX_BYTES,
+            ignore_existing: false,
+        })
+        .await
+        .unwrap();
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let payload = leaf.block_payload().unwrap();
+        let bytes: Arc<[u8]> = vec![7u8; (MAX_RECORD_BYTES as usize) + (16 << 20)].into();
+        let (_, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
+        let proposal = Proposal {
+            data: DaProposal2::<SeqTypes> {
+                encoded_transactions: bytes.clone(),
+                metadata: payload.ns_table().clone(),
+                view_number: ViewNumber::new(1),
+                epoch: None,
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
+            },
+            signature: BLSPubKey::sign(&privkey, &payload.encode()).unwrap(),
+            _pd: Default::default(),
+        };
+        let vid_commit = leaf.block_header().payload_commitment();
+        storage.append_da2(&proposal, vid_commit).await.unwrap();
+        let stored = storage.load_da_proposal(ViewNumber::new(1)).await.unwrap();
+        assert_eq!(
+            stored.map(|p| p.data.encoded_transactions.len()),
+            Some(bytes.len())
+        );
+    }
 
     // Regression test: the existing-layout guard must actually see the sql layout, not the
     // journal/wal, journal/data dirs this same call creates a moment later.
