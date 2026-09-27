@@ -948,7 +948,6 @@ impl<F: JournalFs> Writer<F> {
             self.metrics
                 .set_queue_bytes(self.queue_bytes.load(Ordering::Relaxed));
 
-            self.frame_buf.clear();
             let mut durable_in_batch = false;
             for w in &batch {
                 format::encode_frame(&mut self.frame_buf, w.lsn, w.view, w.kind, &w.body);
@@ -965,6 +964,9 @@ impl<F: JournalFs> Writer<F> {
                 std::process::abort();
             }
             self.active.offset += self.frame_buf.len() as u64;
+            // One oversized record must not keep its copy resident.
+            self.frame_buf.clear();
+            self.frame_buf.shrink_to(self.cfg.max_batch_bytes);
             // Permits are held by `batch` until here, bounding in-flight data bytes until the write
             // (not the fsync) lands; the semaphore is about memory, not durability.
             drop(batch);
