@@ -503,9 +503,9 @@ fn read_segment<F: JournalFs>(
     path: &Path,
     seq: u64,
     stream: Stream,
-    max_record: u32,
     collect_records: bool,
 ) -> anyhow::Result<SegmentRead> {
+    let file_len = fs.len(path)?;
     let mut reader = fs.open_read_stream(path)?;
 
     let mut header_buf = [0u8; SegmentHeader::LEN];
@@ -538,7 +538,10 @@ fn read_segment<F: JournalFs>(
         }
 
         let len = u32::from_le_bytes(frame_buf[4..8].try_into().unwrap());
-        if len > max_record {
+        // A torn length can claim up to 4 GiB; never allocate past what the file holds.
+        let remaining = file_len
+            .saturating_sub((SegmentHeader::LEN + format::FRAME_HEADER_LEN) as u64 + consumed);
+        if u64::from(len) > remaining {
             break ScanEnd::Torn(consumed);
         }
         let header_len = frame_buf.len();
@@ -549,7 +552,7 @@ fn read_segment<F: JournalFs>(
             break ScanEnd::Torn(consumed);
         }
 
-        match format::decode_frame(&frame_buf, expect_lsn, max_record) {
+        match format::decode_frame(&frame_buf, expect_lsn) {
             Ok((frame_header, body, total)) => {
                 if collect_records {
                     records.push((frame_header, body.to_vec()));
@@ -592,12 +595,7 @@ fn is_unwritten_segment<F: JournalFs>(fs: &F, path: &Path) -> anyhow::Result<boo
 /// is a candidate to unlink and retry with the segment behind it. Nothing is actually unlinked
 /// until a keepable segment is found: an error validating the fallback must not leave a segment
 /// deleted with no replacement.
-pub fn recover<F: JournalFs>(
-    fs: &F,
-    dir: &Path,
-    stream: Stream,
-    max_record: u32,
-) -> anyhow::Result<Recovered> {
+pub fn recover<F: JournalFs>(fs: &F, dir: &Path, stream: Stream) -> anyhow::Result<Recovered> {
     let mut paths: Vec<(u64, PathBuf)> = fs
         .list(dir)?
         .into_iter()
@@ -650,7 +648,7 @@ pub fn recover<F: JournalFs>(
             continue;
         }
 
-        let read = read_segment(fs, &path, seq, stream, max_record, stream == Stream::Wal)?;
+        let read = read_segment(fs, &path, seq, stream, stream == Stream::Wal)?;
 
         if let Some(expected) = expect_next_lsn {
             anyhow::ensure!(
@@ -773,8 +771,7 @@ fn abort_on_panic(f: impl FnOnce() + std::panic::UnwindSafe) {
 
 /// `State` (in particular `proposals`) is not size-bounded, so a snapshot can legitimately grow
 /// large; warn well before it gets anywhere near `max_snapshot_bytes` so an operator sees it
-/// coming, then abort if it actually crosses that bound (`format::decode_frame` would otherwise
-/// reject it on replay and it would look like corruption, not an oversized record).
+/// coming, then abort if it actually crosses that bound.
 const SNAPSHOT_WARN_BYTES: u64 = 16 << 20;
 
 fn check_snapshot_size(stream: Stream, body: &[u8], max_snapshot_bytes: u32) {
@@ -1383,7 +1380,7 @@ mod tests {
     async fn recover_empty_dir() {
         let fs = Arc::new(MemFs::default());
         let dir = std::path::PathBuf::from("/wal");
-        let recovered = recover(&*fs, &dir, Stream::Wal, 1024).unwrap();
+        let recovered = recover(&*fs, &dir, Stream::Wal).unwrap();
         assert!(recovered.segments.is_empty());
         assert_eq!(recovered.next_seq, 1);
         assert_eq!(recovered.next_lsn, 1);
@@ -1409,7 +1406,7 @@ mod tests {
 
         // Simulate a crash: nothing unsynced should exist, since the ack implies fsync happened.
         fs.crash(|_| 0);
-        let recovered = recover(&*fs, &dir, Stream::Data, 1024).unwrap();
+        let recovered = recover(&*fs, &dir, Stream::Data).unwrap();
         assert_eq!(recovered.next_lsn, 2);
     }
 
@@ -1431,7 +1428,7 @@ mod tests {
             let lsn = lane.enqueue(i, Kind::Vid, vec![i as u8; 4], Class::Durable, None);
             lane.wait_durable(lsn).await.unwrap();
         }
-        let recovered = recover(&*fs, &dir, Stream::Data, 1024).unwrap();
+        let recovered = recover(&*fs, &dir, Stream::Data).unwrap();
         assert_eq!(recovered.next_lsn, 6);
         assert_eq!(recovered.segments.len(), 1);
     }
@@ -1492,7 +1489,7 @@ mod tests {
         }
 
         fs.crash(|_| 0);
-        let recovered = recover(&*fs, &dir, Stream::Wal, 1024).unwrap();
+        let recovered = recover(&*fs, &dir, Stream::Wal).unwrap();
         assert_eq!(
             recovered.wal_records.first().map(|(h, _)| h.kind),
             Some(Kind::Snapshot)
@@ -1551,7 +1548,7 @@ mod tests {
             &[],
         );
 
-        let recovered = recover(&fs, &dir, Stream::Wal, 1024).unwrap();
+        let recovered = recover(&fs, &dir, Stream::Wal).unwrap();
         assert_eq!(
             recovered
                 .wal_records
@@ -1594,7 +1591,7 @@ mod tests {
             &seg,
         );
 
-        let recovered = recover(&fs, &dir, Stream::Wal, 1024).unwrap();
+        let recovered = recover(&fs, &dir, Stream::Wal).unwrap();
         assert_eq!(
             recovered.wal_records.first().map(|(h, _)| h.kind),
             Some(Kind::Snapshot)
@@ -1605,6 +1602,42 @@ mod tests {
             fs.file_len(&segment_path(&dir, 1)),
             SegmentHeader::LEN + clean_end,
             "the torn second frame must be truncated off, not just ignored"
+        );
+    }
+
+    // Regression test: a torn frame header whose length exceeds the file must end the scan
+    // before the body buffer is sized from it.
+    #[tokio::test]
+    async fn recover_truncates_torn_frame_length_past_file_end() {
+        let fs = MemFs::default();
+        let dir = std::path::PathBuf::from("/wal6");
+
+        let mut seg = Vec::new();
+        format::encode_frame(&mut seg, 1, 0, Kind::Snapshot, b"snap");
+        let clean_end = seg.len();
+        let mut torn = Vec::new();
+        format::encode_frame(&mut torn, 2, 7, Kind::Action, b"x");
+        torn[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        seg.extend_from_slice(&torn);
+
+        write_segment(
+            &fs,
+            &dir,
+            SegmentHeader {
+                stream: Stream::Wal,
+                seq: 1,
+                first_lsn: 1,
+                prev_max_view: 0,
+            },
+            &seg,
+        );
+
+        let recovered = recover(&fs, &dir, Stream::Wal).unwrap();
+        assert_eq!(recovered.wal_records.len(), 1);
+        assert_eq!(recovered.next_lsn, 2);
+        assert_eq!(
+            fs.file_len(&segment_path(&dir, 1)),
+            SegmentHeader::LEN + clean_end
         );
     }
 }

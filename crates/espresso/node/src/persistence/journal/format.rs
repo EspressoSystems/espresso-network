@@ -146,7 +146,6 @@ pub(crate) const FRAME_HEADER_LEN: usize = 32;
 pub enum FrameError {
     Short,
     Crc,
-    LenBound,
     Lsn { expected: Lsn, got: Lsn },
 }
 
@@ -165,24 +164,20 @@ pub fn encode_frame(out: &mut Vec<u8>, lsn: Lsn, view: u64, kind: Kind, body: &[
     out[start..start + 4].copy_from_slice(&crc.to_le_bytes());
 }
 
-/// Decodes one frame at the start of `buf`. `max_len` bounds `len` before it is ever used to size
-/// a slice, so a corrupt or adversarial length can't cause an oversized read.
+/// Decodes one frame at the start of `buf`. `len` only slices `buf` after the check that `buf`
+/// holds that many bytes, so a corrupt length can't cause an oversized read.
 ///
-/// Checks run cheapest-and-safest first: header present, length in bound, body present, crc (which
-/// covers `lsn`), then the lsn-consecutive check. A frame that fails any check ends the scan; it
+/// Checks run cheapest-and-safest first: header present, body present, crc (which covers `lsn`),
+/// then the lsn-consecutive check. A frame that fails any check ends the scan; it
 /// is never partially applied.
 pub fn decode_frame(
     buf: &[u8],
     expect_lsn: Lsn,
-    max_len: u32,
 ) -> Result<(FrameHeader, &[u8], usize), FrameError> {
     if buf.len() < FRAME_HEADER_LEN {
         return Err(FrameError::Short);
     }
     let len = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-    if len > max_len {
-        return Err(FrameError::LenBound);
-    }
     let total = FRAME_HEADER_LEN + len as usize;
     if buf.len() < total {
         return Err(FrameError::Short);
@@ -229,7 +224,6 @@ pub enum ScanEnd {
 pub fn scan(
     buf: &[u8],
     first_lsn: Lsn,
-    max_len: u32,
     mut f: impl FnMut(&FrameHeader, &[u8]) -> anyhow::Result<()>,
 ) -> anyhow::Result<(ScanEnd, Lsn, u64)> {
     let mut offset = 0usize;
@@ -239,7 +233,7 @@ pub fn scan(
         if offset == buf.len() {
             return Ok((ScanEnd::Clean(offset as u64), expect_lsn, max_view));
         }
-        match decode_frame(&buf[offset..], expect_lsn, max_len) {
+        match decode_frame(&buf[offset..], expect_lsn) {
             Ok((header, body, consumed)) => {
                 f(&header, body)?;
                 max_view = max_view.max(header.view);
@@ -264,7 +258,7 @@ mod tests {
     #[test]
     fn decode_roundtrip() {
         let buf = frame(3, 7, Kind::Action, b"hello");
-        let (header, body, consumed) = decode_frame(&buf, 3, 1024).unwrap();
+        let (header, body, consumed) = decode_frame(&buf, 3).unwrap();
         assert_eq!(header.lsn, 3);
         assert_eq!(header.view, 7);
         assert_eq!(header.kind, Kind::Action);
@@ -277,7 +271,7 @@ mod tests {
         let mut buf = frame(1, 0, Kind::Action, b"a");
         buf.extend(frame(3, 0, Kind::Action, b"b")); // lsn 2 missing
         let mut seen = vec![];
-        let (end, next_lsn, _) = scan(&buf, 1, 1024, |h, b| {
+        let (end, next_lsn, _) = scan(&buf, 1, |h, b| {
             seen.push((h.lsn, b.to_vec()));
             Ok(())
         })
@@ -292,7 +286,7 @@ mod tests {
     #[test]
     fn scan_clean_at_exact_end() {
         let buf = frame(1, 0, Kind::Action, b"a");
-        let (end, next_lsn, _) = scan(&buf, 1, 1024, |_, _| Ok(())).unwrap();
+        let (end, next_lsn, _) = scan(&buf, 1, |_, _| Ok(())).unwrap();
         assert!(matches!(end, ScanEnd::Clean(n) if n == buf.len() as u64));
         assert_eq!(next_lsn, 2);
     }
@@ -306,7 +300,7 @@ mod tests {
         for len in 0..full.len() {
             let truncated = &full[..len];
             let mut seen = vec![];
-            let (end, ..) = scan(truncated, 1, 1024, |h, b| {
+            let (end, ..) = scan(truncated, 1, |h, b| {
                 seen.push((h.lsn, b.to_vec()));
                 Ok(())
             })
@@ -342,7 +336,7 @@ mod tests {
             buf.extend(corrupt);
 
             let mut seen = vec![];
-            let (end, ..) = scan(&buf, 1, 1024, |h, b| {
+            let (end, ..) = scan(&buf, 1, |h, b| {
                 seen.push((h.lsn, b.to_vec()));
                 Ok(())
             })
@@ -359,7 +353,7 @@ mod tests {
     fn oversize_len_stops_scan_without_reading_body() {
         let mut buf = vec![0u8; FRAME_HEADER_LEN];
         buf[4..8].copy_from_slice(&(u32::MAX).to_le_bytes());
-        let (end, next_lsn, max_view) = scan(&buf, 5, 1024, |_, _| Ok(())).unwrap();
+        let (end, next_lsn, max_view) = scan(&buf, 5, |_, _| Ok(())).unwrap();
         assert!(matches!(end, ScanEnd::Torn(0)));
         assert_eq!(next_lsn, 5);
         assert_eq!(max_view, 0);

@@ -72,10 +72,6 @@ const DATA_MIN_RECORD_BYTES: u64 = 1 << 30;
 const MAX_SNAPSHOT_BYTES: u32 = 1 << 30;
 const IN_FLIGHT_BYTES: usize = 128 << 20;
 
-/// Frame-length bound for scanning either stream: the largest length a frame header can hold.
-/// Independent of the chain config, so a restart with another genesis never misreads old frames.
-const MAX_FRAME_BYTES: u32 = u32::MAX;
-
 /// Per-record size bounds, enforced in `put_wal`/`put_data` before a record reaches a lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RecordLimits {
@@ -90,13 +86,14 @@ impl RecordLimits {
     /// `max_block_size` (each namespace takes at least 8 payload bytes for an 8-byte entry).
     /// data: a VID share holds `weight / ceil(total_weight / 3)` of the payload, so up to 3x for a
     /// node with all the stake; a DA proposal holds 1x. Never below `DATA_MIN_RECORD_BYTES`.
+    /// Both stop at `u32::MAX`, the frame length field's range.
     fn new(max_block_size: u64) -> Self {
         let bound = |factor: u64| {
             max_block_size
                 .saturating_mul(factor)
                 .saturating_add(RECORD_HEADROOM_BYTES)
         };
-        let frame = |bytes: u64| bytes.min(MAX_FRAME_BYTES.into()) as u32;
+        let frame = |bytes: u64| bytes.min(u32::MAX.into()) as u32;
         Self {
             wal: frame(bound(1)),
             data: frame(bound(3).max(DATA_MIN_RECORD_BYTES)),
@@ -287,21 +284,17 @@ impl Persistence {
         let (wal_recovered, data_recovered) = {
             let fs = std_fs.clone();
             let dir = wal_dir.clone();
-            let wal = tokio::task::spawn_blocking(move || {
-                lane::recover(&*fs, &dir, Stream::Wal, MAX_FRAME_BYTES)
-            })
-            .await
-            .context("wal recovery task panicked")?
-            .context("recovering wal stream")?;
+            let wal = tokio::task::spawn_blocking(move || lane::recover(&*fs, &dir, Stream::Wal))
+                .await
+                .context("wal recovery task panicked")?
+                .context("recovering wal stream")?;
 
             let fs = std_fs.clone();
             let dir = data_dir.clone();
-            let data = tokio::task::spawn_blocking(move || {
-                lane::recover(&*fs, &dir, Stream::Data, MAX_FRAME_BYTES)
-            })
-            .await
-            .context("data recovery task panicked")?
-            .context("recovering data stream")?;
+            let data = tokio::task::spawn_blocking(move || lane::recover(&*fs, &dir, Stream::Data))
+                .await
+                .context("data recovery task panicked")?
+                .context("recovering data stream")?;
             (wal, data)
         };
 
@@ -505,17 +498,12 @@ impl Persistence {
                 let mut found: Option<Vec<u8>> = None;
                 // A torn tail on the active segment is `Ok` (`ScanEnd::Torn`, not an `Err`); scan
                 // only fails here if a *sealed* segment is corrupt, which is a real error.
-                format::scan(
-                    &bytes[SegmentHeader::LEN..],
-                    header.first_lsn,
-                    MAX_FRAME_BYTES,
-                    |h, body| {
-                        if h.kind == kind && h.view == view_u64 {
-                            found = Some(body.to_vec());
-                        }
-                        Ok(())
-                    },
-                )?;
+                format::scan(&bytes[SegmentHeader::LEN..], header.first_lsn, |h, body| {
+                    if h.kind == kind && h.view == view_u64 {
+                        found = Some(body.to_vec());
+                    }
+                    Ok(())
+                })?;
                 if let Some(body) = found {
                     return Ok(Some(bincode::deserialize::<T>(&body)?));
                 }
@@ -1029,8 +1017,8 @@ mod tests {
     #[test]
     fn record_limits_stop_at_frame_ceiling() {
         let limits = RecordLimits::new(u64::MAX);
-        assert_eq!(limits.wal, MAX_FRAME_BYTES);
-        assert_eq!(limits.data, MAX_FRAME_BYTES);
+        assert_eq!(limits.wal, u32::MAX);
+        assert_eq!(limits.data, u32::MAX);
     }
 
     // Regression test: VID shares and DA payloads grow with block size and stake (78 MB shares at
