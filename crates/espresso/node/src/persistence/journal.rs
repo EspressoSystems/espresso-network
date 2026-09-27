@@ -47,7 +47,7 @@ use crate::{
     persistence::{
         fs as side_fs,
         journal::{
-            format::{Class, Kind, SegmentHeader, Stream},
+            format::{Class, Kind, ScanEnd, SegmentHeader, Stream},
             lane::{JournalFs, Lane, LaneConfig, SegmentSet, SnapshotHook, StdFs},
             state::{Record, State},
         },
@@ -464,37 +464,24 @@ impl Persistence {
             Stream::Data => self.inner.data_dir.clone(),
         };
         let view_u64 = view.u64();
-        let candidates: Vec<u64> = {
+        // (seq, sealed): only the last segment is active and may have a torn tail.
+        let candidates: Vec<(u64, bool)> = {
             let segments = self.inner.segments.lock();
-            segments
-                .list(stream)
-                .iter()
+            let list = segments.list(stream);
+            let active = list.last().map(|m| m.seq);
+            list.iter()
                 .filter(|m| m.max_view >= view_u64)
-                .map(|m| m.seq)
+                .map(|m| (m.seq, Some(m.seq) != active))
                 .collect()
         };
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<Option<T>> {
-            for seq in candidates {
+            for (seq, sealed) in candidates {
                 let path = lane::segment_path(&dir, seq);
                 let bytes = std::fs::read(&path)
                     .with_context(|| format!("reading segment {}", path.display()))?;
-                ensure!(
-                    bytes.len() >= SegmentHeader::LEN,
-                    "segment {} shorter than its header",
-                    path.display()
-                );
-                let header = SegmentHeader::decode(&bytes)
-                    .with_context(|| format!("corrupt segment header {}", path.display()))?;
-                let mut found: Option<Vec<u8>> = None;
-                // A torn tail on the active segment is `Ok` (`ScanEnd::Torn`, not an `Err`); scan
-                // only fails here if a *sealed* segment is corrupt, which is a real error.
-                format::scan(&bytes[SegmentHeader::LEN..], header.first_lsn, |h, body| {
-                    if h.kind == kind && h.view == view_u64 {
-                        found = Some(body.to_vec());
-                    }
-                    Ok(())
-                })?;
+                let found = find_in_segment(&bytes, kind, view_u64, sealed)
+                    .with_context(|| format!("scanning segment {}", path.display()))?;
                 if let Some(body) = found {
                     return Ok(Some(bincode::deserialize::<T>(&body)?));
                 }
@@ -572,6 +559,32 @@ impl Persistence {
         .context("gc: blocking task panicked")??;
         Ok(())
     }
+}
+
+/// Body of the last `kind` record at `view` in a whole segment file. A torn tail is expected on
+/// the active segment; on a sealed one (fsynced before the roll) it is corruption.
+fn find_in_segment(
+    bytes: &[u8],
+    kind: Kind,
+    view: u64,
+    sealed: bool,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    ensure!(
+        bytes.len() >= SegmentHeader::LEN,
+        "segment shorter than its header"
+    );
+    let header = SegmentHeader::decode(bytes).context("corrupt segment header")?;
+    let mut found = None;
+    let (end, ..) = format::scan(&bytes[SegmentHeader::LEN..], header.first_lsn, |h, body| {
+        if h.kind == kind && h.view == view {
+            found = Some(body.to_vec());
+        }
+        Ok(())
+    })?;
+    if let ScanEnd::Torn(offset) = end {
+        ensure!(!sealed, "sealed segment corrupt at frame offset {offset}");
+    }
+    Ok(found)
 }
 
 #[async_trait]
@@ -1048,6 +1061,28 @@ mod tests {
             .put_data(da_record(1024).await, Class::Durable)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn find_in_segment_fails_on_corrupt_sealed_segment() {
+        let header = SegmentHeader {
+            stream: Stream::Data,
+            seq: 1,
+            first_lsn: 1,
+            prev_max_view: 0,
+        };
+        let mut seg = header.encode().to_vec();
+        format::encode_frame(&mut seg, 1, 5, Kind::Da, b"five");
+        format::encode_frame(&mut seg, 2, 6, Kind::Da, b"six");
+        let last = seg.len() - 1;
+        seg[last] ^= 0xff;
+
+        assert_eq!(
+            find_in_segment(&seg, Kind::Da, 5, false).unwrap(),
+            Some(b"five".to_vec())
+        );
+        assert_eq!(find_in_segment(&seg, Kind::Da, 6, false).unwrap(), None);
+        find_in_segment(&seg, Kind::Da, 5, true).unwrap_err();
     }
 
     #[tokio::test]
