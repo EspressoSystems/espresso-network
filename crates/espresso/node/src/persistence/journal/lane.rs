@@ -379,7 +379,7 @@ impl Lane {
         self.metrics.install(metrics, self.stream);
     }
 
-    /// Data-stream backpressure: blocks until `bytes` of the 128 MiB in-flight budget are free.
+    /// Data-stream backpressure: blocks until `bytes` of the in-flight budget are free.
     pub async fn reserve(&self, bytes: u32) -> OwnedSemaphorePermit {
         self.in_flight
             .clone()

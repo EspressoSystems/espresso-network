@@ -102,7 +102,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             telemetry_handle.as_mut(),
         )
         .await
-    } else if let Some(storage) = modules.storage_journal.take() {
+    } else if let Some(mut storage) = modules.storage_journal.take() {
         ensure!(
             modules.query.is_none(),
             "storage-journal does not support the query module; use storage-sql"
@@ -111,6 +111,8 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             genesis.base_version >= NEW_PROTOCOL_VERSION,
             "storage-journal requires a genesis base_version of at least {NEW_PROTOCOL_VERSION}"
         );
+        // Chain configs change only through genesis upgrades, so the largest covers every version.
+        storage.max_block_size = genesis.block_sizes().into_values().max();
         run_with_storage(
             genesis,
             modules,

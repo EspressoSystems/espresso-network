@@ -61,28 +61,51 @@ const WAL_MAX_VIEW_SPAN: u64 = 8192;
 const WAL_MAX_BATCH_BYTES: usize = 4 << 20;
 const DATA_SEGMENT_BYTES: u64 = 1 << 30;
 const DATA_MAX_BATCH_BYTES: usize = 64 << 20;
-/// Bound on a regular wal/data record, enforced in `put_wal`/`put_data` before it ever reaches a
-/// lane.
-const MAX_RECORD_BYTES: u32 = 64 << 20;
-/// Bound on a data record. VID shares and DA payloads scale with block size and stake, up to the
-/// chain's `max_block_size`; a record over `IN_FLIGHT_BYTES` takes the whole in-flight budget.
-const DATA_MAX_RECORD_BYTES: u32 = 1 << 30;
+/// Floor for both record bounds: covers everything in a record that does not grow with block
+/// size (QCs, header fields, VID proofs).
+const RECORD_FLOOR_BYTES: u64 = 64 << 20;
 /// Bound on a wal `Snapshot` frame specifically: `State` (particularly `proposals`) is not pruned,
 /// so it needs more headroom than a single consensus record.
 const MAX_SNAPSHOT_BYTES: u32 = 1 << 30;
-const IN_FLIGHT_BYTES: usize = 128 << 20;
+const IN_FLIGHT_FLOOR_BYTES: usize = 128 << 20;
 
-const _: () = assert!(MAX_RECORD_BYTES as usize <= IN_FLIGHT_BYTES);
+/// Frame-length bound for scanning either stream: the largest length a frame header can hold.
+/// Independent of the chain config, so a restart with another genesis never misreads old frames.
+const MAX_FRAME_BYTES: u32 = u32::MAX;
 
-/// The frame-length bound to scan a stream with: wal can hold a `Snapshot` frame up to
-/// `MAX_SNAPSHOT_BYTES`; data never writes one, so `DATA_MAX_RECORD_BYTES` (already enforced on every
-/// record in `put_data`) covers it.
-fn max_frame_bytes(stream: Stream) -> u32 {
-    match stream {
-        Stream::Wal => MAX_SNAPSHOT_BYTES,
-        Stream::Data => DATA_MAX_RECORD_BYTES,
+/// Per-record size bounds, enforced in `put_wal`/`put_data` before a record reaches a lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RecordLimits {
+    wal: u32,
+    data: u32,
+}
+
+impl RecordLimits {
+    /// `max_block_size` is the largest over the genesis base version and upgrades.
+    ///
+    /// wal: only the header's ns table grows with block size, and it stays under
+    /// `max_block_size` (each namespace takes at least 8 payload bytes for an 8-byte entry).
+    /// data: a VID share holds `weight / ceil(total_weight / 3)` of the payload, so up to 3x for a
+    /// node with all the stake; a DA proposal holds 1x.
+    fn new(max_block_size: u64) -> Self {
+        let bound = |factor: u64| {
+            max_block_size
+                .saturating_mul(factor)
+                .saturating_add(RECORD_FLOOR_BYTES)
+                .min(MAX_FRAME_BYTES.into()) as u32
+        };
+        Self {
+            wal: bound(1),
+            data: bound(3),
+        }
+    }
+
+    /// Data-lane budget; at least one max data record so `reserve` never waits forever.
+    fn in_flight_bytes(&self) -> usize {
+        IN_FLIGHT_FLOOR_BYTES.max(self.data as usize)
     }
 }
+
 /// Default `--max-bytes`: 100 GiB. Clap can't parse a `"100gb"` default into a plain `u64`
 /// without a custom value parser, so the CLI default is the equivalent byte count.
 const DEFAULT_MAX_BYTES: u64 = 100 * (1 << 30);
@@ -121,6 +144,10 @@ pub struct Options {
         env = "ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING"
     )]
     pub ignore_existing: bool,
+
+    /// Largest `max_block_size` over the genesis base version and upgrades, set from genesis.
+    #[clap(skip)]
+    pub max_block_size: Option<u64>,
 }
 
 #[async_trait]
@@ -170,6 +197,7 @@ struct Inner {
     wal_dir: PathBuf,
     data_dir: PathBuf,
     probe: StorageProbe,
+    limits: RecordLimits,
     /// Measured before any real `Metrics` is attached; `enable_metrics` records it once a
     /// histogram exists to record it into.
     replay_seconds: f64,
@@ -252,12 +280,17 @@ impl Persistence {
             .await
             .context("probing wal directory")?;
 
+        let limits = RecordLimits::new(
+            opts.max_block_size
+                .context("journal options have no max_block_size")?,
+        );
+
         let std_fs = Arc::new(StdFs);
         let (wal_recovered, data_recovered) = {
             let fs = std_fs.clone();
             let dir = wal_dir.clone();
             let wal = tokio::task::spawn_blocking(move || {
-                lane::recover(&*fs, &dir, Stream::Wal, max_frame_bytes(Stream::Wal))
+                lane::recover(&*fs, &dir, Stream::Wal, MAX_FRAME_BYTES)
             })
             .await
             .context("wal recovery task panicked")?
@@ -266,7 +299,7 @@ impl Persistence {
             let fs = std_fs.clone();
             let dir = data_dir.clone();
             let data = tokio::task::spawn_blocking(move || {
-                lane::recover(&*fs, &dir, Stream::Data, max_frame_bytes(Stream::Data))
+                lane::recover(&*fs, &dir, Stream::Data, MAX_FRAME_BYTES)
             })
             .await
             .context("data recovery task panicked")?
@@ -311,7 +344,7 @@ impl Persistence {
                 max_view_span: WAL_MAX_VIEW_SPAN,
                 max_batch_bytes: WAL_MAX_BATCH_BYTES,
                 max_snapshot_bytes: MAX_SNAPSHOT_BYTES,
-                in_flight_bytes: IN_FLIGHT_BYTES,
+                in_flight_bytes: limits.in_flight_bytes(),
             },
             (wal_recovered.next_seq, wal_recovered.next_lsn),
             Some(hook),
@@ -330,7 +363,7 @@ impl Persistence {
                 // Never read: the data lane has no `SnapshotHook`, so no `Snapshot` frame is ever
                 // written on it.
                 max_snapshot_bytes: MAX_SNAPSHOT_BYTES,
-                in_flight_bytes: IN_FLIGHT_BYTES,
+                in_flight_bytes: limits.in_flight_bytes(),
             },
             (data_recovered.next_seq, data_recovered.next_lsn),
             None,
@@ -350,6 +383,7 @@ impl Persistence {
                 wal_dir,
                 data_dir,
                 probe,
+                limits,
                 replay_seconds,
                 _lock: lock_file,
             }),
@@ -364,9 +398,10 @@ impl Persistence {
         let kind = rec.kind();
         let view = rec.view();
         let body = rec.encode()?;
+        let max = self.inner.limits.wal;
         ensure!(
-            body.len() <= MAX_RECORD_BYTES as usize,
-            "wal record of kind {kind:?} is {} bytes, over the {MAX_RECORD_BYTES}-byte limit",
+            body.len() <= max as usize,
+            "wal record of kind {kind:?} is {} bytes, over the {max}-byte limit",
             body.len()
         );
         let (lsn, finalized) = {
@@ -395,17 +430,13 @@ impl Persistence {
         let kind = rec.kind();
         let view = rec.view();
         let body = rec.encode()?;
+        let max = self.inner.limits.data;
         ensure!(
-            body.len() <= DATA_MAX_RECORD_BYTES as usize,
-            "data record of kind {kind:?} is {} bytes, over the {DATA_MAX_RECORD_BYTES}-byte limit",
+            body.len() <= max as usize,
+            "data record of kind {kind:?} is {} bytes, over the {max}-byte limit",
             body.len()
         );
-        // Capped at the whole budget so an oversized record cannot block forever.
-        let permit = self
-            .inner
-            .data
-            .reserve(body.len().min(IN_FLIGHT_BYTES) as u32)
-            .await;
+        let permit = self.inner.data.reserve(body.len() as u32).await;
         let lsn = self
             .inner
             .data
@@ -456,13 +487,11 @@ impl Persistence {
                     .with_context(|| format!("corrupt segment header {}", path.display()))?;
                 let mut found: Option<Vec<u8>> = None;
                 // A torn tail on the active segment is `Ok` (`ScanEnd::Torn`, not an `Err`); scan
-                // only fails here if a *sealed* segment is corrupt, which is a real error. The
-                // bound must cover a wal `Snapshot` frame, not just a regular record, or scanning
-                // past one would look exactly like that kind of corruption.
+                // only fails here if a *sealed* segment is corrupt, which is a real error.
                 format::scan(
                     &bytes[SegmentHeader::LEN..],
                     header.first_lsn,
-                    max_frame_bytes(stream),
+                    MAX_FRAME_BYTES,
                     |h, body| {
                         if h.kind == kind && h.view == view_u64 {
                             found = Some(body.to_vec());
@@ -951,10 +980,10 @@ mod tests {
     use hotshot_types::{traits::EncodeBytes, utils::EpochTransitionIndicator};
     use tempfile::TempDir;
 
-    use super::*;
+    use super::{testing::TEST_MAX_BLOCK_SIZE, *};
 
     // Regression test: VID shares and DA payloads grow with block size and stake (78 MB shares at
-    // 40% stake with 1 MB txs), past the 64 MiB wal record bound.
+    // 40% stake with 1 MB txs), past the wal record bound.
     #[tokio::test]
     async fn stores_data_record_larger_than_wal_record_limit() {
         let tmp = TempDir::new().unwrap();
@@ -963,6 +992,7 @@ mod tests {
             view_retention: DEFAULT_VIEW_RETENTION,
             max_bytes: DEFAULT_MAX_BYTES,
             ignore_existing: false,
+            max_block_size: Some(TEST_MAX_BLOCK_SIZE),
         })
         .await
         .unwrap();
@@ -973,7 +1003,8 @@ mod tests {
         )
         .await;
         let payload = leaf.block_payload().unwrap();
-        let bytes: Arc<[u8]> = vec![7u8; (MAX_RECORD_BYTES as usize) + (16 << 20)].into();
+        let bytes: Arc<[u8]> =
+            vec![7u8; RecordLimits::new(TEST_MAX_BLOCK_SIZE).wal as usize + (16 << 20)].into();
         let (_, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
         let proposal = Proposal {
             data: DaProposal2::<SeqTypes> {
@@ -1011,6 +1042,7 @@ mod tests {
             view_retention: DEFAULT_VIEW_RETENTION,
             max_bytes: DEFAULT_MAX_BYTES,
             ignore_existing: false,
+            max_block_size: Some(TEST_MAX_BLOCK_SIZE),
         })
         .await
         .err()
@@ -1026,6 +1058,9 @@ mod testing {
     use super::*;
     use crate::persistence::tests::TestablePersistence;
 
+    /// Mainnet's `max_block_size`.
+    pub(super) const TEST_MAX_BLOCK_SIZE: u64 = 10_000_000;
+
     #[async_trait]
     impl TestablePersistence for Persistence {
         type Storage = TempDir;
@@ -1040,6 +1075,7 @@ mod testing {
                 view_retention: DEFAULT_VIEW_RETENTION,
                 max_bytes: DEFAULT_MAX_BYTES,
                 ignore_existing: false,
+                max_block_size: Some(TEST_MAX_BLOCK_SIZE),
             }
         }
     }
