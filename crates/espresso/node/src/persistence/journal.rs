@@ -1026,15 +1026,64 @@ mod tests {
     #[tokio::test]
     async fn stores_data_record_larger_than_wal_record_limit() {
         let tmp = TempDir::new().unwrap();
-        let storage = Persistence::open(Options {
+        let storage = Persistence::open(options(&tmp)).await.unwrap();
+        let len = RecordLimits::new(TEST_MAX_BLOCK_SIZE).wal as usize + (16 << 20);
+        // `append_da2` enqueues without waiting for the write; wait so the cold scan sees it.
+        storage
+            .put_data(da_record(len).await, Class::Durable)
+            .await
+            .unwrap();
+        let stored = storage.load_da_proposal(ViewNumber::new(1)).await.unwrap();
+        assert_eq!(stored.map(|p| p.data.encoded_transactions.len()), Some(len));
+    }
+
+    #[tokio::test]
+    async fn put_data_rejects_record_over_data_limit() {
+        let tmp = TempDir::new().unwrap();
+        let mut storage = Persistence::open(options(&tmp)).await.unwrap();
+        let len = da_record(1024).await.encode().unwrap().len();
+        let inner = Arc::get_mut(&mut storage.inner).expect("no other handle to inner yet");
+        inner.limits.data = len as u32 - 1;
+
+        let err = storage
+            .put_data(da_record(1024).await, Class::Durable)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("over the"), "{err:#}");
+
+        let inner = Arc::get_mut(&mut storage.inner).expect("no other handle to inner yet");
+        inner.limits.data = len as u32;
+        storage
+            .put_data(da_record(1024).await, Class::Durable)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn open_fails_without_max_block_size() {
+        let tmp = TempDir::new().unwrap();
+        let err = Persistence::open(Options {
+            max_block_size: None,
+            ..options(&tmp)
+        })
+        .await
+        .err()
+        .expect("open must fail without max_block_size");
+        assert!(err.to_string().contains("max_block_size"), "{err:#}");
+    }
+
+    fn options(tmp: &TempDir) -> Options {
+        Options {
             path: tmp.path().to_path_buf(),
             view_retention: DEFAULT_VIEW_RETENTION,
             max_bytes: DEFAULT_MAX_BYTES,
             ignore_existing: false,
             max_block_size: Some(TEST_MAX_BLOCK_SIZE),
-        })
-        .await
-        .unwrap();
+        }
+    }
+
+    /// A view-1 DA proposal whose payload is `len` bytes.
+    async fn da_record(len: usize) -> Record {
         let leaf = Leaf2::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
@@ -1042,12 +1091,10 @@ mod tests {
         )
         .await;
         let payload = leaf.block_payload().unwrap();
-        let bytes: Arc<[u8]> =
-            vec![7u8; RecordLimits::new(TEST_MAX_BLOCK_SIZE).wal as usize + (16 << 20)].into();
         let (_, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let proposal = Proposal {
+        Record::Da(Proposal {
             data: DaProposal2::<SeqTypes> {
-                encoded_transactions: bytes.clone(),
+                encoded_transactions: vec![7u8; len].into(),
                 metadata: payload.ns_table().clone(),
                 view_number: ViewNumber::new(1),
                 epoch: None,
@@ -1055,17 +1102,7 @@ mod tests {
             },
             signature: BLSPubKey::sign(&privkey, &payload.encode()).unwrap(),
             _pd: Default::default(),
-        };
-        // `append_da2` enqueues without waiting for the write; wait so the cold scan sees it.
-        storage
-            .put_data(Record::Da(proposal), Class::Durable)
-            .await
-            .unwrap();
-        let stored = storage.load_da_proposal(ViewNumber::new(1)).await.unwrap();
-        assert_eq!(
-            stored.map(|p| p.data.encoded_transactions.len()),
-            Some(bytes.len())
-        );
+        })
     }
 
     // Regression test: the existing-layout guard must actually see the sql layout, not the
