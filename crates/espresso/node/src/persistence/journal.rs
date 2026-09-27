@@ -986,8 +986,11 @@ mod tests {
             signature: BLSPubKey::sign(&privkey, &payload.encode()).unwrap(),
             _pd: Default::default(),
         };
-        let vid_commit = leaf.block_header().payload_commitment();
-        storage.append_da2(&proposal, vid_commit).await.unwrap();
+        // `append_da2` enqueues without waiting for the write; wait so the cold scan sees it.
+        storage
+            .put_data(Record::Da(proposal), Class::Durable)
+            .await
+            .unwrap();
         let stored = storage.load_da_proposal(ViewNumber::new(1)).await.unwrap();
         assert_eq!(
             stored.map(|p| p.data.encoded_transactions.len()),
