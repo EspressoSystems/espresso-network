@@ -62,12 +62,15 @@ const WAL_MAX_BATCH_BYTES: usize = 4 << 20;
 const DATA_SEGMENT_BYTES: u64 = 1 << 30;
 const DATA_MAX_BATCH_BYTES: usize = 64 << 20;
 /// Added to both record bounds: covers everything in a record that does not grow with block
-/// size (QCs, header fields, VID proofs).
+/// size (QCs, header fields).
 const RECORD_HEADROOM_BYTES: u64 = 64 << 20;
+/// Lower bound on the data record limit. VID proofs grow with namespaces x shard weight, not
+/// payload bytes: ~160 KB per namespace at 1/3 stake.
+const DATA_MIN_RECORD_BYTES: u64 = 1 << 30;
 /// Bound on a wal `Snapshot` frame specifically: `State` (particularly `proposals`) is not pruned,
 /// so it needs more headroom than a single consensus record.
 const MAX_SNAPSHOT_BYTES: u32 = 1 << 30;
-const IN_FLIGHT_FLOOR_BYTES: usize = 128 << 20;
+const IN_FLIGHT_BYTES: usize = 128 << 20;
 
 /// Frame-length bound for scanning either stream: the largest length a frame header can hold.
 /// Independent of the chain config, so a restart with another genesis never misreads old frames.
@@ -86,23 +89,18 @@ impl RecordLimits {
     /// wal: only the header's ns table grows with block size, and it stays under
     /// `max_block_size` (each namespace takes at least 8 payload bytes for an 8-byte entry).
     /// data: a VID share holds `weight / ceil(total_weight / 3)` of the payload, so up to 3x for a
-    /// node with all the stake; a DA proposal holds 1x.
+    /// node with all the stake; a DA proposal holds 1x. Never below `DATA_MIN_RECORD_BYTES`.
     fn new(max_block_size: u64) -> Self {
         let bound = |factor: u64| {
             max_block_size
                 .saturating_mul(factor)
                 .saturating_add(RECORD_HEADROOM_BYTES)
-                .min(MAX_FRAME_BYTES.into()) as u32
         };
+        let frame = |bytes: u64| bytes.min(MAX_FRAME_BYTES.into()) as u32;
         Self {
-            wal: bound(1),
-            data: bound(3),
+            wal: frame(bound(1)),
+            data: frame(bound(3).max(DATA_MIN_RECORD_BYTES)),
         }
-    }
-
-    /// Data-lane budget; at least one max data record so `reserve` never waits forever.
-    fn in_flight_bytes(&self) -> usize {
-        IN_FLIGHT_FLOOR_BYTES.max(self.data as usize)
     }
 }
 
@@ -358,7 +356,7 @@ impl Persistence {
                 max_view_span: WAL_MAX_VIEW_SPAN,
                 max_batch_bytes: WAL_MAX_BATCH_BYTES,
                 max_snapshot_bytes: MAX_SNAPSHOT_BYTES,
-                in_flight_bytes: limits.in_flight_bytes(),
+                in_flight_bytes: IN_FLIGHT_BYTES,
             },
             (wal_recovered.next_seq, wal_recovered.next_lsn),
             Some(hook),
@@ -377,7 +375,7 @@ impl Persistence {
                 // Never read: the data lane has no `SnapshotHook`, so no `Snapshot` frame is ever
                 // written on it.
                 max_snapshot_bytes: MAX_SNAPSHOT_BYTES,
-                in_flight_bytes: limits.in_flight_bytes(),
+                in_flight_bytes: IN_FLIGHT_BYTES,
             },
             (data_recovered.next_seq, data_recovered.next_lsn),
             None,
@@ -450,7 +448,12 @@ impl Persistence {
             "data record of kind {kind:?} is {} bytes, over the {max}-byte limit",
             body.len()
         );
-        let permit = self.inner.data.reserve(body.len() as u32).await;
+        // Capped at the whole budget so a record over it cannot block forever.
+        let permit = self
+            .inner
+            .data
+            .reserve(body.len().min(IN_FLIGHT_BYTES) as u32)
+            .await;
         let lsn = self
             .inner
             .data
@@ -997,28 +1000,30 @@ mod tests {
     use super::{testing::TEST_MAX_BLOCK_SIZE, *};
 
     #[test]
-    fn record_limits_keep_floor_for_small_blocks() {
-        let floor = RECORD_HEADROOM_BYTES as u32;
+    fn record_limits_keep_minimums_for_small_blocks() {
         assert_eq!(
             RecordLimits::new(0),
             RecordLimits {
-                wal: floor,
-                data: floor
+                wal: RECORD_HEADROOM_BYTES as u32,
+                data: DATA_MIN_RECORD_BYTES as u32,
             }
-        );
-        assert_eq!(
-            RecordLimits::new(0).in_flight_bytes(),
-            IN_FLIGHT_FLOOR_BYTES
         );
     }
 
     #[test]
     fn record_limits_scale_with_block_size() {
-        let mb = 10_000_000;
-        let limits = RecordLimits::new(mb);
-        assert_eq!(u64::from(limits.wal), RECORD_HEADROOM_BYTES + mb);
-        assert_eq!(u64::from(limits.data), RECORD_HEADROOM_BYTES + 3 * mb);
-        assert_eq!(limits.in_flight_bytes(), IN_FLIGHT_FLOOR_BYTES);
+        let limits = RecordLimits::new(TEST_MAX_BLOCK_SIZE);
+        assert_eq!(
+            u64::from(limits.wal),
+            RECORD_HEADROOM_BYTES + TEST_MAX_BLOCK_SIZE
+        );
+        assert_eq!(u64::from(limits.data), DATA_MIN_RECORD_BYTES);
+
+        let big = 400_000_000;
+        assert_eq!(
+            u64::from(RecordLimits::new(big).data),
+            RECORD_HEADROOM_BYTES + 3 * big
+        );
     }
 
     #[test]
@@ -1026,15 +1031,6 @@ mod tests {
         let limits = RecordLimits::new(u64::MAX);
         assert_eq!(limits.wal, MAX_FRAME_BYTES);
         assert_eq!(limits.data, MAX_FRAME_BYTES);
-        assert_eq!(limits.in_flight_bytes(), MAX_FRAME_BYTES as usize);
-    }
-
-    #[test]
-    fn in_flight_budget_covers_largest_data_record() {
-        for max_block_size in [0, 10_000_000, 100_000_000, 1 << 30] {
-            let limits = RecordLimits::new(max_block_size);
-            assert!(limits.in_flight_bytes() >= limits.data as usize);
-        }
     }
 
     // Regression test: VID shares and DA payloads grow with block size and stake (78 MB shares at
