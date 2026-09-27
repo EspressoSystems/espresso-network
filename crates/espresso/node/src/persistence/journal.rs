@@ -61,9 +61,9 @@ const WAL_MAX_VIEW_SPAN: u64 = 8192;
 const WAL_MAX_BATCH_BYTES: usize = 4 << 20;
 const DATA_SEGMENT_BYTES: u64 = 1 << 30;
 const DATA_MAX_BATCH_BYTES: usize = 64 << 20;
-/// Floor for both record bounds: covers everything in a record that does not grow with block
+/// Added to both record bounds: covers everything in a record that does not grow with block
 /// size (QCs, header fields, VID proofs).
-const RECORD_FLOOR_BYTES: u64 = 64 << 20;
+const RECORD_HEADROOM_BYTES: u64 = 64 << 20;
 /// Bound on a wal `Snapshot` frame specifically: `State` (particularly `proposals`) is not pruned,
 /// so it needs more headroom than a single consensus record.
 const MAX_SNAPSHOT_BYTES: u32 = 1 << 30;
@@ -91,7 +91,7 @@ impl RecordLimits {
         let bound = |factor: u64| {
             max_block_size
                 .saturating_mul(factor)
-                .saturating_add(RECORD_FLOOR_BYTES)
+                .saturating_add(RECORD_HEADROOM_BYTES)
                 .min(MAX_FRAME_BYTES.into()) as u32
         };
         Self {
@@ -998,7 +998,7 @@ mod tests {
 
     #[test]
     fn record_limits_keep_floor_for_small_blocks() {
-        let floor = RECORD_FLOOR_BYTES as u32;
+        let floor = RECORD_HEADROOM_BYTES as u32;
         assert_eq!(
             RecordLimits::new(0),
             RecordLimits {
@@ -1016,8 +1016,8 @@ mod tests {
     fn record_limits_scale_with_block_size() {
         let mb = 10_000_000;
         let limits = RecordLimits::new(mb);
-        assert_eq!(u64::from(limits.wal), RECORD_FLOOR_BYTES + mb);
-        assert_eq!(u64::from(limits.data), RECORD_FLOOR_BYTES + 3 * mb);
+        assert_eq!(u64::from(limits.wal), RECORD_HEADROOM_BYTES + mb);
+        assert_eq!(u64::from(limits.data), RECORD_HEADROOM_BYTES + 3 * mb);
         assert_eq!(limits.in_flight_bytes(), IN_FLIGHT_FLOOR_BYTES);
     }
 
