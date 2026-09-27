@@ -334,6 +334,7 @@ pub struct Lane {
     alloc: Arc<Mutex<Lsn>>,
     durable: watch::Receiver<Lsn>,
     in_flight: Arc<Semaphore>,
+    in_flight_budget: u32,
     /// Bytes enqueued (sent to the writer thread) but not yet picked up into a batch; mirrors
     /// `journal_queue_bytes`. Shared with the writer thread, which subtracts a batch's bytes once
     /// it drains them off the channel.
@@ -379,11 +380,12 @@ impl Lane {
         self.metrics.install(metrics, self.stream);
     }
 
-    /// Data-stream backpressure: blocks until `bytes` of the in-flight budget are free.
+    /// Data-stream backpressure: blocks until `bytes` of the in-flight budget are free. Capped at
+    /// the whole budget so a record over it cannot block forever.
     pub async fn reserve(&self, bytes: u32) -> OwnedSemaphorePermit {
         self.in_flight
             .clone()
-            .acquire_many_owned(bytes)
+            .acquire_many_owned(bytes.min(self.in_flight_budget))
             .await
             .expect("in-flight semaphore is never closed")
     }
@@ -834,6 +836,8 @@ pub fn spawn_lane<F: JournalFs>(
     let (tx, rx) = mpsc::unbounded_channel::<Write>();
     let (durable_tx, durable_rx) = watch::channel(active.last_lsn);
     let in_flight = Arc::new(Semaphore::new(cfg.in_flight_bytes));
+    let in_flight_budget =
+        u32::try_from(cfg.in_flight_bytes).context("in_flight_bytes must fit in u32")?;
     let alloc = Arc::new(Mutex::new(counter_start));
     let queue_bytes = Arc::new(AtomicU64::new(0));
 
@@ -887,6 +891,7 @@ pub fn spawn_lane<F: JournalFs>(
             alloc,
             durable: durable_rx,
             in_flight,
+            in_flight_budget,
             queue_bytes,
             metrics,
         },
@@ -1284,6 +1289,8 @@ pub mod mem {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{mem::MemFs, *};
 
     fn meta(stream: Stream, seq: u64, bytes: u64, max_view: u64) -> SegmentMeta {
@@ -1413,6 +1420,26 @@ mod tests {
         fs.crash(|_| 0);
         let recovered = recover(&*fs, &dir, Stream::Data).unwrap();
         assert_eq!(recovered.next_lsn, 2);
+    }
+
+    #[tokio::test]
+    async fn reserve_over_budget_takes_whole_budget() {
+        let fs = Arc::new(MemFs::default());
+        let segments = Arc::new(Mutex::new(SegmentSet::default()));
+        let (lane, _handle) = spawn_lane(
+            fs,
+            PathBuf::from("/data-reserve"),
+            cfg(Stream::Data),
+            (1, 1),
+            None,
+            segments,
+        )
+        .unwrap();
+
+        let permit = tokio::time::timeout(Duration::from_secs(5), lane.reserve(2 << 20))
+            .await
+            .expect("reserve over the 1 MiB budget must not block");
+        assert_eq!(permit.num_permits(), 1 << 20);
     }
 
     #[tokio::test]

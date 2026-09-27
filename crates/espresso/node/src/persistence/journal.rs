@@ -434,12 +434,7 @@ impl Persistence {
             "data record of kind {kind:?} is {} bytes, over the {max}-byte limit",
             body.len()
         );
-        // Capped at the whole budget so a record over it cannot block forever.
-        let permit = self
-            .inner
-            .data
-            .reserve(body.len().min(IN_FLIGHT_BYTES) as u32)
-            .await;
+        let permit = self.inner.data.reserve(body.len() as u32).await;
         let lsn = self
             .inner
             .data
