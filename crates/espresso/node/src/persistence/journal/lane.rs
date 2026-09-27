@@ -1642,27 +1642,30 @@ mod tests {
     #[tokio::test]
     async fn recover_truncates_torn_frame_length_past_file_end() {
         let fs = MemFs::default();
-        let dir = std::path::PathBuf::from("/wal6");
+        let header = |seq| SegmentHeader {
+            stream: Stream::Wal,
+            seq,
+            first_lsn: 1,
+            prev_max_view: 0,
+        };
 
         let mut seg = Vec::new();
         format::encode_frame(&mut seg, 1, 0, Kind::Snapshot, b"snap");
         let clean_end = seg.len();
-        let mut torn = Vec::new();
-        format::encode_frame(&mut torn, 2, 7, Kind::Action, b"x");
-        torn[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
-        seg.extend_from_slice(&torn);
+        format::encode_frame(&mut seg, 2, 7, Kind::Action, b"x");
 
-        write_segment(
-            &fs,
-            &dir,
-            SegmentHeader {
-                stream: Stream::Wal,
-                seq: 1,
-                first_lsn: 1,
-                prev_max_view: 0,
-            },
-            &seg,
-        );
+        // A final frame whose length exactly fills the file is valid.
+        let exact = std::path::PathBuf::from("/wal6-exact");
+        write_segment(&fs, &exact, header(1), &seg);
+        let recovered = recover(&fs, &exact, Stream::Wal).unwrap();
+        assert_eq!(recovered.wal_records.len(), 2);
+        assert_eq!(recovered.next_lsn, 3);
+
+        // One byte past the file end is torn.
+        let remaining = (seg.len() - clean_end - format::FRAME_HEADER_LEN) as u32;
+        seg[clean_end + 4..clean_end + 8].copy_from_slice(&(remaining + 1).to_le_bytes());
+        let dir = std::path::PathBuf::from("/wal6");
+        write_segment(&fs, &dir, header(1), &seg);
 
         let recovered = recover(&fs, &dir, Stream::Wal).unwrap();
         assert_eq!(recovered.wal_records.len(), 1);
