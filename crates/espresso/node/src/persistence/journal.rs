@@ -996,6 +996,47 @@ mod tests {
 
     use super::{testing::TEST_MAX_BLOCK_SIZE, *};
 
+    #[test]
+    fn record_limits_keep_floor_for_small_blocks() {
+        let floor = RECORD_FLOOR_BYTES as u32;
+        assert_eq!(
+            RecordLimits::new(0),
+            RecordLimits {
+                wal: floor,
+                data: floor
+            }
+        );
+        assert_eq!(
+            RecordLimits::new(0).in_flight_bytes(),
+            IN_FLIGHT_FLOOR_BYTES
+        );
+    }
+
+    #[test]
+    fn record_limits_scale_with_block_size() {
+        let mb = 10_000_000;
+        let limits = RecordLimits::new(mb);
+        assert_eq!(u64::from(limits.wal), RECORD_FLOOR_BYTES + mb);
+        assert_eq!(u64::from(limits.data), RECORD_FLOOR_BYTES + 3 * mb);
+        assert_eq!(limits.in_flight_bytes(), IN_FLIGHT_FLOOR_BYTES);
+    }
+
+    #[test]
+    fn record_limits_stop_at_frame_ceiling() {
+        let limits = RecordLimits::new(u64::MAX);
+        assert_eq!(limits.wal, MAX_FRAME_BYTES);
+        assert_eq!(limits.data, MAX_FRAME_BYTES);
+        assert_eq!(limits.in_flight_bytes(), MAX_FRAME_BYTES as usize);
+    }
+
+    #[test]
+    fn in_flight_budget_covers_largest_data_record() {
+        for max_block_size in [0, 10_000_000, 100_000_000, 1 << 30] {
+            let limits = RecordLimits::new(max_block_size);
+            assert!(limits.in_flight_bytes() >= limits.data as usize);
+        }
+    }
+
     // Regression test: VID shares and DA payloads grow with block size and stake (78 MB shares at
     // 40% stake with 1 MB txs), past the wal record bound.
     #[tokio::test]
