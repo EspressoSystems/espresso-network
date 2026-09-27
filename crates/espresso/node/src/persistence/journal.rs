@@ -303,18 +303,11 @@ impl Persistence {
 
         let replay_started = Instant::now();
         let mut state = State::default();
-        let mut snapshot_anchor_view = None;
         for (header, body) in &wal_recovered.wal_records {
             let record = Record::decode(header.kind, header.view, body)
                 .context("decoding wal record during replay")?;
             match record {
-                Record::Snapshot(snapshot) => {
-                    snapshot_anchor_view = snapshot
-                        .anchor
-                        .as_ref()
-                        .map(|(leaf, ..)| leaf.view_number());
-                    state = *snapshot;
-                },
+                Record::Snapshot(snapshot) => state = *snapshot,
                 record => {
                     if let Some(finalized) = state.apply(&record) {
                         side.insert_state_cert(finalized.epoch, finalized.cert)
@@ -326,9 +319,9 @@ impl Persistence {
         }
         let replay_seconds = replay_started.elapsed().as_secs_f64();
         tracing::info!(
-            segment = ?wal_recovered.segments.last().map(|s| s.seq),
+            wal_segment = ?wal_recovered.segments.last().map(|s| s.seq),
             records = wal_recovered.wal_records.len(),
-            ?snapshot_anchor_view,
+            anchor_view = ?state.anchor.as_ref().map(|(leaf, ..)| leaf.view_number()),
             replay_seconds,
             "journal: replayed wal"
         );
