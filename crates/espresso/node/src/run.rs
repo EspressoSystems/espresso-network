@@ -1,3 +1,4 @@
+use anyhow::ensure;
 use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::traits::NullEventConsumer;
@@ -5,10 +6,11 @@ use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 use process_metrics::log_cpu_probe;
 use url::Url;
+use versions::NEW_PROTOCOL_VERSION;
 
 use super::{
     CatchupParams, Genesis, L1Params, NetworkParams,
-    api::{self, data_source::DataSourceOptions},
+    api::{self, data_source::QueryModuleOptions},
     context::SequencerContext,
     init_node, network,
     options::{Modules, Options, PublicNodeConfig},
@@ -100,6 +102,24 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             telemetry_handle.as_mut(),
         )
         .await
+    } else if let Some(storage) = modules.storage_journal.take() {
+        ensure!(
+            modules.query.is_none(),
+            "storage-journal does not support the query module; use storage-sql"
+        );
+        ensure!(
+            genesis.base_version >= NEW_PROTOCOL_VERSION,
+            "storage-journal requires a genesis base_version of at least {NEW_PROTOCOL_VERSION}"
+        );
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
     } else {
         // Persistence is required. If none is provided, just use the local file system.
         run_with_storage(
@@ -128,7 +148,7 @@ async fn run_with_storage<S>(
     telemetry_handle: Option<&mut telemetry::TelemetryHandle>,
 ) -> anyhow::Result<()>
 where
-    S: DataSourceOptions,
+    S: QueryModuleOptions,
 {
     let mut ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
 
@@ -158,7 +178,7 @@ pub async fn init_with_storage<S>(
     public_node_config: PublicNodeConfig,
 ) -> anyhow::Result<SequencerContext<network::Production, S::Persistence>>
 where
-    S: DataSourceOptions,
+    S: QueryModuleOptions,
 {
     let KeySet {
         staking,
@@ -229,7 +249,7 @@ where
             // Add optional API modules as requested.
             let mut http_opt = api::Options::from(http_opt);
             if let Some(query) = modules.query {
-                http_opt = storage_opt.enable_query_module(http_opt, query);
+                http_opt = storage_opt.enable_query_module(http_opt, query)?;
             }
             if let Some(submit) = modules.submit {
                 http_opt = http_opt.submit(submit);
