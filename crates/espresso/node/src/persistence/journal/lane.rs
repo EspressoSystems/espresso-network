@@ -964,9 +964,12 @@ impl<F: JournalFs> Writer<F> {
                 std::process::abort();
             }
             self.active.offset += self.frame_buf.len() as u64;
-            // One oversized record must not keep its copy resident.
+            // A batch can overshoot `max_batch_bytes`; shrink only well past it, so saturated
+            // batches reuse the buffer and one oversized record does not keep its copy resident.
             self.frame_buf.clear();
-            self.frame_buf.shrink_to(self.cfg.max_batch_bytes);
+            if self.frame_buf.capacity() > 2 * self.cfg.max_batch_bytes {
+                self.frame_buf.shrink_to(self.cfg.max_batch_bytes);
+            }
             // Permits are held by `batch` until here, bounding in-flight data bytes until the write
             // (not the fsync) lands; the semaphore is about memory, not durability.
             drop(batch);
