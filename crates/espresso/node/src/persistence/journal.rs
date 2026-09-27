@@ -65,11 +65,14 @@ const DATA_MAX_BATCH_BYTES: usize = 64 << 20;
 /// size (QCs, header fields).
 const RECORD_HEADROOM_BYTES: u64 = 64 << 20;
 /// Lower bound on the data record limit. VID proofs grow with namespaces x shard weight, not
-/// payload bytes: ~160 KB per namespace at 1/3 stake.
+/// payload bytes: ~160 KB per namespace at 1/3 stake. Covers ~6.5k namespaces at 1/3 stake, ~2.2k
+/// at full stake; `put_data` rejects larger shares.
 const DATA_MIN_RECORD_BYTES: u64 = 1 << 30;
 /// Bound on a wal `Snapshot` frame specifically: `State` (particularly `proposals`) is not pruned,
 /// so it needs more headroom than a single consensus record.
 const MAX_SNAPSHOT_BYTES: u32 = 1 << 30;
+/// A record over this budget takes all of it, so peak memory is about one record plus its
+/// `frame_buf` copy.
 const IN_FLIGHT_BYTES: usize = 128 << 20;
 
 /// Per-record size bounds, enforced in `put_wal`/`put_data` before a record reaches a lane.
