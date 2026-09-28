@@ -1,0 +1,41 @@
+repo_root := `git rev-parse --show-toplevel`
+bench := source_directory() / "bench"
+target_dir := env_var_or_default("CARGO_TARGET_DIR", repo_root / "target")
+bin_dir := env_var_or_default("BENCH_BIN_DIR", target_dir / "release")
+out := env_var_or_default("BENCH_OUT", "bench-out")
+
+default:
+    just --list --justfile {{source_file()}}
+
+# Release binaries the benchmark network runs; postgres and sqlite builds need separate invocations.
+build:
+    cd {{repo_root}} && cargo build --locked --release -p espresso-node --bin espresso-node --bin orchestrator --bin state-relay-server --bin deploy
+    cd {{repo_root}} && cargo build --locked --release -p espresso-node-sqlite
+
+# Start the network, load and measure it, tear it down; writes result.json and summary.md.
+run *args:
+    cd {{repo_root}} && {{bench}} run --bin-dir {{bin_dir}} --out {{out}} {{args}}
+
+# Re-analyse a run directory, optionally against a baseline, without rerunning.
+render dir=out *args:
+    cd {{repo_root}} && {{bench}} render {{dir}} {{args}}
+
+# Compare a result.json with a baseline (a result.json or `nextest-ci stats-fetch` output).
+compare result baseline:
+    cd {{repo_root}} && {{bench}} compare {{result}} --baseline {{baseline}}
+
+# Runner info and CPU calibration only.
+sysinfo:
+    cd {{repo_root}} && {{bench}} sysinfo --out {{out}}
+
+# Remove the output directory and storage left by an interrupted run.
+clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{repo_root}}
+    rm -rf {{out}}
+    for dir in /tmp/enb.*; do
+        [[ -e $dir || -L $dir ]] || continue
+        [[ -L $dir ]] && rm -rf "$(readlink -f "$dir")"
+        rm -rf "$dir"
+    done
