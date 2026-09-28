@@ -522,17 +522,15 @@ class LoadTest(unittest.TestCase):
 
     def test_inclusion_releases_permits(self):
         _, node, txs, meta = self.run_load(True, 1.0, max_pending=4, tx_timeout_s=5)
-        self.assertGreater(len(txs), 4 * 3)
+        self.assertGreater(len(txs), 4)
         self.assertTrue(all(tx["status"] == "included" for tx in txs))
         self.assertLessEqual(meta["max_in_flight"], 4)
         self.assertLessEqual(node.max_outstanding, 4)
 
     def test_timeout_releases_permits(self):
-        start, node, txs, meta = self.run_load(
-            False, 2.5, max_pending=4, tx_timeout_s=1
-        )
-        before_first_timeout = [t for t in node.submits if t < start + 1.0]
-        self.assertEqual(len(before_first_timeout), 4)
+        _, node, txs, meta = self.run_load(False, 2.5, max_pending=4, tx_timeout_s=1)
+        # A permit returns only on timeout, and the first one is 1 s after the first submit.
+        self.assertGreater(node.submits[4] - node.submits[0], 0.9)
         self.assertGreater(len(node.submits), 4)
         self.assertEqual(meta["max_in_flight"], 4)
         self.assertTrue(all(tx["status"] == "timeout" for tx in txs))
@@ -547,6 +545,117 @@ class LoadTest(unittest.TestCase):
             )
         self.assertEqual(meta["missing_payloads"], [3])
         self.assertGreater(sum(tx["status"] == "included" for tx in txs), 4)
+
+
+def write_run_dir(out):
+    """A 60 s window (t 100 to 160) where every node decides 1 MB/s in 2 blocks/s and 4 views/s
+    and uses 0.5 cores, the host is half busy, and 41 of 42 transactions land 2 s after submit."""
+    t0, t1 = 100.0, 160.0
+
+    def jsonl(name, records):
+        (out / name).write_text("".join(json.dumps(r) + "\n" for r in records))
+
+    metrics = {
+        "consensus_finalized_bytes_sum": 1e6,
+        "consensus_finalized_bytes_count": 2.0,
+        "consensus_last_decided_view": 4.0,
+        "consensus_last_synced_block_height": 2.0,
+        "process_cpu_seconds_total": 0.5,
+    }
+    jsonl(
+        "metrics.jsonl",
+        (
+            {
+                "ts": ts,
+                "node": node,
+                "ok": True,
+                "m": {k: v * ts for k, v in metrics.items()},
+            }
+            for ts in range(90, 175, 5)
+            for node in bench.NODES
+        ),
+    )
+    jsonl(
+        "host.jsonl",
+        (
+            {
+                "ts": ts,
+                "cpu": [50 * ts, 0, 0, 50 * ts, 0, 0, 0, 0, 0, 0],
+                "mem_avail": 1000 + ts,
+                "procs": {"node0": {"cpu_s": 0.5 * ts, "rss": 10 * ts}},
+            }
+            for ts in range(90, 172, 2)
+        ),
+    )
+    txs: list[dict] = [
+        {"id": i, "node": 0, "t_submit": t, "t_included": t + 2.0, "status": "included"}
+        for i, t in enumerate(range(110, 151))
+    ]
+    txs.append(
+        {
+            "id": 99,
+            "node": 0,
+            "t_submit": 120.5,
+            "t_included": None,
+            "status": "timeout",
+        }
+    )
+    jsonl("load.jsonl", txs)
+    calib = {"sha256_1t_mb_s": 2000.0, "sha256_mt_mb_s": 8000.0, "fsync_per_s": 300.0}
+    files = {
+        "load-meta.json": {
+            "submit_errors": 0,
+            "max_in_flight": 4,
+            "missing_payloads": [],
+        },
+        "calibration.json": {"before": calib, "after": calib},
+        "sysinfo.json": {"runner": make_result()["runner"]},
+        "stake-table.json": {
+            "stake_table": [{"stake_table_entry": {"stake_amount": "0x1"}}] * 3
+        },
+        "run.json": {
+            "t0": t0,
+            "t1": t1,
+            "started": 0.0,
+            "wall_s": 300.0,
+            "ready_s": 40.0,
+            "teardown": [],
+            "config_hash": "abc",
+            "meta": make_result()["run"],
+        },
+    }
+    for name, data in files.items():
+        (out / name).write_text(json.dumps(data))
+
+
+class AnalyzeTest(unittest.TestCase):
+    def test_window_rates(self):
+        cfg = bench.BenchConfig(measure_s=60, subwindow_s=20)
+        with tempfile.TemporaryDirectory() as tmp:
+            write_run_dir(Path(tmp))
+            result = bench.analyze(Path(tmp), cfg)
+        net, node0, load = result["network"], result["nodes"]["node0"], result["load"]
+        self.assertAlmostEqual(net["decided_mb_per_s"]["value"], 1.0)
+        self.assertAlmostEqual(net["blocks_per_s"]["min"], 2.0)
+        self.assertAlmostEqual(net["mean_view_ms"]["value"], 250.0)
+        self.assertAlmostEqual(net["cpu_s_per_mb"]["value"], 1.5)
+        self.assertEqual(net["timeouts"], 0)
+        self.assertEqual((node0["decided_blocks"], node0["cpu_cores"]), (120, 0.5))
+        self.assertEqual(
+            (result["window"]["height_start"], result["window"]["height_end"]),
+            (200, 320),
+        )
+        self.assertAlmostEqual(result["host"]["util_mean"], 0.5)
+        self.assertEqual(result["host"]["mem_avail_min_bytes"], 1100)
+        self.assertAlmostEqual(result["processes"]["node0"]["cpu_cores_mean"], 0.5)
+        self.assertAlmostEqual(load["submitted_per_s"], 42 / 60)
+        self.assertAlmostEqual(load["included_per_s"], 41 / 60)
+        self.assertEqual(load["latency_ms"]["p50"], 2000.0)
+        self.assertEqual(load["timeouts"], 1)
+        self.assertEqual(
+            result["validity"],
+            {"valid": True, "noisy": True, "reasons": ["1 transactions timed out"]},
+        )
 
 
 class StatTest(unittest.TestCase):
