@@ -4,11 +4,11 @@ use std::collections::{HashMap, VecDeque};
 
 use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
+use espresso_types::Header;
 use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2},
-    event::LeafInfo,
+    data::{EpochNumber, ViewNumber},
     light_client::{
         LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
         StakeTableState, StateSignKey, StateSignature, StateVerKey,
@@ -90,34 +90,20 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         self
     }
 
-    pub(super) async fn handle_event<I>(
+    pub(super) async fn handle_decide<I>(
         &mut self,
-        event: &CoordinatorEvent<SeqTypes>,
+        leaf: &DecidedLeaf,
         consensus_handle: &ConsensusHandle<SeqTypes, I>,
     ) where
         I: hotshot::traits::NodeImplementation<SeqTypes>,
         I::Storage: hotshot_new_protocol::storage::NewProtocolStorage<SeqTypes>,
     {
-        let leaf: &Leaf2<SeqTypes> = match event {
-            CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) => match leaf_chain.first() {
-                Some(LeafInfo { leaf, .. }) => leaf,
-                None => return,
-            },
-            CoordinatorEvent::NewDecide { leaf_infos, .. } => match leaf_infos.first() {
-                Some(info) => &info.leaf,
-                None => return,
-            },
-            _ => return,
-        };
-        match leaf
-            .block_header()
-            .get_light_client_state(leaf.view_number())
-        {
+        match leaf.header.get_light_client_state(leaf.view) {
             Ok(state) => {
-                tracing::debug!("New leaves decided. Latest block height: {}", leaf.height(),);
+                tracing::debug!(
+                    "New leaves decided. Latest block height: {}",
+                    leaf.header.block_number()
+                );
 
                 let cur_block_height = state.block_height;
                 let blocks_per_epoch = *consensus_handle.epoch_height().await;
@@ -169,7 +155,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                     return;
                 }
 
-                let Ok(auth_root) = leaf.block_header().auth_root() else {
+                let Ok(auth_root) = leaf.header.auth_root() else {
                     tracing::error!("Failed to get auth root for light client state");
                     return;
                 };
@@ -272,6 +258,33 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         state: &LightClientState,
     ) -> Result<StateSignature, SignatureError> {
         <SchnorrPubKey as LCV1StateSignatureKey>::sign_state(&self.sign_key, state)
+    }
+}
+
+/// The parts of the latest decided leaf that the state signer needs, without the block payload
+/// a leader's leaf still carries.
+#[derive(Clone, Debug)]
+pub(crate) struct DecidedLeaf {
+    header: Header,
+    view: ViewNumber,
+    with_epoch: bool,
+}
+
+impl DecidedLeaf {
+    pub(crate) fn from_event(event: &CoordinatorEvent<SeqTypes>) -> Option<DecidedLeaf> {
+        let leaf = match event {
+            CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) => &leaf_chain.first()?.leaf,
+            CoordinatorEvent::NewDecide { leaf_infos, .. } => &leaf_infos.first()?.leaf,
+            _ => return None,
+        };
+        Some(DecidedLeaf {
+            header: leaf.block_header().clone(),
+            view: leaf.view_number(),
+            with_epoch: leaf.with_epoch,
+        })
     }
 }
 
