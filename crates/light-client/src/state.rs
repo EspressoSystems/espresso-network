@@ -381,6 +381,7 @@ where
     ///
     /// The server's QCs are unverified, so each returned leaf instead carries the justify QC of
     /// the leaf above it, which that leaf's commitment covers.
+    /// It may differ from the QC the server stored for the leaf.
     async fn verify_leaf_chain(
         &self,
         leaves: &[LeafQueryData<SeqTypes>],
@@ -1271,42 +1272,58 @@ mod test {
         );
     }
 
+    /// A client serving a legacy chain, or a new-protocol chain from genesis.
+    async fn forged_qc_client(new_protocol: bool) -> TestClient {
+        let client = TestClient::default();
+        if new_protocol {
+            client.set_upgrade(0, NEW_PROTOCOL_VERSION).await;
+        }
+        client
+    }
+
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_leaves_in_range_forged_qc() {
-        let client = TestClient::default();
-        let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
-            client.clone(),
-            client.genesis().await,
-        );
+        for new_protocol in [false, true] {
+            let client = forged_qc_client(new_protocol).await;
+            let lc = LightClient::from_genesis(
+                SqliteStorage::default().await.unwrap(),
+                client.clone(),
+                client.genesis().await,
+            );
 
-        let expected = vec![client.leaf(1).await, client.leaf(2).await];
-        client.forge_qc(1).await;
-        assert_eq!(lc.fetch_leaves_in_range(1, 3).await.unwrap(), expected);
+            let expected = vec![client.leaf(1).await, client.leaf(2).await];
+            client.forge_qc(1).await;
+            assert_eq!(lc.fetch_leaves_in_range(1, 3).await.unwrap(), expected);
+        }
     }
 
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_leaves_for_ranges_forged_qc() {
-        let client = TestClient::default();
-        let lc = LightClient::from_genesis(
-            SqliteStorage::default().await.unwrap(),
-            client.clone(),
-            client.genesis().await,
-        );
+        for new_protocol in [false, true] {
+            let client = forged_qc_client(new_protocol).await;
+            let lc = LightClient::from_genesis(
+                SqliteStorage::default().await.unwrap(),
+                client.clone(),
+                client.genesis().await,
+            );
 
-        // A coalesced span and a pair of runs too far apart to coalesce.
-        for (ranges, heights) in [
-            ([1..3, 5..8], [1usize, 2, 5, 6, 7]),
-            ([10..12, 70..73], [10, 11, 70, 71, 72]),
-        ] {
-            let mut expected = vec![];
-            for height in heights {
-                expected.push(client.leaf(height).await);
-                client.forge_qc(height).await;
+            // A coalesced span and a pair of runs too far apart to coalesce. Only leaves below
+            // each run's anchor are forged: a new-protocol anchor with a forged QC is rejected.
+            for (ranges, heights, forged) in [
+                ([1..3, 5..8], [1usize, 2, 5, 6, 7], [1, 5, 6]),
+                ([10..12, 70..73], [10, 11, 70, 71, 72], [10, 70, 71]),
+            ] {
+                let mut expected = vec![];
+                for height in heights {
+                    expected.push(client.leaf(height).await);
+                }
+                for height in forged {
+                    client.forge_qc(height).await;
+                }
+                assert_eq!(lc.fetch_leaves_for_ranges(&ranges).await.unwrap(), expected);
             }
-            assert_eq!(lc.fetch_leaves_for_ranges(&ranges).await.unwrap(), expected);
         }
     }
 
