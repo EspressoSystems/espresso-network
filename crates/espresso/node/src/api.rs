@@ -1855,7 +1855,8 @@ pub mod test_helpers {
         /// Deferred node indices not yet started (see [`Self::start_deferred_node`]).
         deferred: Vec<usize>,
         genesis_states: Vec<ValidatedState>,
-        api_url: Url,
+        /// Node 0's API, if nodes use it for catchup (see [`with_api_catchup`]).
+        api_catchup: Option<Url>,
     }
 
     pub struct TestNetworkConfig<const NUM_NODES: usize, P, C>
@@ -1871,6 +1872,7 @@ pub mod test_helpers {
         contracts: Option<Contracts>,
         initial_token_supply: Option<U256>,
         deferred_start: Vec<usize>,
+        api_catchup: bool,
     }
 
     impl<const NUM_NODES: usize, P, C> TestNetworkConfig<{ NUM_NODES }, P, C>
@@ -1922,6 +1924,7 @@ pub mod test_helpers {
         contracts: Option<Contracts>,
         initial_token_supply: Option<U256>,
         deferred_start: Vec<usize>,
+        api_catchup: bool,
     }
 
     impl Default for TestNetworkConfigBuilder<5, no_storage::Options, NullStateCatchup> {
@@ -1935,6 +1938,7 @@ pub mod test_helpers {
                 contracts: None,
                 initial_token_supply: None,
                 deferred_start: Vec::new(),
+                api_catchup: true,
             }
         }
     }
@@ -1953,6 +1957,7 @@ pub mod test_helpers {
                 contracts: None,
                 initial_token_supply: None,
                 deferred_start: Vec::new(),
+                api_catchup: true,
             }
         }
     }
@@ -1993,6 +1998,7 @@ pub mod test_helpers {
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
                 deferred_start: self.deferred_start,
+                api_catchup: self.api_catchup,
             }
         }
 
@@ -2014,6 +2020,7 @@ pub mod test_helpers {
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
                 deferred_start: self.deferred_start,
+                api_catchup: self.api_catchup,
             }
         }
 
@@ -2021,6 +2028,14 @@ pub mod test_helpers {
         /// join later via [`TestNetwork::start_deferred_node`].
         pub fn deferred_start(mut self, indices: &[usize]) -> Self {
             self.deferred_start = indices.to_vec();
+            self
+        }
+
+        /// Leaves node 0's API out of every node's catchup providers, for tests
+        /// of a specific catchup route. A node then catches up only through
+        /// its own provider, so past epoch 2 it needs one that serves leaves.
+        pub fn without_api_catchup(mut self) -> Self {
+            self.api_catchup = false;
             self
         }
 
@@ -2095,6 +2110,7 @@ pub mod test_helpers {
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
                 deferred_start: self.deferred_start,
+                api_catchup: self.api_catchup,
             }
         }
     }
@@ -2131,9 +2147,11 @@ pub mod test_helpers {
 
             let deferred = cfg.deferred_start.clone();
             let genesis_states = cfg.state.to_vec();
-            let api_url: Url = format!("http://localhost:{}", opt.http.port)
-                .parse()
-                .unwrap();
+            let api_catchup: Option<Url> = cfg.api_catchup.then(|| {
+                format!("http://localhost:{}", opt.http.port)
+                    .parse()
+                    .unwrap()
+            });
             assert!(
                 deferred.len() < NUM_NODES,
                 "node 0 runs the API server and cannot be deferred"
@@ -2149,7 +2167,7 @@ pub mod test_helpers {
                     .enumerate()
                     .filter(|(i, _)| !deferred.contains(i))
                     .map(|(i, (state, persistence, state_peers))| {
-                        let state_peers = with_api_catchup(state_peers, &api_url);
+                        let state_peers = with_api_catchup(state_peers, api_catchup.as_ref());
                         let opt = opt.clone();
                         let cfg = &cfg.network_config;
                         let upgrades_map = cfg.upgrades();
@@ -2227,7 +2245,7 @@ pub mod test_helpers {
                 contracts: cfg.contracts,
                 deferred,
                 genesis_states,
-                api_url,
+                api_catchup,
             }
         }
 
@@ -2336,7 +2354,7 @@ pub mod test_helpers {
                     i,
                     state,
                     persistence,
-                    Some(with_api_catchup(catchup, &self.api_url)),
+                    Some(with_api_catchup(catchup, self.api_catchup.as_ref())),
                     None,
                     &NoMetrics,
                     STAKE_TABLE_CAPACITY_FOR_TEST,
@@ -2367,20 +2385,24 @@ pub mod test_helpers {
         }
     }
 
-    /// Adds node 0's API as a catchup provider behind `catchup`. From epoch 3 the new protocol
-    /// fetches epoch root leaves through catchup, so a node without storage or state peers
-    /// would otherwise wedge at the first epoch boundary.
+    /// Adds node 0's API, if given, as a catchup provider alongside `catchup`. From epoch 3 the
+    /// new protocol fetches epoch root leaves through catchup, so a node without storage or state
+    /// peers would otherwise wedge at the first epoch boundary. Both providers are queried at
+    /// once, so a test of `catchup` itself must leave the API out.
     fn with_api_catchup(
         catchup: impl StateCatchup + 'static,
-        api_url: &Url,
+        api_url: Option<&Url>,
     ) -> ParallelStateCatchup {
-        let api = StatePeers::<SequencerApiVersion>::from_urls(
-            vec![api_url.clone()],
-            Default::default(),
-            Duration::from_secs(2),
-            &NoMetrics,
-        );
-        ParallelStateCatchup::new(&[Arc::new(catchup), Arc::new(api)], Duration::from_secs(5))
+        let mut providers: Vec<Arc<dyn StateCatchup>> = vec![Arc::new(catchup)];
+        if let Some(url) = api_url {
+            providers.push(Arc::new(StatePeers::<SequencerApiVersion>::from_urls(
+                vec![url.clone()],
+                Default::default(),
+                Duration::from_secs(2),
+                &NoMetrics,
+            )));
+        }
+        ParallelStateCatchup::new(&providers, Duration::from_secs(5))
     }
 
     /// Deploys the stake table (with a mock light client) sized to the
@@ -3885,6 +3907,7 @@ mod test {
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
             .network_config(TestConfigBuilder::default().build())
+            .without_api_catchup()
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![url.clone()],
@@ -3984,6 +4007,7 @@ mod test {
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
             .network_config(TestConfigBuilder::default().build())
+            .without_api_catchup()
             .build();
         let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
         restarted_node_catches_up(&mut network, NullStateCatchup::default()).await;
@@ -4313,7 +4337,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                TEST_UPGRADE,
+                Upgrade::trivial(EPOCH_VERSION),
                 Default::default(),
             )
             .await;
