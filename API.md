@@ -59,12 +59,14 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   selectors become query parameters on one route per tree, exactly one required, and v1's two block-height routes both
   read the same `get_last_state_height`, so v2 serves that number once.
 - `RewardStateService` serves the reward tree (`RewardMerkleTreeV2`) under `/v2/merklized-state/reward/...`: an
-  account's balance and its proof, the L1 claim input, paged reward amounts, the serialized tree, and a path lookup. A
-  balance or proof takes an optional `height`, absent meaning the newest height the light client contract finalized,
-  where v1 has a route for each. The account balance and the claim input's lifetime rewards are decimal strings, where
-  v1 serves them as `0x` hex, and a page of reward amounts comes in the tree's own order, where v1 reverses it. The
-  serialized tree is one message, so a large one can exceed a gRPC client's default 4 MB decode limit. The routes over
-  the older `RewardMerkleTreeV1`, its account proof and its path lookup, stay on v1.
+  account's balance and its proof, the L1 claim input, paged reward amounts, and the serialized tree. A balance or proof
+  takes an optional `height`, absent meaning the newest height the light client contract finalized, where v1 has a route
+  for each. The account balance and the claim input's lifetime rewards are decimal strings, where v1 serves them as `0x`
+  hex, and a page of reward amounts comes in the tree's own order, where v1 reverses it. The serialized tree is one
+  message, so a large one can exceed a gRPC client's default 4 MB decode limit. The routes over the older
+  `RewardMerkleTreeV1`, its account proof and its path lookup, stay on v1. v2 has no path lookup for
+  `RewardMerkleTreeV2`: v1's reads merklized-state tables no reward tree populates, so it cannot succeed, and the proof
+  route already serves an account's path.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

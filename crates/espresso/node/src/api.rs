@@ -9965,11 +9965,6 @@ mod test {
         .await;
         assert_eq!(v2.tree, v1_tree);
 
-        let header: Header = fetch(client, &format!("availability/header/{height}")).await;
-        let commit = header
-            .reward_merkle_tree_root()
-            .right()
-            .expect("a V4 header carries the v2 reward root");
         let absent = alloy::primitives::Address::with_last_byte(0xaa);
         let beyond = height + 1_000_000;
         for (v1, v2) in [
@@ -10017,8 +10012,6 @@ mod test {
             format!("claim-input?height={height}"),
             format!("amounts?height={height}&offset=0"),
             "tree".to_owned(),
-            format!("path?address={address}"),
-            format!("path?address={address}&height={height}&commit={commit}"),
         ] {
             let status =
                 error_status(client, &format!("v2/merklized-state/reward/{missing}")).await;

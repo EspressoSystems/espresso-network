@@ -101,17 +101,6 @@ message RewardMerkleTreeV2Response {
   bytes tree = 1;
 }
 
-message GetRewardStatePathRequest {
-  // Required, the account to look up, hex with an optional `0x` prefix
-  optional string address = 1;
-
-  // Snapshot the tree as of this block height
-  optional uint64 height = 2;
-
-  // Snapshot the tree at this root, TaggedBase64 `MERKLE_COMM~`
-  optional string commit = 3;
-}
-
 // The reward tree, backed by RewardMerkleTreeV2. The height of the newest persisted snapshot is one
 // value shared with every merklized-state tree, served by `GetStateHeight` on MerklizedStateService
 service RewardStateService {
@@ -140,11 +129,5 @@ service RewardStateService {
   // Get this node's serialized RewardMerkleTreeV2 snapshot at a block height
   rpc GetRewardMerkleTreeV2(GetRewardMerkleTreeV2Request) returns (RewardMerkleTreeV2Response) {
     option (google.api.http) = {get: "/v2/merklized-state/reward/tree"};
-  }
-
-  // Get the Merkle path to one account of the reward merkle tree. Exactly one of height or commit
-  // selects the snapshot. None or both is a 400
-  rpc GetRewardStatePath(GetRewardStatePathRequest) returns (MerklePathResponse) {
-    option (google.api.http) = {get: "/v2/merklized-state/reward/path"};
   }
 }

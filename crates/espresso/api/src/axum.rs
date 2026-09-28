@@ -4914,7 +4914,6 @@ mod tests {
             "/v2/merklized-state/reward/claim-input",
             "/v2/merklized-state/reward/proof",
             "/v2/merklized-state/reward/tree",
-            "/v2/merklized-state/reward/path",
             "/v2/merklized-state/fee/balance",
             "/v2/merklized-state/height",
             "/v2/availability/limits",
@@ -5453,13 +5452,6 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetRewardBalanceRequest>,
         ) -> Result<tonic::Response<crate::proto::RewardBalanceResponse>, tonic::Status> {
-            Err(tonic::Status::internal("mock"))
-        }
-
-        async fn get_reward_state_path(
-            &self,
-            _request: tonic::Request<crate::proto::GetRewardStatePathRequest>,
-        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 

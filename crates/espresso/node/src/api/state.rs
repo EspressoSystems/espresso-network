@@ -4152,21 +4152,6 @@ where
             tree,
         }))
     }
-
-    async fn get_reward_state_path(
-        &self,
-        request: tonic::Request<proto::GetRewardStatePathRequest>,
-    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
-        let request = request.into_inner();
-        let address = required(request.address, "address")?;
-        let snapshot = snapshot_from_query(request.height, request.commit)?;
-        let proof = v1::RewardApi::get_reward_state_path_v2(self, snapshot, address)
-            .await
-            .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::MerklePathResponse::from(
-            &proof,
-        )))
-    }
 }
 
 fn snapshot_from_query(
