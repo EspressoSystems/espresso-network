@@ -1921,7 +1921,9 @@ def status_line(result: BenchResult) -> str:
     validity = result["validity"]
     reasons = "; ".join(validity["reasons"])
     run = result["run"]
-    head = f"`{run['sha'][:10]}` {run['event']} {run['ref']}, config `{result['config_hash']}`"
+    # A dispatched PR run has the PR branch as ref; the PR number says more.
+    where = f"PR #{run['pr']}" if run["pr"] else f"{run['event']} {run['ref']}"
+    head = f"`{run['sha'][:10]}` {where}, config `{result['config_hash']}`"
     return f"{head}: **{verdict_word(validity)}**" + (
         f" ({reasons})" if reasons else ""
     )

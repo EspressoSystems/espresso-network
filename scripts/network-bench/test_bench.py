@@ -177,6 +177,11 @@ class RenderTest(unittest.TestCase):
         )
         self.assertIn("Test CPU", summary)
 
+    def test_status_names_the_pr(self):
+        current = make_result()
+        current["run"] |= {"pr": 42, "event": "workflow_dispatch"}
+        self.assertIn("`0123456789` PR #42, config", bench.render(current, None))
+
     def test_no_baseline(self):
         current = make_result()
         comparison = compare(current, [])
