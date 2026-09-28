@@ -56,6 +56,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -134,6 +135,9 @@ PROGRESS_S = 30
 # Payloads are read a block behind the query node's height: a payload requested as soon as its
 # header is stored can start a peer fetch that races the node's own insert.
 PAYLOAD_LAG_BLOCKS = 1
+STOP_TIMEOUT_S = 20
+CLEANUP_TIMEOUT_S = 60
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 MISSING_PAYLOAD_S = 10
 TOOL_VERSIONS = (
     ["process-compose", "version"],
@@ -467,15 +471,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     write_json(out / "config.json", dataclasses.asdict(cfg))
     runner, raw = collect_sysinfo(args.bin_dir)
     write_json(out / "sysinfo.json", {"runner": runner, "raw": raw})
-    storage = make_storage(args.storage_root)
+    # SIGTERM (a cancelled CI job) unwinds like Ctrl-C, so storage and the network are cleaned up.
+    previous = signal.signal(signal.SIGTERM, raise_interrupt)
     try:
-        calib_before = calibrate(storage)
-        log.info("calibration before: %s", calib_before)
-        run = drive_network(cfg, args, out, storage)
-        calib_after = calibrate(storage)
-        log.info("calibration after: %s", calib_after)
+        storage = make_storage(args.storage_root)
+        try:
+            calib_before = calibrate(storage)
+            log.info("calibration before: %s", calib_before)
+            run = drive_network(cfg, args, out, storage)
+            calib_after = calibrate(storage)
+            log.info("calibration after: %s", calib_after)
+        finally:
+            remove_storage(storage)
     finally:
-        remove_storage(storage)
+        signal.signal(signal.SIGTERM, previous)
     run |= {
         "started": started,
         "wall_s": time.time() - started,
@@ -546,15 +555,15 @@ def drive_network(
     run: dict[str, Any] = {"error": None, "ready_s": None, "teardown": []}
     stop = threading.Event()
     pool = HttpPool()
-    net = start_network(cfg, out, storage, args.bin_dir)
+    net = None
     samplers = [
         threading.Thread(
             target=sample_metrics, args=(list(NODES), out / "metrics.jsonl", stop)
         ),
         threading.Thread(target=sample_host, args=(out / "host.jsonl", storage, stop)),
     ]
-    previous = signal.signal(signal.SIGTERM, raise_interrupt)
     try:
+        net = start_network(cfg, out, storage, args.bin_dir)
         for sampler in samplers:
             sampler.start()
         run["ready_s"] = wait_ready(
@@ -582,13 +591,14 @@ def drive_network(
         run["error"] = "interrupted"
         log.error("interrupted")
     finally:
-        stop.set()
-        for sampler in samplers:
-            if sampler.is_alive():
-                sampler.join()
-        pool.close()
-        run["teardown"] = teardown(net)
-        signal.signal(signal.SIGTERM, previous)
+        with signals_ignored():
+            stop.set()
+            for sampler in samplers:
+                if sampler.is_alive():
+                    sampler.join()
+            pool.close()
+            if net is not None:
+                run["teardown"] = teardown(net)
     return run
 
 
@@ -598,6 +608,17 @@ class NetworkError(Exception):
 
 def raise_interrupt(signum: int, frame: Any) -> None:
     raise KeyboardInterrupt
+
+
+@contextmanager
+def signals_ignored() -> Iterator[None]:
+    """A second Ctrl-C or SIGTERM must not abort teardown halfway."""
+    previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in STOP_SIGNALS}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def preflight_problems(ports: tuple[int, ...], names: tuple[str, ...]) -> list[str]:
@@ -728,27 +749,33 @@ def teardown(net: Network) -> list[str]:
     if net.proc.poll() is None:
         net.proc.send_signal(signal.SIGTERM)
         try:
-            net.proc.wait(timeout=20)
+            net.proc.wait(timeout=STOP_TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            notes.append("process-compose did not stop within 20 s")
+            notes.append(f"process-compose did not stop within {STOP_TIMEOUT_S} s")
             os.killpg(net.proc.pid, signal.SIGKILL)
             net.proc.wait()
     with open(net.out / "logs" / "cleanup.log", "wb") as cleanup_log:
-        subprocess.run(
-            [str(REPO / "scripts" / "cleanup-process-compose")],
-            cwd=REPO,
-            stdout=cleanup_log,
-            stderr=subprocess.STDOUT,
-            timeout=60,
-            check=False,
-        )
+        try:
+            subprocess.run(
+                [str(REPO / "scripts" / "cleanup-process-compose")],
+                cwd=REPO,
+                stdout=cleanup_log,
+                stderr=subprocess.STDOUT,
+                timeout=CLEANUP_TIMEOUT_S,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            notes.append(f"cleanup-process-compose ran over {CLEANUP_TIMEOUT_S} s")
     deadline = time.time() + 10
     storage = net.storage.resolve()
     while own_processes(storage) and time.time() < deadline:
         time.sleep(0.5)
     for pid, comm in own_processes(storage):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
         notes.append(f"force-killed {comm} (pid {pid})")
-        os.kill(pid, signal.SIGKILL)
     for note in notes:
         log.warning("teardown: %s", note)
     return notes

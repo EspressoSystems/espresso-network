@@ -12,6 +12,8 @@ import dataclasses
 import importlib.util
 import json
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -350,6 +352,47 @@ class PreflightTest(unittest.TestCase):
         ):
             self.assertEqual(bench.cmd_run(args), 2)
         self.assertIn("scripts/cleanup-process-compose", "\n".join(logs.output))
+
+
+class TeardownTest(unittest.TestCase):
+    def test_hung_stop_is_force_killed_and_listed(self):
+        """TEST:bench-teardown-hang-ok: every step is bounded and a failing step skips none."""
+        hung = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+                    " print(flush=True); time.sleep(60)"
+                ),
+            ],
+            stdout=subprocess.PIPE,
+            start_new_session=True,
+        )
+        assert hung.stdout is not None
+        hung.stdout.readline()
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "logs").mkdir()
+            net = bench.Network(proc=hung, out=Path(tmp), storage=Path(tmp))
+            timeout = subprocess.TimeoutExpired("cleanup", 1)
+            with (
+                mock.patch.object(bench, "STOP_TIMEOUT_S", 0.5),
+                mock.patch.object(bench.subprocess, "run", side_effect=timeout),
+                mock.patch.object(
+                    bench, "own_processes", side_effect=[[], [(1, "gone")]]
+                ),
+                mock.patch.object(bench.os, "kill", side_effect=ProcessLookupError),
+                self.assertLogs(bench.log, "WARNING"),
+            ):
+                notes = bench.teardown(net)
+        self.assertIsNotNone(hung.poll())
+        self.assertEqual(
+            notes,
+            [
+                "process-compose did not stop within 0.5 s",
+                "cleanup-process-compose ran over 60 s",
+            ],
+        )
 
 
 class FakeNode(ThreadingHTTPServer):
