@@ -625,13 +625,6 @@ impl ModuleArgs {
 }
 
 fn validate_follower_modules(modules: &Modules) -> Result<(), clap::Error> {
-    if modules.hotshot_events.is_some() {
-        return Err(clap::Error::raw(
-            ErrorKind::ArgumentConflict,
-            "module follower cannot run with hotshot-events: it has no consensus event stream to \
-             relay",
-        ));
-    }
     if modules
         .query
         .as_ref()
@@ -769,8 +762,7 @@ enum SequencerModule {
     /// to. The node never joins consensus and needs no staking keys, orchestrator, CDN, libp2p or
     /// cliquenet.
     ///
-    /// This module requires the storage-sql, http and query modules to be started, and cannot
-    /// run with hotshot-events.
+    /// This module requires the storage-sql, http and query modules to be started.
     Follower(Module<Follower>),
 }
 
@@ -1545,28 +1537,6 @@ pub(crate) mod tests {
         assert!(
             parse(&["storage-sql", "http", "query", "follower"]).is_err(),
             "the query module's peers are the upstreams"
-        );
-        assert!(
-            parse(&[
-                "storage-sql",
-                "http",
-                "query --peers http://a.test",
-                "hotshot-events",
-                "follower",
-            ])
-            .is_err(),
-            "a follower has no event stream to relay"
-        );
-        assert!(
-            parse(&[
-                "storage-sql",
-                "http",
-                "query --peers http://a.test",
-                "follower",
-                "hotshot-events",
-            ])
-            .is_err(),
-            "hotshot-events is rejected in either order"
         );
     }
 

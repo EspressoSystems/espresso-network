@@ -1085,7 +1085,7 @@ class RowStatus(unittest.TestCase):
 
     def test_release_row_has_no_checkbox_ok(self):
         row = rel.render_row(commit(), REPO, mark=None, landed=True, backport=None)
-        self.assertTrue(row.startswith("- ✅ [`aaaaaaaa`]"))
+        self.assertTrue(row.startswith("| ✅ | "))
 
 
 # EDGE:release-html-subject
@@ -1100,7 +1100,17 @@ class HtmlSubject(unittest.TestCase):
             landed=False,
             backport=None,
         )
-        self.assertIn("a&lt;b&gt; &amp; c|d", row)
+        self.assertIn("a&lt;b&gt; &amp; c\\|d", row)
+
+    def test_release_row_bare_title_ok(self):
+        row = rel.render_row(
+            commit(subject="[Backport release-0.6.0] fix: thing (#12)", pr=12),
+            REPO,
+            mark=None,
+            landed=False,
+            backport=None,
+        )
+        self.assertTrue(row.endswith("| fix: thing |"))
 
 
 # EDGE:release-branch-name-escaping
@@ -1177,8 +1187,6 @@ class CmdCutRerun(unittest.TestCase):
                 ("gh", "repo", "view"): REPO,
                 ("gh", "issue", "list"): "[]",
                 ("gh", "issue", "create"): "https://example/issues/9",
-                ("gh", "issue", "lock"): "",
-                ("gh", "api", "repos/{owner}/{repo}/issues/9"): "false",
                 ("gh", "workflow", "run"): "",
             }
         )
@@ -1205,8 +1213,8 @@ class CmdCutRerun(unittest.TestCase):
         self.assertFalse(runner.ran("gh", "issue", "create"))
 
 
-class CmdCutLocksExistingTracker(unittest.TestCase):
-    def _cut(self, locked: str) -> FakeRunner:
+class CmdCutReusesExistingTracker(unittest.TestCase):
+    def test_release_cmd_cut_reuses_existing_tracker_ok(self):
         sha = "d" * 40
         runner = FakeRunner(
             {
@@ -1223,21 +1231,12 @@ class CmdCutLocksExistingTracker(unittest.TestCase):
                 ("gh", "issue", "list"): json.dumps(
                     [{"number": 7, "title": "Release 0.6.0"}]
                 ),
-                ("gh", "api", "repos/{owner}/{repo}/issues/7"): locked,
-                ("gh", "issue", "lock"): "",
                 ("gh", "workflow", "run"): "",
             }
         )
         args = argparse.Namespace(version="0.6.0", source_ref="main")
         self.assertEqual(rel.cmd_cut(args, rel.Git(runner), rel.Gh(runner)), 0)
         self.assertFalse(runner.ran("gh", "issue", "create"))
-        return runner
-
-    def test_release_cmd_cut_locks_unlocked_tracker_ok(self):
-        self.assertIn(["gh", "issue", "lock", "7"], self._cut("false").calls)
-
-    def test_release_cmd_cut_skips_locked_tracker_ok(self):
-        self.assertFalse(self._cut("true").ran("gh", "issue", "lock"))
 
 
 class CanWrite(unittest.TestCase):
@@ -1272,8 +1271,6 @@ class CmdCutFirstRun(unittest.TestCase):
                 ("gh", "repo", "view"): REPO,
                 ("gh", "issue", "list"): "[]",
                 ("gh", "issue", "create"): "https://example/issues/9",
-                ("gh", "issue", "lock"): "",
-                ("gh", "api", "repos/{owner}/{repo}/issues/9"): "false",
                 ("gh", "workflow", "run"): "",
             }
         )
@@ -1292,7 +1289,6 @@ class CmdCutFirstRun(unittest.TestCase):
         )
         self.assertIn("--title", create_call)
         self.assertIn("Release 0.6.0", create_call)
-        self.assertIn(["gh", "issue", "lock", "9"], runner.calls)
         release_call = next(
             call for call in runner.calls if call[:3] == ["gh", "release", "create"]
         )
@@ -1340,8 +1336,6 @@ class CmdCutSkipsExistingRelease(unittest.TestCase):
                 ("gh", "repo", "view"): REPO,
                 ("gh", "issue", "list"): "[]",
                 ("gh", "issue", "create"): "https://example/issues/9",
-                ("gh", "issue", "lock"): "",
-                ("gh", "api", "repos/{owner}/{repo}/issues/9"): "false",
                 ("gh", "workflow", "run"): "",
             }
         )
@@ -1423,11 +1417,16 @@ class RenderBodyGolden(unittest.TestCase):
         self.assertIn("## Commits on `main` not yet on the branch", body)
         self.assertIn("## Commits on `release-0.6.0`", body)
         self.assertIn("## Experimental branches", body)
-        self.assertIn(f"- ⬜ [`{sha_done[:8]}`]", body)  # not landed, not marked done
-        self.assertIn(rel.STATUS_LEGEND, body)
-        self.assertIn("[#20](https://example/pr/20) merged", body)
-        self.assertIn(f"- ⏭️ [`{sha_skip[:8]}`]", body)
-        self.assertIn("~~chore: noise", body)
+        self.assertIn(
+            f"| ⬜ | [#10](https://github.com/{REPO}/pull/10) | [`{sha_done[:8]}`]",
+            body,
+        )  # not landed, not marked done
+        self.assertEqual(body.count(rel.STATUS_LEGEND), 1)
+        self.assertIn("| 🟣 [#20](https://example/pr/20) | feat: thing |", body)
+        self.assertIn(
+            f"| ⏭️ | [#11](https://github.com/{REPO}/pull/11) | [`{sha_skip[:8]}`]", body
+        )
+        self.assertIn("|  | ~~chore: noise~~ |", body)
         self.assertTrue(body.endswith(f"{rel.SENTINEL}\nKept notes.\n"))
 
 

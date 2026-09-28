@@ -12,7 +12,11 @@ on:
   workflow_dispatch:
     inputs:
       issue:
-        description: "Tracker issue number; empty refreshes every open tracker"
+        description: "Tracker issue number; empty refreshes the tracker for `ref`, or every open tracker"
+        required: false
+        type: string
+      ref:
+        description: "Branch ref that triggered a redispatch; selects its tracker"
         required: false
         type: string
 
@@ -22,12 +26,33 @@ permissions:
   pull-requests: read
 
 jobs:
-  refresh:
+  # Release-branch runs use that branch's copy of this file; re-run on the default
+  # branch so the refresh always uses its workflow and `scripts/release`.
+  redispatch:
     # Fork PRs are skipped; backport PRs come from same-repo `backport-*` branches.
     if: |
-      (github.event_name == 'pull_request_target' &&
-       github.event.pull_request.head.repo.full_name == github.repository) ||
-      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      github.ref_name != github.event.repository.default_branch &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'pull_request_target' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch on the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
+          ISSUE: ${{ inputs.issue }}
+        run: |
+          gh workflow run update-release-tracker.yml --ref "$REF" \
+            -f ref="$GITHUB_REF" ${ISSUE:+-f issue="$ISSUE"}
+
+  refresh:
+    if: |
+      (github.ref_name == github.event.repository.default_branch &&
+       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request == null &&
        contains(github.event.issue.labels.*.name, 'release-tracker') &&
@@ -35,7 +60,7 @@ jobs:
        (startsWith(github.event.comment.body, '/done ') ||
         startsWith(github.event.comment.body, '/skip ') ||
         startsWith(github.event.comment.body, '/unmark ')))
-    # Job-level, so runs skipped by `if:` (outside comments, fork PRs) never cancel a pending run.
+    # Job-level, so runs skipped by `if:` (outside comments, redispatches) never cancel a pending run.
     concurrency:
       group: release-tracker
       cancel-in-progress: false
@@ -49,4 +74,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ inputs.issue || github.event.issue.number }}
-        run: scripts/release refresh --ref "$GITHUB_REF" ${ISSUE:+--issue "$ISSUE"}
+          REF: ${{ inputs.ref || github.ref }}
+        run: scripts/release refresh --ref "$REF" ${ISSUE:+--issue "$ISSUE"}

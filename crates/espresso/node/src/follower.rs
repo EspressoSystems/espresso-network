@@ -29,7 +29,6 @@ use espresso_types::{
     v0_1::ChainId,
 };
 use futures::{FutureExt, future::BoxFuture};
-use hotshot_events_service::events_source::EventsStreamer;
 use hotshot_query_service::{
     availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
     types::HeightIndexed,
@@ -364,10 +363,6 @@ impl<P: SequencerPersistence> ApiContext for FollowerHandle<P> {
     }
 
     fn state_signer(&self) -> Option<Arc<RwLock<StateSigner<SequencerApiVersion>>>> {
-        None
-    }
-
-    fn event_streamer(&self) -> Option<Arc<RwLock<EventsStreamer<SeqTypes>>>> {
         None
     }
 
