@@ -8,7 +8,7 @@ use url::Url;
 
 use super::{
     CatchupParams, Genesis, L1Params, NetworkParams,
-    api::{self, data_source::DataSourceOptions},
+    api::{self, data_source::StorageOptions},
     context::SequencerContext,
     init_node, network,
     options::{Modules, Options, PublicNodeConfig},
@@ -80,7 +80,17 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     tracing::warn!(?genesis, "genesis");
 
-    let result = if let Some(storage) = modules.storage_fs.take() {
+    let result = if let Some(storage) = modules.storage_rocksdb.take() {
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
+    } else if let Some(storage) = modules.storage_fs.take() {
         run_with_storage(
             genesis,
             modules,
@@ -128,7 +138,7 @@ async fn run_with_storage<S>(
     telemetry_handle: Option<&mut telemetry::TelemetryHandle>,
 ) -> anyhow::Result<()>
 where
-    S: DataSourceOptions,
+    S: StorageOptions,
 {
     let mut ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
 
@@ -158,7 +168,7 @@ pub async fn init_with_storage<S>(
     public_node_config: PublicNodeConfig,
 ) -> anyhow::Result<SequencerContext<network::Production, S::Persistence>>
 where
-    S: DataSourceOptions,
+    S: StorageOptions,
 {
     let KeySet {
         staking,
@@ -229,7 +239,7 @@ where
             // Add optional API modules as requested.
             let mut http_opt = api::Options::from(http_opt);
             if let Some(query) = modules.query {
-                http_opt = storage_opt.enable_query_module(http_opt, query);
+                http_opt = storage_opt.enable_query_module(http_opt, query)?;
             }
             if let Some(submit) = modules.submit {
                 http_opt = http_opt.submit(submit);

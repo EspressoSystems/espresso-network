@@ -95,6 +95,7 @@ rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
 request-response = { workspace = true }
 reqwest = { workspace = true }
+rocksdb = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 serde = { workspace = true }

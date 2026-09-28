@@ -3,6 +3,7 @@ use espresso_node::{
     api::data_source::{DataSourceOptions, SequencerDataSource},
     persistence,
 };
+use espresso_types::v0::traits::PersistenceOptions;
 
 /// Options for resetting persistent storage.
 ///
@@ -21,6 +22,8 @@ pub enum SequencerStorage {
     Fs(persistence::fs::Options),
     /// Reset SQL storage.
     Sql(Box<persistence::sql::Options>),
+    /// Reset RocksDB consensus storage.
+    Rocksdb(persistence::rocksdb::Options),
 }
 
 pub async fn run(opt: Commands) -> anyhow::Result<()> {
@@ -33,6 +36,10 @@ pub async fn run(opt: Commands) -> anyhow::Result<()> {
             SequencerStorage::Sql(opt) => {
                 tracing::warn!("resetting sequencer SQL storage {opt:?}");
                 reset_storage(*opt).await
+            },
+            SequencerStorage::Rocksdb(opt) => {
+                tracing::warn!("resetting sequencer RocksDB storage {opt:?}");
+                opt.reset().await
             },
         },
     }

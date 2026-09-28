@@ -2273,6 +2273,7 @@ impl From<crate::options::StorageConfig> for proto::NodeStorage {
                 crate::options::StorageBackend::Sql => proto::StorageBackend::Sql,
                 crate::options::StorageBackend::Fs => proto::StorageBackend::Fs,
                 crate::options::StorageBackend::FsDefault => proto::StorageBackend::FsDefault,
+                crate::options::StorageBackend::Rocksdb => proto::StorageBackend::Rocksdb,
             }
             .into(),
             fs: storage.fs.map(|fs| proto::FsStorage {
@@ -2280,6 +2281,9 @@ impl From<crate::options::StorageConfig> for proto::NodeStorage {
                 consensus_view_retention: fs.consensus_view_retention,
             }),
             sql: storage.sql.map(Into::into),
+            rocksdb: storage.rocksdb.map(|rocksdb| proto::RocksdbStorage {
+                path: rocksdb.path.display().to_string(),
+            }),
         }
     }
 }
@@ -5570,6 +5574,7 @@ mod tests {
                         consensus_view_retention: fs.consensus_view_retention,
                     }),
                     sql: None,
+                    rocksdb: None,
                 }),
                 genesis_file: cfg.genesis_file.to_string(),
                 public_api_url: cfg.public_api_url.as_ref().map(ToString::to_string),

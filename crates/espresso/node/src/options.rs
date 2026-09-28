@@ -551,6 +551,9 @@ impl ModuleArgs {
                 SequencerModule::StorageSql(m) => {
                     curr = m.add(&mut modules.storage_sql, &mut provided)?
                 },
+                SequencerModule::StorageRocksdb(m) => {
+                    curr = m.add(&mut modules.storage_rocksdb, &mut provided)?
+                },
                 SequencerModule::Http(m) => curr = m.add(&mut modules.http, &mut provided)?,
                 SequencerModule::Query(m) => curr = m.add(&mut modules.query, &mut provided)?,
                 SequencerModule::Submit(m) => curr = m.add(&mut modules.submit, &mut provided)?,
@@ -567,6 +570,15 @@ impl ModuleArgs {
                     curr = m.add(&mut modules.light_client, &mut provided)?
                 },
             }
+        }
+
+        if modules.storage_rocksdb.is_some()
+            && (modules.storage_fs.is_some() || modules.storage_sql.is_some())
+        {
+            return Err(clap::Error::raw(
+                ErrorKind::ArgumentConflict,
+                "storage-rocksdb cannot be combined with storage-fs or storage-sql",
+            ));
         }
 
         Ok(modules)
@@ -592,6 +604,7 @@ macro_rules! module {
 
 module!("storage-fs", persistence::fs::Options);
 module!("storage-sql", persistence::sql::Options);
+module!("storage-rocksdb", persistence::rocksdb::Options);
 module!("http", api::options::Http);
 module!("query", api::options::Query, requires: "http");
 module!("submit", api::options::Submit, requires: "http");
@@ -654,6 +667,10 @@ enum SequencerModule {
     StorageFs(Module<persistence::fs::Options>),
     /// Use a Postgres database for persistent storage.
     StorageSql(Module<persistence::sql::Options>),
+    /// Use RocksDB for consensus storage.
+    ///
+    /// For nodes that do not run the query module, which needs storage-sql or storage-fs.
+    StorageRocksdb(Module<persistence::rocksdb::Options>),
     /// Run the query API module.
     ///
     /// This module requires the http module to be started.
@@ -694,6 +711,7 @@ enum SequencerModule {
 pub struct Modules {
     pub storage_fs: Option<persistence::fs::Options>,
     pub storage_sql: Option<persistence::sql::Options>,
+    pub storage_rocksdb: Option<persistence::rocksdb::Options>,
     pub http: Option<api::options::Http>,
     pub query: Option<api::options::Query>,
     pub submit: Option<api::options::Submit>,
@@ -742,6 +760,7 @@ pub enum StorageBackend {
     Sql,
     Fs,
     FsDefault,
+    Rocksdb,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -750,12 +769,18 @@ pub struct StorageConfig {
     pub backend: StorageBackend,
     pub fs: Option<FsStorageConfig>,
     pub sql: Option<SqlStorageConfig>,
+    pub rocksdb: Option<RocksdbStorageConfig>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FsStorageConfig {
     pub path: PathBuf,
     pub consensus_view_retention: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RocksdbStorageConfig {
+    pub path: PathBuf,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -899,6 +924,14 @@ impl From<&persistence::fs::Options> for FsStorageConfig {
     }
 }
 
+impl From<&persistence::rocksdb::Options> for RocksdbStorageConfig {
+    fn from(o: &persistence::rocksdb::Options) -> Self {
+        Self {
+            path: o.path.clone(),
+        }
+    }
+}
+
 impl From<&api::options::Http> for HttpConfig {
     fn from(o: &api::options::Http) -> Self {
         Self {
@@ -1033,17 +1066,26 @@ impl From<&L1ClientOptions> for L1Tuning {
 
 impl PublicNodeConfig {
     pub fn new(opt: &Options, modules: &Modules, genesis: &Genesis) -> Self {
-        let storage = if let Some(sql) = modules.storage_sql.as_ref() {
+        let storage = if let Some(rocksdb) = modules.storage_rocksdb.as_ref() {
+            StorageConfig {
+                backend: StorageBackend::Rocksdb,
+                fs: None,
+                sql: None,
+                rocksdb: Some(RocksdbStorageConfig::from(rocksdb)),
+            }
+        } else if let Some(sql) = modules.storage_sql.as_ref() {
             StorageConfig {
                 backend: StorageBackend::Sql,
                 fs: None,
                 sql: Some(SqlStorageConfig::from(sql)),
+                rocksdb: None,
             }
         } else if let Some(fs) = modules.storage_fs.as_ref() {
             StorageConfig {
                 backend: StorageBackend::Fs,
                 fs: Some(FsStorageConfig::from(fs)),
                 sql: None,
+                rocksdb: None,
             }
         } else {
             let fs = persistence::fs::Options::try_parse_from(std::iter::empty::<String>()).ok();
@@ -1051,6 +1093,7 @@ impl PublicNodeConfig {
                 backend: StorageBackend::FsDefault,
                 fs: fs.as_ref().map(FsStorageConfig::from),
                 sql: None,
+                rocksdb: None,
             }
         };
 
@@ -1290,6 +1333,22 @@ pub(crate) mod tests {
             json.contains("peer1.test") && json.contains("peer2.test"),
             "state_peers missing from JSON: {json}"
         );
+    }
+
+    #[test]
+    fn storage_rocksdb_rejects_a_second_storage_module() {
+        for other in [
+            Vec::from(["storage-fs", "--path", "/fs"]),
+            Vec::from(["storage-sql"]),
+        ] {
+            let args = ["storage-rocksdb", "--path", "/rocks", "--"]
+                .into_iter()
+                .chain(other.iter().copied())
+                .map(String::from)
+                .collect();
+            let err = ModuleArgs(args).try_parse().unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::ArgumentConflict, "{other:?}: {err}");
+        }
     }
 
     #[test]
