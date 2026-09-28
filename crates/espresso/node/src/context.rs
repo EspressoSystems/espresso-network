@@ -142,6 +142,13 @@ where
         let pub_key = validator_config.public_key;
         tracing::info!(%pub_key, "initializing consensus");
 
+        anyhow::ensure!(
+            upgrade.base >= NEW_PROTOCOL_VERSION,
+            "base_version {} predates the new protocol ({NEW_PROTOCOL_VERSION}), which this node \
+             requires. Set base_version in the genesis file to {NEW_PROTOCOL_VERSION} or later.",
+            upgrade.base,
+        );
+
         let instance_state = initializer.instance_state().clone();
 
         // Stick our node ID in `metrics` so it is easily accessible via the status API.
