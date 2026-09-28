@@ -71,7 +71,8 @@ jobs:
       - uses: ./.github/actions/install-process-compose
         with:
           version: v1.75.2
-      - uses: ./.github/actions/install-native-demo-deps
+      - uses: ./.github/actions/install-foundry
+      - uses: ./.github/actions/install-postgres
       # No cache: the run executes pull request code, which could write into it before the
       # post-step save.
       - uses: astral-sh/setup-uv@v10.0.1
@@ -105,9 +106,6 @@ jobs:
 
       - name: Make binaries executable
         run: chmod +x bench-bin/*
-
-      - name: Runner info
-        run: BENCH_OUT=bench-sysinfo just bench::sysinfo
 
       - name: Fetch main baseline
         continue-on-error: true
@@ -147,9 +145,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: network-bench-${{ github.run_id }}
-          path: |
-            bench-out
-            bench-sysinfo
+          path: bench-out
           retention-days: 90
           overwrite: true
 
