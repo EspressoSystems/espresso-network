@@ -256,6 +256,13 @@ impl Quorum for AlwaysTrueQuorum {
     ) -> Result<()> {
         Ok(())
     }
+
+    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &QuorumCertificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -269,6 +276,13 @@ impl Quorum for AlwaysFalseQuorum {
     async fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
         _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        bail!("always false quorum");
+    }
+
+    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &QuorumCertificate2<SeqTypes>,
     ) -> Result<()> {
         bail!("always false quorum");
     }
@@ -316,6 +330,13 @@ impl Quorum for VersionCheckQuorum {
     ) -> Result<()> {
         Ok(())
     }
+
+    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &QuorumCertificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// A quorum which verifies that epoch change QCs are provided, but does not check signatures.
@@ -344,6 +365,13 @@ impl Quorum for EpochChangeQuorum {
     async fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
         _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &QuorumCertificate2<SeqTypes>,
     ) -> Result<()> {
         Ok(())
     }

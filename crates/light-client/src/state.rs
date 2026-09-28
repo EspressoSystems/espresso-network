@@ -370,8 +370,7 @@ where
             end_height
         );
 
-        self.verify_leaf_chain(&leaves, known_finalized).await?;
-        Ok(leaves)
+        self.verify_leaf_chain(&leaves, known_finalized).await
     }
 
     /// Verify unproven leaves by chaining them to a leaf already known to be finalized.
@@ -379,13 +378,18 @@ where
     /// `leaves` must be consecutive and end just below `known_finalized`, which the caller has
     /// verified. Each leaf is then pinned by the parent commitment of the one above it, so the
     /// whole run inherits the anchor's finality without a proof of its own.
+    ///
+    /// The server's QCs are unverified, so each returned leaf instead carries the justify QC of
+    /// the leaf above it, which that leaf's commitment covers.
     async fn verify_leaf_chain(
         &self,
         leaves: &[LeafQueryData<SeqTypes>],
         known_finalized: &LeafQueryData<SeqTypes>,
-    ) -> Result<()> {
-        let mut expected_parent = known_finalized.leaf().parent_commitment();
+    ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
+        let mut child = known_finalized.leaf();
+        let mut verified = Vec::with_capacity(leaves.len());
         for leaf in leaves.iter().rev() {
+            let expected_parent = child.parent_commitment();
             let leaf_hash = leaf.hash();
             ensure!(
                 leaf_hash == expected_parent,
@@ -393,11 +397,17 @@ where
                 expected_parent,
                 leaf_hash
             );
-            expected_parent = leaf.leaf().parent_commitment();
+            let qc = child.justify_qc().clone();
+            verified.push(
+                LeafQueryData::new(leaf.leaf().clone(), qc)
+                    .context("justify QC does not sign the parent leaf")?,
+            );
+            child = leaf.leaf();
         }
+        verified.reverse();
 
         // Cache the verified leaves, but do not fail the fetch if caching does.
-        for leaf in leaves {
+        for leaf in &verified {
             if let Err(err) = self.db.insert_leaf(leaf.clone()).await {
                 tracing::warn!(
                     "failed to cache leaf at height {}: {:#?}",
@@ -407,7 +417,7 @@ where
             }
         }
 
-        Ok(())
+        Ok(verified)
     }
 
     /// Fetch and verify the leaves in a set of height ranges.
@@ -515,8 +525,7 @@ where
                 };
                 run.push(leaf);
             }
-            self.verify_leaf_chain(&run, &anchor).await?;
-            leaves.extend(run);
+            leaves.extend(self.verify_leaf_chain(&run, &anchor).await?);
             leaves.push(anchor);
         }
 
@@ -1252,13 +1261,14 @@ mod test {
             client.genesis().await,
         );
 
+        // Fetch the forged leaf first: a cached leaf above it would verify it by assumption.
+        client.forge_qc(1).await;
+        lc.fetch_leaf(LeafId::Number(1)).await.unwrap_err();
+
         assert_eq!(
             lc.fetch_leaf(LeafId::Number(2)).await.unwrap(),
             client.leaf(2).await
         );
-
-        client.forge_qc(1).await;
-        lc.fetch_leaf(LeafId::Number(1)).await.unwrap_err();
     }
 
     #[tokio::test]

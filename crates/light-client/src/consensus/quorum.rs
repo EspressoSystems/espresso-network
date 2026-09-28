@@ -7,7 +7,7 @@ use espresso_types::{Certificate2, Leaf2, PubKey, SeqTypes};
 use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
-    simple_certificate::CertificatePair,
+    simple_certificate::{CertificatePair, QuorumCertificate2},
     stake_table::{HSStakeTable, StakeTableEntries, StakeTableEntry, supermajority_threshold},
     vote::{self, HasViewNumber},
 };
@@ -80,6 +80,39 @@ pub trait Quorum: Sync {
     fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
         cert2: &Certificate2<SeqTypes>,
+    ) -> impl Send + Future<Output = Result<()>>;
+
+    /// Check a threshold signature on a single new-protocol QC, without epoch-transition checks.
+    fn verify_leaf_qc(
+        &self,
+        qc: &QuorumCertificate2<SeqTypes>,
+        version: Version,
+    ) -> impl Send + Future<Output = Result<()>> {
+        async move {
+            match (version.major, version.minor) {
+                (0, 1) => self.verify_leaf_qc_static::<StaticVersion<0, 1>>(qc).await,
+                (0, 2) => self.verify_leaf_qc_static::<StaticVersion<0, 2>>(qc).await,
+                (0, 3) => self.verify_leaf_qc_static::<StaticVersion<0, 3>>(qc).await,
+                (0, 4) => self.verify_leaf_qc_static::<StaticVersion<0, 4>>(qc).await,
+                (0, 5) => self.verify_leaf_qc_static::<StaticVersion<0, 5>>(qc).await,
+                (0, 6) => self.verify_leaf_qc_static::<StaticVersion<0, 6>>(qc).await,
+                (0, 7) => self.verify_leaf_qc_static::<StaticVersion<0, 7>>(qc).await,
+                _ => {
+                    const {
+                        assert!(MAX_SUPPORTED_VERSION.major == 0);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 7);
+                    }
+                    bail!("unsupported version {version}");
+                },
+            }
+        }
+    }
+
+    /// Same as [`verify_leaf_qc`](Self::verify_leaf_qc), but with the version as a type-level
+    /// parameter.
+    fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        qc: &QuorumCertificate2<SeqTypes>,
     ) -> impl Send + Future<Output = Result<()>>;
 
     /// Check a threshold signature on a certificate signed by the epoch after this quorum's.
@@ -434,6 +467,17 @@ where
             .verify_cert::<V, _>(cert2)
             .await
             .context("verifying cert2")
+    }
+
+    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        qc: &QuorumCertificate2<SeqTypes>,
+    ) -> Result<()> {
+        let stake_table = self.membership.stake_table().await?;
+        stake_table
+            .verify_cert::<V, _>(qc)
+            .await
+            .context("verifying leaf QC")
     }
 
     async fn verify_next_epoch_static<V: StaticVersionType + 'static>(

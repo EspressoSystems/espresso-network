@@ -221,6 +221,23 @@ impl LeafProof {
                     .await
                     .context("verifying cert2 signature")?;
 
+                // `leaf_qc` is returned only for a single-leaf chain; longer chains take the QC
+                // from the next leaf's justify QC, which the leaf chain commits to.
+                if opt_qc.is_none() {
+                    ensure!(
+                        leaf_qc.data.leaf_commit == curr.commit(),
+                        "leaf QC commitment does not match leaf"
+                    );
+                    ensure!(
+                        leaf_qc.view_number() == curr.view_number(),
+                        "leaf QC view number does not match leaf"
+                    );
+                    quorum
+                        .verify_leaf_qc(leaf_qc, version)
+                        .await
+                        .context("verifying leaf QC signature")?;
+                }
+
                 leaf_qc.as_ref().clone()
             },
             (proof, hint) => {
