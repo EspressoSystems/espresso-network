@@ -1,41 +1,48 @@
-repo_root := `git rev-parse --show-toplevel`
+set positional-arguments
+
+repo_root := source_directory() / ".." / ".."
 bench := source_directory() / "bench"
 target_dir := env_var_or_default("CARGO_TARGET_DIR", repo_root / "target")
 bin_dir := env_var_or_default("BENCH_BIN_DIR", target_dir / "release")
 out := env_var_or_default("BENCH_OUT", "bench-out")
 
 default:
-    just --list --justfile {{source_file()}}
+    just --list --justfile {{quote(source_file())}}
 
 # Release binaries the benchmark network runs; postgres and sqlite builds need separate invocations.
 build:
-    cd {{repo_root}} && cargo build --locked --release -p espresso-node --bin espresso-node --bin orchestrator --bin state-relay-server --bin deploy
-    cd {{repo_root}} && cargo build --locked --release -p espresso-node-sqlite
+    cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node --bin espresso-node --bin orchestrator --bin state-relay-server --bin deploy
+    cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node-sqlite
 
 # Start the network, load and measure it, tear it down; writes result.json and summary.md.
 run *args:
-    cd {{repo_root}} && {{bench}} run --bin-dir {{bin_dir}} --out {{out}} {{args}}
+    cd {{quote(repo_root)}} && {{quote(bench)}} run --bin-dir {{quote(bin_dir)}} --out {{quote(out)}} "$@"
 
 # Re-analyse a run directory, optionally against a baseline, without rerunning.
 render dir=out *args:
-    cd {{repo_root}} && {{bench}} render {{dir}} {{args}}
+    cd {{quote(repo_root)}} && {{quote(bench)}} render "$@"
 
 # Compare a result.json with a baseline (a result.json or `nextest-ci stats-fetch` output).
 compare result baseline:
-    cd {{repo_root}} && {{bench}} compare {{result}} --baseline {{baseline}}
+    cd {{quote(repo_root)}} && {{quote(bench)}} compare "$1" --baseline "$2"
 
 # Runner info and CPU calibration only.
 sysinfo:
-    cd {{repo_root}} && {{bench}} sysinfo --out {{out}}
+    cd {{quote(repo_root)}} && {{quote(bench)}} sysinfo --out {{quote(out)}}
 
 # Remove the output directory and storage left by an interrupted run.
 clean:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd {{repo_root}}
-    rm -rf {{out}}
+    if pgrep -u "$(id -u)" -f network-bench/process-compose.yaml > /dev/null; then
+        echo "a benchmark network is running; stop it first" >&2
+        exit 1
+    fi
+    cd {{quote(repo_root)}}
+    rm -rf {{quote(out)}}
     for dir in /tmp/enb.*; do
-        [[ -e $dir || -L $dir ]] || continue
+        # Only this user's entries: a symlink planted by someone else must not be followed.
+        [[ -O $dir ]] || continue
         [[ -L $dir ]] && rm -rf "$(readlink -f "$dir")"
         rm -rf "$dir"
     done
