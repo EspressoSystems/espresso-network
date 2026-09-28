@@ -17,6 +17,28 @@ use versions::{EPOCH_VERSION, MAX_SUPPORTED_VERSION, Upgrade, version};
 
 pub type Certificate = CertificatePair<SeqTypes>;
 
+/// Dispatch a runtime `Version` to a call with the matching `StaticVersion` in place of `V`.
+macro_rules! dispatch_version {
+    ($version:expr, $self:ident.$method:ident::<V $(, $generic:tt)*>($($arg:expr),*)) => {
+        match ($version.major, $version.minor) {
+            (0, 1) => $self.$method::<StaticVersion<0, 1> $(, $generic)*>($($arg),*).await,
+            (0, 2) => $self.$method::<StaticVersion<0, 2> $(, $generic)*>($($arg),*).await,
+            (0, 3) => $self.$method::<StaticVersion<0, 3> $(, $generic)*>($($arg),*).await,
+            (0, 4) => $self.$method::<StaticVersion<0, 4> $(, $generic)*>($($arg),*).await,
+            (0, 5) => $self.$method::<StaticVersion<0, 5> $(, $generic)*>($($arg),*).await,
+            (0, 6) => $self.$method::<StaticVersion<0, 6> $(, $generic)*>($($arg),*).await,
+            (0, 7) => $self.$method::<StaticVersion<0, 7> $(, $generic)*>($($arg),*).await,
+            _ => {
+                const {
+                    assert!(MAX_SUPPORTED_VERSION.major == 0);
+                    assert!(MAX_SUPPORTED_VERSION.minor == 7);
+                }
+                bail!("unsupported version {}", $version);
+            },
+        }
+    };
+}
+
 pub trait Quorum: Sync {
     /// Check a threshold signature on a quorum certificate.
     fn verify(
@@ -24,24 +46,7 @@ pub trait Quorum: Sync {
         cert: &Certificate,
         version: Version,
     ) -> impl Send + Future<Output = Result<()>> {
-        async move {
-            match (version.major, version.minor) {
-                (0, 1) => self.verify_static::<StaticVersion<0, 1>>(cert).await,
-                (0, 2) => self.verify_static::<StaticVersion<0, 2>>(cert).await,
-                (0, 3) => self.verify_static::<StaticVersion<0, 3>>(cert).await,
-                (0, 4) => self.verify_static::<StaticVersion<0, 4>>(cert).await,
-                (0, 5) => self.verify_static::<StaticVersion<0, 5>>(cert).await,
-                (0, 6) => self.verify_static::<StaticVersion<0, 6>>(cert).await,
-                (0, 7) => self.verify_static::<StaticVersion<0, 7>>(cert).await,
-                _ => {
-                    const {
-                        assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 7);
-                    }
-                    bail!("unsupported version {version}");
-                },
-            }
-        }
+        async move { dispatch_version!(version, self.verify_static::<V>(cert)) }
     }
 
     /// Same as [`verify`](Self::verify), but with the version as a type-level parameter.
@@ -56,45 +61,7 @@ pub trait Quorum: Sync {
         cert: &(impl vote::Certificate<SeqTypes, D> + Sync),
         version: Version,
     ) -> impl Send + Future<Output = Result<()>> {
-        async move {
-            match (version.major, version.minor) {
-                (0, 1) => {
-                    self.verify_simple_cert_static::<StaticVersion<0, 1>, _>(cert)
-                        .await
-                },
-                (0, 2) => {
-                    self.verify_simple_cert_static::<StaticVersion<0, 2>, _>(cert)
-                        .await
-                },
-                (0, 3) => {
-                    self.verify_simple_cert_static::<StaticVersion<0, 3>, _>(cert)
-                        .await
-                },
-                (0, 4) => {
-                    self.verify_simple_cert_static::<StaticVersion<0, 4>, _>(cert)
-                        .await
-                },
-                (0, 5) => {
-                    self.verify_simple_cert_static::<StaticVersion<0, 5>, _>(cert)
-                        .await
-                },
-                (0, 6) => {
-                    self.verify_simple_cert_static::<StaticVersion<0, 6>, _>(cert)
-                        .await
-                },
-                (0, 7) => {
-                    self.verify_simple_cert_static::<StaticVersion<0, 7>, _>(cert)
-                        .await
-                },
-                _ => {
-                    const {
-                        assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 7);
-                    }
-                    bail!("unsupported version {version}");
-                },
-            }
-        }
+        async move { dispatch_version!(version, self.verify_simple_cert_static::<V, _>(cert)) }
     }
 
     /// Same as [`verify_simple_cert`](Self::verify_simple_cert), but with the version as a

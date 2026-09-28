@@ -232,6 +232,10 @@ impl LeafProof {
                         leaf_qc.view_number() == curr.view_number(),
                         "leaf QC view number does not match leaf"
                     );
+                    ensure!(
+                        leaf_qc.data.block_number == Some(curr.block_header().block_number()),
+                        "leaf QC block number does not match leaf"
+                    );
                     quorum
                         .verify_simple_cert(&**leaf_qc, version)
                         .await
@@ -567,7 +571,9 @@ mod test {
         let mut wrong_view = leaves[0].qc().clone();
         wrong_view.view_number += 1;
         let wrong_leaf = leaves[1].qc().clone();
-        for leaf_qc in [wrong_view, wrong_leaf] {
+        let mut wrong_height = leaves[0].qc().clone();
+        wrong_height.data.block_number = wrong_height.data.block_number.map(|h| h + 1);
+        for leaf_qc in [wrong_view, wrong_leaf, wrong_height] {
             proof_with_qc(leaf_qc)
                 .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
                 .await
