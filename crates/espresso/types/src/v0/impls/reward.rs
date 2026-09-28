@@ -1074,12 +1074,22 @@ pub struct EpochRewardsResult {
 #[derive(Debug, Default)]
 pub struct EpochRewardsCalculator {
     /// The currently pending calculation, if any.
-    pending: Option<(EpochNumber, JoinHandle<anyhow::Result<EpochRewardsResult>>)>,
+    pending: Option<PendingRewards>,
     /// The last result handed out. One node can apply the same epoch boundary twice (a leader
     /// builds the block, then validates it), and the second application must reuse the result:
     /// recomputing it throws away the in-memory leader counts and fetches the epoch's last leaf
     /// through catchup instead.
     applied: Option<EpochRewardsResult>,
+}
+
+/// A background reward calculation and the inputs that distinguish it.
+#[derive(Debug)]
+struct PendingRewards {
+    epoch: EpochNumber,
+    /// The in-memory leader counts the task was started with, or `None` if it recovers them from
+    /// the epoch's last leaf.
+    leader_counts: Option<LeaderCounts>,
+    handle: JoinHandle<anyhow::Result<EpochRewardsResult>>,
 }
 
 impl EpochRewardsCalculator {
@@ -1089,7 +1099,7 @@ impl EpochRewardsCalculator {
 
     /// Check if the result for `epoch` is being calculated or was already handed out.
     pub fn is_calculating(&self, epoch: EpochNumber) -> bool {
-        self.pending.as_ref().is_some_and(|(e, _)| *e == epoch)
+        self.pending.as_ref().is_some_and(|p| p.epoch == epoch)
             || self.applied.as_ref().is_some_and(|r| r.epoch == epoch)
     }
 
@@ -1105,14 +1115,14 @@ impl EpochRewardsCalculator {
         if let Some(applied) = self.applied.as_ref().filter(|r| r.epoch == epoch) {
             return Some(Ok(applied.clone()));
         }
-        let (pending_epoch, handle) = self.pending.take()?;
-        if pending_epoch != epoch {
+        let pending = self.pending.take()?;
+        if pending.epoch != epoch {
             // Not the epoch we're looking for — put the task back.
-            self.pending = Some((pending_epoch, handle));
+            self.pending = Some(pending);
             return None;
         }
 
-        let result = match handle.await {
+        let result = match pending.handle.await {
             Ok(Ok(result)) => {
                 tracing::info!(%epoch, total = %result.total_distributed.0, "epoch rewards calculation completed");
                 self.applied = Some(result.clone());
@@ -1131,7 +1141,8 @@ impl EpochRewardsCalculator {
     }
 
     /// Start a background task that calculates epoch rewards.
-    /// Does nothing if calculation is already in progress for this epoch.
+    /// Does nothing if calculation is already in progress for this epoch with the same leader
+    /// counts, or if `leader_counts` is `None` and a task will recover them anyway.
     /// Aborts any stale pending task since only one epoch matters at a time.
     pub fn spawn_background_task(
         &mut self,
@@ -1142,15 +1153,15 @@ impl EpochRewardsCalculator {
         coordinator: EpochMembershipCoordinator<SeqTypes>,
         leader_counts: Option<LeaderCounts>,
     ) {
-        if self.is_calculating(epoch) {
+        if !self.needs_spawn(epoch, leader_counts.as_ref()) {
             tracing::debug!(%epoch, "calculation already in progress, skipping");
             return;
         }
 
         // Abort any stale pending task.
-        if let Some((stale_epoch, handle)) = self.pending.take() {
-            tracing::info!(%stale_epoch, %epoch, "aborting stale epoch rewards task");
-            handle.abort();
+        if let Some(stale) = self.pending.take() {
+            tracing::info!(stale_epoch = %stale.epoch, %epoch, "aborting stale epoch rewards task");
+            stale.handle.abort();
         }
 
         tracing::info!(
@@ -1170,7 +1181,25 @@ impl EpochRewardsCalculator {
             )
             .await
         });
-        self.pending = Some((epoch, handle));
+        self.pending = Some(PendingRewards {
+            epoch,
+            leader_counts,
+            handle,
+        });
+    }
+
+    /// Whether a task for `epoch` has to be (re)started.
+    ///
+    /// Two proposals for one boundary block at different views have different leaders, so they
+    /// carry different leader counts. A pending task started from one of them is replaced when
+    /// the other is applied, so the task always reflects the last boundary block this node applied.
+    fn needs_spawn(&self, epoch: EpochNumber, leader_counts: Option<&LeaderCounts>) -> bool {
+        match &self.pending {
+            Some(p) if p.epoch == epoch => {
+                leader_counts.is_some_and(|lc| p.leader_counts.as_ref() != Some(lc))
+            },
+            _ => !self.applied.as_ref().is_some_and(|r| r.epoch == epoch),
+        }
     }
 
     async fn fetch_and_calculate(
@@ -1424,7 +1453,11 @@ pub mod tests {
         };
         let mut calculator = EpochRewardsCalculator::new();
         let ready = result.clone();
-        calculator.pending = Some((epoch, tokio::spawn(async move { Ok(ready) })));
+        calculator.pending = Some(PendingRewards {
+            epoch,
+            leader_counts: None,
+            handle: tokio::spawn(async move { Ok(ready) }),
+        });
 
         let first = calculator.get_result(epoch).await.unwrap().unwrap();
         assert!(calculator.is_calculating(epoch));
@@ -1433,6 +1466,29 @@ pub mod tests {
         assert_eq!(first.epoch, epoch);
         assert_eq!(second.epoch, epoch);
         assert_eq!(second.total_distributed, result.total_distributed);
+    }
+
+    /// Two proposals for one boundary block (views `v` and `v+1`) carry different leader counts.
+    /// Applying the second must restart the next epoch's task with its counts; a reapplication
+    /// with the same counts, or an eager start without counts, must keep the pending task.
+    #[tokio::test]
+    async fn test_epoch_rewards_task_restarts_on_different_leader_counts() {
+        let epoch = EpochNumber::new(3);
+        let counts_v: LeaderCounts = [1; crate::v0_3::MAX_VALIDATORS];
+        let mut counts_v1 = counts_v;
+        counts_v1[0] += 1;
+
+        let mut calculator = EpochRewardsCalculator::new();
+        calculator.pending = Some(PendingRewards {
+            epoch,
+            leader_counts: Some(counts_v),
+            handle: tokio::spawn(std::future::pending()),
+        });
+
+        assert!(!calculator.needs_spawn(epoch, Some(&counts_v)));
+        assert!(!calculator.needs_spawn(epoch, None));
+        assert!(calculator.needs_spawn(epoch, Some(&counts_v1)));
+        assert!(calculator.needs_spawn(epoch + 1, None));
     }
 
     // TODO: current tests are just sanity checks, we need more.
