@@ -473,6 +473,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         "started": started,
         "wall_s": time.time() - started,
         "meta": environment_meta(args.pr),
+        # Hashed at run time: a later re-render may see other genesis or compose files.
+        "config_hash": config_hash(cfg),
     }
     write_json(out / "run.json", run)
     write_json(out / "calibration.json", {"before": calib_before, "after": calib_after})
@@ -1241,7 +1243,7 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
             "drift_pct": pct_change(before["sha256_mt_mb_s"], after["sha256_mt_mb_s"]),
         },
         "config": dataclasses.asdict(cfg),
-        "config_hash": config_hash(cfg),
+        "config_hash": run["config_hash"],
         "window": window(series, t0, t1),
         "network": network_stats(series, cfg, t0, t1),
         "nodes": nodes,
@@ -1939,7 +1941,10 @@ def ops_table(result: BenchResult, count: int = 8) -> list[str]:
 
 
 def process_table(result: BenchResult) -> list[str]:
-    lines = ["| process | CPU cores | CPU-s | RSS peak |", "|---|---:|---:|---:|"]
+    lines = [
+        "| process | CPU cores | CPU-s | RSS peak (sum of its processes) |",
+        "|---|---:|---:|---:|",
+    ]
     for label, p in sorted(result["processes"].items(), key=lambda kv: -kv[1]["cpu_s"]):
         lines.append(
             f"| {label} | {p['cpu_cores_mean']:.2f} | {p['cpu_s']:.0f} "
