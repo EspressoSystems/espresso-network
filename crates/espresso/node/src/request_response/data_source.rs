@@ -2,18 +2,17 @@
 //! to calculate/derive a response for a specific request. In the confirmation layer the implementer
 //! would be something like a [`FeeMerkleTree`] for fee catchup
 
-use std::{marker::PhantomData, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use espresso_types::{
-    NodeState, PubKey, SeqTypes, retain_accounts,
+    NodeState, SeqTypes, retain_accounts,
     traits::SequencerPersistence,
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
-use hotshot::traits::NodeImplementation;
-use hotshot_new_protocol::storage::NewProtocolStorage;
+use hotshot_new_protocol::client::ClientApi;
 use hotshot_query_service::{
     data_source::{
         VersionedDataSource,
@@ -21,8 +20,7 @@ use hotshot_query_service::{
     },
     node::BlockId,
 };
-use hotshot_types::{data::ViewNumber, traits::network::ConnectedNetwork, vote::HasViewNumber};
-use itertools::Itertools;
+use hotshot_types::data::ViewNumber;
 use jf_merkle_tree_compat::{
     ForgetableMerkleTreeScheme, ForgetableUniversalMerkleTreeScheme, LookupResult,
     MerkleTreeScheme, UniversalMerkleTreeScheme,
@@ -36,7 +34,6 @@ use crate::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state,
     },
-    consensus_handle::ConsensusHandle,
 };
 
 /// Query Service Storage types that can be used for request-response data source
@@ -47,35 +44,24 @@ pub enum Storage {
 }
 
 #[derive(Clone)]
-pub struct DataSource<
-    I: NodeImplementation<SeqTypes>,
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-> {
-    /// The consensus adapter handle
-    pub consensus_handle: Arc<ConsensusHandle<SeqTypes, I>>,
+pub struct DataSource<P: SequencerPersistence> {
+    pub client_api: ClientApi<SeqTypes>,
     /// The node's state
     pub node_state: NodeState,
     /// The storage
     pub storage: Option<Storage>,
     /// sequencer persistence
     pub persistence: Arc<P>,
-    /// Phantom data
-    pub phantom: PhantomData<N>,
 }
 
 /// Implement the trait that allows the [`RequestResponseProtocol`] to calculate/derive a response for a specific request
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerPersistence>
-    DataSourceTrait<Request> for DataSource<I, N, P>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
     async fn derive_response_for(&self, request: &Request) -> Result<Response> {
         match request {
             Request::Accounts(height, view, accounts) => {
                 // Try to get accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await
+                if let Ok(Some(state)) = self.client_api.state(ViewNumber::new(*view)).await
                     && let Ok(accounts) =
                         retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
                 {
@@ -95,7 +81,7 @@ where
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
                 if let Err(err) = add_fee_accounts_to_state(
-                    &*self.consensus_handle,
+                    &self.client_api,
                     &ViewNumber::new(*view),
                     accounts,
                     &merkle_tree,
@@ -110,14 +96,6 @@ where
             },
 
             Request::Leaf(height) => {
-                // Legacy heights can be served from in-memory undecided leaves; new-protocol
-                // heights always fall through to storage.
-                if let Ok(leaf_chain) =
-                    legacy_leaf_chain_from_memory(&*self.consensus_handle, *height).await
-                {
-                    return Ok(Response::Leaf(leaf_chain));
-                }
-
                 let leaf_chain = match &self.storage {
                     Some(Storage::Sql(storage)) => storage
                         .get_leaf_chain(*height)
@@ -131,7 +109,7 @@ where
             },
             Request::ChainConfig(commitment) => {
                 // Try to get the chain config from memory first, then fall back to storage
-                if let Some(state) = self.consensus_handle.decided_state().await {
+                if let Ok(Some(state)) = self.client_api.decided_state().await {
                     let chain_config_from_memory = state.chain_config;
                     if chain_config_from_memory.commit() == *commitment
                         && let Some(chain_config) = chain_config_from_memory.resolve()
@@ -155,9 +133,11 @@ where
             Request::BlocksFrontier(height, view) => {
                 // First try to respond from memory
                 let blocks_frontier_from_memory: Option<Result<BlocksFrontier>> = self
-                    .consensus_handle
+                    .client_api
                     .state(ViewNumber::new(*view))
                     .await
+                    .ok()
+                    .flatten()
                     .map(|state| {
                         let tree = &state.block_merkle_tree;
                         let frontier = tree.lookup(tree.num_leaves() - 1).expect_ok()?.1;
@@ -184,7 +164,7 @@ where
             },
             Request::RewardAccountsV2(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await
+                if let Ok(Some(state)) = self.client_api.state(ViewNumber::new(*view)).await
                     && let Ok(reward_accounts) = retain_v2_reward_accounts(
                         &state.reward_merkle_tree_v2,
                         accounts.iter().copied(),
@@ -213,7 +193,7 @@ where
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
                 if let Err(err) = add_v2_reward_accounts_to_state(
-                    &*self.consensus_handle,
+                    &self.client_api,
                     &ViewNumber::new(*view),
                     accounts,
                     &merkle_tree,
@@ -229,7 +209,7 @@ where
 
             Request::RewardAccountsV1(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await
+                if let Ok(Some(state)) = self.client_api.state(ViewNumber::new(*view)).await
                     && let Ok(reward_accounts) = retain_v1_reward_accounts(
                         &state.reward_merkle_tree_v1,
                         accounts.iter().copied(),
@@ -258,7 +238,7 @@ where
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
                 if let Err(err) = add_v1_reward_accounts_to_state(
-                    &*self.consensus_handle,
+                    &self.client_api,
                     &ViewNumber::new(*view),
                     accounts,
                     &merkle_tree,
@@ -330,7 +310,7 @@ where
             },
             Request::RewardMerkleTreeV2(height, view) => {
                 // Try to get the reward merkle tree from memory first, then fall back to storage
-                if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await {
+                if let Ok(Some(state)) = self.client_api.state(ViewNumber::new(*view)).await {
                     let tree_data =
                         TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)
                             .inspect_err(|err| {
@@ -361,52 +341,6 @@ where
             },
         }
     }
-}
-
-/// Build a legacy-protocol 3-chain leaf chain decided at `height` from in-memory undecided leaves.
-///
-/// Returns an error if the chain cannot be assembled from memory (e.g. the height is below the
-/// latest decided leaf).
-async fn legacy_leaf_chain_from_memory<I: NodeImplementation<SeqTypes>>(
-    consensus_handle: &ConsensusHandle<SeqTypes, I>,
-    height: u64,
-) -> anyhow::Result<Vec<espresso_types::Leaf2>>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
-    let mut leaves = consensus_handle.undecided_leaves().await;
-    leaves.sort_by_key(|l| l.view_number());
-
-    let (position, mut last_leaf) = leaves
-        .iter()
-        .find_position(|l| l.height() == height)
-        .ok_or_else(|| anyhow::anyhow!("leaf at height {height} not in memory"))?;
-
-    let mut leaf_chain = vec![last_leaf.clone()];
-    for leaf in leaves.iter().skip(position + 1) {
-        if leaf.justify_qc().view_number() == last_leaf.view_number() {
-            leaf_chain.push(leaf.clone());
-        } else {
-            continue;
-        }
-        if leaf.view_number() == last_leaf.view_number() + 1 {
-            last_leaf = leaf;
-            break;
-        }
-        last_leaf = leaf;
-    }
-
-    for leaf in leaves
-        .iter()
-        .skip_while(|l| l.view_number() <= last_leaf.view_number())
-    {
-        if leaf.justify_qc().view_number() == last_leaf.view_number() {
-            leaf_chain.push(leaf.clone());
-            return Ok(leaf_chain);
-        }
-    }
-
-    anyhow::bail!("incomplete leaf chain in memory for height {height}")
 }
 
 /// Get a partial snapshot of the given reward state, which contains only the specified accounts.
