@@ -8,6 +8,7 @@ No network is started.
 import argparse
 import asyncio
 import base64
+import dataclasses
 import importlib.util
 import json
 import socket
@@ -251,7 +252,9 @@ class ReportOnlyTest(unittest.TestCase):
     def report(self, current):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
-            (out / "config.json").write_text(json.dumps({"workers": 6}))
+            (out / "config.json").write_text(
+                json.dumps(dataclasses.asdict(bench.BenchConfig()))
+            )
             baseline = out / "baseline.json"
             baseline.write_text(json.dumps({"runs": [make_result(mb_per_s=8.0)] * 3}))
             with (

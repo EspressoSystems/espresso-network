@@ -130,6 +130,7 @@ DRIFT_NOISY_PCT = 10.0
 INCLUSION_NOISY_RATIO = 0.95
 SCRAPE_OK_MIN = 0.9
 MIN_READY_HEIGHT = 5
+PROGRESS_S = 30
 TOOL_VERSIONS = (
     ["process-compose", "version"],
     ["anvil", "--version"],
@@ -463,7 +464,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         log.info("calibration after: %s", calib_after)
     finally:
         remove_storage(storage)
-    run |= {"started": started, "wall_s": time.time() - started, "pr": args.pr}
+    run |= {
+        "started": started,
+        "wall_s": time.time() - started,
+        "meta": environment_meta(args.pr),
+    }
     write_json(out / "run.json", run)
     write_json(out / "calibration.json", {"before": calib_before, "after": calib_after})
     if run["error"]:
@@ -497,9 +502,9 @@ def cmd_sysinfo(args: argparse.Namespace) -> int:
 
 
 def write_report(out: Path, baseline: Path | None) -> int:
-    cfg = BenchConfig(
-        **json.loads((out / "config.json").read_text()) | {"namespaces": (10000, 10010)}
-    )
+    saved = read_json(out / "config.json")
+    saved["namespaces"] = tuple(saved["namespaces"])
+    cfg = BenchConfig(**saved)
     result = analyze(out, cfg)
     write_json(out / "result.json", result)
     comparison = compare(result, load_baseline(baseline)) if baseline else None
@@ -895,8 +900,12 @@ async def track_inclusion(
     """Scan every new block's payload for our marker; time out transactions that never show."""
     pattern = re.compile(re.escape(marker) + b"(.{8})", re.DOTALL)
     deadline = None
+    report = time.time() + PROGRESS_S
     while True:
         now = time.time()
+        if now >= report:
+            log_progress(state, height)
+            report = now + PROGRESS_S
         if done.is_set():
             deadline = deadline or now + cfg.tx_timeout_s
             if not state.pending or now > deadline:
@@ -917,6 +926,19 @@ async def track_inclusion(
                 state.resolve(int.from_bytes(match.group(1), "big"), "included", seen)
             height += 1
         await asyncio.sleep(0.1)
+
+
+def log_progress(state: LoadState, height: int) -> None:
+    included = sum(1 for tx in state.txs if tx.status == "included")
+    timeouts = sum(1 for tx in state.txs if tx.status == "timeout")
+    log.info(
+        "height %d: %d submitted, %d included, %d pending, %d timed out",
+        height,
+        len(state.txs),
+        included,
+        len(state.pending),
+        timeouts,
+    )
 
 
 def query_height(pool: HttpPool, query_url: str) -> int:
@@ -987,10 +1009,7 @@ def sample_host(out: Path, storage: Path, stop: threading.Event) -> None:
                 rss[label] = rss.get(label, 0) + int(fields[21]) * page
             rec = {
                 "ts": time.time(),
-                "cpu": [
-                    int(x)
-                    for x in Path("/proc/stat").read_text().split("\n")[0].split()[1:]
-                ],
+                "cpu": usable_cpu_jiffies(),
                 "load1": float(Path("/proc/loadavg").read_text().split()[0]),
                 "psi_cpu": psi("cpu"),
                 "psi_io": psi("io"),
@@ -999,6 +1018,18 @@ def sample_host(out: Path, storage: Path, stop: threading.Event) -> None:
             }
             f.write(json.dumps(rec) + "\n")
             stop.wait(2.0)
+
+
+def usable_cpu_jiffies() -> list[int]:
+    """/proc/stat counters summed over the CPUs this process may run on, so utilisation under
+    taskset or a cpuset is relative to those CPUs."""
+    usable = {f"cpu{n}" for n in os.sched_getaffinity(0)}
+    rows = [
+        [int(x) for x in fields[1:]]
+        for fields in map(str.split, Path("/proc/stat").read_text().splitlines())
+        if fields and fields[0] in usable
+    ]
+    return [sum(column) for column in zip(*rows, strict=True)]
 
 
 def labelled_processes(
@@ -1173,7 +1204,7 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
     run = read_json(out / "run.json")
     t0, t1 = run["t0"], run["t1"]
     series = load_series(out / "metrics.jsonl")
-    host = [r for r in read_jsonl(out / "host.jsonl")]
+    host = list(read_jsonl(out / "host.jsonl"))
     calib = read_json(out / "calibration.json")
     before, after = calib["before"], calib["after"]
     nodes = {node: node_stats(node, series, t0, t1) for node in NODES}
@@ -1235,6 +1266,27 @@ def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
 
 
 def run_meta(run: dict[str, Any]) -> RunMeta:
+    meta = run["meta"]
+    return {
+        "sha": meta["sha"],
+        "ref": meta["ref"],
+        "event": meta["event"],
+        "run_id": meta["run_id"],
+        "run_url": meta["run_url"],
+        "pr": meta["pr"],
+        "started_at": datetime.fromtimestamp(run["started"], UTC).isoformat(
+            timespec="seconds"
+        ),
+        "wall_s": run["wall_s"],
+        "ready_s": run["ready_s"],
+        "local": meta["local"],
+        "teardown": run["teardown"],
+    }
+
+
+def environment_meta(pr: int | None) -> dict[str, Any]:
+    """Where the run happened, captured at run time. The sha is the checkout's: a dispatched
+    PR run has GITHUB_SHA of the default branch."""
     env = os.environ
     run_id = env.get("GITHUB_RUN_ID")
     run_url = (
@@ -1243,19 +1295,13 @@ def run_meta(run: dict[str, Any]) -> RunMeta:
         else None
     )
     return {
-        "sha": env.get("GITHUB_SHA") or git(["rev-parse", "HEAD"]),
+        "sha": git(["rev-parse", "HEAD"]),
         "ref": env.get("GITHUB_REF") or git(["rev-parse", "--abbrev-ref", "HEAD"]),
         "event": env.get("GITHUB_EVENT_NAME", "local"),
         "run_id": run_id,
         "run_url": run_url,
-        "pr": run["pr"],
-        "started_at": datetime.fromtimestamp(run["started"], UTC).isoformat(
-            timespec="seconds"
-        ),
-        "wall_s": run["wall_s"],
-        "ready_s": run["ready_s"],
+        "pr": pr,
         "local": "GITHUB_ACTIONS" not in env,
-        "teardown": run["teardown"],
     }
 
 
@@ -1535,13 +1581,14 @@ def host_stats(host: list[dict[str, Any]], t0: float, t1: float) -> HostStats:
 
 def load_stats(out: Path, t0: float, t1: float) -> LoadStats:
     meta = read_json(out / "load-meta.json")
-    txs = [tx for tx in read_jsonl(out / "load.jsonl") if t0 <= tx["t_submit"] <= t1]
+    every = list(read_jsonl(out / "load.jsonl"))
+    txs = [tx for tx in every if t0 <= tx["t_submit"] <= t1]
     included = [tx for tx in txs if tx["status"] == "included"]
     dt = t1 - t0
     latencies = [(tx["t_included"] - tx["t_submit"]) * 1000 for tx in included]
     landed = sum(
         1
-        for tx in read_jsonl(out / "load.jsonl")
+        for tx in every
         if tx["t_included"] is not None and t0 <= tx["t_included"] <= t1
     )
     return {
