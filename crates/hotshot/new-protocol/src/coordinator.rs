@@ -736,7 +736,7 @@ where
                     .push_back(ConsensusOutput::BlockPayloadReconstructed {
                         view: out.view,
                         header: proposal.block_header.clone(),
-                        payload: out.payload,
+                        payload: Arc::new(out.payload),
                     });
             } else {
                 warn!(
