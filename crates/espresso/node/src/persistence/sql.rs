@@ -3582,7 +3582,7 @@ mod test {
             proposal: QuorumProposal2::<SeqTypes> {
                 block_header: leaf.block_header().clone(),
                 view_number: leaf.view_number(),
-                justify_qc: leaf.justify_qc(),
+                justify_qc: leaf.justify_qc().clone(),
                 upgrade_certificate: None,
                 view_change_evidence: None,
                 next_drb_result: None,

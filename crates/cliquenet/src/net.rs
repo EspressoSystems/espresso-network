@@ -148,7 +148,7 @@ impl Network {
             metrics: metr,
         };
 
-        info!(name = %conf.name, %node, %addr, "listening");
+        info!(name = %conf.name, %node, %addr, max_message_size = %conf.max_message_size, "listening");
 
         Ok(Self { recv, send })
     }

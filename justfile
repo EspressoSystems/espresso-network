@@ -103,9 +103,6 @@ build profile="dev" features="":
 demo-native-da-committees *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-new-protocol-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-new-protocol-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
-
 demo-native-large-block-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-large-block-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
@@ -134,7 +131,7 @@ anvil *args:
 # slow-tests: slow and serial tests
 # espresso-dev-node: enables embedded-db
 # espresso-crypto-helper: vendored openssl leaks to workspace via feature unification
-nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude hotshot-examples --exclude espresso-crypto-helper"
+nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
@@ -249,10 +246,8 @@ check-features-ci *args:
         --exclude hotshot \
         --exclude hotshot-builder-api \
         --exclude hotshot-contract-adapter \
-        --exclude hotshot-events-service \
         --exclude hotshot-example-types \
         --exclude hotshot-libp2p-networking \
-        --exclude hotshot-macros \
         --exclude hotshot-orchestrator \
         --exclude hotshot-query-service \
         --exclude hotshot-state-prover \

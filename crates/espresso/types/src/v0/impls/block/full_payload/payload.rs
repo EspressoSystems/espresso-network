@@ -41,6 +41,11 @@ impl Payload {
         &self.ns_table
     }
 
+    /// The bytes [`BlockPayload::encode`] returns, without its copy into a fresh `Arc`.
+    pub fn raw_payload(&self) -> &[u8] {
+        &self.raw_payload
+    }
+
     /// Read a transaction from this payload.
     pub fn transaction(&self, index: &Index) -> Option<Transaction> {
         let ns = &index.ns_index;

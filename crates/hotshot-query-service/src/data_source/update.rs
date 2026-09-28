@@ -126,7 +126,7 @@ where
                 let qcs = once(committing_qc.qc().clone())
                     // ...and each leaf in the chain justifies the subsequent leaf (its parent)
                     // through `leaf.justify_qc`.
-                    .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc()))
+                    .chain(leaf_chain.iter().map(|leaf| leaf.leaf.justify_qc().clone()))
                     // Put the QCs in chronological order.
                     .rev()
                     // The oldest QC is the `justify_qc` of the oldest leaf, which does not justify
@@ -248,7 +248,7 @@ where
                 // `cert1` certifies the newest leaf; each newer leaf's justify_qc
                 // certifies the next older leaf.
                 let certifying_qcs = once(cert1.clone())
-                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()))
+                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc().clone()))
                     .take(leaf_infos.len())
                     .collect::<Vec<_>>();
 

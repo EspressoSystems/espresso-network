@@ -525,7 +525,7 @@ fn leaf_json<T: NodeType>(leaf: &Leaf2<T>) -> String {
             obj(&[("payloadCommit", payload_json(leaf.block_header()))]),
         ),
         ("viewNumber", view_json(leaf.view_number())),
-        ("parentCert", cert1_json_raw(&leaf.justify_qc())),
+        ("parentCert", cert1_json_raw(leaf.justify_qc())),
         ("timeoutEvidence", "null".to_string()),
         ("identity", ident(&leaf.commit())),
     ])

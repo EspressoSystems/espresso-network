@@ -25,7 +25,7 @@ use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
     client::CoordinatorClient,
-    consensus::{Consensus, PreCutoverSeed},
+    consensus::Consensus,
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::test_upgrade_lock,
@@ -64,7 +64,6 @@ pub async fn build_test_coordinator(
     client: CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-    pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
     upgrade: UpgradeSetup,
 ) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
@@ -135,19 +134,6 @@ pub async fn build_test_coordinator(
         genesis_leaf.clone(),
     );
 
-    if let Some(seed) = pre_cutover_seed.as_ref() {
-        let anchor_view = seed.decided_anchor.view_number();
-        if let Some(state) = seed.validated_states.get(&anchor_view).cloned() {
-            state_manager.seed_state(anchor_view, state, seed.decided_anchor.clone());
-        }
-        for leaf in &seed.undecided {
-            let view = leaf.view_number();
-            if let Some(state) = seed.validated_states.get(&view).cloned() {
-                state_manager.seed_state(view, state, leaf.clone());
-            }
-        }
-    }
-
     // Build a genesis cert1 and proposal so consensus can self-start.
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
@@ -167,10 +153,11 @@ pub async fn build_test_coordinator(
             block_header: anchor_leaf.block_header().clone(),
             view_number: anchor_view,
             epoch: anchor_epoch,
-            justify_qc: anchor_leaf.justify_qc(),
+            justify_qc: anchor_leaf.justify_qc().clone(),
             next_epoch_justify_qc: None,
             upgrade_certificate: anchor_leaf
                 .upgrade_certificate()
+                .cloned()
                 .map(|cert| UpgradeCertificate2::restore_epoch(cert, anchor_epoch)),
             view_change_evidence: anchor_leaf
                 .view_change_evidence
@@ -221,10 +208,6 @@ pub async fn build_test_coordinator(
         );
         ViewNumber::genesis()
     };
-
-    if let Some(seed) = pre_cutover_seed {
-        consensus.apply_pre_cutover_seed(seed);
-    }
 
     // Restarted nodes must not act again in views they acted in before.
     let restart_view = storage.restart_view().await;
@@ -304,7 +287,7 @@ pub async fn build_test_coordinator(
         .build();
 
     // Emit initial ViewChanged + RequestBlockAndHeader (if leader).
-    coordinator.start(None);
+    coordinator.start();
 
     // Process the initial outputs so the timer resets and block builder
     // gets notified before the event loop starts.

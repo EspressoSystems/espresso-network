@@ -93,6 +93,7 @@ async fn create_network(
         keypair,
         bind_addr,
         parties,
+        None,
         upgrade_lock(),
         Box::new(NoMetrics),
     )
@@ -235,7 +236,7 @@ async fn build_coordinator(
         .build();
 
     // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
-    coordinator.start(None);
+    coordinator.start();
 
     // Process initial outputs so the timer resets before the event loop.
     while let Some(output) = coordinator.outbox_mut().pop_front() {

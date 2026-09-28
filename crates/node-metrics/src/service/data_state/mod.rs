@@ -931,7 +931,7 @@ mod tests {
                 .send((
                     Leaf1QueryData::new(
                         sample_leaf.clone().to_leaf_unsafe(),
-                        sample_leaf.justify_qc().to_qc()
+                        sample_leaf.justify_qc().clone().to_qc()
                     ),
                     sample_block_query_data
                 ))
