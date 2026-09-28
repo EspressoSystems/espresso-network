@@ -3,9 +3,9 @@
 //! The leader of view 1 sends proposal A to the network and a different proposal B,
 //! with this node's VID share, to this node alone. The network certifies and
 //! decides A, and view 2's proposal extends it. Whichever proposal this node got
-//! first, it has to end up holding A: deciding view 1, locking on it, and
-//! voting for view 2's proposal all check the proposal held at view 1 against the
-//! certificate that names A.
+//! first, it has to end up holding A beside the rival: locking on A, casting its
+//! vote2 for A, deciding view 1 with A, and voting for view 2's proposal all look
+//! the proposal up by the certificate that names A.
 //!
 //! The node is a single `Consensus` fed by hand, in the orders a network can
 //! deliver. It asks for A by fetch when it needs it, and the test answers the
@@ -19,6 +19,7 @@ use hotshot_types::{
     data::{VidCommitment, VidCommitment2, ViewNumber},
     message::Proposal as SignedProposal,
     traits::signature_key::SignatureKey,
+    vote::HasViewNumber,
 };
 
 use crate::{
@@ -157,14 +158,14 @@ impl<'a> Node<'a> {
             .map(proposal_commitment)
     }
 
-    /// The node holds A, decided view 1 with it, and voted for view 2's proposal.
+    /// The node holds A beside the rival, locked on A, cast its vote2 for A,
+    /// decided view 1 with A, and voted for view 2's proposal.
     ///
-    /// Checked together, so a failure shows which of the three went wrong.
+    /// Checked together, so a failure shows which of them went wrong.
     fn assert_follows(&self, a: &TestView) {
         let a_commit = proposal_commitment(&a.proposal.data);
-        let decided_at_view_1: Vec<_> = self
-            .harness
-            .outputs()
+        let outputs = self.harness.outputs();
+        let decided_at_view_1: Vec<_> = outputs
             .iter()
             .filter_map(|o| match o {
                 ConsensusOutput::LeafDecided { leaves, .. } => Some(leaves),
@@ -174,11 +175,35 @@ impl<'a> Node<'a> {
             .filter(|leaf| *leaf.view_number() == 1)
             .map(|leaf| leaf.commit())
             .collect();
-        let votes_at_view_2 = count_matching(self.harness.outputs(), |o| is_vote1_for_view(o, 2));
+        let vote2s_at_view_1: Vec<_> = outputs
+            .iter()
+            .filter_map(|o| match o {
+                ConsensusOutput::SendVote2(v) if *v.view_number() == 1 => Some(v.data.leaf_commit),
+                _ => None,
+            })
+            .collect();
+        let proposals = self.harness.consensus.proposals();
         assert_eq!(
-            (self.held_at_view_1(), decided_at_view_1, votes_at_view_2),
-            (Some(a_commit), vec![a_commit], 1),
-            "(proposal held at view 1, leaves decided at view 1, vote1s at view 2)"
+            (
+                proposals.get(ViewNumber::new(1), a_commit).is_some(),
+                proposals.at(ViewNumber::new(1)).count(),
+                self.harness.consensus.locked_view(),
+                vote2s_at_view_1,
+                self.held_at_view_1(),
+                decided_at_view_1,
+                count_matching(outputs, |o| is_vote1_for_view(o, 2)),
+            ),
+            (
+                true,
+                2,
+                Some(ViewNumber::new(1)),
+                vec![a_commit],
+                Some(a_commit),
+                vec![a_commit],
+                1,
+            ),
+            "(A held, proposals held at view 1, lock, vote2s at view 1, proposal picked at view \
+             1, leaves decided at view 1, vote1s at view 2)"
         );
     }
 }

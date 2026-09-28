@@ -4,6 +4,7 @@ use committable::Commitment;
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
     traits::node_implementation::NodeType,
+    vote::HasViewNumber,
 };
 
 use crate::message::Proposal;
@@ -55,8 +56,8 @@ impl<T: NodeType> Proposals<T> {
     }
 
     pub fn last(&self) -> Option<&Proposal<T>> {
-        let (&view, all) = self.all.last_key_value()?;
-        self.live(view).or_else(|| all.values().next())
+        let (_, all) = self.all.last_key_value()?;
+        all.values().max_by_key(|p| p.justify_qc.view_number())
     }
 
     pub fn insert_under(&mut self, p: Proposal<T>, c: Commitment<Leaf2<T>>) {
