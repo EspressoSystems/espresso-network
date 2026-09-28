@@ -65,11 +65,13 @@ from urllib.parse import urlsplit
 
 log = logging.getLogger("network-bench")
 
+# Bump when a metric's meaning changes: config_hash covers the inputs, not the analysis code.
 SCHEMA_VERSION = 1
 BENCH_DIR = Path(__file__).resolve().parent
 REPO = BENCH_DIR.parents[1]
 COMPOSE_FILE = BENCH_DIR / "process-compose.yaml"
 GENESIS_FILE = BENCH_DIR / "genesis.toml"
+ENV_FILE = REPO / ".env"
 
 NODES = {
     "node0": "http://localhost:24000",
@@ -1388,6 +1390,7 @@ def config_hash(cfg: BenchConfig) -> str:
     )
     digest.update(GENESIS_FILE.read_bytes())
     digest.update(COMPOSE_FILE.read_bytes())
+    digest.update(ENV_FILE.read_bytes())
     return digest.hexdigest()[:12]
 
 
