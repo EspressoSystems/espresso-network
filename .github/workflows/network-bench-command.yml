@@ -1,0 +1,114 @@
+name: Network benchmark command
+
+# `/benchmark` on a pull request runs network-bench.yml against the binaries the pull request's
+# build.yml run already uploaded, so nothing is rebuilt.
+#
+# Security model:
+# - This workflow runs main's code with a writable token and never checks out the pull request.
+# - Only OWNER/MEMBER/COLLABORATOR comments on same-repo pull requests are accepted. Fork pull
+#   requests are refused, so no outside code runs with a repository token.
+# - The dispatched run executes pull request code with a read-only token (contents, actions).
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  # Dispatch network-bench.yml.
+  actions: write
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: network-bench-command-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    name: Network benchmark
+    # `issue_comment` fires on issues too, and runs on the default branch with a writable token,
+    # so the author needs write access to the repository.
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/benchmark') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.issue.number }}
+      REPO: ${{ github.repository }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      SERVER: ${{ github.server_url }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Acknowledge the command
+        env:
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          gh api --method POST --silent \
+            "repos/$REPO/issues/comments/$COMMENT_ID/reactions" \
+            --field content=eyes
+
+      - name: Dispatch the benchmark
+        id: dispatch
+        run: |
+          set -euo pipefail
+          pr_json=$(gh api "repos/$REPO/pulls/$PR")
+          sha=$(jq -r .head.sha <<< "$pr_json")
+          if [[ "$(jq -r .head.repo.full_name <<< "$pr_json")" != "$REPO" ]]; then
+            msg="\`/benchmark\` runs only for branches of $REPO, not for forks."
+            echo "message=$msg" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Newest first. A pull_request run from this repository whose build-amd legs uploaded
+          # all three artifacts; they are kept for one day.
+          needed='["amd-espresso-node","amd-espresso-node-sqlite","amd-other"]'
+          run_ids=$(gh api -X GET "repos/$REPO/actions/workflows/build.yml/runs" \
+            -f head_sha="$sha" -f event=pull_request -f per_page=20 \
+            --jq ".workflow_runs[] | select(.head_repository.full_name == \"$REPO\") | .id")
+          build_run=""
+          for id in $run_ids; do
+            names=$(gh api "repos/$REPO/actions/runs/$id/artifacts?per_page=100" --paginate \
+              --jq '.artifacts[] | select(.expired | not) | .name' | jq -R . | jq -s .)
+            if jq -e --argjson need "$needed" '($need - .) == []' <<< "$names" > /dev/null; then
+              build_run="$id"
+              break
+            fi
+          done
+          if [[ -z "$build_run" ]]; then
+            msg="\`/benchmark\`: no build.yml run for $sha has the amd-espresso-node,"
+            msg+=" amd-espresso-node-sqlite and amd-other artifacts (kept 1 day)."
+            echo "message=$msg Re-run CI for this pull request first." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The dispatch API answers with the new run's URL; fall back to the run list if not.
+          resp=$(gh api --method POST \
+            "repos/$REPO/actions/workflows/network-bench.yml/dispatches" \
+            -f ref="$DEFAULT_BRANCH" \
+            -f "inputs[build_run_id]=$build_run" \
+            -f "inputs[sha]=$sha" \
+            -f "inputs[pr]=$PR")
+          bench_url=$(jq -r '.html_url // empty' <<< "$resp")
+          bench_url="${bench_url:-$SERVER/$REPO/actions/workflows/network-bench.yml}"
+          msg="Network benchmark of $sha (binaries from $SERVER/$REPO/actions/runs/$build_run):"
+          echo "message=$msg $bench_url. Results are in its step summary." >> "$GITHUB_OUTPUT"
+
+      - name: Post the result
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          number: ${{ github.event.issue.number }}
+          header: network-bench-command
+          message: ${{ steps.dispatch.outputs.message }}
+
+      # An `issue_comment` run is not among the pull request's checks, so a failure is invisible
+      # unless it says so where the command was given.
+      - name: Report a failure
+        if: failure()
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          number: ${{ github.event.issue.number }}
+          header: network-bench-command
+          message: "`/benchmark` failed: ${{ env.RUN_URL }}"
