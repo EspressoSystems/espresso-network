@@ -207,6 +207,21 @@ jobs:
         with:
           artifact: compile-metrics-build
 
+  # Pull requests run it on demand with `/benchmark` (network-bench-command.yml).
+  network-bench:
+    name: Network benchmark
+    needs: build-amd
+    if: >-
+      ${{ !cancelled() && needs.build-amd.result == 'success' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/network-bench.yml
+    with:
+      build_run_id: ${{ github.run_id }}
+      sha: ${{ github.sha }}
+
   build-dockers-amd:
     needs: build-amd
     runs-on: ubuntu-latest
