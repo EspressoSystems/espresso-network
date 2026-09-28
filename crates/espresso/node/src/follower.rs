@@ -296,7 +296,11 @@ impl<P: SequencerPersistence> FollowerContext<P> {
 
     /// Waits for the first decided leaf.
     pub async fn decided_leaf(&self) -> Leaf2 {
-        self.handle.consensus.decided_leaf().await
+        self.handle
+            .consensus
+            .decided_leaf()
+            .await
+            .expect("the follower's decided_leaf is infallible")
     }
 
     pub fn node_state(&self) -> NodeState {
@@ -344,6 +348,14 @@ impl<P: SequencerPersistence> ApiContext for FollowerHandle<P> {
 
     fn consensus(&self) -> Arc<dyn ConsensusSource> {
         self.consensus.clone()
+    }
+
+    fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
+        self.consensus.coordinator.clone()
+    }
+
+    fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+        self.consensus.upgrade_lock.clone()
     }
 
     fn persistence(&self) -> Arc<P> {
@@ -400,16 +412,17 @@ struct FollowerConsensus {
 
 #[async_trait]
 impl ConsensusSource for FollowerConsensus {
-    async fn decided_leaf(&self) -> Leaf2 {
+    async fn decided_leaf(&self) -> anyhow::Result<Leaf2> {
         let mut decided = self.decided.clone();
         let leaf = decided
             .wait_for(Option::is_some)
             .await
             .expect("the follower context holds the sender");
-        leaf.as_ref()
+        Ok(leaf
+            .as_ref()
             .expect("waited for a decided leaf")
             .leaf()
-            .clone()
+            .clone())
     }
 
     async fn decided_state(&self) -> Option<Arc<ValidatedState>> {
@@ -436,14 +449,6 @@ impl ConsensusSource for FollowerConsensus {
         decided
             .as_ref()
             .and_then(|leaf| leaf.leaf().epoch(self.epoch_height))
-    }
-
-    async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
-        self.coordinator.clone()
-    }
-
-    async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
-        self.upgrade_lock.clone()
     }
 
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
