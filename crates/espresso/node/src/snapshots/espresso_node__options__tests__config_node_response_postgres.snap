@@ -237,6 +237,7 @@ storage:
       target_retention: 302000
       minimum_retention: 130000
       target_usage: 1000000000
+  rocksdb: ~
 modules:
   http:
     port: 24000

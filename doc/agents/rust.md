@@ -7,7 +7,7 @@
 - Use `-p <package>` for all cargo commands (full workspace builds OOM)
 - Run `cargo fmt` and `cargo check -p <package>` after changes
 - Run `cargo test -p espresso-types reference` after modifying any serializable type
-- Update all three storage backends (PostgreSQL, SQLite, filesystem) when changing persistence
+- Update every storage backend (PostgreSQL, SQLite, filesystem, RocksDB) when changing persistence
 
 **NEVER:**
 
@@ -111,8 +111,11 @@ Backends:
 - PostgreSQL (`sql.rs`): production DA/archival, merklized, pruning supported
 - Filesystem (`fs.rs`): production non-DA validators, not merklized, limited pruning
 - SQLite (`sql.rs` + `embedded-db`): not yet production, merklized, pruning supported
+- RocksDB (`rocksdb.rs`): consensus data only, for non-query nodes, not merklized. Never replays decide events:
+  everything at or below a decided view is dropped at decide, except the anchor leaf. Every write is synced to the WAL,
+  and monotonic records (`record_action`, `append_high_qc2`) are lock-free merges
 
-Migrations (all three backends required when adding storage):
+Migrations (every backend required when adding storage):
 
 - SQL via Refinery. Naming `V{n}__{name}.sql`.
 - Locations: `crates/espresso/node/api/migrations/{postgres,sqlite}/`,
@@ -120,6 +123,8 @@ Migrations (all three backends required when adding storage):
 - hotshot-query-service uses multiples of 100 (V100, V200...) leaving gaps for applications.
 - Filesystem (`crates/espresso/node/src/persistence/fs.rs`): no migration framework. Handle older on-disk formats with
   read-time fallbacks (see `load_stake` and `legacy_anchor_leaf_path`), and keep writes atomic via `Inner::replace`.
+- RocksDB (`crates/espresso/node/src/persistence/rocksdb.rs`): no migration framework. Add a column family to `Cf`, and
+  handle older value formats with read-time fallbacks.
 - Update `SequencerPersistence` for all backends; test with `cargo test -p espresso-node persistence`.
 
 Refinery migrations run synchronously at startup before the node joins consensus, so they must be fast and schema-only.

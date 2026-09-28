@@ -51,25 +51,45 @@ use crate::{
     state_cert::StateCertFetchError,
 };
 
-pub trait DataSourceOptions: PersistenceOptions {
-    type DataSource: SequencerDataSource<Options = Self>;
+/// Persistence options a node can run consensus on.
+pub trait StorageOptions: PersistenceOptions {
+    /// Add the query API module, backed by this storage.
+    ///
+    /// Fails for storage that cannot back the query service.
+    fn enable_query_module(&self, opt: Options, query: Query) -> anyhow::Result<Options>;
+}
 
-    fn enable_query_module(&self, opt: Options, query: Query) -> Options;
+/// Persistence options that can also back the query service.
+pub trait DataSourceOptions: StorageOptions {
+    type DataSource: SequencerDataSource<Options = Self>;
+}
+
+impl StorageOptions for persistence::sql::Options {
+    fn enable_query_module(&self, opt: Options, query: Query) -> anyhow::Result<Options> {
+        Ok(opt.query_sql(query, self.clone()))
+    }
 }
 
 impl DataSourceOptions for persistence::sql::Options {
     type DataSource = sql::DataSource;
+}
 
-    fn enable_query_module(&self, opt: Options, query: Query) -> Options {
-        opt.query_sql(query, self.clone())
+impl StorageOptions for persistence::fs::Options {
+    fn enable_query_module(&self, opt: Options, query: Query) -> anyhow::Result<Options> {
+        Ok(opt.query_fs(query, self.clone()))
     }
 }
 
 impl DataSourceOptions for persistence::fs::Options {
     type DataSource = fs::DataSource;
+}
 
-    fn enable_query_module(&self, opt: Options, query: Query) -> Options {
-        opt.query_fs(query, self.clone())
+impl StorageOptions for persistence::rocksdb::Options {
+    fn enable_query_module(&self, _opt: Options, _query: Query) -> anyhow::Result<Options> {
+        anyhow::bail!(
+            "storage-rocksdb only stores consensus data and cannot serve the query module. Use \
+             storage-sql or storage-fs on query nodes"
+        )
     }
 }
 

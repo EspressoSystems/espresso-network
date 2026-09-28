@@ -3,7 +3,7 @@ use espresso_node::{
     api::data_source::{DataSourceOptions, SequencerDataSource},
     persistence,
 };
-use espresso_types::v0::traits::MembershipPersistence;
+use espresso_types::v0::traits::{MembershipPersistence, PersistenceOptions};
 use espresso_utils::logging;
 
 /// Reset the persistent storage of a sequencer.
@@ -31,6 +31,8 @@ enum Command {
     Fs(persistence::fs::Options),
     /// Reset SQL storage.
     Sql(Box<persistence::sql::Options>),
+    /// Reset RocksDB consensus storage.
+    Rocksdb(persistence::rocksdb::Options),
 }
 
 #[tokio::main]
@@ -59,6 +61,17 @@ async fn main() -> anyhow::Result<()> {
                 reset_storage(*persistence_opt).await
             }
         },
+        Command::Rocksdb(persistence_opt) => {
+            if opt.stake_table_only {
+                tracing::warn!(
+                    "clearing stake table events from RocksDB storage {persistence_opt:?}"
+                );
+                clear_stake_table_events(persistence_opt).await
+            } else {
+                tracing::warn!("resetting RocksDB storage {persistence_opt:?}");
+                persistence_opt.reset().await
+            }
+        },
     }
 }
 
@@ -71,7 +84,7 @@ async fn reset_storage<O: DataSourceOptions>(opt: O) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn clear_stake_table_events<O: DataSourceOptions>(mut opt: O) -> anyhow::Result<()> {
+async fn clear_stake_table_events<O: PersistenceOptions>(mut opt: O) -> anyhow::Result<()> {
     let persistence = opt.create().await?;
     persistence.delete_stake_tables().await?;
     Ok(())

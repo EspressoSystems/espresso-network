@@ -371,6 +371,7 @@ refinery = { version = "0.8", features = ["tokio-postgres"] }
 refinery-core = { version = "0.8" }
 request-response = { path = "crates/request-response" }
 reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
+rocksdb = { version = "0.25", default-features = false, features = ["bindgen-runtime", "lz4"] }
 rstest = "0.25.0"
 rstest_reuse = "0.7.0"
 rust_decimal = "1.36.0"
