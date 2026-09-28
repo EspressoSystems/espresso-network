@@ -54,7 +54,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -196,10 +196,10 @@ class Window(TypedDict):
 
 
 class Stat(TypedDict):
-    value: float
-    min: float
-    max: float
-    cv: float
+    value: float | None
+    min: float | None
+    max: float | None
+    cv: float | None
     unit: str
     better: Literal["higher", "lower"]
 
@@ -1465,9 +1465,7 @@ def network_stats(
             "higher",
         ),
         "views_per_s": stat(views, "/s", "higher"),
-        "mean_view_ms": stat(
-            [1000 / v if v else math.inf for v in views], "ms", "lower"
-        ),
+        "mean_view_ms": stat([1000 / v if v else None for v in views], "ms", "lower"),
         "timeouts": int(
             max(delta(s, t0, t1, "consensus_number_of_timeouts")[0] for s in nodes)
         ),
@@ -1477,7 +1475,7 @@ def network_stats(
             "consensus_proposal_to_decide_time",
         ),
         "cpu_s_per_mb": stat(
-            [c / m if m else math.inf for c, m in zip(cpu, mb)], "s/MB", "lower"
+            [c / m if m else None for c, m in zip(cpu, mb)], "s/MB", "lower"
         ),
     }
 
@@ -1700,14 +1698,27 @@ def stake_amounts(path: Path) -> list[str]:
     return [entry["stake_table_entry"]["stake_amount"] for entry in table]
 
 
-def stat(values: list[float], unit: str, better: Literal["higher", "lower"]) -> Stat:
-    mean = statistics.fmean(values)
-    cv = statistics.pstdev(values) / mean if mean and math.isfinite(mean) else 0.0
+def stat(
+    values: Sequence[float | None], unit: str, better: Literal["higher", "lower"]
+) -> Stat:
+    """Over sub-windows; all None if any sub-window has no value, e.g. a ratio to nothing
+    decided."""
+    known = [v for v in values if v is not None]
+    if len(known) < len(values):
+        return {
+            "value": None,
+            "min": None,
+            "max": None,
+            "cv": None,
+            "unit": unit,
+            "better": better,
+        }
+    mean = statistics.fmean(known)
     return {
-        "value": statistics.median(values),
-        "min": min(values),
-        "max": max(values),
-        "cv": cv,
+        "value": statistics.median(known),
+        "min": min(known),
+        "max": max(known),
+        "cv": statistics.pstdev(known) / mean if mean else 0.0,
         "unit": unit,
         "better": better,
     }
@@ -1982,6 +1993,8 @@ def range_cell(result: BenchResult, path: str) -> str:
     parent: Any = result
     for part in path.split(".")[:-1]:
         parent = parent[part]
+    if parent["value"] is None:
+        return ""
     return (
         f"{fmt_num(parent['min'])} to {fmt_num(parent['max'])}, cv {parent['cv']:.0%}"
     )
@@ -2104,8 +2117,6 @@ def fmt_value(value: float | None, unit: str) -> str:
 def fmt_num(value: float | None) -> str:
     if value is None:
         return ""
-    if not math.isfinite(value):
-        return str(value)
     if value == 0 or abs(value) >= 100:
         return f"{value:.0f}"
     return f"{value:.3g}"

@@ -532,6 +532,13 @@ class LoadTest(unittest.TestCase):
         self.assertGreater(sum(tx["status"] == "included" for tx in txs), 4)
 
 
+class StatTest(unittest.TestCase):
+    def test_empty_sub_window_gives_json_null(self):
+        value = bench.stat([2.0, None], "ms", "lower")
+        self.assertIsNone(value["value"])
+        self.assertEqual(json.loads(json.dumps(value, allow_nan=False)), value)
+
+
 class HistogramTest(unittest.TestCase):
     def test_interpolates_inside_bucket(self):
         m0 = {}
