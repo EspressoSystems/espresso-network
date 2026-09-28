@@ -345,6 +345,14 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             return Err(QueryError::NotFound);
         }
 
+        // Pruning deletes a node version once a newer one exists at or below the pruned height,
+        // which leaves every pruned snapshot but the newest incomplete. The newest one is intact,
+        // since nothing supersedes it, and the state writer resumes from it, so it stays readable
+        // whatever the pruned height.
+        if (created as usize) == height {
+            return Ok((created, commit));
+        }
+
         let pruned_height =
             self.load_state_pruned_height()
                 .await
