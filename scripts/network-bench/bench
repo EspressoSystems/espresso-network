@@ -516,7 +516,8 @@ def cmd_render(args: argparse.Namespace) -> int:
 
 def cmd_compare(args: argparse.Namespace) -> int:
     current: BenchResult = json.loads(args.result.read_text())
-    print("\n".join(comparison_table(compare(current, load_baseline(args.baseline)))))
+    comparison = compare(current, load_baseline(args.baseline))
+    print("\n".join(headline_table(current, comparison)))
     return 0
 
 
@@ -857,7 +858,7 @@ async def generate_load(
     state = LoadState(cfg.max_pending)
     marker = hashlib.sha256(f"network-bench:{cfg.seed}".encode()).digest()[:16]
     bodies = tx_bodies(cfg, len(marker) + 8)
-    ids = iter(range(sys.maxsize))
+    ids = itertools.count()
     pool = HttpPool()
     done = asyncio.Event()
     try:
@@ -2095,20 +2096,6 @@ def render_failure(error: str, runner: RunnerInfo) -> str:
         f"## Network benchmark\n\n**invalid**: {error}\n\nRunner: {runner['cpu_model']}, "
         f"{runner['nproc']} CPUs. Logs are in the artifact.\n"
     )
-
-
-def comparison_table(comparison: Comparison) -> list[str]:
-    lines = [
-        f"| metric | current | baseline (n={comparison['n']}) | delta | verdict |",
-        "|---|---:|---:|---:|---|",
-    ]
-    for row in comparison["rows"]:
-        delta_cell = f"{row['delta_pct']:+.1f}%" if row["delta_pct"] is not None else ""
-        lines.append(
-            f"| {row['label']} | {fmt_value(row['current'], row['unit'])} "
-            f"| {fmt_value(row['baseline'], row['unit'])} | {delta_cell} | {row['verdict']} |"
-        )
-    return lines
 
 
 def fmt_value(value: float | None, unit: str) -> str:
