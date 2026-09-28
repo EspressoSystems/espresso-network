@@ -8,7 +8,7 @@ use espresso_node::{
         Options,
         data_source::testing::TestableSequencerDataSource,
         sql::DataSource as SqlDataSource,
-        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+        test_helpers::{NEW_PROTOCOL, TestNetwork, TestNetworkConfigBuilder},
     },
     catchup::StatePeers,
     testing::{TestConfig, TestConfigBuilder},
@@ -23,9 +23,6 @@ use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
 use staking_cli::demo::DelegationConfig;
 use test_utils::reserve_tcp_port;
 use tokio::time::{sleep, timeout};
-use versions::{NEW_PROTOCOL_VERSION, Upgrade};
-
-const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {
