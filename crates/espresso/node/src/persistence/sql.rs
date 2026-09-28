@@ -648,7 +648,7 @@ pub struct PruningOptions {
         env = "ESPRESSO_NODE_PRUNER_STATE_MINIMUM_RETENTION",
         value_parser = parse_duration,
     )]
-    state_minimum_retention: Option<Duration>,
+    pub(crate) state_minimum_retention: Option<Duration>,
 
     /// Target retention period.
     /// Data older than this is pruned to free up space.
@@ -667,7 +667,7 @@ pub struct PruningOptions {
         env = "ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION",
         value_parser = parse_duration,
     )]
-    state_target_retention: Option<Duration>,
+    pub(crate) state_target_retention: Option<Duration>,
 
     /// Batch size for pruning.
     /// This is the number of blocks worth of data to delete in a single transaction. Heights that
