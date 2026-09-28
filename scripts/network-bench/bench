@@ -326,7 +326,7 @@ class Baseline(TypedDict):
 
 class Comparison(TypedDict):
     n: int
-    excluded: int
+    excluded: dict[str, int]
     error: str | None
     rows: list[Row]
 
@@ -1731,6 +1731,8 @@ HEADLINE = (
     ),
 )
 BASELINE_RUNS = 10
+# GitHub's ubuntu-latest spans CPU models; a baseline run counts only on a like runner.
+CALIBRATION_MATCH_PCT = 10.0
 
 
 def lookup(result: Any, path: str) -> float | None:
@@ -1744,24 +1746,50 @@ def lookup(result: Any, path: str) -> float | None:
 def compare(current: BenchResult, baseline: Baseline) -> Comparison:
     """Deltas against the median of comparable runs. A delta counts only beyond both the metric's
     floor and 3 times the baseline's robust spread; a noisy current run is never conclusive."""
-    usable = [
-        run
-        for run in baseline["runs"]
-        if run.get("schema_version") == SCHEMA_VERSION
-        and run["validity"]["valid"]
-        and not run["validity"]["noisy"]
-        and run["config_hash"] == current["config_hash"]
-    ][:BASELINE_RUNS]
+    usable: list[BenchResult] = []
+    excluded: dict[str, int] = {}
+    for run in baseline["runs"]:
+        reason = exclusion(current, run)
+        if reason:
+            excluded[reason] = excluded.get(reason, 0) + 1
+        else:
+            usable.append(run)
+    usable = usable[:BASELINE_RUNS]
     rows = [
         compare_metric(metric, current, usable, current["validity"]["noisy"])
         for metric in HEADLINE
     ]
     return {
         "n": len(usable),
-        "excluded": len(baseline["runs"]) - len(usable),
+        "excluded": excluded,
         "error": baseline["error"],
         "rows": rows,
     }
+
+
+def exclusion(current: BenchResult, run: BenchResult) -> str | None:
+    """Why `run` is no baseline for `current`, or None if it is one."""
+    if run.get("schema_version") != SCHEMA_VERSION:
+        return "other schema"
+    if not run["validity"]["valid"]:
+        return "invalid"
+    if run["validity"]["noisy"]:
+        return "noisy"
+    if run["config_hash"] != current["config_hash"]:
+        return "other config"
+    ours, theirs = current["runner"], run["runner"]
+    if (ours["cpu_model"], ours["affinity"]) != (
+        theirs["cpu_model"],
+        theirs["affinity"],
+    ):
+        return "other runner"
+    speed = pct_change(
+        current["calibration"]["before"]["sha256_1t_mb_s"],
+        run["calibration"]["before"]["sha256_1t_mb_s"],
+    )
+    if abs(speed) > CALIBRATION_MATCH_PCT:
+        return "other calibration"
+    return None
 
 
 def compare_metric(
@@ -1896,16 +1924,19 @@ def headline_table(result: BenchResult, comparison: Comparison | None) -> list[s
     if comparison["error"]:
         lines += ["", f"Baseline fetch failed: {comparison['error']}"]
     elif comparison["n"] == 0:
-        lines += [
-            "",
-            f"No baseline: 0 comparable runs ({comparison['excluded']} excluded).",
-        ]
+        lines += ["", f"No baseline: 0 comparable runs{excluded_note(comparison)}."]
     elif comparison["excluded"]:
-        lines += [
-            "",
-            f"{comparison['excluded']} baseline runs excluded (invalid, noisy or other config).",
-        ]
+        lines += ["", f"Baseline runs excluded{excluded_note(comparison)}."]
     return lines
+
+
+def excluded_note(comparison: Comparison) -> str:
+    excluded = comparison["excluded"]
+    return (
+        " (excluded: " + ", ".join(f"{n} {why}" for why, n in excluded.items()) + ")"
+        if excluded
+        else ""
+    )
 
 
 def range_cell(result: BenchResult, path: str) -> str:

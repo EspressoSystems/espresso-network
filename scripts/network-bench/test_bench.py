@@ -222,7 +222,27 @@ class CompareTest(unittest.TestCase):
         invalid["validity"] = {"valid": False, "noisy": False, "reasons": ["x"]}
         other = make_result(config_hash="other")
         comparison = compare(make_result(), [noisy, invalid, other, make_result()])
-        self.assertEqual((comparison["n"], comparison["excluded"]), (1, 3))
+        self.assertEqual(comparison["n"], 1)
+        self.assertEqual(
+            comparison["excluded"], {"noisy": 1, "invalid": 1, "other config": 1}
+        )
+
+    def test_excludes_other_runner(self):
+        other_cpu = make_result()
+        other_cpu["runner"]["cpu_model"] = "Other CPU"
+        slower = make_result()
+        slower["calibration"]["before"]["sha256_1t_mb_s"] = 1700.0
+        close = make_result()
+        close["calibration"]["before"]["sha256_1t_mb_s"] = 1900.0
+        comparison = compare(make_result(), [other_cpu, slower, close])
+        self.assertEqual(comparison["n"], 1)
+        self.assertEqual(
+            comparison["excluded"], {"other runner": 1, "other calibration": 1}
+        )
+        self.assertIn(
+            "No baseline: 0 comparable runs (excluded: 1 other runner)",
+            bench.render(make_result(), compare(make_result(), [other_cpu])),
+        )
 
     def test_noisy_current_is_inconclusive(self):
         current = make_result(mb_per_s=1.0, steal=8.0)
