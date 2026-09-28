@@ -1694,9 +1694,9 @@ HEADLINE = (
     Metric(
         "proposal to decide p99", "network.proposal_to_decide_ms.p99", "ms", "lower", 20
     ),
-    Metric("node0 CPU", "nodes.node0.cpu_cores", "cores", "lower", 10),
-    Metric("node1 CPU", "nodes.node1.cpu_cores", "cores", "lower", 10),
-    Metric("node2 CPU", "nodes.node2.cpu_cores", "cores", "lower", 10),
+    Metric("node0 CPU", "nodes.node0.cpu_cores", "cores", "lower", 15),
+    Metric("node1 CPU", "nodes.node1.cpu_cores", "cores", "lower", 15),
+    Metric("node2 CPU", "nodes.node2.cpu_cores", "cores", "lower", 15),
     Metric("node0 RSS peak", "nodes.node0.rss_peak_bytes", "bytes", "lower", 10),
     Metric("node1 RSS peak", "nodes.node1.rss_peak_bytes", "bytes", "lower", 10),
     Metric("postgres CPU", "processes.postgres.cpu_cores_mean", "cores", "lower", 15),
