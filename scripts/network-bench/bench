@@ -1,0 +1,1991 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+r"""End-to-end throughput benchmark of a 3-node espresso-node network, for regression tracking.
+
+`run` starts scripts/network-bench/process-compose.yaml (3 equal-stake validators, so every
+certificate needs all 3; node0 on Postgres with the query service, node1 and node2 on SQLite),
+drives it with a closed-loop load generator, samples node metrics and host CPU, tears the network
+down, and writes `result.json` plus a markdown `summary.md` into the output directory.
+
+Load is closed loop: at most `max_pending` transactions are in flight. A permit returns when
+node0's query service shows the transaction in a block, or after `tx_timeout_s`. Each transaction
+carries a per-run marker and its id, so inclusion is found by scanning block payloads, one fetch
+per block, without computing transaction hashes.
+
+Headline rates are the median of `subwindow_s` slices of the measurement window. A run is
+`noisy` when steal time, calibration drift or dropped transactions suggest the runner, not the
+code, moved the numbers; noisy runs are kept but never used as a baseline.
+
+Exit codes:
+    0  the run is valid, whatever the performance deltas
+    1  the run is invalid (network not ready, a node stalled, no transactions included, ...)
+    2  preflight refused to start (leftover processes or busy ports)
+
+Examples:
+    scripts/network-bench/bench run --bin-dir target/release --out bench-out
+    scripts/network-bench/bench render bench-out --baseline main-network-bench.json
+    scripts/network-bench/bench compare bench-out/result.json --baseline other/result.json
+    scripts/network-bench/bench sysinfo --out bench-out
+"""
+
+import argparse
+import asyncio
+import base64
+import dataclasses
+import hashlib
+import http.client
+import itertools
+import json
+import logging
+import math
+import os
+import platform
+import random
+import re
+import shutil
+import signal
+import socket
+import statistics
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Literal, TypedDict
+from urllib.parse import urlsplit
+
+log = logging.getLogger("network-bench")
+
+SCHEMA_VERSION = 1
+BENCH_DIR = Path(__file__).resolve().parent
+REPO = BENCH_DIR.parents[1]
+COMPOSE_FILE = BENCH_DIR / "process-compose.yaml"
+GENESIS_FILE = BENCH_DIR / "genesis.toml"
+
+NODES = {
+    "node0": "http://localhost:24000",
+    "node1": "http://localhost:24001",
+    "node2": "http://localhost:24002",
+}
+ROLES = {
+    "node0": "validator, query, postgres",
+    "node1": "validator, sqlite",
+    "node2": "validator, sqlite",
+}
+QUERY_NODE = "node0"
+# API, cliquenet, libp2p, anvil, postgres, orchestrator, relay.
+PORTS = (
+    24000,
+    24001,
+    24002,
+    11000,
+    11001,
+    11002,
+    7000,
+    7001,
+    7002,
+    8545,
+    5432,
+    30001,
+    30011,
+)
+# Exact /proc/<pid>/comm names (truncated to 15 chars) of the processes the network runs.
+PROCESS_NAMES = (
+    "process-compose",
+    "espresso-node",
+    "espresso-node-s",
+    "orchestrator",
+    "state-relay-ser",
+    "deploy",
+    "anvil",
+    "postgres",
+)
+# comm prefix -> label for the per-process CPU sampler; nodes are labelled by API port.
+PROCESS_LABELS = {
+    "postgres": "postgres",
+    "anvil": "anvil",
+    "orchestrator": "orchestrator",
+    "state-relay-ser": "relay",
+    "process-compose": "process-compose",
+}
+METRIC_PREFIXES = (
+    "consensus_",
+    "process_",
+    "tokio_",
+    "hotshot_",
+    "sql",
+    "storage",
+    "internal_",
+)
+STEAL_NOISY_PCT = 5.0
+DRIFT_NOISY_PCT = 10.0
+INCLUSION_NOISY_RATIO = 0.95
+SCRAPE_OK_MIN = 0.9
+MIN_READY_HEIGHT = 5
+TOOL_VERSIONS = (
+    ["process-compose", "version"],
+    ["anvil", "--version"],
+    ["postgres", "--version"],
+    ["openssl", "version"],
+)
+
+
+class Calibration(TypedDict):
+    sha256_1t_mb_s: float
+    sha256_mt_mb_s: float
+    fsync_per_s: float
+
+
+class RunnerInfo(TypedDict):
+    cpu_model: str
+    nproc: int
+    affinity: int
+    cgroup_cpu_max: str | None
+    mhz: list[float]
+    flags: list[str]
+    mem_total_bytes: int
+    kernel: str
+    image_os: str | None
+    image_version: str | None
+    runner_name: str | None
+
+
+class RunMeta(TypedDict):
+    sha: str
+    ref: str
+    event: str
+    run_id: str | None
+    run_url: str | None
+    pr: int | None
+    started_at: str
+    wall_s: float
+    ready_s: float
+    local: bool
+    teardown: list[str]
+
+
+class Window(TypedDict):
+    t0: float
+    t1: float
+    height_start: int
+    height_end: int
+
+
+class Stat(TypedDict):
+    value: float
+    min: float
+    max: float
+    cv: float
+    unit: str
+    better: Literal["higher", "lower"]
+
+
+class Quantiles(TypedDict):
+    n: int
+    mean: float
+    p50: float
+    p95: float
+    p99: float
+    max: float
+
+
+class NetworkStats(TypedDict):
+    decided_mb_per_s: Stat
+    blocks_per_s: Stat
+    views_per_s: Stat
+    mean_view_ms: Stat
+    timeouts: int
+    empty_block_frac: float
+    proposal_to_decide_ms: Quantiles | None
+    cpu_s_per_mb: Stat
+
+
+class OpStats(TypedDict):
+    per_s: float
+    mean_ms: float
+    p50_ms: float | None
+    p99_ms: float | None
+    busy_frac: float
+
+
+class NodeStats(TypedDict):
+    role: str
+    decided_height_end: int
+    decided_blocks: int
+    view_lag_end: int
+    cpu_cores: float
+    rss_peak_bytes: int
+    tokio_busy_frac: float | None
+    ops: dict[str, OpStats]
+
+
+class ProcStats(TypedDict):
+    cpu_cores_mean: float
+    cpu_s: float
+    rss_peak_bytes: int
+
+
+class HostStats(TypedDict):
+    util_mean: float
+    util_max: float
+    steal_pct: float
+    iowait_pct: float
+    mem_avail_min_bytes: int
+
+
+class LoadStats(TypedDict):
+    submitted_per_s: float
+    included_per_s: float
+    inclusion_ratio: float
+    timeouts: int
+    submit_errors: int
+    max_in_flight: int
+    latency_ms: Quantiles | None
+
+
+class Validity(TypedDict):
+    valid: bool
+    noisy: bool
+    reasons: list[str]
+
+
+class CalibrationPair(TypedDict):
+    before: Calibration
+    after: Calibration
+    drift_pct: float
+
+
+class BenchResult(TypedDict):
+    schema_version: int
+    run: RunMeta
+    runner: RunnerInfo
+    calibration: CalibrationPair
+    config: dict[str, Any]
+    config_hash: str
+    window: Window
+    network: NetworkStats
+    nodes: dict[str, NodeStats]
+    processes: dict[str, ProcStats]
+    host: HostStats
+    load: LoadStats
+    stake_table: list[str]
+    validity: Validity
+
+
+@dataclass(frozen=True)
+class BenchConfig:
+    genesis: str = "scripts/network-bench/genesis.toml"
+    tx_size: int = 100_000
+    namespaces: tuple[int, int] = (10000, 10010)
+    workers: int = 6
+    max_pending: int = 48
+    tx_timeout_s: int = 30
+    warmup_s: int = 60
+    measure_s: int = 180
+    subwindow_s: int = 30
+    seed: int = 42
+
+
+@dataclass
+class Network:
+    proc: subprocess.Popen
+    out: Path
+    storage: Path
+
+
+class Row(TypedDict):
+    key: str
+    label: str
+    unit: str
+    better: str
+    current: float | None
+    baseline: float | None
+    delta_pct: float | None
+    threshold_pct: float
+    verdict: str
+
+
+class Comparison(TypedDict):
+    n: int
+    excluded: int
+    rows: list[Row]
+
+
+class HttpPool:
+    """Keep-alive connections shared by threads, one request per connection at a time. A
+    reused connection the server closed is retried once on a fresh one; any other failure
+    raises OSError."""
+
+    def __init__(self) -> None:
+        self._idle: dict[str, list[http.client.HTTPConnection]] = {}
+        self._lock = threading.Lock()
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+    ) -> tuple[int, bytes]:
+        parts = urlsplit(url)
+        headers = {"Accept": "application/json"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        for attempt in range(2):
+            with self._lock:
+                idle = self._idle.setdefault(parts.netloc, [])
+                conn = idle.pop() if idle else None
+            reused = conn is not None
+            if conn is None:
+                conn = http.client.HTTPConnection(parts.netloc, timeout=timeout)
+            elif conn.sock is not None:
+                conn.sock.settimeout(timeout)
+            try:
+                conn.request(method, parts.path, body=body, headers=headers)
+                resp = conn.getresponse()
+                data = resp.read()
+            except (OSError, http.client.HTTPException) as err:
+                conn.close()
+                if not reused or attempt:
+                    raise OSError(f"{method} {url}: {err}") from err
+                continue
+            with self._lock:
+                idle.append(conn)
+            return resp.status, data
+        raise AssertionError("unreachable")
+
+    def close(self) -> None:
+        with self._lock:
+            for conns in self._idle.values():
+                for conn in conns:
+                    conn.close()
+            self._idle.clear()
+
+
+def main() -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    args = parse_args(sys.argv[1:])
+    return args.func(args)
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    defaults = BenchConfig()
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    sub = parser.add_subparsers(required=True)
+
+    run = sub.add_parser("run", help="start the network, load it, measure, tear down")
+    run.add_argument("--bin-dir", type=Path, required=True, help="release binaries")
+    run.add_argument("--out", type=Path, default=Path("bench-out"))
+    run.add_argument(
+        "--storage-root",
+        type=Path,
+        default=Path("/tmp"),
+        help="where node data lives; linked from a short /tmp path for the Postgres socket",
+    )
+    run.add_argument(
+        "--baseline", type=Path, help="stats-fetch output or a result.json"
+    )
+    run.add_argument("--pr", type=int)
+    run.add_argument("--ready-timeout", type=float, default=420.0)
+    for field in dataclasses.fields(BenchConfig):
+        if field.name in ("genesis", "namespaces"):
+            continue
+        run.add_argument(
+            f"--{field.name.replace('_', '-')}",
+            type=int,
+            default=getattr(defaults, field.name),
+        )
+    run.set_defaults(func=cmd_run)
+
+    render_p = sub.add_parser(
+        "render", help="re-analyse a run directory and print its summary"
+    )
+    render_p.add_argument("dir", type=Path)
+    render_p.add_argument("--baseline", type=Path)
+    render_p.set_defaults(func=cmd_render)
+
+    compare_p = sub.add_parser(
+        "compare", help="compare a result.json against a baseline"
+    )
+    compare_p.add_argument("result", type=Path)
+    compare_p.add_argument("--baseline", type=Path, required=True)
+    compare_p.set_defaults(func=cmd_compare)
+
+    sysinfo_p = sub.add_parser(
+        "sysinfo", help="record runner info and a CPU calibration"
+    )
+    sysinfo_p.add_argument("--out", type=Path, default=Path("bench-out"))
+    sysinfo_p.set_defaults(func=cmd_sysinfo)
+    return parser.parse_args(argv)
+
+
+def config_from_args(args: argparse.Namespace) -> BenchConfig:
+    fields = {f.name for f in dataclasses.fields(BenchConfig)} - {
+        "genesis",
+        "namespaces",
+    }
+    return BenchConfig(**{name: getattr(args, name) for name in fields})
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    cfg = config_from_args(args)
+    problems = preflight_problems(PORTS, PROCESS_NAMES)
+    if problems:
+        for problem in problems:
+            log.error("preflight: %s", problem)
+        log.error("stop the leftovers first, e.g. scripts/cleanup-process-compose")
+        return 2
+    out = args.out.resolve()
+    if out.exists() and any(out.iterdir()):
+        log.error("output directory %s is not empty", out)
+        return 2
+    (out / "logs").mkdir(parents=True, exist_ok=True)
+    started = time.time()
+    write_json(out / "config.json", dataclasses.asdict(cfg))
+    runner, raw = collect_sysinfo(args.bin_dir)
+    write_json(out / "sysinfo.json", {"runner": runner, "raw": raw})
+    storage = make_storage(args.storage_root)
+    try:
+        calib_before = calibrate(storage)
+        log.info("calibration before: %s", calib_before)
+        run = drive_network(cfg, args, out, storage)
+        calib_after = calibrate(storage)
+        log.info("calibration after: %s", calib_after)
+    finally:
+        remove_storage(storage)
+    run |= {"started": started, "wall_s": time.time() - started, "pr": args.pr}
+    write_json(out / "run.json", run)
+    write_json(out / "calibration.json", {"before": calib_before, "after": calib_after})
+    if run["error"]:
+        summary = render_failure(run["error"], runner)
+        (out / "summary.md").write_text(summary)
+        print(summary)
+        return 1
+    return write_report(out, args.baseline)
+
+
+def cmd_render(args: argparse.Namespace) -> int:
+    return write_report(args.dir.resolve(), args.baseline)
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    current: BenchResult = json.loads(args.result.read_text())
+    print("\n".join(comparison_table(compare(current, load_baseline(args.baseline)))))
+    return 0
+
+
+def cmd_sysinfo(args: argparse.Namespace) -> int:
+    args.out.mkdir(parents=True, exist_ok=True)
+    runner, raw = collect_sysinfo(None)
+    with tempfile.TemporaryDirectory(dir=args.out) as scratch:
+        calib = calibrate(Path(scratch))
+    write_json(
+        args.out / "sysinfo.json", {"runner": runner, "raw": raw, "calibration": calib}
+    )
+    print(json.dumps({"runner": runner, "calibration": calib}, indent=2))
+    return 0
+
+
+def write_report(out: Path, baseline: Path | None) -> int:
+    cfg = BenchConfig(
+        **json.loads((out / "config.json").read_text()) | {"namespaces": (10000, 10010)}
+    )
+    result = analyze(out, cfg)
+    write_json(out / "result.json", result)
+    comparison = compare(result, load_baseline(baseline)) if baseline else None
+    summary = render(result, comparison)
+    (out / "summary.md").write_text(summary)
+    print(summary)
+    net, load = result["network"], result["load"]
+    log.info(
+        "decided %.2f MB/s, tx p50 %s ms, p99 %s ms, %d timeouts, %s",
+        net["decided_mb_per_s"]["value"],
+        fmt_num(load["latency_ms"]["p50"] if load["latency_ms"] else None),
+        fmt_num(load["latency_ms"]["p99"] if load["latency_ms"] else None),
+        net["timeouts"],
+        verdict_word(result["validity"]),
+    )
+    log.info("wrote %s %s", out / "result.json", out / "summary.md")
+    return 0 if result["validity"]["valid"] else 1
+
+
+def drive_network(
+    cfg: BenchConfig, args: argparse.Namespace, out: Path, storage: Path
+) -> dict[str, Any]:
+    """Everything between the two calibrations. Returns run.json; never leaves processes."""
+    run: dict[str, Any] = {"error": None, "ready_s": None, "teardown": []}
+    stop = threading.Event()
+    pool = HttpPool()
+    net = start_network(cfg, out, storage, args.bin_dir)
+    samplers = [
+        threading.Thread(
+            target=sample_metrics, args=(list(NODES), out / "metrics.jsonl", stop)
+        ),
+        threading.Thread(target=sample_host, args=(out / "host.jsonl", storage, stop)),
+    ]
+    previous = signal.signal(signal.SIGTERM, raise_interrupt)
+    try:
+        for sampler in samplers:
+            sampler.start()
+        run["ready_s"] = wait_ready(
+            pool, net, list(NODES), MIN_READY_HEIGHT, args.ready_timeout
+        )
+        log.info("network ready after %.0f s", run["ready_s"])
+        stake_table = get_ok(pool, NODES[QUERY_NODE] + "/v1/node/stake-table/current")
+        (out / "stake-table.json").write_bytes(stake_table)
+        t_load = time.time()
+        run |= {
+            "t_load": t_load,
+            "t0": t_load + cfg.warmup_s,
+            "t1": t_load + cfg.warmup_s + cfg.measure_s,
+        }
+        log.info("load: warmup %d s, measuring %d s", cfg.warmup_s, cfg.measure_s)
+        submit_urls = list(NODES.values())
+        asyncio.run(generate_load(cfg, submit_urls, NODES[QUERY_NODE], run["t1"], out))
+        for node, url in NODES.items():
+            prom = get_ok(pool, url + "/v1/status/metrics")
+            (out / f"final-{node}.prom").write_bytes(prom)
+    except NetworkError as err:
+        run["error"] = str(err)
+        log.error("%s", err)
+    except KeyboardInterrupt:
+        run["error"] = "interrupted"
+        log.error("interrupted")
+    finally:
+        stop.set()
+        for sampler in samplers:
+            if sampler.is_alive():
+                sampler.join()
+        pool.close()
+        run["teardown"] = teardown(net)
+        signal.signal(signal.SIGTERM, previous)
+    return run
+
+
+class NetworkError(Exception):
+    pass
+
+
+def raise_interrupt(signum: int, frame: Any) -> None:
+    raise KeyboardInterrupt
+
+
+def preflight_problems(ports: tuple[int, ...], names: tuple[str, ...]) -> list[str]:
+    problems = [f"port {port} is in use" for port in ports if port_in_use(port)]
+    uid = os.getuid()
+    for pid, comm in proc_comms():
+        if comm in names and proc_uid(pid) == uid:
+            problems.append(f"{comm} (pid {pid}) is still running")
+    return problems
+
+
+def port_in_use(port: int) -> bool:
+    with socket.socket() as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def proc_comms() -> Iterator[tuple[int, str]]:
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                yield int(entry.name), (entry / "comm").read_text().strip()
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+
+
+def proc_uid(pid: int) -> int | None:
+    try:
+        return os.stat(f"/proc/{pid}").st_uid
+    except FileNotFoundError:
+        return None
+
+
+def make_storage(root: Path) -> Path:
+    """A short path: Postgres puts its unix socket there and socket paths are capped at 107 bytes."""
+    short = Path(tempfile.mkdtemp(prefix="enb.", dir="/tmp"))
+    if root.resolve() == Path("/tmp"):
+        return short
+    real = Path(tempfile.mkdtemp(prefix="enb.", dir=root.resolve()))
+    short.rmdir()
+    short.symlink_to(real)
+    return short
+
+
+def remove_storage(storage: Path) -> None:
+    if storage.is_symlink():
+        shutil.rmtree(storage.resolve())
+        storage.unlink()
+    else:
+        shutil.rmtree(storage)
+
+
+def start_network(cfg: BenchConfig, out: Path, storage: Path, bin_dir: Path) -> Network:
+    env = os.environ | {
+        "PATH": f"{bin_dir.resolve()}:{os.environ['PATH']}",
+        "BENCH_OUT": str(out),
+        "ESPRESSO_BASE_STORAGE_PATH": str(storage),
+    }
+    cmd = [
+        "process-compose",
+        "--no-server",
+        "-f",
+        str(COMPOSE_FILE),
+        "-L",
+        str(out / "logs" / "process-compose.log"),
+        "up",
+        "-t=false",
+    ]
+    log.info("starting network, storage %s -> %s", storage, storage.resolve())
+    # Process output lands in the per-process log_location files; stderr keeps
+    # process-compose's own failures.
+    with open(out / "logs" / "process-compose.stderr", "wb") as stderr:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=REPO,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr,
+            start_new_session=True,
+        )
+    return Network(proc=proc, out=out, storage=storage)
+
+
+def wait_ready(
+    pool: HttpPool, net: Network, nodes: list[str], min_height: int, timeout_s: float
+) -> float:
+    start = time.time()
+    while True:
+        heights = {node: block_height(pool, node) for node in nodes}
+        if all(h is not None and h >= min_height for h in heights.values()):
+            return time.time() - start
+        if net.proc.poll() is not None:
+            raise NetworkError(
+                f"process-compose exited with {net.proc.returncode} during startup"
+            )
+        if time.time() - start > timeout_s:
+            raise NetworkError(
+                f"network not ready after {timeout_s:.0f} s: heights {heights}"
+            )
+        time.sleep(2)
+
+
+def block_height(pool: HttpPool, node: str) -> int | None:
+    """None until the node's API answers."""
+    try:
+        status, body = pool.request(
+            "GET", NODES[node] + "/v1/status/block-height", timeout=2
+        )
+    except OSError:
+        return None
+    return int(body) if status == 200 else None
+
+
+def get_ok(pool: HttpPool, url: str) -> bytes:
+    try:
+        status, body = pool.request("GET", url)
+    except OSError as err:
+        raise NetworkError(str(err)) from err
+    if status != 200:
+        raise NetworkError(f"GET {url}: HTTP {status}")
+    return body
+
+
+def teardown(net: Network) -> list[str]:
+    """Bounded stop. A Postgres-backed node can hang in its shutdown flush once its database is
+    gone, so every step has a deadline. Returns what had to be force-killed."""
+    notes: list[str] = []
+    if net.proc.poll() is None:
+        net.proc.send_signal(signal.SIGTERM)
+        try:
+            net.proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            notes.append("process-compose did not stop within 20 s")
+            os.killpg(net.proc.pid, signal.SIGKILL)
+            net.proc.wait()
+    with open(net.out / "logs" / "cleanup.log", "wb") as cleanup_log:
+        subprocess.run(
+            [str(REPO / "scripts" / "cleanup-process-compose")],
+            cwd=REPO,
+            stdout=cleanup_log,
+            stderr=subprocess.STDOUT,
+            timeout=60,
+            check=False,
+        )
+    deadline = time.time() + 10
+    storage = net.storage.resolve()
+    while own_processes(storage) and time.time() < deadline:
+        time.sleep(0.5)
+    for pid, comm in own_processes(storage):
+        notes.append(f"force-killed {comm} (pid {pid})")
+        os.kill(pid, signal.SIGKILL)
+    for note in notes:
+        log.warning("teardown: %s", note)
+    return notes
+
+
+def own_processes(storage: Path) -> list[tuple[int, str]]:
+    """Network processes of this user started by this run."""
+    uid = os.getuid()
+    return [
+        (pid, comm)
+        for pid, comm in proc_comms()
+        if comm in PROCESS_NAMES and proc_uid(pid) == uid and in_run(pid, storage)
+    ]
+
+
+def in_run(pid: int, storage: Path) -> bool:
+    """Postgres runs in its data directory, everything else in the repo root."""
+    cwd = proc_cwd(pid)
+    return cwd is not None and (cwd == REPO or cwd.is_relative_to(storage))
+
+
+def proc_cwd(pid: int) -> Path | None:
+    try:
+        return Path(os.readlink(f"/proc/{pid}/cwd"))
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        return None
+
+
+@dataclass
+class Tx:
+    id: int
+    node: int
+    t_submit: float
+    t_included: float | None = None
+    status: str = "pending"
+
+
+class LoadState:
+    """Transactions of one run; permits bound the ones submitted but neither included nor timed
+    out."""
+
+    def __init__(self, max_pending: int) -> None:
+        self.permits = asyncio.Semaphore(max_pending)
+        self.txs: list[Tx] = []
+        self.pending: dict[int, Tx] = {}
+        self.max_in_flight = 0
+        self.submit_errors = 0
+
+    def submitted(self, tx: Tx) -> None:
+        self.txs.append(tx)
+        self.pending[tx.id] = tx
+        self.max_in_flight = max(self.max_in_flight, len(self.pending))
+
+    def resolve(self, tx_id: int, status: str, now: float) -> None:
+        tx = self.pending.pop(tx_id, None)
+        if tx is None:
+            return
+        tx.status = status
+        if status == "included":
+            tx.t_included = now
+        self.permits.release()
+
+
+async def generate_load(
+    cfg: BenchConfig, submit_urls: list[str], query_url: str, until: float, out: Path
+) -> None:
+    """Closed-loop load until `until`, then wait up to `tx_timeout_s` for the stragglers.
+    Writes one line per transaction to load.jsonl and the counters to load-meta.json."""
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(cfg.workers + 2))
+    state = LoadState(cfg.max_pending)
+    marker = hashlib.sha256(f"network-bench:{cfg.seed}".encode()).digest()[:16]
+    bodies = tx_bodies(cfg, len(marker) + 8)
+    ids = iter(range(sys.maxsize))
+    pool = HttpPool()
+    done = asyncio.Event()
+    try:
+        start_height = await asyncio.to_thread(query_height, pool, query_url)
+        async with asyncio.TaskGroup() as group:
+            tracker = group.create_task(
+                track_inclusion(cfg, state, pool, query_url, marker, start_height, done)
+            )
+            workers = [
+                group.create_task(
+                    submit_worker(
+                        cfg, state, pool, submit_urls, marker, bodies, ids, until
+                    )
+                )
+                for _ in range(cfg.workers)
+            ]
+            await asyncio.gather(*workers)
+            done.set()
+            await tracker
+    except* (NetworkError, OSError) as group:
+        raise NetworkError(f"load generator: {group.exceptions[0]}") from group
+    finally:
+        pool.close()
+    write_jsonl(out / "load.jsonl", (dataclasses.asdict(tx) for tx in state.txs))
+    write_json(
+        out / "load-meta.json",
+        {
+            "start_height": start_height,
+            "max_in_flight": state.max_in_flight,
+            "submit_errors": state.submit_errors,
+            "marker": marker.hex(),
+        },
+    )
+
+
+def tx_bodies(cfg: BenchConfig, header_len: int) -> list[bytes]:
+    rng = random.Random(cfg.seed)
+    return [rng.randbytes(cfg.tx_size - header_len) for _ in range(16)]
+
+
+async def submit_worker(
+    cfg: BenchConfig,
+    state: LoadState,
+    pool: HttpPool,
+    urls: list[str],
+    marker: bytes,
+    bodies: list[bytes],
+    ids: Iterator[int],
+    until: float,
+) -> None:
+    lo, hi = cfg.namespaces
+    while True:
+        await state.permits.acquire()
+        if time.time() >= until:
+            state.permits.release()
+            return
+        tx_id = next(ids)
+        node = tx_id % len(urls)
+        payload = marker + tx_id.to_bytes(8, "big") + bodies[tx_id % len(bodies)]
+        body = json.dumps(
+            {
+                "namespace": lo + tx_id % (hi - lo + 1),
+                "payload": base64.b64encode(payload).decode(),
+            }
+        ).encode()
+        tx = Tx(id=tx_id, node=node, t_submit=time.time())
+        try:
+            status, _ = await asyncio.to_thread(
+                pool.request, "POST", urls[node] + "/v1/submit/submit", body
+            )
+        except OSError:
+            status = 0
+        if status != 200:
+            state.submit_errors += 1
+            state.permits.release()
+            await asyncio.sleep(0.5)
+            continue
+        state.submitted(tx)
+
+
+async def track_inclusion(
+    cfg: BenchConfig,
+    state: LoadState,
+    pool: HttpPool,
+    query_url: str,
+    marker: bytes,
+    height: int,
+    done: asyncio.Event,
+) -> None:
+    """Scan every new block's payload for our marker; time out transactions that never show."""
+    pattern = re.compile(re.escape(marker) + b"(.{8})", re.DOTALL)
+    deadline = None
+    while True:
+        now = time.time()
+        if done.is_set():
+            deadline = deadline or now + cfg.tx_timeout_s
+            if not state.pending or now > deadline:
+                for tx_id in list(state.pending):
+                    state.resolve(tx_id, "timeout", now)
+                return
+        for tx in [
+            tx for tx in state.pending.values() if now - tx.t_submit > cfg.tx_timeout_s
+        ]:
+            state.resolve(tx.id, "timeout", now)
+        top = await asyncio.to_thread(query_height, pool, query_url)
+        while height < top:
+            raw = await asyncio.to_thread(block_payload, pool, query_url, height)
+            if raw is None:
+                break
+            seen = time.time()
+            for match in pattern.finditer(raw):
+                state.resolve(int.from_bytes(match.group(1), "big"), "included", seen)
+            height += 1
+        await asyncio.sleep(0.1)
+
+
+def query_height(pool: HttpPool, query_url: str) -> int:
+    status, body = pool.request("GET", query_url + "/v1/node/block-height")
+    if status != 200:
+        raise NetworkError(f"block height from query node: HTTP {status}")
+    return int(body)
+
+
+def block_payload(pool: HttpPool, query_url: str, height: int) -> bytes | None:
+    """Raw payload bytes of block `height`, or None if the query node does not have it yet."""
+    url = f"{query_url}/v1/availability/payload/{height}"
+    status, body = pool.request("GET", url)
+    if status == 404:
+        return None
+    if status != 200:
+        raise NetworkError(f"payload {height} from query node: HTTP {status}")
+    return base64.b64decode(json.loads(body)["data"]["raw_payload"])
+
+
+def sample_metrics(nodes: list[str], out: Path, stop: threading.Event) -> None:
+    """Every 5 s, one JSON line per node: {ts, node, ok, m}; `m` keeps the families analysed."""
+    pool = HttpPool()
+    with open(out, "a", buffering=1) as f:
+        while not stop.is_set():
+            start = time.time()
+            for node in nodes:
+                rec: dict[str, Any] = {"ts": time.time(), "node": node, "ok": False}
+                try:
+                    status, body = pool.request(
+                        "GET", NODES[node] + "/v1/status/metrics", timeout=4
+                    )
+                    if status == 200:
+                        rec["ok"] = True
+                        rec["m"] = {
+                            k: v
+                            for k, v in parse_prom(body.decode()).items()
+                            if k.startswith(METRIC_PREFIXES)
+                        }
+                except OSError:
+                    pass
+                f.write(json.dumps(rec) + "\n")
+            stop.wait(max(0.0, 5.0 - (time.time() - start)))
+    pool.close()
+
+
+def sample_host(out: Path, storage: Path, stop: threading.Event) -> None:
+    """Every 2 s: /proc/stat, load, pressure, MemAvailable and cumulative CPU-s and RSS per
+    process label. CPU of processes that exit is kept, so per-label counters never go back."""
+    tick = os.sysconf("SC_CLK_TCK")
+    page = os.sysconf("SC_PAGE_SIZE")
+    labels: dict[int, str | None] = {}
+    last: dict[int, float] = {}
+    cpu_s: dict[str, float] = {}
+    with open(out, "a", buffering=1) as f:
+        while not stop.is_set():
+            rss: dict[str, int] = {}
+            for pid, label in labelled_processes(labels, storage.resolve()):
+                try:
+                    fields = (
+                        Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+                    )
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                used = (int(fields[11]) + int(fields[12])) / tick
+                cpu_s[label] = cpu_s.get(label, 0.0) + used - last.get(pid, 0.0)
+                last[pid] = used
+                rss[label] = rss.get(label, 0) + int(fields[21]) * page
+            rec = {
+                "ts": time.time(),
+                "cpu": [
+                    int(x)
+                    for x in Path("/proc/stat").read_text().split("\n")[0].split()[1:]
+                ],
+                "load1": float(Path("/proc/loadavg").read_text().split()[0]),
+                "psi_cpu": psi("cpu"),
+                "psi_io": psi("io"),
+                "mem_avail": meminfo()["MemAvailable"],
+                "procs": {k: {"cpu_s": cpu_s[k], "rss": rss.get(k, 0)} for k in cpu_s},
+            }
+            f.write(json.dumps(rec) + "\n")
+            stop.wait(2.0)
+
+
+def labelled_processes(
+    cache: dict[int, str | None], storage: Path
+) -> Iterator[tuple[int, str]]:
+    uid, me = os.getuid(), os.getpid()
+    for pid, comm in proc_comms():
+        if pid not in cache:
+            cache[pid] = process_label(pid, comm, uid, me, storage)
+        label = cache[pid]
+        if label is not None:
+            yield pid, label
+
+
+def process_label(pid: int, comm: str, uid: int, me: int, storage: Path) -> str | None:
+    if pid == me:
+        return "bench"
+    if proc_uid(pid) != uid or not in_run(pid, storage):
+        return None
+    if comm.startswith("espresso-node"):
+        try:
+            environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            return None
+        for var in environ:
+            if var.startswith(b"ESPRESSO_NODE_API_PORT="):
+                port = var.split(b"=", 1)[1].decode()
+                return next(
+                    (n for n, url in NODES.items() if url.endswith(":" + port)), None
+                )
+        return None
+    return PROCESS_LABELS.get(comm)
+
+
+def psi(resource: str) -> float | None:
+    """`some avg10` pressure, or None where the kernel has no PSI."""
+    try:
+        line = Path(f"/proc/pressure/{resource}").read_text().split("\n")[0]
+    except FileNotFoundError:
+        return None
+    return float(line.split()[1].split("=")[1])
+
+
+def meminfo() -> dict[str, int]:
+    out = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, value = line.split(":", 1)
+        out[key] = int(value.split()[0]) * 1024
+    return out
+
+
+def collect_sysinfo(bin_dir: Path | None) -> tuple[RunnerInfo, dict[str, Any]]:
+    cpuinfo = Path("/proc/cpuinfo").read_text()
+    models = re.findall(r"^model name\s*:\s*(.+)$", cpuinfo, re.MULTILINE)
+    flags = re.search(r"^flags\s*:\s*(.+)$", cpuinfo, re.MULTILINE)
+    runner: RunnerInfo = {
+        "cpu_model": models[0] if models else platform.processor(),
+        "nproc": os.cpu_count() or 0,
+        "affinity": len(os.sched_getaffinity(0)),
+        "cgroup_cpu_max": cgroup_file("cpu.max"),
+        "mhz": [
+            float(x) for x in re.findall(r"^cpu MHz\s*:\s*(.+)$", cpuinfo, re.MULTILINE)
+        ],
+        "flags": flags.group(1).split() if flags else [],
+        "mem_total_bytes": meminfo()["MemTotal"],
+        "kernel": platform.release(),
+        "image_os": os.environ.get("ImageOS"),
+        "image_version": os.environ.get("ImageVersion"),
+        "runner_name": os.environ.get("RUNNER_NAME"),
+    }
+    raw = {
+        "lscpu": command_output(["lscpu"]),
+        "uname": command_output(["uname", "-a"]),
+        "df": command_output(["df", "-B1", "/tmp", str(REPO)]),
+        "cgroup_cpu_stat": cgroup_file("cpu.stat"),
+        "env": {
+            k: v
+            for k, v in os.environ.items()
+            if k.startswith(("RUNNER_", "GITHUB_", "Image"))
+            and k not in ("GITHUB_TOKEN", "RUNNER_TOKEN")
+        },
+        "binaries": binary_info(bin_dir) if bin_dir else {},
+        "tools": {
+            cmd[0]: command_output(cmd).strip()
+            for cmd in TOOL_VERSIONS
+            if shutil.which(cmd[0])
+        },
+    }
+    return runner, raw
+
+
+def cgroup_file(name: str) -> str | None:
+    """A cgroup v2 file of this process's cgroup, or None outside cgroup v2."""
+    rel = Path("/proc/self/cgroup").read_text().strip().split("::")[-1]
+    path = Path("/sys/fs/cgroup") / rel.lstrip("/") / name
+    return path.read_text().strip() if path.exists() else None
+
+
+def command_output(cmd: list[str]) -> str:
+    return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+
+
+def binary_info(bin_dir: Path) -> dict[str, dict[str, Any]]:
+    names = (
+        "espresso-node",
+        "espresso-node-sqlite",
+        "orchestrator",
+        "state-relay-server",
+        "deploy",
+    )
+    out = {}
+    for name in names:
+        path = bin_dir / name
+        digest = hashlib.sha256()
+        with open(path, "rb") as f:
+            while chunk := f.read(1 << 20):
+                digest.update(chunk)
+        out[name] = {"sha256": digest.hexdigest(), "size": path.stat().st_size}
+    return out
+
+
+def calibrate(storage_dir: Path) -> Calibration:
+    """Fixed-work probes of the runner: sha256 on one core and on every core, fsyncs per second."""
+    threads = len(os.sched_getaffinity(0))
+    return {
+        "sha256_1t_mb_s": openssl_sha256([]),
+        "sha256_mt_mb_s": openssl_sha256(["-multi", str(threads)]),
+        "fsync_per_s": fsync_rate(storage_dir, 3.0),
+    }
+
+
+def openssl_sha256(extra: list[str]) -> float:
+    cmd = [
+        "openssl",
+        "speed",
+        "-seconds",
+        "5",
+        "-bytes",
+        "16384",
+        *extra,
+        "-evp",
+        "sha256",
+    ]
+    text = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+    match = re.findall(r"^sha256\s+([\d.]+)k\s*$", text, re.MULTILINE | re.IGNORECASE)
+    if not match:
+        raise RuntimeError(f"unexpected `{' '.join(cmd)}` output: {text[-300:]}")
+    return float(match[-1]) / 1000
+
+
+def fsync_rate(directory: Path, seconds: float) -> float:
+    path = directory / "fsync-probe"
+    block = os.urandom(4096)
+    count = 0
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+    try:
+        start = time.time()
+        while time.time() - start < seconds:
+            os.write(fd, block)
+            os.fsync(fd)
+            count += 1
+        return count / (time.time() - start)
+    finally:
+        os.close(fd)
+        path.unlink()
+
+
+Sample = tuple[float, dict[str, float]]
+
+
+def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
+    run = read_json(out / "run.json")
+    t0, t1 = run["t0"], run["t1"]
+    series = load_series(out / "metrics.jsonl")
+    host = [r for r in read_jsonl(out / "host.jsonl")]
+    calib = read_json(out / "calibration.json")
+    before, after = calib["before"], calib["after"]
+    nodes = {node: node_stats(node, series, t0, t1) for node in NODES}
+    result: BenchResult = {
+        "schema_version": SCHEMA_VERSION,
+        "run": run_meta(run),
+        "runner": read_json(out / "sysinfo.json")["runner"],
+        "calibration": {
+            "before": before,
+            "after": after,
+            "drift_pct": pct_change(before["sha256_mt_mb_s"], after["sha256_mt_mb_s"]),
+        },
+        "config": dataclasses.asdict(cfg),
+        "config_hash": config_hash(cfg),
+        "window": window(series, t0, t1),
+        "network": network_stats(series, cfg, t0, t1),
+        "nodes": nodes,
+        "processes": process_stats(host, t0, t1),
+        "host": host_stats(host, t0, t1),
+        "load": load_stats(out, t0, t1),
+        "stake_table": stake_amounts(out / "stake-table.json"),
+        "validity": {"valid": True, "noisy": False, "reasons": []},
+    }
+    result["validity"] = check_validity(
+        result, scrape_coverage(out / "metrics.jsonl", t0, t1)
+    )
+    return result
+
+
+def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
+    invalid: list[str] = []
+    noisy: list[str] = []
+    for node, frac in coverage.items():
+        if frac < SCRAPE_OK_MIN:
+            invalid.append(f"{node} metrics answered for only {frac:.0%} of the window")
+    for node, stats in result["nodes"].items():
+        if stats["decided_blocks"] <= 0:
+            invalid.append(f"{node} decided no blocks in the window")
+    load = result["load"]
+    if load["included_per_s"] <= 0:
+        invalid.append("no transactions included in the window")
+    stakes = result["stake_table"]
+    if len(stakes) != len(NODES) or len(set(stakes)) != 1:
+        invalid.append(f"stake table is not {len(NODES)} equal entries: {stakes}")
+    if result["host"]["steal_pct"] > STEAL_NOISY_PCT:
+        noisy.append(
+            f"steal {result['host']['steal_pct']:.1f}% > {STEAL_NOISY_PCT:.0f}%"
+        )
+    drift = result["calibration"]["drift_pct"]
+    if abs(drift) > DRIFT_NOISY_PCT:
+        noisy.append(f"calibration drift {drift:+.1f}% beyond {DRIFT_NOISY_PCT:.0f}%")
+    if load["inclusion_ratio"] < INCLUSION_NOISY_RATIO:
+        noisy.append(
+            f"inclusion ratio {load['inclusion_ratio']:.3f} < {INCLUSION_NOISY_RATIO}"
+        )
+    if load["submit_errors"]:
+        noisy.append(f"{load['submit_errors']} submit errors")
+    return {"valid": not invalid, "noisy": bool(noisy), "reasons": invalid + noisy}
+
+
+def run_meta(run: dict[str, Any]) -> RunMeta:
+    env = os.environ
+    run_id = env.get("GITHUB_RUN_ID")
+    run_url = (
+        f"{env['GITHUB_SERVER_URL']}/{env['GITHUB_REPOSITORY']}/actions/runs/{run_id}"
+        if run_id
+        else None
+    )
+    return {
+        "sha": env.get("GITHUB_SHA") or git(["rev-parse", "HEAD"]),
+        "ref": env.get("GITHUB_REF") or git(["rev-parse", "--abbrev-ref", "HEAD"]),
+        "event": env.get("GITHUB_EVENT_NAME", "local"),
+        "run_id": run_id,
+        "run_url": run_url,
+        "pr": run["pr"],
+        "started_at": datetime.fromtimestamp(run["started"], UTC).isoformat(
+            timespec="seconds"
+        ),
+        "wall_s": run["wall_s"],
+        "ready_s": run["ready_s"],
+        "local": "GITHUB_ACTIONS" not in env,
+        "teardown": run["teardown"],
+    }
+
+
+def git(args: list[str]) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=REPO, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def config_hash(cfg: BenchConfig) -> str:
+    digest = hashlib.sha256(
+        json.dumps(dataclasses.asdict(cfg), sort_keys=True).encode()
+    )
+    digest.update(GENESIS_FILE.read_bytes())
+    digest.update(COMPOSE_FILE.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+def load_series(path: Path) -> dict[str, list[Sample]]:
+    series: dict[str, list[Sample]] = {node: [] for node in NODES}
+    for rec in read_jsonl(path):
+        if rec["ok"]:
+            series[rec["node"]].append((rec["ts"], rec["m"]))
+    return series
+
+
+def scrape_coverage(path: Path, t0: float, t1: float) -> dict[str, float]:
+    seen: dict[str, list[bool]] = {node: [] for node in NODES}
+    for rec in read_jsonl(path):
+        if t0 <= rec["ts"] <= t1:
+            seen[rec["node"]].append(rec["ok"])
+    return {node: sum(oks) / len(oks) if oks else 0.0 for node, oks in seen.items()}
+
+
+def at(samples: list[Sample], t: float) -> Sample:
+    """The last sample at or before `t`, else the first one."""
+    best = samples[0]
+    for sample in samples:
+        if sample[0] > t:
+            break
+        best = sample
+    return best
+
+
+def delta(samples: list[Sample], ta: float, tb: float, key: str) -> tuple[float, float]:
+    (ts0, m0), (ts1, m1) = at(samples, ta), at(samples, tb)
+    return m1.get(key, 0.0) - m0.get(key, 0.0), ts1 - ts0
+
+
+def rate(samples: list[Sample], ta: float, tb: float, key: str) -> float:
+    d, dt = delta(samples, ta, tb, key)
+    return d / dt if dt > 0 else 0.0
+
+
+def subwindows(cfg: BenchConfig, t0: float, t1: float) -> list[tuple[float, float]]:
+    n = max(1, int((t1 - t0) // cfg.subwindow_s))
+    step = (t1 - t0) / n
+    return [(t0 + i * step, t0 + (i + 1) * step) for i in range(n)]
+
+
+def network_stats(
+    series: dict[str, list[Sample]], cfg: BenchConfig, t0: float, t1: float
+) -> NetworkStats:
+    nodes = [s for s in series.values() if s]
+    slices = subwindows(cfg, t0, t1)
+
+    def across(fn: Callable[[list[Sample], float, float], float]) -> list[float]:
+        return [statistics.median(fn(s, a, b) for s in nodes) for a, b in slices]
+
+    mb = across(lambda s, a, b: rate(s, a, b, "consensus_finalized_bytes_sum") / 1e6)
+    views = across(lambda s, a, b: rate(s, a, b, "consensus_last_decided_view"))
+    cpu = [
+        sum(rate(s, a, b, "process_cpu_seconds_total") for s in nodes)
+        for a, b in slices
+    ]
+    blocks = statistics.median(
+        delta(s, t0, t1, "consensus_finalized_bytes_count")[0] for s in nodes
+    )
+    empty = sum(
+        delta(s, t0, t1, "consensus_number_of_empty_blocks_proposed")[0] for s in nodes
+    )
+    return {
+        "decided_mb_per_s": stat(mb, "MB/s", "higher"),
+        "blocks_per_s": stat(
+            across(lambda s, a, b: rate(s, a, b, "consensus_finalized_bytes_count")),
+            "/s",
+            "higher",
+        ),
+        "views_per_s": stat(views, "/s", "higher"),
+        "mean_view_ms": stat(
+            [1000 / v if v else math.inf for v in views], "ms", "lower"
+        ),
+        "timeouts": int(
+            max(delta(s, t0, t1, "consensus_number_of_timeouts")[0] for s in nodes)
+        ),
+        "empty_block_frac": empty / blocks if blocks else 0.0,
+        "proposal_to_decide_ms": histogram_quantiles(
+            [(at(s, t0)[1], at(s, t1)[1]) for s in nodes],
+            "consensus_proposal_to_decide_time",
+        ),
+        "cpu_s_per_mb": stat(
+            [c / m if m else math.inf for c, m in zip(cpu, mb)], "s/MB", "lower"
+        ),
+    }
+
+
+def node_stats(
+    node: str, series: dict[str, list[Sample]], t0: float, t1: float
+) -> NodeStats:
+    samples = series[node]
+    if not samples:
+        return {
+            "role": ROLES[node],
+            "decided_height_end": 0,
+            "decided_blocks": 0,
+            "view_lag_end": 0,
+            "cpu_cores": 0.0,
+            "rss_peak_bytes": 0,
+            "tokio_busy_frac": None,
+            "ops": {},
+        }
+    m0, m1 = at(samples, t0)[1], at(samples, t1)[1]
+    top_view = max(
+        at(s, t1)[1].get("consensus_last_decided_view", 0) for s in series.values() if s
+    )
+    in_window = [m for ts, m in samples if t0 <= ts <= t1] or [m1]
+    workers = m1.get("tokio_workers")
+    busy = rate(samples, t0, t1, "tokio_worker_busy_seconds_total")
+    return {
+        "role": ROLES[node],
+        "decided_height_end": int(m1.get("consensus_last_synced_block_height", 0)),
+        "decided_blocks": int(
+            delta(samples, t0, t1, "consensus_finalized_bytes_count")[0]
+        ),
+        "view_lag_end": int(top_view - m1.get("consensus_last_decided_view", 0)),
+        "cpu_cores": rate(samples, t0, t1, "process_cpu_seconds_total"),
+        "rss_peak_bytes": int(
+            max(m.get("process_resident_memory_bytes", 0) for m in in_window)
+        ),
+        "tokio_busy_frac": busy / workers if workers else None,
+        "ops": op_stats(m0, m1, delta(samples, t0, t1, "process_cpu_seconds_total")[1]),
+    }
+
+
+def op_stats(
+    m0: dict[str, float], m1: dict[str, float], dt: float
+) -> dict[str, OpStats]:
+    ops: dict[str, OpStats] = {}
+    for key, end in m1.items():
+        if not key.endswith("_count") or "{" in key:
+            continue
+        base = key.removesuffix("_count")
+        if base + "_sum" not in m1 or not is_duration(base):
+            continue
+        count = end - m0.get(key, 0.0)
+        if count <= 0 or dt <= 0:
+            continue
+        total = m1[base + "_sum"] - m0.get(base + "_sum", 0.0)
+        quantiles = histogram_quantiles([(m0, m1)], base)
+        ops[base] = {
+            "per_s": count / dt,
+            "mean_ms": total / count * 1000,
+            "p50_ms": quantiles["p50"] if quantiles else None,
+            "p99_ms": quantiles["p99"] if quantiles else None,
+            "busy_frac": total / dt,
+        }
+    return ops
+
+
+def is_duration(base: str) -> bool:
+    return base.endswith("_duration") or base.startswith("consensus_storage_")
+
+
+def histogram_quantiles(
+    pairs: list[tuple[dict[str, float], dict[str, float]]], base: str
+) -> Quantiles | None:
+    """Quantiles in ms of a seconds histogram over window deltas, summed across `pairs`, with
+    linear interpolation inside a bucket as Prometheus' histogram_quantile does."""
+    buckets: dict[float, float] = {}
+    count = total = 0.0
+    for m0, m1 in pairs:
+        for key, value in m1.items():
+            if key.startswith(base + "_bucket{") and 'le="' in key:
+                le = key.split('le="')[1].split('"')[0]
+                bound = math.inf if le == "+Inf" else float(le)
+                buckets[bound] = buckets.get(bound, 0.0) + value - m0.get(key, 0.0)
+        count += m1.get(base + "_count", 0.0) - m0.get(base + "_count", 0.0)
+        total += m1.get(base + "_sum", 0.0) - m0.get(base + "_sum", 0.0)
+    if count <= 0 or not buckets:
+        return None
+    bounds = sorted(buckets)
+    finite_top = max((b for b in bounds if math.isfinite(b)), default=0.0)
+
+    def quantile(q: float) -> float:
+        rank = q * buckets[bounds[-1]]
+        lower, below = 0.0, 0.0
+        for bound in bounds:
+            if buckets[bound] >= rank:
+                if not math.isfinite(bound):
+                    return finite_top * 1000
+                inside = buckets[bound] - below
+                frac = (rank - below) / inside if inside else 1.0
+                return (lower + (bound - lower) * frac) * 1000
+            lower, below = bound, buckets[bound]
+        return finite_top * 1000
+
+    top = next(b for b in bounds if buckets[b] >= buckets[bounds[-1]])
+    return {
+        "n": int(count),
+        "mean": total / count * 1000,
+        "p50": quantile(0.5),
+        "p95": quantile(0.95),
+        "p99": quantile(0.99),
+        "max": (top if math.isfinite(top) else finite_top) * 1000,
+    }
+
+
+def window(series: dict[str, list[Sample]], t0: float, t1: float) -> Window:
+    samples = series[QUERY_NODE]
+    key = "consensus_last_synced_block_height"
+    return {
+        "t0": t0,
+        "t1": t1,
+        "height_start": int(at(samples, t0)[1].get(key, 0)) if samples else 0,
+        "height_end": int(at(samples, t1)[1].get(key, 0)) if samples else 0,
+    }
+
+
+def process_stats(
+    host: list[dict[str, Any]], t0: float, t1: float
+) -> dict[str, ProcStats]:
+    inside = [r for r in host if t0 <= r["ts"] <= t1]
+    if len(inside) < 2:
+        return {}
+    first, last = inside[0], inside[-1]
+    dt = last["ts"] - first["ts"]
+    out: dict[str, ProcStats] = {}
+    for label, now in sorted(last["procs"].items()):
+        cpu = now["cpu_s"] - first["procs"].get(label, {"cpu_s": 0.0})["cpu_s"]
+        out[label] = {
+            "cpu_cores_mean": cpu / dt,
+            "cpu_s": cpu,
+            "rss_peak_bytes": max(
+                r["procs"].get(label, {"rss": 0})["rss"] for r in inside
+            ),
+        }
+    return out
+
+
+def host_stats(host: list[dict[str, Any]], t0: float, t1: float) -> HostStats:
+    inside = [r for r in host if t0 <= r["ts"] <= t1]
+    if len(inside) < 2:
+        return {
+            "util_mean": 0.0,
+            "util_max": 0.0,
+            "steal_pct": 0.0,
+            "iowait_pct": 0.0,
+            "mem_avail_min_bytes": 0,
+        }
+
+    def busy(a: list[int], b: list[int]) -> tuple[float, float, float, float]:
+        d = [y - x for x, y in zip(a, b)]
+        total = sum(d[:8]) or 1
+        idle, iowait, steal = d[3], d[4], d[7]
+        return (total - idle - iowait) / total, steal / total, iowait / total, total
+
+    steps = [busy(a["cpu"], b["cpu"]) for a, b in itertools.pairwise(inside)]
+    whole = busy(inside[0]["cpu"], inside[-1]["cpu"])
+    return {
+        "util_mean": whole[0],
+        "util_max": max(s[0] for s in steps),
+        "steal_pct": whole[1] * 100,
+        "iowait_pct": whole[2] * 100,
+        "mem_avail_min_bytes": min(r["mem_avail"] for r in inside),
+    }
+
+
+def load_stats(out: Path, t0: float, t1: float) -> LoadStats:
+    meta = read_json(out / "load-meta.json")
+    txs = [tx for tx in read_jsonl(out / "load.jsonl") if t0 <= tx["t_submit"] <= t1]
+    included = [tx for tx in txs if tx["status"] == "included"]
+    dt = t1 - t0
+    latencies = [(tx["t_included"] - tx["t_submit"]) * 1000 for tx in included]
+    landed = sum(
+        1
+        for tx in read_jsonl(out / "load.jsonl")
+        if tx["t_included"] is not None and t0 <= tx["t_included"] <= t1
+    )
+    return {
+        "submitted_per_s": len(txs) / dt,
+        "included_per_s": landed / dt,
+        "inclusion_ratio": len(included) / len(txs) if txs else 0.0,
+        "timeouts": sum(1 for tx in txs if tx["status"] == "timeout"),
+        "submit_errors": meta["submit_errors"],
+        "max_in_flight": meta["max_in_flight"],
+        "latency_ms": quantiles(latencies),
+    }
+
+
+def quantiles(values: list[float]) -> Quantiles | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+
+    def q(p: float) -> float:
+        return ordered[min(len(ordered) - 1, int(p * len(ordered)))]
+
+    return {
+        "n": len(ordered),
+        "mean": statistics.fmean(ordered),
+        "p50": q(0.5),
+        "p95": q(0.95),
+        "p99": q(0.99),
+        "max": ordered[-1],
+    }
+
+
+def stake_amounts(path: Path) -> list[str]:
+    table = read_json(path)["stake_table"]
+    return [entry["stake_table_entry"]["stake_amount"] for entry in table]
+
+
+def stat(values: list[float], unit: str, better: Literal["higher", "lower"]) -> Stat:
+    mean = statistics.fmean(values)
+    cv = statistics.pstdev(values) / mean if mean and math.isfinite(mean) else 0.0
+    return {
+        "value": statistics.median(values),
+        "min": min(values),
+        "max": max(values),
+        "cv": cv,
+        "unit": unit,
+        "better": better,
+    }
+
+
+def pct_change(before: float, after: float) -> float:
+    return (after - before) / before * 100 if before else 0.0
+
+
+@dataclass(frozen=True)
+class Metric:
+    label: str
+    path: str
+    unit: str
+    better: Literal["higher", "lower"]
+    floor_pct: float
+
+
+HEADLINE = (
+    Metric(
+        "decided throughput", "network.decided_mb_per_s.value", "MB/s", "higher", 10
+    ),
+    Metric("tx latency p50", "load.latency_ms.p50", "ms", "lower", 15),
+    Metric("tx latency p99", "load.latency_ms.p99", "ms", "lower", 20),
+    Metric("mean view time", "network.mean_view_ms.value", "ms", "lower", 10),
+    Metric("views/s", "network.views_per_s.value", "/s", "higher", 10),
+    Metric("timeouts", "network.timeouts", "", "lower", 0),
+    Metric("node CPU-s per MB", "network.cpu_s_per_mb.value", "s/MB", "lower", 10),
+    Metric(
+        "proposal to decide p99", "network.proposal_to_decide_ms.p99", "ms", "lower", 20
+    ),
+    Metric("node0 CPU", "nodes.node0.cpu_cores", "cores", "lower", 10),
+    Metric("node1 CPU", "nodes.node1.cpu_cores", "cores", "lower", 10),
+    Metric("node2 CPU", "nodes.node2.cpu_cores", "cores", "lower", 10),
+    Metric("node0 RSS peak", "nodes.node0.rss_peak_bytes", "bytes", "lower", 10),
+    Metric("node1 RSS peak", "nodes.node1.rss_peak_bytes", "bytes", "lower", 10),
+    Metric("postgres CPU", "processes.postgres.cpu_cores_mean", "cores", "lower", 15),
+    Metric(
+        "node0 decide processing p99",
+        "nodes.node0.ops.consensus_internal_process_decided_events_duration.p99_ms",
+        "ms",
+        "lower",
+        20,
+    ),
+    Metric(
+        "node1 decide processing p99",
+        "nodes.node1.ops.consensus_internal_process_decided_events_duration.p99_ms",
+        "ms",
+        "lower",
+        20,
+    ),
+    Metric(
+        "node1 append DA p99",
+        "nodes.node1.ops.consensus_storage_append_da.p99_ms",
+        "ms",
+        "lower",
+        20,
+    ),
+)
+BASELINE_RUNS = 10
+
+
+def lookup(result: Any, path: str) -> float | None:
+    for part in path.split("."):
+        if not isinstance(result, dict) or part not in result or result[part] is None:
+            return None
+        result = result[part]
+    return float(result)
+
+
+def compare(current: BenchResult, baseline_runs: list[BenchResult]) -> Comparison:
+    """Deltas against the median of comparable runs. A delta counts only beyond both the metric's
+    floor and 3 times the baseline's robust spread; a noisy current run is never conclusive."""
+    usable = [
+        run
+        for run in baseline_runs
+        if run.get("schema_version") == SCHEMA_VERSION
+        and run["validity"]["valid"]
+        and not run["validity"]["noisy"]
+        and run["config_hash"] == current["config_hash"]
+    ][:BASELINE_RUNS]
+    rows = [
+        compare_metric(metric, current, usable, current["validity"]["noisy"])
+        for metric in HEADLINE
+    ]
+    return {
+        "n": len(usable),
+        "excluded": len(baseline_runs) - len(usable),
+        "rows": rows,
+    }
+
+
+def compare_metric(
+    metric: Metric, current: BenchResult, usable: list[BenchResult], noisy: bool
+) -> Row:
+    value = lookup(current, metric.path)
+    history = [v for v in (lookup(run, metric.path) for run in usable) if v is not None]
+    baseline = statistics.median(history) if history else None
+    spread = 0.0
+    if baseline and len(history) >= 3:
+        mad = statistics.median(abs(v - baseline) for v in history)
+        spread = 1.4826 * mad / abs(baseline) * 100
+    threshold = max(metric.floor_pct, 3 * spread)
+    delta_pct = pct_change(baseline, value) if baseline and value is not None else None
+    if value is None or baseline is None:
+        verdict = "n/a"
+    elif noisy:
+        verdict = "inconclusive"
+    elif baseline == 0:
+        verdict = (
+            "same"
+            if value == 0
+            else ("worse" if metric.better == "lower" else "better")
+        )
+    elif delta_pct is not None and abs(delta_pct) > threshold:
+        verdict = (
+            "better" if (delta_pct > 0) == (metric.better == "higher") else "worse"
+        )
+    else:
+        verdict = "same"
+    return {
+        "key": metric.path,
+        "label": metric.label,
+        "unit": metric.unit,
+        "better": metric.better,
+        "current": value,
+        "baseline": baseline,
+        "delta_pct": delta_pct,
+        "threshold_pct": threshold,
+        "verdict": verdict,
+    }
+
+
+def load_baseline(path: Path) -> list[BenchResult]:
+    """`nextest-ci stats-fetch` output ({runs: [...]}, newest first) or a single result.json."""
+    match json.loads(path.read_text()):
+        case {"runs": list() as runs}:
+            return runs
+        case single:
+            return [single]
+
+
+def render(result: BenchResult, comparison: Comparison | None) -> str:
+    lines = [
+        "## Network benchmark",
+        "",
+        status_line(result),
+        "",
+        runner_line(result),
+        "",
+    ]
+    lines += headline_table(result, comparison) + [""]
+    lines += node_table(result) + [""]
+    lines += ops_table(result) + [""]
+    lines += process_table(result) + [""]
+    lines += load_lines(result) + [""]
+    lines += footer(result)
+    return "\n".join(lines) + "\n"
+
+
+def status_line(result: BenchResult) -> str:
+    validity = result["validity"]
+    reasons = "; ".join(validity["reasons"])
+    run = result["run"]
+    head = f"`{run['sha'][:10]}` {run['event']} {run['ref']}, config `{result['config_hash']}`"
+    return f"{head}: **{verdict_word(validity)}**" + (
+        f" ({reasons})" if reasons else ""
+    )
+
+
+def verdict_word(validity: Validity) -> str:
+    if not validity["valid"]:
+        return "invalid"
+    return "noisy" if validity["noisy"] else "valid"
+
+
+def runner_line(result: BenchResult) -> str:
+    r, c, h = result["runner"], result["calibration"], result["host"]
+    mhz = statistics.fmean(r["mhz"]) if r["mhz"] else 0.0
+    image = " ".join(x for x in (r["image_os"], r["image_version"]) if x) or "local"
+    return (
+        f"Runner: {r['cpu_model']}, {r['nproc']} CPUs ({r['affinity']} usable"
+        f"{', cpu.max ' + r['cgroup_cpu_max'] if r['cgroup_cpu_max'] else ''}), {mhz:.0f} MHz, "
+        f"{fmt_bytes(r['mem_total_bytes'])} RAM, image {image}. Calibration sha256 "
+        f"{c['before']['sha256_1t_mb_s']:.0f}/{c['before']['sha256_mt_mb_s']:.0f} MB/s (1 core/all) "
+        f"before, {c['after']['sha256_1t_mb_s']:.0f}/{c['after']['sha256_mt_mb_s']:.0f} after "
+        f"(drift {c['drift_pct']:+.1f}%), {c['before']['fsync_per_s']:.0f} fsync/s. Host CPU "
+        f"{h['util_mean']:.0%} mean, {h['util_max']:.0%} max, steal {h['steal_pct']:.1f}%, "
+        f"iowait {h['iowait_pct']:.1f}%."
+    )
+
+
+def headline_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
+    if comparison is None:
+        rows = [compare_metric(m, result, [], False) for m in HEADLINE]
+        lines = ["| metric | this run | sub-window range |", "|---|---:|---:|"]
+        for row in rows:
+            lines.append(
+                f"| {row['label']} | {fmt_value(row['current'], row['unit'])} "
+                f"| {range_cell(result, row['key'])} |"
+            )
+        return lines + ["", "No baseline given."]
+    lines = [
+        f"| metric | this run | sub-window range | main median (n={comparison['n']}) | delta | |",
+        "|---|---:|---:|---:|---:|---|",
+    ]
+    for row in comparison["rows"]:
+        delta_cell = f"{row['delta_pct']:+.1f}%" if row["delta_pct"] is not None else ""
+        mark = {"worse": "**worse**", "better": "better"}.get(
+            row["verdict"], row["verdict"]
+        )
+        lines.append(
+            f"| {row['label']} | {fmt_value(row['current'], row['unit'])} "
+            f"| {range_cell(result, row['key'])} | {fmt_value(row['baseline'], row['unit'])} "
+            f"| {delta_cell} | {mark} (±{row['threshold_pct']:.0f}%) |"
+        )
+    if comparison["n"] == 0:
+        lines += [
+            "",
+            f"No baseline: 0 comparable main runs ({comparison['excluded']} excluded).",
+        ]
+    elif comparison["excluded"]:
+        lines += [
+            "",
+            f"{comparison['excluded']} main runs excluded (invalid, noisy or other config).",
+        ]
+    return lines
+
+
+def range_cell(result: BenchResult, path: str) -> str:
+    if not path.endswith(".value"):
+        return ""
+    parent: Any = result
+    for part in path.split(".")[:-1]:
+        parent = parent[part]
+    return (
+        f"{fmt_num(parent['min'])} to {fmt_num(parent['max'])}, cv {parent['cv']:.0%}"
+    )
+
+
+def node_table(result: BenchResult) -> list[str]:
+    lines = [
+        "| node | role | height | view lag | CPU cores | RSS peak | tokio busy |",
+        "|---|---|---:|---:|---:|---:|---:|",
+    ]
+    for node, s in result["nodes"].items():
+        busy = f"{s['tokio_busy_frac']:.0%}" if s["tokio_busy_frac"] is not None else ""
+        lines.append(
+            f"| {node} | {s['role']} | {s['decided_height_end']} | {s['view_lag_end']} "
+            f"| {s['cpu_cores']:.2f} | {fmt_bytes(s['rss_peak_bytes'])} | {busy} |"
+        )
+    return lines
+
+
+def ops_table(result: BenchResult, count: int = 8) -> list[str]:
+    """The ops that kept any node busiest, as p99 ms and busy fraction per node."""
+    busiest: dict[str, float] = {}
+    for s in result["nodes"].values():
+        for op, stats in s["ops"].items():
+            busiest[op] = max(busiest.get(op, 0.0), stats["busy_frac"])
+    top = sorted(busiest, key=lambda op: -busiest[op])[:count]
+    nodes = list(result["nodes"])
+    lines = [
+        "| op (p99 ms, busy) | " + " | ".join(nodes) + " |",
+        "|---|" + "---:|" * len(nodes),
+    ]
+    for op in top:
+        cells = []
+        for node in nodes:
+            stats = result["nodes"][node]["ops"].get(op)
+            cells.append(
+                f"{fmt_num(stats['p99_ms'])}, {stats['busy_frac']:.0%}" if stats else ""
+            )
+        lines.append(f"| {op.removeprefix('consensus_')} | " + " | ".join(cells) + " |")
+    return lines
+
+
+def process_table(result: BenchResult) -> list[str]:
+    lines = ["| process | CPU cores | CPU-s | RSS peak |", "|---|---:|---:|---:|"]
+    for label, p in sorted(result["processes"].items(), key=lambda kv: -kv[1]["cpu_s"]):
+        lines.append(
+            f"| {label} | {p['cpu_cores_mean']:.2f} | {p['cpu_s']:.0f} "
+            f"| {fmt_bytes(p['rss_peak_bytes'])} |"
+        )
+    return lines
+
+
+def load_lines(result: BenchResult) -> list[str]:
+    load, cfg, net = result["load"], result["config"], result["network"]
+    lat = load["latency_ms"]
+    return [
+        f"Load: {cfg['workers']} workers, max {cfg['max_pending']} pending, "
+        f"{fmt_bytes(cfg['tx_size'])} txs; submitted {load['submitted_per_s']:.1f}/s, included "
+        f"{load['included_per_s']:.1f}/s, inclusion ratio {load['inclusion_ratio']:.3f}, "
+        f"{load['timeouts']} tx timeouts, {load['submit_errors']} submit errors, max in flight "
+        f"{load['max_in_flight']}. Latency p50/p95/p99/max "
+        + (
+            f"{lat['p50']:.0f}/{lat['p95']:.0f}/{lat['p99']:.0f}/{lat['max']:.0f} ms (n={lat['n']})."
+            if lat
+            else "n/a."
+        )
+        + f" Empty blocks {net['empty_block_frac']:.0%}."
+    ]
+
+
+def footer(result: BenchResult) -> list[str]:
+    w, run = result["window"], result["run"]
+    lines = [
+        (
+            f"Window {w['t1'] - w['t0']:.0f} s, heights {w['height_start']} to "
+            f"{w['height_end']}; network ready after {run['ready_s']:.0f} s, run took "
+            f"{run['wall_s']:.0f} s."
+        )
+    ]
+    if run["teardown"]:
+        lines.append("Teardown: " + "; ".join(run["teardown"]) + ".")
+    if run["run_url"]:
+        lines.append(f"Raw data: artifacts of [this run]({run['run_url']}).")
+    return lines
+
+
+def render_failure(error: str, runner: RunnerInfo) -> str:
+    return (
+        f"## Network benchmark\n\n**invalid**: {error}\n\nRunner: {runner['cpu_model']}, "
+        f"{runner['nproc']} CPUs. Logs are in the artifact.\n"
+    )
+
+
+def comparison_table(comparison: Comparison) -> list[str]:
+    lines = [
+        f"| metric | current | baseline (n={comparison['n']}) | delta | verdict |",
+        "|---|---:|---:|---:|---|",
+    ]
+    for row in comparison["rows"]:
+        delta_cell = f"{row['delta_pct']:+.1f}%" if row["delta_pct"] is not None else ""
+        lines.append(
+            f"| {row['label']} | {fmt_value(row['current'], row['unit'])} "
+            f"| {fmt_value(row['baseline'], row['unit'])} | {delta_cell} | {row['verdict']} |"
+        )
+    return lines
+
+
+def fmt_value(value: float | None, unit: str) -> str:
+    if value is None:
+        return ""
+    if unit == "bytes":
+        return fmt_bytes(value)
+    sep = "" if unit.startswith("/") else " "
+    return f"{fmt_num(value)}{sep}{unit}".strip()
+
+
+def fmt_num(value: float | None) -> str:
+    if value is None:
+        return ""
+    if not math.isfinite(value):
+        return str(value)
+    if value == 0 or abs(value) >= 100:
+        return f"{value:.0f}"
+    return f"{value:.3g}"
+
+
+def fmt_bytes(value: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(value) < 1000:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1000
+    return f"{value:.1f} TB"
+
+
+def parse_prom(text: str) -> dict[str, float]:
+    out = {}
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.rpartition(" ")
+        try:
+            out[key] = float(value)
+        except ValueError:
+            continue
+    return out
+
+
+def read_json(path: Path) -> Any:
+    return json.loads(path.read_text())
+
+
+def write_json(path: Path, data: Any) -> None:
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
+    with open(path) as f:
+        for line in f:
+            yield json.loads(line)
+
+
+def write_jsonl(path: Path, records: Iterator[dict[str, Any]]) -> None:
+    with open(path, "w") as f:
+        f.writelines(json.dumps(record) + "\n" for record in records)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
