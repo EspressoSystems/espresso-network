@@ -11,7 +11,9 @@ use espresso_types::{
         AvidMIncorrectEncodingNsProof, AvidMNsProof, RegisteredValidator, ResolvableChainConfig,
         StateCertQueryDataV1,
     },
-    v0_4::StateCertQueryDataV2,
+    v0_4::{
+        RewardAccountProofV2, RewardAccountQueryDataV2, RewardMerkleProofV2, StateCertQueryDataV2,
+    },
     v0_6::AvidmGf2NsProof,
 };
 use hotshot_query_service_types::{
@@ -577,6 +579,30 @@ where
             },
         };
         proto::AdvzMerkleNode { node: Some(node) }
+    }
+}
+
+impl From<RewardAccountQueryDataV2> for proto::RewardAccountProofResponse {
+    fn from(query: RewardAccountQueryDataV2) -> proto::RewardAccountProofResponse {
+        let RewardAccountQueryDataV2 {
+            balance,
+            proof: RewardAccountProofV2 { account, proof },
+        } = query;
+        let proof = match proof {
+            RewardMerkleProofV2::Presence(proof) => {
+                proto::reward_merkle_proof::Proof::Presence(proto::MerklePathResponse::from(&proof))
+            },
+            RewardMerkleProofV2::Absence(proof) => {
+                proto::reward_merkle_proof::Proof::Absence(proto::MerklePathResponse::from(&proof))
+            },
+        };
+        proto::RewardAccountProofResponse {
+            balance: balance.to_string(),
+            proof: Some(proto::RewardAccountProof {
+                account: account.to_string(),
+                proof: Some(proto::RewardMerkleProof { proof: Some(proof) }),
+            }),
+        }
     }
 }
 
