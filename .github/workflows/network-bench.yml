@@ -67,7 +67,11 @@ jobs:
         with:
           version: v1.75.2
       - uses: ./.github/actions/install-native-demo-deps
+      # No cache: the run executes pull request code, which could write into it before the
+      # post-step save.
       - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: false
       - uses: taiki-e/install-action@just
 
       # A token only for another run: without one the action reads the current run, which is

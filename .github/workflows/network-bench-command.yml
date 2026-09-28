@@ -7,7 +7,10 @@ name: Network benchmark command
 # - This workflow runs main's code with a writable token and never checks out the pull request.
 # - Only OWNER/MEMBER/COLLABORATOR comments on same-repo pull requests are accepted. Fork pull
 #   requests are refused, so no outside code runs with a repository token.
-# - The dispatched run executes pull request code with a read-only token (contents, actions).
+# - The run is dispatched on the pull request branch, not the default branch: a run's cache writes
+#   land in its ref's scope, and main's scope is restored by main pushes that hold secrets. The
+#   author already has write access, so running the branch's copy of network-bench.yml grants
+#   nothing new. The dispatched run has a read-only token (contents, actions).
 on:
   issue_comment:
     types: [created]
@@ -38,7 +41,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.issue.number }}
       REPO: ${{ github.repository }}
-      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       SERVER: ${{ github.server_url }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
@@ -56,6 +58,11 @@ jobs:
           set -euo pipefail
           pr_json=$(gh api "repos/$REPO/pulls/$PR")
           sha=$(jq -r .head.sha <<< "$pr_json")
+          branch=$(jq -r .head.ref <<< "$pr_json")
+          if [[ "$(jq -r .state <<< "$pr_json")" != open ]]; then
+            echo "message=\`/benchmark\` runs only for open pull requests." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [[ "$(jq -r .head.repo.full_name <<< "$pr_json")" != "$REPO" ]]; then
             msg="\`/benchmark\` runs only for branches of $REPO, not for forks."
             echo "message=$msg" >> "$GITHUB_OUTPUT"
@@ -85,12 +92,17 @@ jobs:
           fi
 
           # The dispatch API answers with the new run's URL; fall back to the run list if not.
-          resp=$(gh api --method POST \
+          # It refuses (422) a branch without network-bench.yml.
+          if ! resp=$(gh api --method POST \
             "repos/$REPO/actions/workflows/network-bench.yml/dispatches" \
-            -f ref="$DEFAULT_BRANCH" \
+            -f ref="$branch" \
             -f "inputs[build_run_id]=$build_run" \
             -f "inputs[sha]=$sha" \
-            -f "inputs[pr]=$PR")
+            -f "inputs[pr]=$PR"); then
+            msg="\`/benchmark\`: could not dispatch network-bench.yml on $branch; a branch cut"
+            echo "message=$msg before it was added needs main merged in first." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           bench_url=$(jq -r '.html_url // empty' <<< "$resp")
           bench_url="${bench_url:-$SERVER/$REPO/actions/workflows/network-bench.yml}"
           msg="Network benchmark of $sha (binaries from $SERVER/$REPO/actions/runs/$build_run):"
