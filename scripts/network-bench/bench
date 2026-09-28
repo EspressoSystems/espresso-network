@@ -131,6 +131,10 @@ INCLUSION_NOISY_RATIO = 0.95
 SCRAPE_OK_MIN = 0.9
 MIN_READY_HEIGHT = 5
 PROGRESS_S = 30
+# Payloads are read a block behind the query node's height: a payload requested as soon as its
+# header is stored can start a peer fetch that races the node's own insert.
+PAYLOAD_LAG_BLOCKS = 1
+MISSING_PAYLOAD_S = 10
 TOOL_VERSIONS = (
     ["process-compose", "version"],
     ["anvil", "--version"],
@@ -249,6 +253,7 @@ class LoadStats(TypedDict):
     timeouts: int
     submit_errors: int
     max_in_flight: int
+    missing_payloads: list[int]
     latency_ms: Quantiles | None
 
 
@@ -781,6 +786,7 @@ class LoadState:
         self.pending: dict[int, Tx] = {}
         self.max_in_flight = 0
         self.submit_errors = 0
+        self.missing_payloads: list[int] = []
 
     def submitted(self, tx: Tx) -> None:
         self.txs.append(tx)
@@ -838,6 +844,7 @@ async def generate_load(
             "start_height": start_height,
             "max_in_flight": state.max_in_flight,
             "submit_errors": state.submit_errors,
+            "missing_payloads": state.missing_payloads,
             "marker": marker.hex(),
         },
     )
@@ -897,10 +904,13 @@ async def track_inclusion(
     height: int,
     done: asyncio.Event,
 ) -> None:
-    """Scan every new block's payload for our marker; time out transactions that never show."""
+    """Scan every new block's payload for our marker; time out transactions that never show.
+    A transaction counts as included when its block's header appeared on the query node."""
     pattern = re.compile(re.escape(marker) + b"(.{8})", re.DOTALL)
     deadline = None
     report = time.time() + PROGRESS_S
+    missing_since = None
+    appeared: dict[int, float] = {}
     while True:
         now = time.time()
         if now >= report:
@@ -917,13 +927,26 @@ async def track_inclusion(
         ]:
             state.resolve(tx.id, "timeout", now)
         top = await asyncio.to_thread(query_height, pool, query_url)
-        while height < top:
+        seen = time.time()
+        for new in range(height, top):
+            appeared.setdefault(new, seen)
+        while height < top - PAYLOAD_LAG_BLOCKS:
             raw = await asyncio.to_thread(block_payload, pool, query_url, height)
             if raw is None:
-                break
-            seen = time.time()
+                missing_since = missing_since or time.time()
+                if time.time() - missing_since < MISSING_PAYLOAD_S:
+                    break
+                log.warning("payload %d missing on the query node, skipping", height)
+                state.missing_payloads.append(height)
+                missing_since = None
+                del appeared[height]
+                height += 1
+                continue
+            missing_since = None
+            at_height = appeared.pop(height)
             for match in pattern.finditer(raw):
-                state.resolve(int.from_bytes(match.group(1), "big"), "included", seen)
+                tx_id = int.from_bytes(match.group(1), "big")
+                state.resolve(tx_id, "included", at_height)
             height += 1
         await asyncio.sleep(0.1)
 
@@ -1260,8 +1283,12 @@ def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
         noisy.append(
             f"inclusion ratio {load['inclusion_ratio']:.3f} < {INCLUSION_NOISY_RATIO}"
         )
+    if load["timeouts"]:
+        noisy.append(f"{load['timeouts']} transactions timed out")
     if load["submit_errors"]:
         noisy.append(f"{load['submit_errors']} submit errors")
+    if load["missing_payloads"]:
+        noisy.append(f"query node lost payloads at heights {load['missing_payloads']}")
     return {"valid": not invalid, "noisy": bool(noisy), "reasons": invalid + noisy}
 
 
@@ -1598,6 +1625,7 @@ def load_stats(out: Path, t0: float, t1: float) -> LoadStats:
         "timeouts": sum(1 for tx in txs if tx["status"] == "timeout"),
         "submit_errors": meta["submit_errors"],
         "max_in_flight": meta["max_in_flight"],
+        "missing_payloads": meta["missing_payloads"],
         "latency_ms": quantiles(latencies),
     }
 

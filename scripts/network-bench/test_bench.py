@@ -138,6 +138,7 @@ def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
             "timeouts": 0,
             "submit_errors": 0,
             "max_in_flight": 48,
+            "missing_payloads": [],
             "latency_ms": quantiles(1200.0, 2500.0),
         },
         "stake_table": ["0x1", "0x1", "0x1"],
@@ -305,9 +306,10 @@ class FakeNode(ThreadingHTTPServer):
     """Submit, block height and payload endpoints; `include` decides whether blocks carry the
     submitted transactions."""
 
-    def __init__(self, include):
+    def __init__(self, include, lost=frozenset()):
         super().__init__(("127.0.0.1", 0), FakeHandler)
         self.include = include
+        self.lost = lost
         self.lock = threading.Lock()
         self.pending = []
         self.blocks = [b""]
@@ -357,15 +359,15 @@ class FakeHandler(BaseHTTPRequestHandler):
             if self.path == "/v1/node/block-height":
                 return self.reply(200, len(node.blocks))
             height = int(self.path.removeprefix("/v1/availability/payload/"))
-            if height >= len(node.blocks):
+            if height >= len(node.blocks) or height in node.lost:
                 return self.reply(404, "not found")
             raw = base64.b64encode(node.blocks[height]).decode()
         self.reply(200, {"data": {"raw_payload": raw, "ns_table": {"bytes": ""}}})
 
 
 class LoadTest(unittest.TestCase):
-    def run_load(self, include, duration, **cfg):
-        node = FakeNode(include)
+    def run_load(self, include, duration, lost=frozenset(), **cfg):
+        node = FakeNode(include, lost)
         threads = [
             threading.Thread(target=node.serve_forever),
             threading.Thread(target=node.produce),
@@ -408,6 +410,17 @@ class LoadTest(unittest.TestCase):
         self.assertGreater(len(node.submits), 4)
         self.assertEqual(meta["max_in_flight"], 4)
         self.assertTrue(all(tx["status"] == "timeout" for tx in txs))
+
+    def test_lost_payload_is_skipped(self):
+        with (
+            mock.patch.object(bench, "MISSING_PAYLOAD_S", 0.2),
+            self.assertLogs(bench.log, "WARNING"),
+        ):
+            _, _, txs, meta = self.run_load(
+                True, 1.0, lost={3}, max_pending=4, tx_timeout_s=1
+            )
+        self.assertEqual(meta["missing_payloads"], [3])
+        self.assertGreater(sum(tx["status"] == "included" for tx in txs), 4)
 
 
 class HistogramTest(unittest.TestCase):
