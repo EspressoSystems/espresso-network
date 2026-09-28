@@ -540,8 +540,9 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_protocol_leaf_qc_mismatch() {
         let leaves = leaf_chain(1..=2, NEW_PROTOCOL_VERSION).await;
-        let proof_with_qc = |leaf_qc: QuorumCertificate2<SeqTypes>| {
-            let leaf = &leaves[0];
+        // A proof of `chain`, finalized by a cert2 on its last leaf.
+        let proof_with_qc = |chain: &[LeafQueryData<SeqTypes>], leaf_qc| {
+            let leaf = chain.last().unwrap();
             let data = Vote2Data {
                 leaf_commit: leaf.leaf().commit(),
                 epoch: leaf.qc().data.epoch.unwrap(),
@@ -555,13 +556,15 @@ mod test {
                 PhantomData,
             );
             let mut proof = LeafProof::default();
-            assert!(!proof.push(leaf.clone()));
+            for leaf in chain {
+                assert!(!proof.push(leaf.clone()));
+            }
             proof.add_certificate(Arc::new(cert2), leaf_qc);
             proof
         };
 
         assert_eq!(
-            proof_with_qc(leaves[0].qc().clone())
+            proof_with_qc(&leaves[..1], leaves[0].qc().clone())
                 .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
                 .await
                 .unwrap(),
@@ -574,11 +577,22 @@ mod test {
         let mut wrong_height = leaves[0].qc().clone();
         wrong_height.data.block_number = wrong_height.data.block_number.map(|h| h + 1);
         for leaf_qc in [wrong_view, wrong_leaf, wrong_height] {
-            proof_with_qc(leaf_qc)
+            proof_with_qc(&leaves[..1], leaf_qc)
                 .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
                 .await
                 .unwrap_err();
         }
+
+        // With a longer chain the QC comes from the next leaf's justify QC; `leaf_qc` is ignored.
+        let mut wrong_view = leaves[1].qc().clone();
+        wrong_view.view_number += 1;
+        assert_eq!(
+            proof_with_qc(&leaves, wrong_view)
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
