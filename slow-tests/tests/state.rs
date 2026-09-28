@@ -8,7 +8,7 @@ use espresso_node::{
         Options,
         data_source::testing::TestableSequencerDataSource,
         sql::DataSource as SqlDataSource,
-        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+        test_helpers::{NEW_PROTOCOL, TestNetwork, TestNetworkConfigBuilder},
     },
     testing::{TestConfig, TestConfigBuilder},
 };
@@ -19,7 +19,6 @@ use http_client::{Client, error::ClientErr};
 use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
 use test_utils::reserve_tcp_port;
 use tokio::time::sleep;
-use versions::{EPOCH_VERSION, Upgrade};
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {
@@ -33,8 +32,10 @@ async fn slow_test_merklized_state_api() {
     let config = TestNetworkConfigBuilder::default()
         .api_config(options)
         .network_config(network_config)
+        .new_protocol()
+        .await
         .build();
-    let mut network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+    let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
     let url = format!("http://localhost:{port}").parse().unwrap();
     let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 

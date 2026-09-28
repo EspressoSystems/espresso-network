@@ -35,7 +35,7 @@ use test_utils::reserve_tcp_port;
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
 const BLOCKS_PER_EPOCH: u64 = 7;
@@ -90,13 +90,13 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .pos_hook(
             DelegationConfig::default(),
             StakeTableContractVersion::V3,
-            Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
+            Upgrade::trivial(NEW_PROTOCOL_VERSION),
         )
         .await?
         .build();
 
     println!("Starting Espresso TestNetwork with {} nodes...", NUM_NODES);
-    let network = TestNetwork::new(config, Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION)).await;
+    let network = TestNetwork::new(config, Upgrade::trivial(NEW_PROTOCOL_VERSION)).await;
     println!("TestNetwork started successfully");
 
     let contracts = network.contracts.unwrap();
