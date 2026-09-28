@@ -1050,7 +1050,7 @@ def sample_host(out: Path, storage: Path, stop: threading.Event) -> None:
     process label. CPU of processes that exit is kept, so per-label counters never go back."""
     tick = os.sysconf("SC_CLK_TCK")
     page = os.sysconf("SC_PAGE_SIZE")
-    labels: dict[int, str | None] = {}
+    labels: dict[tuple[int, str], str | None] = {}
     last: dict[int, float] = {}
     cpu_s: dict[str, float] = {}
     with open(out, "a", buffering=1) as f:
@@ -1093,13 +1093,15 @@ def usable_cpu_jiffies() -> list[int]:
 
 
 def labelled_processes(
-    cache: dict[int, str | None], storage: Path
+    cache: dict[tuple[int, str], str | None], storage: Path
 ) -> Iterator[tuple[int, str]]:
+    """Keyed by (pid, comm): process-compose starts each process through `bash -c`, so a pid
+    first seen as bash may exec into a node."""
     uid, me = os.getuid(), os.getpid()
     for pid, comm in proc_comms():
-        if pid not in cache:
-            cache[pid] = process_label(pid, comm, uid, me, storage)
-        label = cache[pid]
+        if (pid, comm) not in cache:
+            cache[pid, comm] = process_label(pid, comm, uid, me, storage)
+        label = cache[pid, comm]
         if label is not None:
             yield pid, label
 

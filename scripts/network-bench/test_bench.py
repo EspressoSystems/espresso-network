@@ -395,6 +395,22 @@ class TeardownTest(unittest.TestCase):
         )
 
 
+class LabelTest(unittest.TestCase):
+    def test_pid_relabelled_after_exec(self):
+        cache = {}
+        label = mock.patch.object(
+            bench,
+            "process_label",
+            side_effect=lambda pid, comm, *_: bench.PROCESS_LABELS.get(comm),
+        )
+        with label:
+            for comm, want in (("bash", []), ("anvil", [(7, "anvil")])):
+                with mock.patch.object(bench, "proc_comms", return_value=[(7, comm)]):
+                    self.assertEqual(
+                        list(bench.labelled_processes(cache, Path("/"))), want
+                    )
+
+
 class FakeNode(ThreadingHTTPServer):
     """Submit, block height and payload endpoints; `include` decides whether blocks carry the
     submitted transactions."""
