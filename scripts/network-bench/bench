@@ -82,11 +82,15 @@ ROLES = {
     "node2": "validator, sqlite",
 }
 QUERY_NODE = "node0"
-# API, cliquenet, libp2p, anvil, postgres, orchestrator, relay.
+# From .env: API, tonic, cliquenet, libp2p, anvil, postgres, orchestrator, relay, and the CDN
+# the nodes would join if a demo left one listening.
 PORTS = (
     24000,
     24001,
     24002,
+    24200,
+    24201,
+    24202,
     11000,
     11001,
     11002,
@@ -97,6 +101,7 @@ PORTS = (
     5432,
     30001,
     30011,
+    30000,
 )
 # Exact /proc/<pid>/comm names (truncated to 15 chars) of the processes the network runs.
 PROCESS_NAMES = (
