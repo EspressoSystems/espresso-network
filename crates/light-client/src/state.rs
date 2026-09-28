@@ -1243,6 +1243,65 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
+    async fn test_fetch_leaf_new_protocol_forged_qc() {
+        let client = TestClient::default();
+        client.set_upgrade(0, NEW_PROTOCOL_VERSION).await;
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        assert_eq!(
+            lc.fetch_leaf(LeafId::Number(2)).await.unwrap(),
+            client.leaf(2).await
+        );
+
+        client.forge_qc(1).await;
+        lc.fetch_leaf(LeafId::Number(1)).await.unwrap_err();
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_in_range_forged_qc() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        let expected = vec![client.leaf(1).await, client.leaf(2).await];
+        client.forge_qc(1).await;
+        assert_eq!(lc.fetch_leaves_in_range(1, 3).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_leaves_for_ranges_forged_qc() {
+        let client = TestClient::default();
+        let lc = LightClient::from_genesis(
+            SqliteStorage::default().await.unwrap(),
+            client.clone(),
+            client.genesis().await,
+        );
+
+        // A coalesced span and a pair of runs too far apart to coalesce.
+        for (ranges, heights) in [
+            ([1..3, 5..8], [1usize, 2, 5, 6, 7]),
+            ([10..12, 70..73], [10, 11, 70, 71, 72]),
+        ] {
+            let mut expected = vec![];
+            for height in heights {
+                expected.push(client.leaf(height).await);
+                client.forge_qc(height).await;
+            }
+            assert_eq!(lc.fetch_leaves_for_ranges(&ranges).await.unwrap(), expected);
+        }
+    }
+
+    #[tokio::test]
+    #[test_log::test]
     async fn test_fetch_header_twice() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(

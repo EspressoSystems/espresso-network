@@ -377,6 +377,9 @@ impl LeafProof {
 
 #[cfg(test)]
 mod test {
+    use std::marker::PhantomData;
+
+    use hotshot_types::simple_vote::Vote2Data;
     use pretty_assertions::assert_eq;
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
 
@@ -511,6 +514,48 @@ mod test {
                 .contains("HotStuff2 finality proof used for new-protocol leaf"),
             "{err:#}"
         );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_leaf_qc_mismatch() {
+        let leaves = leaf_chain(1..=2, NEW_PROTOCOL_VERSION).await;
+        let proof_with_qc = |leaf_qc: QuorumCertificate2<SeqTypes>| {
+            let leaf = &leaves[0];
+            let data = Vote2Data {
+                leaf_commit: leaf.leaf().commit(),
+                epoch: leaf.qc().data.epoch.unwrap(),
+                block_number: leaf.leaf().height(),
+            };
+            let cert2 = Certificate2::new(
+                data.clone(),
+                data.commit(),
+                leaf.leaf().view_number(),
+                None,
+                PhantomData,
+            );
+            let mut proof = LeafProof::default();
+            assert!(!proof.push(leaf.clone()));
+            proof.add_certificate(Arc::new(cert2), leaf_qc);
+            proof
+        };
+
+        assert_eq!(
+            proof_with_qc(leaves[0].qc().clone())
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+
+        let mut wrong_view = leaves[0].qc().clone();
+        wrong_view.view_number += 1;
+        let wrong_leaf = leaves[1].qc().clone();
+        for leaf_qc in [wrong_view, wrong_leaf] {
+            proof_with_qc(leaf_qc)
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap_err();
+        }
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
