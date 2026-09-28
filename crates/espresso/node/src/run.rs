@@ -54,6 +54,7 @@ impl<P: SequencerPersistence> NodeContext<P> {
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     espresso_types::assert_node_feature();
     let opt = Options::parse();
+    let mut modules = opt.modules();
 
     // Genesis carries the chain ID, which selects the default telemetry
     // endpoint. Load it before telemetry init; the genesis log line is emitted
@@ -94,7 +95,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
                 )],
                 None,
             ),
-            (Err(_), _) if telemetry_enabled && !opt.follower_peers.is_empty() => (
+            (Err(_), _) if telemetry_enabled && modules.follower.is_some() => (
                 None,
                 vec![
                     "telemetry enabled but a follower has no staking key to identify itself with; \
@@ -117,9 +118,6 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
     log_cpu_probe(genesis.drb_difficulty.max(genesis.drb_upgrade_difficulty)).await;
 
-    let mut modules = opt.modules();
-    // Before the storage module is taken out of `modules` below, and before any of it is set up.
-    opt.validate_modules(&modules)?;
     tracing::warn!(?modules, "sequencer starting up");
 
     let public_node_config = PublicNodeConfig::new(&opt, &modules, &genesis);
@@ -205,9 +203,9 @@ pub async fn init_with_storage<S>(
 where
     S: DataSourceOptions,
 {
-    let follower_params = match &modules.query {
-        Some(query) => opt.follower_params(query)?,
-        None => None,
+    let follower_params = match (&modules.follower, &modules.query) {
+        (Some(follower), Some(query)) => Some(opt.follower_params(follower, query)?),
+        _ => None,
     };
     let l1_params = L1Params {
         urls: opt.l1_provider_url,
@@ -333,8 +331,7 @@ where
     Ok(NodeContext::Validator(Box::new(ctx)))
 }
 
-/// `Options::validate_modules` has checked that the http, query and storage-sql modules are
-/// present.
+/// Module parsing has checked that the http, query and storage-sql modules are present.
 async fn init_follower_with_storage<S>(
     genesis: Genesis,
     mut modules: Modules,
@@ -350,11 +347,6 @@ where
         .http
         .take()
         .context("a follower needs the http module")?;
-    if let Some(query) = modules.query.as_mut()
-        && query.peers.is_empty()
-    {
-        query.peers = params.upstreams.clone();
-    }
     let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
     let persistence = storage_opt.create().await?;
     http_opt

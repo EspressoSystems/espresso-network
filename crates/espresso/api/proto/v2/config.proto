@@ -355,6 +355,13 @@ message ApiModules {
   bool light_client = 9;
 }
 
+message FollowerModule {
+  uint64 poll_interval_ms = 1;
+
+  // The most blocks ingested per poll; the query service backfills older heights
+  uint64 max_blocks_per_poll = 2;
+}
+
 // The node's effective runtime configuration: CLI flags, environment and defaults merged. The
 // genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this
 // node holds is served, but a URL an operator configured with userinfo is served as given, as v1
@@ -406,13 +413,8 @@ message RuntimeConfigResponse {
 
   ApiModules modules = 19;
 
-  // Query nodes a follower verifies the chain from, empty on a validator
-  repeated string follower_peers = 20;
-
-  uint64 follower_poll_interval_ms = 21;
-
-  // The most blocks a follower ingests per poll; the query service backfills older heights
-  uint64 follower_max_blocks_per_poll = 22;
+  // Unset on a validator. A follower verifies the chain from the query module's peers
+  optional FollowerModule follower = 20;
 }
 
 service ConfigService {

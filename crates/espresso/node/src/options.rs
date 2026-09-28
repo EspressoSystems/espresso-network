@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, ensure};
+use anyhow::Context;
 use clap::{Args, FromArgMatches, Parser, error::ErrorKind};
 use derivative::Derivative;
 use espresso_telemetry::TelemetryOptions;
@@ -367,36 +367,6 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_EMPTY_BLOCK_DELAY", default_value = "500ms", value_parser = parse_duration)]
     pub empty_block_delay: Duration,
 
-    /// Follow the chain through the light client from these query nodes instead of running
-    /// consensus.
-    ///
-    /// Every block served is verified against finality proofs from these peers; the node never
-    /// joins consensus and needs no staking keys, orchestrator, CDN, libp2p or cliquenet. When
-    /// unset, `--peers`, `--state-peers` and `--config-peers` default to this list. A follower
-    /// needs the `storage-sql`, `http` and `query` modules and cannot serve `hotshot-events`.
-    #[clap(long, env = "ESPRESSO_NODE_FOLLOWER_PEERS", value_delimiter = ',')]
-    pub follower_peers: Vec<Url>,
-
-    /// How often a follower polls its peers for new blocks.
-    #[clap(long, env = "ESPRESSO_NODE_FOLLOWER_POLL_INTERVAL", default_value = "1s", value_parser = parse_duration)]
-    pub follower_poll_interval: Duration,
-
-    /// The most blocks a follower ingests per poll; older heights are backfilled by the query
-    /// service.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_FOLLOWER_MAX_BLOCKS_PER_POLL",
-        default_value = "10"
-    )]
-    pub follower_max_blocks_per_poll: u64,
-
-    /// TOML file with the light client genesis a follower trusts.
-    ///
-    /// Derived from the network config fetched from `--config-peers` when unset. Pin a reviewed
-    /// file to stop trusting those peers for the root of trust.
-    #[clap(long, env = "ESPRESSO_NODE_LIGHT_CLIENT_GENESIS")]
-    pub light_client_genesis: Option<PathBuf>,
-
     #[clap(flatten)]
     pub logging: logging::Config,
 
@@ -415,40 +385,13 @@ impl Options {
         ModuleArgs(self.modules.clone()).parse()
     }
 
-    pub fn validate_modules(&self, modules: &Modules) -> anyhow::Result<()> {
-        if self.follower_peers.is_empty() {
-            ensure!(
-                self.light_client_genesis.is_none(),
-                "--light-client-genesis pins a follower's root of trust and needs --follower-peers"
-            );
-            return Ok(());
-        }
-        ensure!(
-            modules.http.is_some() && modules.query.is_some(),
-            "a follower (--follower-peers) needs the http and query modules"
-        );
-        ensure!(
-            modules.storage_sql.is_some(),
-            "a follower (--follower-peers) needs the storage-sql module: merklized state and \
-             rewards need SQL storage"
-        );
-        ensure!(
-            modules.hotshot_events.is_none(),
-            "a follower (--follower-peers) cannot serve hotshot-events: it has no consensus event \
-             stream to relay"
-        );
-        Ok(())
-    }
-
-    /// `--config-peers` is left unset for `init_follower_node` to default it to the follower peers.
+    /// `--config-peers` is left unset for `init_follower_node` to default it to the upstreams.
     pub fn follower_params(
         &self,
+        follower: &Follower,
         query: &api::options::Query,
-    ) -> anyhow::Result<Option<FollowerParams>> {
-        if self.follower_peers.is_empty() {
-            return Ok(None);
-        }
-        let light_client_genesis = match &self.light_client_genesis {
+    ) -> anyhow::Result<FollowerParams> {
+        let light_client_genesis = match &follower.light_client_genesis {
             Some(path) => {
                 let toml = std::fs::read_to_string(path)
                     .with_context(|| format!("reading light client genesis {}", path.display()))?;
@@ -461,12 +404,12 @@ impl Options {
             None => None,
         };
         let state_peers = if self.state_peers.is_empty() {
-            self.follower_peers.clone()
+            query.peers.clone()
         } else {
             self.state_peers.clone()
         };
-        Ok(Some(FollowerParams {
-            upstreams: self.follower_peers.clone(),
+        Ok(FollowerParams {
+            upstreams: query.peers.clone(),
             config_peers: self.config_peers.clone(),
             catchup: CatchupParams {
                 state_peers,
@@ -476,13 +419,13 @@ impl Options {
             },
             bootstrap_epoch_catchup_timeout: self.bootstrap_epoch_catchup_timeout,
             options: FollowerOptions {
-                poll_interval: self.follower_poll_interval,
-                max_blocks_per_poll: self.follower_max_blocks_per_poll,
+                poll_interval: follower.poll_interval,
+                max_blocks_per_poll: follower.max_blocks_per_poll,
                 light_client: query.light_client.clone(),
                 light_client_db: query.light_client_db.clone(),
                 light_client_genesis,
             },
-        }))
+        })
     }
 }
 
@@ -668,11 +611,39 @@ impl ModuleArgs {
                 SequencerModule::LightClient(m) => {
                     curr = m.add(&mut modules.light_client, &mut provided)?
                 },
+                SequencerModule::Follower(m) => {
+                    curr = m.add(&mut modules.follower, &mut provided)?
+                },
             }
+        }
+        if modules.follower.is_some() {
+            validate_follower_modules(&modules)?;
         }
 
         Ok(modules)
     }
+}
+
+fn validate_follower_modules(modules: &Modules) -> Result<(), clap::Error> {
+    if modules.hotshot_events.is_some() {
+        return Err(clap::Error::raw(
+            ErrorKind::ArgumentConflict,
+            "module follower cannot run with hotshot-events: it has no consensus event stream to \
+             relay",
+        ));
+    }
+    if modules
+        .query
+        .as_ref()
+        .is_none_or(|query| query.peers.is_empty())
+    {
+        return Err(clap::Error::raw(
+            ErrorKind::MissingRequiredArgument,
+            "module follower verifies the chain from the query module's peers: set --peers \
+             (ESPRESSO_NODE_API_PEERS)",
+        ));
+    }
+    Ok(())
 }
 
 trait ModuleInfo: Args + FromArgMatches {
@@ -703,6 +674,7 @@ module!("config", api::options::Config, requires: "http");
 module!("hotshot-events", api::options::HotshotEvents, requires: "http");
 module!("explorer", api::options::Explorer, requires: "http", "storage-sql");
 module!("light-client", api::options::LightClient, requires: "http", "storage-sql");
+module!("follower", Follower, requires: "storage-sql", "http", "query");
 
 #[derive(Clone, Debug, Args)]
 struct Module<Options: ModuleInfo> {
@@ -790,6 +762,16 @@ enum SequencerModule {
     ///
     /// This module requires the http and storage-sql modules to be started.
     LightClient(Module<api::options::LightClient>),
+    /// Follow the chain through the light client instead of running consensus.
+    ///
+    /// Every block served is verified against finality proofs from the query module's peers
+    /// (`--peers`, `ESPRESSO_NODE_API_PEERS`), which `--state-peers` and `--config-peers` default
+    /// to. The node never joins consensus and needs no staking keys, orchestrator, CDN, libp2p or
+    /// cliquenet.
+    ///
+    /// This module requires the storage-sql, http and query modules to be started, and cannot
+    /// run with hotshot-events.
+    Follower(Module<Follower>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -805,6 +787,30 @@ pub struct Modules {
     pub hotshot_events: Option<api::options::HotshotEvents>,
     pub explorer: Option<api::options::Explorer>,
     pub light_client: Option<api::options::LightClient>,
+    pub follower: Option<Follower>,
+}
+
+/// Options for the follower module.
+#[derive(Parser, Clone, Debug)]
+pub struct Follower {
+    /// How often to poll the upstreams for new blocks.
+    #[clap(long, env = "ESPRESSO_NODE_FOLLOWER_POLL_INTERVAL", default_value = "1s", value_parser = parse_duration)]
+    pub poll_interval: Duration,
+
+    /// The most blocks ingested per poll; older heights are backfilled by the query service.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_FOLLOWER_MAX_BLOCKS_PER_POLL",
+        default_value = "10"
+    )]
+    pub max_blocks_per_poll: u64,
+
+    /// TOML file with the light client genesis to trust.
+    ///
+    /// Derived from the network config fetched from `--config-peers` when unset. Pin a reviewed
+    /// file to stop trusting those peers for the root of trust.
+    #[clap(long, env = "ESPRESSO_NODE_LIGHT_CLIENT_GENESIS")]
+    pub light_client_genesis: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -829,9 +835,8 @@ pub struct PublicNodeConfig {
     pub local_catchup_timeout: Duration,
     pub bootstrap_epoch_catchup_timeout: Duration,
     pub catchup_backoff: BackoffParams,
-    pub follower_peers: Vec<Url>,
-    pub follower_poll_interval: Duration,
-    pub follower_max_blocks_per_poll: u64,
+    /// Unset on a validator.
+    pub follower: Option<FollowerConfig>,
     pub proposal_fetcher: ProposalFetcherConfig,
     pub libp2p: Libp2pTuning,
     pub l1: L1Tuning,
@@ -926,6 +931,21 @@ pub struct HttpConfig {
     pub port: u16,
     pub max_connections: Option<usize>,
     pub tonic_port: Option<u16>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FollowerConfig {
+    pub poll_interval: Duration,
+    pub max_blocks_per_poll: u64,
+}
+
+impl From<&Follower> for FollowerConfig {
+    fn from(o: &Follower) -> Self {
+        Self {
+            poll_interval: o.poll_interval,
+            max_blocks_per_poll: o.max_blocks_per_poll,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1180,9 +1200,7 @@ impl PublicNodeConfig {
             local_catchup_timeout: opt.local_catchup_timeout,
             bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
             catchup_backoff: opt.catchup_backoff,
-            follower_peers: opt.follower_peers.clone(),
-            follower_poll_interval: opt.follower_poll_interval,
-            follower_max_blocks_per_poll: opt.follower_max_blocks_per_poll,
+            follower: modules.follower.as_ref().map(FollowerConfig::from),
             proposal_fetcher: opt.proposal_fetcher_config,
             libp2p: Libp2pTuning::from(opt),
             l1: L1Tuning::from(&opt.l1_options),
@@ -1442,16 +1460,15 @@ pub(crate) mod tests {
 
     #[test]
     fn follower_params_default_peers() {
-        let query = api::options::Query::default();
-        let opt = parse_options_with(&[]);
-        assert!(opt.follower_params(&query).unwrap().is_none());
-
         let peers = ["http://a.test", "http://b.test"].map(|url| url.parse::<Url>().unwrap());
-        let opt = parse_options_with(&["--follower-peers", "http://a.test,http://b.test"]);
-        let params = opt
-            .follower_params(&query)
-            .unwrap()
-            .expect("follower configured");
+        let query = api::options::Query {
+            peers: peers.to_vec(),
+            ..Default::default()
+        };
+        let follower = Follower::try_parse_from(["follower"]).unwrap();
+
+        let opt = parse_options_with(&[]);
+        let params = opt.follower_params(&follower, &query).unwrap();
         assert_eq!(params.upstreams, peers);
         assert_eq!(params.catchup.state_peers, peers);
         assert!(
@@ -1460,17 +1477,13 @@ pub(crate) mod tests {
         );
 
         let opt = parse_options_with(&[
-            "--follower-peers",
-            "http://a.test",
             "--state-peers",
             "http://c.test",
             "--config-peers",
             "http://d.test",
         ]);
-        let params = opt
-            .follower_params(&query)
-            .unwrap()
-            .expect("follower configured");
+        let params = opt.follower_params(&follower, &query).unwrap();
+        assert_eq!(params.upstreams, peers);
         assert_eq!(
             params.catchup.state_peers,
             ["http://c.test".parse::<Url>().unwrap()]
@@ -1485,58 +1498,75 @@ pub(crate) mod tests {
     // irrelevant to what this test asserts.
     #[cfg(not(feature = "embedded-db"))]
     #[test]
-    fn validate_modules_for_follower() {
-        let validate = |modules: &[&str]| {
-            let mut args = vec!["--follower-peers", "http://a.test"];
+    fn follower_module_requirements() {
+        let parse = |modules: &[&str]| {
+            let mut args = vec![];
             for module in modules {
-                args.push("--");
-                args.extend(module.split(' '));
+                args.push("--".to_string());
+                args.extend(module.split(' ').map(String::from));
             }
-            let opt = parse_options_with(&args);
-            opt.validate_modules(&opt.modules())
+            // Drop the leading `--`, as `Options` does.
+            ModuleArgs(args.split_off(1)).try_parse()
         };
-        validate(&["storage-sql", "http", "query"]).expect("sql storage, http and query suffice");
-        validate(&[
+        let modules = parse(&[
             "storage-sql",
             "http",
-            "query",
+            "query --peers http://a.test",
+            "follower",
+        ])
+        .expect("sql storage, http and query with peers suffice");
+        assert!(modules.follower.is_some());
+        parse(&[
+            "storage-sql",
+            "http",
+            "query --peers http://a.test",
             "submit",
             "catchup",
             "config",
             "light-client",
             "explorer",
+            "follower",
         ])
         .expect("the other modules are allowed");
         assert!(
-            validate(&["storage-fs --path /tmp/follower", "http", "query"]).is_err(),
+            parse(&[
+                "storage-fs --path /tmp/follower",
+                "http",
+                "query --peers http://a.test",
+                "follower",
+            ])
+            .is_err(),
             "fs storage cannot serve merklized state"
         );
         assert!(
-            validate(&["storage-sql", "http"]).is_err(),
+            parse(&["storage-sql", "http", "follower"]).is_err(),
             "the query module is required"
         );
         assert!(
-            validate(&["storage-sql", "http", "query", "hotshot-events"]).is_err(),
+            parse(&["storage-sql", "http", "query", "follower"]).is_err(),
+            "the query module's peers are the upstreams"
+        );
+        assert!(
+            parse(&[
+                "storage-sql",
+                "http",
+                "query --peers http://a.test",
+                "hotshot-events",
+                "follower",
+            ])
+            .is_err(),
             "a follower has no event stream to relay"
         );
-
-        let opt = parse_options_with(&[
-            "--",
-            "storage-fs",
-            "--path",
-            "/tmp/validator",
-            "--",
-            "http",
-            "--",
-            "hotshot-events",
-        ]);
-        opt.validate_modules(&opt.modules())
-            .expect("validators may run any modules");
-
-        let opt = parse_options_with(&["--light-client-genesis", "/tmp/light-client-genesis.toml"]);
         assert!(
-            opt.validate_modules(&opt.modules()).is_err(),
-            "a light client genesis is ignored without follower peers, so it is rejected"
+            parse(&[
+                "storage-sql",
+                "http",
+                "query --peers http://a.test",
+                "follower",
+                "hotshot-events",
+            ])
+            .is_err(),
+            "hotshot-events is rejected in either order"
         );
     }
 
