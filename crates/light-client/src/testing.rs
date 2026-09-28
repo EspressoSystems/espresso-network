@@ -42,7 +42,7 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, is_epoch_transition, is_ge_epoch_root},
     vid::avidm::init_avidm_param,
-    vote::Certificate as _,
+    vote::{self, Certificate as _},
 };
 use jf_merkle_tree_compat::{
     AppendableMerkleTreeScheme, MerkleTreeScheme, prelude::SHA3MerkleTree,
@@ -250,16 +250,9 @@ impl Quorum for AlwaysTrueQuorum {
         Ok(())
     }
 
-    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+    async fn verify_simple_cert_static<V: StaticVersionType + 'static, D>(
         &self,
-        _: &Certificate2<SeqTypes>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
-        &self,
-        _: &QuorumCertificate2<SeqTypes>,
+        _: &(impl vote::Certificate<SeqTypes, D> + Sync),
     ) -> Result<()> {
         Ok(())
     }
@@ -273,16 +266,9 @@ impl Quorum for AlwaysFalseQuorum {
         bail!("always false quorum");
     }
 
-    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+    async fn verify_simple_cert_static<V: StaticVersionType + 'static, D>(
         &self,
-        _: &Certificate2<SeqTypes>,
-    ) -> Result<()> {
-        bail!("always false quorum");
-    }
-
-    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
-        &self,
-        _: &QuorumCertificate2<SeqTypes>,
+        _: &(impl vote::Certificate<SeqTypes, D> + Sync),
     ) -> Result<()> {
         bail!("always false quorum");
     }
@@ -324,16 +310,9 @@ impl Quorum for VersionCheckQuorum {
         Ok(())
     }
 
-    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+    async fn verify_simple_cert_static<V: StaticVersionType + 'static, D>(
         &self,
-        _: &Certificate2<SeqTypes>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
-        &self,
-        _: &QuorumCertificate2<SeqTypes>,
+        _: &(impl vote::Certificate<SeqTypes, D> + Sync),
     ) -> Result<()> {
         Ok(())
     }
@@ -362,16 +341,9 @@ impl Quorum for EpochChangeQuorum {
         Ok(())
     }
 
-    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+    async fn verify_simple_cert_static<V: StaticVersionType + 'static, D>(
         &self,
-        _: &Certificate2<SeqTypes>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
-        &self,
-        _: &QuorumCertificate2<SeqTypes>,
+        _: &(impl vote::Certificate<SeqTypes, D> + Sync),
     ) -> Result<()> {
         Ok(())
     }
