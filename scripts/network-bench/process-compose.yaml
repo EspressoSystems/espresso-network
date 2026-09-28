@@ -5,6 +5,8 @@ version: "3"
 # Started by scripts/network-bench/bench from the repo root with BENCH_OUT and
 # ESPRESSO_BASE_STORAGE_PATH set. Keys, ports and addresses come from the repo .env.
 # Processes are covered by the NATIVE_PROCESSES list in scripts/cleanup-process-compose.
+# process-compose 1.75 (CI) lets .env win over `environment:`, 1.120 the reverse; settings
+# that .env also defines therefore go on the command line.
 
 x-availability:
   run-forever: &run-forever
@@ -53,10 +55,9 @@ processes:
     availability: *exit-ok
 
   orchestrator:
-    command: orchestrator
+    command: orchestrator --num-nodes 3
     log_location: ${BENCH_OUT}/logs/orchestrator.log
     environment:
-      - ESPRESSO_ORCHESTRATOR_NUM_NODES=3
       # No builder runs here; leaders fall back to an empty block after the timeout.
       - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:1
       - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=100ms
@@ -73,8 +74,6 @@ processes:
   state-relay-server:
     command: state-relay-server
     log_location: ${BENCH_OUT}/logs/relay.log
-    environment:
-      - ESPRESSO_STATE_SIGNATURE_TOTAL_STAKE=3
     readiness_probe:
       http_get:
         scheme: http
@@ -98,11 +97,9 @@ processes:
     availability: *run-forever
 
   espresso-node-0:
-    command: espresso-node -- storage-sql -- http -- query -- submit -- catchup -- config -- light-client
+    command: RUST_LOG=info,libp2p=off RUST_LOG_FORMAT=json espresso-node -- storage-sql -- http -- query -- submit -- catchup -- config -- light-client
     log_location: ${BENCH_OUT}/logs/node0.log
     environment:
-      - RUST_LOG=info,libp2p=off
-      - RUST_LOG_FORMAT=json
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=false
       - ESPRESSO_NODE_IS_DA=true
@@ -145,11 +142,9 @@ processes:
     availability: *run-forever
 
   espresso-node-1:
-    command: espresso-node-sqlite -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
+    command: RUST_LOG=info,libp2p=off RUST_LOG_FORMAT=json espresso-node-sqlite -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
     log_location: ${BENCH_OUT}/logs/node1.log
     environment:
-      - RUST_LOG=info,libp2p=off
-      - RUST_LOG_FORMAT=json
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=false
       - ESPRESSO_NODE_IS_DA=true
@@ -180,11 +175,9 @@ processes:
     availability: *run-forever
 
   espresso-node-2:
-    command: espresso-node-sqlite -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
+    command: RUST_LOG=info,libp2p=off RUST_LOG_FORMAT=json espresso-node-sqlite -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
     log_location: ${BENCH_OUT}/logs/node2.log
     environment:
-      - RUST_LOG=info,libp2p=off
-      - RUST_LOG_FORMAT=json
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=false
       - ESPRESSO_NODE_IS_DA=true
