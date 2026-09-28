@@ -115,10 +115,6 @@ where
             return;
         }
 
-        if self.upgrade_lock.upgrade().base < versions::NEW_PROTOCOL_VERSION {
-            return;
-        }
-
         let mut new_proto = self.new_proto.write();
 
         match new_proto.take() {
@@ -448,17 +444,8 @@ where
 
     pub async fn start_consensus(&self) {
         self.activate().await;
-        if self.is_new_proto_running() {
-            tracing::info!("base version runs the new protocol, shutting down legacy stack");
-            self.shut_down_legacy().await;
-            return;
-        }
-        self.legacy_handle
-            .read()
-            .await
-            .hotshot
-            .start_consensus()
-            .await;
+        tracing::info!("base version runs the new protocol, shutting down legacy stack");
+        self.shut_down_legacy().await;
     }
 
     pub async fn shut_down(&self) {

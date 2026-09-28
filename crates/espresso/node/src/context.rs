@@ -197,27 +197,20 @@ where
         // `first_epoch` is now seeded on the shared membership. Walk the
         // catchup chain forward to populate the stake-table window for the
         // current epoch.
-        //
-        // Only the new protocol (cliquenet) needs this
-        let max_configured_version = std::cmp::max(upgrade.base, upgrade.target);
-        if max_configured_version >= NEW_PROTOCOL_VERSION {
-            let current_epoch = bootstrap_epoch_window(
-                &membership_coordinator,
-                epoch_height,
-                bootstrap_epoch_catchup_timeout,
-            )
-            .await
-            .context("startup stake-table catchup failed")?;
-            tracing::info!(%current_epoch, "Startup catchup complete");
+        let current_epoch = bootstrap_epoch_window(
+            &membership_coordinator,
+            epoch_height,
+            bootstrap_epoch_catchup_timeout,
+        )
+        .await
+        .context("startup stake-table catchup failed")?;
+        tracing::info!(%current_epoch, "Startup catchup complete");
 
-            // Push the resolved peer window into the coordinator network. For
-            // cliquenet this dials the N-1/N/N+1 sliding window for the current
-            // epoch before consensus starts.
-            if let Err(err) =
-                coordinator_network.apply_epoch(current_epoch, &membership_coordinator)
-            {
-                tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
-            }
+        // Push the resolved peer window into the coordinator network. For
+        // cliquenet this dials the N-1/N/N+1 sliding window for the current
+        // epoch before consensus starts.
+        if let Err(err) = coordinator_network.apply_epoch(current_epoch, &membership_coordinator) {
+            tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
         }
 
         // Restore the persisted lock so the new protocol resumes with the lock
