@@ -36,12 +36,6 @@ pub struct SetHotshotUpReqBody {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum DevNodeVersion {
-    #[value(name = "0.3")]
-    V0_3,
-    #[value(name = "0.4")]
-    V0_4,
-    #[value(name = "0.5")]
-    V0_5,
     #[value(name = "0.6")]
     V0_6,
 }
@@ -49,9 +43,6 @@ pub enum DevNodeVersion {
 impl fmt::Display for DevNodeVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DevNodeVersion::V0_3 => write!(f, "0.3"),
-            DevNodeVersion::V0_4 => write!(f, "0.4"),
-            DevNodeVersion::V0_5 => write!(f, "0.5"),
             DevNodeVersion::V0_6 => write!(f, "0.6"),
         }
     }
