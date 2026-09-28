@@ -660,7 +660,8 @@ pub struct PruningOptions {
     pub(crate) target_retention: Option<Duration>,
 
     /// Target retention period for Merklized state.
-    /// State older than this is pruned to free up space.
+    /// State older than this is pruned to free up space, but never at or past the newest
+    /// merklized state, which the state writer resumes from.
     #[clap(
         long,
         env = "ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION",
