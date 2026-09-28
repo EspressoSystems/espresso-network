@@ -66,10 +66,17 @@ pub const MIN_MESSAGE_LIMIT: NonZeroUsize =
 /// Room above a full block for message envelopes.
 const MESSAGE_HEADROOM: usize = 64 * 1024;
 
+/// A VID share is not bounded by the block it encodes: with few DA nodes the erasure code gives
+/// each share most of the payload plus overhead, and two DA nodes produced shares of 2x a full
+/// block.
+const VID_SHARE_EXPANSION: usize = 3;
+
 /// Message limit for blocks of at most `max_block_size`.
 pub fn message_limit(max_block_size: u64) -> NonZeroUsize {
     let block = usize::try_from(max_block_size).unwrap_or(usize::MAX);
-    let limit = block.saturating_add(MESSAGE_HEADROOM);
+    let limit = block
+        .saturating_mul(VID_SHARE_EXPANSION)
+        .saturating_add(MESSAGE_HEADROOM);
     NonZeroUsize::new(limit).map_or(MIN_MESSAGE_LIMIT, |n| n.max(MIN_MESSAGE_LIMIT))
 }
 
