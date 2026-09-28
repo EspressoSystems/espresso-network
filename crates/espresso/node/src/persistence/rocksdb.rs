@@ -1,9 +1,12 @@
-//! RocksDB-backed consensus storage for nodes that do not run the query service.
+//! RocksDB-backed consensus storage.
 //!
 //! Every write is synced to the write-ahead log before it returns, so a vote or proposal that
 //! consensus has acted on survives a crash. RocksDB groups concurrent synced writes into a single
 //! WAL fsync, which lets the per-view writes consensus issues in parallel share one flush instead
 //! of queueing behind a database-wide write lock.
+//!
+//! A query node pairs this store with a separate query-service database. Consensus writes stay
+//! here, and decided blocks are replayed into the query service off the voting path.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -17,8 +20,8 @@ use anyhow::{Context as _, bail};
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
-    SeqTypes, StakeTableHash,
+    AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, Payload, PubKey,
+    RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
@@ -40,7 +43,10 @@ use hotshot_types::{
         CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
     },
-    traits::metrics::Metrics,
+    traits::{
+        block_contents::{BlockHeader as _, BlockPayload as _},
+        metrics::Metrics,
+    },
     vote::HasViewNumber,
 };
 use rocksdb::{
@@ -53,30 +59,75 @@ use tokio::sync::Mutex;
 use crate::{
     RECENT_STAKE_TABLES_LIMIT, ViewNumber,
     persistence::{
-        migrate_network_config,
+        fs, migrate_network_config,
         persistence_metrics::PersistenceMetricsValue,
+        sql::{self, DecidedLeaf, decide_events_from_chain, within_gap_fill_horizon},
         storage_probe::{self, StorageProbe},
     },
 };
 
-/// Options for RocksDB-backed persistence.
+/// Options for RocksDB-backed persistence, the consensus storage of every node.
 ///
-/// This backend stores consensus data only. It cannot back the query service, so a node that
-/// serves the `query` module must use `storage-sql` or `storage-fs` instead.
+/// This backend stores consensus data only. To serve the `query` module it needs a separate
+/// database for the query service, see [`Options::with_query_storage`].
 ///
-/// Decided leaves are never replayed as decide events: the event consumer is not called, and
-/// everything at or below a decided view is dropped as soon as it is decided, except the newest
-/// decided leaf, which is the restart anchor.
+/// Without one, decided leaves are never replayed as decide events: the event consumer is not
+/// called, and everything at or below a decided view is dropped as soon as it is decided, except
+/// the newest decided leaf, which is the restart anchor.
 #[derive(Parser, Clone, Debug)]
 pub struct Options {
-    /// Directory holding the RocksDB database.
-    #[clap(long = "path", env = "ESPRESSO_NODE_ROCKSDB_PATH")]
-    pub(crate) path: PathBuf,
+    /// The node's storage path. The RocksDB database lives in its `rocksdb` directory.
+    ///
+    /// Defaults to a temporary directory, so consensus state does not survive a restart.
+    #[clap(long = "path", env = "ESPRESSO_NODE_STORAGE_PATH")]
+    storage_path: Option<PathBuf>,
+
+    #[clap(skip)]
+    query_storage: Option<QueryStorage>,
+}
+
+/// The database the query service reads from, filled by replaying decided leaves.
+#[derive(Clone, Debug)]
+pub enum QueryStorage {
+    Sql(sql::Options),
+    Fs(fs::Options),
+}
+
+impl Default for Options {
+    fn default() -> Options {
+        Options::parse_from(std::iter::empty::<String>())
+    }
 }
 
 impl Options {
-    pub fn new(path: PathBuf) -> Options {
-        Options { path }
+    pub fn new(storage_path: PathBuf) -> Options {
+        Options {
+            storage_path: Some(storage_path),
+            query_storage: None,
+        }
+    }
+
+    /// The directory holding the RocksDB database.
+    pub fn path(&self) -> PathBuf {
+        let storage_path = self.storage_path.clone().unwrap_or_else(|| {
+            // Keyed by process so every lookup in one run resolves to the same directory.
+            std::env::temp_dir().join(format!("espresso-storage-{}", std::process::id()))
+        });
+        storage_path.join("rocksdb")
+    }
+
+    /// Back the query service with `query_storage`.
+    ///
+    /// Decided leaves, with their payloads and VID shares, are then kept until they have been
+    /// replayed as decide events to the query service, which may lag consensus. Consensus never
+    /// waits on the query service database.
+    pub fn with_query_storage(mut self, query_storage: QueryStorage) -> Options {
+        self.query_storage = Some(query_storage);
+        self
+    }
+
+    pub(crate) fn query_storage(&self) -> Option<&QueryStorage> {
+        self.query_storage.as_ref()
     }
 }
 
@@ -88,20 +139,17 @@ impl PersistenceOptions for Options {
     fn set_view_retention(&mut self, _: u64) {}
 
     async fn create(&mut self) -> anyhow::Result<Persistence> {
-        std::fs::create_dir_all(&self.path).with_context(|| {
-            format!(
-                "failed to create storage directory '{}'",
-                self.path.display()
-            )
-        })?;
-        let probe = storage_probe::probe(&self.path, None).await?;
-        let path = self.path.clone();
+        let path = self.path();
+        std::fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create storage directory '{}'", path.display()))?;
+        let probe = storage_probe::probe(&path, None).await?;
         let db = tokio::task::spawn_blocking(move || open_shared(&path))
             .await
             .context("failed to join the RocksDB open task")??;
 
         Ok(Persistence {
             db: Db(db),
+            replay_decides: self.query_storage.is_some(),
             stake_events_lock: Arc::new(Mutex::new(())),
             drb_input_lock: Arc::new(Mutex::new(())),
             metrics: Arc::new(PersistenceMetricsValue::default()),
@@ -110,7 +158,7 @@ impl PersistenceOptions for Options {
     }
 
     async fn reset(self) -> anyhow::Result<()> {
-        let path = self.path;
+        let path = self.path();
         tokio::task::spawn_blocking(move || {
             DB::destroy(&rocksdb::Options::default(), &path)
                 .with_context(|| format!("failed to destroy RocksDB at '{}'", path.display()))
@@ -124,6 +172,7 @@ impl PersistenceOptions for Options {
 #[derive(Clone, Debug)]
 pub struct Persistence {
     db: Db,
+    replay_decides: bool,
     stake_events_lock: Arc<Mutex<()>>,
     drb_input_lock: Arc<Mutex<()>>,
     metrics: Arc<PersistenceMetricsValue>,
@@ -225,11 +274,15 @@ impl Cf {
         match self {
             Cf::Meta => opts.set_merge_operator_associative("keep_highest_view", keep_highest_view),
             // Payloads reach the maximum block size. Keeping them in blob files stops every
-            // compaction from rewriting them before they are deleted at decide.
+            // compaction from rewriting them before they are deleted at decide. A memtable that
+            // holds several of them flushes every few blocks instead of every block, and
+            // erasure-coded or random bytes do not compress.
             Cf::VidShares | Cf::DaProposals | Cf::QuorumProposals => {
                 opts.set_enable_blob_files(true);
                 opts.set_min_blob_size(4096);
                 opts.set_enable_blob_gc(true);
+                opts.set_write_buffer_size(PAYLOAD_WRITE_BUFFER_SIZE);
+                opts.set_compression_type(DBCompressionType::None);
             },
             Cf::Leaves
             | Cf::Cert2
@@ -257,7 +310,20 @@ mod meta {
     pub(super) const UPGRADE_CERT: &[u8] = b"upgrade_certificate";
     pub(super) const DHT: &[u8] = b"libp2p_dht";
     pub(super) const STAKE_EVENTS_L1_BLOCK: &[u8] = b"stake_table_events_l1_block";
+    pub(super) const PROCESSED_VIEW: &[u8] = b"last_processed_view";
 }
+
+/// Most views replayed in one decide event. A backlog of full blocks is read into memory a batch
+/// at a time, so this bounds replay memory at a few block payloads and VID shares.
+const MAX_REPLAY_VIEWS: usize = 8;
+
+/// Memtable size of the column families holding block payloads, VID shares and proposals.
+const PAYLOAD_WRITE_BUFFER_SIZE: usize = 256 << 20;
+
+/// Total size at which the write-ahead log forces a memtable flush. Column families that are
+/// written rarely, like the metadata, otherwise keep every old log file alive, and with block
+/// payloads going through the log it grew to tens of gigabytes in minutes.
+const MAX_TOTAL_WAL_SIZE: u64 = 1 << 30;
 
 /// Exclusive upper bound for every key this backend writes, the longest being an epoch followed
 /// by a validator address.
@@ -293,6 +359,7 @@ fn open(path: &Path) -> anyhow::Result<DB> {
     opts.create_missing_column_families(true);
     let parallelism = std::thread::available_parallelism().map_or(2, |n| n.get());
     opts.increase_parallelism(i32::try_from(parallelism).unwrap_or(i32::MAX));
+    opts.set_max_total_wal_size(MAX_TOTAL_WAL_SIZE);
     let mut table = BlockBasedOptions::default();
     table.set_bloom_filter(10.0, false);
     opts.set_block_based_table_factory(&table);
@@ -477,6 +544,31 @@ where
 /// never decided must not become its epoch's finalized certificate.
 fn collect_decided(db: &DB, view: u64) -> anyhow::Result<()> {
     let mut batch = WriteBatch::default();
+    collect_decided_into(db, view, &mut batch)?;
+    write(db, batch)?;
+    drop_decided_files(db, view)
+}
+
+/// Delete the table files that only hold rows [`collect_decided_into`] already deleted up to
+/// `view`, so their space, and that of the blob files only they reference, comes back without
+/// waiting for a compaction to reach them.
+fn drop_decided_files(db: &DB, view: u64) -> anyhow::Result<()> {
+    for family in Cf::PER_VIEW {
+        // Unlike `delete_range`, the end key is inclusive, and the leaf at `view` is the anchor.
+        let last = match family {
+            Cf::Leaves => match view.checked_sub(1) {
+                Some(last) => last,
+                None => continue,
+            },
+            _ => view,
+        };
+        db.delete_file_in_range_cf(cf(db, family), u64_key(0), u64_key(last))
+            .with_context(|| format!("failed to drop decided {} files", family.name()))?;
+    }
+    Ok(())
+}
+
+fn collect_decided_into(db: &DB, view: u64, batch: &mut WriteBatch) -> anyhow::Result<()> {
     let start = u64_key(0);
     for item in db.iterator_cf(
         cf(db, Cf::Leaves),
@@ -505,7 +597,160 @@ fn collect_decided(db: &DB, view: u64) -> anyhow::Result<()> {
         };
         batch.delete_range_cf(cf(db, family), u64_key(0), u64_key(end));
     }
-    write(db, batch)
+    Ok(())
+}
+
+/// A run of consecutive decided leaves, newest first, ready to become decide events.
+struct ReplayBatch {
+    chain: Vec<DecidedLeaf>,
+    cert2: Option<Certificate2<SeqTypes>>,
+    to_view: u64,
+}
+
+fn processed_view(db: &DB) -> anyhow::Result<Option<u64>> {
+    db.get_pinned_cf(cf(db, Cf::Meta), meta::PROCESSED_VIEW)
+        .context("failed to read the replay cursor")?
+        .map(|bytes| decode_u64(&bytes))
+        .transpose()
+}
+
+/// Collect the decided leaves after the replay cursor, stopping at the first height gap.
+///
+/// A gap the newest decides can still fill holds the cursor instead: consensus may yet decide
+/// the missing leaf, and replaying past it would leave the query service without that block.
+fn next_replay_batch(db: &DB) -> anyhow::Result<Option<ReplayBatch>> {
+    let processed = processed_view(db)?;
+    let mut parent = match processed {
+        Some(view) => get::<(Leaf2, CertificatePair<SeqTypes>)>(db, Cf::Leaves, u64_key(view))?
+            .map(|(leaf, _)| leaf.block_header().block_number()),
+        None => None,
+    };
+    let watermark = db
+        .iterator_cf(cf(db, Cf::Leaves), IteratorMode::End)
+        .next()
+        .transpose()
+        .context("failed to find the newest decided leaf")?
+        .map(|(key, _)| decode_u64(&key))
+        .transpose()?;
+
+    let from = u64_key(processed.map_or(0, |view| view + 1));
+    let mut leaves = Vec::new();
+    for item in db.iterator_cf(
+        cf(db, Cf::Leaves),
+        IteratorMode::From(&from, Direction::Forward),
+    ) {
+        let (key, value) = item.context("failed to iterate decided leaves")?;
+        let view = decode_u64(&key)?;
+        let (leaf, cert): (Leaf2, CertificatePair<SeqTypes>) = bincode::deserialize(&value)
+            .with_context(|| format!("failed to decode leaf {view}"))?;
+        let height = leaf.block_header().block_number();
+        if let Some(parent) = parent
+            && height != parent + 1
+        {
+            if !leaves.is_empty() {
+                break;
+            }
+            if height > parent + 1
+                && leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
+                && watermark.is_some_and(|watermark| within_gap_fill_horizon(view, watermark))
+            {
+                tracing::info!(
+                    height,
+                    parent,
+                    view,
+                    "holding the replay cursor for a gap-fill"
+                );
+                return Ok(None);
+            }
+        }
+        parent = Some(height);
+        leaves.push((view, leaf, cert));
+        if leaves.len() == MAX_REPLAY_VIEWS {
+            break;
+        }
+    }
+    let (Some((from_view, ..)), Some((to_view, ..))) = (leaves.first(), leaves.last()) else {
+        return Ok(None);
+    };
+    let (from_view, to_view) = (*from_view, *to_view);
+
+    let mut vid_shares: BTreeMap<u64, Proposal<SeqTypes, VidDisperseShare<SeqTypes>>> =
+        range(db, Cf::VidShares, from_view, to_view)?
+            .into_iter()
+            .collect();
+    let mut da_proposals: BTreeMap<u64, Proposal<SeqTypes, DaProposal2<SeqTypes>>> =
+        range(db, Cf::DaProposals, from_view, to_view)?
+            .into_iter()
+            .collect();
+    let mut state_certs: BTreeMap<u64, LightClientStateUpdateCertificateV2<SeqTypes>> =
+        range(db, Cf::StateCerts, from_view, to_view)?
+            .into_iter()
+            .collect();
+    let cert2 = get(db, Cf::Cert2, u64_key(to_view))?;
+
+    let chain = leaves
+        .into_iter()
+        .rev()
+        .map(|(view, mut leaf, cert)| {
+            match da_proposals.remove(&view) {
+                Some(proposal) => leaf.fill_block_payload_unchecked(Payload::from_bytes(
+                    &proposal.data.encoded_transactions,
+                    &proposal.data.metadata,
+                )),
+                // The genesis view has no DA proposal, and its payload is always empty.
+                None if view == 0 => leaf.fill_block_payload_unchecked(Payload::empty().0),
+                None => tracing::debug!(view, "DA proposal not available at decide"),
+            }
+            let info = LeafInfo {
+                leaf,
+                vid_share: vid_shares.remove(&view).map(|proposal| proposal.data),
+                state_cert: state_certs.remove(&view),
+                state: Default::default(),
+                delta: Default::default(),
+            };
+            DecidedLeaf { info, cert }
+        })
+        .collect();
+    Ok(Some(ReplayBatch {
+        chain,
+        cert2,
+        to_view,
+    }))
+}
+
+/// Advance the replay cursor to `to_view` and drop what that replay covered, in one write, so a
+/// crash either replays the batch again or finds it gone.
+fn finish_replay(db: &DB, to_view: u64) -> anyhow::Result<()> {
+    let mut batch = WriteBatch::default();
+    batch.put_cf(cf(db, Cf::Meta), meta::PROCESSED_VIEW, u64_key(to_view));
+    collect_decided_into(db, to_view, &mut batch)?;
+    write(db, batch)?;
+    drop_decided_files(db, to_view)
+}
+
+impl Persistence {
+    /// Replay decided leaves to `consumer` in batches until caught up, returning the cursor.
+    ///
+    /// A batch is dropped only after the consumer accepted all of its events, so a consumer
+    /// failure leaves the batch to be retried by the next call.
+    async fn replay_decided(
+        &self,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        while let Some(ReplayBatch {
+            chain,
+            cert2,
+            to_view,
+        }) = self.db.run(next_replay_batch).await?
+        {
+            for event in decide_events_from_chain(chain, cert2, deciding_qc.clone()) {
+                consumer.handle_event(&event).await?;
+            }
+            self.db.run(move |db| finish_replay(db, to_view)).await?;
+        }
+        Ok(self.db.run(processed_view).await?.map(ViewNumber::new))
+    }
 }
 
 #[async_trait]
@@ -578,16 +823,21 @@ impl SequencerPersistence for Persistence {
     async fn process_decided_events(
         &self,
         view: ViewNumber,
-        _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        _consumer: &(impl EventConsumer + 'static),
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
         let now = Instant::now();
-        let decided = view.u64();
-        self.db.run(move |db| collect_decided(db, decided)).await?;
+        let processed = if self.replay_decides {
+            self.replay_decided(deciding_qc, consumer).await?
+        } else {
+            let decided = view.u64();
+            self.db.run(move |db| collect_decided(db, decided)).await?;
+            Some(view)
+        };
         self.metrics
             .internal_process_decided_events_duration
             .add_point(now.elapsed().as_secs_f64());
-        Ok(Some(view))
+        Ok(processed)
     }
 
     async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
@@ -1196,8 +1446,10 @@ mod test {
             TempDir::new().unwrap()
         }
 
+        /// Replays decides, as on a query node, so the shared decide tests cover the replay.
         fn options(storage: &TempDir) -> impl PersistenceOptions<Persistence = Persistence> {
             Options::new(storage.path().into())
+                .with_query_storage(QueryStorage::Sql(sql::Options::default()))
         }
     }
 
@@ -1288,6 +1540,19 @@ mod test {
             persistence.load_restart_view().await.unwrap(),
             Some(ViewNumber::new(10))
         );
+    }
+
+    #[tokio::test]
+    async fn storage_rocksdb_serves_the_query_module_from_its_query_storage() {
+        let options = Options::new(PathBuf::from("/unused"))
+            .with_query_storage(QueryStorage::Sql(sql::Options::default()));
+        let api = options
+            .enable_query_module(
+                crate::api::Options::with_port(0),
+                crate::api::options::Query::default(),
+            )
+            .unwrap();
+        assert!(api.has_query_module());
     }
 
     #[tokio::test]

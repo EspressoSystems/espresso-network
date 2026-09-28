@@ -111,9 +111,10 @@ Backends:
 - PostgreSQL (`sql.rs`): production DA/archival, merklized, pruning supported
 - Filesystem (`fs.rs`): production non-DA validators, not merklized, limited pruning
 - SQLite (`sql.rs` + `embedded-db`): not yet production, merklized, pruning supported
-- RocksDB (`rocksdb.rs`): consensus data only, for non-query nodes, not merklized. Never replays decide events:
-  everything at or below a decided view is dropped at decide, except the anchor leaf. Every write is synced to the WAL,
-  and monotonic records (`record_action`, `append_high_qc2`) are lock-free merges
+- RocksDB (`rocksdb.rs`): the consensus storage of every node, not merklized. `storage-sql` and `storage-fs` only back
+  the query service. On a non-query node everything at or below a decided view is dropped at decide, except the anchor
+  leaf. On a query node decided leaves are replayed from a cursor into the query service, off the voting path. Every
+  write is synced to the WAL, and monotonic records (`record_action`, `append_high_qc2`) are lock-free merges
 
 Migrations (every backend required when adding storage):
 

@@ -26,7 +26,7 @@ use crate::{
     api,
     genesis::{Genesis, GenesisSource},
     keyset::KeySetOptions,
-    persistence,
+    persistence::{self, rocksdb::QueryStorage},
     proposal_fetcher::ProposalFetcherConfig,
 };
 
@@ -572,14 +572,22 @@ impl ModuleArgs {
             }
         }
 
-        if modules.storage_rocksdb.is_some()
-            && (modules.storage_fs.is_some() || modules.storage_sql.is_some())
-        {
-            return Err(clap::Error::raw(
-                ErrorKind::ArgumentConflict,
-                "storage-rocksdb cannot be combined with storage-fs or storage-sql",
-            ));
+        // Consensus always runs on RocksDB. storage-sql and storage-fs only back the query service.
+        let mut rocksdb = modules.storage_rocksdb.take().unwrap_or_default();
+        if modules.query.is_some() {
+            match (modules.storage_sql.take(), modules.storage_fs.take()) {
+                (Some(_), Some(_)) => {
+                    return Err(clap::Error::raw(
+                        ErrorKind::ArgumentConflict,
+                        "the query module takes storage-sql or storage-fs, not both",
+                    ));
+                },
+                (Some(sql), None) => rocksdb = rocksdb.with_query_storage(QueryStorage::Sql(sql)),
+                (None, Some(fs)) => rocksdb = rocksdb.with_query_storage(QueryStorage::Fs(fs)),
+                (None, None) => {},
+            }
         }
+        modules.storage_rocksdb = Some(rocksdb);
 
         Ok(modules)
     }
@@ -667,9 +675,12 @@ enum SequencerModule {
     StorageFs(Module<persistence::fs::Options>),
     /// Use a Postgres database for persistent storage.
     StorageSql(Module<persistence::sql::Options>),
-    /// Use RocksDB for consensus storage.
+    /// Configure the RocksDB consensus storage every node uses.
     ///
-    /// For nodes that do not run the query module, which needs storage-sql or storage-fs.
+    /// Without this module the database lives under ESPRESSO_NODE_STORAGE_PATH, or in a new
+    /// temporary directory when that is unset. The query module also needs storage-sql or
+    /// storage-fs, which then hold only the query service data, ingested from decided blocks
+    /// without slowing consensus.
     StorageRocksdb(Module<persistence::rocksdb::Options>),
     /// Run the query API module.
     ///
@@ -926,9 +937,7 @@ impl From<&persistence::fs::Options> for FsStorageConfig {
 
 impl From<&persistence::rocksdb::Options> for RocksdbStorageConfig {
     fn from(o: &persistence::rocksdb::Options) -> Self {
-        Self {
-            path: o.path.clone(),
-        }
+        Self { path: o.path() }
     }
 }
 
@@ -1069,8 +1078,14 @@ impl PublicNodeConfig {
         let storage = if let Some(rocksdb) = modules.storage_rocksdb.as_ref() {
             StorageConfig {
                 backend: StorageBackend::Rocksdb,
-                fs: None,
-                sql: None,
+                fs: match rocksdb.query_storage() {
+                    Some(QueryStorage::Fs(fs)) => Some(FsStorageConfig::from(fs)),
+                    Some(QueryStorage::Sql(_)) | None => None,
+                },
+                sql: match rocksdb.query_storage() {
+                    Some(QueryStorage::Sql(sql)) => Some(SqlStorageConfig::from(sql)),
+                    Some(QueryStorage::Fs(_)) | None => None,
+                },
                 rocksdb: Some(RocksdbStorageConfig::from(rocksdb)),
             }
         } else if let Some(sql) = modules.storage_sql.as_ref() {
@@ -1336,19 +1351,51 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn storage_rocksdb_rejects_a_second_storage_module() {
-        for other in [
-            Vec::from(["storage-fs", "--path", "/fs"]),
+    fn consensus_storage_is_rocksdb_without_a_storage_module() {
+        let modules = ModuleArgs(Vec::from(["http".to_owned()]))
+            .try_parse()
+            .unwrap();
+        let rocksdb = modules.storage_rocksdb.unwrap();
+        assert!(rocksdb.query_storage().is_none());
+    }
+
+    #[test]
+    fn query_module_storage_backs_only_the_query_service() {
+        for storage in [
             Vec::from(["storage-sql"]),
+            Vec::from(["storage-fs", "--path", "/fs"]),
         ] {
-            let args = ["storage-rocksdb", "--path", "/rocks", "--"]
-                .into_iter()
-                .chain(other.iter().copied())
+            let args = storage
+                .iter()
+                .copied()
+                .chain(["--", "http", "--", "query"])
                 .map(String::from)
                 .collect();
-            let err = ModuleArgs(args).try_parse().unwrap_err();
-            assert_eq!(err.kind(), ErrorKind::ArgumentConflict, "{other:?}: {err}");
+            let modules = ModuleArgs(args).try_parse().unwrap();
+            assert!(modules.storage_sql.is_none(), "{storage:?}");
+            assert!(modules.storage_fs.is_none(), "{storage:?}");
+            let rocksdb = modules.storage_rocksdb.unwrap();
+            assert!(rocksdb.query_storage().is_some(), "{storage:?}");
         }
+    }
+
+    #[test]
+    fn query_module_rejects_two_query_storages() {
+        let args = [
+            "storage-sql",
+            "--",
+            "storage-fs",
+            "--path",
+            "/fs",
+            "--",
+            "http",
+            "--",
+            "query",
+        ]
+        .map(String::from)
+        .into();
+        let err = ModuleArgs(args).try_parse().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]

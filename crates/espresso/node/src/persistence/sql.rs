@@ -955,12 +955,13 @@ pub(crate) fn within_gap_fill_horizon(view: u64, watermark: u64) -> bool {
 }
 
 #[derive(Debug)]
-struct DecidedLeaf {
-    info: LeafInfo<SeqTypes>,
-    cert: CertificatePair<SeqTypes>,
+pub(crate) struct DecidedLeaf {
+    pub(crate) info: LeafInfo<SeqTypes>,
+    pub(crate) cert: CertificatePair<SeqTypes>,
 }
 
-fn decide_events_from_chain(
+/// Build the decide events for `chain`, newest leaf first.
+pub(crate) fn decide_events_from_chain(
     mut chain: Vec<DecidedLeaf>,
     cert2: Option<Certificate2<SeqTypes>>,
     deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
