@@ -1,3 +1,4 @@
+mod coordinator_task;
 mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
@@ -6,7 +7,6 @@ mod startup_catchup;
 
 pub mod api;
 pub mod catchup;
-pub mod consensus_handle;
 pub mod context;
 pub mod follower;
 pub mod genesis;
@@ -20,18 +20,17 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{fmt::Debug, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
 use async_lock::Mutex;
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
-use derivative::Derivative;
 use dyn_clone::clone_box;
 use espresso_types::{
-    BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, PubKey,
-    SeqTypes, ValidatedState,
+    BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, SeqTypes,
+    ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
     v0_1::{ChainId, DECAF_CHAIN_ID, MAINNET_CHAIN_ID},
@@ -58,14 +57,9 @@ pub use espresso_types::RECENT_STAKE_TABLES_LIMIT;
 use genesis::L1Finalized;
 pub use genesis::{Genesis, GenesisSource};
 use hotshot::{
-    traits::implementations::{
-        CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
-        MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
-        derive_libp2p_multiaddr, derive_libp2p_peer_id,
-    },
+    traits::implementations::{derive_libp2p_multiaddr, derive_libp2p_peer_id},
     types::SignatureKey,
 };
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 use hotshot_new_protocol::network::{Cliquenet, message_limit};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
@@ -78,9 +72,7 @@ use hotshot_types::{
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
-        network::ConnectedNetwork,
-        node_implementation::{NodeImplementation, NodeType},
-        storage::Storage,
+        node_implementation::NodeType,
     },
     utils::BuilderCommitment,
     x25519,
@@ -92,41 +84,13 @@ use options::Identity;
 pub use options::Options;
 use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
-use serde::{Deserialize, Serialize};
 use tracing::info;
 use url::Url;
 use vbs::version::{StaticVersion, Version};
 
 use crate::request_response::data_source::Storage as RequestResponseStorage;
 
-/// The Sequencer node is generic over the hotshot CommChannel.
-#[derive(Derivative, Serialize, Deserialize)]
-#[derivative(
-    Copy(bound = ""),
-    Debug(bound = ""),
-    Default(bound = ""),
-    PartialEq(bound = ""),
-    Eq(bound = ""),
-    Hash(bound = "")
-)]
-pub struct Node<N: ConnectedNetwork<PubKey>, P: SequencerPersistence>(PhantomData<fn(&N, &P)>);
-
-// Using derivative to derive Clone triggers the clippy lint
-// https://rust-lang.github.io/rust-clippy/master/index.html#/incorrect_clone_impl_on_copy_type
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Clone for Node<N, P> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
 pub type SequencerApiVersion = StaticVersion<0, 1>;
-
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> NodeImplementation<SeqTypes>
-    for Node<N, P>
-{
-    type Network = N;
-    type Storage = Arc<P>;
-}
 
 #[derive(Clone, Debug)]
 pub struct NetworkParams {
@@ -263,10 +227,9 @@ pub async fn init_node<P>(
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
     empty_block_delay: Duration,
-) -> anyhow::Result<SequencerContext<network::Production, P>>
+) -> anyhow::Result<SequencerContext<P>>
 where
-    P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
-    Arc<P>: Storage<SeqTypes>,
+    P: SequencerPersistence + MembershipPersistence,
 {
     // Expose genesis version fields via the status API.
     metrics
@@ -406,14 +369,8 @@ where
         .text_family("node".into(), vec!["key".into()])
         .create(vec![pub_key.to_string()]);
 
-    // Parse the Libp2p bind and advertise addresses to multiaddresses
-    let libp2p_bind_address = derive_libp2p_multiaddr(&network_params.libp2p_bind_address)
-        .with_context(|| {
-            format!(
-                "Failed to derive Libp2p bind address of {}",
-                network_params.libp2p_bind_address
-            )
-        })?;
+    // The orchestrator still collects a libp2p address and peer ID from every node it
+    // bootstraps, so they are derived even though no libp2p network runs.
     let advertise_multiaddr = network_params
         .libp2p_advertise_address
         .as_ref()
@@ -422,39 +379,7 @@ where
                 .with_context(|| format!("Failed to derive Libp2p advertise address of {addr}"))
         })
         .transpose()?;
-    let advertise_is_global = match network_params
-        .libp2p_advertise_address
-        .as_deref()
-        .and_then(|s| s.parse::<NetAddr>().ok())
-    {
-        Some(parsed) if !parsed.is_probably_global() => {
-            tracing::error!(
-                "Libp2p advertise address {parsed} is probably not publicly routable. This is \
-                 fine for local testing (demo-native, docker-compose) but is wrong for any real \
-                 deployment: remote peers will fail to dial us."
-            );
-            false
-        },
-        _ => true,
-    };
-
-    // Always pass the configured address to the orchestrator stake table; that path is
-    // testing-only and demo-native legitimately uses loopback.
     let libp2p_announce_addresses: Vec<Multiaddr> = advertise_multiaddr.iter().cloned().collect();
-
-    // Only register the advertise address as a libp2p `external_address` when it looks
-    // publicly routable: announcing local/private values via Identify / Kademlia poisons peer
-    // routing tables in production. Local tests don't need it since peers find each other via
-    // `libp2p_bootstrap_nodes`.
-    let libp2p_external_addresses: Vec<Multiaddr> = if advertise_is_global {
-        advertise_multiaddr.iter().cloned().collect()
-    } else {
-        Vec::new()
-    };
-
-    info!("Libp2p bind address: {}", libp2p_bind_address);
-    info!("Libp2p announce addresses: {:?}", libp2p_announce_addresses);
-    info!("Libp2p external addresses: {:?}", libp2p_external_addresses);
 
     // Orchestrator client
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
@@ -472,9 +397,6 @@ where
         &validator_config.private_key,
     )
     .with_context(|| "Failed to derive Libp2p peer ID")?;
-
-    // Print the libp2p public key
-    info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
     let catchup_params = network_params.catchup;
 
@@ -562,59 +484,6 @@ where
         }
     }
 
-    let node_index = network_config.node_index;
-
-    // If we are a DA node, we need to subscribe to the DA topic
-    let topics = {
-        let mut topics = vec![CdnTopic::Global];
-        if is_da {
-            topics.push(CdnTopic::Da);
-        }
-        topics
-    };
-
-    // Initialize the push CDN network (and perform the initial connection)
-    let cdn_network = PushCdnNetwork::new(
-        network_params.cdn_endpoint,
-        topics,
-        KeyPair {
-            public_key: WrappedSignatureKey(validator_config.public_key),
-            private_key: validator_config.private_key.clone(),
-        },
-        CdnMetricsValue::new(&*metrics),
-    )
-    .with_context(|| format!("Failed to create CDN network {node_index}"))?;
-
-    // Configure gossipsub based on the command line options
-    let gossip_config = GossipConfig {
-        heartbeat_interval: network_params.libp2p_heartbeat_interval,
-        history_gossip: network_params.libp2p_history_gossip,
-        history_length: network_params.libp2p_history_length,
-        mesh_n: network_params.libp2p_mesh_n,
-        mesh_n_high: network_params.libp2p_mesh_n_high,
-        mesh_n_low: network_params.libp2p_mesh_n_low,
-        mesh_outbound_min: network_params.libp2p_mesh_outbound_min,
-        max_ihave_messages: network_params.libp2p_max_ihave_messages,
-        max_transmit_size: network_params.libp2p_max_gossip_transmit_size,
-        max_ihave_length: network_params.libp2p_max_ihave_length,
-        published_message_ids_cache_time: network_params.libp2p_published_message_ids_cache_time,
-        iwant_followup_time: network_params.libp2p_iwant_followup_time,
-        max_messages_per_rpc: network_params.libp2p_max_messages_per_rpc,
-        gossip_retransmission: network_params.libp2p_gossip_retransmission,
-        flood_publish: network_params.libp2p_flood_publish,
-        duplicate_cache_time: network_params.libp2p_duplicate_cache_time,
-        fanout_ttl: network_params.libp2p_fanout_ttl,
-        heartbeat_initial_delay: network_params.libp2p_heartbeat_initial_delay,
-        gossip_factor: network_params.libp2p_gossip_factor,
-        gossip_lazy: network_params.libp2p_gossip_lazy,
-    };
-
-    // Configure request/response based on the command line options
-    let request_response_config = RequestResponseConfig {
-        request_size_maximum: network_params.libp2p_max_direct_transmit_size,
-        response_size_maximum: network_params.libp2p_max_direct_transmit_size,
-    };
-
     let NodeStateParts {
         node_state: instance_state,
         state_catchup: state_catchup_providers,
@@ -639,46 +508,9 @@ where
     )
     .await;
 
-    // Load saved consensus state from storage. It is loaded once here, both to
-    // seed consensus in `SequencerContext::init` below and to tell whether the
-    // network has already cut over to the new protocol.
     let (initializer, anchor_view) = persistence
         .load_consensus_state(instance_state, version_upgrade)
         .await?;
-
-    let combined_network = {
-        info!("Initializing Libp2p network");
-        // Mainnet keeps today's libp2p protocol strings byte-identical.
-        let chain_id = genesis.chain_config.chain_id;
-        let network_discriminator = (chain_id != MAINNET_CHAIN_ID).then_some(chain_id.0);
-        let p2p_network = Libp2pNetwork::from_config(
-            network_config.clone(),
-            persistence.clone(),
-            gossip_config,
-            request_response_config,
-            libp2p_bind_address,
-            libp2p_external_addresses,
-            &validator_config.public_key,
-            // We need the private key so we can derive our Libp2p keypair
-            // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
-            &validator_config.private_key,
-            hotshot::traits::implementations::Libp2pMetricsValue::new(&*metrics),
-            network_discriminator,
-            network_params.libp2p_dht_put_quorum,
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to create libp2p network on node {node_index}; binding to {:?}",
-                network_params.libp2p_bind_address
-            )
-        })?;
-
-        info!("Libp2p network initialized");
-
-        // Combine the CDN and P2P networks
-        CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
-    };
 
     let block_sizes = genesis.block_sizes();
     let cliquenet = {
@@ -706,8 +538,6 @@ where
         }
     };
 
-    let network = Arc::new(combined_network);
-
     let mut ctx = SequencerContext::init(
         network_config,
         version_upgrade,
@@ -718,7 +548,6 @@ where
         storage,
         state_catchup_providers,
         persistence,
-        network.clone(),
         cliquenet,
         Some(network_params.state_relay_server_url),
         &*metrics,
@@ -870,7 +699,6 @@ pub(crate) async fn init_node_state<P>(
 ) -> anyhow::Result<NodeStateParts<P>>
 where
     P: SequencerPersistence + MembershipPersistence,
-    Arc<P>: Storage<SeqTypes>,
 {
     let l1_client = l1_params
         .options
@@ -1135,7 +963,6 @@ pub mod testing {
         },
         signers::{k256::ecdsa::SigningKey, local::LocalSigner},
     };
-    use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_contract_deployer::{
         Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS,
@@ -1146,16 +973,10 @@ pub mod testing {
         FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade, UpgradeMap,
         UpgradeMode,
         eth_signature_key::EthKeyPair,
-        v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
+        v0::traits::{EventConsumer, PersistenceOptions, StateCatchup},
     };
-    use futures::{
-        future::join_all,
-        stream::{Stream, StreamExt},
-    };
-    use hotshot::traits::{
-        BlockPayload,
-        implementations::{MasterMap, MemoryNetwork},
-    };
+    use futures::stream::{Stream, StreamExt};
+    use hotshot::traits::BlockPayload;
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_testing::block_builder::{
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
@@ -1167,7 +988,7 @@ pub mod testing {
         light_client::StateKeyPair,
         new_protocol::CoordinatorEvent,
         traits::{
-            EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
+            EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics,
             signature_key::BuilderSignatureKey,
         },
     };
@@ -1180,10 +1001,7 @@ pub mod testing {
     use versions::{EPOCH_VERSION, LARGE_BLOCK_VERSION};
 
     use super::*;
-    use crate::{
-        catchup::ParallelStateCatchup,
-        persistence::no_storage::{self, NoStorage},
-    };
+    use crate::catchup::ParallelStateCatchup;
 
     const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
     type AnvilFillProvider = AnvilProvider<
@@ -1227,7 +1045,6 @@ pub mod testing {
         config: HotShotConfig<SeqTypes>,
         priv_keys: Vec<BLSPrivKey>,
         state_key_pairs: Vec<StateKeyPair>,
-        master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
         l1_opt: L1ClientOptions,
         anvil_provider: Option<AnvilFillProvider>,
@@ -1499,7 +1316,6 @@ pub mod testing {
                 config: self.config,
                 priv_keys: self.priv_keys,
                 state_key_pairs: self.state_key_pairs,
-                master_map: self.master_map,
                 l1_url: self.l1_url,
                 l1_opt: self.l1_opt,
                 signer: self.signer,
@@ -1559,8 +1375,6 @@ pub mod testing {
                 )
                 .collect::<Vec<_>>();
 
-            let master_map = MasterMap::new();
-
             let builder_port = reserve_tcp_port().unwrap();
 
             let config: HotShotConfig<SeqTypes> = HotShotConfig {
@@ -1611,7 +1425,6 @@ pub mod testing {
                 config,
                 priv_keys,
                 state_key_pairs,
-                master_map,
                 l1_url: anvil_provider.anvil().endpoint().parse().unwrap(),
                 l1_opt: L1ClientOptions {
                     stake_table_update_interval: Duration::from_secs(5),
@@ -1636,7 +1449,6 @@ pub mod testing {
         config: HotShotConfig<SeqTypes>,
         priv_keys: Vec<BLSPrivKey>,
         state_key_pairs: Vec<StateKeyPair>,
-        master_map: Arc<MasterMap<PubKey>>,
         l1_url: Url,
         l1_opt: L1ClientOptions,
         anvil_provider: Option<AnvilFillProvider>,
@@ -1758,28 +1570,6 @@ pub mod testing {
                 .collect()
         }
 
-        pub async fn init_nodes(
-            &self,
-            upgrade: versions::Upgrade,
-        ) -> Vec<SequencerContext<network::Memory, NoStorage>> {
-            join_all((0..self.num_nodes()).map(|i| async move {
-                self.init_node(
-                    i,
-                    ValidatedState::default(),
-                    no_storage::Options,
-                    Some(NullStateCatchup::default()),
-                    None,
-                    &NoMetrics,
-                    STAKE_TABLE_CAPACITY_FOR_TEST,
-                    NullEventConsumer,
-                    upgrade,
-                    Default::default(),
-                )
-                .await
-            }))
-            .await
-        }
-
         pub fn known_nodes_with_stake(&self) -> &[PeerConfig<SeqTypes>] {
             &self.config.known_nodes_with_stake
         }
@@ -1797,7 +1587,7 @@ pub mod testing {
             event_consumer: impl EventConsumer + 'static,
             upgrade: versions::Upgrade,
             upgrades: BTreeMap<Version, Upgrade>,
-        ) -> SequencerContext<network::Memory, P::Persistence> {
+        ) -> SequencerContext<P::Persistence> {
             let config = self.config.clone();
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
@@ -1823,19 +1613,6 @@ pub mod testing {
                 x25519_keypair: Some(x25519_keypair.clone()),
                 p2p_addr: Some(coordinator_addr.clone()),
             };
-
-            let topics = if is_da {
-                vec![Topic::Global, Topic::Da]
-            } else {
-                vec![Topic::Global]
-            };
-
-            let network = Arc::new(MemoryNetwork::new(
-                &pub_key,
-                &self.master_map,
-                &topics,
-                None,
-            ));
 
             // Make sure the builder account is funded.
             let builder_account = Self::builder_key().fee_account();
@@ -1960,7 +1737,6 @@ pub mod testing {
                 storage,
                 catchup_providers,
                 persistence,
-                network,
                 coordinator_network,
                 self.state_relay_url.clone(),
                 metrics,

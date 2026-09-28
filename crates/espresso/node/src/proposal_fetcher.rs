@@ -5,28 +5,23 @@ use async_channel::{Receiver, Sender};
 use clap::Parser;
 use committable::Commitment;
 use derivative::Derivative;
-use espresso_types::{PubKey, ValidatedState, parse_duration, v0::traits::SequencerPersistence};
-use futures::stream::StreamExt;
+use espresso_types::{ValidatedState, parse_duration, v0::traits::SequencerPersistence};
+use futures::stream::{BoxStream, StreamExt};
+use hotshot_new_protocol::{client::ClientApi, state::UpdateLeaf};
 use hotshot_types::{
     data::{Leaf2, QuorumProposalWrapper, ViewNumber},
-    event::{Event, EventType},
-    message::Proposal,
+    message::{Proposal, convert_proposal},
     new_protocol::CoordinatorEvent,
     traits::{
         ValidatedState as _,
         metrics::{Counter, Gauge, Metrics},
-        network::ConnectedNetwork,
     },
 };
 use serde::Serialize;
 use tokio::time::{sleep, timeout};
 use tracing::Instrument;
 
-use crate::{
-    SeqTypes,
-    consensus_handle::ConsensusHandle,
-    context::{ConsensusNode, TaskList},
-};
+use crate::{SeqTypes, context::TaskList};
 
 #[derive(Clone, Copy, Debug, Parser, Serialize)]
 pub struct ProposalFetcherConfig {
@@ -53,26 +48,26 @@ impl Default for ProposalFetcherConfig {
 }
 
 impl ProposalFetcherConfig {
-    pub(crate) fn spawn<N, P>(
+    pub(crate) fn spawn<P>(
         self,
         tasks: &mut TaskList,
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+        client_api: ClientApi<SeqTypes>,
+        events: BoxStream<'static, CoordinatorEvent<SeqTypes>>,
         persistence: Arc<P>,
         metrics: &(impl Metrics + ?Sized),
     ) where
-        N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
     {
         let (sender, receiver) = async_channel::unbounded();
         let fetcher = ProposalFetcher {
             sender,
-            consensus_handle,
+            client_api,
             persistence,
             cfg: self,
             metrics: ProposalFetcherMetrics::new(metrics),
         };
 
-        tasks.spawn("proposal scanner", fetcher.clone().scan());
+        tasks.spawn("proposal scanner", fetcher.clone().scan(events));
         for i in 0..self.num_workers {
             tasks.spawn(
                 format!("proposal fetcher {i}"),
@@ -112,38 +107,27 @@ type Request = (ViewNumber, Commitment<Leaf2<SeqTypes>>);
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ProposalFetcher<N, P>
+struct ProposalFetcher<P>
 where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     sender: Sender<Request>,
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+    client_api: ClientApi<SeqTypes>,
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
     cfg: ProposalFetcherConfig,
     metrics: ProposalFetcherMetrics,
 }
 
-impl<N, P> ProposalFetcher<N, P>
+impl<P> ProposalFetcher<P>
 where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     #[tracing::instrument(skip_all)]
-    async fn scan(self) {
-        let mut events = self.consensus_handle.event_stream();
+    async fn scan(self, mut events: BoxStream<'static, CoordinatorEvent<SeqTypes>>) {
         while let Some(event) = events.next().await {
             let (parent_view, parent_leaf) = match event {
-                CoordinatorEvent::LegacyEvent(Event {
-                    event: EventType::QuorumProposal { proposal, .. },
-                    ..
-                }) => {
-                    let parent_view = proposal.data.justify_qc().view_number;
-                    let parent_leaf = proposal.data.justify_qc().data.leaf_commit;
-                    (parent_view, parent_leaf)
-                },
                 CoordinatorEvent::QuorumProposal { proposal, .. } => {
                     let parent_view = proposal.data.justify_qc.view_number;
                     let parent_leaf = proposal.data.justify_qc.data.leaf_commit;
@@ -174,7 +158,12 @@ where
     async fn fetch_request(&self, (view, leaf): Request) {
         let span = tracing::warn_span!("fetch proposal", ?view, %leaf);
         let res: anyhow::Result<()> = async {
-            let mut decided_view = self.consensus_handle.decided_leaf().await.view_number();
+            let mut decided_view = self
+                .client_api
+                .decided_leaf()
+                .await
+                .context("failed to read the decided leaf")?
+                .view_number();
             if decided_view == ViewNumber::genesis() {
                 // A freshly restarted node may not have decided anything
                 // yet sofall back to the persisted anchor view
@@ -203,12 +192,14 @@ where
                 },
             }
 
-            let future = self.consensus_handle.request_proposal(view, leaf).await?;
-            let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
-                timeout(self.cfg.fetch_timeout, future)
-                    .await
-                    .context("timed out fetching proposal")?
-                    .context("error fetching proposal")?;
+            let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> = timeout(
+                self.cfg.fetch_timeout,
+                self.client_api.request_proposal(view, leaf),
+            )
+            .await
+            .context("timed out fetching proposal")?
+            .map(convert_proposal)
+            .context("error fetching proposal")?;
             self.persistence
                 .append_quorum_proposal2(&proposal)
                 .await
@@ -218,9 +209,21 @@ where
             // Only update if the view is missing or DA-only (state() returns None for
             // both cases) — don't overwrite an existing Leaf view.
             let leaf = Leaf2::from_quorum_proposal(&proposal.data);
-            if self.consensus_handle.state(view).await.is_none() {
+            if self
+                .client_api
+                .state(view)
+                .await
+                .context("failed to read state from the coordinator")?
+                .is_none()
+            {
                 let state = Arc::new(ValidatedState::from_header(leaf.block_header()));
-                if let Err(err) = self.consensus_handle.update_leaf(leaf, state, None).await {
+                let update = UpdateLeaf {
+                    view,
+                    leaf,
+                    state,
+                    delta: None,
+                };
+                if let Err(err) = self.client_api.update_leaf(update).await {
                     tracing::info!("unable to update leaf: {err:#}");
                 }
             }

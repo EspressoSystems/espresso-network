@@ -2,7 +2,6 @@ use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
     future::Future,
-    marker::PhantomData,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -11,15 +10,16 @@ use anyhow::Context;
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
-    NodeState, PubKey, Transaction, ValidatedState,
+    NodeState, Transaction, ValidatedState,
     v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
 };
 use futures::{
     future::join_all,
     stream::{BoxStream, Stream, StreamExt},
 };
-use hotshot::{HotShotInitializer, SystemContext};
+use hotshot::HotShotInitializer;
 use hotshot_new_protocol::{
+    client::ClientApi,
     coordinator::Coordinator,
     network::{Cliquenet, NetworkError},
 };
@@ -34,11 +34,7 @@ use hotshot_types::{
     network::NetworkConfig,
     new_protocol::CoordinatorEvent,
     simple_certificate::CertificatePair,
-    storage_metrics::StorageMetricsValue,
-    traits::{
-        metrics::{Counter, Gauge, Histogram, Metrics},
-        network::ConnectedNetwork,
-    },
+    traits::metrics::{Counter, Gauge, Histogram, Metrics},
     upgrade_config::UpgradeConfig,
 };
 use parking_lot::Mutex;
@@ -53,9 +49,9 @@ use url::Url;
 use versions::{NEW_PROTOCOL_VERSION, Version};
 
 use crate::{
-    Node, SeqTypes, SequencerApiVersion,
+    SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
-    consensus_handle::ConsensusHandle,
+    coordinator_task::CoordinatorTask,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
@@ -64,19 +60,22 @@ use crate::{
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
     },
-    startup_catchup::bootstrap_epoch_window,
+    startup_catchup::{bootstrap_epoch_window, seed_membership},
     state_signature::{self, StateSigner},
 };
-pub(crate) type ConsensusNode<N, P> = Node<N, P>;
-pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, ConsensusNode<N, P>>;
 
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
 #[derivative(Debug(bound = ""))]
-pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
-    /// The consensus adapter that dispatches between old HotShot and new coordinator.
+pub struct SequencerContext<P: SequencerPersistence> {
     #[derivative(Debug = "ignore")]
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+    client_api: ClientApi<SeqTypes>,
+
+    #[derivative(Debug = "ignore")]
+    coordinator: Arc<CoordinatorTask<SeqTypes, Arc<P>>>,
+
+    #[derivative(Debug = "ignore")]
+    upgrade_lock: UpgradeLock<SeqTypes>,
 
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
@@ -84,7 +83,7 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
-    pub request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
+    pub request_response_protocol: RequestResponseProtocol<P>,
 
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
@@ -107,9 +106,8 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     validator_config: ValidatorConfig<SeqTypes>,
 }
 
-impl<N, P> SequencerContext<N, P>
+impl<P> SequencerContext<P>
 where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     #[tracing::instrument(skip_all, fields(node_id = initializer.instance_state().node_id))]
@@ -124,7 +122,6 @@ where
         storage: Option<RequestResponseStorage>,
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
-        network: Arc<N>,
         coordinator_network: F,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
@@ -169,34 +166,28 @@ where
 
         let epoch_height = initializer.epoch_height();
 
-        let initializer_for_coordinator = initializer.clone();
-
         let consensus_metrics = ConsensusMetricsValue::new(metrics);
 
-        let handle = SystemContext::init(
-            validator_config.public_key,
-            validator_config.private_key.clone(),
-            validator_config.state_private_key.clone(),
-            instance_state.node_id,
-            config.clone(),
+        let upgrade_lock = UpgradeLock::from_certificate(
             upgrade,
-            membership_coordinator.clone(),
-            network.clone(),
-            initializer,
-            consensus_metrics.clone(),
-            Arc::clone(&persistence),
-            StorageMetricsValue::new(metrics),
+            &initializer.decided_upgrade_certificate().cloned(),
+        );
+        let current_version = initializer
+            .decided_upgrade_certificate()
+            .map_or(upgrade.base, |cert| cert.data.new_version);
+        seed_membership(
+            &membership_coordinator,
+            &initializer,
+            config,
+            current_version,
+            &persistence,
         )
-        .await?
-        .0;
+        .await;
 
-        let mut coordinator_network =
-            coordinator_network(handle.hotshot.upgrade_lock.clone()).await?;
+        let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
 
-        // `load_start_epoch_info` ran inside `SystemContext::init`, so
-        // `first_epoch` is now seeded on the shared membership. Walk the
-        // catchup chain forward to populate the stake-table window for the
-        // current epoch.
+        // Cliquenet only dials the validators of the epochs it knows, so the stake-table window
+        // has to be populated before consensus can receive anything.
         let current_epoch = bootstrap_epoch_window(
             &membership_coordinator,
             epoch_height,
@@ -205,10 +196,6 @@ where
         .await
         .context("startup stake-table catchup failed")?;
         tracing::info!(%current_epoch, "Startup catchup complete");
-
-        // Push the resolved peer window into the coordinator network. For
-        // cliquenet this dials the N-1/N/N+1 sliding window for the current
-        // epoch before consensus starts.
         if let Err(err) = coordinator_network.apply_epoch(current_epoch, &membership_coordinator) {
             tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
         }
@@ -223,8 +210,8 @@ where
         let coordinator = Coordinator::maker()
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
-            .initializer(&initializer_for_coordinator)
-            .upgrade_lock(handle.hotshot.upgrade_lock.clone())
+            .initializer(&initializer)
+            .upgrade_lock(upgrade_lock.clone())
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
             .state_private_key(validator_config.state_private_key.clone())
@@ -247,22 +234,12 @@ where
                 stop_voting_time: config.stop_voting_time,
             })
             .make();
-
-        let legacy_event_rx = handle.event_stream_known_impl().deactivate();
-        let hotshot_handle = Arc::new(RwLock::new(handle));
-
-        let consensus_handle = {
-            let handle = ConsensusHandle::new(
-                hotshot_handle.clone(),
-                coordinator,
-                epoch_height.into(),
-                legacy_event_rx,
-                EXTERNAL_EVENT_CHANNEL_SIZE,
-                metrics,
-            )
-            .await;
-            Arc::new(handle)
-        };
+        let client_api = coordinator.client_api().clone();
+        let coordinator = Arc::new(CoordinatorTask::new(
+            coordinator,
+            EXTERNAL_EVENT_CHANNEL_SIZE,
+            metrics,
+        ));
 
         let mut state_signer = StateSigner::new(
             validator_config.state_private_key.clone(),
@@ -299,15 +276,14 @@ where
             request_response_receiver,
             RecipientSource {
                 memberships: membership_coordinator,
-                consensus_handle: consensus_handle.clone(),
+                client_api: client_api.clone(),
                 public_key: validator_config.public_key,
             },
             DataSource {
                 node_state: instance_state.clone(),
                 storage,
                 persistence: persistence.clone(),
-                consensus_handle: consensus_handle.clone(),
-                phantom: PhantomData,
+                client_api: client_api.clone(),
             },
             validator_config.public_key,
             validator_config.private_key.clone(),
@@ -324,15 +300,16 @@ where
             &mut tasks,
             request_response_sender,
             outbound_message_receiver,
-            consensus_handle.clone(),
-            network,
+            client_api.clone(),
             pub_key,
         )
         .await
         .with_context(|| "Failed to create external event handler")?;
 
-        Ok(Self::new(
-            consensus_handle,
+        Ok(SequencerContext::new(
+            client_api,
+            coordinator,
+            upgrade_lock,
             persistence,
             state_signer,
             external_event_handler,
@@ -351,11 +328,13 @@ where
     /// Constructor
     #[allow(clippy::too_many_arguments)]
     fn new(
-        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+        client_api: ClientApi<SeqTypes>,
+        coordinator: Arc<CoordinatorTask<SeqTypes, Arc<P>>>,
+        upgrade_lock: UpgradeLock<SeqTypes>,
         persistence: Arc<P>,
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
-        request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
+        request_response_protocol: RequestResponseProtocol<P>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -363,12 +342,14 @@ where
         anchor_view: Option<ViewNumber>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         metrics: &dyn Metrics,
-    ) -> Self {
-        let events = consensus_handle.event_stream();
+    ) -> SequencerContext<P> {
+        let events = coordinator.event_stream();
 
         let node_id = node_state.node_id;
-        let mut ctx = Self {
-            consensus_handle,
+        let mut ctx = SequencerContext {
+            client_api,
+            coordinator,
+            upgrade_lock,
             persistence: persistence.clone(),
             state_signer: Arc::new(RwLock::new(state_signer)),
             request_response_protocol,
@@ -383,7 +364,8 @@ where
         // Spawn proposal fetching tasks.
         proposal_fetcher_cfg.spawn(
             &mut ctx.tasks,
-            ctx.consensus_handle.clone(),
+            ctx.client_api.clone(),
+            ctx.coordinator.event_stream(),
             persistence.clone(),
             metrics,
         );
@@ -411,7 +393,7 @@ where
         ctx.spawn(
             "event handler",
             handle_events(
-                ctx.consensus_handle.clone(),
+                ctx.node_state.coordinator.clone(),
                 node_id,
                 events,
                 persistence,
@@ -451,40 +433,63 @@ where
 
     /// Stream consensus events.
     pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<SeqTypes>> {
-        self.consensus_handle.event_stream()
+        self.coordinator.event_stream()
     }
 
     pub async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<()> {
-        self.consensus_handle.submit_transaction(tx).await
+        self.client_api
+            .submit_transaction(tx)
+            .await
+            .context("failed to submit transaction to the coordinator")
     }
 
-    /// Return a reference to the consensus adapter.
-    pub fn consensus_handle(&self) -> Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>> {
-        self.consensus_handle.clone()
+    /// A handle for querying and driving consensus.
+    ///
+    /// Queries sent before [`start_consensus`](Self::start_consensus) wait until it is called.
+    pub fn client_api(&self) -> &ClientApi<SeqTypes> {
+        &self.client_api
     }
 
     pub fn validator_config(&self) -> &ValidatorConfig<SeqTypes> {
         &self.validator_config
     }
 
-    pub async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
-        self.consensus_handle.upgrade_lock().await
+    pub fn upgrade_lock(&self) -> &UpgradeLock<SeqTypes> {
+        &self.upgrade_lock
     }
 
     pub async fn shutdown_consensus(&self) {
-        self.consensus_handle.shut_down().await
+        self.coordinator.shut_down().await
     }
 
+    /// # Panics
+    ///
+    /// Panics if the coordinator has stopped.
     pub async fn decided_leaf(&self) -> Leaf2<SeqTypes> {
-        self.consensus_handle.decided_leaf().await
+        self.client_api
+            .decided_leaf()
+            .await
+            .expect("the coordinator stopped. Check the logs for a critical coordinator error")
     }
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<ValidatedState>> {
-        self.consensus_handle.state(view).await
+        match self.client_api.state(view).await {
+            Ok(state) => state,
+            Err(err) => {
+                tracing::warn!(%view, %err, "coordinator unavailable for state");
+                None
+            },
+        }
     }
 
     pub async fn decided_state(&self) -> Option<Arc<ValidatedState>> {
-        self.consensus_handle.decided_state().await
+        match self.client_api.decided_state().await {
+            Ok(state) => state,
+            Err(err) => {
+                tracing::warn!(%err, "coordinator unavailable for decided_state");
+                None
+            },
+        }
     }
 
     pub fn node_id(&self) -> u64 {
@@ -513,7 +518,7 @@ where
             tracing::info!("no orchestrator configured");
         }
         tracing::warn!("starting consensus");
-        self.consensus_handle.start_consensus().await;
+        self.coordinator.start();
     }
 
     /// Spawn a background task attached to this context.
@@ -542,7 +547,7 @@ where
     /// Stop participating in consensus.
     pub async fn shut_down(&mut self) {
         tracing::info!("shutting down SequencerContext");
-        self.consensus_handle.shut_down().await;
+        self.coordinator.shut_down().await;
         self.tasks.shut_down();
         self.node_state.l1_client.shut_down_tasks().await;
 
@@ -571,17 +576,17 @@ where
     }
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerContext<N, P> {
+impl<P: SequencerPersistence> Drop for SequencerContext<P> {
     fn drop(&mut self) {
         if !self.detached {
             // Spawn a task to shut down the context
-            let consensus_handle = self.consensus_handle.clone();
+            let coordinator = self.coordinator.clone();
             let tasks_clone = self.tasks.clone();
             let node_state_clone = self.node_state.clone();
 
             spawn(async move {
                 tracing::info!("shutting down SequencerContext");
-                consensus_handle.shut_down().await;
+                coordinator.shut_down().await;
                 tasks_clone.shut_down();
                 node_state_clone.l1_client.shut_down_tasks().await;
             });
@@ -629,8 +634,8 @@ impl DecideProcessorMetrics {
 
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
-async fn handle_events<N, P, C>(
-    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
+async fn handle_events<P, C>(
+    membership: EpochMembershipCoordinator<SeqTypes>,
     node_id: u64,
     mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
     persistence: Arc<P>,
@@ -639,7 +644,6 @@ async fn handle_events<N, P, C>(
     event_consumer: Arc<C>,
     decide_tx: watch::Sender<DecideSignal>,
 ) where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
     C: PersistenceEventConsumer + 'static,
 {
@@ -647,14 +651,6 @@ async fn handle_events<N, P, C>(
         tracing::debug!(node_id, ?event, "consensus event");
 
         match &event {
-            CoordinatorEvent::LegacyEvent(hotshot_event) => {
-                if let hotshot_types::event::EventType::ExternalMessageReceived { ref data, .. } =
-                    hotshot_event.event
-                    && let Err(err) = external_event_handler.handle_event(data).await
-                {
-                    tracing::warn!(%err, "Failed to handle legacy external message");
-                }
-            },
             CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
                     tracing::warn!("Failed to handle external message: {:?}", err);
@@ -691,7 +687,7 @@ async fn handle_events<N, P, C>(
             state_signer
                 .write()
                 .await
-                .handle_event(&event, consensus_handle.as_ref())
+                .handle_event(&event, &membership)
                 .await;
         };
 

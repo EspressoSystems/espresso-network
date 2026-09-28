@@ -47,10 +47,7 @@ use hotshot_types::{
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
     stake_table::HSStakeTable,
-    traits::{
-        election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
-        network::ConnectedNetwork,
-    },
+    traits::election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
     utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
@@ -81,7 +78,6 @@ use crate::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state,
     },
-    context::ConsensusNode,
     request_response::{
         RequestResponseProtocol,
         data_source::{retain_v1_reward_accounts, retain_v2_reward_accounts},
@@ -165,7 +161,7 @@ impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C
         self.as_ref().get_total_supply_l1().await
     }
 
-    async fn get_decided_header(&self) -> espresso_types::Header {
+    async fn get_decided_header(&self) -> anyhow::Result<espresso_types::Header> {
         self.as_ref().get_decided_header().await
     }
 }
@@ -287,13 +283,9 @@ impl<C: ApiContext> TokenDataSource<SeqTypes> for ApiState<C> {
         }
     }
 
-    async fn get_decided_header(&self) -> espresso_types::Header {
-        self.consensus()
-            .await
-            .decided_leaf()
-            .await
-            .block_header()
-            .clone()
+    async fn get_decided_header(&self) -> anyhow::Result<espresso_types::Header> {
+        let leaf = self.consensus().await.decided_leaf().await?;
+        Ok(leaf.block_header().clone())
     }
 }
 
@@ -304,12 +296,9 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         let handle = self.consensus().await;
+        let coordinator = self.context().await.membership_coordinator();
         if let Some(requested) = epoch {
-            let first_epoch = handle
-                .membership_coordinator()
-                .await
-                .membership()
-                .first_epoch();
+            let first_epoch = coordinator.membership().first_epoch();
             if let Some(first_epoch) = first_epoch
                 && requested < first_epoch
             {
@@ -326,10 +315,7 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
                  {highest_epoch:?}"
             ));
         }
-        let mem = handle
-            .membership_coordinator()
-            .await
-            .stake_table_for_epoch(epoch)?;
+        let mem = coordinator.stake_table_for_epoch(epoch)?;
 
         Ok(mem.stake_table().cloned().collect())
     }
@@ -349,7 +335,7 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
         &self,
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
-        let coordinator = self.consensus().await.membership_coordinator().await;
+        let coordinator = self.context().await.membership_coordinator();
         Ok(match epoch {
             Some(e) => coordinator
                 .membership()
@@ -381,7 +367,7 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
         &self,
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Option<RewardAmount>> {
-        let coordinator = self.consensus().await.membership_coordinator().await;
+        let coordinator = self.context().await.membership_coordinator();
 
         let membership = coordinator.membership();
         let block_reward = match epoch {
@@ -395,10 +381,9 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
     /// Get the whole validators map
     async fn get_validators(&self, e: EpochNumber) -> anyhow::Result<AuthenticatedValidatorMap> {
         Ok(self
-            .consensus()
+            .context()
             .await
             .membership_coordinator()
-            .await
             .membership_for_epoch(Some(e))
             .context("membership not found")?
             .snapshot()
@@ -492,14 +477,13 @@ impl<C: ApiContext> RequestResponseDataSource<SeqTypes> for ApiState<C> {
     }
 }
 
-pub(super) fn request_vid_shares<N, P>(
-    request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
+pub(super) fn request_vid_shares<P>(
+    request_response_protocol: RequestResponseProtocol<P>,
     block_number: u64,
     vid_common_data: VidCommonQueryData<SeqTypes>,
     duration: Duration,
 ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>>
 where
-    N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
     async move {
@@ -594,7 +578,7 @@ impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ApiState<C> {
         }
 
         // Get the stake table for validation
-        let coordinator = handle.membership_coordinator().await;
+        let coordinator = self.context().await.membership_coordinator();
         if let Err(err) = coordinator.stake_table_for_epoch(Some(EpochNumber::new(epoch))) {
             tracing::warn!(
                 "Failed to get membership for epoch {epoch}: {err:#}. Waiting for catchup"
@@ -637,7 +621,7 @@ impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ApiState<C> {
                     &stake_table,
                     EpochNumber::new(epoch),
                     *coordinator.epoch_height(),
-                    &handle.upgrade_lock().await,
+                    &self.context().await.upgrade_lock(),
                 )
                 .map_err(|e| {
                     StateCertFetchError::ValidationError(e.context(format!(
@@ -1145,9 +1129,7 @@ impl<C: ApiContext> NodeKeysDataSource for ApiState<C> {
         let config = ctx.validator_config()?;
         let consensus_key = config.public_key;
         let eth_account = ctx
-            .consensus()
             .membership_coordinator()
-            .await
             .membership()
             .latest_account(&consensus_key);
         Some(NodePublicKeys {
@@ -1839,7 +1821,6 @@ pub mod test_helpers {
     use crate::{
         api::data_source::testing::TestableSequencerDataSource,
         catchup::{NullStateCatchup, StatePeers},
-        network,
         persistence::no_storage,
         testing::{
             TestConfig, TestConfigBuilder, deploy_stake_table, run_test_builder,
@@ -1860,8 +1841,8 @@ pub mod test_helpers {
     }
 
     pub struct TestNetwork<P: PersistenceOptions, const NUM_NODES: usize> {
-        pub server: SequencerContext<network::Memory, P::Persistence>,
-        pub peers: Vec<SequencerContext<network::Memory, P::Persistence>>,
+        pub server: SequencerContext<P::Persistence>,
+        pub peers: Vec<SequencerContext<P::Persistence>>,
         pub cfg: TestConfig<{ NUM_NODES }>,
         // todo (abdul): remove this when fs storage is removed
         pub temp_dir: Option<TempDir>,
@@ -2239,7 +2220,7 @@ pub mod test_helpers {
             let mut cfg = cfg;
             let upgrade = cfg.upgrade;
 
-            let (builder_task, builder_url) =
+            let (_builder_task, builder_url) =
                 run_test_builder::<{ NUM_NODES }>(cfg.network_config.builder_port()).await;
             cfg.network_config
                 .set_builder_urls(vec1::vec1![builder_url.clone()]);
@@ -2321,17 +2302,6 @@ pub mod test_helpers {
             )
             .await;
 
-            // The new protocol builds its own blocks, but dev-node can still run legacy consensus,
-            // whose leaders only get non-empty blocks from a builder fed with these events.
-            builder_task.start(Box::new(
-                nodes[0]
-                    .consensus_handle()
-                    .legacy_consensus()
-                    .read()
-                    .await
-                    .event_stream(),
-            ));
-
             for ctx in &nodes {
                 ctx.start_consensus().await;
             }
@@ -2363,7 +2333,7 @@ pub mod test_helpers {
             state: ValidatedState,
             persistence: P,
             catchup: C,
-        ) -> &SequencerContext<network::Memory, P::Persistence> {
+        ) -> &SequencerContext<P::Persistence> {
             assert_eq!(
                 self.deferred.first(),
                 Some(&i),
@@ -2387,7 +2357,7 @@ pub mod test_helpers {
             state: ValidatedState,
             persistence: P,
             catchup: C,
-        ) -> &SequencerContext<network::Memory, P::Persistence> {
+        ) -> &SequencerContext<P::Persistence> {
             assert_ne!(i, 0, "node 0 runs the API server and cannot be restarted");
             assert!(
                 !self.deferred.contains(&i),
@@ -2420,7 +2390,7 @@ pub mod test_helpers {
             state: ValidatedState,
             persistence: P,
             catchup: C,
-        ) -> SequencerContext<network::Memory, P::Persistence> {
+        ) -> SequencerContext<P::Persistence> {
             let ctx = self
                 .cfg
                 .init_node(
@@ -2449,7 +2419,7 @@ pub mod test_helpers {
         }
 
         /// The context of the node at index `i` (node 0 is the API server).
-        pub fn node(&self, i: usize) -> &SequencerContext<network::Memory, P::Persistence> {
+        pub fn node(&self, i: usize) -> &SequencerContext<P::Persistence> {
             if i == 0 {
                 &self.server
             } else {
@@ -2614,7 +2584,7 @@ pub mod test_helpers {
     /// legacy builder stops producing non-empty blocks after roughly a
     /// hundred views, independent of any stake table activity.
     pub async fn assert_node_live<P: SequencerPersistence>(
-        node: &SequencerContext<network::Memory, P>,
+        node: &SequencerContext<P>,
         epoch_height: u64,
         epochs_ahead: u64,
     ) {
@@ -2666,7 +2636,7 @@ pub mod test_helpers {
     /// Asserts every node has decided at least `min_height`, and that nodes
     /// which have decided the same height agree on the leaf.
     pub async fn assert_nodes_agree<P: SequencerPersistence>(
-        nodes: &[&SequencerContext<network::Memory, P>],
+        nodes: &[&SequencerContext<P>],
         min_height: u64,
     ) {
         let leaves = join_all(nodes.iter().map(|node| node.decided_leaf())).await;
@@ -2959,7 +2929,6 @@ mod api_tests {
 
     use super::{update::ApiEventConsumer, *};
     use crate::{
-        network,
         persistence::no_storage::NoStorage,
         testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
@@ -3182,7 +3151,7 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
+        let data_source: Arc<StorageState<SequencerContext<NoStorage>, _>> =
             Arc::new(StorageState::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
@@ -3410,7 +3379,7 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
+        let data_source: Arc<StorageState<SequencerContext<NoStorage>, _>> =
             Arc::new(StorageState::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
@@ -5387,82 +5356,6 @@ mod test {
         Ok(())
     }
 
-    /// Run entirely without the legacy consensus stack: with base version
-    /// `NEW_PROTOCOL_VERSION` it is torn down at startup, and the explicit
-    /// mid-run `shut_down_legacy` calls below must be harmless to repeat.
-    /// The network has to keep deciding across epoch boundaries: DRB
-    /// computations on the shared membership coordinator must survive the
-    /// teardown.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_new_protocol_survives_legacy_shutdown() -> anyhow::Result<()> {
-        const EPOCH_HEIGHT: u64 = 20;
-        const NUM_NODES: usize = 5;
-        const SHUTDOWN_HEIGHT: u64 = 10;
-        const TARGET_BLOCK_HEIGHT: u64 = 50;
-
-        let network_config = TestConfigBuilder::default()
-            .epoch_height(EPOCH_HEIGHT)
-            .epoch_start_block(0)
-            .build();
-
-        let api_port = reserve_tcp_port().expect("No ports free for query service");
-
-        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
-
-        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
-            .network_config(network_config)
-            .persistences(persistence)
-            .catchup_from_api()
-            .build()
-            .await;
-
-        let network = TestNetwork::new(config).await;
-
-        let client: Client<ClientErr, SequencerApiVersion> =
-            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
-        client.connect(Some(Duration::from_secs(30))).await;
-
-        let mut leaves = client
-            .socket("availability/stream/leaves/0")
-            .subscribe::<LeafQueryData<SeqTypes>>()
-            .await
-            .expect("subscribe to leaf stream");
-
-        // Let the new protocol decide a few blocks first.
-        let mut height = 0;
-        while height < SHUTDOWN_HEIGHT {
-            let leaf = leaves
-                .next()
-                .await
-                .expect("leaf stream ended early")
-                .expect("leaf stream yielded an error");
-            height = leaf.header().height();
-        }
-
-        // Tear down the legacy stack on every node.
-        network.server.consensus_handle().shut_down_legacy().await;
-        for peer in &network.peers {
-            peer.consensus_handle().shut_down_legacy().await;
-        }
-
-        // The chain must keep growing across the epoch boundaries at 20 and
-        // 40 purely on the new protocol.
-        while height < TARGET_BLOCK_HEIGHT {
-            let leaf = leaves
-                .next()
-                .await
-                .expect("leaf stream ended early")
-                .expect("leaf stream yielded an error");
-            height = leaf.header().height();
-        }
-
-        Ok(())
-    }
-
     /// Full-application epoch-boundary committee change: a validator sends a
     /// real `deregisterValidator` transaction to the StakeTable contract on
     /// L1 mid-run, drops out of the consensus committee at the epoch boundary
@@ -6750,8 +6643,7 @@ mod test {
             }
         }
 
-        // Read before shutting consensus down: once the coordinator stops, these fall back to the
-        // legacy handle, which never ran at 0.6.
+        // Read before shutting consensus down: the coordinator stops answering once it shuts down.
         let decided_leaf = node_0.decided_leaf().await;
         let state = node_0.decided_state().await.unwrap();
         node_0.shutdown_consensus().await;
@@ -7090,8 +6982,7 @@ mod test {
         // Wait until at least 3 epochs have passed
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
 
-        // Read before shutting consensus down: once the coordinator stops, the decided state falls
-        // back to the legacy handle, which never ran at 0.6.
+        // Read before shutting consensus down: the coordinator stops answering once it shuts down.
         let instance = node_0.node_state();
         // A node can decide a leaf before it has validated that leaf's state itself.
         let state = timeout(Duration::from_secs(60), async {
@@ -11770,12 +11661,11 @@ mod test {
     /// Check the light client stake table endpoint: replaying `first_epoch + 2`
     /// reproduces the validator set loaded from storage, and an earlier epoch
     /// is a `BAD_REQUEST`.
-    async fn check_light_client_stake_table<N, P>(
+    async fn check_light_client_stake_table<P>(
         client: &Client<ClientErr, StaticVersion<0, 1>>,
-        server: &SequencerContext<N, P>,
+        server: &SequencerContext<P>,
         first_epoch: EpochNumber,
     ) where
-        N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
     {
         let events: Vec<StakeTableEvent> = client

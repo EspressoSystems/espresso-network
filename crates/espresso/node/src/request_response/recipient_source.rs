@@ -1,21 +1,16 @@
-use std::sync::Arc;
-
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use espresso_types::{PubKey, SeqTypes};
-use hotshot::traits::NodeImplementation;
-use hotshot_new_protocol::storage::NewProtocolStorage;
+use hotshot_new_protocol::client::ClientApi;
 use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembershipCoordinator};
 use request_response::recipient_source::RecipientSource as RecipientSourceTrait;
 use tracing::warn;
 
 use super::request::Request;
-use crate::consensus_handle::ConsensusHandle;
 
 #[derive(Clone)]
-pub struct RecipientSource<I: NodeImplementation<SeqTypes>> {
-    /// The consensus adapter handle
-    pub consensus_handle: Arc<ConsensusHandle<SeqTypes, I>>,
+pub struct RecipientSource {
+    pub client_api: ClientApi<SeqTypes>,
     /// A copy of the membership coordinator
     pub memberships: EpochMembershipCoordinator<SeqTypes>,
     /// The public key of the node
@@ -25,16 +20,13 @@ pub struct RecipientSource<I: NodeImplementation<SeqTypes>> {
 /// Implement the RecipientSourceTrait, which allows the request-response protocol to derive the
 /// intended recipients for a given request
 #[async_trait]
-impl<I: NodeImplementation<SeqTypes>> RecipientSourceTrait<Request, PubKey> for RecipientSource<I>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+impl RecipientSourceTrait<Request, PubKey> for RecipientSource {
     async fn get_expected_responders(&self, _request: &Request) -> Result<Vec<PubKey>> {
-        // Get the current epoch number
         let epoch_number = self
-            .consensus_handle
+            .client_api
             .current_epoch()
             .await
+            .context("failed to read the current epoch from the coordinator")?
             .unwrap_or(EpochNumber::genesis());
 
         // Attempt to get the membership for the current epoch
