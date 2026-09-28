@@ -1312,6 +1312,10 @@ def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
     for node, stats in result["nodes"].items():
         if stats["decided_blocks"] <= 0:
             invalid.append(f"{node} decided no blocks in the window")
+    if result["network"]["blocks_per_s"]["min"] == 0:
+        invalid.append(
+            f"a {result['config']['subwindow_s']} s sub-window decided no blocks"
+        )
     load = result["load"]
     if load["included_per_s"] <= 0:
         invalid.append("no transactions included in the window")

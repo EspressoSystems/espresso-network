@@ -109,7 +109,12 @@ def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
             },
             "drift_pct": 0.0,
         },
-        "config": {"workers": 6, "max_pending": 48, "tx_size": 100_000},
+        "config": {
+            "workers": 6,
+            "max_pending": 48,
+            "tx_size": 100_000,
+            "subwindow_s": 30,
+        },
         "config_hash": config_hash,
         "window": {"t0": 0.0, "t1": 180.0, "height_start": 100, "height_end": 500},
         "network": {
@@ -284,6 +289,13 @@ class ValidityTest(unittest.TestCase):
         )
         self.assertFalse(validity["valid"])
         self.assertEqual(len(validity["reasons"]), 3)
+
+    def test_stalled_sub_window_is_invalid(self):
+        result = make_result()
+        result["network"]["blocks_per_s"]["min"] = 0.0
+        validity = bench.check_validity(result, {n: 1.0 for n in bench.NODES})
+        self.assertFalse(validity["valid"])
+        self.assertEqual(validity["reasons"], ["a 30 s sub-window decided no blocks"])
 
 
 class ReportOnlyTest(unittest.TestCase):
