@@ -1,0 +1,215 @@
+version: "3"
+
+# Benchmark network: 3 equal-stake validators, so every certificate needs all 3.
+# node0: espresso-node on Postgres with the query service. node1, node2: espresso-node-sqlite.
+# Started by scripts/network-bench/bench from the repo root with BENCH_OUT and
+# ESPRESSO_BASE_STORAGE_PATH set. Keys, ports and addresses come from the repo .env.
+# Processes are covered by the NATIVE_PROCESSES list in scripts/cleanup-process-compose.
+
+x-availability:
+  run-forever: &run-forever
+    exit_on_skipped: true
+    exit_on_end: true
+  exit-ok: &exit-ok
+    exit_on_skipped: true
+    restart: exit_on_failure
+
+environment:
+  - ESPRESSO_NODE_CDN_ENDPOINT=127.0.0.1:${ESPRESSO_CDN_SERVER_PORT}
+  - ESPRESSO_NODE_ORCHESTRATOR_URL=http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
+  - ESPRESSO_API_NODE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}
+  - ESPRESSO_L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
+  - ESPRESSO_NODE_GENESIS_FILE=scripts/network-bench/genesis.toml
+  - ESPRESSO_STATE_RELAY_SERVER_URL=http://localhost:${ESPRESSO_STATE_RELAY_SERVER_PORT}
+
+processes:
+  demo-l1-network:
+    command: >-
+      anvil --host 127.0.0.1 --port ${ESPRESSO_L1_PORT} --chain-id 31337
+      --accounts 20 --balance 1000000000 --block-time 1
+    log_location: ${BENCH_OUT}/logs/anvil.log
+    readiness_probe:
+      exec:
+        command: >-
+          curl -H "Content-Type: application/json"
+          --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
+          http://localhost:${ESPRESSO_L1_PORT}
+      failure_threshold: 30
+      period_seconds: 1
+    availability: *run-forever
+
+  deploy-espresso-contracts:
+    # Unset the .env addresses, or deploy treats the contracts as already deployed.
+    command:
+      unset
+      ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS
+      ESP_TOKEN_PROXY_ADDRESS
+      ESPRESSO_STAKE_TABLE_PROXY_ADDRESS
+      && deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1 --upgrade-stake-table-v2 --upgrade-stake-table-v3
+    log_location: ${BENCH_OUT}/logs/deploy.log
+    depends_on:
+      demo-l1-network:
+        condition: process_healthy
+    availability: *exit-ok
+
+  orchestrator:
+    command: orchestrator
+    log_location: ${BENCH_OUT}/logs/orchestrator.log
+    environment:
+      - ESPRESSO_ORCHESTRATOR_NUM_NODES=3
+      # No builder runs here; leaders fall back to an empty block after the timeout.
+      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:1
+      - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=100ms
+    readiness_probe:
+      http_get:
+        scheme: http
+        host: localhost
+        port: ${ESPRESSO_ORCHESTRATOR_PORT}
+        path: /healthcheck
+      period_seconds: 1
+      failure_threshold: 100
+    availability: *exit-ok
+
+  state-relay-server:
+    command: state-relay-server
+    log_location: ${BENCH_OUT}/logs/relay.log
+    environment:
+      - ESPRESSO_STATE_SIGNATURE_TOTAL_STAKE=3
+    readiness_probe:
+      http_get:
+        scheme: http
+        host: localhost
+        port: ${ESPRESSO_STATE_RELAY_SERVER_PORT}
+        path: /healthcheck
+      period_seconds: 1
+      failure_threshold: 30
+    availability: *run-forever
+
+  espresso-node-db-0:
+    command: scripts/run-postgres ${ESPRESSO_NODE_0_DB_PORT} ${ESPRESSO_BASE_STORAGE_PATH}/pg0
+    log_location: ${BENCH_OUT}/logs/postgres.log
+    readiness_probe:
+      exec:
+        command: psql -h localhost -p ${ESPRESSO_NODE_0_DB_PORT} -U root -d espresso -c 'SELECT 1'
+      initial_delay_seconds: 2
+      period_seconds: 2
+      timeout_seconds: 4
+      failure_threshold: 30
+    availability: *run-forever
+
+  espresso-node-0:
+    command: espresso-node -- storage-sql -- http -- query -- submit -- catchup -- config -- light-client
+    log_location: ${BENCH_OUT}/logs/node0.log
+    environment:
+      - RUST_LOG=info,libp2p=off
+      - RUST_LOG_FORMAT=json
+      - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
+      - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=false
+      - ESPRESSO_NODE_IS_DA=true
+      - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_0_API_PORT}
+      - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_0_TONIC_PORT}
+      - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_0}
+      - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_0}
+      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
+      - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
+      - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_1_API_PORT}
+      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_1_API_PORT},http://localhost:${ESPRESSO_NODE_2_API_PORT}
+      - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq0-lc
+      - ESPRESSO_NODE_POSTGRES_HOST=localhost
+      - ESPRESSO_NODE_POSTGRES_PORT=${ESPRESSO_NODE_0_DB_PORT}
+      - ESPRESSO_NODE_POSTGRES_USER=root
+      - ESPRESSO_NODE_POSTGRES_PASSWORD=password
+      - ESPRESSO_NODE_POSTGRES_DATABASE=espresso
+      - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_0}
+      - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_0}
+      - ESPRESSO_NODE_PRIVATE_X25519_KEY=${ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_0}
+      - ESPRESSO_NODE_IDENTITY_NODE_NAME=espresso-node-0
+      - ESPRESSO_NODE_PUBLIC_API_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}/
+    depends_on: &node-deps
+      orchestrator:
+        condition: process_healthy
+      state-relay-server:
+        condition: process_healthy
+      espresso-node-db-0:
+        condition: process_healthy
+      deploy-espresso-contracts:
+        condition: process_completed_successfully
+    readiness_probe:
+      http_get:
+        scheme: http
+        host: localhost
+        port: ${ESPRESSO_NODE_0_API_PORT}
+        path: /healthcheck
+      period_seconds: 1
+      failure_threshold: 300
+    availability: *run-forever
+
+  espresso-node-1:
+    command: espresso-node-sqlite -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
+    log_location: ${BENCH_OUT}/logs/node1.log
+    environment:
+      - RUST_LOG=info,libp2p=off
+      - RUST_LOG_FORMAT=json
+      - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
+      - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=false
+      - ESPRESSO_NODE_IS_DA=true
+      - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_1_API_PORT}
+      - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_1_TONIC_PORT}
+      - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_1}
+      - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_1}
+      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
+      - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
+      - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
+      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_2_API_PORT}
+      - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq1
+      - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq1-lc
+      - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_1}
+      - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_1}
+      - ESPRESSO_NODE_PRIVATE_X25519_KEY=${ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_1}
+      - ESPRESSO_NODE_IDENTITY_NODE_NAME=espresso-node-1
+      - ESPRESSO_NODE_PUBLIC_API_URL=http://localhost:${ESPRESSO_NODE_1_API_PORT}/
+    depends_on: *node-deps
+    readiness_probe:
+      http_get:
+        scheme: http
+        host: localhost
+        port: ${ESPRESSO_NODE_1_API_PORT}
+        path: /healthcheck
+      period_seconds: 1
+      failure_threshold: 300
+    availability: *run-forever
+
+  espresso-node-2:
+    command: espresso-node-sqlite -- storage-sql -- http -- status -- submit -- catchup -- config -- light-client
+    log_location: ${BENCH_OUT}/logs/node2.log
+    environment:
+      - RUST_LOG=info,libp2p=off
+      - RUST_LOG_FORMAT=json
+      - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=false
+      - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=false
+      - ESPRESSO_NODE_IS_DA=true
+      - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_2_API_PORT}
+      - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_2_TONIC_PORT}
+      - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_2}
+      - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_2}
+      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
+      - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
+      - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
+      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
+      - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2
+      - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2-lc
+      - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_2}
+      - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_2}
+      - ESPRESSO_NODE_PRIVATE_X25519_KEY=${ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_2}
+      - ESPRESSO_NODE_IDENTITY_NODE_NAME=espresso-node-2
+      - ESPRESSO_NODE_PUBLIC_API_URL=http://localhost:${ESPRESSO_NODE_2_API_PORT}/
+    depends_on: *node-deps
+    readiness_probe:
+      http_get:
+        scheme: http
+        host: localhost
+        port: ${ESPRESSO_NODE_2_API_PORT}
+        path: /healthcheck
+      period_seconds: 1
+      failure_threshold: 300
+    availability: *run-forever
