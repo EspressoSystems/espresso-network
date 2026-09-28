@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["advz_merkle_node","header_v4","header_v5","json_array","json_entry","json_field","quorum_signatures","reward_merkle_tree_root","to_json"]};
+window.SIDEBAR_ITEMS = {"fn":["advz_merkle_node","field_tb64","header_v4","header_v5","json_array","json_entry","json_field","quorum_signatures","reward_merkle_tree_root","to_json"]};
