@@ -157,7 +157,7 @@ class RenderTest(unittest.TestCase):
         current = make_result(mb_per_s=3.0)
         summary = bench.render(current, bench.compare(current, baseline))
         self.assertIn(
-            "| metric | this run | sub-window range | main median (n=5) | delta |",
+            "| metric | this run | sub-window range | baseline median (n=5) | delta |",
             summary,
         )
         self.assertRegex(
@@ -170,7 +170,7 @@ class RenderTest(unittest.TestCase):
         comparison = bench.compare(current, [])
         self.assertEqual(comparison["n"], 0)
         self.assertIn(
-            "No baseline: 0 comparable main runs", bench.render(current, comparison)
+            "No baseline: 0 comparable runs", bench.render(current, comparison)
         )
         self.assertIn("No baseline given.", bench.render(current, None))
 

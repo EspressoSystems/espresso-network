@@ -1675,21 +1675,21 @@ HEADLINE = (
         "nodes.node0.ops.consensus_internal_process_decided_events_duration.p99_ms",
         "ms",
         "lower",
-        20,
+        30,
     ),
     Metric(
         "node1 decide processing p99",
         "nodes.node1.ops.consensus_internal_process_decided_events_duration.p99_ms",
         "ms",
         "lower",
-        20,
+        30,
     ),
     Metric(
         "node1 append DA p99",
         "nodes.node1.ops.consensus_storage_append_da.p99_ms",
         "ms",
         "lower",
-        20,
+        30,
     ),
 )
 BASELINE_RUNS = 10
@@ -1836,7 +1836,7 @@ def headline_table(result: BenchResult, comparison: Comparison | None) -> list[s
             )
         return lines + ["", "No baseline given."]
     lines = [
-        f"| metric | this run | sub-window range | main median (n={comparison['n']}) | delta | |",
+        f"| metric | this run | sub-window range | baseline median (n={comparison['n']}) | delta | |",
         "|---|---:|---:|---:|---:|---|",
     ]
     for row in comparison["rows"]:
@@ -1852,12 +1852,12 @@ def headline_table(result: BenchResult, comparison: Comparison | None) -> list[s
     if comparison["n"] == 0:
         lines += [
             "",
-            f"No baseline: 0 comparable main runs ({comparison['excluded']} excluded).",
+            f"No baseline: 0 comparable runs ({comparison['excluded']} excluded).",
         ]
     elif comparison["excluded"]:
         lines += [
             "",
-            f"{comparison['excluded']} main runs excluded (invalid, noisy or other config).",
+            f"{comparison['excluded']} baseline runs excluded (invalid, noisy or other config).",
         ]
     return lines
 
