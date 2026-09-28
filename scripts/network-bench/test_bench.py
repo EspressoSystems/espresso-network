@@ -148,6 +148,10 @@ def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
     return result
 
 
+def compare(current, runs, error=None):
+    return bench.compare(current, {"runs": runs, "error": error})
+
+
 def row(comparison, label):
     return next(r for r in comparison["rows"] if r["label"] == label)
 
@@ -156,7 +160,7 @@ class RenderTest(unittest.TestCase):
     def test_summary_has_headline_and_delta(self):
         baseline = [make_result(mb_per_s=4.0) for _ in range(5)]
         current = make_result(mb_per_s=3.0)
-        summary = bench.render(current, bench.compare(current, baseline))
+        summary = bench.render(current, compare(current, baseline))
         self.assertIn(
             "| metric | this run | sub-window range | baseline median (n=5) | delta |",
             summary,
@@ -168,12 +172,27 @@ class RenderTest(unittest.TestCase):
 
     def test_no_baseline(self):
         current = make_result()
-        comparison = bench.compare(current, [])
+        comparison = compare(current, [])
         self.assertEqual(comparison["n"], 0)
         self.assertIn(
             "No baseline: 0 comparable runs", bench.render(current, comparison)
         )
         self.assertIn("No baseline given.", bench.render(current, None))
+
+    def test_failed_fetch_is_not_no_baseline(self):
+        current = make_result()
+        summary = bench.render(current, compare(current, [], "OSError: timed out"))
+        self.assertIn("Baseline fetch failed: OSError: timed out", summary)
+        self.assertNotIn("No baseline", summary)
+
+    def test_load_baseline_single_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "result.json"
+            path.write_text(json.dumps(make_result()))
+            self.assertEqual(len(bench.load_baseline(path)["runs"]), 1)
+            path.write_text("[]")
+            with self.assertRaises(ValueError):
+                bench.load_baseline(path)
 
     def test_compare_cli_with_empty_runs_exits_zero(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -188,14 +207,12 @@ class RenderTest(unittest.TestCase):
 class CompareTest(unittest.TestCase):
     def test_within_threshold_is_same(self):
         current = make_result(mb_per_s=3.8)
-        comparison = bench.compare(current, [make_result(mb_per_s=4.0)])
+        comparison = compare(current, [make_result(mb_per_s=4.0)])
         self.assertEqual(row(comparison, "decided throughput")["verdict"], "same")
 
     def test_spread_widens_threshold(self):
         history = [make_result(mb_per_s=v) for v in (3.0, 4.0, 5.0, 3.5, 4.5)]
-        verdict = row(
-            bench.compare(make_result(mb_per_s=3.0), history), "decided throughput"
-        )
+        verdict = row(compare(make_result(mb_per_s=3.0), history), "decided throughput")
         self.assertGreater(verdict["threshold_pct"], 10)
         self.assertEqual(verdict["verdict"], "same")
 
@@ -204,14 +221,12 @@ class CompareTest(unittest.TestCase):
         invalid = make_result()
         invalid["validity"] = {"valid": False, "noisy": False, "reasons": ["x"]}
         other = make_result(config_hash="other")
-        comparison = bench.compare(
-            make_result(), [noisy, invalid, other, make_result()]
-        )
+        comparison = compare(make_result(), [noisy, invalid, other, make_result()])
         self.assertEqual((comparison["n"], comparison["excluded"]), (1, 3))
 
     def test_noisy_current_is_inconclusive(self):
         current = make_result(mb_per_s=1.0, steal=8.0)
-        comparison = bench.compare(current, [make_result()])
+        comparison = compare(current, [make_result()])
         self.assertEqual(
             row(comparison, "decided throughput")["verdict"], "inconclusive"
         )
@@ -220,7 +235,7 @@ class CompareTest(unittest.TestCase):
         current = make_result()
         current["network"]["timeouts"] = 3
         self.assertEqual(
-            row(bench.compare(current, [make_result()]), "timeouts")["verdict"], "worse"
+            row(compare(current, [make_result()]), "timeouts")["verdict"], "worse"
         )
 
 
@@ -263,7 +278,7 @@ class ReportOnlyTest(unittest.TestCase):
                 mock.patch("builtins.print"),
                 self.assertLogs(bench.log),
             ):
-                code = bench.write_report(out, baseline)
+                code = bench.write_report(out, bench.load_baseline(baseline))
             return code, (out / "summary.md").read_text()
 
     def test_regression_still_exits_zero(self):
@@ -286,6 +301,21 @@ class PreflightTest(unittest.TestCase):
             self.assertEqual(
                 bench.preflight_problems((port,), ()), [f"port {port} is in use"]
             )
+
+    def test_bad_baseline_fails_before_starting_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline = Path(tmp) / "baseline.json"
+            baseline.write_text('{"runs": [')
+            args = bench.parse_args(
+                ["run", "--bin-dir", "/nonexistent", "--baseline", str(baseline)]
+            )
+            with (
+                mock.patch.object(
+                    bench, "start_network", side_effect=AssertionError("started")
+                ),
+                self.assertRaises(json.JSONDecodeError),
+            ):
+                bench.cmd_run(args)
 
     def test_run_refuses_without_starting_network(self):
         args = bench.parse_args(["run", "--bin-dir", "/nonexistent"])

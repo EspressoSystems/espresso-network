@@ -319,9 +319,15 @@ class Row(TypedDict):
     verdict: str
 
 
+class Baseline(TypedDict):
+    runs: list[BenchResult]
+    error: str | None
+
+
 class Comparison(TypedDict):
     n: int
     excluded: int
+    error: str | None
     rows: list[Row]
 
 
@@ -445,6 +451,7 @@ def config_from_args(args: argparse.Namespace) -> BenchConfig:
 
 def cmd_run(args: argparse.Namespace) -> int:
     cfg = config_from_args(args)
+    baseline = load_baseline(args.baseline) if args.baseline else None
     problems = preflight_problems(PORTS, PROCESS_NAMES)
     if problems:
         for problem in problems:
@@ -483,11 +490,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         (out / "summary.md").write_text(summary)
         print(summary)
         return 1
-    return write_report(out, args.baseline)
+    return write_report(out, baseline)
 
 
 def cmd_render(args: argparse.Namespace) -> int:
-    return write_report(args.dir.resolve(), args.baseline)
+    baseline = load_baseline(args.baseline) if args.baseline else None
+    return write_report(args.dir.resolve(), baseline)
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
@@ -508,13 +516,13 @@ def cmd_sysinfo(args: argparse.Namespace) -> int:
     return 0
 
 
-def write_report(out: Path, baseline: Path | None) -> int:
+def write_report(out: Path, baseline: Baseline | None) -> int:
     saved = read_json(out / "config.json")
     saved["namespaces"] = tuple(saved["namespaces"])
     cfg = BenchConfig(**saved)
     result = analyze(out, cfg)
     write_json(out / "result.json", result)
-    comparison = compare(result, load_baseline(baseline)) if baseline else None
+    comparison = compare(result, baseline) if baseline else None
     summary = render(result, comparison)
     (out / "summary.md").write_text(summary)
     print(summary)
@@ -1733,12 +1741,12 @@ def lookup(result: Any, path: str) -> float | None:
     return float(result)
 
 
-def compare(current: BenchResult, baseline_runs: list[BenchResult]) -> Comparison:
+def compare(current: BenchResult, baseline: Baseline) -> Comparison:
     """Deltas against the median of comparable runs. A delta counts only beyond both the metric's
     floor and 3 times the baseline's robust spread; a noisy current run is never conclusive."""
     usable = [
         run
-        for run in baseline_runs
+        for run in baseline["runs"]
         if run.get("schema_version") == SCHEMA_VERSION
         and run["validity"]["valid"]
         and not run["validity"]["noisy"]
@@ -1750,7 +1758,8 @@ def compare(current: BenchResult, baseline_runs: list[BenchResult]) -> Compariso
     ]
     return {
         "n": len(usable),
-        "excluded": len(baseline_runs) - len(usable),
+        "excluded": len(baseline["runs"]) - len(usable),
+        "error": baseline["error"],
         "rows": rows,
     }
 
@@ -1796,13 +1805,18 @@ def compare_metric(
     }
 
 
-def load_baseline(path: Path) -> list[BenchResult]:
-    """`nextest-ci stats-fetch` output ({runs: [...]}, newest first) or a single result.json."""
-    match json.loads(path.read_text()):
-        case {"runs": list() as runs}:
-            return runs
-        case single:
-            return [single]
+def load_baseline(path: Path) -> Baseline:
+    """`nextest-ci stats-fetch` output ({runs: [...], error?}, newest first) or a single
+    result.json. A stats-fetch `error` means the lookup failed, not that nothing was published."""
+    match read_json(path):
+        case {"runs": list() as runs} as fetched:
+            return {"runs": runs, "error": fetched.get("error")}
+        case {"schema_version": _} as single:
+            return {"runs": [single], "error": None}
+        case other:
+            raise ValueError(
+                f"{path} is neither stats-fetch output nor a result.json: {other!r:.200}"
+            )
 
 
 def render(result: BenchResult, comparison: Comparison | None) -> str:
@@ -1879,7 +1893,9 @@ def headline_table(result: BenchResult, comparison: Comparison | None) -> list[s
             f"| {range_cell(result, row['key'])} | {fmt_value(row['baseline'], row['unit'])} "
             f"| {delta_cell} | {mark} (±{row['threshold_pct']:.0f}%) |"
         )
-    if comparison["n"] == 0:
+    if comparison["error"]:
+        lines += ["", f"Baseline fetch failed: {comparison['error']}"]
+    elif comparison["n"] == 0:
         lines += [
             "",
             f"No baseline: 0 comparable runs ({comparison['excluded']} excluded).",
