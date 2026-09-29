@@ -24,6 +24,8 @@ A run is `noisy` when steal time, calibration drift, submit errors, lost payload
 payload scan suggest the runner, not the code, moved the numbers; noisy runs are kept but never
 used as a baseline.
 
+The same load driver runs against an AWS fleet via `just bench aws` (see `aws-bench`).
+
 Exit codes:
     0  the run is valid, whatever the performance deltas
     1  the run is invalid (network not ready, a node stalled, no transactions included, ...)

@@ -1,0 +1,31 @@
+set positional-arguments
+
+repo_root := source_directory() / ".." / ".." / ".."
+aws_bench := source_directory() / ".." / "aws-bench"
+
+default:
+    just --list --justfile {{quote(source_file())}}
+
+# Render the run dir and print the cost estimate; nothing is written to AWS.
+plan *args:
+    cd {{quote(repo_root)}} && {{quote(aws_bench)}} plan "$@"
+
+# Plan, confirm, provision the fleet, load it, measure, collect, and destroy.
+run *args:
+    cd {{quote(repo_root)}} && {{quote(aws_bench)}} run "$@"
+
+# List tagged resources in the account, or one run's progress.
+status *args:
+    cd {{quote(repo_root)}} && {{quote(aws_bench)}} status "$@"
+
+# Re-collect logs and samples from a run's live hosts.
+collect *args:
+    cd {{quote(repo_root)}} && {{quote(aws_bench)}} collect "$@"
+
+# Re-analyze a run dir and rewrite result.json and summary.md.
+render *args:
+    cd {{quote(repo_root)}} && {{quote(aws_bench)}} render "$@"
+
+# Tear down a run's fleet, or sweep every tagged resource with --orphans.
+destroy *args:
+    cd {{quote(repo_root)}} && {{quote(aws_bench)}} destroy "$@"

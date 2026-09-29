@@ -16,6 +16,11 @@ whose local state is lost or whose TTL passed. `collect` and `render` redo those
 existing run dir. `agent-drive` (on ctl) and `agent-host` (on every host) run under system
 python3 from /opt/bench.
 
+Prerequisites: opentofu and awscli2 (nix devShell), `AWS_PROFILE` set to the benchmark account,
+an ssh key (`--ssh-key`, default ~/.ssh/id_ed25519), and `--tag` naming the ghcr tag CI pushed for a
+`release-*` branch.
+Recipes: `just bench aws plan|run|status|collect|render|destroy`.
+
 Exit codes of `run`: 0 valid, 1 invalid result, 2 refused before any AWS write, 3 failed after
 writes but destroyed, 4 resources may remain (the last log line is the destroy command).
 

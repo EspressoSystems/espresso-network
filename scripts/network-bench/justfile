@@ -1,5 +1,7 @@
 set positional-arguments
 
+mod aws "aws/justfile"
+
 repo_root := source_directory() / ".." / ".."
 bench := source_directory() / "bench"
 target_dir := env_var_or_default("CARGO_TARGET_DIR", repo_root / "target")
