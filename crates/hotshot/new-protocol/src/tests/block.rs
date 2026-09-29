@@ -48,7 +48,7 @@ fn sizes(block_size: u64) -> BTreeMap<Version, u64> {
 
 fn small_config() -> BlockBuilderConfig {
     BlockBuilderConfig {
-        max_retry_bytes: 1024,
+        max_retry_bytes: 64 * 1024,
         block_sizes: sizes(512),
         ttl: 5,
         dedup_window_size: 3,
@@ -263,6 +263,28 @@ async fn test_full_forward_fits_in_a_message() {
         forward_budget(limit) as usize / (tx_len + 8),
         "the message budget, not the block size, should stop the batch"
     );
+}
+
+/// Tiny transactions are charged for their in-memory footprint, so the retry
+/// buffer stays within `max_retry_bytes` of memory.
+#[tokio::test]
+async fn test_retry_buffer_charges_entry_overhead() {
+    let max_retry_bytes = 4096;
+    let mut b = builder_with(BlockBuilderConfig {
+        max_retry_bytes,
+        ..small_config()
+    });
+    for n in 0..1000u16 {
+        b.on_submit_transaction(TestTransaction::new(n.to_le_bytes().to_vec()));
+    }
+    let (count, _) = b.outstanding_transactions();
+    assert!(
+        (count * size_of::<TestTransaction>()) as u64 <= max_retry_bytes,
+        "{count} entries exceed the budget"
+    );
+
+    b.on_view_changed(view(100));
+    assert_eq!(b.outstanding_transactions(), (0, 0));
 }
 
 #[tokio::test]

@@ -109,6 +109,14 @@ struct RetryEntry<T: NodeType> {
     encoded_size: u64,
 }
 
+/// Memory charged per retry entry on top of its block size, so tiny
+/// transactions cannot outgrow `max_retry_bytes`. Doubled for table slack.
+const fn retry_entry_overhead<T: NodeType>() -> u64 {
+    let map = size_of::<(Commitment<T::Transaction>, RetryEntry<T>)>();
+    let order = size_of::<(ViewNumber, Commitment<T::Transaction>)>();
+    2 * (map + order) as u64
+}
+
 pub struct BlockBuilder<T: NodeType> {
     instance: Arc<T::InstanceState>,
     membership: EpochMembershipCoordinator<T>,
@@ -324,14 +332,15 @@ impl<T: NodeType> BlockBuilder<T> {
             warn!(%hash, %size, "transaction can never be included, rejecting");
             return;
         }
-        if self.retry_total_bytes + size > self.config.max_retry_bytes {
+        let charge = size + retry_entry_overhead::<T>();
+        if self.retry_total_bytes + charge > self.config.max_retry_bytes {
             warn!("retry buffer full, rejecting {hash}");
             return;
         }
 
         let valid_until = self.current_view + self.config.ttl;
 
-        self.retry_total_bytes += size;
+        self.retry_total_bytes += charge;
         self.retry_order.insert((valid_until, hash));
         self.retry_pending.insert(
             hash,
@@ -410,7 +419,7 @@ impl<T: NodeType> BlockBuilder<T> {
     fn remove_pending(&mut self, hash: &Commitment<T::Transaction>) {
         if let Some(entry) = self.retry_pending.remove(hash) {
             self.retry_order.remove(&(entry.valid_until, *hash));
-            self.retry_total_bytes -= entry.size;
+            self.retry_total_bytes -= entry.size + retry_entry_overhead::<T>();
         }
     }
 
