@@ -237,8 +237,9 @@ class NetworkStats(TypedDict):
     blocks_per_s: Stat
     views_per_s: Stat
     mean_view_ms: Stat
-    timeouts: int
-    empty_block_frac: float
+    # None, like every stat here, when no node answered a metrics scrape.
+    timeouts: int | None
+    empty_block_frac: float | None
     # Built from whole-second header timestamps: raw data only, too coarse to compare.
     proposal_to_decide_ms: Quantiles | None
     cpu_s_per_mb: Stat
@@ -596,8 +597,8 @@ def write_report(out: Path, baseline: Baseline | None) -> int:
     print(summary)
     net, load = result["network"], result["load"]
     log.info(
-        "decided %.2f MB/s, tx p50 %s ms, p99 %s ms, %d timeouts, %s",
-        net["decided_mb_per_s"]["value"],
+        "decided %s MB/s, tx p50 %s ms, p99 %s ms, %s timeouts, %s",
+        fmt_num(net["decided_mb_per_s"]["value"]),
         fmt_num(load["latency_ms"]["p50"] if load["latency_ms"] else None),
         fmt_num(load["latency_ms"]["p99"] if load["latency_ms"] else None),
         net["timeouts"],
@@ -1583,8 +1584,9 @@ def bottleneck(offered: float, net: NetworkStats, load: LoadStats) -> Bound:
     behind = []
     if load["at_cap_frac"] >= KEEP_UP_AT_CAP_FRAC:
         behind.append(f"max_pending reached in {load['at_cap_frac']:.0%} of samples")
-    if net["empty_block_frac"] >= KEEP_UP_EMPTY_FRAC:
-        behind.append(f"{net['empty_block_frac']:.0%} of blocks empty")
+    empty = net["empty_block_frac"]
+    if empty is not None and empty >= KEEP_UP_EMPTY_FRAC:
+        behind.append(f"{empty:.0%} of blocks empty")
     if behind:
         return {"kind": "consensus", "reason": ", ".join(behind)}
     return {
@@ -1763,6 +1765,8 @@ def network_stats(
 ) -> NetworkStats:
     nodes = [s for s in series.values() if s]
     slices = subwindows(cfg, t0, t1)
+    if not nodes:
+        return unmeasured_network_stats(max_block)
 
     def across(fn: Callable[[list[Sample], float, float], float]) -> list[float]:
         return [statistics.median(fn(s, a, b) for s in nodes) for a, b in slices]
@@ -1805,6 +1809,21 @@ def network_stats(
         "block_bytes_nonempty_mean": (
             decided_bytes / (blocks - empty) if blocks > empty else None
         ),
+        "max_block_bytes": max_block,
+    }
+
+
+def unmeasured_network_stats(max_block: int) -> NetworkStats:
+    return {
+        "decided_mb_per_s": stat([None], "MB/s", "higher"),
+        "blocks_per_s": stat([None], "/s", "higher"),
+        "views_per_s": stat([None], "/s", "higher"),
+        "mean_view_ms": stat([None], "ms", "lower"),
+        "timeouts": None,
+        "empty_block_frac": None,
+        "proposal_to_decide_ms": None,
+        "cpu_s_per_mb": stat([None], "s/MB", "lower"),
+        "block_bytes_nonempty_mean": None,
         "max_block_bytes": max_block,
     }
 
@@ -2370,7 +2389,7 @@ def saturation_facts(result: BenchResult) -> list[str]:
         ),
         f"block time {fmt_num(1000 / blocks if blocks else None)} ms",
         size,
-        f"{net['empty_block_frac']:.0%} of blocks empty",
+        f"{fmt_pct(net['empty_block_frac'])} of blocks empty",
         (
             f"max_pending {cfg['max_pending']} reached in {load['at_cap_frac']:.0%} of "
             f"{IN_FLIGHT_STEP_S:.0f} s samples, {load['cap_waits']} submits waited"
@@ -2643,6 +2662,10 @@ def fmt_num(value: float | None) -> str:
     if value == 0 or abs(value) >= 100:
         return f"{value:.0f}"
     return f"{value:.3g}"
+
+
+def fmt_pct(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.0%}"
 
 
 def fmt_bytes(value: float) -> str:

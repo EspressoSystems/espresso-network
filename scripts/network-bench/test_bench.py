@@ -1097,6 +1097,25 @@ class AnalyzeTest(unittest.TestCase):
             {"valid": True, "noisy": True, "reasons": ["1 transactions timed out"]},
         )
 
+    def test_no_scrapes_is_invalid_not_a_crash(self):
+        cfg = bench.BenchConfig(measure_s=60, subwindow_s=20, rate_mb_s=1.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            write_run_dir(Path(tmp))
+            (Path(tmp) / "metrics.jsonl").write_text(
+                "".join(
+                    json.dumps({"ts": ts, "node": node, "ok": False}) + "\n"
+                    for ts in range(90, 175, 5)
+                    for node in bench.NODES
+                )
+            )
+            result = bench.analyze(Path(tmp), cfg)
+        self.assertFalse(result["validity"]["valid"])
+        self.assertIsNone(result["network"]["decided_mb_per_s"]["value"])
+        self.assertIn(
+            "node0 metrics answered for only 0%", result["validity"]["reasons"][0]
+        )
+        self.assertIn("run **invalid**", bench.render(result, None))
+
 
 class PaceTest(unittest.TestCase):
     def test_interval_from_rate(self):
