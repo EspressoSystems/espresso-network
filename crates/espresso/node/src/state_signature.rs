@@ -262,7 +262,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
 #[derive(Clone, Debug)]
 pub(crate) struct DecidedLeaf {
     header: Header,
-    pub(crate) view: ViewNumber,
+    view: ViewNumber,
     with_epoch: bool,
 }
 

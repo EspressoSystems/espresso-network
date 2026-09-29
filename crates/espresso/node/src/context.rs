@@ -45,7 +45,10 @@ use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
 use tokio::{
     spawn,
-    sync::{mpsc::channel, watch},
+    sync::{
+        mpsc::{self, channel},
+        watch,
+    },
     task::JoinHandle,
 };
 use tracing::{Instrument, Level, info};
@@ -407,7 +410,7 @@ where
             ),
         );
 
-        let (signer_tx, signer_rx) = watch::channel::<Option<DecidedLeaf>>(None);
+        let (signer_tx, signer_rx) = mpsc::unbounded_channel();
         ctx.spawn(
             "state signer",
             sign_decided_leaves(ctx.consensus_handle.clone(), state_signer, signer_rx),
@@ -637,7 +640,7 @@ async fn handle_events<P, C>(
     node_id: u64,
     mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
     persistence: Arc<P>,
-    signer_tx: watch::Sender<Option<DecidedLeaf>>,
+    signer_tx: mpsc::UnboundedSender<DecidedLeaf>,
     external_event_handler: ExternalEventHandler,
     event_consumer: Arc<C>,
     decide_tx: watch::Sender<DecideSignal>,
@@ -673,18 +676,10 @@ async fn handle_events<P, C>(
             _ => {},
         }
 
-        if let Some(leaf) = DecidedLeaf::from_event(&event) {
-            // Keep the max view, like `decide_tx`, but without waking the signer when a gap-fill
-            // decide changes nothing: it would sign and post the same leaf again.
-            signer_tx.send_if_modified(|current| {
-                let newer = current
-                    .as_ref()
-                    .is_none_or(|latest| latest.view < leaf.view);
-                if newer {
-                    *current = Some(leaf);
-                }
-                newer
-            });
+        if let Some(leaf) = DecidedLeaf::from_event(&event)
+            && signer_tx.send(leaf).is_err()
+        {
+            tracing::error!("state signer task stopped, decided leaf not signed");
         }
 
         // Critical path: only persist the decided leaves, then signal the background processor.
@@ -703,21 +698,18 @@ async fn handle_events<P, C>(
     }
 }
 
-/// Signs and relays light client states off the event loop, because a relay post can take as
-/// long as its HTTP timeout. When it falls behind, it skips to the newest decided leaf: a stale
-/// signature is worth less than a current one.
+/// Signs and relays every decided leaf in order, off the event loop, because a relay post can
+/// take as long as its HTTP timeout. The queue is unbounded so no leaf is skipped: it holds only
+/// headers, so a stalled relay grows it by one header per decide.
 async fn sign_decided_leaves<N, P>(
     consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
     mut state_signer: StateSigner<SequencerApiVersion>,
-    mut leaves: watch::Receiver<Option<DecidedLeaf>>,
+    mut leaves: mpsc::UnboundedReceiver<DecidedLeaf>,
 ) where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    while leaves.changed().await.is_ok() {
-        let Some(leaf) = leaves.borrow_and_update().clone() else {
-            continue;
-        };
+    while let Some(leaf) = leaves.recv().await {
         state_signer
             .handle_decide(&leaf, consensus_handle.as_ref())
             .await;
