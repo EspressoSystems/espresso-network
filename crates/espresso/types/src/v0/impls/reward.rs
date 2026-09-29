@@ -1140,6 +1140,23 @@ impl EpochRewardsCalculator {
         Some(result)
     }
 
+    /// Drop the result and any pending task for `epoch`.
+    ///
+    /// Called when the result for `epoch` did not match the root a boundary proposal committed
+    /// to. That result was computed from the leader counts of an unfinalized boundary proposal,
+    /// which may have failed, so it cannot be trusted for the next proposal either. Dropping it
+    /// lets the next application of the boundary start a task that recovers the counts from the
+    /// epoch's decided last leaf, which the cached result would otherwise suppress.
+    pub fn discard(&mut self, epoch: EpochNumber) {
+        if self.applied.take_if(|r| r.epoch == epoch).is_some() {
+            tracing::warn!(%epoch, "discarding applied epoch rewards result");
+        }
+        if let Some(pending) = self.pending.take_if(|p| p.epoch == epoch) {
+            tracing::warn!(%epoch, "discarding pending epoch rewards task");
+            pending.handle.abort();
+        }
+    }
+
     /// Start a background task that calculates epoch rewards.
     /// Does nothing if calculation is already in progress for this epoch with the same leader
     /// counts, or if `leader_counts` is `None` and a task will recover them anyway.
@@ -1466,6 +1483,55 @@ pub mod tests {
         assert_eq!(first.epoch, epoch);
         assert_eq!(second.epoch, epoch);
         assert_eq!(second.total_distributed, result.total_distributed);
+    }
+
+    /// A result computed from a failed boundary proposal's leader counts does not match the
+    /// decided header's root. Discarding it must reopen the eager leaf-recovering start, which
+    /// the cached result otherwise suppresses at every retry of the boundary.
+    #[tokio::test]
+    async fn test_epoch_rewards_discard_reopens_recovery_after_root_mismatch() {
+        let epoch = EpochNumber::new(3);
+        let result = EpochRewardsResult {
+            epoch,
+            reward_tree: RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT),
+            total_distributed: RewardAmount(U256::from(7)),
+            changed_accounts: HashSet::new(),
+        };
+        let mut calculator = EpochRewardsCalculator::new();
+        calculator.pending = Some(PendingRewards {
+            epoch,
+            leader_counts: Some([1; crate::v0_3::MAX_VALIDATORS]),
+            handle: tokio::spawn(async move { Ok(result) }),
+        });
+        calculator.get_result(epoch).await.unwrap().unwrap();
+        assert!(calculator.is_calculating(epoch));
+        assert!(!calculator.needs_spawn(epoch, None));
+
+        // Discarding another epoch leaves the result alone.
+        calculator.discard(epoch + 1);
+        assert!(calculator.is_calculating(epoch));
+
+        calculator.discard(epoch);
+
+        assert!(!calculator.is_calculating(epoch));
+        assert!(calculator.needs_spawn(epoch, None));
+        assert!(calculator.get_result(epoch).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_epoch_rewards_discard_aborts_pending_task() {
+        let epoch = EpochNumber::new(3);
+        let mut calculator = EpochRewardsCalculator::new();
+        calculator.pending = Some(PendingRewards {
+            epoch,
+            leader_counts: Some([1; crate::v0_3::MAX_VALIDATORS]),
+            handle: tokio::spawn(std::future::pending()),
+        });
+
+        calculator.discard(epoch);
+
+        assert!(!calculator.is_calculating(epoch));
+        assert!(calculator.pending.is_none());
     }
 
     /// Two proposals for one boundary block (views `v` and `v+1`) carry different leader counts.
