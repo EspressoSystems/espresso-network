@@ -116,7 +116,7 @@ jobs:
           python3 scripts/nextest-ci stats-fetch \
             --workflow build.yml \
             --artifact-name network-bench-baseline \
-            --max-runs 15 \
+            --max-runs 30 \
             --out main-network-bench.json
 
       - name: Run benchmark
