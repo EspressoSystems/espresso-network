@@ -45,10 +45,7 @@ use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
 use tokio::{
     spawn,
-    sync::{
-        mpsc::{self, channel},
-        watch,
-    },
+    sync::{broadcast, mpsc::channel, watch},
     task::JoinHandle,
 };
 use tracing::{Instrument, Level, info};
@@ -410,7 +407,7 @@ where
             ),
         );
 
-        let (signer_tx, signer_rx) = mpsc::unbounded_channel();
+        let (signer_tx, signer_rx) = broadcast::channel(STATE_SIGNER_QUEUE_CAPACITY);
         ctx.spawn(
             "state signer",
             sign_decided_leaves(ctx.consensus_handle.clone(), state_signer, signer_rx),
@@ -640,7 +637,7 @@ async fn handle_events<P, C>(
     node_id: u64,
     mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
     persistence: Arc<P>,
-    signer_tx: mpsc::UnboundedSender<DecidedLeaf>,
+    signer_tx: broadcast::Sender<DecidedLeaf>,
     external_event_handler: ExternalEventHandler,
     event_consumer: Arc<C>,
     decide_tx: watch::Sender<DecideSignal>,
@@ -698,25 +695,37 @@ async fn handle_events<P, C>(
     }
 }
 
-/// Signs and relays every decided leaf in order, off the event loop, because a relay post can
-/// take as long as its HTTP timeout. The queue is unbounded so no leaf is skipped: it holds only
-/// headers, so a stalled relay grows it by one header per decide.
+/// Signs and relays decided leaves in order, off the event loop, because a relay post can take
+/// as long as its HTTP timeout. Once a slow relay puts the signer a full queue behind, the oldest
+/// leaves are skipped: a stale signature is worth less than a current one.
 async fn sign_decided_leaves<N, P>(
     consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
     mut state_signer: StateSigner<SequencerApiVersion>,
-    mut leaves: mpsc::UnboundedReceiver<DecidedLeaf>,
+    mut leaves: broadcast::Receiver<DecidedLeaf>,
 ) where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    while let Some(leaf) = leaves.recv().await {
-        state_signer
-            .handle_decide(&leaf, consensus_handle.as_ref())
-            .await;
+    loop {
+        match leaves.recv().await {
+            Ok(leaf) => {
+                state_signer
+                    .handle_decide(&leaf, consensus_handle.as_ref())
+                    .await;
+            },
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                tracing::warn!(skipped, "state signer skipped decided leaves");
+            },
+            Err(broadcast::error::RecvError::Closed) => return,
+        }
     }
 }
 
 const PROCESS_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How far behind the tip, in decides, the state signer may fall before it skips ahead. Each
+/// stale post can cost a full relay timeout, so a large queue would keep the signer hours behind.
+const STATE_SIGNER_QUEUE_CAPACITY: usize = 64;
 
 /// Turns persisted decided leaves into query-service decide events and GCs processed data.
 /// Decoupled from [`handle_events`] so slow ingestion/GC can't stall (or drop) consensus events;
