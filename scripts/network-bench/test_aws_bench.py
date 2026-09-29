@@ -10,6 +10,7 @@ made no `aws` call at all.
 
 import contextlib
 import dataclasses
+import gzip
 import importlib.util
 import io
 import json
@@ -386,16 +387,29 @@ class CmdPlanTest(unittest.TestCase):
                     "run1",
                     "--out-root",
                     out_root,
+                    "--genesis",
+                    str(Path(__file__).with_name("genesis.toml")),
                     "--price",
                     "c8g.4xlarge=0.71",
                     "--price",
                     "c8g.2xlarge=0.355",
                 ]
             )
-            runner = FakeRunner({})
+            git = ("git", "rev-parse", "HEAD")
+            runner = FakeRunner({git: completed(stdout="a" * 40 + "\n")})
             code = awsb.cmd_plan(args, run=runner)
             self.assertEqual(code, awsb.EXIT_OK)
-            self.assertEqual(runner.calls, [])
+            self.assertEqual(runner.calls, [list(git)])
+            run_dir = Path(out_root) / "run1"
+            for name in (
+                "genesis.toml",
+                "config.json",
+                "hosts/ctl/user-data.sh",
+                "hosts/node0/user-data.sh",
+                "terraform/main.tf",
+                "terraform/terraform.tfvars.json",
+            ):
+                self.assertTrue((run_dir / name).exists(), name)
             manifest = json.loads(
                 (Path(out_root) / "run1" / "manifest.json").read_text()
             )
@@ -1891,6 +1905,8 @@ class FleetRunner:
         return completed(stdout="plan")
 
     def ssh(self, command: str) -> subprocess.CompletedProcess:
+        if "cloud-init status --format json" in command:
+            return completed(stdout=json.dumps({"status": "done"}))
         if "ready.json" in command:
             digests = {n: f"{i['ref']}@{i['digest']}" for n, i in fake_images().items()}
             tracking = "System time     : 0.000001000 seconds fast of NTP time\n"
@@ -2032,6 +2048,9 @@ class RunHarness:
             ask_destroy=ask,
         )
 
+    def index_log(self) -> str:
+        return (self.run_dir / "driver.log").read_text()
+
     def last_log_line(self) -> str:
         return (self.run_dir / "driver.log").read_text().splitlines()[-1]
 
@@ -2172,6 +2191,19 @@ class RunInterruptTest(unittest.TestCase):
             harness.last_log_line().endswith(f"aws-bench destroy {harness.run_dir}")
         )
 
+    def test_first_signal_logs_the_phase_and_later_ones_remind(self):
+        interrupts = awsb.Interrupts()
+        interrupts.phase = "services"
+        with self.assertLogs("aws-bench", "WARNING") as logs:
+            interrupts._handle(2, None)
+            interrupts._handle(2, None)
+        self.assertTrue(interrupts.event.is_set())
+        self.assertIn(
+            "interrupt received; stopping after the current step (services)",
+            logs.output[0],
+        )
+        self.assertIn("still waiting for the current step (services)", logs.output[1])
+
     def test_interrupts_are_ignored_after_disarm(self):
         interrupts = awsb.Interrupts()
         interrupts.disarm()
@@ -2211,6 +2243,52 @@ class RunDestroyFallbackTest(unittest.TestCase):
         self.assertEqual(code, awsb.EXIT_FAILED)
         self.assertEqual(runner.count("tofu", "destroy"), 2)
         self.assertFalse(runner.ran("terminate-instances"))
+
+
+# REQ:awsbench-teardown-guaranteed
+class RunTeardownGuaranteedTest(unittest.TestCase):
+    def test_exception_in_finish_still_destroys(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        with unittest.mock.patch.object(awsb, "finish", side_effect=IndexError("x")):
+            code = harness.run(runner)
+        self.assertEqual(code, awsb.EXIT_FAILED)
+        self.assertTrue(runner.ran("tofu", "destroy"))
+        self.assertIn("ERROR finish failed", harness.index_log())
+        self.assertIn("IndexError: x", harness.index_log())
+
+    def test_exception_in_analysis_writes_failure_summary_and_destroys(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        with unittest.mock.patch.object(
+            awsb, "write_report", side_effect=ZeroDivisionError("x")
+        ):
+            code = harness.run(runner)
+        self.assertEqual(code, awsb.EXIT_FAILED)
+        self.assertTrue(runner.ran("tofu", "destroy"))
+        self.assertIn("ZeroDivisionError", (harness.run_dir / "summary.md").read_text())
+
+    def test_truncated_node_log_does_not_break_the_failure_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            host_dir = run_dir / "hosts" / "node0"
+            host_dir.mkdir(parents=True)
+            good = gzip.compress(b"line\n" * 1000)
+            (host_dir / "espresso-node.log.gz").write_bytes(good[: len(good) // 2])
+            awsb.write_failure_summary(run_dir, {"hosts": [{"name": "node0"}]}, "boom")
+            self.assertIn("log unreadable", (run_dir / "summary.md").read_text())
+
+    def test_interrupt_before_the_fleet_exists_is_refused(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE])
+        with (
+            unittest.mock.patch.object(
+                awsb, "preflight", side_effect=KeyboardInterrupt
+            ),
+            self.assertRaisesRegex(awsb.Refused, "interrupted"),
+        ):
+            harness.run(runner)
+        self.assertFalse(runner.ran("tofu", "apply"))
 
 
 # REQ:awsbench-manifest-repro
@@ -2379,6 +2457,209 @@ class RemoteTest(unittest.TestCase):
             - awsb.parse_docker_time("2026-09-29T15:00:00Z"),
             0.5,
         )
+
+
+class Scripted:
+    """Runner answering ssh by substring of the remote command, and rsync with `rsync_rc`.
+    `answers` maps a substring to a list of results; the last result repeats."""
+
+    def __init__(self, answers, rsync_rc: int = 0):
+        self.answers = {k: list(v) for k, v in answers.items()}
+        self.rsync_rc = rsync_rc
+        self.calls: list[list[str]] = []
+        self.lock = threading.Lock()
+
+    def __call__(self, argv):
+        with self.lock:
+            self.calls.append(argv)
+            if argv[0] == "rsync":
+                return completed(returncode=self.rsync_rc, stderr="rsync broke")
+            for needle, results in self.answers.items():
+                if needle in argv[-1]:
+                    return results.pop(0) if len(results) > 1 else results[0]
+        return completed()
+
+
+def tmp_dir(test: unittest.TestCase) -> Path:
+    tmp = Path(tempfile.mkdtemp())
+    test.addCleanup(shutil.rmtree, tmp)
+    return tmp
+
+
+def scripted_remote(
+    test: unittest.TestCase, runner, tmp: Path | None = None
+) -> "awsb.Remote":
+    tmp = tmp or tmp_dir(test)
+    return awsb.Remote(runner, tmp, Path("~/.ssh/id"), two_node_hosts_info())
+
+
+# REQ:awsbench-collect-bounded
+class CollectBoundTest(unittest.TestCase):
+    def test_stop_freeze_and_collect_run_under_timeout(self):
+        runner = Scripted({})
+        tmp = tmp_dir(self)
+        remote = scripted_remote(self, runner, tmp)
+        awsb.stop_agent(remote)
+        awsb.freeze(remote)
+        awsb.collect_hosts(remote, list(remote.hosts.values()), tmp)
+        commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
+        self.assertEqual(len(commands), 1 + 3 + 3)
+        prefix = f"sudo timeout -k 10 {awsb.COLLECT_HOST_TIMEOUT_S:.0f} bash -c "
+        self.assertTrue(all(c.startswith(prefix) for c in commands), commands)
+        rsyncs = [c for c in runner.calls if c[0] == "rsync"]
+        self.assertEqual(len(rsyncs), 3)
+        self.assertTrue(all("--timeout=60" in c for c in rsyncs))
+
+    def test_a_hung_host_fails_only_itself(self):
+        runner = Scripted({"docker logs": [completed(returncode=124)]})
+        tmp = tmp_dir(self)
+        remote = scripted_remote(self, runner, tmp)
+        with self.assertLogs("aws-bench", "WARNING"):
+            awsb.collect_hosts(remote, list(remote.hosts.values()), tmp)
+
+    def test_freeze_names_each_roles_containers(self):
+        runner = Scripted({})
+        remote = scripted_remote(self, runner)
+        awsb.freeze(remote)
+        by_host = {c[-2].split("@")[1]: c[-1] for c in runner.calls}
+        self.assertIn("anvil orchestrator state-relay-server", by_host["203.0.113.1"])
+        self.assertIn("for c in espresso-node;", by_host["203.0.113.2"])
+        self.assertNotIn("postgres", " ".join(by_host.values()))
+
+    def run_freeze(self, docker_stderr: str, docker_rc: int) -> int:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        docker = tmp / "docker"
+        docker.write_text(f"#!/bin/sh\necho '{docker_stderr}' >&2\nexit {docker_rc}\n")
+        docker.chmod(0o755)
+        env = {"PATH": f"{tmp}:{os.environ['PATH']}"}
+        command = awsb.freeze_command(("a", "b"))
+        return subprocess.run(["bash", "-c", command], env=env, check=False).returncode
+
+    def test_freeze_command_ignores_only_a_missing_container(self):
+        self.assertEqual(self.run_freeze("Error: No such container: a", 1), 0)
+        self.assertEqual(self.run_freeze("permission denied", 1), 1)
+        self.assertEqual(self.run_freeze("", 0), 0)
+
+
+# REQ:awsbench-poll-tolerant
+class PollAgentTest(unittest.TestCase):
+    def poll(self, runner) -> "awsb.AgentState":
+        cfg = awsb.RunConfig(
+            tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
+        )
+        tmp = tmp_dir(self)
+        remote = scripted_remote(self, runner, tmp)
+        with unittest.mock.patch.object(awsb, "AGENT_POLL_S", 0.0):
+            return awsb.poll_agent(remote, tmp, cfg, awsb.Interrupts())
+
+    def state(self, state: dict) -> "subprocess.CompletedProcess":
+        return completed(stdout=json.dumps(state))
+
+    def test_ssh_blips_are_retried(self):
+        blip = completed(returncode=255, stderr="timed out")
+        runner = Scripted(
+            {
+                "is-active": [blip, blip, completed()],
+                "agent-state.json": [self.state(DONE_STATE)],
+            }
+        )
+        self.assertEqual(self.poll(runner)["phase"], "done")
+
+    def test_persistent_ssh_failure_raises(self):
+        runner = Scripted({"is-active": [completed(returncode=255, stderr="down")]})
+        with (
+            unittest.mock.patch.object(awsb, "AGENT_POLL_SSH_FAILURES_MAX", 2),
+            self.assertRaisesRegex(awsb.RemoteError, "unreachable for 3 polls"),
+        ):
+            self.poll(runner)
+
+    def test_inactive_agent_without_done_raises(self):
+        loading = self.state({"phase": "loading", "detail": "x"})
+        runner = Scripted(
+            {
+                "is-active": [completed(returncode=awsb.SYSTEMCTL_INACTIVE_RC)],
+                "agent-state.json": [loading],
+            }
+        )
+        with self.assertRaisesRegex(awsb.RemoteError, "agent exited in phase loading"):
+            self.poll(runner)
+
+    def test_unexpected_is_active_status_raises(self):
+        runner = Scripted({"is-active": [completed(returncode=1)]})
+        with self.assertRaisesRegex(awsb.RemoteError, "is-active exited 1"):
+            self.poll(runner)
+
+    def test_failed_partial_rsync_only_warns(self):
+        loading = self.state({"phase": "loading", "detail": "x"})
+        runner = Scripted(
+            {"agent-state.json": [loading, self.state(DONE_STATE)]}, rsync_rc=23
+        )
+        with (
+            unittest.mock.patch.object(awsb, "OUT_RSYNC_S", 0.0),
+            self.assertLogs("aws-bench", "WARNING") as logs,
+        ):
+            self.assertEqual(self.poll(runner)["phase"], "done")
+        self.assertIn("partial rsync failed", logs.output[0])
+
+
+class WaitCloudInitTest(unittest.TestCase):
+    def wait(self, rc: int, status: str) -> None:
+        runner = Scripted(
+            {
+                "--wait": [completed(returncode=rc, stderr="err")],
+                "--format json": [completed(stdout=json.dumps({"status": status}))],
+            }
+        )
+        awsb.wait_cloud_init(scripted_remote(self, runner), "ctl")
+
+    def test_recoverable_errors_are_accepted(self):
+        self.wait(2, "done")
+
+    def test_clean_done_is_accepted(self):
+        self.wait(0, "done")
+
+    def test_cloud_init_error_raises(self):
+        with self.assertRaisesRegex(awsb.RemoteError, "exited 1"):
+            self.wait(1, "error")
+
+    def test_status_other_than_done_raises(self):
+        with self.assertRaisesRegex(awsb.RemoteError, "'degraded'"):
+            self.wait(2, "degraded")
+
+
+class StartSupportTest(unittest.TestCase):
+    def test_deploy_timeout_names_the_limit(self):
+        runner = Scripted({"docker wait deploy": [completed(returncode=124)]})
+        remote = scripted_remote(self, runner)
+        with self.assertRaisesRegex(
+            awsb.RemoteError, f"still running after {awsb.DEPLOY_TIMEOUT_S} s"
+        ):
+            awsb.start_support(remote, [], awsb.Interrupts())
+
+    def test_deploy_failure_status_is_reported(self):
+        runner = Scripted({"docker wait deploy": [completed(stdout="1\n")]})
+        remote = scripted_remote(self, runner)
+        with self.assertRaisesRegex(awsb.RemoteError, "deploy exited with status 1"):
+            awsb.start_support(remote, [], awsb.Interrupts())
+
+
+class StartNodesSyncTest(unittest.TestCase):
+    def test_every_node_waits_concurrently_whatever_the_pool_size(self):
+        # Both calls must be inside `docker start` at once; a pool of 1 would time out here.
+        barrier = threading.Barrier(2, timeout=2)
+
+        def runner(argv):
+            if "docker start" in argv[-1]:
+                barrier.wait()
+            if "inspect" in argv[-1]:
+                return completed(stdout="2026-09-29T15:00:00.1Z\n")
+            return completed()
+
+        remote = scripted_remote(self, runner)
+        hosts = [remote.hosts["node0"], remote.hosts["node1"]]
+        with unittest.mock.patch.object(awsb, "REMOTE_POOL_SIZE", 1):
+            self.assertEqual(awsb.start_nodes(remote, hosts, 0.0), 0.0)
 
 
 class WaitHostsTest(unittest.TestCase):
@@ -2581,6 +2862,38 @@ class SweepAndCostTest(unittest.TestCase):
             ],
         )
         self.assertTrue(runner.ran("Key=espresso-bench-run,Values=run1"))
+
+    def test_security_group_delete_retries_on_dependency_violation(self):
+        attempts = []
+
+        def runner(argv):
+            attempts.append(argv)
+            busy = len(attempts) < 3
+            return completed(
+                returncode=254 if busy else 0,
+                stderr="DependencyViolation: has a dependent object" if busy else "",
+            )
+
+        with unittest.mock.patch.object(awsb, "SG_DELETE_BACKOFF_S", 0.0):
+            awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p")
+        self.assertEqual(len(attempts), 3)
+
+    def test_security_group_delete_gives_up_after_the_retry_bound(self):
+        runner = FakeRunner(
+            {("aws",): completed(returncode=254, stderr="DependencyViolation")}
+        )
+        with (
+            unittest.mock.patch.object(awsb, "SG_DELETE_BACKOFF_S", 0.0),
+            self.assertRaisesRegex(awsb.RemoteError, "DependencyViolation"),
+        ):
+            awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p")
+        self.assertEqual(len(runner.calls), awsb.SG_DELETE_RETRIES)
+
+    def test_security_group_delete_does_not_retry_other_errors(self):
+        runner = FakeRunner({("aws",): completed(returncode=254, stderr="denied")})
+        with self.assertRaisesRegex(awsb.RemoteError, "denied"):
+            awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p")
+        self.assertEqual(len(runner.calls), 1)
 
     def test_tagged_resources_without_name_matches_every_run(self):
         runner = FleetRunner([DONE_STATE])
@@ -2990,15 +3303,25 @@ class ClassifyOrphanTest(unittest.TestCase):
 
 
 class LocalPhaseTest(unittest.TestCase):
-    def test_needs_manifest_and_terraform_state(self):
+    def test_no_manifest_is_no_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(awsb.local_phase(Path(tmp), "r"))
+
+    def test_live_run_without_tfstate_keeps_its_phase(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
-            self.assertIsNone(awsb.local_phase(out, "r"))
+            (out / "r").mkdir()
+            netbench.write_json(out / "r" / "manifest.json", {"phase": "applying"})
+            self.assertEqual(awsb.local_phase(out, "r"), "applying")
+
+    def test_terminal_phase_needs_terraform_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
             (out / "r" / "terraform").mkdir(parents=True)
-            netbench.write_json(out / "r" / "manifest.json", {"phase": "measuring"})
+            netbench.write_json(out / "r" / "manifest.json", {"phase": "done"})
             self.assertIsNone(awsb.local_phase(out, "r"))
             (out / "r" / "terraform" / "terraform.tfstate").write_text("{}")
-            self.assertEqual(awsb.local_phase(out, "r"), "measuring")
+            self.assertEqual(awsb.local_phase(out, "r"), "done")
 
 
 class FormatRunsTest(unittest.TestCase):

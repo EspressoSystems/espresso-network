@@ -16,9 +16,9 @@ whose local state is lost or whose TTL passed. `collect` and `render` redo those
 existing run dir. `agent-drive` (on ctl) and `agent-host` (on every host) run under system
 python3 from /opt/bench.
 
-Prerequisites: opentofu and awscli2 (nix devShell), `AWS_PROFILE` set to the benchmark account,
-an ssh key (`--ssh-key`, default ~/.ssh/id_ed25519), and `--tag` naming the ghcr tag CI pushed for a
-`release-*` branch.
+Prerequisites: opentofu and awscli2 (nix devShell), an AWS profile for the benchmark account
+(`--profile`, default `timeboost-dev`), an ssh key (`--ssh-key`, default ~/.ssh/id_ed25519), and
+`--tag` naming the ghcr tag CI pushed for a `release-*` branch.
 Recipes: `just bench aws plan|run|status|collect|render|destroy`.
 
 Exit codes of `run`: 0 valid, 1 invalid result, 2 refused before any AWS write, 3 failed after
@@ -51,6 +51,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import defaultdict
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -227,6 +228,8 @@ SSH_RETRY_S = 5.0
 SSH_RETRY_MAX_S = 30.0
 # user-data pulls every image before cloud-init finishes; the ready timeout does not cover it.
 CLOUD_INIT_TIMEOUT_S = 900
+# cloud-init 23.4+ exits 2 for "done with recoverable errors", e.g. deprecation warnings.
+CLOUD_INIT_OK_RCS = (0, 2)
 GATE_RETRY_S = 2.0
 # Per support service (anvil, orchestrator, relay, postgres) to answer after `docker start`.
 GATE_TIMEOUT_S = 120.0
@@ -236,6 +239,13 @@ DEPLOY_TIMEOUT_S = 300
 AGENT_START_GRACE_S = 30.0
 # Beyond ready timeout plus load duration, for the final drain and stake table fetch.
 AGENT_SLACK_S = 300.0
+# ssh exits 255 when it cannot connect; `systemctl is-active` exits 3 for an inactive unit.
+SSH_FAILED_RC = 255
+# `timeout` exits 124 when it killed the command.
+TIMEOUT_RC = 124
+SYSTEMCTL_INACTIVE_RC = 3
+# Consecutive polls that may fail to reach ctl (about a minute) before the run fails.
+AGENT_POLL_SSH_FAILURES_MAX = 6
 # The tag every terraform resource carries (default_tags), and the key `sweep` filters on.
 TAG_RUN = "espresso-bench-run"
 TAG_OWNER = "espresso-bench-owner"
@@ -250,15 +260,27 @@ DOCKER_START_LEAD_S = 15.0
 # Container log lines per node in the summary of a run without a result.
 FAILURE_LOG_LINES = 10
 CHECKIP_URL = "https://checkip.amazonaws.com"
+# `plan --offline` touches neither the operator's key nor the network (unless --operator-cidr).
+OFFLINE_SSH_PUB = "ssh-ed25519 OFFLINE-PLACEHOLDER"
+OFFLINE_CIDR = "192.0.2.1/32"
 AGENT_POLL_S = 5.0
 AGENT_LOG_S = 30.0
 OUT_RSYNC_S = 60.0
+# Per remote command of stop, freeze and collect: above the docker stop grace of every
+# container on one host and well below COLLECT_MAX_S, so a hung docker call cannot block teardown.
+COLLECT_HOST_TIMEOUT_S = 180.0
+# rsync's idle I/O timeout; a stalled transfer fails instead of hanging.
+RSYNC_IO_TIMEOUT_S = 60
 # docker stop's grace period before SIGKILL, long enough for a clean journal fsync.
 FREEZE_STOP_TIMEOUT_S = 30.0
 DESTROY_RETRIES = 3
 DESTROY_BACKOFF_S = 20.0
 # Ctrl-C during measure: default-yes destroy prompt, so an unattended run still tears down.
 DESTROY_PROMPT_TIMEOUT_S = 30.0
+# delete-security-group right after termination fails with DependencyViolation until the
+# network interfaces detach.
+SG_DELETE_RETRIES = 6
+SG_DELETE_BACKOFF_S = 10.0
 
 # AWS validity rules (check_validity_aws), on top of netbench's own check_validity.
 START_SPREAD_NOISY_S = 2.0
@@ -273,12 +295,10 @@ class Refused(Exception):
 
 
 class TfFailed(Exception):
-    """`tofu apply` or `tofu destroy` failed after resources may already have been created or
-    changed, unlike `Refused`. `stage` picks the exit code in `main`: `apply` may have written
-    a partial fleet (exit 3, destroyed by the caller); `destroy` means resources may remain
-    (exit 4)."""
+    """`tofu apply`, `output` or `destroy` failed after resources may already have been created
+    or changed, unlike `Refused`. `measure` and `destroy_fleet` catch it."""
 
-    def __init__(self, stage: Literal["apply", "destroy"], message: str):
+    def __init__(self, stage: Literal["apply", "output", "destroy"], message: str):
         self.stage = stage
         super().__init__(message)
 
@@ -400,6 +420,7 @@ class Instance(TypedDict):
     type: str
     state: str
     launch: str
+    reason: str
 
 
 class TaggedRun(TypedDict):
@@ -1364,7 +1385,7 @@ class Terraform:
     def output(self) -> dict[str, Any]:
         result = self.run(self._argv("output", "-json"))
         if result.returncode != 0:
-            raise Refused(f"tofu output failed: {result.stderr.strip()}")
+            raise TfFailed("output", f"tofu output failed: {result.stderr.strip()}")
         return json.loads(result.stdout)
 
     def destroy(self) -> None:
@@ -1864,11 +1885,42 @@ def cmd_plan(args: argparse.Namespace, run: Runner = _run) -> int:
         # Pricing API (or any other AWS call) against the wrong account.
         caller_account(run, cfg)
     estimate = estimate_or_refuse(run, cfg, hosts, minor, run_dir, now)
-    write_manifest(
-        run_dir, cfg, hosts, host_peers, estimate, phase="planned", argv=args.argv
-    )
+    if cfg.offline:
+        render_run_dir(
+            run, cfg, run_dir, hosts, offline_preflight(cfg), estimate, args.argv
+        )
+    else:
+        write_manifest(
+            run_dir, cfg, hosts, host_peers, estimate, phase="planned", argv=args.argv
+        )
     log.info("rendered %s (phase=planned)", run_dir)
     return EXIT_OK
+
+
+def offline_preflight(cfg: RunConfig) -> Preflight:
+    """Placeholders for what `preflight` reads from AWS and the registry, so that `plan --offline`
+    renders every file."""
+    placeholder = "sha256:" + "0" * 64
+    images: dict[str, ImageInfo] = {
+        name: {
+            "ref": ref,
+            "digest": placeholder,
+            "revision": None,
+            "platforms": ["linux/arm64"],
+        }
+        for name, ref in image_refs(cfg).items()
+    }
+    return {
+        "account": cfg.account,
+        "vpc_id": "",
+        "az": "",
+        "ami_id": "",
+        "images": images,
+        "vcpu_needed": 0,
+        "vcpu_in_use": 0,
+        "vcpu_quota": 0.0,
+        "git_diff": None,
+    }
 
 
 def estimate_or_refuse(
@@ -1906,16 +1958,22 @@ class Interrupts:
     def __init__(self) -> None:
         self.event = threading.Event()
         self.armed = True
+        self.phase = "starting"
 
     def install(self) -> None:
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, self._handle)
 
     def _handle(self, signum: int, frame: Any) -> None:
-        if self.armed:
-            self.event.set()
-        else:
+        if not self.armed:
             log.warning("signal %d ignored: teardown in progress", signum)
+        elif self.event.is_set():
+            log.warning("still waiting for the current step (%s)", self.phase)
+        else:
+            self.event.set()
+            log.warning(
+                "interrupt received; stopping after the current step (%s)", self.phase
+            )
 
     def check(self) -> None:
         if self.armed and self.event.is_set():
@@ -1996,17 +2054,21 @@ class Remote:
                 shlex.join(["ssh", *self.ssh_opts]),
                 "--rsync-path",
                 "sudo rsync",
+                f"--timeout={RSYNC_IO_TIMEOUT_S}",
                 *args,
             ]
         )
         if result.returncode != 0:
             raise RemoteError(f"{host}: rsync failed: {result.stderr.strip()}")
 
-    def parallel(self, fn: Callable[[str], _T], names: Iterable[str]) -> dict[str, _T]:
-        """`fn(name)` for every name on a pool of REMOTE_POOL_SIZE threads. Waits for all, then
-        raises the first failure."""
+    def parallel(
+        self, fn: Callable[[str], _T], names: Iterable[str], workers: int | None = None
+    ) -> dict[str, _T]:
+        """`fn(name)` for every name on a pool of `workers` (default REMOTE_POOL_SIZE) threads.
+        Waits for all, then raises the first failure."""
         names = list(names)
-        with ThreadPoolExecutor(min(REMOTE_POOL_SIZE, max(1, len(names)))) as pool:
+        size = workers or REMOTE_POOL_SIZE
+        with ThreadPoolExecutor(min(size, max(1, len(names)))) as pool:
             futures = {name: pool.submit(fn, name) for name in names}
         return {name: future.result() for name, future in futures.items()}
 
@@ -2051,6 +2113,29 @@ def cmd_run(
 ) -> int:
     cfg = config_from_args(args)
     started = time.time()
+    try:
+        run_dir, tf = prepare_run(args, cfg, run, started)
+    except KeyboardInterrupt:
+        raise Refused("interrupted; nothing was created") from None
+    if interrupts is None:
+        interrupts = Interrupts()
+        interrupts.install()
+    fleet = Fleet(run, cfg, run_dir, tf, interrupts, started)
+    measure(fleet)
+    try:
+        result = finish(fleet)
+    except Exception as exc:  # the fleet costs money until teardown, whatever failed
+        log.exception("finish failed")
+        fleet.error = fleet.error or f"finish failed: {type(exc).__name__}: {exc}"
+        result = None
+    return teardown(fleet, result, ask_destroy)
+
+
+def prepare_run(
+    args: argparse.Namespace, cfg: RunConfig, run: Runner, started: float
+) -> tuple[Path, Terraform]:
+    """Everything before the first AWS write: preflight, render, `tofu init` and `plan`, and
+    the prompt. Any failure or Ctrl-C leaves nothing to destroy."""
     minor = region_minor_prices(cfg.region)
     hosts = plan_hosts(cfg)
     run_dir = new_run_dir(cfg.out_root, cfg.name)
@@ -2069,17 +2154,12 @@ def cmd_run(
     if not confirm(prompt, cfg.yes, sys.stdin.isatty()):
         append_event(run_dir, "planned", "refused", "not confirmed")
         raise Refused("not confirmed; nothing was created")
-    if interrupts is None:
-        interrupts = Interrupts()
-        interrupts.install()
-    fleet = Fleet(run, cfg, run_dir, tf, interrupts, started)
-    measure(fleet)
-    result = finish(fleet)
-    return teardown(fleet, result, ask_destroy)
+    return run_dir, tf
 
 
 def enter_phase(fleet: Fleet, name: str, message: str) -> None:
     fleet.interrupts.check()
+    fleet.interrupts.phase = name
     update_manifest(fleet.run_dir, name)
     log.info("%s: %s", name, message)
 
@@ -2113,7 +2193,7 @@ def measure(fleet: Fleet) -> None:
         fleet.interrupted = True
         fleet.error = "interrupted"
         log.error("interrupted")
-    except (TfFailed, RemoteError, Refused, nb.NetworkError) as exc:
+    except (TfFailed, RemoteError, nb.NetworkError) as exc:
         fleet.error = str(exc)
         log.error("error: %s", exc)
     except Exception as exc:  # the fleet costs money until teardown, whatever failed
@@ -2160,6 +2240,8 @@ def best_effort(what: str, action: Callable[[], object]) -> None:
         action()
     except RemoteError as exc:
         log.warning("%s failed: %s", what, exc)
+    except Exception:
+        log.exception("%s failed unexpectedly", what)
 
 
 def report(fleet: Fleet) -> nb.BenchResult | None:
@@ -2167,7 +2249,7 @@ def report(fleet: Fleet) -> nb.BenchResult | None:
         try:
             write_run_json(fleet)
             result = write_report(fleet.run_dir)
-        except (OSError, KeyError, ValueError) as exc:
+        except Exception as exc:
             log.exception("report failed")
             fleet.error = f"report failed: {type(exc).__name__}: {exc}"
         else:
@@ -2298,7 +2380,7 @@ def render_run_dir(
 ) -> None:
     """Everything known before `tofu apply`. Files that need the hosts' addresses (env files,
     start.sh, topology) are written by `render_host_files` after it."""
-    ssh_pub = read_ssh_pub(cfg.ssh_key)
+    ssh_pub = OFFLINE_SSH_PUB if cfg.offline else read_ssh_pub(cfg.ssh_key)
     cidr = operator_cidr(cfg)
     git_rev = git_head(run)
     genesis = render_genesis(
@@ -2373,6 +2455,8 @@ def read_ssh_pub(ssh_key: Path) -> str:
 def operator_cidr(cfg: RunConfig) -> str:
     if cfg.operator_cidr != "auto":
         return cfg.operator_cidr
+    if cfg.offline:
+        return OFFLINE_CIDR
     try:
         with urllib.request.urlopen(CHECKIP_URL, timeout=10) as response:
             return f"{response.read().decode().strip()}/32"
@@ -2479,9 +2563,7 @@ def wait_hosts(
 
     def ready(host: str) -> None:
         wait_ssh(remote, host, interrupts)
-        remote.ssh(
-            host, f"sudo timeout {CLOUD_INIT_TIMEOUT_S} cloud-init status --wait"
-        )
+        wait_cloud_init(remote, host)
         text = remote.ssh(host, f"cat {BENCH_DIR}/ready.json").stdout
         host_dir = run_dir / "hosts" / host
         (host_dir / "ready.json").write_text(text)
@@ -2490,6 +2572,24 @@ def wait_hosts(
             log.warning("%s pulled other digests than the manifest: %s", host, bad)
 
     remote.parallel(ready, remote.hosts)
+
+
+def wait_cloud_init(remote: Remote, host: str) -> None:
+    waited = remote.ssh(
+        host,
+        f"sudo timeout {CLOUD_INIT_TIMEOUT_S} cloud-init status --wait",
+        check=False,
+    )
+    if waited.returncode not in CLOUD_INIT_OK_RCS:
+        raise RemoteError(
+            f"{host}: cloud-init status --wait exited {waited.returncode}: "
+            f"{waited.stderr.strip()}"
+        )
+    status = json.loads(
+        remote.ssh(host, "cloud-init status --format json", check=False).stdout
+    )["status"]
+    if status != "done":
+        raise RemoteError(f"{host}: cloud-init finished as {status!r}, not 'done'")
 
 
 def digest_mismatches(
@@ -2574,12 +2674,18 @@ def start_support(remote: Remote, contracts: list[str], interrupts: Interrupts) 
         interrupts,
     )
     start("ctl", "deploy")
-    code = remote.ssh(
-        "ctl", f"sudo timeout {DEPLOY_TIMEOUT_S} docker wait deploy"
-    ).stdout
-    if code.strip() != "0":
+    waited = remote.ssh(
+        "ctl", f"sudo timeout {DEPLOY_TIMEOUT_S} docker wait deploy", check=False
+    )
+    if waited.returncode == TIMEOUT_RC:
+        raise RemoteError(f"deploy still running after {DEPLOY_TIMEOUT_S} s")
+    if waited.returncode != 0:
         raise RemoteError(
-            f"deploy exited with status {code.strip()}; see docker logs on ctl"
+            f"docker wait deploy exited {waited.returncode}: {waited.stderr.strip()}"
+        )
+    if waited.stdout.strip() != "0":
+        raise RemoteError(
+            f"deploy exited with status {waited.stdout.strip()}; see docker logs on ctl"
         )
     for address in contracts:
         check = rpc_check("eth_getCode", [address, "latest"], '.result != "0x"')
@@ -2629,7 +2735,9 @@ def start_nodes(remote: Remote, hosts: list[HostInfo], at: float) -> float:
         remote.ssh(node, f"{wait} && sudo docker start espresso-node")
         return parse_docker_time(remote.ssh(node, inspect).stdout)
 
-    started = remote.parallel(start, [h["name"] for h in hosts])
+    # One thread per node: each ssh call sleeps until `at`, so a smaller pool would start the
+    # rest only after the first batch returned.
+    started = remote.parallel(start, [h["name"] for h in hosts], workers=len(hosts))
     return max(started.values()) - min(started.values())
 
 
@@ -2648,9 +2756,15 @@ def start_agent(remote: Remote) -> None:
     )
 
 
+def bounded(command: str) -> str:
+    """`command` as root under `timeout`: a hung docker or systemctl call must not block
+    teardown."""
+    return f"sudo timeout -k 10 {COLLECT_HOST_TIMEOUT_S:.0f} bash -c {shlex.quote(command)}"
+
+
 def stop_agent(remote: Remote) -> None:
     """SIGTERM: the agent flushes its load output before exiting. Fine if it already exited."""
-    remote.ssh("ctl", "sudo systemctl stop bench-agent", check=False)
+    remote.ssh("ctl", bounded("systemctl stop bench-agent"), check=False)
 
 
 def read_agent_state(remote: Remote) -> AgentState | None:
@@ -2667,15 +2781,29 @@ def poll_agent(
     deadline = begin + cfg.ready_timeout_s + load_seconds(cfg.load) + AGENT_SLACK_S
     next_log = begin + AGENT_LOG_S
     next_sync = begin + OUT_RSYNC_S
+    state: AgentState | None = None
+    unreachable = 0
     while True:
         interrupts.check()
-        active = (
-            remote.ssh(
-                "ctl", "systemctl is-active --quiet bench-agent", check=False
-            ).returncode
-            == 0
+        probe = remote.ssh(
+            "ctl", "systemctl is-active --quiet bench-agent", check=False
         )
-        state = read_agent_state(remote)
+        if probe.returncode == SSH_FAILED_RC:
+            unreachable += 1
+            if unreachable > AGENT_POLL_SSH_FAILURES_MAX:
+                raise RemoteError(
+                    f"ctl unreachable for {unreachable} polls: {probe.stderr.strip()}"
+                )
+            log.warning("ctl unreachable, retrying: %s", probe.stderr.strip())
+            interrupts.sleep(AGENT_POLL_S)
+            continue
+        unreachable = 0
+        if probe.returncode not in (0, SYSTEMCTL_INACTIVE_RC):
+            raise RemoteError(
+                f"systemctl is-active exited {probe.returncode}: {probe.stderr.strip()}"
+            )
+        active = probe.returncode == 0
+        state = read_agent_state(remote) or state
         now = time.monotonic()
         if state is not None and state["phase"] == "done":
             return state
@@ -2694,22 +2822,39 @@ def poll_agent(
             log.info("%s: %s", state["phase"], state.get("progress", state["detail"]))
             next_log = now + AGENT_LOG_S
         if now >= next_sync:
-            remote.rsync_from("ctl", f"{BENCH_DIR}/out/", run_dir)
+            best_effort(
+                "partial rsync",
+                lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", run_dir),
+            )
             next_sync = now + OUT_RSYNC_S
         interrupts.sleep(AGENT_POLL_S)
 
 
-# Containers that write to the journal or answer queries; postgres stays up so that
-# `collect_hosts` can still ask it for statistics.
-FREEZE_FILTER = "^(espresso-node|anvil|orchestrator|state-relay-server)$"
+# Containers `render_start_sh` creates per role that write to the journal or answer queries;
+# postgres stays up so that `collect_hosts` can still ask it for statistics.
+FREEZE_CONTAINERS = {
+    "ctl": ("anvil", "orchestrator", "state-relay-server"),
+    "query": ("espresso-node",),
+    "validator": ("espresso-node",),
+}
+
+
+def freeze_command(names: tuple[str, ...]) -> str:
+    """`docker stop` per container, ignoring only a container that does not exist."""
+    return (
+        f"for c in {' '.join(names)}; do "
+        f"out=$(docker stop -t {int(FREEZE_STOP_TIMEOUT_S)} $c 2>&1) || "
+        'case "$out" in *"No such container"*) ;; *) echo "$out" >&2; exit 1;; esac; '
+        "done"
+    )
 
 
 def freeze(remote: Remote) -> None:
-    command = (
-        f"sudo docker ps -q --filter 'name={FREEZE_FILTER}' "
-        f"| xargs -r sudo docker stop -t {int(FREEZE_STOP_TIMEOUT_S)}"
-    )
-    remote.parallel(lambda host: remote.ssh(host, command), remote.hosts)
+    def stop(host: str) -> None:
+        names = FREEZE_CONTAINERS[remote.hosts[host]["role"]]
+        remote.ssh(host, bounded(freeze_command(names)))
+
+    remote.parallel(stop, remote.hosts)
 
 
 COLLECT_SCRIPT = (
@@ -2753,7 +2898,7 @@ def collect_hosts(
             COLLECT_SCRIPT + (PG_STATS_SCRIPT if role == "query" else "") + "true\n"
         )
         try:
-            remote.ssh(name, f"sudo bash -c {shlex.quote(script)}")
+            remote.ssh(name, bounded(script))
             remote.rsync_from(
                 name,
                 f"{BENCH_DIR}/",
@@ -3030,7 +3175,7 @@ def describe_instances(
         *filters,
         "--query",
         "Reservations[].Instances[].{id:InstanceId,type:InstanceType,"
-        "state:State.Name,launch:LaunchTime}",
+        "state:State.Name,launch:LaunchTime,reason:StateTransitionReason}",
         "--output",
         "json",
     )
@@ -3075,14 +3220,18 @@ def group_runs(
 
 
 def local_phase(out_root: Path, name: str) -> str | None:
-    """The run's manifest phase, or None when this machine no longer has its state (manifest
-    or terraform state missing)."""
+    """The run's manifest phase, or None when this machine no longer has its state: no manifest,
+    or a terminal phase without terraform state. A live run has no tfstate during `tofu apply`."""
     run_dir = out_root / name
     if not (run_dir / "manifest.json").exists():
         return None
-    if not (run_dir / "terraform" / "terraform.tfstate").exists():
+    phase = nb.read_json(run_dir / "manifest.json")["phase"]
+    if (
+        phase in TERMINAL_PHASES
+        and not (run_dir / "terraform" / "terraform.tfstate").exists()
+    ):
         return None
-    return nb.read_json(run_dir / "manifest.json")["phase"]
+    return phase
 
 
 def classify_orphan(
@@ -3438,7 +3587,10 @@ def write_failure_summary(run_dir: Path, manifest: Manifest, error: str | None) 
     for spec in manifest["hosts"]:
         path = run_dir / "hosts" / spec["name"] / "espresso-node.log.gz"
         if path.exists():
-            tail = [line[:300] for line in log_tail(path, FAILURE_LOG_LINES)]
+            try:
+                tail = [line[:300] for line in log_tail(path, FAILURE_LOG_LINES)]
+            except (OSError, EOFError) as exc:  # a log cut off by a timed-out collect
+                tail = [f"log unreadable: {exc}"]
             lines += [f"Last log lines of {spec['name']}:", "", "```", *tail, "```", ""]
     (run_dir / "summary.md").write_text("\n".join(lines))
 
@@ -3476,18 +3628,18 @@ def sweep(
     """Terminates the instances found by `tagged_resources`, then deletes their volumes,
     security group and key pair. Returns every ARN found."""
     arns = tagged_resources(run, region, name, profile)
-    by_kind: dict[str, list[str]] = {}
+    by_kind: defaultdict[str, list[str]] = defaultdict(list)
     for arn in arns:
-        kind, _, resource_id = arn.rpartition(":")[2].partition("/")
-        by_kind.setdefault(kind, []).append(resource_id)
-    instances = by_kind.get("instance", [])
+        kind, resource_id = arn_parts(arn)
+        by_kind[kind].append(resource_id)
+    instances = by_kind["instance"]
     if instances:
         ids = ["--instance-ids", *instances]
         aws_ok(run, profile, "ec2", "terminate-instances", "--region", region, *ids)
         aws_ok(
             run, profile, "ec2", "wait", "instance-terminated", "--region", region, *ids
         )
-    for volume in by_kind.get("volume", []):
+    for volume in by_kind["volume"]:
         # Root volumes normally vanish with their instance.
         aws_ok(
             run,
@@ -3500,18 +3652,9 @@ def sweep(
             volume,
             tolerate="InvalidVolume.NotFound",
         )
-    for group in by_kind.get("security-group", []):
-        aws_ok(
-            run,
-            profile,
-            "ec2",
-            "delete-security-group",
-            "--region",
-            region,
-            "--group-id",
-            group,
-        )
-    for key in by_kind.get("key-pair", []):
+    for group in by_kind["security-group"]:
+        delete_security_group(run, region, group, profile)
+    for key in by_kind["key-pair"]:
         aws_ok(
             run,
             profile,
@@ -3525,6 +3668,27 @@ def sweep(
     return arns
 
 
+def delete_security_group(run: Runner, region: str, group: str, profile: str) -> None:
+    for attempt in range(1, SG_DELETE_RETRIES + 1):
+        try:
+            aws_ok(
+                run,
+                profile,
+                "ec2",
+                "delete-security-group",
+                "--region",
+                region,
+                "--group-id",
+                group,
+            )
+            return
+        except RemoteError as exc:
+            if "DependencyViolation" not in str(exc) or attempt == SG_DELETE_RETRIES:
+                raise
+            log.debug("security group %s still in use, retrying", group)
+            time.sleep(SG_DELETE_BACKOFF_S)
+
+
 TERMINATION_TIME = re.compile(r"\((\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) GMT\)")
 
 
@@ -3533,21 +3697,12 @@ def actual_cost(run: Runner, manifest: Manifest) -> dict[str, float]:
     estimate's price lines at the time between the first launch and the last termination,
     from `describe-instances` (terminated instances stay listed for about an hour)."""
     config = manifest["config"]
-    out = aws_ok(
+    rows = describe_instances(
         run,
-        config["profile"],
-        "ec2",
-        "describe-instances",
-        "--region",
         config["region"],
-        "--filters",
+        config["profile"],
         f"Name=tag:{TAG_RUN},Values={manifest['name']}",
-        "--query",
-        "Reservations[].Instances[].{launch:LaunchTime,reason:StateTransitionReason}",
-        "--output",
-        "json",
     )
-    rows = json.loads(out)
     if not rows:
         raise RemoteError(f"no instances tagged {manifest['name']} to price")
     launches = [datetime.fromisoformat(row["launch"]) for row in rows]
@@ -3862,9 +4017,6 @@ def main() -> int:
     except RemoteError as exc:
         log.error("error: %s", exc)
         return EXIT_FAILED
-    except TfFailed as exc:
-        log.error("error: %s", exc)
-        return EXIT_LEFTOVER if exc.stage == "destroy" else EXIT_FAILED
 
 
 if __name__ == "__main__":
