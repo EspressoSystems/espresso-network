@@ -635,7 +635,7 @@ where
         } => Some(CoordinatorEvent::BlockPayloadReconstructed {
             view: *view,
             header: header.clone(),
-            payload: payload.clone(),
+            payload: Arc::clone(payload),
         }),
         _ => None,
     }

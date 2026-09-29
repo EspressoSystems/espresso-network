@@ -330,7 +330,7 @@ where
             CoordinatorEvent::BlockPayloadReconstructed {
                 header, payload, ..
             } => {
-                let block = BlockQueryData::new(header.clone(), payload.clone());
+                let block = BlockQueryData::new(header.clone(), payload.as_ref().clone());
                 let height = block.height();
                 if let Err(err) = self.append_payload(block).await {
                     tracing::error!(height, "failed to store reconstructed payload: {err:#}");
