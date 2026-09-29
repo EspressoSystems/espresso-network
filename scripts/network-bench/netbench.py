@@ -639,6 +639,8 @@ async def generate_load(
     counters: list[dict[str, Any]] = []
     heights: Heights | None = None
     steps: list[dict[str, Any]] = []
+    drained: float | None = None
+    skipped = False
     try:
         heights = Heights(await tracking.call(query_height, query_url))
         async with asyncio.TaskGroup() as group:
@@ -675,7 +677,9 @@ async def generate_load(
         polling.close()
         # In `finally` so a load cut short (SIGTERM of the AWS agent) keeps its raw data.
         if heights is not None:
-            write_load_files(out, state, heights, counters, steps, marker)
+            write_load_files(
+                out, state, heights, counters, steps, marker, drained, skipped
+            )
     return steps[0]["t_start"], steps[-1]["t_end"]
 
 
@@ -686,6 +690,8 @@ def write_load_files(
     counters: list[dict[str, Any]],
     steps: list[dict[str, Any]],
     marker: bytes,
+    drained: float | None,
+    skipped: bool,
 ) -> None:
     write_jsonl(out / "load.jsonl", (dataclasses.asdict(tx) for tx in state.txs))
     write_jsonl(out / "heights.jsonl", heights.records())

@@ -1233,7 +1233,9 @@ class WriteLoadFilesTest(unittest.TestCase):
         heights = netbench.Heights(7)
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
-            netbench.write_load_files(out, state, heights, [], steps, b"\x01")
+            netbench.write_load_files(
+                out, state, heights, [], steps, b"\x01", None, False
+            )
             return {p.name: p.read_text() for p in out.iterdir()}
 
     def test_cut_short_load_keeps_raw_files_without_steps(self):
