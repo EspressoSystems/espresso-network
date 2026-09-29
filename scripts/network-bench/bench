@@ -898,6 +898,14 @@ class LoadState:
         self.pending[tx.id] = tx
         self.max_in_flight = max(self.max_in_flight, len(self.pending))
 
+    def failed(self, tx: Tx) -> None:
+        """A submit that failed. Its permit returns unless the transaction was included
+        anyway, e.g. after a timed-out response."""
+        self.submit_errors += 1
+        if self.pending.pop(tx.id, None) is not None:
+            self.txs.remove(tx)
+            self.permits.release()
+
     def resolve(self, tx_id: int, status: str, now: float) -> None:
         tx = self.pending.pop(tx_id, None)
         if tx is None:
@@ -1006,7 +1014,8 @@ async def submit_tx(
     bodies: list[bytes],
     tx_id: int,
 ) -> None:
-    """Submit one transaction holding a permit; the tracker returns it on inclusion."""
+    """Submit one transaction holding a permit; the tracker returns it on inclusion. Pending
+    before the request goes out: its block may be scanned before the response arrives."""
     lo, hi = cfg.namespaces
     node = tx_id % len(urls)
     payload = marker + tx_id.to_bytes(8, "big") + bodies[tx_id % len(bodies)]
@@ -1017,12 +1026,10 @@ async def submit_tx(
         }
     ).encode()
     tx = Tx(id=tx_id, node=node, t_submit=time.time())
+    state.submitted(tx)
     status = await client.call(post_tx, tx, urls[node] + "/v1/submit/submit", body)
     if status != 200:
-        state.submit_errors += 1
-        state.permits.release()
-        return
-    state.submitted(tx)
+        state.failed(tx)
 
 
 def post_tx(pool: HttpPool, tx: Tx, url: str, body: bytes) -> int:
