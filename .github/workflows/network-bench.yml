@@ -168,7 +168,7 @@ jobs:
   comment:
     name: Post benchmark summary
     needs: bench
-    if: ${{ always() && inputs.pr != '' }}
+    if: ${{ !cancelled() && inputs.pr != '' }}
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:
