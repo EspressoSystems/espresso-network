@@ -12,6 +12,7 @@ import contextlib
 import dataclasses
 import importlib.util
 import json
+import math
 import socket
 import statistics
 import subprocess
@@ -1115,6 +1116,171 @@ class AnalyzeTest(unittest.TestCase):
             "node0 metrics answered for only 0%", result["validity"]["reasons"][0]
         )
         self.assertIn("run **invalid**", bench.render(result, None))
+
+
+class StaircaseTest(unittest.TestCase):
+    def test_ramp_until_the_first_failure_then_refine(self):
+        ramp = (4.0, 6.0, 8.0)
+        self.assertEqual(bench.next_rate(ramp, []), 4.0)
+        self.assertEqual(bench.next_rate(ramp, [True]), 6.0)
+        self.assertEqual(bench.next_rate(ramp, [True, False]), 5.0)
+        self.assertIsNone(bench.next_rate(ramp, [True, False, True]))
+        self.assertIsNone(bench.next_rate(ramp, [True, True, True]))
+
+    def test_first_step_failing_ends_the_ramp(self):
+        self.assertIsNone(bench.next_rate((4.0, 6.0), [False]))
+
+    def test_theil_sen_ignores_an_outlier(self):
+        points = [(float(x), 2.0 * x) for x in range(10)] + [(10.0, 100.0)]
+        self.assertAlmostEqual(bench.theil_sen(points), 2.0)
+        self.assertIsNone(bench.theil_sen([(1.0, 1.0)]))
+
+
+def step_window(rate=10.0, start=0.0):
+    return {
+        "rate_mb_s": rate,
+        "refine": False,
+        "t_start": start,
+        "t_mid": start + 15,
+        "t_end": start + 30,
+    }
+
+
+class StepMeasuresTest(unittest.TestCase):
+    """A 10 MB/s step, t 0 to 30, measured from 15: one 1 MB tx every 0.1 s."""
+
+    def measures(
+        self,
+        decided_mb_s=10.0,
+        timeouts=0,
+        consensus_s=0.5,
+        query_s=0.2,
+        query_growth=0.0,
+        now=math.inf,
+    ):
+        cfg = bench.BenchConfig()
+        txs = [
+            {"t_submit": i / 10, "height": i, "status": "included"} for i in range(300)
+        ]
+        heights = [
+            {
+                "height": i,
+                "validator": i / 10 + consensus_s,
+                "query": i / 10 + consensus_s + query_s + query_growth * i / 10,
+                "scanned": None,
+            }
+            for i in range(300)
+        ]
+        counters = [
+            {
+                "ts": float(t),
+                "decided_bytes": decided_mb_s * 1e6 * t,
+                "timeouts": timeouts * (t > 20),
+            }
+            for t in range(31)
+        ]
+        return bench.step_measures(step_window(), cfg, txs, heights, counters, now)
+
+    def test_keeping_up(self):
+        m = self.measures()
+        self.assertAlmostEqual(m["decided_mb_s"], 10.0)
+        self.assertAlmostEqual(m["backlog_slope_mb_s"], 0.0, delta=0.2)
+        self.assertEqual(m["timeouts"], 0)
+        self.assertAlmostEqual(m["consensus_latency_ms"]["p50"], 500.0)
+        self.assertAlmostEqual(m["query_lag_ms"]["p50"], 200.0)
+        self.assertAlmostEqual(m["query_lag_slope_ms_s"], 0.0)
+        self.assertEqual(bench.step_fails(m, 10.0, bench.BenchConfig()), ([], []))
+
+    def test_consensus_rules(self):
+        m = self.measures(decided_mb_s=9.0, timeouts=1, consensus_s=1.5)
+        consensus, query = bench.step_fails(m, 10.0, bench.BenchConfig())
+        self.assertEqual(query, [])
+        self.assertEqual(
+            consensus,
+            [
+                "decided 90% of offered",
+                "backlog grows 1 MB/s",
+                "1 view timeouts",
+                "consensus latency p50 1500 ms > 1000 ms",
+            ],
+        )
+
+    def test_growing_query_lag(self):
+        m = self.measures(query_growth=0.2)
+        self.assertAlmostEqual(m["query_lag_slope_ms_s"], 200.0, delta=1)
+        consensus, query = bench.step_fails(m, 10.0, bench.BenchConfig())
+        self.assertEqual(consensus, [])
+        self.assertEqual(query[0], "query lag grows 200 ms/s")
+
+    def test_heights_not_yet_on_the_query_node_count_as_lagging(self):
+        # At t 22 nothing is on the query node yet: heights older than the target lag.
+        m = self.measures(query_s=100.0, now=22.0)
+        self.assertGreater(m["query_lag_ms"]["p50"], 1000.0)
+        _, query = bench.step_fails(m, 10.0, bench.BenchConfig())
+        self.assertIn("query lag p50", query[0])
+
+
+def verdict(rate, consensus=(), query=()):
+    return {
+        "rate_mb_s": rate,
+        "consensus_fails": list(consensus),
+        "query_fails": list(query),
+    }
+
+
+class CapacityTest(unittest.TestCase):
+    def test_all_pass_is_a_lower_bound(self):
+        cap = bench.capacity([verdict(4.0), verdict(6.0)])
+        self.assertEqual(cap["overall"], {"mb_s": 6.0, "bounded": False})
+        self.assertIsNone(cap["fail_rule"])
+
+    def test_consensus_limit(self):
+        cap = bench.capacity(
+            [
+                verdict(4.0),
+                verdict(6.0),
+                verdict(8.0, consensus=["decided 90% of offered"]),
+                verdict(7.0),
+            ]
+        )
+        self.assertEqual(cap["overall"], {"mb_s": 7.0, "bounded": True})
+        self.assertEqual(cap["consensus"], {"mb_s": 7.0, "bounded": True})
+        self.assertEqual(cap["query_node"], {"mb_s": 8.0, "bounded": False})
+        self.assertEqual(cap["fail_rule"], "decided 90% of offered at 8 MB/s")
+        self.assertEqual(
+            bench.capacity_line(cap),
+            "Capacity **7 MB/s**: consensus limits (decided 90% of offered at 8 MB/s).",
+        )
+
+    def test_query_node_limit(self):
+        cap = bench.capacity(
+            [
+                verdict(4.0),
+                verdict(6.0, query=["query lag p50 1500 ms > 1000 ms"]),
+                verdict(5.0),
+            ]
+        )
+        self.assertEqual(cap["query_node"], {"mb_s": 5.0, "bounded": True})
+        self.assertEqual(cap["consensus"], {"mb_s": 6.0, "bounded": False})
+        self.assertEqual(
+            bench.capacity_line(cap),
+            "Capacity **5 MB/s**: query node limits at 5 MB/s, consensus >= 6 MB/s "
+            "(query lag p50 1500 ms > 1000 ms at 6 MB/s).",
+        )
+
+    def test_first_step_fails(self):
+        cap = bench.capacity([verdict(4.0, consensus=["1 view timeouts"])])
+        self.assertEqual(cap["overall"], {"mb_s": None, "bounded": True})
+        self.assertEqual(
+            bench.capacity_line(cap),
+            "Capacity **< 4 MB/s**: consensus limits (1 view timeouts at 4 MB/s).",
+        )
+
+    def test_no_failure(self):
+        self.assertEqual(
+            bench.capacity_line(bench.capacity([verdict(4.0), verdict(6.0)])),
+            "Capacity **>= 6 MB/s**: no step failed.",
+        )
 
 
 class PaceTest(unittest.TestCase):

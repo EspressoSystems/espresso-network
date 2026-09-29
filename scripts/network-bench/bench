@@ -165,6 +165,9 @@ KEEP_UP_RATIO = 0.95
 KEEP_UP_AT_CAP_FRAC = 0.02
 KEEP_UP_EMPTY_FRAC = 0.05
 QUERY_LAG_BEHIND_MS = 1000.0
+# Step rules, see step_fails.
+BACKLOG_GROWTH_FRAC = 0.05
+QUERY_LAG_GROWTH_MS_S = 50.0
 TOOL_VERSIONS = (
     ["process-compose", "version"],
     ["anvil", "--version"],
@@ -310,6 +313,40 @@ class Bound(TypedDict):
     reason: str
 
 
+class StepWindow(TypedDict):
+    """One load step: `rate_mb_s` from `t_start`, measured from `t_mid` to `t_end`."""
+
+    rate_mb_s: float
+    refine: bool
+    t_start: float
+    t_mid: float
+    t_end: float
+
+
+class StepMeasures(TypedDict):
+    decided_mb_s: float | None
+    # Submitted minus decided bytes, Theil-Sen slope over the measured half.
+    backlog_slope_mb_s: float | None
+    timeouts: int | None
+    consensus_latency_ms: Quantiles | None
+    query_lag_ms: Quantiles | None
+    query_lag_slope_ms_s: float | None
+
+
+class Limit(TypedDict):
+    # None: below the first step. Not `bounded`: every step passed, a lower bound.
+    mb_s: float | None
+    bounded: bool
+
+
+class Capacity(TypedDict):
+    overall: Limit
+    consensus: Limit
+    query_node: Limit
+    failed_at_mb_s: float | None
+    fail_rule: str | None
+
+
 class Validity(TypedDict):
     valid: bool
     noisy: bool
@@ -354,6 +391,9 @@ class BenchConfig:
     measure_s: int = 180
     subwindow_s: int = 30
     seed: int = 42
+    # A step fails above either target, see step_fails.
+    latency_target_ms: int = 1000
+    query_lag_target_ms: int = 1000
 
 
 @dataclass
@@ -1233,6 +1273,159 @@ def log_progress(state: LoadState, height: int) -> None:
         timeouts,
         state.cap_waits,
     )
+
+
+def next_rate(ramp: Sequence[float], passed: list[bool]) -> float | None:
+    """The rate of the next step after steps with `passed` verdicts: up the ramp until a step
+    fails, then one refine step halfway back, then none."""
+    if all(passed):
+        return ramp[len(passed)] if len(passed) < len(ramp) else None
+    first_fail = passed.index(False)
+    if first_fail == 0 or len(passed) > first_fail + 1:
+        return None
+    return (ramp[first_fail - 1] + ramp[first_fail]) / 2
+
+
+def step_measures(
+    step: StepWindow,
+    cfg: BenchConfig,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    counters: list[dict[str, Any]],
+    now: float,
+) -> StepMeasures:
+    """Over the measured half, from what is known at `now`. A height still missing on the
+    query node counts with its lag so far once that exceeds the target."""
+    t0, t1 = step["t_mid"], step["t_end"]
+    inside = [c for c in counters if t0 <= c["ts"] <= t1]
+    sent = sorted(tx["t_submit"] for tx in txs if math.isfinite(tx["t_submit"]))
+    backlog = [
+        (
+            c["ts"],
+            (bisect_right(sent, c["ts"]) * cfg.tx_size - c["decided_bytes"]) / 1e6,
+        )
+        for c in inside
+    ]
+    first, last = (inside[0], inside[-1]) if len(inside) >= 2 else (None, None)
+    on_validator = {h["height"]: h["validator"] for h in heights}
+    consensus = [
+        (on_validator[tx["height"]] - tx["t_submit"]) * 1000
+        for tx in txs
+        if t0 <= tx["t_submit"] <= t1
+        and tx["height"] is not None
+        and on_validator.get(tx["height"]) is not None
+    ]
+    lags = []
+    for h in heights:
+        seen = h["validator"]
+        if seen is None or not t0 <= seen <= t1:
+            continue
+        if h["query"] is not None:
+            lags.append((seen, (h["query"] - seen) * 1000))
+        elif (now - seen) * 1000 > cfg.query_lag_target_ms:
+            lags.append((seen, (now - seen) * 1000))
+    return {
+        "decided_mb_s": (
+            (last["decided_bytes"] - first["decided_bytes"])
+            / (last["ts"] - first["ts"])
+            / 1e6
+            if first and last
+            else None
+        ),
+        "backlog_slope_mb_s": theil_sen(backlog),
+        "timeouts": int(last["timeouts"] - first["timeouts"])
+        if first and last
+        else None,
+        "consensus_latency_ms": quantiles(consensus),
+        "query_lag_ms": quantiles([lag for _, lag in lags]),
+        "query_lag_slope_ms_s": theil_sen(lags),
+    }
+
+
+def theil_sen(points: list[tuple[float, float]]) -> float | None:
+    """Median slope over all point pairs: one outlier does not tilt it."""
+    slopes = [
+        (y2 - y1) / (x2 - x1)
+        for (x1, y1), (x2, y2) in itertools.combinations(sorted(points), 2)
+        if x2 > x1
+    ]
+    return statistics.median(slopes) if slopes else None
+
+
+def step_fails(
+    m: StepMeasures, rate: float, cfg: BenchConfig
+) -> tuple[list[str], list[str]]:
+    """Failed rules of a step: consensus-side, then query-node-side."""
+    consensus, query = [], []
+    decided, backlog = m["decided_mb_s"], m["backlog_slope_mb_s"]
+    if decided is None:
+        consensus.append("no consensus metrics")
+    elif decided < KEEP_UP_RATIO * rate:
+        consensus.append(f"decided {decided / rate:.0%} of offered")
+    if backlog is not None and backlog > BACKLOG_GROWTH_FRAC * rate:
+        consensus.append(f"backlog grows {fmt_num(backlog)} MB/s")
+    if m["timeouts"]:
+        consensus.append(f"{m['timeouts']} view timeouts")
+    latency = m["consensus_latency_ms"]
+    if latency and latency["p50"] > cfg.latency_target_ms:
+        consensus.append(
+            f"consensus latency p50 {latency['p50']:.0f} ms > {cfg.latency_target_ms} ms"
+        )
+    lag, slope = m["query_lag_ms"], m["query_lag_slope_ms_s"]
+    if slope is not None and slope > QUERY_LAG_GROWTH_MS_S:
+        query.append(f"query lag grows {slope:.0f} ms/s")
+    if lag and lag["p50"] > cfg.query_lag_target_ms:
+        query.append(
+            f"query lag p50 {lag['p50']:.0f} ms > {cfg.query_lag_target_ms} ms"
+        )
+    return consensus, query
+
+
+def capacity(steps: Sequence[dict[str, Any]]) -> Capacity:
+    """Highest passing rate below the lowest failing one, overall and per rule side."""
+    ordered = sorted(steps, key=lambda s: s["rate_mb_s"])
+
+    def limit(fails: Callable[[dict[str, Any]], list[str]]) -> tuple[Limit, Any]:
+        passed = None
+        for step in ordered:
+            if fails(step):
+                return {"mb_s": passed, "bounded": True}, step
+            passed = step["rate_mb_s"]
+        return {"mb_s": passed, "bounded": False}, None
+
+    overall, failed = limit(lambda s: s["consensus_fails"] + s["query_fails"])
+    return {
+        "overall": overall,
+        "consensus": limit(lambda s: s["consensus_fails"])[0],
+        "query_node": limit(lambda s: s["query_fails"])[0],
+        "failed_at_mb_s": failed["rate_mb_s"] if failed else None,
+        "fail_rule": (
+            f"{'; '.join(failed['consensus_fails'] + failed['query_fails'])} at "
+            f"{fmt_num(failed['rate_mb_s'])} MB/s"
+            if failed
+            else None
+        ),
+    }
+
+
+def capacity_line(cap: Capacity) -> str:
+    overall, consensus = cap["overall"], cap["consensus"]
+    if not overall["bounded"]:
+        return f"Capacity **>= {fmt_num(overall['mb_s'])} MB/s**: no step failed."
+    value = (
+        fmt_num(overall["mb_s"])
+        if overall["mb_s"] is not None
+        else f"< {fmt_num(cap['failed_at_mb_s'])}"
+    )
+    if consensus["bounded"] and consensus["mb_s"] == overall["mb_s"]:
+        who = "consensus limits"
+    else:
+        bound = "limits at" if consensus["bounded"] else ">="
+        who = (
+            f"query node limits at {value} MB/s, consensus {bound} "
+            f"{fmt_num(consensus['mb_s'])} MB/s"
+        )
+    return f"Capacity **{value} MB/s**: {who} ({cap['fail_rule']})."
 
 
 def read(pool: HttpPool, url: str) -> tuple[int, bytes]:
