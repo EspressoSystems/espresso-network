@@ -4,6 +4,7 @@ network endpoint is passed in as a `Topology`. Imported by the local `bench` dri
 by the AWS driver and its agents.
 """
 
+import argparse
 import asyncio
 import base64
 import dataclasses
@@ -303,6 +304,16 @@ class BenchConfig:
     # A step fails above either target, see step_fails.
     latency_target_ms: int = 1000
     query_lag_target_ms: int = 1000
+
+
+def parse_rates(text: str) -> tuple[float, ...]:
+    """`4,6,8`: increasing MB/s."""
+    rates = tuple(float(x) for x in text.split(","))
+    if list(rates) != sorted(set(rates)) or rates[0] <= 0:
+        raise argparse.ArgumentTypeError(
+            f"steps must be increasing and positive: {text}"
+        )
+    return rates
 
 
 class Row(TypedDict):

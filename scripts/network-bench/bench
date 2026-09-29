@@ -177,7 +177,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default = getattr(defaults, field.name)
         run.add_argument(
             f"--{field.name.replace('_', '-')}",
-            type=parse_rates if field.name == "steps" else type(default),
+            type=nb.parse_rates if field.name == "steps" else type(default),
             default=default,
         )
     run.set_defaults(func=cmd_run)
@@ -202,16 +202,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     sysinfo_p.add_argument("--out", type=Path, default=Path("bench-out"))
     sysinfo_p.set_defaults(func=cmd_sysinfo)
     return parser.parse_args(argv)
-
-
-def parse_rates(text: str) -> tuple[float, ...]:
-    """`4,6,8`: increasing MB/s."""
-    rates = tuple(float(x) for x in text.split(","))
-    if list(rates) != sorted(set(rates)) or rates[0] <= 0:
-        raise argparse.ArgumentTypeError(
-            f"steps must be increasing and positive: {text}"
-        )
-    return rates
 
 
 def config_from_args(args: argparse.Namespace) -> nb.BenchConfig:
