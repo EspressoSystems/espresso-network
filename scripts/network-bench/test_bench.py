@@ -8,6 +8,7 @@ No network is started.
 import argparse
 import asyncio
 import base64
+import contextlib
 import dataclasses
 import importlib.util
 import json
@@ -495,41 +496,71 @@ class ReadRetryTest(unittest.TestCase):
         self.assertEqual(pool.request.call_count, 1)
 
 
-class UnexpectedErrorTest(unittest.TestCase):
-    def test_tears_down_and_writes_failure_summary(self):
+class CmdRunTest(unittest.TestCase):
+    """`cmd_run` with the runner, calibration and storage stubbed out."""
+
+    def cmd_run(self, tmp, **patches):
+        out, storage = Path(tmp) / "out", Path(tmp) / "storage"
+        storage.mkdir()
+        args = bench.parse_args(["run", "--bin-dir", "/nonexistent", "--out", str(out)])
+        calib = {"sha256_1t_mb_s": 1.0, "sha256_mt_mb_s": 1.0, "fsync_per_s": 1.0}
+        stubs = {
+            "preflight_problems": mock.Mock(return_value=[]),
+            "collect_sysinfo": mock.Mock(return_value=(make_result()["runner"], {})),
+            "calibrate": mock.Mock(return_value=calib),
+            "make_storage": mock.Mock(return_value=storage),
+            "remove_storage": mock.Mock(),
+        } | patches
+        with contextlib.ExitStack() as stack:
+            for name, stub in stubs.items():
+                stack.enter_context(mock.patch.object(bench, name, stub))
+            stack.enter_context(mock.patch("builtins.print"))
+            stack.enter_context(self.assertLogs(bench.log, "ERROR"))
+            code = bench.cmd_run(args)
+        return code, out
+
+    def test_unexpected_error_tears_down_and_writes_failure_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
-            out, storage = Path(tmp) / "out", Path(tmp) / "storage"
-            storage.mkdir()
-            args = bench.parse_args(
-                ["run", "--bin-dir", "/nonexistent", "--out", str(out)]
+            net = bench.Network(proc=mock.Mock(), out=Path(tmp), storage=Path(tmp))
+            teardown = mock.Mock(return_value=[])
+            code, out = self.cmd_run(
+                tmp,
+                start_network=mock.Mock(return_value=net),
+                sample_metrics=mock.Mock(),
+                sample_host=mock.Mock(),
+                wait_ready=mock.Mock(side_effect=ValueError("bad height")),
+                teardown=teardown,
             )
-            net = bench.Network(proc=mock.Mock(), out=out, storage=storage)
-            calib = {"sha256_1t_mb_s": 1.0, "sha256_mt_mb_s": 1.0, "fsync_per_s": 1.0}
-            with (
-                mock.patch.object(bench, "preflight_problems", return_value=[]),
-                mock.patch.object(
-                    bench, "collect_sysinfo", return_value=(make_result()["runner"], {})
-                ),
-                mock.patch.object(bench, "calibrate", return_value=calib),
-                mock.patch.object(bench, "make_storage", return_value=storage),
-                mock.patch.object(bench, "remove_storage"),
-                mock.patch.object(bench, "start_network", return_value=net),
-                mock.patch.object(bench, "sample_metrics"),
-                mock.patch.object(bench, "sample_host"),
-                mock.patch.object(
-                    bench, "wait_ready", side_effect=ValueError("bad height")
-                ),
-                mock.patch.object(bench, "teardown", return_value=[]) as teardown,
-                mock.patch("builtins.print"),
-                self.assertLogs(bench.log, "ERROR"),
-            ):
-                self.assertEqual(bench.cmd_run(args), 1)
+            self.assertEqual(code, 1)
             teardown.assert_called_once_with(net)
             run = json.loads((out / "run.json").read_text())
             self.assertEqual(run["error"], "ValueError: bad height")
             self.assertIn(
                 "**invalid**: ValueError: bad height", (out / "summary.md").read_text()
             )
+
+    def test_metadata_is_read_before_the_run(self):
+        order = []
+        meta = make_result()["run"]
+
+        def environment_meta(pr):
+            order.append("meta")
+            return meta
+
+        def drive_network(*_):
+            order.append("run")
+            bench.log.error("stalled")
+            return {"error": "stalled", "ready_s": None, "teardown": []}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = self.cmd_run(
+                tmp,
+                environment_meta=mock.Mock(side_effect=environment_meta),
+                drive_network=mock.Mock(side_effect=drive_network),
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(order, ["meta", "run"])
+            self.assertEqual(json.loads((out / "run.json").read_text())["meta"], meta)
 
 
 class TeardownTest(unittest.TestCase):

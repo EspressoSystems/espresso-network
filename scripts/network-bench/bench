@@ -507,6 +507,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
     (out / "logs").mkdir(parents=True, exist_ok=True)
     started = time.time()
+    # Read before the run: the checkout or its files may change while it runs.
+    run_info = {
+        "meta": environment_meta(args.pr),
+        # A later re-render may see other genesis or compose files.
+        "config_hash": config_hash(cfg),
+    }
     write_json(out / "config.json", dataclasses.asdict(cfg))
     runner, raw = collect_sysinfo(args.bin_dir)
     write_json(out / "sysinfo.json", {"runner": runner, "raw": raw})
@@ -524,13 +530,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             remove_storage(storage)
     finally:
         signal.signal(signal.SIGTERM, previous)
-    run |= {
-        "started": started,
-        "wall_s": time.time() - started,
-        "meta": environment_meta(args.pr),
-        # Hashed at run time: a later re-render may see other genesis or compose files.
-        "config_hash": config_hash(cfg),
-    }
+    run |= run_info | {"started": started, "wall_s": time.time() - started}
     write_json(out / "run.json", run)
     write_json(out / "calibration.json", {"before": calib_before, "after": calib_after})
     if run["error"]:
