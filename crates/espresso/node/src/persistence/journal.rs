@@ -200,6 +200,11 @@ impl PersistenceOptions for Options {
         self.view_retention = view_retention;
     }
 
+    /// Without query storage the journal keeps no payloads for replay and emits no decide events.
+    fn set_consensus_only(&mut self) {
+        self.query_storage = None;
+    }
+
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         Persistence::open(self.clone()).await
     }
