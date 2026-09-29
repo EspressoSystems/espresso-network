@@ -34,17 +34,6 @@ assert _spec.loader is not None
 _spec.loader.exec_module(bench)
 
 
-def stat(value, unit, better):
-    return {
-        "value": value,
-        "min": value * 0.9,
-        "max": value * 1.1,
-        "cv": 0.05,
-        "unit": unit,
-        "better": better,
-    }
-
-
 def quantiles(p50, p99):
     return {"n": 100, "mean": p50, "p50": p50, "p95": p99, "p99": p99, "max": p99}
 
@@ -70,7 +59,39 @@ def node(cpu):
     }
 
 
-def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
+def step(rate, decided=None, consensus=(), query=(), consensus_p50=900.0):
+    """A step at `rate` MB/s that decides `decided` (default: all of it)."""
+    return {
+        "rate_mb_s": rate,
+        "refine": False,
+        "t_start": 0.0,
+        "t_mid": 15.0,
+        "t_end": 30.0,
+        "decided_mb_s": rate if decided is None else decided,
+        "backlog_slope_mb_s": 0.0,
+        "timeouts": 0,
+        "consensus_latency_ms": quantiles(consensus_p50, 2000.0),
+        "query_lag_ms": quantiles(200.0, 400.0),
+        "query_lag_slope_ms_s": 0.0,
+        "latency_ms": quantiles(1200.0, 2500.0),
+        "mean_view_ms": 500.0,
+        "cpu_s_per_mb": 0.5,
+        "node_cpu": {"node0": 1.0, "node1": 0.5, "node2": 0.5},
+        "postgres_cpu": 0.3,
+        "consensus_fails": list(consensus),
+        "query_fails": list(query),
+        "passed": not consensus and not query,
+    }
+
+
+def make_result(steps=None, steal=0.0, config_hash="abc123"):
+    """Steps at 4, 6 and 8 MB/s, the last failing on decided: capacity 6 MB/s."""
+    if steps is None:
+        steps = [
+            step(4.0),
+            step(6.0),
+            step(8.0, 7.0, consensus=["decided 88% of offered"]),
+        ]
     result = {
         "schema_version": bench.SCHEMA_VERSION,
         "run": {
@@ -118,22 +139,17 @@ def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
             "tx_size": 100_000,
             "rate_mb_s": 4.0,
             "submit_nodes": 3,
-            "subwindow_s": 30,
+            "steps": [4.0, 6.0, 8.0],
+            "step_s": 30,
+            "warmup_s": 60,
+            "cap_s": 5.0,
+            "latency_target_ms": 1000,
+            "query_lag_target_ms": 1000,
         },
         "config_hash": config_hash,
         "window": {"t0": 0.0, "t1": 180.0, "height_start": 100, "height_end": 500},
-        "network": {
-            "decided_mb_per_s": stat(mb_per_s, "MB/s", "higher"),
-            "blocks_per_s": stat(2.0, "1/s", "higher"),
-            "views_per_s": stat(2.0, "1/s", "higher"),
-            "mean_view_ms": stat(500.0, "ms", "lower"),
-            "timeouts": 0,
-            "empty_block_frac": 0.1,
-            "proposal_to_decide_ms": quantiles(900.0, 2000.0),
-            "cpu_s_per_mb": stat(0.5, "s/MB", "lower"),
-            "block_bytes_nonempty_mean": 2_000_000.0,
-            "max_block_bytes": 100_000_000,
-        },
+        "steps": steps,
+        "capacity": bench.capacity(steps),
         "nodes": {"node0": node(1.0), "node1": node(0.5), "node2": node(0.5)},
         "processes": {
             "postgres": {"cpu_cores_mean": 0.3, "cpu_s": 54.0, "rss_peak_bytes": 10}
@@ -146,25 +162,15 @@ def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
             "mem_avail_min_bytes": 8_000_000_000,
         },
         "load": {
-            "submitted_per_s": 40.0,
-            "included_per_s": 40.0,
-            "inclusion_ratio": 1.0,
-            "timeouts": 0,
+            "submitted": 1000,
+            "included": 990,
+            "timeouts": 10,
             "submit_errors": 0,
             "max_in_flight": 48,
-            "at_cap_frac": 0.8,
             "cap_waits": 0,
-            "offered_mb_s": 4.0,
             "missing_payloads": [],
-            "latency_ms": quantiles(1200.0, 2500.0),
-            "consensus_latency_ms": quantiles(900.0, 2000.0),
-            "query_lag_ms": quantiles(200.0, 400.0),
-            "query_lag_end_ms": 200.0,
             "tracker_lag_ms": quantiles(50.0, 100.0),
-            "tracker_lag_end_ms": 50.0,
-            "in_flight_mean": 20.0,
         },
-        "bound": {"kind": "keeping-up", "reason": "r"},
         "stake_table": ["0x1", "0x1", "0x1"],
         "validity": {"valid": True, "noisy": False, "reasons": []},
     }
@@ -180,43 +186,52 @@ def row(comparison, label):
     return next(r for r in comparison["rows"] if r["label"] == label)
 
 
+def step_row(comparison, rate, label):
+    by_rate = next(c for c in comparison["steps"] if c["rate_mb_s"] == rate)
+    return next(r for r in by_rate["rows"] if r["label"] == label)
+
+
 class RenderTest(unittest.TestCase):
-    def test_summary_has_headline_and_delta(self):
-        baseline = [make_result(mb_per_s=4.0) for _ in range(5)]
-        current = make_result(mb_per_s=3.0)
+    def test_step_table_with_deltas(self):
+        baseline = [make_result() for _ in range(5)]
+        current = make_result(
+            [
+                step(4.0),
+                step(6.0, consensus_p50=1200.0),
+                step(8.0, 7.0, consensus=["x"]),
+            ]
+        )
         summary = bench.render(current, compare(current, baseline))
         self.assertIn("| main median (n=5) |", summary)
-        self.assertRegex(
+        self.assertIn(
+            "| 6 | 6 MB/s | **1200 ms (+33%)** | 2000 ms | 200 ms | 1200 ms | 0.5 s/MB "
+            "| pass | 5 |",
             summary,
-            r"\| decided payload throughput \| 3 MB/s \|.*\| -25\.0% \| \*\*worse\*\*",
         )
         self.assertIn("Test CPU", summary)
 
-    def test_verdict_first_detail_last(self):
-        current = make_result()
-        current["bound"] = {"kind": "consensus", "reason": "75% of blocks empty"}
-        summary = bench.render(current, None)
+    def test_capacity_first_detail_last(self):
+        summary = bench.render(make_result(), None)
         order = [
-            "**Consensus behind the offered load** (75% of blocks empty)",
+            "Capacity **6 MB/s**: consensus limits (decided 88% of offered at 8 MB/s).",
             "Baseline: none given",
-            "| metric | this run |",
-            "### Load",
-            "<details>",
+            "### Load steps",
+            "| MB/s | decided |",
+            "<details><summary>Step details</summary>",
+            "\n### Load\n",
+            "- benchmark tracker lag: p50 50, p95 100, p99 100",
         ]
         self.assertEqual(sorted(order, key=summary.index), order)
         self.assertNotIn("| delta |", summary)
 
-    def test_latency_breakdown(self):
-        summary = bench.render(make_result(), None)
-        for row in (
-            "| consensus latency p50 | 900 ms |",
-            "| consensus latency p99 | 2000 ms |",
-            "| query lag p50 | 200 ms |",
-            "| query lag p99 | 400 ms |",
-            "| tx latency p50 (via query node) | 1200 ms |",
-        ):
-            self.assertIn(row, summary)
-        self.assertIn("- benchmark tracker lag: p50 50, p95 100, p99 100", summary)
+    def test_rates_not_reached(self):
+        current = make_result([step(4.0), step(6.0, 5.0, consensus=["x"]), step(5.0)])
+        comparison = compare(current, [make_result()] * 3)
+        eight = next(c for c in comparison["steps"] if c["rate_mb_s"] == 8.0)
+        self.assertEqual((eight["reached"], eight["n"]), (False, 3))
+        summary = bench.render(current, comparison)
+        self.assertIn("| 8 | | | | | | | **not reached** | 3 |", summary)
+        self.assertIn("| 5 | 5 MB/s | 900 ms |", summary)
 
     def test_ops_table_drops_duplicates(self):
         current = make_result()
@@ -323,18 +338,37 @@ class BaselineLabelTest(unittest.TestCase):
 
 class CompareTest(unittest.TestCase):
     def test_within_threshold_is_same(self):
-        current = make_result(mb_per_s=3.8)
-        comparison = compare(current, [make_result(mb_per_s=4.0)])
-        self.assertEqual(
-            row(comparison, "decided payload throughput")["verdict"], "same"
-        )
+        current = make_result([step(4.0), step(6.0, 5.8), step(8.0, 7.0, ["x"])])
+        comparison = compare(current, [make_result()])
+        self.assertEqual(step_row(comparison, 6.0, "decided")["verdict"], "same")
+        self.assertEqual(row(comparison, "capacity")["verdict"], "same")
+
+    def test_lower_capacity_is_worse(self):
+        current = make_result([step(4.0), step(6.0, 5.0, ["x"]), step(5.0)])
+        comparison = compare(current, [make_result()] * 3)
+        capacity = row(comparison, "capacity")
+        self.assertEqual((capacity["current"], capacity["baseline"]), (5.0, 6.0))
+        self.assertEqual(capacity["verdict"], "worse")
+
+    def test_steps_compare_only_against_runs_at_that_rate(self):
+        short = make_result([step(4.0, consensus_p50=500.0), step(6.0, 3.0, ["x"])])
+        comparison = compare(make_result(), [short, make_result()])
+        six = step_row(comparison, 4.0, "consensus p50")
+        self.assertEqual(six["baseline"], 700.0)
+        eight = next(c for c in comparison["steps"] if c["rate_mb_s"] == 8.0)
+        self.assertEqual((eight["n"], eight["reached"]), (1, True))
 
     def test_spread_widens_threshold(self):
-        history = [make_result(mb_per_s=v) for v in (3.0, 4.0, 5.0, 3.5, 4.5)]
-        verdict = row(
-            compare(make_result(mb_per_s=3.0), history), "decided payload throughput"
+        history = [
+            make_result([step(4.0, consensus_p50=v)])
+            for v in (600, 900, 1200, 750, 1050)
+        ]
+        verdict = step_row(
+            compare(make_result([step(4.0, consensus_p50=1200.0)]), history),
+            4.0,
+            "consensus p50",
         )
-        self.assertGreater(verdict["threshold_pct"], 10)
+        self.assertGreater(verdict["threshold_pct"], 15)
         self.assertEqual(verdict["verdict"], "same")
 
     def test_excludes_noisy_invalid_and_other_config(self):
@@ -366,25 +400,14 @@ class CompareTest(unittest.TestCase):
         )
 
     def test_noisy_current_is_inconclusive(self):
-        current = make_result(mb_per_s=1.0, steal=8.0)
+        current = make_result([step(4.0), step(6.0, 1.0, ["x"])], steal=8.0)
         comparison = compare(current, [make_result()])
-        self.assertEqual(
-            row(comparison, "decided payload throughput")["verdict"], "inconclusive"
-        )
+        self.assertEqual(row(comparison, "capacity")["verdict"], "inconclusive")
 
-    def test_proposal_to_decide_is_not_compared(self):
-        current = make_result()
-        keys = [r["key"] for r in compare(current, [make_result()])["rows"]]
-        self.assertNotIn("network.proposal_to_decide_ms.p99", keys)
-        self.assertNotIn("proposal to decide", bench.render(current, None))
-
-    def test_timeouts_from_zero_baseline(self):
-        current = make_result()
-        current["network"]["timeouts"] = 3
-        self.assertEqual(
-            row(compare(current, [make_result()]), "consensus timeouts")["verdict"],
-            "worse",
-        )
+    def test_other_schema_is_excluded(self):
+        old = make_result()
+        old["schema_version"] = 1
+        self.assertEqual(compare(make_result(), [old])["excluded"], {"other schema": 1})
 
 
 class ValidityTest(unittest.TestCase):
@@ -418,12 +441,11 @@ class ValidityTest(unittest.TestCase):
         self.assertTrue(validity["noisy"])
         self.assertIn("benchmark tracker behind", validity["reasons"][0])
 
-    def test_stalled_sub_window_is_invalid(self):
-        result = make_result()
-        result["network"]["blocks_per_s"]["min"] = 0.0
+    def test_stalled_step_is_invalid(self):
+        result = make_result([step(4.0), step(6.0, 0.0, ["decided 0% of offered"])])
         validity = bench.check_validity(result, {n: 1.0 for n in bench.NODES})
         self.assertFalse(validity["valid"])
-        self.assertEqual(validity["reasons"], ["a 30 s sub-window decided no blocks"])
+        self.assertEqual(validity["reasons"], ["the 6 MB/s step decided nothing"])
 
 
 class ReportOnlyTest(unittest.TestCase):
@@ -434,7 +456,7 @@ class ReportOnlyTest(unittest.TestCase):
                 json.dumps(dataclasses.asdict(bench.BenchConfig()))
             )
             baseline = out / "baseline.json"
-            baseline.write_text(json.dumps({"runs": [make_result(mb_per_s=8.0)] * 3}))
+            baseline.write_text(json.dumps({"runs": [make_result()] * 3}))
             with (
                 mock.patch.object(bench, "analyze", return_value=current),
                 mock.patch("builtins.print"),
@@ -444,7 +466,7 @@ class ReportOnlyTest(unittest.TestCase):
             return code, (out / "summary.md").read_text()
 
     def test_regression_still_exits_zero(self):
-        code, summary = self.report(make_result(mb_per_s=2.0))
+        code, summary = self.report(make_result([step(4.0, 3.0, ["x"])]))
         self.assertEqual(code, 0)
         self.assertIn("**worse**", summary)
 
@@ -667,7 +689,8 @@ class FakeNode(ThreadingHTTPServer):
     submitted transactions. A submit takes `accept_delay` s before the transaction is taken
     and `reply_delay` s after. Payloads in `lost` are never served, those in `late` only
     `late[height]` s after their block was made; every payload answer takes `payload_delay` s.
-    The query API shows a block `query_lag` s after the validator status API."""
+    The query API shows a block `query_lag` s after the validator status API. A block takes at
+    most `block_txs` transactions."""
 
     def __init__(
         self,
@@ -678,9 +701,11 @@ class FakeNode(ThreadingHTTPServer):
         late=None,
         payload_delay=0.0,
         query_lag=0.0,
+        block_txs=None,
     ):
         super().__init__(("127.0.0.1", 0), FakeHandler)
         self.query_lag = query_lag
+        self.block_txs = block_txs
         self.include = include
         self.lost = lost
         self.late = late or {}
@@ -702,10 +727,10 @@ class FakeNode(ThreadingHTTPServer):
     def produce(self):
         while not self.stop.wait(0.05):
             with self.lock:
-                block = b"".join(self.pending) if self.include else b""
+                taken = self.pending[: self.block_txs] if self.include else []
                 if self.include:
-                    self.pending = []
-                self.blocks.append(block)
+                    self.pending = self.pending[len(taken) :]
+                self.blocks.append(b"".join(taken))
                 self.made.append(time.time())
 
 
@@ -720,7 +745,7 @@ class FakeHandler(BaseHTTPRequestHandler):
         pass
 
     def reply(self, status, body):
-        data = json.dumps(body).encode()
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(status)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -747,6 +772,13 @@ class FakeHandler(BaseHTTPRequestHandler):
                 return self.reply(200, sum(1 for t in node.made if t <= shown))
             if self.path == "/v1/status/block-height":
                 return self.reply(200, len(node.blocks) - 1)
+            if self.path == "/v1/status/metrics":
+                decided = sum(len(block) for block in node.blocks)
+                return self.reply(
+                    200,
+                    f"consensus_finalized_bytes_sum {decided}\n"
+                    "consensus_number_of_timeouts 0\n".encode(),
+                )
             height = int(self.path.removeprefix("/v1/availability/payload/"))
             if height >= len(node.blocks) or height in node.lost:
                 return self.reply(404, "not found")
@@ -768,8 +800,12 @@ class LoadTest(unittest.TestCase):
         late=None,
         payload_delay=0.0,
         query_lag=0.0,
+        block_txs=None,
+        rate_mb_s=0.02,
+        max_pending=1000,
         **cfg,
     ):
+        """One step of `duration` s at `rate_mb_s`, no warmup, unless `cfg` sets `steps`."""
         node = FakeNode(
             include,
             lost=lost,
@@ -778,6 +814,7 @@ class LoadTest(unittest.TestCase):
             late=late,
             payload_delay=payload_delay,
             query_lag=query_lag,
+            block_txs=block_txs,
         )
         threads = [
             threading.Thread(target=node.serve_forever),
@@ -785,7 +822,17 @@ class LoadTest(unittest.TestCase):
         ]
         for thread in threads:
             thread.start()
-        config = bench.BenchConfig(**{"tx_size": 1000, "workers": 3} | cfg)
+        config = bench.BenchConfig(
+            **{
+                "tx_size": 1000,
+                "workers": 3,
+                "steps": (rate_mb_s,),
+                "step_s": duration,
+                "warmup_s": 0,
+                "cap_s": max_pending * 1000 / (rate_mb_s * 1e6),
+            }
+            | cfg
+        )
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 start = time.time()
@@ -795,7 +842,6 @@ class LoadTest(unittest.TestCase):
                         [node.url] * nodes,
                         node.url,
                         [node.url, node.url],
-                        start + duration,
                         Path(tmp),
                     )
                 )
@@ -806,6 +852,7 @@ class LoadTest(unittest.TestCase):
                     for line in (Path(tmp) / "heights.jsonl").read_text().splitlines()
                 ]
                 meta = json.loads((Path(tmp) / "load-meta.json").read_text())
+                self.steps = json.loads((Path(tmp) / "steps.json").read_text())
         finally:
             node.stop.set()
             node.shutdown()
@@ -941,6 +988,22 @@ class LoadTest(unittest.TestCase):
         self.assertTrue(all(tx["status"] == "included" for tx in txs))
         self.assertLess(max(tx["t_included"] - tx["t_submit"] for tx in txs), 0.7)
 
+    def test_staircase_stops_at_the_first_failing_step_and_refines(self):
+        # 4 txs of 1000 bytes per 50 ms block: 0.08 MB/s of capacity.
+        with mock.patch.object(bench, "COUNTER_POLL_S", 0.05):
+            self.run_load(
+                True, 1.0, block_txs=4, steps=(0.02, 0.04, 0.16, 0.32), tx_timeout_s=1
+            )
+        self.assertEqual(
+            [(s["rate_mb_s"], s["refine"], s["online_passed"]) for s in self.steps],
+            [
+                (0.02, False, True),
+                (0.04, False, True),
+                (0.16, False, False),
+                (0.1, True, False),
+            ],
+        )
+
     def test_lost_payload_is_skipped(self):
         with (
             mock.patch.object(bench, "MISSING_PAYLOAD_S", 0.2),
@@ -954,10 +1017,10 @@ class LoadTest(unittest.TestCase):
 
 
 def write_run_dir(out):
-    """A 60 s window (t 100 to 160) where every node decides 1 MB/s in 2 blocks/s and 4 views/s
-    and uses 0.5 cores, the host is half busy, and 41 of 42 transactions land 2 s after submit:
-    their block shows on a validator after 1.5 s and on node0 after 2 s, and is scanned 0.1 s
-    after the next height shows on node0."""
+    """Steps at 1 MB/s (t 100 to 130) and 2 MB/s (130 to 160). Every node decides 1 MB/s in 2
+    blocks/s and 4 views/s and uses 0.5 cores, the host is half busy, and a 1 MB transaction
+    goes out every second from 110 to 150 (one times out): its block shows on a validator
+    after 0.5 s and on node0 after 0.8 s, and is scanned 1.1 s after that."""
     t0, t1 = 100.0, 160.0
 
     def jsonl(name, records):
@@ -1000,7 +1063,7 @@ def write_run_dir(out):
             "id": i,
             "node": 0,
             "t_submit": t,
-            "t_included": t + 2.0,
+            "t_included": t + 0.8,
             "height": 1000 + i,
             "status": "included",
         }
@@ -1020,7 +1083,7 @@ def write_run_dir(out):
     heights = [
         {
             "height": tx["height"],
-            "validator": tx["t_submit"] + 1.5,
+            "validator": tx["t_submit"] + 0.5,
             "query": tx["t_included"],
             "scanned": tx["t_included"] + 1.1,
         }
@@ -1030,6 +1093,29 @@ def write_run_dir(out):
         {"height": 2000, "validator": 130.0, "query": 130.5, "scanned": None}
     )
     jsonl("heights.jsonl", heights)
+    jsonl(
+        "consensus.jsonl",
+        (
+            {"ts": float(ts), "decided_bytes": 1e6 * ts, "timeouts": 0}
+            for ts in range(100, 161)
+        ),
+    )
+    steps = [
+        {
+            "rate_mb_s": 1.0,
+            "refine": False,
+            "t_start": 100.0,
+            "t_mid": 115.0,
+            "t_end": 130.0,
+        },
+        {
+            "rate_mb_s": 2.0,
+            "refine": False,
+            "t_start": 130.0,
+            "t_mid": 145.0,
+            "t_end": 160.0,
+        },
+    ]
     calib = {"sha256_1t_mb_s": 2000.0, "sha256_mt_mb_s": 8000.0, "fsync_per_s": 300.0}
     files = {
         "load-meta.json": {
@@ -1039,6 +1125,7 @@ def write_run_dir(out):
             "missing_payloads": [],
         },
         "calibration.json": {"before": calib, "after": calib},
+        "steps.json": [s | {"online_passed": True} for s in steps],
         "sysinfo.json": {"runner": make_result()["runner"]},
         "stake-table.json": {
             "stake_table": [{"stake_table_entry": {"stake_amount": "0x1"}}] * 3
@@ -1059,47 +1146,42 @@ def write_run_dir(out):
 
 
 class AnalyzeTest(unittest.TestCase):
-    def test_window_rates(self):
-        cfg = bench.BenchConfig(measure_s=60, subwindow_s=20, rate_mb_s=1.0)
+    def test_steps_and_capacity(self):
         with tempfile.TemporaryDirectory() as tmp:
             write_run_dir(Path(tmp))
-            result = bench.analyze(Path(tmp), cfg)
-        net, node0, load = result["network"], result["nodes"]["node0"], result["load"]
-        self.assertAlmostEqual(net["decided_mb_per_s"]["value"], 1.0)
-        self.assertAlmostEqual(net["blocks_per_s"]["min"], 2.0)
-        self.assertAlmostEqual(net["mean_view_ms"]["value"], 250.0)
-        self.assertAlmostEqual(net["cpu_s_per_mb"]["value"], 1.5)
-        self.assertEqual(net["timeouts"], 0)
+            result = bench.analyze(Path(tmp), bench.BenchConfig())
+        one, two = result["steps"]
+        self.assertAlmostEqual(one["decided_mb_s"], 1.0)
+        self.assertAlmostEqual(one["backlog_slope_mb_s"], 0.0, delta=0.1)
+        self.assertEqual(one["timeouts"], 0)
+        self.assertAlmostEqual(one["consensus_latency_ms"]["p50"], 500.0)
+        self.assertAlmostEqual(one["query_lag_ms"]["p50"], 300.0)
+        self.assertAlmostEqual(one["latency_ms"]["p50"], 800.0)
+        self.assertAlmostEqual(one["mean_view_ms"], 250.0)
+        self.assertAlmostEqual(one["cpu_s_per_mb"], 1.5)
+        self.assertEqual(one["node_cpu"], {"node0": 0.5, "node1": 0.5, "node2": 0.5})
+        self.assertIsNone(one["postgres_cpu"])
+        self.assertTrue(one["passed"])
+        self.assertEqual(two["consensus_fails"], ["decided 50% of offered"])
+        self.assertEqual(result["capacity"]["overall"], {"mb_s": 1.0, "bounded": True})
+        node0, load = result["nodes"]["node0"], result["load"]
         self.assertEqual((node0["decided_blocks"], node0["cpu_cores"]), (120, 0.5))
         self.assertEqual(
             (result["window"]["height_start"], result["window"]["height_end"]),
             (200, 320),
         )
         self.assertAlmostEqual(result["host"]["util_mean"], 0.5)
-        self.assertEqual(result["host"]["mem_avail_min_bytes"], 1100)
         self.assertAlmostEqual(result["processes"]["node0"]["cpu_cores_mean"], 0.5)
-        self.assertAlmostEqual(load["submitted_per_s"], 42 / 60)
-        self.assertAlmostEqual(load["included_per_s"], 41 / 60)
-        self.assertEqual(load["latency_ms"]["p50"], 2000.0)
-        self.assertEqual(load["consensus_latency_ms"]["p50"], 1500.0)
-        self.assertAlmostEqual(load["query_lag_ms"]["p50"], 500.0)
-        self.assertAlmostEqual(load["query_lag_end_ms"], 500.0)
-        self.assertAlmostEqual(load["tracker_lag_ms"]["p99"], 100.0)
-        # 41 spans of 2 s and one of 30 s over 60 s.
-        self.assertAlmostEqual(load["in_flight_mean"], 112 / 60)
-        self.assertEqual(load["timeouts"], 1)
-        self.assertEqual(load["at_cap_frac"], 0.0)
-        self.assertAlmostEqual(net["block_bytes_nonempty_mean"], 500_000.0)
-        self.assertEqual(net["max_block_bytes"], 100_000_000)
-        self.assertEqual(load["offered_mb_s"], 1.0)
-        self.assertEqual(result["bound"]["kind"], "keeping-up")
         self.assertEqual(
-            result["validity"],
-            {"valid": True, "noisy": True, "reasons": ["1 transactions timed out"]},
+            (load["submitted"], load["included"], load["timeouts"]), (42, 41, 1)
+        )
+        self.assertAlmostEqual(load["tracker_lag_ms"]["p99"], 100.0)
+        self.assertEqual(
+            result["validity"], {"valid": True, "noisy": False, "reasons": []}
         )
 
     def test_no_scrapes_is_invalid_not_a_crash(self):
-        cfg = bench.BenchConfig(measure_s=60, subwindow_s=20, rate_mb_s=1.0)
+        cfg = bench.BenchConfig()
         with tempfile.TemporaryDirectory() as tmp:
             write_run_dir(Path(tmp))
             (Path(tmp) / "metrics.jsonl").write_text(
@@ -1111,7 +1193,7 @@ class AnalyzeTest(unittest.TestCase):
             )
             result = bench.analyze(Path(tmp), cfg)
         self.assertFalse(result["validity"]["valid"])
-        self.assertIsNone(result["network"]["decided_mb_per_s"]["value"])
+        self.assertIsNone(result["steps"][0]["mean_view_ms"])
         self.assertIn(
             "node0 metrics answered for only 0%", result["validity"]["reasons"][0]
         )
@@ -1285,90 +1367,16 @@ class CapacityTest(unittest.TestCase):
 
 class PaceTest(unittest.TestCase):
     def test_interval_from_rate(self):
-        cfg = bench.BenchConfig(tx_size=1_000_000, rate_mb_s=20.0)
-        self.assertAlmostEqual(bench.tx_interval_s(cfg), 0.05)
+        self.assertAlmostEqual(bench.tx_interval_s(1_000_000, 20.0), 0.05)
+
+    def test_cap_is_seconds_of_load(self):
+        self.assertEqual(bench.step_cap(bench.BenchConfig(), 7.0), 35)
 
     def test_on_time_keeps_the_schedule(self):
         self.assertEqual(bench.next_due(10.0, 0.5, 10.2), 10.5)
 
     def test_late_restarts_from_now(self):
         self.assertEqual(bench.next_due(10.0, 0.5, 12.0), 12.0)
-
-
-class BoundTest(unittest.TestCase):
-    def bound(
-        self, decided=10.0, empty=0.0, at_cap=0.0, query=200.0, end=200.0, scan=100.0
-    ):
-        result = make_result()
-        net, load = result["network"], result["load"]
-        net["decided_mb_per_s"] = stat(decided, "MB/s", "higher")
-        net["empty_block_frac"] = empty
-        load |= {
-            "at_cap_frac": at_cap,
-            "query_lag_ms": quantiles(query, query * 2),
-            "query_lag_end_ms": end,
-            "tracker_lag_ms": quantiles(scan / 2, scan),
-        }
-        return bench.bottleneck(10.0, net, load)
-
-    def test_keeping_up(self):
-        self.assertEqual(self.bound()["kind"], "keeping-up")
-        self.assertEqual(
-            self.bound(decided=9.6, at_cap=0.01, empty=0.04)["kind"], "keeping-up"
-        )
-
-    def test_decided_below_offered_is_consensus(self):
-        bound = self.bound(decided=9.0, query=5000.0)
-        self.assertEqual(bound["kind"], "consensus")
-        self.assertIn("decided 90% of offered", bound["reason"])
-
-    def test_cap_or_empty_blocks_without_query_lag_is_consensus(self):
-        bound = self.bound(at_cap=0.1)
-        self.assertEqual(bound["kind"], "consensus")
-        self.assertIn("max_pending", bound["reason"])
-        bound = self.bound(empty=0.5)
-        self.assertEqual(bound["kind"], "consensus")
-        self.assertIn("50% of blocks empty", bound["reason"])
-
-    def test_query_lag_with_consensus_keeping_up_is_query_node(self):
-        bound = self.bound(empty=0.09, at_cap=0.9, query=5000.0, end=6000.0)
-        self.assertEqual(bound["kind"], "query-node")
-        self.assertIn("query lag p50 5000 ms", bound["reason"])
-        self.assertEqual(self.bound(query=300.0, end=2000.0)["kind"], "query-node")
-
-    def test_tracker_lag_is_benchmark(self):
-        bound = self.bound(decided=5.0, scan=1500.0)
-        self.assertEqual(bound["kind"], "benchmark")
-        self.assertIn("1500 ms", bound["reason"])
-
-    def test_queueing_estimate_when_behind(self):
-        result = make_result()
-        result["bound"] = {"kind": "query-node", "reason": "r"}
-        summary = bench.render(result, None)
-        # 20 in flight / 40 tx/s
-        self.assertIn("Little's law: 20 in flight / 40 tx/s = 500 ms", summary)
-        self.assertIn("tx latency p50 1200 ms", summary)
-        self.assertNotIn("Little's law", bench.render(make_result(), None))
-
-    def test_in_flight_samples_the_window(self):
-        spans = [(0.0, 10.0), (0.0, 5.0), (20.0, 30.0)]
-        self.assertEqual(
-            bench.in_flight(spans, 0.0, 10.0, 1.0), [2, 2, 2, 2, 2, 1, 1, 1, 1, 1]
-        )
-
-    def test_parse_size(self):
-        self.assertEqual(bench.parse_size("100mb"), 100_000_000)
-        self.assertEqual(bench.parse_size("2 KB"), 2000)
-        self.assertEqual(bench.parse_size(30720), 30720)
-        with self.assertRaises(ValueError):
-            bench.parse_size("1 wei")
-
-
-class StatTest(unittest.TestCase):
-    def test_empty_sub_window_gives_json_null(self):
-        value = bench.stat([2.0, None], "ms", "lower")
-        self.assertIsNone(value["value"])
-        self.assertEqual(json.loads(json.dumps(value, allow_nan=False)), value)
 
 
 class HistogramTest(unittest.TestCase):

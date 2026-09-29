@@ -10,16 +10,19 @@ certificate needs all 3; node0 on Postgres with the query service, node1 and nod
 drives it with a paced load generator, samples node metrics and host CPU, tears the network
 down, and writes `result.json` plus a markdown `summary.md` into the output directory.
 
-Load is paced: `tx_size` transactions go out evenly spaced at `rate_mb_s`, round-robin over the
-first `submit_nodes` nodes, independent of inclusion. `max_pending` only caps the transactions in
-flight; a submit waiting for the cap means the network is behind. A permit returns when node0's
-query service shows the transaction in a block, or after `tx_timeout_s`. Each transaction carries
-a per-run marker and its id, so inclusion is found by scanning block payloads, one fetch per
-block, without computing transaction hashes.
+Load is a staircase: after a warmup, `tx_size` transactions go out evenly spaced at each rate
+of `steps` for `step_s`, round-robin over the first `submit_nodes` nodes, independent of
+inclusion; `cap_s` of load caps the transactions in flight. Each step is judged on its second
+half: it fails if decided falls behind the offered rate, the backlog grows, a view times out,
+consensus latency (submit to the block on a validator) exceeds its target, or the query node's
+lag behind the validators exceeds its target or grows. At the first failing step the ramp stops
+and one refine step runs halfway back. Capacity is the highest passing rate, split into the
+consensus and query node limits. Each transaction carries a per-run marker and its id, so
+inclusion is found by scanning node0's block payloads, one fetch per block.
 
-Headline rates are the median of `subwindow_s` slices of the measurement window. A run is
-`noisy` when steal time, calibration drift or dropped transactions suggest the runner, not the
-code, moved the numbers; noisy runs are kept but never used as a baseline.
+A run is `noisy` when steal time, calibration drift, submit errors, lost payloads or a lagging
+payload scan suggest the runner, not the code, moved the numbers; noisy runs are kept but never
+used as a baseline.
 
 Exit codes:
     0  the run is valid, whatever the performance deltas
@@ -57,7 +60,7 @@ import tempfile
 import threading
 import time
 from bisect import bisect_right
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -66,13 +69,11 @@ from pathlib import Path
 from typing import Any, Literal, TypedDict, TypeVar
 from urllib.parse import urlsplit
 
-import tomllib
-
 log = logging.getLogger("network-bench")
 T = TypeVar("T")
 
 # Bump when a metric's meaning changes: config_hash covers the inputs, not the analysis code.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BENCH_DIR = Path(__file__).resolve().parent
 REPO = BENCH_DIR.parents[1]
 COMPOSE_FILE = BENCH_DIR / "process-compose.yaml"
@@ -141,7 +142,6 @@ METRIC_PREFIXES = (
 )
 STEAL_NOISY_PCT = 5.0
 DRIFT_NOISY_PCT = 10.0
-INCLUSION_NOISY_RATIO = 0.95
 TRACKER_LAG_NOISY_MS = 1000.0
 SCRAPE_OK_MIN = 0.9
 MIN_READY_HEIGHT = 5
@@ -159,12 +159,9 @@ READ_RETRY_S = 1.0
 # The payload scan's requests are sequential.
 TRACKER_THREADS = 1
 HEIGHT_POLL_S = 0.1
-IN_FLIGHT_STEP_S = 1.0
-# Keeping-up rules, see bottleneck.
+COUNTER_POLL_S = 1.0
+METRICS_EVERY_S = 1.0
 KEEP_UP_RATIO = 0.95
-KEEP_UP_AT_CAP_FRAC = 0.02
-KEEP_UP_EMPTY_FRAC = 0.05
-QUERY_LAG_BEHIND_MS = 1000.0
 # Step rules, see step_fails.
 BACKLOG_GROWTH_FRAC = 0.05
 QUERY_LAG_GROWTH_MS_S = 50.0
@@ -217,15 +214,6 @@ class Window(TypedDict):
     height_end: int
 
 
-class Stat(TypedDict):
-    value: float | None
-    min: float | None
-    max: float | None
-    cv: float | None
-    unit: str
-    better: Literal["higher", "lower"]
-
-
 class Quantiles(TypedDict):
     n: int
     mean: float
@@ -233,21 +221,6 @@ class Quantiles(TypedDict):
     p95: float
     p99: float
     max: float
-
-
-class NetworkStats(TypedDict):
-    decided_mb_per_s: Stat
-    blocks_per_s: Stat
-    views_per_s: Stat
-    mean_view_ms: Stat
-    # None, like every stat here, when no node answered a metrics scrape.
-    timeouts: int | None
-    empty_block_frac: float | None
-    # Built from whole-second header timestamps: raw data only, too coarse to compare.
-    proposal_to_decide_ms: Quantiles | None
-    cpu_s_per_mb: Stat
-    block_bytes_nonempty_mean: float | None
-    max_block_bytes: int
 
 
 class OpStats(TypedDict):
@@ -284,33 +257,17 @@ class HostStats(TypedDict):
 
 
 class LoadStats(TypedDict):
-    submitted_per_s: float
-    included_per_s: float
-    inclusion_ratio: float
+    """Over all steps."""
+
+    submitted: int
+    included: int
     timeouts: int
     submit_errors: int
     max_in_flight: int
-    at_cap_frac: float
     cap_waits: int
-    offered_mb_s: float
     missing_payloads: list[int]
-    # Submit to the block showing on node0's query API: what a client of the query node sees.
-    latency_ms: Quantiles | None
-    # Submit to the block showing on a validator's status API, independent of the query node.
-    consensus_latency_ms: Quantiles | None
-    # Per height: shown on node0's query API after a validator's status API.
-    query_lag_ms: Quantiles | None
-    # Median over the last sub-window, to tell a growing lag from a steady one.
-    query_lag_end_ms: float | None
     # Per height: the bench finished scanning its payload after it could start.
     tracker_lag_ms: Quantiles | None
-    tracker_lag_end_ms: float | None
-    in_flight_mean: float
-
-
-class Bound(TypedDict):
-    kind: Literal["keeping-up", "consensus", "query-node", "benchmark"]
-    reason: str
 
 
 class StepWindow(TypedDict):
@@ -331,6 +288,18 @@ class StepMeasures(TypedDict):
     consensus_latency_ms: Quantiles | None
     query_lag_ms: Quantiles | None
     query_lag_slope_ms_s: float | None
+
+
+class StepResult(StepWindow, StepMeasures):
+    # Submit to the block showing on node0's query API: what a client of the query node sees.
+    latency_ms: Quantiles | None
+    mean_view_ms: float | None
+    cpu_s_per_mb: float | None
+    node_cpu: dict[str, float]
+    postgres_cpu: float | None
+    consensus_fails: list[str]
+    query_fails: list[str]
+    passed: bool
 
 
 class Limit(TypedDict):
@@ -367,12 +336,12 @@ class BenchResult(TypedDict):
     config: dict[str, Any]
     config_hash: str
     window: Window
-    network: NetworkStats
+    steps: list[StepResult]
+    capacity: Capacity
     nodes: dict[str, NodeStats]
     processes: dict[str, ProcStats]
     host: HostStats
     load: LoadStats
-    bound: Bound
     stake_table: list[str]
     validity: Validity
 
@@ -382,14 +351,16 @@ class BenchConfig:
     genesis: str = "scripts/network-bench/genesis.toml"
     tx_size: int = 1_000_000
     namespaces: tuple[int, int] = (10000, 10001)
-    rate_mb_s: float = 7.0
+    # MB/s of each load step; each is held `step_s`, and its second half is measured.
+    steps: tuple[float, ...] = (4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0)
+    step_s: int = 30
     submit_nodes: int = 3
     workers: int = 6
-    max_pending: int = 35
+    # Safety cap on transactions in flight: this many seconds of the current step's load.
+    cap_s: float = 5.0
     tx_timeout_s: int = 30
+    # At the first step's rate.
     warmup_s: int = 60
-    measure_s: int = 180
-    subwindow_s: int = 30
     seed: int = 42
     # A step fails above either target, see step_fails.
     latency_target_ms: int = 1000
@@ -428,6 +399,15 @@ class Comparison(TypedDict):
     error: str | None
     source: Literal["main", "reference"]
     used: list[RunMeta]
+    rows: list[Row]
+    steps: list["StepComparison"]
+
+
+class StepComparison(TypedDict):
+    rate_mb_s: float
+    # Baseline runs that ran this rate.
+    n: int
+    reached: bool
     rows: list[Row]
 
 
@@ -516,7 +496,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             continue
         default = getattr(defaults, field.name)
         run.add_argument(
-            f"--{field.name.replace('_', '-')}", type=type(default), default=default
+            f"--{field.name.replace('_', '-')}",
+            type=parse_rates if field.name == "steps" else type(default),
+            default=default,
         )
     run.set_defaults(func=cmd_run)
 
@@ -540,6 +522,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     sysinfo_p.add_argument("--out", type=Path, default=Path("bench-out"))
     sysinfo_p.set_defaults(func=cmd_sysinfo)
     return parser.parse_args(argv)
+
+
+def parse_rates(text: str) -> tuple[float, ...]:
+    """`4,6,8`: increasing MB/s."""
+    rates = tuple(float(x) for x in text.split(","))
+    if list(rates) != sorted(set(rates)) or rates[0] <= 0:
+        raise argparse.ArgumentTypeError(
+            f"steps must be increasing and positive: {text}"
+        )
+    return rates
 
 
 def config_from_args(args: argparse.Namespace) -> BenchConfig:
@@ -608,7 +600,14 @@ def cmd_compare(args: argparse.Namespace) -> int:
     current: BenchResult = json.loads(args.result.read_text())
     comparison = compare(current, load_baseline(args.baseline))
     print(
-        "\n".join([*headline_table(current, comparison), "", baseline_line(comparison)])
+        "\n".join(
+            [
+                *capacity_table(current, comparison),
+                *step_table(current, comparison),
+                "",
+                baseline_line(comparison),
+            ]
+        )
     )
     return 0
 
@@ -628,6 +627,7 @@ def cmd_sysinfo(args: argparse.Namespace) -> int:
 def write_report(out: Path, baseline: Baseline | None) -> int:
     saved = read_json(out / "config.json")
     saved["namespaces"] = tuple(saved["namespaces"])
+    saved["steps"] = tuple(saved["steps"])
     cfg = BenchConfig(**saved)
     result = analyze(out, cfg)
     write_json(out / "result.json", result)
@@ -635,13 +635,9 @@ def write_report(out: Path, baseline: Baseline | None) -> int:
     summary = render(result, comparison)
     (out / "summary.md").write_text(summary)
     print(summary)
-    net, load = result["network"], result["load"]
     log.info(
-        "decided %s MB/s, tx p50 %s ms, p99 %s ms, %s timeouts, %s",
-        fmt_num(net["decided_mb_per_s"]["value"]),
-        fmt_num(load["latency_ms"]["p50"] if load["latency_ms"] else None),
-        fmt_num(load["latency_ms"]["p99"] if load["latency_ms"] else None),
-        net["timeouts"],
+        "%s Run %s.",
+        capacity_line(result["capacity"]).replace("**", ""),
         verdict_word(result["validity"]),
     )
     log.info("wrote %s %s", out / "result.json", out / "summary.md")
@@ -672,18 +668,16 @@ def drive_network(
         log.info("network ready after %.0f s", run["ready_s"])
         stake_table = get_ok(pool, NODES[QUERY_NODE] + "/v1/node/stake-table/current")
         (out / "stake-table.json").write_bytes(stake_table)
-        t_load = time.time()
-        run |= {
-            "t_load": t_load,
-            "t0": t_load + cfg.warmup_s,
-            "t1": t_load + cfg.warmup_s + cfg.measure_s,
-        }
-        log.info("load: warmup %d s, measuring %d s", cfg.warmup_s, cfg.measure_s)
+        run["t_load"] = time.time()
+        log.info(
+            "load: warmup %d s, then steps of %d s at %s MB/s",
+            cfg.warmup_s,
+            cfg.step_s,
+            ", ".join(map(fmt_num, cfg.steps)),
+        )
         validators = [url for node, url in NODES.items() if node != QUERY_NODE]
-        asyncio.run(
-            generate_load(
-                cfg, list(NODES.values()), NODES[QUERY_NODE], validators, run["t1"], out
-            )
+        run["t0"], run["t1"] = asyncio.run(
+            generate_load(cfg, list(NODES.values()), NODES[QUERY_NODE], validators, out)
         )
         for node, url in NODES.items():
             prom = get_ok(pool, url + "/v1/status/metrics")
@@ -945,11 +939,12 @@ class Client:
 
 
 class LoadState:
-    """Transactions of one run; permits bound the ones submitted but neither included nor timed
-    out."""
+    """Transactions of one run. At most `cap` are pending: submitted but neither included nor
+    timed out."""
 
-    def __init__(self, max_pending: int) -> None:
-        self.permits = asyncio.Semaphore(max_pending)
+    def __init__(self) -> None:
+        self.cap = 1
+        self.room = asyncio.Event()
         self.txs: list[Tx] = []
         self.pending: dict[int, Tx] = {}
         self.max_in_flight = 0
@@ -963,12 +958,19 @@ class LoadState:
         self.max_in_flight = max(self.max_in_flight, len(self.pending))
 
     def failed(self, tx: Tx) -> None:
-        """A submit that failed. Its permit returns unless the transaction was included
-        anyway, e.g. after a timed-out response."""
+        """A submit that failed, unless the transaction was included anyway, e.g. after a
+        timed-out response."""
         self.submit_errors += 1
         if self.pending.pop(tx.id, None) is not None:
             self.txs.remove(tx)
-            self.permits.release()
+            self.room.set()
+
+    async def wait_for_room(self) -> None:
+        if len(self.pending) >= self.cap:
+            self.cap_waits += 1
+        while len(self.pending) >= self.cap:
+            self.room.clear()
+            await self.room.wait()
 
     def resolve(self, tx_id: int, status: str, now: float) -> None:
         tx = self.pending.pop(tx_id, None)
@@ -977,7 +979,7 @@ class LoadState:
         tx.status = status
         if status == "included":
             tx.t_included = now
-        self.permits.release()
+        self.room.set()
 
     def include(self, tx_id: int, height: int, at: float) -> None:
         tx = self.pending.get(tx_id)
@@ -991,19 +993,20 @@ async def generate_load(
     submit_urls: list[str],
     query_url: str,
     validator_urls: list[str],
-    until: float,
     out: Path,
-) -> None:
-    """Paced load until `until`, then wait up to `tx_timeout_s` for the stragglers.
-    Writes one line per transaction to load.jsonl, one per block height to heights.jsonl and
-    the counters to load-meta.json."""
-    state = LoadState(cfg.max_pending)
+) -> tuple[float, float]:
+    """The load staircase, then up to `tx_timeout_s` for the stragglers. Returns when the
+    steps started and ended. Writes one line per transaction to load.jsonl, per block height
+    to heights.jsonl, per consensus counter sample of the first validator to
+    consensus.jsonl, per step to steps.json, and the counters to load-meta.json."""
+    state = LoadState()
     marker = hashlib.sha256(f"network-bench:{cfg.seed}".encode()).digest()[:16]
     bodies = tx_bodies(cfg, len(marker) + 8)
     submitter = Client(HttpPool(), ThreadPoolExecutor(cfg.workers))
     tracking = Client(HttpPool(), ThreadPoolExecutor(TRACKER_THREADS))
-    polling = Client(HttpPool(), ThreadPoolExecutor(1 + len(validator_urls)))
+    polling = Client(HttpPool(), ThreadPoolExecutor(2 + len(validator_urls)))
     done = asyncio.Event()
+    counters: list[dict[str, Any]] = []
     try:
         start_height = await tracking.call(query_height, query_url)
         heights = Heights(start_height)
@@ -1020,19 +1023,15 @@ async def generate_load(
                     )
                     for url in validator_urls
                 ),
+                group.create_task(poll_counters(polling, validator_urls[0], counters)),
             ]
             tracker = group.create_task(
                 track_inclusion(cfg, state, tracking, query_url, marker, heights, done)
             )
-            await pace_submissions(
-                cfg,
-                state,
-                submitter,
-                submit_urls[: cfg.submit_nodes],
-                marker,
-                bodies,
-                until,
+            load = Load(
+                cfg, state, submitter, submit_urls[: cfg.submit_nodes], marker, bodies
             )
+            steps = await run_staircase(load, heights, counters)
             done.set()
             await tracker
             for poller in pollers:
@@ -1045,6 +1044,8 @@ async def generate_load(
         polling.close()
     write_jsonl(out / "load.jsonl", (dataclasses.asdict(tx) for tx in state.txs))
     write_jsonl(out / "heights.jsonl", heights.records())
+    write_jsonl(out / "consensus.jsonl", iter(counters))
+    write_json(out / "steps.json", steps)
     write_json(
         out / "load-meta.json",
         {
@@ -1056,6 +1057,7 @@ async def generate_load(
             "marker": marker.hex(),
         },
     )
+    return steps[0]["t_start"], steps[-1]["t_end"]
 
 
 def tx_bodies(cfg: BenchConfig, header_len: int) -> list[bytes]:
@@ -1063,8 +1065,12 @@ def tx_bodies(cfg: BenchConfig, header_len: int) -> list[bytes]:
     return [rng.randbytes(cfg.tx_size - header_len) for _ in range(16)]
 
 
-def tx_interval_s(cfg: BenchConfig) -> float:
-    return cfg.tx_size / (cfg.rate_mb_s * 1e6)
+def tx_interval_s(tx_size: int, rate_mb_s: float) -> float:
+    return tx_size / (rate_mb_s * 1e6)
+
+
+def step_cap(cfg: BenchConfig, rate_mb_s: float) -> int:
+    return max(1, round(cfg.cap_s / tx_interval_s(cfg.tx_size, rate_mb_s)))
 
 
 def next_due(due: float, interval: float, now: float) -> float:
@@ -1073,56 +1079,99 @@ def next_due(due: float, interval: float, now: float) -> float:
     return max(due + interval, now)
 
 
-async def pace_submissions(
-    cfg: BenchConfig,
-    state: LoadState,
-    client: Client,
-    urls: list[str],
-    marker: bytes,
-    bodies: list[bytes],
-    until: float,
-) -> None:
-    interval = tx_interval_s(cfg)
-    due = time.time()
+@dataclass
+class Load:
+    cfg: BenchConfig
+    state: LoadState
+    client: Client
+    urls: list[str]
+    marker: bytes
+    bodies: list[bytes]
+    ids: Iterator[int] = dataclasses.field(default_factory=itertools.count)
+
+
+async def run_staircase(
+    load: Load, heights: "Heights", counters: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Warmup, then steps up the ramp until one fails, then one refine step. Each step's
+    verdict here uses what is known at its end; the report recomputes it from all data."""
+    cfg = load.cfg
+    steps: list[dict[str, Any]] = []
+    passed: list[bool] = []
     async with asyncio.TaskGroup() as submits:
-        for tx_id in itertools.count():
-            await asyncio.sleep(max(0.0, due - time.time()))
-            if time.time() >= until:
-                return
-            if state.permits.locked():
-                state.cap_waits += 1
-            await state.permits.acquire()
-            submits.create_task(
-                submit_tx(cfg, state, client, urls, marker, bodies, tx_id)
+        await pace(load, submits, cfg.steps[0], time.time() + cfg.warmup_s)
+        while (rate := next_rate(cfg.steps, passed)) is not None:
+            start = time.time()
+            await pace(load, submits, rate, start + cfg.step_s)
+            step: StepWindow = {
+                "rate_mb_s": rate,
+                "refine": not all(passed),
+                "t_start": start,
+                "t_mid": start + cfg.step_s / 2,
+                "t_end": time.time(),
+            }
+            txs = [dataclasses.asdict(tx) for tx in load.state.txs]
+            m = step_measures(
+                step, cfg, txs, list(heights.records()), counters, time.time()
             )
-            due = next_due(due, interval, time.time())
+            consensus, query = step_fails(m, rate, cfg)
+            log_step(rate, m, consensus + query)
+            passed.append(not consensus and not query)
+            steps.append({**step, "online_passed": passed[-1]})
+    return steps
 
 
-async def submit_tx(
-    cfg: BenchConfig,
-    state: LoadState,
-    client: Client,
-    urls: list[str],
-    marker: bytes,
-    bodies: list[bytes],
-    tx_id: int,
+def log_step(rate: float, m: StepMeasures, fails: list[str]) -> None:
+    consensus, lag = m["consensus_latency_ms"], m["query_lag_ms"]
+    log.info(
+        "step %s MB/s: decided %s MB/s, consensus p50 %s ms, query lag p50 %s ms, "
+        "backlog %s MB/s: %s",
+        fmt_num(rate),
+        fmt_num(m["decided_mb_s"]),
+        fmt_num(consensus["p50"] if consensus else None),
+        fmt_num(lag["p50"] if lag else None),
+        fmt_num(m["backlog_slope_mb_s"]),
+        "; ".join(fails) or "pass",
+    )
+
+
+async def pace(
+    load: Load, submits: asyncio.TaskGroup, rate_mb_s: float, until: float
 ) -> None:
-    """Submit one transaction holding a permit; the tracker returns it on inclusion. Pending
-    before the request goes out: its block may be scanned before the response arrives."""
-    lo, hi = cfg.namespaces
-    node = tx_id % len(urls)
-    payload = marker + tx_id.to_bytes(8, "big") + bodies[tx_id % len(bodies)]
-    body = json.dumps(
+    """Submits at `rate_mb_s` until `until`, independent of inclusion, but never more than
+    the step's cap in flight."""
+    state = load.state
+    state.cap = step_cap(load.cfg, rate_mb_s)
+    state.room.set()
+    interval = tx_interval_s(load.cfg.tx_size, rate_mb_s)
+    due = time.time()
+    while True:
+        await asyncio.sleep(max(0.0, due - time.time()))
+        if time.time() >= until:
+            return
+        await state.wait_for_room()
+        tx_id = next(load.ids)
+        tx = Tx(id=tx_id, node=tx_id % len(load.urls))
+        state.submitted(tx)
+        submits.create_task(submit_tx(load, tx))
+        due = next_due(due, interval, time.time())
+
+
+async def submit_tx(load: Load, tx: Tx) -> None:
+    """Pending before the request goes out: its block may be scanned before the response
+    arrives."""
+    lo, hi = load.cfg.namespaces
+    body = load.bodies[tx.id % len(load.bodies)]
+    payload = load.marker + tx.id.to_bytes(8, "big") + body
+    request = json.dumps(
         {
-            "namespace": lo + tx_id % (hi - lo + 1),
+            "namespace": lo + tx.id % (hi - lo + 1),
             "payload": base64.b64encode(payload).decode(),
         }
     ).encode()
-    tx = Tx(id=tx_id, node=node)
-    state.submitted(tx)
-    status = await client.call(post_tx, tx, urls[node] + "/v1/submit/submit", body)
-    if status != 200:
-        state.failed(tx)
+    url = load.urls[tx.node] + "/v1/submit/submit"
+    if await load.client.call(post_tx, tx, url, request) != 200:
+        load.state.failed(tx)
 
 
 def post_tx(pool: HttpPool, tx: Tx, url: str, body: bytes) -> int:
@@ -1180,6 +1229,25 @@ async def poll_heights(
     while True:
         heights.saw(source, await client.call(count, url), time.time())
         await asyncio.sleep(HEIGHT_POLL_S)
+
+
+async def poll_counters(
+    client: Client, url: str, counters: list[dict[str, Any]]
+) -> None:
+    """Decided payload bytes and view timeouts of one validator, every COUNTER_POLL_S."""
+    while True:
+        m = await client.call(consensus_counters, url)
+        counters.append({"ts": time.time(), **m})
+        await asyncio.sleep(COUNTER_POLL_S)
+
+
+def consensus_counters(pool: HttpPool, url: str) -> dict[str, float]:
+    m = parse_prom(get_ok(pool, url + "/v1/status/metrics").decode())
+    # Both appear only once the first block is decided or view timed out.
+    return {
+        "decided_bytes": m.get("consensus_finalized_bytes_sum", 0.0),
+        "timeouts": m.get("consensus_number_of_timeouts", 0.0),
+    }
 
 
 async def track_inclusion(
@@ -1381,11 +1449,11 @@ def step_fails(
     return consensus, query
 
 
-def capacity(steps: Sequence[dict[str, Any]]) -> Capacity:
+def capacity(steps: Sequence[Mapping[str, Any]]) -> Capacity:
     """Highest passing rate below the lowest failing one, overall and per rule side."""
     ordered = sorted(steps, key=lambda s: s["rate_mb_s"])
 
-    def limit(fails: Callable[[dict[str, Any]], list[str]]) -> tuple[Limit, Any]:
+    def limit(fails: Callable[[Mapping[str, Any]], list[str]]) -> tuple[Limit, Any]:
         passed = None
         for step in ordered:
             if fails(step):
@@ -1476,7 +1544,8 @@ def block_payload(pool: HttpPool, query_url: str, height: int) -> bytes | None:
 
 
 def sample_metrics(nodes: list[str], out: Path, stop: threading.Event) -> None:
-    """Every 5 s, one JSON line per node: {ts, node, ok, m}; `m` keeps the families analysed."""
+    """Every METRICS_EVERY_S, one JSON line per node: {ts, node, ok, m}; `m` keeps the
+    families analysed. Often enough for rates over a step's measured half."""
     pool = HttpPool()
     with open(out, "a", buffering=1) as f:
         while not stop.is_set():
@@ -1497,7 +1566,7 @@ def sample_metrics(nodes: list[str], out: Path, stop: threading.Event) -> None:
                 except OSError:
                     pass
                 f.write(json.dumps(rec) + "\n")
-            stop.wait(max(0.0, 5.0 - (time.time() - start)))
+            stop.wait(max(0.0, METRICS_EVERY_S - (time.time() - start)))
     pool.close()
 
 
@@ -1719,13 +1788,21 @@ Sample = tuple[float, dict[str, float]]
 
 
 def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
+    """`window`, `nodes`, `processes`, `host` and `load` cover all steps; each step's own
+    metrics cover its measured half."""
     run = read_json(out / "run.json")
     t0, t1 = run["t0"], run["t1"]
     series = load_series(out / "metrics.jsonl")
     host = list(read_jsonl(out / "host.jsonl"))
+    txs = list(read_jsonl(out / "load.jsonl"))
+    heights = list(read_jsonl(out / "heights.jsonl"))
+    counters = list(read_jsonl(out / "consensus.jsonl"))
     calib = read_json(out / "calibration.json")
     before, after = calib["before"], calib["after"]
-    nodes = {node: node_stats(node, series, t0, t1) for node in NODES}
+    steps = [
+        step_result(step, cfg, txs, heights, counters, series, host)
+        for step in read_json(out / "steps.json")
+    ]
     result: BenchResult = {
         "schema_version": SCHEMA_VERSION,
         "run": run_meta(run),
@@ -1738,78 +1815,71 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
         "config": dataclasses.asdict(cfg),
         "config_hash": run["config_hash"],
         "window": window(series, t0, t1),
-        "network": network_stats(
-            series, cfg, t0, t1, max_block_bytes(REPO / cfg.genesis)
-        ),
-        "nodes": nodes,
+        "steps": steps,
+        "capacity": capacity(steps),
+        "nodes": {node: node_stats(node, series, t0, t1) for node in NODES},
         "processes": process_stats(host, t0, t1),
         "host": host_stats(host, t0, t1),
-        "load": load_stats(out, cfg, t0, t1),
-        "bound": {"kind": "keeping-up", "reason": ""},
+        "load": load_stats(out, txs, heights, t0, t1),
         "stake_table": stake_amounts(out / "stake-table.json"),
         "validity": {"valid": True, "noisy": False, "reasons": []},
     }
-    result["bound"] = bottleneck(cfg.rate_mb_s, result["network"], result["load"])
     result["validity"] = check_validity(
         result, scrape_coverage(out / "metrics.jsonl", t0, t1)
     )
     return result
 
 
-def bottleneck(offered: float, net: NetworkStats, load: LoadStats) -> Bound:
-    """What fell behind the paced load, checked in this order: the benchmark's own payload
-    scan, consensus deciding less than offered, the query node showing heights late (large or
-    growing lag), then consensus again if the cap was reached or blocks went empty."""
-    decided = net["decided_mb_per_s"]["value"] or 0.0
-    tracker, query = load["tracker_lag_ms"], load["query_lag_ms"]
-    if tracker and tracker["p99"] > TRACKER_LAG_NOISY_MS:
-        return {
-            "kind": "benchmark",
-            "reason": f"payload scans lag node0 by {tracker['p99']:.0f} ms p99",
-        }
-    if decided < KEEP_UP_RATIO * offered:
-        return {
-            "kind": "consensus",
-            "reason": f"decided {decided / offered:.0%} of offered",
-        }
-    end = load["query_lag_end_ms"]
-    if query and max(query["p50"], end or 0.0) > QUERY_LAG_BEHIND_MS:
-        return {
-            "kind": "query-node",
-            "reason": f"query lag p50 {query['p50']:.0f} ms, {fmt_num(end)} ms in the "
-            f"last sub-window, while decided {decided / offered:.0%} of offered",
-        }
-    behind = []
-    if load["at_cap_frac"] >= KEEP_UP_AT_CAP_FRAC:
-        behind.append(f"max_pending reached in {load['at_cap_frac']:.0%} of samples")
-    empty = net["empty_block_frac"]
-    if empty is not None and empty >= KEEP_UP_EMPTY_FRAC:
-        behind.append(f"{empty:.0%} of blocks empty")
-    if behind:
-        return {"kind": "consensus", "reason": ", ".join(behind)}
-    return {
-        "kind": "keeping-up",
-        "reason": f"decided >= {KEEP_UP_RATIO:.0%} of offered, max_pending reached in "
-        f"< {KEEP_UP_AT_CAP_FRAC:.0%} of samples, < {KEEP_UP_EMPTY_FRAC:.0%} of blocks "
-        f"empty, query lag <= {QUERY_LAG_BEHIND_MS:.0f} ms",
+def step_result(
+    raw: dict[str, Any],
+    cfg: BenchConfig,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    counters: list[dict[str, Any]],
+    series: dict[str, list[Sample]],
+    host: list[dict[str, Any]],
+) -> StepResult:
+    step: StepWindow = {
+        "rate_mb_s": raw["rate_mb_s"],
+        "refine": raw["refine"],
+        "t_start": raw["t_start"],
+        "t_mid": raw["t_mid"],
+        "t_end": raw["t_end"],
     }
-
-
-def max_block_bytes(genesis: Path) -> int:
-    return parse_size(
-        tomllib.loads(genesis.read_text())["chain_config"]["max_block_size"]
-    )
-
-
-def parse_size(value: str | int) -> int:
-    """Decimal sizes as espresso's genesis parses them: `100mb` is 100_000_000 bytes."""
-    if isinstance(value, int):
-        return value
-    match = re.fullmatch(r"(\d+)\s*(b|kb|mb|gb)?", value.strip().lower())
-    if not match:
-        raise ValueError(f"unsupported block size {value!r}")
-    scale = {None: 1, "b": 1, "kb": 1000, "mb": 1000**2, "gb": 1000**3}
-    return int(match.group(1)) * scale[match.group(2)]
+    t0, t1 = step["t_mid"], step["t_end"]
+    m = step_measures(step, cfg, txs, heights, counters, math.inf)
+    consensus, query = step_fails(m, step["rate_mb_s"], cfg)
+    views = [
+        rate(s, t0, t1, "consensus_last_decided_view") for s in series.values() if s
+    ]
+    view = statistics.median(views) if views else None
+    node_cpu = {
+        node: rate(s, t0, t1, "process_cpu_seconds_total")
+        for node, s in series.items()
+        if s
+    }
+    decided = m["decided_mb_s"]
+    procs = process_stats(host, t0, t1)
+    return {
+        **step,
+        **m,
+        "latency_ms": quantiles(
+            [
+                (tx["t_included"] - tx["t_submit"]) * 1000
+                for tx in txs
+                if t0 <= tx["t_submit"] <= t1 and tx["status"] == "included"
+            ]
+        ),
+        "mean_view_ms": 1000 / view if view else None,
+        "cpu_s_per_mb": sum(node_cpu.values()) / decided if decided else None,
+        "node_cpu": node_cpu,
+        "postgres_cpu": (
+            procs["postgres"]["cpu_cores_mean"] if "postgres" in procs else None
+        ),
+        "consensus_fails": consensus,
+        "query_fails": query,
+        "passed": not consensus and not query,
+    }
 
 
 def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
@@ -1821,13 +1891,14 @@ def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
     for node, stats in result["nodes"].items():
         if stats["decided_blocks"] <= 0:
             invalid.append(f"{node} decided no blocks in the window")
-    if result["network"]["blocks_per_s"]["min"] == 0:
-        invalid.append(
-            f"a {result['config']['subwindow_s']} s sub-window decided no blocks"
-        )
+    for step in result["steps"]:
+        if not step["decided_mb_s"]:
+            invalid.append(
+                f"the {fmt_num(step['rate_mb_s'])} MB/s step decided nothing"
+            )
     load = result["load"]
-    if load["included_per_s"] <= 0:
-        invalid.append("no transactions included in the window")
+    if load["included"] <= 0:
+        invalid.append("no transactions included")
     stakes = result["stake_table"]
     if len(stakes) != len(NODES) or len(set(stakes)) != 1:
         invalid.append(f"stake table is not {len(NODES)} equal entries: {stakes}")
@@ -1838,17 +1909,11 @@ def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
     drift = result["calibration"]["drift_pct"]
     if abs(drift) > DRIFT_NOISY_PCT:
         noisy.append(f"calibration drift {drift:+.1f}% beyond {DRIFT_NOISY_PCT:.0f}%")
-    if load["inclusion_ratio"] < INCLUSION_NOISY_RATIO:
-        noisy.append(
-            f"inclusion ratio {load['inclusion_ratio']:.3f} < {INCLUSION_NOISY_RATIO}"
-        )
     tracker = load["tracker_lag_ms"]
     if tracker and tracker["p99"] > TRACKER_LAG_NOISY_MS:
         noisy.append(
             f"benchmark tracker behind: payload scans lag node0 by {tracker['p99']:.0f} ms p99"
         )
-    if load["timeouts"]:
-        noisy.append(f"{load['timeouts']} transactions timed out")
     if load["submit_errors"]:
         noisy.append(f"{load['submit_errors']} submit errors")
     if load["missing_payloads"]:
@@ -1946,84 +2011,6 @@ def delta(samples: list[Sample], ta: float, tb: float, key: str) -> tuple[float,
 def rate(samples: list[Sample], ta: float, tb: float, key: str) -> float:
     d, dt = delta(samples, ta, tb, key)
     return d / dt if dt > 0 else 0.0
-
-
-def subwindows(cfg: BenchConfig, t0: float, t1: float) -> list[tuple[float, float]]:
-    n = max(1, int((t1 - t0) // cfg.subwindow_s))
-    step = (t1 - t0) / n
-    return [(t0 + i * step, t0 + (i + 1) * step) for i in range(n)]
-
-
-def network_stats(
-    series: dict[str, list[Sample]],
-    cfg: BenchConfig,
-    t0: float,
-    t1: float,
-    max_block: int,
-) -> NetworkStats:
-    nodes = [s for s in series.values() if s]
-    slices = subwindows(cfg, t0, t1)
-    if not nodes:
-        return unmeasured_network_stats(max_block)
-
-    def across(fn: Callable[[list[Sample], float, float], float]) -> list[float]:
-        return [statistics.median(fn(s, a, b) for s in nodes) for a, b in slices]
-
-    mb = across(lambda s, a, b: rate(s, a, b, "consensus_finalized_bytes_sum") / 1e6)
-    views = across(lambda s, a, b: rate(s, a, b, "consensus_last_decided_view"))
-    cpu = [
-        sum(rate(s, a, b, "process_cpu_seconds_total") for s in nodes)
-        for a, b in slices
-    ]
-    blocks = statistics.median(
-        delta(s, t0, t1, "consensus_finalized_bytes_count")[0] for s in nodes
-    )
-    empty = sum(
-        delta(s, t0, t1, "consensus_number_of_empty_blocks_proposed")[0] for s in nodes
-    )
-    decided_bytes = statistics.median(
-        delta(s, t0, t1, "consensus_finalized_bytes_sum")[0] for s in nodes
-    )
-    return {
-        "decided_mb_per_s": stat(mb, "MB/s", "higher"),
-        "blocks_per_s": stat(
-            across(lambda s, a, b: rate(s, a, b, "consensus_finalized_bytes_count")),
-            "/s",
-            "higher",
-        ),
-        "views_per_s": stat(views, "/s", "higher"),
-        "mean_view_ms": stat([1000 / v if v else None for v in views], "ms", "lower"),
-        "timeouts": int(
-            max(delta(s, t0, t1, "consensus_number_of_timeouts")[0] for s in nodes)
-        ),
-        "empty_block_frac": empty / blocks if blocks else 0.0,
-        "proposal_to_decide_ms": histogram_quantiles(
-            [(at(s, t0)[1], at(s, t1)[1]) for s in nodes],
-            "consensus_proposal_to_decide_time",
-        ),
-        "cpu_s_per_mb": stat(
-            [c / m if m else None for c, m in zip(cpu, mb)], "s/MB", "lower"
-        ),
-        "block_bytes_nonempty_mean": (
-            decided_bytes / (blocks - empty) if blocks > empty else None
-        ),
-        "max_block_bytes": max_block,
-    }
-
-
-def unmeasured_network_stats(max_block: int) -> NetworkStats:
-    return {
-        "decided_mb_per_s": stat([None], "MB/s", "higher"),
-        "blocks_per_s": stat([None], "/s", "higher"),
-        "views_per_s": stat([None], "/s", "higher"),
-        "mean_view_ms": stat([None], "ms", "lower"),
-        "timeouts": None,
-        "empty_block_frac": None,
-        "proposal_to_decide_ms": None,
-        "cpu_s_per_mb": stat([None], "s/MB", "lower"),
-        "block_bytes_nonempty_mean": None,
-        "max_block_bytes": max_block,
-    }
 
 
 def node_stats(
@@ -2197,64 +2184,24 @@ def host_stats(host: list[dict[str, Any]], t0: float, t1: float) -> HostStats:
     }
 
 
-def load_stats(out: Path, cfg: BenchConfig, t0: float, t1: float) -> LoadStats:
+def load_stats(
+    out: Path,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    t0: float,
+    t1: float,
+) -> LoadStats:
     meta = read_json(out / "load-meta.json")
-    every = list(read_jsonl(out / "load.jsonl"))
-    txs = [tx for tx in every if t0 <= tx["t_submit"] <= t1]
-    included = [tx for tx in txs if tx["status"] == "included"]
-    dt = t1 - t0
-    latencies = [(tx["t_included"] - tx["t_submit"]) * 1000 for tx in included]
-    heights = list(read_jsonl(out / "heights.jsonl"))
-    on_validator = {h["height"]: h["validator"] for h in heights}
-    consensus = [
-        (on_validator[tx["height"]] - tx["t_submit"]) * 1000
-        for tx in included
-        if on_validator.get(tx["height"]) is not None
-    ]
-    end = t1 - cfg.subwindow_s
-    query_lag = height_lags(heights, "validator", t0, t1)
-    tracker_lag = scan_lags(heights, t0, t1)
-    spans = [
-        (tx["t_submit"], tx["t_included"] or tx["t_submit"] + cfg.tx_timeout_s)
-        for tx in every
-    ]
-    open_spans = in_flight(spans, t0, t1, IN_FLIGHT_STEP_S)
-    landed = sum(
-        1
-        for tx in every
-        if tx["t_included"] is not None and t0 <= tx["t_included"] <= t1
-    )
     return {
-        "submitted_per_s": len(txs) / dt,
-        "included_per_s": landed / dt,
-        "inclusion_ratio": len(included) / len(txs) if txs else 0.0,
+        "submitted": len(txs),
+        "included": sum(1 for tx in txs if tx["status"] == "included"),
         "timeouts": sum(1 for tx in txs if tx["status"] == "timeout"),
         "submit_errors": meta["submit_errors"],
         "max_in_flight": meta["max_in_flight"],
         "cap_waits": meta["cap_waits"],
-        "offered_mb_s": cfg.rate_mb_s,
-        "at_cap_frac": sum(1 for n in open_spans if n >= cfg.max_pending)
-        / len(open_spans),
         "missing_payloads": meta["missing_payloads"],
-        "latency_ms": quantiles(latencies),
-        "consensus_latency_ms": quantiles(consensus),
-        "query_lag_ms": quantiles(query_lag),
-        "query_lag_end_ms": median_or_none(height_lags(heights, "validator", end, t1)),
-        "tracker_lag_ms": quantiles(tracker_lag),
-        "tracker_lag_end_ms": median_or_none(scan_lags(heights, end, t1)),
-        "in_flight_mean": statistics.fmean(open_spans),
+        "tracker_lag_ms": quantiles(scan_lags(heights, t0, t1)),
     }
-
-
-def height_lags(
-    heights: list[dict[str, Any]], other: str, t0: float, t1: float
-) -> list[float]:
-    """Per height shown on node0 in [t0, t1]: ms from `other` to node0."""
-    return [
-        (h["query"] - h[other]) * 1000
-        for h in heights
-        if h["query"] is not None and h[other] is not None and t0 <= h["query"] <= t1
-    ]
 
 
 def scan_lags(heights: list[dict[str, Any]], t0: float, t1: float) -> list[float]:
@@ -2267,21 +2214,6 @@ def scan_lags(heights: list[dict[str, Any]], t0: float, t1: float) -> list[float
         if ready is not None and h["scanned"] is not None and t0 <= ready <= t1:
             lags.append((h["scanned"] - ready) * 1000)
     return lags
-
-
-def median_or_none(values: list[float]) -> float | None:
-    return statistics.median(values) if values else None
-
-
-def in_flight(
-    spans: list[tuple[float, float]], t0: float, t1: float, step: float
-) -> list[int]:
-    """Open [start, end) spans at `step`-spaced samples in [t0, t1). A span ends when its
-    block appears, slightly before the permit returns."""
-    starts = sorted(a for a, _ in spans)
-    ends = sorted(b for _, b in spans)
-    samples = [t0 + i * step for i in range(max(1, int((t1 - t0) / step)))]
-    return [bisect_right(starts, t) - bisect_right(ends, t) for t in samples]
 
 
 def quantiles(values: list[float]) -> Quantiles | None:
@@ -2307,32 +2239,6 @@ def stake_amounts(path: Path) -> list[str]:
     return [entry["stake_table_entry"]["stake_amount"] for entry in table]
 
 
-def stat(
-    values: Sequence[float | None], unit: str, better: Literal["higher", "lower"]
-) -> Stat:
-    """Over sub-windows; all None if any sub-window has no value, e.g. a ratio to nothing
-    decided."""
-    known = [v for v in values if v is not None]
-    if len(known) < len(values):
-        return {
-            "value": None,
-            "min": None,
-            "max": None,
-            "cv": None,
-            "unit": unit,
-            "better": better,
-        }
-    mean = statistics.fmean(known)
-    return {
-        "value": statistics.median(known),
-        "min": min(known),
-        "max": max(known),
-        "cv": statistics.pstdev(known) / mean if mean else 0.0,
-        "unit": unit,
-        "better": better,
-    }
-
-
 def pct_change(before: float, after: float) -> float:
     return (after - before) / before * 100 if before else 0.0
 
@@ -2346,54 +2252,35 @@ class Metric:
     floor_pct: float
 
 
-HEADLINE = (
-    Metric(
-        "decided payload throughput",
-        "network.decided_mb_per_s.value",
-        "MB/s",
-        "higher",
-        10,
-    ),
-    Metric("consensus latency p50", "load.consensus_latency_ms.p50", "ms", "lower", 15),
-    Metric("consensus latency p99", "load.consensus_latency_ms.p99", "ms", "lower", 20),
-    Metric("query lag p50", "load.query_lag_ms.p50", "ms", "lower", 30),
-    Metric("query lag p99", "load.query_lag_ms.p99", "ms", "lower", 30),
-    Metric("tx latency p50 (via query node)", "load.latency_ms.p50", "ms", "lower", 15),
-    Metric("tx latency p99 (via query node)", "load.latency_ms.p99", "ms", "lower", 20),
-    Metric("mean view time", "network.mean_view_ms.value", "ms", "lower", 10),
-    Metric("consensus timeouts", "network.timeouts", "", "lower", 0),
-    Metric(
-        "node CPU-s per decided MB", "network.cpu_s_per_mb.value", "s/MB", "lower", 10
-    ),
-    Metric("node0 CPU mean", "nodes.node0.cpu_cores", "cores", "lower", 15),
-    Metric("node1 CPU mean", "nodes.node1.cpu_cores", "cores", "lower", 15),
-    Metric("node2 CPU mean", "nodes.node2.cpu_cores", "cores", "lower", 15),
-    Metric("node0 RSS peak", "nodes.node0.rss_peak_bytes", "bytes", "lower", 10),
-    Metric("node1 RSS peak", "nodes.node1.rss_peak_bytes", "bytes", "lower", 10),
-    Metric(
-        "postgres CPU mean", "processes.postgres.cpu_cores_mean", "cores", "lower", 15
-    ),
-    Metric(
-        "node0 decide processing p99",
-        "nodes.node0.ops.consensus_internal_process_decided_events_duration.p99_ms",
-        "ms",
-        "lower",
-        30,
-    ),
-    Metric(
-        "node1 decide processing p99",
-        "nodes.node1.ops.consensus_internal_process_decided_events_duration.p99_ms",
-        "ms",
-        "lower",
-        30,
-    ),
-    Metric(
-        "node1 append DA p99",
-        "nodes.node1.ops.consensus_storage_append_da.p99_ms",
-        "ms",
-        "lower",
-        30,
-    ),
+CAPACITY_METRICS = (
+    Metric("capacity", "capacity.overall.mb_s", "MB/s", "higher", 10),
+    Metric("consensus limit", "capacity.consensus.mb_s", "MB/s", "higher", 10),
+    Metric("query node limit", "capacity.query_node.mb_s", "MB/s", "higher", 10),
+)
+# Paths into one step of result.json's `steps`.
+STEP_METRICS = (
+    Metric("decided", "decided_mb_s", "MB/s", "higher", 10),
+    Metric("consensus p50", "consensus_latency_ms.p50", "ms", "lower", 15),
+    Metric("consensus p99", "consensus_latency_ms.p99", "ms", "lower", 20),
+    Metric("query lag p50", "query_lag_ms.p50", "ms", "lower", 30),
+    Metric("query lag p99", "query_lag_ms.p99", "ms", "lower", 30),
+    Metric("e2e p50", "latency_ms.p50", "ms", "lower", 15),
+    Metric("e2e p99", "latency_ms.p99", "ms", "lower", 20),
+    Metric("view time", "mean_view_ms", "ms", "lower", 10),
+    Metric("CPU-s/MB", "cpu_s_per_mb", "s/MB", "lower", 10),
+    Metric("node0 CPU", "node_cpu.node0", "cores", "lower", 15),
+    Metric("node1 CPU", "node_cpu.node1", "cores", "lower", 15),
+    Metric("node2 CPU", "node_cpu.node2", "cores", "lower", 15),
+    Metric("postgres CPU", "postgres_cpu", "cores", "lower", 15),
+)
+# The per-step summary table; the rest go to the step details.
+STEP_COLUMNS = (
+    "decided",
+    "consensus p50",
+    "consensus p99",
+    "query lag p50",
+    "e2e p50",
+    "CPU-s/MB",
 )
 BASELINE_RUNS = 10
 # GitHub's ubuntu-latest spans CPU models; a baseline run counts only on a like runner.
@@ -2409,7 +2296,8 @@ def lookup(result: Any, path: str) -> float | None:
 
 
 def compare(current: BenchResult, baseline: Baseline) -> Comparison:
-    """Deltas against the median of comparable runs. A delta counts only beyond both the metric's
+    """Deltas against the median of comparable runs: capacity, and each step's metrics
+    against the runs that ran the same rate. A delta counts only beyond both the metric's
     floor and 3 times the baseline's robust spread; a noisy current run is never conclusive."""
     usable: list[BenchResult] = []
     excluded: dict[str, int] = {}
@@ -2420,10 +2308,19 @@ def compare(current: BenchResult, baseline: Baseline) -> Comparison:
         else:
             usable.append(run)
     usable = usable[:BASELINE_RUNS]
+    noisy = current["validity"]["noisy"]
     rows = [
-        compare_metric(metric, current, usable, current["validity"]["noisy"])
-        for metric in HEADLINE
+        compare_metric(
+            metric,
+            lookup(current, metric.path),
+            [lookup(run, metric.path) for run in usable],
+            noisy,
+        )
+        for metric in CAPACITY_METRICS
     ]
+    rates = sorted(
+        {step["rate_mb_s"] for run in [current, *usable] for step in run["steps"]}
+    )
     return {
         "n": len(usable),
         "excluded": excluded,
@@ -2431,7 +2328,33 @@ def compare(current: BenchResult, baseline: Baseline) -> Comparison:
         "source": baseline["source"],
         "used": [run["run"] for run in usable],
         "rows": rows,
+        "steps": [compare_step(rate, current, usable, noisy) for rate in rates],
     }
+
+
+def compare_step(
+    rate: float, current: BenchResult, usable: list[BenchResult], noisy: bool
+) -> StepComparison:
+    mine = step_at(current, rate)
+    theirs = [step for run in usable if (step := step_at(run, rate))]
+    return {
+        "rate_mb_s": rate,
+        "n": len(theirs),
+        "reached": mine is not None,
+        "rows": [
+            compare_metric(
+                metric,
+                lookup(mine, metric.path),
+                [lookup(step, metric.path) for step in theirs],
+                noisy,
+            )
+            for metric in STEP_METRICS
+        ],
+    }
+
+
+def step_at(result: BenchResult, rate: float) -> StepResult | None:
+    return next((s for s in result["steps"] if s["rate_mb_s"] == rate), None)
 
 
 def exclusion(current: BenchResult, run: BenchResult) -> str | None:
@@ -2460,10 +2383,9 @@ def exclusion(current: BenchResult, run: BenchResult) -> str | None:
 
 
 def compare_metric(
-    metric: Metric, current: BenchResult, usable: list[BenchResult], noisy: bool
+    metric: Metric, value: float | None, values: list[float | None], noisy: bool
 ) -> Row:
-    value = lookup(current, metric.path)
-    history = [v for v in (lookup(run, metric.path) for run in usable) if v is not None]
+    history = [v for v in values if v is not None]
     baseline = statistics.median(history) if history else None
     spread = 0.0
     if baseline and len(history) >= 3:
@@ -2519,11 +2441,15 @@ def render(result: BenchResult, comparison: Comparison | None) -> str:
         "## Network benchmark",
         "",
         f"- {status_line(result)}",
-        f"- {bound_line(result)}",
+        f"- {capacity_line(result['capacity'])}",
         f"- {baseline_line(comparison)}",
         "",
-        *headline_table(result, comparison),
+        *capacity_table(result, comparison),
+        "### Load steps",
         "",
+        *step_table(result, comparison),
+        "",
+        *details("Step details", step_details(result)),
         "### Load",
         "",
         *load_lines(result),
@@ -2545,62 +2471,6 @@ def status_line(result: BenchResult) -> str:
     return f"{head}: run **{verdict_word(validity)}**" + (
         f" ({reasons})" if reasons else ""
     )
-
-
-def bound_line(result: BenchResult) -> str:
-    bound = result["bound"]
-    title = {
-        "keeping-up": "Keeping up with the offered load",
-        "consensus": "Consensus behind the offered load",
-        "query-node": "Query node behind consensus",
-        "benchmark": "Benchmark tracker behind",
-    }
-    line = (
-        f"**{title[bound['kind']]}** ({bound['reason']}): "
-        f"{'; '.join(saturation_facts(result))}."
-    )
-    if bound["kind"] == "keeping-up":
-        return line
-    return f"{line} {queueing_note(result['load'])}"
-
-
-def queueing_note(load: LoadStats) -> str:
-    """Behind the load, tx latency is set by the queue in flight, which max_pending bounds."""
-    lat, consensus = load["latency_ms"], load["consensus_latency_ms"]
-    rate = load["included_per_s"]
-    queued = load["in_flight_mean"] / rate * 1000 if rate else None
-    return (
-        f"Tx latency is queueing, not consensus latency: Little's law: "
-        f"{fmt_num(load['in_flight_mean'])} in flight / {fmt_num(rate)} tx/s = "
-        f"{fmt_num(queued)} ms, tx latency p50 {fmt_num(lat['p50'] if lat else None)} ms, "
-        f"consensus latency p50 {fmt_num(consensus['p50'] if consensus else None)} ms."
-    )
-
-
-def saturation_facts(result: BenchResult) -> list[str]:
-    net, load, cfg = result["network"], result["load"], result["config"]
-    block = net["block_bytes_nonempty_mean"]
-    blocks = net["blocks_per_s"]["value"]
-    size = (
-        f"non-empty blocks {fmt_bytes(block)} mean, "
-        f"{block / net['max_block_bytes']:.1%} of max_block_size"
-        if block is not None
-        else "no non-empty blocks"
-    )
-    submitted = load["submitted_per_s"] * cfg["tx_size"] / 1e6
-    return [
-        (
-            f"offered {fmt_num(load['offered_mb_s'])} MB/s, submitted {fmt_num(submitted)} "
-            f"MB/s, decided {fmt_num(net['decided_mb_per_s']['value'])} MB/s"
-        ),
-        f"block time {fmt_num(1000 / blocks if blocks else None)} ms",
-        size,
-        f"{fmt_pct(net['empty_block_frac'])} of blocks empty",
-        (
-            f"max_pending {cfg['max_pending']} reached in {load['at_cap_frac']:.0%} of "
-            f"{IN_FLIGHT_STEP_S:.0f} s samples, {load['cap_waits']} submits waited"
-        ),
-    ]
 
 
 def run_where(run: RunMeta) -> str:
@@ -2675,22 +2545,13 @@ def details(summary: str, body: list[str]) -> list[str]:
     return [f"<details><summary>{summary}</summary>", "", *body, "", "</details>", ""]
 
 
-def headline_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
-    windows = f"{result['config']['subwindow_s']} s sub-windows (min to max, cv)"
+def capacity_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
+    """Capacity against the baseline; nothing without one."""
     if comparison is None or not comparison["used"]:
-        lines = [f"| metric | this run | {windows} |", "|---|---:|---:|"]
-        for row in (compare_metric(m, result, [], False) for m in HEADLINE):
-            lines.append(
-                f"| {row['label']} | {fmt_value(row['current'], row['unit'])} "
-                f"| {range_cell(result, row['key'])} |"
-            )
-        return lines
+        return []
     lines = [
-        (
-            f"| metric | this run | {windows} | {baseline_label(comparison)} | delta "
-            "| verdict (threshold) |"
-        ),
-        "|---|---:|---:|---:|---:|---|",
+        f"| metric | this run | {baseline_label(comparison)} | delta | verdict (threshold) |",
+        "|---|---:|---:|---:|---|",
     ]
     for row in comparison["rows"]:
         delta_cell = f"{row['delta_pct']:+.1f}%" if row["delta_pct"] is not None else ""
@@ -2699,10 +2560,92 @@ def headline_table(result: BenchResult, comparison: Comparison | None) -> list[s
         )
         lines.append(
             f"| {row['label']} | {fmt_value(row['current'], row['unit'])} "
-            f"| {range_cell(result, row['key'])} | {fmt_value(row['baseline'], row['unit'])} "
+            f"| {fmt_value(row['baseline'], row['unit'])} "
             f"| {delta_cell} | {mark} (±{row['threshold_pct']:.0f}%) |"
         )
+    return [*lines, ""]
+
+
+def step_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
+    """One row per rate this run or the baseline ran; a cell beyond its threshold against the
+    baseline median at that rate carries the delta, bold when worse."""
+    by_rate = (
+        {c["rate_mb_s"]: c for c in comparison["steps"]}
+        if comparison and comparison["used"]
+        else {}
+    )
+    rates = sorted({s["rate_mb_s"] for s in result["steps"]} | set(by_rate))
+    top = max(s["rate_mb_s"] for s in result["steps"])
+    lines = [
+        "| MB/s | "
+        + " | ".join(STEP_COLUMNS)
+        + " | verdict |"
+        + (" main runs |" if by_rate else ""),
+        "|---:|" + "---:|" * len(STEP_COLUMNS) + "---|" + ("---:|" if by_rate else ""),
+    ]
+    for rate in rates:
+        step, other = step_at(result, rate), by_rate.get(rate)
+        tail = f" {other['n']} |" if other else (" 0 |" if by_rate else "")
+        if step is None:
+            missing = "**not reached**" if rate > top else "not run"
+            lines.append(
+                f"| {fmt_num(rate)} |"
+                + " |" * len(STEP_COLUMNS)
+                + f" {missing} |{tail}"
+            )
+            continue
+        rows = {row["label"]: row for row in other["rows"]} if other else {}
+        cells = [step_cell(step, label, rows.get(label)) for label in STEP_COLUMNS]
+        lines.append(
+            f"| {fmt_num(rate)}{' (refine)' if step['refine'] else ''} | "
+            + " | ".join(cells)
+            + f" | {step_verdict(step)} |{tail}"
+        )
     return lines
+
+
+def step_cell(step: StepResult, label: str, row: Row | None) -> str:
+    metric = next(m for m in STEP_METRICS if m.label == label)
+    text = fmt_value(lookup(step, metric.path), metric.unit)
+    if (
+        row is None
+        or row["delta_pct"] is None
+        or row["verdict"] not in ("worse", "better")
+    ):
+        return text
+    text += f" ({row['delta_pct']:+.0f}%)"
+    return f"**{text}**" if row["verdict"] == "worse" else text
+
+
+def step_verdict(step: StepResult) -> str:
+    fails = step["consensus_fails"] + step["query_fails"]
+    return "pass" if not fails else "fail: " + "; ".join(fails)
+
+
+def step_details(result: BenchResult) -> list[str]:
+    lines = [
+        (
+            "| MB/s | decided | backlog MB/s | view timeouts | consensus p50/p99 ms "
+            "| query lag p50/p99 ms | query lag slope ms/s | e2e p50/p99 ms | view ms "
+            "| CPU-s/MB | node0/1/2 CPU | postgres CPU |"
+        ),
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"]):
+        cpu = "/".join(fmt_num(s["node_cpu"].get(node)) for node in NODES)
+        lines.append(
+            f"| {fmt_num(s['rate_mb_s'])} | {fmt_num(s['decided_mb_s'])} "
+            f"| {fmt_num(s['backlog_slope_mb_s'])} | {s['timeouts']} "
+            f"| {pair(s['consensus_latency_ms'])} | {pair(s['query_lag_ms'])} "
+            f"| {fmt_num(s['query_lag_slope_ms_s'])} | {pair(s['latency_ms'])} "
+            f"| {fmt_num(s['mean_view_ms'])} | {fmt_num(s['cpu_s_per_mb'])} | {cpu} "
+            f"| {fmt_num(s['postgres_cpu'])} |"
+        )
+    return lines
+
+
+def pair(q: Quantiles | None) -> str:
+    return f"{q['p50']:.0f}/{q['p99']:.0f}" if q else ""
 
 
 def excluded_note(comparison: Comparison) -> str:
@@ -2711,19 +2654,6 @@ def excluded_note(comparison: Comparison) -> str:
         " (excluded: " + ", ".join(f"{n} {why}" for why, n in excluded.items()) + ")"
         if excluded
         else ""
-    )
-
-
-def range_cell(result: BenchResult, path: str) -> str:
-    if not path.endswith(".value"):
-        return ""
-    parent: Any = result
-    for part in path.split(".")[:-1]:
-        parent = parent[part]
-    if parent["value"] is None:
-        return ""
-    return (
-        f"{fmt_num(parent['min'])} to {fmt_num(parent['max'])}, cv {parent['cv']:.0%}"
     )
 
 
@@ -2793,31 +2723,27 @@ def process_table(result: BenchResult) -> list[str]:
 
 
 def load_lines(result: BenchResult) -> list[str]:
-    load, cfg, net = result["load"], result["config"], result["network"]
-    blocks = net["blocks_per_s"]["value"]
+    load, cfg = result["load"], result["config"]
     return [
         (
-            f"- paced: {fmt_num(cfg['rate_mb_s'])} MB/s offered in {fmt_bytes(cfg['tx_size'])} "
-            f"txs to {cfg['submit_nodes']} nodes, {cfg['workers']} submit threads, "
-            f"max_pending cap {cfg['max_pending']}"
+            f"- steps: {', '.join(map(fmt_num, cfg['steps']))} MB/s, {cfg['step_s']} s each, "
+            f"second half measured, after {cfg['warmup_s']} s warmup; "
+            f"{fmt_bytes(cfg['tx_size'])} txs to {cfg['submit_nodes']} nodes, "
+            f"{cfg['workers']} submit threads, in flight capped at {fmt_num(cfg['cap_s'])} s "
+            "of load"
         ),
         (
-            f"- submitted {load['submitted_per_s']:.1f} tx/s, included "
-            f"{load['included_per_s']:.1f} tx/s, inclusion ratio {load['inclusion_ratio']:.3f}"
-        ),
-        f"- decided blocks: {fmt_num(blocks)}/s, peak in flight {load['max_in_flight']}",
-        f"- tx latency, submit to block on node0's query API: {spread(load['latency_ms'])}",
-        (
-            "- consensus latency, submit to block on a validator: "
-            f"{spread(load['consensus_latency_ms'])}"
+            f"- step rules: decided >= {KEEP_UP_RATIO:.0%} of offered, backlog growth <= "
+            f"{BACKLOG_GROWTH_FRAC:.0%} of offered, no view timeouts, consensus latency p50 "
+            f"<= {cfg['latency_target_ms']} ms; query lag p50 <= "
+            f"{cfg['query_lag_target_ms']} ms, growth <= {QUERY_LAG_GROWTH_MS_S:.0f} ms/s"
         ),
         (
-            "- query lag, height on node0's query API after a validator: "
-            f"{spread(load['query_lag_ms'])}, last sub-window median "
-            f"{fmt_num(load['query_lag_end_ms'])} ms"
+            f"- {load['submitted']} submitted, {load['included']} included, "
+            f"{load['timeouts']} timed out, {load['submit_errors']} submit errors, "
+            f"peak in flight {load['max_in_flight']}, {load['cap_waits']} submits waited"
         ),
         f"- benchmark tracker lag: {spread(load['tracker_lag_ms'])}",
-        f"- {load['timeouts']} tx timeouts, {load['submit_errors']} submit errors",
     ]
 
 
@@ -2868,10 +2794,6 @@ def fmt_num(value: float | None) -> str:
     if value == 0 or abs(value) >= 100:
         return f"{value:.0f}"
     return f"{value:.3g}"
-
-
-def fmt_pct(value: float | None) -> str:
-    return "n/a" if value is None else f"{value:.0%}"
 
 
 def fmt_bytes(value: float) -> str:
