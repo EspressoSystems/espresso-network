@@ -8,8 +8,10 @@ made no `aws` call at all.
     just py::test
 """
 
+import contextlib
 import dataclasses
 import importlib.util
+import io
 import json
 import logging
 import os
@@ -20,6 +22,7 @@ import tempfile
 import threading
 import unittest
 import unittest.mock
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -2884,6 +2887,628 @@ class WriteReportTest(unittest.TestCase):
     def test_render_is_repeatable(self):
         run_dir, first = self.report()
         self.assertEqual(awsb.write_report(run_dir), first)
+
+
+NOW = datetime(2026, 9, 29, 16, 0, tzinfo=UTC)
+EXPIRES_LATER = "2026-09-29T17:00:00Z"
+EXPIRES_PAST = "2026-09-29T15:00:00Z"
+
+
+def arn(kind: str, resource_id: str) -> str:
+    return f"arn:aws:ec2:eu-west-1:1:{kind}/{resource_id}"
+
+
+def tag_mapping(
+    kind: str, resource_id: str, run: str, owner: str | None, expires: str | None
+) -> dict:
+    tags = {awsb.TAG_RUN: run}
+    if owner:
+        tags[awsb.TAG_OWNER] = owner
+    if expires:
+        tags[awsb.TAG_EXPIRES] = expires
+    return {
+        "arn": arn(kind, resource_id),
+        "tags": [{"Key": k, "Value": v} for k, v in tags.items()],
+    }
+
+
+def instance(resource_id: str, state: str = "running", launch: str | None = None):
+    return {
+        "id": resource_id,
+        "type": "c8g.4xlarge",
+        "state": state,
+        "launch": launch or "2026-09-29T15:30:00+00:00",
+    }
+
+
+class GroupRunsTest(unittest.TestCase):
+    def test_groups_by_run_sorted_by_owner_and_drops_terminated(self):
+        mappings = [
+            tag_mapping("instance", "i-2", "zed", "alice", EXPIRES_LATER),
+            tag_mapping("instance", "i-dead", "zed", "alice", EXPIRES_LATER),
+            tag_mapping("volume", "vol-1", "zed", None, None),
+            tag_mapping("security-group", "sg-1", "zed", "alice", EXPIRES_LATER),
+            tag_mapping("instance", "i-1", "amy", "bob", EXPIRES_LATER),
+            tag_mapping("volume", "vol-2", "lost", None, None),
+        ]
+        instances = [instance("i-1"), instance("i-2"), instance("i-dead", "terminated")]
+        runs = awsb.group_runs(mappings, instances)
+        self.assertEqual([r["name"] for r in runs], ["lost", "zed", "amy"])
+        zed = runs[1]
+        self.assertEqual(zed["owner"], "alice")
+        self.assertEqual(zed["expires"], EXPIRES_LATER)
+        self.assertEqual([i["id"] for i in zed["instances"]], ["i-2"])
+        self.assertEqual(
+            zed["arns"],
+            [
+                arn("instance", "i-2"),
+                arn("volume", "vol-1"),
+                arn("security-group", "sg-1"),
+            ],
+        )
+        self.assertIsNone(runs[0]["owner"])
+        self.assertEqual(runs[0]["instances"], [])
+
+    def test_nothing_tagged_gives_no_runs(self):
+        self.assertEqual(awsb.group_runs([], []), [])
+
+    def test_arn_parts(self):
+        self.assertEqual(
+            awsb.arn_parts(arn("instance", "i-0abc")), ("instance", "i-0abc")
+        )
+
+
+class ClassifyOrphanTest(unittest.TestCase):
+    def tagged(self, owner: str | None = "me", expires: str | None = EXPIRES_LATER):
+        return {"name": "r", "owner": owner, "expires": expires}
+
+    def classify(self, phase, **kwargs) -> str | None:
+        return awsb.classify_orphan(self.tagged(**kwargs), phase, NOW, "me")
+
+    def test_live_run_with_state_is_not_an_orphan(self):
+        self.assertIsNone(self.classify("measuring"))
+        self.assertIsNone(self.classify("left-running"))
+
+    def test_past_expiry(self):
+        self.assertEqual(
+            self.classify("measuring", expires=EXPIRES_PAST), "past expiry"
+        )
+        self.assertEqual(
+            self.classify(None, owner="bob", expires=EXPIRES_PAST), "past expiry"
+        )
+
+    def test_finished_run_with_leftovers(self):
+        self.assertEqual(self.classify("done"), "run is done")
+        self.assertEqual(self.classify("swept"), "run is swept")
+
+    def test_lost_state_counts_only_for_the_current_user(self):
+        self.assertEqual(self.classify(None), "no local state")
+        self.assertIsNone(self.classify(None, owner="bob"))
+
+    def test_untagged_expiry_never_expires(self):
+        self.assertIsNone(self.classify("measuring", expires=None))
+
+
+class LocalPhaseTest(unittest.TestCase):
+    def test_needs_manifest_and_terraform_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            self.assertIsNone(awsb.local_phase(out, "r"))
+            (out / "r" / "terraform").mkdir(parents=True)
+            netbench.write_json(out / "r" / "manifest.json", {"phase": "measuring"})
+            self.assertIsNone(awsb.local_phase(out, "r"))
+            (out / "r" / "terraform" / "terraform.tfstate").write_text("{}")
+            self.assertEqual(awsb.local_phase(out, "r"), "measuring")
+
+
+class FormatRunsTest(unittest.TestCase):
+    def test_accrued_usd_is_instance_hours_at_cached_price(self):
+        two = [instance("i-1"), instance("i-2", launch="2026-09-29T15:00:00+00:00")]
+        usd = awsb.accrued_usd(two, {"c8g.4xlarge": 0.8}, NOW)
+        self.assertAlmostEqual(usd, 0.5 * 0.8 + 1.0 * 0.8)
+
+    def test_accrued_usd_without_a_price_is_none(self):
+        self.assertIsNone(awsb.accrued_usd([instance("i-1")], {}, NOW))
+
+    def test_cached_prices_reads_one_region(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "prices.json"
+            self.assertEqual(awsb.cached_prices(cache, "eu-west-1"), {})
+            netbench.write_json(
+                cache,
+                {
+                    "eu-west-1:c8g.4xlarge": {"usd_hour": 0.7, "fetched_at": 1},
+                    "us-east-1:c8g.4xlarge": {"usd_hour": 0.6, "fetched_at": 1},
+                },
+            )
+            self.assertEqual(
+                awsb.cached_prices(cache, "eu-west-1"), {"c8g.4xlarge": 0.7}
+            )
+
+    def test_table_row_shows_owner_cost_and_orphan(self):
+        runs = awsb.group_runs(
+            [
+                tag_mapping("instance", "i-1", "amy", "bob", EXPIRES_PAST),
+                tag_mapping("key-pair", "key-1", "amy", "bob", EXPIRES_PAST),
+            ],
+            [instance("i-1")],
+        )
+        runs[0]["orphan"] = "past expiry"
+        lines = awsb.format_runs(runs, {"c8g.4xlarge": 0.8}, NOW)
+        self.assertEqual(
+            lines[2],
+            "| amy | bob | 2026-09-29T15:30 | 2026-09-29T15:00 | 1 instances, 1 other "
+            "| 0.40 | past expiry |",
+        )
+
+
+class TagRunner(FakeRunner):
+    """Answers the tag API with `{arn, tags}` mappings, or with bare ARNs for a query that
+    asks for `ResourceARN` only (`tagged_resources`)."""
+
+    mappings: list[dict]
+
+    def __call__(self, argv: list[str]) -> subprocess.CompletedProcess:
+        if "resourcegroupstaggingapi" in argv:
+            self.calls.append(argv)
+            arns = "ResourceTagMappingList[].ResourceARN" in argv
+            body = [m["arn"] for m in self.mappings] if arns else self.mappings
+            return completed(stdout=json.dumps(body))
+        return super().__call__(argv)
+
+
+def tag_runner(mappings: list[dict], instances: list[dict]) -> FakeRunner:
+    runner = TagRunner(
+        {
+            STS_CALL: sts_response("027574771971"),
+            (
+                "aws",
+                "--profile",
+                "timeboost-dev",
+                "ec2",
+                "describe-instances",
+            ): completed(stdout=json.dumps(instances)),
+            ("aws",): completed(),
+        }
+    )
+    runner.mappings = mappings
+    return runner
+
+
+def run_cmd(func, argv: list[str], runner, *args) -> tuple[int, str]:
+    parsed = awsb.parse_args(argv)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = func(parsed, runner, *args)
+    return code, out.getvalue()
+
+
+class StatusAllTest(unittest.TestCase):
+    def test_empty_region(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = run_cmd(
+                awsb.cmd_status,
+                ["status", "--all", "--out-root", tmp],
+                tag_runner([], []),
+                NOW,
+            )
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertEqual(out, "no espresso-bench resources in eu-west-1\n")
+
+    def test_lists_runs_with_orphan_marker(self):
+        mappings = [
+            tag_mapping("instance", "i-1", "amy", "bob", EXPIRES_PAST),
+            tag_mapping("instance", "i-2", "ok", "bob", EXPIRES_LATER),
+        ]
+        runner = tag_runner(mappings, [instance("i-1"), instance("i-2")])
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = run_cmd(
+                awsb.cmd_status, ["status", "--all", "--out-root", tmp], runner, NOW
+            )
+        self.assertEqual(code, awsb.EXIT_OK)
+        lines = out.splitlines()
+        self.assertIn("| amy | bob |", lines[2])
+        self.assertTrue(lines[2].endswith("| past expiry |"))
+        self.assertTrue(lines[3].endswith("| n/a |  |"), lines[3])
+
+    def test_wrong_account_is_refused_before_listing(self):
+        runner = FakeRunner({STS_CALL: sts_response("999")})
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(awsb.Refused):
+            run_cmd(
+                awsb.cmd_status, ["status", "--all", "--out-root", tmp], runner, NOW
+            )
+        self.assertEqual(len(runner.calls), 1)
+
+    def test_needs_dir_or_all(self):
+        with self.assertRaises(awsb.Refused):
+            run_cmd(awsb.cmd_status, ["status"], FakeRunner(), NOW)
+
+
+class DestroyOrphansTest(unittest.TestCase):
+    def runner(self) -> FakeRunner:
+        mappings = [
+            tag_mapping("instance", "i-1", "amy", "bob", EXPIRES_PAST),
+            tag_mapping("volume", "vol-1", "amy", None, None),
+            tag_mapping("security-group", "sg-1", "amy", "bob", EXPIRES_PAST),
+            tag_mapping("key-pair", "key-1", "amy", "bob", EXPIRES_PAST),
+            tag_mapping("instance", "i-2", "live", "bob", EXPIRES_LATER),
+        ]
+        return tag_runner(mappings, [instance("i-1"), instance("i-2")])
+
+    def destroy(self, runner, *flags: str) -> tuple[int, str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            return run_cmd(
+                awsb.cmd_destroy,
+                ["destroy", "--orphans", "--out-root", tmp, *flags],
+                runner,
+                NOW,
+            )
+
+    def test_sweeps_only_orphans_in_dependency_order(self):
+        runner = self.runner()
+        code, out = self.destroy(runner, "--yes")
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertIn("| amy | bob |", out)
+        self.assertNotIn("| live |", out)
+        ec2 = [
+            c[4]
+            for c in runner.calls
+            if c[3:4] == ["ec2"] and c[4] != "describe-instances"
+        ]
+        self.assertEqual(
+            ec2,
+            [
+                "terminate-instances",
+                "wait",
+                "delete-volume",
+                "delete-security-group",
+                "delete-key-pair",
+            ],
+        )
+        self.assertFalse(
+            runner.ran(
+                "aws",
+                "--profile",
+                "timeboost-dev",
+                "ec2",
+                "terminate-instances",
+                "--region",
+                "eu-west-1",
+                "--instance-ids",
+                "i-2",
+            )
+        )
+
+    def test_declined_prompt_deletes_nothing(self):
+        runner = self.runner()
+        with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
+            self.destroy(runner)
+        self.assertFalse(any("terminate-instances" in c for c in runner.calls))
+
+    def test_nothing_to_sweep(self):
+        code, out = self.destroy(tag_runner([], []), "--yes")
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertIn("no orphaned", out)
+
+    def test_failed_sweep_exits_4(self):
+        runner = self.runner()
+        runner.responses = {
+            (
+                "aws",
+                "--profile",
+                "timeboost-dev",
+                "ec2",
+                "terminate-instances",
+            ): completed(returncode=1, stderr="denied"),
+            **runner.responses,
+        }
+        code, _ = self.destroy(runner, "--yes")
+        self.assertEqual(code, awsb.EXIT_LEFTOVER)
+
+    def test_marks_local_state_swept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "amy").mkdir()
+            netbench.write_json(
+                out / "amy" / "manifest.json", {"phase": "left-running"}
+            )
+            parsed = awsb.parse_args(
+                ["destroy", "--orphans", "--yes", "--out-root", tmp]
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                awsb.cmd_destroy(parsed, self.runner(), NOW)
+            manifest = json.loads((out / "amy" / "manifest.json").read_text())
+        self.assertEqual(manifest["phase"], "swept")
+
+    def test_needs_dir_or_orphans(self):
+        with self.assertRaises(awsb.Refused):
+            run_cmd(awsb.cmd_destroy, ["destroy"], FakeRunner(), NOW)
+
+
+class SweepVolumeTest(unittest.TestCase):
+    def test_volume_between_instances_and_security_group(self):
+        runner = tag_runner(
+            [
+                tag_mapping("key-pair", "key-1", "r", None, None),
+                tag_mapping("security-group", "sg-1", "r", None, None),
+                tag_mapping("volume", "vol-1", "r", None, None),
+                tag_mapping("instance", "i-1", "r", None, None),
+            ],
+            [],
+        )
+        awsb.sweep(runner, "eu-west-1", "r")
+        ec2 = [c[4] for c in runner.calls if c[3:4] == ["ec2"]]
+        self.assertEqual(
+            ec2,
+            [
+                "terminate-instances",
+                "wait",
+                "delete-volume",
+                "delete-security-group",
+                "delete-key-pair",
+            ],
+        )
+
+    def test_already_deleted_volume_is_tolerated(self):
+        runner = tag_runner([tag_mapping("volume", "vol-1", "r", None, None)], [])
+        runner.responses = {
+            ("aws", "--profile", "timeboost-dev", "ec2", "delete-volume"): completed(
+                returncode=255, stderr="InvalidVolume.NotFound: gone"
+            ),
+            **runner.responses,
+        }
+        awsb.sweep(runner, "eu-west-1", "r")
+
+    def test_other_volume_errors_raise(self):
+        runner = tag_runner([tag_mapping("volume", "vol-1", "r", None, None)], [])
+        runner.responses = {
+            ("aws", "--profile", "timeboost-dev", "ec2", "delete-volume"): completed(
+                returncode=255, stderr="VolumeInUse"
+            ),
+            **runner.responses,
+        }
+        with self.assertRaisesRegex(awsb.RemoteError, "VolumeInUse"):
+            awsb.sweep(runner, "eu-west-1", "r")
+
+
+class ManifestCostTest(unittest.TestCase):
+    def manifest(self) -> dict:
+        cfg = awsb.RunConfig(
+            tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
+        )
+        hosts = awsb.plan_hosts(cfg)
+        estimate = awsb.estimate_cost(
+            hosts, cfg, two_node_prices(), awsb.region_minor_prices("eu-west-1")
+        )
+        return {"config": {"region": "eu-west-1"}, "hosts": hosts, "estimate": estimate}
+
+    def test_is_linear_in_duration_and_covers_instance_hours(self):
+        manifest = self.manifest()
+        hour = awsb.manifest_cost(manifest, 3600) - awsb.manifest_cost(manifest, 0)
+        self.assertAlmostEqual(
+            awsb.manifest_cost(manifest, 7200) - awsb.manifest_cost(manifest, 3600),
+            hour,
+        )
+        self.assertGreaterEqual(hour, 0.355 + 2 * 0.71)
+
+
+class IndexKeepsRowsTest(unittest.TestCase):
+    def test_append_keeps_existing_rows(self):
+        manifest = IndexTest.manifest(IndexTest())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "INDEX.md"
+            path.write_text(awsb.INDEX_HEADER + "| older | row |\n")
+            awsb.append_index(Path(tmp), manifest, None, 4, False, None)
+            awsb.append_index(Path(tmp), manifest, None, 0, True, {"actual": 1.0})
+            lines = path.read_text().splitlines()
+        self.assertEqual(lines[2], "| older | row |")
+        self.assertEqual(len(lines), 5)
+        self.assertEqual(sum(l.startswith("| name |") for l in lines), 1)
+        self.assertIn("| 4 | 4.60/- | no |", lines[3])
+        self.assertIn("| 0 | 4.60/1.00 | yes |", lines[4])
+
+
+STATUS_DESCRIBE = json.dumps(
+    [
+        {
+            **instance("i-000000000001", launch="2026-09-29T15:00:00+00:00"),
+            "reason": "",
+        },
+        {
+            **instance("i-000000000002", launch="2026-09-29T15:00:01+00:00"),
+            "reason": "",
+        },
+        {
+            **instance("i-000000000003", launch="2026-09-29T15:00:02+00:00"),
+            "reason": "",
+        },
+    ]
+)
+
+
+class KeptRunTest(unittest.TestCase):
+    """`status`, `collect` and `destroy DIR` on the run dir of a `run --keep`."""
+
+    def kept(self, describe: str = STATUS_DESCRIBE, states=None):
+        harness = RunHarness(self)
+        runner = FleetRunner(states or [DONE_STATE], describe=describe)
+        with unittest.mock.patch.object(
+            awsb, "write_report", return_value=valid_result()
+        ):
+            self.assertEqual(harness.run(runner, extra=("--keep",)), awsb.EXIT_OK)
+        (harness.run_dir / "terraform").mkdir(exist_ok=True)
+        return harness, runner
+
+    def args(self, harness, verb: str, *extra: str):
+        return awsb.parse_args([verb, str(harness.run_dir), *extra])
+
+    def test_status_shows_phase_instances_agent_and_cost(self):
+        harness, runner = self.kept()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = awsb.cmd_status(self.args(harness, "status"), runner, NOW)
+        self.assertEqual(code, awsb.EXIT_OK)
+        text = out.getvalue()
+        self.assertIn("- run run1: phase left-running", text)
+        self.assertIn("- ctl: running, c8g.4xlarge, launched 2026-09-29T15:00", text)
+        self.assertIn("- agent: done, load finished", text)
+        self.assertRegex(text, r"- cost: \$\d+\.\d\d so far, bound \$\d+\.\d\d")
+
+    def test_status_of_a_destroyed_fleet_shows_actual_cost(self):
+        harness, runner = self.kept()
+        terminated = json.dumps(
+            [
+                {
+                    **instance("i-000000000001", "terminated"),
+                    "reason": "User initiated (2026-09-29 15:30:00 GMT)",
+                }
+            ]
+        )
+        runner.describe = terminated
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            awsb.cmd_status(self.args(harness, "status"), runner, NOW)
+        self.assertRegex(out.getvalue(), r"- cost: \$\d+\.\d\d actual, bound")
+        self.assertNotIn("agent", out.getvalue())
+
+    def test_status_of_a_planned_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "p"
+            run_dir.mkdir()
+            netbench.write_json(
+                run_dir / "manifest.json",
+                {
+                    "name": "p",
+                    "phase": "planned",
+                    "created_at": "2026-09-29T15:00:00+00:00",
+                },
+            )
+            runner = FakeRunner()
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                awsb.cmd_status(awsb.parse_args(["status", str(run_dir)]), runner, NOW)
+        self.assertIn("planned only", out.getvalue())
+        self.assertEqual(runner.calls, [])
+
+    def test_destroy_dir_destroys_prices_and_appends_index(self):
+        harness, runner = self.kept(describe=DESCRIBE)
+        code = awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertTrue(runner.ran("tofu", "destroy"))
+        manifest = json.loads((harness.run_dir / "manifest.json").read_text())
+        self.assertEqual(manifest["phase"], "done")
+        self.assertGreater(manifest["cost_usd"]["actual"], 0)
+        rows = harness.index().splitlines()
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(rows[2].endswith("| no |"))
+        self.assertTrue(rows[3].endswith("| yes |"))
+
+    def test_destroy_dir_twice_is_refused(self):
+        harness, runner = self.kept(describe=DESCRIBE)
+        awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
+        with self.assertRaisesRegex(awsb.Refused, "already done"):
+            awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
+
+    def test_destroy_dir_declined(self):
+        harness, runner = self.kept()
+        with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
+            awsb.cmd_destroy(self.args(harness, "destroy"), runner)
+        self.assertFalse(runner.ran("tofu", "destroy"))
+
+    def test_failed_destroy_dir_sweeps_and_exits_4(self):
+        harness, runner = self.kept()
+        runner.destroys = [completed(returncode=1, stderr="locked")]
+        code = awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
+        self.assertEqual(code, awsb.EXIT_LEFTOVER)
+        self.assertTrue(runner.ran("terminate-instances", "i-1"))
+        manifest = json.loads((harness.run_dir / "manifest.json").read_text())
+        self.assertEqual(manifest["phase"], "left-running")
+
+    def test_collect_writes_numbered_subdirs(self):
+        harness, runner = self.kept()
+        for index in (1, 2):
+            expected = harness.run_dir / "hosts" / "node0" / f"collect-{index}"
+            with unittest.mock.patch.object(
+                awsb.Remote,
+                "rsync_from",
+                autospec=True,
+                side_effect=lambda self, host, remote, local, *flags: (
+                    local.mkdir(parents=True, exist_ok=True),
+                    (local / "df.txt").write_text("x"),
+                ),
+            ):
+                code = awsb.cmd_collect(self.args(harness, "collect"), runner)
+            self.assertEqual(code, awsb.EXIT_OK)
+            self.assertTrue((expected / "df.txt").exists())
+        self.assertTrue(runner.ran("docker exec postgres psql"))
+
+    def test_collect_reports_hosts_that_yielded_nothing(self):
+        harness, runner = self.kept()
+        with unittest.mock.patch.object(awsb.Remote, "rsync_from", autospec=True):
+            code = awsb.cmd_collect(self.args(harness, "collect"), runner)
+        self.assertEqual(code, awsb.EXIT_FAILED)
+
+    def test_collect_of_an_unprovisioned_run_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            netbench.write_json(
+                Path(tmp) / "manifest.json", {"name": "p", "phase": "planned"}
+            )
+            with self.assertRaisesRegex(awsb.Refused, "never provisioned"):
+                awsb.cmd_collect(awsb.parse_args(["collect", tmp]), FakeRunner())
+
+
+class NextCollectIndexTest(unittest.TestCase):
+    def test_counts_past_the_highest_across_hosts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            self.assertEqual(awsb.next_collect_index(run_dir), 1)
+            (run_dir / "hosts" / "a" / "collect-1").mkdir(parents=True)
+            (run_dir / "hosts" / "b" / "collect-3").mkdir(parents=True)
+            self.assertEqual(awsb.next_collect_index(run_dir), 4)
+
+
+class CmdRenderTest(unittest.TestCase):
+    def collected(self) -> Path:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        write_collected_run(tmp)
+        return tmp
+
+    def test_rewrites_result_and_summary_offline(self):
+        run_dir = self.collected()
+        (run_dir / "summary.md").write_text("stale")
+        code = awsb.cmd_render(awsb.parse_args(["render", str(run_dir)]))
+        self.assertIn(code, (awsb.EXIT_OK, awsb.EXIT_INVALID))
+        self.assertIn("Deployment", (run_dir / "summary.md").read_text())
+        self.assertEqual(
+            code == awsb.EXIT_OK,
+            json.loads((run_dir / "result.json").read_text())["validity"]["valid"],
+        )
+
+    def test_baseline_adds_a_comparison(self):
+        run_dir = self.collected()
+        awsb.write_report(run_dir)
+        baseline = run_dir / "baseline.json"
+        baseline.write_text((run_dir / "result.json").read_text())
+        awsb.cmd_render(
+            awsb.parse_args(["render", str(run_dir), "--baseline", str(baseline)])
+        )
+        self.assertIn("baseline", (run_dir / "summary.md").read_text().lower())
+
+    def test_run_without_result_is_refused(self):
+        run_dir = self.collected()
+        (run_dir / "run.json").unlink()
+        with self.assertRaisesRegex(awsb.Refused, "no run.json"):
+            awsb.cmd_render(awsb.parse_args(["render", str(run_dir)]))
+
+
+class ConfigFromManifestTest(unittest.TestCase):
+    def test_round_trips_config_to_json(self):
+        cfg = awsb.RunConfig(
+            tag="x", nodes=3, load=netbench.BenchConfig(submit_nodes=2), price=("a=1",)
+        )
+        saved = json.loads(json.dumps(awsb.config_to_json(cfg)))
+        self.assertEqual(awsb.config_from_manifest(saved), cfg)
 
 
 if __name__ == "__main__":

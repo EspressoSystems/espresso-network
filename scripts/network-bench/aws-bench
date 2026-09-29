@@ -10,9 +10,11 @@ and region, replacing manual `espresso-deploy` runs for this purpose. `plan` ren
 and prints a cost estimate without writing anything to AWS; `run` additionally provisions,
 measures, collects and destroys.
 
-`plan` (including `--offline`), `run`, `agent-drive` and `agent-host` are implemented; `status`,
-`collect`, `render` and `destroy` raise `NotImplementedError` for now. `agent-drive` (on ctl) and
-`agent-host` (on every host) run under system python3 from /opt/bench.
+`status` shows one run (phase, instances, agent progress, cost so far) or, with `--all`, every
+tagged resource in the region. `destroy DIR` tears one run down; `destroy --orphans` sweeps runs
+whose local state is lost or whose TTL passed. `collect` and `render` redo those steps on an
+existing run dir. `agent-drive` (on ctl) and `agent-host` (on every host) run under system
+python3 from /opt/bench.
 
 Exit codes of `run`: 0 valid, 1 invalid result, 2 refused before any AWS write, 3 failed after
 writes but destroyed, 4 resources may remain (the last log line is the destroy command).
@@ -231,6 +233,10 @@ AGENT_START_GRACE_S = 30.0
 AGENT_SLACK_S = 300.0
 # The tag every terraform resource carries (default_tags), and the key `sweep` filters on.
 TAG_RUN = "espresso-bench-run"
+TAG_OWNER = "espresso-bench-owner"
+TAG_EXPIRES = "espresso-bench-expires"
+# Manifest phases after which no resources of the run remain.
+TERMINAL_PHASES = ("done", "swept")
 # Thread pool size for parallel ssh/rsync calls; also the espresso-deploy fan-out limit.
 REMOTE_POOL_SIZE = 16
 # Chrony-synced clocks give a wall-clock start command room to land within this spread; a start
@@ -384,6 +390,26 @@ class AgentState(TypedDict):
     t1: NotRequired[float]
 
 
+class Instance(TypedDict):
+    id: str
+    type: str
+    state: str
+    launch: str
+
+
+class TaggedRun(TypedDict):
+    """Everything tagged `espresso-bench-run=<name>`. `owner` and `expires` are None when no
+    tagged resource carries them (root volumes do not); `instances` excludes terminated ones;
+    `orphan` is the reason `classify_orphan` gave."""
+
+    name: str
+    owner: str | None
+    expires: str | None
+    arns: list[str]
+    instances: list[Instance]
+    orphan: str | None
+
+
 class Evidence(TypedDict):
     """Per-host facts `check_validity_aws` judges, read back from the collected files."""
 
@@ -442,10 +468,11 @@ def aws_argv(cfg: RunConfig, *args: str) -> list[str]:
     return ["aws", "--profile", cfg.profile, *args]
 
 
-def aws_ok(run: Runner, profile: str, *args: str) -> str:
-    """stdout of an `aws` call whose failure means the fleet state is unknown."""
+def aws_ok(run: Runner, profile: str, *args: str, tolerate: str | None = None) -> str:
+    """stdout of an `aws` call whose failure means the fleet state is unknown, except a stderr
+    containing `tolerate` (an already-deleted resource)."""
     result = run(["aws", "--profile", profile, *args])
-    if result.returncode != 0:
+    if result.returncode != 0 and not (tolerate and tolerate in result.stderr):
         raise RemoteError(f"aws {' '.join(args[:3])} failed: {result.stderr.strip()}")
     return result.stdout
 
@@ -1741,6 +1768,15 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     )
 
 
+def add_account_flags(parser: argparse.ArgumentParser) -> None:
+    """For `status --all` and `destroy --orphans`, which have no manifest to read them from."""
+    defaults = RunConfig(tag="")
+    parser.add_argument("--region", default=defaults.region)
+    parser.add_argument("--profile", default=defaults.profile)
+    parser.add_argument("--account", default=defaults.account)
+    parser.add_argument("--out-root", type=Path, default=defaults.out_root)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -1770,7 +1806,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     status_p.add_argument("dir", type=Path, nargs="?")
     status_p.add_argument("--all", action="store_true")
-    status_p.add_argument("--out-root", type=Path, default=Path("tmp/aws-bench"))
+    add_account_flags(status_p)
     status_p.set_defaults(func=cmd_status)
 
     collect_p = sub.add_parser(
@@ -1791,8 +1827,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     destroy_p.add_argument("dir", type=Path, nargs="?")
     destroy_p.add_argument("--orphans", action="store_true")
-    destroy_p.add_argument("--region", default="eu-west-1")
     destroy_p.add_argument("--yes", action="store_true")
+    add_account_flags(destroy_p)
     destroy_p.set_defaults(func=cmd_destroy)
 
     agent_drive_p = sub.add_parser("agent-drive", help="ctl only: run the load driver")
@@ -2130,11 +2166,15 @@ def report(fleet: Fleet) -> nb.BenchResult | None:
             log.exception("report failed")
             fleet.error = f"report failed: {type(exc).__name__}: {exc}"
         else:
-            log.info(nb.status_line(result))
-            log.info(nb.capacity_line(result["capacity"]).replace("**", ""))
+            log_result(result)
             return result
     write_failure_summary(fleet.run_dir, fleet.manifest, fleet.error)
     return None
+
+
+def log_result(result: nb.BenchResult) -> None:
+    log.info(nb.status_line(result))
+    log.info(nb.capacity_line(result["capacity"]).replace("**", ""))
 
 
 def teardown(
@@ -2695,10 +2735,12 @@ PG_STATS_SCRIPT = (
 COLLECT_EXCLUDES = ("--exclude=/out/", "--exclude=/aws-bench", "--exclude=/netbench.py")
 
 
-def collect_hosts(remote: Remote, hosts: list[HostInfo], out: Path) -> None:
+def collect_hosts(
+    remote: Remote, hosts: list[HostInfo], out: Path, subdir: str = ""
+) -> None:
     """Logs, inspect, chrony, disk and journal sizes, host samples and (node0) Postgres
-    statistics into `out/hosts/<name>/`. Best effort per host: one that cannot be reached is
-    reported and the rest are still collected."""
+    statistics into `out/hosts/<name>/<subdir>`. Best effort per host: one that cannot be
+    reached is reported and the rest are still collected."""
 
     def collect(name: str) -> None:
         role = remote.hosts[name]["role"]
@@ -2710,7 +2752,7 @@ def collect_hosts(remote: Remote, hosts: list[HostInfo], out: Path) -> None:
             remote.rsync_from(
                 name,
                 f"{BENCH_DIR}/",
-                out / "hosts" / name,
+                out / "hosts" / name / subdir,
                 *COLLECT_EXCLUDES,
                 "--exclude=__pycache__",
             )
@@ -2720,26 +2762,389 @@ def collect_hosts(remote: Remote, hosts: list[HostInfo], out: Path) -> None:
     remote.parallel(collect, [h["name"] for h in hosts])
 
 
-def cmd_status(args: argparse.Namespace) -> int:
-    raise NotImplementedError(
-        "aws-bench status: fleet inspection lands in a later commit"
-    )
+def cmd_status(
+    args: argparse.Namespace, run: Runner = _run, now: datetime | None = None
+) -> int:
+    if (args.dir is not None) == args.all:
+        raise Refused("status takes either DIR or --all")
+    now = now or datetime.now(UTC)
+    if args.all:
+        return status_all(run, args, now)
+    return status_run(run, args.dir, now)
 
 
-def cmd_collect(args: argparse.Namespace) -> int:
-    raise NotImplementedError(
-        "aws-bench collect: log/sample collection lands in a later commit"
-    )
+def cmd_collect(args: argparse.Namespace, run: Runner = _run) -> int:
+    """Collects again from the live hosts into `hosts/<name>/collect-<k>/`, leaving the files
+    of the run itself untouched."""
+    run_dir: Path = args.dir
+    manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+    hosts = provisioned_hosts(manifest)
+    setup_logging(run_dir)
+    remote = Remote(run, run_dir, Path(manifest["config"]["ssh_key"]), hosts)
+    subdir = f"collect-{next_collect_index(run_dir)}"
+    collect_hosts(remote, list(hosts.values()), run_dir, subdir)
+    missing = [
+        name for name in hosts if not any((run_dir / "hosts" / name / subdir).glob("*"))
+    ]
+    if missing:
+        log.error("nothing collected from %s", ", ".join(missing))
+        return EXIT_FAILED
+    log.info("collected %d hosts into hosts/<name>/%s", len(hosts), subdir)
+    return EXIT_OK
 
 
 def cmd_render(args: argparse.Namespace) -> int:
-    raise NotImplementedError(
-        "aws-bench render: AWS result rendering lands in a later commit"
+    """Analyzes the collected files again, offline; `--baseline` adds the comparison."""
+    run_dir: Path = args.dir
+    if not (run_dir / "run.json").exists():
+        raise Refused(
+            f"{run_dir} has no run.json: the run produced no result, see summary.md"
+        )
+    setup_logging(run_dir)
+    baseline = nb.load_baseline(args.baseline) if args.baseline else None
+    result = write_report(run_dir, baseline)
+    log_result(result)
+    log.info("wrote %s", run_dir / "summary.md")
+    return EXIT_OK if result["validity"]["valid"] else EXIT_INVALID
+
+
+def cmd_destroy(
+    args: argparse.Namespace, run: Runner = _run, now: datetime | None = None
+) -> int:
+    if (args.dir is not None) == args.orphans:
+        raise Refused("destroy takes either DIR or --orphans")
+    if args.orphans:
+        return destroy_orphans(run, args, now or datetime.now(UTC))
+    return destroy_run(run, args)
+
+
+def status_run(run: Runner, run_dir: Path, now: datetime) -> int:
+    manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+    name = manifest["name"]
+    print(
+        f"- run {name}: phase {manifest['phase']}, created {manifest['created_at'][:16]}"
+    )
+    if manifest["phase"] == "planned":
+        print("- no instances: planned only")
+        return EXIT_OK
+    config = manifest["config"]
+    instances = describe_instances(
+        run, config["region"], config["profile"], f"Name=tag:{TAG_RUN},Values={name}"
+    )
+    hosts = manifest.get("hosts_info", {})
+    by_id = {info["instance_id"]: host for host, info in hosts.items()}
+    for instance in instances:
+        print(
+            f"- {by_id.get(instance['id'], instance['id'])}: {instance['state']}, "
+            f"{instance['type']}, launched {instance['launch'][:16]}"
+        )
+    ctl = hosts.get("ctl")
+    if ctl and any(
+        i["id"] == ctl["instance_id"] and i["state"] == "running" for i in instances
+    ):
+        remote = Remote(run, run_dir, Path(config["ssh_key"]), hosts)
+        print(f"- agent: {format_agent(read_agent_state(remote))}")
+    print(f"- cost: {status_cost(run, manifest, instances, now)}")
+    return EXIT_OK
+
+
+def format_agent(state: AgentState | None) -> str:
+    if state is None:
+        return "no state file"
+    return f"{state['phase']}, {state.get('progress', state['detail'])}"
+
+
+def status_cost(
+    run: Runner, manifest: Manifest, instances: list[Instance], now: datetime
+) -> str:
+    bound = f"bound ${manifest['estimate']['bound_usd']:.2f}"
+    if not instances:
+        return f"no instances, {bound}"
+    if all(i["state"] == "terminated" for i in instances):
+        return f"${actual_cost(run, manifest)['actual']:.2f} actual, {bound}"
+    launched = min(datetime.fromisoformat(i["launch"]) for i in instances)
+    usd = manifest_cost(manifest, (now - launched).total_seconds())
+    return f"${usd:.2f} so far, {bound}"
+
+
+def status_all(run: Runner, args: argparse.Namespace, now: datetime) -> int:
+    cfg = account_config(args)
+    caller_account(run, cfg)
+    runs = find_runs(run, cfg.region, cfg.profile, args.out_root, now)
+    if not runs:
+        print(f"no espresso-bench resources in {cfg.region}")
+        return EXIT_OK
+    prices = cached_prices(args.out_root / "prices.json", cfg.region)
+    print("\n".join(format_runs(runs, prices, now)))
+    return EXIT_OK
+
+
+def destroy_run(run: Runner, args: argparse.Namespace) -> int:
+    run_dir: Path = args.dir
+    manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+    name = manifest["name"]
+    if manifest["phase"] == "planned":
+        raise Refused(f"{name} was only planned: nothing was created")
+    if manifest["phase"] in TERMINAL_PHASES:
+        raise Refused(f"{name} is already {manifest['phase']}")
+    prompt = f"Destroy the fleet of {name} in {manifest['config']['account']}?"
+    if not confirm(prompt, args.yes, sys.stdin.isatty()):
+        raise Refused("not confirmed; nothing was destroyed")
+    setup_logging(run_dir)
+    cfg = config_from_manifest(manifest["config"])
+    tf = Terraform(run, cfg.tf, run_dir / "terraform", terraform_env())
+    fleet = Fleet(run, cfg, run_dir, tf, Interrupts(), time.time())
+    update_manifest(run_dir, "destroying")
+    if not destroy_fleet(fleet):
+        update_manifest(run_dir, "left-running")
+        log.error("resources may remain, run: aws-bench destroy %s", run_dir)
+        return EXIT_LEFTOVER
+    cost = final_cost(fleet)
+    update_manifest(run_dir, "done")
+    result = (
+        nb.read_json(run_dir / "result.json")
+        if (run_dir / "result.json").exists()
+        else None
+    )
+    code = exit_code(fleet, result, True)
+    append_index(run_dir.parent, fleet.manifest, result, code, True, cost)
+    log.info("destroyed %s", name)
+    return EXIT_OK
+
+
+def destroy_orphans(run: Runner, args: argparse.Namespace, now: datetime) -> int:
+    cfg = account_config(args)
+    caller_account(run, cfg)
+    runs = find_runs(run, cfg.region, cfg.profile, args.out_root, now)
+    orphans = [r for r in runs if r["orphan"] is not None]
+    if not orphans:
+        print(f"no orphaned espresso-bench resources in {cfg.region}")
+        return EXIT_OK
+    prices = cached_prices(args.out_root / "prices.json", cfg.region)
+    print("\n".join(format_runs(orphans, prices, now)))
+    instances = sum(len(r["instances"]) for r in orphans)
+    others = sum(len(r["arns"]) - len(r["instances"]) for r in orphans)
+    prompt = (
+        f"Terminate {instances} instances and delete {others} other resources "
+        f"of {len(orphans)} runs in {cfg.account}?"
+    )
+    if not confirm(prompt, args.yes, sys.stdin.isatty()):
+        raise Refused("not confirmed; nothing was destroyed")
+    try:
+        for orphan in orphans:
+            log.info("sweeping %s", orphan["name"])
+            sweep(run, cfg.region, orphan["name"], cfg.profile)
+            mark_swept(args.out_root / orphan["name"])
+    except RemoteError as exc:
+        log.error("sweep failed, resources may remain: %s", exc)
+        return EXIT_LEFTOVER
+    log.info("swept %d runs", len(orphans))
+    return EXIT_OK
+
+
+def mark_swept(run_dir: Path) -> None:
+    if (run_dir / "manifest.json").exists():
+        update_manifest(run_dir, "swept")
+
+
+def account_config(args: argparse.Namespace) -> RunConfig:
+    return RunConfig(
+        tag="", region=args.region, profile=args.profile, account=args.account
     )
 
 
-def cmd_destroy(args: argparse.Namespace) -> int:
-    raise NotImplementedError("aws-bench destroy: teardown lands in a later commit")
+def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
+    """Inverse of `config_to_json`."""
+    fields: dict[str, Any] = {
+        **saved,
+        "load": load_config(dict(saved["load"])),
+        "ssh_key": Path(saved["ssh_key"]),
+        "out_root": Path(saved["out_root"]),
+        "price": tuple(saved["price"]),
+    }
+    return RunConfig(**fields)
+
+
+def provisioned_hosts(manifest: Manifest) -> dict[str, HostInfo]:
+    if "hosts_info" not in manifest:
+        raise Refused(
+            f"{manifest['name']} has no hosts: the fleet was never provisioned"
+        )
+    return manifest["hosts_info"]
+
+
+def next_collect_index(run_dir: Path) -> int:
+    indices = [
+        int(path.name.removeprefix("collect-"))
+        for path in (run_dir / "hosts").glob("*/collect-*")
+    ]
+    return max(indices, default=0) + 1
+
+
+def find_runs(
+    run: Runner, region: str, profile: str, out_root: Path, now: datetime
+) -> list[TaggedRun]:
+    """Every run with a resource tagged `espresso-bench-run` in `region`, with the reason
+    it counts as an orphan (if it does)."""
+    out = aws_ok(
+        run,
+        profile,
+        "resourcegroupstaggingapi",
+        "get-resources",
+        "--region",
+        region,
+        "--tag-filters",
+        f"Key={TAG_RUN}",
+        "--query",
+        "ResourceTagMappingList[].{arn:ResourceARN,tags:Tags}",
+        "--output",
+        "json",
+    )
+    instances = describe_instances(
+        run, region, profile, f"Name=tag-key,Values={TAG_RUN}"
+    )
+    runs = group_runs(json.loads(out), instances)
+    user = getpass.getuser()
+    for tagged in runs:
+        phase = local_phase(out_root, tagged["name"])
+        tagged["orphan"] = classify_orphan(tagged, phase, now, user)
+    return runs
+
+
+def describe_instances(
+    run: Runner, region: str, profile: str, *filters: str
+) -> list[Instance]:
+    out = aws_ok(
+        run,
+        profile,
+        "ec2",
+        "describe-instances",
+        "--region",
+        region,
+        "--filters",
+        *filters,
+        "--query",
+        "Reservations[].Instances[].{id:InstanceId,type:InstanceType,"
+        "state:State.Name,launch:LaunchTime}",
+        "--output",
+        "json",
+    )
+    return json.loads(out)
+
+
+def arn_parts(arn: str) -> tuple[str, str]:
+    """(`instance`, `i-0abc`) of `arn:aws:ec2:eu-west-1:1:instance/i-0abc`."""
+    kind, _, resource_id = arn.rpartition(":")[2].partition("/")
+    return kind, resource_id
+
+
+def group_runs(
+    mappings: list[dict[str, Any]], instances: list[Instance]
+) -> list[TaggedRun]:
+    """Groups tag-API `{arn, tags}` mappings by run, sorted by owner then name. A terminated
+    instance still shows up in both APIs for about an hour and is dropped."""
+    live = {i["id"]: i for i in instances if i["state"] != "terminated"}
+    runs: dict[str, TaggedRun] = {}
+    for mapping in mappings:
+        kind, resource_id = arn_parts(mapping["arn"])
+        if kind == "instance" and resource_id not in live:
+            continue
+        tags = {tag["Key"]: tag["Value"] for tag in mapping["tags"]}
+        tagged = runs.setdefault(
+            tags[TAG_RUN],
+            {
+                "name": tags[TAG_RUN],
+                "owner": None,
+                "expires": None,
+                "arns": [],
+                "instances": [],
+                "orphan": None,
+            },
+        )
+        tagged["owner"] = tags.get(TAG_OWNER, tagged["owner"])
+        tagged["expires"] = tags.get(TAG_EXPIRES, tagged["expires"])
+        tagged["arns"].append(mapping["arn"])
+        if kind == "instance":
+            tagged["instances"].append(live[resource_id])
+    return sorted(runs.values(), key=lambda r: (r["owner"] or "", r["name"]))
+
+
+def local_phase(out_root: Path, name: str) -> str | None:
+    """The run's manifest phase, or None when this machine no longer has its state (manifest
+    or terraform state missing)."""
+    run_dir = out_root / name
+    if not (run_dir / "manifest.json").exists():
+        return None
+    if not (run_dir / "terraform" / "terraform.tfstate").exists():
+        return None
+    return nb.read_json(run_dir / "manifest.json")["phase"]
+
+
+def classify_orphan(
+    tagged: TaggedRun, phase: str | None, now: datetime, user: str
+) -> str | None:
+    """Why `destroy --orphans` may sweep the run. A run of another owner without local state
+    is that owner's live run, so only its expiry can condemn it."""
+    if tagged["expires"] is not None and now > datetime.fromisoformat(
+        tagged["expires"]
+    ):
+        return "past expiry"
+    if phase in TERMINAL_PHASES:
+        return f"run is {phase}"
+    if phase is None and tagged["owner"] == user:
+        return "no local state"
+    return None
+
+
+def cached_prices(cache: Path, region: str) -> dict[str, float]:
+    """USD per hour by instance type from the pricing cache `fetch_prices` writes."""
+    if not cache.exists():
+        return {}
+    prefix = f"{region}:"
+    return {
+        key.removeprefix(prefix): entry["usd_hour"]
+        for key, entry in json.loads(cache.read_text()).items()
+        if key.startswith(prefix)
+    }
+
+
+def accrued_usd(
+    instances: list[Instance], prices: dict[str, float], now: datetime
+) -> float | None:
+    """Instance-hours since launch at cached prices; None if a type has no price."""
+    total = 0.0
+    for instance in instances:
+        if instance["type"] not in prices:
+            return None
+        launched = datetime.fromisoformat(instance["launch"])
+        hours = (now - launched).total_seconds() / 3600
+        total += hours * prices[instance["type"]]
+    return total
+
+
+def format_runs(
+    runs: list[TaggedRun], prices: dict[str, float], now: datetime
+) -> list[str]:
+    lines = [
+        "| run | owner | launched | expires | resources | instance USD | orphan |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for tagged in runs:
+        instances = tagged["instances"]
+        launched = min((i["launch"] for i in instances), default="-")[:16]
+        usd = accrued_usd(instances, prices, now)
+        cost = "-" if not instances else "n/a" if usd is None else f"{usd:.2f}"
+        cells = [
+            tagged["name"],
+            tagged["owner"] or "-",
+            launched,
+            (tagged["expires"] or "-")[:16],
+            f"{len(instances)} instances, {len(tagged['arns']) - len(instances)} other",
+            cost,
+            tagged["orphan"] or "",
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+    return lines
 
 
 def write_run_json(fleet: Fleet) -> None:
@@ -3063,8 +3468,8 @@ def tagged_resources(
 def sweep(
     run: Runner, region: str, name: str | None, profile: str = RunConfig.profile
 ) -> list[str]:
-    """Terminates the instances found by `tagged_resources`, then deletes their security group
-    and key pair (volumes go with the instances). Returns every ARN found."""
+    """Terminates the instances found by `tagged_resources`, then deletes their volumes,
+    security group and key pair. Returns every ARN found."""
     arns = tagged_resources(run, region, name, profile)
     by_kind: dict[str, list[str]] = {}
     for arn in arns:
@@ -3076,6 +3481,19 @@ def sweep(
         aws_ok(run, profile, "ec2", "terminate-instances", "--region", region, *ids)
         aws_ok(
             run, profile, "ec2", "wait", "instance-terminated", "--region", region, *ids
+        )
+    for volume in by_kind.get("volume", []):
+        # Root volumes normally vanish with their instance.
+        aws_ok(
+            run,
+            profile,
+            "ec2",
+            "delete-volume",
+            "--region",
+            region,
+            "--volume-id",
+            volume,
+            tolerate="InvalidVolume.NotFound",
         )
     for group in by_kind.get("security-group", []):
         aws_ok(
@@ -3136,6 +3554,17 @@ def actual_cost(run: Runner, manifest: Manifest) -> dict[str, float]:
         ends.append(datetime.fromisoformat(match.group(1)).replace(tzinfo=UTC))
     duration_s = (max(ends) - min(launches)).total_seconds()
     estimate = manifest["estimate"]
+    return {
+        "expected": estimate["expected_usd"],
+        "bound": estimate["bound_usd"],
+        "actual": manifest_cost(manifest, duration_s),
+        "duration_s": duration_s,
+    }
+
+
+def manifest_cost(manifest: Manifest, duration_s: float) -> float:
+    """USD of the whole fleet running `duration_s`, at the prices the estimate recorded."""
+    estimate = manifest["estimate"]
     prices: Prices = {
         "instances": {
             line["item"].removeprefix("instance "): {
@@ -3147,14 +3576,12 @@ def actual_cost(run: Runner, manifest: Manifest) -> dict[str, float]:
         }
     }
     lines = _cost_lines(
-        manifest["hosts"], prices, region_minor_prices(config["region"]), duration_s
+        manifest["hosts"],
+        prices,
+        region_minor_prices(manifest["config"]["region"]),
+        duration_s,
     )
-    return {
-        "expected": estimate["expected_usd"],
-        "bound": estimate["bound_usd"],
-        "actual": sum(line["usd"] for line in lines),
-        "duration_s": duration_s,
-    }
+    return sum(line["usd"] for line in lines)
 
 
 INDEX_HEADER = (
@@ -3420,11 +3847,16 @@ def main() -> int:
     argv = sys.argv[1:]
     args = parse_args(argv)
     args.argv = argv
+    if args.command in ("status", "destroy"):
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         return args.func(args)
     except Refused as exc:
         log.error("error: %s", exc)
         return EXIT_REFUSED
+    except RemoteError as exc:
+        log.error("error: %s", exc)
+        return EXIT_FAILED
     except TfFailed as exc:
         log.error("error: %s", exc)
         return EXIT_LEFTOVER if exc.stage == "destroy" else EXIT_FAILED
