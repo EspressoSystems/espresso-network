@@ -885,6 +885,7 @@ pub fn spawn_lane<F: JournalFs>(
     let alloc = Arc::new(Mutex::new(counter_start));
     let queue_bytes = Arc::new(AtomicU64::new(0));
 
+    let seeded = seed.is_some();
     if let Some(body) = seed {
         check_snapshot_size(cfg.stream, &body, cfg.max_snapshot_bytes);
         let mut frame = Vec::new();
@@ -897,7 +898,6 @@ pub fn spawn_lane<F: JournalFs>(
         active.last_lsn = next_lsn;
         active.snapshot_end = active.offset;
         timed_sync(&mut active.file, &metrics).context("fsyncing initial wal snapshot")?;
-        durable_tx.send(active.last_lsn).ok();
     }
 
     segments.lock().push_active(SegmentMeta {
@@ -906,6 +906,11 @@ pub fn spawn_lane<F: JournalFs>(
         bytes: active.offset,
         max_view: active.max_view,
     });
+    // Published only after `segments` above reflects this segment: `wait_durable` callers must
+    // never observe a durable lsn `scan_for`/gc can't yet see in `SegmentSet`.
+    if seeded {
+        durable_tx.send(active.last_lsn).ok();
+    }
 
     let frame_buf = Vec::with_capacity(cfg.max_batch_bytes);
     let writer = Writer {
@@ -1023,6 +1028,15 @@ impl<F: JournalFs> Writer<F> {
             // (not the fsync) lands; the semaphore is about memory, not durability.
             drop(batch);
 
+            // Update before publishing durability: `wait_durable` callers must see this batch's
+            // views in `SegmentSet` (e.g. via `scan_for`) as soon as it returns.
+            let total_bytes = {
+                let mut segments = self.segments.lock();
+                segments.update_active(self.cfg.stream, self.active.offset, self.active.max_view);
+                segments.list(self.cfg.stream).iter().map(|m| m.bytes).sum()
+            };
+            self.metrics.set_total_bytes(total_bytes);
+
             if durable_in_batch {
                 if let Err(err) = timed_sync(&mut self.active.file, &self.metrics) {
                     tracing::error!(stream = ?self.cfg.stream, %err, "journal: fsync failed");
@@ -1030,13 +1044,6 @@ impl<F: JournalFs> Writer<F> {
                 }
                 self.durable_tx.send(self.active.last_lsn).ok();
             }
-
-            let total_bytes = {
-                let mut segments = self.segments.lock();
-                segments.update_active(self.cfg.stream, self.active.offset, self.active.max_view);
-                segments.list(self.cfg.stream).iter().map(|m| m.bytes).sum()
-            };
-            self.metrics.set_total_bytes(total_bytes);
 
             let over_bytes = self.active.offset.saturating_sub(self.active.snapshot_end)
                 >= self.cfg.segment_bytes;
@@ -1104,10 +1111,10 @@ impl<F: JournalFs> Writer<F> {
             tracing::error!(?stream, %err, "journal: roll fsync of old segment failed");
             std::process::abort();
         }
-        self.durable_tx.send(active.last_lsn).ok();
         self.segments
             .lock()
             .update_active(stream, active.offset, active.max_view);
+        self.durable_tx.send(active.last_lsn).ok();
 
         let new_seq = active.seq + 1;
         let mut new_active = match open_new_segment(
@@ -1126,6 +1133,14 @@ impl<F: JournalFs> Writer<F> {
             },
         };
 
+        // Register the new segment before any `durable_tx` send that could ack a write into it.
+        self.segments.lock().push_active(SegmentMeta {
+            stream,
+            seq: new_seq,
+            bytes: new_active.offset,
+            max_view: new_active.max_view,
+        });
+
         if let Some(body) = snapshot {
             check_snapshot_size(stream, &body, max_snapshot_bytes);
             let mut frame = Vec::new();
@@ -1142,19 +1157,19 @@ impl<F: JournalFs> Writer<F> {
             new_active.offset += frame.len() as u64;
             new_active.last_lsn = new_first_lsn;
             new_active.snapshot_end = new_active.offset;
+            self.segments
+                .lock()
+                .update_active(stream, new_active.offset, new_active.max_view);
             self.durable_tx.send(new_active.last_lsn).ok();
         }
 
-        let total_bytes = {
-            let mut segments = self.segments.lock();
-            segments.push_active(SegmentMeta {
-                stream,
-                seq: new_seq,
-                bytes: new_active.offset,
-                max_view: new_active.max_view,
-            });
-            segments.list(stream).iter().map(|m| m.bytes).sum()
-        };
+        let total_bytes = self
+            .segments
+            .lock()
+            .list(stream)
+            .iter()
+            .map(|m| m.bytes)
+            .sum();
         self.metrics.set_total_bytes(total_bytes);
 
         self.active = new_active;
@@ -1469,6 +1484,34 @@ mod tests {
         fs.crash(|_| 0);
         let recovered = recover(&*fs, &dir, Stream::Data).unwrap();
         assert_eq!(recovered.next_lsn, 2);
+    }
+
+    // Regression test: `SegmentSet` must reflect an acked write's view before `durable_tx` publishes
+    // it, or a `scan_for` racing right after `wait_durable` returns can pick stale segment bounds and
+    // miss the record. Two independent threads (writer thread vs. this task's tokio runtime) racing
+    // on the watch channel, so many iterations to give a wrong order a chance to show up.
+    #[tokio::test]
+    async fn durable_ack_makes_segment_set_reflect_the_acked_view_immediately() {
+        let fs = Arc::new(MemFs::default());
+        let dir = std::path::PathBuf::from("/data-order");
+        let segments = Arc::new(Mutex::new(SegmentSet::default()));
+        let (lane, _handle) =
+            spawn_lane(fs, dir, cfg(Stream::Data), (1, 1), None, segments.clone()).unwrap();
+
+        for view in 1..=2000u64 {
+            let lsn = lane.enqueue(view, Kind::Vid, vec![0u8; 4], Class::Durable, None);
+            lane.wait_durable(lsn).await.unwrap();
+            let max_view = segments
+                .lock()
+                .list(Stream::Data)
+                .last()
+                .map(|m| m.max_view)
+                .unwrap_or(0);
+            assert!(
+                max_view >= view,
+                "SegmentSet max_view {max_view} lagged the just-acked view {view}"
+            );
+        }
     }
 
     #[tokio::test]
