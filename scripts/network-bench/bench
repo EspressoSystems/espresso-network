@@ -962,12 +962,17 @@ class LoadState:
             self.txs.remove(tx)
             self.room.set()
 
-    async def wait_for_room(self) -> None:
+    async def wait_for_room(self, until: float) -> bool:
+        """False if there is no room before `until`."""
         if len(self.pending) >= self.cap:
             self.cap_waits += 1
         while len(self.pending) >= self.cap:
             self.room.clear()
-            await self.room.wait()
+            try:
+                await asyncio.wait_for(self.room.wait(), until - time.time())
+            except TimeoutError:
+                return False
+        return True
 
     def resolve(self, tx_id: int, status: str, now: float) -> None:
         tx = self.pending.pop(tx_id, None)
@@ -1142,9 +1147,8 @@ async def pace(
     due = time.time()
     while True:
         await asyncio.sleep(max(0.0, due - time.time()))
-        if time.time() >= until:
+        if time.time() >= until or not await state.wait_for_room(until):
             return
-        await state.wait_for_room()
         tx_id = next(load.ids)
         tx = Tx(id=tx_id, node=tx_id % len(load.urls))
         state.submitted(tx)

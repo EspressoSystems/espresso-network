@@ -1010,6 +1010,12 @@ class LoadTest(unittest.TestCase):
             ],
         )
 
+    def test_step_ends_on_time_while_waiting_for_room(self):
+        # Nothing is included: the cap fills at once and frees only on timeouts after 3 s.
+        self.run_load(False, 1.0, rate_mb_s=0.02, max_pending=2, tx_timeout_s=3)
+        (step,) = self.steps
+        self.assertLess(step["t_end"] - step["t_start"], 1.3)
+
     def test_lost_payload_is_skipped(self):
         with (
             mock.patch.object(bench, "MISSING_PAYLOAD_S", 0.2),
