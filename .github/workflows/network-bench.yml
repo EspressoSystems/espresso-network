@@ -2,8 +2,9 @@ name: Network benchmark
 run-name: Network benchmark ${{ inputs.pr && format('PR {0} ', inputs.pr) || '' }}${{ inputs.sha }}
 
 # Throughput and latency of a 3-node network (scripts/network-bench). Report only: the job fails
-# on an invalid run, never on a performance delta. Called by build.yml on every push to main, and
-# dispatched by network-bench-command.yml for `/benchmark` on a pull request.
+# on an invalid run, never on a performance delta. Called by build.yml on every push to main and
+# on pull requests that change the benchmark; dispatched by network-bench-command.yml for
+# `/benchmark` on other pull requests.
 on:
   workflow_call:
     inputs:

@@ -207,13 +207,33 @@ jobs:
         with:
           artifact: compile-metrics-build
 
-  # Pull requests run it on demand with `/benchmark` (network-bench-command.yml).
+  # Other pull requests run it on demand with `/benchmark` (network-bench-command.yml).
+  network-bench-changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      bench: ${{ steps.filter.outputs.bench }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[].filename' | grep -qE '^(scripts/network-bench/|\.github/workflows/network-bench)'; then
+            echo "bench=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bench=false" >> "$GITHUB_OUTPUT"
+          fi
+
   network-bench:
     name: Network benchmark
-    needs: build-amd
+    needs: [build-amd, network-bench-changes]
     if: >-
       ${{ !cancelled() && needs.build-amd.result == 'success' &&
-      github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      needs.network-bench-changes.outputs.bench == 'true') }}
     permissions:
       actions: read
       contents: read
@@ -221,6 +241,7 @@ jobs:
     with:
       build_run_id: ${{ github.run_id }}
       sha: ${{ github.sha }}
+      pr: ${{ github.event.pull_request.number || '' }}
 
   build-dockers-amd:
     needs: build-amd
