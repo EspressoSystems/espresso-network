@@ -318,8 +318,8 @@ class BenchResult(TypedDict):
 @dataclass(frozen=True)
 class BenchConfig:
     genesis: str = "scripts/network-bench/genesis.toml"
-    tx_size: int = 100_000
-    namespaces: tuple[int, int] = (10000, 10010)
+    tx_size: int = 1_000_000
+    namespaces: tuple[int, int] = (10000, 10001)
     workers: int = 6
     max_pending: int = 48
     tx_timeout_s: int = 30
