@@ -1810,14 +1810,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     sub = parser.add_subparsers(dest="command", required=True)
 
     plan_p = sub.add_parser(
-        "plan", help="render the run dir and print the cost estimate"
+        "plan",
+        help="render the run dir and print the cost estimate",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     add_run_flags(plan_p)
     plan_p.add_argument("--offline", action="store_true", help="use no AWS credentials")
     plan_p.set_defaults(func=cmd_plan, yes=False, keep=False, allow_dirty=False)
 
     run_p = sub.add_parser(
-        "run", help="plan, confirm, provision, load, measure, collect, destroy"
+        "run",
+        help="plan, confirm, provision, load, measure, collect, destroy",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     add_run_flags(run_p)
     run_p.add_argument("--yes", action="store_true")
