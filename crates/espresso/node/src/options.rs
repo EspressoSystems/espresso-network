@@ -1178,8 +1178,9 @@ impl From<&L1ClientOptions> for L1Tuning {
 
 impl PublicNodeConfig {
     pub fn new(opt: &Options, modules: &Modules, genesis: &Genesis) -> Self {
-        // Consensus always runs on the journal. storage-sql or storage-fs back the query service
-        // when the query module is on, and are ignored otherwise.
+        // Consensus always runs on the journal. storage-fs, else storage-sql, backs the query
+        // service when the query module is on, and both are ignored otherwise. Same choice as
+        // `run.rs`.
         let journal = match &modules.storage_journal {
             Some(journal) => Some(JournalStorageConfig::from(journal)),
             None => persistence::journal::Options::from_env()
@@ -1187,13 +1188,10 @@ impl PublicNodeConfig {
                 .as_ref()
                 .map(JournalStorageConfig::from),
         };
-        let (fs, sql) = if modules.query.is_some() {
-            (
-                modules.storage_fs.as_ref().map(FsStorageConfig::from),
-                modules.storage_sql.as_ref().map(SqlStorageConfig::from),
-            )
-        } else {
-            (None, None)
+        let (fs, sql) = match (&modules.query, &modules.storage_fs, &modules.storage_sql) {
+            (None, ..) => (None, None),
+            (Some(_), Some(fs), _) => (Some(FsStorageConfig::from(fs)), None),
+            (Some(_), None, sql) => (None, sql.as_ref().map(SqlStorageConfig::from)),
         };
         let storage = StorageConfig {
             backend: StorageBackend::Journal,
@@ -1464,7 +1462,7 @@ pub(crate) mod tests {
             cfg.config_peers
         );
         assert_eq!(cfg.l1_ws_provider_count, 0);
-        assert_eq!(cfg.storage.backend, StorageBackend::FsDefault);
+        assert_eq!(cfg.storage.backend, StorageBackend::Journal);
         assert!(cfg.storage.fs.is_none());
         assert!(cfg.storage.sql.is_none());
         assert!(!cfg.modules.submit);
@@ -1650,13 +1648,15 @@ pub(crate) mod tests {
             "--prune",
             "--pruning-threshold",
             "1000000000000",
+            "--",
+            "query",
         ]);
         let modules = opt.modules();
 
         let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
         let json = serde_json::to_string(&cfg).unwrap();
 
-        assert_eq!(cfg.storage.backend, StorageBackend::Sql);
+        assert_eq!(cfg.storage.backend, StorageBackend::Journal);
         assert!(
             json.contains("\"prune\":true"),
             "expected prune:true in JSON: {json}"

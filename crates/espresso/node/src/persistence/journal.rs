@@ -14,11 +14,7 @@ pub mod lane;
 pub mod state;
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs, io,
-    os::unix::fs::FileExt as _,
-    path::PathBuf,
-    sync::Arc,
+    collections::BTreeMap, fs, io, os::unix::fs::FileExt as _, path::PathBuf, sync::Arc,
     time::Instant,
 };
 
@@ -51,7 +47,7 @@ use hotshot_types::{
     },
     traits::{
         block_contents::{BlockHeader as _, BlockPayload as _},
-        metrics::{Gauge, Metrics, NoMetrics},
+        metrics::Metrics,
     },
 };
 
@@ -236,9 +232,6 @@ pub struct Persistence {
     /// inside `Inner`: it starts as a `NoMetrics`-backed default and only this clone (the one
     /// `enable_metrics` is called on) observes the swap, matching fs/sql's existing behaviour.
     metrics: Arc<PersistenceMetricsValue>,
-    /// Views whose DA proposal is still being stored. It only stays above zero while the data
-    /// stream falls behind.
-    pending_da_writes: Box<dyn Gauge>,
 }
 
 struct Inner {
@@ -263,10 +256,6 @@ struct Inner {
     replay_seconds: f64,
     /// `Some` exactly on a query node, which replays decided blocks into its query service.
     replay_index: Option<DataIndex>,
-    /// Views whose DA proposal was handed to `append_da2` but is not stored yet. Replay holds
-    /// before them: a write still waiting for in-flight room has no lsn, so `read_data` cannot
-    /// wait for it.
-    pending_da: parking_lot::Mutex<BTreeSet<u64>>,
     _lock: std::fs::File,
 }
 
@@ -491,11 +480,9 @@ impl Persistence {
                 limits,
                 replay_seconds,
                 replay_index,
-                pending_da: Default::default(),
                 _lock: lock_file,
             }),
             metrics: Arc::new(PersistenceMetricsValue::default()),
-            pending_da_writes: NoMetrics::boxed().create_gauge(String::new(), None),
         })
     }
 
@@ -693,15 +680,13 @@ impl Persistence {
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         loop {
-            let batch = {
-                let pending_da = self.inner.pending_da.lock();
-                self.inner
-                    .state
-                    .lock()
-                    .replay
-                    .as_ref()
-                    .and_then(|replay| next_replay_batch(replay, &pending_da))
-            };
+            let batch = self
+                .inner
+                .state
+                .lock()
+                .replay
+                .as_ref()
+                .and_then(next_replay_batch);
             let Some(ReplayBatch {
                 leaves,
                 cert2,
@@ -846,13 +831,11 @@ struct ReplayBatch {
     to_height: u64,
 }
 
-/// The decided leaves after the replay cursor, stopping at the first height gap or at a leaf
-/// whose DA proposal is still being stored.
+/// The decided leaves after the replay cursor, stopping at the first height gap.
 ///
 /// A gap the newest decides can still fill holds the cursor instead: consensus may yet decide the
-/// missing leaf, and replaying past it would leave the query service without that block. A leaf
-/// with a pending DA proposal holds it for the same reason.
-fn next_replay_batch(replay: &Replay, pending_da: &BTreeSet<u64>) -> Option<ReplayBatch> {
+/// missing leaf, and replaying past it would leave the query service without that block.
+fn next_replay_batch(replay: &Replay) -> Option<ReplayBatch> {
     let watermark = replay.leaves.keys().next_back()?.u64();
     let mut parent = replay.cursor.map(|(_, height)| height);
     let mut leaves = Vec::new();
@@ -873,16 +856,6 @@ fn next_replay_batch(replay: &Replay, pending_da: &BTreeSet<u64>) -> Option<Repl
                 );
                 return None;
             }
-        }
-        if pending_da.contains(&view.u64()) {
-            if !leaves.is_empty() {
-                break;
-            }
-            tracing::debug!(
-                %view,
-                "holding the replay cursor for a DA proposal still being stored"
-            );
-            return None;
         }
         parent = Some(height);
         leaves.push((*view, entry.clone()));
@@ -1139,32 +1112,11 @@ impl SequencerPersistence for Persistence {
             return Ok(());
         }
         let now = Instant::now();
-        let storage = self.clone();
-        let record = Record::Da(proposal.clone());
-        let view = proposal.data.view_number;
-        {
-            let mut pending = self.inner.pending_da.lock();
-            pending.insert(view.u64());
-            self.pending_da_writes.set(pending.len());
-        }
-        // Consensus aborts storage writes a few views behind the decide, which may be before a
-        // DA proposal has room to be queued. This task outlives that abort, so the payload the
-        // query service replays is still written. Durable, so it survives a power loss.
-        let res = tokio::spawn(async move {
-            let res = storage.put_data(record, Class::Durable).await;
-            {
-                let mut pending = storage.inner.pending_da.lock();
-                pending.remove(&view.u64());
-                storage.pending_da_writes.set(pending.len());
-            }
-            // Logged here too: the caller may have been aborted and never see this error.
-            if let Err(err) = &res {
-                tracing::warn!(%view, "failed to store DA proposal: {err:#}");
-            }
-            res
-        })
-        .await
-        .context("DA proposal write task panicked")?;
+        // Durable: the query service is replayed from this record, so it must survive a power
+        // loss.
+        let res = self
+            .put_data(Record::Da(proposal.clone()), Class::Durable)
+            .await;
         self.metrics
             .internal_append_da2_duration
             .add_point(now.elapsed().as_secs_f64());
@@ -1222,8 +1174,6 @@ impl SequencerPersistence for Persistence {
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics) {
         self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
-        self.pending_da_writes =
-            metrics.create_gauge("journal_pending_da_writes".to_string(), None);
         metrics
             .create_histogram(
                 "journal_replay_seconds".to_string(),
@@ -1336,25 +1286,12 @@ impl DhtPersistentStorage for Persistence {
 }
 
 #[cfg(test)]
-impl Persistence {
-    /// Takes the whole data in-flight budget: the next `put_data` waits in `reserve` until the
-    /// permit is dropped.
-    pub(crate) async fn hold_data_budget(&self) -> tokio::sync::OwnedSemaphorePermit {
-        self.inner.data.reserve(IN_FLIGHT_BYTES as u32).await
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use espresso_types::{NodeState, ValidatedState};
     use hotshot::types::{BLSPubKey, SignatureKey};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::metrics::PrometheusMetrics;
-    use hotshot_types::{
-        data::vid_commitment, traits::EncodeBytes, utils::EpochTransitionIndicator,
-    };
+    use hotshot_types::{traits::EncodeBytes, utils::EpochTransitionIndicator};
     use tempfile::TempDir;
 
     use super::{testing::TEST_MAX_BLOCK_SIZE, *};
@@ -1431,47 +1368,6 @@ mod tests {
             .unwrap();
     }
 
-    // Regression test: consensus aborts storage writes a few views behind the decide. A DA
-    // proposal still waiting for in-flight room at that point must be stored anyway, or a query
-    // node replays its block without the payload.
-    #[tokio::test]
-    async fn stores_da_proposal_when_its_write_is_aborted() {
-        let tmp = TempDir::new().unwrap();
-        let storage = Persistence::open(query_options(&tmp)).await.unwrap();
-        let Record::Da(proposal) = da_record(1024).await else {
-            unreachable!("da_record builds a DA record");
-        };
-        let commitment = vid_commitment(
-            &proposal.data.encoded_transactions,
-            &proposal.data.metadata.encode(),
-            2,
-            TEST_VERSIONS.test.base,
-        );
-
-        let budget = storage.hold_data_budget().await;
-        let write = tokio::spawn({
-            let storage = storage.clone();
-            let proposal = proposal.clone();
-            async move { storage.append_da2(&proposal, commitment).await }
-        });
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        write.abort();
-        assert!(write.await.unwrap_err().is_cancelled());
-        drop(budget);
-
-        let stored = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if let Some(stored) = storage.load_da_proposal(ViewNumber::new(1)).await.unwrap() {
-                    return stored;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("the aborted DA proposal write never landed");
-        assert_eq!(stored, proposal);
-    }
-
     #[test]
     fn find_in_segment_fails_on_corrupt_sealed_segment() {
         let header = SegmentHeader {
@@ -1515,15 +1411,6 @@ mod tests {
             ignore_existing: false,
             max_block_size: Some(TEST_MAX_BLOCK_SIZE),
             query_storage: None,
-        }
-    }
-
-    fn query_options(tmp: &TempDir) -> Options {
-        Options {
-            query_storage: Some(QueryStorage::Fs(side_fs::Options::new(
-                tmp.path().join("query"),
-            ))),
-            ..options(tmp)
         }
     }
 

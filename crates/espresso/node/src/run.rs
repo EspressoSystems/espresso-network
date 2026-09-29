@@ -1,4 +1,4 @@
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, ensure};
 use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
@@ -137,12 +137,11 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     );
     // Chain configs change only through genesis upgrades, so the largest covers every version.
     storage.max_block_size = genesis.block_sizes().into_values().max();
-    let query_storage = match (modules.storage_sql.take(), modules.storage_fs.take()) {
-        (Some(_), Some(_)) => {
-            bail!("the query service takes storage-sql or storage-fs, not both")
-        },
-        (Some(sql), None) => Some(persistence::journal::QueryStorage::Sql(Box::new(sql))),
-        (None, Some(fs)) => Some(persistence::journal::QueryStorage::Fs(fs)),
+    // storage-fs wins over storage-sql, as it did as consensus storage: an embedded-db node can
+    // get storage-sql from its environment next to an explicit storage-fs.
+    let query_storage = match (modules.storage_fs.take(), modules.storage_sql.take()) {
+        (Some(fs), _) => Some(persistence::journal::QueryStorage::Fs(fs)),
+        (None, Some(sql)) => Some(persistence::journal::QueryStorage::Sql(Box::new(sql))),
         (None, None) => None,
     };
     match query_storage {

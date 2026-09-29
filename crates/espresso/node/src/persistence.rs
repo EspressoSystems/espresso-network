@@ -2154,44 +2154,6 @@ mod tests {
         );
     }
 
-    /// A DA proposal still waiting for room in the journal has no index entry yet, so replay
-    /// holds before its block instead of delivering the block without a payload.
-    ///
-    /// journal only: sql and fs store DA proposals before `append_da2` returns.
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub async fn test_decide_holds_for_da_proposal_still_being_stored() {
-        type Journal = crate::persistence::journal::Persistence;
-        let tmp = Journal::tmp_storage().await;
-        let storage = Journal::connect(&tmp).await;
-        let consumer = DecideViewCollector::default();
-        let chain = consecutive_height_chain(2).await;
-
-        decide_range(&storage, &chain, 0..1, &consumer).await;
-        assert_eq!(received_views(&consumer).await, vec![0]);
-
-        let budget = storage.hold_data_budget().await;
-        let write = tokio::spawn({
-            let storage = storage.clone();
-            async move { store_da_proposal(&storage, 1).await }
-        });
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        decide_range(&storage, &chain, 1..2, &consumer).await;
-        assert_eq!(
-            received_views(&consumer).await,
-            vec![0],
-            "a block whose DA proposal is still being stored must not be delivered"
-        );
-
-        drop(budget);
-        write.await.unwrap();
-        storage
-            .process_decided_events(ViewNumber::new(1), None, &consumer)
-            .await
-            .unwrap();
-        assert_eq!(received_views(&consumer).await, vec![0, 1]);
-        assert!(consumer.leaves.read().await[1].block_payload().is_some());
-    }
-
     /// A consumer far behind consensus still receives every block with its payload once it
     /// catches up: storage keeps what it has not yet delivered.
     #[rstest::rstest]

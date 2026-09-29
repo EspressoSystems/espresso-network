@@ -329,6 +329,7 @@ pub struct PruneStats {
 /// instead of unlinking younger segments first, which would leave a sequence gap recovery can never
 /// close. The caller must serialize passes (e.g. a gc lock): `to_unlink` is computed once up front,
 /// so an overlapping pass could otherwise select the same segment twice.
+#[allow(clippy::too_many_arguments)]
 pub fn prune<F: JournalFs>(
     fs: &F,
     segments: &Mutex<SegmentSet>,

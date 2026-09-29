@@ -194,7 +194,7 @@ l1:
 l1_provider_count: 1
 l1_ws_provider_count: 0
 storage:
-  backend: sql
+  backend: journal
   fs: ~
   sql:
     prune: true
