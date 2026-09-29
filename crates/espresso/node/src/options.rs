@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Context;
 use clap::{Args, FromArgMatches, Parser, error::ErrorKind};
 use derivative::Derivative;
 use espresso_telemetry::TelemetryOptions;
@@ -23,7 +24,8 @@ use serde::Serialize;
 use url::Url;
 
 use crate::{
-    api,
+    CatchupParams, api,
+    follower::{FollowerOptions, FollowerParams},
     genesis::{Genesis, GenesisSource},
     keyset::KeySetOptions,
     persistence,
@@ -382,6 +384,49 @@ impl Options {
     pub fn modules(&self) -> Modules {
         ModuleArgs(self.modules.clone()).parse()
     }
+
+    /// `--config-peers` is left unset for `init_follower_node` to default it to the upstreams.
+    pub fn follower_params(
+        &self,
+        follower: &Follower,
+        query: &api::options::Query,
+    ) -> anyhow::Result<FollowerParams> {
+        let light_client_genesis = match &follower.light_client_genesis {
+            Some(path) => {
+                let toml = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading light client genesis {}", path.display()))?;
+                Some(
+                    toml::from_str(&toml).with_context(|| {
+                        format!("parsing light client genesis {}", path.display())
+                    })?,
+                )
+            },
+            None => None,
+        };
+        let state_peers = if self.state_peers.is_empty() {
+            query.peers.clone()
+        } else {
+            self.state_peers.clone()
+        };
+        Ok(FollowerParams {
+            upstreams: query.peers.clone(),
+            config_peers: self.config_peers.clone(),
+            catchup: CatchupParams {
+                state_peers,
+                backoff: self.catchup_backoff,
+                base_timeout: self.catchup_base_timeout,
+                local_timeout: self.local_catchup_timeout,
+            },
+            bootstrap_epoch_catchup_timeout: self.bootstrap_epoch_catchup_timeout,
+            options: FollowerOptions {
+                poll_interval: follower.poll_interval,
+                max_blocks_per_poll: follower.max_blocks_per_poll,
+                light_client: query.light_client.clone(),
+                light_client_db: query.light_client_db.clone(),
+                light_client_genesis,
+            },
+        })
+    }
 }
 
 /// Parse an address to bind to, and check that it is well-formed, so that a mistyped
@@ -566,11 +611,32 @@ impl ModuleArgs {
                 SequencerModule::LightClient(m) => {
                     curr = m.add(&mut modules.light_client, &mut provided)?
                 },
+                SequencerModule::Follower(m) => {
+                    curr = m.add(&mut modules.follower, &mut provided)?
+                },
             }
+        }
+        if modules.follower.is_some() {
+            validate_follower_modules(&modules)?;
         }
 
         Ok(modules)
     }
+}
+
+fn validate_follower_modules(modules: &Modules) -> Result<(), clap::Error> {
+    if modules
+        .query
+        .as_ref()
+        .is_none_or(|query| query.peers.is_empty())
+    {
+        return Err(clap::Error::raw(
+            ErrorKind::MissingRequiredArgument,
+            "module follower verifies the chain from the query module's peers: set --peers \
+             (ESPRESSO_NODE_API_PEERS)",
+        ));
+    }
+    Ok(())
 }
 
 trait ModuleInfo: Args + FromArgMatches {
@@ -601,6 +667,7 @@ module!("config", api::options::Config, requires: "http");
 module!("hotshot-events", api::options::HotshotEvents, requires: "http");
 module!("explorer", api::options::Explorer, requires: "http", "storage-sql");
 module!("light-client", api::options::LightClient, requires: "http", "storage-sql");
+module!("follower", Follower, requires: "storage-sql", "http", "query");
 
 #[derive(Clone, Debug, Args)]
 struct Module<Options: ModuleInfo> {
@@ -688,6 +755,15 @@ enum SequencerModule {
     ///
     /// This module requires the http and storage-sql modules to be started.
     LightClient(Module<api::options::LightClient>),
+    /// Follow the chain through the light client instead of running consensus.
+    ///
+    /// Every block served is verified against finality proofs from the query module's peers
+    /// (`--peers`, `ESPRESSO_NODE_API_PEERS`), which `--state-peers` and `--config-peers` default
+    /// to. The node never joins consensus and needs no staking keys, orchestrator, CDN, libp2p or
+    /// cliquenet.
+    ///
+    /// This module requires the storage-sql, http and query modules to be started.
+    Follower(Module<Follower>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -703,6 +779,30 @@ pub struct Modules {
     pub hotshot_events: Option<api::options::HotshotEvents>,
     pub explorer: Option<api::options::Explorer>,
     pub light_client: Option<api::options::LightClient>,
+    pub follower: Option<Follower>,
+}
+
+/// Options for the follower module.
+#[derive(Parser, Clone, Debug)]
+pub struct Follower {
+    /// How often to poll the upstreams for new blocks.
+    #[clap(long, env = "ESPRESSO_NODE_FOLLOWER_POLL_INTERVAL", default_value = "1s", value_parser = parse_duration)]
+    pub poll_interval: Duration,
+
+    /// The most blocks ingested per poll; older heights are backfilled by the query service.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_FOLLOWER_MAX_BLOCKS_PER_POLL",
+        default_value = "10"
+    )]
+    pub max_blocks_per_poll: u64,
+
+    /// TOML file with the light client genesis to trust.
+    ///
+    /// Derived from the network config fetched from `--config-peers` when unset. Pin a reviewed
+    /// file to stop trusting those peers for the root of trust.
+    #[clap(long, env = "ESPRESSO_NODE_LIGHT_CLIENT_GENESIS")]
+    pub light_client_genesis: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -727,6 +827,8 @@ pub struct PublicNodeConfig {
     pub local_catchup_timeout: Duration,
     pub bootstrap_epoch_catchup_timeout: Duration,
     pub catchup_backoff: BackoffParams,
+    /// Unset on a validator.
+    pub follower: Option<FollowerConfig>,
     pub proposal_fetcher: ProposalFetcherConfig,
     pub libp2p: Libp2pTuning,
     pub l1: L1Tuning,
@@ -821,6 +923,21 @@ pub struct HttpConfig {
     pub port: u16,
     pub max_connections: Option<usize>,
     pub tonic_port: Option<u16>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FollowerConfig {
+    pub poll_interval: Duration,
+    pub max_blocks_per_poll: u64,
+}
+
+impl From<&Follower> for FollowerConfig {
+    fn from(o: &Follower) -> Self {
+        Self {
+            poll_interval: o.poll_interval,
+            max_blocks_per_poll: o.max_blocks_per_poll,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1075,6 +1192,7 @@ impl PublicNodeConfig {
             local_catchup_timeout: opt.local_catchup_timeout,
             bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
             catchup_backoff: opt.catchup_backoff,
+            follower: modules.follower.as_ref().map(FollowerConfig::from),
             proposal_fetcher: opt.proposal_fetcher_config,
             libp2p: Libp2pTuning::from(opt),
             l1: L1Tuning::from(&opt.l1_options),
@@ -1330,6 +1448,96 @@ pub(crate) mod tests {
         assert_eq!(value["libp2p_bootstrap_nodes"], serde_json::Value::Null);
         assert_eq!(value["config_peers"], serde_json::Value::Null);
         assert_eq!(value["public_api_url"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn follower_params_default_peers() {
+        let peers = ["http://a.test", "http://b.test"].map(|url| url.parse::<Url>().unwrap());
+        let query = api::options::Query {
+            peers: peers.to_vec(),
+            ..Default::default()
+        };
+        let follower = Follower::try_parse_from(["follower"]).unwrap();
+
+        let opt = parse_options_with(&[]);
+        let params = opt.follower_params(&follower, &query).unwrap();
+        assert_eq!(params.upstreams, peers);
+        assert_eq!(params.catchup.state_peers, peers);
+        assert!(
+            params.config_peers.is_none(),
+            "config peers are defaulted by init_follower_node"
+        );
+
+        let opt = parse_options_with(&[
+            "--state-peers",
+            "http://c.test",
+            "--config-peers",
+            "http://d.test",
+        ]);
+        let params = opt.follower_params(&follower, &query).unwrap();
+        assert_eq!(params.upstreams, peers);
+        assert_eq!(
+            params.catchup.state_peers,
+            ["http://c.test".parse::<Url>().unwrap()]
+        );
+        assert_eq!(
+            params.config_peers,
+            Some(vec!["http://d.test".parse::<Url>().unwrap()])
+        );
+    }
+
+    // Postgres only: storage-sql under embedded-db requires a --path arg that's
+    // irrelevant to what this test asserts.
+    #[cfg(not(feature = "embedded-db"))]
+    #[test]
+    fn follower_module_requirements() {
+        let parse = |modules: &[&str]| {
+            let mut args = vec![];
+            for module in modules {
+                args.push("--".to_string());
+                args.extend(module.split(' ').map(String::from));
+            }
+            // Drop the leading `--`, as `Options` does.
+            ModuleArgs(args.split_off(1)).try_parse()
+        };
+        let modules = parse(&[
+            "storage-sql",
+            "http",
+            "query --peers http://a.test",
+            "follower",
+        ])
+        .expect("sql storage, http and query with peers suffice");
+        assert!(modules.follower.is_some());
+        parse(&[
+            "storage-sql",
+            "http",
+            "query --peers http://a.test",
+            "submit",
+            "catchup",
+            "config",
+            "light-client",
+            "explorer",
+            "follower",
+        ])
+        .expect("the other modules are allowed");
+        assert!(
+            parse(&[
+                "storage-fs --path /tmp/follower",
+                "http",
+                "query --peers http://a.test",
+                "follower",
+            ])
+            .is_err(),
+            "fs storage cannot serve merklized state"
+        );
+        assert!(
+            parse(&["storage-sql", "http", "follower"]).is_err(),
+            "the query module is required"
+        );
+        assert!(
+            parse(&["storage-sql", "http", "query", "follower"]).is_err(),
+            "the query module's peers are the upstreams"
+        );
     }
 
     // Document the JSON shape of GET /config/runtime. Runs under Postgres builds only;

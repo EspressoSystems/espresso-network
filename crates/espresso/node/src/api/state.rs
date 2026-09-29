@@ -2188,6 +2188,7 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             local_catchup_timeout: _,
             bootstrap_epoch_catchup_timeout: _,
             catchup_backoff: _,
+            follower,
             proposal_fetcher: _,
             libp2p: _,
             l1: _,
@@ -2262,6 +2263,10 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             l1_provider_count: l1_provider_count as u64,
             l1_ws_provider_count: l1_ws_provider_count as u64,
             modules: Some(modules.into()),
+            follower: follower.map(|follower| proto::FollowerModule {
+                poll_interval_ms: follower.poll_interval.as_millis() as u64,
+                max_blocks_per_poll: follower.max_blocks_per_poll,
+            }),
         }
     }
 }
@@ -5473,7 +5478,7 @@ mod tests {
         use proto::config_service_server::ConfigService as _;
 
         use crate::options::{
-            Identity, PublicNodeConfig,
+            FollowerConfig, Identity, PublicNodeConfig,
             tests::{parse_options_with, test_genesis},
         };
 
@@ -5508,6 +5513,11 @@ mod tests {
             "config",
         ]);
         let mut cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
+        // Set directly: the follower module needs storage-sql, whose args differ under embedded-db.
+        cfg.follower = Some(FollowerConfig {
+            poll_interval: Duration::from_millis(2500),
+            max_blocks_per_poll: 17,
+        });
         cfg.identity = Identity {
             node_name: Some("node-name".into()),
             node_description: Some("node-description".into()),
@@ -5593,6 +5603,10 @@ mod tests {
                     .unwrap_or_default(),
                 l1_provider_count: cfg.l1_provider_count as u64,
                 l1_ws_provider_count: cfg.l1_ws_provider_count as u64,
+                follower: Some(proto::FollowerModule {
+                    poll_interval_ms: 2500,
+                    max_blocks_per_poll: 17,
+                }),
                 modules: Some(proto::ApiModules {
                     http: Some(proto::HttpModule {
                         port: 24000,
