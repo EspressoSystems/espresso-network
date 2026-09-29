@@ -38,7 +38,7 @@ pub enum BlockBuildingError {
 
 /// Proposer-side limit that keeps VID dispersal size bounded. Not a
 /// validation rule.
-pub(crate) const MAX_NAMESPACES_PER_BLOCK: usize = 100;
+pub(crate) const MAX_NAMESPACES_PER_BLOCK: usize = 50;
 
 impl Payload {
     pub fn ns_table(&self) -> &NsTable {
