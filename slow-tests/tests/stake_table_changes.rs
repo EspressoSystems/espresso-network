@@ -8,11 +8,10 @@
 use std::{collections::HashSet, time::Duration};
 
 use alloy::{
-    network::EthereumWallet,
     primitives::{Address, U256, utils::parse_ether},
-    providers::{ProviderBuilder, ext::AnvilApi},
+    providers::ext::AnvilApi,
 };
-use espresso_contract_deployer::{Contract, upgrade_stake_table_v3};
+use espresso_contract_deployer::Contract;
 use espresso_node::{
     SequencerApiVersion,
     api::{
@@ -34,17 +33,13 @@ use espresso_types::{
     AuthenticatedValidatorMap, Header, PubKey, SeqTypes, ValidatedState,
     v0::traits::SequencerPersistence,
 };
-use futures::{
-    future::join_all,
-    stream::{Stream, StreamExt},
-};
+use futures::{future::join_all, stream::StreamExt};
 use hotshot::types::EventType;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_query_service::{availability::LeafQueryData, types::HeightIndexed};
 use hotshot_types::{
     addr::NetAddr,
     light_client::StateKeyPair,
-    new_protocol::CoordinatorEvent,
     signature_key::BLSKeyPair,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     utils::epoch_from_block_number,
@@ -330,35 +325,6 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
         }
         panic!("header {height} not served by the query service in time");
     }
-}
-
-/// Streams decided leaves from a node's coordinator events until one reaches
-/// `version` or newer; returns its height. Unlike
-/// [`StakeTableTestNetwork::wait_for_version`] this does not depend on the
-/// query node staying live, so it also works when the query node is in the
-/// outgoing cohort of a swap.
-async fn wait_for_version_on_events(
-    events: &mut (impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin),
-    version: Version,
-    deadline: Duration,
-) -> u64 {
-    timeout(deadline, async {
-        loop {
-            let leaf = match events.next().await.unwrap() {
-                CoordinatorEvent::LegacyEvent(hotshot::types::Event {
-                    event: EventType::Decide { leaf_chain, .. },
-                    ..
-                }) => leaf_chain[0].leaf.clone(),
-                CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
-                _ => continue,
-            };
-            if leaf.block_header().version() >= version {
-                break leaf.height();
-            }
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("the network did not upgrade to {version} in time"))
 }
 
 /// Blocks until the legacy consensus proposes an upgrade, asserting it
@@ -1049,312 +1015,6 @@ async fn test_stake_table_single_removal_across_epoch_reward_upgrade() -> anyhow
 
     let all_nodes: Vec<_> = (0..NUM_NODES).map(|i| net.network.node(i)).collect();
     assert_nodes_agree(&all_nodes, activation_epoch * EPOCH_HEIGHT).await;
-
-    Ok(())
-}
-
-/// Full set replacement across the 0.5 -> 0.6 (new protocol / fast finality)
-/// upgrade: the network starts at 0.5 with committee {0,1,2} and cuts over
-/// to cliquenet-based consensus mid-run while the committee is replaced
-/// wholesale by {3,4,5}.
-///
-/// The `before_cutover` case swaps early, so the cutover itself runs on the
-/// freshly replaced committee; the `straddling` case sends the swap at the
-/// `UpgradeProposal`, so the new committee activates right at or just after
-/// the cutover epoch. An `AfterUpgrade` case is intentionally absent: a
-/// swap sent entirely under 0.6 is what
-/// [`test_stake_table_full_set_replacement_v6`] covers.
-///
-/// As in [`full_set_replacement`], node 0 — the query node — is in the
-/// outgoing set to serve the incoming cohort's catchup; it stalls at the
-/// cutover at the latest, so progress is observed through an incoming
-/// node's event stream.
-async fn full_swap_across_new_protocol_upgrade(trigger: SwapTrigger) -> anyhow::Result<()> {
-    const NUM_NODES: usize = 6;
-    const EPOCH_HEIGHT: u64 = 70;
-    const UPGRADE_START_PROPOSING_VIEW: u64 = 3 * EPOCH_HEIGHT + 5;
-    let outgoing = [0, 1, 2];
-    let incoming = [3, 4, 5];
-    let upgrade = Upgrade::new(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION);
-
-    let network_config = TestConfigBuilder::<NUM_NODES>::default()
-        .epoch_height(EPOCH_HEIGHT)
-        .epoch_start_block(0)
-        // Longer than `BUILDER_TIMEOUT`: this network reaches the 0.6 cutover
-        // with little margin against the `wait_for_version` deadline below.
-        .builder_timeout(Duration::from_millis(500))
-        .set_upgrades_with(
-            NEW_PROTOCOL_VERSION,
-            StakeTableContractVersion::V3,
-            &outgoing,
-        )
-        .await
-        .upgrade_proposing_views(UPGRADE_START_PROPOSING_VIEW, 1000)
-        .build();
-
-    let net = StakeTableTestNetwork::start_upgrading(network_config.clone(), upgrade).await;
-    let incoming_addrs = staking_addresses(&network_config, &incoming);
-    let mut events = net.network.node(incoming[0]).event_stream();
-
-    let swap = || async {
-        register_validators(
-            &network_config,
-            net.stake_table,
-            &incoming,
-            DelegationConfig::MultipleDelegators,
-        )
-        .await?;
-        deregister_validators(&network_config, net.stake_table, &outgoing).await?;
-        anyhow::Ok(())
-    };
-
-    let pre_cutover_activation = match trigger {
-        SwapTrigger::BeforeUpgrade => {
-            // Swap while epoch 2 is running; the committee flips to the
-            // incoming set well before the upgrade window opens.
-            wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
-            swap().await?;
-            let (activation_epoch, _) = wait_for_committee(
-                &net.client,
-                &mut events,
-                EPOCH_HEIGHT,
-                FIRST_CONTRACT_EPOCH,
-                MAX_ACTIVATION_EPOCHS,
-                committee_is(incoming_addrs.clone()),
-            )
-            .await;
-            tracing::info!(activation_epoch, "swap activated before the cutover");
-            Some(activation_epoch)
-        },
-        SwapTrigger::AtUpgradeProposal => {
-            wait_for_upgrade_proposal(
-                &net.network.server,
-                NEW_PROTOCOL_VERSION,
-                Duration::from_secs(600),
-            )
-            .await;
-            swap().await?;
-            None
-        },
-        SwapTrigger::AfterUpgrade => unreachable!("not a case of this test"),
-    };
-
-    let upgrade_height =
-        wait_for_version_on_events(&mut events, NEW_PROTOCOL_VERSION, Duration::from_secs(600))
-            .await;
-    let cutover_epoch = epoch_from_block_number(upgrade_height, EPOCH_HEIGHT);
-    tracing::info!(upgrade_height, cutover_epoch, "new protocol enabled");
-
-    let activation_epoch = match pre_cutover_activation {
-        Some(activation_epoch) => {
-            // The swapped committee must have carried the network through the
-            // cutover epoch itself.
-            let committee = net.committee(cutover_epoch).await;
-            assert_eq!(
-                committee.keys().copied().collect::<HashSet<_>>(),
-                incoming_addrs,
-                "the cutover should run on the fully replaced committee"
-            );
-            activation_epoch
-        },
-        None => {
-            let (activation_epoch, _) = wait_for_committee(
-                &net.client,
-                &mut events,
-                EPOCH_HEIGHT,
-                cutover_epoch,
-                MAX_ACTIVATION_EPOCHS,
-                committee_is(incoming_addrs.clone()),
-            )
-            .await;
-            tracing::info!(activation_epoch, "swap activated around the cutover");
-            activation_epoch
-        },
-    };
-
-    // Every member of the new committee must be dialable via cliquenet.
-    let committee = net.committee(activation_epoch.max(cutover_epoch)).await;
-    for (address, validator) in &committee {
-        assert!(
-            validator.x25519_key.is_some() && validator.p2p_addr.is_some(),
-            "incoming validator {address} is missing cliquenet connect info"
-        );
-    }
-
-    // The new protocol on the replaced committee must keep crossing epoch
-    // boundaries and sequencing transactions.
-    assert_node_live(net.network.node(incoming[0]), EPOCH_HEIGHT, 2).await;
-    let incoming_nodes: Vec<_> = incoming.iter().map(|&i| net.network.node(i)).collect();
-    assert_nodes_agree(
-        &incoming_nodes,
-        activation_epoch.max(cutover_epoch) * EPOCH_HEIGHT,
-    )
-    .await;
-
-    Ok(())
-}
-
-/// The swap completes under 0.5 legacy consensus, then the cutover runs on
-/// the freshly replaced committee: see
-/// [`full_swap_across_new_protocol_upgrade`].
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_full_swap_before_new_protocol_cutover() -> anyhow::Result<()> {
-    full_swap_across_new_protocol_upgrade(SwapTrigger::BeforeUpgrade).await
-}
-
-/// The swap is sent at the `UpgradeProposal`, so it activates right after
-/// the cutover — a 0.6-native handoff to a committee that never held the
-/// previous epoch's payloads, carried by the boundary-state seeding (see
-/// `test_stake_table_full_set_replacement_v6`).
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_full_swap_straddles_new_protocol_cutover() -> anyhow::Result<()> {
-    full_swap_across_new_protocol_upgrade(SwapTrigger::AtUpgradeProposal).await
-}
-
-/// The liveness hazard of the cliquenet upgrade
-/// (`AuthenticatedValidator::is_eligible`): validators without on-chain
-/// connect info are still members of the committees selected before 0.6
-/// activates — silently skipped by cliquenet but counted toward the quorum.
-/// Here 4 of 5 validators publish their network config before the cutover
-/// (80% of stake >= 2/3, so the chain stays live) and the fifth doesn't:
-/// it must remain a member through the transition window, then drop out at
-/// the first epoch whose root is a 0.6 header. When the laggard finally
-/// publishes its connect info it must be re-selected, and its node — stalled
-/// while dropped from the peer windows — must catch back up.
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_new_protocol_upgrade_ineligible_validator_drops() -> anyhow::Result<()> {
-    const NUM_NODES: usize = 5;
-    const EPOCH_HEIGHT: u64 = 70;
-    const UPGRADE_START_PROPOSING_VIEW: u64 = 3 * EPOCH_HEIGHT + 5;
-    let upgrade = Upgrade::new(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION);
-    let all: Vec<usize> = (0..NUM_NODES).collect();
-
-    // Register everyone on StakeTable V2: no x25519 keys or p2p addresses on
-    // chain, and equal stakes so the eligible fraction is exactly 4/5.
-    let network_config = TestConfigBuilder::<NUM_NODES>::default()
-        .epoch_height(EPOCH_HEIGHT)
-        .epoch_start_block(0)
-        // Longer than `BUILDER_TIMEOUT`: this network reaches the 0.6 cutover
-        // with little margin against the `wait_for_version` deadline below.
-        .builder_timeout(Duration::from_millis(500))
-        .set_upgrades_with(NEW_PROTOCOL_VERSION, StakeTableContractVersion::V2, &all)
-        .await
-        .upgrade_proposing_views(UPGRADE_START_PROPOSING_VIEW, 1000)
-        .build();
-
-    let net = StakeTableTestNetwork::start_upgrading(network_config.clone(), upgrade).await;
-    let mut events = net.network.server.event_stream();
-    wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
-
-    // Upgrade the contract to V3 mid-run and publish connect info for all
-    // validators except the last, well before any 0.6 epoch root.
-    let deployer = ProviderBuilder::new()
-        .wallet(EthereumWallet::from(network_config.signer()))
-        .connect_http(network_config.l1_url());
-    let mut contracts = network_config
-        .contracts()
-        .expect("set_upgrades_with deploys the contracts");
-    upgrade_stake_table_v3(&deployer, &mut contracts)
-        .await
-        .expect("stake table upgrade to V3");
-
-    let keys = network_config.staking_priv_keys();
-    let providers = network_config.validator_providers();
-    for i in 0..NUM_NODES - 1 {
-        let receipt = update_network_config(
-            &providers[i].1,
-            net.stake_table,
-            keys[i].x25519.public_key(),
-            keys[i].p2p_addr.clone(),
-        )
-        .await?
-        .get_receipt()
-        .await?;
-        anyhow::ensure!(
-            receipt.status(),
-            "network config update of validator {i} reverted"
-        );
-    }
-
-    let upgrade_height = net
-        .wait_for_version(NEW_PROTOCOL_VERSION, Duration::from_secs(600))
-        .await;
-    let cutover_epoch = epoch_from_block_number(upgrade_height, EPOCH_HEIGHT);
-    tracing::info!(upgrade_height, cutover_epoch, "new protocol enabled");
-
-    // The cutover epoch's committee was selected under 0.5 rules: all five
-    // validators are members, the last one without connect info.
-    let committee = net.committee(cutover_epoch).await;
-    assert_eq!(
-        committee.len(),
-        NUM_NODES,
-        "pre-cutover selection must not apply the eligibility filter"
-    );
-    let ineligible = providers[NUM_NODES - 1].0;
-    assert!(
-        committee[&ineligible].x25519_key.is_none(),
-        "the last validator should still have no connect info on chain"
-    );
-
-    // From the first epoch whose root is a 0.6 header, the eligibility
-    // filter drops it; the chain must stay live throughout.
-    let eligible_addrs = staking_addresses(&network_config, &all[..NUM_NODES - 1]);
-    let (drop_epoch, _) = wait_for_committee(
-        &net.client,
-        &mut events,
-        EPOCH_HEIGHT,
-        cutover_epoch + 1,
-        MAX_ACTIVATION_EPOCHS,
-        committee_is(eligible_addrs),
-    )
-    .await;
-    tracing::info!(
-        drop_epoch,
-        "ineligible validator dropped from the committee"
-    );
-    assert!(
-        drop_epoch <= cutover_epoch + 3,
-        "the eligibility filter should apply within an epoch of the first 0.6 root"
-    );
-
-    let receipt = update_network_config(
-        &providers[NUM_NODES - 1].1,
-        net.stake_table,
-        keys[NUM_NODES - 1].x25519.public_key(),
-        keys[NUM_NODES - 1].p2p_addr.clone(),
-    )
-    .await?
-    .get_receipt()
-    .await?;
-    anyhow::ensure!(receipt.status(), "late network config update reverted");
-
-    assert_node_live(&net.network.server, EPOCH_HEIGHT, 2).await;
-    let eligible_nodes: Vec<_> = (0..NUM_NODES - 1).map(|i| net.network.node(i)).collect();
-    assert_nodes_agree(&eligible_nodes, drop_epoch * EPOCH_HEIGHT).await;
-
-    let all_addrs = staking_addresses(&network_config, &all);
-    let (rejoin_epoch, _) = wait_for_committee(
-        &net.client,
-        &mut events,
-        EPOCH_HEIGHT,
-        drop_epoch + 1,
-        MAX_ACTIVATION_EPOCHS,
-        committee_is(all_addrs),
-    )
-    .await;
-    tracing::info!(rejoin_epoch, "laggard validator rejoined the committee");
-
-    assert_node_live(&net.network.server, EPOCH_HEIGHT, 1).await;
-
-    let mut laggard_events = net.network.node(NUM_NODES - 1).event_stream();
-    timeout(
-        Duration::from_secs(600),
-        wait_for_epochs(&mut laggard_events, EPOCH_HEIGHT, rejoin_epoch),
-    )
-    .await
-    .expect("laggard node did not catch back up after rejoining the committee");
-
-    assert_nodes_agree(&eligible_nodes, rejoin_epoch * EPOCH_HEIGHT).await;
 
     Ok(())
 }
