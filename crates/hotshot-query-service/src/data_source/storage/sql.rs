@@ -21,7 +21,10 @@ use chrono::Utc;
 use futures::future::FutureExt;
 use hotshot_types::{
     data::VidShare,
-    traits::{metrics::Metrics, node_implementation::NodeType},
+    traits::{
+        metrics::{Gauge, Metrics},
+        node_implementation::NodeType,
+    },
 };
 use itertools::Itertools;
 use log::LevelFilter;
@@ -547,6 +550,7 @@ pub struct SqlStorage {
     pool: Pool<Db>,
     metrics: PrometheusMetrics,
     pool_metrics: PoolMetrics,
+    pruned_heights: PrunedHeightMetrics,
     pruner_cfg: Option<PrunerCfg>,
     serializable_retry_config: SerializableRetryConfig,
 }
@@ -603,6 +607,28 @@ pub struct Pruner<'a> {
 enum PruneCategory {
     Data,
     State,
+}
+
+#[derive(Clone, Debug)]
+struct PrunedHeightMetrics {
+    data: Box<dyn Gauge>,
+    state: Box<dyn Gauge>,
+}
+
+impl PrunedHeightMetrics {
+    fn new(metrics: &(impl Metrics + ?Sized)) -> PrunedHeightMetrics {
+        PrunedHeightMetrics {
+            data: metrics.create_gauge("data_height".into(), None),
+            state: metrics.create_gauge("state_height".into(), None),
+        }
+    }
+
+    fn set(&self, category: PruneCategory, height: u64) {
+        match category {
+            PruneCategory::Data => self.data.set(height as usize),
+            PruneCategory::State => self.state.set(height as usize),
+        }
+    }
 }
 
 impl<'a> Pruner<'a> {
@@ -669,6 +695,7 @@ impl SqlStorage {
     ) -> Result<Self, Error> {
         let metrics = PrometheusMetrics::default();
         let pool_metrics = PoolMetrics::new(&*metrics.subgroup("sql".into()));
+        let pruned_heights = PrunedHeightMetrics::new(&*metrics.subgroup("pruner".into()));
 
         #[cfg(feature = "embedded-db")]
         let pool = config.pool_opt.clone();
@@ -688,6 +715,7 @@ impl SqlStorage {
                 return Ok(Self {
                     metrics,
                     pool_metrics,
+                    pruned_heights,
                     pool,
                     pruner_cfg,
                     serializable_retry_config,
@@ -788,6 +816,7 @@ impl SqlStorage {
         Ok(Self {
             pool,
             pool_metrics,
+            pruned_heights,
             metrics,
             pruner_cfg,
             serializable_retry_config,
@@ -1244,10 +1273,10 @@ impl SqlStorage {
                 .await
                 .context("opening transaction to load pruned heights")?;
             (
-                tx.load_pruned_height()
+                self.load_pruned_height(&mut tx, PruneCategory::Data)
                     .await?
                     .map_or(0, |pruned| pruned + 1),
-                tx.load_state_pruned_height()
+                self.load_pruned_height(&mut tx, PruneCategory::State)
                     .await?
                     .map_or(0, |pruned| pruned + 1),
             )
@@ -1337,6 +1366,7 @@ impl SqlStorage {
             .context("opening transaction for pruned height")?;
         tx.save_pruned_height(to).await?;
         tx.commit().await.context("committing pruned height")?;
+        self.pruned_heights.set(PruneCategory::Data, to);
 
         let mut tx = self
             .prune_write()
@@ -1358,7 +1388,26 @@ impl SqlStorage {
             .context("opening transaction to delete state")?;
         tx.delete_state_batch(cfg.state_tables(), from, to).await?;
         tx.save_state_pruned_height(to).await?;
-        tx.commit().await.context("committing deleted state")
+        tx.commit().await.context("committing deleted state")?;
+        self.pruned_heights.set(PruneCategory::State, to);
+        Ok(())
+    }
+
+    async fn load_pruned_height(
+        &self,
+        tx: &mut Transaction<Read>,
+        category: PruneCategory,
+    ) -> anyhow::Result<Option<u64>> {
+        let pruned = match category {
+            PruneCategory::Data => tx.load_pruned_height().await?,
+            PruneCategory::State => tx.load_state_pruned_height().await?,
+        };
+        // Setting the gauge only on commit would leave it at zero after a restart, for good once
+        // the cutoff stops moving.
+        if let Some(pruned) = pruned {
+            self.pruned_heights.set(category, pruned);
+        }
+        Ok(pruned)
     }
 
     /// Prune merklized state below `height`, never within `min_retention` of the state head and
@@ -1375,7 +1424,7 @@ impl SqlStorage {
                 .await
                 .context("opening transaction to load state heights")?;
             (
-                tx.load_state_pruned_height()
+                self.load_pruned_height(&mut tx, PruneCategory::State)
                     .await?
                     .map_or(0, |pruned| pruned + 1),
                 tx.get_last_state_height().await? as u64,
@@ -1414,11 +1463,25 @@ impl SqlStorage {
 
             batches += 1;
             if batches.is_multiple_of(10) {
-                tracing::info!(from, target, "archived state pruning progress");
                 self.vacuum(cfg.incremental_vacuum_pages()).await?;
             }
+            if batches.is_multiple_of(1000) {
+                tracing::warn!(
+                    pruned_height = to,
+                    target,
+                    batches,
+                    "archived state pruning progress"
+                );
+            }
         }
-        self.vacuum(cfg.incremental_vacuum_pages()).await
+        self.vacuum(cfg.incremental_vacuum_pages()).await?;
+        tracing::warn!(
+            pruned_height = from - 1,
+            head,
+            batches,
+            "archived state pruning finished"
+        );
+        Ok(())
     }
 
     async fn get_disk_usage(&self) -> anyhow::Result<u64> {
@@ -2590,7 +2653,14 @@ mod test {
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(20));
     }
 
+    fn pruned_height_gauge(storage: &SqlStorage, name: &str) -> usize {
+        let pruner_metrics = storage.metrics().get_subgroup(["pruner"]).unwrap();
+        pruner_metrics.get_gauge(name).unwrap().get()
+    }
+
     async fn assert_state_pruned_to(storage: &SqlStorage, pruned: Option<u64>, written: u64) {
+        let gauge = pruned_height_gauge(storage, "state_height");
+        assert_eq!(gauge as u64, pruned.unwrap_or(0));
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), pruned);
         for height in 1..=written {
@@ -2700,6 +2770,16 @@ mod test {
             .await
             .unwrap();
         assert_eq!(headers as u64, heights);
+        drop(tx);
+
+        // After a restart the gauge reports the stored marker even with nothing left to prune.
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        storage.prune_state_below(100, 0, &cfg).await.unwrap();
+        assert_state_pruned_to(&storage, Some(9), heights).await;
+        let exported = storage.metrics().export().unwrap();
+        assert!(exported.contains("pruner_state_height 9"), "{exported}");
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -2808,6 +2888,11 @@ mod test {
             assert_eq!(
                 tx.load_state_pruned_height().await.unwrap(),
                 Some(num_blocks - 1)
+            );
+            assert_eq!(pruned_height_gauge(&storage, "data_height"), 0);
+            assert_eq!(
+                pruned_height_gauge(&storage, "state_height") as u64,
+                num_blocks - 1
             );
 
             for height in 0..num_blocks {
@@ -2934,6 +3019,7 @@ mod test {
         assert_eq!(storage.prune(&mut pruner).await.unwrap(), None);
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_pruned_height().await.unwrap(), Some(5009));
+        assert_eq!(pruned_height_gauge(&storage, "data_height"), 5009);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
