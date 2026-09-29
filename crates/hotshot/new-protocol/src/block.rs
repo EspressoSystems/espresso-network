@@ -133,8 +133,7 @@ pub struct BlockBuilder<T: NodeType> {
     /// leader and view, so a second block for the view is votable only if its
     /// payload is the same. It is the same whenever the new parent does not
     /// change how the payload is built.
-    #[allow(clippy::type_complexity)]
-    view_transactions: BTreeMap<ViewNumber, Vec<(Commitment<T::Transaction>, T::Transaction)>>,
+    view_transactions: BTreeMap<ViewNumber, Vec<T::Transaction>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -174,7 +173,7 @@ impl<T: NodeType> BlockBuilder<T> {
             return;
         };
         let epoch = request.epoch;
-        let buffer = self.transactions_for(view);
+        let txs = self.transactions_for(view);
         let instance = self.instance.clone();
         let membership = self.membership.clone();
 
@@ -183,10 +182,9 @@ impl<T: NodeType> BlockBuilder<T> {
         let handle = self.tasks.spawn(async move {
             // Without this an idle network produces empty blocks as fast as consensus can run
             // them, flooding the coordinator's event queue.
-            if buffer.is_empty() {
+            if txs.is_empty() {
                 sleep(empty_block_delay).await;
             }
-            let txs: Vec<_> = buffer.into_values().collect();
 
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
@@ -270,15 +268,12 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert((view, parent_commitment), handle);
     }
 
-    fn transactions_for(
-        &mut self,
-        view: ViewNumber,
-    ) -> Vec<(Commitment<T::Transaction>, T::Transaction)> {
+    fn transactions_for(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         if let Some(txs) = self.view_transactions.get(&view) {
             return txs.clone();
         }
         let txs: Vec<_> = std::mem::take(&mut self.leader_buffer)
-            .into_iter()
+            .into_values()
             .collect();
         self.leader_total_bytes = 0;
         self.view_transactions.insert(view, txs.clone());
