@@ -169,6 +169,8 @@ def make_result(steps=None, steal=0.0, config_hash="abc123"):
             "cap_waits": 0,
             "missing_payloads": [],
             "tracker_lag_ms": quantiles(50.0, 100.0),
+            "drain_s": 3.0,
+            "refine_skipped": False,
         },
         "stake_table": ["0x1", "0x1", "0x1"],
         "validity": {"valid": True, "noisy": False, "reasons": []},
@@ -1010,6 +1012,45 @@ class LoadTest(unittest.TestCase):
             ],
         )
 
+    def test_refine_starts_after_the_backlog_drained(self):
+        # 80 tx/s of capacity: 0.1 MB/s leaves 40 txs behind; 0.07 MB/s alone keeps up but
+        # drains that backlog only at 10 tx/s, adding latency over the 300 ms target.
+        with mock.patch.object(bench, "COUNTER_POLL_S", 0.05):
+            _, _, _, meta = self.run_load(
+                True,
+                2.0,
+                block_txs=4,
+                steps=(0.04, 0.1),
+                latency_target_ms=300,
+                tx_timeout_s=10,
+            )
+        verdicts = [
+            (s["rate_mb_s"], s["refine"], not s["consensus_fails"] + s["query_fails"])
+            for s in self.steps
+        ]
+        self.assertEqual(
+            verdicts,
+            [
+                (0.04, False, True),
+                (0.1, False, False),
+                (0.07000000000000001, True, True),
+            ],
+        )
+        self.assertGreater(meta["drain_s"], 0.2)
+        self.assertFalse(meta["refine_skipped"])
+
+    def test_refine_is_skipped_when_the_backlog_does_not_drain(self):
+        with (
+            mock.patch.object(bench, "COUNTER_POLL_S", 0.05),
+            mock.patch.object(bench, "drain", mock.AsyncMock(return_value=None)),
+            self.assertLogs(bench.log, "WARNING"),
+        ):
+            _, _, _, meta = self.run_load(
+                True, 1.0, block_txs=4, steps=(0.02, 0.16), tx_timeout_s=1
+            )
+        self.assertEqual([s["rate_mb_s"] for s in self.steps], [0.02, 0.16])
+        self.assertTrue(meta["refine_skipped"])
+
     def test_step_ends_on_time_while_waiting_for_room(self):
         # Nothing is included: the cap fills at once and frees only on timeouts after 3 s.
         self.run_load(False, 1.0, rate_mb_s=0.02, max_pending=2, tx_timeout_s=3)
@@ -1133,6 +1174,8 @@ def write_run_dir(out):
             "max_in_flight": 4,
             "cap_waits": 0,
             "missing_payloads": [],
+            "drain_s": None,
+            "refine_skipped": False,
         },
         "calibration.json": {"before": calib, "after": calib},
         "steps.json": [

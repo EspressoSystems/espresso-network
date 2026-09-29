@@ -266,6 +266,9 @@ class LoadStats(TypedDict):
     missing_payloads: list[int]
     # Per height: the bench finished scanning its payload after it could start.
     tracker_lag_ms: Quantiles | None
+    # Before the refine step; skipped if the failed step's backlog did not drain in time.
+    drain_s: float | None
+    refine_skipped: bool
 
 
 class StepWindow(TypedDict):
@@ -1033,7 +1036,7 @@ async def generate_load(
             load = Load(
                 cfg, state, submitter, submit_urls[: cfg.submit_nodes], marker, bodies
             )
-            steps = await run_staircase(load, heights, counters)
+            steps, drained, skipped = await run_staircase(load, heights, counters)
             done.set()
             await tracker
             for poller in pollers:
@@ -1056,6 +1059,8 @@ async def generate_load(
             "cap_waits": state.cap_waits,
             "submit_errors": state.submit_errors,
             "missing_payloads": state.missing_payloads,
+            "drain_s": drained,
+            "refine_skipped": skipped,
             "marker": marker.hex(),
         },
     )
@@ -1094,15 +1099,25 @@ class Load:
 
 async def run_staircase(
     load: Load, heights: "Heights", counters: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Warmup, then steps up the ramp until one fails, then one refine step. Each step is
-    judged on what is known at its end; the report keeps that verdict."""
+) -> tuple[list[dict[str, Any]], float | None, bool]:
+    """Warmup, then steps up the ramp until one fails, then one refine step once the failed
+    step's backlog drained. Each step is judged on what is known at its end; the report keeps
+    that verdict. Returns the steps, the drain time and whether the drain timed out, which
+    skips the refine step."""
     cfg = load.cfg
     steps: list[dict[str, Any]] = []
     passed: list[bool] = []
+    drained, skipped = None, False
     async with asyncio.TaskGroup() as submits:
         await pace(load, submits, cfg.steps[0], time.time() + cfg.warmup_s)
         while (rate := next_rate(cfg.steps, passed)) is not None:
+            if not all(passed):
+                drained = await drain(load.state, counters, cfg.tx_timeout_s + 10)
+                if drained is None:
+                    log.warning("backlog did not drain, skipping the refine step")
+                    skipped = True
+                    break
+                log.info("backlog drained in %.1f s", drained)
             start = time.time()
             await pace(load, submits, rate, start + cfg.step_s)
             step: StepWindow = {
@@ -1120,7 +1135,24 @@ async def run_staircase(
             log_step(judged, fails)
             passed.append(not fails)
             steps.append(judged)
-    return steps
+    return steps, drained, skipped
+
+
+async def drain(
+    state: LoadState, counters: list[dict[str, Any]], timeout_s: float
+) -> float | None:
+    """Submits nothing until no transaction is pending and decided bytes stopped growing.
+    Seconds that took, or None after `timeout_s`."""
+    start = time.time()
+    while time.time() - start < timeout_s:
+        flat = (
+            len(counters) >= 2
+            and counters[-1]["decided_bytes"] == counters[-2]["decided_bytes"]
+        )
+        if not state.pending and flat:
+            return time.time() - start
+        await asyncio.sleep(0.1)
+    return None
 
 
 def log_step(m: dict[str, Any], fails: list[str]) -> None:
@@ -2198,6 +2230,8 @@ def load_stats(
         "cap_waits": meta["cap_waits"],
         "missing_payloads": meta["missing_payloads"],
         "tracker_lag_ms": quantiles(scan_lags(heights, t0, t1)),
+        "drain_s": meta["drain_s"],
+        "refine_skipped": meta["refine_skipped"],
     }
 
 
@@ -2740,6 +2774,16 @@ def load_lines(result: BenchResult) -> list[str]:
             f"peak in flight {load['max_in_flight']}, {load['cap_waits']} submits waited"
         ),
         f"- benchmark tracker lag: {spread(load['tracker_lag_ms'])}",
+        *(
+            ["- refine step skipped: the failed step's backlog did not drain"]
+            if load["refine_skipped"]
+            else []
+        ),
+        *(
+            [f"- backlog drained in {load['drain_s']:.1f} s before the refine step"]
+            if load["drain_s"] is not None
+            else []
+        ),
     ]
 
 
