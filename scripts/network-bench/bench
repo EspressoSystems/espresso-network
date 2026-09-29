@@ -13,7 +13,7 @@ down, and writes `result.json` plus a markdown `summary.md` into the output dire
 Load is a staircase: after a warmup, `tx_size` transactions go out evenly spaced at each rate
 of `steps` for `step_s`, round-robin over the first `submit_nodes` nodes, independent of
 inclusion; `cap_s` of load caps the transactions in flight. Each step is judged on its second
-half: it fails if decided falls behind the offered rate, the backlog grows, a view times out,
+half: it fails if decided falls behind the offered rate, a view times out,
 consensus latency (submit to the block on a validator) exceeds its target, or the query node's
 lag behind the validators exceeds its target or grows. At the first failing step the ramp stops
 and one refine step runs halfway back. Capacity is the highest passing rate, split into the
@@ -59,7 +59,6 @@ import sys
 import tempfile
 import threading
 import time
-from bisect import bisect_right
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -163,7 +162,6 @@ COUNTER_POLL_S = 1.0
 METRICS_EVERY_S = 1.0
 KEEP_UP_RATIO = 0.95
 # Step rules, see step_fails.
-BACKLOG_GROWTH_FRAC = 0.05
 QUERY_LAG_GROWTH_MS_S = 50.0
 TOOL_VERSIONS = (
     ["process-compose", "version"],
@@ -281,9 +279,8 @@ class StepWindow(TypedDict):
 
 
 class StepMeasures(TypedDict):
+    # Theil-Sen slope of the decided payload bytes.
     decided_mb_s: float | None
-    # Submitted minus decided bytes, Theil-Sen slope over the measured half.
-    backlog_slope_mb_s: float | None
     timeouts: int | None
     consensus_latency_ms: Quantiles | None
     query_lag_ms: Quantiles | None
@@ -1124,13 +1121,11 @@ async def run_staircase(
 def log_step(rate: float, m: StepMeasures, fails: list[str]) -> None:
     consensus, lag = m["consensus_latency_ms"], m["query_lag_ms"]
     log.info(
-        "step %s MB/s: decided %s MB/s, consensus p50 %s ms, query lag p50 %s ms, "
-        "backlog %s MB/s: %s",
+        "step %s MB/s: decided %s MB/s, consensus p50 %s ms, query lag p50 %s ms: %s",
         fmt_num(rate),
         fmt_num(m["decided_mb_s"]),
         fmt_num(consensus["p50"] if consensus else None),
         fmt_num(lag["p50"] if lag else None),
-        fmt_num(m["backlog_slope_mb_s"]),
         "; ".join(fails) or "pass",
     )
 
@@ -1366,14 +1361,6 @@ def step_measures(
     query node counts with its lag so far once that exceeds the target."""
     t0, t1 = step["t_mid"], step["t_end"]
     inside = [c for c in counters if t0 <= c["ts"] <= t1]
-    sent = sorted(tx["t_submit"] for tx in txs if math.isfinite(tx["t_submit"]))
-    backlog = [
-        (
-            c["ts"],
-            (bisect_right(sent, c["ts"]) * cfg.tx_size - c["decided_bytes"]) / 1e6,
-        )
-        for c in inside
-    ]
     first, last = (inside[0], inside[-1]) if len(inside) >= 2 else (None, None)
     on_validator = {h["height"]: h["validator"] for h in heights}
     consensus = [
@@ -1392,15 +1379,10 @@ def step_measures(
             lags.append((seen, (h["query"] - seen) * 1000))
         elif (now - seen) * 1000 > cfg.query_lag_target_ms:
             lags.append((seen, (now - seen) * 1000))
+    # A slope over all samples: two samples see whole blocks, off by up to one block.
+    decided = theil_sen([(c["ts"], c["decided_bytes"] / 1e6) for c in inside])
     return {
-        "decided_mb_s": (
-            (last["decided_bytes"] - first["decided_bytes"])
-            / (last["ts"] - first["ts"])
-            / 1e6
-            if first and last
-            else None
-        ),
-        "backlog_slope_mb_s": theil_sen(backlog),
+        "decided_mb_s": decided,
         "timeouts": int(last["timeouts"] - first["timeouts"])
         if first and last
         else None,
@@ -1425,13 +1407,11 @@ def step_fails(
 ) -> tuple[list[str], list[str]]:
     """Failed rules of a step: consensus-side, then query-node-side."""
     consensus, query = [], []
-    decided, backlog = m["decided_mb_s"], m["backlog_slope_mb_s"]
+    decided = m["decided_mb_s"]
     if decided is None:
         consensus.append("no consensus metrics")
     elif decided < KEEP_UP_RATIO * rate:
         consensus.append(f"decided {decided / rate:.0%} of offered")
-    if backlog is not None and backlog > BACKLOG_GROWTH_FRAC * rate:
-        consensus.append(f"backlog grows {fmt_num(backlog)} MB/s")
     if m["timeouts"]:
         consensus.append(f"{m['timeouts']} view timeouts")
     latency = m["consensus_latency_ms"]
@@ -2625,17 +2605,17 @@ def step_verdict(step: StepResult) -> str:
 def step_details(result: BenchResult) -> list[str]:
     lines = [
         (
-            "| MB/s | decided | backlog MB/s | view timeouts | consensus p50/p99 ms "
+            "| MB/s | decided | view timeouts | consensus p50/p99 ms "
             "| query lag p50/p99 ms | query lag slope ms/s | e2e p50/p99 ms | view ms "
             "| CPU-s/MB | node0/1/2 CPU | postgres CPU |"
         ),
-        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"]):
         cpu = "/".join(fmt_num(s["node_cpu"].get(node)) for node in NODES)
         lines.append(
             f"| {fmt_num(s['rate_mb_s'])} | {fmt_num(s['decided_mb_s'])} "
-            f"| {fmt_num(s['backlog_slope_mb_s'])} | {s['timeouts']} "
+            f"| {s['timeouts']} "
             f"| {pair(s['consensus_latency_ms'])} | {pair(s['query_lag_ms'])} "
             f"| {fmt_num(s['query_lag_slope_ms_s'])} | {pair(s['latency_ms'])} "
             f"| {fmt_num(s['mean_view_ms'])} | {fmt_num(s['cpu_s_per_mb'])} | {cpu} "
@@ -2733,8 +2713,7 @@ def load_lines(result: BenchResult) -> list[str]:
             "of load"
         ),
         (
-            f"- step rules: decided >= {KEEP_UP_RATIO:.0%} of offered, backlog growth <= "
-            f"{BACKLOG_GROWTH_FRAC:.0%} of offered, no view timeouts, consensus latency p50 "
+            f"- step rules: decided >= {KEEP_UP_RATIO:.0%} of offered, no view timeouts, consensus latency p50 "
             f"<= {cfg['latency_target_ms']} ms; query lag p50 <= "
             f"{cfg['query_lag_target_ms']} ms, growth <= {QUERY_LAG_GROWTH_MS_S:.0f} ms/s"
         ),

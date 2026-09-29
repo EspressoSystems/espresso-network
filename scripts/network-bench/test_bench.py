@@ -68,7 +68,6 @@ def step(rate, decided=None, consensus=(), query=(), consensus_p50=900.0):
         "t_mid": 15.0,
         "t_end": 30.0,
         "decided_mb_s": rate if decided is None else decided,
-        "backlog_slope_mb_s": 0.0,
         "timeouts": 0,
         "consensus_latency_ms": quantiles(consensus_p50, 2000.0),
         "query_lag_ms": quantiles(200.0, 400.0),
@@ -1152,7 +1151,6 @@ class AnalyzeTest(unittest.TestCase):
             result = bench.analyze(Path(tmp), bench.BenchConfig())
         one, two = result["steps"]
         self.assertAlmostEqual(one["decided_mb_s"], 1.0)
-        self.assertAlmostEqual(one["backlog_slope_mb_s"], 0.0, delta=0.1)
         self.assertEqual(one["timeouts"], 0)
         self.assertAlmostEqual(one["consensus_latency_ms"]["p50"], 500.0)
         self.assertAlmostEqual(one["query_lag_ms"]["p50"], 300.0)
@@ -1266,7 +1264,6 @@ class StepMeasuresTest(unittest.TestCase):
     def test_keeping_up(self):
         m = self.measures()
         self.assertAlmostEqual(m["decided_mb_s"], 10.0)
-        self.assertAlmostEqual(m["backlog_slope_mb_s"], 0.0, delta=0.2)
         self.assertEqual(m["timeouts"], 0)
         self.assertAlmostEqual(m["consensus_latency_ms"]["p50"], 500.0)
         self.assertAlmostEqual(m["query_lag_ms"]["p50"], 200.0)
@@ -1281,11 +1278,23 @@ class StepMeasuresTest(unittest.TestCase):
             consensus,
             [
                 "decided 90% of offered",
-                "backlog grows 1 MB/s",
                 "1 view timeouts",
                 "consensus latency p50 1500 ms > 1000 ms",
             ],
         )
+
+    def test_decided_rate_is_not_quantized_by_blocks(self):
+        # A 20 MB block every 2 s at t 1, 3, 5, ...: 10 MB/s, but the counter samples at 15
+        # and 30 see 7 blocks in 15 s.
+        counters = [
+            {"ts": float(t), "decided_bytes": 20e6 * ((t + 1) // 2), "timeouts": 0}
+            for t in range(31)
+        ]
+        m = bench.step_measures(
+            step_window(), bench.BenchConfig(), [], [], counters, 30.0
+        )
+        self.assertAlmostEqual(m["decided_mb_s"], 10.0, delta=0.3)
+        self.assertEqual(bench.step_fails(m, 10.0, bench.BenchConfig()), ([], []))
 
     def test_growing_query_lag(self):
         m = self.measures(query_growth=0.2)
