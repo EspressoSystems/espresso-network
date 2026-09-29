@@ -35,7 +35,7 @@ sysinfo:
 clean:
     #!/usr/bin/env bash
     set -euo pipefail
-    if pgrep -u "$(id -u)" -f network-bench/process-compose.yaml > /dev/null; then
+    if pgrep -u "$(id -u)" -f 'network-bench/process-compose.yaml|network-bench/bench run' > /dev/null; then
         echo "a benchmark network is running; stop it first" >&2
         exit 1
     fi
@@ -43,15 +43,19 @@ clean:
     rm -rf {{quote(out)}}
     root=$(realpath -m {{quote(storage_root)}})
     # `find -user` does not follow links. A link is bench's /tmp/enb.x -> <storage root>/enb.y;
-    # its target goes only if it is exactly that and ours.
+    # it and its target go only if the target is exactly that and ours.
     find /tmp -mindepth 1 -maxdepth 1 -name 'enb.*' -user "$(id -u)" -print0 |
         while IFS= read -r -d '' dir; do
             if [[ -L $dir ]]; then
                 target=$(readlink -f -- "$dir" || true)
                 if [[ -n $target && -d $target && -O $target && $(dirname -- "$target") == "$root" && $(basename -- "$target") == enb.* ]]; then
                     rm -rf -- "$target"
+                    rm -f -- "$dir"
+                elif [[ ! -e $dir ]]; then
+                    rm -f -- "$dir"
+                else
+                    echo "kept $dir -> ${target:-$(readlink -- "$dir")}" >&2
                 fi
-                rm -f -- "$dir"
             else
                 rm -rf -- "$dir"
             fi
