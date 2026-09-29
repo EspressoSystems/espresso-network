@@ -69,6 +69,37 @@ def node(cpu):
     }
 
 
+def host_sample(disk_mb_s=12.0, net_mb_s=5.0) -> netbench.HostSample:
+    return {
+        "util_mean": 0.4,
+        "util_max": 0.6,
+        "steal_pct": 0.5,
+        "iowait_pct": 0.2,
+        "mem_avail_min_bytes": 4_000_000_000,
+        "disk_mb_s": disk_mb_s,
+        "net_mb_s": net_mb_s,
+    }
+
+
+def deployment() -> netbench.DeploymentMeta:
+    return {
+        "provider": "aws",
+        "account": "027574771971",
+        "region": "eu-west-1",
+        "az": "eu-west-1b",
+        "ami": "ami-0abc",
+        "hosts": {
+            "ctl": {"instance_type": "c8g.2xlarge"},
+            "node0": {"instance_type": "c8g.4xlarge"},
+        },
+        "images": {"espresso-node": "release-x@sha256:1a2b"},
+        "image_revision": "bd2ad6e1dc7",
+        "start_spread_s": 0.8,
+        "clock_offset_ms_max": 12.0,
+        "cost_usd": {"expected": 2.4, "bound": 4.6},
+    }
+
+
 def step(rate, decided=None, consensus=(), query=(), consensus_p50=900.0):
     """A step at `rate` MB/s that decides `decided` (default: all of it)."""
     return {
@@ -282,6 +313,55 @@ class RenderTest(unittest.TestCase):
             "Baseline: fetching main runs failed: OSError: timed out", summary
         )
         self.assertNotIn("no main runs", summary)
+
+    def test_deployment_and_hosts_sections(self):
+        current = make_result()
+        current["deployment"] = deployment()
+        current["hosts"] = {"ctl": host_sample(), "node0": host_sample(net_mb_s=20.0)}
+        summary = netbench.render(current, None)
+        self.assertIn("<details><summary>Deployment</summary>", summary)
+        self.assertIn(
+            "- account 027574771971 (eu-west-1), az eu-west-1b, ami ami-0abc", summary
+        )
+        self.assertIn(
+            "- images @ bd2ad6e1dc7: espresso-node release-x@sha256:1a2b", summary
+        )
+        self.assertIn("- instance types: ctl c8g.2xlarge, node0 c8g.4xlarge", summary)
+        self.assertIn("- cost: expected $2.40, bound $4.60", summary)
+        self.assertIn("<details><summary>Hosts</summary>", summary)
+        self.assertIn("| ctl | 40% | 0.5% | 12 | 5 |", summary)
+        self.assertIn("| node0 | 40% | 0.5% | 12 | 20 |", summary)
+
+    def test_deployment_no_revision_omits_at_marker(self):
+        current = make_result()
+        current["deployment"] = deployment()
+        current["deployment"]["image_revision"] = None
+        summary = netbench.render(current, None)
+        self.assertIn("- images: espresso-node release-x@sha256:1a2b", summary)
+        self.assertNotIn("@ bd2ad6e1dc7", summary)
+        self.assertNotIn(" @ None", summary)
+
+    def test_deployment_actual_cost(self):
+        current = make_result()
+        current["deployment"] = deployment()
+        current["deployment"]["cost_usd"] = {
+            "expected": 2.4,
+            "bound": 4.6,
+            "actual": 3.1,
+        }
+        summary = netbench.render(current, None)
+        self.assertIn("- cost: expected $2.40, bound $4.60, actual $3.10", summary)
+
+    def test_no_deployment_or_hosts_by_default(self):
+        summary = netbench.render(make_result(), None)
+        self.assertNotIn("Deployment", summary)
+        self.assertNotIn("<details><summary>Hosts</summary>", summary)
+
+    def test_hosts_empty_omits_table(self):
+        current = make_result()
+        current["hosts"] = {}
+        summary = netbench.render(current, None)
+        self.assertNotIn("<details><summary>Hosts</summary>", summary)
 
     def test_load_baseline_single_result(self):
         with tempfile.TemporaryDirectory() as tmp:

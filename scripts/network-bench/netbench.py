@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, TypedDict, TypeVar
+from typing import Any, Literal, NotRequired, TypedDict, TypeVar
 from urllib.parse import urlsplit
 
 log = logging.getLogger("netbench")
@@ -41,6 +41,7 @@ METRIC_PREFIXES = (
     "sql",
     "storage",
     "internal_",
+    "journal_",
 )
 STEAL_NOISY_PCT = 5.0
 DRIFT_NOISY_PCT = 10.0
@@ -168,6 +169,13 @@ class HostStats(TypedDict):
     mem_avail_min_bytes: int
 
 
+class HostSample(HostStats):
+    """Adds throughput sampled by the AWS host monitor; absent for the local bench."""
+
+    disk_mb_s: float
+    net_mb_s: float
+
+
 class LoadStats(TypedDict):
     """Over all steps."""
 
@@ -240,6 +248,22 @@ class CalibrationPair(TypedDict):
     drift_pct: float
 
 
+class DeploymentMeta(TypedDict):
+    """AWS fleet metadata; absent for the local bench."""
+
+    provider: Literal["aws"]
+    account: str
+    region: str
+    az: str
+    ami: str
+    hosts: dict[str, dict[str, Any]]  # name -> {instance_type: str, ...}
+    images: dict[str, str]  # name -> "ref@digest"
+    image_revision: str | None
+    start_spread_s: float
+    clock_offset_ms_max: float
+    cost_usd: dict[str, float]  # expected, bound required; actual optional
+
+
 class BenchResult(TypedDict):
     schema_version: int
     run: RunMeta
@@ -256,6 +280,8 @@ class BenchResult(TypedDict):
     load: LoadStats
     stake_table: list[str]
     validity: Validity
+    hosts: NotRequired[dict[str, HostSample]]
+    deployment: NotRequired[DeploymentMeta]
 
 
 @dataclass(frozen=True)
@@ -1790,6 +1816,8 @@ def render(result: BenchResult, comparison: Comparison | None) -> str:
         *load_lines(result),
         "",
         *details("Runner, calibration, host", runner_lines(result)),
+        *(details("Deployment", body) if (body := deployment_lines(result)) else []),
+        *(details("Hosts", body) if (body := hosts_table(result)) else []),
         *details("Nodes", node_table(result)),
         *details("Top ops by busy time", ops_table(result)),
         *details("Processes", process_table(result)),
@@ -1873,6 +1901,51 @@ def runner_lines(result: BenchResult) -> list[str]:
         f"- host CPU busy (usable CPUs): {h['util_mean']:.0%} mean, {h['util_max']:.0%} max",
         f"- steal {h['steal_pct']:.1f}%, iowait {h['iowait_pct']:.1f}%",
     ]
+
+
+def deployment_lines(result: BenchResult) -> list[str]:
+    """AWS fleet metadata and cost; empty for the local bench."""
+    if "deployment" not in result:
+        return []
+    d = result["deployment"]
+    images = ", ".join(f"{name} {ref}" for name, ref in sorted(d["images"].items()))
+    rev = d["image_revision"]
+    images_line = (
+        f"- images @ {rev}: {images}" if rev is not None else f"- images: {images}"
+    )
+    types = ", ".join(
+        f"{name} {meta['instance_type']}" for name, meta in sorted(d["hosts"].items())
+    )
+    cost = d["cost_usd"]
+    cost_line = f"expected ${cost['expected']:.2f}, bound ${cost['bound']:.2f}"
+    if "actual" in cost:
+        cost_line += f", actual ${cost['actual']:.2f}"
+    return [
+        f"- account {d['account']} ({d['region']}), az {d['az']}, ami {d['ami']}",
+        images_line,
+        f"- instance types: {types}",
+        (
+            f"- start spread {d['start_spread_s']:.1f} s, clock offset max "
+            f"{d['clock_offset_ms_max']:.0f} ms"
+        ),
+        f"- cost: {cost_line}",
+    ]
+
+
+def hosts_table(result: BenchResult) -> list[str]:
+    """Per-host CPU, steal and I/O; empty when no per-host samples were collected."""
+    if "hosts" not in result or not result["hosts"]:
+        return []
+    lines = [
+        "| host | CPU busy mean | steal | disk MB/s | net MB/s |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for name, h in sorted(result["hosts"].items()):
+        lines.append(
+            f"| {name} | {h['util_mean']:.0%} | {h['steal_pct']:.1f}% "
+            f"| {fmt_num(h['disk_mb_s'])} | {fmt_num(h['net_mb_s'])} |"
+        )
+    return lines
 
 
 def details(summary: str, body: list[str]) -> list[str]:
