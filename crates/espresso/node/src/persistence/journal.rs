@@ -190,6 +190,9 @@ struct Inner {
     data: Lane,
     _threads: JoinOnDrop,
     segments: Arc<parking_lot::Mutex<SegmentSet>>,
+    // Serializes `gc` passes: `lane::prune` computes `to_unlink` once up front, so an overlapping
+    // pass could otherwise select and unlink the same segment twice.
+    gc_lock: parking_lot::Mutex<()>,
     side: side_fs::Persistence,
     opts: Options,
     wal_dir: PathBuf,
@@ -394,6 +397,7 @@ impl Persistence {
                 data,
                 _threads: JoinOnDrop(vec![wal_thread, data_thread]),
                 segments,
+                gc_lock: parking_lot::Mutex::new(()),
                 side,
                 opts,
                 wal_dir,
@@ -507,66 +511,28 @@ impl Persistence {
         .context("scan_for: blocking task panicked")?
     }
 
-    /// Unlinks segments `SegmentSet::to_unlink` selects, then fsyncs each touched directory once.
+    /// Unlinks segments `SegmentSet::to_unlink` selects. Passes are serialized by `gc_lock`: see
+    /// `lane::prune` for why an unlink failure stops the pass instead of skipping ahead.
     async fn gc(&self, decided: ViewNumber) -> anyhow::Result<()> {
-        let view_retention = self.inner.opts.view_retention;
-        let max_bytes = self.inner.opts.max_bytes;
-        let segments = self.inner.segments.clone();
-        let wal_dir = self.inner.wal_dir.clone();
-        let data_dir = self.inner.data_dir.clone();
-        let wal_lane = self.inner.wal.clone();
-        let data_lane = self.inner.data.clone();
+        let inner = self.inner.clone();
         let decided = decided.u64();
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            // Drop from the in-memory set before unlinking: an overlapping GC pass never sees the
-            // same segment twice, so a `NotFound` below is always benign.
-            let (to_unlink, wal_bytes, data_bytes) = {
-                let mut segments = segments.lock();
-                let to_unlink = segments.to_unlink(decided, view_retention, max_bytes);
-                segments.wal.retain(|m| {
-                    !to_unlink
-                        .iter()
-                        .any(|u| u.stream == Stream::Wal && u.seq == m.seq)
-                });
-                segments.data.retain(|m| {
-                    !to_unlink
-                        .iter()
-                        .any(|u| u.stream == Stream::Data && u.seq == m.seq)
-                });
-                let wal_bytes: u64 = segments.wal.iter().map(|m| m.bytes).sum();
-                let data_bytes: u64 = segments.data.iter().map(|m| m.bytes).sum();
-                (to_unlink, wal_bytes, data_bytes)
-            };
-            if to_unlink.is_empty() {
-                return Ok(());
+            let _guard = inner.gc_lock.lock();
+            let stats = lane::prune(
+                &StdFs,
+                &inner.segments,
+                &inner.wal_dir,
+                &inner.data_dir,
+                decided,
+                inner.opts.view_retention,
+                inner.opts.max_bytes,
+            )?;
+            if let Some(bytes) = stats.wal_bytes {
+                inner.wal.set_total_bytes(bytes);
             }
-            let std_fs = StdFs;
-            let (mut wal_touched, mut data_touched) = (false, false);
-            for meta in &to_unlink {
-                let dir = match meta.stream {
-                    Stream::Wal => &wal_dir,
-                    Stream::Data => &data_dir,
-                };
-                match std_fs.remove(&lane::segment_path(dir, meta.seq)) {
-                    Ok(()) => {},
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => {},
-                    Err(err) => {
-                        return Err(err).with_context(|| format!("unlinking segment {}", meta.seq));
-                    },
-                }
-                match meta.stream {
-                    Stream::Wal => wal_touched = true,
-                    Stream::Data => data_touched = true,
-                }
-            }
-            if wal_touched {
-                std_fs.sync_dir(&wal_dir)?;
-                wal_lane.set_total_bytes(wal_bytes);
-            }
-            if data_touched {
-                std_fs.sync_dir(&data_dir)?;
-                data_lane.set_total_bytes(data_bytes);
+            if let Some(bytes) = stats.data_bytes {
+                inner.data.set_total_bytes(bytes);
             }
             Ok(())
         })

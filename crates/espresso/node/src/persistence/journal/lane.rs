@@ -290,6 +290,68 @@ impl SegmentSet {
     }
 }
 
+/// Bytes remaining on disk per stream after a `prune` pass, if that stream's live set changed
+/// (`None` means nothing to report, matching `Persistence::gc`'s prior skip-if-untouched metric).
+#[derive(Debug)]
+pub struct PruneStats {
+    pub wal_bytes: Option<u64>,
+    pub data_bytes: Option<u64>,
+}
+
+/// Unlinks the segments `SegmentSet::to_unlink` selects, oldest first within each stream. A segment
+/// is dropped from `segments` only once its file is actually gone (`NotFound` counts as gone), so a
+/// failed unlink leaves it both on disk and tracked; the pass stops there and returns the error
+/// instead of unlinking younger segments first, which would leave a sequence gap recovery can never
+/// close. The caller must serialize passes (e.g. a gc lock): `to_unlink` is computed once up front,
+/// so an overlapping pass could otherwise select the same segment twice.
+pub fn prune<F: JournalFs>(
+    fs: &F,
+    segments: &Mutex<SegmentSet>,
+    wal_dir: &Path,
+    data_dir: &Path,
+    decided: u64,
+    view_retention: u64,
+    max_bytes: u64,
+) -> anyhow::Result<PruneStats> {
+    let to_unlink = segments
+        .lock()
+        .to_unlink(decided, view_retention, max_bytes);
+    let mut stats = PruneStats {
+        wal_bytes: None,
+        data_bytes: None,
+    };
+
+    for (stream, dir) in [(Stream::Wal, wal_dir), (Stream::Data, data_dir)] {
+        let mut touched = false;
+        for meta in to_unlink.iter().filter(|m| m.stream == stream) {
+            match fs.remove(&segment_path(dir, meta.seq)) {
+                Ok(()) => {},
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {},
+                Err(err) => {
+                    if touched {
+                        fs.sync_dir(dir)?;
+                    }
+                    return Err(err).with_context(|| format!("unlinking segment {}", meta.seq));
+                },
+            }
+            segments
+                .lock()
+                .list_mut(stream)
+                .retain(|m| m.seq != meta.seq);
+            touched = true;
+        }
+        if touched {
+            fs.sync_dir(dir)?;
+            let bytes = segments.lock().list(stream).iter().map(|m| m.bytes).sum();
+            match stream {
+                Stream::Wal => stats.wal_bytes = Some(bytes),
+                Stream::Data => stats.data_bytes = Some(bytes),
+            }
+        }
+    }
+    Ok(stats)
+}
+
 pub struct LaneConfig {
     pub stream: Stream,
     pub segment_bytes: u64,
@@ -1102,7 +1164,7 @@ impl<F: JournalFs> Writer<F> {
 #[cfg(test)]
 pub mod mem {
     use std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         sync::{Arc, Mutex},
     };
 
@@ -1134,6 +1196,8 @@ pub mod mem {
     pub struct MemFs {
         files: Arc<Mutex<HashMap<std::path::PathBuf, FileState>>>,
         pub fail_next_write: Arc<std::sync::atomic::AtomicBool>,
+        /// Paths on which `remove` fails once (removed from the set on the failing call).
+        pub fail_remove: Arc<Mutex<HashSet<std::path::PathBuf>>>,
     }
 
     pub struct MemFile {
@@ -1230,6 +1294,9 @@ pub mod mem {
         }
 
         fn remove(&self, path: &std::path::Path) -> std::io::Result<()> {
+            if self.fail_remove.lock().unwrap().remove(path) {
+                return Err(std::io::ErrorKind::Other.into());
+            }
             self.files.lock().unwrap().remove(path);
             Ok(())
         }
@@ -1517,6 +1584,79 @@ mod tests {
         let (_, snap) = &recovered.wal_records[0];
         let snap_count = u64::from_le_bytes(snap[..8].try_into().unwrap());
         assert_eq!(snap_count + recovered.wal_records.len() as u64 - 1, 40);
+    }
+
+    // Regression test: a failed unlink must not drop its segment from `SegmentSet` before the file
+    // is actually gone, or a later pass moves on to younger segments and leaves a gap on disk that
+    // `recover` refuses to start over.
+    #[tokio::test]
+    async fn prune_stops_at_a_failed_unlink_instead_of_skipping_ahead() {
+        let fs = MemFs::default();
+        let wal_dir = std::path::PathBuf::from("/gc-wal");
+        let data_dir = std::path::PathBuf::from("/gc-data");
+
+        // 6 data segments, all old enough to qualify except the last (active, never unlinked).
+        let mut segments = SegmentSet::default();
+        for seq in 1..=6u64 {
+            write_segment(
+                &fs,
+                &data_dir,
+                SegmentHeader {
+                    stream: Stream::Data,
+                    seq,
+                    first_lsn: seq,
+                    prev_max_view: 100,
+                },
+                &[],
+            );
+            segments
+                .data
+                .push(meta(Stream::Data, seq, SegmentHeader::LEN as u64, 100));
+        }
+        let segments = Mutex::new(segments);
+
+        fs.fail_remove
+            .lock()
+            .unwrap()
+            .insert(segment_path(&data_dir, 2));
+
+        let err = prune(&fs, &segments, &wal_dir, &data_dir, 1000, 0, u64::MAX).unwrap_err();
+        assert!(format!("{err:#}").contains("segment 2"), "{err:#}");
+
+        assert_eq!(fs.list(&data_dir).unwrap().len(), 5, "only seq 1 unlinked");
+        assert!(fs.open_read(&segment_path(&data_dir, 1)).is_err());
+        for seq in 2..=6 {
+            assert!(
+                fs.open_read(&segment_path(&data_dir, seq)).is_ok(),
+                "seq {seq} must survive a failure unlinking an older segment"
+            );
+        }
+        assert_eq!(
+            segments
+                .lock()
+                .data
+                .iter()
+                .map(|m| m.seq)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4, 5, 6],
+            "seq 2 must stay tracked: its unlink failed"
+        );
+
+        // Second pass, fault cleared (single-shot): must retry seq 2 first, in order.
+        let stats = prune(&fs, &segments, &wal_dir, &data_dir, 1000, 0, u64::MAX).unwrap();
+        assert_eq!(stats.data_bytes, Some(SegmentHeader::LEN as u64));
+        assert_eq!(
+            segments
+                .lock()
+                .data
+                .iter()
+                .map(|m| m.seq)
+                .collect::<Vec<_>>(),
+            vec![6]
+        );
+        assert_eq!(fs.list(&data_dir).unwrap().len(), 1);
+
+        recover(&fs, &data_dir, Stream::Data).expect("no sequence gap left behind");
     }
 
     fn write_segment(fs: &MemFs, dir: &Path, header: SegmentHeader, frames: &[u8]) {
