@@ -2412,7 +2412,7 @@ def compare_capacity(
         verdict = "inconclusive"
     elif cur is None or base is None:
         verdict = "same" if cur == base else ("worse" if cur is None else "better")
-    elif delta is not None and abs(delta) < resolution:
+    elif delta is not None and abs(delta) < resolution - 1e-9:
         verdict = "same"
     elif delta is not None and delta < 0:
         verdict = "worse" if current["bounded"] else "inconclusive"

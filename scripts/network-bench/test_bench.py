@@ -408,6 +408,15 @@ class CompareTest(unittest.TestCase):
             "same",
         )
 
+    def test_one_refine_step_shift_is_not_lost_to_float_error(self):
+        resolution = bench.ramp_resolution((0.1, 0.3))
+        current, baseline = (
+            {"mb_s": 0.2, "bounded": True},
+            {"mb_s": 0.3, "bounded": True},
+        )
+        verdict = bench.compare_capacity("x", current, [baseline], resolution, False)
+        self.assertEqual(verdict["verdict"], "worse")
+
     def test_steps_compare_only_against_runs_at_that_rate(self):
         short = make_result([step(4.0, consensus_p50=500.0), step(6.0, 3.0, ["x"])])
         comparison = compare(make_result(), [short, make_result()])
