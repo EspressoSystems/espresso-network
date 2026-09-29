@@ -1221,5 +1221,68 @@ class HistogramTest(unittest.TestCase):
         self.assertAlmostEqual(q["mean"], 100.0)
 
 
+class InfBucketTest(unittest.TestCase):
+    def test_quantile_in_inf_bucket_is_the_top_finite_bound(self):
+        m1 = {
+            'op_bucket{le="0.1"}': 50.0,
+            'op_bucket{le="+Inf"}': 100.0,
+            "op_count": 100.0,
+            "op_sum": 30.0,
+        }
+        q = bench.histogram_quantiles([({}, m1)], "op")
+        self.assertAlmostEqual(q["p50"], 100.0)
+        self.assertAlmostEqual(q["p99"], 100.0)
+        self.assertAlmostEqual(q["max"], 100.0)
+
+
+class ClosingHandler(BaseHTTPRequestHandler):
+    """Answers keep-alive style, then closes the connection without saying so."""
+
+    protocol_version = "HTTP/1.1"
+    connections = 0
+
+    def setup(self):
+        super().setup()
+        type(self).connections += 1
+
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"42")
+        self.close_connection = True
+
+
+class HttpPoolTest(unittest.TestCase):
+    def test_stale_connection_is_retried_on_a_fresh_one(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ClosingHandler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        url = f"http://127.0.0.1:{server.server_address[1]}/x"
+        pool = bench.HttpPool()
+        try:
+            self.assertEqual(pool.request("GET", url), (200, b"42"))
+            time.sleep(0.1)
+            self.assertEqual(pool.request("GET", url), (200, b"42"))
+        finally:
+            pool.close()
+            server.shutdown()
+            thread.join()
+            server.server_close()
+        self.assertEqual(ClosingHandler.connections, 2)
+
+
+class WindowTest(unittest.TestCase):
+    def test_no_samples_gives_zero_heights(self):
+        series = {node: [] for node in bench.NODES}
+        self.assertEqual(
+            bench.window(series, 1.0, 2.0),
+            {"t0": 1.0, "t1": 2.0, "height_start": 0, "height_end": 0},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
