@@ -14,7 +14,11 @@ pub mod lane;
 pub mod state;
 
 use std::{
-    collections::BTreeMap, fs, io, os::unix::fs::FileExt as _, path::PathBuf, sync::Arc,
+    collections::{BTreeMap, BTreeSet},
+    fs, io,
+    os::unix::fs::FileExt as _,
+    path::PathBuf,
+    sync::Arc,
     time::Instant,
 };
 
@@ -164,29 +168,32 @@ pub struct Options {
     pub max_block_size: Option<u64>,
 
     #[clap(skip)]
-    pub query_storage: Option<QueryStorage>,
+    pub(crate) query_storage: Option<QueryStorage>,
 }
 
 /// The database a query node's query service reads from, filled by replaying decided leaves.
 #[derive(Clone, Debug)]
-pub enum QueryStorage {
+pub(crate) enum QueryStorage {
     Sql(Box<sql::Options>),
     Fs(side_fs::Options),
 }
 
-impl Default for Options {
-    fn default() -> Options {
-        Options::parse_from(std::iter::empty::<String>())
-    }
-}
-
 impl Options {
+    /// The options of a node started without the `storage-journal` module: its environment
+    /// variables alone.
+    pub fn from_env() -> anyhow::Result<Self> {
+        Self::try_parse_from(std::iter::empty::<String>()).context(
+            "consensus storage needs ESPRESSO_NODE_STORAGE_PATH, or the storage-journal module \
+             with --path",
+        )
+    }
+
     /// Back the query service with `query_storage`.
     ///
     /// Decided leaves, with their payloads and VID shares, are then kept until they have been
     /// replayed as decide events to the query service, which may lag consensus. Consensus never
     /// waits on the query service database.
-    pub fn with_query_storage(mut self, query_storage: QueryStorage) -> Options {
+    pub(crate) fn with_query_storage(mut self, query_storage: QueryStorage) -> Options {
         self.query_storage = Some(query_storage);
         self
     }
@@ -229,8 +236,8 @@ pub struct Persistence {
     /// inside `Inner`: it starts as a `NoMetrics`-backed default and only this clone (the one
     /// `enable_metrics` is called on) observes the swap, matching fs/sql's existing behaviour.
     metrics: Arc<PersistenceMetricsValue>,
-    /// DA proposals handed to `append_da2` and not yet queued for the writer thread. It only
-    /// stays above zero while the data stream falls behind.
+    /// Views whose DA proposal is still being stored. It only stays above zero while the data
+    /// stream falls behind.
     pending_da_writes: Box<dyn Gauge>,
 }
 
@@ -253,6 +260,10 @@ struct Inner {
     replay_seconds: f64,
     /// `Some` exactly on a query node, which replays decided blocks into its query service.
     replay_index: Option<DataIndex>,
+    /// Views whose DA proposal was handed to `append_da2` but is not stored yet. Replay holds
+    /// before them: a write still waiting for in-flight room has no lsn, so `read_data` cannot
+    /// wait for it.
+    pending_da: parking_lot::Mutex<BTreeSet<u64>>,
     _lock: std::fs::File,
 }
 
@@ -476,6 +487,7 @@ impl Persistence {
                 limits,
                 replay_seconds,
                 replay_index,
+                pending_da: Default::default(),
                 _lock: lock_file,
             }),
             metrics: Arc::new(PersistenceMetricsValue::default()),
@@ -660,28 +672,17 @@ impl Persistence {
         Ok(())
     }
 
-    /// The newest `kind` data record at `view`, including one still queued for the writer thread.
-    /// A query node reads it through its index, any other node scans the segments that could
-    /// hold it.
+    /// The newest `kind` data record at `view`. A query node reads it through its index, any
+    /// other node scans the segments that could hold it.
     async fn read_data<T>(&self, kind: Kind, view: ViewNumber) -> anyhow::Result<Option<T>>
     where
         T: serde::de::DeserializeOwned + Send + 'static,
     {
         let Some(index) = &self.inner.replay_index else {
-            self.inner.data.wait_enqueued_written().await?;
             return self.scan_for(Stream::Data, kind, view).await;
         };
-        let key = (view.u64(), kind);
-        let found = index.lock().get(&key).copied();
-        let location = match found {
-            Some(location) => location,
-            None => {
-                self.inner.data.wait_enqueued_written().await?;
-                let Some(location) = index.lock().get(&key).copied() else {
-                    return Ok(None);
-                };
-                location
-            },
+        let Some(location) = index.lock().get(&(view.u64(), kind)).copied() else {
+            return Ok(None);
         };
         let path = lane::segment_path(&self.inner.data_dir, location.seq);
         tokio::task::spawn_blocking(move || -> anyhow::Result<Option<T>> {
@@ -709,7 +710,7 @@ impl Persistence {
         .context("read_data: blocking task panicked")?
     }
 
-    /// Replay decided leaves to `consumer` in batches until caught up, returning the cursor.
+    /// Replay decided leaves to `consumer` in batches until caught up.
     ///
     /// The cursor moves only after the consumer accepted a whole batch, so a consumer failure
     /// leaves the batch to be retried by the next call.
@@ -717,15 +718,17 @@ impl Persistence {
         &self,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
-    ) -> anyhow::Result<Option<ViewNumber>> {
+    ) -> anyhow::Result<()> {
         loop {
-            let batch = self
-                .inner
-                .state
-                .lock()
-                .replay
-                .as_ref()
-                .and_then(next_replay_batch);
+            let batch = {
+                let pending_da = self.inner.pending_da.lock();
+                self.inner
+                    .state
+                    .lock()
+                    .replay
+                    .as_ref()
+                    .and_then(|replay| next_replay_batch(replay, &pending_da))
+            };
             let Some(ReplayBatch {
                 leaves,
                 cert2,
@@ -788,14 +791,18 @@ impl Persistence {
             )
             .await?;
         }
-        Ok(self
-            .inner
+        Ok(())
+    }
+
+    /// The view the query service is replayed up to, on a query node.
+    fn replay_cursor(&self) -> Option<ViewNumber> {
+        self.inner
             .state
             .lock()
             .replay
             .as_ref()
             .and_then(|replay| replay.cursor)
-            .map(|(view, _)| view))
+            .map(|(view, _)| view)
     }
 }
 
@@ -825,8 +832,9 @@ fn find_in_segment(
     Ok(found)
 }
 
-/// Index the data frames a query node may still replay. `max_view` only grows along a stream, so
-/// segments before the first that reaches the oldest unreplayed leaf hold nothing replay needs.
+/// Index the data frames a query node may still replay: every record past the replay cursor,
+/// decided or not yet. `max_view` only grows along a stream, so segments ending at or before the
+/// cursor hold nothing replay needs.
 async fn index_unreplayed(
     fs: Arc<StdFs>,
     dir: PathBuf,
@@ -834,12 +842,10 @@ async fn index_unreplayed(
     replay: &Replay,
 ) -> anyhow::Result<DataIndex> {
     let index = DataIndex::default();
-    let Some(oldest) = replay.leaves.keys().next().map(|view| view.u64()) else {
-        return Ok(index);
-    };
+    let cursor = replay.cursor.map_or(0, |(view, _)| view.u64());
     let seqs = segments
         .iter()
-        .filter(|meta| meta.max_view >= oldest)
+        .filter(|meta| replay.cursor.is_none() || meta.max_view > cursor)
         .map(|meta| meta.seq)
         .collect::<Vec<_>>();
     let frames = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<_>> {
@@ -867,11 +873,13 @@ struct ReplayBatch {
     to_height: u64,
 }
 
-/// The decided leaves after the replay cursor, stopping at the first height gap.
+/// The decided leaves after the replay cursor, stopping at the first height gap or at a leaf
+/// whose DA proposal is still being stored.
 ///
 /// A gap the newest decides can still fill holds the cursor instead: consensus may yet decide the
-/// missing leaf, and replaying past it would leave the query service without that block.
-fn next_replay_batch(replay: &Replay) -> Option<ReplayBatch> {
+/// missing leaf, and replaying past it would leave the query service without that block. A leaf
+/// with a pending DA proposal holds it for the same reason.
+fn next_replay_batch(replay: &Replay, pending_da: &BTreeSet<u64>) -> Option<ReplayBatch> {
     let watermark = replay.leaves.keys().next_back()?.u64();
     let mut parent = replay.cursor.map(|(_, height)| height);
     let mut leaves = Vec::new();
@@ -893,16 +901,28 @@ fn next_replay_batch(replay: &Replay) -> Option<ReplayBatch> {
                 return None;
             }
         }
+        if pending_da.contains(&view.u64()) {
+            if !leaves.is_empty() {
+                break;
+            }
+            tracing::debug!(
+                %view,
+                "holding the replay cursor for a DA proposal still being stored"
+            );
+            return None;
+        }
         parent = Some(height);
         leaves.push((*view, entry.clone()));
         if leaves.len() == MAX_REPLAY_VIEWS {
             break;
         }
     }
-    let to_view = leaves.last()?.0;
+    let (to_view, to_height) = leaves
+        .last()
+        .map(|(view, entry)| (*view, entry.leaf.block_header().block_number()))?;
     Some(ReplayBatch {
         cert2: replay.cert2.get(&to_view).cloned(),
-        to_height: parent?,
+        to_height,
         to_view,
         leaves,
     })
@@ -961,9 +981,13 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<Option<ViewNumber>> {
         let now = Instant::now();
         let processed = if self.inner.replay_index.is_some() {
-            let cursor = self.replay_decided(deciding_qc, consumer).await?;
+            // GC runs on what did get replayed even when a batch failed, so a query service
+            // outage does not also stop the wal from being pruned.
+            let replayed = self.replay_decided(deciding_qc, consumer).await;
+            let cursor = self.replay_cursor();
             self.gc(decided_view, Some(cursor.map_or(0, |view| view.u64())))
                 .await?;
+            replayed?;
             cursor
         } else {
             self.gc(decided_view, None).await?;
@@ -1137,24 +1161,30 @@ impl SequencerPersistence for Persistence {
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         _vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
-        // Only a query node replays payloads from here, so only there must a DA proposal survive
-        // a power loss.
-        let class = if self.inner.replay_index.is_some() {
-            Class::Durable
-        } else {
-            Class::Enqueue
-        };
+        // Only a query node replays payloads from here. No other node keeps them, same as sql/fs.
+        if self.inner.replay_index.is_none() {
+            return Ok(());
+        }
         let now = Instant::now();
         let storage = self.clone();
         let record = Record::Da(proposal.clone());
         let view = proposal.data.view_number;
-        storage.pending_da_writes.update(1);
+        {
+            let mut pending = self.inner.pending_da.lock();
+            pending.insert(view.u64());
+            self.pending_da_writes.set(pending.len());
+        }
         // Consensus aborts storage writes a few views behind the decide, which may be before a
         // DA proposal has room to be queued. This task outlives that abort, so the payload the
-        // query service replays is still written.
+        // query service replays is still written. Durable, so it survives a power loss.
         let res = tokio::spawn(async move {
-            let res = storage.put_data(record, class).await;
-            storage.pending_da_writes.update(-1);
+            let res = storage.put_data(record, Class::Durable).await;
+            {
+                let mut pending = storage.inner.pending_da.lock();
+                pending.remove(&view.u64());
+                storage.pending_da_writes.set(pending.len());
+            }
+            // Logged here too: the caller may have been aborted and never see this error.
             if let Err(err) = &res {
                 tracing::warn!(%view, "failed to store DA proposal: {err:#}");
             }
@@ -1333,6 +1363,15 @@ impl DhtPersistentStorage for Persistence {
 }
 
 #[cfg(test)]
+impl Persistence {
+    /// Takes the whole data in-flight budget: the next `put_data` waits in `reserve` until the
+    /// permit is dropped.
+    pub(crate) async fn hold_data_budget(&self) -> tokio::sync::OwnedSemaphorePermit {
+        self.inner.data.reserve(IN_FLIGHT_BYTES as u32).await
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
@@ -1436,7 +1475,7 @@ mod tests {
             TEST_VERSIONS.test.base,
         );
 
-        let budget = storage.inner.data.reserve(IN_FLIGHT_BYTES as u32).await;
+        let budget = storage.hold_data_budget().await;
         let write = tokio::spawn({
             let storage = storage.clone();
             let proposal = proposal.clone();

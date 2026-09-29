@@ -2073,7 +2073,8 @@ mod tests {
     }
 
     /// Leaves persisted but not yet processed when the node stops are delivered after it
-    /// restarts, in order and exactly once.
+    /// restarts, in order and exactly once, with the payloads stored before the restart. That
+    /// includes payloads of views that decide only after the restart.
     #[rstest::rstest]
     #[case(PhantomData::<crate::persistence::sql::Persistence>)]
     #[case(PhantomData::<crate::persistence::journal::Persistence>)]
@@ -2086,6 +2087,9 @@ mod tests {
         let chain = consecutive_height_chain(5).await;
 
         let storage = P::connect(&tmp).await;
+        for view in 0..chain.len() {
+            store_da_proposal(&storage, view as u64).await;
+        }
         persist_range(&storage, &chain, 0..3).await;
         drop(storage);
 
@@ -2095,15 +2099,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(received_views(&consumer).await, vec![0, 1, 2]);
-        persist_range(&storage, &chain, 3..5).await;
         drop(storage);
 
         let storage = P::connect(&tmp).await;
+        persist_range(&storage, &chain, 3..5).await;
         storage
             .process_decided_events(ViewNumber::new(4), None, &consumer)
             .await
             .unwrap();
         assert_eq!(received_views(&consumer).await, vec![0, 1, 2, 3, 4]);
+        let missing = consumer
+            .leaves
+            .read()
+            .await
+            .iter()
+            .filter(|leaf| leaf.block_payload().is_none())
+            .map(|leaf| leaf.view_number().u64())
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "delivered without a payload: {missing:?}"
+        );
     }
 
     /// A block decided right after its DA proposal is stored reaches the consumer with its
@@ -2136,6 +2152,44 @@ mod tests {
             missing.is_empty(),
             "delivered without a payload: {missing:?}"
         );
+    }
+
+    /// A DA proposal still waiting for room in the journal has no index entry yet, so replay
+    /// holds before its block instead of delivering the block without a payload.
+    ///
+    /// journal only: sql and fs store DA proposals before `append_da2` returns.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_decide_holds_for_da_proposal_still_being_stored() {
+        type Journal = crate::persistence::journal::Persistence;
+        let tmp = Journal::tmp_storage().await;
+        let storage = Journal::connect(&tmp).await;
+        let consumer = DecideViewCollector::default();
+        let chain = consecutive_height_chain(2).await;
+
+        decide_range(&storage, &chain, 0..1, &consumer).await;
+        assert_eq!(received_views(&consumer).await, vec![0]);
+
+        let budget = storage.hold_data_budget().await;
+        let write = tokio::spawn({
+            let storage = storage.clone();
+            async move { store_da_proposal(&storage, 1).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        decide_range(&storage, &chain, 1..2, &consumer).await;
+        assert_eq!(
+            received_views(&consumer).await,
+            vec![0],
+            "a block whose DA proposal is still being stored must not be delivered"
+        );
+
+        drop(budget);
+        write.await.unwrap();
+        storage
+            .process_decided_events(ViewNumber::new(1), None, &consumer)
+            .await
+            .unwrap();
+        assert_eq!(received_views(&consumer).await, vec![0, 1]);
+        assert!(consumer.leaves.read().await[1].block_payload().is_some());
     }
 
     /// A consumer far behind consensus still receives every block with its payload once it
@@ -3308,7 +3362,9 @@ mod tests {
 
     /// Without the query module, storage keeps what consensus needs to run and restart, and
     /// drops what only a decide event consumer would read.
-    #[rstest_reuse::apply(persistence_types)]
+    /// sql and fs only: the journal prunes by segment, not by view, so decided views' shares stay
+    /// readable until their segment is unlinked.
+    #[rstest_reuse::apply(replaying_persistence_types)]
     pub async fn test_consensus_only_decide<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
 

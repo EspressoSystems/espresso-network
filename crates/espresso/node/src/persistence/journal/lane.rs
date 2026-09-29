@@ -222,7 +222,7 @@ pub struct SegmentMeta {
 
 /// Where one frame lives, so it can be read back without scanning its segment.
 #[derive(Clone, Copy, Debug)]
-pub struct Location {
+pub(crate) struct Location {
     pub seq: u64,
     pub offset: u64,
     pub lsn: Lsn,
@@ -231,7 +231,7 @@ pub struct Location {
 
 /// The newest data frame for each `(view, kind)`, kept only on a query node, whose replay reads
 /// every decided block's payload and share back. Entries appear once their bytes are written.
-pub type DataIndex = Arc<Mutex<std::collections::BTreeMap<(u64, Kind), Location>>>;
+pub(crate) type DataIndex = Arc<Mutex<std::collections::BTreeMap<(u64, Kind), Location>>>;
 
 /// In-memory index of every segment a stream currently has on disk, kept live by the writer
 /// thread. Lets GC compute what to unlink without a directory scan or a full-segment read.
@@ -345,8 +345,6 @@ pub struct Lane {
     /// writer thread so a wal roll's snapshot frame reserves its lsn from the same counter,
     /// instead of guessing `active.last_lsn + 1` and racing the next `enqueue`.
     alloc: Arc<Mutex<Lsn>>,
-    /// The last lsn written to the segment file, and so visible to reads, fsynced or not.
-    written: watch::Receiver<Lsn>,
     durable: watch::Receiver<Lsn>,
     in_flight: Arc<Semaphore>,
     in_flight_budget: u32,
@@ -397,18 +395,6 @@ impl Lane {
             .acquire_many_owned(bytes.min(self.in_flight_budget))
             .await
             .expect("in-flight semaphore is never closed")
-    }
-
-    /// Blocks until every record enqueued before this call is written, so a read that follows
-    /// finds it.
-    pub async fn wait_enqueued_written(&self) -> anyhow::Result<()> {
-        let last = *self.alloc.lock() - 1;
-        self.written
-            .clone()
-            .wait_for(|written| *written >= last)
-            .await
-            .context("journal writer thread exited before writing an enqueued record")?;
-        Ok(())
     }
 
     pub async fn wait_durable(&self, lsn: Lsn) -> anyhow::Result<()> {
@@ -611,7 +597,7 @@ fn read_segment<F: JournalFs>(
 
 /// Every frame in segment `seq` with where it lives, stopping at a torn tail. Streams the segment
 /// like recovery does, so at most one frame is in memory at a time.
-pub fn frame_locations<F: JournalFs>(
+pub(crate) fn frame_locations<F: JournalFs>(
     fs: &F,
     dir: &Path,
     stream: Stream,
@@ -843,7 +829,7 @@ fn check_snapshot_size(stream: Stream, body: &[u8], max_snapshot_bytes: u32) {
 /// handle, which the caller must join after dropping the `Lane` (see `journal::Inner`'s `Drop`).
 /// `hook` is `Some` only for the wal lane: it provides the `Snapshot` payload opening every new
 /// wal segment. `index`, when given, learns where every record this lane writes lives.
-pub fn spawn_lane<F: JournalFs>(
+pub(crate) fn spawn_lane<F: JournalFs>(
     fs: Arc<F>,
     dir: PathBuf,
     cfg: LaneConfig,
@@ -879,7 +865,6 @@ pub fn spawn_lane<F: JournalFs>(
     };
 
     let (tx, rx) = mpsc::unbounded_channel::<Write>();
-    let (written_tx, written_rx) = watch::channel(active.last_lsn);
     let (durable_tx, durable_rx) = watch::channel(active.last_lsn);
     let in_flight = Arc::new(Semaphore::new(cfg.in_flight_bytes));
     let in_flight_budget =
@@ -899,7 +884,6 @@ pub fn spawn_lane<F: JournalFs>(
         active.last_lsn = next_lsn;
         active.snapshot_end = active.offset;
         timed_sync(&mut active.file, &metrics).context("fsyncing initial wal snapshot")?;
-        written_tx.send(active.last_lsn).ok();
         durable_tx.send(active.last_lsn).ok();
     }
 
@@ -917,7 +901,6 @@ pub fn spawn_lane<F: JournalFs>(
         cfg,
         rx,
         active,
-        written_tx,
         durable_tx,
         hook,
         segments,
@@ -938,7 +921,6 @@ pub fn spawn_lane<F: JournalFs>(
             stream,
             tx,
             alloc,
-            written: written_rx,
             durable: durable_rx,
             in_flight,
             in_flight_budget,
@@ -957,7 +939,6 @@ struct Writer<F: JournalFs> {
     cfg: LaneConfig,
     rx: mpsc::UnboundedReceiver<Write>,
     active: ActiveSegment<F::File>,
-    written_tx: watch::Sender<Lsn>,
     durable_tx: watch::Sender<Lsn>,
     hook: Option<Arc<dyn SnapshotHook>>,
     segments: Arc<Mutex<SegmentSet>>,
@@ -1035,7 +1016,6 @@ impl<F: JournalFs> Writer<F> {
             if let Some(index) = &self.index {
                 index.lock().extend(written);
             }
-            self.written_tx.send(self.active.last_lsn).ok();
             self.active.offset += self.frame_buf.len() as u64;
             // A batch can overshoot `max_batch_bytes`; shrink only well past it, so saturated
             // batches reuse the buffer and one oversized record does not keep its copy resident.
@@ -1047,6 +1027,14 @@ impl<F: JournalFs> Writer<F> {
             // (not the fsync) lands; the semaphore is about memory, not durability.
             drop(batch);
 
+            // Before the durable ack: a reader that saw the ack filters segments by `max_view`.
+            let total_bytes = {
+                let mut segments = self.segments.lock();
+                segments.update_active(self.cfg.stream, self.active.offset, self.active.max_view);
+                segments.list(self.cfg.stream).iter().map(|m| m.bytes).sum()
+            };
+            self.metrics.set_total_bytes(total_bytes);
+
             if durable_in_batch {
                 if let Err(err) = timed_sync(&mut self.active.file, &self.metrics) {
                     tracing::error!(stream = ?self.cfg.stream, %err, "journal: fsync failed");
@@ -1054,13 +1042,6 @@ impl<F: JournalFs> Writer<F> {
                 }
                 self.durable_tx.send(self.active.last_lsn).ok();
             }
-
-            let total_bytes = {
-                let mut segments = self.segments.lock();
-                segments.update_active(self.cfg.stream, self.active.offset, self.active.max_view);
-                segments.list(self.cfg.stream).iter().map(|m| m.bytes).sum()
-            };
-            self.metrics.set_total_bytes(total_bytes);
 
             let over_bytes = self.active.offset.saturating_sub(self.active.snapshot_end)
                 >= self.cfg.segment_bytes;
@@ -1128,11 +1109,10 @@ impl<F: JournalFs> Writer<F> {
             tracing::error!(?stream, %err, "journal: roll fsync of old segment failed");
             std::process::abort();
         }
-        self.written_tx.send(active.last_lsn).ok();
-        self.durable_tx.send(active.last_lsn).ok();
         self.segments
             .lock()
             .update_active(stream, active.offset, active.max_view);
+        self.durable_tx.send(active.last_lsn).ok();
 
         let new_seq = active.seq + 1;
         let mut new_active = match open_new_segment(
@@ -1167,7 +1147,6 @@ impl<F: JournalFs> Writer<F> {
             new_active.offset += frame.len() as u64;
             new_active.last_lsn = new_first_lsn;
             new_active.snapshot_end = new_active.offset;
-            self.written_tx.send(new_active.last_lsn).ok();
             self.durable_tx.send(new_active.last_lsn).ok();
         }
 

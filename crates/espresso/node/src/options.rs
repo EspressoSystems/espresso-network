@@ -1178,14 +1178,28 @@ impl From<&L1ClientOptions> for L1Tuning {
 
 impl PublicNodeConfig {
     pub fn new(opt: &Options, modules: &Modules, genesis: &Genesis) -> Self {
-        // Consensus always runs on the journal. storage-sql or storage-fs, if given, is the query
-        // service's database.
-        let journal = modules.storage_journal.clone().unwrap_or_default();
+        // Consensus always runs on the journal. storage-sql or storage-fs back the query service
+        // when the query module is on, and are ignored otherwise.
+        let journal = match &modules.storage_journal {
+            Some(journal) => Some(JournalStorageConfig::from(journal)),
+            None => persistence::journal::Options::from_env()
+                .ok()
+                .as_ref()
+                .map(JournalStorageConfig::from),
+        };
+        let (fs, sql) = if modules.query.is_some() {
+            (
+                modules.storage_fs.as_ref().map(FsStorageConfig::from),
+                modules.storage_sql.as_ref().map(SqlStorageConfig::from),
+            )
+        } else {
+            (None, None)
+        };
         let storage = StorageConfig {
             backend: StorageBackend::Journal,
-            fs: modules.storage_fs.as_ref().map(FsStorageConfig::from),
-            sql: modules.storage_sql.as_ref().map(SqlStorageConfig::from),
-            journal: Some(JournalStorageConfig::from(&journal)),
+            fs,
+            sql,
+            journal,
         };
 
         Self {

@@ -126,7 +126,10 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     tracing::warn!(?genesis, "genesis");
 
     // Consensus always runs on the journal. storage-sql and storage-fs only back the query service.
-    let mut storage = modules.storage_journal.take().unwrap_or_default();
+    let mut storage = match modules.storage_journal.take() {
+        Some(storage) => storage,
+        None => persistence::journal::Options::from_env()?,
+    };
     ensure!(
         genesis.base_version >= NEW_PROTOCOL_VERSION,
         "the journal consensus storage requires a genesis base_version of at least \
