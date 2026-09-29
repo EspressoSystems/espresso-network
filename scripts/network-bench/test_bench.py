@@ -531,7 +531,6 @@ class CmdRunTest(unittest.TestCase):
             for name, stub in stubs.items():
                 stack.enter_context(mock.patch.object(bench, name, stub))
             stack.enter_context(mock.patch("builtins.print"))
-            stack.enter_context(self.assertLogs(bench.log, "ERROR"))
             code = bench.cmd_run(args)
         return code, out
 
@@ -539,14 +538,15 @@ class CmdRunTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             net = bench.Network(proc=mock.Mock(), out=Path(tmp), storage=Path(tmp))
             teardown = mock.Mock(return_value=[])
-            code, out = self.cmd_run(
-                tmp,
-                start_network=mock.Mock(return_value=net),
-                sample_metrics=mock.Mock(),
-                sample_host=mock.Mock(),
-                wait_ready=mock.Mock(side_effect=ValueError("bad height")),
-                teardown=teardown,
-            )
+            with self.assertLogs(bench.log, "ERROR"):
+                code, out = self.cmd_run(
+                    tmp,
+                    start_network=mock.Mock(return_value=net),
+                    sample_metrics=mock.Mock(),
+                    sample_host=mock.Mock(),
+                    wait_ready=mock.Mock(side_effect=ValueError("bad height")),
+                    teardown=teardown,
+                )
             self.assertEqual(code, 1)
             teardown.assert_called_once_with(net)
             run = json.loads((out / "run.json").read_text())
@@ -565,7 +565,6 @@ class CmdRunTest(unittest.TestCase):
 
         def drive_network(*_):
             order.append("run")
-            bench.log.error("stalled")
             return {"error": "stalled", "ready_s": None, "teardown": []}
 
         with tempfile.TemporaryDirectory() as tmp:
