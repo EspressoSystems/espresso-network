@@ -156,6 +156,12 @@ def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
             "offered_mb_s": 4.0,
             "missing_payloads": [],
             "latency_ms": quantiles(1200.0, 2500.0),
+            "consensus_latency_ms": quantiles(900.0, 2000.0),
+            "query_lag_ms": quantiles(200.0, 400.0),
+            "query_lag_end_ms": 200.0,
+            "tracker_lag_ms": quantiles(50.0, 100.0),
+            "tracker_lag_end_ms": 50.0,
+            "in_flight_mean": 20.0,
         },
         "bound": {"kind": "keeping-up", "reason": "r"},
         "stake_table": ["0x1", "0x1", "0x1"],
@@ -391,6 +397,13 @@ class ValidityTest(unittest.TestCase):
         )
         self.assertFalse(validity["valid"])
         self.assertEqual(len(validity["reasons"]), 3)
+
+    def test_lagging_tracker_marks_noisy(self):
+        result = make_result()
+        result["load"]["tracker_lag_ms"] = quantiles(300.0, 1500.0)
+        validity = bench.check_validity(result, {n: 1.0 for n in bench.NODES})
+        self.assertTrue(validity["noisy"])
+        self.assertIn("benchmark tracker behind", validity["reasons"][0])
 
     def test_stalled_sub_window_is_invalid(self):
         result = make_result()
@@ -929,7 +942,9 @@ class LoadTest(unittest.TestCase):
 
 def write_run_dir(out):
     """A 60 s window (t 100 to 160) where every node decides 1 MB/s in 2 blocks/s and 4 views/s
-    and uses 0.5 cores, the host is half busy, and 41 of 42 transactions land 2 s after submit."""
+    and uses 0.5 cores, the host is half busy, and 41 of 42 transactions land 2 s after submit:
+    their block shows on a validator after 1.5 s and on node0 after 2 s, and is scanned 0.1 s
+    later."""
     t0, t1 = 100.0, 160.0
 
     def jsonl(name, records):
@@ -968,7 +983,14 @@ def write_run_dir(out):
         ),
     )
     txs: list[dict] = [
-        {"id": i, "node": 0, "t_submit": t, "t_included": t + 2.0, "status": "included"}
+        {
+            "id": i,
+            "node": 0,
+            "t_submit": t,
+            "t_included": t + 2.0,
+            "height": 1000 + i,
+            "status": "included",
+        }
         for i, t in enumerate(range(110, 151))
     ]
     txs.append(
@@ -977,10 +999,24 @@ def write_run_dir(out):
             "node": 0,
             "t_submit": 120.5,
             "t_included": None,
+            "height": None,
             "status": "timeout",
         }
     )
     jsonl("load.jsonl", txs)
+    heights = [
+        {
+            "height": tx["height"],
+            "validator": tx["t_submit"] + 1.5,
+            "query": tx["t_included"],
+            "scanned": tx["t_included"] + 0.1,
+        }
+        for tx in txs[:-1]
+    ]
+    heights.append(
+        {"height": 2000, "validator": 130.0, "query": 130.5, "scanned": None}
+    )
+    jsonl("heights.jsonl", heights)
     calib = {"sha256_1t_mb_s": 2000.0, "sha256_mt_mb_s": 8000.0, "fsync_per_s": 300.0}
     files = {
         "load-meta.json": {
@@ -1032,6 +1068,12 @@ class AnalyzeTest(unittest.TestCase):
         self.assertAlmostEqual(load["submitted_per_s"], 42 / 60)
         self.assertAlmostEqual(load["included_per_s"], 41 / 60)
         self.assertEqual(load["latency_ms"]["p50"], 2000.0)
+        self.assertEqual(load["consensus_latency_ms"]["p50"], 1500.0)
+        self.assertAlmostEqual(load["query_lag_ms"]["p50"], 500.0)
+        self.assertAlmostEqual(load["query_lag_end_ms"], 500.0)
+        self.assertAlmostEqual(load["tracker_lag_ms"]["p99"], 100.0)
+        # 41 spans of 2 s and one of 30 s over 60 s.
+        self.assertAlmostEqual(load["in_flight_mean"], 112 / 60)
         self.assertEqual(load["timeouts"], 1)
         self.assertEqual(load["at_cap_frac"], 0.0)
         self.assertAlmostEqual(net["block_bytes_nonempty_mean"], 500_000.0)
@@ -1081,9 +1123,11 @@ class BoundTest(unittest.TestCase):
         self.assertEqual(bound["kind"], "behind")
         self.assertIn("50% of blocks empty", bound["reason"])
 
-    def test_at_cap_frac_samples_the_window(self):
+    def test_in_flight_samples_the_window(self):
         spans = [(0.0, 10.0), (0.0, 5.0), (20.0, 30.0)]
-        self.assertEqual(bench.at_cap_frac(spans, 0.0, 10.0, 2, 1.0), 0.5)
+        self.assertEqual(
+            bench.in_flight(spans, 0.0, 10.0, 1.0), [2, 2, 2, 2, 2, 1, 1, 1, 1, 1]
+        )
 
     def test_parse_size(self):
         self.assertEqual(bench.parse_size("100mb"), 100_000_000)

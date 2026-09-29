@@ -142,6 +142,7 @@ METRIC_PREFIXES = (
 STEAL_NOISY_PCT = 5.0
 DRIFT_NOISY_PCT = 10.0
 INCLUSION_NOISY_RATIO = 0.95
+TRACKER_LAG_NOISY_MS = 1000.0
 SCRAPE_OK_MIN = 0.9
 MIN_READY_HEIGHT = 5
 PROGRESS_S = 30
@@ -288,7 +289,18 @@ class LoadStats(TypedDict):
     cap_waits: int
     offered_mb_s: float
     missing_payloads: list[int]
+    # Submit to the block showing on node0's query API: what a client of the query node sees.
     latency_ms: Quantiles | None
+    # Submit to the block showing on a validator's status API, independent of the query node.
+    consensus_latency_ms: Quantiles | None
+    # Per height: shown on node0's query API after a validator's status API.
+    query_lag_ms: Quantiles | None
+    # Median over the last sub-window, to tell a growing lag from a steady one.
+    query_lag_end_ms: float | None
+    # Per height: the bench finished scanning its payload after node0 showed it.
+    tracker_lag_ms: Quantiles | None
+    tracker_lag_end_ms: float | None
+    in_flight_mean: float
 
 
 class Bound(TypedDict):
@@ -1622,6 +1634,11 @@ def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
         noisy.append(
             f"inclusion ratio {load['inclusion_ratio']:.3f} < {INCLUSION_NOISY_RATIO}"
         )
+    tracker = load["tracker_lag_ms"]
+    if tracker and tracker["p99"] > TRACKER_LAG_NOISY_MS:
+        noisy.append(
+            f"benchmark tracker behind: payload scans lag node0 by {tracker['p99']:.0f} ms p99"
+        )
     if load["timeouts"]:
         noisy.append(f"{load['timeouts']} transactions timed out")
     if load["submit_errors"]:
@@ -1962,6 +1979,21 @@ def load_stats(out: Path, cfg: BenchConfig, t0: float, t1: float) -> LoadStats:
     included = [tx for tx in txs if tx["status"] == "included"]
     dt = t1 - t0
     latencies = [(tx["t_included"] - tx["t_submit"]) * 1000 for tx in included]
+    heights = list(read_jsonl(out / "heights.jsonl"))
+    on_validator = {h["height"]: h["validator"] for h in heights}
+    consensus = [
+        (on_validator[tx["height"]] - tx["t_submit"]) * 1000
+        for tx in included
+        if on_validator.get(tx["height"]) is not None
+    ]
+    end = t1 - cfg.subwindow_s
+    query_lag = height_lags(heights, "validator", t0, t1)
+    tracker_lag = height_lags(heights, "scanned", t0, t1)
+    spans = [
+        (tx["t_submit"], tx["t_included"] or tx["t_submit"] + cfg.tx_timeout_s)
+        for tx in every
+    ]
+    open_spans = in_flight(spans, t0, t1, IN_FLIGHT_STEP_S)
     landed = sum(
         1
         for tx in every
@@ -1976,33 +2008,47 @@ def load_stats(out: Path, cfg: BenchConfig, t0: float, t1: float) -> LoadStats:
         "max_in_flight": meta["max_in_flight"],
         "cap_waits": meta["cap_waits"],
         "offered_mb_s": cfg.rate_mb_s,
-        "at_cap_frac": at_cap_frac(
-            [
-                (tx["t_submit"], tx["t_included"] or tx["t_submit"] + cfg.tx_timeout_s)
-                for tx in every
-            ],
-            t0,
-            t1,
-            cfg.max_pending,
-            IN_FLIGHT_STEP_S,
-        ),
+        "at_cap_frac": sum(1 for n in open_spans if n >= cfg.max_pending)
+        / len(open_spans),
         "missing_payloads": meta["missing_payloads"],
         "latency_ms": quantiles(latencies),
+        "consensus_latency_ms": quantiles(consensus),
+        "query_lag_ms": quantiles(query_lag),
+        "query_lag_end_ms": median_or_none(
+            height_lags(heights, "validator", end, t1)
+        ),
+        "tracker_lag_ms": quantiles(tracker_lag),
+        "tracker_lag_end_ms": median_or_none(height_lags(heights, "scanned", end, t1)),
+        "in_flight_mean": statistics.fmean(open_spans),
     }
 
 
-def at_cap_frac(
-    spans: list[tuple[float, float]], t0: float, t1: float, cap: int, step: float
-) -> float:
-    """Fraction of `step`-spaced samples in [t0, t1) with at least `cap` of the [start, end)
-    spans open. A span ends when its block appears, slightly before the permit returns."""
+def height_lags(
+    heights: list[dict[str, Any]], other: str, t0: float, t1: float
+) -> list[float]:
+    """Per height shown on node0 in [t0, t1]: ms from `other` to node0 for "validator",
+    from node0 to `other` for "scanned"."""
+    sign = -1 if other == "validator" else 1
+    return [
+        sign * (h[other] - h["query"]) * 1000
+        for h in heights
+        if h["query"] is not None and h[other] is not None and t0 <= h["query"] <= t1
+    ]
+
+
+def median_or_none(values: list[float]) -> float | None:
+    return statistics.median(values) if values else None
+
+
+def in_flight(
+    spans: list[tuple[float, float]], t0: float, t1: float, step: float
+) -> list[int]:
+    """Open [start, end) spans at `step`-spaced samples in [t0, t1). A span ends when its
+    block appears, slightly before the permit returns."""
     starts = sorted(a for a, _ in spans)
     ends = sorted(b for _, b in spans)
     samples = [t0 + i * step for i in range(max(1, int((t1 - t0) / step)))]
-    full = sum(
-        1 for t in samples if bisect_right(starts, t) - bisect_right(ends, t) >= cap
-    )
-    return full / len(samples)
+    return [bisect_right(starts, t) - bisect_right(ends, t) for t in samples]
 
 
 def quantiles(values: list[float]) -> Quantiles | None:
