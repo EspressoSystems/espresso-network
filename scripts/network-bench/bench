@@ -232,6 +232,7 @@ class NetworkStats(TypedDict):
     mean_view_ms: Stat
     timeouts: int
     empty_block_frac: float
+    # Built from whole-second header timestamps: raw data only, too coarse to compare.
     proposal_to_decide_ms: Quantiles | None
     cpu_s_per_mb: Stat
     block_bytes_nonempty_mean: float | None
@@ -1926,9 +1927,6 @@ HEADLINE = (
     Metric("consensus timeouts", "network.timeouts", "", "lower", 0),
     Metric(
         "node CPU-s per decided MB", "network.cpu_s_per_mb.value", "s/MB", "lower", 10
-    ),
-    Metric(
-        "proposal to decide p99", "network.proposal_to_decide_ms.p99", "ms", "lower", 20
     ),
     Metric("node0 CPU mean", "nodes.node0.cpu_cores", "cores", "lower", 15),
     Metric("node1 CPU mean", "nodes.node1.cpu_cores", "cores", "lower", 15),

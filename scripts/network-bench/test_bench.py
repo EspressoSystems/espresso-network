@@ -351,6 +351,12 @@ class CompareTest(unittest.TestCase):
             row(comparison, "decided payload throughput")["verdict"], "inconclusive"
         )
 
+    def test_proposal_to_decide_is_not_compared(self):
+        current = make_result()
+        keys = [r["key"] for r in compare(current, [make_result()])["rows"]]
+        self.assertNotIn("network.proposal_to_decide_ms.p99", keys)
+        self.assertNotIn("proposal to decide", bench.render(current, None))
+
     def test_timeouts_from_zero_baseline(self):
         current = make_result()
         current["network"]["timeouts"] = 3
