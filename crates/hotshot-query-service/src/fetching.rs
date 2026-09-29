@@ -59,6 +59,14 @@ use crate::types::HeightIndexed;
 #[trait_variant::make(Callback: Send)]
 pub trait LocalCallback<T>: Debug + Ord {
     async fn run(self, response: T);
+
+    /// The height of the block this callback stores, if it is tied to a single block.
+    ///
+    /// Blocks with identical payloads share one request, so the callbacks registered on it can
+    /// span many heights. Logs summarize them by this height instead of printing each one.
+    fn height(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Management of concurrent requests to fetch resources.
@@ -139,8 +147,17 @@ impl<T, C> Fetcher<T, C> {
                     Entry::Occupied(mut e) => {
                         // If the object is already being fetched, add our callback for the fetching
                         // task to execute upon completion.
+                        let callbacks: Vec<C> = callbacks.into_iter().collect();
+                        let heights = || e.get().iter().filter_map(|cb| cb.height());
+                        tracing::info!(
+                            ?req,
+                            ?callbacks,
+                            registered = e.get().len(),
+                            min_height = heights().min(),
+                            max_height = heights().max(),
+                            "resource is already being fetched"
+                        );
                         e.get_mut().extend(callbacks);
-                        tracing::info!(?req, callbacks = ?e.get(), "resource is already being fetched");
                         return;
                     },
                     Entry::Vacant(e) => {
