@@ -155,8 +155,9 @@ MISSING_PAYLOAD_S = 10
 # One slow or failed answer from the query node must not end the run.
 READ_DEADLINE_S = 30.0
 READ_RETRY_S = 1.0
-# The tracker's requests are sequential.
+# The payload scan's requests are sequential.
 TRACKER_THREADS = 1
+HEIGHT_POLL_S = 0.1
 IN_FLIGHT_STEP_S = 1.0
 # Keeping-up rules, see throughput_bound.
 KEEP_UP_RATIO = 0.95
@@ -930,14 +931,15 @@ async def generate_load(
     bodies = tx_bodies(cfg, len(marker) + 8)
     submitter = Client(HttpPool(), ThreadPoolExecutor(cfg.workers))
     tracking = Client(HttpPool(), ThreadPoolExecutor(TRACKER_THREADS))
+    polling = Client(HttpPool(), ThreadPoolExecutor(1))
     done = asyncio.Event()
     try:
         start_height = await tracking.call(query_height, query_url)
+        heights = Heights(start_height)
         async with asyncio.TaskGroup() as group:
+            poller = group.create_task(poll_heights(polling, query_url, heights))
             tracker = group.create_task(
-                track_inclusion(
-                    cfg, state, tracking, query_url, marker, start_height, done
-                )
+                track_inclusion(cfg, state, tracking, query_url, marker, heights, done)
             )
             await pace_submissions(
                 cfg,
@@ -950,11 +952,13 @@ async def generate_load(
             )
             done.set()
             await tracker
+            poller.cancel()
     except* (NetworkError, OSError) as group:
         raise NetworkError(f"load generator: {innermost(group)}") from group
     finally:
         submitter.close()
         tracking.close()
+        polling.close()
     write_jsonl(out / "load.jsonl", (dataclasses.asdict(tx) for tx in state.txs))
     write_json(
         out / "load-meta.json",
@@ -1047,13 +1051,36 @@ def post_tx(pool: HttpPool, tx: Tx, url: str, body: bytes) -> int:
     return status
 
 
+class Heights:
+    """When each block height from `start` on first showed on the query node."""
+
+    def __init__(self, start: int) -> None:
+        self.start = start
+        self.seen: dict[int, float] = {}
+
+    @property
+    def top(self) -> int:
+        return self.start + len(self.seen)
+
+    def saw(self, count: int, now: float) -> None:
+        for height in range(self.top, count):
+            self.seen[height] = now
+
+
+async def poll_heights(client: Client, query_url: str, heights: Heights) -> None:
+    """On its own thread, so block times never wait for payload scans."""
+    while True:
+        heights.saw(await client.call(query_height, query_url), time.time())
+        await asyncio.sleep(HEIGHT_POLL_S)
+
+
 async def track_inclusion(
     cfg: BenchConfig,
     state: LoadState,
     client: Client,
     query_url: str,
     marker: bytes,
-    height: int,
+    heights: Heights,
     done: asyncio.Event,
 ) -> None:
     """Scan every new block's payload for our marker; time out transactions that never show.
@@ -1062,7 +1089,7 @@ async def track_inclusion(
     pattern = re.compile(re.escape(marker) + b"(.{8})", re.DOTALL)
     deadline = None
     report = time.time() + PROGRESS_S
-    appeared: dict[int, float] = {}
+    height = heights.start
     missing: dict[int, float] = {}
     while True:
         now = time.time()
@@ -1079,12 +1106,9 @@ async def track_inclusion(
             tx for tx in state.pending.values() if now - tx.t_submit > cfg.tx_timeout_s
         ]:
             state.resolve(tx.id, "timeout", now)
-        top = await client.call(query_height, query_url)
-        seen = time.time()
-        for new in range(height, top):
-            appeared.setdefault(new, seen)
+        top = heights.top
         while height < top - PAYLOAD_LAG_BLOCKS:
-            at_height = appeared.pop(height)
+            at_height = heights.seen[height]
             raw = await client.call(block_payload, query_url, height)
             if raw is None:
                 missing[height] = at_height

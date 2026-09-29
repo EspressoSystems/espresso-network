@@ -639,10 +639,16 @@ class FakeNode(ThreadingHTTPServer):
     """Submit, block height and payload endpoints; `include` decides whether blocks carry the
     submitted transactions. A submit takes `accept_delay` s before the transaction is taken
     and `reply_delay` s after. Payloads in `lost` are never served, those in `late` only
-    `late[height]` s after their block was made."""
+    `late[height]` s after their block was made; every payload answer takes `payload_delay` s."""
 
     def __init__(
-        self, include, lost=frozenset(), accept_delay=0.0, reply_delay=0.0, late=None
+        self,
+        include,
+        lost=frozenset(),
+        accept_delay=0.0,
+        reply_delay=0.0,
+        late=None,
+        payload_delay=0.0,
     ):
         super().__init__(("127.0.0.1", 0), FakeHandler)
         self.include = include
@@ -650,6 +656,7 @@ class FakeNode(ThreadingHTTPServer):
         self.late = late or {}
         self.accept_delay = accept_delay
         self.reply_delay = reply_delay
+        self.payload_delay = payload_delay
         self.lock = threading.Lock()
         self.pending = []
         self.blocks = [b""]
@@ -702,6 +709,8 @@ class FakeHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         node = self.server
+        if self.path != "/v1/node/block-height":
+            time.sleep(node.payload_delay)
         with node.lock:
             if self.path == "/v1/node/block-height":
                 return self.reply(200, len(node.blocks))
@@ -724,9 +733,17 @@ class LoadTest(unittest.TestCase):
         accept_delay=0.0,
         reply_delay=0.0,
         late=None,
+        payload_delay=0.0,
         **cfg,
     ):
-        node = FakeNode(include, lost, accept_delay, reply_delay, late)
+        node = FakeNode(
+            include,
+            lost=lost,
+            accept_delay=accept_delay,
+            reply_delay=reply_delay,
+            late=late,
+            payload_delay=payload_delay,
+        )
         threads = [
             threading.Thread(target=node.serve_forever),
             threading.Thread(target=node.produce),
@@ -816,6 +833,20 @@ class LoadTest(unittest.TestCase):
         self.assertGreater(len(txs), 5)
         self.assertEqual({tx["status"] for tx in txs}, {"included"})
         self.assertLessEqual(meta["max_in_flight"], 5)
+
+    def test_slow_payloads_do_not_delay_block_times(self):
+        # Payload scans fall behind a block every 50 ms; block times must not.
+        _, _, txs, _ = self.run_load(
+            True,
+            0.5,
+            payload_delay=0.1,
+            rate_mb_s=0.02,
+            max_pending=100,
+            tx_timeout_s=10,
+        )
+        self.assertGreater(len(txs), 5)
+        self.assertEqual({tx["status"] for tx in txs}, {"included"})
+        self.assertLess(max(tx["t_included"] - tx["t_submit"] for tx in txs), 0.4)
 
     def test_included_before_the_submit_returns(self):
         _, _, txs, _ = self.run_load(
