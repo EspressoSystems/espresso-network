@@ -11853,8 +11853,6 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-lock 3.4.2",
- "cdn-broker",
- "cdn-marshal",
  "clap 4.6.1",
  "committable",
  "derivative",
