@@ -399,8 +399,19 @@ class Comparison(TypedDict):
     error: str | None
     source: Literal["main", "reference"]
     used: list[RunMeta]
-    rows: list[Row]
+    capacity: list["CapacityRow"]
     steps: list["StepComparison"]
+
+
+class CapacityRow(TypedDict):
+    label: str
+    current: Limit
+    # The baseline runs' median, a run below the first step ranking lowest.
+    baseline: Limit | None
+    n: int
+    delta_mb_s: float | None
+    resolution_mb_s: float
+    verdict: str
 
 
 class StepComparison(TypedDict):
@@ -2283,10 +2294,10 @@ class Metric:
     floor_pct: float
 
 
-CAPACITY_METRICS = (
-    Metric("capacity", "capacity.overall.mb_s", "MB/s", "higher", 10),
-    Metric("consensus limit", "capacity.consensus.mb_s", "MB/s", "higher", 10),
-    Metric("query node limit", "capacity.query_node.mb_s", "MB/s", "higher", 10),
+CAPACITY_LIMITS = (
+    ("capacity", "overall"),
+    ("consensus limit", "consensus"),
+    ("query node limit", "query_node"),
 )
 # Paths into one step of result.json's `steps`.
 STEP_METRICS = (
@@ -2340,14 +2351,16 @@ def compare(current: BenchResult, baseline: Baseline) -> Comparison:
             usable.append(run)
     usable = usable[:BASELINE_RUNS]
     noisy = current["validity"]["noisy"]
-    rows = [
-        compare_metric(
-            metric,
-            lookup(current, metric.path),
-            [lookup(run, metric.path) for run in usable],
+    resolution = ramp_resolution(current["config"]["steps"])
+    capacity_rows = [
+        compare_capacity(
+            label,
+            current["capacity"][key],
+            [run["capacity"][key] for run in usable],
+            resolution,
             noisy,
         )
-        for metric in CAPACITY_METRICS
+        for label, key in CAPACITY_LIMITS
     ]
     rates = sorted(
         {step["rate_mb_s"] for run in [current, *usable] for step in run["steps"]}
@@ -2358,8 +2371,47 @@ def compare(current: BenchResult, baseline: Baseline) -> Comparison:
         "error": baseline["error"],
         "source": baseline["source"],
         "used": [run["run"] for run in usable],
-        "rows": rows,
+        "capacity": capacity_rows,
         "steps": [compare_step(rate, current, usable, noisy) for rate in rates],
+    }
+
+
+def ramp_resolution(steps: Sequence[float]) -> float:
+    """The smallest capacity change the ramp can show: a refine step, half a step gap."""
+    gaps = [b - a for a, b in itertools.pairwise(steps)]
+    return min(gaps) / 2 if gaps else steps[0] / 2
+
+
+def compare_capacity(
+    label: str, current: Limit, history: list[Limit], resolution: float, noisy: bool
+) -> CapacityRow:
+    """In MB/s, not percent: capacity moves in ramp steps. A capacity below the first step
+    ranks lowest; a lower bound (no step failed) below the baseline says nothing."""
+    ordered = sorted(history, key=lambda lim: -math.inf if lim["mb_s"] is None else lim["mb_s"])
+    baseline = ordered[(len(ordered) - 1) // 2] if ordered else None
+    cur = current["mb_s"]
+    base = baseline["mb_s"] if baseline else None
+    delta = cur - base if cur is not None and base is not None else None
+    if baseline is None:
+        verdict = "n/a"
+    elif noisy:
+        verdict = "inconclusive"
+    elif cur is None or base is None:
+        verdict = "same" if cur == base else ("worse" if cur is None else "better")
+    elif delta is not None and abs(delta) < resolution:
+        verdict = "same"
+    elif delta is not None and delta < 0:
+        verdict = "worse" if current["bounded"] else "inconclusive"
+    else:
+        verdict = "better" if baseline["bounded"] else "inconclusive"
+    return {
+        "label": label,
+        "current": current,
+        "baseline": baseline,
+        "n": len(history),
+        "delta_mb_s": delta,
+        "resolution_mb_s": resolution,
+        "verdict": verdict,
     }
 
 
@@ -2580,21 +2632,33 @@ def capacity_table(result: BenchResult, comparison: Comparison | None) -> list[s
     """Capacity against the baseline; nothing without one."""
     if comparison is None or not comparison["used"]:
         return []
+    first = result["config"]["steps"][0]
     lines = [
-        f"| metric | this run | {baseline_label(comparison)} | delta | verdict (threshold) |",
-        "|---|---:|---:|---:|---|",
+        (
+            f"| metric | this run | {baseline_label(comparison)} | runs | delta "
+            "| verdict (resolution) |"
+        ),
+        "|---|---:|---:|---:|---:|---|",
     ]
-    for row in comparison["rows"]:
-        delta_cell = f"{row['delta_pct']:+.1f}%" if row["delta_pct"] is not None else ""
+    for row in comparison["capacity"]:
+        delta = row["delta_mb_s"]
         mark = {"worse": "**worse**", "better": "better"}.get(
             row["verdict"], row["verdict"]
         )
+        base = fmt_limit(row["baseline"], first) if row["baseline"] else ""
         lines.append(
-            f"| {row['label']} | {fmt_value(row['current'], row['unit'])} "
-            f"| {fmt_value(row['baseline'], row['unit'])} "
-            f"| {delta_cell} | {mark} (±{row['threshold_pct']:.0f}%) |"
+            f"| {row['label']} | {fmt_limit(row['current'], first)} | {base} "
+            f"| {row['n']} | {f'{delta:+g} MB/s' if delta is not None else ''} "
+            f"| {mark} (±{fmt_num(row['resolution_mb_s'])} MB/s) |"
         )
     return [*lines, ""]
+
+
+def fmt_limit(limit: Limit, first: float) -> str:
+    if limit["mb_s"] is None:
+        return f"< {fmt_num(first)} MB/s"
+    bound = "" if limit["bounded"] else ">= "
+    return f"{bound}{fmt_num(limit['mb_s'])} MB/s"
 
 
 def step_table(result: BenchResult, comparison: Comparison | None) -> list[str]:

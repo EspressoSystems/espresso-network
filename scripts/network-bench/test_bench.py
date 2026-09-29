@@ -184,7 +184,7 @@ def compare(current, runs, error=None, source="main"):
 
 
 def row(comparison, label):
-    return next(r for r in comparison["rows"] if r["label"] == label)
+    return next(r for r in comparison["capacity"] if r["label"] == label)
 
 
 def step_row(comparison, rate, label):
@@ -348,8 +348,48 @@ class CompareTest(unittest.TestCase):
         current = make_result([step(4.0), step(6.0, 5.0, ["x"]), step(5.0)])
         comparison = compare(current, [make_result()] * 3)
         capacity = row(comparison, "capacity")
-        self.assertEqual((capacity["current"], capacity["baseline"]), (5.0, 6.0))
+        self.assertEqual(
+            (capacity["current"]["mb_s"], capacity["baseline"]["mb_s"]), (5.0, 6.0)
+        )
         self.assertEqual(capacity["verdict"], "worse")
+
+    def test_capacity_below_the_first_step_is_worse(self):
+        current = make_result([step(4.0, 1.0, ["x"])])
+        comparison = compare(current, [make_result()] * 3)
+        capacity = row(comparison, "capacity")
+        self.assertEqual(capacity["verdict"], "worse")
+        self.assertIn(
+            "| capacity | < 4 MB/s | 6 MB/s | 3 |  | **worse** (±1 MB/s) |",
+            bench.render(current, comparison),
+        )
+
+    def test_lower_bound_below_the_baseline_is_inconclusive(self):
+        higher = make_result([step(4.0), step(6.0), step(8.0), step(10.0, 5.0, ["x"])])
+        current = make_result([step(4.0), step(6.0)])
+        comparison = compare(current, [higher] * 3)
+        self.assertEqual(row(comparison, "capacity")["verdict"], "inconclusive")
+        self.assertIn(
+            "| capacity | >= 6 MB/s | 8 MB/s |", bench.render(current, comparison)
+        )
+
+    def test_baseline_runs_below_the_first_step_count(self):
+        below = make_result([step(4.0, 1.0, ["x"])])
+        comparison = compare(make_result(), [below, below, make_result()])
+        capacity = row(comparison, "capacity")
+        self.assertEqual(capacity["n"], 3)
+        self.assertEqual(capacity["baseline"], {"mb_s": None, "bounded": True})
+        self.assertEqual(capacity["verdict"], "better")
+
+    def test_capacity_changes_by_ramp_resolution(self):
+        # Steps 2 MB/s apart: a refine step is 1 MB/s away.
+        refined = make_result([step(4.0), step(6.0), step(8.0, 6.0, ["x"]), step(7.0)])
+        self.assertEqual(
+            row(compare(refined, [make_result()] * 3), "capacity")["verdict"], "better"
+        )
+        self.assertEqual(
+            row(compare(make_result(), [make_result()] * 3), "capacity")["verdict"],
+            "same",
+        )
 
     def test_steps_compare_only_against_runs_at_that_rate(self):
         short = make_result([step(4.0, consensus_p50=500.0), step(6.0, 3.0, ["x"])])
