@@ -285,6 +285,9 @@ where
     let proposal_fetcher_config = opt.proposal_fetcher_config;
     let empty_block_delay = opt.empty_block_delay;
 
+    if modules.query.is_none() {
+        storage_opt.set_consensus_only();
+    }
     let persistence = storage_opt.create().await?;
 
     // Initialize HotShot. If the user requested the HTTP module, we must initialize the handle in
