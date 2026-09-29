@@ -891,7 +891,7 @@ pub trait SequencerPersistence:
                 // `cert1` certifies the newest leaf; each newer leaf's justify_qc certifies the
                 // next older leaf.
                 let certifying_qcs = std::iter::once(cert1.clone())
-                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()))
+                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc().clone()))
                     .take(leaf_infos.len())
                     .map(CertificatePair::non_epoch_change);
 

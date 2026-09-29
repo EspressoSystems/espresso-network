@@ -339,9 +339,11 @@
           CARGO_INCREMENTAL = "0";
           shellHook = ''
             ${rustShellHook}
-            RUSTFLAGS="$RUSTFLAGS -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests -Cdebuginfo=2"
+            # These replace `build.rustflags` from `.cargo/config.toml` rather than adding to it,
+            # so `--cfg tokio_unstable` (needed for the blocking-pool metrics) is repeated here.
+            export RUSTFLAGS="$RUSTFLAGS -Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests -Cdebuginfo=2 --cfg tokio_unstable"
           '';
-          RUSTDOCFLAGS = "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests";
+          RUSTDOCFLAGS = "-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests --cfg tokio_unstable";
         });
 
       devShells.rustShell =

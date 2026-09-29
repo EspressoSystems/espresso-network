@@ -9,6 +9,8 @@ network.
 import importlib.util
 import json
 import math
+import subprocess
+import tempfile
 import unittest
 from dataclasses import replace
 from importlib.machinery import SourceFileLoader
@@ -499,6 +501,91 @@ class RunSelection(unittest.TestCase):
 
     def test_a_revision_selector_constrains_nothing(self):
         self.assertEqual(self.newest(None)["databaseId"], 2)
+
+
+class HasMetrics(unittest.TestCase):
+    """An unpaginated listing stops at 30 artifacts and finds none of the metrics ones."""
+
+    NAMES = [f"nextest-junit-{i}" for i in range(40)] + ["compile-metrics-test-bins"]
+
+    def setUp(self):
+        self.command = []
+
+    def has_metrics(self):
+        def capture(*command):
+            self.command = list(command)
+            names = self.NAMES if "--paginate" in command else self.NAMES[:30]
+            return "".join(f"{name}\n" for name in names)
+
+        with mock.patch.object(cm, "capture", side_effect=capture):
+            return cm.has_metrics(1)
+
+    def test_metrics_past_the_first_page_are_found(self):
+        self.assertTrue(self.has_metrics())
+
+    def test_every_page_is_asked_for(self):
+        self.has_metrics()
+        self.assertIn("--paginate", self.command)
+        self.assertTrue(any("per_page=100" in arg for arg in self.command))
+
+
+class BaselineNote(unittest.TestCase):
+    """A failed lookup and a workflow that has never run on main are not the same thing."""
+
+    def test_no_stats_at_all(self):
+        self.assertEqual(cm.baseline_note(None), cm.NO_BASELINE)
+
+    def test_lookup_failure_says_so(self):
+        note = cm.baseline_note({"runs": [], "error": "gh api exited 1"})
+        self.assertIn("gh api exited 1", note)
+
+    def test_nothing_published_names_the_window(self):
+        self.assertIn("10", cm.baseline_note({"runs": [], "scanned": 10}))
+
+    def test_a_workflow_that_never_ran_on_main(self):
+        self.assertEqual(cm.baseline_note({"runs": [], "scanned": 0}), cm.NO_BASELINE)
+
+
+class FetchBaseline(unittest.TestCase):
+    """The three shapes `baseline_note` reads."""
+
+    def fetch(self, returncode, contents=None):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "main.json"
+
+            def run(command, **_kwargs):
+                if contents is not None:
+                    out.write_text(contents)
+                return subprocess.CompletedProcess(command, returncode)
+
+            with mock.patch.object(cm.subprocess, "run", side_effect=run):
+                return cm.fetch_baseline("build.yml", "compile-metrics-build", out)
+
+    def test_stats_fetch_died(self):
+        self.assertIn("exited 3", self.fetch(3)["error"])
+
+    def test_stats_fetch_wrote_nothing(self):
+        self.assertIn("main.json", self.fetch(0)["error"])
+
+    def test_the_document_is_passed_through(self):
+        self.assertEqual(
+            self.fetch(0, '{"runs": [], "scanned": 5}'), {"runs": [], "scanned": 5}
+        )
+
+
+class ReportMarkdown(unittest.TestCase):
+    """`report_markdown` takes the whole stats document and unwraps the newest run itself."""
+
+    def report(self, main_stats):
+        current = {"sha": "cafe", "run_url": "u", "jobs": {"j": job()}}
+        return cm.report_markdown(current, main_stats, "t")
+
+    def test_a_baseline_is_compared_against(self):
+        main = {"sha": "beef", "run_url": "m", "jobs": {"j": job()}}
+        self.assertIn("Baseline: main [beef]", self.report({"runs": [main]}))
+
+    def test_no_baseline_renders_the_note(self):
+        self.assertIn(cm.NO_BASELINE, self.report(None))
 
 
 class FmtName(unittest.TestCase):

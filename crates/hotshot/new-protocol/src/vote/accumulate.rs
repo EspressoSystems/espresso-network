@@ -7,7 +7,7 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_vote::{HasEpoch, VersionedVoteData},
     stake_table::StakeTableEntries,
-    traits::node_implementation::NodeType,
+    traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
     vote::{Certificate, Vote, VoteAccumulator},
 };
 use hotshot_utils::anytrace;
@@ -88,6 +88,29 @@ where
                 self.recover()
             },
         }
+    }
+
+    /// The fewest votes that could reach the threshold.
+    ///
+    /// A vote carries at most the largest stake in the table, so fewer than
+    /// this many can never certify anything. Clamped to the size of that same
+    /// table: the quotient stays below it only while the threshold and the
+    /// stake table come from one snapshot, and the caller sizes an allocation
+    /// with the result.
+    pub fn min_votes(&self) -> usize {
+        let table = C::stake_table(&self.membership);
+        let largest = table
+            .0
+            .iter()
+            .map(|peer| peer.stake_table_entry.stake())
+            .max()
+            .unwrap_or_default();
+        if largest.is_zero() {
+            return 1;
+        }
+        let nodes = table.0.len().max(1);
+        let votes = C::threshold(&self.membership).div_ceil(largest);
+        usize::try_from(votes).unwrap_or(nodes).clamp(1, nodes)
     }
 
     /// Discard votes with invalid signatures and accumulate the rest again.

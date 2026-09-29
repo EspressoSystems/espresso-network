@@ -173,26 +173,6 @@ services:
       espresso-node-0:
         condition: service_healthy
 
-  fund-builder:
-    image: ghcr.io/espressosystems/espresso-network/bridge:${DOCKER_TAG:-main}
-    command: espresso-bridge deposit
-    environment:
-      - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
-      - L1_POLLING_INTERVAL=$ESPRESSO_L1_POLLING_INTERVAL
-      - ESPRESSO_PROVIDER=http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
-      - CONTRACT_ADDRESS=$ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS
-      - MNEMONIC=$ESPRESSO_BUILDER_ETH_MNEMONIC
-      - ACCOUNT_INDEX=$ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
-      - AMOUNT=1000000000000000000
-      - CONFIRMATIONS=1
-      - RUST_LOG
-      - RUST_LOG_FORMAT
-    depends_on:
-      deploy-espresso-contracts:
-        condition: service_completed_successfully
-      espresso-node-1:
-        condition: service_healthy
-
   stake-for-demo:
     image: ghcr.io/espressosystems/espresso-network/staking-cli:${DOCKER_TAG:-main}
     command: staking-cli stake-for-demo
@@ -235,12 +215,13 @@ services:
     ports:
       - "$ESPRESSO_ORCHESTRATOR_PORT:$ESPRESSO_ORCHESTRATOR_PORT"
     environment:
-      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://permissionless-builder:$ESPRESSO_BUILDER_SERVER_PORT
+      # No builder runs here; leaders fall back to an empty block after the timeout below.
+      - ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:1
       - ESPRESSO_ORCHESTRATOR_PORT
       - ESPRESSO_ORCHESTRATOR_NUM_NODES
       - ESPRESSO_ORCHESTRATOR_START_DELAY
       - ESPRESSO_ORCHESTRATOR_NEXT_VIEW_TIMEOUT
-      - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT
+      - ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT=${ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT:-100ms}
       - RUST_LOG
       - RUST_LOG_FORMAT
       - ASYNC_STD_THREAD_COUNT
@@ -397,7 +378,7 @@ services:
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
       - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_EMBEDDED_DB=false
-      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
+      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_0_API_PORT
@@ -420,6 +401,7 @@ services:
       - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_NODE_LIBP2P_PORT_0
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=espresso-node-0:$ESPRESSO_DEMO_NODE_LIBP2P_PORT_0
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
+      - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=espresso-node-0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       - ESPRESSO_NODE_IS_DA=true
       - ESPRESSO_NODE_IDENTITY_NODE_NAME=espresso-node-0
       - ESPRESSO_NODE_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000000
@@ -456,12 +438,12 @@ services:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NODE_1_API_PORT:$ESPRESSO_NODE_1_API_PORT"
-    command: espresso-node -- storage-sql -- http -- config -- query -- explorer
+    command: espresso-node -- storage-sql -- http -- config -- query -- submit -- explorer
     environment:
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://vector:${ESPRESSO_DEMO_TELEMETRY_PRW_PORT}
       - ESPRESSO_NODE_EMBEDDED_DB=false
-      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
+      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_1_API_PORT
@@ -485,6 +467,7 @@ services:
       - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_NODE_LIBP2P_PORT_1
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=espresso-node-1:$ESPRESSO_DEMO_NODE_LIBP2P_PORT_1
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
+      - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=espresso-node-1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       - ESPRESSO_NODE_IS_DA=true
       - ESPRESSO_NODE_IDENTITY_NODE_NAME=espresso-node-1
       - ESPRESSO_NODE_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000001
@@ -524,7 +507,7 @@ services:
     command: espresso-node -- http -- config
     environment:
       - ESPRESSO_NODE_EMBEDDED_DB=false
-      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
+      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_2_API_PORT
@@ -541,6 +524,7 @@ services:
       - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_NODE_LIBP2P_PORT_2
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=espresso-node-2:$ESPRESSO_DEMO_NODE_LIBP2P_PORT_2
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
+      - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=espresso-node-2:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       - ESPRESSO_NODE_IS_DA=true
       - ESPRESSO_NODE_IDENTITY_NODE_NAME=espresso-node-2
       - ESPRESSO_NODE_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000002
@@ -581,7 +565,7 @@ services:
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://vector:${ESPRESSO_DEMO_TELEMETRY_OTLP_PORT}
       - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_EMBEDDED_DB=false
-      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
+      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_3_API_PORT
@@ -600,6 +584,7 @@ services:
       - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_NODE_LIBP2P_PORT_3
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=espresso-node-3:$ESPRESSO_DEMO_NODE_LIBP2P_PORT_3
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
+      - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=espresso-node-3:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
       - ESPRESSO_NODE_IDENTITY_NODE_NAME=espresso-node-3
       - ESPRESSO_NODE_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000003
       - ESPRESSO_NODE_IDENTITY_COMPANY_NAME=Espresso Systems
@@ -637,7 +622,7 @@ services:
     environment:
       - ESPRESSO_NODE_EMBEDDED_DB=true
       - LIGHT_CLIENT_DB_PATH=/store/lc
-      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
+      - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-ff.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_4_API_PORT
@@ -655,6 +640,7 @@ services:
       - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:$ESPRESSO_DEMO_NODE_LIBP2P_PORT_4
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=espresso-node-4:$ESPRESSO_DEMO_NODE_LIBP2P_PORT_4
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
+      - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=espresso-node-4:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
       - ESPRESSO_NODE_IDENTITY_NODE_NAME=espresso-node-4
       - ESPRESSO_NODE_IDENTITY_WALLET_ADDRESS=0x0000000000000000000000000000000000000004
       - ESPRESSO_NODE_IDENTITY_COMPANY_NAME=Espresso Systems
@@ -701,10 +687,6 @@ services:
     depends_on:
       espresso-node-0:
         condition: service_healthy
-      # We don't directly depend on the builder, but transactions will not be finalized until it has
-      # started, so there is no point in starting before then.
-      permissionless-builder:
-        condition: service_healthy
 
   submit-transactions-private:
     image: ghcr.io/espressosystems/espresso-network/submit-transactions:${DOCKER_TAG:-main}
@@ -713,7 +695,6 @@ services:
     environment:
       - ESPRESSO_ORCHESTRATOR_NUM_NODES
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=8080
-      - ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=http://permissionless-builder:${ESPRESSO_BUILDER_SERVER_PORT}/txn_submit
       - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY
       - ESPRESSO_BENCH_START_BLOCK
       - ESPRESSO_BENCH_END_BLOCK
@@ -724,36 +705,6 @@ services:
     depends_on:
       espresso-node-0:
         condition: service_healthy
-      permissionless-builder:
-        condition: service_healthy
-
-  permissionless-builder:
-    image: ghcr.io/espressosystems/espresso-network/builder:${DOCKER_TAG:-main}
-    ports:
-      - "$ESPRESSO_BUILDER_SERVER_PORT:$ESPRESSO_BUILDER_SERVER_PORT"
-    environment:
-      - ESPRESSO_API_NODE_URL=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT
-      - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT
-      - ESPRESSO_BUILDER_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
-      - ESPRESSO_BUILDER_ETH_MNEMONIC
-      - ESPRESSO_BUILDER_ETH_ACCOUNT_INDEX
-      - ESPRESSO_BUILDER_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
-      - ESPRESSO_BUILDER_SERVER_PORT
-      - ESPRESSO_BUILDER_TX_CHANNEL_CAPACITY
-      - ESPRESSO_BUILDER_EVENT_CHANNEL_CAPACITY
-      - ESPRESSO_BUILDER_BOOTSTRAPPED_VIEW
-      - ESPRESSO_BUILDER_WEBSERVER_RESPONSE_TIMEOUT_DURATION
-      - ESPRESSO_BUILDER_BUFFER_VIEW_NUM_COUNT
-      - ESPRESSO_BUILDER_INIT_NODE_COUNT
-      - RUST_LOG
-      - RUST_LOG_FORMAT
-      - ASYNC_STD_THREAD_COUNT
-    depends_on:
-      espresso-node-0:
-        condition: service_healthy
-      fund-builder:
-        condition: service_completed_successfully
-
   nasty-client:
     image: ghcr.io/espressosystems/espresso-network/nasty-client:${DOCKER_TAG:-main}
     ports:

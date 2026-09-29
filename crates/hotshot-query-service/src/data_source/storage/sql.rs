@@ -1,0 +1,3079 @@
+// Copyright (c) 2022 Espresso Systems (espressosys.com)
+// This file is part of the HotShot Query Service library.
+//
+// This program is free software: you can redistribute it and/or modify it under the terms of the GNU
+// General Public License as published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+// This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+// even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+// General Public License for more details.
+// You should have received a copy of the GNU General Public License along with this program. If not,
+// see <https://www.gnu.org/licenses/>.
+
+#![cfg(feature = "sql-data-source")]
+use std::{cmp::min, fmt::Debug, future::Future, str::FromStr, time::Duration};
+
+use anyhow::Context;
+use async_trait::async_trait;
+use backon::{BackoffBuilder, ExponentialBuilder};
+use chrono::Utc;
+#[cfg(not(feature = "embedded-db"))]
+use futures::future::FutureExt;
+use hotshot_types::{
+    data::VidShare,
+    traits::{metrics::Metrics, node_implementation::NodeType},
+};
+use itertools::Itertools;
+use log::LevelFilter;
+use rand::Rng;
+#[cfg(not(feature = "embedded-db"))]
+use sqlx::postgres::{PgConnectOptions, PgSslMode};
+#[cfg(feature = "embedded-db")]
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{
+    ConnectOptions, Row,
+    pool::{Pool, PoolOptions},
+};
+use tokio::time::sleep;
+use tracing::instrument;
+
+use crate::{
+    Header, QueryError, QueryResult,
+    availability::{QueryableHeader, QueryablePayload, VidCommonMetadata, VidCommonQueryData},
+    data_source::{
+        VersionedDataSource,
+        storage::{
+            MerklizedStateHeightStorage, SerializableRetry,
+            pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
+        },
+        update::Transaction as _,
+    },
+    metrics::PrometheusMetrics,
+    node::BlockId,
+    status::HasMetrics,
+};
+pub extern crate sqlx;
+pub use sqlx::{Database, Sqlite};
+
+mod db;
+mod migrate;
+mod queries;
+mod transaction;
+
+pub use anyhow::Error;
+pub use db::*;
+pub use include_dir::include_dir;
+pub use queries::QueryBuilder;
+pub use refinery::Migration;
+pub use transaction::*;
+
+use self::{migrate::Migrator, transaction::PoolMetrics};
+use super::{AvailabilityStorage, NodeStorage};
+// This needs to be reexported so that we can reference it by absolute path relative to this crate
+// in the expansion of `include_migrations`, even when `include_migrations` is invoked from another
+// crate which doesn't have `include_dir` as a dependency.
+pub use crate::include_migrations;
+
+/// Embed migrations from the given directory into the current binary for PostgreSQL or SQLite.
+///
+/// The macro invocation `include_migrations!(path)` evaluates to an expression of type `impl
+/// Iterator<Item = Migration>`. Each migration must be a text file which is an immediate child of
+/// `path`, and there must be no non-migration files in `path`. The migration files must have names
+/// of the form `V${version}__${name}.sql`, where `version` is a positive integer indicating how the
+/// migration is to be ordered relative to other migrations, and `name` is a descriptive name for
+/// the migration.
+///
+/// `path` should be an absolute path. It is possible to give a path relative to the root of the
+/// invoking crate by using environment variable expansions and the `CARGO_MANIFEST_DIR` environment
+/// variable.
+///
+/// As an example, this is the invocation used to load the default migrations from the
+/// `hotshot-query-service` crate. The migrations are located in a directory called `migrations` at
+/// - PostgreSQL migrations are in `/migrations/postgres`.
+/// - SQLite migrations are in `/migrations/sqlite`.
+///
+/// ```
+/// # use hotshot_query_service::data_source::sql::{include_migrations, Migration};
+/// // For PostgreSQL
+/// #[cfg(not(feature = "embedded-db"))]
+///  let mut migrations: Vec<Migration> =
+///     include_migrations!("$CARGO_MANIFEST_DIR/migrations/postgres").collect();
+/// // For SQLite
+/// #[cfg(feature = "embedded-db")]
+/// let mut migrations: Vec<Migration> =
+///     include_migrations!("$CARGO_MANIFEST_DIR/migrations/sqlite").collect();
+///
+///     migrations.sort();
+///     assert_eq!(migrations[0].version(), 10);
+///     assert_eq!(migrations[0].name(), "init_schema");
+/// ```
+///
+/// Note that a similar macro is available from Refinery:
+/// [embed_migrations](https://docs.rs/refinery/0.8.11/refinery/macro.embed_migrations.html). This
+/// macro differs in that it evaluates to an iterator of [migrations](Migration), making it an
+/// expression macro, while `embed_migrations` is a statement macro that defines a module which
+/// provides access to the embedded migrations only indirectly via a
+/// [`Runner`](https://docs.rs/refinery/0.8.11/refinery/struct.Runner.html). The direct access to
+/// migrations provided by [`include_migrations`] makes this macro easier to use with
+/// [`Config::migrations`], for combining custom migrations with [`default_migrations`].
+#[macro_export]
+macro_rules! include_migrations {
+    ($dir:tt) => {
+        $crate::data_source::storage::sql::include_dir!($dir)
+            .files()
+            .map(|file| {
+                let path = file.path();
+                let name = path
+                    .file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "migration file {} must have a non-empty UTF-8 name",
+                            path.display()
+                        )
+                    });
+                let sql = file
+                    .contents_utf8()
+                    .unwrap_or_else(|| panic!("migration file {name} must use UTF-8 encoding"));
+                $crate::data_source::storage::sql::Migration::unapplied(name, sql)
+                    .expect("invalid migration")
+            })
+    };
+}
+
+/// The migrations required to build the default schema for this version of [`SqlStorage`].
+pub fn default_migrations() -> Vec<Migration> {
+    #[cfg(not(feature = "embedded-db"))]
+    let mut migrations =
+        include_migrations!("$CARGO_MANIFEST_DIR/migrations/postgres").collect::<Vec<_>>();
+
+    #[cfg(feature = "embedded-db")]
+    let mut migrations =
+        include_migrations!("$CARGO_MANIFEST_DIR/migrations/sqlite").collect::<Vec<_>>();
+
+    // Check version uniqueness and sort by version.
+    validate_migrations(&mut migrations).expect("default migrations are invalid");
+
+    // Check that all migration versions are multiples of 100, so that custom migrations can be
+    // inserted in between.
+    for m in &migrations {
+        if m.version() <= 30 {
+            // An older version of this software used intervals of 10 instead of 100. This was
+            // changed to allow more custom migrations between each default migration, but we must
+            // still accept older migrations that followed the older rule.
+            assert!(
+                m.version() > 0 && m.version() % 10 == 0,
+                "legacy default migration version {} is not a positive multiple of 10",
+                m.version()
+            );
+        } else {
+            assert!(
+                m.version() % 100 == 0,
+                "default migration version {} is not a multiple of 100",
+                m.version()
+            );
+        }
+    }
+
+    migrations
+}
+
+/// Validate and preprocess a sequence of migrations.
+///
+/// * Ensure all migrations have distinct versions
+/// * Ensure migrations are sorted by increasing version
+fn validate_migrations(migrations: &mut [Migration]) -> Result<(), Error> {
+    migrations.sort_by_key(|m| m.version());
+
+    // Check version uniqueness.
+    for (prev, next) in migrations.iter().zip(migrations.iter().skip(1)) {
+        if next <= prev {
+            return Err(Error::msg(format!(
+                "migration versions are not strictly increasing ({prev}->{next})"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Add custom migrations to a default migration sequence.
+///
+/// Migrations in `custom` replace migrations in `default` with the same version. Otherwise, the two
+/// sequences `default` and `custom` are merged so that the resulting sequence is sorted by
+/// ascending version number. Each of `default` and `custom` is assumed to be the output of
+/// [`validate_migrations`]; that is, each is sorted by version and contains no duplicate versions.
+fn add_custom_migrations(
+    default: impl IntoIterator<Item = Migration>,
+    custom: impl IntoIterator<Item = Migration>,
+) -> impl Iterator<Item = Migration> {
+    default
+        .into_iter()
+        // Merge sorted lists, joining pairs of equal version into `EitherOrBoth::Both`.
+        .merge_join_by(custom, |l, r| l.version().cmp(&r.version()))
+        // Prefer the custom migration for a given version when both default and custom versions
+        // are present.
+        .map(|pair| pair.reduce(|_, custom| custom))
+}
+
+#[derive(Clone)]
+pub struct Config {
+    #[cfg(feature = "embedded-db")]
+    db_opt: SqliteConnectOptions,
+
+    #[cfg(not(feature = "embedded-db"))]
+    db_opt: PgConnectOptions,
+
+    pool_opt: PoolOptions<Db>,
+
+    /// Extra pool_opt to allow separately configuring the connection pool for query service
+    #[cfg(not(feature = "embedded-db"))]
+    pool_opt_query: PoolOptions<Db>,
+
+    #[cfg(not(feature = "embedded-db"))]
+    schema: String,
+    reset: bool,
+    migrations: Vec<Migration>,
+    no_migrations: bool,
+    pruner_cfg: Option<PrunerCfg>,
+    archive: bool,
+    serializable_retry_config: SerializableRetryConfig,
+    pool: Option<Pool<Db>>,
+}
+
+#[cfg(not(feature = "embedded-db"))]
+impl Default for Config {
+    fn default() -> Self {
+        PgConnectOptions::default()
+            .username("postgres")
+            .password("password")
+            .host("localhost")
+            .port(5432)
+            .into()
+    }
+}
+
+#[cfg(feature = "embedded-db")]
+impl Default for Config {
+    fn default() -> Self {
+        crate::sqlite_options::sqlite_options().into()
+    }
+}
+
+#[cfg(feature = "embedded-db")]
+impl From<SqliteConnectOptions> for Config {
+    fn from(db_opt: SqliteConnectOptions) -> Self {
+        Self {
+            db_opt,
+            pool_opt: PoolOptions::default(),
+            reset: false,
+            migrations: vec![],
+            no_migrations: false,
+            pruner_cfg: None,
+            archive: false,
+            serializable_retry_config: SerializableRetryConfig::default(),
+            pool: None,
+        }
+    }
+}
+
+#[cfg(not(feature = "embedded-db"))]
+impl From<PgConnectOptions> for Config {
+    fn from(db_opt: PgConnectOptions) -> Self {
+        Self {
+            db_opt,
+            pool_opt: PoolOptions::default(),
+            pool_opt_query: PoolOptions::default(),
+            schema: "hotshot".into(),
+            reset: false,
+            migrations: vec![],
+            no_migrations: false,
+            pruner_cfg: None,
+            archive: false,
+            serializable_retry_config: SerializableRetryConfig::default(),
+            pool: None,
+        }
+    }
+}
+
+#[cfg(not(feature = "embedded-db"))]
+impl FromStr for Config {
+    type Err = <PgConnectOptions as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(PgConnectOptions::from_str(s)?.into())
+    }
+}
+
+#[cfg(feature = "embedded-db")]
+impl FromStr for Config {
+    type Err = <SqliteConnectOptions as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(SqliteConnectOptions::from_str(s)?.into())
+    }
+}
+
+#[cfg(feature = "embedded-db")]
+impl Config {
+    pub fn busy_timeout(mut self, timeout: Duration) -> Self {
+        self.db_opt = self.db_opt.busy_timeout(timeout);
+        self
+    }
+
+    pub fn db_path(mut self, path: std::path::PathBuf) -> Self {
+        self.db_opt = self.db_opt.filename(path);
+        self
+    }
+}
+
+#[cfg(not(feature = "embedded-db"))]
+impl Config {
+    /// Set the hostname of the database server.
+    ///
+    /// The default is `localhost`.
+    pub fn host(mut self, host: impl Into<String>) -> Self {
+        self.db_opt = self.db_opt.host(&host.into());
+        self
+    }
+
+    /// Set the port on which to connect to the database.
+    ///
+    /// The default is 5432, the default Postgres port.
+    pub fn port(mut self, port: u16) -> Self {
+        self.db_opt = self.db_opt.port(port);
+        self
+    }
+
+    /// Set the DB user to connect as.
+    pub fn user(mut self, user: &str) -> Self {
+        self.db_opt = self.db_opt.username(user);
+        self
+    }
+
+    /// Set a password for connecting to the database.
+    pub fn password(mut self, password: &str) -> Self {
+        self.db_opt = self.db_opt.password(password);
+        self
+    }
+
+    /// Set the name of the database to connect to.
+    pub fn database(mut self, database: &str) -> Self {
+        self.db_opt = self.db_opt.database(database);
+        self
+    }
+
+    /// Use TLS for an encrypted connection to the database.
+    ///
+    /// Note that an encrypted connection may be established even if this option is not set, as long
+    /// as both the client and server support it. This option merely causes connection to fail if an
+    /// encrypted stream cannot be established.
+    pub fn tls(mut self) -> Self {
+        self.db_opt = self.db_opt.ssl_mode(PgSslMode::Require);
+        self
+    }
+
+    /// Set the name of the schema to use for queries.
+    ///
+    /// The default schema is named `hotshot` and is created via the default migrations.
+    pub fn schema(mut self, schema: impl Into<String>) -> Self {
+        self.schema = schema.into();
+        self
+    }
+}
+
+impl Config {
+    /// Sets the database connection pool
+    /// This allows reusing an existing connection pool when building a new `SqlStorage` instance.
+    pub fn pool(mut self, pool: Pool<Db>) -> Self {
+        self.pool = Some(pool);
+        self
+    }
+
+    /// Set the retry policy for transactions aborted by PostgreSQL serialization conflicts.
+    pub fn serializable_retry(mut self, cfg: SerializableRetryConfig) -> Self {
+        self.serializable_retry_config = cfg;
+        self
+    }
+
+    /// Reset the schema on connection.
+    ///
+    /// When this [`Config`] is used to [`connect`](Self::connect) a
+    /// [`SqlDataSource`](crate::data_source::SqlDataSource), if this option is set, the relevant
+    /// [`schema`](Self::schema) will first be dropped and then recreated, yielding a completely
+    /// fresh instance of the query service.
+    ///
+    /// This is a particularly useful capability for development and staging environments. Still, it
+    /// must be used with extreme caution, as using this will irrevocably delete any data pertaining
+    /// to the query service in the database.
+    pub fn reset_schema(mut self) -> Self {
+        self.reset = true;
+        self
+    }
+
+    /// Add custom migrations to run when connecting to the database.
+    pub fn migrations(mut self, migrations: impl IntoIterator<Item = Migration>) -> Self {
+        self.migrations.extend(migrations);
+        self
+    }
+
+    /// Skip all migrations when connecting to the database.
+    pub fn no_migrations(mut self) -> Self {
+        self.no_migrations = true;
+        self
+    }
+
+    /// Enable pruning with a given configuration.
+    ///
+    /// If [`archive`](Self::archive) was previously specified, this will override it.
+    pub fn pruner_cfg(mut self, cfg: PrunerCfg) -> Result<Self, Error> {
+        cfg.validate()?;
+        self.pruner_cfg = Some(cfg);
+        self.archive = false;
+        Ok(self)
+    }
+
+    /// Disable pruning and reconstruct previously pruned data.
+    ///
+    /// While running without pruning is the default behavior, the default will not try to
+    /// reconstruct data that was pruned in a previous run where pruning was enabled. This option
+    /// instructs the service to run without pruning _and_ reconstruct all previously pruned data by
+    /// fetching from peers.
+    ///
+    /// If [`pruner_cfg`](Self::pruner_cfg) was previously specified, this will override it.
+    pub fn archive(mut self) -> Self {
+        self.pruner_cfg = None;
+        self.archive = true;
+        self
+    }
+
+    /// Set the maximum idle time of a connection.
+    ///
+    /// Any connection which has been open and unused longer than this duration will be
+    /// automatically closed to reduce load on the server.
+    pub fn idle_connection_timeout(mut self, timeout: Duration) -> Self {
+        self.pool_opt = self.pool_opt.idle_timeout(Some(timeout));
+
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            self.pool_opt_query = self.pool_opt_query.idle_timeout(Some(timeout));
+        }
+
+        self
+    }
+
+    /// Set the maximum lifetime of a connection.
+    ///
+    /// Any connection which has been open longer than this duration will be automatically closed
+    /// (and, if needed, replaced), even if it is otherwise healthy. It is good practice to refresh
+    /// even healthy connections once in a while (e.g. daily) in case of resource leaks in the
+    /// server implementation.
+    pub fn connection_timeout(mut self, timeout: Duration) -> Self {
+        self.pool_opt = self.pool_opt.max_lifetime(Some(timeout));
+
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            self.pool_opt = self.pool_opt.max_lifetime(Some(timeout));
+        }
+
+        self
+    }
+
+    /// Set the minimum number of connections to maintain at any time.
+    ///
+    /// The data source will, to the best of its ability, maintain at least `min` open connections
+    /// at all times. This can be used to reduce the latency hit of opening new connections when at
+    /// least this many simultaneous connections are frequently needed.
+    pub fn min_connections(mut self, min: u32) -> Self {
+        self.pool_opt = self.pool_opt.min_connections(min);
+        self
+    }
+
+    #[cfg(not(feature = "embedded-db"))]
+    pub fn query_min_connections(mut self, min: u32) -> Self {
+        self.pool_opt_query = self.pool_opt_query.min_connections(min);
+        self
+    }
+
+    /// Set the maximum number of connections to maintain at any time.
+    ///
+    /// Once `max` connections are in use simultaneously, further attempts to acquire a connection
+    /// (or begin a transaction) will block until one of the existing connections is released.
+    pub fn max_connections(mut self, max: u32) -> Self {
+        self.pool_opt = self.pool_opt.max_connections(max);
+        self
+    }
+
+    #[cfg(not(feature = "embedded-db"))]
+    pub fn query_max_connections(mut self, max: u32) -> Self {
+        self.pool_opt_query = self.pool_opt_query.max_connections(max);
+        self
+    }
+
+    /// Log at WARN level any time a SQL statement takes longer than `threshold`.
+    ///
+    /// The default threshold is 1s.
+    pub fn slow_statement_threshold(mut self, threshold: Duration) -> Self {
+        self.db_opt = self
+            .db_opt
+            .log_slow_statements(LevelFilter::Warn, threshold);
+        self
+    }
+
+    /// Set the maximum time a single SQL statement is allowed to run before being canceled.
+    ///
+    /// This helps prevent queries from running indefinitely even when the client is dropped
+    #[cfg(not(feature = "embedded-db"))]
+    pub fn statement_timeout(mut self, timeout: Duration) -> Self {
+        // Format duration as milliseconds
+        // PostgreSQL interprets values without units as milliseconds
+        let timeout_ms = timeout.as_millis();
+        self.db_opt = self
+            .db_opt
+            .options([("statement_timeout", timeout_ms.to_string())]);
+        self
+    }
+
+    /// not supported for SQLite.
+    #[cfg(feature = "embedded-db")]
+    pub fn statement_timeout(self, _timeout: Duration) -> Self {
+        self
+    }
+}
+
+/// Storage for the APIs provided in this crate, backed by a remote PostgreSQL database.
+#[derive(Clone, Debug)]
+pub struct SqlStorage {
+    pool: Pool<Db>,
+    metrics: PrometheusMetrics,
+    pool_metrics: PoolMetrics,
+    pruner_cfg: Option<PrunerCfg>,
+    serializable_retry_config: SerializableRetryConfig,
+}
+
+#[derive(Debug)]
+struct PruneState {
+    min_height: u64,
+    target_height: u64,
+    minimum_retention_height: u64,
+}
+
+fn next_batch(from: u64, batch_size: u64, target: u64) -> Option<u64> {
+    // A zero step would underflow the subtraction to `u64::MAX` and prune the whole table.
+    let step = batch_size.max(1);
+    (from < target).then(|| min(from.saturating_add(step), target) - 1)
+}
+
+impl PruneState {
+    /// The exclusive height bound of the next batch below the target retention, if any remains.
+    fn next_target_bound(&self) -> Option<u64> {
+        (self.min_height < self.target_height).then_some(self.target_height)
+    }
+
+    /// The exclusive height bound of the next batch below the minimum retention, if any remains.
+    fn next_extra_bound(&self) -> Option<u64> {
+        (self.min_height < self.minimum_retention_height).then_some(self.minimum_retention_height)
+    }
+
+    /// The inclusive end of the next batch below `bound`.
+    ///
+    /// `first_present` is the lowest height at or above the cursor that has any rows. Heights
+    /// without rows cost nothing to delete, so a span of them is consumed in one batch instead of
+    /// `batch_size` heights at a time. The populated part of the batch is still at most
+    /// `batch_size` heights, so widening it over an empty span does not add work per transaction.
+    ///
+    /// `bound` is at least 1: callers only produce a bound when the cursor is below it.
+    fn batch_end(bound: u64, batch_size: u64, first_present: Option<u64>) -> u64 {
+        debug_assert!(bound >= 1, "a batch bound is always above the cursor");
+        first_present
+            .and_then(|height| next_batch(height, batch_size, bound))
+            .unwrap_or(bound - 1)
+    }
+}
+
+#[derive(Debug)]
+pub struct Pruner<'a> {
+    data: PruneState,
+    state: PruneState,
+    cfg: &'a PrunerCfg,
+    extra_pruning: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PruneCategory {
+    Data,
+    State,
+}
+
+impl<'a> Pruner<'a> {
+    /// Get the next type of data with anything older than its target retention left to delete.
+    ///
+    /// If there is one, returns the type of data to delete (either consensus data or derived
+    /// state) and the exclusive height bound of what may be deleted.
+    fn next_target_bound(&self) -> Option<(PruneCategory, u64)> {
+        // Delete the oldest batch which is older than its target retention; whether state or
+        // consensus data. All else equal, we always delete state before the corresponding consensus
+        // data, to honor the dependency (state is derived from corresponding consensus data).
+        if let Some(bound) = self.state.next_target_bound() {
+            return Some((PruneCategory::State, bound));
+        }
+        self.data
+            .next_target_bound()
+            .map(|bound| (PruneCategory::Data, bound))
+    }
+
+    /// Get the next type of data with anything past its target retention left to delete, to
+    /// reclaim space.
+    ///
+    /// Returns the exclusive height bound given by the minimum retention for that type of data.
+    fn next_extra_bound(&self) -> Option<(PruneCategory, u64)> {
+        if let Some(bound) = self.state.next_extra_bound() {
+            return Some((PruneCategory::State, bound));
+        }
+        self.data
+            .next_extra_bound()
+            .map(|bound| (PruneCategory::Data, bound))
+    }
+
+    fn prune_state(&self, category: PruneCategory) -> &PruneState {
+        match category {
+            PruneCategory::State => &self.state,
+            PruneCategory::Data => &self.data,
+        }
+    }
+
+    fn set_pruned_height(&mut self, category: PruneCategory, height: u64) {
+        match category {
+            PruneCategory::State => self.state.min_height = height + 1,
+            PruneCategory::Data => self.data.min_height = height + 1,
+        }
+    }
+}
+
+#[derive(PartialEq)]
+pub enum StorageConnectionType {
+    Sequencer,
+    Query,
+}
+
+impl SqlStorage {
+    pub fn pool(&self) -> Pool<Db> {
+        self.pool.clone()
+    }
+
+    /// Connect to a remote database.
+    #[allow(unused_variables)]
+    pub async fn connect(
+        mut config: Config,
+        connection_type: StorageConnectionType,
+    ) -> Result<Self, Error> {
+        let metrics = PrometheusMetrics::default();
+        let pool_metrics = PoolMetrics::new(&*metrics.subgroup("sql".into()));
+
+        #[cfg(feature = "embedded-db")]
+        let pool = config.pool_opt.clone();
+        #[cfg(not(feature = "embedded-db"))]
+        let pool = match connection_type {
+            StorageConnectionType::Sequencer => config.pool_opt.clone(),
+            StorageConnectionType::Query => config.pool_opt_query.clone(),
+        };
+
+        let pruner_cfg = config.pruner_cfg;
+        let serializable_retry_config = config.serializable_retry_config;
+
+        // Only reuse the same pool if we're using sqlite
+        if cfg!(feature = "embedded-db") || connection_type == StorageConnectionType::Sequencer {
+            // re-use the same pool if present and return early
+            if let Some(pool) = config.pool {
+                return Ok(Self {
+                    metrics,
+                    pool_metrics,
+                    pool,
+                    pruner_cfg,
+                    serializable_retry_config,
+                });
+            }
+        } else if config.pool.is_some() {
+            tracing::info!("not reusing existing pool for query connection");
+        }
+
+        #[cfg(not(feature = "embedded-db"))]
+        let schema = config.schema.clone();
+        #[cfg(not(feature = "embedded-db"))]
+        let pool = pool.after_connect(move |conn, _| {
+            let schema = config.schema.clone();
+            async move {
+                query(&format!("SET search_path TO {schema}"))
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            }
+            .boxed()
+        });
+
+        #[cfg(feature = "embedded-db")]
+        if config.reset {
+            std::fs::remove_file(config.db_opt.get_filename())?;
+        }
+
+        let pool = pool.connect_with(config.db_opt).await?;
+
+        // Create or connect to the schema for this query service.
+        let mut conn = pool.acquire().await?;
+
+        // Disable statement timeout for migrations, as they can take a long time
+        #[cfg(not(feature = "embedded-db"))]
+        query("SET statement_timeout = 0")
+            .execute(conn.as_mut())
+            .await?;
+
+        #[cfg(not(feature = "embedded-db"))]
+        if config.reset {
+            query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+                .execute(conn.as_mut())
+                .await?;
+        }
+
+        #[cfg(not(feature = "embedded-db"))]
+        query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+            .execute(conn.as_mut())
+            .await?;
+
+        // Get migrations and interleave with custom migrations, sorting by version number.
+        validate_migrations(&mut config.migrations)?;
+        let migrations =
+            add_custom_migrations(default_migrations(), config.migrations).collect::<Vec<_>>();
+
+        // Get a migration runner. Depending on the config, we can either use this to actually run
+        // the migrations or just check if the database is up to date.
+        let runner = refinery::Runner::new(&migrations).set_grouped(true);
+
+        if config.no_migrations {
+            // We've been asked not to run any migrations. Abort if the DB is not already up to
+            // date.
+            let last_applied = runner
+                .get_last_applied_migration_async(&mut Migrator::from(&mut conn))
+                .await?;
+            let last_expected = migrations.last();
+            if last_applied.as_ref() != last_expected {
+                return Err(Error::msg(format!(
+                    "DB is out of date: last applied migration is {last_applied:?}, but expected \
+                     {last_expected:?}"
+                )));
+            }
+        } else {
+            // Run migrations using `refinery`.
+            match runner.run_async(&mut Migrator::from(&mut conn)).await {
+                Ok(report) => {
+                    tracing::info!("ran DB migrations: {report:?}");
+                },
+                Err(err) => {
+                    tracing::error!("DB migrations failed: {:?}", err.report());
+                    Err(err)?;
+                },
+            }
+        }
+
+        if config.archive {
+            // If running in archive mode, ensure the pruned height is set to 0, so the fetcher will
+            // reconstruct previously pruned data.
+            query("DELETE FROM pruned_height WHERE id = $1")
+                .bind(Transaction::<Write>::PRUNED_HEIGHT_ID)
+                .execute(conn.as_mut())
+                .await?;
+        }
+
+        conn.close().await?;
+
+        Ok(Self {
+            pool,
+            pool_metrics,
+            metrics,
+            pruner_cfg,
+            serializable_retry_config,
+        })
+    }
+}
+
+/// Retry policy for transactions aborted by PostgreSQL serialization conflicts (SQLSTATE 40001).
+#[derive(Clone, Copy, Debug)]
+pub struct SerializableRetryConfig {
+    /// Initial delay before the first retry.
+    base: Duration,
+    /// Maximum delay between retries.
+    max: Duration,
+    /// Multiplier applied to the delay between successive retries.
+    factor: u32,
+    /// Backoff jitter as a `(numerator, denominator)` ratio of the delay.
+    jitter: (u64, u64),
+    /// Maximum number of retries before giving up.
+    retry_max: u32,
+    /// When set, each retried conflict spawns a background `pg_stat_activity` / `pg_locks` snapshot.
+    pg_stat_diag: bool,
+}
+
+impl Default for SerializableRetryConfig {
+    fn default() -> Self {
+        Self {
+            base: Duration::from_millis(10),
+            max: Duration::from_millis(500),
+            factor: 2,
+            jitter: (5, 10),
+            retry_max: 100,
+            pg_stat_diag: false,
+        }
+    }
+}
+
+impl SerializableRetryConfig {
+    /// Construct a retry policy. `jitter` is a `(numerator, denominator)` ratio of the delay.
+    pub const fn new(
+        base: Duration,
+        max: Duration,
+        factor: u32,
+        jitter: (u64, u64),
+        retry_max: u32,
+        pg_stat_diag: bool,
+    ) -> Self {
+        Self {
+            base,
+            max,
+            factor,
+            jitter,
+            retry_max,
+            pg_stat_diag,
+        }
+    }
+
+    /// Run `f`, retrying (up to `retry_max` times with exponential backoff + jitter) whenever
+    /// `should_retry` returns `true` for the error. `f` is re-run from scratch on each attempt.
+    async fn retry_if<F, Fut, T, E>(
+        &self,
+        op: &'static str,
+        mut should_retry: impl FnMut(&E) -> bool,
+        f: F,
+    ) -> Result<T, E>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+    {
+        let mut delay = self.base;
+        for i in 0..=self.retry_max {
+            match f().await {
+                Ok(res) => return Ok(res),
+                Err(err) if i < self.retry_max && should_retry(&err) => {
+                    tracing::warn!(
+                        op,
+                        attempt = i + 1,
+                        max_retries = self.retry_max,
+                        delay_ms = delay.as_millis(),
+                        "serialization conflict, retrying transaction after {delay:?}"
+                    );
+                    sleep(delay).await;
+                    delay = self.backoff(delay);
+                },
+                Err(err) => return Err(err),
+            }
+        }
+        unreachable!()
+    }
+
+    /// Compute the next backoff delay: `delay * factor` plus random jitter, capped at `max`.
+    fn backoff(&self, delay: Duration) -> Duration {
+        if delay >= self.max {
+            return self.max;
+        }
+        let ms = delay
+            .saturating_mul(self.factor)
+            .as_millis()
+            .min(u64::MAX as u128) as u64;
+        let (jitter_num, jitter_den) = self.jitter;
+        let jitter = if jitter_num == 0 || jitter_den == 0 {
+            0
+        } else {
+            let mut rng = rand::thread_rng();
+            ms * rng.gen_range(0..jitter_num) / jitter_den
+        };
+        min(Duration::from_millis(ms + jitter), self.max)
+    }
+}
+
+/// Returns `true` if `err`'s [`Display`](std::fmt::Display) output identifies it as a PostgreSQL
+/// serialization conflict (SQLSTATE 40001, message "could not serialize access").
+fn is_serialization_conflict_err<E: std::fmt::Display>(err: &E) -> bool {
+    format!("{err:#}").contains("could not serialize access")
+}
+
+/// Like [`is_serialization_conflict_err`] but also logs concurrent DB sessions for diagnostics.
+fn serialization_conflict_with_diag<E: std::fmt::Display>(
+    pool: Pool<Db>,
+    op: &'static str,
+) -> impl FnMut(&E) -> bool {
+    let mut first = true;
+    move |err| {
+        if is_serialization_conflict_err(err) {
+            #[cfg(not(feature = "embedded-db"))]
+            if first {
+                first = false;
+                spawn_pg_stat_activity_log(pool.clone(), op);
+            }
+            #[cfg(feature = "embedded-db")]
+            let _ = (&pool, op, &mut first);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Spawn a background task that queries `pg_stat_activity` and `pg_locks` to identify the
+/// connections and predicate locks involved in a serialization conflict, logging them at `warn`.
+#[cfg(not(feature = "embedded-db"))]
+fn spawn_pg_stat_activity_log(pool: Pool<Db>, op: &'static str) {
+    use sqlx::Row as _;
+    tokio::spawn(async move {
+        match sqlx::query(
+            "SELECT pid, COALESCE(state, 'unknown') AS state, left(COALESCE(query, ''), 200) AS \
+             query FROM pg_stat_activity WHERE pid != pg_backend_pid() AND state IS DISTINCT FROM \
+             'idle' AND usename = current_user",
+        )
+        .fetch_all(&pool)
+        .await
+        {
+            Ok(rows) if rows.is_empty() => {
+                tracing::warn!(op, "serialization conflict: no other non-idle DB sessions");
+            },
+            Ok(rows) => {
+                for row in &rows {
+                    let pid: i32 = row.try_get("pid").unwrap_or(-1);
+                    let state: String = row.try_get("state").unwrap_or_default();
+                    let query_text: String = row.try_get("query").unwrap_or_default();
+                    tracing::warn!(
+                        op,
+                        pid,
+                        state,
+                        "serialization conflict: concurrent session: {query_text}",
+                    );
+                }
+            },
+            Err(e) => {
+                tracing::error!(op, "failed to query pg_stat_activity: {e:#}");
+            },
+        }
+
+        // Log SSI predicate locks held by all non-idle sessions
+        match sqlx::query(
+            "SELECT l.pid, l.locktype, CASE WHEN l.relation IS NOT NULL THEN c.relname ELSE NULL \
+             END AS relation, l.page, l.tuple, left(COALESCE(a.query, ''), 100) AS query FROM \
+             pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid LEFT JOIN pg_class c ON c.oid = \
+             l.relation WHERE l.mode = 'SIReadLock' AND a.state IS DISTINCT FROM 'idle' AND l.pid \
+             != pg_backend_pid() ORDER BY l.pid, c.relname",
+        )
+        .fetch_all(&pool)
+        .await
+        {
+            Ok(rows) if rows.is_empty() => {
+                tracing::warn!(op, "serialization conflict: no SIReadLocks held");
+            },
+            Ok(rows) => {
+                for row in &rows {
+                    let pid: i32 = row.try_get("pid").unwrap_or(-1);
+                    let locktype: String = row.try_get("locktype").unwrap_or_default();
+                    let relation: Option<String> = row.try_get("relation").unwrap_or(None);
+                    let page: Option<i32> = row.try_get("page").unwrap_or(None);
+                    let tuple: Option<i16> = row.try_get("tuple").unwrap_or(None);
+                    let query_text: String = row.try_get("query").unwrap_or_default();
+                    tracing::warn!(
+                        op,
+                        pid,
+                        locktype,
+                        relation,
+                        page,
+                        tuple,
+                        "serialization conflict: SIReadLock: {query_text}",
+                    );
+                }
+            },
+            Err(e) => {
+                tracing::warn!(op, "failed to query pg_locks: {e:#}");
+            },
+        }
+    });
+}
+
+#[async_trait]
+impl SerializableRetry for SqlStorage {
+    async fn serializable_retry<T, E, F, Fut>(&self, op: &'static str, f: F) -> Result<T, E>
+    where
+        T: Send,
+        E: std::fmt::Display + Send,
+        F: Fn() -> Fut + Send + Sync,
+        Fut: Future<Output = Result<T, E>> + Send,
+    {
+        if self.serializable_retry_config.pg_stat_diag {
+            self.serializable_retry_config
+                .retry_if(op, serialization_conflict_with_diag(self.pool(), op), f)
+                .await
+        } else {
+            self.serializable_retry_config
+                .retry_if(op, is_serialization_conflict_err, f)
+                .await
+        }
+    }
+}
+
+#[cfg(test)]
+mod serializable_retry_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    };
+
+    use super::{Duration, SerializableRetryConfig, is_serialization_conflict_err};
+
+    /// A retry policy with small delays and a low retry cap, so the exhaustion test runs quickly.
+    const TEST_RETRY: SerializableRetryConfig = SerializableRetryConfig::new(
+        Duration::from_millis(1),
+        Duration::from_millis(5),
+        2,
+        (5, 10),
+        5,
+        false,
+    );
+
+    /// An error whose message matches a PostgreSQL serialization conflict.
+    fn mock_serialization_error() -> anyhow::Error {
+        anyhow::anyhow!(
+            "could not serialize access due to read/write dependencies among transactions"
+        )
+    }
+
+    #[test]
+    fn test_is_serialization_conflict_err() {
+        // The PostgreSQL serialization-conflict message must be recognised.
+        assert!(is_serialization_conflict_err(&mock_serialization_error()));
+        // Other database errors must NOT match.
+        assert!(!is_serialization_conflict_err(&anyhow::anyhow!(
+            "duplicate key value violates unique constraint"
+        )));
+        // Non-database errors must not match.
+        assert!(!is_serialization_conflict_err(&anyhow::anyhow!(
+            "plain error"
+        )));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_retry_if_succeeds_immediately() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = calls.clone();
+
+        let result: anyhow::Result<()> = TEST_RETRY
+            .retry_if("test", is_serialization_conflict_err, || {
+                let calls = calls_clone.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_retry_if_retries_on_serialization_error() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = calls.clone();
+
+        // The closure fails twice with a serialization error, then succeeds on the third attempt.
+        let result: anyhow::Result<()> = TEST_RETRY
+            .retry_if("test", is_serialization_conflict_err, || {
+                let calls = calls_clone.clone();
+                async move {
+                    let n = calls.fetch_add(1, Ordering::SeqCst);
+                    if n < 2 {
+                        Err(mock_serialization_error())
+                    } else {
+                        Ok(())
+                    }
+                }
+            })
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_retry_if_exhausts_retries() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = calls.clone();
+
+        // The closure always fails; retry must give up after TEST_RETRY.retry_max (5) retries.
+        let result: anyhow::Result<()> = TEST_RETRY
+            .retry_if("test", is_serialization_conflict_err, || {
+                let calls = calls_clone.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(mock_serialization_error())
+                }
+            })
+            .await;
+
+        assert!(result.is_err());
+        // 1 initial attempt + 5 retries = 6 total calls.
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_retry_if_no_retry_on_other_errors() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = calls.clone();
+
+        // Non-serialization errors must not be retried.
+        let result: anyhow::Result<()> = TEST_RETRY
+            .retry_if("test", is_serialization_conflict_err, || {
+                let calls = calls_clone.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(anyhow::anyhow!("unrelated error"))
+                }
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Verify that [`function_name!`](crate::function_name) resolves to the unqualified name of the
+    /// enclosing function, both from a nested helper and from the test fn itself.
+    #[test]
+    fn test_function_name_macro() {
+        fn outer_test_fn() -> &'static str {
+            crate::function_name!()
+        }
+        assert_eq!(outer_test_fn(), "outer_test_fn");
+        assert_eq!(crate::function_name!(), "test_function_name_macro");
+
+        // Non-ASCII identifiers must not panic: the macro slices the `type_name` output, and
+        // a multi-byte codepoint near a slice boundary would panic if the macro used fixed
+        // byte offsets instead of char-boundary-safe operations.
+        fn télécharger() -> &'static str {
+            crate::function_name!()
+        }
+        assert_eq!(télécharger(), "télécharger");
+    }
+
+    /// Verify that [`function_name!`](crate::function_name) resolves to the function name even from
+    /// `async` contexts, where the body is lowered into a generator/closure. This is the case that
+    /// every production call site hits, and a naive macro reports `{{closure}}` here.
+    #[test_log::test(tokio::test)]
+    async fn test_function_name_macro_async() {
+        // Plain `async fn`: the body becomes a generator, adding a `{{closure}}` path segment.
+        async fn plain_async_fn() -> &'static str {
+            crate::function_name!()
+        }
+        assert_eq!(plain_async_fn().await, "plain_async_fn");
+
+        // Closure returning an async block inside an `async fn`, mirroring the real
+        // `serializable_retry!(self, || async { .. })` call sites: adds multiple `{{closure}}`
+        // segments to the path.
+        async fn nested_async_blocks() -> &'static str {
+            let f = || async { crate::function_name!() };
+            f().await
+        }
+        assert_eq!(nested_async_blocks().await, "nested_async_blocks");
+
+        // `#[async_trait]` method: the body is rewritten to `Box::pin(async move { .. })`, exactly
+        // as the real `serializable_retry!` call sites are.
+        struct S;
+        #[async_trait::async_trait]
+        trait T {
+            async fn async_trait_method(&self) -> &'static str;
+        }
+        #[async_trait::async_trait]
+        impl T for S {
+            async fn async_trait_method(&self) -> &'static str {
+                crate::function_name!()
+            }
+        }
+        assert_eq!(S.async_trait_method().await, "async_trait_method");
+    }
+}
+
+impl PrunerConfig for SqlStorage {
+    fn set_pruning_config(&mut self, cfg: PrunerCfg) {
+        self.pruner_cfg = Some(cfg);
+    }
+
+    fn get_pruning_config(&self) -> Option<PrunerCfg> {
+        self.pruner_cfg.clone()
+    }
+}
+
+impl HasMetrics for SqlStorage {
+    fn metrics(&self) -> &PrometheusMetrics {
+        &self.metrics
+    }
+}
+
+impl SqlStorage {
+    async fn prune_write(&self) -> anyhow::Result<Transaction<Prune>> {
+        Transaction::new(&self.pool, self.pool_metrics.clone()).await
+    }
+
+    /// Open a transaction for a deferred-migration batch.
+    ///
+    /// Backfill transactions run under READ COMMITTED on Postgres so long-running batches don't
+    /// trip SSI predicate-lock conflicts against concurrent consensus writes. See [`Backfill`].
+    pub async fn backfill(&self) -> anyhow::Result<Transaction<Backfill>> {
+        Transaction::new(&self.pool, self.pool_metrics.clone()).await
+    }
+
+    async fn new_pruner<'a>(&'a self) -> anyhow::Result<Pruner<'a>> {
+        let cfg = self
+            .pruner_cfg
+            .as_ref()
+            .context("pruning config not found")?;
+        let now = Utc::now().timestamp();
+
+        let (min_height, state_min_height) = {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction to load pruned heights")?;
+            (
+                tx.load_pruned_height()
+                    .await?
+                    .map_or(0, |pruned| pruned + 1),
+                tx.load_state_pruned_height()
+                    .await?
+                    .map_or(0, |pruned| pruned + 1),
+            )
+        };
+        Ok(Pruner {
+            data: PruneState {
+                min_height,
+                target_height: self
+                    .get_height_by_timestamp(now - (cfg.target_retention().as_secs()) as i64)
+                    .await
+                    .context("getting height for target retention")?
+                    .map_or(min_height, |to_prune| to_prune + 1),
+                minimum_retention_height: self
+                    .get_height_by_timestamp(now - (cfg.minimum_retention().as_secs()) as i64)
+                    .await
+                    .context("getting height for minimum retention")?
+                    .map_or(min_height, |to_prune| to_prune + 1),
+            },
+            state: PruneState {
+                min_height: state_min_height,
+                target_height: self
+                    .get_height_by_timestamp(now - (cfg.state_target_retention().as_secs()) as i64)
+                    .await
+                    .context("getting height for state target retention")?
+                    .map_or(state_min_height, |to_prune| to_prune + 1),
+                minimum_retention_height: self
+                    .get_height_by_timestamp(now - (cfg.state_minimum_retention().as_secs()) as i64)
+                    .await
+                    .context("getting height for state minimum retention")?
+                    .map_or(state_min_height, |to_prune| to_prune + 1),
+            },
+            cfg,
+            extra_pruning: false,
+        })
+    }
+
+    /// Choose the next `category` batch below `bound`, as the inclusive window `(from, to)`.
+    ///
+    /// `from` is the category's cursor. `to` comes from probing storage for the first height at or
+    /// above the cursor that has any rows, so that a span of heights with nothing to delete is
+    /// consumed in one batch.
+    async fn next_batch_window(
+        &self,
+        pruner: &Pruner<'_>,
+        category: PruneCategory,
+        bound: u64,
+    ) -> anyhow::Result<(u64, u64)> {
+        let from = pruner.prune_state(category).min_height;
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to find next pruning batch")?;
+        let first_present = match category {
+            PruneCategory::Data => tx.first_header_height_from(from).await?,
+            PruneCategory::State => {
+                tx.first_state_height_from(pruner.cfg.state_tables(), from)
+                    .await?
+            },
+        };
+        let to = PruneState::batch_end(bound, pruner.cfg.batch_size(), first_present);
+        Ok((from, to))
+    }
+
+    #[instrument(skip(self, pruner))]
+    async fn prune_batch(
+        &self,
+        pruner: &mut Pruner<'_>,
+        category: PruneCategory,
+        from: u64,
+        to: u64,
+    ) -> anyhow::Result<()> {
+        tracing::info!("pruning batch");
+        match category {
+            PruneCategory::Data => self.prune_data_batch(to).await?,
+            PruneCategory::State => self.prune_state_batch(pruner.cfg, from, to).await?,
+        }
+        pruner.set_pruned_height(category, to);
+        Ok(())
+    }
+
+    async fn prune_data_batch(&self, to: u64) -> anyhow::Result<()> {
+        // Update pruned height first so the fetcher does not try to fetch data that we are about to
+        // delete.
+        let mut tx = self
+            .write()
+            .await
+            .context("opening transaction for pruned height")?;
+        tx.save_pruned_height(to).await?;
+        tx.commit().await.context("committing pruned height")?;
+
+        let mut tx = self
+            .prune_write()
+            .await
+            .context("opening pruning transaction")?;
+        tx.delete_batch(to).await?;
+        tx.commit().await.context("committing deleted batch")
+    }
+
+    /// State is never fetched from peers, so unlike data the marker need not commit first.
+    async fn prune_state_batch(&self, cfg: &PrunerCfg, from: u64, to: u64) -> anyhow::Result<()> {
+        if cfg.state_tables().is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self
+            .prune_write()
+            .await
+            .context("opening transaction to delete state")?;
+        tx.delete_state_batch(cfg.state_tables(), from, to).await?;
+        tx.save_state_pruned_height(to).await?;
+        tx.commit().await.context("committing deleted state")
+    }
+
+    /// Prune merklized state below `height`, never within `min_retention` of the state head and
+    /// never past it, since the state writer resumes from there. Consensus data is untouched.
+    pub async fn prune_state_below(
+        &self,
+        height: u64,
+        min_retention: u64,
+        cfg: &PrunerCfg,
+    ) -> anyhow::Result<()> {
+        let (min_height, head) = {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction to load state heights")?;
+            (
+                tx.load_state_pruned_height()
+                    .await?
+                    .map_or(0, |pruned| pruned + 1),
+                tx.get_last_state_height().await? as u64,
+            )
+        };
+
+        let target = min(height, head.saturating_sub(min_retention));
+        if min_height >= target {
+            tracing::debug!(
+                head,
+                target,
+                from = min_height,
+                "no archived state to prune"
+            );
+            return Ok(());
+        }
+
+        tracing::info!(head, target, from = min_height, "pruning archived state");
+        let mut from = min_height;
+        let mut batches = 0u64;
+        while let Some(to) = next_batch(from, cfg.batch_size(), target) {
+            let mut backoff = ExponentialBuilder::default().build();
+            loop {
+                match self.prune_state_batch(cfg, from, to).await {
+                    Ok(()) => break,
+                    Err(err) => match backoff.next() {
+                        Some(delay) => {
+                            tracing::warn!(%err, to, "retrying archived state batch");
+                            sleep(delay).await;
+                        },
+                        None => return Err(err),
+                    },
+                }
+            }
+            from = to + 1;
+
+            batches += 1;
+            if batches.is_multiple_of(10) {
+                tracing::info!(from, target, "archived state pruning progress");
+                self.vacuum(cfg.incremental_vacuum_pages()).await?;
+            }
+        }
+        self.vacuum(cfg.incremental_vacuum_pages()).await
+    }
+
+    async fn get_disk_usage(&self) -> anyhow::Result<u64> {
+        let mut tx = self.read().await?;
+
+        #[cfg(not(feature = "embedded-db"))]
+        let query = "SELECT pg_database_size(current_database())";
+
+        #[cfg(feature = "embedded-db")]
+        let query = "
+            SELECT( (SELECT page_count FROM pragma_page_count) * (SELECT * FROM pragma_page_size)) \
+                     AS total_bytes";
+
+        let row = tx.fetch_one(query).await.context("getting disk usage")?;
+        let size: i64 = row.get(0);
+
+        Ok(size as u64)
+    }
+
+    /// No-op on Postgres: no incremental vacuum, and a full one is too expensive to schedule.
+    async fn vacuum(&self, pages: u64) -> anyhow::Result<()> {
+        if !cfg!(feature = "embedded-db") {
+            return Ok(());
+        }
+        let mut conn = self.pool().acquire().await?;
+        query(&format!("PRAGMA incremental_vacuum({pages})"))
+            .execute(conn.as_mut())
+            .await
+            .context("triggering vacuum")?;
+        conn.close().await?;
+        Ok(())
+    }
+
+    async fn get_height_by_timestamp(&self, timestamp: i64) -> QueryResult<Option<u64>> {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+
+        // We order by timestamp and then height, even though logically this is no different than
+        // just ordering by height, since timestamps are monotonic. The reason is that this order
+        // allows the query planner to efficiently solve the where clause and presort the results
+        // based on the timestamp index. The remaining sort on height, which guarantees a unique
+        // block if multiple blocks have the same timestamp, is very efficient, because there are
+        // never more than a handful of blocks with the same timestamp.
+        let Some((height,)) = query_as::<(i64,)>(
+            "SELECT height FROM header
+              WHERE timestamp <= $1
+              ORDER BY timestamp DESC, height DESC
+              LIMIT 1",
+        )
+        .bind(timestamp)
+        .fetch_optional(tx.as_mut())
+        .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(height as u64))
+    }
+
+    /// Get the stored VID share for a given block, if one exists.
+    pub async fn get_vid_share<Types>(&self, block_id: BlockId<Types>) -> QueryResult<VidShare>
+    where
+        Types: NodeType,
+        Header<Types>: QueryableHeader<Types>,
+    {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+        let share = tx.vid_share(block_id).await?;
+        Ok(share)
+    }
+
+    /// Get the stored VID common data for a given block, if one exists.
+    pub async fn get_vid_common<Types: NodeType>(
+        &self,
+        block_id: BlockId<Types>,
+    ) -> QueryResult<VidCommonQueryData<Types>>
+    where
+        <Types as NodeType>::BlockPayload: QueryablePayload<Types>,
+        <Types as NodeType>::BlockHeader: QueryableHeader<Types>,
+    {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+        let common = tx.get_vid_common(block_id).await?;
+        Ok(common)
+    }
+
+    /// Get the stored VID common metadata for a given block, if one exists.
+    pub async fn get_vid_common_metadata<Types: NodeType>(
+        &self,
+        block_id: BlockId<Types>,
+    ) -> QueryResult<VidCommonMetadata<Types>>
+    where
+        <Types as NodeType>::BlockPayload: QueryablePayload<Types>,
+        <Types as NodeType>::BlockHeader: QueryableHeader<Types>,
+    {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+        let common = tx.get_vid_common_metadata(block_id).await?;
+        Ok(common)
+    }
+}
+
+#[async_trait]
+impl PruneStorage for SqlStorage {
+    type Pruner<'a> = Option<Pruner<'a>>;
+
+    /// Note: The prune operation may not immediately free up space even after rows are deleted.
+    /// This is because a vacuum operation may be necessary to reclaim more space.
+    /// PostgreSQL already performs auto vacuuming, so we are not including it here
+    /// as running a vacuum operation can be resource-intensive.
+    #[instrument(skip(self))]
+    async fn prune<'a>(&'a self, pruner: &mut Option<Pruner<'a>>) -> anyhow::Result<Option<u64>> {
+        let pruner = match pruner {
+            Some(pruner) => pruner,
+            None => pruner.get_or_insert(self.new_pruner().await?),
+        };
+
+        // Prune data exceeding target retention in batches
+        if let Some((category, bound)) = pruner.next_target_bound() {
+            tracing::info!("pruning to target retention");
+            let (from, to) = self.next_batch_window(pruner, category, bound).await?;
+            self.prune_batch(pruner, category, from, to).await?;
+            return Ok(Some(to));
+        }
+
+        // If threshold is set, prune data exceeding minimum retention in batches. This parameter is
+        // needed for SQL storage as there is no direct way to get free space.
+        let Some(threshold) = pruner.cfg.pruning_threshold() else {
+            return Ok(None);
+        };
+        let usage = self.get_disk_usage().await?;
+
+        // Pruning beyond the target retention is triggered when usage exceeds the threshold.
+        if usage > threshold {
+            tracing::info!(usage, threshold, "Disk usage exceeds pruning threshold");
+            pruner.extra_pruning = true;
+        }
+        if !pruner.extra_pruning {
+            return Ok(None);
+        }
+
+        // Once extra pruning is triggered, we continue until the usage ratio drops below
+        // `max_usage`.
+        if (usage as f64 / threshold as f64) <= (f64::from(pruner.cfg.max_usage()) / 10000.0) {
+            tracing::info!(
+                usage,
+                threshold,
+                "space reclaimed makes usage less than threshold"
+            );
+            return Ok(None);
+        }
+
+        // Prune the next extra batch if possible.
+        let Some((category, bound)) = pruner.next_extra_bound() else {
+            return Ok(None);
+        };
+
+        tracing::info!("pruning beyond target retention");
+        let (from, to) = self.next_batch_window(pruner, category, bound).await?;
+        self.prune_batch(pruner, category, from, to).await?;
+        self.vacuum(pruner.cfg.incremental_vacuum_pages()).await?;
+        Ok(Some(to))
+    }
+}
+
+impl VersionedDataSource for SqlStorage {
+    type Transaction<'a>
+        = Transaction<Write>
+    where
+        Self: 'a;
+    type ReadOnly<'a>
+        = Transaction<Read>
+    where
+        Self: 'a;
+
+    async fn write(&self) -> anyhow::Result<Transaction<Write>> {
+        Transaction::new(&self.pool, self.pool_metrics.clone()).await
+    }
+
+    async fn read(&self) -> anyhow::Result<Transaction<Read>> {
+        Transaction::new(&self.pool, self.pool_metrics.clone()).await
+    }
+}
+
+// These tests run the `postgres` Docker image, which doesn't work on Windows.
+#[cfg(all(any(test, feature = "testing"), not(target_os = "windows")))]
+pub mod testing {
+    #![allow(unused_imports)]
+    use std::{
+        env,
+        process::{Child, Command, Stdio},
+        time::Duration,
+    };
+
+    use refinery::Migration;
+    use test_utils::reserve_tcp_port;
+    use tokio::time::timeout;
+
+    use super::Config;
+    use crate::testing::sleep;
+    #[derive(Debug)]
+    pub struct TmpDb {
+        #[cfg(not(feature = "embedded-db"))]
+        host: String,
+        #[cfg(not(feature = "embedded-db"))]
+        port: u16,
+        #[cfg(not(feature = "embedded-db"))]
+        data_dir: std::path::PathBuf,
+        #[cfg(not(feature = "embedded-db"))]
+        postgres: Option<Child>,
+        #[cfg(feature = "embedded-db")]
+        db_path: std::path::PathBuf,
+        #[allow(dead_code)]
+        persistent: bool,
+    }
+    impl TmpDb {
+        #[cfg(feature = "embedded-db")]
+        fn init_sqlite_db(persistent: bool) -> Self {
+            let file = tempfile::Builder::new()
+                .prefix("sqlite-")
+                .suffix(".db")
+                .tempfile()
+                .unwrap();
+
+            let (_, db_path) = file.keep().unwrap();
+
+            Self {
+                db_path,
+                persistent,
+            }
+        }
+        pub async fn init() -> Self {
+            #[cfg(feature = "embedded-db")]
+            return Self::init_sqlite_db(false);
+
+            #[cfg(not(feature = "embedded-db"))]
+            Self::init_postgres(false).await
+        }
+
+        pub async fn persistent() -> Self {
+            #[cfg(feature = "embedded-db")]
+            return Self::init_sqlite_db(true);
+
+            #[cfg(not(feature = "embedded-db"))]
+            Self::init_postgres(true).await
+        }
+
+        #[cfg(not(feature = "embedded-db"))]
+        async fn init_postgres(persistent: bool) -> Self {
+            let port = reserve_tcp_port().unwrap();
+            let host = "127.0.0.1".to_string();
+
+            // initdb requires an empty target; clear any dir left by a crashed run
+            // that reused this (recycled) ephemeral port.
+            let data_dir = env::temp_dir().join(format!("espresso-tmpdb-{port}"));
+            let _ = std::fs::remove_dir_all(&data_dir);
+
+            let output = Command::new("initdb")
+                .arg("-D")
+                .arg(&data_dir)
+                .args(["-U", "postgres", "--auth=trust"])
+                .output()
+                .expect("initdb failed to run; is postgres installed and on PATH?");
+            assert!(
+                output.status.success(),
+                "initdb failed for {data_dir:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let mut db = Self {
+                host,
+                port,
+                data_dir,
+                postgres: None,
+                persistent,
+            };
+
+            db.start_postgres().await;
+            db
+        }
+
+        #[cfg(not(feature = "embedded-db"))]
+        pub fn host(&self) -> String {
+            self.host.clone()
+        }
+
+        #[cfg(not(feature = "embedded-db"))]
+        pub fn port(&self) -> u16 {
+            self.port
+        }
+
+        #[cfg(feature = "embedded-db")]
+        pub fn path(&self) -> std::path::PathBuf {
+            self.db_path.clone()
+        }
+
+        pub fn config(&self) -> Config {
+            #[cfg(feature = "embedded-db")]
+            let mut cfg = Config::default().db_path(self.db_path.clone());
+
+            #[cfg(not(feature = "embedded-db"))]
+            let mut cfg = Config::default()
+                .user("postgres")
+                .password("password")
+                .host(self.host())
+                .port(self.port());
+
+            cfg = cfg.migrations(vec![
+                Migration::unapplied(
+                    "V101__create_test_merkle_tree_table.sql",
+                    &TestMerkleTreeMigration::create("test_tree"),
+                )
+                .unwrap(),
+            ]);
+
+            cfg
+        }
+
+        #[cfg(not(feature = "embedded-db"))]
+        pub fn stop_postgres(&mut self) {
+            let Some(mut postgres) = self.postgres.take() else {
+                return;
+            };
+            tracing::info!(port = self.port, "stopping postgres");
+            // Fast shutdown (SIGINT to the postmaster) releases the datadir before
+            // Drop removes it; fall back to SIGKILL if pg_ctl is unavailable.
+            let stopped = Command::new("pg_ctl")
+                .arg("-D")
+                .arg(&self.data_dir)
+                .args(["stop", "-m", "fast", "-w"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            if !stopped {
+                let _ = postgres.kill();
+            }
+            let _ = postgres.wait();
+        }
+
+        #[cfg(not(feature = "embedded-db"))]
+        pub async fn start_postgres(&mut self) {
+            self.stop_postgres();
+            tracing::info!(port = self.port, "starting postgres");
+            let postgres = Command::new("postgres")
+                .arg("-D")
+                .arg(&self.data_dir)
+                .args(["-p", &self.port.to_string()])
+                .args(["-h", &self.host])
+                // Keep the unix socket inside the data dir instead of a shared /tmp.
+                .arg("-k")
+                .arg(&self.data_dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("failed to start postgres; is it installed and on PATH?");
+            self.postgres = Some(postgres);
+
+            self.wait_for_ready().await;
+        }
+
+        #[cfg(not(feature = "embedded-db"))]
+        async fn wait_for_ready(&self) {
+            let timeout_duration = Duration::from_secs(
+                env::var("SQL_TMP_DB_CONNECT_TIMEOUT")
+                    .unwrap_or("60".to_string())
+                    .parse()
+                    .expect("SQL_TMP_DB_CONNECT_TIMEOUT must be an integer number of seconds"),
+            );
+
+            if let Err(err) = timeout(timeout_duration, async {
+                while !Command::new("pg_isready")
+                    .args(["-h", &self.host])
+                    .args(["-p", &self.port.to_string()])
+                    .args(["-U", "postgres"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map(|status| status.success())
+                    .unwrap_or(false)
+                {
+                    tracing::warn!("database is not ready");
+                    sleep(Duration::from_secs(1)).await;
+                }
+            })
+            .await
+            {
+                panic!(
+                    "failed to connect to TmpDb within configured timeout {timeout_duration:?}: \
+                     {err:#}\n{}",
+                    "Consider increasing the timeout by setting SQL_TMP_DB_CONNECT_TIMEOUT"
+                );
+            }
+        }
+    }
+
+    #[cfg(not(feature = "embedded-db"))]
+    impl Drop for TmpDb {
+        fn drop(&mut self) {
+            self.stop_postgres();
+            if !self.persistent {
+                let _ = std::fs::remove_dir_all(&self.data_dir);
+            }
+        }
+    }
+
+    #[cfg(feature = "embedded-db")]
+    impl Drop for TmpDb {
+        fn drop(&mut self) {
+            if !self.persistent {
+                std::fs::remove_file(self.db_path.clone()).unwrap();
+            }
+        }
+    }
+
+    pub struct TestMerkleTreeMigration;
+
+    impl TestMerkleTreeMigration {
+        fn create(name: &str) -> String {
+            let (bit_vec, binary, hash_pk, root_stored_column) = if cfg!(feature = "embedded-db") {
+                (
+                    "TEXT",
+                    "BLOB",
+                    "INTEGER PRIMARY KEY AUTOINCREMENT",
+                    " (json_extract(data, '$.test_merkle_tree_root'))",
+                )
+            } else {
+                (
+                    "BIT(8)",
+                    "BYTEA",
+                    "BIGSERIAL PRIMARY KEY",
+                    "(data->>'test_merkle_tree_root')",
+                )
+            };
+
+            format!(
+                "CREATE TABLE IF NOT EXISTS hash
+            (
+                id {hash_pk},
+                value {binary}  NOT NULL UNIQUE
+            );
+
+            ALTER TABLE header
+            ADD column test_merkle_tree_root text
+            GENERATED ALWAYS as {root_stored_column} STORED;
+
+            CREATE TABLE {name}
+            (
+                path JSONB NOT NULL,
+                created BIGINT NOT NULL,
+                hash_id BIGINT NOT NULL,
+                children JSONB,
+                children_bitvec {bit_vec},
+                idx JSONB,
+                entry JSONB,
+                PRIMARY KEY (path, created)
+            );
+            CREATE INDEX {name}_created ON {name} (created);"
+            )
+        }
+    }
+}
+
+// These tests run the `postgres` Docker image, which doesn't work on Windows.
+#[cfg(all(test, not(target_os = "windows")))]
+mod test {
+    use std::time::Duration;
+
+    use hotshot_example_types::{
+        node_types::TEST_VERSIONS,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
+    use jf_merkle_tree_compat::{
+        MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme, prelude::UniversalMerkleTree,
+    };
+    use tokio::time::sleep;
+
+    use super::{testing::TmpDb, *};
+    use crate::{
+        availability::{BlockQueryData, LeafQueryData},
+        data_source::storage::{
+            MerklizedStateStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
+        },
+        merklized_state::{MerklizedState, Snapshot, UpdateStateData},
+        testing::mocks::{MockMerkleTree, MockTypes},
+    };
+
+    impl SqlStorage {
+        async fn get_minimum_height(&self) -> QueryResult<Option<u64>> {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            let (Some(height),) =
+                query_as::<(Option<i64>,)>("SELECT MIN(height) as height FROM header")
+                    .fetch_one(tx.as_mut())
+                    .await?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(height as u64))
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_migrations() {
+        let db = TmpDb::init().await;
+        let cfg = db.config();
+
+        let connect = |migrations: bool, custom_migrations| {
+            let cfg = cfg.clone();
+            async move {
+                let mut cfg = cfg.migrations(custom_migrations);
+                if !migrations {
+                    cfg = cfg.no_migrations();
+                }
+                let client = SqlStorage::connect(cfg, StorageConnectionType::Query).await?;
+                Ok::<_, Error>(client)
+            }
+        };
+
+        // Connecting with migrations disabled should fail if the database is not already up to date
+        // (since we've just created a fresh database, it isn't).
+        let err = connect(false, vec![]).await.unwrap_err();
+        tracing::info!("connecting without running migrations failed as expected: {err}");
+
+        // Now connect and run migrations to bring the database up to date.
+        connect(true, vec![]).await.unwrap();
+        // Now connecting without migrations should work.
+        connect(false, vec![]).await.unwrap();
+
+        // Connect with some custom migrations, to advance the schema even further. Pass in the
+        // custom migrations out of order; they should still execute in order of version number.
+        // The SQL commands used here will fail if not run in order.
+        let migrations = vec![
+            Migration::unapplied(
+                "V9999__create_test_table.sql",
+                "ALTER TABLE test ADD COLUMN data INTEGER;",
+            )
+            .unwrap(),
+            Migration::unapplied(
+                "V9998__create_test_table.sql",
+                "CREATE TABLE test (x bigint);",
+            )
+            .unwrap(),
+        ];
+        connect(true, migrations.clone()).await.unwrap();
+
+        // Connect using the default schema (no custom migrations) and not running migrations. This
+        // should fail because the database is _ahead_ of the client in terms of schema.
+        let err = connect(false, vec![]).await.unwrap_err();
+        tracing::info!("connecting without running migrations failed as expected: {err}");
+
+        // Connecting with the customized schema should work even without running migrations.
+        connect(true, migrations).await.unwrap();
+    }
+
+    #[test]
+    #[cfg(not(feature = "embedded-db"))]
+    fn test_config_from_str() {
+        let cfg = Config::from_str("postgresql://user:password@host:8080").unwrap();
+        assert_eq!(cfg.db_opt.get_username(), "user");
+        assert_eq!(cfg.db_opt.get_host(), "host");
+        assert_eq!(cfg.db_opt.get_port(), 8080);
+    }
+
+    #[test]
+    #[cfg(feature = "embedded-db")]
+    fn test_config_from_str() {
+        let cfg = Config::from_str("sqlite://data.db").unwrap();
+        assert_eq!(cfg.db_opt.get_filename().to_string_lossy(), "data.db");
+    }
+
+    async fn vacuum(storage: &SqlStorage) {
+        #[cfg(feature = "embedded-db")]
+        let query = "PRAGMA incremental_vacuum(16000)";
+        #[cfg(not(feature = "embedded-db"))]
+        let query = "VACUUM";
+        storage
+            .pool
+            .acquire()
+            .await
+            .unwrap()
+            .execute(query)
+            .await
+            .unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_target_period_pruning() {
+        let db = TmpDb::init().await;
+        let cfg = db.config();
+
+        let mut storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
+            &TestValidatedState::default(),
+            &TestInstanceState::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        // insert some mock data
+        for i in 0..20 {
+            leaf.leaf.block_header_mut().block_number = i;
+            leaf.leaf.block_header_mut().timestamp = Utc::now().timestamp() as u64;
+            let mut tx = storage.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let height_before_pruning = storage.get_minimum_height().await.unwrap().unwrap();
+
+        // Set pruner config to default which has minimum retention set to 1 day
+        storage.set_pruning_config(PrunerCfg::new());
+        // No data will be pruned
+        let pruned_height = storage.prune(&mut Default::default()).await.unwrap();
+
+        // Vacuum the database to reclaim space.
+        // This is necessary to ensure the test passes.
+        // Note: We don't perform a vacuum after each pruner run in production because the auto vacuum job handles it automatically.
+        vacuum(&storage).await;
+        // Pruned height should be none
+        assert!(pruned_height.is_none());
+
+        let height_after_pruning = storage.get_minimum_height().await.unwrap().unwrap();
+
+        assert_eq!(
+            height_after_pruning, height_before_pruning,
+            "some data has been pruned"
+        );
+
+        // Set pruner config to target retention set to 1s
+        storage.set_pruning_config(PrunerCfg::new().with_target_retention(Duration::from_secs(1)));
+        sleep(Duration::from_secs(2)).await;
+        let usage_before_pruning = storage.get_disk_usage().await.unwrap();
+        // All of the data is now older than 1s.
+        // This would prune all the data as the target retention is set to 1s
+        let pruned_height = storage.prune(&mut Default::default()).await.unwrap();
+        // Vacuum the database to reclaim space.
+        // This is necessary to ensure the test passes.
+        // Note: We don't perform a vacuum after each pruner run in production because the auto vacuum job handles it automatically.
+        vacuum(&storage).await;
+
+        // Pruned height should be some
+        assert!(pruned_height.is_some());
+        let usage_after_pruning = storage.get_disk_usage().await.unwrap();
+        // All the tables should be empty
+        // counting rows in header table
+        let header_rows = storage
+            .read()
+            .await
+            .unwrap()
+            .fetch_one("select count(*) as count from header")
+            .await
+            .unwrap()
+            .get::<i64, _>("count");
+        // the table should be empty
+        assert_eq!(header_rows, 0);
+
+        // counting rows in leaf table.
+        // Deleting rows from header table would delete rows in all the tables
+        // as each of table implement "ON DELETE CASCADE" fk constraint with the header table.
+        let leaf_rows = storage
+            .read()
+            .await
+            .unwrap()
+            .fetch_one("select count(*) as count from leaf")
+            .await
+            .unwrap()
+            .get::<i64, _>("count");
+        // the table should be empty
+        assert_eq!(leaf_rows, 0);
+
+        assert!(
+            usage_before_pruning > usage_after_pruning,
+            " disk usage should decrease after pruning"
+        )
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_merklized_state_pruning() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let num_blocks = 10_000u64;
+        let mut test_tree: UniversalMerkleTree<_, _, _, 8, _> =
+            MockMerkleTree::new(MockMerkleTree::tree_height());
+
+        // Insert entries and merkle nodes for each block height.
+        let mut tx = storage.write().await.unwrap();
+        for height in 0..num_blocks {
+            test_tree.update(height as usize, height as usize).unwrap();
+
+            let test_data = serde_json::json!({
+                MockMerkleTree::header_state_commitment_field():
+                    serde_json::to_value(test_tree.commitment()).unwrap()
+            });
+            tx.upsert(
+                "header",
+                [
+                    "height",
+                    "hash",
+                    "payload_hash",
+                    "timestamp",
+                    "data",
+                    "ns_table",
+                ],
+                ["height"],
+                [(
+                    height as i64,
+                    format!("hash{height}"),
+                    "ph".to_string(),
+                    0,
+                    test_data,
+                    "ns".to_string(),
+                )],
+            )
+            .await
+            .unwrap();
+
+            let (_, proof) = test_tree.lookup(height as usize).expect_ok().unwrap();
+            let traversal_path = <usize as ToTraversalPath<8>>::to_traversal_path(
+                &(height as usize),
+                test_tree.height(),
+            );
+            UpdateStateData::<_, MockMerkleTree, 8>::insert_merkle_nodes(
+                &mut tx,
+                proof.clone(),
+                traversal_path,
+                height,
+            )
+            .await
+            .unwrap();
+        }
+        UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(
+            &mut tx,
+            num_blocks as usize,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        // Prune up to height 500, keeping only the newest version of each node.
+        let prune_height = 5678u64;
+        let mut tx = storage.prune_write().await.unwrap();
+        tx.delete_state_batch(vec!["test_tree".to_string()], 0, prune_height)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // Verify no paths have multiple versions at or below the prune height.
+        let mut tx = storage.read().await.unwrap();
+        let (duplicates,) = query_as::<(i64,)>(
+            "SELECT count(*) FROM (SELECT count(*) FROM test_tree WHERE created <= $1 GROUP BY \
+             path HAVING count(*) > 1) AS s",
+        )
+        .bind(prune_height as i64)
+        .fetch_one(tx.as_mut())
+        .await
+        .unwrap();
+        assert_eq!(
+            duplicates, 0,
+            "found {duplicates} paths with duplicate versions at or below prune height"
+        );
+
+        // Verify get_path still works for the latest snapshot and returns correct proofs.
+        let commitment = test_tree.commitment();
+        let mut tx = storage.read().await.unwrap();
+        for key in 0..num_blocks as usize {
+            let proof = MerklizedStateStorage::<MockTypes, MockMerkleTree, 8>::get_path(
+                &mut tx,
+                Snapshot::Index(num_blocks - 1),
+                key,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("get_path failed for key {key} after pruning: {e:#}"));
+            assert_eq!(
+                proof.elem(),
+                Some(&key),
+                "proof for key {key} has wrong element: {:?}",
+                proof.elem()
+            );
+            MockMerkleTree::verify(commitment, key, &proof)
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_minimum_retention_pruning() {
+        let db = TmpDb::init().await;
+
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
+            &TestValidatedState::default(),
+            &TestInstanceState::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        // insert some mock data
+        for i in 0..20 {
+            leaf.leaf.block_header_mut().block_number = i;
+            leaf.leaf.block_header_mut().timestamp = Utc::now().timestamp() as u64;
+            let mut tx = storage.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let height_before_pruning = storage.get_minimum_height().await.unwrap().unwrap();
+        let cfg = PrunerCfg::new();
+        // Set pruning_threshold to 1
+        // SQL storage size is more than 1000 bytes even without any data indexed
+        // This would mean that the threshold would always be greater than the disk usage
+        // However, minimum retention is set to 24 hours by default so the data would not be pruned
+        storage.set_pruning_config(cfg.clone().with_pruning_threshold(1));
+        println!("{:?}", storage.get_pruning_config().unwrap());
+        // Pruning would not delete any data
+        // All the data is younger than minimum retention period even though the usage > threshold
+        let pruned_height = storage.prune(&mut Default::default()).await.unwrap();
+        // Vacuum the database to reclaim space.
+        // This is necessary to ensure the test passes.
+        // Note: We don't perform a vacuum after each pruner run in production because the auto vacuum job handles it automatically.
+        vacuum(&storage).await;
+
+        // Pruned height should be none
+        assert!(pruned_height.is_none());
+
+        let height_after_pruning = storage.get_minimum_height().await.unwrap().unwrap();
+
+        assert_eq!(
+            height_after_pruning, height_before_pruning,
+            "some data has been pruned"
+        );
+
+        // Change minimum retention to 1s
+        storage.set_pruning_config(
+            cfg.with_minimum_retention(Duration::from_secs(1))
+                .with_pruning_threshold(1),
+        );
+        // sleep for 2s to make sure the data is older than minimum retention
+        sleep(Duration::from_secs(2)).await;
+        // This would prune all the data
+        let pruned_height = storage.prune(&mut Default::default()).await.unwrap();
+        // Vacuum the database to reclaim space.
+        // This is necessary to ensure the test passes.
+        // Note: We don't perform a vacuum after each pruner run in production because the auto vacuum job handles it automatically.
+        vacuum(&storage).await;
+
+        // Pruned height should be some
+        assert!(pruned_height.is_some());
+        // All the tables should be empty
+        // counting rows in header table
+        let header_rows = storage
+            .read()
+            .await
+            .unwrap()
+            .fetch_one("select count(*) as count from header")
+            .await
+            .unwrap()
+            .get::<i64, _>("count");
+        // the table should be empty
+        assert_eq!(header_rows, 0);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_payload_pruning() {
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        storage.set_pruning_config(Default::default());
+
+        // Insert some mock data.
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
+            &TestValidatedState::default(),
+            &TestInstanceState::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let block = BlockQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let vid = VidCommonQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_block(&block).await.unwrap();
+            tx.insert_vid(&vid, None).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Insert a second leaf sharing the same payload.
+        leaf.leaf.block_header_mut().block_number += 1;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        {
+            let mut tx = storage.read().await.unwrap();
+            let (num_payloads,): (i64,) = query_as("SELECT count(*) FROM payload")
+                .fetch_one(tx.as_mut())
+                .await
+                .unwrap();
+            assert_eq!(num_payloads, 1);
+            let (num_vid,): (i64,) = query_as("SELECT count(*) FROM vid_common")
+                .fetch_one(tx.as_mut())
+                .await
+                .unwrap();
+            assert_eq!(num_vid, 1);
+        }
+
+        // Prune the first leaf but not the second (and thus not the payload or VID).
+        let mut pruner = Some(Pruner {
+            data: PruneState {
+                min_height: 0,
+                target_height: 1,
+                minimum_retention_height: 1,
+            },
+            state: PruneState {
+                min_height: 0,
+                target_height: 0,
+                minimum_retention_height: 0,
+            },
+            cfg: &Default::default(),
+            extra_pruning: false,
+        });
+        let pruned_height = storage.prune(&mut pruner).await.unwrap();
+        tracing::info!(?pruned_height, "first pruning run complete");
+        {
+            let mut tx = storage.read().await.unwrap();
+
+            // First block is pruned.
+            let err = tx
+                .get_block(BlockId::<MockTypes>::Number(0))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, QueryError::NotFound), "{err:#}");
+            let err = tx
+                .get_vid_common(BlockId::<MockTypes>::Number(0))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, QueryError::NotFound), "{err:#}");
+
+            // Second block is still available.
+            assert_eq!(
+                tx.get_block(BlockId::<MockTypes>::Number(1)).await.unwrap(),
+                BlockQueryData::new(leaf.header().clone(), block.payload)
+            );
+            assert_eq!(
+                tx.get_vid_common(BlockId::<MockTypes>::Number(1))
+                    .await
+                    .unwrap(),
+                VidCommonQueryData::new(leaf.header().clone(), vid.common)
+            );
+
+            let (num_payloads,): (i64,) = query_as("SELECT count(*) FROM payload")
+                .fetch_one(tx.as_mut())
+                .await
+                .unwrap();
+            assert_eq!(num_payloads, 1);
+
+            let (num_vid,): (i64,) = query_as("SELECT count(*) FROM vid_common")
+                .fetch_one(tx.as_mut())
+                .await
+                .unwrap();
+            assert_eq!(num_vid, 1);
+        }
+
+        // Now prune the second leaf, ensuring the payload and VID get deleted as well.
+        pruner.as_mut().unwrap().data.target_height = 2;
+        let pruned_height = storage.prune(&mut pruner).await.unwrap();
+        tracing::info!(?pruned_height, "second pruning run complete");
+
+        let mut tx = storage.read().await.unwrap();
+        for i in 0..2 {
+            let err = tx
+                .get_block(BlockId::<MockTypes>::Number(i))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, QueryError::NotFound), "{err:#}");
+
+            let err = tx
+                .get_vid_common(BlockId::<MockTypes>::Number(i))
+                .await
+                .unwrap_err();
+            assert!(matches!(err, QueryError::NotFound), "{err:#}");
+        }
+        let (num_payloads,): (i64,) = query_as("SELECT count(*) FROM payload")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(num_payloads, 0);
+
+        let (num_vid,): (i64,) = query_as("SELECT count(*) FROM vid_common")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(num_vid, 0);
+    }
+
+    async fn count_rows(storage: &SqlStorage, table: &str) -> i64 {
+        let mut tx = storage.read().await.unwrap();
+        let sql = format!("SELECT count(*) FROM {table}");
+        let (count,) = query_as::<(i64,)>(&sql)
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        count
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruning_empty_batch_skips_gc() {
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let cfg = PrunerCfg::default();
+        storage.set_pruning_config(cfg.clone());
+
+        // Insert a block, then orphan its payload and VID common by deleting the header directly.
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
+            &TestValidatedState::default(),
+            &TestInstanceState::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let block = BlockQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let vid = VidCommonQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_block(&block).await.unwrap();
+            tx.insert_vid(&vid, None).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        {
+            let mut tx = storage.write().await.unwrap();
+            query("DELETE FROM leaf2 WHERE height = 0")
+                .execute(tx.as_mut())
+                .await
+                .unwrap();
+            query("DELETE FROM header WHERE height = 0")
+                .execute(tx.as_mut())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        assert_eq!(count_rows(&storage, "payload").await, 1);
+        assert_eq!(count_rows(&storage, "vid_common").await, 1);
+
+        let mut pruner = Some(Pruner {
+            data: PruneState {
+                min_height: 0,
+                target_height: 1,
+                minimum_retention_height: 1,
+            },
+            state: PruneState {
+                min_height: 0,
+                target_height: 0,
+                minimum_retention_height: 0,
+            },
+            cfg: &cfg,
+            extra_pruning: false,
+        });
+
+        // A batch that deletes no header leaves the orphans alone.
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(0));
+        assert_eq!(count_rows(&storage, "payload").await, 1);
+        assert_eq!(count_rows(&storage, "vid_common").await, 1);
+
+        // The next batch that deletes a header collects them.
+        leaf.leaf.block_header_mut().block_number = 1;
+        {
+            let mut tx = storage.write().await.unwrap();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        pruner.as_mut().unwrap().data.target_height = 2;
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(1));
+        assert_eq!(count_rows(&storage, "payload").await, 0);
+        assert_eq!(count_rows(&storage, "vid_common").await, 0);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruned_height_storage() {
+        let db = TmpDb::init().await;
+        let cfg = db.config();
+
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .read()
+                .await
+                .unwrap()
+                .load_pruned_height()
+                .await
+                .unwrap()
+                .is_none()
+        );
+        for height in [10, 20, 30] {
+            let mut tx = storage.write().await.unwrap();
+            tx.save_pruned_height(height).await.unwrap();
+            tx.commit().await.unwrap();
+            assert_eq!(
+                storage
+                    .read()
+                    .await
+                    .unwrap()
+                    .load_pruned_height()
+                    .await
+                    .unwrap(),
+                Some(height)
+            );
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_archive_clears_data_pruned_height_only() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let mut tx = storage.write().await.unwrap();
+        tx.save_pruned_height(10).await.unwrap();
+        tx.commit().await.unwrap();
+        let mut tx = storage.prune_write().await.unwrap();
+        tx.save_state_pruned_height(20).await.unwrap();
+        tx.commit().await.unwrap();
+        drop(storage);
+
+        // Archive mode clears the data marker so the fetcher refills pruned data, but keeps the
+        // state marker: state is never fetched from peers, and the archive gc owns it.
+        let storage = SqlStorage::connect(db.config().archive(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(20));
+    }
+
+    async fn assert_state_pruned_to(storage: &SqlStorage, pruned: Option<u64>, written: u64) {
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), pruned);
+        for height in 1..=written {
+            let path = tx
+                .get_path(
+                    Snapshot::<_, MockMerkleTree, { MockMerkleTree::ARITY }>::Index(height),
+                    0usize,
+                )
+                .await;
+            let readable = pruned.is_none_or(|pruned| height > pruned);
+            assert_eq!(path.is_ok(), readable, "height {height}: {:?}", path.err());
+        }
+        let surviving: Vec<u64> = query_as::<(i64,)>(&format!(
+            "SELECT DISTINCT created FROM {} ORDER BY created",
+            MockMerkleTree::state_type()
+        ))
+        .fetch_all(tx.as_mut())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(created,)| created as u64)
+        .collect();
+        let expected: Vec<u64> = (pruned.unwrap_or(1)..=written).collect();
+        assert_eq!(surviving, expected);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_prune_state_below() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let cfg = PrunerCfg::default()
+            .with_batch_size(1)
+            .with_state_tables(vec![MockMerkleTree::state_type().into()]);
+
+        storage.prune_state_below(10, 0, &cfg).await.unwrap();
+        assert_state_pruned_to(&storage, None, 0).await;
+
+        let heights = 10u64;
+        let mut tree: UniversalMerkleTree<_, _, _, 8, _> =
+            MockMerkleTree::new(MockMerkleTree::tree_height());
+        let mut tx = storage.write().await.unwrap();
+        for height in 1..=heights {
+            tree.update(0usize, height as usize).unwrap();
+            let data = serde_json::json!({
+                MockMerkleTree::header_state_commitment_field():
+                    serde_json::to_value(tree.commitment()).unwrap()
+            });
+            tx.upsert(
+                "header",
+                [
+                    "height",
+                    "hash",
+                    "payload_hash",
+                    "timestamp",
+                    "data",
+                    "ns_table",
+                ],
+                ["height"],
+                [(
+                    height as i64,
+                    format!("hash{height}"),
+                    "ph".to_string(),
+                    0,
+                    data,
+                    "ns".to_string(),
+                )],
+            )
+            .await
+            .unwrap();
+            let (_, proof) = tree.lookup(0usize).expect_ok().unwrap();
+            let path = <usize as ToTraversalPath<8>>::to_traversal_path(&0usize, tree.height());
+            UpdateStateData::<_, MockMerkleTree, 8>::insert_merkle_nodes(
+                &mut tx, proof, path, height,
+            )
+            .await
+            .unwrap();
+        }
+        UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(&mut tx, heights as usize)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // Zero, the cutoff before the policy is readable, keeps everything.
+        storage.prune_state_below(0, 0, &cfg).await.unwrap();
+        assert_state_pruned_to(&storage, None, heights).await;
+
+        // The cutoff itself stays readable, and a zero batch size reads as one.
+        storage
+            .prune_state_below(4, 0, &cfg.clone().with_batch_size(0))
+            .await
+            .unwrap();
+        assert_state_pruned_to(&storage, Some(3), heights).await;
+
+        // The floor wins over a cutoff past it: head 10, floor 4, so target 6 and marker 5.
+        storage.prune_state_below(heights, 4, &cfg).await.unwrap();
+        assert_state_pruned_to(&storage, Some(5), heights).await;
+
+        // A cutoff past the head stops one short of it.
+        storage.prune_state_below(100, 0, &cfg).await.unwrap();
+        assert_state_pruned_to(&storage, Some(9), heights).await;
+
+        let mut tx = storage.read().await.unwrap();
+        let (headers,): (i64,) = query_as("SELECT count(*) FROM header")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(headers as u64, heights);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_separate_state_data_pruning() {
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let num_blocks = 10u64;
+        let mut test_tree: UniversalMerkleTree<_, _, _, 8, _> =
+            MockMerkleTree::new(MockMerkleTree::tree_height());
+
+        // Insert headers (consensus data) and merkle nodes (state) for each block height.
+        let mut tx = storage.write().await.unwrap();
+        for height in 0..num_blocks {
+            test_tree.update(height as usize, height as usize).unwrap();
+
+            let test_data = serde_json::json!({
+                MockMerkleTree::header_state_commitment_field():
+                    serde_json::to_value(test_tree.commitment()).unwrap()
+            });
+            tx.upsert(
+                "header",
+                [
+                    "height",
+                    "hash",
+                    "payload_hash",
+                    "timestamp",
+                    "data",
+                    "ns_table",
+                ],
+                ["height"],
+                [(
+                    height as i64,
+                    format!("hash{height}"),
+                    "ph".to_string(),
+                    0,
+                    test_data,
+                    "ns".to_string(),
+                )],
+            )
+            .await
+            .unwrap();
+
+            let (_, proof) = test_tree.lookup(height as usize).expect_ok().unwrap();
+            let traversal_path = <usize as ToTraversalPath<8>>::to_traversal_path(
+                &(height as usize),
+                test_tree.height(),
+            );
+            UpdateStateData::<_, MockMerkleTree, 8>::insert_merkle_nodes(
+                &mut tx,
+                proof.clone(),
+                traversal_path,
+                height,
+            )
+            .await
+            .unwrap();
+        }
+        UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(
+            &mut tx,
+            num_blocks as usize,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        // Verify all the data exists
+        {
+            let mut tx = storage.read().await.unwrap();
+            assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+            assert_eq!(tx.load_state_pruned_height().await.unwrap(), None);
+
+            for height in 0..num_blocks {
+                assert_eq!(
+                    query_as::<(i64,)>("SELECT count(*) FROM header WHERE height = $1")
+                        .bind(height as i64)
+                        .fetch_one(tx.as_mut())
+                        .await
+                        .unwrap(),
+                    (1,)
+                );
+                for i in 0..=height {
+                    tx.get_path(
+                        Snapshot::<_, MockMerkleTree, { MockMerkleTree::ARITY }>::Index(height),
+                        i as usize,
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+        }
+
+        // Configure the pruner to prune state data aggressively, but not consensus data.
+        storage.set_pruning_config(
+            PrunerCfg::default()
+                .with_state_target_retention(Duration::ZERO)
+                .with_state_tables(vec![MockMerkleTree::state_type().into()]),
+        );
+        storage.prune(&mut Default::default()).await.unwrap();
+
+        // The headers still exist, but the Merkle state is pruned.
+        {
+            let mut tx = storage.read().await.unwrap();
+            assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+            assert_eq!(
+                tx.load_state_pruned_height().await.unwrap(),
+                Some(num_blocks - 1)
+            );
+
+            for height in 0..num_blocks {
+                assert_eq!(
+                    query_as::<(i64,)>("SELECT count(*) FROM header WHERE height = $1")
+                        .bind(height as i64)
+                        .fetch_one(tx.as_mut())
+                        .await
+                        .unwrap(),
+                    (1,)
+                );
+
+                for i in 0..=height {
+                    let err = tx
+                        .get_path(
+                            Snapshot::<_, MockMerkleTree, { MockMerkleTree::ARITY }>::Index(height),
+                            i as usize,
+                        )
+                        .await
+                        .unwrap_err();
+                    assert!(matches!(err, QueryError::NotFound), "{err:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_pruning_batch_end() {
+        // No rows at or above the cursor: consume the whole span up to the bound.
+        assert_eq!(PruneState::batch_end(5010, 1000, None), 5009);
+        // The first rows are at or beyond the bound: same.
+        assert_eq!(PruneState::batch_end(5010, 1000, Some(5010)), 5009);
+        assert_eq!(PruneState::batch_end(5010, 1000, Some(9000)), 5009);
+        // Rows within the bound: a full batch starting at the first row.
+        assert_eq!(PruneState::batch_end(5010, 1000, Some(0)), 999);
+        assert_eq!(PruneState::batch_end(5010, 1000, Some(1000)), 1999);
+        // Rows within the bound but fewer than a batch left: capped by the bound.
+        assert_eq!(PruneState::batch_end(5010, 1000, Some(5000)), 5009);
+        // Smallest possible bound.
+        assert_eq!(PruneState::batch_end(1, 1000, None), 0);
+        assert_eq!(PruneState::batch_end(1, 1000, Some(0)), 0);
+        // Adding the batch size never overflows.
+        assert_eq!(
+            PruneState::batch_end(u64::MAX, u64::MAX, Some(u64::MAX - 1)),
+            u64::MAX - 1
+        );
+    }
+
+    /// Insert bare headers (no payload, no state) at the given heights.
+    async fn insert_headers(
+        tx: &mut Transaction<Write>,
+        heights: impl IntoIterator<Item = u64>,
+        timestamp: i64,
+    ) {
+        let rows = heights
+            .into_iter()
+            .map(|height| {
+                (
+                    height as i64,
+                    format!("hash{height}"),
+                    "ph".to_string(),
+                    timestamp,
+                    serde_json::json!({}),
+                    "ns".to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        tx.upsert(
+            "header",
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
+            ["height"],
+            rows,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruning_skips_empty_height_spans() {
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let cfg = PrunerCfg::new().with_batch_size(1000);
+        storage.set_pruning_config(cfg.clone());
+
+        // Two clusters of headers separated by a span of heights with no data.
+        {
+            let mut tx = storage.write().await.unwrap();
+            insert_headers(&mut tx, (0..10).chain(5000..5010), 0).await;
+            tx.commit().await.unwrap();
+        }
+
+        let mut pruner = Some(Pruner {
+            data: PruneState {
+                min_height: 0,
+                target_height: 5010,
+                minimum_retention_height: 5010,
+            },
+            state: PruneState {
+                min_height: 0,
+                target_height: 0,
+                minimum_retention_height: 0,
+            },
+            cfg: &cfg,
+            extra_pruning: false,
+        });
+
+        // The first batch covers the first cluster.
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(999));
+        assert_eq!(storage.get_minimum_height().await.unwrap(), Some(5000));
+
+        // The empty span is consumed at once, so the second batch covers the second cluster.
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(5009));
+        assert_eq!(storage.get_minimum_height().await.unwrap(), None);
+
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), None);
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_pruned_height().await.unwrap(), Some(5009));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_pruning_without_state_rows() {
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // Recent headers for every height, so only state is eligible for pruning, and no state.
+        let num_blocks = 10_000u64;
+        {
+            let mut tx = storage.write().await.unwrap();
+            insert_headers(&mut tx, 0..num_blocks, Utc::now().timestamp()).await;
+            tx.commit().await.unwrap();
+        }
+        storage.set_pruning_config(
+            PrunerCfg::default()
+                .with_state_target_retention(Duration::ZERO)
+                .with_state_tables(vec![MockMerkleTree::state_type().into()]),
+        );
+        let mut pruner = Default::default();
+
+        // With nothing to delete, the whole span up to the target is consumed in one batch.
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(num_blocks - 1)
+        );
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), None);
+
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+        assert_eq!(
+            tx.load_state_pruned_height().await.unwrap(),
+            Some(num_blocks - 1)
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_pruning_skips_empty_height_spans() {
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // Recent headers for every height, so only state is eligible for pruning, and state at a
+        // few heights far apart.
+        let num_blocks = 10_000u64;
+        let state_heights = [0u64, 1, 9000];
+        let mut test_tree: UniversalMerkleTree<_, _, _, 8, _> =
+            MockMerkleTree::new(MockMerkleTree::tree_height());
+        {
+            let mut tx = storage.write().await.unwrap();
+            insert_headers(&mut tx, 0..num_blocks, Utc::now().timestamp()).await;
+            for height in state_heights {
+                test_tree.update(height as usize, height as usize).unwrap();
+                let (_, proof) = test_tree.lookup(height as usize).expect_ok().unwrap();
+                let traversal_path = <usize as ToTraversalPath<8>>::to_traversal_path(
+                    &(height as usize),
+                    test_tree.height(),
+                );
+                UpdateStateData::<_, MockMerkleTree, 8>::insert_merkle_nodes(
+                    &mut tx,
+                    proof,
+                    traversal_path,
+                    height,
+                )
+                .await
+                .unwrap();
+            }
+            UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(
+                &mut tx,
+                num_blocks as usize,
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+        storage.set_pruning_config(
+            PrunerCfg::default()
+                .with_state_target_retention(Duration::ZERO)
+                .with_state_tables(vec![MockMerkleTree::state_type().into()]),
+        );
+        let mut pruner = Default::default();
+
+        // The first batch starts at the first state row; the second consumes the empty span up to
+        // the next one at once.
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(999));
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(num_blocks - 1)
+        );
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), None);
+
+        // Only the newest version of each node survives; the headers are untouched.
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+        assert_eq!(
+            tx.load_state_pruned_height().await.unwrap(),
+            Some(num_blocks - 1)
+        );
+        let (duplicates,) = query_as::<(i64,)>(
+            "SELECT count(*) FROM (SELECT count(*) FROM test_tree WHERE created <= $1 GROUP BY \
+             path HAVING count(*) > 1) AS s",
+        )
+        .bind((num_blocks - 1) as i64)
+        .fetch_one(tx.as_mut())
+        .await
+        .unwrap();
+        assert_eq!(duplicates, 0);
+        let (num_headers,) = query_as::<(i64,)>("SELECT count(*) FROM header")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(num_headers, num_blocks as i64);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_transaction_upsert_retries() {
+        let db = TmpDb::init().await;
+        let config = db.config();
+
+        let storage = SqlStorage::connect(config, StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let mut tx = storage.write().await.unwrap();
+
+        // Try to upsert into a table that does not exist.
+        // This will fail, so our `upsert` function will enter the retry loop.
+        // Since the table does not exist, all retries will eventually
+        // fail and we expect an error to be returned.
+        //
+        // Previously, this case would cause  a panic because we were calling
+        // methods on `QueryBuilder` after `.build()` without first
+        // calling `.reset()`and according to the sqlx docs, that always panics.
+        // Now, since we are properly calling `.reset()` inside `upsert()` for
+        // the query builder, the function returns an error instead of panicking.
+        tx.upsert("does_not_exist", ["test"], ["test"], [(1_i64,)])
+            .await
+            .unwrap_err();
+    }
+}

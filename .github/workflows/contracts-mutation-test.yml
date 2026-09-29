@@ -28,7 +28,7 @@ jobs:
       shard_matrix: ${{ steps.shards.outputs.shard_matrix }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0
@@ -98,7 +98,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -127,7 +127,7 @@ jobs:
         shard: ${{ fromJson(needs.generate.outputs.shard_matrix) }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 

@@ -207,10 +207,10 @@ error AlreadyClaimed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -281,10 +281,10 @@ error DailyLimitExceeded();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -355,10 +355,10 @@ error InvalidAuthRoot();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -429,10 +429,10 @@ error InvalidRewardAmount();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -703,13 +703,26 @@ function claimRewards(uint256 lifetimeRewards, bytes memory authData) external;
                     .map(Into::into)
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(Into::into)
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -856,16 +869,29 @@ function claimedRewards(address claimer) external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: claimedRewardsReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -1003,23 +1029,36 @@ function totalClaimed() external view returns (uint256);
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: totalClaimedReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     ///Container for all the [`IRewardClaim`](self) function calls.
     #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum IRewardClaimCalls {
         #[allow(missing_docs)]
         claimRewards(claimRewardsCall),
@@ -1106,15 +1145,31 @@ function totalClaimed() external view returns (uint256);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<IRewardClaimCalls>] = &[
                 {
                     fn claimRewards(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<IRewardClaimCalls> {
-                        <claimRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <claimRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(IRewardClaimCalls::claimRewards)
                     }
@@ -1123,9 +1178,11 @@ function totalClaimed() external view returns (uint256);
                 {
                     fn claimedRewards(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<IRewardClaimCalls> {
-                        <claimedRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <claimedRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(IRewardClaimCalls::claimedRewards)
                     }
@@ -1134,9 +1191,11 @@ function totalClaimed() external view returns (uint256);
                 {
                     fn totalClaimed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<IRewardClaimCalls> {
-                        <totalClaimedCall as alloy_sol_types::SolCall>::abi_decode_raw(
+                        <totalClaimedCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(IRewardClaimCalls::totalClaimed)
                     }
@@ -1151,7 +1210,7 @@ function totalClaimed() external view returns (uint256);
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -1159,52 +1218,11 @@ function totalClaimed() external view returns (uint256);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<IRewardClaimCalls>] = &[
-                {
-                    fn claimRewards(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<IRewardClaimCalls> {
-                        <claimRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(IRewardClaimCalls::claimRewards)
-                    }
-                    claimRewards
-                },
-                {
-                    fn claimedRewards(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<IRewardClaimCalls> {
-                        <claimedRewardsCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(IRewardClaimCalls::claimedRewards)
-                    }
-                    claimedRewards
-                },
-                {
-                    fn totalClaimed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<IRewardClaimCalls> {
-                        <totalClaimedCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(IRewardClaimCalls::totalClaimed)
-                    }
-                    totalClaimed
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -1348,15 +1366,31 @@ function totalClaimed() external view returns (uint256);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<IRewardClaimErrors>] = &[
                 {
                     fn DailyLimitExceeded(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <DailyLimitExceeded as alloy_sol_types::SolError>::abi_decode_raw(
+                        <DailyLimitExceeded as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(IRewardClaimErrors::DailyLimitExceeded)
                     }
@@ -1365,9 +1399,11 @@ function totalClaimed() external view returns (uint256);
                 {
                     fn InvalidAuthRoot(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <InvalidAuthRoot as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidAuthRoot as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(IRewardClaimErrors::InvalidAuthRoot)
                     }
@@ -1376,9 +1412,11 @@ function totalClaimed() external view returns (uint256);
                 {
                     fn InvalidRewardAmount(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <InvalidRewardAmount as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidRewardAmount as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(IRewardClaimErrors::InvalidRewardAmount)
                     }
@@ -1387,9 +1425,11 @@ function totalClaimed() external view returns (uint256);
                 {
                     fn AlreadyClaimed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <AlreadyClaimed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <AlreadyClaimed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(IRewardClaimErrors::AlreadyClaimed)
                     }
@@ -1404,7 +1444,7 @@ function totalClaimed() external view returns (uint256);
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -1412,63 +1452,11 @@ function totalClaimed() external view returns (uint256);
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<IRewardClaimErrors>] = &[
-                {
-                    fn DailyLimitExceeded(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <DailyLimitExceeded as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(IRewardClaimErrors::DailyLimitExceeded)
-                    }
-                    DailyLimitExceeded
-                },
-                {
-                    fn InvalidAuthRoot(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <InvalidAuthRoot as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(IRewardClaimErrors::InvalidAuthRoot)
-                    }
-                    InvalidAuthRoot
-                },
-                {
-                    fn InvalidRewardAmount(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <InvalidRewardAmount as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(IRewardClaimErrors::InvalidRewardAmount)
-                    }
-                    InvalidRewardAmount
-                },
-                {
-                    fn AlreadyClaimed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<IRewardClaimErrors> {
-                        <AlreadyClaimed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(IRewardClaimErrors::AlreadyClaimed)
-                    }
-                    AlreadyClaimed
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -1523,6 +1511,45 @@ function totalClaimed() external view returns (uint256);
                     )
                 }
             }
+        }
+    }
+    #[automatically_derived]
+    impl IRewardClaimErrors {
+        /**Creates a [`AlreadyClaimed`] error.
+
+```solidity
+error AlreadyClaimed()
+```*/
+        #[inline]
+        pub fn already_claimed() -> Self {
+            Self::AlreadyClaimed(AlreadyClaimed)
+        }
+        /**Creates a [`DailyLimitExceeded`] error.
+
+```solidity
+error DailyLimitExceeded()
+```*/
+        #[inline]
+        pub fn daily_limit_exceeded() -> Self {
+            Self::DailyLimitExceeded(DailyLimitExceeded)
+        }
+        /**Creates a [`InvalidAuthRoot`] error.
+
+```solidity
+error InvalidAuthRoot()
+```*/
+        #[inline]
+        pub fn invalid_auth_root() -> Self {
+            Self::InvalidAuthRoot(InvalidAuthRoot)
+        }
+        /**Creates a [`InvalidRewardAmount`] error.
+
+```solidity
+error InvalidRewardAmount()
+```*/
+        #[inline]
+        pub fn invalid_reward_amount() -> Self {
+            Self::InvalidRewardAmount(InvalidRewardAmount)
         }
     }
     ///Container for all the [`IRewardClaim`](self) events.
@@ -1621,6 +1648,24 @@ function totalClaimed() external view returns (uint256);
                     alloy_sol_types::private::IntoLogData::into_log_data(inner)
                 }
             }
+        }
+    }
+    #[automatically_derived]
+    impl IRewardClaimEvents {
+        /**Creates a [`RewardsClaimed`] event.
+
+```solidity
+event RewardsClaimed(address,uint256)
+```*/
+        #[inline]
+        pub fn rewards_claimed(
+            user: alloy::sol_types::private::Address,
+            amount: alloy::sol_types::private::primitives::aliases::U256,
+        ) -> Self {
+            Self::RewardsClaimed(RewardsClaimed {
+                user: user,
+                amount: amount,
+            })
         }
     }
     use alloy::contract as alloy_contract;

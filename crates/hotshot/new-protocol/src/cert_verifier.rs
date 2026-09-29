@@ -14,6 +14,7 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::{
         Certificate1, Certificate2, SimpleCertificate, Threshold, TimeoutCertificate2,
+        TimeoutCertificate3,
     },
     simple_vote::{HasEpoch, Voteable},
     stake_table::StakeTableEntries,
@@ -47,6 +48,16 @@ impl<C> ValidCert<C> {
 
     pub fn into_cert(self) -> C {
         self.cert
+    }
+
+    pub fn map<D, F>(self, f: F) -> ValidCert<D>
+    where
+        F: FnOnce(C) -> D,
+    {
+        ValidCert {
+            cert: f(self.cert),
+            epoch: self.epoch,
+        }
     }
 }
 
@@ -318,6 +329,13 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
     }
 }
 
+/// What a completed certificate retires: its view, or its view and epoch.
+#[derive(Clone, Copy, Debug)]
+pub enum Completion {
+    PerView,
+    PerViewAndEpoch,
+}
+
 /// Verifies certificates off the main coordinator thread.
 ///
 /// Unlike [`CertVerifier`], these certificates are keyed by sender key
@@ -327,7 +345,8 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
 pub struct CertBySenderVerifier<T: NodeType, C: Verifiable<T>> {
     tasks: JoinMap<T::SignatureKey, Option<ValidCert<C::Output>>>,
     pending: HashMap<T::SignatureKey, C>,
-    completed: BTreeSet<ViewNumber>,
+    completed: BTreeSet<(ViewNumber, EpochNumber)>,
+    completion: Completion,
     lower_bound: ViewNumber,
     membership: EpochMembershipCoordinator<T>,
     upgrade_lock: UpgradeLock<T>,
@@ -338,11 +357,16 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertBySenderVerifier<T, C>
 where
     C::Output: HasViewNumber,
 {
-    pub fn new(membership: EpochMembershipCoordinator<T>, upgrade_lock: UpgradeLock<T>) -> Self {
+    pub fn new(
+        membership: EpochMembershipCoordinator<T>,
+        upgrade_lock: UpgradeLock<T>,
+        completion: Completion,
+    ) -> Self {
         Self {
             tasks: JoinMap::new(),
             pending: HashMap::new(),
             completed: BTreeSet::new(),
+            completion,
             lower_bound: ViewNumber::genesis(),
             membership,
             upgrade_lock,
@@ -358,10 +382,7 @@ where
     pub fn verify(&mut self, sender: T::SignatureKey, cert: C) -> Option<EpochNumber> {
         let view = cert.view_number();
 
-        if view < self.lower_bound
-            || self.completed.contains(&view)
-            || self.tasks.contains_key(&sender)
-        {
+        if view < self.lower_bound || self.tasks.contains_key(&sender) {
             return None;
         }
 
@@ -369,6 +390,10 @@ where
             warn!(%view, cert = type_name::<C>(), "received certificate has no epoch number");
             return None;
         };
+
+        if self.completed.contains(&self.completion_key(view, epoch)) {
+            return None;
+        }
 
         let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
             self.pending.insert(sender, cert);
@@ -393,15 +418,17 @@ where
         None
     }
 
-    /// Record that this view's item was completed by other means.
+    /// Record that this view's item was completed by other means, in `epoch`.
     ///
     /// This can happen locally from votes for example.
-    pub fn mark_completed(&mut self, view: ViewNumber) {
+    pub fn mark_completed(&mut self, view: ViewNumber, epoch: EpochNumber) {
         if view < self.lower_bound {
             return;
         }
-        self.completed.insert(view);
-        self.pending.retain(|_, c| c.view_number() != view);
+        self.completed.insert(self.completion_key(view, epoch));
+        let and_epoch = matches!(self.completion, Completion::PerViewAndEpoch);
+        self.pending
+            .retain(|_, c| c.view_number() != view || (and_epoch && c.epoch() != Some(epoch)));
     }
 
     /// Re-attempt any items deferred because their epoch stake table wasn't
@@ -419,7 +446,8 @@ where
             match self.tasks.join_next().await? {
                 (_, Ok(Some(cert))) => {
                     let view = cert.view_number();
-                    if view >= self.lower_bound && self.completed.insert(view) {
+                    let key = self.completion_key(view, cert.epoch());
+                    if view >= self.lower_bound && self.completed.insert(key) {
                         return Some(cert);
                     }
                 },
@@ -436,9 +464,17 @@ where
     }
 
     pub fn gc(&mut self, view: ViewNumber) {
-        self.completed = self.completed.split_off(&view);
+        self.completed = self.completed.split_off(&(view, EpochNumber::new(0)));
         self.pending.retain(|_, c| c.view_number() >= view);
         self.lower_bound = view;
+    }
+
+    /// What a completed item is remembered by.
+    fn completion_key(&self, view: ViewNumber, epoch: EpochNumber) -> (ViewNumber, EpochNumber) {
+        match self.completion {
+            Completion::PerView => (view, EpochNumber::new(0)),
+            Completion::PerViewAndEpoch => (view, epoch),
+        }
     }
 
     pub fn num_invalid_certs(&self) -> u64 {
@@ -451,6 +487,7 @@ pub struct CertVerifiers<T: NodeType> {
     pub cert1: CertVerifier<T, Certificate1<T>>,
     pub cert2: CertVerifier<T, Certificate2<T>>,
     pub timeout: CertBySenderVerifier<T, TimeoutCertificate2<T>>,
+    pub timeout3: CertBySenderVerifier<T, TimeoutCertificate3<T>>,
     pub advance: CertBySenderVerifier<T, Certificate1<T>>,
     pub epoch_change: CertVerifier<T, EpochChangeMessage<T, Unchecked>>,
 }
@@ -460,8 +497,21 @@ impl<T: NodeType> CertVerifiers<T> {
         Self {
             cert1: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
             cert2: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
-            timeout: CertBySenderVerifier::new(membership.clone(), upgrade_lock.clone()),
-            advance: CertBySenderVerifier::new(membership.clone(), upgrade_lock.clone()),
+            timeout: CertBySenderVerifier::new(
+                membership.clone(),
+                upgrade_lock.clone(),
+                Completion::PerView,
+            ),
+            timeout3: CertBySenderVerifier::new(
+                membership.clone(),
+                upgrade_lock.clone(),
+                Completion::PerViewAndEpoch,
+            ),
+            advance: CertBySenderVerifier::new(
+                membership.clone(),
+                upgrade_lock.clone(),
+                Completion::PerViewAndEpoch,
+            ),
             epoch_change: CertVerifier::new(membership, upgrade_lock),
         }
     }
@@ -479,6 +529,9 @@ impl<T: NodeType> CertVerifiers<T> {
         for epoch in self.timeout.retry_pending() {
             request(epoch);
         }
+        for epoch in self.timeout3.retry_pending() {
+            request(epoch);
+        }
         for epoch in self.advance.retry_pending() {
             request(epoch);
         }
@@ -491,6 +544,7 @@ impl<T: NodeType> CertVerifiers<T> {
         self.cert1.gc(view);
         self.cert2.gc(view);
         self.timeout.gc(view);
+        self.timeout3.gc(view);
         self.advance.gc(view);
         self.epoch_change.gc(epoch);
     }
@@ -500,7 +554,111 @@ impl<T: NodeType> CertVerifiers<T> {
             .num_invalid_certs()
             .saturating_add(self.cert2.num_invalid_certs())
             .saturating_add(self.timeout.num_invalid_certs())
+            .saturating_add(self.timeout3.num_invalid_certs())
             .saturating_add(self.advance.num_invalid_certs())
             .saturating_add(self.epoch_change.num_invalid_certs())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::marker::PhantomData;
+
+    use committable::Committable;
+    use hotshot::types::{BLSPubKey, SignatureKey as _};
+    use hotshot_example_types::node_types::TestTypes;
+    use hotshot_types::{
+        data::{EpochNumber, ViewNumber},
+        simple_certificate::{TimeoutCertificate2, TimeoutCertificate3},
+        simple_vote::{TimeoutData2, TimeoutData3},
+    };
+
+    use super::{CertBySenderVerifier, Completion};
+    use crate::{
+        helpers::{test_timeout_epoch_lock, test_upgrade_lock},
+        tests::common::utils::mock_membership,
+    };
+
+    /// An unsigned certificate, which verification is bound to reject: what is
+    /// under test is whether it is examined at all.
+    fn junk_tc(view: ViewNumber, epoch: EpochNumber) -> TimeoutCertificate2<TestTypes> {
+        let data = TimeoutData2 {
+            view,
+            epoch: Some(epoch),
+        };
+        TimeoutCertificate2::new(data.clone(), data.commit(), view, None, PhantomData)
+    }
+
+    fn junk_tc3(view: ViewNumber, epoch: EpochNumber) -> TimeoutCertificate3<TestTypes> {
+        let data = TimeoutData3 { view, epoch };
+        TimeoutCertificate3::new(data.clone(), data.commit(), view, None, PhantomData)
+    }
+
+    /// Completing a view in one epoch must not retire it in another, where the
+    /// epoch is bound.
+    ///
+    /// A view at an epoch boundary can have a certificate from each committee.
+    /// Retiring the view on the first would leave the second permanently
+    /// unverified, with the one the node ends up acting on decided by arrival
+    /// order.
+    #[tokio::test]
+    async fn completing_one_epoch_leaves_the_other_open() {
+        let mut verifier = CertBySenderVerifier::<TestTypes, TimeoutCertificate3<TestTypes>>::new(
+            mock_membership(),
+            test_timeout_epoch_lock(),
+            Completion::PerViewAndEpoch,
+        );
+        let view = ViewNumber::new(1);
+        let (old, new) = (EpochNumber::genesis(), EpochNumber::genesis() + 1);
+        let sender = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
+
+        verifier.mark_completed(view, old);
+
+        // The same view under the other committee is still examined, and
+        // rejected on its merits rather than dropped on the view alone.
+        assert!(verifier.verify(sender, junk_tc3(view, new)).is_none());
+        assert!(verifier.next().await.is_none());
+        assert_eq!(verifier.num_invalid_certs(), 1);
+
+        // The epoch that was marked stays retired, so nothing examines it.
+        assert!(verifier.verify(sender, junk_tc3(view, old)).is_none());
+        assert!(verifier.next().await.is_none());
+        assert_eq!(verifier.num_invalid_certs(), 1);
+    }
+
+    /// Completing a view retires it under every epoch, where the epoch is not
+    /// bound.
+    ///
+    /// The label is not covered by the signers, so a copy of the same
+    /// certificate under another epoch is the same object, and verifying it
+    /// again buys nothing: a second certificate for a view is dropped by
+    /// `Consensus::handle_timeout_certificate` whatever it names.
+    #[tokio::test]
+    async fn completing_a_view_retires_every_epoch_of_it() {
+        let mut verifier = CertBySenderVerifier::<TestTypes, TimeoutCertificate2<TestTypes>>::new(
+            mock_membership(),
+            test_upgrade_lock(),
+            Completion::PerView,
+        );
+        let view = ViewNumber::new(1);
+        let (ours, theirs) = (EpochNumber::genesis(), EpochNumber::genesis() + 1);
+        let sender = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
+
+        verifier.mark_completed(view, ours);
+
+        for epoch in [ours, theirs] {
+            assert!(verifier.verify(sender, junk_tc(view, epoch)).is_none());
+            assert!(verifier.next().await.is_none());
+            assert_eq!(
+                verifier.num_invalid_certs(),
+                0,
+                "a retired view must not be examined again under {epoch}"
+            );
+        }
+
+        // A later view is untouched.
+        assert!(verifier.verify(sender, junk_tc(view + 1, theirs)).is_none());
+        assert!(verifier.next().await.is_none());
+        assert_eq!(verifier.num_invalid_certs(), 1);
     }
 }

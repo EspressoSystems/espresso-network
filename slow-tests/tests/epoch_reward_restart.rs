@@ -16,6 +16,7 @@ use espresso_types::ValidatedState;
 use futures::{StreamExt, future::join_all};
 use hotshot_types::{event::EventType, traits::metrics::NoMetrics, utils::epoch_from_block_number};
 use jf_merkle_tree_compat::MerkleTreeScheme;
+use slow_tests::BUILDER_TIMEOUT;
 use test_utils::reserve_tcp_port;
 use tokio::time::sleep;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
@@ -45,6 +46,7 @@ async fn slow_test_epoch_reward_restart() {
     // V4 base already has epochs, so epoch_start_block = 0.
     let test_config = TestConfigBuilder::default()
         .epoch_height(EPOCH_HEIGHT)
+        .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .set_upgrades(upgrade.target)
         .await

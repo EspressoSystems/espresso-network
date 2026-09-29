@@ -5,19 +5,25 @@
 #    module on the archival pair, since UPGRADE's query fetcher hits
 #    /light-client/leaf/N which doesn't exist on non-archival peers
 #    (backport of b9702a786f).
+# 3. Cliquenet advertise addresses, which BASE_TAG composes don't set: from
+#    NEW_PROTOCOL_VERSION on a node bootstrapping from the orchestrator needs
+#    one, and it has to match what stake-for-demo registered in the stake
+#    table, so without it every node exits at startup on a V0.6 genesis.
 
 services:
   espresso-node-0:
     command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- light-client
     environment:
+      ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       # Without this the light-client SQLite is :memory: per connection and
       # serves empty results, so wiped peers can't fetch historical leaves.
       LIGHT_CLIENT_DB_PATH: /store/lc
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
 
   espresso-node-1:
-    command: espresso-node -- storage-sql -- http -- query -- explorer -- light-client
+    command: espresso-node -- storage-sql -- http -- query -- submit -- explorer -- light-client
     environment:
+      ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       LIGHT_CLIENT_DB_PATH: /store/lc
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
       # Multiple peers: node-0 (often the proposer) lags consensus slightly,
@@ -31,6 +37,7 @@ services:
   espresso-node-2:
     command: espresso-node -- http -- storage-fs -- status
     environment:
+      ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-2:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
@@ -39,6 +46,7 @@ services:
 
   espresso-node-3:
     environment:
+      ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-3:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       ESPRESSO_NODE_API_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
@@ -48,6 +56,7 @@ services:
 
   espresso-node-4:
     environment:
+      ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-4:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       ESPRESSO_NODE_API_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT

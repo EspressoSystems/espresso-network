@@ -102,6 +102,10 @@ pub mod v1 {
         "/v1/availability/vid/common/payload-hash/{payload_hash}";
     pub const VID_COMMON_RANGE_ROUTE: &str = "/v1/availability/vid/common/{from}/{until}";
 
+    pub const LEAF_RANGES_ROUTE: &str = "/v1/availability/leaf/ranges";
+    pub const BLOCK_RANGES_ROUTE: &str = "/v1/availability/block/ranges";
+    pub const VID_COMMON_RANGES_ROUTE: &str = "/v1/availability/vid/common/ranges";
+
     pub const TRANSACTION_BY_POSITION_NOPROOF_ROUTE: &str =
         "/v1/availability/transaction/{height}/{index}/noproof";
     pub const TRANSACTION_BY_HASH_NOPROOF_ROUTE: &str =
@@ -233,10 +237,6 @@ pub mod v1 {
     // State signature
     pub const STATE_SIGNATURE_BLOCK_ROUTE: &str = "/v1/state-signature/block/{height}";
 
-    // HotShot events
-    pub const HOTSHOT_EVENTS_STREAM_ROUTE: &str = "/v1/hotshot-events/events";
-    pub const HOTSHOT_EVENTS_STARTUP_ROUTE: &str = "/v1/hotshot-events/startup_info";
-
     // Light client
     pub const LC_LEAF_BY_HEIGHT_ROUTE: &str = "/v1/light-client/leaf/{height}";
     pub const LC_LEAF_BY_HEIGHT_FINALIZED_ROUTE: &str =
@@ -261,6 +261,7 @@ pub mod v1 {
 
     pub const LC_PAYLOAD_ROUTE: &str = "/v1/light-client/payload/{height}";
     pub const LC_PAYLOAD_RANGE_ROUTE: &str = "/v1/light-client/payload/{start}/{end}";
+    pub const LC_PAYLOAD_RANGES_ROUTE: &str = "/v1/light-client/payload/ranges";
 
     pub const LC_NAMESPACE_ROUTE: &str = "/v1/light-client/namespace/{height}/{namespace}";
     pub const LC_NAMESPACE_RANGE_ROUTE: &str =
@@ -476,6 +477,11 @@ pub mod v1 {
         payload_hash
     );
     path_fn!(vid_common_range, VID_COMMON_RANGE_ROUTE, from, until);
+
+    // Availability, sets of height ranges
+    path_fn!(leaf_ranges, LEAF_RANGES_ROUTE);
+    path_fn!(block_ranges, BLOCK_RANGES_ROUTE);
+    path_fn!(vid_common_ranges, VID_COMMON_RANGES_ROUTE);
 
     // Availability — transactions
     path_fn!(
@@ -791,10 +797,6 @@ pub mod v1 {
     // State signature
     path_fn!(state_signature_block, STATE_SIGNATURE_BLOCK_ROUTE, height);
 
-    // HotShot events
-    path_fn!(hotshot_events_stream, HOTSHOT_EVENTS_STREAM_ROUTE);
-    path_fn!(hotshot_events_startup, HOTSHOT_EVENTS_STARTUP_ROUTE);
-
     // Light client
     path_fn!(lc_leaf_by_height, LC_LEAF_BY_HEIGHT_ROUTE, height);
     path_fn!(
@@ -843,6 +845,7 @@ pub mod v1 {
     path_fn!(lc_stake_table, LC_STAKE_TABLE_ROUTE, epoch);
     path_fn!(lc_payload, LC_PAYLOAD_ROUTE, height);
     path_fn!(lc_payload_range, LC_PAYLOAD_RANGE_ROUTE, start, end);
+    path_fn!(lc_payload_ranges, LC_PAYLOAD_RANGES_ROUTE);
     path_fn!(lc_namespace, LC_NAMESPACE_ROUTE, height, namespace);
     path_fn!(
         lc_namespace_range,
@@ -985,4 +988,7 @@ pub mod v2 {
     /// so the slashed form is its own route.
     pub const SWAGGER_SLASH_ROUTE: &str = "/v2/";
     pub const SCALAR_ROUTE: &str = "/v2/scalar";
+    /// What the generated `config_service_rest_router` mounts, pinned to it by a test.
+    pub const CONFIG_ROUTES: &[&str] =
+        &["/v2/config/hotshot", "/v2/config/env", "/v2/config/runtime"];
 }

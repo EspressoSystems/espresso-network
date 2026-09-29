@@ -10,24 +10,15 @@
 pub mod task_state;
 use std::{collections::BTreeMap, fmt::Debug, sync::Arc, time::Duration};
 
-use async_broadcast::{RecvError, broadcast};
-use async_lock::RwLock;
-use async_trait::async_trait;
-use futures::{
-    StreamExt,
-    future::{BoxFuture, FutureExt},
-    stream,
-};
+use async_broadcast::RecvError;
+use futures::future::{BoxFuture, FutureExt};
 use hotshot_task::task::Task;
-#[cfg(feature = "rewind")]
-use hotshot_task_impls::rewind::RewindTaskState;
 use hotshot_task_impls::{
     da::DaTaskState,
     events::HotShotEvent,
     network::{NetworkEventTaskState, NetworkMessageTaskState},
     request::NetworkRequestState,
     response::{NetworkResponseState, run_response_task},
-    stats::StatsTaskState,
     transactions::TransactionTaskState,
     upgrade::UpgradeTaskState,
     vid::VidTaskState,
@@ -35,10 +26,8 @@ use hotshot_task_impls::{
 };
 use hotshot_types::{
     consensus::OuterConsensus,
-    constants::EVENT_CHANNEL_SIZE,
     data::ViewNumber,
-    message::{EXTERNAL_MESSAGE_VERSION, Message, MessageKind, UpgradeLock},
-    storage_metrics::StorageMetricsValue,
+    message::{EXTERNAL_MESSAGE_VERSION, Message, MessageKind},
     traits::{
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
@@ -48,9 +37,7 @@ use tokio::{spawn, time::sleep};
 use vbs::version::Version;
 
 use crate::{
-    ConsensusApi, ConsensusMetricsValue, ConsensusTaskRegistry, EpochMembershipCoordinator,
-    HotShotConfig, HotShotInitializer, NetworkTaskRegistry, SignatureKey, StateSignatureKey,
-    SystemContext, genesis_epoch_from_version, tasks::task_state::CreateTaskState,
+    ConsensusApi, genesis_epoch_from_version, tasks::task_state::CreateTaskState,
     types::SystemContextHandle,
 };
 
@@ -256,13 +243,8 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         handle.add_task(QuorumVoteTaskState::<TYPES, I>::create_from(handle).await);
         handle.add_task(QuorumProposalRecvTaskState::<TYPES, I>::create_from(handle).await);
         handle.add_task(ConsensusTaskState::<TYPES, I>::create_from(handle).await);
-        if cfg!(feature = "stats") {
-            handle.add_task(StatsTaskState::<TYPES>::create_from(handle).await);
-        }
     }
     add_queue_len_task(handle);
-    #[cfg(feature = "rewind")]
-    handle.add_task(RewindTaskState::<TYPES>::create_from(&handle).await);
 }
 
 /// Creates a monitor for shutdown events.
@@ -298,256 +280,6 @@ pub fn create_shutdown_event_monitor<TYPES: NodeType, I: NodeImplementation<TYPE
         }
     }
     .boxed()
-}
-
-/// Trait for intercepting and modifying messages between the network and consensus layers.
-///
-/// Consensus <-> [Byzantine logic layer] <-> Network
-#[allow(clippy::too_many_arguments)]
-#[async_trait]
-pub trait EventTransformerState<TYPES: NodeType, I: NodeImplementation<TYPES>>
-where
-    Self: std::fmt::Debug + Send + Sync + 'static,
-{
-    /// modify incoming messages from the network
-    async fn recv_handler(&mut self, event: &HotShotEvent<TYPES>) -> Vec<HotShotEvent<TYPES>>;
-
-    /// modify outgoing messages from the network
-    async fn send_handler(
-        &mut self,
-        event: &HotShotEvent<TYPES>,
-        public_key: &TYPES::SignatureKey,
-        private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        upgrade_lock: &UpgradeLock<TYPES>,
-        consensus: OuterConsensus<TYPES>,
-        membership_coordinator: EpochMembershipCoordinator<TYPES>,
-        network: Arc<I::Network>,
-    ) -> Vec<HotShotEvent<TYPES>>;
-
-    /// Creates a `SystemContextHandle` with the given even transformer
-    #[allow(clippy::too_many_arguments)]
-    async fn spawn_handle(
-        &'static mut self,
-        public_key: TYPES::SignatureKey,
-        private_key: <TYPES::SignatureKey as SignatureKey>::PrivateKey,
-        state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
-        nonce: u64,
-        config: HotShotConfig<TYPES>,
-        upgrade: versions::Upgrade,
-        memberships: EpochMembershipCoordinator<TYPES>,
-        network: Arc<I::Network>,
-        initializer: HotShotInitializer<TYPES>,
-        consensus_metrics: ConsensusMetricsValue,
-        storage: I::Storage,
-        storage_metrics: StorageMetricsValue,
-    ) -> SystemContextHandle<TYPES, I> {
-        let epoch_height = config.epoch_height;
-
-        let hotshot = SystemContext::new(
-            public_key,
-            private_key,
-            state_private_key,
-            nonce,
-            config,
-            upgrade,
-            memberships.clone(),
-            network,
-            initializer,
-            consensus_metrics,
-            storage.clone(),
-            storage_metrics,
-        )
-        .await;
-        let consensus_registry = ConsensusTaskRegistry::new();
-        let network_registry = NetworkTaskRegistry::new();
-
-        let output_event_stream = hotshot.external_event_stream.clone();
-        let internal_event_stream = hotshot.internal_event_stream.clone();
-
-        let mut handle = SystemContextHandle {
-            consensus_registry,
-            network_registry,
-            output_event_stream: output_event_stream.clone(),
-            internal_event_stream: internal_event_stream.clone(),
-            hotshot: Arc::clone(&hotshot),
-            storage,
-            network: Arc::clone(&hotshot.network),
-            membership_coordinator: memberships.clone(),
-            epoch_height,
-        };
-
-        add_consensus_tasks::<TYPES, I>(&mut handle).await;
-        self.add_network_tasks(&mut handle).await;
-
-        handle
-    }
-
-    /// Add byzantine network tasks with the trait
-    #[allow(clippy::too_many_lines)]
-    async fn add_network_tasks(&'static mut self, handle: &mut SystemContextHandle<TYPES, I>) {
-        // channels between the task spawned in this function and the network tasks.
-        // with this, we can control exactly what events the network tasks see.
-
-        // channel to the network task
-        let (sender_to_network, network_task_receiver) = broadcast(EVENT_CHANNEL_SIZE);
-        // channel from the network task
-        let (network_task_sender, receiver_from_network) = broadcast(EVENT_CHANNEL_SIZE);
-        // create a copy of the original receiver
-        let (original_sender, original_receiver) = (
-            handle.internal_event_stream.0.clone(),
-            handle.internal_event_stream.1.activate_cloned(),
-        );
-
-        // replace the internal event stream with the one we just created,
-        // so that the network tasks are spawned with our channel.
-        let mut internal_event_stream = (
-            network_task_sender.clone(),
-            network_task_receiver.clone().deactivate(),
-        );
-        std::mem::swap(
-            &mut internal_event_stream,
-            &mut handle.internal_event_stream,
-        );
-
-        // spawn the network tasks with our newly-created channel
-        add_network_message_and_request_receiver_tasks(handle).await;
-        self.add_network_event_tasks(handle);
-
-        std::mem::swap(
-            &mut internal_event_stream,
-            &mut handle.internal_event_stream,
-        );
-
-        let state_in = Arc::new(RwLock::new(self));
-        let state_out = Arc::clone(&state_in);
-        // spawn a task to listen on the (original) internal event stream,
-        // and broadcast the transformed events to the replacement event stream we just created.
-        let shutdown_signal = create_shutdown_event_monitor(handle).fuse();
-        let public_key = handle.public_key().clone();
-        let private_key = handle.private_key().clone();
-        let upgrade_lock = handle.hotshot.upgrade_lock.clone();
-        let consensus = OuterConsensus::new(handle.consensus());
-        let membership_coordinator = handle.membership_coordinator.clone();
-        let network = Arc::clone(&handle.network);
-        let send_handle = spawn(async move {
-            futures::pin_mut!(shutdown_signal);
-
-            let recv_stream = stream::unfold(original_receiver, |mut recv| async move {
-                match recv.recv().await {
-                    Ok(event) => Some((Ok(event), recv)),
-                    Err(async_broadcast::RecvError::Closed) => None,
-                    Err(e) => Some((Err(e), recv)),
-                }
-            })
-            .boxed();
-
-            let fused_recv_stream = recv_stream.fuse();
-            futures::pin_mut!(fused_recv_stream);
-
-            loop {
-                futures::select! {
-                    () = shutdown_signal => {
-                        tracing::error!("Shutting down relay send task");
-                        let _ = sender_to_network.broadcast(HotShotEvent::<TYPES>::Shutdown.into()).await;
-                        return;
-                    }
-                    event = fused_recv_stream.next() => {
-                        match event {
-                            Some(Ok(msg)) => {
-                                let mut state = state_out.write().await;
-                                let mut results = state.send_handler(
-                                    &msg,
-                                    &public_key,
-                                    &private_key,
-                                    &upgrade_lock,
-                                    consensus.clone(),
-                                    membership_coordinator.clone(),
-                                    Arc::clone(&network),
-                                ).await;
-                                results.reverse();
-                                while let Some(event) = results.pop() {
-                                    let _ = sender_to_network.broadcast(event.into()).await;
-                                }
-                            }
-                            Some(Err(e)) => {
-                                tracing::error!("Relay Task, send_handle, Error receiving event: {e:?}");
-                            }
-                            None => {
-                                tracing::info!("Relay Task, send_handle, Event stream closed");
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        // spawn a task to listen on the newly created event stream,
-        // and broadcast the transformed events to the original internal event stream
-        let shutdown_signal = create_shutdown_event_monitor(handle).fuse();
-        let recv_handle = spawn(async move {
-            futures::pin_mut!(shutdown_signal);
-
-            let network_recv_stream =
-                stream::unfold(receiver_from_network, |mut recv| async move {
-                    match recv.recv().await {
-                        Ok(event) => Some((Ok(event), recv)),
-                        Err(async_broadcast::RecvError::Closed) => None,
-                        Err(e) => Some((Err(e), recv)),
-                    }
-                });
-
-            let fused_network_recv_stream = network_recv_stream.boxed().fuse();
-            futures::pin_mut!(fused_network_recv_stream);
-
-            loop {
-                futures::select! {
-                    () = shutdown_signal => {
-                        tracing::error!("Shutting down relay receive task");
-                        return;
-                    }
-                    event = fused_network_recv_stream.next() => {
-                        match event {
-                            Some(Ok(msg)) => {
-                                let mut state = state_in.write().await;
-                                let mut results = state.recv_handler(&msg).await;
-                                results.reverse();
-                                while let Some(event) = results.pop() {
-                                    let _ = original_sender.broadcast(event.into()).await;
-                                }
-                            }
-                            Some(Err(e)) => {
-                                tracing::error!("Relay Task, recv_handle, Error receiving event from network: {e:?}");
-                            }
-                            None => {
-                                tracing::info!("Relay Task, recv_handle, Network event stream closed");
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        handle.network_registry.register(send_handle);
-        handle.network_registry.register(recv_handle);
-    }
-
-    /// Adds the `NetworkEventTaskState` tasks possibly modifying them as well.
-    fn add_network_event_tasks(&self, handle: &mut SystemContextHandle<TYPES, I>) {
-        let network = Arc::clone(&handle.network);
-
-        self.add_network_event_task(handle, network);
-    }
-
-    /// Adds a `NetworkEventTaskState` task. Can be reimplemented to modify its behaviour.
-    fn add_network_event_task(
-        &self,
-        handle: &mut SystemContextHandle<TYPES, I>,
-        channel: Arc<<I as NodeImplementation<TYPES>>::Network>,
-    ) {
-        add_network_event_task(handle, channel);
-    }
 }
 
 /// adds tasks for sending/receiving messages to/from the network.

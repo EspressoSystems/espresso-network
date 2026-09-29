@@ -108,6 +108,9 @@ pub fn registry() -> Option<Arc<Registry>> {
     REGISTRY.get().cloned()
 }
 
+/// Default OTel log filter: warnings and above, plus the `announce` target.
+const DEFAULT_LOG_FILTER: &str = "warn,announce=info";
+
 /// Operator-facing telemetry configuration.
 #[derive(Parser, Clone, Derivative)]
 #[derivative(Debug)]
@@ -134,9 +137,11 @@ pub struct TelemetryOptions {
     pub endpoint: Option<Url>,
 
     /// `EnvFilter` for the OTel log layer only; the local stderr layer is
-    /// unaffected. Default `warn`; per-target syntax works (e.g.
-    /// `warn,hotshot=info`).
-    #[clap(long, env = "ESPRESSO_NODE_TELEMETRY_LOG", default_value = "warn")]
+    /// unaffected. Per-target syntax works (e.g. `warn,hotshot=info`).
+    ///
+    /// The default admits the `announce` target at INFO, for milestones that
+    /// belong in telemetry without being warnings.
+    #[clap(long, env = "ESPRESSO_NODE_TELEMETRY_LOG", default_value = DEFAULT_LOG_FILTER)]
     pub log_filter: String,
 
     /// Seconds between Prometheus remote-write pushes.
@@ -154,7 +159,7 @@ impl Default for TelemetryOptions {
             logs_enable: false,
             metrics_enable: false,
             endpoint: None,
-            log_filter: "warn".to_owned(),
+            log_filter: DEFAULT_LOG_FILTER.to_owned(),
             metrics_interval_secs: 60,
         }
     }

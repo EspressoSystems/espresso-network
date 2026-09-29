@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fmt::{Debug, Display},
     future::Future,
     marker::PhantomData,
@@ -18,7 +19,6 @@ use futures::{
     stream::{BoxStream, Stream, StreamExt},
 };
 use hotshot::{HotShotInitializer, SystemContext};
-use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_new_protocol::{
     coordinator::Coordinator,
     network::{Cliquenet, NetworkError},
@@ -39,6 +39,7 @@ use hotshot_types::{
         metrics::{Counter, Gauge, Histogram, Metrics},
         network::ConnectedNetwork,
     },
+    upgrade_config::UpgradeConfig,
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
@@ -49,7 +50,7 @@ use tokio::{
 };
 use tracing::{Instrument, Level, info};
 use url::Url;
-use versions::NEW_PROTOCOL_VERSION;
+use versions::{NEW_PROTOCOL_VERSION, Version};
 
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
@@ -77,6 +78,9 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     #[derivative(Debug = "ignore")]
     consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
 
+    #[derivative(Debug = "ignore")]
+    persistence: Arc<P>,
+
     /// The request-response protocol
     #[derivative(Debug = "ignore")]
     #[allow(dead_code)]
@@ -85,15 +89,13 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// Context for generating state signatures.
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
 
-    /// An orchestrator to wait for before starting consensus.
+    /// An orchestrator to wait for before starting consensus, with the peer config this node
+    /// registered there.
     #[derivative(Debug = "ignore")]
-    wait_for_orchestrator: Option<Arc<OrchestratorClient>>,
+    wait_for_orchestrator: Option<(Arc<OrchestratorClient>, PeerConfig<SeqTypes>)>,
 
     /// Background tasks to shut down when the node is dropped.
     tasks: TaskList,
-
-    /// events streamer to stream hotshot events to external clients
-    events_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
 
     detached: bool,
 
@@ -130,6 +132,8 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
+        empty_block_delay: Duration,
+        block_sizes: BTreeMap<Version, u64>,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -160,10 +164,6 @@ where
 
         let initializer_for_coordinator = initializer.clone();
 
-        let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
-            stake_table.0,
-            0,
-        )));
         let consensus_metrics = ConsensusMetricsValue::new(metrics);
 
         let handle = SystemContext::init(
@@ -230,10 +230,22 @@ where
             .state_private_key(validator_config.state_private_key.clone())
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
+            .empty_block_delay(empty_block_delay)
+            .block_sizes(block_sizes)
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
             .maybe_locked_qc(locked_qc)
+            .upgrade_config(UpgradeConfig {
+                start_proposing_view: config.start_proposing_view,
+                stop_proposing_view: config.stop_proposing_view,
+                start_voting_view: config.start_voting_view,
+                stop_voting_view: config.stop_voting_view,
+                start_proposing_time: config.start_proposing_time,
+                stop_proposing_time: config.stop_proposing_time,
+                start_voting_time: config.start_voting_time,
+                stop_voting_time: config.stop_voting_time,
+            })
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
@@ -325,7 +337,6 @@ where
             state_signer,
             external_event_handler,
             request_response_protocol,
-            event_streamer,
             instance_state,
             network_config,
             validator_config,
@@ -345,7 +356,6 @@ where
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
         request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
-        event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -359,12 +369,12 @@ where
         let node_id = node_state.node_id;
         let mut ctx = Self {
             consensus_handle,
+            persistence: persistence.clone(),
             state_signer: Arc::new(RwLock::new(state_signer)),
             request_response_protocol,
             tasks: Default::default(),
             detached: false,
             wait_for_orchestrator: None,
-            events_streamer: event_streamer.clone(),
             node_state,
             network_config,
             validator_config,
@@ -407,7 +417,6 @@ where
                 persistence,
                 ctx.state_signer.clone(),
                 external_event_handler,
-                Some(event_streamer.clone()),
                 event_consumer,
                 decide_tx,
             ),
@@ -417,8 +426,15 @@ where
     }
 
     /// Wait for a signal from the orchestrator before starting consensus.
-    pub fn wait_for_orchestrator(mut self, client: OrchestratorClient) -> Self {
-        self.wait_for_orchestrator = Some(Arc::new(client));
+    ///
+    /// `peer_config` is what this node registered with the orchestrator. `/ready` posts it
+    /// again, and the orchestrator equality-checks it against `known_nodes_with_stake`.
+    pub fn wait_for_orchestrator(
+        mut self,
+        client: OrchestratorClient,
+        peer_config: PeerConfig<SeqTypes>,
+    ) -> Self {
+        self.wait_for_orchestrator = Some((Arc::new(client), peer_config));
         self
     }
 
@@ -440,11 +456,6 @@ where
 
     pub async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<()> {
         self.consensus_handle.submit_transaction(tx).await
-    }
-
-    /// get event streamer
-    pub fn event_streamer(&self) -> Arc<RwLock<EventsStreamer<SeqTypes>>> {
-        self.events_streamer.clone()
     }
 
     /// Return a reference to the consensus adapter.
@@ -484,13 +495,16 @@ where
         self.node_state.clone()
     }
 
+    pub fn persistence(&self) -> Arc<P> {
+        self.persistence.clone()
+    }
+
     /// Start participating in consensus.
     pub async fn start_consensus(&self) {
-        if let Some(orchestrator_client) = &self.wait_for_orchestrator {
+        if let Some((orchestrator_client, peer_config)) = &self.wait_for_orchestrator {
             tracing::warn!("waiting for orchestrated start");
-            let peer_config = PeerConfig::to_bytes(&self.validator_config.public_config()).clone();
             orchestrator_client
-                .wait_for_all_nodes_ready(peer_config)
+                .wait_for_all_nodes_ready(PeerConfig::to_bytes(peer_config))
                 .await;
         } else {
             // the network config was loaded from storage or fetched from
@@ -613,13 +627,6 @@ impl DecideProcessorMetrics {
     }
 }
 
-/// How many new-protocol decides to wait for before tearing down the legacy
-/// consensus stack (tasks + network). Once the coordinator has decided even a
-/// single leaf the cutover boundary is final and all consensus traffic runs
-/// on the coordinator's network; the margin only gives slightly-lagging peers
-/// a window to finish crossing the boundary with legacy help.
-const LEGACY_SHUTDOWN_DECIDE_COUNT: u64 = 100;
-
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_events<N, P, C>(
@@ -629,7 +636,6 @@ async fn handle_events<N, P, C>(
     persistence: Arc<P>,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler,
-    events_streamer: Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>,
     event_consumer: Arc<C>,
     decide_tx: watch::Sender<DecideSignal>,
 ) where
@@ -637,23 +643,10 @@ async fn handle_events<N, P, C>(
     P: SequencerPersistence,
     C: PersistenceEventConsumer + 'static,
 {
-    let mut new_protocol_decides: u64 = 0;
-
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
 
         match &event {
-            CoordinatorEvent::NewDecide { .. } => {
-                new_protocol_decides += 1;
-                if new_protocol_decides == LEGACY_SHUTDOWN_DECIDE_COUNT {
-                    tracing::info!(
-                        node_id,
-                        "new protocol is live, shutting down legacy consensus and network"
-                    );
-                    let handle = consensus_handle.clone();
-                    spawn(async move { handle.shut_down_legacy().await });
-                }
-            },
             CoordinatorEvent::LegacyEvent(hotshot_event) => {
                 if let hotshot_types::event::EventType::ExternalMessageReceived { ref data, .. } =
                     hotshot_event.event
@@ -661,7 +654,6 @@ async fn handle_events<N, P, C>(
                 {
                     tracing::warn!(%err, "Failed to handle legacy external message");
                 }
-                consensus_handle.activate().await;
             },
             CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
@@ -703,19 +695,7 @@ async fn handle_events<N, P, C>(
                 .await;
         };
 
-        let events_streamer_fut = async {
-            if let CoordinatorEvent::LegacyEvent(ref hotshot_event) = event
-                && let Some(events_streamer) = events_streamer.as_ref()
-            {
-                events_streamer
-                    .write()
-                    .await
-                    .handle_event(hotshot_event.clone())
-                    .await;
-            }
-        };
-
-        tokio::join!(persistence_fut, state_signer_fut, events_streamer_fut);
+        tokio::join!(persistence_fut, state_signer_fut);
     }
 }
 
@@ -814,7 +794,7 @@ async fn process_decided_events_task<P, C>(
 
 #[derive(Debug, Default, Clone)]
 #[allow(clippy::type_complexity)]
-pub(crate) struct TaskList(Arc<Mutex<Vec<(String, JoinHandle<()>)>>>);
+pub struct TaskList(Arc<Mutex<Vec<(String, JoinHandle<()>)>>>);
 
 macro_rules! spawn_with_log_level {
     ($this:expr, $lvl:expr, $name:expr, $task: expr) => {
