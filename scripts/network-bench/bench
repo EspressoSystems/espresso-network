@@ -7,13 +7,15 @@ r"""End-to-end throughput benchmark of a 3-node espresso-node network, for regre
 
 `run` starts scripts/network-bench/process-compose.yaml (3 equal-stake validators, so every
 certificate needs all 3; node0 on Postgres with the query service, node1 and node2 on SQLite),
-drives it with a closed-loop load generator, samples node metrics and host CPU, tears the network
+drives it with a paced load generator, samples node metrics and host CPU, tears the network
 down, and writes `result.json` plus a markdown `summary.md` into the output directory.
 
-Load is closed loop: at most `max_pending` transactions are in flight. A permit returns when
-node0's query service shows the transaction in a block, or after `tx_timeout_s`. Each transaction
-carries a per-run marker and its id, so inclusion is found by scanning block payloads, one fetch
-per block, without computing transaction hashes.
+Load is paced: `tx_size` transactions go out evenly spaced at `rate_mb_s`, round-robin over the
+first `submit_nodes` nodes, independent of inclusion. `max_pending` only caps the transactions in
+flight; a submit waiting for the cap means the network is behind. A permit returns when node0's
+query service shows the transaction in a block, or after `tx_timeout_s`. Each transaction carries
+a per-run marker and its id, so inclusion is found by scanning block payloads, one fetch per
+block, without computing transaction hashes.
 
 Headline rates are the median of `subwindow_s` slices of the measurement window. A run is
 `noisy` when steal time, calibration drift or dropped transactions suggest the runner, not the
@@ -150,11 +152,10 @@ CLEANUP_TIMEOUT_S = 60
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 MISSING_PAYLOAD_S = 10
 IN_FLIGHT_STEP_S = 1.0
-# Throughput bound rules, see throughput_bound.
-FULL_BLOCK_FILL = 0.8
-LOAD_EMPTY_FRAC = 0.25
-NETWORK_EMPTY_FRAC = 0.05
-AT_CAP_MIN_FRAC = 0.5
+# Keeping-up rules, see throughput_bound.
+KEEP_UP_RATIO = 0.95
+KEEP_UP_AT_CAP_FRAC = 0.02
+KEEP_UP_EMPTY_FRAC = 0.05
 TOOL_VERSIONS = (
     ["process-compose", "version"],
     ["anvil", "--version"],
@@ -276,12 +277,14 @@ class LoadStats(TypedDict):
     submit_errors: int
     max_in_flight: int
     at_cap_frac: float
+    cap_waits: int
+    offered_mb_s: float
     missing_payloads: list[int]
     latency_ms: Quantiles | None
 
 
 class Bound(TypedDict):
-    kind: Literal["load", "network", "unclear"]
+    kind: Literal["keeping-up", "behind"]
     reason: str
 
 
@@ -320,8 +323,10 @@ class BenchConfig:
     genesis: str = "scripts/network-bench/genesis.toml"
     tx_size: int = 1_000_000
     namespaces: tuple[int, int] = (10000, 10001)
+    rate_mb_s: float = 16.0
+    submit_nodes: int = 3
     workers: int = 6
-    max_pending: int = 48
+    max_pending: int = 80
     tx_timeout_s: int = 30
     warmup_s: int = 60
     measure_s: int = 180
@@ -445,10 +450,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     for field in dataclasses.fields(BenchConfig):
         if field.name in ("genesis", "namespaces"):
             continue
+        default = getattr(defaults, field.name)
         run.add_argument(
-            f"--{field.name.replace('_', '-')}",
-            type=int,
-            default=getattr(defaults, field.name),
+            f"--{field.name.replace('_', '-')}", type=type(default), default=default
         )
     run.set_defaults(func=cmd_run)
 
@@ -854,6 +858,7 @@ class LoadState:
         self.txs: list[Tx] = []
         self.pending: dict[int, Tx] = {}
         self.max_in_flight = 0
+        self.cap_waits = 0
         self.submit_errors = 0
         self.missing_payloads: list[int] = []
 
@@ -875,14 +880,13 @@ class LoadState:
 async def generate_load(
     cfg: BenchConfig, submit_urls: list[str], query_url: str, until: float, out: Path
 ) -> None:
-    """Closed-loop load until `until`, then wait up to `tx_timeout_s` for the stragglers.
+    """Paced load until `until`, then wait up to `tx_timeout_s` for the stragglers.
     Writes one line per transaction to load.jsonl and the counters to load-meta.json."""
     loop = asyncio.get_running_loop()
     loop.set_default_executor(ThreadPoolExecutor(cfg.workers + 2))
     state = LoadState(cfg.max_pending)
     marker = hashlib.sha256(f"network-bench:{cfg.seed}".encode()).digest()[:16]
     bodies = tx_bodies(cfg, len(marker) + 8)
-    ids = itertools.count()
     pool = HttpPool()
     done = asyncio.Event()
     try:
@@ -891,15 +895,9 @@ async def generate_load(
             tracker = group.create_task(
                 track_inclusion(cfg, state, pool, query_url, marker, start_height, done)
             )
-            workers = [
-                group.create_task(
-                    submit_worker(
-                        cfg, state, pool, submit_urls, marker, bodies, ids, until
-                    )
-                )
-                for _ in range(cfg.workers)
-            ]
-            await asyncio.gather(*workers)
+            await pace_submissions(
+                cfg, state, pool, submit_urls[: cfg.submit_nodes], marker, bodies, until
+            )
             done.set()
             await tracker
     except* (NetworkError, OSError) as group:
@@ -912,6 +910,7 @@ async def generate_load(
         {
             "start_height": start_height,
             "max_in_flight": state.max_in_flight,
+            "cap_waits": state.cap_waits,
             "submit_errors": state.submit_errors,
             "missing_payloads": state.missing_payloads,
             "marker": marker.hex(),
@@ -924,44 +923,72 @@ def tx_bodies(cfg: BenchConfig, header_len: int) -> list[bytes]:
     return [rng.randbytes(cfg.tx_size - header_len) for _ in range(16)]
 
 
-async def submit_worker(
+def tx_interval_s(cfg: BenchConfig) -> float:
+    return cfg.tx_size / (cfg.rate_mb_s * 1e6)
+
+
+def next_due(due: float, interval: float, now: float) -> float:
+    """Evenly spaced submit times. A pacer more than an interval late restarts from `now`
+    instead of bursting to catch up."""
+    return max(due + interval, now)
+
+
+async def pace_submissions(
     cfg: BenchConfig,
     state: LoadState,
     pool: HttpPool,
     urls: list[str],
     marker: bytes,
     bodies: list[bytes],
-    ids: Iterator[int],
     until: float,
 ) -> None:
-    lo, hi = cfg.namespaces
-    while True:
-        await state.permits.acquire()
-        if time.time() >= until:
-            state.permits.release()
-            return
-        tx_id = next(ids)
-        node = tx_id % len(urls)
-        payload = marker + tx_id.to_bytes(8, "big") + bodies[tx_id % len(bodies)]
-        body = json.dumps(
-            {
-                "namespace": lo + tx_id % (hi - lo + 1),
-                "payload": base64.b64encode(payload).decode(),
-            }
-        ).encode()
-        tx = Tx(id=tx_id, node=node, t_submit=time.time())
-        try:
-            status, _ = await asyncio.to_thread(
-                pool.request, "POST", urls[node] + "/v1/submit/submit", body
+    interval = tx_interval_s(cfg)
+    due = time.time()
+    async with asyncio.TaskGroup() as submits:
+        for tx_id in itertools.count():
+            await asyncio.sleep(max(0.0, due - time.time()))
+            if time.time() >= until:
+                return
+            if state.permits.locked():
+                state.cap_waits += 1
+            await state.permits.acquire()
+            submits.create_task(
+                submit_tx(cfg, state, pool, urls, marker, bodies, tx_id)
             )
-        except OSError:
-            status = 0
-        if status != 200:
-            state.submit_errors += 1
-            state.permits.release()
-            await asyncio.sleep(0.5)
-            continue
-        state.submitted(tx)
+            due = next_due(due, interval, time.time())
+
+
+async def submit_tx(
+    cfg: BenchConfig,
+    state: LoadState,
+    pool: HttpPool,
+    urls: list[str],
+    marker: bytes,
+    bodies: list[bytes],
+    tx_id: int,
+) -> None:
+    """Submit one transaction holding a permit; the tracker returns it on inclusion."""
+    lo, hi = cfg.namespaces
+    node = tx_id % len(urls)
+    payload = marker + tx_id.to_bytes(8, "big") + bodies[tx_id % len(bodies)]
+    body = json.dumps(
+        {
+            "namespace": lo + tx_id % (hi - lo + 1),
+            "payload": base64.b64encode(payload).decode(),
+        }
+    ).encode()
+    tx = Tx(id=tx_id, node=node, t_submit=time.time())
+    try:
+        status, _ = await asyncio.to_thread(
+            pool.request, "POST", urls[node] + "/v1/submit/submit", body
+        )
+    except OSError:
+        status = 0
+    if status != 200:
+        state.submit_errors += 1
+        state.permits.release()
+        return
+    state.submitted(tx)
 
 
 async def track_inclusion(
@@ -1024,12 +1051,13 @@ def log_progress(state: LoadState, height: int) -> None:
     included = sum(1 for tx in state.txs if tx.status == "included")
     timeouts = sum(1 for tx in state.txs if tx.status == "timeout")
     log.info(
-        "height %d: %d submitted, %d included, %d pending, %d timed out",
+        "height %d: %d submitted, %d included, %d pending, %d timed out, %d waited for the cap",
         height,
         len(state.txs),
         included,
         len(state.pending),
         timeouts,
+        state.cap_waits,
     )
 
 
@@ -1321,15 +1349,16 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
         "processes": process_stats(host, t0, t1),
         "host": host_stats(host, t0, t1),
         "load": load_stats(out, cfg, t0, t1),
-        "bound": {"kind": "unclear", "reason": ""},
+        "bound": {"kind": "behind", "reason": ""},
         "stake_table": stake_amounts(out / "stake-table.json"),
         "validity": {"valid": True, "noisy": False, "reasons": []},
     }
     net = result["network"]
     result["bound"] = throughput_bound(
+        cfg.rate_mb_s,
+        net["decided_mb_per_s"]["value"] or 0.0,
         result["load"]["at_cap_frac"],
         net["empty_block_frac"],
-        (net["block_bytes_nonempty_mean"] or 0.0) / net["max_block_bytes"],
     )
     result["validity"] = check_validity(
         result, scrape_coverage(out / "metrics.jsonl", t0, t1)
@@ -1337,24 +1366,26 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
     return result
 
 
-def throughput_bound(at_cap: float, empty_frac: float, fill: float) -> Bound:
-    """Whether decided throughput measures the network or the closed-loop load. `at_cap` is the
-    fraction of samples with max_pending transactions in flight, `fill` the mean non-empty block
-    size over max_block_size."""
-    if fill >= FULL_BLOCK_FILL:
-        return {
-            "kind": "network",
-            "reason": f"non-empty blocks >= {FULL_BLOCK_FILL:.0%} full",
-        }
-    if empty_frac >= LOAD_EMPTY_FRAC:
-        return {"kind": "load", "reason": f">= {LOAD_EMPTY_FRAC:.0%} of blocks empty"}
-    if empty_frac < NETWORK_EMPTY_FRAC and at_cap >= AT_CAP_MIN_FRAC:
-        return {
-            "kind": "network",
-            "reason": f"< {NETWORK_EMPTY_FRAC:.0%} of blocks empty, max_pending in flight "
-            f"for >= {AT_CAP_MIN_FRAC:.0%} of samples",
-        }
-    return {"kind": "unclear", "reason": "no rule matched"}
+def throughput_bound(
+    offered: float, decided: float, at_cap: float, empty_frac: float
+) -> Bound:
+    """Whether the network keeps up with the paced load: decided close to offered, the
+    max_pending cap hardly reached (`at_cap`: fraction of samples at the cap), and every block
+    carrying transactions."""
+    behind = []
+    if decided < KEEP_UP_RATIO * offered:
+        behind.append(f"decided {decided / offered:.0%} of offered")
+    if at_cap >= KEEP_UP_AT_CAP_FRAC:
+        behind.append(f"max_pending reached in {at_cap:.0%} of samples")
+    if empty_frac >= KEEP_UP_EMPTY_FRAC:
+        behind.append(f"{empty_frac:.0%} of blocks empty")
+    if behind:
+        return {"kind": "behind", "reason": ", ".join(behind)}
+    return {
+        "kind": "keeping-up",
+        "reason": f"decided >= {KEEP_UP_RATIO:.0%} of offered, max_pending reached in "
+        f"< {KEEP_UP_AT_CAP_FRAC:.0%} of samples, < {KEEP_UP_EMPTY_FRAC:.0%} of blocks empty",
+    }
 
 
 def max_block_bytes(genesis: Path) -> int:
@@ -1756,6 +1787,8 @@ def load_stats(out: Path, cfg: BenchConfig, t0: float, t1: float) -> LoadStats:
         "timeouts": sum(1 for tx in txs if tx["status"] == "timeout"),
         "submit_errors": meta["submit_errors"],
         "max_in_flight": meta["max_in_flight"],
+        "cap_waits": meta["cap_waits"],
+        "offered_mb_s": cfg.rate_mb_s,
         "at_cap_frac": at_cap_frac(
             [
                 (tx["t_submit"], tx["t_included"] or tx["t_submit"] + cfg.tx_timeout_s)
@@ -2048,19 +2081,13 @@ def status_line(result: BenchResult) -> str:
 
 
 def bound_line(result: BenchResult) -> str:
-    bound, cfg = result["bound"], result["config"]
-    meaning = {
-        "load": f"decided payload measures the offered load, capped by max_pending {cfg['max_pending']}",
-        "network": "decided payload measures network capacity",
-        "unclear": "decided payload is attributed to neither bound",
-    }[bound["kind"]]
+    bound = result["bound"]
     title = {
-        "load": "Load-bound",
-        "network": "Network-bound",
-        "unclear": "Bound unclear",
+        "keeping-up": "Keeping up with the offered load",
+        "behind": "Behind the offered load",
     }
     return (
-        f"**{title[bound['kind']]}** (rule: {bound['reason']}): {meaning}. "
+        f"**{title[bound['kind']]}** ({bound['reason']}): "
         f"{'; '.join(saturation_facts(result))}."
     )
 
@@ -2068,19 +2095,26 @@ def bound_line(result: BenchResult) -> str:
 def saturation_facts(result: BenchResult) -> list[str]:
     net, load, cfg = result["network"], result["load"], result["config"]
     block = net["block_bytes_nonempty_mean"]
-    fill = (
+    blocks = net["blocks_per_s"]["value"]
+    size = (
         f"non-empty blocks {fmt_bytes(block)} mean, "
-        f"{block / net['max_block_bytes']:.1%} of max_block_size {fmt_bytes(net['max_block_bytes'])}"
+        f"{block / net['max_block_bytes']:.1%} of max_block_size"
         if block is not None
-        else f"no non-empty blocks, max_block_size {fmt_bytes(net['max_block_bytes'])}"
+        else "no non-empty blocks"
     )
+    submitted = load["submitted_per_s"] * cfg["tx_size"] / 1e6
     return [
+        (
+            f"offered {fmt_num(load['offered_mb_s'])} MB/s, submitted {fmt_num(submitted)} "
+            f"MB/s, decided {fmt_num(net['decided_mb_per_s']['value'])} MB/s"
+        ),
+        f"block time {fmt_num(1000 / blocks if blocks else None)} ms",
+        size,
         f"{net['empty_block_frac']:.0%} of blocks empty",
         (
-            f"{cfg['max_pending']}/{cfg['max_pending']} txs in flight for "
-            f"{load['at_cap_frac']:.0%} of {IN_FLIGHT_STEP_S:.0f} s samples"
+            f"max_pending {cfg['max_pending']} reached in {load['at_cap_frac']:.0%} of "
+            f"{IN_FLIGHT_STEP_S:.0f} s samples, {load['cap_waits']} submits waited"
         ),
-        fill,
     ]
 
 
@@ -2285,8 +2319,9 @@ def load_lines(result: BenchResult) -> list[str]:
     blocks = net["blocks_per_s"]["value"]
     return [
         (
-            f"- closed loop: {cfg['workers']} workers, max_pending {cfg['max_pending']}, "
-            f"{fmt_bytes(cfg['tx_size'])} per tx"
+            f"- paced: {fmt_num(cfg['rate_mb_s'])} MB/s offered in {fmt_bytes(cfg['tx_size'])} "
+            f"txs to {cfg['submit_nodes']} nodes, {cfg['workers']} submit threads, "
+            f"max_pending cap {cfg['max_pending']}"
         ),
         (
             f"- submitted {load['submitted_per_s']:.1f} tx/s, included "

@@ -113,6 +113,8 @@ def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
             "workers": 6,
             "max_pending": 48,
             "tx_size": 100_000,
+            "rate_mb_s": 4.0,
+            "submit_nodes": 3,
             "subwindow_s": 30,
         },
         "config_hash": config_hash,
@@ -148,10 +150,12 @@ def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
             "submit_errors": 0,
             "max_in_flight": 48,
             "at_cap_frac": 0.8,
+            "cap_waits": 0,
+            "offered_mb_s": 4.0,
             "missing_payloads": [],
             "latency_ms": quantiles(1200.0, 2500.0),
         },
-        "bound": {"kind": "unclear", "reason": "r"},
+        "bound": {"kind": "keeping-up", "reason": "r"},
         "stake_table": ["0x1", "0x1", "0x1"],
         "validity": {"valid": True, "noisy": False, "reasons": []},
     }
@@ -181,10 +185,10 @@ class RenderTest(unittest.TestCase):
 
     def test_verdict_first_detail_last(self):
         current = make_result()
-        current["bound"] = {"kind": "load", "reason": "75% of blocks empty"}
+        current["bound"] = {"kind": "behind", "reason": "75% of blocks empty"}
         summary = bench.render(current, None)
         order = [
-            "**Load-bound** (rule: 75% of blocks empty)",
+            "**Behind the offered load** (75% of blocks empty)",
             "Baseline: none given",
             "| metric | this run |",
             "### Load",
@@ -577,7 +581,7 @@ class FakeHandler(BaseHTTPRequestHandler):
 
 
 class LoadTest(unittest.TestCase):
-    def run_load(self, include, duration, lost=frozenset(), **cfg):
+    def run_load(self, include, duration, lost=frozenset(), nodes=1, **cfg):
         node = FakeNode(include, lost)
         threads = [
             threading.Thread(target=node.serve_forever),
@@ -585,13 +589,17 @@ class LoadTest(unittest.TestCase):
         ]
         for thread in threads:
             thread.start()
-        config = bench.BenchConfig(tx_size=1000, workers=3, **cfg)
+        config = bench.BenchConfig(**{"tx_size": 1000, "workers": 3} | cfg)
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 start = time.time()
                 asyncio.run(
                     bench.generate_load(
-                        config, [node.url], node.url, start + duration, Path(tmp)
+                        config,
+                        [node.url] * nodes,
+                        node.url,
+                        start + duration,
+                        Path(tmp),
                     )
                 )
                 lines = (Path(tmp) / "load.jsonl").read_text().splitlines()
@@ -605,19 +613,32 @@ class LoadTest(unittest.TestCase):
             node.server_close()
         return start, node, txs, meta
 
-    def test_inclusion_releases_permits(self):
-        _, node, txs, meta = self.run_load(True, 1.0, max_pending=4, tx_timeout_s=5)
-        self.assertGreater(len(txs), 4)
+    def test_submits_at_the_offered_rate(self):
+        # 1000 byte txs at 0.02 MB/s: one every 50 ms, independent of inclusion.
+        _, node, txs, meta = self.run_load(
+            True, 1.0, rate_mb_s=0.02, max_pending=100, tx_timeout_s=5
+        )
+        self.assertIn(len(node.submits), range(19, 22))
+        gaps = [b - a for a, b in zip(node.submits, node.submits[1:])]
+        self.assertAlmostEqual(sorted(gaps)[len(gaps) // 2], 0.05, delta=0.01)
         self.assertTrue(all(tx["status"] == "included" for tx in txs))
-        self.assertLessEqual(meta["max_in_flight"], 4)
-        self.assertLessEqual(node.max_outstanding, 4)
+        self.assertEqual(meta["cap_waits"], 0)
 
-    def test_timeout_releases_permits(self):
-        _, node, txs, meta = self.run_load(False, 2.5, max_pending=4, tx_timeout_s=1)
+    def test_round_robin_over_submit_nodes(self):
+        _, _, txs, _ = self.run_load(
+            True, 0.5, nodes=3, submit_nodes=2, rate_mb_s=0.02, tx_timeout_s=5
+        )
+        self.assertEqual([tx["node"] for tx in txs[:4]], [0, 1, 0, 1])
+
+    def test_cap_blocks_until_timeout(self):
+        _, node, txs, meta = self.run_load(
+            False, 2.5, rate_mb_s=1.0, max_pending=4, tx_timeout_s=1
+        )
         # A permit returns only on timeout, and the first one is 1 s after the first submit.
         self.assertGreater(node.submits[4] - node.submits[0], 0.9)
         self.assertGreater(len(node.submits), 4)
         self.assertEqual(meta["max_in_flight"], 4)
+        self.assertGreater(meta["cap_waits"], 0)
         self.assertTrue(all(tx["status"] == "timeout" for tx in txs))
 
     def test_lost_payload_is_skipped(self):
@@ -626,7 +647,7 @@ class LoadTest(unittest.TestCase):
             self.assertLogs(bench.log, "WARNING"),
         ):
             _, _, txs, meta = self.run_load(
-                True, 1.0, lost={3}, max_pending=4, tx_timeout_s=1
+                True, 1.0, lost={3}, rate_mb_s=0.02, tx_timeout_s=1
             )
         self.assertEqual(meta["missing_payloads"], [3])
         self.assertGreater(sum(tx["status"] == "included" for tx in txs), 4)
@@ -691,6 +712,7 @@ def write_run_dir(out):
         "load-meta.json": {
             "submit_errors": 0,
             "max_in_flight": 4,
+            "cap_waits": 0,
             "missing_payloads": [],
         },
         "calibration.json": {"before": calib, "after": calib},
@@ -715,7 +737,7 @@ def write_run_dir(out):
 
 class AnalyzeTest(unittest.TestCase):
     def test_window_rates(self):
-        cfg = bench.BenchConfig(measure_s=60, subwindow_s=20)
+        cfg = bench.BenchConfig(measure_s=60, subwindow_s=20, rate_mb_s=1.0)
         with tempfile.TemporaryDirectory() as tmp:
             write_run_dir(Path(tmp))
             result = bench.analyze(Path(tmp), cfg)
@@ -740,30 +762,50 @@ class AnalyzeTest(unittest.TestCase):
         self.assertEqual(load["at_cap_frac"], 0.0)
         self.assertAlmostEqual(net["block_bytes_nonempty_mean"], 500_000.0)
         self.assertEqual(net["max_block_bytes"], 100_000_000)
-        self.assertEqual(result["bound"]["kind"], "unclear")
+        self.assertEqual(load["offered_mb_s"], 1.0)
+        self.assertEqual(result["bound"]["kind"], "keeping-up")
         self.assertEqual(
             result["validity"],
             {"valid": True, "noisy": True, "reasons": ["1 transactions timed out"]},
         )
 
 
+class PaceTest(unittest.TestCase):
+    def test_interval_from_rate(self):
+        cfg = bench.BenchConfig(tx_size=1_000_000, rate_mb_s=20.0)
+        self.assertAlmostEqual(bench.tx_interval_s(cfg), 0.05)
+
+    def test_on_time_keeps_the_schedule(self):
+        self.assertEqual(bench.next_due(10.0, 0.5, 10.2), 10.5)
+
+    def test_late_restarts_from_now(self):
+        self.assertEqual(bench.next_due(10.0, 0.5, 12.0), 12.0)
+
+
 class BoundTest(unittest.TestCase):
-    def kind(self, at_cap, empty, fill):
-        return bench.throughput_bound(at_cap, empty, fill)["kind"]
+    def kind(self, decided=10.0, at_cap=0.0, empty=0.0):
+        return bench.throughput_bound(10.0, decided, at_cap, empty)
 
-    def test_empty_blocks_are_load_bound(self):
-        self.assertEqual(self.kind(0.78, 0.75, 0.05), "load")
-        self.assertEqual(self.kind(0.1, 0.5, 0.05), "load")
+    def test_keeping_up(self):
+        self.assertEqual(self.kind()["kind"], "keeping-up")
+        self.assertEqual(
+            self.kind(decided=9.6, at_cap=0.01, empty=0.04)["kind"], "keeping-up"
+        )
 
-    def test_full_blocks_are_network_bound(self):
-        self.assertEqual(self.kind(0.9, 0.5, 0.85), "network")
+    def test_decided_below_offered_is_behind(self):
+        bound = self.kind(decided=9.0)
+        self.assertEqual(bound["kind"], "behind")
+        self.assertIn("decided 90% of offered", bound["reason"])
 
-    def test_busy_blocks_at_cap_are_network_bound(self):
-        self.assertEqual(self.kind(0.9, 0.01, 0.3), "network")
+    def test_cap_blocking_is_behind(self):
+        bound = self.kind(at_cap=0.1)
+        self.assertEqual(bound["kind"], "behind")
+        self.assertIn("max_pending", bound["reason"])
 
-    def test_between_rules_is_unclear(self):
-        self.assertEqual(self.kind(0.9, 0.1, 0.3), "unclear")
-        self.assertEqual(self.kind(0.2, 0.01, 0.3), "unclear")
+    def test_empty_blocks_are_behind(self):
+        bound = self.kind(empty=0.5)
+        self.assertEqual(bound["kind"], "behind")
+        self.assertIn("50% of blocks empty", bound["reason"])
 
     def test_at_cap_frac_samples_the_window(self):
         spans = [(0.0, 10.0), (0.0, 5.0), (20.0, 30.0)]
