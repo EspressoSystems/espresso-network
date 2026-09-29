@@ -1088,7 +1088,9 @@ async def track_inclusion(
                 raw = await client.call(block_payload, query_url, height)
                 if raw is None:
                     retries.create_task(
-                        retry_payload(state, client, query_url, pattern, height, at_height)
+                        retry_payload(
+                            state, client, query_url, pattern, height, at_height
+                        )
                     )
                 else:
                     record_inclusions(state, pattern, raw, at_height)
