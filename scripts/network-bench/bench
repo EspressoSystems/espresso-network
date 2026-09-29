@@ -323,7 +323,7 @@ class BenchConfig:
     genesis: str = "scripts/network-bench/genesis.toml"
     tx_size: int = 1_000_000
     namespaces: tuple[int, int] = (10000, 10001)
-    rate_mb_s: float = 16.0
+    rate_mb_s: float = 10.0
     submit_nodes: int = 3
     workers: int = 6
     max_pending: int = 80
