@@ -411,30 +411,31 @@ impl<Types: NodeType> EarlyPayloads<Types>
 where
     Header<Types>: QueryableHeader<Types>,
 {
-    /// Buffer `block`, dropping it when full so the lowest heights, decided next, are kept.
+    /// Buffer `block`, evicting the lowest heights when full.
     fn insert(&mut self, block: BlockQueryData<Types>) {
-        if self.len >= EARLY_PAYLOAD_CAPACITY {
-            tracing::debug!(
-                height = block.height(),
-                "early payload buffer full; dropping"
-            );
+        let candidates = self.blocks.entry(block.height()).or_default();
+        if candidates.iter().any(|b| b.hash() == block.hash()) {
             return;
         }
-        let candidates = self.blocks.entry(block.height()).or_default();
-        if candidates.iter().all(|b| b.hash() != block.hash()) {
-            candidates.push(block);
-            self.len += 1;
+        candidates.push(block);
+        self.len += 1;
+        while self.len > EARLY_PAYLOAD_CAPACITY {
+            let Some((height, evicted)) = self.blocks.pop_first() else {
+                break;
+            };
+            tracing::debug!(height, "early payload buffer full; evicting");
+            self.len -= evicted.len();
         }
     }
 
     /// Drop payloads at or below `leaf`'s height, returning the one matching `leaf`.
     fn take_decided(&mut self, leaf: &LeafQueryData<Types>) -> Option<BlockQueryData<Types>> {
         let height = leaf.height();
-        let block = self
-            .blocks
-            .remove(&height)?
-            .into_iter()
-            .find(|b| b.hash() == leaf.block_hash());
+        let block = self.blocks.remove(&height).and_then(|candidates| {
+            candidates
+                .into_iter()
+                .find(|b| b.hash() == leaf.block_hash())
+        });
         self.blocks.retain(|&h, _| h > height);
         self.len = self.blocks.values().map(Vec::len).sum();
         block

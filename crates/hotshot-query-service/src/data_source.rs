@@ -770,14 +770,14 @@ pub mod availability_tests {
                 .unwrap();
         }
 
-        // A full buffer keeps the lowest heights, which are decided next, and drops the newest.
-        let (last, others) = decided.split_last().unwrap();
+        // A full buffer evicts the lowest height.
+        let (first, others) = decided.split_first().unwrap();
+        let fetched = ds.get_block(first.0.height() as usize).await.try_resolve();
+        assert!(fetched.is_err());
         for (leaf, block) in others {
             let fetched = ds.get_block(leaf.height() as usize).await.try_resolve();
             assert_eq!(fetched.ok().as_ref(), Some(block));
         }
-        let fetched = ds.get_block(last.0.height() as usize).await.try_resolve();
-        assert!(fetched.is_err());
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
