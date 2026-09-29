@@ -622,9 +622,10 @@ async def generate_load(
     polling = Client(HttpPool(), ThreadPoolExecutor(2 + len(validator_urls)))
     done = asyncio.Event()
     counters: list[dict[str, Any]] = []
+    heights: Heights | None = None
+    steps: list[dict[str, Any]] = []
     try:
-        start_height = await tracking.call(query_height, query_url)
-        heights = Heights(start_height)
+        heights = Heights(await tracking.call(query_height, query_url))
         async with asyncio.TaskGroup() as group:
             pollers = [
                 group.create_task(
@@ -657,14 +658,29 @@ async def generate_load(
         submitter.close()
         tracking.close()
         polling.close()
+        # In `finally` so a load cut short (SIGTERM of the AWS agent) keeps its raw data.
+        if heights is not None:
+            write_load_files(out, state, heights, counters, steps, marker)
+    return steps[0]["t_start"], steps[-1]["t_end"]
+
+
+def write_load_files(
+    out: Path,
+    state: LoadState,
+    heights: "Heights",
+    counters: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+    marker: bytes,
+) -> None:
     write_jsonl(out / "load.jsonl", (dataclasses.asdict(tx) for tx in state.txs))
     write_jsonl(out / "heights.jsonl", heights.records())
     write_jsonl(out / "consensus.jsonl", iter(counters))
-    write_json(out / "steps.json", steps)
+    if steps:
+        write_json(out / "steps.json", steps)
     write_json(
         out / "load-meta.json",
         {
-            "start_height": start_height,
+            "start_height": heights.start,
             "max_in_flight": state.max_in_flight,
             "cap_waits": state.cap_waits,
             "submit_errors": state.submit_errors,
@@ -672,7 +688,6 @@ async def generate_load(
             "marker": marker.hex(),
         },
     )
-    return steps[0]["t_start"], steps[-1]["t_end"]
 
 
 def innermost(err: BaseException) -> BaseException:

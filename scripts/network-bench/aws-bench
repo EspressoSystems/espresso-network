@@ -10,9 +10,12 @@ and region, replacing manual `espresso-deploy` runs for this purpose. `plan` ren
 and prints a cost estimate without writing anything to AWS; `run` additionally provisions,
 measures, collects and destroys.
 
-`plan` (including `--offline`) and `agent-host` are implemented; `run`, `status`, `collect`,
-`render`, `destroy` and `agent-drive` raise `NotImplementedError` for now. `agent-host` also runs
-on every AWS host under system python3, sampling /proc and cgroups into `host.jsonl`.
+`plan` (including `--offline`), `run`, `agent-drive` and `agent-host` are implemented; `status`,
+`collect`, `render` and `destroy` raise `NotImplementedError` for now. `agent-drive` (on ctl) and
+`agent-host` (on every host) run under system python3 from /opt/bench.
+
+Exit codes of `run`: 0 valid, 1 invalid result, 2 refused before any AWS write, 3 failed after
+writes but destroyed, 4 resources may remain (the last log line is the destroy command).
 
 Examples:
     scripts/network-bench/aws-bench plan --tag release-x --offline \
@@ -23,11 +26,13 @@ Examples:
 import argparse
 import dataclasses
 import getpass
+import gzip
 import hashlib
 import json
 import logging
 import os
 import re
+import select
 import shlex
 import shutil
 import signal
@@ -40,12 +45,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict, TypeVar, cast
 
 import netbench as nb
+
+_T = TypeVar("_T")
 
 log = logging.getLogger("aws-bench")
 
@@ -179,7 +187,13 @@ RESERVED_GB = 20
 QUERY_JOURNAL_FRACTION = 0.5
 
 BENCH_DIR = "/opt/bench"
-USER_DATA_TEMPLATE = Path(__file__).resolve().parent / "aws" / "user-data.sh"
+SCRIPT_DIR = Path(__file__).resolve().parent
+# On a host the script lives in /opt/bench, whose parents[1] is "/"; only the laptop reads it.
+REPO_ROOT = SCRIPT_DIR.parents[1]
+USER_DATA_TEMPLATE = SCRIPT_DIR / "aws" / "user-data.sh"
+TERRAFORM_SRC = SCRIPT_DIR / "aws" / "terraform"
+# Rendered per host after `tofu apply`, shipped to /opt/bench next to netbench.py and aws-bench.
+SHIPPED_HOST_FILES = ("node.env", "ctl.env", "start.sh", "agent.json")
 
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 # Matches bench.sample_host, so host_stats/process_stats coverage math is unchanged.
@@ -199,6 +213,49 @@ TF_PLUGIN_CACHE_DIR = Path(
     "~/.cache/espresso-network/aws-bench/tf-plugins"
 ).expanduser()
 
+SSH_USER = "ubuntu"
+# The plan's "ssh reachable with backoff up to 5 min".
+SSH_READY_TIMEOUT_S = 300.0
+SSH_RETRY_S = 5.0
+SSH_RETRY_MAX_S = 30.0
+# user-data pulls every image before cloud-init finishes; the ready timeout does not cover it.
+CLOUD_INIT_TIMEOUT_S = 900
+GATE_RETRY_S = 2.0
+# Per support service (anvil, orchestrator, relay, postgres) to answer after `docker start`.
+GATE_TIMEOUT_S = 120.0
+# Contract deployment: 7 deploy steps at anvil's 1 s block time, with margin.
+DEPLOY_TIMEOUT_S = 300
+# systemd-run returns before python writes its first agent-state.json.
+AGENT_START_GRACE_S = 30.0
+# Beyond ready timeout plus load duration, for the final drain and stake table fetch.
+AGENT_SLACK_S = 300.0
+# The tag every terraform resource carries (default_tags), and the key `sweep` filters on.
+TAG_RUN = "espresso-bench-run"
+# Thread pool size for parallel ssh/rsync calls; also the espresso-deploy fan-out limit.
+REMOTE_POOL_SIZE = 16
+# Chrony-synced clocks give a wall-clock start command room to land within this spread; a start
+# more spread out than this indicates docker or ssh dispatch, not clock skew, dominates.
+DOCKER_START_LEAD_S = 15.0
+# Container log lines per node in the summary of a run without a result.
+FAILURE_LOG_LINES = 10
+CHECKIP_URL = "https://checkip.amazonaws.com"
+AGENT_POLL_S = 5.0
+AGENT_LOG_S = 30.0
+OUT_RSYNC_S = 60.0
+# docker stop's grace period before SIGKILL, long enough for a clean journal fsync.
+FREEZE_STOP_TIMEOUT_S = 30.0
+DESTROY_RETRIES = 3
+DESTROY_BACKOFF_S = 20.0
+# Ctrl-C during measure: default-yes destroy prompt, so an unattended run still tears down.
+DESTROY_PROMPT_TIMEOUT_S = 30.0
+
+# AWS validity rules (check_validity_aws), on top of netbench's own check_validity.
+START_SPREAD_NOISY_S = 2.0
+CLOCK_OFFSET_INVALID_MS = 1000.0
+CLOCK_OFFSET_NOISY_MS = 50.0
+CTL_CPU_NOISY_FRAC = 0.85
+JOURNAL_NOISY_FRACTION = 0.9
+
 
 class Refused(Exception):
     """A plan or run must be refused before any AWS write; caught once, in `main`."""
@@ -213,6 +270,16 @@ class TfFailed(Exception):
     def __init__(self, stage: Literal["apply", "destroy"], message: str):
         self.stage = stage
         super().__init__(message)
+
+
+class RemoteError(Exception):
+    """ssh/rsync/cloud-init/gate failure against a live fleet; always caught in `cmd_run` and
+    turned into a destroy-then-exit-3, the same as `nb.NetworkError` in the local bench."""
+
+
+class Interrupted(Exception):
+    """Raised by `Interrupts.check` after a SIGINT/SIGTERM, caught once in `measure` so `cmd_run`
+    runs a bounded collection and a destroy prompt instead of an abrupt exit."""
 
 
 class HostSpec(TypedDict):
@@ -292,6 +359,40 @@ class Manifest(TypedDict):
     phase: str
     phase_seconds: dict[str, list[float]]
     estimate: Estimate
+    # Filled in by preflight for `run` (absent for an offline `plan`): needed again at
+    # `wait_hosts` to check pulled digests, and at `render` for the deployment block.
+    az: NotRequired[str]
+    ami_id: NotRequired[str]
+    images: NotRequired[dict[str, ImageInfo]]
+    hosts_info: NotRequired[dict[str, "HostInfo"]]
+    start_spread_s: NotRequired[float]
+    cost_usd: NotRequired[dict[str, float]]
+    git_rev: NotRequired[str]
+    config_hash: NotRequired[str]
+
+
+class AgentState(TypedDict):
+    """`agent-state.json`, polled from the laptop and written by `cmd_agent_drive`. `progress`
+    is the latest netbench INFO line; `ready_s`, `t0` and `t1` are set once known."""
+
+    phase: Literal["waiting", "loading", "done", "error"]
+    detail: str
+    error: NotRequired[str]
+    progress: NotRequired[str]
+    ready_s: NotRequired[float]
+    t0: NotRequired[float]
+    t1: NotRequired[float]
+
+
+class Evidence(TypedDict):
+    """Per-host facts `check_validity_aws` judges, read back from the collected files."""
+
+    coverage: dict[
+        str, float
+    ]  # fraction of expected host samples inside the load window
+    journal_bytes: dict[str, int]
+    clock_offset_ms: dict[str, float]
+    digest_mismatch: dict[str, list[str]]  # host -> images whose pulled digest differs
 
 
 @dataclass(frozen=True)
@@ -330,11 +431,23 @@ Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
 def _run(argv: list[str]) -> subprocess.CompletedProcess[str]:
     log.debug("+ %s", " ".join(argv))
-    return subprocess.run(argv, capture_output=True, text=True, check=False)
+    # A new session keeps the terminal's Ctrl-C away from tofu and rsync: the driver gets it
+    # first, then decides (see `Interrupts`).
+    return subprocess.run(
+        argv, capture_output=True, text=True, check=False, start_new_session=True
+    )
 
 
 def aws_argv(cfg: RunConfig, *args: str) -> list[str]:
     return ["aws", "--profile", cfg.profile, *args]
+
+
+def aws_ok(run: Runner, profile: str, *args: str) -> str:
+    """stdout of an `aws` call whose failure means the fleet state is unknown."""
+    result = run(["aws", "--profile", profile, *args])
+    if result.returncode != 0:
+        raise RemoteError(f"aws {' '.join(args[:3])} failed: {result.stderr.strip()}")
+    return result.stdout
 
 
 def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
@@ -726,6 +839,16 @@ def write_manifest(
     }
     nb.write_json(run_dir / "manifest.json", manifest)
     append_event(run_dir, phase, "manifest-written", None)
+
+
+def update_manifest(run_dir: Path, phase: str, **extra: Any) -> Manifest:
+    """Advances `manifest.json.phase` and merges in whatever the caller now knows (`az`,
+    `hosts_info`, `start_spread_s`, ...); every previous key is kept."""
+    merged: dict[str, Any] = {**nb.read_json(run_dir / "manifest.json"), "phase": phase}
+    merged.update(extra)
+    nb.write_json(run_dir / "manifest.json", merged)
+    append_event(run_dir, phase, "manifest-written", None)
+    return cast(Manifest, merged)
 
 
 def tools_on_path(
@@ -1699,6 +1822,22 @@ def cmd_plan(args: argparse.Namespace, run: Runner = _run) -> int:
         # Caught here, not inside resolve_prices: a wrong --profile must never reach the
         # Pricing API (or any other AWS call) against the wrong account.
         caller_account(run, cfg)
+    estimate = estimate_or_refuse(run, cfg, hosts, minor, run_dir, now)
+    write_manifest(
+        run_dir, cfg, hosts, host_peers, estimate, phase="planned", argv=args.argv
+    )
+    log.info("rendered %s (phase=planned)", run_dir)
+    return EXIT_OK
+
+
+def estimate_or_refuse(
+    run: Runner,
+    cfg: RunConfig,
+    hosts: list[HostSpec],
+    minor: dict[str, float],
+    run_dir: Path,
+    now: float,
+) -> Estimate:
     prices = resolve_prices(run, cfg, cfg.out_root / "prices.json", now)
     estimate = estimate_cost(hosts, cfg, prices, minor)
     log.info(format_estimate_summary(estimate, cfg.max_usd))
@@ -1715,17 +1854,870 @@ def cmd_plan(args: argparse.Namespace, run: Runner = _run) -> int:
             f"hard bound ${estimate['bound_usd']:.2f} exceeds --max-usd "
             f"${cfg.max_usd:.2f}; pass --max-usd {estimate['bound_usd']:.2f} or shrink the run"
         )
-    write_manifest(
-        run_dir, cfg, hosts, host_peers, estimate, phase="planned", argv=args.argv
-    )
-    log.info("rendered %s (phase=planned)", run_dir)
-    return EXIT_OK
+    return estimate
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    raise NotImplementedError(
-        "aws-bench run: provisioning lands in a later commit; use plan"
+class Interrupts:
+    """The first SIGINT/SIGTERM sets `event`; `check` turns it into `Interrupted` at the next
+    phase boundary or wait, so a `tofu apply` or rsync in flight always finishes. After
+    `disarm` signals are logged and ignored."""
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.armed = True
+
+    def install(self) -> None:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, self._handle)
+
+    def _handle(self, signum: int, frame: Any) -> None:
+        if self.armed:
+            self.event.set()
+        else:
+            log.warning("signal %d ignored: teardown in progress", signum)
+
+    def check(self) -> None:
+        if self.armed and self.event.is_set():
+            raise Interrupted("interrupted")
+
+    def sleep(self, seconds: float) -> None:
+        if not self.armed:
+            time.sleep(seconds)
+            return
+        self.event.wait(seconds)
+        self.check()
+
+    def disarm(self) -> None:
+        self.armed = False
+
+
+class Remote:
+    """ssh and rsync to the fleet through the injectable Runner. ControlMaster sockets live in
+    `<run>/ssh/` and host keys in `<run>/known_hosts`. Pass `run_dir` relative (as `out_root`
+    is by default): an absolute path can exceed the 104 byte unix socket limit."""
+
+    def __init__(
+        self, run: Runner, run_dir: Path, ssh_key: Path, hosts: dict[str, HostInfo]
+    ):
+        self.run = run
+        self.hosts = hosts
+        (run_dir / "ssh").mkdir(exist_ok=True)
+        self.ssh_opts = [
+            "-i",
+            str(ssh_key.expanduser()),
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            "ControlPersist=10m",
+            "-o",
+            f"ControlPath={run_dir / 'ssh' / '%C'}",
+            "-o",
+            f"UserKnownHostsFile={run_dir / 'known_hosts'}",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=4",
+        ]
+
+    def _target(self, host: str) -> str:
+        return f"{SSH_USER}@{self.hosts[host]['public_ip']}"
+
+    def ssh(
+        self, host: str, command: str, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        result = self.run(["ssh", *self.ssh_opts, self._target(host), command])
+        if check and result.returncode != 0:
+            raise RemoteError(
+                f"{host}: `{command}` exited {result.returncode}: {result.stderr.strip()}"
+            )
+        return result
+
+    def rsync_to(self, host: str, sources: list[Path], dest: str) -> None:
+        self._rsync(host, [*map(str, sources), f"{self._target(host)}:{dest}"])
+
+    def rsync_from(self, host: str, remote: str, local: Path, *flags: str) -> None:
+        local.mkdir(parents=True, exist_ok=True)
+        self._rsync(host, [*flags, f"{self._target(host)}:{remote}", str(local)])
+
+    def _rsync(self, host: str, args: list[str]) -> None:
+        # sudo on the far side: /opt/bench is root-owned.
+        result = self.run(
+            [
+                "rsync",
+                "-az",
+                "-e",
+                shlex.join(["ssh", *self.ssh_opts]),
+                "--rsync-path",
+                "sudo rsync",
+                *args,
+            ]
+        )
+        if result.returncode != 0:
+            raise RemoteError(f"{host}: rsync failed: {result.stderr.strip()}")
+
+    def parallel(self, fn: Callable[[str], _T], names: Iterable[str]) -> dict[str, _T]:
+        """`fn(name)` for every name on a pool of REMOTE_POOL_SIZE threads. Waits for all, then
+        raises the first failure."""
+        names = list(names)
+        with ThreadPoolExecutor(min(REMOTE_POOL_SIZE, max(1, len(names)))) as pool:
+            futures = {name: pool.submit(fn, name) for name in names}
+        return {name: future.result() for name, future in futures.items()}
+
+
+@dataclass
+class Fleet:
+    """One run's mutable state after `tofu apply` was reached. `error` is set by whichever phase
+    failed first; `interrupted` marks a Ctrl-C, which also asks before destroying."""
+
+    run: Runner
+    cfg: RunConfig
+    run_dir: Path
+    tf: Terraform
+    interrupts: Interrupts
+    started: float
+    remote: Remote | None = None
+    agent: AgentState | None = None
+    error: str | None = None
+    interrupted: bool = False
+
+    @property
+    def manifest(self) -> Manifest:
+        return nb.read_json(self.run_dir / "manifest.json")
+
+
+def prompt_destroy(timeout_s: float) -> bool:
+    """Default yes: an unattended run still tears down."""
+    if not sys.stdin.isatty():
+        return True
+    print(
+        f"Destroy the fleet now? [Y/n] (yes in {timeout_s:.0f} s) ", end="", flush=True
     )
+    ready, _, _ = select.select([sys.stdin], [], [], timeout_s)
+    return not ready or sys.stdin.readline().strip().lower() != "n"
+
+
+def cmd_run(
+    args: argparse.Namespace,
+    run: Runner = _run,
+    interrupts: Interrupts | None = None,
+    ask_destroy: Callable[[float], bool] = prompt_destroy,
+) -> int:
+    cfg = config_from_args(args)
+    started = time.time()
+    minor = region_minor_prices(cfg.region)
+    hosts = plan_hosts(cfg)
+    run_dir = new_run_dir(cfg.out_root, cfg.name)
+    setup_logging(run_dir)
+    log.debug("argv %s", args.argv)
+    pre = preflight(run, cfg, hosts)
+    estimate = estimate_or_refuse(run, cfg, hosts, minor, run_dir, started)
+    render_run_dir(run, cfg, run_dir, hosts, pre, estimate, args.argv)
+    tf = Terraform(run, cfg.tf, run_dir / "terraform", terraform_env())
+    tf.init()
+    (run_dir / "terraform" / "plan.txt").write_text(tf.plan())
+    log_preflight(cfg, pre, hosts)
+    prompt = (
+        f"Create {len(hosts)} instances, 1 security group, 1 key pair in {cfg.account}?"
+    )
+    if not confirm(prompt, cfg.yes, sys.stdin.isatty()):
+        append_event(run_dir, "planned", "refused", "not confirmed")
+        raise Refused("not confirmed; nothing was created")
+    if interrupts is None:
+        interrupts = Interrupts()
+        interrupts.install()
+    fleet = Fleet(run, cfg, run_dir, tf, interrupts, started)
+    measure(fleet)
+    result = finish(fleet)
+    return teardown(fleet, result, ask_destroy)
+
+
+def enter_phase(fleet: Fleet, name: str, message: str) -> None:
+    fleet.interrupts.check()
+    update_manifest(fleet.run_dir, name)
+    log.info("%s: %s", name, message)
+
+
+def measure(fleet: Fleet) -> None:
+    """Everything from `tofu apply` to the end of the load. Never raises: a failure is recorded
+    in `fleet.error` so that `finish` and `teardown` always run against the live fleet."""
+    try:
+        enter_phase(fleet, "applying", "tofu apply")
+        fleet.tf.apply()
+        remote = connect(fleet)
+        manifest = fleet.manifest
+        enter_phase(
+            fleet, "waiting-hosts", f"ssh and cloud-init on {len(remote.hosts)} hosts"
+        )
+        wait_hosts(remote, manifest, fleet.run_dir, fleet.interrupts)
+        enter_phase(fleet, "shipping", "files, host monitors, containers")
+        ship(remote, fleet.run_dir)
+        start_hostmon(remote)
+        create_containers(remote)
+        enter_phase(fleet, "services", "anvil, deploy, orchestrator, relay, postgres")
+        start_support(remote, genesis_contracts(fleet.run_dir), fleet.interrupts)
+        enter_phase(fleet, "nodes", "synchronized docker start")
+        at = fleet_time(remote) + DOCKER_START_LEAD_S
+        spread = start_nodes(remote, node_hosts(remote.hosts), at)
+        update_manifest(fleet.run_dir, "measuring", start_spread_s=spread)
+        log.info("measuring: nodes started within %.2f s of each other", spread)
+        start_agent(remote)
+        fleet.agent = poll_agent(remote, fleet.run_dir, fleet.cfg, fleet.interrupts)
+    except Interrupted:
+        fleet.interrupted = True
+        fleet.error = "interrupted"
+        log.error("interrupted")
+    except (TfFailed, RemoteError, Refused, nb.NetworkError) as exc:
+        fleet.error = str(exc)
+        log.error("error: %s", exc)
+    except Exception as exc:  # the fleet costs money until teardown, whatever failed
+        log.exception("unexpected error")
+        fleet.error = f"{type(exc).__name__}: {exc}"
+
+
+def connect(fleet: Fleet) -> Remote:
+    manifest = fleet.manifest
+    hosts_info = parse_hosts_output(fleet.tf.output(), manifest["hosts"])
+    nb.write_json(fleet.run_dir / "hosts.json", hosts_info)
+    update_manifest(fleet.run_dir, "provisioned", hosts_info=hosts_info)
+    render_host_files(fleet.run_dir, fleet.cfg, manifest, hosts_info)
+    fleet.remote = Remote(fleet.run, fleet.run_dir, fleet.cfg.ssh_key, hosts_info)
+    return fleet.remote
+
+
+def finish(fleet: Fleet) -> nb.BenchResult | None:
+    """Stops the load if it still runs, freezes and collects every host, then reports. Signals
+    are ignored from here on: teardown must not be cut short."""
+    fleet.interrupts.disarm()
+    remote = fleet.remote
+    if remote is not None:
+        update_manifest(fleet.run_dir, "collecting")
+        log.info("collecting: stop, freeze, logs, host samples, final rsync")
+        if fleet.error is not None:
+            best_effort("stop agent", lambda: stop_agent(remote))
+        best_effort("freeze", lambda: freeze(remote))
+        best_effort(
+            "collect",
+            lambda: collect_hosts(remote, list(remote.hosts.values()), fleet.run_dir),
+        )
+        best_effort(
+            "final rsync",
+            lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", fleet.run_dir),
+        )
+    return report(fleet)
+
+
+def best_effort(what: str, action: Callable[[], object]) -> None:
+    """Collection runs against a fleet that is about to be destroyed: one unreachable host
+    must not stop the others. Missing files surface as `check_validity_aws` findings."""
+    try:
+        action()
+    except RemoteError as exc:
+        log.warning("%s failed: %s", what, exc)
+
+
+def report(fleet: Fleet) -> nb.BenchResult | None:
+    if fleet.error is None and fleet.agent is not None:
+        try:
+            write_run_json(fleet)
+            result = write_report(fleet.run_dir)
+        except (OSError, KeyError, ValueError) as exc:
+            log.exception("report failed")
+            fleet.error = f"report failed: {type(exc).__name__}: {exc}"
+        else:
+            log.info(nb.status_line(result))
+            log.info(nb.capacity_line(result["capacity"]).replace("**", ""))
+            return result
+    write_failure_summary(fleet.run_dir, fleet.manifest, fleet.error)
+    return None
+
+
+def teardown(
+    fleet: Fleet, result: nb.BenchResult | None, ask_destroy: Callable[[float], bool]
+) -> int:
+    cfg, run_dir = fleet.cfg, fleet.run_dir
+    update_manifest(run_dir, "destroying")
+    destroyed = False
+    if cfg.keep:
+        log.info(
+            "--keep: fleet stays up until its TTL; then run: aws-bench destroy %s",
+            run_dir,
+        )
+    elif cfg.yes or not fleet.interrupted or ask_destroy(DESTROY_PROMPT_TIMEOUT_S):
+        log.info("destroying: tofu destroy")
+        destroyed = destroy_fleet(fleet)
+    cost = None
+    if destroyed:
+        cost = final_cost(fleet)
+    code = exit_code(fleet, result, cfg.keep or destroyed)
+    update_manifest(run_dir, "done" if destroyed else "left-running")
+    append_index(cfg.out_root, fleet.manifest, result, code, destroyed, cost)
+    if destroyed and cost is not None:
+        log.info(
+            "destroyed; actual cost $%.2f (bound $%.2f); run dir %s",
+            cost["actual"],
+            cost["bound"],
+            run_dir,
+        )
+    if not (destroyed or cfg.keep):
+        log.error("resources may remain, run: aws-bench destroy %s", run_dir)
+    return code
+
+
+def exit_code(fleet: Fleet, result: nb.BenchResult | None, fleet_gone: bool) -> int:
+    if not fleet_gone:
+        return EXIT_LEFTOVER
+    if fleet.error is not None or result is None:
+        return EXIT_FAILED
+    return EXIT_OK if result["validity"]["valid"] else EXIT_INVALID
+
+
+def final_cost(fleet: Fleet) -> dict[str, float] | None:
+    try:
+        cost = actual_cost(fleet.run, fleet.manifest)
+    except (RemoteError, ValueError) as exc:
+        log.warning("actual cost unavailable: %s", exc)
+        return None
+    nb.write_json(fleet.run_dir / "cost.json", cost)
+    update_manifest(fleet.run_dir, "destroyed", cost_usd=cost)
+    return cost
+
+
+def destroy_fleet(fleet: Fleet) -> bool:
+    """`tofu destroy` with retries, then a tag sweep. False when `tofu destroy` never worked,
+    even if the sweep found and terminated everything: the state file is then out of date."""
+    for attempt in range(1, DESTROY_RETRIES + 1):
+        try:
+            fleet.tf.destroy()
+            return True
+        except TfFailed as exc:
+            log.warning(
+                "destroy attempt %d/%d failed: %s", attempt, DESTROY_RETRIES, exc
+            )
+            if attempt < DESTROY_RETRIES:
+                time.sleep(DESTROY_BACKOFF_S)
+    log.warning("tofu destroy failed; sweeping resources tagged %s", fleet.run_dir.name)
+    try:
+        swept = sweep(
+            fleet.run, fleet.cfg.region, fleet.run_dir.name, fleet.cfg.profile
+        )
+    except RemoteError as exc:
+        log.error("sweep failed: %s", exc)
+    else:
+        log.warning("sweep terminated %d resources: %s", len(swept), ", ".join(swept))
+    return False
+
+
+def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None:
+    log.info(
+        "account %s (%s) %s, az %s, ami %s",
+        pre["account"],
+        cfg.profile,
+        cfg.region,
+        pre["az"],
+        pre["ami_id"],
+    )
+    images = ", ".join(f"{n}@{i['digest'][:15]}" for n, i in pre["images"].items())
+    log.info("images %s: %s", cfg.tag, images)
+    log.info(
+        "hosts: ctl %s; %d x %s (node0 validator+query, postgres)",
+        cfg.ctl_type,
+        cfg.nodes,
+        cfg.node_type,
+    )
+    log.info(
+        "vcpu: %d needed, %d in use, quota %.0f",
+        pre["vcpu_needed"],
+        pre["vcpu_in_use"],
+        pre["vcpu_quota"],
+    )
+    phases = ", ".join(
+        f"{name} {worst / 60:.0f}m" for name, (_, worst) in phase_seconds(cfg).items()
+    )
+    log.info("phases (worst case): %s", phases)
+
+
+def render_run_dir(
+    run: Runner,
+    cfg: RunConfig,
+    run_dir: Path,
+    hosts: list[HostSpec],
+    pre: Preflight,
+    estimate: Estimate,
+    argv: list[str],
+) -> None:
+    """Everything known before `tofu apply`. Files that need the hosts' addresses (env files,
+    start.sh, topology) are written by `render_host_files` after it."""
+    ssh_pub = read_ssh_pub(cfg.ssh_key)
+    cidr = operator_cidr(cfg)
+    git_rev = git_head(run)
+    genesis = render_genesis(
+        Path(cfg.load.genesis).read_bytes(), cfg.nodes, cfg.max_block_size
+    )
+    write_manifest(run_dir, cfg, hosts, plan_peers(hosts), estimate, "planned", argv)
+    update_manifest(
+        run_dir,
+        "planned",
+        az=pre["az"],
+        ami_id=pre["ami_id"],
+        images=pre["images"],
+        git_rev=git_rev,
+        config_hash=run_config_hash(cfg, hosts, pre["images"], genesis),
+        cost_usd={"expected": estimate["expected_usd"], "bound": estimate["bound_usd"]},
+    )
+    (run_dir / "genesis.toml").write_bytes(genesis)
+    nb.write_json(run_dir / "config.json", dataclasses.asdict(cfg.load))
+    for host in hosts:
+        host_dir = run_dir / "hosts" / host["name"]
+        host_dir.mkdir(parents=True)
+        (host_dir / "user-data.sh").write_text(
+            render_user_data(host, pre["images"], int(estimate["ttl_s"]))
+        )
+    if pre["git_diff"] is not None:
+        (run_dir / "diff.patch").write_text(pre["git_diff"])
+    tf_dir = run_dir / "terraform"
+    shutil.copytree(TERRAFORM_SRC, tf_dir)
+    expires = datetime.now(UTC) + timedelta(seconds=estimate["ttl_s"])
+    # Absolute: `tofu -chdir` changes the directory `file()` resolves user_data_path against.
+    tfvars = render_tfvars(
+        cfg,
+        run_dir.resolve(),
+        run_dir.name,
+        getpass.getuser(),
+        hosts,
+        ssh_pub,
+        cidr,
+        expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        git_rev,
+        pre["az"],
+        pre["ami_id"],
+    )
+    nb.write_json(tf_dir / "terraform.tfvars.json", tfvars)
+
+
+def run_config_hash(
+    cfg: RunConfig, hosts: list[HostSpec], images: dict[str, ImageInfo], genesis: bytes
+) -> str:
+    """Load config plus what else changes the measured system: image digests, the fleet's
+    shape and the rendered genesis."""
+    digests = {name: image["digest"] for name, image in sorted(images.items())}
+    return nb.config_hash(
+        cfg.load,
+        [
+            genesis,
+            json.dumps(digests).encode(),
+            json.dumps(hosts, sort_keys=True).encode(),
+        ],
+    )
+
+
+def read_ssh_pub(ssh_key: Path) -> str:
+    key = ssh_key.expanduser()
+    pub = key.with_name(key.name + ".pub")
+    for path in (key, pub):
+        if not path.exists():
+            raise Refused(f"ssh key file not found: {path} (see --ssh-key)")
+    return pub.read_text().strip()
+
+
+def operator_cidr(cfg: RunConfig) -> str:
+    if cfg.operator_cidr != "auto":
+        return cfg.operator_cidr
+    try:
+        with urllib.request.urlopen(CHECKIP_URL, timeout=10) as response:
+            return f"{response.read().decode().strip()}/32"
+    except OSError as exc:
+        raise Refused(f"cannot detect this machine's IP ({exc}); pass --operator-cidr")
+
+
+def git_head(run: Runner) -> str:
+    result = run(["git", "rev-parse", "HEAD"])
+    if result.returncode != 0:
+        raise Refused(f"git rev-parse HEAD failed: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def parse_hosts_output(
+    output: dict[str, Any], specs: list[HostSpec]
+) -> dict[str, HostInfo]:
+    value = output["hosts"]["value"]
+    return {
+        spec["name"]: {
+            "name": spec["name"],
+            "role": spec["role"],
+            "public_ip": value[spec["name"]]["public_ip"],
+            "private_ip": value[spec["name"]]["private_ip"],
+            "private_dns": value[spec["name"]]["private_dns"],
+            "instance_id": value[spec["name"]]["instance_id"],
+        }
+        for spec in specs
+    }
+
+
+def topology(hosts: dict[str, HostInfo]) -> nb.Topology:
+    """Private URLs: the load runs on ctl, inside the VPC."""
+    names = _node_names(hosts)
+    return {
+        "nodes": {name: _node_url(hosts[name]) for name in names},
+        "roles": {
+            name: "validator, query, postgres" if name == "node0" else "validator"
+            for name in names
+        },
+        "query_node": "node0",
+    }
+
+
+def node_hosts(hosts: dict[str, HostInfo]) -> list[HostInfo]:
+    return [hosts[name] for name in _node_names(hosts)]
+
+
+def render_host_files(
+    run_dir: Path, cfg: RunConfig, manifest: Manifest, hosts: dict[str, HostInfo]
+) -> None:
+    dotenv = parse_dotenv((REPO_ROOT / ".env").read_text())
+    for spec in manifest["hosts"]:
+        host_dir = run_dir / "hosts" / spec["name"]
+        (host_dir / "start.sh").write_text(render_start_sh(spec, manifest["images"]))
+        if spec["role"] == "ctl":
+            (host_dir / "ctl.env").write_text(render_ctl_env(hosts, cfg, dotenv))
+        else:
+            (host_dir / "node.env").write_text(render_node_env(spec, hosts))
+    topo = topology(hosts)
+    nb.write_json(run_dir / "topology.json", topo)
+    nb.write_json(
+        run_dir / "hosts" / "ctl" / "agent.json",
+        {
+            "cfg": dataclasses.asdict(cfg.load),
+            "topology": topo,
+            "ready_timeout_s": cfg.ready_timeout_s,
+        },
+    )
+
+
+def genesis_contracts(run_dir: Path) -> list[str]:
+    """Addresses `deploy` must have created for the nodes to start: the fee and stake table
+    contracts the genesis chain_config points at."""
+    text = (run_dir / "genesis.toml").read_text()
+    found = re.findall(r'(?m)^(?:fee|stake_table)_contract = "(0x[0-9a-fA-F]+)"$', text)
+    if not found:
+        raise ValueError("no contract addresses in genesis.toml")
+    return sorted(set(found))
+
+
+def wait_ssh(remote: Remote, host: str, interrupts: Interrupts) -> None:
+    deadline = time.monotonic() + SSH_READY_TIMEOUT_S
+    delay = SSH_RETRY_S
+    while True:
+        result = remote.ssh(host, "true", check=False)
+        if result.returncode == 0:
+            return
+        if time.monotonic() >= deadline:
+            raise RemoteError(
+                f"{host}: ssh not reachable after {SSH_READY_TIMEOUT_S:.0f} s: "
+                f"{result.stderr.strip()}"
+            )
+        interrupts.sleep(delay)
+        delay = min(delay * 1.5, SSH_RETRY_MAX_S)
+
+
+def wait_hosts(
+    remote: Remote, manifest: Manifest, run_dir: Path, interrupts: Interrupts
+) -> None:
+    """Per host: ssh reachable, `cloud-init status --wait`, then `ready.json` saved. Pulled
+    digests that differ from the manifest are only logged here; `check_validity_aws` marks the
+    run invalid."""
+
+    def ready(host: str) -> None:
+        wait_ssh(remote, host, interrupts)
+        remote.ssh(
+            host, f"sudo timeout {CLOUD_INIT_TIMEOUT_S} cloud-init status --wait"
+        )
+        text = remote.ssh(host, f"cat {BENCH_DIR}/ready.json").stdout
+        host_dir = run_dir / "hosts" / host
+        (host_dir / "ready.json").write_text(text)
+        bad = digest_mismatches(json.loads(text)["digests"], manifest["images"])
+        if bad:
+            log.warning("%s pulled other digests than the manifest: %s", host, bad)
+
+    remote.parallel(ready, remote.hosts)
+
+
+def digest_mismatches(
+    pulled: dict[str, str], images: dict[str, ImageInfo]
+) -> list[str]:
+    """`pulled` maps image name to `repo@sha256:..` as `docker image inspect` reports."""
+    return [
+        name
+        for name, ref in sorted(pulled.items())
+        if ref.rpartition("@")[2] != images[name]["digest"]
+    ]
+
+
+def ship(remote: Remote, run_dir: Path) -> None:
+    def send(host: str) -> None:
+        host_dir = run_dir / "hosts" / host
+        files = [SCRIPT_DIR / "netbench.py", SCRIPT_DIR / "aws-bench"]
+        files += [host_dir / f for f in SHIPPED_HOST_FILES if (host_dir / f).exists()]
+        files.append(run_dir / "genesis.toml")
+        remote.rsync_to(host, files, f"{BENCH_DIR}/")
+
+    remote.parallel(send, remote.hosts)
+
+
+def start_hostmon(remote: Remote) -> None:
+    command = (
+        f"sudo systemd-run --unit bench-host --collect python3 {BENCH_DIR}/aws-bench "
+        f"agent-host {BENCH_DIR}/host.jsonl"
+    )
+    remote.parallel(lambda host: remote.ssh(host, command), remote.hosts)
+
+
+def create_containers(remote: Remote) -> None:
+    """start.sh only runs `docker create`, so `start_nodes` can start every node at once."""
+    remote.parallel(
+        lambda host: remote.ssh(host, f"sudo bash {BENCH_DIR}/start.sh"), remote.hosts
+    )
+
+
+def gate(
+    remote: Remote,
+    host: str,
+    what: str,
+    command: str,
+    interrupts: Interrupts,
+    timeout_s: float = GATE_TIMEOUT_S,
+) -> None:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        result = remote.ssh(host, command, check=False)
+        if result.returncode == 0:
+            return
+        if time.monotonic() >= deadline:
+            raise RemoteError(
+                f"gate `{what}` on {host} not passed after {timeout_s:.0f} s: "
+                f"{(result.stdout + result.stderr).strip()}"
+            )
+        interrupts.sleep(GATE_RETRY_S)
+
+
+def rpc_check(method: str, params: list[str], jq_filter: str) -> str:
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+    return (
+        f"curl -sf -X POST -H 'Content-Type: application/json' --data {shlex.quote(body)} "
+        f"http://localhost:{L1_PORT} | jq -e {shlex.quote(jq_filter)}"
+    )
+
+
+def start_support(remote: Remote, contracts: list[str], interrupts: Interrupts) -> None:
+    """On ctl, in order and each gated on a check: anvil, contract deployment, orchestrator,
+    relay; then Postgres on node0."""
+
+    def start(host: str, container: str) -> None:
+        remote.ssh(host, f"sudo docker start {container}")
+
+    start("ctl", "anvil")
+    gate(
+        remote,
+        "ctl",
+        "anvil eth_chainId",
+        rpc_check("eth_chainId", [], ".result"),
+        interrupts,
+    )
+    start("ctl", "deploy")
+    code = remote.ssh(
+        "ctl", f"sudo timeout {DEPLOY_TIMEOUT_S} docker wait deploy"
+    ).stdout
+    if code.strip() != "0":
+        raise RemoteError(
+            f"deploy exited with status {code.strip()}; see docker logs on ctl"
+        )
+    for address in contracts:
+        check = rpc_check("eth_getCode", [address, "latest"], '.result != "0x"')
+        gate(remote, "ctl", f"eth_getCode {address}", check, interrupts)
+    start("ctl", "orchestrator")
+    gate(
+        remote,
+        "ctl",
+        "orchestrator healthcheck",
+        f"curl -sf http://localhost:{ORCHESTRATOR_PORT}/healthcheck",
+        interrupts,
+    )
+    start("ctl", "state-relay-server")
+    gate(
+        remote,
+        "ctl",
+        "relay healthcheck",
+        f"curl -sf http://localhost:{RELAY_PORT}/healthcheck",
+        interrupts,
+    )
+    start("node0", "postgres")
+    gate(
+        remote,
+        "node0",
+        "pg_isready",
+        "sudo docker exec postgres pg_isready -U root -d espresso",
+        interrupts,
+    )
+
+
+def fleet_time(remote: Remote) -> float:
+    """Epoch seconds on ctl. Every host is chrony-synced to the same source, so a start time on
+    ctl's clock is a start time on all clocks; the laptop's clock is not."""
+    return float(remote.ssh("ctl", "date +%s.%N").stdout)
+
+
+def start_nodes(remote: Remote, hosts: list[HostInfo], at: float) -> float:
+    """`docker start` of every node at fleet time `at`. Returns the spread in seconds between
+    the earliest and latest `.State.StartedAt`."""
+    wait = (
+        "python3 -c 'import sys, time; time.sleep(max(0.0, float(sys.argv[1]) - time.time()))' "
+        f"{at!r}"
+    )
+    inspect = "sudo docker inspect -f '{{.State.StartedAt}}' espresso-node"
+
+    def start(node: str) -> float:
+        remote.ssh(node, f"{wait} && sudo docker start espresso-node")
+        return parse_docker_time(remote.ssh(node, inspect).stdout)
+
+    started = remote.parallel(start, [h["name"] for h in hosts])
+    return max(started.values()) - min(started.values())
+
+
+def parse_docker_time(text: str) -> float:
+    """`.State.StartedAt`: RFC 3339 with nanoseconds, e.g. 2026-09-29T15:00:00.123456789Z."""
+    stamp, _, frac = text.strip().removesuffix("Z").partition(".")
+    moment = datetime.fromisoformat(f"{stamp}.{frac[:6].ljust(6, '0')}+00:00")
+    return moment.timestamp()
+
+
+def start_agent(remote: Remote) -> None:
+    remote.ssh(
+        "ctl",
+        f"sudo systemd-run --unit bench-agent --collect python3 {BENCH_DIR}/aws-bench "
+        f"agent-drive {BENCH_DIR}/agent.json {BENCH_DIR}/out",
+    )
+
+
+def stop_agent(remote: Remote) -> None:
+    """SIGTERM: the agent flushes its load output before exiting. Fine if it already exited."""
+    remote.ssh("ctl", "sudo systemctl stop bench-agent", check=False)
+
+
+def read_agent_state(remote: Remote) -> AgentState | None:
+    result = remote.ssh("ctl", f"cat {BENCH_DIR}/out/agent-state.json", check=False)
+    return json.loads(result.stdout) if result.returncode == 0 else None
+
+
+def poll_agent(
+    remote: Remote, run_dir: Path, cfg: RunConfig, interrupts: Interrupts
+) -> AgentState:
+    """Until the agent reports `done`: reads its state every AGENT_POLL_S, logs its progress
+    every AGENT_LOG_S and rsyncs its output every OUT_RSYNC_S."""
+    begin = time.monotonic()
+    deadline = begin + cfg.ready_timeout_s + load_seconds(cfg.load) + AGENT_SLACK_S
+    next_log = begin + AGENT_LOG_S
+    next_sync = begin + OUT_RSYNC_S
+    while True:
+        interrupts.check()
+        active = (
+            remote.ssh(
+                "ctl", "systemctl is-active --quiet bench-agent", check=False
+            ).returncode
+            == 0
+        )
+        state = read_agent_state(remote)
+        now = time.monotonic()
+        if state is not None and state["phase"] == "done":
+            return state
+        if state is not None and state["phase"] == "error":
+            raise RemoteError(f"agent failed: {state['error']}")
+        if not active:
+            raise RemoteError(
+                f"agent exited in phase {state['phase'] if state else 'start'} "
+                "without finishing"
+            )
+        if state is None and now - begin > AGENT_START_GRACE_S:
+            raise RemoteError("agent wrote no state file")
+        if now > deadline:
+            raise RemoteError("agent did not finish within the expected time")
+        if state is not None and now >= next_log:
+            log.info("%s: %s", state["phase"], state.get("progress", state["detail"]))
+            next_log = now + AGENT_LOG_S
+        if now >= next_sync:
+            remote.rsync_from("ctl", f"{BENCH_DIR}/out/", run_dir)
+            next_sync = now + OUT_RSYNC_S
+        interrupts.sleep(AGENT_POLL_S)
+
+
+# Containers that write to the journal or answer queries; postgres stays up so that
+# `collect_hosts` can still ask it for statistics.
+FREEZE_FILTER = "^(espresso-node|anvil|orchestrator|state-relay-server)$"
+
+
+def freeze(remote: Remote) -> None:
+    command = (
+        f"sudo docker ps -q --filter 'name={FREEZE_FILTER}' "
+        f"| xargs -r sudo docker stop -t {int(FREEZE_STOP_TIMEOUT_S)}"
+    )
+    remote.parallel(lambda host: remote.ssh(host, command), remote.hosts)
+
+
+COLLECT_SCRIPT = (
+    f"cd {BENCH_DIR}\n"
+    "systemctl stop bench-host\n"
+    "for c in $(docker ps -a --format '{{.Names}}'); do "
+    'docker logs "$c" 2>&1 | gzip > "$c.log.gz"; done\n'
+    "docker inspect $(docker ps -aq) > inspect.json\n"
+    "chronyc tracking > chrony.txt\n"
+    "df -B1 / /data > df.txt\n"
+    "du -sb /data/journal > du-journal.txt\n"
+    "lscpu > lscpu.txt\n"
+    "uname -r > uname.txt\n"
+    "grep MemTotal /proc/meminfo > meminfo.txt\n"
+    "cp /var/log/cloud-init-output.log .\n"
+)
+PG_STATS_SQL = (
+    "select json_build_object('database_bytes', pg_database_size('espresso'), 'tables', "
+    "(select coalesce(json_agg(t), '[]'::json) from (select relname, n_live_tup, "
+    "pg_total_relation_size(relid) as total_bytes from pg_stat_user_tables "
+    "order by total_bytes desc limit 20) t))"
+)
+PG_STATS_SCRIPT = (
+    f"docker exec postgres psql -U root -d espresso -At -c {shlex.quote(PG_STATS_SQL)} "
+    f"> {BENCH_DIR}/pg-stats.json\n"
+)
+# Shipped inputs and the agent's output, which `poll_agent` and the final rsync fetch.
+COLLECT_EXCLUDES = ("--exclude=/out/", "--exclude=/aws-bench", "--exclude=/netbench.py")
+
+
+def collect_hosts(remote: Remote, hosts: list[HostInfo], out: Path) -> None:
+    """Logs, inspect, chrony, disk and journal sizes, host samples and (node0) Postgres
+    statistics into `out/hosts/<name>/`. Best effort per host: one that cannot be reached is
+    reported and the rest are still collected."""
+
+    def collect(name: str) -> None:
+        role = remote.hosts[name]["role"]
+        script = (
+            COLLECT_SCRIPT + (PG_STATS_SCRIPT if role == "query" else "") + "true\n"
+        )
+        try:
+            remote.ssh(name, f"sudo bash -c {shlex.quote(script)}")
+            remote.rsync_from(
+                name,
+                f"{BENCH_DIR}/",
+                out / "hosts" / name,
+                *COLLECT_EXCLUDES,
+                "--exclude=__pycache__",
+            )
+        except RemoteError as exc:
+            log.warning("collect %s failed: %s", name, exc)
+
+    remote.parallel(collect, [h["name"] for h in hosts])
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -1750,10 +2742,571 @@ def cmd_destroy(args: argparse.Namespace) -> int:
     raise NotImplementedError("aws-bench destroy: teardown lands in a later commit")
 
 
-def cmd_agent_drive(args: argparse.Namespace) -> int:
-    raise NotImplementedError(
-        "aws-bench agent-drive: the ctl load agent lands in a later commit"
+def write_run_json(fleet: Fleet) -> None:
+    """`run.json` as `netbench.analyze` reads it, from the agent's final state."""
+    agent = fleet.agent
+    assert agent is not None
+    manifest = fleet.manifest
+    nb.write_json(
+        fleet.run_dir / "run.json",
+        {
+            "meta": {
+                "sha": manifest["git_rev"],
+                "ref": fleet.cfg.tag,
+                "event": "aws",
+                "run_id": None,
+                "run_url": None,
+                "pr": None,
+                "local": False,
+            },
+            "config_hash": manifest["config_hash"],
+            "started": fleet.started,
+            "wall_s": time.time() - fleet.started,
+            "ready_s": agent["ready_s"],
+            "t0": agent["t0"],
+            "t1": agent["t1"],
+            "teardown": [],
+            "error": None,
+        },
     )
+
+
+def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.BenchResult:
+    """Analyzes a collected run dir into `result.json` and `summary.md`; the same inputs give
+    the same output, so `render` can call it again offline."""
+    manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+    cfg = load_config(nb.read_json(run_dir / "config.json"))
+    prepare_analysis(run_dir, manifest)
+    result = nb.analyze(run_dir, cfg, nb.read_json(run_dir / "topology.json"))
+    run = nb.read_json(run_dir / "run.json")
+    stats, evidence = load_evidence(run_dir, manifest, run["t0"], run["t1"])
+    result["hosts"] = stats
+    result["deployment"] = deployment_meta(manifest, evidence)
+    result["validity"] = check_validity_aws(result, manifest, evidence)
+    nb.write_json(run_dir / "result.json", result)
+    comparison = nb.compare(result, baseline) if baseline else None
+    (run_dir / "summary.md").write_text(nb.render(result, comparison))
+    return result
+
+
+def load_config(saved: dict[str, Any]) -> nb.BenchConfig:
+    saved["namespaces"] = tuple(saved["namespaces"])
+    saved["steps"] = tuple(saved["steps"])
+    return nb.BenchConfig(**saved)
+
+
+def prepare_analysis(run_dir: Path, manifest: Manifest) -> None:
+    """The files `netbench.analyze` reads that the local bench produces itself. Its process and
+    host statistics come from node0, the host with Postgres. The AWS harness runs no
+    calibration; zeros keep the schema."""
+    node0 = run_dir / "hosts" / "node0"
+    shutil.copyfile(node0 / "host.jsonl", run_dir / "host.jsonl")
+    zero: nb.Calibration = {
+        "sha256_1t_mb_s": 0.0,
+        "sha256_mt_mb_s": 0.0,
+        "fsync_per_s": 0.0,
+    }
+    nb.write_json(run_dir / "calibration.json", {"before": zero, "after": zero})
+    runner = runner_info(
+        (node0 / "lscpu.txt").read_text(),
+        (node0 / "meminfo.txt").read_text(),
+        (node0 / "uname.txt").read_text(),
+        manifest["ami_id"],
+    )
+    nb.write_json(run_dir / "sysinfo.json", {"runner": runner, "raw": {}})
+
+
+def runner_info(lscpu: str, meminfo: str, uname: str, ami_id: str) -> nb.RunnerInfo:
+    fields = {
+        key.strip(): value.strip()
+        for key, _, value in (line.partition(":") for line in lscpu.splitlines())
+        if value.strip()
+    }
+    mem = re.search(r"^MemTotal:\s*(\d+) kB", meminfo, re.MULTILINE)
+    if mem is None:
+        raise ValueError(f"no MemTotal line in {meminfo!r}")
+    cpus = int(fields["CPU(s)"])
+    return {
+        "cpu_model": fields["Model name"],
+        "nproc": cpus,
+        "affinity": cpus,
+        "cgroup_cpu_max": None,
+        "mhz": [float(fields["CPU max MHz"])] if "CPU max MHz" in fields else [],
+        "flags": fields["Flags"].split(),
+        "mem_total_bytes": int(mem.group(1)) * 1024,
+        "kernel": uname.strip(),
+        "image_os": "ubuntu",
+        "image_version": ami_id,
+        "runner_name": None,
+    }
+
+
+# Devices whose counters double count a parent (partitions, device mapper) or carry no I/O of
+# interest, and the interfaces that are not the host's own network.
+DISK_SKIP = re.compile(r"^(loop|ram|dm-)|p\d+$|^(sd|vd|xvd)[a-z]+\d+$")
+NET_SKIP = re.compile(r"^(lo|docker\d+|veth.*|br-.*)$")
+
+
+def counter_mb_s(
+    samples: list[dict[str, Any]],
+    key: str,
+    fields: tuple[str, ...],
+    skip: re.Pattern[str],
+) -> float:
+    def total(sample: dict[str, Any]) -> int:
+        return sum(
+            counters[f]
+            for device, counters in sample[key].items()
+            if not skip.search(device)
+            for f in fields
+        )
+
+    span = samples[-1]["ts"] - samples[0]["ts"]
+    return (total(samples[-1]) - total(samples[0])) / span / 1e6
+
+
+def host_sample_stats(
+    samples: list[dict[str, Any]], t0: float, t1: float
+) -> tuple[nb.HostSample, float]:
+    """`netbench.host_stats` plus disk and network MB/s over the window, and the fraction of
+    the samples the window should hold that exist."""
+    inside = [s for s in samples if t0 <= s["ts"] <= t1]
+    coverage = min(1.0, len(inside) / ((t1 - t0) / HOST_SAMPLE_S))
+    stats: nb.HostSample = {
+        **nb.host_stats(samples, t0, t1),
+        "disk_mb_s": 0.0,
+        "net_mb_s": 0.0,
+    }
+    if len(inside) >= 2:
+        stats["disk_mb_s"] = counter_mb_s(
+            inside, "disk", ("read_bytes", "write_bytes"), DISK_SKIP
+        )
+        stats["net_mb_s"] = counter_mb_s(
+            inside, "net", ("rx_bytes", "tx_bytes"), NET_SKIP
+        )
+    return stats, coverage
+
+
+def parse_du_bytes(text: str) -> int:
+    """`du -sb <dir>`: `<bytes>\\t<dir>`."""
+    return int(text.split()[0])
+
+
+def parse_clock_offset_ms(tracking: str) -> float:
+    """`chronyc tracking`: `System time : 0.000012 seconds fast of NTP time`."""
+    match = re.search(
+        r"^System time\s*:\s*([\d.]+) seconds (?:fast|slow)", tracking, re.MULTILINE
+    )
+    if match is None:
+        raise ValueError(
+            f"no System time line in chronyc tracking output: {tracking!r}"
+        )
+    return float(match.group(1)) * 1000
+
+
+def load_evidence(
+    run_dir: Path, manifest: Manifest, t0: float, t1: float
+) -> tuple[dict[str, nb.HostSample], Evidence]:
+    """Reads `hosts/<name>/` as `collect_hosts` left it. A file that is missing (a host that
+    could not be collected) is absent from the maps, and coverage is 0 without host samples."""
+    stats: dict[str, nb.HostSample] = {}
+    evidence: Evidence = {
+        "coverage": {},
+        "journal_bytes": {},
+        "clock_offset_ms": {},
+        "digest_mismatch": {},
+    }
+    for spec in manifest["hosts"]:
+        name = spec["name"]
+        host_dir = run_dir / "hosts" / name
+        samples = host_dir / "host.jsonl"
+        evidence["coverage"][name] = 0.0
+        if samples.exists():
+            stats[name], evidence["coverage"][name] = host_sample_stats(
+                list(nb.read_jsonl(samples)), t0, t1
+            )
+        journal = host_dir / "du-journal.txt"
+        if spec["role"] != "ctl" and journal.exists():
+            evidence["journal_bytes"][name] = parse_du_bytes(journal.read_text())
+        ready = host_dir / "ready.json"
+        tracking = [
+            text
+            for text in (
+                nb.read_json(ready)["chronyc_tracking"] if ready.exists() else None,
+                (host_dir / "chrony.txt").read_text()
+                if (host_dir / "chrony.txt").exists()
+                else None,
+            )
+            if text is not None
+        ]
+        if tracking:
+            evidence["clock_offset_ms"][name] = max(
+                map(parse_clock_offset_ms, tracking)
+            )
+        if ready.exists():
+            evidence["digest_mismatch"][name] = digest_mismatches(
+                nb.read_json(ready)["digests"], manifest["images"]
+            )
+    return stats, evidence
+
+
+def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta:
+    config = manifest["config"]
+    images = manifest["images"]
+    return {
+        "provider": "aws",
+        "account": config["account"],
+        "region": config["region"],
+        "az": manifest["az"],
+        "ami": manifest["ami_id"],
+        "hosts": {
+            h["name"]: {"instance_type": h["instance_type"], "role": h["role"]}
+            for h in manifest["hosts"]
+        },
+        "images": {n: f"{i['ref']}@{i['digest']}" for n, i in images.items()},
+        "image_revision": images["espresso-node"]["revision"],
+        "start_spread_s": manifest["start_spread_s"],
+        "clock_offset_ms_max": max(evidence["clock_offset_ms"].values(), default=0.0),
+        "cost_usd": manifest["cost_usd"],
+    }
+
+
+def check_validity_aws(
+    result: nb.BenchResult, manifest: Manifest, evidence: Evidence
+) -> nb.Validity:
+    """`result["validity"]` (netbench's own rules) plus the fleet rules: invalid on missing host
+    samples, a digest that differs from the manifest or a clock offset above
+    CLOCK_OFFSET_INVALID_MS; noisy on start spread, clock offset, ctl CPU, journal size or steal."""
+    invalid: list[str] = []
+    noisy: list[str] = []
+    for host, frac in evidence["coverage"].items():
+        if frac < nb.SCRAPE_OK_MIN:
+            invalid.append(f"{host} host samples cover only {frac:.0%} of the window")
+    for host, names in evidence["digest_mismatch"].items():
+        if names:
+            invalid.append(
+                f"{host} pulled another digest than the manifest for {', '.join(names)}"
+            )
+    offset = max(evidence["clock_offset_ms"].values(), default=0.0)
+    if offset > CLOCK_OFFSET_INVALID_MS:
+        invalid.append(
+            f"clock offset {offset:.0f} ms > {CLOCK_OFFSET_INVALID_MS:.0f} ms"
+        )
+    elif offset > CLOCK_OFFSET_NOISY_MS:
+        noisy.append(f"clock offset {offset:.0f} ms > {CLOCK_OFFSET_NOISY_MS:.0f} ms")
+    spread = manifest["start_spread_s"]
+    if spread >= START_SPREAD_NOISY_S:
+        noisy.append(f"nodes started {spread:.1f} s apart")
+    hosts = result["hosts"]
+    if "ctl" in hosts and hosts["ctl"]["util_mean"] > CTL_CPU_NOISY_FRAC:
+        noisy.append(f"ctl CPU busy {hosts['ctl']['util_mean']:.0%}")
+    for name, stats in hosts.items():
+        # node0's steal is already judged by netbench.check_validity through result["host"].
+        if name != "node0" and stats["steal_pct"] > nb.STEAL_NOISY_PCT:
+            noisy.append(
+                f"{name} steal {stats['steal_pct']:.1f}% > {nb.STEAL_NOISY_PCT:.0f}%"
+            )
+    specs = {h["name"]: h for h in manifest["hosts"]}
+    for name, size in evidence["journal_bytes"].items():
+        limit = _journal_max_bytes(specs[name])
+        if size > JOURNAL_NOISY_FRACTION * limit:
+            noisy.append(
+                f"{name} journal {size / 1e9:.1f} GB near its {limit / 1e9:.1f} GB limit"
+            )
+    base = result["validity"]
+    return {
+        "valid": base["valid"] and not invalid,
+        "noisy": base["noisy"] or bool(noisy),
+        "reasons": base["reasons"] + invalid + noisy,
+    }
+
+
+def write_failure_summary(run_dir: Path, manifest: Manifest, error: str | None) -> None:
+    """A run without a result: the error (`netbench.wait_ready` includes the last heights) and
+    the last log lines of every node container that was collected."""
+    lines = ["## Network benchmark", "", f"**invalid**: {error}", ""]
+    for spec in manifest["hosts"]:
+        path = run_dir / "hosts" / spec["name"] / "espresso-node.log.gz"
+        if path.exists():
+            tail = [line[:300] for line in log_tail(path, FAILURE_LOG_LINES)]
+            lines += [f"Last log lines of {spec['name']}:", "", "```", *tail, "```", ""]
+    (run_dir / "summary.md").write_text("\n".join(lines))
+
+
+def log_tail(path: Path, count: int) -> list[str]:
+    with gzip.open(path, "rt", errors="replace") as f:
+        return f.read().splitlines()[-count:]
+
+
+def tagged_resources(
+    run: Runner, region: str, name: str | None = None, profile: str = RunConfig.profile
+) -> list[str]:
+    """ARNs of resources tagged `espresso-bench-run`, of one run when `name` is given."""
+    tag = f"Key={TAG_RUN}" + (f",Values={name}" if name is not None else "")
+    out = aws_ok(
+        run,
+        profile,
+        "resourcegroupstaggingapi",
+        "get-resources",
+        "--region",
+        region,
+        "--tag-filters",
+        tag,
+        "--query",
+        "ResourceTagMappingList[].ResourceARN",
+        "--output",
+        "json",
+    )
+    return list(json.loads(out))
+
+
+def sweep(
+    run: Runner, region: str, name: str | None, profile: str = RunConfig.profile
+) -> list[str]:
+    """Terminates the instances found by `tagged_resources`, then deletes their security group
+    and key pair (volumes go with the instances). Returns every ARN found."""
+    arns = tagged_resources(run, region, name, profile)
+    by_kind: dict[str, list[str]] = {}
+    for arn in arns:
+        kind, _, resource_id = arn.rpartition(":")[2].partition("/")
+        by_kind.setdefault(kind, []).append(resource_id)
+    instances = by_kind.get("instance", [])
+    if instances:
+        ids = ["--instance-ids", *instances]
+        aws_ok(run, profile, "ec2", "terminate-instances", "--region", region, *ids)
+        aws_ok(
+            run, profile, "ec2", "wait", "instance-terminated", "--region", region, *ids
+        )
+    for group in by_kind.get("security-group", []):
+        aws_ok(
+            run,
+            profile,
+            "ec2",
+            "delete-security-group",
+            "--region",
+            region,
+            "--group-id",
+            group,
+        )
+    for key in by_kind.get("key-pair", []):
+        aws_ok(
+            run,
+            profile,
+            "ec2",
+            "delete-key-pair",
+            "--region",
+            region,
+            "--key-pair-id",
+            key,
+        )
+    return arns
+
+
+TERMINATION_TIME = re.compile(r"\((\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) GMT\)")
+
+
+def actual_cost(run: Runner, manifest: Manifest) -> dict[str, float]:
+    """expected, bound and actual USD, with the run's wall time in `duration_s`. Actual is the
+    estimate's price lines at the time between the first launch and the last termination,
+    from `describe-instances` (terminated instances stay listed for about an hour)."""
+    config = manifest["config"]
+    out = aws_ok(
+        run,
+        config["profile"],
+        "ec2",
+        "describe-instances",
+        "--region",
+        config["region"],
+        "--filters",
+        f"Name=tag:{TAG_RUN},Values={manifest['name']}",
+        "--query",
+        "Reservations[].Instances[].{launch:LaunchTime,reason:StateTransitionReason}",
+        "--output",
+        "json",
+    )
+    rows = json.loads(out)
+    if not rows:
+        raise RemoteError(f"no instances tagged {manifest['name']} to price")
+    launches = [datetime.fromisoformat(row["launch"]) for row in rows]
+    ends = []
+    for row in rows:
+        match = TERMINATION_TIME.search(row["reason"])
+        if match is None:
+            raise ValueError(f"no termination time in {row['reason']!r}")
+        ends.append(datetime.fromisoformat(match.group(1)).replace(tzinfo=UTC))
+    duration_s = (max(ends) - min(launches)).total_seconds()
+    estimate = manifest["estimate"]
+    prices: Prices = {
+        "instances": {
+            line["item"].removeprefix("instance "): {
+                "usd_hour": line["usd_per_unit"],
+                "source": line["source"],
+            }
+            for line in estimate["lines"]
+            if line["item"].startswith("instance ")
+        }
+    }
+    lines = _cost_lines(
+        manifest["hosts"], prices, region_minor_prices(config["region"]), duration_s
+    )
+    return {
+        "expected": estimate["expected_usd"],
+        "bound": estimate["bound_usd"],
+        "actual": sum(line["usd"] for line in lines),
+        "duration_s": duration_s,
+    }
+
+
+INDEX_HEADER = (
+    "| name | utc | git | tag@rev | N | rate MB/s | decided MB/s | kept up | lag p99 ms "
+    "| status | exit | cost bound/actual | destroyed |\n"
+    "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+)
+
+
+def index_row(
+    manifest: Manifest,
+    result: nb.BenchResult | None,
+    code: int,
+    destroyed: bool,
+    cost: dict[str, float] | None,
+) -> str:
+    rate = decided = kept_up = lag = "-"
+    status = "failed"
+    if result is not None:
+        status = nb.verdict_word(result["validity"])
+        limits = result["capacity"]
+        rate = nb.fmt_num(limits["overall"]["mb_s"])
+        kept_up = (
+            "yes"
+            if limits["query_node"]["mb_s"] == limits["consensus"]["mb_s"]
+            else "no"
+        )
+        passing = [s for s in result["steps"] if s["passed"]]
+        if passing:
+            decided = nb.fmt_num(passing[-1]["decided_mb_s"])
+            quantiles = passing[-1]["query_lag_ms"]
+            lag = f"{quantiles['p99']:.0f}" if quantiles else "-"
+    revision = (manifest["images"]["espresso-node"]["revision"] or "-")[:10]
+    actual = f"{cost['actual']:.2f}" if cost else "-"
+    cells = [
+        manifest["name"],
+        manifest["created_at"][:16],
+        manifest["git_rev"][:10],
+        f"{manifest['config']['tag']}@{revision}",
+        str(manifest["config"]["nodes"]),
+        rate,
+        decided,
+        kept_up,
+        lag,
+        status,
+        str(code),
+        f"{manifest['estimate']['bound_usd']:.2f}/{actual}",
+        "yes" if destroyed else "no",
+    ]
+    return "| " + " | ".join(cells) + " |\n"
+
+
+def append_index(
+    out_root: Path,
+    manifest: Manifest,
+    result: nb.BenchResult | None,
+    code: int,
+    destroyed: bool,
+    cost: dict[str, float] | None,
+) -> None:
+    path = out_root / "INDEX.md"
+    with path.open("a") as f:
+        if f.tell() == 0:
+            f.write(INDEX_HEADER)
+        f.write(index_row(manifest, result, code, destroyed, cost))
+
+
+class AgentReporter(logging.Handler):
+    """Owns `agent-state.json`, rewritten atomically for the laptop's `poll_agent`. Attached to
+    the `netbench` logger it also stores the latest INFO line as `progress`."""
+
+    def __init__(self, path: Path):
+        super().__init__(level=logging.INFO)
+        self.path = path
+        self.state: AgentState = {"phase": "waiting", "detail": "starting"}
+        self._write_lock = threading.Lock()
+        self.flush_state()
+
+    def flush_state(self) -> None:
+        with self._write_lock:
+            tmp = self.path.with_suffix(".tmp")
+            nb.write_json(tmp, self.state)
+            os.replace(tmp, self.path)
+
+    def set_phase(
+        self, phase: Literal["waiting", "loading", "done", "error"], detail: str
+    ) -> None:
+        self.state["phase"] = phase
+        self.state["detail"] = detail
+        self.flush_state()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.state["progress"] = record.getMessage()
+        self.flush_state()
+
+
+def raise_interrupt(signum: int, frame: Any) -> None:
+    raise KeyboardInterrupt
+
+
+def cmd_agent_drive(args: argparse.Namespace) -> int:
+    """Runs on ctl under systemd-run: waits for the nodes, then `netbench.drive_load` against
+    their private URLs. SIGTERM unwinds like Ctrl-C so `drive_load` flushes its output."""
+    agent = nb.read_json(args.config)
+    cfg = load_config(agent["cfg"])
+    topo: nb.Topology = agent["topology"]
+    args.out.mkdir(parents=True, exist_ok=True)
+    reporter = AgentReporter(args.out / "agent-state.json")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.FileHandler(args.out / "agent.log"), logging.StreamHandler()],
+    )
+    nb.log.addHandler(reporter)
+    signal.signal(signal.SIGTERM, raise_interrupt)
+    stop = threading.Event()
+    sampler = threading.Thread(
+        target=nb.sample_metrics,
+        args=(topo["nodes"], nb.METRIC_PREFIXES, args.out / "metrics.jsonl", stop),
+    )
+    sampler.start()
+    pool = nb.HttpPool()
+    try:
+        ready_s = nb.wait_ready(
+            pool,
+            topo["nodes"],
+            nb.MIN_READY_HEIGHT,
+            agent["ready_timeout_s"],
+            lambda: True,
+        )
+        reporter.state["ready_s"] = ready_s
+        reporter.set_phase("loading", f"ready after {ready_s:.0f} s")
+        outcome = nb.drive_load(cfg, topo, args.out, lambda: True)
+        reporter.state["t0"], reporter.state["t1"] = outcome["t0"], outcome["t1"]
+        reporter.set_phase("done", "load finished")
+        return EXIT_OK
+    except (Exception, KeyboardInterrupt) as exc:
+        cause = nb.innermost(exc)
+        if isinstance(exc, KeyboardInterrupt):
+            message = "interrupted"
+        elif isinstance(exc, nb.NetworkError):
+            message = str(exc)
+        else:
+            message = f"{type(cause).__name__}: {cause}"
+        log.exception("agent failed")
+        reporter.state["error"] = message
+        reporter.set_phase("error", message)
+        return EXIT_INVALID
+    finally:
+        pool.close()
+        stop.set()
+        sampler.join()
 
 
 def diskstats(text: str) -> dict[str, dict[str, int]]:

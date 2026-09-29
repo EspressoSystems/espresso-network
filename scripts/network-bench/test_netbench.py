@@ -1102,6 +1102,30 @@ def write_run_dir(out):
         (out / name).write_text(json.dumps(data))
 
 
+class WriteLoadFilesTest(unittest.TestCase):
+    """`generate_load` writes these in `finally`, so a load cut short keeps its raw data."""
+
+    def write(self, steps):
+        state = netbench.LoadState()
+        heights = netbench.Heights(7)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            netbench.write_load_files(out, state, heights, [], steps, b"\x01")
+            return {p.name: p.read_text() for p in out.iterdir()}
+
+    def test_cut_short_load_keeps_raw_files_without_steps(self):
+        files = self.write([])
+        self.assertEqual(
+            sorted(files),
+            ["consensus.jsonl", "heights.jsonl", "load-meta.json", "load.jsonl"],
+        )
+        self.assertEqual(json.loads(files["load-meta.json"])["start_height"], 7)
+
+    def test_finished_load_also_writes_steps(self):
+        files = self.write([{"rate_mb_s": 1.0, "t_start": 1.0, "t_end": 2.0}])
+        self.assertIn("steps.json", files)
+
+
 class AnalyzeTest(unittest.TestCase):
     def test_steps_and_capacity(self):
         with tempfile.TemporaryDirectory() as tmp:
