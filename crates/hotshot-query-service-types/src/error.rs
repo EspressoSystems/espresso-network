@@ -69,17 +69,6 @@ impl ClientError for Error {
     }
 }
 
-/// Here we converge the events service error type into the API error type
-#[cfg(feature = "web")]
-impl From<hotshot_events_service::events::Error> for Error {
-    fn from(err: hotshot_events_service::events::Error) -> Self {
-        Self::Custom {
-            message: err.to_string(),
-            status: disco_types::error::Error::status(&err),
-        }
-    }
-}
-
 /// An internal error that arises when querying a database.
 #[derive(Clone, Debug, Snafu, Deserialize, Serialize)]
 #[snafu(visibility(pub))]

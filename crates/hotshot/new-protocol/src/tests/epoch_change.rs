@@ -233,6 +233,44 @@ async fn test_epoch_change_proposal_epoch_mismatch_not_well_formed() {
     ));
 }
 
+/// The embedded proposal is always the last block of an epoch, whose parent
+/// (the block before it) is never an epoch root, so nothing may attach a
+/// state_cert to it, not even a genuine one lifted from elsewhere in the
+/// chain: the field is not covered by any signature this message carries.
+#[tokio::test]
+async fn test_epoch_change_state_cert_unexpected_not_well_formed() {
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+
+    let epoch_view = &test_data.views[9];
+    let genuine_state_cert = test_data
+        .views
+        .iter()
+        .find_map(|v| v.proposal.data.state_cert.clone())
+        .expect("fixture precondition: chain carries a genuine state_cert");
+
+    let mut proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
+    assert!(
+        proposal.state_cert.is_none(),
+        "fixture precondition: the epoch-change proposal's own parent is not an epoch root"
+    );
+    proposal.state_cert = Some(genuine_state_cert);
+    assert_eq!(
+        proposal_commitment(&proposal),
+        epoch_view.cert1.data.leaf_commit,
+        "attaching state_cert must leave the commitment intact, or this proves nothing",
+    );
+
+    let epoch_change =
+        EpochChangeMessage::validated(epoch_view.cert1.clone(), epoch_view.cert2.clone(), proposal);
+
+    assert!(matches!(
+        epoch_change.well_formed(EPOCH_HEIGHT),
+        Err(EpochChangeError::Proposal(
+            MalformedProposal::StateCertUnexpected(_)
+        ))
+    ));
+}
+
 /// A certificate names its own view, which the leaf commitment does not cover.
 /// Certificates that agree with each other but sit at a view other than the
 /// proposal's are not well-formed, even though they certify the proposal's leaf.

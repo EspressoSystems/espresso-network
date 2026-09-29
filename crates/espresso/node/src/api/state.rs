@@ -29,7 +29,6 @@ use espresso_types::{
 };
 use futures::{StreamExt as _, TryStreamExt as _, join, stream::BoxStream};
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
-use hotshot_events_service::events_source::EventsSource as _;
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
     Header as HsHeader, QueryError,
@@ -57,8 +56,9 @@ use hotshot_types::{
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
-use jf_merkle_tree_compat::prelude::{
-    MerkleProof as InternalMerkleProof, MerkleProof as JfMerkleProof,
+use jf_merkle_tree_compat::{
+    MerkleTreeScheme,
+    prelude::{MerkleProof as InternalMerkleProof, MerkleProof as JfMerkleProof},
 };
 use prometheus::Encoder as _;
 use serde_json;
@@ -2188,6 +2188,7 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             local_catchup_timeout: _,
             bootstrap_epoch_catchup_timeout: _,
             catchup_backoff: _,
+            follower,
             proposal_fetcher: _,
             libp2p: _,
             l1: _,
@@ -2262,6 +2263,10 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             l1_provider_count: l1_provider_count as u64,
             l1_ws_provider_count: l1_ws_provider_count as u64,
             modules: Some(modules.into()),
+            follower: follower.map(|follower| proto::FollowerModule {
+                poll_interval_ms: follower.poll_interval.as_millis() as u64,
+                max_blocks_per_poll: follower.max_blocks_per_poll,
+            }),
         }
     }
 }
@@ -2353,7 +2358,8 @@ impl From<crate::options::ApiModulesConfig> for proto::ApiModules {
             status: modules.status,
             catchup: modules.catchup,
             config: modules.config,
-            hotshot_events: modules.hotshot_events,
+            // The module is accepted for compatibility but no longer served.
+            hotshot_events: false,
             explorer: modules.explorer,
             light_client: modules.light_client,
         }
@@ -3140,27 +3146,6 @@ pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
 /// changes that default changes this bound too.
 fn lc_leaf_proof_chain_limit() -> usize {
     hotshot_query_service::availability::Options::default().small_object_range_limit
-}
-
-#[async_trait]
-impl<D> v1::HotShotEventsApi for NodeApiStateImpl<D>
-where
-    D: Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_events_service::events_source::EventsSource<SeqTypes> + Send + Sync,
-{
-    type Event = std::sync::Arc<hotshot_types::event::Event<SeqTypes>>;
-    type StartupInfo = hotshot_events_service::events_source::StartupInfo<SeqTypes>;
-
-    async fn startup_info(&self) -> anyhow::Result<Self::StartupInfo> {
-        let ds = &*self.data_source;
-        Ok(ds.get_startup_info().await)
-    }
-
-    async fn events(&self) -> anyhow::Result<futures::stream::BoxStream<'static, Self::Event>> {
-        let ds = &*self.data_source;
-        let stream = ds.get_event_stream(None).await;
-        Ok(Box::pin(stream))
-    }
 }
 
 #[async_trait]
@@ -3978,6 +3963,197 @@ where
         Ok(tonic::Response::new(end_at_first_error(proofs.map(
             |proof| proto::NamespaceProofResponse::try_from(&proof),
         ))))
+    }
+}
+
+#[tonic::async_trait]
+impl<D> proto::merklized_state_service_server::MerklizedStateService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            SeqTypes,
+            espresso_types::BlockMerkleTree,
+            { <espresso_types::BlockMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
+        > + hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            SeqTypes,
+            espresso_types::FeeMerkleTree,
+            { <espresso_types::FeeMerkleTree as jf_merkle_tree_compat::MerkleTreeScheme>::ARITY },
+        > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
+        + Send
+        + Sync,
+{
+    async fn get_block_state_path(
+        &self,
+        request: tonic::Request<proto::GetBlockStatePathRequest>,
+    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let key = required(request.key, "key")?;
+        let snapshot = snapshot_from_query(request.height, request.commit)?;
+        // v1 takes the key as a string because its route carried it as a path segment.
+        let proof =
+            <Self as v1::BlockStateApi>::get_block_state_path(self, snapshot, key.to_string())
+                .await
+                .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::MerklePathResponse::from(
+            &proof,
+        )))
+    }
+
+    async fn get_fee_state_path(
+        &self,
+        request: tonic::Request<proto::GetFeeStatePathRequest>,
+    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let address = required(request.address, "address")?;
+        let snapshot = snapshot_from_query(request.height, request.commit)?;
+        let proof = <Self as v1::FeeStateApi>::get_fee_state_path(self, snapshot, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::MerklePathResponse::from(
+            &proof,
+        )))
+    }
+
+    async fn get_latest_fee_balance(
+        &self,
+        request: tonic::Request<proto::GetLatestFeeBalanceRequest>,
+    ) -> Result<tonic::Response<proto::FeeBalanceResponse>, tonic::Status> {
+        let address = required(request.into_inner().address, "address")?;
+        let balance = <Self as v1::FeeStateApi>::get_fee_balance_latest(self, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::FeeBalanceResponse {
+            balance: balance.unwrap_or_default().to_string(),
+        }))
+    }
+
+    async fn get_state_height(
+        &self,
+        _request: tonic::Request<proto::GetStateHeightRequest>,
+    ) -> Result<tonic::Response<proto::StateHeightResponse>, tonic::Status> {
+        let height = <Self as v1::BlockStateApi>::get_block_state_height(self)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::StateHeightResponse { height }))
+    }
+}
+
+#[tonic::async_trait]
+impl<D> proto::reward_state_service_server::RewardStateService for NodeApiStateImpl<D>
+where
+    D: RewardMerkleTreeDataSource + Deref + Clone + Send + Sync + 'static,
+    D::Target: MerklizedStateHeightPersistence
+        + MerklizedStateDataSource<
+            SeqTypes,
+            RewardMerkleTreeV1,
+            { <RewardMerkleTreeV1 as MerkleTreeScheme>::ARITY },
+        > + MerklizedStateDataSource<
+            SeqTypes,
+            RewardMerkleTreeV2,
+            { <RewardMerkleTreeV2 as MerkleTreeScheme>::ARITY },
+        > + Send
+        + Sync,
+{
+    async fn get_reward_balance(
+        &self,
+        request: tonic::Request<proto::GetRewardBalanceRequest>,
+    ) -> Result<tonic::Response<proto::RewardBalanceResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let address = required(request.address, "address")?;
+        let balance = match request.height {
+            Some(height) => v1::RewardApi::get_reward_balance(self, height, address).await,
+            None => v1::RewardApi::get_latest_reward_balance(self, address).await,
+        }
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::RewardBalanceResponse {
+            balance: balance.to_string(),
+        }))
+    }
+
+    async fn get_reward_account_proof(
+        &self,
+        request: tonic::Request<proto::GetRewardAccountProofRequest>,
+    ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let address = required(request.address, "address")?;
+        let query = match request.height {
+            Some(height) => v1::RewardApi::get_reward_account_proof(self, height, address).await,
+            None => v1::RewardApi::get_latest_reward_account_proof(self, address).await,
+        }
+        .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::RewardAccountProofResponse::from(query),
+        ))
+    }
+
+    async fn get_reward_claim_input(
+        &self,
+        request: tonic::Request<proto::GetRewardClaimInputRequest>,
+    ) -> Result<tonic::Response<proto::RewardClaimInputResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let address = required(request.address, "address")?;
+        let height = required(request.height, "height")?;
+        let InternalRewardClaimInput {
+            lifetime_rewards,
+            auth_data,
+        } = v1::RewardApi::get_reward_claim_input(self, height, address)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::RewardClaimInputResponse {
+            lifetime_rewards: lifetime_rewards.to_string(),
+            auth_data: alloy::primitives::Bytes::from(auth_data).to_string(),
+        }))
+    }
+
+    async fn get_reward_amounts(
+        &self,
+        request: tonic::Request<proto::GetRewardAmountsRequest>,
+    ) -> Result<tonic::Response<proto::RewardAmountsResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let height = required(request.height, "height")?;
+        let offset = required(request.offset, "offset")?;
+        let limit = required(request.limit, "limit")?;
+        let amounts = v1::RewardApi::get_reward_amounts(self, height, offset, limit)
+            .await
+            .map_err(to_status)?;
+        // v1 reverses each page. v2 serves the tree's own order, so a client paging forward reads
+        // the tree in one direction.
+        Ok(tonic::Response::new(proto::RewardAmountsResponse {
+            amounts: amounts
+                .into_iter()
+                .rev()
+                .map(|(address, amount)| proto::RewardAmountPair {
+                    address: address.to_string(),
+                    amount: amount.to_string(),
+                })
+                .collect(),
+        }))
+    }
+
+    async fn get_reward_merkle_tree_v2(
+        &self,
+        request: tonic::Request<proto::GetRewardMerkleTreeV2Request>,
+    ) -> Result<tonic::Response<proto::RewardMerkleTreeV2Response>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let tree = v1::RewardApi::get_reward_merkle_tree_v2(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::RewardMerkleTreeV2Response {
+            tree,
+        }))
+    }
+}
+
+fn snapshot_from_query(
+    height: Option<u64>,
+    commit: Option<String>,
+) -> Result<v1::Snapshot, tonic::Status> {
+    match (height, commit) {
+        (Some(height), None) => Ok(v1::Snapshot::Height(height)),
+        (None, Some(commit)) => Ok(v1::Snapshot::Commit(commit)),
+        _ => Err(tonic::Status::invalid_argument(
+            "set exactly one of height or commit",
+        )),
     }
 }
 
@@ -5302,7 +5478,7 @@ mod tests {
         use proto::config_service_server::ConfigService as _;
 
         use crate::options::{
-            Identity, PublicNodeConfig,
+            FollowerConfig, Identity, PublicNodeConfig,
             tests::{parse_options_with, test_genesis},
         };
 
@@ -5337,6 +5513,11 @@ mod tests {
             "config",
         ]);
         let mut cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
+        // Set directly: the follower module needs storage-sql, whose args differ under embedded-db.
+        cfg.follower = Some(FollowerConfig {
+            poll_interval: Duration::from_millis(2500),
+            max_blocks_per_poll: 17,
+        });
         cfg.identity = Identity {
             node_name: Some("node-name".into()),
             node_description: Some("node-description".into()),
@@ -5422,6 +5603,10 @@ mod tests {
                     .unwrap_or_default(),
                 l1_provider_count: cfg.l1_provider_count as u64,
                 l1_ws_provider_count: cfg.l1_ws_provider_count as u64,
+                follower: Some(proto::FollowerModule {
+                    poll_interval_ms: 2500,
+                    max_blocks_per_poll: 17,
+                }),
                 modules: Some(proto::ApiModules {
                     http: Some(proto::HttpModule {
                         port: 24000,
@@ -5633,5 +5818,107 @@ mod tests {
         let served = storage.sql.unwrap();
         assert!(served.statement_timeout_ms > 0);
         assert!(served.consensus_pruning.unwrap().target_retention > 0);
+    }
+
+    fn assert_matches_v1_rendering<E, I, T, const ARITY: usize>(
+        proof: &jf_merkle_tree_compat::prelude::MerkleProof<E, I, T, ARITY>,
+    ) where
+        E: jf_merkle_tree_compat::Element
+            + ark_serialize::CanonicalSerialize
+            + ark_serialize::CanonicalDeserialize,
+        I: jf_merkle_tree_compat::Index
+            + ark_serialize::CanonicalSerialize
+            + ark_serialize::CanonicalDeserialize,
+        T: jf_merkle_tree_compat::NodeValue,
+    {
+        let expected = serde_json::to_value(proof).unwrap();
+        let converted = proto::MerklePathResponse::from(proof);
+
+        assert_eq!(converted.pos, expected["pos"].as_str().unwrap());
+        let expected_path = expected["proof"].as_array().unwrap();
+        assert_eq!(converted.proof.len(), expected_path.len());
+        assert!(
+            !expected_path.is_empty(),
+            "a path of no nodes would assert nothing"
+        );
+        for (node, expected) in converted.proof.iter().zip(expected_path) {
+            assert_merkle_node(node, expected);
+        }
+    }
+
+    #[test]
+    fn block_state_path_mirrors_its_v1_rendering() {
+        use committable::Committable as _;
+        use jf_merkle_tree_compat::MerkleTreeScheme as _;
+
+        let commitment = reference_header("v3").0.commit();
+        let tree = espresso_types::BlockMerkleTree::from_elems(Some(32), [commitment, commitment])
+            .unwrap();
+        // The block tree is light-weight: every leaf but the frontier is forgotten, so only the
+        // last index can be looked up here.
+        let (_, proof) = tree.lookup(1).expect_ok().unwrap();
+        assert_matches_v1_rendering(&proof);
+    }
+
+    /// The fee tree indexes by account and branches 256 ways where the block tree indexes by
+    /// height and branches 3, so it exercises the conversion over a different `Index` and a
+    /// different arity.
+    #[test]
+    fn fee_state_path_mirrors_its_v1_rendering() {
+        use jf_merkle_tree_compat::MerkleTreeScheme as _;
+
+        let account = espresso_types::FeeAccount::default();
+        let tree = espresso_types::FeeMerkleTree::from_kv_set(
+            20,
+            [(account, espresso_types::FeeAmount::from(123u64))],
+        )
+        .unwrap();
+        let (_, proof) = tree.lookup(account).expect_ok().unwrap();
+        assert_matches_v1_rendering(&proof);
+    }
+
+    fn assert_merkle_node(node: &proto::AdvzMerkleNode, expected: &serde_json::Value) {
+        use proto::advz_merkle_node::Node;
+
+        match node.node.as_ref().unwrap() {
+            Node::Empty(_) => assert_eq!(expected, "Empty"),
+            Node::Branch(branch) => {
+                let expected = &expected["Branch"];
+                assert_eq!(branch.value, expected["value"].as_str().unwrap());
+                let children = expected["children"].as_array().unwrap();
+                assert_eq!(branch.children.len(), children.len());
+                for (child, expected) in branch.children.iter().zip(children) {
+                    assert_merkle_node(child, expected);
+                }
+            },
+            Node::Leaf(leaf) => {
+                let expected = &expected["Leaf"];
+                assert_eq!(leaf.value, expected["value"].as_str().unwrap());
+                assert_eq!(leaf.pos, expected["pos"].as_str().unwrap());
+                assert_eq!(leaf.elem, expected["elem"].as_str().unwrap());
+            },
+            Node::ForgottenSubtree(forgotten) => {
+                let expected = &expected["ForgettenSubtree"];
+                assert_eq!(forgotten.value, expected["value"].as_str().unwrap());
+            },
+        }
+    }
+
+    #[test]
+    fn snapshot_query_takes_exactly_one_selector() {
+        assert!(matches!(
+            snapshot_from_query(Some(7), None).unwrap(),
+            v1::Snapshot::Height(7)
+        ));
+        assert!(matches!(
+            snapshot_from_query(None, Some("MERKLE_COMM~x".to_owned())).unwrap(),
+            v1::Snapshot::Commit(_)
+        ));
+        for (height, commit) in [(None, None), (Some(7), Some("MERKLE_COMM~x".to_owned()))] {
+            assert_eq!(
+                snapshot_from_query(height, commit).unwrap_err().code(),
+                tonic::Code::InvalidArgument
+            );
+        }
     }
 }

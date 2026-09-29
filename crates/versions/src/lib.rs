@@ -4,7 +4,7 @@ use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{self, DeserializeOwned},
 };
-use vbs::version::Version;
+pub use vbs::version::Version;
 
 // Known versions:
 
