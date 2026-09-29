@@ -13,6 +13,7 @@ import dataclasses
 import importlib.util
 import json
 import socket
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -639,7 +640,8 @@ class FakeNode(ThreadingHTTPServer):
     """Submit, block height and payload endpoints; `include` decides whether blocks carry the
     submitted transactions. A submit takes `accept_delay` s before the transaction is taken
     and `reply_delay` s after. Payloads in `lost` are never served, those in `late` only
-    `late[height]` s after their block was made; every payload answer takes `payload_delay` s."""
+    `late[height]` s after their block was made; every payload answer takes `payload_delay` s.
+    The query API shows a block `query_lag` s after the validator status API."""
 
     def __init__(
         self,
@@ -649,8 +651,10 @@ class FakeNode(ThreadingHTTPServer):
         reply_delay=0.0,
         late=None,
         payload_delay=0.0,
+        query_lag=0.0,
     ):
         super().__init__(("127.0.0.1", 0), FakeHandler)
+        self.query_lag = query_lag
         self.include = include
         self.lost = lost
         self.late = late or {}
@@ -709,11 +713,14 @@ class FakeHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         node = self.server
-        if self.path != "/v1/node/block-height":
+        if self.path.startswith("/v1/availability/"):
             time.sleep(node.payload_delay)
         with node.lock:
             if self.path == "/v1/node/block-height":
-                return self.reply(200, len(node.blocks))
+                shown = time.time() - node.query_lag
+                return self.reply(200, sum(1 for t in node.made if t <= shown))
+            if self.path == "/v1/status/block-height":
+                return self.reply(200, len(node.blocks) - 1)
             height = int(self.path.removeprefix("/v1/availability/payload/"))
             if height >= len(node.blocks) or height in node.lost:
                 return self.reply(404, "not found")
@@ -734,6 +741,7 @@ class LoadTest(unittest.TestCase):
         reply_delay=0.0,
         late=None,
         payload_delay=0.0,
+        query_lag=0.0,
         **cfg,
     ):
         node = FakeNode(
@@ -743,6 +751,7 @@ class LoadTest(unittest.TestCase):
             reply_delay=reply_delay,
             late=late,
             payload_delay=payload_delay,
+            query_lag=query_lag,
         )
         threads = [
             threading.Thread(target=node.serve_forever),
@@ -759,12 +768,17 @@ class LoadTest(unittest.TestCase):
                         config,
                         [node.url] * nodes,
                         node.url,
+                        [node.url, node.url],
                         start + duration,
                         Path(tmp),
                     )
                 )
                 lines = (Path(tmp) / "load.jsonl").read_text().splitlines()
                 txs = [json.loads(line) for line in lines]
+                self.heights = [
+                    json.loads(line)
+                    for line in (Path(tmp) / "heights.jsonl").read_text().splitlines()
+                ]
                 meta = json.loads((Path(tmp) / "load-meta.json").read_text())
         finally:
             node.stop.set()
@@ -847,6 +861,19 @@ class LoadTest(unittest.TestCase):
         self.assertGreater(len(txs), 5)
         self.assertEqual({tx["status"] for tx in txs}, {"included"})
         self.assertLess(max(tx["t_included"] - tx["t_submit"] for tx in txs), 0.4)
+
+    def test_heights_on_validators_and_query_node(self):
+        _, _, txs, _ = self.run_load(
+            True, 0.5, query_lag=0.3, rate_mb_s=0.02, max_pending=100, tx_timeout_s=5
+        )
+        self.assertEqual({tx["status"] for tx in txs}, {"included"})
+        by_height = {h["height"]: h for h in self.heights}
+        for tx in txs:
+            h = by_height[tx["height"]]
+            self.assertEqual(tx["t_included"], h["query"])
+            self.assertGreaterEqual(h["scanned"], h["query"])
+        lags = [h["query"] - h["validator"] for h in self.heights if h["query"]]
+        self.assertAlmostEqual(statistics.median(lags), 0.3, delta=0.12)
 
     def test_included_before_the_submit_returns(self):
         _, _, txs, _ = self.run_load(

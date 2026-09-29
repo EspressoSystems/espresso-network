@@ -625,8 +625,12 @@ def drive_network(
             "t1": t_load + cfg.warmup_s + cfg.measure_s,
         }
         log.info("load: warmup %d s, measuring %d s", cfg.warmup_s, cfg.measure_s)
-        submit_urls = list(NODES.values())
-        asyncio.run(generate_load(cfg, submit_urls, NODES[QUERY_NODE], run["t1"], out))
+        validators = [url for node, url in NODES.items() if node != QUERY_NODE]
+        asyncio.run(
+            generate_load(
+                cfg, list(NODES.values()), NODES[QUERY_NODE], validators, run["t1"], out
+            )
+        )
         for node, url in NODES.items():
             prom = get_ok(pool, url + "/v1/status/metrics")
             (out / f"final-{node}.prom").write_bytes(prom)
@@ -866,6 +870,7 @@ class Tx:
     # inf while the request waits for a submit thread, so the timeout clock starts at send.
     t_submit: float = math.inf
     t_included: float | None = None
+    height: int | None = None
     status: str = "pending"
 
 
@@ -920,24 +925,46 @@ class LoadState:
             tx.t_included = now
         self.permits.release()
 
+    def include(self, tx_id: int, height: int, at: float) -> None:
+        tx = self.pending.get(tx_id)
+        if tx is not None:
+            tx.height = height
+            self.resolve(tx_id, "included", at)
+
 
 async def generate_load(
-    cfg: BenchConfig, submit_urls: list[str], query_url: str, until: float, out: Path
+    cfg: BenchConfig,
+    submit_urls: list[str],
+    query_url: str,
+    validator_urls: list[str],
+    until: float,
+    out: Path,
 ) -> None:
     """Paced load until `until`, then wait up to `tx_timeout_s` for the stragglers.
-    Writes one line per transaction to load.jsonl and the counters to load-meta.json."""
+    Writes one line per transaction to load.jsonl, one per block height to heights.jsonl and
+    the counters to load-meta.json."""
     state = LoadState(cfg.max_pending)
     marker = hashlib.sha256(f"network-bench:{cfg.seed}".encode()).digest()[:16]
     bodies = tx_bodies(cfg, len(marker) + 8)
     submitter = Client(HttpPool(), ThreadPoolExecutor(cfg.workers))
     tracking = Client(HttpPool(), ThreadPoolExecutor(TRACKER_THREADS))
-    polling = Client(HttpPool(), ThreadPoolExecutor(1))
+    polling = Client(HttpPool(), ThreadPoolExecutor(1 + len(validator_urls)))
     done = asyncio.Event()
     try:
         start_height = await tracking.call(query_height, query_url)
         heights = Heights(start_height)
         async with asyncio.TaskGroup() as group:
-            poller = group.create_task(poll_heights(polling, query_url, heights))
+            pollers = [
+                group.create_task(
+                    poll_heights(polling, query_url, query_height, heights, "query")
+                ),
+                *(
+                    group.create_task(
+                        poll_heights(polling, url, validator_height, heights, "validator")
+                    )
+                    for url in validator_urls
+                ),
+            ]
             tracker = group.create_task(
                 track_inclusion(cfg, state, tracking, query_url, marker, heights, done)
             )
@@ -952,7 +979,8 @@ async def generate_load(
             )
             done.set()
             await tracker
-            poller.cancel()
+            for poller in pollers:
+                poller.cancel()
     except* (NetworkError, OSError) as group:
         raise NetworkError(f"load generator: {innermost(group)}") from group
     finally:
@@ -960,6 +988,7 @@ async def generate_load(
         tracking.close()
         polling.close()
     write_jsonl(out / "load.jsonl", (dataclasses.asdict(tx) for tx in state.txs))
+    write_jsonl(out / "heights.jsonl", heights.records())
     write_json(
         out / "load-meta.json",
         {
@@ -1051,26 +1080,49 @@ def post_tx(pool: HttpPool, tx: Tx, url: str, body: bytes) -> int:
     return status
 
 
+HeightSource = Literal["query", "validator"]
+
+
 class Heights:
-    """When each block height from `start` on first showed on the query node."""
+    """From `start` on, when each block height first showed on the query node's API and on
+    any validator's status API, and when the bench finished scanning its payload."""
 
     def __init__(self, start: int) -> None:
         self.start = start
-        self.seen: dict[int, float] = {}
+        self.seen: dict[HeightSource, dict[int, float]] = {
+            "query": {},
+            "validator": {},
+        }
+        self.scanned: dict[int, float] = {}
 
-    @property
-    def top(self) -> int:
-        return self.start + len(self.seen)
+    def top(self, source: HeightSource) -> int:
+        return self.start + len(self.seen[source])
 
-    def saw(self, count: int, now: float) -> None:
-        for height in range(self.top, count):
-            self.seen[height] = now
+    def saw(self, source: HeightSource, count: int, now: float) -> None:
+        for height in range(self.top(source), count):
+            self.seen[source][height] = now
+
+    def records(self) -> Iterator[dict[str, Any]]:
+        top = max(self.top("query"), self.top("validator"))
+        for height in range(self.start, top):
+            yield {
+                "height": height,
+                "validator": self.seen["validator"].get(height),
+                "query": self.seen["query"].get(height),
+                "scanned": self.scanned.get(height),
+            }
 
 
-async def poll_heights(client: Client, query_url: str, heights: Heights) -> None:
+async def poll_heights(
+    client: Client,
+    url: str,
+    count: Callable[[HttpPool, str], int],
+    heights: Heights,
+    source: HeightSource,
+) -> None:
     """On its own thread, so block times never wait for payload scans."""
     while True:
-        heights.saw(await client.call(query_height, query_url), time.time())
+        heights.saw(source, await client.call(count, url), time.time())
         await asyncio.sleep(HEIGHT_POLL_S)
 
 
@@ -1106,16 +1158,15 @@ async def track_inclusion(
             tx for tx in state.pending.values() if now - tx.t_submit > cfg.tx_timeout_s
         ]:
             state.resolve(tx.id, "timeout", now)
-        top = heights.top
+        top = heights.top("query")
         while height < top - PAYLOAD_LAG_BLOCKS:
-            at_height = heights.seen[height]
             raw = await client.call(block_payload, query_url, height)
             if raw is None:
-                missing[height] = at_height
+                missing[height] = heights.seen["query"][height]
             else:
-                record_inclusions(state, pattern, raw, at_height)
+                record_inclusions(state, pattern, raw, heights, height)
             height += 1
-        await retry_missing(state, client, query_url, pattern, missing)
+        await retry_missing(state, client, query_url, pattern, heights, missing)
         await asyncio.sleep(0.1)
 
 
@@ -1124,6 +1175,7 @@ async def retry_missing(
     client: Client,
     query_url: str,
     pattern: re.Pattern[bytes],
+    heights: Heights,
     missing: dict[int, float],
 ) -> None:
     """One fetch per missing payload. Past MISSING_PAYLOAD_S after its block appeared a
@@ -1137,14 +1189,20 @@ async def retry_missing(
             log.warning("payload %d missing on the query node, skipping", height)
             state.missing_payloads.append(height)
         else:
-            record_inclusions(state, pattern, raw, at_height)
+            record_inclusions(state, pattern, raw, heights, height)
 
 
 def record_inclusions(
-    state: LoadState, pattern: re.Pattern[bytes], raw: bytes, at_height: float
+    state: LoadState,
+    pattern: re.Pattern[bytes],
+    raw: bytes,
+    heights: Heights,
+    height: int,
 ) -> None:
+    at = heights.seen["query"][height]
     for match in pattern.finditer(raw):
-        state.resolve(int.from_bytes(match.group(1), "big"), "included", at_height)
+        state.include(int.from_bytes(match.group(1), "big"), height, at)
+    heights.scanned[height] = time.time()
 
 
 def log_progress(state: LoadState, height: int) -> None:
@@ -1187,6 +1245,14 @@ def query_height(pool: HttpPool, query_url: str) -> int:
     if status != 200:
         raise NetworkError(f"block height from query node: HTTP {status}")
     return int(body)
+
+
+def validator_height(pool: HttpPool, url: str) -> int:
+    """Blocks decided on a validator: its status API reports the newest decided height."""
+    status, body = read(pool, url + "/v1/status/block-height")
+    if status != 200:
+        raise NetworkError(f"block height from {url}: HTTP {status}")
+    return int(body) + 1
 
 
 def block_payload(pool: HttpPool, query_url: str, height: int) -> bytes | None:
