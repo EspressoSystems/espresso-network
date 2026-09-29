@@ -539,7 +539,9 @@ def cmd_render(args: argparse.Namespace) -> int:
 def cmd_compare(args: argparse.Namespace) -> int:
     current: BenchResult = json.loads(args.result.read_text())
     comparison = compare(current, load_baseline(args.baseline))
-    print("\n".join(headline_table(current, comparison)))
+    print(
+        "\n".join([*headline_table(current, comparison), "", baseline_line(comparison)])
+    )
     return 0
 
 
@@ -1340,15 +1342,19 @@ def throughput_bound(at_cap: float, empty_frac: float, fill: float) -> Bound:
     fraction of samples with max_pending transactions in flight, `fill` the mean non-empty block
     size over max_block_size."""
     if fill >= FULL_BLOCK_FILL:
-        return {"kind": "network", "reason": f"non-empty blocks {fill:.0%} full"}
+        return {
+            "kind": "network",
+            "reason": f"non-empty blocks >= {FULL_BLOCK_FILL:.0%} full",
+        }
     if empty_frac >= LOAD_EMPTY_FRAC:
-        return {"kind": "load", "reason": f"{empty_frac:.0%} of blocks empty"}
+        return {"kind": "load", "reason": f">= {LOAD_EMPTY_FRAC:.0%} of blocks empty"}
     if empty_frac < NETWORK_EMPTY_FRAC and at_cap >= AT_CAP_MIN_FRAC:
         return {
             "kind": "network",
-            "reason": f"{empty_frac:.0%} of blocks empty with max_pending in flight",
+            "reason": f"< {NETWORK_EMPTY_FRAC:.0%} of blocks empty, max_pending in flight "
+            f"for >= {AT_CAP_MIN_FRAC:.0%} of samples",
         }
-    return {"kind": "unclear", "reason": "no bound rule applies"}
+    return {"kind": "unclear", "reason": "no rule matched"}
 
 
 def max_block_bytes(genesis: Path) -> int:
@@ -1843,23 +1849,30 @@ class Metric:
 
 HEADLINE = (
     Metric(
-        "decided throughput", "network.decided_mb_per_s.value", "MB/s", "higher", 10
+        "decided payload throughput",
+        "network.decided_mb_per_s.value",
+        "MB/s",
+        "higher",
+        10,
     ),
     Metric("tx latency p50", "load.latency_ms.p50", "ms", "lower", 15),
     Metric("tx latency p99", "load.latency_ms.p99", "ms", "lower", 20),
     Metric("mean view time", "network.mean_view_ms.value", "ms", "lower", 10),
-    Metric("views/s", "network.views_per_s.value", "/s", "higher", 10),
-    Metric("timeouts", "network.timeouts", "", "lower", 0),
-    Metric("node CPU-s per MB", "network.cpu_s_per_mb.value", "s/MB", "lower", 10),
+    Metric("consensus timeouts", "network.timeouts", "", "lower", 0),
+    Metric(
+        "node CPU-s per decided MB", "network.cpu_s_per_mb.value", "s/MB", "lower", 10
+    ),
     Metric(
         "proposal to decide p99", "network.proposal_to_decide_ms.p99", "ms", "lower", 20
     ),
-    Metric("node0 CPU", "nodes.node0.cpu_cores", "cores", "lower", 15),
-    Metric("node1 CPU", "nodes.node1.cpu_cores", "cores", "lower", 15),
-    Metric("node2 CPU", "nodes.node2.cpu_cores", "cores", "lower", 15),
+    Metric("node0 CPU mean", "nodes.node0.cpu_cores", "cores", "lower", 15),
+    Metric("node1 CPU mean", "nodes.node1.cpu_cores", "cores", "lower", 15),
+    Metric("node2 CPU mean", "nodes.node2.cpu_cores", "cores", "lower", 15),
     Metric("node0 RSS peak", "nodes.node0.rss_peak_bytes", "bytes", "lower", 10),
     Metric("node1 RSS peak", "nodes.node1.rss_peak_bytes", "bytes", "lower", 10),
-    Metric("postgres CPU", "processes.postgres.cpu_cores_mean", "cores", "lower", 15),
+    Metric(
+        "postgres CPU mean", "processes.postgres.cpu_cores_mean", "cores", "lower", 15
+    ),
     Metric(
         "node0 decide processing p99",
         "nodes.node0.ops.consensus_internal_process_decided_events_duration.p99_ms",
@@ -2005,17 +2018,22 @@ def render(result: BenchResult, comparison: Comparison | None) -> str:
     lines = [
         "## Network benchmark",
         "",
-        status_line(result),
+        f"- {status_line(result)}",
+        f"- {bound_line(result)}",
+        f"- {baseline_line(comparison)}",
         "",
-        runner_line(result),
+        *headline_table(result, comparison),
         "",
+        "### Load",
+        "",
+        *load_lines(result),
+        "",
+        *details("Runner, calibration, host", runner_lines(result)),
+        *details("Nodes", node_table(result)),
+        *details("Top ops by busy time", ops_table(result)),
+        *details("Processes", process_table(result)),
+        *footer(result),
     ]
-    lines += headline_table(result, comparison) + [""]
-    lines += node_table(result) + [""]
-    lines += ops_table(result) + [""]
-    lines += process_table(result) + [""]
-    lines += load_lines(result) + [""]
-    lines += footer(result)
     return "\n".join(lines) + "\n"
 
 
@@ -2024,9 +2042,46 @@ def status_line(result: BenchResult) -> str:
     reasons = "; ".join(validity["reasons"])
     run = result["run"]
     head = f"`{run['sha'][:10]}` {run_where(run)}, config `{result['config_hash']}`"
-    return f"{head}: **{verdict_word(validity)}**" + (
+    return f"{head}: run **{verdict_word(validity)}**" + (
         f" ({reasons})" if reasons else ""
     )
+
+
+def bound_line(result: BenchResult) -> str:
+    bound, cfg = result["bound"], result["config"]
+    meaning = {
+        "load": f"decided payload measures the offered load, capped by max_pending {cfg['max_pending']}",
+        "network": "decided payload measures network capacity",
+        "unclear": "decided payload is attributed to neither bound",
+    }[bound["kind"]]
+    title = {
+        "load": "Load-bound",
+        "network": "Network-bound",
+        "unclear": "Bound unclear",
+    }
+    return (
+        f"**{title[bound['kind']]}** (rule: {bound['reason']}): {meaning}. "
+        f"{'; '.join(saturation_facts(result))}."
+    )
+
+
+def saturation_facts(result: BenchResult) -> list[str]:
+    net, load, cfg = result["network"], result["load"], result["config"]
+    block = net["block_bytes_nonempty_mean"]
+    fill = (
+        f"non-empty blocks {fmt_bytes(block)} mean, "
+        f"{block / net['max_block_bytes']:.1%} of max_block_size {fmt_bytes(net['max_block_bytes'])}"
+        if block is not None
+        else f"no non-empty blocks, max_block_size {fmt_bytes(net['max_block_bytes'])}"
+    )
+    return [
+        f"{net['empty_block_frac']:.0%} of blocks empty",
+        (
+            f"{cfg['max_pending']}/{cfg['max_pending']} txs in flight for "
+            f"{load['at_cap_frac']:.0%} of {IN_FLIGHT_STEP_S:.0f} s samples"
+        ),
+        fill,
+    ]
 
 
 def run_where(run: RunMeta) -> str:
@@ -2071,34 +2126,51 @@ def verdict_word(validity: Validity) -> str:
     return "noisy" if validity["noisy"] else "valid"
 
 
-def runner_line(result: BenchResult) -> str:
+def runner_lines(result: BenchResult) -> list[str]:
     r, c, h = result["runner"], result["calibration"], result["host"]
     mhz = statistics.fmean(r["mhz"]) if r["mhz"] else 0.0
     image = " ".join(x for x in (r["image_os"], r["image_version"]) if x) or "local"
-    return (
-        f"Runner: {r['cpu_model']}, {r['nproc']} CPUs ({r['affinity']} usable"
-        f"{', cpu.max ' + r['cgroup_cpu_max'] if r['cgroup_cpu_max'] else ''}), {mhz:.0f} MHz, "
-        f"{fmt_bytes(r['mem_total_bytes'])} RAM, image {image}. Calibration sha256 "
-        f"{c['before']['sha256_1t_mb_s']:.0f}/{c['before']['sha256_mt_mb_s']:.0f} MB/s (1 core/all) "
-        f"before, {c['after']['sha256_1t_mb_s']:.0f}/{c['after']['sha256_mt_mb_s']:.0f} after "
-        f"(drift {c['drift_pct']:+.1f}%), {c['before']['fsync_per_s']:.0f} fsync/s. Host CPU "
-        f"{h['util_mean']:.0%} mean, {h['util_max']:.0%} max, steal {h['steal_pct']:.1f}%, "
-        f"iowait {h['iowait_pct']:.1f}%."
-    )
+    quota = f", cgroup cpu.max {r['cgroup_cpu_max']}" if r["cgroup_cpu_max"] else ""
+    before, after = c["before"], c["after"]
+    return [
+        f"- CPU: {r['cpu_model']}, {mhz:.0f} MHz mean",
+        f"- CPUs: {r['affinity']} usable of {r['nproc']}{quota}",
+        f"- RAM: {fmt_bytes(r['mem_total_bytes'])}",
+        f"- image: {image}",
+        (
+            f"- sha256 1 core: {before['sha256_1t_mb_s']:.0f} MB/s before, "
+            f"{after['sha256_1t_mb_s']:.0f} MB/s after"
+        ),
+        (
+            f"- sha256 all usable cores: {before['sha256_mt_mb_s']:.0f} MB/s before, "
+            f"{after['sha256_mt_mb_s']:.0f} MB/s after, drift {c['drift_pct']:+.1f}%"
+        ),
+        f"- fsync: {before['fsync_per_s']:.0f}/s",
+        f"- host CPU busy (usable CPUs): {h['util_mean']:.0%} mean, {h['util_max']:.0%} max",
+        f"- steal {h['steal_pct']:.1f}%, iowait {h['iowait_pct']:.1f}%",
+    ]
+
+
+def details(summary: str, body: list[str]) -> list[str]:
+    """A collapsed block; GitHub renders markdown inside only after a blank line."""
+    return [f"<details><summary>{summary}</summary>", "", *body, "", "</details>", ""]
 
 
 def headline_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
-    if comparison is None:
-        rows = [compare_metric(m, result, [], False) for m in HEADLINE]
-        lines = ["| metric | this run | sub-window range |", "|---|---:|---:|"]
-        for row in rows:
+    windows = f"{result['config']['subwindow_s']} s sub-windows (min to max, cv)"
+    if comparison is None or not comparison["used"]:
+        lines = [f"| metric | this run | {windows} |", "|---|---:|---:|"]
+        for row in (compare_metric(m, result, [], False) for m in HEADLINE):
             lines.append(
                 f"| {row['label']} | {fmt_value(row['current'], row['unit'])} "
                 f"| {range_cell(result, row['key'])} |"
             )
-        return lines + ["", baseline_line(comparison)]
+        return lines
     lines = [
-        f"| metric | this run | sub-window range | {baseline_label(comparison)} | delta | |",
+        (
+            f"| metric | this run | {windows} | {baseline_label(comparison)} | delta "
+            "| verdict (threshold) |"
+        ),
         "|---|---:|---:|---:|---:|---|",
     ]
     for row in comparison["rows"]:
@@ -2111,7 +2183,7 @@ def headline_table(result: BenchResult, comparison: Comparison | None) -> list[s
             f"| {range_cell(result, row['key'])} | {fmt_value(row['baseline'], row['unit'])} "
             f"| {delta_cell} | {mark} (±{row['threshold_pct']:.0f}%) |"
         )
-    return lines + ["", baseline_line(comparison)]
+    return lines
 
 
 def excluded_note(comparison: Comparison) -> str:
@@ -2138,28 +2210,40 @@ def range_cell(result: BenchResult, path: str) -> str:
 
 def node_table(result: BenchResult) -> list[str]:
     lines = [
-        "| node | role | height | view lag | CPU cores | RSS peak | tokio busy |",
-        "|---|---|---:|---:|---:|---:|---:|",
+        "| node | role | decided height | view lag | tokio workers busy |",
+        "|---|---|---:|---:|---:|",
     ]
     for node, s in result["nodes"].items():
         busy = f"{s['tokio_busy_frac']:.0%}" if s["tokio_busy_frac"] is not None else ""
         lines.append(
             f"| {node} | {s['role']} | {s['decided_height_end']} | {s['view_lag_end']} "
-            f"| {s['cpu_cores']:.2f} | {fmt_bytes(s['rss_peak_bytes'])} | {busy} |"
+            f"| {busy} |"
         )
     return lines
 
 
+# Timers nested in another listed op: their numbers repeat the outer one's.
+DUPLICATE_OPS = frozenset(
+    {
+        "consensus_decide_processor_process_duration",
+        "consensus_internal_append_da2_duration",
+        "consensus_internal_append_vid_duration",
+        "consensus_internal_append_quorum2_duration",
+    }
+)
+
+
 def ops_table(result: BenchResult, count: int = 8) -> list[str]:
-    """The ops that kept any node busiest, as p99 ms and busy fraction per node."""
+    """The ops that kept any node busiest, as p99 and busy fraction per node."""
     busiest: dict[str, float] = {}
     for s in result["nodes"].values():
         for op, stats in s["ops"].items():
-            busiest[op] = max(busiest.get(op, 0.0), stats["busy_frac"])
+            if op not in DUPLICATE_OPS:
+                busiest[op] = max(busiest.get(op, 0.0), stats["busy_frac"])
     top = sorted(busiest, key=lambda op: -busiest[op])[:count]
     nodes = list(result["nodes"])
     lines = [
-        "| op (p99 ms, busy) | " + " | ".join(nodes) + " |",
+        "| op (p99 ms, busy %) | " + " | ".join(nodes) + " |",
         "|---|" + "---:|" * len(nodes),
     ]
     for op in top:
@@ -2170,12 +2254,15 @@ def ops_table(result: BenchResult, count: int = 8) -> list[str]:
                 f"{fmt_num(stats['p99_ms'])}, {stats['busy_frac']:.0%}" if stats else ""
             )
         lines.append(f"| {op.removeprefix('consensus_')} | " + " | ".join(cells) + " |")
-    return lines
+    return lines + [
+        "",
+        "busy: summed op duration over the window length; above 100% means overlapping calls.",
+    ]
 
 
 def process_table(result: BenchResult) -> list[str]:
     lines = [
-        "| process | CPU cores | CPU-s | RSS peak (sum of its processes) |",
+        "| process | CPU cores mean | CPU-s | RSS peak (sum over its PIDs) |",
         "|---|---:|---:|---:|",
     ]
     for label, p in sorted(result["processes"].items(), key=lambda kv: -kv[1]["cpu_s"]):
@@ -2189,18 +2276,25 @@ def process_table(result: BenchResult) -> list[str]:
 def load_lines(result: BenchResult) -> list[str]:
     load, cfg, net = result["load"], result["config"], result["network"]
     lat = load["latency_ms"]
+    latency = (
+        f"p50 {lat['p50']:.0f}, p95 {lat['p95']:.0f}, p99 {lat['p99']:.0f}, "
+        f"max {lat['max']:.0f} ms (n={lat['n']})"
+        if lat
+        else "n/a"
+    )
+    blocks = net["blocks_per_s"]["value"]
     return [
-        f"Load: {cfg['workers']} workers, max {cfg['max_pending']} pending, "
-        f"{fmt_bytes(cfg['tx_size'])} txs; submitted {load['submitted_per_s']:.1f}/s, included "
-        f"{load['included_per_s']:.1f}/s, inclusion ratio {load['inclusion_ratio']:.3f}, "
-        f"{load['timeouts']} tx timeouts, {load['submit_errors']} submit errors, max in flight "
-        f"{load['max_in_flight']}. Latency p50/p95/p99/max "
-        + (
-            f"{lat['p50']:.0f}/{lat['p95']:.0f}/{lat['p99']:.0f}/{lat['max']:.0f} ms (n={lat['n']})."
-            if lat
-            else "n/a."
-        )
-        + f" Empty blocks {net['empty_block_frac']:.0%}."
+        (
+            f"- closed loop: {cfg['workers']} workers, max_pending {cfg['max_pending']}, "
+            f"{fmt_bytes(cfg['tx_size'])} per tx"
+        ),
+        (
+            f"- submitted {load['submitted_per_s']:.1f} tx/s, included "
+            f"{load['included_per_s']:.1f} tx/s, inclusion ratio {load['inclusion_ratio']:.3f}"
+        ),
+        f"- decided blocks: {fmt_num(blocks)}/s, peak in flight {load['max_in_flight']}",
+        f"- tx latency, submit to block on node0: {latency}",
+        f"- {load['timeouts']} tx timeouts, {load['submit_errors']} submit errors",
     ]
 
 

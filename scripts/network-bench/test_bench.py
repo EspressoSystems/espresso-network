@@ -174,9 +174,36 @@ class RenderTest(unittest.TestCase):
         summary = bench.render(current, compare(current, baseline))
         self.assertIn("| main median (n=5) |", summary)
         self.assertRegex(
-            summary, r"\| decided throughput \| 3 MB/s \|.*\| -25\.0% \| \*\*worse\*\*"
+            summary,
+            r"\| decided payload throughput \| 3 MB/s \|.*\| -25\.0% \| \*\*worse\*\*",
         )
         self.assertIn("Test CPU", summary)
+
+    def test_verdict_first_detail_last(self):
+        current = make_result()
+        current["bound"] = {"kind": "load", "reason": "75% of blocks empty"}
+        summary = bench.render(current, None)
+        order = [
+            "**Load-bound** (rule: 75% of blocks empty)",
+            "Baseline: none given",
+            "| metric | this run |",
+            "### Load",
+            "<details>",
+        ]
+        self.assertEqual(sorted(order, key=summary.index), order)
+        self.assertNotIn("| delta |", summary)
+
+    def test_ops_table_drops_duplicates(self):
+        current = make_result()
+        op = current["nodes"]["node0"]["ops"]["consensus_storage_append_da"]
+        current["nodes"]["node0"]["ops"] |= {
+            "consensus_internal_append_da2_duration": op,
+            "consensus_decide_processor_process_duration": op,
+        }
+        table = "\n".join(bench.ops_table(current))
+        self.assertIn("storage_append_da", table)
+        self.assertNotIn("append_da2", table)
+        self.assertNotIn("decide_processor", table)
 
     def test_status_names_the_pr(self):
         current = make_result()
@@ -273,11 +300,15 @@ class CompareTest(unittest.TestCase):
     def test_within_threshold_is_same(self):
         current = make_result(mb_per_s=3.8)
         comparison = compare(current, [make_result(mb_per_s=4.0)])
-        self.assertEqual(row(comparison, "decided throughput")["verdict"], "same")
+        self.assertEqual(
+            row(comparison, "decided payload throughput")["verdict"], "same"
+        )
 
     def test_spread_widens_threshold(self):
         history = [make_result(mb_per_s=v) for v in (3.0, 4.0, 5.0, 3.5, 4.5)]
-        verdict = row(compare(make_result(mb_per_s=3.0), history), "decided throughput")
+        verdict = row(
+            compare(make_result(mb_per_s=3.0), history), "decided payload throughput"
+        )
         self.assertGreater(verdict["threshold_pct"], 10)
         self.assertEqual(verdict["verdict"], "same")
 
@@ -313,14 +344,15 @@ class CompareTest(unittest.TestCase):
         current = make_result(mb_per_s=1.0, steal=8.0)
         comparison = compare(current, [make_result()])
         self.assertEqual(
-            row(comparison, "decided throughput")["verdict"], "inconclusive"
+            row(comparison, "decided payload throughput")["verdict"], "inconclusive"
         )
 
     def test_timeouts_from_zero_baseline(self):
         current = make_result()
         current["network"]["timeouts"] = 3
         self.assertEqual(
-            row(compare(current, [make_result()]), "timeouts")["verdict"], "worse"
+            row(compare(current, [make_result()]), "consensus timeouts")["verdict"],
+            "worse",
         )
 
 
