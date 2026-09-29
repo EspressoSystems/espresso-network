@@ -10,6 +10,7 @@ made no `aws` call at all.
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -127,18 +128,19 @@ class PeersTest(unittest.TestCase):
         self.assertEqual(awsb.peers(1, 5), [2, 3, 4])
         self.assertEqual(awsb.peers(4, 5), [1, 2, 3])
 
-    def test_node0_has_no_peers(self):
-        for n in range(1, 10):
-            self.assertEqual(awsb.peers(0, n), [])
+    def test_node0_gets_first_validators(self):
+        self.assertEqual(awsb.peers(0, 5), [1, 2, 3])
+        self.assertEqual(awsb.peers(0, 3), [1, 2])
+        self.assertEqual(awsb.peers(0, 2), [1])
 
     # EDGE:awsbench-two-nodes
-    def test_two_nodes_empty(self):
+    def test_two_nodes_one_validator_empty(self):
         self.assertEqual(awsb.peers(1, 2), [])
         cfg = awsb.RunConfig(
             tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
         )
         hosts = awsb.plan_hosts(cfg)
-        self.assertEqual(awsb.plan_peers(hosts), {"node0": [], "node1": []})
+        self.assertEqual(awsb.plan_peers(hosts), {"node0": ["node1"], "node1": []})
 
 
 class PlanHostsTest(unittest.TestCase):
@@ -391,7 +393,7 @@ class CmdPlanTest(unittest.TestCase):
                 (Path(out_root) / "run1" / "manifest.json").read_text()
             )
             self.assertEqual(manifest["phase"], "planned")
-            self.assertEqual(manifest["peers"], {"node0": [], "node1": []})
+            self.assertEqual(manifest["peers"], {"node0": ["node1"], "node1": []})
             self.assertEqual(len(manifest["hosts"]), 3)
             self.assertTrue((Path(out_root) / "run1" / "driver.log").exists())
             self.assertTrue((Path(out_root) / "run1" / "events.jsonl").exists())
@@ -1343,6 +1345,467 @@ class TofuValidateTest(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(plan.returncode, 0, plan.stderr)
+
+
+def host_info(name: str, role: str, index: int) -> dict:
+    return {
+        "name": name,
+        "role": role,
+        "public_ip": f"203.0.113.{index}",
+        "private_ip": f"10.0.0.{index}",
+        "private_dns": f"ip-10-0-0-{index}.eu-west-1.compute.internal",
+        "instance_id": f"i-{index:012x}",
+    }
+
+
+def fleet(n: int) -> dict:
+    hosts = {"ctl": host_info("ctl", "ctl", 1)}
+    for i in range(n):
+        role = "query" if i == 0 else "validator"
+        hosts[f"node{i}"] = host_info(f"node{i}", role, i + 2)
+    return hosts
+
+
+class RenderGenesisTest(unittest.TestCase):
+    def setUp(self):
+        self.template = (Path(__file__).parent / "genesis.toml").read_bytes()
+
+    def test_capacity_at_least_ten(self):
+        rendered = awsb.render_genesis(
+            self.template, n=3, max_block_size="100mb"
+        ).decode()
+        self.assertIn("stake_table_capacity = 10", rendered)
+        self.assertIn("capacity = 10", rendered)
+
+    def test_capacity_scales_above_ten(self):
+        rendered = awsb.render_genesis(
+            self.template, n=50, max_block_size="100mb"
+        ).decode()
+        self.assertIn("stake_table_capacity = 50", rendered)
+        self.assertIn("capacity = 50", rendered)
+
+    def test_max_block_size_set_in_both_chain_configs(self):
+        rendered = awsb.render_genesis(
+            self.template, n=5, max_block_size="64mb"
+        ).decode()
+        self.assertEqual(rendered.count('max_block_size = "64mb"'), 2)
+        self.assertNotIn("100mb", rendered)
+
+    def test_raises_if_template_shape_changes(self):
+        with self.assertRaises(ValueError):
+            awsb.render_genesis(b"no capacity fields here", n=5, max_block_size="64mb")
+
+
+class ParseDotenvTest(unittest.TestCase):
+    def test_parses_simple_and_quoted_values(self):
+        env = awsb.parse_dotenv(
+            '# comment\nFOO=bar\nQUOTED="a b c"\n\nESPRESSO_NODE_L1_STAKE_TABLE_UPDATE_INTERVAL=1m\n'
+        )
+        self.assertEqual(env["FOO"], "bar")
+        self.assertEqual(env["QUOTED"], "a b c")
+        self.assertEqual(env["ESPRESSO_NODE_L1_STAKE_TABLE_UPDATE_INTERVAL"], "1m")
+
+    def test_expands_reference_to_earlier_key(self):
+        env = awsb.parse_dotenv("FOO=bar\nBAZ=${FOO}/baz\n")
+        self.assertEqual(env["BAZ"], "bar/baz")
+
+    def test_reference_to_unknown_key_raises(self):
+        with self.assertRaises(KeyError):
+            awsb.parse_dotenv("BAZ=${UNKNOWN}\n")
+
+    def test_line_without_equals_raises(self):
+        with self.assertRaises(ValueError):
+            awsb.parse_dotenv("FOO=bar\nnot a line\n")
+
+    def test_real_env_file_parses(self):
+        env = awsb.parse_dotenv((Path(__file__).parents[2] / ".env").read_text())
+        self.assertIn("ESPRESSO_ETH_MNEMONIC", env)
+        self.assertIn("ESPRESSO_STAKE_TABLE_PROXY_ADDRESS", env)
+        self.assertEqual(
+            env["ESPRESSO_OPS_TIMELOCK_ADMIN"], env["ESPRESSO_ETH_MULTISIG_ADDRESS"]
+        )
+
+
+class RenderNodeEnvTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = awsb.RunConfig(
+            tag="x", nodes=5, load=netbench.BenchConfig(submit_nodes=4)
+        )
+        self.hosts = fleet(5)
+
+    def env(self, name: str) -> dict:
+        host = next(h for h in awsb.plan_hosts(self.cfg) if h["name"] == name)
+        text = awsb.render_node_env(host, self.hosts)
+        return dict(line.split("=", 1) for line in text.splitlines())
+
+    def test_key_index_offset_by_twenty(self):
+        self.assertEqual(self.env("node0")["ESPRESSO_NODE_KEY_INDEX"], "20")
+        self.assertEqual(self.env("node3")["ESPRESSO_NODE_KEY_INDEX"], "23")
+
+    def test_validator_has_no_postgres_vars(self):
+        env = self.env("node1")
+        self.assertNotIn("ESPRESSO_NODE_POSTGRES_HOST", env)
+        self.assertEqual(env["ESPRESSO_NODE_STORAGE_PATH"], "/store/espresso")
+
+    def test_query_node_has_postgres_vars(self):
+        env = self.env("node0")
+        self.assertEqual(env["ESPRESSO_NODE_POSTGRES_HOST"], "127.0.0.1")
+        self.assertEqual(env["ESPRESSO_NODE_POSTGRES_DATABASE"], "espresso")
+
+    def test_state_peers_via_peers_function(self):
+        env = self.env("node1")
+        expected = [
+            f"http://{self.hosts[f'node{j}']['private_ip']}:{awsb.NODE_API_PORT}"
+            for j in awsb.peers(1, 5)
+        ]
+        self.assertEqual(env["ESPRESSO_NODE_STATE_PEERS"], ",".join(expected))
+
+    def test_node0_has_state_peers(self):
+        env = self.env("node0")
+        expected = [
+            f"http://{self.hosts[f'node{j}']['private_ip']}:{awsb.NODE_API_PORT}"
+            for j in awsb.peers(0, 5)
+        ]
+        self.assertEqual(env["ESPRESSO_NODE_STATE_PEERS"], ",".join(expected))
+
+    def test_state_peers_omitted_when_empty(self):
+        cfg = awsb.RunConfig(
+            tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
+        )
+        hosts = fleet(2)
+        host = next(h for h in awsb.plan_hosts(cfg) if h["name"] == "node1")
+        env = dict(
+            line.split("=", 1)
+            for line in awsb.render_node_env(host, hosts).splitlines()
+        )
+        self.assertNotIn("ESPRESSO_NODE_STATE_PEERS", env)
+
+    def test_journal_max_bytes_reserves_disk_and_halves_for_query(self):
+        validator_gb = self.env("node1")["ESPRESSO_NODE_JOURNAL_MAX_BYTES"]
+        query_gb = self.env("node0")["ESPRESSO_NODE_JOURNAL_MAX_BYTES"]
+        usable = (awsb.NODE_ROOT_GB_DEFAULT - awsb.RESERVED_GB) * 1_000_000_000
+        self.assertEqual(
+            int(validator_gb), int(usable * awsb.JOURNAL_MAX_BYTES_FRACTION)
+        )
+        self.assertEqual(
+            int(query_gb),
+            int(usable * awsb.JOURNAL_MAX_BYTES_FRACTION * awsb.QUERY_JOURNAL_FRACTION),
+        )
+
+    def test_advertise_addresses_use_private_ip_and_dns(self):
+        env = self.env("node2")
+        self.assertEqual(
+            env["ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS"],
+            f"10.0.0.4:{awsb.CLIQUENET_PORT}",
+        )
+        self.assertEqual(
+            env["ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS"],
+            f"ip-10-0-0-4.eu-west-1.compute.internal:{awsb.LIBP2P_PORT}",
+        )
+
+
+class RenderCtlEnvTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = awsb.RunConfig(
+            tag="x", nodes=5, load=netbench.BenchConfig(submit_nodes=4)
+        )
+        self.hosts = fleet(5)
+        self.dotenv = awsb.parse_dotenv(
+            (Path(__file__).parents[2] / ".env").read_text()
+        )
+
+    def env(self) -> dict:
+        text = awsb.render_ctl_env(self.hosts, self.cfg, self.dotenv)
+        return dict(line.split("=", 1) for line in text.splitlines())
+
+    def test_proxy_addresses_unset(self):
+        env = self.env()
+        for key in awsb.PROXY_ADDRESS_KEYS:
+            self.assertNotIn(key, env)
+        # Not one of the three unset proxy addresses; stays.
+        self.assertIn("ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS", env)
+
+    def test_orchestrator_num_nodes_and_builder_disabled(self):
+        env = self.env()
+        self.assertEqual(env["ESPRESSO_ORCHESTRATOR_NUM_NODES"], "5")
+        self.assertEqual(
+            env["ESPRESSO_ORCHESTRATOR_BUILDER_URLS"], "http://localhost:1"
+        )
+        self.assertEqual(env["ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT"], "100ms")
+
+    def test_relay_reads_node0(self):
+        env = self.env()
+        self.assertEqual(
+            env["ESPRESSO_API_NODE_URL"], f"http://10.0.0.2:{awsb.NODE_API_PORT}"
+        )
+
+    def test_no_unsubstituted_dollar_reference(self):
+        env = self.env()
+        for value in env.values():
+            self.assertNotIn("$", value)
+
+    def test_port_drift_from_dotenv_raises(self):
+        dotenv = dict(self.dotenv, ESPRESSO_L1_PORT="9999")
+        with self.assertRaises(ValueError):
+            awsb.render_ctl_env(self.hosts, self.cfg, dotenv)
+
+
+def fake_image(ref: str) -> dict:
+    return {
+        "ref": ref,
+        "digest": f"sha256:{'0' * 64}",
+        "revision": "abc1234",
+        "platforms": [],
+    }
+
+
+def fake_images() -> dict:
+    return {
+        name: fake_image(f"ghcr.io/x/{name}:t") for name in awsb.IMAGE_COMPONENTS
+    } | {name: fake_image(ref) for name, ref in awsb.SUPPORT_IMAGES.items()}
+
+
+# REQ:awsbench-user-data
+class RenderUserDataTest(unittest.TestCase):
+    def setUp(self):
+        self.images = fake_images()
+
+    def test_ttl_line_is_first(self):
+        host = {
+            "name": "ctl",
+            "role": "ctl",
+            "instance_type": "x",
+            "root_gb": 40,
+            "root_iops": 3000,
+            "root_mbps": 125,
+        }
+        text = awsb.render_user_data(host, self.images, ttl_s=930)
+        lines = [
+            line
+            for line in text.splitlines()
+            if line.strip() and not line.startswith(("#", "set "))
+        ]
+        self.assertTrue(lines[0].startswith("shutdown -P +"))
+        self.assertEqual(lines[0], "shutdown -P +16")
+
+    def test_every_image_pulled_by_digest(self):
+        host = {
+            "name": "node0",
+            "role": "query",
+            "instance_type": "x",
+            "root_gb": 100,
+            "root_iops": 6000,
+            "root_mbps": 500,
+        }
+        text = awsb.render_user_data(host, self.images, ttl_s=60)
+        for name in awsb.ROLE_IMAGES["query"]:
+            image = self.images[name]
+            self.assertIn(f"docker pull {image['ref']}@{image['digest']}", text)
+
+    def test_no_unsubstituted_placeholder(self):
+        host = {
+            "name": "ctl",
+            "role": "ctl",
+            "instance_type": "x",
+            "root_gb": 40,
+            "root_iops": 3000,
+            "root_mbps": 125,
+        }
+        text = awsb.render_user_data(host, self.images, ttl_s=60)
+        found = set(re.findall(r"\$\{?[A-Za-z_]\w*", text))
+        # $digests/$chrony: ready.json's jq filter. $name/$digest: the per-image jq merge that
+        # records what was actually pulled. $pulled: the bash variable holding it. None are
+        # leftover Template placeholders.
+        self.assertLessEqual(
+            found, {"$digests", "$chrony", "$name", "$digest", "$pulled"}
+        )
+
+    def test_digest_recorded_from_docker_inspect_not_requested_digest(self):
+        host = {
+            "name": "node0",
+            "role": "query",
+            "instance_type": "x",
+            "root_gb": 100,
+            "root_iops": 6000,
+            "root_mbps": 500,
+        }
+        text = awsb.render_user_data(host, self.images, ttl_s=60)
+        self.assertIn("docker image inspect", text)
+        self.assertIn("RepoDigests", text)
+        self.assertIn("/opt/bench/digests.json", text)
+
+    def test_query_role_mounts_pg_volume(self):
+        query = {
+            "name": "node0",
+            "role": "query",
+            "instance_type": "x",
+            "root_gb": 100,
+            "root_iops": 6000,
+            "root_mbps": 500,
+        }
+        validator = {
+            "name": "node1",
+            "role": "validator",
+            "instance_type": "x",
+            "root_gb": 100,
+            "root_iops": 3000,
+            "root_mbps": 125,
+        }
+        self.assertIn(
+            "mkdir -p /data/pg", awsb.render_user_data(query, self.images, ttl_s=60)
+        )
+        self.assertNotIn(
+            "mkdir -p /data/pg", awsb.render_user_data(validator, self.images, ttl_s=60)
+        )
+
+
+class RenderStartShTest(unittest.TestCase):
+    def setUp(self):
+        self.images = fake_images()
+
+    def test_ctl_creates_support_containers(self):
+        ctl = {
+            "name": "ctl",
+            "role": "ctl",
+            "instance_type": "x",
+            "root_gb": 40,
+            "root_iops": 3000,
+            "root_mbps": 125,
+        }
+        script = awsb.render_start_sh(ctl, self.images)
+        for name in ("anvil", "deploy", "orchestrator", "state-relay-server"):
+            self.assertIn(f"--name {name}", script)
+        self.assertNotIn("--num-nodes", script)
+        self.assertNotIn("docker start", script)
+
+    def test_anvil_uses_entrypoint_and_binds_every_interface(self):
+        ctl = {
+            "name": "ctl",
+            "role": "ctl",
+            "instance_type": "x",
+            "root_gb": 40,
+            "root_iops": 3000,
+            "root_mbps": 125,
+        }
+        script = awsb.render_start_sh(ctl, self.images)
+        self.assertIn("--entrypoint anvil", script)
+        self.assertIn("--host 0.0.0.0", script)
+
+    def test_deploy_has_deploy_flags(self):
+        ctl = {
+            "name": "ctl",
+            "role": "ctl",
+            "instance_type": "x",
+            "root_gb": 40,
+            "root_iops": 3000,
+            "root_mbps": 125,
+        }
+        script = awsb.render_start_sh(ctl, self.images)
+        for flag in awsb.DEPLOY_FLAGS:
+            self.assertIn(flag, script)
+
+    def test_validator_uses_storage_journal_only(self):
+        validator = {
+            "name": "node1",
+            "role": "validator",
+            "instance_type": "x",
+            "root_gb": 100,
+            "root_iops": 3000,
+            "root_mbps": 125,
+        }
+        script = awsb.render_start_sh(validator, self.images)
+        self.assertIn("-- storage-journal -- http", script)
+        self.assertNotIn("storage-sql", script)
+        self.assertNotIn("--name postgres", script)
+        self.assertIn("/opt/bench/genesis.toml:/opt/bench/genesis.toml:ro", script)
+
+    def test_query_node_adds_storage_sql_and_postgres(self):
+        query = {
+            "name": "node0",
+            "role": "query",
+            "instance_type": "x",
+            "root_gb": 100,
+            "root_iops": 6000,
+            "root_mbps": 500,
+        }
+        script = awsb.render_start_sh(query, self.images)
+        self.assertIn("-- storage-journal -- storage-sql", script)
+        self.assertIn("--name postgres", script)
+
+
+# REQ:awsbench-hostmon-parsers
+class DiskstatsTest(unittest.TestCase):
+    def test_parses_known_columns(self):
+        line = "   8       0 nvme0n1 100 0 2000 5 200 0 4000 10 0 20 20\n"
+        result = awsb.diskstats(line)
+        self.assertEqual(
+            result["nvme0n1"],
+            {"read_bytes": 2000 * 512, "write_bytes": 4000 * 512, "io_ticks_ms": 20},
+        )
+
+    def test_raises_on_short_line(self):
+        with self.assertRaises(ValueError):
+            awsb.diskstats("garbage\n")
+
+
+class NetdevTest(unittest.TestCase):
+    FIXTURE = (
+        "Inter-|   Receive                                                |  Transmit\n"
+        " face |bytes    packets errs drop fifo frame compressed multicast|"
+        "bytes    packets errs drop fifo colls carrier compressed\n"
+        "    lo:  100    1    0    0    0     0          0         0  "
+        "  100    1    0    0    0     0       0          0\n"
+        "  eth0: 5000    5    0    0    0     0          0         0 "
+        " 7000    7    0    0    0     0       0          0\n"
+    )
+
+    def test_parses_rx_and_tx_bytes(self):
+        result = awsb.netdev(self.FIXTURE)
+        self.assertEqual(result["eth0"], {"rx_bytes": 5000, "tx_bytes": 7000})
+        self.assertEqual(result["lo"], {"rx_bytes": 100, "tx_bytes": 100})
+
+    def test_skips_header_lines(self):
+        result = awsb.netdev(self.FIXTURE)
+        self.assertNotIn("Inter-", result)
+        self.assertNotIn("face ", result)
+
+    def test_raises_on_short_device_line(self):
+        with self.assertRaises(ValueError):
+            awsb.netdev("eth0: 100 1\n")
+
+
+class CgroupParsersTest(unittest.TestCase):
+    def test_parse_cpu_stat(self):
+        text = "usage_usec 123456\nuser_usec 100000\nsystem_usec 23456\n"
+        self.assertEqual(awsb.parse_cpu_stat(text), 123456)
+
+    def test_parse_cpu_stat_missing_raises(self):
+        with self.assertRaises(ValueError):
+            awsb.parse_cpu_stat("user_usec 1\n")
+
+    def test_parse_memory_stat_anon(self):
+        text = "anon 104857600\nfile 500000000\nkernel_stack 8192\n"
+        self.assertEqual(awsb.parse_memory_stat_anon(text), 104857600)
+
+    def test_parse_memory_stat_anon_missing_raises(self):
+        with self.assertRaises(ValueError):
+            awsb.parse_memory_stat_anon("file 500000000\n")
+
+    def test_container_stats_reads_scope_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scope = root / "system.slice" / "docker-abc123.scope"
+            scope.mkdir(parents=True)
+            (scope / "cpu.stat").write_text("usage_usec 2000000\n")
+            # file (page cache) dwarfs anon here; container_stats must report anon, not the sum.
+            (scope / "memory.stat").write_text("anon 104857600\nfile 900000000\n")
+            stats = awsb.container_stats({"espresso-node": "abc123"}, root)
+            self.assertEqual(stats, {"espresso-node": {"cpu_s": 2.0, "rss": 104857600}})
+
+    def test_container_stats_skips_missing_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stats = awsb.container_stats({"gone": "deadbeef"}, Path(tmp))
+            self.assertEqual(stats, {})
 
 
 if __name__ == "__main__":

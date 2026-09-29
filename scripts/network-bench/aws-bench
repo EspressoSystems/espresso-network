@@ -10,9 +10,9 @@ and region, replacing manual `espresso-deploy` runs for this purpose. `plan` ren
 and prints a cost estimate without writing anything to AWS; `run` additionally provisions,
 measures, collects and destroys.
 
-`plan` (including `--offline`) is implemented; every other subcommand raises
-`NotImplementedError` for now. Also runs on AWS hosts under system python3 as `agent-drive`
-(on ctl) and `agent-host` (on every host).
+`plan` (including `--offline`) and `agent-host` are implemented; `run`, `status`, `collect`,
+`render`, `destroy` and `agent-drive` raise `NotImplementedError` for now. `agent-host` also runs
+on every AWS host under system python3, sampling /proc and cgroups into `host.jsonl`.
 
 Examples:
     scripts/network-bench/aws-bench plan --tag release-x --offline \
@@ -28,9 +28,13 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
+import signal
+import string
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -114,6 +118,72 @@ SUPPORT_IMAGES = {
     "postgres": "docker.io/library/postgres:16",
     "foundry": "ghcr.io/foundry-rs/foundry:latest",
 }
+# Images each role's user-data pulls ahead of time and start.sh runs.
+ROLE_IMAGES: dict[str, tuple[str, ...]] = {
+    "ctl": ("deploy", "orchestrator", "state-relay-server", "foundry"),
+    "validator": ("espresso-node",),
+    "query": ("espresso-node", "postgres"),
+}
+
+# crates/staking-cli/src/lib.rs:101 DEMO_VALIDATOR_START_INDEX; same derivation stake-for-demo
+# uses, so a later --stake demo needs no key changes.
+KEY_INDEX_BASE = 20
+# crates/staking-cli/src/lib.rs DEV_MNEMONIC; a public, non-secret test value.
+BENCH_MNEMONIC = "test test test test test test test test test test test junk"
+# .env's three proxy addresses; process-compose.yaml unsets them before `deploy`, since deploy
+# treats non-empty addresses as already-deployed contracts.
+PROXY_ADDRESS_KEYS = (
+    "ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS",
+    "ESP_TOKEN_PROXY_ADDRESS",
+    "ESPRESSO_STAKE_TABLE_PROXY_ADDRESS",
+)
+NODE_API_PORT = 8080
+NODE_TONIC_PORT = 8081
+CLIQUENET_PORT = 9000
+LIBP2P_PORT = 1769
+# From .env; render_ctl_env asserts these still match the parsed file.
+ORCHESTRATOR_PORT = 30001
+L1_PORT = 8545
+RELAY_PORT = 30011
+# The bench's own postgres container, independent of .env.
+POSTGRES_PORT = 5432
+# deploy's flags all default to false; this is process-compose.yaml:51's set, needed so the
+# genesis fee_contract and stake_table_contract addresses actually exist.
+DEPLOY_FLAGS = (
+    "--deploy-ops-timelock",
+    "--deploy-safe-exit-timelock",
+    "--deploy-fee-v1",
+    "--deploy-esp-token-v1",
+    "--deploy-stake-table-v1",
+    "--upgrade-stake-table-v2",
+    "--upgrade-stake-table-v3",
+)
+VALIDATOR_MODULES = ("storage-journal", "http", "status", "submit", "catchup", "config")
+QUERY_MODULES = (
+    "storage-journal",
+    "storage-sql",
+    "http",
+    "query",
+    "submit",
+    "catchup",
+    "config",
+)
+# Headroom below the usable disk so the journal's own retention GCs data before the volume
+# fills.
+JOURNAL_MAX_BYTES_FRACTION = 0.8
+# OS, docker images, and worst-case docker json-file logs (up to 2 containers x 4 x 2 GB,
+# user-data.sh's daemon.json), subtracted from root_gb before applying JOURNAL_MAX_BYTES_FRACTION.
+RESERVED_GB = 20
+# node0 also holds Postgres, which grows with every replayed payload; halve the journal's share
+# of the usable disk there so Postgres has room too.
+QUERY_JOURNAL_FRACTION = 0.5
+
+BENCH_DIR = "/opt/bench"
+USER_DATA_TEMPLATE = Path(__file__).resolve().parent / "aws" / "user-data.sh"
+
+CGROUP_ROOT = Path("/sys/fs/cgroup")
+# Matches bench.sample_host, so host_stats/process_stats coverage math is unchanged.
+HOST_SAMPLE_S = 2.0
 
 # OCI/Docker registry token flow and manifest media types (docker.io and ghcr.io both implement
 # the same spec, so no registry-specific code is needed).
@@ -159,6 +229,18 @@ class ImageInfo(TypedDict):
     digest: str
     revision: str | None
     platforms: list[str]
+
+
+class HostInfo(TypedDict):
+    """`tofu output -json hosts`, one entry per host; `role` is carried over from `HostSpec`
+    since terraform's own copy is a plain passthrough of the tfvars input."""
+
+    name: str
+    role: Literal["ctl", "query", "validator"]
+    public_ip: str
+    private_ip: str
+    private_dns: str
+    instance_id: str
 
 
 class Preflight(TypedDict):
@@ -290,11 +372,14 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
 
 
 def peers(i: int, n: int) -> list[int]:
-    """Up to 3 other validators for node i's `STATE_PEERS`, never itself or node0 (the query
-    node carries no submit load and is not used to catch up). Deterministic: the next
-    `min(3, n - 2)` validators after i in the fixed cycle `1, 2, .., n-1`, wrapping around.
+    """Up to 3 other validators for node i's `STATE_PEERS`, never itself. node0 gets the first
+    `min(3, n - 1)` validators, so it can catch up on state it lacks instead of skewing query
+    lag; other nodes get the next `min(3, n - 2)` validators after i in the fixed cycle
+    `1, .., n-1`, wrapping around, excluding node0 (which carries no submit load).
     """
-    if i == 0 or n <= 2:
+    if i == 0:
+        return list(range(1, min(3, n - 1) + 1))
+    if n <= 2:
         return []
     count = min(3, n - 2)
     return [(i - 1 + k) % (n - 1) + 1 for k in range(1, count + 1)]
@@ -1176,6 +1261,271 @@ def render_tfvars(
     }
 
 
+def render_genesis(template: bytes, n: int, max_block_size: str) -> bytes:
+    """`n` validators need a stake table at least as large; contract addresses stay as the
+    template's, since they are deterministic from the deployer nonce."""
+    capacity = max(10, n)
+    text = template.decode()
+    text, stake_n = re.subn(
+        r"(?m)^stake_table_capacity = \d+$", f"stake_table_capacity = {capacity}", text
+    )
+    text, cap_n = re.subn(r"(?m)^capacity = \d+$", f"capacity = {capacity}", text)
+    text, block_n = re.subn(
+        r'(?m)^max_block_size = "[^"]*"$', f'max_block_size = "{max_block_size}"', text
+    )
+    if stake_n + cap_n != 2:
+        raise ValueError(
+            f"expected 2 capacity fields in genesis template, replaced {stake_n + cap_n}"
+        )
+    if block_n != 2:
+        raise ValueError(
+            f"expected 2 max_block_size fields in genesis template, replaced {block_n}"
+        )
+    return text.encode()
+
+
+def parse_dotenv(text: str) -> dict[str, str]:
+    """The subset of .env syntax this repo's .env uses: KEY=VALUE lines, `#` comments, optional
+    surrounding double quotes, `${OTHER_KEY}` references to a key already defined above, no
+    multi-line values. `docker --env-file` does not expand `${...}`, so this does it once here;
+    a reference to an undefined key raises `KeyError` instead of reaching a container literally.
+    """
+    env: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if not sep:
+            raise ValueError(f".env line has no '=': {line!r}")
+        env[key.strip()] = string.Template(value.strip().strip('"')).substitute(env)
+    return env
+
+
+def _node_names(hosts: dict[str, HostInfo]) -> list[str]:
+    return sorted(
+        (name for name in hosts if name != "ctl"),
+        key=lambda name: int(name.removeprefix("node")),
+    )
+
+
+def _node_url(info: HostInfo) -> str:
+    return f"http://{info['private_ip']}:{NODE_API_PORT}"
+
+
+def _journal_max_bytes(host: HostSpec) -> int:
+    """Usable disk after RESERVED_GB, times JOURNAL_MAX_BYTES_FRACTION; halved on the query
+    role, which shares the disk with Postgres."""
+    usable_gb = host["root_gb"] - RESERVED_GB
+    fraction = JOURNAL_MAX_BYTES_FRACTION
+    if host["role"] == "query":
+        fraction *= QUERY_JOURNAL_FRACTION
+    return int(usable_gb * 1_000_000_000 * fraction)
+
+
+def render_node_env(host: HostSpec, hosts: dict[str, HostInfo]) -> str:
+    self_info = hosts[host["name"]]
+    ctl_info = hosts["ctl"]
+    node_names = _node_names(hosts)
+    i = node_names.index(host["name"])
+    peer_urls = [_node_url(hosts[node_names[j]]) for j in peers(i, len(node_names))]
+    env = {
+        "ESPRESSO_NODE_KEY_MNEMONIC": BENCH_MNEMONIC,
+        "ESPRESSO_NODE_KEY_INDEX": str(KEY_INDEX_BASE + i),
+        "ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS": f"0.0.0.0:{CLIQUENET_PORT}",
+        "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS": f"{self_info['private_ip']}:{CLIQUENET_PORT}",
+        "ESPRESSO_NODE_LIBP2P_BIND_ADDRESS": f"0.0.0.0:{LIBP2P_PORT}",
+        "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS": f"{self_info['private_dns']}:{LIBP2P_PORT}",
+        "ESPRESSO_NODE_API_PORT": str(NODE_API_PORT),
+        "ESPRESSO_NODE_TONIC_PORT": str(NODE_TONIC_PORT),
+        "ESPRESSO_NODE_ORCHESTRATOR_URL": f"http://{ctl_info['private_ip']}:{ORCHESTRATOR_PORT}",
+        "ESPRESSO_L1_PROVIDER": f"http://{ctl_info['private_ip']}:{L1_PORT}",
+        "ESPRESSO_STATE_RELAY_SERVER_URL": f"http://{ctl_info['private_ip']}:{RELAY_PORT}",
+        "ESPRESSO_NODE_GENESIS_FILE": f"{BENCH_DIR}/genesis.toml",
+        "ESPRESSO_NODE_IS_DA": "true",
+        "ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE": "false",
+        "ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE": "false",
+        "RUST_LOG": "info,libp2p=off",
+        "RUST_LOG_FORMAT": "json",
+        "ESPRESSO_NODE_STORAGE_PATH": "/store/espresso",
+        "ESPRESSO_NODE_JOURNAL_MAX_BYTES": str(_journal_max_bytes(host)),
+        "ESPRESSO_NODE_IDENTITY_NODE_NAME": host["name"],
+    }
+    # A required value left empty risks a clap parse error; omit rather than pass "".
+    if peer_urls:
+        env["ESPRESSO_NODE_STATE_PEERS"] = ",".join(peer_urls)
+    if host["role"] == "query":
+        env.update(
+            {
+                "ESPRESSO_NODE_POSTGRES_HOST": "127.0.0.1",
+                "ESPRESSO_NODE_POSTGRES_PORT": str(POSTGRES_PORT),
+                "ESPRESSO_NODE_POSTGRES_USER": "root",
+                "ESPRESSO_NODE_POSTGRES_PASSWORD": "password",
+                "ESPRESSO_NODE_POSTGRES_DATABASE": "espresso",
+            }
+        )
+    return "".join(f"{key}={value}\n" for key, value in env.items())
+
+
+def _assert_ports_match_dotenv(dotenv: dict[str, str]) -> None:
+    """Ports duplicated as module constants (used before ctl.env exists, e.g. in
+    render_node_env); catches drift against .env instead of a silent mismatch at runtime."""
+    expected = {
+        "ESPRESSO_ORCHESTRATOR_PORT": ORCHESTRATOR_PORT,
+        "ESPRESSO_L1_PORT": L1_PORT,
+        "ESPRESSO_STATE_RELAY_SERVER_PORT": RELAY_PORT,
+    }
+    for key, port in expected.items():
+        if int(dotenv[key]) != port:
+            raise ValueError(
+                f"{key}={dotenv[key]} in .env no longer matches aws-bench's {port}"
+            )
+
+
+def render_ctl_env(
+    hosts: dict[str, HostInfo], cfg: RunConfig, dotenv: dict[str, str]
+) -> str:
+    _assert_ports_match_dotenv(dotenv)
+    node0 = hosts["node0"]
+    env = {k: v for k, v in dotenv.items() if k not in PROXY_ADDRESS_KEYS}
+    env["ESPRESSO_ORCHESTRATOR_NUM_NODES"] = str(cfg.nodes)
+    # No builder runs on ctl; leaders fall back to an empty block after the timeout.
+    env["ESPRESSO_ORCHESTRATOR_BUILDER_URLS"] = "http://localhost:1"
+    env["ESPRESSO_ORCHESTRATOR_BUILDER_TIMEOUT"] = "100ms"
+    env["ESPRESSO_API_NODE_URL"] = _node_url(node0)
+    return "".join(f"{key}={value}\n" for key, value in env.items())
+
+
+def _pull_and_record_digest(name: str, ref: str) -> str:
+    """Pulls by the requested digest, then records what `docker image inspect` says was
+    actually pulled, into /opt/bench/digests.json; ready.json's manifest check needs the
+    pulled digest, not the requested one, to ever be able to fail."""
+    inspect_format = "{{json .RepoDigests}}"
+    return (
+        f"docker pull {ref}\n"
+        f"pulled=$(docker image inspect --format {shlex.quote(inspect_format)} "
+        f"{shlex.quote(ref)} | jq -r '.[0]')\n"
+        f'jq --arg name {shlex.quote(name)} --arg digest "$pulled" '
+        "'. + {($name): $digest}' "
+        f"{BENCH_DIR}/digests.json > {BENCH_DIR}/digests.json.tmp\n"
+        f"mv {BENCH_DIR}/digests.json.tmp {BENCH_DIR}/digests.json"
+    )
+
+
+def render_user_data(host: HostSpec, images: dict[str, ImageInfo], ttl_s: int) -> str:
+    needed = ROLE_IMAGES[host["role"]]
+    pulls = "\n".join(
+        _pull_and_record_digest(name, f"{images[name]['ref']}@{images[name]['digest']}")
+        for name in needed
+    )
+    extra_dirs = "mkdir -p /data/pg" if host["role"] == "query" else ""
+    ttl_min = max(1, -(-ttl_s // 60))
+    template = string.Template(USER_DATA_TEMPLATE.read_text())
+    return template.substitute(
+        TTL_MIN=str(ttl_min),
+        EXTRA_DIRS=extra_dirs,
+        DOCKER_PULLS=pulls,
+    )
+
+
+def _docker_create(name: str, argv: list[str], entrypoint: str | None = None) -> str:
+    """`argv` is everything after `docker create --name <name> --network host --restart no
+    [--entrypoint <entrypoint>]`. Only creates: commit 6's `start_nodes` runs `docker start` on
+    every host at one wall-clock time. `docker create` prints the container id on stdout;
+    captured straight into containers.json, the map `agent-host` reads to find each container's
+    cgroup."""
+    flags = ["docker", "create", "--name", name, "--network", "host", "--restart", "no"]
+    if entrypoint is not None:
+        flags += ["--entrypoint", entrypoint]
+    create = " ".join(flags + [shlex.quote(a) for a in argv])
+    return (
+        f"id=$({create})\n"
+        f"jq --arg n {shlex.quote(name)} --arg i \"$id\" '. + {{($n): $i}}' "
+        f"{BENCH_DIR}/containers.json > {BENCH_DIR}/containers.json.tmp\n"
+        f"mv {BENCH_DIR}/containers.json.tmp {BENCH_DIR}/containers.json\n\n"
+    )
+
+
+def render_start_sh(host: HostSpec, images: dict[str, ImageInfo]) -> str:
+    """Deviates from the plan signature (drops unused `hosts`, `cfg`): every value start.sh
+    needs is already in `host` and `images`, or in ctl.env/node.env rendered separately."""
+    script = (
+        "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n"
+        f"echo '{{}}' > {BENCH_DIR}/containers.json\n\n"
+    )
+    if host["role"] == "ctl":
+        anvil = images["foundry"]
+        # The foundry image's ENTRYPOINT is `sh -c`; without --entrypoint, `anvil ...` becomes
+        # `sh -c anvil`, dropping every flag, so anvil binds 127.0.0.1 instead of 0.0.0.0.
+        script += _docker_create(
+            "anvil",
+            [
+                f"{anvil['ref']}@{anvil['digest']}",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(L1_PORT),
+                "--chain-id",
+                "31337",
+                "--accounts",
+                "20",
+                "--balance",
+                "1000000000",
+                "--block-time",
+                "1",
+            ],
+            entrypoint="anvil",
+        )
+        for name, binary in (
+            ("deploy", "/bin/deploy"),
+            ("orchestrator", "/bin/orchestrator"),
+            ("state-relay-server", "/bin/state-relay-server"),
+        ):
+            image = images[name]
+            argv = [
+                "--env-file",
+                f"{BENCH_DIR}/ctl.env",
+                f"{image['ref']}@{image['digest']}",
+                binary,
+            ]
+            if name == "deploy":
+                argv += list(DEPLOY_FLAGS)
+            script += _docker_create(name, argv)
+        return script
+    if host["role"] == "query":
+        pg = images["postgres"]
+        script += _docker_create(
+            "postgres",
+            [
+                "-v",
+                "/data/pg:/var/lib/postgresql/data",
+                "-e",
+                "POSTGRES_USER=root",
+                "-e",
+                "POSTGRES_PASSWORD=password",
+                "-e",
+                "POSTGRES_DB=espresso",
+                f"{pg['ref']}@{pg['digest']}",
+            ],
+        )
+    node = images["espresso-node"]
+    modules = QUERY_MODULES if host["role"] == "query" else VALIDATOR_MODULES
+    argv = [
+        "--env-file",
+        f"{BENCH_DIR}/node.env",
+        "-v",
+        "/data/journal:/store",
+        "-v",
+        f"{BENCH_DIR}/genesis.toml:{BENCH_DIR}/genesis.toml:ro",
+    ]
+    argv.append(f"{node['ref']}@{node['digest']}")
+    argv.append("/bin/espresso-node")
+    for module in modules:
+        argv += ["--", module]
+    script += _docker_create("espresso-node", argv)
+    return script
+
+
 def add_run_flags(parser: argparse.ArgumentParser) -> None:
     defaults = RunConfig(tag="")
     load = defaults.load
@@ -1406,10 +1756,111 @@ def cmd_agent_drive(args: argparse.Namespace) -> int:
     )
 
 
+def diskstats(text: str) -> dict[str, dict[str, int]]:
+    """/proc/diskstats; sector size is a kernel-wide constant (512 bytes), not per-device. The
+    kernel's column count is fixed, so a short line means this parser is wrong, not that the
+    line should be skipped."""
+    sector_bytes = 512
+    stats: dict[str, dict[str, int]] = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 14:
+            raise ValueError(f"diskstats line has fewer than 14 fields: {line!r}")
+        stats[fields[2]] = {
+            "read_bytes": int(fields[5]) * sector_bytes,
+            "write_bytes": int(fields[9]) * sector_bytes,
+            "io_ticks_ms": int(fields[12]),
+        }
+    return stats
+
+
+def netdev(text: str) -> dict[str, dict[str, int]]:
+    """/proc/net/dev; header lines have no `:` and are skipped. A device line with a `:` but
+    fewer than 16 fields means this parser is wrong, not that the line should be skipped."""
+    stats: dict[str, dict[str, int]] = {}
+    for line in text.splitlines():
+        name, sep, rest = line.partition(":")
+        if not sep:
+            continue
+        fields = rest.split()
+        if len(fields) < 16:
+            raise ValueError(f"netdev line has fewer than 16 fields: {line!r}")
+        stats[name.strip()] = {"rx_bytes": int(fields[0]), "tx_bytes": int(fields[8])}
+    return stats
+
+
+def parse_cpu_stat(text: str) -> int:
+    """cgroup v2 cpu.stat, `usage_usec <n>` line."""
+    for line in text.splitlines():
+        key, sep, value = line.partition(" ")
+        if sep and key == "usage_usec":
+            return int(value)
+    raise ValueError("usage_usec not found in cpu.stat")
+
+
+def parse_memory_stat_anon(text: str) -> int:
+    """cgroup v2 memory.stat, `anon <n>` line: the RSS-equivalent field. memory.current also
+    counts page cache, which journal writes inflate well past actual process memory use."""
+    for line in text.splitlines():
+        key, sep, value = line.partition(" ")
+        if sep and key == "anon":
+            return int(value)
+    raise ValueError("anon not found in memory.stat")
+
+
+def container_stats(
+    containers: dict[str, str], cgroup_root: Path = CGROUP_ROOT
+) -> dict[str, dict[str, float]]:
+    """name -> {cpu_s, rss}, read from system.slice/docker-<id>.scope. A container whose scope
+    is already gone (exited, or not yet created) contributes nothing."""
+    stats: dict[str, dict[str, float]] = {}
+    for name, container_id in containers.items():
+        scope = cgroup_root / "system.slice" / f"docker-{container_id}.scope"
+        try:
+            cpu_usec = parse_cpu_stat((scope / "cpu.stat").read_text())
+            rss = parse_memory_stat_anon((scope / "memory.stat").read_text())
+        except FileNotFoundError:
+            continue
+        stats[name] = {"cpu_s": cpu_usec / 1_000_000, "rss": rss}
+    return stats
+
+
+def load_containers(path: Path) -> dict[str, str]:
+    """name -> container id, written incrementally by start.sh; empty before any container is
+    created, so the sampler can start before `docker create` runs."""
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+
+def host_sample(
+    containers: dict[str, str], cgroup_root: Path = CGROUP_ROOT
+) -> dict[str, Any]:
+    """Same shape as bench.sample_host's record, plus disk and net throughput counters and
+    per-container cpu/mem in place of bench's per-process labels."""
+    return {
+        "ts": time.time(),
+        "cpu": nb.usable_cpu_jiffies(),
+        "load1": float(Path("/proc/loadavg").read_text().split()[0]),
+        "psi_cpu": nb.psi("cpu"),
+        "psi_io": nb.psi("io"),
+        "mem_avail": nb.meminfo()["MemAvailable"],
+        "procs": container_stats(containers, cgroup_root),
+        "disk": diskstats(Path("/proc/diskstats").read_text()),
+        "net": netdev(Path("/proc/net/dev").read_text()),
+    }
+
+
 def cmd_agent_host(args: argparse.Namespace) -> int:
-    raise NotImplementedError(
-        "aws-bench agent-host: the host sampler lands in a later commit"
-    )
+    containers_path = Path(BENCH_DIR) / "containers.json"
+    stop = threading.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: stop.set())
+    with args.out.open("a", buffering=1) as f:
+        while not stop.is_set():
+            f.write(json.dumps(host_sample(load_containers(containers_path))) + "\n")
+            stop.wait(HOST_SAMPLE_S)
+    return EXIT_OK
 
 
 def main() -> int:
