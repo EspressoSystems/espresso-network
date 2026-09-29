@@ -147,6 +147,7 @@ pub mod availability_tests {
         },
         data_source::{
             Transaction,
+            fetching::EARLY_PAYLOAD_CAPACITY,
             storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
         },
         node::NodeDataSource,
@@ -666,34 +667,91 @@ pub mod availability_tests {
         let block = BlockQueryData::new(leaf.header().clone(), payload.clone());
         ds.append_payload(block.clone()).await.unwrap();
         assert_eq!(ds.get_block(0).await.await, block);
+    }
 
-        // A payload arriving before its leaf has been ingested is dropped, not held; it can be
-        // stored once the leaf is available. The payload must be distinct from block 0's, or
-        // `append` would back-fill it from storage by payload hash.
-        let (payload2, metadata2) =
-            <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(
-                [mock_transaction(vec![1])],
-                &Default::default(),
-                &Default::default(),
-            )
-            .await
-            .unwrap();
-        let mut leaf2 = leaf.clone();
-        leaf2.leaf.block_header_mut().block_number += 1;
-        leaf2.leaf.block_header_mut().payload_commitment = vid_commitment(
-            &payload2.encode(),
-            &metadata2.encode(),
+    /// A leaf at `height` whose block holds a single transaction `tx`, and that block.
+    ///
+    /// Each block needs a distinct `tx`, or `append` back-fills its payload from storage by
+    /// payload hash.
+    async fn leaf_with_block(
+        height: u64,
+        tx: Vec<u8>,
+    ) -> (LeafQueryData<MockTypes>, BlockQueryData<MockTypes>) {
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let (payload, metadata) = <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(
+            [mock_transaction(tx)],
+            &Default::default(),
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+        let header = leaf.leaf.block_header_mut();
+        header.block_number = height;
+        header.payload_commitment = vid_commitment(
+            &payload.encode(),
+            &metadata.encode(),
             1,
             TEST_VERSIONS.test.base,
         );
-        let block2 = BlockQueryData::new(leaf2.header().clone(), payload2);
-        ds.append_payload(block2.clone()).await.unwrap();
-        ds.append(BlockInfo::new(leaf2, None, None, None))
+        let block = BlockQueryData::new(leaf.header().clone(), payload);
+        (leaf, block)
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_append_payload_before_leaf<D: TestableDataSource>() {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        let (leaf, block) = leaf_with_block(1, vec![1]).await;
+        ds.append_payload(block.clone()).await.unwrap();
+        ds.append(BlockInfo::new(leaf, None, None, None))
+            .await
+            .unwrap();
+        assert_eq!(ds.get_block(1).await.try_resolve().ok(), Some(block));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_append_payload_before_leaf_mismatch<D: TestableDataSource>() {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        let (leaf, _) = leaf_with_block(1, vec![1]).await;
+        let (_, forked) = leaf_with_block(1, vec![2]).await;
+        ds.append_payload(forked).await.unwrap();
+        ds.append(BlockInfo::new(leaf, None, None, None))
             .await
             .unwrap();
         assert!(ds.get_block(1).await.try_resolve().is_err());
-        ds.append_payload(block2.clone()).await.unwrap();
-        assert_eq!(ds.get_block(1).await.await, block2);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_append_payload_before_leaf_bounded<D: TestableDataSource>() {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        let mut decided = vec![];
+        for height in 1..=EARLY_PAYLOAD_CAPACITY as u64 + 1 {
+            let (leaf, block) = leaf_with_block(height, height.to_le_bytes().to_vec()).await;
+            ds.append_payload(block.clone()).await.unwrap();
+            decided.push((leaf, block));
+        }
+        for (leaf, _) in &decided {
+            ds.append(BlockInfo::new(leaf.clone(), None, None, None))
+                .await
+                .unwrap();
+        }
+
+        // The oldest payload was evicted to make room for the newest.
+        assert!(ds.get_block(1).await.try_resolve().is_err());
+        for (leaf, block) in &decided[1..] {
+            let fetched = ds.get_block(leaf.height() as usize).await.try_resolve();
+            assert_eq!(fetched.ok().as_ref(), Some(block));
+        }
     }
 }
 
