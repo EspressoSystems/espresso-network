@@ -235,6 +235,18 @@ fn dir_has_log_files(dir: &std::path::Path) -> bool {
         .any(|entry| entry.path().extension().and_then(|e| e.to_str()) == Some("log"))
 }
 
+/// Fsyncs `journal_dir`, `path` and `path`'s parent (if any): the directory entries
+/// `fs::create_dir_all` adds for them are not durable until fsynced. `path` and its parent already
+/// exist by the time this runs (creating `journal_dir` requires it), so all three are safe to open.
+fn sync_new_dirs(journal_dir: &std::path::Path, path: &std::path::Path) -> io::Result<()> {
+    StdFs.sync_dir(journal_dir)?;
+    StdFs.sync_dir(path)?;
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        StdFs.sync_dir(parent)?;
+    }
+    Ok(())
+}
+
 impl Persistence {
     pub async fn open(opts: Options) -> anyhow::Result<Self> {
         let path = opts.path.clone();
@@ -261,6 +273,9 @@ impl Persistence {
         // (so `MemFs` tests stay hermetic); the one directory-creation exception lives here.
         fs::create_dir_all(&wal_dir).context("creating wal directory")?;
         fs::create_dir_all(&data_dir).context("creating data directory")?;
+        // `wal_dir`/`data_dir` get fsynced once their first segment is created (`open_new_segment`);
+        // this covers the parent directory entries `create_dir_all` just added, which are not.
+        sync_new_dirs(&journal_dir, &path).context("fsyncing newly created journal directories")?;
 
         let lock_path = journal_dir.join("LOCK");
         let lock_file = std::fs::OpenOptions::new()
