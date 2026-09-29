@@ -237,6 +237,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      pull-requests: write
     uses: ./.github/workflows/network-bench.yml
     with:
       build_run_id: ${{ github.run_id }}

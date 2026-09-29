@@ -162,3 +162,40 @@ jobs:
           path: bench-out/result.json
           retention-days: 90
           overwrite: true
+
+  # Separate job so the write token never reaches a job that runs pull request code. Fork pull
+  # requests get a read-only token, so posting may fail there.
+  comment:
+    name: Post benchmark summary
+    needs: bench
+    if: ${{ always() && inputs.pr != '' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: network-bench-${{ github.run_id }}
+          path: bench-out
+
+      - name: Add the run link
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            if [[ -f bench-out/summary.md ]]; then
+              cat bench-out/summary.md
+            else
+              echo "Network benchmark wrote no summary."
+            fi
+            echo
+            echo "Run and artifacts: $RUN_URL"
+          } > comment.md
+
+      - uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          number: ${{ inputs.pr }}
+          header: network-bench
+          path: comment.md
