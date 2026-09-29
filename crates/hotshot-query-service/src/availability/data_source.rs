@@ -313,7 +313,8 @@ pub trait UpdateAvailabilityData<Types: NodeType> {
     ///
     /// The block comes from a reconstruction event for a view that may never be decided, so
     /// implementations must verify that it matches the decided leaf at the same height before
-    /// storing it.
+    /// storing it. A block may arrive before that leaf is appended; implementations may hold it
+    /// and store it from [`append`](Self::append) once the matching leaf is decided.
     fn append_payload(
         &self,
         _block: BlockQueryData<Types>,

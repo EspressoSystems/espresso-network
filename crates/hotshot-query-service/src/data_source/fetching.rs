@@ -57,7 +57,6 @@ use std::{
     fmt::{Debug, Display},
     iter::repeat_with,
     marker::PhantomData,
-    mem,
     ops::{Bound, Range, RangeBounds},
     pin::pin,
     sync::Arc,
@@ -390,44 +389,55 @@ where
     }
 }
 
-/// Reconstructed payloads held while their decided leaf is not yet stored.
-pub(crate) const EARLY_PAYLOAD_CAPACITY: usize = 256;
+/// Maximum number of reconstructed payloads buffered while their decided leaf is not yet stored.
+///
+/// Covers reconstruction finishing a few views ahead of the decide reaching the query service.
+/// Beyond that the node is lagging, and the payload fetch after decide recovers the block.
+pub(crate) const EARLY_PAYLOAD_CAPACITY: usize = 16;
 
 /// Reconstructed payloads whose decided leaf is not yet stored, keyed by height.
 ///
-/// Reconstruction also runs on views that are never decided, so an entry is used only if it
-/// matches the leaf decided at its height.
+/// Reconstruction also runs on views that are never decided, so a height can hold several
+/// candidates and only the one matching the decided leaf is used. Entries for heights the decide
+/// path skips are dropped once a higher height is decided; the fetcher recovers those blocks.
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""), Default(bound = ""))]
-struct EarlyPayloads<Types: NodeType>(BTreeMap<u64, BlockQueryData<Types>>);
+struct EarlyPayloads<Types: NodeType> {
+    blocks: BTreeMap<u64, Vec<BlockQueryData<Types>>>,
+    len: usize,
+}
 
 impl<Types: NodeType> EarlyPayloads<Types>
 where
     Header<Types>: QueryableHeader<Types>,
 {
-    /// Buffer `block`, evicting the lowest height when full.
+    /// Buffer `block`, dropping it when full so the lowest heights, decided next, are kept.
     fn insert(&mut self, block: BlockQueryData<Types>) {
-        self.0.insert(block.height(), block);
-        if self.0.len() > EARLY_PAYLOAD_CAPACITY {
-            self.0.pop_first();
+        if self.len >= EARLY_PAYLOAD_CAPACITY {
+            tracing::debug!(
+                height = block.height(),
+                "early payload buffer full; dropping"
+            );
+            return;
+        }
+        let candidates = self.blocks.entry(block.height()).or_default();
+        if candidates.iter().all(|b| b.hash() != block.hash()) {
+            candidates.push(block);
+            self.len += 1;
         }
     }
 
     /// Drop payloads at or below `leaf`'s height, returning the one matching `leaf`.
     fn take_decided(&mut self, leaf: &LeafQueryData<Types>) -> Option<BlockQueryData<Types>> {
         let height = leaf.height();
-        let rest = self.0.split_off(&(height + 1));
-        let block = mem::replace(&mut self.0, rest).remove(&height)?;
-        if block.hash() != leaf.block_hash() {
-            tracing::warn!(
-                height,
-                decided = %leaf.block_hash(),
-                reconstructed = %block.hash(),
-                "buffered payload does not match decided block; discarding"
-            );
-            return None;
-        }
-        Some(block)
+        let block = self
+            .blocks
+            .remove(&height)?
+            .into_iter()
+            .find(|b| b.hash() == leaf.block_hash());
+        self.blocks.retain(|&h, _| h > height);
+        self.len = self.blocks.values().map(Vec::len).sum();
+        block
     }
 }
 
@@ -986,6 +996,8 @@ where
     async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         let height = block.height();
         let leaf = {
+            // Held across the leaf read so `append`, which locks after storing the leaf, either
+            // is seen here or takes the buffered payload.
             let mut early = self.fetcher.early_payloads.lock().await;
             let mut tx = self.read().await.context("opening read transaction")?;
             match tx.get_leaf(LeafId::Number(height as usize)).await {

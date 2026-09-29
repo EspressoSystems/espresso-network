@@ -730,28 +730,82 @@ pub mod availability_tests {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub async fn test_append_payload_before_leaf_bounded<D: TestableDataSource>() {
+    pub async fn test_append_payload_before_leaf_fork<D: TestableDataSource>() {
         let storage = D::create(0).await;
         let ds = D::connect(&storage).await;
 
+        let (leaf, block) = leaf_with_block(1, vec![1]).await;
+        let (_, forked) = leaf_with_block(1, vec![2]).await;
+        ds.append_payload(block.clone()).await.unwrap();
+        ds.append_payload(forked).await.unwrap();
+        ds.append(BlockInfo::new(leaf, None, None, None))
+            .await
+            .unwrap();
+        assert_eq!(ds.get_block(1).await.try_resolve().ok(), Some(block));
+    }
+
+    /// Buffer one early payload per height in `heights`, returning the leaves and blocks.
+    async fn buffer_early<D: TestableDataSource>(
+        ds: &D,
+        heights: impl IntoIterator<Item = u64>,
+    ) -> Vec<(LeafQueryData<MockTypes>, BlockQueryData<MockTypes>)> {
         let mut decided = vec![];
-        for height in 1..=EARLY_PAYLOAD_CAPACITY as u64 + 1 {
+        for height in heights {
             let (leaf, block) = leaf_with_block(height, height.to_le_bytes().to_vec()).await;
             ds.append_payload(block.clone()).await.unwrap();
             decided.push((leaf, block));
         }
+        decided
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_append_payload_before_leaf_bounded<D: TestableDataSource>() {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        let decided = buffer_early(&ds, 1..=EARLY_PAYLOAD_CAPACITY as u64 + 1).await;
         for (leaf, _) in &decided {
             ds.append(BlockInfo::new(leaf.clone(), None, None, None))
                 .await
                 .unwrap();
         }
 
-        // The oldest payload was evicted to make room for the newest.
-        assert!(ds.get_block(1).await.try_resolve().is_err());
-        for (leaf, block) in &decided[1..] {
+        // A full buffer keeps the lowest heights, which are decided next, and drops the newest.
+        let (last, others) = decided.split_last().unwrap();
+        for (leaf, block) in others {
             let fetched = ds.get_block(leaf.height() as usize).await.try_resolve();
             assert_eq!(fetched.ok().as_ref(), Some(block));
         }
+        let fetched = ds.get_block(last.0.height() as usize).await.try_resolve();
+        assert!(fetched.is_err());
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_append_with_payload_clears_buffer<D: TestableDataSource>() {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        let decided = buffer_early(&ds, 1..=EARLY_PAYLOAD_CAPACITY as u64).await;
+        let (leaf, block) = decided[0].clone();
+        ds.append(BlockInfo::new(leaf, Some(block), None, None))
+            .await
+            .unwrap();
+
+        // Deciding height 1 freed its slot, so the next early payload is buffered.
+        let [(leaf, block)] = buffer_early(&ds, [EARLY_PAYLOAD_CAPACITY as u64 + 1])
+            .await
+            .try_into()
+            .unwrap();
+        ds.append(BlockInfo::new(leaf, None, None, None))
+            .await
+            .unwrap();
+        assert_eq!(
+            ds.get_block(EARLY_PAYLOAD_CAPACITY + 1)
+                .await
+                .try_resolve()
+                .ok(),
+            Some(block)
+        );
     }
 }
 
