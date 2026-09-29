@@ -1491,10 +1491,13 @@ impl Persistence {
     }
 
     async fn skip_decide_events(&self, view: ViewNumber) -> anyhow::Result<()> {
-        let from_view = self
-            .load_processed_view()
-            .await?
-            .map_or(ViewNumber::genesis(), |processed| processed + 1);
+        let processed = self.load_processed_view().await?;
+        // A gap-fill decide reports the older view it filled. Writing that as the cursor would
+        // rewind it, and a later restart with the query module would resume from pruned views.
+        if processed.is_some_and(|processed| processed >= view) {
+            return Ok(());
+        }
+        let from_view = processed.map_or(ViewNumber::genesis(), |processed| processed + 1);
         let state_certs = serializable_retry!(self, || async {
             let mut tx = self.db.read().await?;
             Self::load_state_certs(&mut tx, from_view, view).await
@@ -3954,6 +3957,27 @@ mod test {
                 (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
             );
         }
+    }
+
+    /// A gap-fill decide reports the older view it filled, after a newer decide already moved
+    /// the cursor past it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_consensus_only_decide_never_rewinds_cursor() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        opt.set_consensus_only();
+        let storage = opt.create().await.unwrap();
+
+        for view in [10, 5] {
+            storage
+                .append_decided_leaves(ViewNumber::new(view), [], None, &NullEventConsumer)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            storage.load_processed_view().await.unwrap(),
+            Some(ViewNumber::new(10))
+        );
     }
 
     /// The probe is taken in `create()` and only reaches the exported registry through
