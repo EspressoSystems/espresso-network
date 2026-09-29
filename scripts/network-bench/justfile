@@ -5,6 +5,7 @@ bench := source_directory() / "bench"
 target_dir := env_var_or_default("CARGO_TARGET_DIR", repo_root / "target")
 bin_dir := env_var_or_default("BENCH_BIN_DIR", target_dir / "release")
 out := env_var_or_default("BENCH_OUT", "bench-out")
+storage_root := env_var_or_default("BENCH_STORAGE_ROOT", "/tmp")
 
 default:
     just --list --justfile {{quote(source_file())}}
@@ -16,7 +17,7 @@ build:
 
 # Start the network, load and measure it, tear it down; writes result.json and summary.md.
 run *args:
-    cd {{quote(repo_root)}} && {{quote(bench)}} run --bin-dir {{quote(bin_dir)}} --out {{quote(out)}} "$@"
+    cd {{quote(repo_root)}} && {{quote(bench)}} run --bin-dir {{quote(bin_dir)}} --out {{quote(out)}} --storage-root {{quote(storage_root)}} "$@"
 
 # Re-analyse a run directory, optionally against a baseline, without rerunning.
 render dir=out *args:
@@ -40,9 +41,18 @@ clean:
     fi
     cd {{quote(repo_root)}}
     rm -rf {{quote(out)}}
-    for dir in /tmp/enb.*; do
-        # Only this user's entries: a symlink planted by someone else must not be followed.
-        [[ -O $dir ]] || continue
-        [[ -L $dir ]] && rm -rf "$(readlink -f "$dir")"
-        rm -rf "$dir"
-    done
+    root=$(realpath -m {{quote(storage_root)}})
+    # `find -user` does not follow links. A link is bench's /tmp/enb.x -> <storage root>/enb.y;
+    # its target goes only if it is exactly that and ours.
+    find /tmp -mindepth 1 -maxdepth 1 -name 'enb.*' -user "$(id -u)" -print0 |
+        while IFS= read -r -d '' dir; do
+            if [[ -L $dir ]]; then
+                target=$(readlink -f -- "$dir" || true)
+                if [[ -n $target && -d $target && -O $target && $(dirname -- "$target") == "$root" && $(basename -- "$target") == enb.* ]]; then
+                    rm -rf -- "$target"
+                fi
+                rm -f -- "$dir"
+            else
+                rm -rf -- "$dir"
+            fi
+        done
