@@ -74,7 +74,7 @@ log = logging.getLogger("network-bench")
 T = TypeVar("T")
 
 # Bump when a metric's meaning changes: config_hash covers the inputs, not the analysis code.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BENCH_DIR = Path(__file__).resolve().parent
 REPO = BENCH_DIR.parents[1]
 COMPOSE_FILE = BENCH_DIR / "process-compose.yaml"
