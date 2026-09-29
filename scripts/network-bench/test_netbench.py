@@ -109,7 +109,6 @@ def step(rate, decided=None, consensus=(), query=(), consensus_p50=900.0):
         "t_mid": 15.0,
         "t_end": 30.0,
         "decided_mb_s": rate if decided is None else decided,
-        "backlog_slope_mb_s": 0.0,
         "timeouts": 0,
         "consensus_latency_ms": quantiles(consensus_p50, 2000.0),
         "query_lag_ms": quantiles(200.0, 400.0),
@@ -176,9 +175,7 @@ def make_result(steps=None, steal=0.0, config_hash="abc123") -> netbench.BenchRe
         },
         "config": {
             "workers": 6,
-            "max_pending": 48,
             "tx_size": 100_000,
-            "rate_mb_s": 4.0,
             "submit_nodes": 3,
             "steps": [4.0, 6.0, 8.0],
             "step_s": 30,
@@ -211,6 +208,8 @@ def make_result(steps=None, steal=0.0, config_hash="abc123") -> netbench.BenchRe
             "cap_waits": 0,
             "missing_payloads": [],
             "tracker_lag_ms": quantiles(50.0, 100.0),
+            "drain_s": 3.0,
+            "refine_skipped": False,
         },
         "stake_table": ["0x1", "0x1", "0x1"],
         "validity": {"valid": True, "noisy": False, "reasons": []},
@@ -226,7 +225,7 @@ def compare(current, runs, error=None, source="main"):
 
 
 def row(comparison, label):
-    return next(r for r in comparison["rows"] if r["label"] == label)
+    return next(r for r in comparison["capacity"] if r["label"] == label)
 
 
 def step_row(comparison, rate, label):
@@ -271,10 +270,28 @@ class RenderTest(unittest.TestCase):
         current = make_result([step(4.0), step(6.0, 5.0, consensus=["x"]), step(5.0)])
         comparison = compare(current, [make_result()] * 3)
         eight = next(c for c in comparison["steps"] if c["rate_mb_s"] == 8.0)
-        self.assertEqual((eight["reached"], eight["n"]), (False, 3))
+        self.assertEqual(eight["n"], 3)
         summary = netbench.render(current, comparison)
         self.assertIn("| 8 | | | | | | | **not reached** | 3 |", summary)
         self.assertIn("| 5 | 5 MB/s | 900 ms |", summary)
+
+    def test_baseline_only_refine_rates_are_left_out(self):
+        refine = step(7.0)
+        refine["refine"] = True
+        baseline = make_result([step(4.0), step(6.0), step(8.0, 6.0, ["x"]), refine])
+        summary = netbench.render(make_result(), compare(make_result(), [baseline] * 3))
+        self.assertNotRegex(summary, r"(?m)^\| 7 ")
+
+    def test_reference_baseline_header(self):
+        comparison = compare(make_result(), [make_result()], source="reference")
+        self.assertIn(
+            "| verdict | reference runs |", netbench.render(make_result(), comparison)
+        )
+
+    def test_fail_rules_short_in_the_table_full_in_details(self):
+        summary = netbench.render(make_result(), None)
+        self.assertIn("| fail: decided |", summary)
+        self.assertIn("| decided 88% of offered |", summary)
 
     def test_ops_table_drops_duplicates(self):
         current = make_result()
@@ -430,8 +447,55 @@ class CompareTest(unittest.TestCase):
         current = make_result([step(4.0), step(6.0, 5.0, ["x"]), step(5.0)])
         comparison = compare(current, [make_result()] * 3)
         capacity = row(comparison, "capacity")
-        self.assertEqual((capacity["current"], capacity["baseline"]), (5.0, 6.0))
+        self.assertEqual(
+            (capacity["current"]["mb_s"], capacity["baseline"]["mb_s"]), (5.0, 6.0)
+        )
         self.assertEqual(capacity["verdict"], "worse")
+
+    def test_capacity_below_the_first_step_is_worse(self):
+        current = make_result([step(4.0, 1.0, ["x"])])
+        comparison = compare(current, [make_result()] * 3)
+        capacity = row(comparison, "capacity")
+        self.assertEqual(capacity["verdict"], "worse")
+        self.assertIn(
+            "| capacity | < 4 MB/s | 6 MB/s | 3 |  | **worse** (±1 MB/s) |",
+            netbench.render(current, comparison),
+        )
+
+    def test_lower_bound_below_the_baseline_is_inconclusive(self):
+        higher = make_result([step(4.0), step(6.0), step(8.0), step(10.0, 5.0, ["x"])])
+        current = make_result([step(4.0), step(6.0)])
+        comparison = compare(current, [higher] * 3)
+        self.assertEqual(row(comparison, "capacity")["verdict"], "inconclusive")
+        self.assertIn(
+            "| capacity | >= 6 MB/s | 8 MB/s |", netbench.render(current, comparison)
+        )
+
+    def test_baseline_runs_below_the_first_step_count(self):
+        below = make_result([step(4.0, 1.0, ["x"])])
+        comparison = compare(make_result(), [below, below, make_result()])
+        capacity = row(comparison, "capacity")
+        self.assertEqual(capacity["n"], 3)
+        self.assertEqual(capacity["baseline"], {"mb_s": None, "bounded": True})
+        self.assertEqual(capacity["verdict"], "better")
+
+    def test_capacity_changes_by_ramp_resolution(self):
+        # Steps 2 MB/s apart: a refine step is 1 MB/s away.
+        refined = make_result([step(4.0), step(6.0), step(8.0, 6.0, ["x"]), step(7.0)])
+        self.assertEqual(
+            row(compare(refined, [make_result()] * 3), "capacity")["verdict"], "better"
+        )
+        self.assertEqual(
+            row(compare(make_result(), [make_result()] * 3), "capacity")["verdict"],
+            "same",
+        )
+
+    def test_one_refine_step_shift_is_not_lost_to_float_error(self):
+        resolution = netbench.ramp_resolution((0.1, 0.3))
+        current: netbench.Limit = {"mb_s": 0.2, "bounded": True}
+        baseline: netbench.Limit = {"mb_s": 0.3, "bounded": True}
+        verdict = netbench.compare_capacity("x", current, [baseline], resolution, False)
+        self.assertEqual(verdict["verdict"], "worse")
 
     def test_steps_compare_only_against_runs_at_that_rate(self):
         short = make_result([step(4.0, consensus_p50=500.0), step(6.0, 3.0, ["x"])])
@@ -439,7 +503,7 @@ class CompareTest(unittest.TestCase):
         six = step_row(comparison, 4.0, "consensus p50")
         self.assertEqual(six["baseline"], 700.0)
         eight = next(c for c in comparison["steps"] if c["rate_mb_s"] == 8.0)
-        self.assertEqual((eight["n"], eight["reached"]), (1, True))
+        self.assertEqual(eight["n"], 1)
 
     def test_spread_widens_threshold(self):
         history = [
@@ -701,11 +765,12 @@ class LoadTest(unittest.TestCase):
         payload_delay=0.0,
         query_lag=0.0,
         block_txs=None,
-        rate_mb_s=0.02,
-        max_pending=1000,
+        rate=0.02,
+        cap_txs=1000,
         **cfg,
     ):
-        """One step of `duration` s at `rate_mb_s`, no warmup, unless `cfg` sets `steps`."""
+        """One step of `duration` s at `rate` MB/s with at most `cap_txs` in flight, no
+        warmup, unless `cfg` sets `steps`."""
         node = FakeNode(
             include,
             lost=lost,
@@ -725,10 +790,10 @@ class LoadTest(unittest.TestCase):
         overrides: dict[str, Any] = {
             "tx_size": 1000,
             "workers": 3,
-            "steps": (rate_mb_s,),
+            "steps": (rate,),
             "step_s": duration,
             "warmup_s": 0,
-            "cap_s": max_pending * 1000 / (rate_mb_s * 1e6),
+            "cap_s": cap_txs * 1000 / (rate * 1e6),
         } | cfg
         config = netbench.BenchConfig(**overrides)
         try:
@@ -762,7 +827,7 @@ class LoadTest(unittest.TestCase):
     def test_submits_at_the_offered_rate(self):
         # 1000 byte txs at 0.02 MB/s: one every 50 ms, independent of inclusion.
         _, node, txs, meta = self.run_load(
-            True, 1.0, rate_mb_s=0.02, max_pending=100, tx_timeout_s=5
+            True, 1.0, rate=0.02, cap_txs=100, tx_timeout_s=5
         )
         self.assertIn(len(node.submits), range(19, 22))
         gaps = [b - a for a, b in zip(node.submits, node.submits[1:])]
@@ -772,15 +837,15 @@ class LoadTest(unittest.TestCase):
 
     def test_round_robin_over_submit_nodes(self):
         _, _, txs, _ = self.run_load(
-            True, 0.5, nodes=3, submit_nodes=2, rate_mb_s=0.02, tx_timeout_s=5
+            True, 0.5, nodes=3, submit_nodes=2, rate=0.02, tx_timeout_s=5
         )
         self.assertEqual([tx["node"] for tx in txs[:4]], [0, 1, 0, 1])
 
     def test_cap_blocks_until_timeout(self):
         _, node, txs, meta = self.run_load(
-            False, 2.5, rate_mb_s=1.0, max_pending=4, tx_timeout_s=1
+            False, 2.5, rate=1.0, cap_txs=4, tx_timeout_s=1
         )
-        # A permit returns only on timeout, and the first one is 1 s after the first submit.
+        # Room under the cap frees only on timeout, the first 1 s after the first submit.
         self.assertGreater(node.submits[4] - node.submits[0], 0.9)
         self.assertGreater(len(node.submits), 4)
         self.assertEqual(meta["max_in_flight"], 4)
@@ -795,8 +860,8 @@ class LoadTest(unittest.TestCase):
             1.0,
             accept_delay=0.2,
             workers=1,
-            rate_mb_s=0.02,
-            max_pending=100,
+            rate=0.02,
+            cap_txs=100,
             tx_timeout_s=5,
         )
         self.assertGreater(len(txs), 5)
@@ -811,8 +876,8 @@ class LoadTest(unittest.TestCase):
             2.0,
             accept_delay=0.3,
             workers=1,
-            rate_mb_s=0.02,
-            max_pending=5,
+            rate=0.02,
+            cap_txs=5,
             tx_timeout_s=1,
         )
         self.assertGreater(len(txs), 5)
@@ -825,8 +890,8 @@ class LoadTest(unittest.TestCase):
             True,
             0.5,
             payload_delay=0.1,
-            rate_mb_s=0.02,
-            max_pending=100,
+            rate=0.02,
+            cap_txs=100,
             tx_timeout_s=10,
         )
         self.assertGreater(len(txs), 5)
@@ -835,7 +900,7 @@ class LoadTest(unittest.TestCase):
 
     def test_heights_on_validators_and_query_node(self):
         _, _, txs, _ = self.run_load(
-            True, 0.5, query_lag=0.3, rate_mb_s=0.02, max_pending=100, tx_timeout_s=5
+            True, 0.5, query_lag=0.3, rate=0.02, cap_txs=100, tx_timeout_s=5
         )
         self.assertEqual({tx["status"] for tx in txs}, {"included"})
         by_height = {h["height"]: h for h in self.heights}
@@ -848,7 +913,7 @@ class LoadTest(unittest.TestCase):
 
     def test_included_before_the_submit_returns(self):
         _, _, txs, _ = self.run_load(
-            True, 0.6, reply_delay=0.4, rate_mb_s=0.005, max_pending=100, tx_timeout_s=2
+            True, 0.6, reply_delay=0.4, rate=0.005, cap_txs=100, tx_timeout_s=2
         )
         self.assertGreater(len(txs), 2)
         self.assertTrue(all(tx["status"] == "included" for tx in txs))
@@ -862,8 +927,8 @@ class LoadTest(unittest.TestCase):
                 True,
                 2.0,
                 lost={10},
-                rate_mb_s=0.02,
-                max_pending=8,
+                rate=0.02,
+                cap_txs=8,
                 tx_timeout_s=1.5,
             )
         self.assertEqual(meta["missing_payloads"], [10])
@@ -877,8 +942,8 @@ class LoadTest(unittest.TestCase):
             True,
             1.5,
             late={10: 1.0},
-            rate_mb_s=0.02,
-            max_pending=8,
+            rate=0.02,
+            cap_txs=8,
             tx_timeout_s=3,
         )
         self.assertEqual(meta["missing_payloads"], [])
@@ -887,13 +952,21 @@ class LoadTest(unittest.TestCase):
         self.assertLess(max(tx["t_included"] - tx["t_submit"] for tx in txs), 0.7)
 
     def test_staircase_stops_at_the_first_failing_step_and_refines(self):
-        # 4 txs of 1000 bytes per 50 ms block: 0.08 MB/s of capacity.
+        # 4 txs of 1000 bytes per 50 ms block: 0.08 MB/s of capacity. 2 s steps: a shorter
+        # measured half holds too few transactions for a steady decided rate.
         with mock.patch.object(netbench, "COUNTER_POLL_S", 0.05):
             self.run_load(
-                True, 1.0, block_txs=4, steps=(0.02, 0.04, 0.16, 0.32), tx_timeout_s=1
+                True, 2.0, block_txs=4, steps=(0.02, 0.04, 0.16), tx_timeout_s=1
             )
         self.assertEqual(
-            [(s["rate_mb_s"], s["refine"], s["online_passed"]) for s in self.steps],
+            [
+                (
+                    s["rate_mb_s"],
+                    s["refine"],
+                    not s["consensus_fails"] + s["query_fails"],
+                )
+                for s in self.steps
+            ],
             [
                 (0.02, False, True),
                 (0.04, False, True),
@@ -902,13 +975,58 @@ class LoadTest(unittest.TestCase):
             ],
         )
 
+    def test_refine_starts_after_the_backlog_drained(self):
+        # 80 tx/s of capacity: 0.1 MB/s leaves 40 txs behind; 0.07 MB/s alone keeps up but
+        # drains that backlog only at 10 tx/s, adding latency over the 300 ms target.
+        with mock.patch.object(netbench, "COUNTER_POLL_S", 0.05):
+            _, _, _, meta = self.run_load(
+                True,
+                2.0,
+                block_txs=4,
+                steps=(0.04, 0.1),
+                latency_target_ms=300,
+                tx_timeout_s=10,
+            )
+        verdicts = [
+            (s["rate_mb_s"], s["refine"], not s["consensus_fails"] + s["query_fails"])
+            for s in self.steps
+        ]
+        self.assertEqual(
+            verdicts,
+            [
+                (0.04, False, True),
+                (0.1, False, False),
+                (0.07000000000000001, True, True),
+            ],
+        )
+        self.assertGreater(meta["drain_s"], 0.2)
+        self.assertFalse(meta["refine_skipped"])
+
+    def test_refine_is_skipped_when_the_backlog_does_not_drain(self):
+        with (
+            mock.patch.object(netbench, "COUNTER_POLL_S", 0.05),
+            mock.patch.object(netbench, "drain", mock.AsyncMock(return_value=None)),
+            self.assertLogs(netbench.log, "WARNING"),
+        ):
+            _, _, _, meta = self.run_load(
+                True, 1.0, block_txs=4, steps=(0.02, 0.16), tx_timeout_s=1
+            )
+        self.assertEqual([s["rate_mb_s"] for s in self.steps], [0.02, 0.16])
+        self.assertTrue(meta["refine_skipped"])
+
+    def test_step_ends_on_time_while_waiting_for_room(self):
+        # Nothing is included: the cap fills at once and frees only on timeouts after 3 s.
+        self.run_load(False, 1.0, rate=0.02, cap_txs=2, tx_timeout_s=3)
+        (step,) = self.steps
+        self.assertLess(step["t_end"] - step["t_start"], 1.3)
+
     def test_lost_payload_is_skipped(self):
         with (
             mock.patch.object(netbench, "MISSING_PAYLOAD_S", 0.2),
             self.assertLogs(netbench.log, "WARNING"),
         ):
             _, _, txs, meta = self.run_load(
-                True, 1.0, lost={3}, rate_mb_s=0.02, tx_timeout_s=1
+                True, 1.0, lost={3}, rate=0.02, tx_timeout_s=1
             )
         self.assertEqual(meta["missing_payloads"], [3])
         self.assertGreater(sum(tx["status"] == "included" for tx in txs), 4)
@@ -1050,14 +1168,12 @@ def write_run_dir(out):
         {"height": 2000, "validator": 130.0, "query": 130.5, "scanned": None}
     )
     jsonl("heights.jsonl", heights)
-    jsonl(
-        "consensus.jsonl",
-        (
-            {"ts": float(ts), "decided_bytes": 1e6 * ts, "timeouts": 0}
-            for ts in range(100, 161)
-        ),
-    )
-    steps = [
+    counters = [
+        {"ts": float(ts), "decided_bytes": 1e6 * ts, "timeouts": 0}
+        for ts in range(100, 161)
+    ]
+    jsonl("consensus.jsonl", counters)
+    steps: list[netbench.StepWindow] = [
         {
             "rate_mb_s": 1.0,
             "refine": False,
@@ -1080,9 +1196,16 @@ def write_run_dir(out):
             "max_in_flight": 4,
             "cap_waits": 0,
             "missing_payloads": [],
+            "drain_s": None,
+            "refine_skipped": False,
         },
         "calibration.json": {"before": calib, "after": calib},
-        "steps.json": [s | {"online_passed": True} for s in steps],
+        "steps.json": [
+            netbench.judge_step(
+                s, netbench.BenchConfig(), txs, heights, counters, s["t_end"]
+            )
+            for s in steps
+        ],
         "sysinfo.json": {"runner": make_result()["runner"]},
         "stake-table.json": {
             "stake_table": [{"stake_table_entry": {"stake_amount": "0x1"}}] * 3
@@ -1109,7 +1232,6 @@ class AnalyzeTest(unittest.TestCase):
             result = netbench.analyze(Path(tmp), netbench.BenchConfig(), TOPOLOGY)
         one, two = result["steps"]
         self.assertAlmostEqual(some(one["decided_mb_s"]), 1.0)
-        self.assertAlmostEqual(some(one["backlog_slope_mb_s"]), 0.0, delta=0.1)
         self.assertEqual(one["timeouts"], 0)
         self.assertAlmostEqual(some(one["consensus_latency_ms"])["p50"], 500.0)
         self.assertAlmostEqual(some(one["query_lag_ms"])["p50"], 300.0)
@@ -1136,6 +1258,25 @@ class AnalyzeTest(unittest.TestCase):
         self.assertEqual(
             result["validity"], {"valid": True, "noisy": False, "reasons": []}
         )
+
+    def test_result_json_is_finite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_run_dir(Path(tmp))
+            result = netbench.analyze(Path(tmp), netbench.BenchConfig(), TOPOLOGY)
+            netbench.write_json(Path(tmp) / "result.json", result)
+            with self.assertRaises(ValueError):
+                netbench.write_json(Path(tmp) / "bad.json", {"x": math.inf})
+
+    def test_report_keeps_the_ramp_verdict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_run_dir(Path(tmp))
+            path = Path(tmp) / "steps.json"
+            steps = json.loads(path.read_text())
+            steps[0]["consensus_fails"] = ["decided 10% of offered"]
+            path.write_text(json.dumps(steps))
+            result = netbench.analyze(Path(tmp), netbench.BenchConfig(), TOPOLOGY)
+        self.assertFalse(result["steps"][0]["passed"])
+        self.assertEqual(result["capacity"]["overall"], {"mb_s": None, "bounded": True})
 
     def test_no_scrapes_is_invalid_not_a_crash(self):
         cfg = netbench.BenchConfig()
@@ -1169,13 +1310,38 @@ class StaircaseTest(unittest.TestCase):
     def test_first_step_failing_ends_the_ramp(self):
         self.assertIsNone(netbench.next_rate((4.0, 6.0), [False]))
 
+    def test_drain_waits_for_the_query_node(self):
+        state = netbench.LoadState()
+        counters = [{"decided_bytes": 1}, {"decided_bytes": 1}]
+        heights = netbench.Heights(0)
+        heights.saw("validator", 5, 0.0)
+        heights.saw("query", 3, 0.0)
+        self.assertIsNone(asyncio.run(netbench.drain(state, counters, heights, 0.3)))
+        heights.saw("query", 5, 0.0)
+        self.assertIsNotNone(asyncio.run(netbench.drain(state, counters, heights, 0.3)))
+
+    def test_drain_does_not_chase_new_validator_heights(self):
+        state = netbench.LoadState()
+        counters = [{"decided_bytes": 1}, {"decided_bytes": 1}]
+        heights = netbench.Heights(0)
+        heights.saw("validator", 5, 0.0)
+
+        async def run() -> float | None:
+            task = asyncio.create_task(netbench.drain(state, counters, heights, 1.0))
+            await asyncio.sleep(0.05)
+            heights.saw("validator", 6, 0.0)
+            heights.saw("query", 5, 0.0)
+            return await task
+
+        self.assertIsNotNone(asyncio.run(run()))
+
     def test_theil_sen_ignores_an_outlier(self):
         points = [(float(x), 2.0 * x) for x in range(10)] + [(10.0, 100.0)]
         self.assertAlmostEqual(some(netbench.theil_sen(points)), 2.0)
         self.assertIsNone(netbench.theil_sen([(1.0, 1.0)]))
 
 
-def step_window(rate=10.0, start=0.0):
+def step_window(rate=10.0, start=0.0) -> netbench.StepWindow:
     return {
         "rate_mb_s": rate,
         "refine": False,
@@ -1223,7 +1389,6 @@ class StepMeasuresTest(unittest.TestCase):
     def test_keeping_up(self):
         m = self.measures()
         self.assertAlmostEqual(m["decided_mb_s"], 10.0)
-        self.assertAlmostEqual(m["backlog_slope_mb_s"], 0.0, delta=0.2)
         self.assertEqual(m["timeouts"], 0)
         self.assertAlmostEqual(m["consensus_latency_ms"]["p50"], 500.0)
         self.assertAlmostEqual(m["query_lag_ms"]["p50"], 200.0)
@@ -1238,11 +1403,36 @@ class StepMeasuresTest(unittest.TestCase):
             consensus,
             [
                 "decided 90% of offered",
-                "backlog grows 1 MB/s",
                 "1 view timeouts",
                 "consensus latency p50 1500 ms > 1000 ms",
             ],
         )
+
+    def test_pending_transactions_count_once_over_target(self):
+        cfg = netbench.BenchConfig()
+        txs = [
+            {"t_submit": 16.0 + i / 10, "height": None, "status": "pending"}
+            for i in range(20)
+        ]
+        m = netbench.step_measures(step_window(), cfg, txs, [], [], 20.0)
+        # By t 20 all 20 are over the 1000 ms target; by t 18 the 10 submitted before 17.
+        self.assertEqual(some(m["consensus_latency_ms"])["n"], 20)
+        m = netbench.step_measures(step_window(), cfg, txs, [], [], 18.0)
+        self.assertEqual(some(m["consensus_latency_ms"])["n"], 10)
+        self.assertGreater(some(m["consensus_latency_ms"])["p50"], 1000.0)
+
+    def test_decided_rate_is_not_quantized_by_blocks(self):
+        # A 20 MB block every 2 s at t 1, 3, 5, ...: 10 MB/s, but the counter samples at 15
+        # and 30 see 7 blocks in 15 s.
+        counters = [
+            {"ts": float(t), "decided_bytes": 20e6 * ((t + 1) // 2), "timeouts": 0}
+            for t in range(31)
+        ]
+        m = netbench.step_measures(
+            step_window(), netbench.BenchConfig(), [], [], counters, 30.0
+        )
+        self.assertAlmostEqual(some(m["decided_mb_s"]), 10.0, delta=0.3)
+        self.assertEqual(netbench.step_fails(m, 10.0, netbench.BenchConfig()), ([], []))
 
     def test_growing_query_lag(self):
         m = self.measures(query_growth=0.2)
