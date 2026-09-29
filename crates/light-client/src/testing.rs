@@ -250,7 +250,7 @@ impl Quorum for AlwaysTrueQuorum {
         Ok(())
     }
 
-    async fn verify_simple_cert_static<V: StaticVersionType + 'static, D>(
+    async fn verify_cert2_static<V: StaticVersionType + 'static, D>(
         &self,
         _: &(impl vote::Certificate<SeqTypes, D> + Sync),
     ) -> Result<()> {
@@ -266,7 +266,7 @@ impl Quorum for AlwaysFalseQuorum {
         bail!("always false quorum");
     }
 
-    async fn verify_simple_cert_static<V: StaticVersionType + 'static, D>(
+    async fn verify_cert2_static<V: StaticVersionType + 'static, D>(
         &self,
         _: &(impl vote::Certificate<SeqTypes, D> + Sync),
     ) -> Result<()> {
@@ -310,7 +310,7 @@ impl Quorum for VersionCheckQuorum {
         Ok(())
     }
 
-    async fn verify_simple_cert_static<V: StaticVersionType + 'static, D>(
+    async fn verify_cert2_static<V: StaticVersionType + 'static, D>(
         &self,
         _: &(impl vote::Certificate<SeqTypes, D> + Sync),
     ) -> Result<()> {
@@ -341,7 +341,7 @@ impl Quorum for EpochChangeQuorum {
         Ok(())
     }
 
-    async fn verify_simple_cert_static<V: StaticVersionType + 'static, D>(
+    async fn verify_cert2_static<V: StaticVersionType + 'static, D>(
         &self,
         _: &(impl vote::Certificate<SeqTypes, D> + Sync),
     ) -> Result<()> {
