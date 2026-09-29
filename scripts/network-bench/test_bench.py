@@ -159,8 +159,8 @@ def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
     return result
 
 
-def compare(current, runs, error=None):
-    return bench.compare(current, {"runs": runs, "error": error})
+def compare(current, runs, error=None, source="main"):
+    return bench.compare(current, {"runs": runs, "error": error, "source": source})
 
 
 def row(comparison, label):
@@ -172,10 +172,7 @@ class RenderTest(unittest.TestCase):
         baseline = [make_result(mb_per_s=4.0) for _ in range(5)]
         current = make_result(mb_per_s=3.0)
         summary = bench.render(current, compare(current, baseline))
-        self.assertIn(
-            "| metric | this run | sub-window range | baseline median (n=5) | delta |",
-            summary,
-        )
+        self.assertIn("| main median (n=5) |", summary)
         self.assertRegex(
             summary, r"\| decided throughput \| 3 MB/s \|.*\| -25\.0% \| \*\*worse\*\*"
         )
@@ -191,21 +188,30 @@ class RenderTest(unittest.TestCase):
         comparison = compare(current, [])
         self.assertEqual(comparison["n"], 0)
         self.assertIn(
-            "No baseline: 0 comparable runs", bench.render(current, comparison)
+            "Baseline: no main runs to compare against.",
+            bench.render(current, comparison),
         )
-        self.assertIn("No baseline given.", bench.render(current, None))
+        self.assertIn(
+            "Baseline: none given, no main runs to compare against.",
+            bench.render(current, None),
+        )
 
     def test_failed_fetch_is_not_no_baseline(self):
         current = make_result()
         summary = bench.render(current, compare(current, [], "OSError: timed out"))
-        self.assertIn("Baseline fetch failed: OSError: timed out", summary)
-        self.assertNotIn("No baseline", summary)
+        self.assertIn(
+            "Baseline: fetching main runs failed: OSError: timed out", summary
+        )
+        self.assertNotIn("no main runs", summary)
 
     def test_load_baseline_single_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "result.json"
             path.write_text(json.dumps(make_result()))
             self.assertEqual(len(bench.load_baseline(path)["runs"]), 1)
+            self.assertEqual(bench.load_baseline(path)["source"], "reference")
+            path.write_text(json.dumps({"runs": []}))
+            self.assertEqual(bench.load_baseline(path)["source"], "main")
             path.write_text("[]")
             with self.assertRaises(ValueError):
                 bench.load_baseline(path)
@@ -218,6 +224,49 @@ class RenderTest(unittest.TestCase):
             args = argparse.Namespace(result=result, baseline=baseline)
             with mock.patch("builtins.print"):
                 self.assertEqual(bench.cmd_compare(args), 0)
+
+
+class BaselineLabelTest(unittest.TestCase):
+    def test_main_runs(self):
+        noisy = make_result(steal=8.0)
+        comparison = compare(make_result(), [make_result()] * 3 + [noisy])
+        self.assertEqual(bench.baseline_label(comparison), "main median (n=3)")
+        self.assertEqual(
+            bench.baseline_line(comparison),
+            "Baseline: median of 3 main runs: "
+            + ", ".join(
+                [
+                    "[`0123456789`](https://github.com/o/r/actions/runs/1) 2026-01-01 00:00 UTC"
+                ]
+                * 3
+            )
+            + " (excluded: 1 noisy).",
+        )
+
+    def test_reference_run(self):
+        reference = make_result()
+        reference["run"] |= {"run_url": None, "local": True, "event": "local"}
+        reference["run"]["ref"] = "my-branch"
+        comparison = compare(make_result(), [reference], source="reference")
+        self.assertEqual(bench.baseline_label(comparison), "reference `0123456789`")
+        self.assertEqual(
+            bench.baseline_line(comparison),
+            "Baseline: reference run `0123456789` 2026-01-01 00:00 UTC, local my-branch.",
+        )
+
+    def test_reference_not_comparable(self):
+        other = make_result(config_hash="other")
+        comparison = compare(make_result(), [other], source="reference")
+        self.assertEqual(
+            bench.baseline_line(comparison),
+            "Baseline: reference run not comparable (excluded: 1 other config).",
+        )
+
+    def test_none(self):
+        self.assertEqual(
+            bench.baseline_line(None),
+            "Baseline: none given, no main runs to compare against.",
+        )
 
 
 class CompareTest(unittest.TestCase):
@@ -256,7 +305,7 @@ class CompareTest(unittest.TestCase):
             comparison["excluded"], {"other runner": 1, "other calibration": 1}
         )
         self.assertIn(
-            "No baseline: 0 comparable runs (excluded: 1 other runner)",
+            "Baseline: no main runs to compare against (excluded: 1 other runner).",
             bench.render(make_result(), compare(make_result(), [other_cpu])),
         )
 

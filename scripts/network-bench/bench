@@ -351,12 +351,16 @@ class Row(TypedDict):
 class Baseline(TypedDict):
     runs: list[BenchResult]
     error: str | None
+    # `main`: stats-fetch output of main runs; `reference`: one result.json given locally.
+    source: Literal["main", "reference"]
 
 
 class Comparison(TypedDict):
     n: int
     excluded: dict[str, int]
     error: str | None
+    source: Literal["main", "reference"]
+    used: list[RunMeta]
     rows: list[Row]
 
 
@@ -1911,6 +1915,8 @@ def compare(current: BenchResult, baseline: Baseline) -> Comparison:
         "n": len(usable),
         "excluded": excluded,
         "error": baseline["error"],
+        "source": baseline["source"],
+        "used": [run["run"] for run in usable],
         "rows": rows,
     }
 
@@ -1986,9 +1992,9 @@ def load_baseline(path: Path) -> Baseline:
     result.json. A stats-fetch `error` means the lookup failed, not that nothing was published."""
     match read_json(path):
         case {"runs": list() as runs} as fetched:
-            return {"runs": runs, "error": fetched.get("error")}
+            return {"runs": runs, "error": fetched.get("error"), "source": "main"}
         case {"schema_version": _} as single:
-            return {"runs": [single], "error": None}
+            return {"runs": [single], "error": None, "source": "reference"}
         case other:
             raise ValueError(
                 f"{path} is neither stats-fetch output nor a result.json: {other!r:.200}"
@@ -2017,11 +2023,45 @@ def status_line(result: BenchResult) -> str:
     validity = result["validity"]
     reasons = "; ".join(validity["reasons"])
     run = result["run"]
-    # A dispatched PR run has the PR branch as ref; the PR number says more.
-    where = f"PR #{run['pr']}" if run["pr"] else f"{run['event']} {run['ref']}"
-    head = f"`{run['sha'][:10]}` {where}, config `{result['config_hash']}`"
+    head = f"`{run['sha'][:10]}` {run_where(run)}, config `{result['config_hash']}`"
     return f"{head}: **{verdict_word(validity)}**" + (
         f" ({reasons})" if reasons else ""
+    )
+
+
+def run_where(run: RunMeta) -> str:
+    # A dispatched PR run has the PR branch as ref; the PR number says more.
+    return f"PR #{run['pr']}" if run["pr"] else f"{run['event']} {run['ref']}"
+
+
+def baseline_label(comparison: Comparison) -> str:
+    if comparison["source"] == "main":
+        return f"main median (n={comparison['n']})"
+    return f"reference `{comparison['used'][0]['sha'][:10]}`"
+
+
+def baseline_line(comparison: Comparison | None) -> str:
+    if comparison is None:
+        return "Baseline: none given, no main runs to compare against."
+    if comparison["error"]:
+        return f"Baseline: fetching main runs failed: {comparison['error']}."
+    note = excluded_note(comparison)
+    if comparison["source"] == "reference":
+        if not comparison["used"]:
+            return f"Baseline: reference run not comparable{note}."
+        run = comparison["used"][0]
+        return f"Baseline: reference run {run_ref(run)}, {run_where(run)}."
+    if not comparison["used"]:
+        return f"Baseline: no main runs to compare against{note}."
+    runs = ", ".join(run_ref(run) for run in comparison["used"])
+    return f"Baseline: median of {comparison['n']} main runs: {runs}{note}."
+
+
+def run_ref(run: RunMeta) -> str:
+    sha = f"`{run['sha'][:10]}`"
+    started = run["started_at"][:16].replace("T", " ") + " UTC"
+    return (
+        f"[{sha}]({run['run_url']}) {started}" if run["run_url"] else f"{sha} {started}"
     )
 
 
@@ -2056,9 +2096,9 @@ def headline_table(result: BenchResult, comparison: Comparison | None) -> list[s
                 f"| {row['label']} | {fmt_value(row['current'], row['unit'])} "
                 f"| {range_cell(result, row['key'])} |"
             )
-        return lines + ["", "No baseline given."]
+        return lines + ["", baseline_line(comparison)]
     lines = [
-        f"| metric | this run | sub-window range | baseline median (n={comparison['n']}) | delta | |",
+        f"| metric | this run | sub-window range | {baseline_label(comparison)} | delta | |",
         "|---|---:|---:|---:|---:|---|",
     ]
     for row in comparison["rows"]:
@@ -2071,13 +2111,7 @@ def headline_table(result: BenchResult, comparison: Comparison | None) -> list[s
             f"| {range_cell(result, row['key'])} | {fmt_value(row['baseline'], row['unit'])} "
             f"| {delta_cell} | {mark} (±{row['threshold_pct']:.0f}%) |"
         )
-    if comparison["error"]:
-        lines += ["", f"Baseline fetch failed: {comparison['error']}"]
-    elif comparison["n"] == 0:
-        lines += ["", f"No baseline: 0 comparable runs{excluded_note(comparison)}."]
-    elif comparison["excluded"]:
-        lines += ["", f"Baseline runs excluded{excluded_note(comparison)}."]
-    return lines
+    return lines + ["", baseline_line(comparison)]
 
 
 def excluded_note(comparison: Comparison) -> str:
