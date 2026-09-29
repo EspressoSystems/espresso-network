@@ -54,6 +54,7 @@ import sys
 import tempfile
 import threading
 import time
+from bisect import bisect_right
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -62,6 +63,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 from urllib.parse import urlsplit
+
+import tomllib
 
 log = logging.getLogger("network-bench")
 
@@ -146,6 +149,12 @@ STOP_TIMEOUT_S = 20
 CLEANUP_TIMEOUT_S = 60
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 MISSING_PAYLOAD_S = 10
+IN_FLIGHT_STEP_S = 1.0
+# Throughput bound rules, see throughput_bound.
+FULL_BLOCK_FILL = 0.8
+LOAD_EMPTY_FRAC = 0.25
+NETWORK_EMPTY_FRAC = 0.05
+AT_CAP_MIN_FRAC = 0.5
 TOOL_VERSIONS = (
     ["process-compose", "version"],
     ["anvil", "--version"],
@@ -222,6 +231,8 @@ class NetworkStats(TypedDict):
     empty_block_frac: float
     proposal_to_decide_ms: Quantiles | None
     cpu_s_per_mb: Stat
+    block_bytes_nonempty_mean: float | None
+    max_block_bytes: int
 
 
 class OpStats(TypedDict):
@@ -264,8 +275,14 @@ class LoadStats(TypedDict):
     timeouts: int
     submit_errors: int
     max_in_flight: int
+    at_cap_frac: float
     missing_payloads: list[int]
     latency_ms: Quantiles | None
+
+
+class Bound(TypedDict):
+    kind: Literal["load", "network", "unclear"]
+    reason: str
 
 
 class Validity(TypedDict):
@@ -293,6 +310,7 @@ class BenchResult(TypedDict):
     processes: dict[str, ProcStats]
     host: HostStats
     load: LoadStats
+    bound: Bound
     stake_table: list[str]
     validity: Validity
 
@@ -1290,18 +1308,60 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
         "config": dataclasses.asdict(cfg),
         "config_hash": run["config_hash"],
         "window": window(series, t0, t1),
-        "network": network_stats(series, cfg, t0, t1),
+        "network": network_stats(
+            series, cfg, t0, t1, max_block_bytes(REPO / cfg.genesis)
+        ),
         "nodes": nodes,
         "processes": process_stats(host, t0, t1),
         "host": host_stats(host, t0, t1),
-        "load": load_stats(out, t0, t1),
+        "load": load_stats(out, cfg, t0, t1),
+        "bound": {"kind": "unclear", "reason": ""},
         "stake_table": stake_amounts(out / "stake-table.json"),
         "validity": {"valid": True, "noisy": False, "reasons": []},
     }
+    net = result["network"]
+    result["bound"] = throughput_bound(
+        result["load"]["at_cap_frac"],
+        net["empty_block_frac"],
+        (net["block_bytes_nonempty_mean"] or 0.0) / net["max_block_bytes"],
+    )
     result["validity"] = check_validity(
         result, scrape_coverage(out / "metrics.jsonl", t0, t1)
     )
     return result
+
+
+def throughput_bound(at_cap: float, empty_frac: float, fill: float) -> Bound:
+    """Whether decided throughput measures the network or the closed-loop load. `at_cap` is the
+    fraction of samples with max_pending transactions in flight, `fill` the mean non-empty block
+    size over max_block_size."""
+    if fill >= FULL_BLOCK_FILL:
+        return {"kind": "network", "reason": f"non-empty blocks {fill:.0%} full"}
+    if empty_frac >= LOAD_EMPTY_FRAC:
+        return {"kind": "load", "reason": f"{empty_frac:.0%} of blocks empty"}
+    if empty_frac < NETWORK_EMPTY_FRAC and at_cap >= AT_CAP_MIN_FRAC:
+        return {
+            "kind": "network",
+            "reason": f"{empty_frac:.0%} of blocks empty with max_pending in flight",
+        }
+    return {"kind": "unclear", "reason": "no bound rule applies"}
+
+
+def max_block_bytes(genesis: Path) -> int:
+    return parse_size(
+        tomllib.loads(genesis.read_text())["chain_config"]["max_block_size"]
+    )
+
+
+def parse_size(value: str | int) -> int:
+    """Decimal sizes as espresso's genesis parses them: `100mb` is 100_000_000 bytes."""
+    if isinstance(value, int):
+        return value
+    match = re.fullmatch(r"(\d+)\s*(b|kb|mb|gb)?", value.strip().lower())
+    if not match:
+        raise ValueError(f"unsupported block size {value!r}")
+    scale = {None: 1, "b": 1, "kb": 1000, "mb": 1000**2, "gb": 1000**3}
+    return int(match.group(1)) * scale[match.group(2)]
 
 
 def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
@@ -1442,7 +1502,11 @@ def subwindows(cfg: BenchConfig, t0: float, t1: float) -> list[tuple[float, floa
 
 
 def network_stats(
-    series: dict[str, list[Sample]], cfg: BenchConfig, t0: float, t1: float
+    series: dict[str, list[Sample]],
+    cfg: BenchConfig,
+    t0: float,
+    t1: float,
+    max_block: int,
 ) -> NetworkStats:
     nodes = [s for s in series.values() if s]
     slices = subwindows(cfg, t0, t1)
@@ -1461,6 +1525,9 @@ def network_stats(
     )
     empty = sum(
         delta(s, t0, t1, "consensus_number_of_empty_blocks_proposed")[0] for s in nodes
+    )
+    decided_bytes = statistics.median(
+        delta(s, t0, t1, "consensus_finalized_bytes_sum")[0] for s in nodes
     )
     return {
         "decided_mb_per_s": stat(mb, "MB/s", "higher"),
@@ -1482,6 +1549,10 @@ def network_stats(
         "cpu_s_per_mb": stat(
             [c / m if m else None for c, m in zip(cpu, mb)], "s/MB", "lower"
         ),
+        "block_bytes_nonempty_mean": (
+            decided_bytes / (blocks - empty) if blocks > empty else None
+        ),
+        "max_block_bytes": max_block,
     }
 
 
@@ -1656,7 +1727,7 @@ def host_stats(host: list[dict[str, Any]], t0: float, t1: float) -> HostStats:
     }
 
 
-def load_stats(out: Path, t0: float, t1: float) -> LoadStats:
+def load_stats(out: Path, cfg: BenchConfig, t0: float, t1: float) -> LoadStats:
     meta = read_json(out / "load-meta.json")
     every = list(read_jsonl(out / "load.jsonl"))
     txs = [tx for tx in every if t0 <= tx["t_submit"] <= t1]
@@ -1675,9 +1746,33 @@ def load_stats(out: Path, t0: float, t1: float) -> LoadStats:
         "timeouts": sum(1 for tx in txs if tx["status"] == "timeout"),
         "submit_errors": meta["submit_errors"],
         "max_in_flight": meta["max_in_flight"],
+        "at_cap_frac": at_cap_frac(
+            [
+                (tx["t_submit"], tx["t_included"] or tx["t_submit"] + cfg.tx_timeout_s)
+                for tx in every
+            ],
+            t0,
+            t1,
+            cfg.max_pending,
+            IN_FLIGHT_STEP_S,
+        ),
         "missing_payloads": meta["missing_payloads"],
         "latency_ms": quantiles(latencies),
     }
+
+
+def at_cap_frac(
+    spans: list[tuple[float, float]], t0: float, t1: float, cap: int, step: float
+) -> float:
+    """Fraction of `step`-spaced samples in [t0, t1) with at least `cap` of the [start, end)
+    spans open. A span ends when its block appears, slightly before the permit returns."""
+    starts = sorted(a for a, _ in spans)
+    ends = sorted(b for _, b in spans)
+    samples = [t0 + i * step for i in range(max(1, int((t1 - t0) / step)))]
+    full = sum(
+        1 for t in samples if bisect_right(starts, t) - bisect_right(ends, t) >= cap
+    )
+    return full / len(samples)
 
 
 def quantiles(values: list[float]) -> Quantiles | None:

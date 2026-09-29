@@ -126,6 +126,8 @@ def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
             "empty_block_frac": 0.1,
             "proposal_to_decide_ms": quantiles(900.0, 2000.0),
             "cpu_s_per_mb": stat(0.5, "s/MB", "lower"),
+            "block_bytes_nonempty_mean": 2_000_000.0,
+            "max_block_bytes": 100_000_000,
         },
         "nodes": {"node0": node(1.0), "node1": node(0.5), "node2": node(0.5)},
         "processes": {
@@ -145,9 +147,11 @@ def make_result(mb_per_s=4.0, steal=0.0, config_hash="abc123"):
             "timeouts": 0,
             "submit_errors": 0,
             "max_in_flight": 48,
+            "at_cap_frac": 0.8,
             "missing_payloads": [],
             "latency_ms": quantiles(1200.0, 2500.0),
         },
+        "bound": {"kind": "unclear", "reason": "r"},
         "stake_table": ["0x1", "0x1", "0x1"],
         "validity": {"valid": True, "noisy": False, "reasons": []},
     }
@@ -652,10 +656,44 @@ class AnalyzeTest(unittest.TestCase):
         self.assertAlmostEqual(load["included_per_s"], 41 / 60)
         self.assertEqual(load["latency_ms"]["p50"], 2000.0)
         self.assertEqual(load["timeouts"], 1)
+        self.assertEqual(load["at_cap_frac"], 0.0)
+        self.assertAlmostEqual(net["block_bytes_nonempty_mean"], 500_000.0)
+        self.assertEqual(net["max_block_bytes"], 100_000_000)
+        self.assertEqual(result["bound"]["kind"], "unclear")
         self.assertEqual(
             result["validity"],
             {"valid": True, "noisy": True, "reasons": ["1 transactions timed out"]},
         )
+
+
+class BoundTest(unittest.TestCase):
+    def kind(self, at_cap, empty, fill):
+        return bench.throughput_bound(at_cap, empty, fill)["kind"]
+
+    def test_empty_blocks_are_load_bound(self):
+        self.assertEqual(self.kind(0.78, 0.75, 0.05), "load")
+        self.assertEqual(self.kind(0.1, 0.5, 0.05), "load")
+
+    def test_full_blocks_are_network_bound(self):
+        self.assertEqual(self.kind(0.9, 0.5, 0.85), "network")
+
+    def test_busy_blocks_at_cap_are_network_bound(self):
+        self.assertEqual(self.kind(0.9, 0.01, 0.3), "network")
+
+    def test_between_rules_is_unclear(self):
+        self.assertEqual(self.kind(0.9, 0.1, 0.3), "unclear")
+        self.assertEqual(self.kind(0.2, 0.01, 0.3), "unclear")
+
+    def test_at_cap_frac_samples_the_window(self):
+        spans = [(0.0, 10.0), (0.0, 5.0), (20.0, 30.0)]
+        self.assertEqual(bench.at_cap_frac(spans, 0.0, 10.0, 2, 1.0), 0.5)
+
+    def test_parse_size(self):
+        self.assertEqual(bench.parse_size("100mb"), 100_000_000)
+        self.assertEqual(bench.parse_size("2 KB"), 2000)
+        self.assertEqual(bench.parse_size(30720), 30720)
+        with self.assertRaises(ValueError):
+            bench.parse_size("1 wei")
 
 
 class StatTest(unittest.TestCase):
