@@ -11866,7 +11866,6 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-orchestrator",
  "hotshot-query-service",
- "hotshot-testing",
  "hotshot-types",
  "http-client 0.1.0",
  "itertools 0.14.0",
