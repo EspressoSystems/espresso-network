@@ -152,6 +152,9 @@ STOP_TIMEOUT_S = 20
 CLEANUP_TIMEOUT_S = 60
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 MISSING_PAYLOAD_S = 10
+# One slow or failed answer from the query node must not end the run.
+READ_DEADLINE_S = 30.0
+READ_RETRY_S = 1.0
 TRACKER_THREADS = 2
 IN_FLIGHT_STEP_S = 1.0
 # Keeping-up rules, see throughput_bound.
@@ -629,6 +632,10 @@ def drive_network(
     except KeyboardInterrupt:
         run["error"] = "interrupted"
         log.error("interrupted")
+    except Exception as err:
+        cause = innermost(err)
+        run["error"] = f"{type(cause).__name__}: {cause}"
+        log.exception("unexpected error")
     finally:
         with signals_ignored():
             stop.set()
@@ -643,6 +650,14 @@ def drive_network(
 
 class NetworkError(Exception):
     pass
+
+
+def innermost(err: BaseException) -> BaseException:
+    """The first leaf of nested exception groups, as raised by task groups."""
+    # ruff assumes Python 3.10 here; the script requires 3.11.
+    while isinstance(err, BaseExceptionGroup):  # noqa: F821
+        err = err.exceptions[0]
+    return err
 
 
 def raise_interrupt(signum: int, frame: Any) -> None:
@@ -772,10 +787,7 @@ def block_height(pool: HttpPool, node: str) -> int | None:
 
 
 def get_ok(pool: HttpPool, url: str) -> bytes:
-    try:
-        status, body = pool.request("GET", url)
-    except OSError as err:
-        raise NetworkError(str(err)) from err
+    status, body = read(pool, url)
     if status != 200:
         raise NetworkError(f"GET {url}: HTTP {status}")
     return body
@@ -927,7 +939,7 @@ async def generate_load(
             done.set()
             await tracker
     except* (NetworkError, OSError) as group:
-        raise NetworkError(f"load generator: {group.exceptions[0]}") from group
+        raise NetworkError(f"load generator: {innermost(group)}") from group
     finally:
         submitter.close()
         tracking.close()
@@ -1094,8 +1106,26 @@ def log_progress(state: LoadState, height: int) -> None:
     )
 
 
+def read(pool: HttpPool, url: str) -> tuple[int, bytes]:
+    """GET, retrying failed requests and 5xx answers until READ_DEADLINE_S."""
+    deadline = time.time() + READ_DEADLINE_S
+    while True:
+        try:
+            status, body = pool.request("GET", url)
+        except OSError as err:
+            problem = str(err)
+        else:
+            if status < 500:
+                return status, body
+            problem = f"GET {url}: HTTP {status}"
+        if time.time() >= deadline:
+            raise NetworkError(f"{problem}, retried for {READ_DEADLINE_S:.0f} s")
+        log.warning("%s, retrying", problem)
+        time.sleep(READ_RETRY_S)
+
+
 def query_height(pool: HttpPool, query_url: str) -> int:
-    status, body = pool.request("GET", query_url + "/v1/node/block-height")
+    status, body = read(pool, query_url + "/v1/node/block-height")
     if status != 200:
         raise NetworkError(f"block height from query node: HTTP {status}")
     return int(body)
@@ -1104,7 +1134,7 @@ def query_height(pool: HttpPool, query_url: str) -> int:
 def block_payload(pool: HttpPool, query_url: str, height: int) -> bytes | None:
     """Raw payload bytes of block `height`, or None if the query node does not have it yet."""
     url = f"{query_url}/v1/availability/payload/{height}"
-    status, body = pool.request("GET", url)
+    status, body = read(pool, url)
     if status == 404:
         return None
     if status != 200:

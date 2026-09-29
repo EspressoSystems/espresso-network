@@ -466,6 +466,72 @@ class PreflightTest(unittest.TestCase):
         self.assertIn("scripts/cleanup-process-compose", "\n".join(logs.output))
 
 
+class ReadRetryTest(unittest.TestCase):
+    def test_retries_failed_reads(self):
+        pool = mock.Mock()
+        pool.request.side_effect = [OSError("timed out"), (503, b""), (200, b"7")]
+        with (
+            mock.patch.object(bench, "READ_RETRY_S", 0),
+            self.assertLogs(bench.log, "WARNING"),
+        ):
+            self.assertEqual(bench.query_height(pool, "http://x"), 7)
+        self.assertEqual(pool.request.call_count, 3)
+
+    def test_gives_up_after_the_deadline(self):
+        pool = mock.Mock()
+        pool.request.side_effect = OSError("timed out")
+        with (
+            mock.patch.object(bench, "READ_RETRY_S", 0.01),
+            mock.patch.object(bench, "READ_DEADLINE_S", 0.05),
+            self.assertLogs(bench.log, "WARNING"),
+            self.assertRaises(bench.NetworkError),
+        ):
+            bench.query_height(pool, "http://x")
+
+    def test_not_found_is_not_retried(self):
+        pool = mock.Mock()
+        pool.request.return_value = (404, b"")
+        self.assertIsNone(bench.block_payload(pool, "http://x", 3))
+        self.assertEqual(pool.request.call_count, 1)
+
+
+class UnexpectedErrorTest(unittest.TestCase):
+    def test_tears_down_and_writes_failure_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out, storage = Path(tmp) / "out", Path(tmp) / "storage"
+            storage.mkdir()
+            args = bench.parse_args(
+                ["run", "--bin-dir", "/nonexistent", "--out", str(out)]
+            )
+            net = bench.Network(proc=mock.Mock(), out=out, storage=storage)
+            calib = {"sha256_1t_mb_s": 1.0, "sha256_mt_mb_s": 1.0, "fsync_per_s": 1.0}
+            with (
+                mock.patch.object(bench, "preflight_problems", return_value=[]),
+                mock.patch.object(
+                    bench, "collect_sysinfo", return_value=(make_result()["runner"], {})
+                ),
+                mock.patch.object(bench, "calibrate", return_value=calib),
+                mock.patch.object(bench, "make_storage", return_value=storage),
+                mock.patch.object(bench, "remove_storage"),
+                mock.patch.object(bench, "start_network", return_value=net),
+                mock.patch.object(bench, "sample_metrics"),
+                mock.patch.object(bench, "sample_host"),
+                mock.patch.object(
+                    bench, "wait_ready", side_effect=ValueError("bad height")
+                ),
+                mock.patch.object(bench, "teardown", return_value=[]) as teardown,
+                mock.patch("builtins.print"),
+                self.assertLogs(bench.log, "ERROR"),
+            ):
+                self.assertEqual(bench.cmd_run(args), 1)
+            teardown.assert_called_once_with(net)
+            run = json.loads((out / "run.json").read_text())
+            self.assertEqual(run["error"], "ValueError: bad height")
+            self.assertIn(
+                "**invalid**: ValueError: bad height", (out / "summary.md").read_text()
+            )
+
+
 class TeardownTest(unittest.TestCase):
     def test_hung_stop_is_force_killed_and_listed(self):
         """TEST:bench-teardown-hang-ok: every step is bounded and a failing step skips none."""
