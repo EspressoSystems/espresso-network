@@ -1,6 +1,9 @@
 //! Utilities for generating and storing the most recent light client state signatures.
 
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
@@ -11,7 +14,7 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     light_client::{
         LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
-        StakeTableState, StateSignKey, StateSignature, StateVerKey,
+        StakeTableState, StateSignKey, StateVerKey,
     },
     new_protocol::CoordinatorEvent,
     stake_table::HSStakeTable,
@@ -44,8 +47,9 @@ pub struct StateSigner<ApiVer: StaticVersionType> {
     /// Key for verifying a light client state
     ver_key: StateVerKey,
 
-    /// The most recent light client state signatures
-    signatures: RwLock<StateSignatureMemStorage>,
+    /// The most recent light client state signatures, shared with readers that must not wait on
+    /// the signer.
+    pub(crate) signatures: Arc<RwLock<StateSignatureMemStorage>>,
 
     /// Commitment for current fixed stake table
     voting_stake_table_state: StakeTableState,
@@ -181,7 +185,12 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
 
                     if !leaf.with_epoch {
                         // Before epoch upgrade, we need to sign the state for the legacy light client
-                        let Ok(legacy_signature) = self.legacy_sign_new_state(&state).await else {
+                        let Ok(legacy_signature) =
+                            <SchnorrPubKey as LCV1StateSignatureKey>::sign_state(
+                                &self.sign_key,
+                                &state,
+                            )
+                        else {
                             tracing::error!("Failed to sign new state for legacy light client");
                             return;
                         };
@@ -211,12 +220,6 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 tracing::error!("Error generating light client state: {:?}", err)
             },
         }
-    }
-
-    /// Return a signature of a light client state at given height.
-    pub async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
-        let pool_guard = self.signatures.read().await;
-        pool_guard.get_signature(height)
     }
 
     /// Sign the light client state at given height and store it.
@@ -252,13 +255,6 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         );
         Ok(request_body)
     }
-
-    async fn legacy_sign_new_state(
-        &self,
-        state: &LightClientState,
-    ) -> Result<StateSignature, SignatureError> {
-        <SchnorrPubKey as LCV1StateSignatureKey>::sign_state(&self.sign_key, state)
-    }
 }
 
 /// The parts of the latest decided leaf that the state signer needs, without the block payload
@@ -266,7 +262,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
 #[derive(Clone, Debug)]
 pub(crate) struct DecidedLeaf {
     header: Header,
-    view: ViewNumber,
+    pub(crate) view: ViewNumber,
     with_epoch: bool,
 }
 

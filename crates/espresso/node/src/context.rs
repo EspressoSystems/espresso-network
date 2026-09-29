@@ -65,7 +65,7 @@ use crate::{
         recipient_source::RecipientSource,
     },
     startup_catchup::bootstrap_epoch_window,
-    state_signature::{self, DecidedLeaf, StateSigner},
+    state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
 pub(crate) type ConsensusNode<N, P> = Node<N, P>;
 pub type Consensus<N, P> = hotshot::types::SystemContextHandle<SeqTypes, ConsensusNode<N, P>>;
@@ -86,8 +86,8 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     #[allow(dead_code)]
     pub request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
 
-    /// Context for generating state signatures.
-    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
+    /// Light client state signatures produced by the state signer task.
+    state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
 
     /// An orchestrator to wait for before starting consensus, with the peer config this node
     /// registered there.
@@ -370,7 +370,7 @@ where
         let mut ctx = Self {
             consensus_handle,
             persistence: persistence.clone(),
-            state_signer: Arc::new(RwLock::new(state_signer)),
+            state_signatures: Arc::clone(&state_signer.signatures),
             request_response_protocol,
             tasks: Default::default(),
             detached: false,
@@ -407,15 +407,10 @@ where
             ),
         );
 
-        let (mut signer_tx, signer_rx) = async_broadcast::broadcast(STATE_SIGNER_QUEUE_CAPACITY);
-        signer_tx.set_overflow(true);
+        let (signer_tx, signer_rx) = watch::channel::<Option<DecidedLeaf>>(None);
         ctx.spawn(
             "state signer",
-            sign_decided_leaves(
-                ctx.consensus_handle.clone(),
-                ctx.state_signer.clone(),
-                signer_rx,
-            ),
+            sign_decided_leaves(ctx.consensus_handle.clone(), state_signer, signer_rx),
         );
 
         // Event loop. On a decide this only does the leaf write, then signals `decide_tx`.
@@ -454,9 +449,9 @@ where
         self
     }
 
-    /// Return a reference to the consensus state signer.
-    pub fn state_signer(&self) -> Arc<RwLock<StateSigner<SequencerApiVersion>>> {
-        self.state_signer.clone()
+    /// Return the light client state signatures this node has produced.
+    pub fn state_signatures(&self) -> Arc<RwLock<StateSignatureMemStorage>> {
+        self.state_signatures.clone()
     }
 
     /// Stream consensus events.
@@ -642,7 +637,7 @@ async fn handle_events<P, C>(
     node_id: u64,
     mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
     persistence: Arc<P>,
-    signer_tx: async_broadcast::Sender<DecidedLeaf>,
+    signer_tx: watch::Sender<Option<DecidedLeaf>>,
     external_event_handler: ExternalEventHandler,
     event_consumer: Arc<C>,
     decide_tx: watch::Sender<DecideSignal>,
@@ -678,10 +673,18 @@ async fn handle_events<P, C>(
             _ => {},
         }
 
-        if let Some(leaf) = DecidedLeaf::from_event(&event)
-            && let Err(err) = signer_tx.try_broadcast(leaf)
-        {
-            tracing::warn!(%err, "failed to queue decided leaf for signing");
+        if let Some(leaf) = DecidedLeaf::from_event(&event) {
+            // Keep the max view, like `decide_tx`, but without waking the signer when a gap-fill
+            // decide changes nothing: it would sign and post the same leaf again.
+            signer_tx.send_if_modified(|current| {
+                let newer = current
+                    .as_ref()
+                    .is_none_or(|latest| latest.view < leaf.view);
+                if newer {
+                    *current = Some(leaf);
+                }
+                newer
+            });
         }
 
         // Critical path: only persist the decided leaves, then signal the background processor.
@@ -701,36 +704,27 @@ async fn handle_events<P, C>(
 }
 
 /// Signs and relays light client states off the event loop, because a relay post can take as
-/// long as its HTTP timeout. When it falls behind, the oldest queued leaves are dropped: a stale
+/// long as its HTTP timeout. When it falls behind, it skips to the newest decided leaf: a stale
 /// signature is worth less than a current one.
 async fn sign_decided_leaves<N, P>(
     consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
-    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
-    mut leaves: async_broadcast::Receiver<DecidedLeaf>,
+    mut state_signer: StateSigner<SequencerApiVersion>,
+    mut leaves: watch::Receiver<Option<DecidedLeaf>>,
 ) where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    loop {
-        match leaves.recv_direct().await {
-            Ok(leaf) => {
-                state_signer
-                    .write()
-                    .await
-                    .handle_decide(&leaf, consensus_handle.as_ref())
-                    .await;
-            },
-            Err(async_broadcast::RecvError::Overflowed(skipped)) => {
-                tracing::warn!(skipped, "state signer skipped decided leaves");
-            },
-            Err(async_broadcast::RecvError::Closed) => return,
-        }
+    while leaves.changed().await.is_ok() {
+        let Some(leaf) = leaves.borrow_and_update().clone() else {
+            continue;
+        };
+        state_signer
+            .handle_decide(&leaf, consensus_handle.as_ref())
+            .await;
     }
 }
 
 const PROCESS_RETRY_INTERVAL: Duration = Duration::from_secs(30);
-
-const STATE_SIGNER_QUEUE_CAPACITY: usize = 16;
 
 /// Turns persisted decided leaves into query-service decide events and GCs processed data.
 /// Decoupled from [`handle_events`] so slow ingestion/GC can't stall (or drop) consensus events;
