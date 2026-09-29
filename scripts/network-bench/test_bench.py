@@ -787,6 +787,21 @@ class LoadTest(unittest.TestCase):
         latencies = [tx["t_included"] - tx["t_submit"] for tx in txs]
         self.assertLess(max(latencies), 1.0)
 
+    def test_queued_submit_does_not_time_out(self):
+        # Submits wait up to 1.5 s in the one thread's queue, longer than tx_timeout_s.
+        _, _, txs, meta = self.run_load(
+            True,
+            2.0,
+            accept_delay=0.3,
+            workers=1,
+            rate_mb_s=0.02,
+            max_pending=5,
+            tx_timeout_s=1,
+        )
+        self.assertGreater(len(txs), 5)
+        self.assertEqual({tx["status"] for tx in txs}, {"included"})
+        self.assertLessEqual(meta["max_in_flight"], 5)
+
     def test_included_before_the_submit_returns(self):
         _, _, txs, _ = self.run_load(
             True, 0.6, reply_delay=0.4, rate_mb_s=0.005, max_pending=100, tx_timeout_s=2

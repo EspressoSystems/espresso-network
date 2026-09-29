@@ -861,7 +861,8 @@ def proc_cwd(pid: int) -> Path | None:
 class Tx:
     id: int
     node: int
-    t_submit: float
+    # inf while the request waits for a submit thread, so the timeout clock starts at send.
+    t_submit: float = math.inf
     t_included: float | None = None
     status: str = "pending"
 
@@ -1027,7 +1028,7 @@ async def submit_tx(
             "payload": base64.b64encode(payload).decode(),
         }
     ).encode()
-    tx = Tx(id=tx_id, node=node, t_submit=time.time())
+    tx = Tx(id=tx_id, node=node)
     state.submitted(tx)
     status = await client.call(post_tx, tx, urls[node] + "/v1/submit/submit", body)
     if status != 200:
@@ -2503,7 +2504,7 @@ def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
 
 def write_jsonl(path: Path, records: Iterator[dict[str, Any]]) -> None:
     with open(path, "w") as f:
-        f.writelines(json.dumps(record) + "\n" for record in records)
+        f.writelines(json.dumps(record, allow_nan=False) + "\n" for record in records)
 
 
 if __name__ == "__main__":
