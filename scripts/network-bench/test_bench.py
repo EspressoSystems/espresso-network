@@ -519,12 +519,13 @@ class LabelTest(unittest.TestCase):
 
 class FakeNode(ThreadingHTTPServer):
     """Submit, block height and payload endpoints; `include` decides whether blocks carry the
-    submitted transactions."""
+    submitted transactions. A submit takes `accept_delay` s before the transaction is taken."""
 
-    def __init__(self, include, lost=frozenset()):
+    def __init__(self, include, lost=frozenset(), accept_delay=0.0):
         super().__init__(("127.0.0.1", 0), FakeHandler)
         self.include = include
         self.lost = lost
+        self.accept_delay = accept_delay
         self.lock = threading.Lock()
         self.pending = []
         self.blocks = [b""]
@@ -562,6 +563,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         node = self.server
         tx = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        time.sleep(node.accept_delay)
         with node.lock:
             node.pending.append(base64.b64decode(tx["payload"]))
             node.submits.append(time.time())
@@ -581,8 +583,10 @@ class FakeHandler(BaseHTTPRequestHandler):
 
 
 class LoadTest(unittest.TestCase):
-    def run_load(self, include, duration, lost=frozenset(), nodes=1, **cfg):
-        node = FakeNode(include, lost)
+    def run_load(
+        self, include, duration, lost=frozenset(), nodes=1, accept_delay=0.0, **cfg
+    ):
+        node = FakeNode(include, lost, accept_delay)
         threads = [
             threading.Thread(target=node.serve_forever),
             threading.Thread(target=node.produce),
@@ -640,6 +644,23 @@ class LoadTest(unittest.TestCase):
         self.assertEqual(meta["max_in_flight"], 4)
         self.assertGreater(meta["cap_waits"], 0)
         self.assertTrue(all(tx["status"] == "timeout" for tx in txs))
+
+    def test_latency_excludes_queued_submits(self):
+        # One submit thread and 0.2 s per submit: submits queue up behind each other, and
+        # neither the queue nor the tracker waiting behind it counts as latency.
+        _, _, txs, _ = self.run_load(
+            True,
+            0.5,
+            accept_delay=0.2,
+            workers=1,
+            rate_mb_s=0.02,
+            max_pending=100,
+            tx_timeout_s=5,
+        )
+        self.assertGreater(len(txs), 5)
+        self.assertTrue(all(tx["status"] == "included" for tx in txs))
+        latencies = [tx["t_included"] - tx["t_submit"] for tx in txs]
+        self.assertLess(max(latencies), 0.6)
 
     def test_lost_payload_is_skipped(self):
         with (

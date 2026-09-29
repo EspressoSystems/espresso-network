@@ -63,12 +63,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, TypeVar
 from urllib.parse import urlsplit
 
 import tomllib
 
 log = logging.getLogger("network-bench")
+T = TypeVar("T")
 
 # Bump when a metric's meaning changes: config_hash covers the inputs, not the analysis code.
 SCHEMA_VERSION = 1
@@ -151,6 +152,7 @@ STOP_TIMEOUT_S = 20
 CLEANUP_TIMEOUT_S = 60
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 MISSING_PAYLOAD_S = 10
+TRACKER_THREADS = 2
 IN_FLIGHT_STEP_S = 1.0
 # Keeping-up rules, see throughput_bound.
 KEEP_UP_RATIO = 0.95
@@ -849,6 +851,22 @@ class Tx:
     status: str = "pending"
 
 
+@dataclass
+class Client:
+    """HTTP on its own threads, so requests of one kind never queue behind another's."""
+
+    pool: HttpPool
+    executor: ThreadPoolExecutor
+
+    async def call(self, fn: Callable[..., T], *args: Any) -> T:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, fn, self.pool, *args)
+
+    def close(self) -> None:
+        self.executor.shutdown(wait=False, cancel_futures=True)
+        self.pool.close()
+
+
 class LoadState:
     """Transactions of one run; permits bound the ones submitted but neither included nor timed
     out."""
@@ -882,28 +900,36 @@ async def generate_load(
 ) -> None:
     """Paced load until `until`, then wait up to `tx_timeout_s` for the stragglers.
     Writes one line per transaction to load.jsonl and the counters to load-meta.json."""
-    loop = asyncio.get_running_loop()
-    loop.set_default_executor(ThreadPoolExecutor(cfg.workers + 2))
     state = LoadState(cfg.max_pending)
     marker = hashlib.sha256(f"network-bench:{cfg.seed}".encode()).digest()[:16]
     bodies = tx_bodies(cfg, len(marker) + 8)
-    pool = HttpPool()
+    submitter = Client(HttpPool(), ThreadPoolExecutor(cfg.workers))
+    tracking = Client(HttpPool(), ThreadPoolExecutor(TRACKER_THREADS))
     done = asyncio.Event()
     try:
-        start_height = await asyncio.to_thread(query_height, pool, query_url)
+        start_height = await tracking.call(query_height, query_url)
         async with asyncio.TaskGroup() as group:
             tracker = group.create_task(
-                track_inclusion(cfg, state, pool, query_url, marker, start_height, done)
+                track_inclusion(
+                    cfg, state, tracking, query_url, marker, start_height, done
+                )
             )
             await pace_submissions(
-                cfg, state, pool, submit_urls[: cfg.submit_nodes], marker, bodies, until
+                cfg,
+                state,
+                submitter,
+                submit_urls[: cfg.submit_nodes],
+                marker,
+                bodies,
+                until,
             )
             done.set()
             await tracker
     except* (NetworkError, OSError) as group:
         raise NetworkError(f"load generator: {group.exceptions[0]}") from group
     finally:
-        pool.close()
+        submitter.close()
+        tracking.close()
     write_jsonl(out / "load.jsonl", (dataclasses.asdict(tx) for tx in state.txs))
     write_json(
         out / "load-meta.json",
@@ -936,7 +962,7 @@ def next_due(due: float, interval: float, now: float) -> float:
 async def pace_submissions(
     cfg: BenchConfig,
     state: LoadState,
-    pool: HttpPool,
+    client: Client,
     urls: list[str],
     marker: bytes,
     bodies: list[bytes],
@@ -953,7 +979,7 @@ async def pace_submissions(
                 state.cap_waits += 1
             await state.permits.acquire()
             submits.create_task(
-                submit_tx(cfg, state, pool, urls, marker, bodies, tx_id)
+                submit_tx(cfg, state, client, urls, marker, bodies, tx_id)
             )
             due = next_due(due, interval, time.time())
 
@@ -961,7 +987,7 @@ async def pace_submissions(
 async def submit_tx(
     cfg: BenchConfig,
     state: LoadState,
-    pool: HttpPool,
+    client: Client,
     urls: list[str],
     marker: bytes,
     bodies: list[bytes],
@@ -978,12 +1004,7 @@ async def submit_tx(
         }
     ).encode()
     tx = Tx(id=tx_id, node=node, t_submit=time.time())
-    try:
-        status, _ = await asyncio.to_thread(
-            pool.request, "POST", urls[node] + "/v1/submit/submit", body
-        )
-    except OSError:
-        status = 0
+    status = await client.call(post_tx, tx, urls[node] + "/v1/submit/submit", body)
     if status != 200:
         state.submit_errors += 1
         state.permits.release()
@@ -991,10 +1012,21 @@ async def submit_tx(
     state.submitted(tx)
 
 
+def post_tx(pool: HttpPool, tx: Tx, url: str, body: bytes) -> int:
+    """HTTP status, 0 if the request failed. Stamps `t_submit` as the request goes out, not
+    when it was queued for a thread."""
+    tx.t_submit = time.time()
+    try:
+        status, _ = pool.request("POST", url, body)
+    except OSError:
+        return 0
+    return status
+
+
 async def track_inclusion(
     cfg: BenchConfig,
     state: LoadState,
-    pool: HttpPool,
+    client: Client,
     query_url: str,
     marker: bytes,
     height: int,
@@ -1022,12 +1054,12 @@ async def track_inclusion(
             tx for tx in state.pending.values() if now - tx.t_submit > cfg.tx_timeout_s
         ]:
             state.resolve(tx.id, "timeout", now)
-        top = await asyncio.to_thread(query_height, pool, query_url)
+        top = await client.call(query_height, query_url)
         seen = time.time()
         for new in range(height, top):
             appeared.setdefault(new, seen)
         while height < top - PAYLOAD_LAG_BLOCKS:
-            raw = await asyncio.to_thread(block_payload, pool, query_url, height)
+            raw = await client.call(block_payload, query_url, height)
             if raw is None:
                 missing_since = missing_since or time.time()
                 if time.time() - missing_since < MISSING_PAYLOAD_S:
