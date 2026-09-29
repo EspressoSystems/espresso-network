@@ -217,7 +217,7 @@ impl LeafProof {
                 );
 
                 quorum
-                    .verify_cert2(&**cert2, version)
+                    .verify_cert(&**cert2, version)
                     .await
                     .context("verifying cert2 signature")?;
 
@@ -237,7 +237,7 @@ impl LeafProof {
                         "leaf QC block number does not match leaf"
                     );
                     quorum
-                        .verify_cert2(&**leaf_qc, version)
+                        .verify_cert(&**leaf_qc, version)
                         .await
                         .context("verifying leaf QC signature")?;
                 }

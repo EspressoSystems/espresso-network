@@ -339,7 +339,7 @@ where
         );
         let quorum = StakeTableQuorum::new((cert2.data.epoch, self), self.epoch_height);
         quorum
-            .verify_cert2(&cert2, header.version())
+            .verify_cert(&cert2, header.version())
             .await
             .context("verifying cert2 signature")?;
         Ok(cert2)

@@ -56,16 +56,16 @@ pub trait Quorum: Sync {
     ) -> impl Send + Future<Output = Result<()>>;
 
     /// Check a threshold signature on a certificate, without next-epoch checks.
-    fn verify_cert2<D>(
+    fn verify_cert<D>(
         &self,
         cert: &(impl vote::Certificate<SeqTypes, D> + Sync),
         version: Version,
     ) -> impl Send + Future<Output = Result<()>> {
-        async move { dispatch_version!(version, self.verify_cert2_static::<V, _>(cert)) }
+        async move { dispatch_version!(version, self.verify_cert_static::<V, _>(cert)) }
     }
 
-    /// Same as [`verify_cert2`](Self::verify_cert2), but with the version as a type-level parameter.
-    fn verify_cert2_static<V: StaticVersionType + 'static, D>(
+    /// Same as [`verify_cert`](Self::verify_cert), but with the version as a type-level parameter.
+    fn verify_cert_static<V: StaticVersionType + 'static, D>(
         &self,
         cert: &(impl vote::Certificate<SeqTypes, D> + Sync),
     ) -> impl Send + Future<Output = Result<()>>;
@@ -375,7 +375,7 @@ where
         Ok(())
     }
 
-    async fn verify_cert2_static<V: StaticVersionType + 'static, D>(
+    async fn verify_cert_static<V: StaticVersionType + 'static, D>(
         &self,
         cert: &(impl vote::Certificate<SeqTypes, D> + Sync),
     ) -> Result<()> {
