@@ -1956,33 +1956,25 @@ mod tests {
             .unwrap();
     }
 
-    /// Records the views delivered in decide events, in delivery order.
+    /// Records the leaves delivered in decide events, in delivery order.
     #[derive(Clone, Debug, Default)]
     struct DecideViewCollector {
-        views: Arc<RwLock<Vec<u64>>>,
+        leaves: Arc<RwLock<Vec<Leaf2>>>,
     }
 
     #[async_trait]
     impl EventConsumer for DecideViewCollector {
         async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
-            let mut views = self.views.write().await;
+            let mut leaves = self.leaves.write().await;
             match event {
                 // Decide events carry their leaves newest first.
-                CoordinatorEvent::NewDecide { leaf_infos, .. } => views.extend(
-                    leaf_infos
-                        .iter()
-                        .rev()
-                        .map(|info| info.leaf.view_number().u64()),
-                ),
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => {
+                    leaves.extend(leaf_infos.iter().rev().map(|info| info.leaf.clone()))
+                },
                 CoordinatorEvent::LegacyEvent(Event {
                     event: EventType::Decide { leaf_chain, .. },
                     ..
-                }) => views.extend(
-                    leaf_chain
-                        .iter()
-                        .rev()
-                        .map(|info| info.leaf.view_number().u64()),
-                ),
+                }) => leaves.extend(leaf_chain.iter().rev().map(|info| info.leaf.clone())),
                 _ => {},
             }
             Ok(())
@@ -1990,16 +1982,23 @@ mod tests {
     }
 
     async fn received_views(consumer: &DecideViewCollector) -> Vec<u64> {
-        consumer.views.read().await.clone()
+        consumer
+            .leaves
+            .read()
+            .await
+            .iter()
+            .map(|leaf| leaf.view_number().u64())
+            .collect()
     }
 
     /// Until a gap-fill decide arrives, event processing holds its cursor at the gap: nothing
     /// past it is delivered, and the pending leaves are neither skipped nor dropped.
     ///
-    /// sql-only: the fs backend keeps the pop-oldest cursor and skips gaps (the consumer
+    /// sql and journal only: the fs backend keeps the pop-oldest cursor and skips gaps (the consumer
     /// re-fetches missing blocks), trading gap-fill delivery for cheap decide passes.
     #[rstest::rstest]
     #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::journal::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_holds_events<P: TestablePersistence>(#[case] _p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
@@ -2041,9 +2040,10 @@ mod tests {
     /// Once the gap-fill decide arrives, the consumer receives the gap leaf and everything held
     /// up behind it, in order, exactly once each.
     ///
-    /// sql-only: see [`test_decide_gap_holds_events`].
+    /// sql and journal only: see [`test_decide_gap_holds_events`].
     #[rstest::rstest]
     #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::journal::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_decide_gap_fill_delivers_all<P: TestablePersistence>(
         #[case] _p: PhantomData<P>,
@@ -2070,6 +2070,167 @@ mod tests {
             vec![0, 1, 2, 3, 4],
             "after the gap fills, every leaf is delivered in order, exactly once"
         );
+    }
+
+    /// Leaves persisted but not yet processed when the node stops are delivered after it
+    /// restarts, in order and exactly once.
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::journal::Persistence>)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_decide_processing_survives_restart<P: TestablePersistence>(
+        #[case] _p: PhantomData<P>,
+    ) {
+        let tmp = P::tmp_storage().await;
+        let consumer = DecideViewCollector::default();
+        let chain = consecutive_height_chain(5).await;
+
+        let storage = P::connect(&tmp).await;
+        persist_range(&storage, &chain, 0..3).await;
+        drop(storage);
+
+        let storage = P::connect(&tmp).await;
+        storage
+            .process_decided_events(ViewNumber::new(2), None, &consumer)
+            .await
+            .unwrap();
+        assert_eq!(received_views(&consumer).await, vec![0, 1, 2]);
+        persist_range(&storage, &chain, 3..5).await;
+        drop(storage);
+
+        let storage = P::connect(&tmp).await;
+        storage
+            .process_decided_events(ViewNumber::new(4), None, &consumer)
+            .await
+            .unwrap();
+        assert_eq!(received_views(&consumer).await, vec![0, 1, 2, 3, 4]);
+    }
+
+    /// A block decided right after its DA proposal is stored reaches the consumer with its
+    /// payload.
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::journal::Persistence>)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_decide_delivers_payload_stored_just_before<P: TestablePersistence>(
+        #[case] _p: PhantomData<P>,
+    ) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+        let consumer = DecideViewCollector::default();
+        let chain = consecutive_height_chain(20).await;
+
+        for view in 0..chain.len() {
+            store_da_proposal(&storage, view as u64).await;
+            decide_range(&storage, &chain, view..view + 1, &consumer).await;
+        }
+
+        let leaves = consumer.leaves.read().await;
+        assert_eq!(leaves.len(), chain.len());
+        let missing = leaves
+            .iter()
+            .filter(|leaf| leaf.block_payload().is_none())
+            .map(|leaf| leaf.view_number().u64())
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "delivered without a payload: {missing:?}"
+        );
+    }
+
+    /// A consumer far behind consensus still receives every block with its payload once it
+    /// catches up: storage keeps what it has not yet delivered.
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::journal::Persistence>)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_decide_delivers_payloads_after_long_lag<P: TestablePersistence>(
+        #[case] _p: PhantomData<P>,
+    ) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+        let consumer = DecideViewCollector::default();
+        let chain = consecutive_height_chain(30).await;
+
+        for view in 0..chain.len() {
+            store_da_proposal(&storage, view as u64).await;
+            persist_range(&storage, &chain, view..view + 1).await;
+        }
+        storage
+            .process_decided_events(ViewNumber::new(chain.len() as u64 - 1), None, &consumer)
+            .await
+            .unwrap();
+
+        let leaves = consumer.leaves.read().await;
+        assert_eq!(leaves.len(), chain.len());
+        let missing = leaves
+            .iter()
+            .filter(|leaf| leaf.block_payload().is_none())
+            .map(|leaf| leaf.view_number().u64())
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "delivered without a payload: {missing:?}"
+        );
+    }
+
+    /// Store a DA proposal for `view`, with a payload unique to that view.
+    async fn store_da_proposal<P: TestablePersistence>(storage: &P, view: u64) {
+        let genesis_payload = Leaf2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test.base,
+        )
+        .await
+        .block_payload()
+        .unwrap();
+        let (_, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
+        let transactions = vec![view as u8; 1 << 16];
+        let da_proposal = Proposal {
+            data: DaProposal2::<SeqTypes> {
+                encoded_transactions: transactions.clone().into(),
+                metadata: genesis_payload.ns_table().clone(),
+                view_number: ViewNumber::new(view),
+                epoch: None,
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
+            },
+            signature: BLSPubKey::sign(&privkey, &transactions).unwrap(),
+            _pd: Default::default(),
+        };
+        let payload_commitment = vid_commitment(
+            &transactions,
+            &genesis_payload.ns_table().encode(),
+            2,
+            TEST_VERSIONS.test.base,
+        );
+        storage
+            .append_da2(&da_proposal, payload_commitment)
+            .await
+            .unwrap();
+    }
+
+    /// Persist the leaves of `chain` at indices (== views) `range` without processing them.
+    async fn persist_range<P: TestablePersistence>(
+        storage: &P,
+        chain: &[(Leaf2, QuorumCertificate2<SeqTypes>)],
+        range: std::ops::Range<usize>,
+    ) {
+        let decided_view = ViewNumber::new(range.end as u64 - 1);
+        let leaf_chain = chain[range]
+            .iter()
+            .map(|(leaf, qc)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        storage
+            .persist_decided_leaves(
+                decided_view,
+                leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                None,
+                &NullEventConsumer,
+            )
+            .await
+            .unwrap();
     }
 
     #[rstest_reuse::apply(replaying_persistence_types)]

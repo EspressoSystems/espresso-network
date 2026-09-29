@@ -345,6 +345,8 @@ pub struct Lane {
     /// writer thread so a wal roll's snapshot frame reserves its lsn from the same counter,
     /// instead of guessing `active.last_lsn + 1` and racing the next `enqueue`.
     alloc: Arc<Mutex<Lsn>>,
+    /// The last lsn written to the segment file, and so visible to reads, fsynced or not.
+    written: watch::Receiver<Lsn>,
     durable: watch::Receiver<Lsn>,
     in_flight: Arc<Semaphore>,
     in_flight_budget: u32,
@@ -395,6 +397,18 @@ impl Lane {
             .acquire_many_owned(bytes.min(self.in_flight_budget))
             .await
             .expect("in-flight semaphore is never closed")
+    }
+
+    /// Blocks until every record enqueued before this call is written, so a read that follows
+    /// finds it.
+    pub async fn wait_enqueued_written(&self) -> anyhow::Result<()> {
+        let last = *self.alloc.lock() - 1;
+        self.written
+            .clone()
+            .wait_for(|written| *written >= last)
+            .await
+            .context("journal writer thread exited before writing an enqueued record")?;
+        Ok(())
     }
 
     pub async fn wait_durable(&self, lsn: Lsn) -> anyhow::Result<()> {
@@ -865,6 +879,7 @@ pub fn spawn_lane<F: JournalFs>(
     };
 
     let (tx, rx) = mpsc::unbounded_channel::<Write>();
+    let (written_tx, written_rx) = watch::channel(active.last_lsn);
     let (durable_tx, durable_rx) = watch::channel(active.last_lsn);
     let in_flight = Arc::new(Semaphore::new(cfg.in_flight_bytes));
     let in_flight_budget =
@@ -884,6 +899,7 @@ pub fn spawn_lane<F: JournalFs>(
         active.last_lsn = next_lsn;
         active.snapshot_end = active.offset;
         timed_sync(&mut active.file, &metrics).context("fsyncing initial wal snapshot")?;
+        written_tx.send(active.last_lsn).ok();
         durable_tx.send(active.last_lsn).ok();
     }
 
@@ -901,6 +917,7 @@ pub fn spawn_lane<F: JournalFs>(
         cfg,
         rx,
         active,
+        written_tx,
         durable_tx,
         hook,
         segments,
@@ -921,6 +938,7 @@ pub fn spawn_lane<F: JournalFs>(
             stream,
             tx,
             alloc,
+            written: written_rx,
             durable: durable_rx,
             in_flight,
             in_flight_budget,
@@ -939,6 +957,7 @@ struct Writer<F: JournalFs> {
     cfg: LaneConfig,
     rx: mpsc::UnboundedReceiver<Write>,
     active: ActiveSegment<F::File>,
+    written_tx: watch::Sender<Lsn>,
     durable_tx: watch::Sender<Lsn>,
     hook: Option<Arc<dyn SnapshotHook>>,
     segments: Arc<Mutex<SegmentSet>>,
@@ -1016,6 +1035,7 @@ impl<F: JournalFs> Writer<F> {
             if let Some(index) = &self.index {
                 index.lock().extend(written);
             }
+            self.written_tx.send(self.active.last_lsn).ok();
             self.active.offset += self.frame_buf.len() as u64;
             // A batch can overshoot `max_batch_bytes`; shrink only well past it, so saturated
             // batches reuse the buffer and one oversized record does not keep its copy resident.
@@ -1108,6 +1128,7 @@ impl<F: JournalFs> Writer<F> {
             tracing::error!(?stream, %err, "journal: roll fsync of old segment failed");
             std::process::abort();
         }
+        self.written_tx.send(active.last_lsn).ok();
         self.durable_tx.send(active.last_lsn).ok();
         self.segments
             .lock()
@@ -1146,6 +1167,7 @@ impl<F: JournalFs> Writer<F> {
             new_active.offset += frame.len() as u64;
             new_active.last_lsn = new_first_lsn;
             new_active.snapshot_end = new_active.offset;
+            self.written_tx.send(new_active.last_lsn).ok();
             self.durable_tx.send(new_active.last_lsn).ok();
         }
 

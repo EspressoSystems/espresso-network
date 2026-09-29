@@ -47,7 +47,7 @@ use hotshot_types::{
     },
     traits::{
         block_contents::{BlockHeader as _, BlockPayload as _},
-        metrics::Metrics,
+        metrics::{Gauge, Metrics, NoMetrics},
     },
 };
 
@@ -224,6 +224,9 @@ pub struct Persistence {
     /// inside `Inner`: it starts as a `NoMetrics`-backed default and only this clone (the one
     /// `enable_metrics` is called on) observes the swap, matching fs/sql's existing behaviour.
     metrics: Arc<PersistenceMetricsValue>,
+    /// DA proposals handed to `append_da2` and not yet queued for the writer thread. It only
+    /// stays above zero while the data stream falls behind.
+    pending_da_writes: Box<dyn Gauge>,
 }
 
 struct Inner {
@@ -456,6 +459,7 @@ impl Persistence {
                 _lock: lock_file,
             }),
             metrics: Arc::new(PersistenceMetricsValue::default()),
+            pending_da_writes: NoMetrics::boxed().create_gauge(String::new(), None),
         })
     }
 
@@ -636,17 +640,28 @@ impl Persistence {
         Ok(())
     }
 
-    /// The newest `kind` data record at `view`. A query node reads it through its index, any
-    /// other node scans the segments that could hold it.
+    /// The newest `kind` data record at `view`, including one still queued for the writer thread.
+    /// A query node reads it through its index, any other node scans the segments that could
+    /// hold it.
     async fn read_data<T>(&self, kind: Kind, view: ViewNumber) -> anyhow::Result<Option<T>>
     where
         T: serde::de::DeserializeOwned + Send + 'static,
     {
         let Some(index) = &self.inner.replay_index else {
+            self.inner.data.wait_enqueued_written().await?;
             return self.scan_for(Stream::Data, kind, view).await;
         };
-        let Some(location) = index.lock().get(&(view.u64(), kind)).copied() else {
-            return Ok(None);
+        let key = (view.u64(), kind);
+        let found = index.lock().get(&key).copied();
+        let location = match found {
+            Some(location) => location,
+            None => {
+                self.inner.data.wait_enqueued_written().await?;
+                let Some(location) = index.lock().get(&key).copied() else {
+                    return Ok(None);
+                };
+                location
+            },
         };
         let path = lane::segment_path(&self.inner.data_dir, location.seq);
         tokio::task::spawn_blocking(move || -> anyhow::Result<Option<T>> {
@@ -722,7 +737,9 @@ impl Persistence {
                     None if view == ViewNumber::genesis() => {
                         leaf.fill_block_payload_unchecked(Payload::empty().0)
                     },
-                    None => tracing::debug!(%view, "DA proposal not available at replay"),
+                    None => {
+                        tracing::warn!(%view, "DA proposal not available at replay, the query service must fetch this block")
+                    },
                 }
                 let vid_share = self
                     .read_data::<Proposal<SeqTypes, VidDisperseShare<SeqTypes>>>(Kind::Vid, view)
@@ -1100,10 +1117,31 @@ impl SequencerPersistence for Persistence {
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         _vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
+        // Only a query node replays payloads from here, so only there must a DA proposal survive
+        // a power loss.
+        let class = if self.inner.replay_index.is_some() {
+            Class::Durable
+        } else {
+            Class::Enqueue
+        };
         let now = Instant::now();
-        let res = self
-            .put_data(Record::Da(proposal.clone()), Class::Enqueue)
-            .await;
+        let storage = self.clone();
+        let record = Record::Da(proposal.clone());
+        let view = proposal.data.view_number;
+        storage.pending_da_writes.update(1);
+        // Consensus aborts storage writes a few views behind the decide, which may be before a
+        // DA proposal has room to be queued. This task outlives that abort, so the payload the
+        // query service replays is still written.
+        let res = tokio::spawn(async move {
+            let res = storage.put_data(record, class).await;
+            storage.pending_da_writes.update(-1);
+            if let Err(err) = &res {
+                tracing::warn!(%view, "failed to store DA proposal: {err:#}");
+            }
+            res
+        })
+        .await
+        .context("DA proposal write task panicked")?;
         self.metrics
             .internal_append_da2_duration
             .add_point(now.elapsed().as_secs_f64());
@@ -1161,6 +1199,8 @@ impl SequencerPersistence for Persistence {
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics) {
         self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
+        self.pending_da_writes =
+            metrics.create_gauge("journal_pending_da_writes".to_string(), None);
         metrics
             .create_histogram(
                 "journal_replay_seconds".to_string(),
@@ -1274,11 +1314,15 @@ impl DhtPersistentStorage for Persistence {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use espresso_types::{NodeState, ValidatedState};
     use hotshot::types::{BLSPubKey, SignatureKey};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::metrics::PrometheusMetrics;
-    use hotshot_types::{traits::EncodeBytes, utils::EpochTransitionIndicator};
+    use hotshot_types::{
+        data::vid_commitment, traits::EncodeBytes, utils::EpochTransitionIndicator,
+    };
     use tempfile::TempDir;
 
     use super::{testing::TEST_MAX_BLOCK_SIZE, *};
@@ -1355,6 +1399,47 @@ mod tests {
             .unwrap();
     }
 
+    // Regression test: consensus aborts storage writes a few views behind the decide. A DA
+    // proposal still waiting for in-flight room at that point must be stored anyway, or a query
+    // node replays its block without the payload.
+    #[tokio::test]
+    async fn stores_da_proposal_when_its_write_is_aborted() {
+        let tmp = TempDir::new().unwrap();
+        let storage = Persistence::open(query_options(&tmp)).await.unwrap();
+        let Record::Da(proposal) = da_record(1024).await else {
+            unreachable!("da_record builds a DA record");
+        };
+        let commitment = vid_commitment(
+            &proposal.data.encoded_transactions,
+            &proposal.data.metadata.encode(),
+            2,
+            TEST_VERSIONS.test.base,
+        );
+
+        let budget = storage.inner.data.reserve(IN_FLIGHT_BYTES as u32).await;
+        let write = tokio::spawn({
+            let storage = storage.clone();
+            let proposal = proposal.clone();
+            async move { storage.append_da2(&proposal, commitment).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        write.abort();
+        assert!(write.await.unwrap_err().is_cancelled());
+        drop(budget);
+
+        let stored = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(stored) = storage.load_da_proposal(ViewNumber::new(1)).await.unwrap() {
+                    return stored;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the aborted DA proposal write never landed");
+        assert_eq!(stored, proposal);
+    }
+
     #[test]
     fn find_in_segment_fails_on_corrupt_sealed_segment() {
         let header = SegmentHeader {
@@ -1398,6 +1483,15 @@ mod tests {
             ignore_existing: false,
             max_block_size: Some(TEST_MAX_BLOCK_SIZE),
             query_storage: None,
+        }
+    }
+
+    fn query_options(tmp: &TempDir) -> Options {
+        Options {
+            query_storage: Some(QueryStorage::Fs(side_fs::Options::new(
+                tmp.path().join("query"),
+            ))),
+            ..options(tmp)
         }
     }
 
@@ -1477,6 +1571,8 @@ mod testing {
             TempDir::new().unwrap()
         }
 
+        /// A query node's journal, so the shared tests cover replay. `mod tests` covers the
+        /// consensus-only journal.
         fn options(storage: &Self::Storage) -> impl PersistenceOptions<Persistence = Self> {
             Options {
                 path: storage.path().into(),
@@ -1484,7 +1580,9 @@ mod testing {
                 max_bytes: DEFAULT_MAX_BYTES,
                 ignore_existing: false,
                 max_block_size: Some(TEST_MAX_BLOCK_SIZE),
-                query_storage: None,
+                query_storage: Some(QueryStorage::Fs(side_fs::Options::new(
+                    storage.path().join("query"),
+                ))),
             }
         }
     }
