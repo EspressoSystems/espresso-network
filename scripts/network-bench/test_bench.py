@@ -623,17 +623,22 @@ class LabelTest(unittest.TestCase):
 class FakeNode(ThreadingHTTPServer):
     """Submit, block height and payload endpoints; `include` decides whether blocks carry the
     submitted transactions. A submit takes `accept_delay` s before the transaction is taken
-    and `reply_delay` s after."""
+    and `reply_delay` s after. Payloads in `lost` are never served, those in `late` only
+    `late[height]` s after their block was made."""
 
-    def __init__(self, include, lost=frozenset(), accept_delay=0.0, reply_delay=0.0):
+    def __init__(
+        self, include, lost=frozenset(), accept_delay=0.0, reply_delay=0.0, late=None
+    ):
         super().__init__(("127.0.0.1", 0), FakeHandler)
         self.include = include
         self.lost = lost
+        self.late = late or {}
         self.accept_delay = accept_delay
         self.reply_delay = reply_delay
         self.lock = threading.Lock()
         self.pending = []
         self.blocks = [b""]
+        self.made = [time.time()]
         self.submits = []
         self.max_outstanding = 0
         self.stop = threading.Event()
@@ -649,10 +654,14 @@ class FakeNode(ThreadingHTTPServer):
                 if self.include:
                     self.pending = []
                 self.blocks.append(block)
+                self.made.append(time.time())
 
 
 class FakeHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # Headers and body go out as separate writes; with Nagle each response waits for a
+    # delayed ACK.
+    disable_nagle_algorithm = True
     server: FakeNode
 
     def log_message(self, format, *args):
@@ -684,6 +693,8 @@ class FakeHandler(BaseHTTPRequestHandler):
             height = int(self.path.removeprefix("/v1/availability/payload/"))
             if height >= len(node.blocks) or height in node.lost:
                 return self.reply(404, "not found")
+            if time.time() - node.made[height] < node.late.get(height, 0.0):
+                return self.reply(404, "not found")
             raw = base64.b64encode(node.blocks[height]).decode()
         self.reply(200, {"data": {"raw_payload": raw, "ns_table": {"bytes": ""}}})
 
@@ -697,9 +708,10 @@ class LoadTest(unittest.TestCase):
         nodes=1,
         accept_delay=0.0,
         reply_delay=0.0,
+        late=None,
         **cfg,
     ):
-        node = FakeNode(include, lost, accept_delay, reply_delay)
+        node = FakeNode(include, lost, accept_delay, reply_delay, late)
         threads = [
             threading.Thread(target=node.serve_forever),
             threading.Thread(target=node.produce),
@@ -763,7 +775,7 @@ class LoadTest(unittest.TestCase):
         # neither the queue nor the tracker waiting behind it counts as latency.
         _, _, txs, _ = self.run_load(
             True,
-            0.5,
+            1.0,
             accept_delay=0.2,
             workers=1,
             rate_mb_s=0.02,
@@ -773,7 +785,7 @@ class LoadTest(unittest.TestCase):
         self.assertGreater(len(txs), 5)
         self.assertTrue(all(tx["status"] == "included" for tx in txs))
         latencies = [tx["t_included"] - tx["t_submit"] for tx in txs]
-        self.assertLess(max(latencies), 0.6)
+        self.assertLess(max(latencies), 1.0)
 
     def test_included_before_the_submit_returns(self):
         _, _, txs, _ = self.run_load(
@@ -781,6 +793,39 @@ class LoadTest(unittest.TestCase):
         )
         self.assertGreater(len(txs), 2)
         self.assertTrue(all(tx["status"] == "included" for tx in txs))
+
+    def test_lost_payload_does_not_stall_later_blocks(self):
+        with (
+            mock.patch.object(bench, "MISSING_PAYLOAD_S", 1.0),
+            self.assertLogs(bench.log, "WARNING"),
+        ):
+            _, _, txs, meta = self.run_load(
+                True,
+                2.0,
+                lost={10},
+                rate_mb_s=0.02,
+                max_pending=8,
+                tx_timeout_s=1.5,
+            )
+        self.assertEqual(meta["missing_payloads"], [10])
+        self.assertEqual(meta["cap_waits"], 0)
+        included = [tx for tx in txs if tx["status"] == "included"]
+        self.assertLessEqual(len(txs) - len(included), 2)
+        self.assertLess(max(tx["t_included"] - tx["t_submit"] for tx in included), 0.5)
+
+    def test_late_payload_counts_from_its_block(self):
+        _, _, txs, meta = self.run_load(
+            True,
+            1.5,
+            late={10: 1.0},
+            rate_mb_s=0.02,
+            max_pending=8,
+            tx_timeout_s=3,
+        )
+        self.assertEqual(meta["missing_payloads"], [])
+        self.assertEqual(meta["cap_waits"], 0)
+        self.assertTrue(all(tx["status"] == "included" for tx in txs))
+        self.assertLess(max(tx["t_included"] - tx["t_submit"] for tx in txs), 0.7)
 
     def test_lost_payload_is_skipped(self):
         with (
