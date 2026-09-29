@@ -152,12 +152,11 @@ STOP_TIMEOUT_S = 20
 CLEANUP_TIMEOUT_S = 60
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 MISSING_PAYLOAD_S = 10
-MISSING_RETRY_S = 0.5
 # One slow or failed answer from the query node must not end the run.
 READ_DEADLINE_S = 30.0
 READ_RETRY_S = 1.0
-# Height polls, payload scans and retries of missing payloads.
-TRACKER_THREADS = 4
+# The tracker's requests are sequential.
+TRACKER_THREADS = 1
 IN_FLIGHT_STEP_S = 1.0
 # Keeping-up rules, see throughput_bound.
 KEEP_UP_RATIO = 0.95
@@ -1057,66 +1056,62 @@ async def track_inclusion(
 ) -> None:
     """Scan every new block's payload for our marker; time out transactions that never show.
     A transaction counts as included when its block's header appeared on the query node. A
-    payload the query node lacks is retried in the background while later blocks are scanned."""
+    payload the query node lacks is retried after each scan until MISSING_PAYLOAD_S."""
     pattern = re.compile(re.escape(marker) + b"(.{8})", re.DOTALL)
     deadline = None
     report = time.time() + PROGRESS_S
     appeared: dict[int, float] = {}
-    async with asyncio.TaskGroup() as retries:
-        while True:
-            now = time.time()
-            if now >= report:
-                log_progress(state, height)
-                report = now + PROGRESS_S
-            if done.is_set():
-                deadline = deadline or now + cfg.tx_timeout_s
-                if not state.pending or now > deadline:
-                    for tx_id in list(state.pending):
-                        state.resolve(tx_id, "timeout", now)
-                    return
-            for tx in [
-                tx
-                for tx in state.pending.values()
-                if now - tx.t_submit > cfg.tx_timeout_s
-            ]:
-                state.resolve(tx.id, "timeout", now)
-            top = await client.call(query_height, query_url)
-            seen = time.time()
-            for new in range(height, top):
-                appeared.setdefault(new, seen)
-            while height < top - PAYLOAD_LAG_BLOCKS:
-                at_height = appeared.pop(height)
-                raw = await client.call(block_payload, query_url, height)
-                if raw is None:
-                    retries.create_task(
-                        retry_payload(
-                            state, client, query_url, pattern, height, at_height
-                        )
-                    )
-                else:
-                    record_inclusions(state, pattern, raw, at_height)
-                height += 1
-            await asyncio.sleep(0.1)
+    missing: dict[int, float] = {}
+    while True:
+        now = time.time()
+        if now >= report:
+            log_progress(state, height)
+            report = now + PROGRESS_S
+        if done.is_set():
+            deadline = deadline or now + cfg.tx_timeout_s
+            if not state.pending or (now > deadline and not missing):
+                for tx_id in list(state.pending):
+                    state.resolve(tx_id, "timeout", now)
+                return
+        for tx in [
+            tx for tx in state.pending.values() if now - tx.t_submit > cfg.tx_timeout_s
+        ]:
+            state.resolve(tx.id, "timeout", now)
+        top = await client.call(query_height, query_url)
+        seen = time.time()
+        for new in range(height, top):
+            appeared.setdefault(new, seen)
+        while height < top - PAYLOAD_LAG_BLOCKS:
+            at_height = appeared.pop(height)
+            raw = await client.call(block_payload, query_url, height)
+            if raw is None:
+                missing[height] = at_height
+            else:
+                record_inclusions(state, pattern, raw, at_height)
+            height += 1
+        await retry_missing(state, client, query_url, pattern, missing)
+        await asyncio.sleep(0.1)
 
 
-async def retry_payload(
+async def retry_missing(
     state: LoadState,
     client: Client,
     query_url: str,
     pattern: re.Pattern[bytes],
-    height: int,
-    at_height: float,
+    missing: dict[int, float],
 ) -> None:
-    """Until MISSING_PAYLOAD_S after the block appeared; then it counts as lost and its
-    transactions, which cannot be told apart, time out."""
-    while time.time() - at_height < MISSING_PAYLOAD_S:
-        await asyncio.sleep(MISSING_RETRY_S)
+    """One fetch per missing payload. Past MISSING_PAYLOAD_S after its block appeared a
+    payload counts as lost; its transactions, which cannot be told apart, time out."""
+    for height, at_height in list(missing.items()):
         raw = await client.call(block_payload, query_url, height)
-        if raw is not None:
+        if raw is None and time.time() - at_height < MISSING_PAYLOAD_S:
+            continue
+        del missing[height]
+        if raw is None:
+            log.warning("payload %d missing on the query node, skipping", height)
+            state.missing_payloads.append(height)
+        else:
             record_inclusions(state, pattern, raw, at_height)
-            return
-    log.warning("payload %d missing on the query node, skipping", height)
-    state.missing_payloads.append(height)
 
 
 def record_inclusions(
