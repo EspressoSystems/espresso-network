@@ -2121,8 +2121,12 @@ HEADLINE = (
         "higher",
         10,
     ),
-    Metric("tx latency p50", "load.latency_ms.p50", "ms", "lower", 15),
-    Metric("tx latency p99", "load.latency_ms.p99", "ms", "lower", 20),
+    Metric("consensus latency p50", "load.consensus_latency_ms.p50", "ms", "lower", 15),
+    Metric("consensus latency p99", "load.consensus_latency_ms.p99", "ms", "lower", 20),
+    Metric("query lag p50", "load.query_lag_ms.p50", "ms", "lower", 30),
+    Metric("query lag p99", "load.query_lag_ms.p99", "ms", "lower", 30),
+    Metric("tx latency p50 (via query node)", "load.latency_ms.p50", "ms", "lower", 15),
+    Metric("tx latency p99 (via query node)", "load.latency_ms.p99", "ms", "lower", 20),
     Metric("mean view time", "network.mean_view_ms.value", "ms", "lower", 10),
     Metric("consensus timeouts", "network.timeouts", "", "lower", 0),
     Metric(
@@ -2539,13 +2543,6 @@ def process_table(result: BenchResult) -> list[str]:
 
 def load_lines(result: BenchResult) -> list[str]:
     load, cfg, net = result["load"], result["config"], result["network"]
-    lat = load["latency_ms"]
-    latency = (
-        f"p50 {lat['p50']:.0f}, p95 {lat['p95']:.0f}, p99 {lat['p99']:.0f}, "
-        f"max {lat['max']:.0f} ms (n={lat['n']})"
-        if lat
-        else "n/a"
-    )
     blocks = net["blocks_per_s"]["value"]
     return [
         (
@@ -2558,9 +2555,28 @@ def load_lines(result: BenchResult) -> list[str]:
             f"{load['included_per_s']:.1f} tx/s, inclusion ratio {load['inclusion_ratio']:.3f}"
         ),
         f"- decided blocks: {fmt_num(blocks)}/s, peak in flight {load['max_in_flight']}",
-        f"- tx latency, submit to block on node0: {latency}",
+        f"- tx latency, submit to block on node0's query API: {spread(load['latency_ms'])}",
+        (
+            "- consensus latency, submit to block on a validator: "
+            f"{spread(load['consensus_latency_ms'])}"
+        ),
+        (
+            "- query lag, height on node0's query API after a validator: "
+            f"{spread(load['query_lag_ms'])}, last sub-window median "
+            f"{fmt_num(load['query_lag_end_ms'])} ms"
+        ),
+        f"- benchmark tracker lag: {spread(load['tracker_lag_ms'])}",
         f"- {load['timeouts']} tx timeouts, {load['submit_errors']} submit errors",
     ]
+
+
+def spread(q: Quantiles | None) -> str:
+    if q is None:
+        return "n/a"
+    return (
+        f"p50 {q['p50']:.0f}, p95 {q['p95']:.0f}, p99 {q['p99']:.0f}, "
+        f"max {q['max']:.0f} ms (n={q['n']})"
+    )
 
 
 def footer(result: BenchResult) -> list[str]:

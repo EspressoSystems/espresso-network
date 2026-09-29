@@ -205,6 +205,18 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(sorted(order, key=summary.index), order)
         self.assertNotIn("| delta |", summary)
 
+    def test_latency_breakdown(self):
+        summary = bench.render(make_result(), None)
+        for row in (
+            "| consensus latency p50 | 900 ms |",
+            "| consensus latency p99 | 2000 ms |",
+            "| query lag p50 | 200 ms |",
+            "| query lag p99 | 400 ms |",
+            "| tx latency p50 (via query node) | 1200 ms |",
+        ):
+            self.assertIn(row, summary)
+        self.assertIn("- benchmark tracker lag: p50 50, p95 100, p99 100", summary)
+
     def test_ops_table_drops_duplicates(self):
         current = make_result()
         op = current["nodes"]["node0"]["ops"]["consensus_storage_append_da"]
