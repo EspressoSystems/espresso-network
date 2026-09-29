@@ -1364,6 +1364,21 @@ class StaircaseTest(unittest.TestCase):
         heights.saw("query", 5, 0.0)
         self.assertIsNotNone(asyncio.run(bench.drain(state, counters, heights, 0.3)))
 
+    def test_drain_does_not_chase_new_validator_heights(self):
+        state = types.SimpleNamespace(pending={})
+        counters = [{"decided_bytes": 1}, {"decided_bytes": 1}]
+        heights = bench.Heights(0)
+        heights.saw("validator", 5, 0.0)
+
+        async def run() -> float | None:
+            task = asyncio.create_task(bench.drain(state, counters, heights, 1.0))
+            await asyncio.sleep(0.05)
+            heights.saw("validator", 6, 0.0)
+            heights.saw("query", 5, 0.0)
+            return await task
+
+        self.assertIsNotNone(asyncio.run(run()))
+
     def test_theil_sen_ignores_an_outlier(self):
         points = [(float(x), 2.0 * x) for x in range(10)] + [(10.0, 100.0)]
         self.assertAlmostEqual(bench.theil_sen(points), 2.0)

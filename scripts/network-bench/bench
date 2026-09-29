@@ -19,8 +19,8 @@ lag behind the validators exceeds its target or grows. At the first failing step
 and, once its backlog has drained (consensus settled, query node caught up), one refine step
 runs halfway back; the refine step is skipped if the backlog does not drain in time. Capacity
 is the highest passing rate, split into the consensus and query node limits. Each transaction
-carries a per-run marker and its id, so
-inclusion is found by scanning node0's block payloads, one fetch per block.
+carries a per-run marker and its id, so inclusion is found by scanning node0's block payloads,
+one fetch per block.
 
 A run is `noisy` when steal time, calibration drift, submit errors, lost payloads or a lagging
 payload scan suggest the runner, not the code, moved the numbers; noisy runs are kept but never
@@ -1160,15 +1160,17 @@ async def drain(
 ) -> float | None:
     """Submits nothing until no transaction is pending, decided bytes stopped growing and the
     query node caught up with the validators. Seconds that took, or None after `timeout_s`."""
-    start = time.time()
+    start, target = time.time(), None
     while time.time() - start < timeout_s:
         # Once nothing is pending, two equal samples (~1 s apart) mean consensus is idle.
         flat = (
             len(counters) >= 2
             and counters[-1]["decided_bytes"] == counters[-2]["decided_bytes"]
         )
-        caught_up = heights.top("query") >= heights.top("validator")
-        if not state.pending and flat and caught_up:
+        if target is None and not state.pending and flat:
+            # Fixed once settled: empty blocks keep the validator height moving.
+            target = heights.top("validator")
+        if target is not None and heights.top("query") >= target:
             return time.time() - start
         await asyncio.sleep(0.1)
     return None
