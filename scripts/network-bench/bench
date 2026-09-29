@@ -255,7 +255,7 @@ class HostStats(TypedDict):
 
 
 class LoadStats(TypedDict):
-    """Over all steps."""
+    """Over the whole load, warmup included."""
 
     submitted: int
     included: int
@@ -418,7 +418,6 @@ class StepComparison(TypedDict):
     rate_mb_s: float
     # Baseline runs that ran this rate.
     n: int
-    reached: bool
     rows: list[Row]
 
 
@@ -1494,7 +1493,11 @@ def step_fails(
 
 
 def capacity(steps: Sequence[Mapping[str, Any]]) -> Capacity:
-    """Highest passing rate below the lowest failing one, overall and per rule side."""
+    """Highest passing rate below the lowest failing one, overall and per rule side.
+
+    A side can fail at one rate and pass at a higher one: noise, or a refine step below the
+    first failure that trips the other side. Its limit is still below its lowest failing
+    rate, so the two limits need not bracket the steps the ramp passed."""
     ordered = sorted(steps, key=lambda s: s["rate_mb_s"])
 
     def limit(fails: Callable[[Mapping[str, Any]], list[str]]) -> tuple[Limit, Any]:
@@ -2423,7 +2426,6 @@ def compare_step(
     return {
         "rate_mb_s": rate,
         "n": len(theirs),
-        "reached": mine is not None,
         "rows": [
             compare_metric(
                 metric,
@@ -2662,31 +2664,32 @@ def fmt_limit(limit: Limit, first: float) -> str:
 
 
 def step_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
-    """One row per rate this run or the baseline ran; a cell beyond its threshold against the
-    baseline median at that rate carries the delta, bold when worse."""
+    """One row per rate this run ran, and per ramp rate the baseline ran but this run did not
+    reach; a cell beyond its threshold against the baseline median at that rate carries the
+    delta, bold when worse. Refine rates only the baseline ran are left out."""
     by_rate = (
         {c["rate_mb_s"]: c for c in comparison["steps"]}
         if comparison and comparison["used"]
         else {}
     )
-    rates = sorted({s["rate_mb_s"] for s in result["steps"]} | set(by_rate))
-    top = max(s["rate_mb_s"] for s in result["steps"])
+    ramp = set(result["config"]["steps"])
+    rates = sorted({s["rate_mb_s"] for s in result["steps"]} | (set(by_rate) & ramp))
+    runs = "main runs" if comparison and comparison["source"] == "main" else "reference runs"
     lines = [
         "| MB/s | "
         + " | ".join(STEP_COLUMNS)
         + " | verdict |"
-        + (" main runs |" if by_rate else ""),
+        + (f" {runs} |" if by_rate else ""),
         "|---:|" + "---:|" * len(STEP_COLUMNS) + "---|" + ("---:|" if by_rate else ""),
     ]
     for rate in rates:
         step, other = step_at(result, rate), by_rate.get(rate)
         tail = f" {other['n']} |" if other else (" 0 |" if by_rate else "")
         if step is None:
-            missing = "**not reached**" if rate > top else "not run"
             lines.append(
                 f"| {fmt_num(rate)} |"
                 + " |" * len(STEP_COLUMNS)
-                + f" {missing} |{tail}"
+                + f" **not reached** |{tail}"
             )
             continue
         rows = {row["label"]: row for row in other["rows"]} if other else {}
@@ -2714,7 +2717,23 @@ def step_cell(step: StepResult, label: str, row: Row | None) -> str:
 
 def step_verdict(step: StepResult) -> str:
     fails = step["consensus_fails"] + step["query_fails"]
-    return "pass" if not fails else "fail: " + "; ".join(fails)
+    return "pass" if not fails else "fail: " + ", ".join(map(fail_code, fails))
+
+
+# Rule text prefix -> the short name in the step table; see step_fails.
+FAIL_CODES = (
+    ("decided", "decided"),
+    ("no consensus metrics", "no metrics"),
+    ("consensus latency", "latency"),
+    ("query lag grows", "query lag growth"),
+    ("query lag p50", "query lag"),
+)
+
+
+def fail_code(rule: str) -> str:
+    if rule.endswith("view timeouts"):
+        return "timeouts"
+    return next((code for prefix, code in FAIL_CODES if rule.startswith(prefix)), rule)
 
 
 def step_details(result: BenchResult) -> list[str]:
@@ -2722,9 +2741,9 @@ def step_details(result: BenchResult) -> list[str]:
         (
             "| MB/s | decided | view timeouts | consensus p50/p99 ms "
             "| query lag p50/p99 ms | query lag slope ms/s | e2e p50/p99 ms | view ms "
-            "| CPU-s/MB | node0/1/2 CPU | postgres CPU |"
+            "| CPU-s/MB | node0/1/2 CPU | postgres CPU | failed rules |"
         ),
-        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"]):
         cpu = "/".join(fmt_num(s["node_cpu"].get(node)) for node in NODES)
@@ -2734,7 +2753,8 @@ def step_details(result: BenchResult) -> list[str]:
             f"| {pair(s['consensus_latency_ms'])} | {pair(s['query_lag_ms'])} "
             f"| {fmt_num(s['query_lag_slope_ms_s'])} | {pair(s['latency_ms'])} "
             f"| {fmt_num(s['mean_view_ms'])} | {fmt_num(s['cpu_s_per_mb'])} | {cpu} "
-            f"| {fmt_num(s['postgres_cpu'])} |"
+            f"| {fmt_num(s['postgres_cpu'])} "
+            f"| {'; '.join(s['consensus_fails'] + s['query_fails'])} |"
         )
     return lines
 

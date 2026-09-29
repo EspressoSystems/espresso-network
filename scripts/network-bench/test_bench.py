@@ -134,9 +134,7 @@ def make_result(steps=None, steal=0.0, config_hash="abc123"):
         },
         "config": {
             "workers": 6,
-            "max_pending": 48,
             "tx_size": 100_000,
-            "rate_mb_s": 4.0,
             "submit_nodes": 3,
             "steps": [4.0, 6.0, 8.0],
             "step_s": 30,
@@ -229,10 +227,28 @@ class RenderTest(unittest.TestCase):
         current = make_result([step(4.0), step(6.0, 5.0, consensus=["x"]), step(5.0)])
         comparison = compare(current, [make_result()] * 3)
         eight = next(c for c in comparison["steps"] if c["rate_mb_s"] == 8.0)
-        self.assertEqual((eight["reached"], eight["n"]), (False, 3))
+        self.assertEqual(eight["n"], 3)
         summary = bench.render(current, comparison)
         self.assertIn("| 8 | | | | | | | **not reached** | 3 |", summary)
         self.assertIn("| 5 | 5 MB/s | 900 ms |", summary)
+
+    def test_baseline_only_refine_rates_are_left_out(self):
+        refine = step(7.0)
+        refine["refine"] = True
+        baseline = make_result([step(4.0), step(6.0), step(8.0, 6.0, ["x"]), refine])
+        summary = bench.render(make_result(), compare(make_result(), [baseline] * 3))
+        self.assertNotRegex(summary, r"(?m)^\| 7 ")
+
+    def test_reference_baseline_header(self):
+        comparison = compare(make_result(), [make_result()], source="reference")
+        self.assertIn(
+            "| verdict | reference runs |", bench.render(make_result(), comparison)
+        )
+
+    def test_fail_rules_short_in_the_table_full_in_details(self):
+        summary = bench.render(make_result(), None)
+        self.assertIn("| fail: decided |", summary)
+        self.assertIn("| decided 88% of offered |", summary)
 
     def test_ops_table_drops_duplicates(self):
         current = make_result()
@@ -397,7 +413,7 @@ class CompareTest(unittest.TestCase):
         six = step_row(comparison, 4.0, "consensus p50")
         self.assertEqual(six["baseline"], 700.0)
         eight = next(c for c in comparison["steps"] if c["rate_mb_s"] == 8.0)
-        self.assertEqual((eight["n"], eight["reached"]), (1, True))
+        self.assertEqual(eight["n"], 1)
 
     def test_spread_widens_threshold(self):
         history = [
@@ -842,11 +858,12 @@ class LoadTest(unittest.TestCase):
         payload_delay=0.0,
         query_lag=0.0,
         block_txs=None,
-        rate_mb_s=0.02,
-        max_pending=1000,
+        rate=0.02,
+        cap_txs=1000,
         **cfg,
     ):
-        """One step of `duration` s at `rate_mb_s`, no warmup, unless `cfg` sets `steps`."""
+        """One step of `duration` s at `rate` MB/s with at most `cap_txs` in flight, no
+        warmup, unless `cfg` sets `steps`."""
         node = FakeNode(
             include,
             lost=lost,
@@ -867,10 +884,10 @@ class LoadTest(unittest.TestCase):
             **{
                 "tx_size": 1000,
                 "workers": 3,
-                "steps": (rate_mb_s,),
+                "steps": (rate,),
                 "step_s": duration,
                 "warmup_s": 0,
-                "cap_s": max_pending * 1000 / (rate_mb_s * 1e6),
+                "cap_s": cap_txs * 1000 / (rate * 1e6),
             }
             | cfg
         )
@@ -905,7 +922,7 @@ class LoadTest(unittest.TestCase):
     def test_submits_at_the_offered_rate(self):
         # 1000 byte txs at 0.02 MB/s: one every 50 ms, independent of inclusion.
         _, node, txs, meta = self.run_load(
-            True, 1.0, rate_mb_s=0.02, max_pending=100, tx_timeout_s=5
+            True, 1.0, rate=0.02, cap_txs=100, tx_timeout_s=5
         )
         self.assertIn(len(node.submits), range(19, 22))
         gaps = [b - a for a, b in zip(node.submits, node.submits[1:])]
@@ -915,15 +932,15 @@ class LoadTest(unittest.TestCase):
 
     def test_round_robin_over_submit_nodes(self):
         _, _, txs, _ = self.run_load(
-            True, 0.5, nodes=3, submit_nodes=2, rate_mb_s=0.02, tx_timeout_s=5
+            True, 0.5, nodes=3, submit_nodes=2, rate=0.02, tx_timeout_s=5
         )
         self.assertEqual([tx["node"] for tx in txs[:4]], [0, 1, 0, 1])
 
     def test_cap_blocks_until_timeout(self):
         _, node, txs, meta = self.run_load(
-            False, 2.5, rate_mb_s=1.0, max_pending=4, tx_timeout_s=1
+            False, 2.5, rate=1.0, cap_txs=4, tx_timeout_s=1
         )
-        # A permit returns only on timeout, and the first one is 1 s after the first submit.
+        # Room under the cap frees only on timeout, the first 1 s after the first submit.
         self.assertGreater(node.submits[4] - node.submits[0], 0.9)
         self.assertGreater(len(node.submits), 4)
         self.assertEqual(meta["max_in_flight"], 4)
@@ -938,8 +955,8 @@ class LoadTest(unittest.TestCase):
             1.0,
             accept_delay=0.2,
             workers=1,
-            rate_mb_s=0.02,
-            max_pending=100,
+            rate=0.02,
+            cap_txs=100,
             tx_timeout_s=5,
         )
         self.assertGreater(len(txs), 5)
@@ -954,8 +971,8 @@ class LoadTest(unittest.TestCase):
             2.0,
             accept_delay=0.3,
             workers=1,
-            rate_mb_s=0.02,
-            max_pending=5,
+            rate=0.02,
+            cap_txs=5,
             tx_timeout_s=1,
         )
         self.assertGreater(len(txs), 5)
@@ -968,8 +985,8 @@ class LoadTest(unittest.TestCase):
             True,
             0.5,
             payload_delay=0.1,
-            rate_mb_s=0.02,
-            max_pending=100,
+            rate=0.02,
+            cap_txs=100,
             tx_timeout_s=10,
         )
         self.assertGreater(len(txs), 5)
@@ -978,7 +995,7 @@ class LoadTest(unittest.TestCase):
 
     def test_heights_on_validators_and_query_node(self):
         _, _, txs, _ = self.run_load(
-            True, 0.5, query_lag=0.3, rate_mb_s=0.02, max_pending=100, tx_timeout_s=5
+            True, 0.5, query_lag=0.3, rate=0.02, cap_txs=100, tx_timeout_s=5
         )
         self.assertEqual({tx["status"] for tx in txs}, {"included"})
         by_height = {h["height"]: h for h in self.heights}
@@ -991,7 +1008,7 @@ class LoadTest(unittest.TestCase):
 
     def test_included_before_the_submit_returns(self):
         _, _, txs, _ = self.run_load(
-            True, 0.6, reply_delay=0.4, rate_mb_s=0.005, max_pending=100, tx_timeout_s=2
+            True, 0.6, reply_delay=0.4, rate=0.005, cap_txs=100, tx_timeout_s=2
         )
         self.assertGreater(len(txs), 2)
         self.assertTrue(all(tx["status"] == "included" for tx in txs))
@@ -1005,8 +1022,8 @@ class LoadTest(unittest.TestCase):
                 True,
                 2.0,
                 lost={10},
-                rate_mb_s=0.02,
-                max_pending=8,
+                rate=0.02,
+                cap_txs=8,
                 tx_timeout_s=1.5,
             )
         self.assertEqual(meta["missing_payloads"], [10])
@@ -1020,8 +1037,8 @@ class LoadTest(unittest.TestCase):
             True,
             1.5,
             late={10: 1.0},
-            rate_mb_s=0.02,
-            max_pending=8,
+            rate=0.02,
+            cap_txs=8,
             tx_timeout_s=3,
         )
         self.assertEqual(meta["missing_payloads"], [])
@@ -1030,10 +1047,11 @@ class LoadTest(unittest.TestCase):
         self.assertLess(max(tx["t_included"] - tx["t_submit"] for tx in txs), 0.7)
 
     def test_staircase_stops_at_the_first_failing_step_and_refines(self):
-        # 4 txs of 1000 bytes per 50 ms block: 0.08 MB/s of capacity.
+        # 4 txs of 1000 bytes per 50 ms block: 0.08 MB/s of capacity. 2 s steps: a shorter
+        # measured half holds too few transactions for a steady decided rate.
         with mock.patch.object(bench, "COUNTER_POLL_S", 0.05):
             self.run_load(
-                True, 1.0, block_txs=4, steps=(0.02, 0.04, 0.16, 0.32), tx_timeout_s=1
+                True, 2.0, block_txs=4, steps=(0.02, 0.04, 0.16), tx_timeout_s=1
             )
         self.assertEqual(
             [
@@ -1093,7 +1111,7 @@ class LoadTest(unittest.TestCase):
 
     def test_step_ends_on_time_while_waiting_for_room(self):
         # Nothing is included: the cap fills at once and frees only on timeouts after 3 s.
-        self.run_load(False, 1.0, rate_mb_s=0.02, max_pending=2, tx_timeout_s=3)
+        self.run_load(False, 1.0, rate=0.02, cap_txs=2, tx_timeout_s=3)
         (step,) = self.steps
         self.assertLess(step["t_end"] - step["t_start"], 1.3)
 
@@ -1103,7 +1121,7 @@ class LoadTest(unittest.TestCase):
             self.assertLogs(bench.log, "WARNING"),
         ):
             _, _, txs, meta = self.run_load(
-                True, 1.0, lost={3}, rate_mb_s=0.02, tx_timeout_s=1
+                True, 1.0, lost={3}, rate=0.02, tx_timeout_s=1
             )
         self.assertEqual(meta["missing_payloads"], [3])
         self.assertGreater(sum(tx["status"] == "included" for tx in txs), 4)
