@@ -20,7 +20,8 @@ pub type Certificate = CertificatePair<SeqTypes>;
 /// Dispatch a runtime `Version` to a call with the matching `StaticVersion` in place of `V`.
 macro_rules! dispatch_version {
     ($version:expr, $self:ident.$method:ident::<V $(, $generic:tt)*>($($arg:expr),*)) => {
-        match ($version.major, $version.minor) {
+        let version = $version;
+        match (version.major, version.minor) {
             (0, 1) => $self.$method::<StaticVersion<0, 1> $(, $generic)*>($($arg),*).await,
             (0, 2) => $self.$method::<StaticVersion<0, 2> $(, $generic)*>($($arg),*).await,
             (0, 3) => $self.$method::<StaticVersion<0, 3> $(, $generic)*>($($arg),*).await,
@@ -33,14 +34,15 @@ macro_rules! dispatch_version {
                     assert!(MAX_SUPPORTED_VERSION.major == 0);
                     assert!(MAX_SUPPORTED_VERSION.minor == 7);
                 }
-                bail!("unsupported version {}", $version);
+                bail!("unsupported version {}", version);
             },
         }
     };
 }
 
 pub trait Quorum: Sync {
-    /// Check a threshold signature on a quorum certificate.
+    /// Check a certificate pair, including any next-epoch QC, against this epoch's and the next
+    /// epoch's quorum.
     fn verify(
         &self,
         cert: &Certificate,
@@ -276,7 +278,7 @@ impl StakeTable {
     }
 
     /// Verify that a certificate is signed by a quorum of this stake table.
-    pub async fn verify_cert<V, T>(&self, cert: &impl vote::Certificate<SeqTypes, T>) -> Result<()>
+    pub async fn verify_cert<V, D>(&self, cert: &impl vote::Certificate<SeqTypes, D>) -> Result<()>
     where
         V: StaticVersionType + 'static,
     {
