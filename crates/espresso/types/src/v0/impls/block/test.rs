@@ -204,6 +204,28 @@ async fn ns_limit() {
     );
 }
 
+/// The dedup manifest is built from these, so they must name exactly the
+/// included transactions, not every transaction offered.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn ns_limit_commitments_cover_included_only() {
+    let txs: Vec<Transaction> = (0..2 * MAX_NAMESPACES_PER_BLOCK)
+        .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
+        .collect();
+    let (block, ns_table) =
+        Payload::from_transactions(txs.clone(), &Default::default(), &Default::default())
+            .await
+            .unwrap();
+
+    let mut got = block.transaction_commitments(&ns_table);
+    got.sort();
+    let mut expected: Vec<_> = txs[..MAX_NAMESPACES_PER_BLOCK]
+        .iter()
+        .map(Committable::commit)
+        .collect();
+    expected.sort();
+    assert_eq!(got, expected);
+}
+
 /// A deferred tx (over the namespace cap) must not consume block-byte budget,
 /// or it could push out a later tx for an already-admitted namespace.
 #[test]

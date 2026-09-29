@@ -161,7 +161,7 @@ async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
     );
 
     b.on_transactions(tx_msg(view(3), (5..=8).map(tx).collect()));
-    let (txns, _) = b.drain(view(3), epoch());
+    let txns = b.drain();
     assert_eq!(txns.len(), 4, "a leader collects the new block size");
 }
 
@@ -291,22 +291,8 @@ async fn test_retry_buffer_charges_entry_overhead() {
 async fn test_leader_buffer_drain() {
     let mut b = builder();
     b.on_transactions(tx_msg(view(1), vec![tx(1), tx(2)]));
-    let (mut txns, manifest) = b.drain(view(1), epoch());
-    txns.sort_by_key(|t| t.bytes().clone());
-    assert_eq!(txns.len(), 2, "both transactions should be drained");
-    assert_eq!(
-        manifest.hashes.len(),
-        2,
-        "manifest should have one hash per tx"
-    );
-
-    // buffer is cleared after drain
-    let (txns2, manifest2) = b.drain(view(2), epoch());
-    assert!(txns2.is_empty(), "second drain should be empty");
-    assert!(
-        manifest2.hashes.is_empty(),
-        "second drain manifest should have no hashes"
-    );
+    assert_eq!(b.drain().len(), 2, "both transactions should be drained");
+    assert!(b.drain().is_empty(), "second drain should be empty");
 }
 
 /// Two paths can emit `RequestBlockAndHeader` for the same view N+1 with
@@ -397,7 +383,7 @@ async fn test_request_block_same_view_reuses_transactions() {
     expected.sort();
     assert_eq!(hashes, expected);
 
-    let (txns, _) = b.drain(view(6), epoch());
+    let txns = b.drain();
     assert_eq!(txns, vec![tx(3)]);
 }
 
@@ -442,7 +428,7 @@ async fn test_dedup_window() {
         hashes: vec![t.commit()],
     });
     b.on_transactions(tx_msg(view(1), vec![t.clone()]));
-    let (txns, _) = b.drain(view(1), epoch());
+    let txns = b.drain();
     assert!(
         txns.is_empty(),
         "tx should be blocked while in the dedup window"
@@ -457,7 +443,7 @@ async fn test_dedup_window() {
     });
 
     b.on_transactions(tx_msg(view(4), vec![t.clone()]));
-    let (txns, _) = b.drain(view(4), epoch());
+    let txns = b.drain();
     assert_eq!(
         txns.len(),
         1,
@@ -470,7 +456,7 @@ async fn reconstructed_block_drops_its_transactions_from_leader_buffer() {
     let mut b = builder();
     b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
     b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
-    let (txns, _) = b.drain(view(2), epoch());
+    let txns = b.drain();
     assert_eq!(txns, Vec::from([tx(2)]));
 }
 
@@ -479,6 +465,6 @@ async fn reconstructed_block_drops_later_copies_of_its_transactions() {
     let mut b = builder();
     b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
     b.on_transactions(tx_msg(view(2), Vec::from([tx(1)])));
-    let (txns, _) = b.drain(view(2), epoch());
+    let txns = b.drain();
     assert!(txns.is_empty());
 }

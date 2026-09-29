@@ -468,21 +468,9 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     #[cfg(test)]
-    pub(crate) fn drain(
-        &mut self,
-        view: ViewNumber,
-        epoch: EpochNumber,
-    ) -> (Vec<T::Transaction>, DedupManifest<T>) {
-        let (hashes, txs) = self.leader_buffer.drain().unzip();
+    pub(crate) fn drain(&mut self) -> Vec<T::Transaction> {
         self.leader_total_bytes = 0;
-
-        let manifest = DedupManifest {
-            view,
-            epoch,
-            hashes,
-        };
-
-        (txs, manifest)
+        self.leader_buffer.drain().map(|(_, tx)| tx).collect()
     }
 }
 
