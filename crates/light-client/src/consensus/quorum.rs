@@ -3,11 +3,11 @@ use std::{future::Future, sync::Arc};
 use alloy::primitives::U256;
 use anyhow::{Context, Result, bail, ensure};
 use committable::Committable;
-use espresso_types::{Leaf2, PubKey, SeqTypes};
+use espresso_types::{Certificate2, Leaf2, PubKey, SeqTypes};
 use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
-    simple_certificate::CertificatePair,
+    simple_certificate::{CertificatePair, QuorumCertificate2},
     stake_table::{HSStakeTable, StakeTableEntries, StakeTableEntry, supermajority_threshold},
     vote::{self, HasViewNumber},
 };
@@ -19,16 +19,16 @@ pub type Certificate = CertificatePair<SeqTypes>;
 
 /// Dispatch a runtime `Version` to a call with the matching `StaticVersion` in place of `V`.
 macro_rules! dispatch_version {
-    ($version:expr, $self:ident.$method:ident::<V $(, $generic:tt)*>($($arg:expr),*)) => {
+    ($version:expr, $self:ident.$method:ident::<V>($($arg:expr),*)) => {{
         let version = $version;
         match (version.major, version.minor) {
-            (0, 1) => $self.$method::<StaticVersion<0, 1> $(, $generic)*>($($arg),*).await,
-            (0, 2) => $self.$method::<StaticVersion<0, 2> $(, $generic)*>($($arg),*).await,
-            (0, 3) => $self.$method::<StaticVersion<0, 3> $(, $generic)*>($($arg),*).await,
-            (0, 4) => $self.$method::<StaticVersion<0, 4> $(, $generic)*>($($arg),*).await,
-            (0, 5) => $self.$method::<StaticVersion<0, 5> $(, $generic)*>($($arg),*).await,
-            (0, 6) => $self.$method::<StaticVersion<0, 6> $(, $generic)*>($($arg),*).await,
-            (0, 7) => $self.$method::<StaticVersion<0, 7> $(, $generic)*>($($arg),*).await,
+            (0, 1) => $self.$method::<StaticVersion<0, 1>>($($arg),*).await,
+            (0, 2) => $self.$method::<StaticVersion<0, 2>>($($arg),*).await,
+            (0, 3) => $self.$method::<StaticVersion<0, 3>>($($arg),*).await,
+            (0, 4) => $self.$method::<StaticVersion<0, 4>>($($arg),*).await,
+            (0, 5) => $self.$method::<StaticVersion<0, 5>>($($arg),*).await,
+            (0, 6) => $self.$method::<StaticVersion<0, 6>>($($arg),*).await,
+            (0, 7) => $self.$method::<StaticVersion<0, 7>>($($arg),*).await,
             _ => {
                 const {
                     assert!(MAX_SUPPORTED_VERSION.major == 0);
@@ -37,7 +37,7 @@ macro_rules! dispatch_version {
                 bail!("unsupported version {}", version);
             },
         }
-    };
+    }};
 }
 
 pub trait Quorum: Sync {
@@ -57,19 +57,36 @@ pub trait Quorum: Sync {
         qc: &Certificate,
     ) -> impl Send + Future<Output = Result<()>>;
 
-    /// Check a threshold signature on a certificate, without next-epoch checks.
-    fn verify_cert<D>(
+    /// Check a threshold signature on a new-protocol finality certificate.
+    fn verify_cert2(
         &self,
-        cert: &(impl vote::Certificate<SeqTypes, D> + Sync),
+        cert2: &Certificate2<SeqTypes>,
         version: Version,
     ) -> impl Send + Future<Output = Result<()>> {
-        async move { dispatch_version!(version, self.verify_cert_static::<V, _>(cert)) }
+        async move { dispatch_version!(version, self.verify_cert2_static::<V>(cert2)) }
     }
 
-    /// Same as [`verify_cert`](Self::verify_cert), but with the version as a type-level parameter.
-    fn verify_cert_static<V: StaticVersionType + 'static, D>(
+    /// Same as [`verify_cert2`](Self::verify_cert2), but with the version as a type-level
+    /// parameter.
+    fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
-        cert: &(impl vote::Certificate<SeqTypes, D> + Sync),
+        cert2: &Certificate2<SeqTypes>,
+    ) -> impl Send + Future<Output = Result<()>>;
+
+    /// Check a threshold signature on a single new-protocol QC, without epoch-transition checks.
+    fn verify_leaf_qc(
+        &self,
+        qc: &QuorumCertificate2<SeqTypes>,
+        version: Version,
+    ) -> impl Send + Future<Output = Result<()>> {
+        async move { dispatch_version!(version, self.verify_leaf_qc_static::<V>(qc)) }
+    }
+
+    /// Same as [`verify_leaf_qc`](Self::verify_leaf_qc), but with the version as a type-level
+    /// parameter.
+    fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        qc: &QuorumCertificate2<SeqTypes>,
     ) -> impl Send + Future<Output = Result<()>>;
 
     /// Check a threshold signature on a certificate signed by the epoch after this quorum's.
@@ -377,15 +394,26 @@ where
         Ok(())
     }
 
-    async fn verify_cert_static<V: StaticVersionType + 'static, D>(
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
-        cert: &(impl vote::Certificate<SeqTypes, D> + Sync),
+        cert2: &Certificate2<SeqTypes>,
     ) -> Result<()> {
         let stake_table = self.membership.stake_table().await?;
         stake_table
-            .verify_cert::<V, _>(cert)
+            .verify_cert::<V, _>(cert2)
             .await
-            .context("verifying certificate")
+            .context("verifying cert2")
+    }
+
+    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        qc: &QuorumCertificate2<SeqTypes>,
+    ) -> Result<()> {
+        let stake_table = self.membership.stake_table().await?;
+        stake_table
+            .verify_cert::<V, _>(qc)
+            .await
+            .context("verifying leaf QC")
     }
 
     async fn verify_next_epoch_static<V: StaticVersionType + 'static>(
@@ -418,7 +446,7 @@ mod test {
     use hotshot_query_service_types::availability::LeafQueryData;
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
-        simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2},
+        simple_certificate::NextEpochQuorumCertificate2,
         simple_vote::{NextEpochQuorumData2, QuorumData2, VersionedVoteData},
         traits::signature_key::SignatureKey,
         vote::Certificate as _,

@@ -227,7 +227,7 @@ impl LeafProof {
                 );
 
                 quorum
-                    .verify_cert(&**cert2, version)
+                    .verify_cert2(cert2, version)
                     .await
                     .context("verifying cert2 signature")?;
 
@@ -249,11 +249,11 @@ impl LeafProof {
                             "leaf QC block number does not match leaf"
                         );
                         ensure!(
-                            leaf_qc.data.epoch == cert2.data.epoch,
+                            leaf_qc.data.epoch == Some(cert2.data.epoch),
                             "leaf QC epoch does not match cert2"
                         );
                         quorum
-                            .verify_cert(&**leaf_qc, version)
+                            .verify_leaf_qc(leaf_qc, version)
                             .await
                             .context("verifying leaf QC signature")?;
                         leaf_qc.as_ref().clone()
