@@ -588,7 +588,7 @@ impl Inner {
         Ok(intervals)
     }
 
-    fn prune_decided(
+    fn skip_decide_events(
         &mut self,
         view: ViewNumber,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
@@ -865,7 +865,7 @@ impl SequencerPersistence for Persistence {
         // retried; no data is lost.
         let mut inner = self.inner.write().await;
         let intervals = if self.consensus_only {
-            inner.prune_decided(view)?
+            inner.skip_decide_events(view)?
         } else {
             inner
                 .generate_decide_events(view, deciding_qc, consumer)

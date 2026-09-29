@@ -1490,7 +1490,7 @@ impl Persistence {
         }
     }
 
-    async fn prune_decided(&self, view: ViewNumber) -> anyhow::Result<()> {
+    async fn skip_decide_events(&self, view: ViewNumber) -> anyhow::Result<()> {
         let from_view = self
             .load_processed_view()
             .await?
@@ -1560,7 +1560,7 @@ impl Persistence {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn prune(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
+    async fn prune_to_retention(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
 
@@ -1749,16 +1749,17 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<Option<ViewNumber>> {
         let now = Instant::now();
         if self.consensus_only {
-            self.prune_decided(view).await?;
+            self.skip_decide_events(view).await?;
         } else {
             // Generate events for the new leaves, then GC. On error `last_processed_view` is not
             // advanced past the failure point, so no data is lost and the range is retried.
             self.generate_decide_events(deciding_qc, consumer).await?;
-        }
 
-        // Best-effort GC of data not included in any decide event; runs again at the next decide.
-        if let Err(err) = self.prune(view).await {
-            tracing::warn!(?view, "pruning failed: {err:#}");
+            // Best-effort GC of data not included in any decide event; runs again at the next
+            // decide.
+            if let Err(err) = self.prune_to_retention(view).await {
+                tracing::warn!(?view, "pruning failed: {err:#}");
+            }
         }
         self.internal_metrics
             .internal_process_decided_events_duration
