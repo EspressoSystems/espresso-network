@@ -1462,16 +1462,15 @@ impl SqlStorage {
             from = to + 1;
 
             batches += 1;
-            if batches.is_multiple_of(10) {
-                self.vacuum(cfg.incremental_vacuum_pages()).await?;
-            }
-            if batches.is_multiple_of(1000) {
-                tracing::warn!(
+            if batches.is_multiple_of(100) {
+                tracing::info!(
+                    target: "announce",
                     pruned_height = to,
                     target,
                     batches,
-                    "archived state pruning progress"
+                    "state pruning progress"
                 );
+                self.vacuum(cfg.incremental_vacuum_pages()).await?;
             }
         }
         self.vacuum(cfg.incremental_vacuum_pages()).await?;
