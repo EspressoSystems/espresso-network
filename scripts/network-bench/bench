@@ -160,10 +160,11 @@ READ_RETRY_S = 1.0
 TRACKER_THREADS = 1
 HEIGHT_POLL_S = 0.1
 IN_FLIGHT_STEP_S = 1.0
-# Keeping-up rules, see throughput_bound.
+# Keeping-up rules, see bottleneck.
 KEEP_UP_RATIO = 0.95
 KEEP_UP_AT_CAP_FRAC = 0.02
 KEEP_UP_EMPTY_FRAC = 0.05
+QUERY_LAG_BEHIND_MS = 1000.0
 TOOL_VERSIONS = (
     ["process-compose", "version"],
     ["anvil", "--version"],
@@ -304,7 +305,7 @@ class LoadStats(TypedDict):
 
 
 class Bound(TypedDict):
-    kind: Literal["keeping-up", "behind"]
+    kind: Literal["keeping-up", "consensus", "query-node", "benchmark"]
     reason: str
 
 
@@ -1548,42 +1549,49 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
         "processes": process_stats(host, t0, t1),
         "host": host_stats(host, t0, t1),
         "load": load_stats(out, cfg, t0, t1),
-        "bound": {"kind": "behind", "reason": ""},
+        "bound": {"kind": "keeping-up", "reason": ""},
         "stake_table": stake_amounts(out / "stake-table.json"),
         "validity": {"valid": True, "noisy": False, "reasons": []},
     }
-    net = result["network"]
-    result["bound"] = throughput_bound(
-        cfg.rate_mb_s,
-        net["decided_mb_per_s"]["value"] or 0.0,
-        result["load"]["at_cap_frac"],
-        net["empty_block_frac"],
-    )
+    result["bound"] = bottleneck(cfg.rate_mb_s, result["network"], result["load"])
     result["validity"] = check_validity(
         result, scrape_coverage(out / "metrics.jsonl", t0, t1)
     )
     return result
 
 
-def throughput_bound(
-    offered: float, decided: float, at_cap: float, empty_frac: float
-) -> Bound:
-    """Whether the network keeps up with the paced load: decided close to offered, the
-    max_pending cap hardly reached (`at_cap`: fraction of samples at the cap), and every block
-    carrying transactions."""
-    behind = []
+def bottleneck(offered: float, net: NetworkStats, load: LoadStats) -> Bound:
+    """What fell behind the paced load, checked in this order: the benchmark's own payload
+    scan, consensus deciding less than offered, the query node showing heights late (large or
+    growing lag), then consensus again if the cap was reached or blocks went empty."""
+    decided = net["decided_mb_per_s"]["value"] or 0.0
+    tracker, query = load["tracker_lag_ms"], load["query_lag_ms"]
+    if tracker and tracker["p99"] > TRACKER_LAG_NOISY_MS:
+        return {
+            "kind": "benchmark",
+            "reason": f"payload scans lag node0 by {tracker['p99']:.0f} ms p99",
+        }
     if decided < KEEP_UP_RATIO * offered:
-        behind.append(f"decided {decided / offered:.0%} of offered")
-    if at_cap >= KEEP_UP_AT_CAP_FRAC:
-        behind.append(f"max_pending reached in {at_cap:.0%} of samples")
-    if empty_frac >= KEEP_UP_EMPTY_FRAC:
-        behind.append(f"{empty_frac:.0%} of blocks empty")
+        return {"kind": "consensus", "reason": f"decided {decided / offered:.0%} of offered"}
+    end = load["query_lag_end_ms"]
+    if query and max(query["p50"], end or 0.0) > QUERY_LAG_BEHIND_MS:
+        return {
+            "kind": "query-node",
+            "reason": f"query lag p50 {query['p50']:.0f} ms, {fmt_num(end)} ms in the "
+            f"last sub-window, while decided {decided / offered:.0%} of offered",
+        }
+    behind = []
+    if load["at_cap_frac"] >= KEEP_UP_AT_CAP_FRAC:
+        behind.append(f"max_pending reached in {load['at_cap_frac']:.0%} of samples")
+    if net["empty_block_frac"] >= KEEP_UP_EMPTY_FRAC:
+        behind.append(f"{net['empty_block_frac']:.0%} of blocks empty")
     if behind:
-        return {"kind": "behind", "reason": ", ".join(behind)}
+        return {"kind": "consensus", "reason": ", ".join(behind)}
     return {
         "kind": "keeping-up",
         "reason": f"decided >= {KEEP_UP_RATIO:.0%} of offered, max_pending reached in "
-        f"< {KEEP_UP_AT_CAP_FRAC:.0%} of samples, < {KEEP_UP_EMPTY_FRAC:.0%} of blocks empty",
+        f"< {KEEP_UP_AT_CAP_FRAC:.0%} of samples, < {KEEP_UP_EMPTY_FRAC:.0%} of blocks "
+        f"empty, query lag <= {QUERY_LAG_BEHIND_MS:.0f} ms",
     }
 
 
@@ -2318,7 +2326,9 @@ def bound_line(result: BenchResult) -> str:
     bound = result["bound"]
     title = {
         "keeping-up": "Keeping up with the offered load",
-        "behind": "Behind the offered load",
+        "consensus": "Consensus behind the offered load",
+        "query-node": "Query node behind consensus",
+        "benchmark": "Benchmark tracker behind",
     }
     return (
         f"**{title[bound['kind']]}** ({bound['reason']}): "

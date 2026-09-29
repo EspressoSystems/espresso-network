@@ -193,10 +193,10 @@ class RenderTest(unittest.TestCase):
 
     def test_verdict_first_detail_last(self):
         current = make_result()
-        current["bound"] = {"kind": "behind", "reason": "75% of blocks empty"}
+        current["bound"] = {"kind": "consensus", "reason": "75% of blocks empty"}
         summary = bench.render(current, None)
         order = [
-            "**Behind the offered load** (75% of blocks empty)",
+            "**Consensus behind the offered load** (75% of blocks empty)",
             "Baseline: none given",
             "| metric | this run |",
             "### Load",
@@ -1111,29 +1111,50 @@ class PaceTest(unittest.TestCase):
 
 
 class BoundTest(unittest.TestCase):
-    def kind(self, decided=10.0, at_cap=0.0, empty=0.0):
-        return bench.throughput_bound(10.0, decided, at_cap, empty)
+    def bound(
+        self, decided=10.0, empty=0.0, at_cap=0.0, query=200.0, end=200.0, scan=100.0
+    ):
+        result = make_result()
+        net, load = result["network"], result["load"]
+        net["decided_mb_per_s"] = stat(decided, "MB/s", "higher")
+        net["empty_block_frac"] = empty
+        load |= {
+            "at_cap_frac": at_cap,
+            "query_lag_ms": quantiles(query, query * 2),
+            "query_lag_end_ms": end,
+            "tracker_lag_ms": quantiles(scan / 2, scan),
+        }
+        return bench.bottleneck(10.0, net, load)
 
     def test_keeping_up(self):
-        self.assertEqual(self.kind()["kind"], "keeping-up")
+        self.assertEqual(self.bound()["kind"], "keeping-up")
         self.assertEqual(
-            self.kind(decided=9.6, at_cap=0.01, empty=0.04)["kind"], "keeping-up"
+            self.bound(decided=9.6, at_cap=0.01, empty=0.04)["kind"], "keeping-up"
         )
 
-    def test_decided_below_offered_is_behind(self):
-        bound = self.kind(decided=9.0)
-        self.assertEqual(bound["kind"], "behind")
+    def test_decided_below_offered_is_consensus(self):
+        bound = self.bound(decided=9.0, query=5000.0)
+        self.assertEqual(bound["kind"], "consensus")
         self.assertIn("decided 90% of offered", bound["reason"])
 
-    def test_cap_blocking_is_behind(self):
-        bound = self.kind(at_cap=0.1)
-        self.assertEqual(bound["kind"], "behind")
+    def test_cap_or_empty_blocks_without_query_lag_is_consensus(self):
+        bound = self.bound(at_cap=0.1)
+        self.assertEqual(bound["kind"], "consensus")
         self.assertIn("max_pending", bound["reason"])
-
-    def test_empty_blocks_are_behind(self):
-        bound = self.kind(empty=0.5)
-        self.assertEqual(bound["kind"], "behind")
+        bound = self.bound(empty=0.5)
+        self.assertEqual(bound["kind"], "consensus")
         self.assertIn("50% of blocks empty", bound["reason"])
+
+    def test_query_lag_with_consensus_keeping_up_is_query_node(self):
+        bound = self.bound(empty=0.09, at_cap=0.9, query=5000.0, end=6000.0)
+        self.assertEqual(bound["kind"], "query-node")
+        self.assertIn("query lag p50 5000 ms", bound["reason"])
+        self.assertEqual(self.bound(query=300.0, end=2000.0)["kind"], "query-node")
+
+    def test_tracker_lag_is_benchmark(self):
+        bound = self.bound(decided=5.0, scan=1500.0)
+        self.assertEqual(bound["kind"], "benchmark")
+        self.assertIn("1500 ms", bound["reason"])
 
     def test_in_flight_samples_the_window(self):
         spans = [(0.0, 10.0), (0.0, 5.0), (20.0, 30.0)]
