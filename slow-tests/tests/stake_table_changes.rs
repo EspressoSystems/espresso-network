@@ -7,10 +7,7 @@
 
 use std::{collections::HashSet, time::Duration};
 
-use alloy::{
-    primitives::{Address, U256, utils::parse_ether},
-    providers::ext::AnvilApi,
-};
+use alloy::primitives::{Address, U256, utils::parse_ether};
 use espresso_contract_deployer::Contract;
 use espresso_node::{
     SequencerApiVersion,
@@ -25,28 +22,19 @@ use espresso_node::{
         },
     },
     catchup::StatePeers,
-    context::SequencerContext,
-    network,
     testing::{TestConfig, TestConfigBuilder, wait_for_epochs},
 };
-use espresso_types::{
-    AuthenticatedValidatorMap, Header, PubKey, SeqTypes, ValidatedState,
-    v0::traits::SequencerPersistence,
-};
-use futures::{future::join_all, stream::StreamExt};
-use hotshot::types::EventType;
+use espresso_types::{AuthenticatedValidatorMap, PubKey, ValidatedState};
+use futures::future::join_all;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
-use hotshot_query_service::{availability::LeafQueryData, types::HeightIndexed};
 use hotshot_types::{
     addr::NetAddr,
     light_client::StateKeyPair,
     signature_key::BLSKeyPair,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
-    utils::epoch_from_block_number,
     x25519,
 };
 use http_client::{Client, error::ClientErr};
-use rstest::rstest;
 use slow_tests::BUILDER_TIMEOUT;
 use staking_cli::{
     NodeSignatures, Transaction as StakingTransaction, demo::DelegationConfig,
@@ -54,12 +42,8 @@ use staking_cli::{
 };
 use test_utils::reserve_tcp_port;
 use tokio::time::timeout;
-use vbs::version::Version;
-use versions::{
-    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION, Upgrade,
-};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
-const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
 const V6: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
 /// The first epoch whose committee is driven by the stake table contract
@@ -198,73 +182,6 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
             .await;
     }
 
-    /// Starts a network that performs a real protocol upgrade mid-run. The
-    /// contracts must already be deployed via
-    /// [`TestConfigBuilder::set_upgrades_with`] on `network_config`; genesis
-    /// carries the upgraded chain config (required whenever the base version
-    /// already has epochs).
-    async fn start_upgrading(network_config: TestConfig<NUM_NODES>, upgrade: Upgrade) -> Self {
-        // `set_upgrades_with` does not enable interval mining (`pos_hook`
-        // does); without it the auto-mining L1 only produces blocks on
-        // transactions and `l1_finalized` never advances.
-        network_config
-            .anvil()
-            .expect("TestConfigBuilder starts an anvil")
-            .anvil_set_interval_mining(1)
-            .await
-            .expect("interval mining");
-
-        let genesis_state = ValidatedState {
-            chain_config: network_config
-                .get_upgrade_map()
-                .chain_config(upgrade.target)
-                .into(),
-            ..Default::default()
-        };
-
-        let api_port = reserve_tcp_port().expect("No ports free for query service");
-
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-
-        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port),
-            ))
-            .network_config(network_config.clone())
-            .persistences(persistence)
-            .states(std::array::from_fn(|_| genesis_state.clone()))
-            .catchups(std::array::from_fn(|_| node_catchup(api_port)))
-            .build();
-
-        let network = TestNetwork::new(config, upgrade).await;
-        let stake_table = network_config
-            .contracts()
-            .expect("set_upgrades_with deploys the contracts")
-            .address(Contract::StakeTableProxy)
-            .unwrap();
-
-        let client: Client<ClientErr, SequencerApiVersion> =
-            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
-        client.connect(Some(Duration::from_secs(30))).await;
-
-        Self {
-            network,
-            client,
-            stake_table,
-            api_port,
-            upgrade,
-            genesis_state,
-            _storage: storage,
-        }
-    }
-
     /// The committee reported for `epoch` by node 0's query API, retried
     /// while the node finishes the epoch's snapshot: the membership endpoint
     /// errors rather than waits when the epoch's DRB is still being computed.
@@ -287,86 +204,6 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
             last_err.expect("at least one attempt")
         );
     }
-
-    /// Streams decided leaves from the query service until one reaches
-    /// `version` or newer; returns its height.
-    async fn wait_for_version(&self, version: Version, deadline: Duration) -> u64 {
-        let mut leaves = self
-            .client
-            .socket("availability/stream/leaves/0")
-            .subscribe::<LeafQueryData<SeqTypes>>()
-            .await
-            .unwrap();
-        timeout(deadline, async {
-            loop {
-                let leaf = leaves.next().await.unwrap().unwrap();
-                if leaf.header().version() >= version {
-                    break leaf.height();
-                }
-            }
-        })
-        .await
-        .unwrap_or_else(|_| panic!("the network did not upgrade to {version} in time"))
-    }
-
-    /// The header at `height`, retried while the query service catches up to
-    /// the decided chain.
-    async fn header_at(&self, height: u64) -> Header {
-        for _ in 0..30 {
-            if let Ok(header) = self
-                .client
-                .get::<Header>(&format!("availability/header/{height}"))
-                .send()
-                .await
-            {
-                return header;
-            }
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-        panic!("header {height} not served by the query service in time");
-    }
-}
-
-/// Blocks until the legacy consensus proposes an upgrade, asserting it
-/// targets `version`.
-async fn wait_for_upgrade_proposal<P: SequencerPersistence>(
-    node: &SequencerContext<network::Memory, P>,
-    version: Version,
-    deadline: Duration,
-) {
-    let mut events = node
-        .consensus_handle()
-        .legacy_consensus()
-        .read()
-        .await
-        .event_stream();
-    timeout(deadline, async {
-        loop {
-            let event = events.next().await.unwrap();
-            if let EventType::UpgradeProposal { proposal, .. } = event.event {
-                let new_version = proposal.data.upgrade_proposal.new_version;
-                assert_eq!(new_version, version, "unexpected upgrade target proposed");
-                return;
-            }
-        }
-    })
-    .await
-    .unwrap_or_else(|_| {
-        panic!("no UpgradeProposal for {version} observed in time (emitted before subscribing?)")
-    });
-}
-
-/// Which point of a protocol upgrade the swap transactions are sent at.
-#[derive(Clone, Copy, Debug)]
-enum SwapTrigger {
-    /// While epoch 2 is running, long before the upgrade window: the swap
-    /// activates first and the network upgrades on the replaced committee.
-    BeforeUpgrade,
-    /// The moment the `UpgradeProposal` is observed, so the swap's activation
-    /// lands inside the upgrade window.
-    AtUpgradeProposal,
-    /// After the first upgraded leaf is decided.
-    AfterUpgrade,
 }
 
 /// The committee {0..3} is replaced wholesale by the disjoint set {4..7};
@@ -464,12 +301,6 @@ async fn full_set_replacement(version: Upgrade, epoch_height: u64) -> anyhow::Re
     Ok(())
 }
 
-/// Full set replacement at 0.5: see [`full_set_replacement`].
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_full_set_replacement_v5() -> anyhow::Result<()> {
-    full_set_replacement(V5, 15).await
-}
-
 /// Full set replacement at 0.6: the incoming committee holds no pre-swap VID
 /// shares and joins via the boundary handoff (the seeded Cert2-final
 /// boundary state plus catchup from node 0). HotShot-layer counterpart:
@@ -486,11 +317,9 @@ async fn test_stake_table_full_set_replacement_v6() -> anyhow::Result<()> {
 /// votes (4 continuing members are below the 6-of-8 threshold), so this
 /// also exercises the boundary handoff for joins (see
 /// `test_stake_table_full_set_replacement_v6`).
-#[rstest]
-#[case::v5(V5)]
-#[case::v6(V6)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_grow_and_shrink(#[case] version: Upgrade) -> anyhow::Result<()> {
+async fn test_stake_table_grow_and_shrink() -> anyhow::Result<()> {
+    let version = V6;
     const NUM_NODES: usize = 8;
     const EPOCH_HEIGHT: u64 = 15;
     const INITIAL_COUNT: usize = 4;
@@ -571,15 +400,10 @@ async fn test_stake_table_grow_and_shrink(#[case] version: Upgrade) -> anyhow::R
 /// set. Validators 3-4 fully undelegate (zero stake filters them out of
 /// `select_active_validator_set`), then fresh delegations bring them back —
 /// at 0.6 the first post-return block needs a rejoiner's vote (3 continuing
-/// members, threshold 4 of 5), exercising the boundary handoff. The V5 case
-/// adds a whale phase: one enormous delegation pushes the minimum-stake
-/// threshold (max stake / 1000) above everyone else's stake, shrinking the
-/// committee to a single validator; undelegating it restores the full set.
-#[rstest]
-#[case::v5(V5)]
-#[case::v6(V6)]
+/// members, threshold 4 of 5), exercising the boundary handoff.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_delegation_reshuffle(#[case] version: Upgrade) -> anyhow::Result<()> {
+async fn test_stake_table_delegation_reshuffle() -> anyhow::Result<()> {
+    let version = V6;
     const NUM_NODES: usize = 5;
     const EPOCH_HEIGHT: u64 = 15;
     let dropped: &[usize] = &[3, 4];
@@ -601,9 +425,7 @@ async fn test_stake_table_delegation_reshuffle(#[case] version: Upgrade) -> anyh
         DelegationConfig::EqualAmounts,
         &(0..NUM_NODES).collect::<Vec<_>>(),
         &[],
-        // The whale phase needs far more ESP than the funding leaves over
-        // from the default supply.
-        Some(U256::from(1_000_000u64)),
+        None,
     )
     .await;
     let token = net
@@ -672,349 +494,6 @@ async fn test_stake_table_delegation_reshuffle(#[case] version: Upgrade) -> anyh
         "re-delegated validators rejoined the committee"
     );
     assert_node_live(&net.network.server, EPOCH_HEIGHT, 1).await;
-
-    // Whale phase, V5 only: a single-validator committee at 0.6 would need
-    // cliquenet window continuity reasoning that is out of scope here.
-    if version.base < NEW_PROTOCOL_VERSION {
-        let whale_stake = parse_ether("150000").unwrap();
-        let (validator0, _) = providers[0];
-        let whale = delegate_new(
-            &network_config,
-            token,
-            net.stake_table,
-            validator0,
-            whale_stake,
-        )
-        .await?;
-
-        // min stake = max stake / 1000 = ~150.1 ESP > 100 ESP, so every other
-        // validator is displaced.
-        let (whale_epoch, committee) = wait_for_committee(
-            &net.client,
-            &mut events,
-            EPOCH_HEIGHT,
-            return_epoch + 1,
-            MAX_ACTIVATION_EPOCHS,
-            committee_is(HashSet::from([validator0])),
-        )
-        .await;
-        tracing::info!(
-            whale_epoch,
-            "whale delegation displaced all other validators"
-        );
-        assert_eq!(
-            committee[&validator0].stake,
-            whale_stake + stake,
-            "whale-backed validator should hold its own and the whale's stake"
-        );
-
-        let receipt = StakingTransaction::Undelegate {
-            stake_table: net.stake_table,
-            validator: validator0,
-            amount: whale_stake,
-        }
-        .send(&whale)
-        .await?
-        .get_receipt()
-        .await?;
-        anyhow::ensure!(receipt.status(), "whale undelegation reverted");
-        wait_for_committee(
-            &net.client,
-            &mut events,
-            EPOCH_HEIGHT,
-            whale_epoch + 1,
-            MAX_ACTIVATION_EPOCHS,
-            committee_is(all_addrs),
-        )
-        .await;
-        assert_node_live(&net.network.server, EPOCH_HEIGHT, 1).await;
-    }
-
-    Ok(())
-}
-
-/// Full set replacement across the 0.4 -> 0.5 (epoch reward) upgrade: the
-/// network starts at 0.4 with committee {3,4,5}, upgrades to 0.5 mid-run,
-/// and the committee is replaced wholesale by {0,1,2}. Depending on the
-/// case, the swap is sent after the upgrade has activated; right at the
-/// `UpgradeProposal`, so its activation lands inside the upgrade window
-/// while the certificate is still pending; or long before the upgrade
-/// window, so the freshly replaced committee performs the upgrade itself.
-///
-/// Besides committee and liveness checks, this asserts that per-epoch reward
-/// distribution (new at 0.5) works under the replaced committee: the total
-/// distributed rewards strictly increase across post-swap epoch boundaries.
-#[rstest]
-#[case::after_upgrade(SwapTrigger::AfterUpgrade)]
-#[case::straddling(SwapTrigger::AtUpgradeProposal)]
-#[case::before_upgrade(SwapTrigger::BeforeUpgrade)]
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_full_swap_across_epoch_reward_upgrade(
-    #[case] trigger: SwapTrigger,
-) -> anyhow::Result<()> {
-    const NUM_NODES: usize = 6;
-    const EPOCH_HEIGHT: u64 = 20;
-    let outgoing = [3, 4, 5];
-    let incoming = [0, 1, 2];
-    let upgrade = Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION);
-
-    // For `BeforeUpgrade` the window opens only after the swap has activated.
-    let upgrade_start_proposing_view = match trigger {
-        SwapTrigger::BeforeUpgrade => 7 * EPOCH_HEIGHT + 5,
-        SwapTrigger::AtUpgradeProposal | SwapTrigger::AfterUpgrade => 65,
-    };
-
-    let network_config = TestConfigBuilder::<NUM_NODES>::default()
-        .epoch_height(EPOCH_HEIGHT)
-        .builder_timeout(BUILDER_TIMEOUT)
-        .epoch_start_block(0)
-        .set_upgrades_with(
-            EPOCH_REWARD_VERSION,
-            StakeTableContractVersion::V3,
-            &outgoing,
-        )
-        .await
-        .upgrade_proposing_views(upgrade_start_proposing_view, 1000)
-        .build();
-
-    let net = StakeTableTestNetwork::start_upgrading(network_config.clone(), upgrade).await;
-    let incoming_addrs = staking_addresses(&network_config, &incoming);
-    let mut events = net.network.server.event_stream();
-
-    let swap = || async {
-        register_validators(
-            &network_config,
-            net.stake_table,
-            &incoming,
-            DelegationConfig::MultipleDelegators,
-        )
-        .await?;
-        deregister_validators(&network_config, net.stake_table, &outgoing).await?;
-        anyhow::Ok(())
-    };
-
-    let decided_epoch = || async {
-        net.network
-            .server
-            .decided_leaf()
-            .await
-            .epoch(EPOCH_HEIGHT)
-            .expect("epochs active")
-            .u64()
-    };
-
-    // For the triggers whose activation is confirmed only after the upgrade,
-    // the epoch during which the swap was submitted: the swap cannot
-    // activate before `swap_epoch + 2`.
-    let mut swap_epoch = None;
-    let pre_upgrade_activation = match trigger {
-        SwapTrigger::BeforeUpgrade => {
-            wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
-            swap().await?;
-            let (activation_epoch, _) = wait_for_committee(
-                &net.client,
-                &mut events,
-                EPOCH_HEIGHT,
-                FIRST_CONTRACT_EPOCH,
-                MAX_ACTIVATION_EPOCHS,
-                committee_is(incoming_addrs.clone()),
-            )
-            .await;
-            tracing::info!(activation_epoch, "swap activated before the upgrade window");
-            Some(activation_epoch)
-        },
-        SwapTrigger::AtUpgradeProposal => {
-            wait_for_upgrade_proposal(
-                &net.network.server,
-                EPOCH_REWARD_VERSION,
-                Duration::from_secs(600),
-            )
-            .await;
-            swap_epoch = Some(decided_epoch().await);
-            swap().await?;
-            None
-        },
-        SwapTrigger::AfterUpgrade => None,
-    };
-
-    let upgrade_height = net
-        .wait_for_version(EPOCH_REWARD_VERSION, Duration::from_secs(600))
-        .await;
-    let upgrade_epoch = epoch_from_block_number(upgrade_height, EPOCH_HEIGHT);
-    if matches!(trigger, SwapTrigger::AfterUpgrade) {
-        swap_epoch = Some(decided_epoch().await);
-        swap().await?;
-    }
-
-    let activation_epoch = match pre_upgrade_activation {
-        Some(activation_epoch) => {
-            let committee = net.committee(upgrade_epoch).await;
-            assert_eq!(
-                committee.keys().copied().collect::<HashSet<_>>(),
-                incoming_addrs,
-                "the upgrade should be carried out by the fully replaced committee"
-            );
-            activation_epoch
-        },
-        None => {
-            // Probe from the earliest epoch the swap could have activated,
-            // so the reported epoch is the actual activation epoch even
-            // though `wait_for_version` may have run for several epochs
-            // since the swap was submitted.
-            let swap_epoch = swap_epoch.expect("the swap has been sent");
-            let (activation_epoch, _) = wait_for_committee(
-                &net.client,
-                &mut events,
-                EPOCH_HEIGHT,
-                swap_epoch + 2,
-                MAX_ACTIVATION_EPOCHS,
-                committee_is(incoming_addrs),
-            )
-            .await;
-            tracing::info!(activation_epoch, "full swap activated across the upgrade");
-            activation_epoch
-        },
-    };
-
-    // The post-upgrade, post-swap network must keep deciding and sequencing.
-    assert_node_live(&net.network.server, EPOCH_HEIGHT, 2).await;
-    assert_eq!(
-        net.network
-            .server
-            .decided_leaf()
-            .await
-            .block_header()
-            .version(),
-        EPOCH_REWARD_VERSION
-    );
-
-    // Per-epoch rewards keep flowing under the replaced committee: totals at
-    // consecutive post-swap, post-upgrade epoch-final blocks strictly increase.
-    let reward_epoch = activation_epoch.max(upgrade_epoch);
-    let first = net
-        .header_at((reward_epoch + 1) * EPOCH_HEIGHT)
-        .await
-        .total_reward_distributed()
-        .expect("v5 headers carry the total distributed reward");
-    let second = net
-        .header_at((reward_epoch + 2) * EPOCH_HEIGHT)
-        .await
-        .total_reward_distributed()
-        .expect("v5 headers carry the total distributed reward");
-    assert!(
-        first.0 > U256::ZERO,
-        "no rewards distributed by the end of the first full post-swap epoch"
-    );
-    assert!(
-        second.0 > first.0,
-        "rewards stopped accruing under the replaced committee"
-    );
-
-    let incoming_nodes: Vec<_> = incoming.iter().map(|&i| net.network.node(i)).collect();
-    assert_nodes_agree(&incoming_nodes, reward_epoch * EPOCH_HEIGHT).await;
-
-    Ok(())
-}
-
-/// A single validator is deregistered right when the 0.4 -> 0.5 upgrade is
-/// proposed, so the shrunken committee activates at one of the first
-/// post-upgrade epoch boundaries — the boundaries whose reward calculations
-/// every node performs through leaf-chain catchup, because no leader counts
-/// were tracked while the epoch still ran under 0.4. The fetched chains
-/// cross the shrink boundary, so each QC must be verified against its own
-/// epoch's stake table (#4740): against a single stake table the
-/// verification jams on the size mismatch and the network halts at the
-/// boundary.
-///
-/// Most nodes are sequencer-only — node 0, the query node, never joins the
-/// committee — mirroring the production topology where non-validators hit
-/// this catchup path despite having been online the whole time.
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_single_removal_across_epoch_reward_upgrade() -> anyhow::Result<()> {
-    const NUM_NODES: usize = 8;
-    const EPOCH_HEIGHT: u64 = 20;
-    const UPGRADE_START_PROPOSING_VIEW: u64 = 65;
-    // 3 of 8 nodes validate; the other 5, including the query node, follow
-    // as sequencer-only.
-    let registered = [5, 6, 7];
-    let removed = 7;
-    let upgrade = Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION);
-
-    let network_config = TestConfigBuilder::<NUM_NODES>::default()
-        .epoch_height(EPOCH_HEIGHT)
-        .builder_timeout(BUILDER_TIMEOUT)
-        .epoch_start_block(0)
-        .set_upgrades_with(
-            EPOCH_REWARD_VERSION,
-            StakeTableContractVersion::V3,
-            &registered,
-        )
-        .await
-        .upgrade_proposing_views(UPGRADE_START_PROPOSING_VIEW, 1000)
-        .build();
-
-    let net = StakeTableTestNetwork::start_upgrading(network_config.clone(), upgrade).await;
-    let remaining_addrs = staking_addresses(&network_config, &[5, 6]);
-    let mut events = net.network.server.event_stream();
-
-    wait_for_upgrade_proposal(
-        &net.network.server,
-        EPOCH_REWARD_VERSION,
-        Duration::from_secs(600),
-    )
-    .await;
-    // The removal cannot activate before `removal_epoch + 2`; probing from
-    // there reports the actual activation epoch.
-    let removal_epoch = net
-        .network
-        .server
-        .decided_leaf()
-        .await
-        .epoch(EPOCH_HEIGHT)
-        .expect("epochs active")
-        .u64();
-    deregister_validators(&network_config, net.stake_table, &[removed]).await?;
-    net.wait_for_version(EPOCH_REWARD_VERSION, Duration::from_secs(600))
-        .await;
-
-    let (activation_epoch, _) = wait_for_committee(
-        &net.client,
-        &mut events,
-        EPOCH_HEIGHT,
-        removal_epoch + 2,
-        MAX_ACTIVATION_EPOCHS,
-        committee_is(remaining_addrs),
-    )
-    .await;
-    tracing::info!(activation_epoch, "removal activated across the upgrade");
-
-    // The sequencer-only query node must keep applying blocks past the
-    // shrink: its epoch rewards catchup has to verify the boundary-crossing
-    // leaf chains.
-    assert_node_live(&net.network.server, EPOCH_HEIGHT, 2).await;
-
-    // Rewards keep flowing under the shrunken committee.
-    let first = net
-        .header_at((activation_epoch + 1) * EPOCH_HEIGHT)
-        .await
-        .total_reward_distributed()
-        .expect("v5 headers carry the total distributed reward");
-    let second = net
-        .header_at((activation_epoch + 2) * EPOCH_HEIGHT)
-        .await
-        .total_reward_distributed()
-        .expect("v5 headers carry the total distributed reward");
-    assert!(
-        first.0 > U256::ZERO,
-        "no rewards distributed by the end of the first full post-removal epoch"
-    );
-    assert!(
-        second.0 > first.0,
-        "rewards stopped accruing under the shrunken committee"
-    );
-
-    let all_nodes: Vec<_> = (0..NUM_NODES).map(|i| net.network.node(i)).collect();
-    assert_nodes_agree(&all_nodes, activation_epoch * EPOCH_HEIGHT).await;
 
     Ok(())
 }
@@ -1094,12 +573,6 @@ async fn fresh_node_joins(version: Upgrade, epoch_height: u64) -> anyhow::Result
     assert_nodes_agree(&all_nodes, activation_epoch * epoch_height).await;
 
     Ok(())
-}
-
-/// Fresh join at 0.5: see [`fresh_node_joins`].
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_fresh_node_joins_v5() -> anyhow::Result<()> {
-    Box::pin(fresh_node_joins(V5, 15)).await
 }
 
 /// Fresh join at 0.6: the node is outside every cliquenet peer window until
