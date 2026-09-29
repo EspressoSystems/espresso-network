@@ -956,7 +956,7 @@ def write_run_dir(out):
     """A 60 s window (t 100 to 160) where every node decides 1 MB/s in 2 blocks/s and 4 views/s
     and uses 0.5 cores, the host is half busy, and 41 of 42 transactions land 2 s after submit:
     their block shows on a validator after 1.5 s and on node0 after 2 s, and is scanned 0.1 s
-    later."""
+    after the next height shows on node0."""
     t0, t1 = 100.0, 160.0
 
     def jsonl(name, records):
@@ -1021,7 +1021,7 @@ def write_run_dir(out):
             "height": tx["height"],
             "validator": tx["t_submit"] + 1.5,
             "query": tx["t_included"],
-            "scanned": tx["t_included"] + 0.1,
+            "scanned": tx["t_included"] + 1.1,
         }
         for tx in txs[:-1]
     ]
