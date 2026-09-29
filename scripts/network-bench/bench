@@ -2390,7 +2390,9 @@ def compare_capacity(
 ) -> CapacityRow:
     """In MB/s, not percent: capacity moves in ramp steps. A capacity below the first step
     ranks lowest; a lower bound (no step failed) below the baseline says nothing."""
-    ordered = sorted(history, key=lambda lim: -math.inf if lim["mb_s"] is None else lim["mb_s"])
+    ordered = sorted(
+        history, key=lambda lim: -math.inf if lim["mb_s"] is None else lim["mb_s"]
+    )
     baseline = ordered[(len(ordered) - 1) // 2] if ordered else None
     cur = current["mb_s"]
     base = baseline["mb_s"] if baseline else None
@@ -2674,7 +2676,11 @@ def step_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
     )
     ramp = set(result["config"]["steps"])
     rates = sorted({s["rate_mb_s"] for s in result["steps"]} | (set(by_rate) & ramp))
-    runs = "main runs" if comparison and comparison["source"] == "main" else "reference runs"
+    runs = (
+        "main runs"
+        if comparison and comparison["source"] == "main"
+        else "reference runs"
+    )
     lines = [
         "| MB/s | "
         + " | ".join(STEP_COLUMNS)
