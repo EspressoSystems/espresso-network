@@ -1090,8 +1090,8 @@ class Load:
 async def run_staircase(
     load: Load, heights: "Heights", counters: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Warmup, then steps up the ramp until one fails, then one refine step. Each step's
-    verdict here uses what is known at its end; the report recomputes it from all data."""
+    """Warmup, then steps up the ramp until one fails, then one refine step. Each step is
+    judged on what is known at its end; the report keeps that verdict."""
     cfg = load.cfg
     steps: list[dict[str, Any]] = []
     passed: list[bool] = []
@@ -1108,21 +1108,21 @@ async def run_staircase(
                 "t_end": time.time(),
             }
             txs = [dataclasses.asdict(tx) for tx in load.state.txs]
-            m = step_measures(
+            judged = judge_step(
                 step, cfg, txs, list(heights.records()), counters, time.time()
             )
-            consensus, query = step_fails(m, rate, cfg)
-            log_step(rate, m, consensus + query)
-            passed.append(not consensus and not query)
-            steps.append({**step, "online_passed": passed[-1]})
+            fails = judged["consensus_fails"] + judged["query_fails"]
+            log_step(judged, fails)
+            passed.append(not fails)
+            steps.append(judged)
     return steps
 
 
-def log_step(rate: float, m: StepMeasures, fails: list[str]) -> None:
+def log_step(m: dict[str, Any], fails: list[str]) -> None:
     consensus, lag = m["consensus_latency_ms"], m["query_lag_ms"]
     log.info(
         "step %s MB/s: decided %s MB/s, consensus p50 %s ms, query lag p50 %s ms: %s",
-        fmt_num(rate),
+        fmt_num(m["rate_mb_s"]),
         fmt_num(m["decided_mb_s"]),
         fmt_num(consensus["p50"] if consensus else None),
         fmt_num(lag["p50"] if lag else None),
@@ -1349,6 +1349,20 @@ def next_rate(ramp: Sequence[float], passed: list[bool]) -> float | None:
     return (ramp[first_fail - 1] + ramp[first_fail]) / 2
 
 
+def judge_step(
+    step: StepWindow,
+    cfg: BenchConfig,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    counters: list[dict[str, Any]],
+    now: float,
+) -> dict[str, Any]:
+    """The one verdict on a step, as the ramp takes it at `now`; stored in steps.json."""
+    m = step_measures(step, cfg, txs, heights, counters, now)
+    consensus, query = step_fails(m, step["rate_mb_s"], cfg)
+    return {**step, **m, "consensus_fails": consensus, "query_fails": query}
+
+
 def step_measures(
     step: StepWindow,
     cfg: BenchConfig,
@@ -1357,19 +1371,22 @@ def step_measures(
     counters: list[dict[str, Any]],
     now: float,
 ) -> StepMeasures:
-    """Over the measured half, from what is known at `now`. A height still missing on the
-    query node counts with its lag so far once that exceeds the target."""
+    """Over the measured half, from what is known at `now`. A transaction not yet on a
+    validator, and a height not yet on the query node, count with their time so far once that
+    exceeds the target."""
     t0, t1 = step["t_mid"], step["t_end"]
     inside = [c for c in counters if t0 <= c["ts"] <= t1]
     first, last = (inside[0], inside[-1]) if len(inside) >= 2 else (None, None)
     on_validator = {h["height"]: h["validator"] for h in heights}
-    consensus = [
-        (on_validator[tx["height"]] - tx["t_submit"]) * 1000
-        for tx in txs
-        if t0 <= tx["t_submit"] <= t1
-        and tx["height"] is not None
-        and on_validator.get(tx["height"]) is not None
-    ]
+    consensus = []
+    for tx in txs:
+        if not t0 <= tx["t_submit"] <= t1:
+            continue
+        seen = on_validator.get(tx["height"])
+        if seen is not None:
+            consensus.append((seen - tx["t_submit"]) * 1000)
+        elif (now - tx["t_submit"]) * 1000 > cfg.latency_target_ms:
+            consensus.append((now - tx["t_submit"]) * 1000)
     lags = []
     for h in heights:
         seen = h["validator"]
@@ -1776,12 +1793,10 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
     host = list(read_jsonl(out / "host.jsonl"))
     txs = list(read_jsonl(out / "load.jsonl"))
     heights = list(read_jsonl(out / "heights.jsonl"))
-    counters = list(read_jsonl(out / "consensus.jsonl"))
     calib = read_json(out / "calibration.json")
     before, after = calib["before"], calib["after"]
     steps = [
-        step_result(step, cfg, txs, heights, counters, series, host)
-        for step in read_json(out / "steps.json")
+        step_result(step, txs, series, host) for step in read_json(out / "steps.json")
     ]
     result: BenchResult = {
         "schema_version": SCHEMA_VERSION,
@@ -1811,24 +1826,13 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
 
 
 def step_result(
-    raw: dict[str, Any],
-    cfg: BenchConfig,
+    judged: dict[str, Any],
     txs: list[dict[str, Any]],
-    heights: list[dict[str, Any]],
-    counters: list[dict[str, Any]],
     series: dict[str, list[Sample]],
     host: list[dict[str, Any]],
 ) -> StepResult:
-    step: StepWindow = {
-        "rate_mb_s": raw["rate_mb_s"],
-        "refine": raw["refine"],
-        "t_start": raw["t_start"],
-        "t_mid": raw["t_mid"],
-        "t_end": raw["t_end"],
-    }
-    t0, t1 = step["t_mid"], step["t_end"]
-    m = step_measures(step, cfg, txs, heights, counters, math.inf)
-    consensus, query = step_fails(m, step["rate_mb_s"], cfg)
+    """The ramp's verdict on a step (see judge_step) plus metrics that decide nothing."""
+    t0, t1 = judged["t_mid"], judged["t_end"]
     views = [
         rate(s, t0, t1, "consensus_last_decided_view") for s in series.values() if s
     ]
@@ -1838,11 +1842,20 @@ def step_result(
         for node, s in series.items()
         if s
     }
-    decided = m["decided_mb_s"]
+    decided = judged["decided_mb_s"]
     procs = process_stats(host, t0, t1)
+    fails = judged["consensus_fails"] + judged["query_fails"]
     return {
-        **step,
-        **m,
+        "rate_mb_s": judged["rate_mb_s"],
+        "refine": judged["refine"],
+        "t_start": judged["t_start"],
+        "t_mid": t0,
+        "t_end": t1,
+        "decided_mb_s": decided,
+        "timeouts": judged["timeouts"],
+        "consensus_latency_ms": judged["consensus_latency_ms"],
+        "query_lag_ms": judged["query_lag_ms"],
+        "query_lag_slope_ms_s": judged["query_lag_slope_ms_s"],
         "latency_ms": quantiles(
             [
                 (tx["t_included"] - tx["t_submit"]) * 1000
@@ -1856,9 +1869,9 @@ def step_result(
         "postgres_cpu": (
             procs["postgres"]["cpu_cores_mean"] if "postgres" in procs else None
         ),
-        "consensus_fails": consensus,
-        "query_fails": query,
-        "passed": not consensus and not query,
+        "consensus_fails": judged["consensus_fails"],
+        "query_fails": judged["query_fails"],
+        "passed": not fails,
     }
 
 

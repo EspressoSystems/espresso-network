@@ -994,7 +994,14 @@ class LoadTest(unittest.TestCase):
                 True, 1.0, block_txs=4, steps=(0.02, 0.04, 0.16, 0.32), tx_timeout_s=1
             )
         self.assertEqual(
-            [(s["rate_mb_s"], s["refine"], s["online_passed"]) for s in self.steps],
+            [
+                (
+                    s["rate_mb_s"],
+                    s["refine"],
+                    not s["consensus_fails"] + s["query_fails"],
+                )
+                for s in self.steps
+            ],
             [
                 (0.02, False, True),
                 (0.04, False, True),
@@ -1092,13 +1099,11 @@ def write_run_dir(out):
         {"height": 2000, "validator": 130.0, "query": 130.5, "scanned": None}
     )
     jsonl("heights.jsonl", heights)
-    jsonl(
-        "consensus.jsonl",
-        (
-            {"ts": float(ts), "decided_bytes": 1e6 * ts, "timeouts": 0}
-            for ts in range(100, 161)
-        ),
-    )
+    counters = [
+        {"ts": float(ts), "decided_bytes": 1e6 * ts, "timeouts": 0}
+        for ts in range(100, 161)
+    ]
+    jsonl("consensus.jsonl", counters)
     steps = [
         {
             "rate_mb_s": 1.0,
@@ -1124,7 +1129,10 @@ def write_run_dir(out):
             "missing_payloads": [],
         },
         "calibration.json": {"before": calib, "after": calib},
-        "steps.json": [s | {"online_passed": True} for s in steps],
+        "steps.json": [
+            bench.judge_step(s, bench.BenchConfig(), txs, heights, counters, s["t_end"])
+            for s in steps
+        ],
         "sysinfo.json": {"runner": make_result()["runner"]},
         "stake-table.json": {
             "stake_table": [{"stake_table_entry": {"stake_amount": "0x1"}}] * 3
@@ -1177,6 +1185,17 @@ class AnalyzeTest(unittest.TestCase):
         self.assertEqual(
             result["validity"], {"valid": True, "noisy": False, "reasons": []}
         )
+
+    def test_report_keeps_the_ramp_verdict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_run_dir(Path(tmp))
+            path = Path(tmp) / "steps.json"
+            steps = json.loads(path.read_text())
+            steps[0]["consensus_fails"] = ["decided 10% of offered"]
+            path.write_text(json.dumps(steps))
+            result = bench.analyze(Path(tmp), bench.BenchConfig())
+        self.assertFalse(result["steps"][0]["passed"])
+        self.assertEqual(result["capacity"]["overall"], {"mb_s": None, "bounded": True})
 
     def test_no_scrapes_is_invalid_not_a_crash(self):
         cfg = bench.BenchConfig()
@@ -1282,6 +1301,19 @@ class StepMeasuresTest(unittest.TestCase):
                 "consensus latency p50 1500 ms > 1000 ms",
             ],
         )
+
+    def test_pending_transactions_count_once_over_target(self):
+        cfg = bench.BenchConfig()
+        txs = [
+            {"t_submit": 16.0 + i / 10, "height": None, "status": "pending"}
+            for i in range(20)
+        ]
+        m = bench.step_measures(step_window(), cfg, txs, [], [], 20.0)
+        # By t 20 all 20 are over the 1000 ms target; by t 18 the 10 submitted before 17.
+        self.assertEqual(m["consensus_latency_ms"]["n"], 20)
+        m = bench.step_measures(step_window(), cfg, txs, [], [], 18.0)
+        self.assertEqual(m["consensus_latency_ms"]["n"], 10)
+        self.assertGreater(m["consensus_latency_ms"]["p50"], 1000.0)
 
     def test_decided_rate_is_not_quantized_by_blocks(self):
         # A 20 MB block every 2 s at t 1, 3, 5, ...: 10 MB/s, but the counter samples at 15
