@@ -573,10 +573,11 @@ mod test {
 
         let mut wrong_view = leaves[0].qc().clone();
         wrong_view.view_number += 1;
-        let wrong_leaf = leaves[1].qc().clone();
+        let mut wrong_commit = leaves[0].qc().clone();
+        wrong_commit.data.leaf_commit = leaves[1].leaf().commit();
         let mut wrong_height = leaves[0].qc().clone();
         wrong_height.data.block_number = wrong_height.data.block_number.map(|h| h + 1);
-        for leaf_qc in [wrong_view, wrong_leaf, wrong_height] {
+        for leaf_qc in [wrong_view, wrong_commit, wrong_height] {
             proof_with_qc(&leaves[..1], leaf_qc)
                 .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
                 .await
