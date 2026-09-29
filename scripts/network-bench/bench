@@ -2814,7 +2814,8 @@ def read_json(path: Path) -> Any:
 
 
 def write_json(path: Path, data: Any) -> None:
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    """Strict JSON: NaN and Infinity are not JSON and break readers of result.json."""
+    path.write_text(json.dumps(data, indent=2, allow_nan=False) + "\n")
 
 
 def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:

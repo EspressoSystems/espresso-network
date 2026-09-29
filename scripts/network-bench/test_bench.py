@@ -1186,6 +1186,14 @@ class AnalyzeTest(unittest.TestCase):
             result["validity"], {"valid": True, "noisy": False, "reasons": []}
         )
 
+    def test_result_json_is_finite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_run_dir(Path(tmp))
+            result = bench.analyze(Path(tmp), bench.BenchConfig())
+            bench.write_json(Path(tmp) / "result.json", result)
+            with self.assertRaises(ValueError):
+                bench.write_json(Path(tmp) / "bad.json", {"x": math.inf})
+
     def test_report_keeps_the_ramp_verdict(self):
         with tempfile.TemporaryDirectory() as tmp:
             write_run_dir(Path(tmp))
