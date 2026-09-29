@@ -20,7 +20,12 @@ use hotshot_query_service_types::{
     availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
     node::BlockId,
 };
-use hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    stake_table::StakeTableEntry,
+    utils::root_block_in_epoch,
+    vote::HasViewNumber,
+};
 use serde::{Deserialize, Serialize};
 use vbs::version::{StaticVersionType, Version};
 
@@ -336,6 +341,10 @@ where
             "cert2 block number {} does not match requested height {}",
             cert2.data.block_number,
             header.height(),
+        );
+        ensure!(
+            cert2.view_number() > ViewNumber::genesis(),
+            "new-protocol certificates must not be at the genesis view"
         );
         let quorum = StakeTableQuorum::new((cert2.data.epoch, self), self.epoch_height);
         quorum
@@ -1273,7 +1282,7 @@ mod test {
     }
 
     /// A client serving a legacy chain, or a new-protocol chain from genesis.
-    async fn forged_qc_client(new_protocol: bool) -> TestClient {
+    async fn test_client(new_protocol: bool) -> TestClient {
         let client = TestClient::default();
         if new_protocol {
             client.set_upgrade(0, NEW_PROTOCOL_VERSION).await;
@@ -1285,7 +1294,7 @@ mod test {
     #[test_log::test]
     async fn test_fetch_leaves_in_range_forged_qc() {
         for new_protocol in [false, true] {
-            let client = forged_qc_client(new_protocol).await;
+            let client = test_client(new_protocol).await;
             let lc = LightClient::from_genesis(
                 SqliteStorage::default().await.unwrap(),
                 client.clone(),
@@ -1302,7 +1311,7 @@ mod test {
     #[test_log::test]
     async fn test_fetch_leaves_for_ranges_forged_qc() {
         for new_protocol in [false, true] {
-            let client = forged_qc_client(new_protocol).await;
+            let client = test_client(new_protocol).await;
             let lc = LightClient::from_genesis(
                 SqliteStorage::default().await.unwrap(),
                 client.clone(),
