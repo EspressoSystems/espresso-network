@@ -3,7 +3,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
     num::NonZeroU64,
-    sync::Arc,
 };
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
@@ -161,7 +160,7 @@ pub enum ConsensusOutput<T: NodeType> {
     BlockPayloadReconstructed {
         view: ViewNumber,
         header: T::BlockHeader,
-        payload: Arc<T::BlockPayload>,
+        payload: T::BlockPayload,
     },
     /// Broadcast our own VID share so peers can reconstruct the block. Emitted
     /// right after `SendVote1` so it never delays the cert-forming vote.
