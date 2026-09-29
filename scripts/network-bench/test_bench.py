@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.machinery import SourceFileLoader
@@ -1343,6 +1344,16 @@ class StaircaseTest(unittest.TestCase):
 
     def test_first_step_failing_ends_the_ramp(self):
         self.assertIsNone(bench.next_rate((4.0, 6.0), [False]))
+
+    def test_drain_waits_for_the_query_node(self):
+        state = types.SimpleNamespace(pending={})
+        counters = [{"decided_bytes": 1}, {"decided_bytes": 1}]
+        heights = bench.Heights(0)
+        heights.saw("validator", 5, 0.0)
+        heights.saw("query", 3, 0.0)
+        self.assertIsNone(asyncio.run(bench.drain(state, counters, heights, 0.3)))
+        heights.saw("query", 5, 0.0)
+        self.assertIsNotNone(asyncio.run(bench.drain(state, counters, heights, 0.3)))
 
     def test_theil_sen_ignores_an_outlier(self):
         points = [(float(x), 2.0 * x) for x in range(10)] + [(10.0, 100.0)]
