@@ -9,9 +9,9 @@ name: Network benchmark command
 #   with read access only, so the check limits who can start a run, not what the run can do.
 # - Only same-repo pull requests are dispatched; their branch was pushed by someone with write
 #   access. Fork pull requests are refused, so no outside code runs.
-# - The run is dispatched on the pull request branch and runs that branch's own copy of
-#   network-bench.yml, which has a read-only token (contents, actions) and no secrets. Its cache
-#   writes land in the branch's scope, not main's.
+# - Runs the branch's own network-bench.yml; whoever pushed the branch can already run any
+#   workflow on it, so dispatching grants nothing new. Cache writes land in the branch's scope,
+#   not main's.
 on:
   issue_comment:
     types: [created]
