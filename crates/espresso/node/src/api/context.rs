@@ -31,8 +31,8 @@ use hotshot_types::{
 };
 
 use crate::{
-    SequencerApiVersion, SequencerContext, consensus_handle::ConsensusHandle, context::TaskList,
-    state_signature::StateSigner,
+    SequencerContext, consensus_handle::ConsensusHandle, context::TaskList,
+    state_signature::StateSignatureMemStorage,
 };
 
 pub type NodeLightClient = LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>;
@@ -72,7 +72,7 @@ pub trait ApiContext: Clone + Send + Sync + 'static {
     fn node_state(&self) -> NodeState;
     fn network_config(&self) -> NetworkConfig<SeqTypes>;
     fn validator_config(&self) -> Option<&ValidatorConfig<SeqTypes>>;
-    fn state_signer(&self) -> Option<Arc<RwLock<StateSigner<SequencerApiVersion>>>>;
+    fn state_signatures(&self) -> Option<Arc<RwLock<StateSignatureMemStorage>>>;
 
     /// A light client the node already runs, for the query service to fetch through.
     fn light_client(&self) -> Option<Arc<NodeLightClient>>;
@@ -187,8 +187,8 @@ where
         Some(SequencerContext::validator_config(self))
     }
 
-    fn state_signer(&self) -> Option<Arc<RwLock<StateSigner<SequencerApiVersion>>>> {
-        Some(SequencerContext::state_signer(self))
+    fn state_signatures(&self) -> Option<Arc<RwLock<StateSignatureMemStorage>>> {
+        Some(SequencerContext::state_signatures(self))
     }
 
     fn light_client(&self) -> Option<Arc<NodeLightClient>> {
