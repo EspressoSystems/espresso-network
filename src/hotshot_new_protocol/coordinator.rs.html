@@ -736,7 +736,7 @@
 <a href=#736 id=736 data-nosnippet>736</a>                    .push_back(ConsensusOutput::BlockPayloadReconstructed {
 <a href=#737 id=737 data-nosnippet>737</a>                        view: out.view,
 <a href=#738 id=738 data-nosnippet>738</a>                        header: proposal.block_header.clone(),
-<a href=#739 id=739 data-nosnippet>739</a>                        payload: out.payload,
+<a href=#739 id=739 data-nosnippet>739</a>                        payload: Arc::new(out.payload),
 <a href=#740 id=740 data-nosnippet>740</a>                    });
 <a href=#741 id=741 data-nosnippet>741</a>            } <span class="kw">else </span>{
 <a href=#742 id=742 data-nosnippet>742</a>                <span class="macro">warn!</span>(

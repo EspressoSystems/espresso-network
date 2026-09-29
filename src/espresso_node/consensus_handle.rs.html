@@ -635,7 +635,7 @@
 <a href=#635 id=635 data-nosnippet>635</a>        } =&gt; <span class="prelude-val">Some</span>(CoordinatorEvent::BlockPayloadReconstructed {
 <a href=#636 id=636 data-nosnippet>636</a>            view: <span class="kw-2">*</span>view,
 <a href=#637 id=637 data-nosnippet>637</a>            header: header.clone(),
-<a href=#638 id=638 data-nosnippet>638</a>            payload: payload.clone(),
+<a href=#638 id=638 data-nosnippet>638</a>            payload: Arc::clone(payload),
 <a href=#639 id=639 data-nosnippet>639</a>        }),
 <a href=#640 id=640 data-nosnippet>640</a>        <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
 <a href=#641 id=641 data-nosnippet>641</a>    }
