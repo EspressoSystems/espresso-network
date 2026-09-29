@@ -5,12 +5,13 @@ name: Network benchmark command
 #
 # Security model:
 # - This workflow runs main's code with a writable token and never checks out the pull request.
-# - Only OWNER/MEMBER/COLLABORATOR comments on same-repo pull requests are accepted. Fork pull
-#   requests are refused, so no outside code runs with a repository token.
-# - The run is dispatched on the pull request branch, not the default branch: a run's cache writes
-#   land in its ref's scope, and main's scope is restored by main pushes that hold secrets. The
-#   author already has write access, so running the branch's copy of network-bench.yml grants
-#   nothing new. The dispatched run has a read-only token (contents, actions).
+# - Comments by OWNER, MEMBER and COLLABORATOR are accepted. MEMBER includes organization members
+#   with read access only, so the check limits who can start a run, not what the run can do.
+# - Only same-repo pull requests are dispatched; their branch was pushed by someone with write
+#   access. Fork pull requests are refused, so no outside code runs.
+# - The run is dispatched on the pull request branch and runs that branch's own copy of
+#   network-bench.yml, which has a read-only token (contents, actions) and no secrets. Its cache
+#   writes land in the branch's scope, not main's.
 on:
   issue_comment:
     types: [created]
@@ -25,11 +26,14 @@ permissions:
 jobs:
   dispatch:
     name: Network benchmark
-    # `issue_comment` fires on issues too, and runs on the default branch with a writable token,
-    # so the author needs write access to the repository.
+    # `issue_comment` fires on issues too. `/benchmark` must be the whole command: alone, or
+    # followed by a space or a line break (web comments end lines with \r\n).
     if: >-
       github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/benchmark') &&
+      (github.event.comment.body == '/benchmark' ||
+      startsWith(github.event.comment.body, '/benchmark ') ||
+      startsWith(github.event.comment.body, format('/benchmark{0}', fromJSON('"\n"'))) ||
+      startsWith(github.event.comment.body, format('/benchmark{0}', fromJSON('"\r"')))) &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     timeout-minutes: 5
