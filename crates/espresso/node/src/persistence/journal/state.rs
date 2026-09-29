@@ -45,6 +45,32 @@ pub struct State {
     )>,
     pub proposals: BTreeMap<ViewNumber, Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>>,
     pub pending_state_certs: BTreeMap<ViewNumber, LightClientStateUpdateCertificateV2<SeqTypes>>,
+    /// Set only on a query node. Recovery replays nothing older than the newest wal segment, so
+    /// the query service's backlog has to live here to survive a restart.
+    pub replay: Option<Replay>,
+}
+
+/// Decided data a query node has not yet replayed into its query service.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Replay {
+    /// The newest replayed leaf's view and block height.
+    pub cursor: Option<(ViewNumber, u64)>,
+    pub leaves: BTreeMap<ViewNumber, ReplayLeaf>,
+    pub cert2: BTreeMap<ViewNumber, Certificate2<SeqTypes>>,
+}
+
+impl Replay {
+    fn is_replayed(&self, view: ViewNumber) -> bool {
+        self.cursor.is_some_and(|(cursor, _)| view <= cursor)
+    }
+}
+
+/// A decided leaf waiting to be replayed, with the state cert its decide finalized.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ReplayLeaf {
+    pub leaf: Leaf2,
+    pub cert: CertificatePair<SeqTypes>,
+    pub state_cert: Option<LightClientStateUpdateCertificateV2<SeqTypes>>,
 }
 
 /// A state cert finalized by a `Leaf` record reaching its view, to be re-upserted into the side
@@ -83,6 +109,11 @@ pub enum Record {
     NextEpochQc(NextEpochQuorumCertificate2<SeqTypes>),
     Vid(Proposal<SeqTypes, VidDisperseShare<SeqTypes>>),
     Da(Proposal<SeqTypes, DaProposal2<SeqTypes>>),
+    /// The query service has ingested every decided leaf up to `view`, at block `height`.
+    Processed {
+        view: ViewNumber,
+        height: u64,
+    },
 }
 
 impl Record {
@@ -100,6 +131,7 @@ impl Record {
             Self::NextEpochQc(_) => Kind::NextEpochQc,
             Self::Vid(_) => Kind::Vid,
             Self::Da(_) => Kind::Da,
+            Self::Processed { .. } => Kind::Processed,
         }
     }
 
@@ -119,6 +151,7 @@ impl Record {
             Self::NextEpochQc(n) => n.view_number().u64(),
             Self::Vid(p) => p.data.view_number().u64(),
             Self::Da(p) => p.data.view_number().u64(),
+            Self::Processed { view, .. } => view.u64(),
         }
     }
 
@@ -140,6 +173,7 @@ impl Record {
             Self::NextEpochQc(n) => bincode::serialize(n)?,
             Self::Vid(p) => bincode::serialize(p)?,
             Self::Da(p) => bincode::serialize(p)?,
+            Self::Processed { height, .. } => bincode::serialize(height)?,
         })
     }
 
@@ -175,6 +209,10 @@ impl Record {
             Kind::NextEpochQc => Self::NextEpochQc(bincode::deserialize(body)?),
             Kind::Vid => Self::Vid(bincode::deserialize(body)?),
             Kind::Da => Self::Da(bincode::deserialize(body)?),
+            Kind::Processed => Self::Processed {
+                view: ViewNumber::new(view),
+                height: bincode::deserialize(body)?,
+            },
         })
     }
 }
@@ -184,7 +222,25 @@ impl State {
     /// Returns a state cert finalized by a `Leaf` reaching its view, if any.
     pub fn apply(&mut self, rec: &Record) -> Option<Finalized> {
         match rec {
-            Record::Snapshot(_) | Record::Cert2 { .. } | Record::Vid(_) | Record::Da(_) => None,
+            Record::Snapshot(_) | Record::Vid(_) | Record::Da(_) => None,
+            Record::Cert2 { view, cert } => {
+                if let Some(replay) = &mut self.replay
+                    && !replay.is_replayed(*view)
+                {
+                    replay.cert2.insert(*view, cert.clone());
+                }
+                None
+            },
+            Record::Processed { view, height } => {
+                if let Some(replay) = &mut self.replay
+                    && !replay.is_replayed(*view)
+                {
+                    replay.cursor = Some((*view, *height));
+                    replay.leaves.retain(|v, _| v > view);
+                    replay.cert2.retain(|v, _| v > view);
+                }
+                None
+            },
             Record::Action { view, kind } => {
                 match kind {
                     HotShotAction::Vote => {
@@ -230,12 +286,23 @@ impl State {
                 }
                 // Finalize at the decided leaf's own view: a gap-fill decide can be older than
                 // the anchor and still finalize a pending cert at its view.
-                self.pending_state_certs
-                    .remove(&leaf_view)
-                    .map(|cert| Finalized {
-                        epoch: cert.epoch.u64(),
-                        cert,
-                    })
+                let state_cert = self.pending_state_certs.remove(&leaf_view);
+                if let Some(replay) = &mut self.replay
+                    && !replay.is_replayed(leaf_view)
+                {
+                    replay.leaves.insert(
+                        leaf_view,
+                        ReplayLeaf {
+                            leaf: leaf.clone(),
+                            cert: CertificatePair::new(qc.clone(), next_epoch_qc.clone()),
+                            state_cert: state_cert.clone(),
+                        },
+                    );
+                }
+                state_cert.map(|cert| Finalized {
+                    epoch: cert.epoch.u64(),
+                    cert,
+                })
             },
             Record::StateCert(cert) => {
                 let view = ViewNumber::new(cert.light_client_state.view_number);

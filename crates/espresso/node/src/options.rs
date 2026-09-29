@@ -1061,35 +1061,14 @@ impl From<&L1ClientOptions> for L1Tuning {
 
 impl PublicNodeConfig {
     pub fn new(opt: &Options, modules: &Modules, genesis: &Genesis) -> Self {
-        let storage = if let Some(sql) = modules.storage_sql.as_ref() {
-            StorageConfig {
-                backend: StorageBackend::Sql,
-                fs: None,
-                sql: Some(SqlStorageConfig::from(sql)),
-                journal: None,
-            }
-        } else if let Some(fs) = modules.storage_fs.as_ref() {
-            StorageConfig {
-                backend: StorageBackend::Fs,
-                fs: Some(FsStorageConfig::from(fs)),
-                sql: None,
-                journal: None,
-            }
-        } else if let Some(journal) = modules.storage_journal.as_ref() {
-            StorageConfig {
-                backend: StorageBackend::Journal,
-                fs: None,
-                sql: None,
-                journal: Some(JournalStorageConfig::from(journal)),
-            }
-        } else {
-            let fs = persistence::fs::Options::try_parse_from(std::iter::empty::<String>()).ok();
-            StorageConfig {
-                backend: StorageBackend::FsDefault,
-                fs: fs.as_ref().map(FsStorageConfig::from),
-                sql: None,
-                journal: None,
-            }
+        // Consensus always runs on the journal. storage-sql or storage-fs, if given, is the query
+        // service's database.
+        let journal = modules.storage_journal.clone().unwrap_or_default();
+        let storage = StorageConfig {
+            backend: StorageBackend::Journal,
+            fs: modules.storage_fs.as_ref().map(FsStorageConfig::from),
+            sql: modules.storage_sql.as_ref().map(SqlStorageConfig::from),
+            journal: Some(JournalStorageConfig::from(&journal)),
         };
 
         Self {

@@ -1,4 +1,4 @@
-use anyhow::ensure;
+use anyhow::{bail, ensure};
 use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::traits::NullEventConsumer;
@@ -82,58 +82,42 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     tracing::warn!(?genesis, "genesis");
 
-    let result = if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
-    } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
-    } else if let Some(mut storage) = modules.storage_journal.take() {
-        ensure!(
-            modules.query.is_none(),
-            "storage-journal does not support the query module; use storage-sql"
-        );
-        ensure!(
-            genesis.base_version >= NEW_PROTOCOL_VERSION,
-            "storage-journal requires a genesis base_version of at least {NEW_PROTOCOL_VERSION}"
-        );
-        // Chain configs change only through genesis upgrades, so the largest covers every version.
-        storage.max_block_size = genesis.block_sizes().into_values().max();
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
-    } else {
-        // Persistence is required. If none is provided, just use the local file system.
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            persistence::fs::Options::default(),
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
+    // Consensus always runs on the journal. storage-sql and storage-fs only back the query service.
+    let mut storage = modules.storage_journal.take().unwrap_or_default();
+    ensure!(
+        genesis.base_version >= NEW_PROTOCOL_VERSION,
+        "the journal consensus storage requires a genesis base_version of at least \
+         {NEW_PROTOCOL_VERSION}"
+    );
+    // Chain configs change only through genesis upgrades, so the largest covers every version.
+    storage.max_block_size = genesis.block_sizes().into_values().max();
+    let query_storage = match (modules.storage_sql.take(), modules.storage_fs.take()) {
+        (Some(_), Some(_)) => {
+            bail!("the query service takes storage-sql or storage-fs, not both")
+        },
+        (Some(sql), None) => Some(persistence::journal::QueryStorage::Sql(Box::new(sql))),
+        (None, Some(fs)) => Some(persistence::journal::QueryStorage::Fs(fs)),
+        (None, None) => None,
     };
+    match query_storage {
+        Some(query_storage) if modules.query.is_some() => {
+            storage = storage.with_query_storage(query_storage);
+        },
+        Some(_) => tracing::warn!(
+            "storage-sql and storage-fs only back the query module, which is not enabled, so they \
+             are ignored. Consensus data is stored in the journal"
+        ),
+        None => {},
+    }
+    let result = run_with_storage(
+        genesis,
+        modules,
+        opt,
+        storage,
+        public_node_config,
+        telemetry_handle.as_mut(),
+    )
+    .await;
 
     if let Some(h) = telemetry_handle {
         h.shutdown();

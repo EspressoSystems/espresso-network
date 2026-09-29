@@ -1,23 +1,29 @@
-//! Append-only journal persistence backend for non-query (light) nodes.
+//! Append-only journal persistence backend for consensus data.
 //!
 //! Two independent streams (`wal`, `data`), each a std writer thread doing group commit with a
 //! durable/enqueue sync policy; see the design doc for the write path, roll and recovery. Reads of
 //! consensus state come from an in-memory `State` folded from wal records; `MembershipPersistence`
 //! and `DhtPersistentStorage` delegate to a side `fs::Persistence` tree, which keeps fs semantics
 //! (no fsync) since DRB/stake/state-cert data is recoverable from L1 or peers.
+//!
+//! A query node pairs the journal with a separate query-service database. Consensus writes stay
+//! here, and decided blocks are replayed into the query service from a cursor, off the voting path.
 
 pub mod format;
 pub mod lane;
 pub mod state;
 
-use std::{collections::BTreeMap, fs, io, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeMap, fs, io, os::unix::fs::FileExt as _, path::PathBuf, sync::Arc,
+    time::Instant,
+};
 
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
-    SeqTypes, StakeTableHash,
+    AuthenticatedValidatorMap, Header, Leaf2, NetworkConfig, Payload, PubKey,
+    RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
@@ -39,7 +45,10 @@ use hotshot_types::{
         CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
     },
-    traits::metrics::Metrics,
+    traits::{
+        block_contents::{BlockHeader as _, BlockPayload as _},
+        metrics::Metrics,
+    },
 };
 
 use crate::{
@@ -48,10 +57,14 @@ use crate::{
         fs as side_fs,
         journal::{
             format::{Class, Kind, ScanEnd, SegmentHeader, Stream},
-            lane::{JournalFs, Lane, LaneConfig, LaneMetrics, SegmentSet, SnapshotHook, StdFs},
-            state::{Record, State},
+            lane::{
+                DataIndex, JournalFs, Lane, LaneConfig, LaneMetrics, SegmentMeta, SegmentSet,
+                SnapshotHook, StdFs,
+            },
+            state::{Record, Replay, ReplayLeaf, State},
         },
         persistence_metrics::PersistenceMetricsValue,
+        sql::{self, DecidedLeaf, decide_events_from_chain, within_gap_fill_horizon},
         storage_probe::{self, StorageProbe},
     },
 };
@@ -109,8 +122,11 @@ impl RecordLimits {
 const DEFAULT_MAX_BYTES: u64 = 100 * (1 << 30);
 /// Default `--view-retention`: about 1 week at a 2s view time.
 const DEFAULT_VIEW_RETENTION: u64 = 302_000;
+/// Most views replayed into the query service in one decide event. Each batch reads its blocks'
+/// payloads and shares into memory, so this bounds replay memory at a few blocks.
+const MAX_REPLAY_VIEWS: usize = 8;
 
-/// Options for the append-only journal storage backend.
+/// Options for the append-only journal, the consensus storage of every node.
 #[derive(Parser, Clone, Debug)]
 pub struct Options {
     /// Storage path for persistent data.
@@ -146,6 +162,34 @@ pub struct Options {
     /// Largest `max_block_size` over the genesis base version and upgrades, set from genesis.
     #[clap(skip)]
     pub max_block_size: Option<u64>,
+
+    #[clap(skip)]
+    pub query_storage: Option<QueryStorage>,
+}
+
+/// The database a query node's query service reads from, filled by replaying decided leaves.
+#[derive(Clone, Debug)]
+pub enum QueryStorage {
+    Sql(Box<sql::Options>),
+    Fs(side_fs::Options),
+}
+
+impl Default for Options {
+    fn default() -> Options {
+        Options::parse_from(std::iter::empty::<String>())
+    }
+}
+
+impl Options {
+    /// Back the query service with `query_storage`.
+    ///
+    /// Decided leaves, with their payloads and VID shares, are then kept until they have been
+    /// replayed as decide events to the query service, which may lag consensus. Consensus never
+    /// waits on the query service database.
+    pub fn with_query_storage(mut self, query_storage: QueryStorage) -> Options {
+        self.query_storage = Some(query_storage);
+        self
+    }
 }
 
 #[async_trait]
@@ -199,6 +243,8 @@ struct Inner {
     /// Measured before any real `Metrics` is attached; `enable_metrics` records it once a
     /// histogram exists to record it into.
     replay_seconds: f64,
+    /// `Some` exactly on a query node, which replays decided blocks into its query service.
+    replay_index: Option<DataIndex>,
     _lock: std::fs::File,
 }
 
@@ -329,6 +375,24 @@ impl Persistence {
             "journal: replayed wal"
         );
 
+        if opts.query_storage.is_some() {
+            state.replay.get_or_insert_with(Replay::default);
+        } else {
+            state.replay = None;
+        }
+        let replay_index = match &state.replay {
+            Some(replay) => Some(
+                index_unreplayed(
+                    std_fs.clone(),
+                    data_dir.clone(),
+                    &data_recovered.segments,
+                    replay,
+                )
+                .await?,
+            ),
+            None => None,
+        };
+
         let segments = Arc::new(parking_lot::Mutex::new(SegmentSet {
             wal: wal_recovered.segments,
             data: data_recovered.segments,
@@ -350,6 +414,7 @@ impl Persistence {
             (wal_recovered.next_seq, wal_recovered.next_lsn),
             Some(hook),
             segments.clone(),
+            None,
         )
         .context("spawning wal writer thread")?;
 
@@ -369,6 +434,7 @@ impl Persistence {
             (data_recovered.next_seq, data_recovered.next_lsn),
             None,
             segments.clone(),
+            replay_index.clone(),
         )
         .context("spawning data writer thread")?;
 
@@ -386,6 +452,7 @@ impl Persistence {
                 probe,
                 limits,
                 replay_seconds,
+                replay_index,
                 _lock: lock_file,
             }),
             metrics: Arc::new(PersistenceMetricsValue::default()),
@@ -493,7 +560,8 @@ impl Persistence {
     }
 
     /// Unlinks segments `SegmentSet::to_unlink` selects, then fsyncs each touched directory once.
-    async fn gc(&self, decided: ViewNumber) -> anyhow::Result<()> {
+    /// On a query node, `replayed` keeps every data segment the query service still has to ingest.
+    async fn gc(&self, decided: ViewNumber, replayed: Option<u64>) -> anyhow::Result<()> {
         let view_retention = self.inner.opts.view_retention;
         let max_bytes = self.inner.opts.max_bytes;
         let segments = self.inner.segments.clone();
@@ -501,6 +569,7 @@ impl Persistence {
         let data_dir = self.inner.data_dir.clone();
         let wal_lane = self.inner.wal.clone();
         let data_lane = self.inner.data.clone();
+        let replay_index = self.inner.replay_index.clone();
         let decided = decided.u64();
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -508,7 +577,14 @@ impl Persistence {
             // same segment twice, so a `NotFound` below is always benign.
             let (to_unlink, wal_bytes, data_bytes) = {
                 let mut segments = segments.lock();
-                let to_unlink = segments.to_unlink(decided, view_retention, max_bytes);
+                let to_unlink = segments.to_unlink(decided, view_retention, max_bytes, replayed);
+                if let Some(index) = &replay_index {
+                    index.lock().retain(|_, location| {
+                        !to_unlink
+                            .iter()
+                            .any(|u| u.stream == Stream::Data && u.seq == location.seq)
+                    });
+                }
                 segments.wal.retain(|m| {
                     !to_unlink
                         .iter()
@@ -559,6 +635,131 @@ impl Persistence {
         .context("gc: blocking task panicked")??;
         Ok(())
     }
+
+    /// The newest `kind` data record at `view`. A query node reads it through its index, any
+    /// other node scans the segments that could hold it.
+    async fn read_data<T>(&self, kind: Kind, view: ViewNumber) -> anyhow::Result<Option<T>>
+    where
+        T: serde::de::DeserializeOwned + Send + 'static,
+    {
+        let Some(index) = &self.inner.replay_index else {
+            return self.scan_for(Stream::Data, kind, view).await;
+        };
+        let Some(location) = index.lock().get(&(view.u64(), kind)).copied() else {
+            return Ok(None);
+        };
+        let path = lane::segment_path(&self.inner.data_dir, location.seq);
+        tokio::task::spawn_blocking(move || -> anyhow::Result<Option<T>> {
+            let file = match std::fs::File::open(&path) {
+                Ok(file) => file,
+                // GC unlinked the segment after the lookup.
+                Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(err) => {
+                    return Err(err).with_context(|| format!("opening segment {}", path.display()));
+                },
+            };
+            let mut frame = vec![0; format::FRAME_HEADER_LEN + location.len as usize];
+            file.read_exact_at(&mut frame, location.offset)
+                .with_context(|| format!("reading segment {}", path.display()))?;
+            let (_, body, _) = format::decode_frame(&frame, location.lsn).map_err(|err| {
+                anyhow::anyhow!(
+                    "corrupt frame in segment {} at offset {}: {err:?}",
+                    path.display(),
+                    location.offset
+                )
+            })?;
+            Ok(Some(bincode::deserialize(body)?))
+        })
+        .await
+        .context("read_data: blocking task panicked")?
+    }
+
+    /// Replay decided leaves to `consumer` in batches until caught up, returning the cursor.
+    ///
+    /// The cursor moves only after the consumer accepted a whole batch, so a consumer failure
+    /// leaves the batch to be retried by the next call.
+    async fn replay_decided(
+        &self,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        loop {
+            let batch = self
+                .inner
+                .state
+                .lock()
+                .replay
+                .as_ref()
+                .and_then(next_replay_batch);
+            let Some(ReplayBatch {
+                leaves,
+                cert2,
+                to_view,
+                to_height,
+            }) = batch
+            else {
+                break;
+            };
+            let mut chain = Vec::with_capacity(leaves.len());
+            for (
+                view,
+                ReplayLeaf {
+                    mut leaf,
+                    cert,
+                    state_cert,
+                },
+            ) in leaves.into_iter().rev()
+            {
+                match self
+                    .read_data::<Proposal<SeqTypes, DaProposal2<SeqTypes>>>(Kind::Da, view)
+                    .await?
+                {
+                    Some(proposal) => leaf.fill_block_payload_unchecked(Payload::from_bytes(
+                        &proposal.data.encoded_transactions,
+                        &proposal.data.metadata,
+                    )),
+                    // The genesis view has no DA proposal, and its payload is always empty.
+                    None if view == ViewNumber::genesis() => {
+                        leaf.fill_block_payload_unchecked(Payload::empty().0)
+                    },
+                    None => tracing::debug!(%view, "DA proposal not available at replay"),
+                }
+                let vid_share = self
+                    .read_data::<Proposal<SeqTypes, VidDisperseShare<SeqTypes>>>(Kind::Vid, view)
+                    .await?
+                    .map(|proposal| proposal.data);
+                chain.push(DecidedLeaf {
+                    info: LeafInfo {
+                        leaf,
+                        vid_share,
+                        state_cert,
+                        state: Default::default(),
+                        delta: Default::default(),
+                    },
+                    cert,
+                });
+            }
+            for event in decide_events_from_chain(chain, cert2, deciding_qc.clone()) {
+                consumer.handle_event(&event).await?;
+            }
+            self.put_wal(
+                Record::Processed {
+                    view: to_view,
+                    height: to_height,
+                },
+                Class::Durable,
+            )
+            .await?;
+        }
+        Ok(self
+            .inner
+            .state
+            .lock()
+            .replay
+            .as_ref()
+            .and_then(|replay| replay.cursor)
+            .map(|(view, _)| view))
+    }
 }
 
 /// Body of the last `kind` record at `view` in a whole segment file. A torn tail is expected on
@@ -587,6 +788,89 @@ fn find_in_segment(
     Ok(found)
 }
 
+/// Index the data frames a query node may still replay. `max_view` only grows along a stream, so
+/// segments before the first that reaches the oldest unreplayed leaf hold nothing replay needs.
+async fn index_unreplayed(
+    fs: Arc<StdFs>,
+    dir: PathBuf,
+    segments: &[SegmentMeta],
+    replay: &Replay,
+) -> anyhow::Result<DataIndex> {
+    let index = DataIndex::default();
+    let Some(oldest) = replay.leaves.keys().next().map(|view| view.u64()) else {
+        return Ok(index);
+    };
+    let seqs = segments
+        .iter()
+        .filter(|meta| meta.max_view >= oldest)
+        .map(|meta| meta.seq)
+        .collect::<Vec<_>>();
+    let frames = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<_>> {
+        let mut frames = Vec::new();
+        for seq in seqs {
+            frames.extend(lane::frame_locations(&*fs, &dir, Stream::Data, seq)?);
+        }
+        Ok(frames)
+    })
+    .await
+    .context("data index task panicked")??;
+    index.lock().extend(
+        frames
+            .into_iter()
+            .map(|(header, location)| ((header.view, header.kind), location)),
+    );
+    Ok(index)
+}
+
+/// A run of consecutive decided leaves, oldest first, ready to become decide events.
+struct ReplayBatch {
+    leaves: Vec<(ViewNumber, ReplayLeaf)>,
+    cert2: Option<Certificate2<SeqTypes>>,
+    to_view: ViewNumber,
+    to_height: u64,
+}
+
+/// The decided leaves after the replay cursor, stopping at the first height gap.
+///
+/// A gap the newest decides can still fill holds the cursor instead: consensus may yet decide the
+/// missing leaf, and replaying past it would leave the query service without that block.
+fn next_replay_batch(replay: &Replay) -> Option<ReplayBatch> {
+    let watermark = replay.leaves.keys().next_back()?.u64();
+    let mut parent = replay.cursor.map(|(_, height)| height);
+    let mut leaves = Vec::new();
+    for (view, entry) in &replay.leaves {
+        let height = entry.leaf.block_header().block_number();
+        if let Some(parent) = parent
+            && height != parent + 1
+        {
+            if !leaves.is_empty() {
+                break;
+            }
+            if height > parent + 1 && within_gap_fill_horizon(view.u64(), watermark) {
+                tracing::info!(
+                    height,
+                    parent,
+                    %view,
+                    "holding the replay cursor for a gap-fill"
+                );
+                return None;
+            }
+        }
+        parent = Some(height);
+        leaves.push((*view, entry.clone()));
+        if leaves.len() == MAX_REPLAY_VIEWS {
+            break;
+        }
+    }
+    let to_view = leaves.last()?.0;
+    Some(ReplayBatch {
+        cert2: replay.cert2.get(&to_view).cloned(),
+        to_height: parent?,
+        to_view,
+        leaves,
+    })
+}
+
 #[async_trait]
 impl SequencerPersistence for Persistence {
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>> {
@@ -612,8 +896,8 @@ impl SequencerPersistence for Persistence {
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
-        // No event consumer call: non-query nodes run `NullEventConsumer`, and the query-service
-        // ingestion this would feed needs the replaying store that only fs/sql provide.
+        // No event consumer call: a query node replays these from `process_decided_events`, off
+        // the voting path, and any other node runs `NullEventConsumer`.
         let records: Vec<_> = leaf_chain
             .into_iter()
             .map(|(info, cert)| {
@@ -635,15 +919,23 @@ impl SequencerPersistence for Persistence {
     async fn process_decided_events(
         &self,
         decided_view: ViewNumber,
-        _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        _consumer: &(impl EventConsumer + 'static),
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
         let now = Instant::now();
-        self.gc(decided_view).await?;
+        let processed = if self.inner.replay_index.is_some() {
+            let cursor = self.replay_decided(deciding_qc, consumer).await?;
+            self.gc(decided_view, Some(cursor.map_or(0, |view| view.u64())))
+                .await?;
+            cursor
+        } else {
+            self.gc(decided_view, None).await?;
+            Some(decided_view)
+        };
         self.metrics
             .internal_process_decided_events_duration
             .add_point(now.elapsed().as_secs_f64());
-        Ok(Some(decided_view))
+        Ok(processed)
     }
 
     async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
@@ -654,14 +946,14 @@ impl SequencerPersistence for Persistence {
         &self,
         view: ViewNumber,
     ) -> anyhow::Result<Option<Proposal<SeqTypes, DaProposal2<SeqTypes>>>> {
-        self.scan_for(Stream::Data, Kind::Da, view).await
+        self.read_data(Kind::Da, view).await
     }
 
     async fn load_vid_share(
         &self,
         view: ViewNumber,
     ) -> anyhow::Result<Option<Proposal<SeqTypes, VidDisperseShare<SeqTypes>>>> {
-        self.scan_for(Stream::Data, Kind::Vid, view).await
+        self.read_data(Kind::Vid, view).await
     }
 
     async fn append_vid(
@@ -1105,6 +1397,7 @@ mod tests {
             max_bytes: DEFAULT_MAX_BYTES,
             ignore_existing: false,
             max_block_size: Some(TEST_MAX_BLOCK_SIZE),
+            query_storage: None,
         }
     }
 
@@ -1157,6 +1450,7 @@ mod tests {
             max_bytes: DEFAULT_MAX_BYTES,
             ignore_existing: false,
             max_block_size: Some(TEST_MAX_BLOCK_SIZE),
+            query_storage: None,
         })
         .await
         .err()
@@ -1190,6 +1484,7 @@ mod testing {
                 max_bytes: DEFAULT_MAX_BYTES,
                 ignore_existing: false,
                 max_block_size: Some(TEST_MAX_BLOCK_SIZE),
+                query_storage: None,
             }
         }
     }

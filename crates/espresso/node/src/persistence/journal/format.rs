@@ -34,7 +34,7 @@ pub enum Class {
 /// Tag identifying which `Record` variant a frame's payload decodes to. See the record-kind
 /// mapping table in the design doc for the trait method that produces each one.
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Kind {
     Snapshot = 1,
     Action = 2,
@@ -48,6 +48,7 @@ pub enum Kind {
     NextEpochQc = 10,
     Vid = 11,
     Da = 12,
+    Processed = 13,
 }
 
 impl Kind {
@@ -65,6 +66,7 @@ impl Kind {
             10 => Self::NextEpochQc,
             11 => Self::Vid,
             12 => Self::Da,
+            13 => Self::Processed,
             _ => return None,
         })
     }

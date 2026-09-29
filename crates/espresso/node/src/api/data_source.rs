@@ -82,8 +82,17 @@ impl DataSourceOptions for persistence::fs::Options {
 }
 
 impl QueryModuleOptions for persistence::journal::Options {
-    fn enable_query_module(&self, _opt: Options, _query: Query) -> anyhow::Result<Options> {
-        anyhow::bail!("storage-journal does not support the query module; use storage-sql")
+    fn enable_query_module(&self, opt: Options, query: Query) -> anyhow::Result<Options> {
+        match &self.query_storage {
+            Some(persistence::journal::QueryStorage::Sql(sql)) => {
+                Ok(opt.query_sql(query, (**sql).clone()))
+            },
+            Some(persistence::journal::QueryStorage::Fs(fs)) => Ok(opt.query_fs(query, fs.clone())),
+            None => anyhow::bail!(
+                "storage-journal only stores consensus data and cannot serve the query module on \
+                 its own. Add storage-sql or storage-fs for the query service database"
+            ),
+        }
     }
 }
 

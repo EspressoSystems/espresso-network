@@ -220,6 +220,19 @@ pub struct SegmentMeta {
     pub max_view: u64,
 }
 
+/// Where one frame lives, so it can be read back without scanning its segment.
+#[derive(Clone, Copy, Debug)]
+pub struct Location {
+    pub seq: u64,
+    pub offset: u64,
+    pub lsn: Lsn,
+    pub len: u32,
+}
+
+/// The newest data frame for each `(view, kind)`, kept only on a query node, whose replay reads
+/// every decided block's payload and share back. Entries appear once their bytes are written.
+pub type DataIndex = Arc<Mutex<std::collections::BTreeMap<(u64, Kind), Location>>>;
+
 /// In-memory index of every segment a stream currently has on disk, kept live by the writer
 /// thread. Lets GC compute what to unlink without a directory scan or a full-segment read.
 #[derive(Clone, Debug, Default)]
@@ -262,7 +275,16 @@ impl SegmentSet {
     /// that doesn't qualify: `max_view` is monotonic (see `open_new_segment`), so a segment that
     /// isn't old enough means nothing sealed after it is either, and unlinking one segment while
     /// keeping an older one would leave a gap GC can never fill in later.
-    pub fn to_unlink(&self, decided: u64, view_retention: u64, max_bytes: u64) -> Vec<SegmentMeta> {
+    ///
+    /// `data` segments holding any view after `replayed` stay, even over `max_bytes`: a query
+    /// node's query service still has to ingest them.
+    pub fn to_unlink(
+        &self,
+        decided: u64,
+        view_retention: u64,
+        max_bytes: u64,
+        replayed: Option<u64>,
+    ) -> Vec<SegmentMeta> {
         let bound = decided.saturating_sub(view_retention);
         let mut out = Vec::new();
 
@@ -278,6 +300,9 @@ impl SegmentSet {
         if !self.data.is_empty() {
             let mut total: u64 = self.data.iter().map(|m| m.bytes).sum();
             for meta in &self.data[..self.data.len() - 1] {
+                if replayed.is_some_and(|replayed| meta.max_view > replayed) {
+                    break;
+                }
                 if meta.max_view >= bound && total <= max_bytes {
                     break;
                 }
@@ -457,6 +482,7 @@ struct SegmentRead {
     /// Only populated when `collect_records` is set (wal streams; recovery never needs a data
     /// stream's decoded records, only where its tail ends).
     records: Vec<(FrameHeader, Vec<u8>)>,
+    locations: Vec<(FrameHeader, Location)>,
     end: ScanEnd,
     next_lsn: Lsn,
     max_view: u64,
@@ -504,6 +530,7 @@ fn read_segment<F: JournalFs>(
     );
 
     let mut records = Vec::new();
+    let mut locations = Vec::new();
     let mut frame_buf: Vec<u8> = Vec::new();
     let mut expect_lsn = header.first_lsn;
     let mut max_view = 0u64;
@@ -541,6 +568,15 @@ fn read_segment<F: JournalFs>(
                 if collect_records {
                     records.push((frame_header, body.to_vec()));
                 }
+                locations.push((
+                    frame_header,
+                    Location {
+                        seq,
+                        offset: SegmentHeader::LEN as u64 + consumed,
+                        lsn: frame_header.lsn,
+                        len: frame_header.len,
+                    },
+                ));
                 max_view = max_view.max(frame_header.view);
                 expect_lsn = frame_header.lsn + 1;
                 consumed += total as u64;
@@ -552,10 +588,22 @@ fn read_segment<F: JournalFs>(
     Ok(SegmentRead {
         header,
         records,
+        locations,
         end,
         next_lsn: expect_lsn,
         max_view,
     })
+}
+
+/// Every frame in segment `seq` with where it lives, stopping at a torn tail. Streams the segment
+/// like recovery does, so at most one frame is in memory at a time.
+pub fn frame_locations<F: JournalFs>(
+    fs: &F,
+    dir: &Path,
+    stream: Stream,
+    seq: u64,
+) -> anyhow::Result<Vec<(FrameHeader, Location)>> {
+    Ok(read_segment(fs, &segment_path(dir, seq), seq, stream, false)?.locations)
 }
 
 /// True only for a segment that was created but never durably written to: shorter than a header,
@@ -780,7 +828,7 @@ fn check_snapshot_size(stream: Stream, body: &[u8], max_snapshot_bytes: u32) {
 /// Spawns the writer thread and returns a handle to enqueue records on it plus the thread's join
 /// handle, which the caller must join after dropping the `Lane` (see `journal::Inner`'s `Drop`).
 /// `hook` is `Some` only for the wal lane: it provides the `Snapshot` payload opening every new
-/// wal segment.
+/// wal segment. `index`, when given, learns where every record this lane writes lives.
 pub fn spawn_lane<F: JournalFs>(
     fs: Arc<F>,
     dir: PathBuf,
@@ -788,6 +836,7 @@ pub fn spawn_lane<F: JournalFs>(
     start: (u64, Lsn),
     hook: Option<Arc<dyn SnapshotHook>>,
     segments: Arc<Mutex<SegmentSet>>,
+    index: Option<DataIndex>,
 ) -> anyhow::Result<(Lane, std::thread::JoinHandle<()>)> {
     let (next_seq, next_lsn) = start;
     let metrics = Arc::new(LaneMetrics::noop());
@@ -859,6 +908,7 @@ pub fn spawn_lane<F: JournalFs>(
         queue_bytes: queue_bytes.clone(),
         metrics: metrics.clone(),
         frame_buf,
+        index,
     };
     let stream = writer.cfg.stream;
     let handle = std::thread::Builder::new()
@@ -898,6 +948,7 @@ struct Writer<F: JournalFs> {
     queue_bytes: Arc<AtomicU64>,
     metrics: Arc<LaneMetrics>,
     frame_buf: Vec<u8>,
+    index: Option<DataIndex>,
 }
 
 /// Applies one record's bookkeeping to `active`: `max_view`, `first_view` (view 0 marks
@@ -936,7 +987,19 @@ impl<F: JournalFs> Writer<F> {
                 .set_queue_bytes(self.queue_bytes.load(Ordering::Relaxed));
 
             let mut durable_in_batch = false;
+            let mut written = Vec::new();
             for w in &batch {
+                if self.index.is_some() {
+                    written.push((
+                        (w.view, w.kind),
+                        Location {
+                            seq: self.active.seq,
+                            offset: self.active.offset + self.frame_buf.len() as u64,
+                            lsn: w.lsn,
+                            len: w.body.len() as u32,
+                        },
+                    ));
+                }
                 format::encode_frame(&mut self.frame_buf, w.lsn, w.view, w.kind, &w.body);
                 durable_in_batch |= w.class == Class::Durable;
                 apply_write_to_active(&mut self.active, w);
@@ -949,6 +1012,9 @@ impl<F: JournalFs> Writer<F> {
             {
                 tracing::error!(stream = ?self.cfg.stream, %err, "journal: write failed");
                 std::process::abort();
+            }
+            if let Some(index) = &self.index {
+                index.lock().extend(written);
             }
             self.active.offset += self.frame_buf.len() as u64;
             // A batch can overshoot `max_batch_bytes`; shrink only well past it, so saturated
@@ -1297,7 +1363,7 @@ mod tests {
         };
         // decided=100, retention=50 -> bound=50: segments 1,2 are old enough, but only those
         // outside the two newest (3, 4) are candidates.
-        let unlink = set.to_unlink(100, 50, u64::MAX);
+        let unlink = set.to_unlink(100, 50, u64::MAX, None);
         assert_eq!(unlink.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![1, 2]);
     }
 
@@ -1307,7 +1373,7 @@ mod tests {
             wal: vec![meta(Stream::Wal, 1, 100, 0), meta(Stream::Wal, 2, 100, 0)],
             data: vec![],
         };
-        assert!(set.to_unlink(1_000_000, 0, u64::MAX).is_empty());
+        assert!(set.to_unlink(1_000_000, 0, u64::MAX, None).is_empty());
     }
 
     // A zero-view segment (e.g. rolled right after a snapshot, before any real record landed)
@@ -1326,7 +1392,7 @@ mod tests {
             ],
             data: vec![],
         };
-        assert!(set.to_unlink(100, 50, u64::MAX).is_empty());
+        assert!(set.to_unlink(100, 50, u64::MAX, None).is_empty());
     }
 
     #[test]
@@ -1341,7 +1407,7 @@ mod tests {
             ],
         };
         // All young (max_view 100 >= bound 0), total 160 > cap 90: drop oldest until <= cap.
-        let unlink = set.to_unlink(0, 0, 90);
+        let unlink = set.to_unlink(0, 0, 90, None);
         assert_eq!(unlink.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![1, 2]);
     }
 
@@ -1355,7 +1421,7 @@ mod tests {
                 meta(Stream::Data, 3, 10, 1000), // active
             ],
         };
-        let unlink = set.to_unlink(1000, 10, u64::MAX);
+        let unlink = set.to_unlink(1000, 10, u64::MAX, None);
         assert_eq!(unlink.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![1]);
     }
 
@@ -1392,6 +1458,7 @@ mod tests {
             (1, 1),
             None,
             segments,
+            None,
         )
         .unwrap();
 
@@ -1415,6 +1482,7 @@ mod tests {
             (1, 1),
             None,
             segments,
+            None,
         )
         .unwrap();
 
@@ -1436,6 +1504,7 @@ mod tests {
             (1, 1),
             None,
             segments,
+            None,
         )
         .unwrap();
         for i in 0..5u64 {
@@ -1482,6 +1551,7 @@ mod tests {
             (1, 1),
             Some(hook),
             segments,
+            None,
         )
         .unwrap();
 
