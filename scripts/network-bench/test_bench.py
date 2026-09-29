@@ -1156,6 +1156,15 @@ class BoundTest(unittest.TestCase):
         self.assertEqual(bound["kind"], "benchmark")
         self.assertIn("1500 ms", bound["reason"])
 
+    def test_queueing_estimate_when_behind(self):
+        result = make_result()
+        result["bound"] = {"kind": "query-node", "reason": "r"}
+        summary = bench.render(result, None)
+        # 20 in flight / 40 tx/s
+        self.assertIn("Little's law: 20 in flight / 40 tx/s = 500 ms", summary)
+        self.assertIn("tx latency p50 1200 ms", summary)
+        self.assertNotIn("Little's law", bench.render(make_result(), None))
+
     def test_in_flight_samples_the_window(self):
         spans = [(0.0, 10.0), (0.0, 5.0), (20.0, 30.0)]
         self.assertEqual(

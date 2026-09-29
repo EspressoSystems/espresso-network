@@ -2330,9 +2330,25 @@ def bound_line(result: BenchResult) -> str:
         "query-node": "Query node behind consensus",
         "benchmark": "Benchmark tracker behind",
     }
-    return (
+    line = (
         f"**{title[bound['kind']]}** ({bound['reason']}): "
         f"{'; '.join(saturation_facts(result))}."
+    )
+    if bound["kind"] == "keeping-up":
+        return line
+    return f"{line} {queueing_note(result['load'])}"
+
+
+def queueing_note(load: LoadStats) -> str:
+    """Behind the load, tx latency is set by the queue in flight, which max_pending bounds."""
+    lat, consensus = load["latency_ms"], load["consensus_latency_ms"]
+    rate = load["included_per_s"]
+    queued = load["in_flight_mean"] / rate * 1000 if rate else None
+    return (
+        f"Tx latency is queueing, not consensus latency: Little's law: "
+        f"{fmt_num(load['in_flight_mean'])} in flight / {fmt_num(rate)} tx/s = "
+        f"{fmt_num(queued)} ms, tx latency p50 {fmt_num(lat['p50'] if lat else None)} ms, "
+        f"consensus latency p50 {fmt_num(consensus['p50'] if consensus else None)} ms."
     )
 
 
