@@ -90,10 +90,11 @@ jobs:
       # Tests are serialized within a shard (threads-required = num-cpus), so a
       # shard costs the sum of its tests and the spread is wide either way.
       # `count` is worse here: it deals the sorted list round-robin and pins the
-      # same overloaded shard every run.
+      # same overloaded shard every run. `hash` can leave a shard empty, which
+      # `--no-tests=pass` keeps green.
       - name: Run slow test
         run: |
-          just test-slow ${{ matrix.features }} --no-fail-fast \
+          just test-slow ${{ matrix.features }} --no-fail-fast --no-tests=pass \
             --partition hash:${{ matrix.partition }}/${{ env.SLOW_TEST_SHARDS }}
         # Above nextest's own budget for a hung test: `terminate-after = 12` at a
         # 2m period is 24 min, and `profile.slow` retries twice, so 72 min plus
