@@ -469,7 +469,7 @@ class PreflightTest(unittest.TestCase):
 
 class ReadRetryTest(unittest.TestCase):
     def test_retries_failed_reads(self):
-        pool = mock.Mock()
+        pool = mock.Mock(closed=threading.Event())
         pool.request.side_effect = [OSError("timed out"), (503, b""), (200, b"7")]
         with (
             mock.patch.object(bench, "READ_RETRY_S", 0),
@@ -479,7 +479,7 @@ class ReadRetryTest(unittest.TestCase):
         self.assertEqual(pool.request.call_count, 3)
 
     def test_gives_up_after_the_deadline(self):
-        pool = mock.Mock()
+        pool = mock.Mock(closed=threading.Event())
         pool.request.side_effect = OSError("timed out")
         with (
             mock.patch.object(bench, "READ_RETRY_S", 0.01),
@@ -489,8 +489,24 @@ class ReadRetryTest(unittest.TestCase):
         ):
             bench.query_height(pool, "http://x")
 
+    def test_closing_the_pool_stops_retries(self):
+        pool = bench.HttpPool()
+        threading.Timer(0.2, pool.close).start()
+        start = time.time()
+        with (
+            mock.patch.object(pool, "request", side_effect=OSError("timed out")),
+            mock.patch.object(bench, "READ_RETRY_S", 0.05),
+            self.assertLogs(bench.log, "DEBUG") as logs,
+            self.assertRaises(bench.NetworkError),
+        ):
+            bench.query_height(pool, "http://x")
+        self.assertLess(time.time() - start, 1.0)
+        levels = [record.levelname for record in logs.records]
+        self.assertEqual(levels[0], "WARNING")
+        self.assertEqual(set(levels[1:]), {"DEBUG"})
+
     def test_not_found_is_not_retried(self):
-        pool = mock.Mock()
+        pool = mock.Mock(closed=threading.Event())
         pool.request.return_value = (404, b"")
         self.assertIsNone(bench.block_payload(pool, "http://x", 3))
         self.assertEqual(pool.request.call_count, 1)

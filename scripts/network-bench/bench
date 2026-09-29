@@ -379,11 +379,12 @@ class Comparison(TypedDict):
 class HttpPool:
     """Keep-alive connections shared by threads, one request per connection at a time. A
     reused connection the server closed is retried once on a fresh one; any other failure
-    raises OSError."""
+    raises OSError. `closed` tells retrying readers to give up."""
 
     def __init__(self) -> None:
         self._idle: dict[str, list[http.client.HTTPConnection]] = {}
         self._lock = threading.Lock()
+        self.closed = threading.Event()
 
     def request(
         self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
@@ -416,6 +417,7 @@ class HttpPool:
         raise AssertionError("unreachable")
 
     def close(self) -> None:
+        self.closed.set()
         with self._lock:
             for conns in self._idle.values():
                 for conn in conns:
@@ -1136,9 +1138,10 @@ def log_progress(state: LoadState, height: int) -> None:
 
 
 def read(pool: HttpPool, url: str) -> tuple[int, bytes]:
-    """GET, retrying failed requests and 5xx answers until READ_DEADLINE_S."""
+    """GET, retrying failed requests and 5xx answers until READ_DEADLINE_S or until the
+    pool is closed."""
     deadline = time.time() + READ_DEADLINE_S
-    while True:
+    for attempt in itertools.count():
         try:
             status, body = pool.request("GET", url)
         except OSError as err:
@@ -1149,8 +1152,10 @@ def read(pool: HttpPool, url: str) -> tuple[int, bytes]:
             problem = f"GET {url}: HTTP {status}"
         if time.time() >= deadline:
             raise NetworkError(f"{problem}, retried for {READ_DEADLINE_S:.0f} s")
-        log.warning("%s, retrying", problem)
-        time.sleep(READ_RETRY_S)
+        log.log(logging.DEBUG if attempt else logging.WARNING, "%s, retrying", problem)
+        if pool.closed.wait(READ_RETRY_S):
+            raise NetworkError(f"{problem}, stopped retrying")
+    raise AssertionError("unreachable")
 
 
 def query_height(pool: HttpPool, query_url: str) -> int:
