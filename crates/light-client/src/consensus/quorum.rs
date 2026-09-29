@@ -77,45 +77,7 @@ pub trait Quorum: Sync {
         cert: &Certificate,
         version: Version,
     ) -> impl Send + Future<Output = Result<()>> {
-        async move {
-            match (version.major, version.minor) {
-                (0, 1) => {
-                    self.verify_next_epoch_static::<StaticVersion<0, 1>>(cert)
-                        .await
-                },
-                (0, 2) => {
-                    self.verify_next_epoch_static::<StaticVersion<0, 2>>(cert)
-                        .await
-                },
-                (0, 3) => {
-                    self.verify_next_epoch_static::<StaticVersion<0, 3>>(cert)
-                        .await
-                },
-                (0, 4) => {
-                    self.verify_next_epoch_static::<StaticVersion<0, 4>>(cert)
-                        .await
-                },
-                (0, 5) => {
-                    self.verify_next_epoch_static::<StaticVersion<0, 5>>(cert)
-                        .await
-                },
-                (0, 6) => {
-                    self.verify_next_epoch_static::<StaticVersion<0, 6>>(cert)
-                        .await
-                },
-                (0, 7) => {
-                    self.verify_next_epoch_static::<StaticVersion<0, 7>>(cert)
-                        .await
-                },
-                _ => {
-                    const {
-                        assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 7);
-                    }
-                    bail!("unsupported version {version}");
-                },
-            }
-        }
+        async move { dispatch_version!(version, self.verify_next_epoch_static::<V>(cert)) }
     }
 
     /// Same as [`verify_next_epoch`](Self::verify_next_epoch), but with the version as a
