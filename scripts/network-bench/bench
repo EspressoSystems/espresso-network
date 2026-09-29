@@ -974,7 +974,9 @@ async def generate_load(
                 ),
                 *(
                     group.create_task(
-                        poll_heights(polling, url, validator_height, heights, "validator")
+                        poll_heights(
+                            polling, url, validator_height, heights, "validator"
+                        )
                     )
                     for url in validator_urls
                 ),
@@ -1573,7 +1575,10 @@ def bottleneck(offered: float, net: NetworkStats, load: LoadStats) -> Bound:
             "reason": f"payload scans lag node0 by {tracker['p99']:.0f} ms p99",
         }
     if decided < KEEP_UP_RATIO * offered:
-        return {"kind": "consensus", "reason": f"decided {decided / offered:.0%} of offered"}
+        return {
+            "kind": "consensus",
+            "reason": f"decided {decided / offered:.0%} of offered",
+        }
     end = load["query_lag_end_ms"]
     if query and max(query["p50"], end or 0.0) > QUERY_LAG_BEHIND_MS:
         return {
@@ -2041,9 +2046,7 @@ def load_stats(out: Path, cfg: BenchConfig, t0: float, t1: float) -> LoadStats:
         "latency_ms": quantiles(latencies),
         "consensus_latency_ms": quantiles(consensus),
         "query_lag_ms": quantiles(query_lag),
-        "query_lag_end_ms": median_or_none(
-            height_lags(heights, "validator", end, t1)
-        ),
+        "query_lag_end_ms": median_or_none(height_lags(heights, "validator", end, t1)),
         "tracker_lag_ms": quantiles(tracker_lag),
         "tracker_lag_end_ms": median_or_none(height_lags(heights, "scanned", end, t1)),
         "in_flight_mean": statistics.fmean(open_spans),
