@@ -23,13 +23,19 @@ Examples:
 import argparse
 import dataclasses
 import getpass
+import hashlib
 import json
 import logging
+import os
 import re
+import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,13 +98,51 @@ MINOR_PRICES: dict[str, dict[str, float]] = {
     },
 }
 
-# Terraform's `name` variable validation is stricter than this; matching it here refuses a bad
-# --name before any file is written instead of failing deep in a later commit's tfvars render.
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
+# Identical to the terraform module's `name` variable validation (variables.tf); matching it
+# here refuses a bad --name before any file is written instead of failing at `tofu plan`.
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
+
+# "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances", the quota c8g/c8in fall
+# under.
+VCPU_QUOTA_CODE = "L-1216C47A"
+UBUNTU_OWNER_ID = "099720109477"  # Canonical
+GHCR_ORG = "ghcr.io/espressosystems/espresso-network"
+# Rebuilt from --tag; these are the only components the tag under test controls.
+IMAGE_COMPONENTS = ("espresso-node", "orchestrator", "state-relay-server", "deploy")
+# Fixed refs, independent of --tag.
+SUPPORT_IMAGES = {
+    "postgres": "docker.io/library/postgres:16",
+    "foundry": "ghcr.io/foundry-rs/foundry:latest",
+}
+
+# OCI/Docker registry token flow and manifest media types (docker.io and ghcr.io both implement
+# the same spec, so no registry-specific code is needed).
+MANIFEST_MEDIA_TYPES = (
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+)
+INDEX_MEDIA_TYPES = MANIFEST_MEDIA_TYPES[:2]
+
+TF_PLUGIN_CACHE_DIR = Path(
+    "~/.cache/espresso-network/aws-bench/tf-plugins"
+).expanduser()
 
 
 class Refused(Exception):
     """A plan or run must be refused before any AWS write; caught once, in `main`."""
+
+
+class TfFailed(Exception):
+    """`tofu apply` or `tofu destroy` failed after resources may already have been created or
+    changed, unlike `Refused`. `stage` picks the exit code in `main`: `apply` may have written
+    a partial fleet (exit 3, destroyed by the caller); `destroy` means resources may remain
+    (exit 4)."""
+
+    def __init__(self, stage: Literal["apply", "destroy"], message: str):
+        self.stage = stage
+        super().__init__(message)
 
 
 class HostSpec(TypedDict):
@@ -108,6 +152,25 @@ class HostSpec(TypedDict):
     root_gb: int
     root_iops: int
     root_mbps: int
+
+
+class ImageInfo(TypedDict):
+    ref: str
+    digest: str
+    revision: str | None
+    platforms: list[str]
+
+
+class Preflight(TypedDict):
+    account: str
+    vpc_id: str
+    az: str
+    ami_id: str
+    images: dict[str, ImageInfo]
+    vcpu_needed: int
+    vcpu_in_use: int
+    vcpu_quota: float
+    git_diff: str | None
 
 
 class InstancePrice(TypedDict):
@@ -580,6 +643,539 @@ def write_manifest(
     append_event(run_dir, phase, "manifest-written", None)
 
 
+def tools_on_path(
+    names: Iterable[str], which: Callable[[str], str | None] = shutil.which
+) -> None:
+    missing = [name for name in names if which(name) is None]
+    if missing:
+        raise Refused(f"missing tools on PATH: {', '.join(missing)}")
+
+
+def caller_account(run: Runner, cfg: RunConfig) -> str:
+    """The account guard: the first AWS call preflight makes, so a mismatch is caught before
+    any other `aws` call (a wrong profile must never touch the right account by accident)."""
+    result = run(aws_argv(cfg, "sts", "get-caller-identity", "--output", "json"))
+    if result.returncode != 0:
+        raise Refused(f"aws sts get-caller-identity failed: {result.stderr.strip()}")
+    account = json.loads(result.stdout)["Account"]
+    if account != cfg.account:
+        raise Refused(
+            f"caller account {account} does not match --account {cfg.account} "
+            f"(wrong --profile {cfg.profile}?)"
+        )
+    return account
+
+
+def default_vpc(run: Runner, cfg: RunConfig) -> str:
+    result = run(
+        aws_argv(
+            cfg,
+            "ec2",
+            "describe-vpcs",
+            "--region",
+            cfg.region,
+            "--filters",
+            "Name=is-default,Values=true",
+            "--output",
+            "json",
+        )
+    )
+    if result.returncode != 0:
+        raise Refused(f"aws ec2 describe-vpcs failed: {result.stderr.strip()}")
+    vpcs = json.loads(result.stdout)["Vpcs"]
+    if not vpcs:
+        raise Refused(f"no default VPC in {cfg.region}; the terraform module needs one")
+    vpc_id = vpcs[0]["VpcId"]
+    attr = run(
+        aws_argv(
+            cfg,
+            "ec2",
+            "describe-vpc-attribute",
+            "--region",
+            cfg.region,
+            "--vpc-id",
+            vpc_id,
+            "--attribute",
+            "enableDnsHostnames",
+            "--output",
+            "json",
+        )
+    )
+    if attr.returncode != 0:
+        raise Refused(f"aws ec2 describe-vpc-attribute failed: {attr.stderr.strip()}")
+    if not json.loads(attr.stdout)["EnableDnsHostnames"]["Value"]:
+        raise Refused(
+            f"default VPC {vpc_id} has DNS hostnames disabled: aws ec2 modify-vpc-attribute "
+            f"--vpc-id {vpc_id} --enable-dns-hostnames --region {cfg.region}"
+        )
+    return vpc_id
+
+
+def describe_instance_types(
+    run: Runner, cfg: RunConfig, types: set[str]
+) -> dict[str, dict[str, Any]]:
+    result = run(
+        aws_argv(
+            cfg,
+            "ec2",
+            "describe-instance-types",
+            "--region",
+            cfg.region,
+            "--instance-types",
+            *sorted(types),
+            "--query",
+            "InstanceTypes[].{Type:InstanceType,VCpus:VCpuInfo.DefaultVCpus,"
+            "Archs:ProcessorInfo.SupportedArchitectures}",
+            "--output",
+            "json",
+        )
+    )
+    if result.returncode != 0:
+        raise Refused(
+            f"aws ec2 describe-instance-types failed: {result.stderr.strip()}"
+        )
+    return {row["Type"]: row for row in json.loads(result.stdout)}
+
+
+def resolve_ami_arch(instance_types: dict[str, dict[str, Any]], types: set[str]) -> str:
+    """`resolve_image` always requires `linux/arm64`; refusing here catches an amd64-only
+    instance type before the AMI lookup instead of at the image digest check."""
+    arch_sets = [set(instance_types[t]["Archs"]) for t in types]
+    common = set.intersection(*arch_sets) if arch_sets else set()
+    if "arm64" not in common:
+        raise Refused(
+            f"instance types {', '.join(sorted(types))} are not all arm64: "
+            "only linux/arm64 images are resolved"
+        )
+    return "arm64"
+
+
+def resolve_ami(run: Runner, cfg: RunConfig, arch: str) -> str:
+    result = run(
+        aws_argv(
+            cfg,
+            "ec2",
+            "describe-images",
+            "--region",
+            cfg.region,
+            "--owners",
+            UBUNTU_OWNER_ID,
+            "--filters",
+            f"Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-{arch}-server-*",
+            "--query",
+            "sort_by(Images, &CreationDate)[-1].ImageId",
+            "--output",
+            "text",
+        )
+    )
+    if result.returncode != 0:
+        raise Refused(f"aws ec2 describe-images failed: {result.stderr.strip()}")
+    ami_id = result.stdout.strip()
+    if not ami_id or ami_id == "None":
+        raise Refused(f"no Ubuntu 24.04 {arch} AMI found in {cfg.region}")
+    return ami_id
+
+
+def capable_az(run: Runner, cfg: RunConfig, types: set[str]) -> str:
+    az_sets = []
+    for instance_type in sorted(types):
+        result = run(
+            aws_argv(
+                cfg,
+                "ec2",
+                "describe-instance-type-offerings",
+                "--region",
+                cfg.region,
+                "--location-type",
+                "availability-zone",
+                "--filters",
+                f"Name=instance-type,Values={instance_type}",
+                "--output",
+                "json",
+            )
+        )
+        if result.returncode != 0:
+            raise Refused(
+                f"aws ec2 describe-instance-type-offerings failed for {instance_type}: "
+                f"{result.stderr.strip()}"
+            )
+        offerings = json.loads(result.stdout)["InstanceTypeOfferings"]
+        az_sets.append({o["Location"] for o in offerings})
+    capable = set.intersection(*az_sets) if az_sets else set()
+    if not capable:
+        raise Refused(
+            f"no AZ in {cfg.region} offers every instance type: {', '.join(sorted(types))}"
+        )
+    if cfg.az == "auto":
+        return min(capable)
+    if cfg.az not in capable:
+        raise Refused(
+            f"--az {cfg.az} does not offer every instance type; AZs that do: "
+            f"{', '.join(sorted(capable))}"
+        )
+    return cfg.az
+
+
+def _running_instance_types(run: Runner, cfg: RunConfig) -> list[str]:
+    """One entry per running instance, not deduplicated: `vcpu_headroom` sums per instance."""
+    result = run(
+        aws_argv(
+            cfg,
+            "ec2",
+            "describe-instances",
+            "--region",
+            cfg.region,
+            "--filters",
+            "Name=instance-state-name,Values=pending,running",
+            "--query",
+            "Reservations[].Instances[].InstanceType",
+            "--output",
+            "json",
+        )
+    )
+    if result.returncode != 0:
+        raise Refused(f"aws ec2 describe-instances failed: {result.stderr.strip()}")
+    return list(json.loads(result.stdout))
+
+
+def _vcpu_quota(run: Runner, cfg: RunConfig) -> float:
+    result = run(
+        aws_argv(
+            cfg,
+            "service-quotas",
+            "get-service-quota",
+            "--region",
+            cfg.region,
+            "--service-code",
+            "ec2",
+            "--quota-code",
+            VCPU_QUOTA_CODE,
+            "--output",
+            "json",
+        )
+    )
+    if result.returncode != 0:
+        raise Refused(
+            f"aws service-quotas get-service-quota failed: {result.stderr.strip()}"
+        )
+    return json.loads(result.stdout)["Quota"]["Value"]
+
+
+def vcpu_headroom(
+    run: Runner,
+    cfg: RunConfig,
+    hosts: list[HostSpec],
+    running: list[str],
+    instance_types: dict[str, dict[str, Any]],
+) -> tuple[int, int, float]:
+    """`running` has one entry per running instance (not deduplicated), so `in_use` counts
+    each instance's vCPUs once, not once per distinct type."""
+    vcpus = {t: row["VCpus"] for t, row in instance_types.items()}
+    needed = sum(vcpus[h["instance_type"]] for h in hosts)
+    in_use = sum(vcpus[t] for t in running)
+    quota = _vcpu_quota(run, cfg)
+    if needed + in_use > quota:
+        raise Refused(
+            f"vCPU quota {VCPU_QUOTA_CODE} is {quota:.0f} in {cfg.region}; {in_use} in use + "
+            f"{needed} needed exceeds it: aws service-quotas request-service-quota-increase "
+            f"--service-code ec2 --quota-code {VCPU_QUOTA_CODE} "
+            f"--desired-value {int(needed + in_use)} --region {cfg.region}"
+        )
+    return needed, in_use, quota
+
+
+def image_refs(cfg: RunConfig) -> dict[str, str]:
+    images = {c: f"{GHCR_ORG}/{c}:{cfg.tag}" for c in IMAGE_COMPONENTS}
+    images.update(SUPPORT_IMAGES)
+    return images
+
+
+DOCKER_HUB_HOST = "registry-1.docker.io"
+# Both are docker.io aliases in image refs; the registry API itself is only ever reachable at
+# registry-1.docker.io (https://docker.io/v2/... 302s to www.docker.com).
+DOCKER_HUB_ALIASES = ("docker.io", "index.docker.io")
+
+
+def parse_ref(ref: str) -> tuple[str, str, str]:
+    """`[registry[:port]/]repository[:tag]` -> (registry host, repository, tag). No registry
+    segment means docker.io, and a single-word repository is implicitly under `library/`."""
+    name, sep, tag = ref.rpartition(":")
+    if not sep or "/" in tag:
+        name, tag = ref, "latest"
+    parts = name.split("/", 1)
+    if len(parts) == 1:
+        return DOCKER_HUB_HOST, f"library/{parts[0]}", tag
+    first, repository = parts
+    if first in DOCKER_HUB_ALIASES:
+        return DOCKER_HUB_HOST, repository, tag
+    if "." in first or ":" in first or first == "localhost":
+        return first, repository, tag
+    return DOCKER_HUB_HOST, name, tag
+
+
+def _registry_scheme(host: str) -> str:
+    # Loopback is only ever the test fixture; every real registry requires TLS.
+    return "http" if host.split(":")[0] in ("localhost", "127.0.0.1") else "https"
+
+
+def _registry_get(url: str, headers: dict[str, str]) -> tuple[int, Any, bytes]:
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, response.headers, response.read()
+    except urllib.error.HTTPError as exc:
+        with exc:
+            return exc.code, exc.headers, exc.read()
+
+
+def _bearer_token(www_authenticate: str, ref: str) -> str:
+    params = dict(re.findall(r'(\w+)="([^"]*)"', www_authenticate))
+    realm = params["realm"]
+    query = urllib.parse.urlencode({k: v for k, v in params.items() if k != "realm"})
+    status, _, body = _registry_get(f"{realm}?{query}", {})
+    if status != 200:
+        raise Refused(f"token request for {ref} to {realm} failed with status {status}")
+    token = json.loads(body)
+    return token["token"] if "token" in token else token["access_token"]
+
+
+def resolve_image(ref: str) -> ImageInfo:
+    """Anonymous token challenge, then the manifest (an index for a multi-arch image, or a
+    single manifest otherwise) and its config blob, for the digest, the `linux/arm64`
+    platform and the `org.opencontainers.image.revision` label. Works against ghcr and docker
+    hub unmodified: both implement the same OCI distribution spec."""
+    host, repository, tag = parse_ref(ref)
+    scheme = _registry_scheme(host)
+    manifest_url = f"{scheme}://{host}/v2/{repository}/manifests/{tag}"
+    headers = {"Accept": ", ".join(MANIFEST_MEDIA_TYPES)}
+    status, resp_headers, body = _registry_get(manifest_url, headers)
+    if status == 401:
+        headers["Authorization"] = (
+            f"Bearer {_bearer_token(resp_headers['WWW-Authenticate'], ref)}"
+        )
+        status, resp_headers, body = _registry_get(manifest_url, headers)
+    if status == 404:
+        raise Refused(f"image not found: {ref}")
+    if status in (401, 403):
+        raise Refused(
+            f"image is private or inaccessible anonymously: {ref} (status {status})"
+        )
+    if status != 200:
+        raise Refused(f"unexpected status {status} resolving {ref}")
+    manifest = json.loads(body)
+    media_type = manifest.get("mediaType", resp_headers.get("Content-Type", ""))
+    if media_type in INDEX_MEDIA_TYPES:
+        # buildx attestations (SBOM, provenance) show up as extra manifests with
+        # platform.os == "unknown" and must not be mistaken for a real platform.
+        entries = [m for m in manifest["manifests"] if m["platform"]["os"] != "unknown"]
+        platforms = [
+            f"{m['platform']['os']}/{m['platform']['architecture']}" for m in entries
+        ]
+        arm64 = next(
+            (
+                m
+                for m in entries
+                if m["platform"]["os"] == "linux"
+                and m["platform"]["architecture"] == "arm64"
+            ),
+            None,
+        )
+        if arm64 is None:
+            raise Refused(
+                f"no linux/arm64 platform for {ref}: has {', '.join(platforms)}"
+            )
+        digest = arm64["digest"]
+        child_status, _, child_body = _registry_get(
+            f"{scheme}://{host}/v2/{repository}/manifests/{digest}", headers
+        )
+        if child_status != 200:
+            raise Refused(
+                f"failed to fetch the arm64 manifest for {ref}: status {child_status}"
+            )
+        config_digest = json.loads(child_body)["config"]["digest"]
+    else:
+        digest = resp_headers.get("Docker-Content-Digest") or (
+            f"sha256:{hashlib.sha256(body).hexdigest()}"
+        )
+        config_digest = manifest["config"]["digest"]
+        platforms = []
+    status, _, config_body = _registry_get(
+        f"{scheme}://{host}/v2/{repository}/blobs/{config_digest}", headers
+    )
+    if status != 200:
+        raise Refused(f"failed to fetch the config blob for {ref}: status {status}")
+    config = json.loads(config_body)
+    if not platforms:
+        platform = f"{config['os']}/{config['architecture']}"
+        if platform != "linux/arm64":
+            raise Refused(f"no linux/arm64 platform for {ref}: has {platform}")
+        platforms = [platform]
+    revision = (config.get("config", {}).get("Labels") or {}).get(
+        "org.opencontainers.image.revision"
+    )
+    return {"ref": ref, "digest": digest, "revision": revision, "platforms": platforms}
+
+
+def check_git_clean(run: Runner, allow_dirty: bool) -> str | None:
+    """`None` for a clean tree. With `allow_dirty`, returns the diff to be recorded as
+    `diff.patch`; without it, a dirty tree is refused. `--untracked-files=no` keeps the
+    dirty check in scope with `git diff HEAD`, which never includes untracked files."""
+    status = run(["git", "status", "--porcelain", "--untracked-files=no"])
+    if status.returncode != 0:
+        raise Refused(f"git status failed: {status.stderr.strip()}")
+    if not status.stdout.strip():
+        return None
+    if not allow_dirty:
+        raise Refused("git tree is dirty; commit the changes or pass --allow-dirty")
+    diff = run(["git", "diff", "HEAD"])
+    if diff.returncode != 0:
+        raise Refused(f"git diff failed: {diff.stderr.strip()}")
+    return diff.stdout
+
+
+def preflight(
+    run: Runner,
+    cfg: RunConfig,
+    hosts: list[HostSpec],
+    which: Callable[[str], str | None] = shutil.which,
+) -> Preflight:
+    tools_on_path((cfg.tf, "aws", "ssh", "scp", "rsync", "git"), which)
+    account = caller_account(run, cfg)
+    vpc_id = default_vpc(run, cfg)
+    types = {h["instance_type"] for h in hosts}
+    az = capable_az(run, cfg, types)
+    running = _running_instance_types(run, cfg)
+    # Fetched once: resolve_ami_arch and vcpu_headroom both need every requested and running
+    # instance type's vCPU count and architecture.
+    instance_types = describe_instance_types(run, cfg, set(running) | types)
+    needed, in_use, quota = vcpu_headroom(run, cfg, hosts, running, instance_types)
+    ami_id = resolve_ami(run, cfg, resolve_ami_arch(instance_types, types))
+    images = {name: resolve_image(ref) for name, ref in image_refs(cfg).items()}
+    git_diff = check_git_clean(run, cfg.allow_dirty)
+    return {
+        "account": account,
+        "vpc_id": vpc_id,
+        "az": az,
+        "ami_id": ami_id,
+        "images": images,
+        "vcpu_needed": needed,
+        "vcpu_in_use": in_use,
+        "vcpu_quota": quota,
+        "git_diff": git_diff,
+    }
+
+
+def classify_tf_error(stderr: str) -> str:
+    if "VcpuLimitExceeded" in stderr:
+        return (
+            "VcpuLimitExceeded: aws service-quotas request-service-quota-increase "
+            f"--service-code ec2 --quota-code {VCPU_QUOTA_CODE} --desired-value <n>"
+        )
+    if "InsufficientInstanceCapacity" in stderr:
+        return "InsufficientInstanceCapacity: retry with --az <other> or a different instance type"
+    if "UnauthorizedOperation" in stderr:
+        return "UnauthorizedOperation: check IAM permissions for the AWS profile"
+    last_line = next(
+        (line for line in reversed(stderr.strip().splitlines()) if line), stderr
+    )
+    return f"unclassified terraform error: {last_line}"
+
+
+def terraform_env() -> dict[str, str]:
+    """Region, profile and account go into `terraform.tfvars.json` and the provider block, not
+    the environment: `region` and `profile` are provider arguments. `TF_PLUGIN_CACHE_DIR` has
+    no HCL equivalent, so it stays here."""
+    return {"TF_PLUGIN_CACHE_DIR": str(TF_PLUGIN_CACHE_DIR)}
+
+
+class Terraform:
+    """`tofu -chdir=<terraform_dir>` through the injectable Runner. `env` is exported into the
+    current process's environment once at construction, since neither `tofu` nor the Runner
+    interface takes a subprocess environment; keep it to values constant for the process
+    lifetime (like `TF_PLUGIN_CACHE_DIR`), never per-run values, or later tests observe them."""
+
+    def __init__(self, run: Runner, tf: str, terraform_dir: Path, env: dict[str, str]):
+        self.run = run
+        self.tf = tf
+        self.dir = terraform_dir
+        os.environ.update(env)
+
+    def _argv(self, *args: str) -> list[str]:
+        return [self.tf, f"-chdir={self.dir}", *args]
+
+    def init(self) -> None:
+        result = self.run(self._argv("init", "-input=false"))
+        if result.returncode != 0:
+            raise Refused(f"tofu init failed: {result.stderr.strip()}")
+
+    def plan(self, out: str = "plan.bin") -> str:
+        result = self.run(self._argv("plan", "-input=false", f"-out={out}"))
+        if result.returncode != 0:
+            raise Refused(f"tofu plan failed: {result.stderr.strip()}")
+        return result.stdout
+
+    def apply(self, plan_file: str = "plan.bin") -> None:
+        result = self.run(
+            self._argv("apply", "-input=false", "-auto-approve", plan_file)
+        )
+        if result.returncode != 0:
+            raise TfFailed("apply", classify_tf_error(result.stderr))
+
+    def output(self) -> dict[str, Any]:
+        result = self.run(self._argv("output", "-json"))
+        if result.returncode != 0:
+            raise Refused(f"tofu output failed: {result.stderr.strip()}")
+        return json.loads(result.stdout)
+
+    def destroy(self) -> None:
+        result = self.run(self._argv("destroy", "-input=false", "-auto-approve"))
+        if result.returncode != 0:
+            raise TfFailed("destroy", f"tofu destroy failed: {result.stderr.strip()}")
+
+
+def render_tfvars(
+    cfg: RunConfig,
+    run_dir: Path,
+    name: str,
+    owner: str,
+    hosts: list[HostSpec],
+    ssh_pub: str,
+    operator_cidr: str,
+    expires_at: str,
+    git_rev: str,
+    az: str,
+    ami_id: str,
+) -> dict[str, Any]:
+    """`az` and `ami_id` come from `preflight`, or from an offline caller's own placeholders;
+    the terraform module no longer re-resolves either (it would risk picking a different AZ
+    than the one preflight already checked every instance type against)."""
+    return {
+        "name": name,
+        "owner": owner,
+        "git_rev": git_rev,
+        "account_id": cfg.account,
+        "region": cfg.region,
+        "profile": cfg.profile,
+        "az": az,
+        "ami_id": ami_id,
+        "ssh_public_key": ssh_pub,
+        "operator_cidr": operator_cidr,
+        "expires_at": expires_at,
+        "offline": cfg.offline,
+        "hosts": {
+            h["name"]: {
+                "role": h["role"],
+                "instance_type": h["instance_type"],
+                "root_gb": h["root_gb"],
+                "root_iops": h["root_iops"],
+                "root_mbps": h["root_mbps"],
+                "user_data_path": str(run_dir / "hosts" / h["name"] / "user-data.sh"),
+            }
+            for h in hosts
+        },
+    }
+
+
 def add_run_flags(parser: argparse.ArgumentParser) -> None:
     defaults = RunConfig(tag="")
     load = defaults.load
@@ -749,6 +1345,10 @@ def cmd_plan(args: argparse.Namespace, run: Runner = _run) -> int:
     log.debug("argv %s", args.argv)
     hosts = plan_hosts(cfg)
     host_peers = plan_peers(hosts)
+    if not cfg.offline:
+        # Caught here, not inside resolve_prices: a wrong --profile must never reach the
+        # Pricing API (or any other AWS call) against the wrong account.
+        caller_account(run, cfg)
     prices = resolve_prices(run, cfg, cfg.out_root / "prices.json", now)
     estimate = estimate_cost(hosts, cfg, prices, minor)
     log.info(format_estimate_summary(estimate, cfg.max_usd))
@@ -821,6 +1421,9 @@ def main() -> int:
     except Refused as exc:
         log.error("error: %s", exc)
         return EXIT_REFUSED
+    except TfFailed as exc:
+        log.error("error: %s", exc)
+        return EXIT_LEFTOVER if exc.stage == "destroy" else EXIT_FAILED
 
 
 if __name__ == "__main__":
