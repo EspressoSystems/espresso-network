@@ -515,7 +515,7 @@ class RunConfig:
     ready_timeout_s: float = 600.0
     max_block_size: str = "100mb"
     root_gb: str = "auto"
-    pg_iops: int = 6000
+    pg_iops: int = 12000
     pg_mbps: int = 500
     operator_cidr: str = "auto"
     ssh_key: str = SSH_KEY_AUTO

@@ -210,6 +210,17 @@ class PlanHostsTest(unittest.TestCase):
         self.assertEqual(node0["root_mbps"], 500)
         self.assertEqual(node1["root_iops"], awsb.GP3_BASELINE_IOPS)
 
+    def test_pg_iops_default_is_12000(self):
+        self.assertEqual(awsb.RunConfig(tag="x").pg_iops, 12000)
+        for verb in ("plan", "run"):
+            args = awsb.parse_args([verb, "--tag", "x"])
+            self.assertEqual(args.pg_iops, 12000)
+            self.assertEqual(args.pg_mbps, 500)
+        cfg = awsb.RunConfig(
+            tag="x", nodes=3, load=netbench.BenchConfig(submit_nodes=2)
+        )
+        self.assertEqual(awsb.plan_hosts(cfg)[1]["root_iops"], 12000)
+
     def test_rejects_single_node(self):
         with self.assertRaises(awsb.Refused):
             awsb.plan_hosts(awsb.RunConfig(tag="x", nodes=1))
