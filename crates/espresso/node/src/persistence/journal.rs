@@ -1133,7 +1133,7 @@ impl SequencerPersistence for Persistence {
         view: ViewNumber,
         cert2: Certificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
-        self.put_wal(Record::Cert2 { view, cert: cert2 }, Class::Enqueue)
+        self.put_wal(Record::Cert2 { view, cert: cert2 }, Class::Durable)
             .await
     }
 
