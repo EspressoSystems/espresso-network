@@ -14,7 +14,7 @@ use espresso_types::{
     v0_4::{
         RewardAccountProofV2, RewardAccountQueryDataV2, RewardMerkleProofV2, StateCertQueryDataV2,
     },
-    v0_6::AvidmGf2NsProof,
+    v0_6::{AvidmGf2IncorrectEncodingNsProof, AvidmGf2NsProof},
 };
 use hotshot_query_service_types::{
     availability::{
@@ -414,25 +414,22 @@ impl TryFrom<&VidShare> for proto::VidShareResponse {
                 })
             },
             VidShare::V2(gf2) => proto::vid_share_response::Share::V2(proto::AvidmGf2VidShare {
-                namespaces: gf2
-                    .ns_shares()
-                    .iter()
-                    .map(|namespace| proto::AvidmGf2Namespace {
-                        range: Some(proto::ShardRange {
-                            start: namespace.range().start as u64,
-                            end: namespace.range().end as u64,
-                        }),
-                        payload: namespace.payload().to_vec(),
-                        mt_proofs: namespace
-                            .mt_proofs()
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect(),
-                    })
-                    .collect(),
+                namespaces: gf2.ns_shares().iter().map(avidm_gf2_namespace).collect(),
             }),
         };
         Ok(proto::VidShareResponse { share: Some(arm) })
+    }
+}
+
+/// One namespace's slice of an AvidmGf2 share, from the share's own accessors.
+fn avidm_gf2_namespace(share: &vid::avidm_gf2::AvidmGf2Share) -> proto::AvidmGf2Namespace {
+    proto::AvidmGf2Namespace {
+        range: Some(proto::ShardRange {
+            start: share.range().start as u64,
+            end: share.range().end as u64,
+        }),
+        payload: share.payload().to_vec(),
+        mt_proofs: share.mt_proofs().iter().map(ToString::to_string).collect(),
     }
 }
 
@@ -1166,6 +1163,25 @@ impl TryFrom<&AvidMIncorrectEncodingNsProof> for proto::AvidmBadEncodingNsProof 
     }
 }
 
+impl From<&AvidmGf2IncorrectEncodingNsProof> for proto::AvidmGf2BadEncodingNsProof {
+    fn from(proof: &AvidmGf2IncorrectEncodingNsProof) -> Self {
+        let inner = &proof.0;
+        proto::AvidmGf2BadEncodingNsProof {
+            ns_index: inner.ns_index as u64,
+            ns_commit: inner.ns_commit.to_string(),
+            ns_mt_proof: inner.ns_mt_proof.to_string(),
+            ns_proof: Some(proto::AvidmGf2BadEncodingProof {
+                shares: inner
+                    .ns_proof
+                    .shares()
+                    .iter()
+                    .map(avidm_gf2_namespace)
+                    .collect(),
+            }),
+        }
+    }
+}
+
 impl TryFrom<&NsProof> for proto::NsProof {
     type Error = tonic::Status;
 
@@ -1181,6 +1197,7 @@ impl TryFrom<&NsProof> for proto::NsProof {
             NsProof::V1(avidm) => Proof::V1(avidm.into()),
             NsProof::V1IncorrectEncoding(bad) => Proof::V1IncorrectEncoding(bad.try_into()?),
             NsProof::V2(gf2) => Proof::V2(gf2.into()),
+            NsProof::V2IncorrectEncoding(bad) => Proof::V2IncorrectEncoding(bad.into()),
         };
         Ok(proto::NsProof { proof: Some(arm) })
     }

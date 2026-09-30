@@ -4,6 +4,7 @@ package espresso.api.v2;
 
 import "google/api/annotations.proto";
 import "v2/common.proto";
+import "v2/node.proto";
 
 message GetLimitsRequest {}
 
@@ -668,7 +669,30 @@ message AvidmBadEncodingNsProof {
   AvidmBadEncodingProof ns_proof = 4;
 }
 
-// The arm names the VID scheme, and v1_incorrect_encoding is an AvidM block whose disperser cheated
+// Evidence that an AvidmGf2 disperser committed a namespace to a non-codeword: shares that verify
+// against the namespace commitment and cover the recovery threshold, yet decode to no payload or to
+// one that commits elsewhere
+message AvidmGf2BadEncodingProof {
+  // Disjoint shard ranges covering exactly the recovery threshold, each verifying against the
+  // namespace commitment
+  repeated AvidmGf2Namespace shares = 1;
+}
+
+message AvidmGf2BadEncodingNsProof {
+  // Position of the namespace in the namespace table
+  uint64 ns_index = 1;
+
+  // Commitment the shares were checked against, TaggedBase64 `AvidmGf2Commit~`
+  string ns_commit = 2;
+
+  // Proof of the namespace commitment in the payload commitment, TaggedBase64 `MERKLE_PROOF~`
+  string ns_mt_proof = 3;
+
+  AvidmGf2BadEncodingProof ns_proof = 4;
+}
+
+// The arm names the VID scheme, and an incorrect_encoding arm is a block whose disperser cheated,
+// which proves the namespace empty
 message NsProof {
   oneof proof {
     AdvzNsProof v0 = 1;
@@ -678,6 +702,8 @@ message NsProof {
     AvidmBadEncodingNsProof v1_incorrect_encoding = 3;
 
     NsProofPayload v2 = 4;
+
+    AvidmGf2BadEncodingNsProof v2_incorrect_encoding = 5;
   }
 }
 
