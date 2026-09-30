@@ -20,19 +20,16 @@ whose local state is lost or whose TTL passed. `collect` and `render` redo those
 existing run dir. `agent-drive` (on ctl) and `agent-host` (on every host) run under
 uv-managed python 3.14 from /opt/bench.
 
-Prerequisites: opentofu and awscli2 (nix devShell), an AWS profile for the benchmark account
-(`--profile`, default `timeboost-dev`), an ssh key (`--ssh-key`, default `auto`: a fresh key per run, deleted after destroy), and
-`--tag` naming the ghcr tag CI pushed for a `release-*` branch.
+Prerequisites: opentofu and awscli2 (nix devShell), the AWS profile `timeboost-dev` for account
+027574771971 in eu-west-1 (constants below), and `--tag` naming the ghcr tag CI pushed for a
+`release-*` branch. Each fleet gets a fresh ssh key, deleted after destroy.
 Recipes: `just bench aws plan|up|run|extend|down|status|collect|render|destroy`.
 
 Exit codes of `run`: 0 valid, 1 invalid result, 2 refused before any AWS write, 3 failed after
-writes but destroyed, 4 resources may remain (the last log line is the destroy command; also the
-exit code with `--keep`). `run --fleet` never destroys: 3 leaves the fleet up. `up` exits 0 with
+writes but destroyed, 4 resources may remain (the last log line is the destroy command). `run --fleet` never destroys: 3 leaves the fleet up. `up` exits 0 with
 the fleet idle, 3 or 4 after a failed provision.
 
 Examples:
-    scripts/network-bench/aws-bench plan --tag release-x --offline \
-        --price c8g.4xlarge=0.71 --price c8g.2xlarge=0.355
     scripts/network-bench/aws-bench plan --tag release-x --nodes 5
     scripts/network-bench/aws-bench up --tag release-x --ttl-min 180
     scripts/network-bench/aws-bench run --fleet tmp/aws-bench/<fleet> --query-db colocated
@@ -51,7 +48,6 @@ import math
 import os
 import re
 import secrets
-import select
 import shlex
 import shutil
 import signal
@@ -116,6 +112,13 @@ STEP_TOP_MB_S = 200.0
 SUBMIT_WORKERS = 32
 NODE_TYPE = "c8g.4xlarge"
 CTL_TYPE = "c8g.2xlarge"
+REGION = "eu-west-1"
+PROFILE = "timeboost-dev"
+ACCOUNT = "027574771971"
+OUT_ROOT = Path("tmp/aws-bench")
+PG_GB = 400
+RDS_CLASS = "db.m8g.4xlarge"
+RDS_ENGINE_VERSION = "18"
 READY_TIMEOUT_S = 600.0
 
 # gp3 includes this many IOPS and this much throughput at no extra charge.
@@ -162,7 +165,7 @@ MINOR_PRICES: dict[str, dict[str, float]] = {
 }
 
 # Identical to the terraform module's `name` variable validation (variables.tf); matching it
-# here refuses a bad --name before any file is written instead of failing at `tofu plan`.
+# here refuses a bad fleet name before any file is written instead of failing at `tofu plan`.
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
 
 # "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances", the quota c8g/c8in fall
@@ -407,25 +410,11 @@ RESET_KEEP = (
 # Flags that shape the fleet, refused by `run --fleet` (the values are in fleet.json).
 FLEET_ONLY_FLAGS = (
     "--nodes",
-    "--az",
-    "--region",
-    "--profile",
-    "--account",
     "--root-gb",
     "--pg-iops",
     "--pg-mbps",
-    "--pg-gb",
-    "--rds-class",
-    "--rds-engine-version",
-    "--operator-cidr",
-    "--ssh-key",
     "--ttl-min",
     "--max-usd",
-    "--price",
-    "--out-root",
-    "--tf",
-    "--allow-dirty",
-    "--keep",
 )
 # Thread pool size for parallel ssh/rsync calls; also the espresso-deploy fan-out limit.
 REMOTE_POOL_SIZE = 16
@@ -435,9 +424,8 @@ DOCKER_START_LEAD_S = 15.0
 # Container log lines per node in the summary of a run without a result.
 FAILURE_LOG_LINES = 10
 CHECKIP_URL = "https://checkip.amazonaws.com"
-# `plan --offline` touches neither the operator's key nor the network (unless --operator-cidr).
+# `plan --offline` touches neither an ssh key nor the network.
 OFFLINE_SSH_PUB = "ssh-ed25519 OFFLINE-PLACEHOLDER"
-SSH_KEY_AUTO = "auto"
 OFFLINE_CIDR = "192.0.2.1/32"
 AGENT_POLL_S = 5.0
 AGENT_LOG_S = 30.0
@@ -451,8 +439,6 @@ RSYNC_IO_TIMEOUT_S = 60
 FREEZE_STOP_TIMEOUT_S = 30.0
 DESTROY_RETRIES = 3
 DESTROY_BACKOFF_S = 20.0
-# Ctrl-C during measure: default-yes destroy prompt, so an unattended run still tears down.
-DESTROY_PROMPT_TIMEOUT_S = 30.0
 # The rds instance, its subnet and parameter groups, delete schedule group and IAM role
 # (under `IAM_ROLE_PATH`) are all named `<RDS_PREFIX><fleet>`.
 RDS_PREFIX = "espresso-bench-"
@@ -488,18 +474,10 @@ RDS_CREATE_MAX_S = 1500.0
 RDS_DELETE_S = 600.0
 RDS_REAPER_LEAD_S = 300.0
 RDS_POLL_S = 10.0
-# RDS identifiers, subnet groups and parameter groups reject `--` and a trailing `-`.
-RDS_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # gp3 volumes of 400 GiB and above are the smallest RDS PostgreSQL storage that includes 12000
 # IOPS and 500 MiB/s; larger provisioned tiers are not priced here.
-RDS_GB_MIN = 400
 RDS_IOPS = 12000
 RDS_MBPS = 500
-# Below 4xlarge the EBS baseline is under 500 MB/s and the class would be measured, not the
-# placement.
-RDS_CLASS_RE = re.compile(r"^db\.[a-z0-9]+\.(\d+)xlarge$")
-RDS_CLASS_MIN_XLARGE = 4
-RDS_CLASS_FALLBACK = "db.m7g.4xlarge"
 RDS_USER = "bench"
 RDS_DATABASE = "espresso"
 RDS_FILE = "rds.json"
@@ -603,7 +581,6 @@ class Preflight(TypedDict):
     vcpu_needed: int
     vcpu_in_use: int
     vcpu_quota: float
-    git_diff: str | None
     # The engine minor `rds_orderable` resolved; present when the fleet has an rds mode.
     rds_engine_version: NotRequired[str]
 
@@ -803,27 +780,12 @@ class Ec2Balance(TypedDict):
 class RunConfig:
     tag: str
     nodes: int = 5
-    az: str = "auto"
-    region: str = "eu-west-1"
-    profile: str = "timeboost-dev"
-    account: str = "027574771971"
     load: nb.BenchConfig = field(default_factory=lambda: aws_load())
     root_gb: str = "auto"
     pg_iops: int = 12000
     pg_mbps: int = 500
-    pg_gb: int = 400
-    rds_class: str = "db.m8g.4xlarge"
-    rds_engine_version: str = "18"
-    operator_cidr: str = "auto"
-    ssh_key: str = SSH_KEY_AUTO
     max_usd: float = 10.0
-    price: tuple[str, ...] = ()
-    name: str | None = None
-    out_root: Path = Path("tmp/aws-bench")
-    tf: str = "tofu"
     yes: bool = False
-    keep: bool = False
-    allow_dirty: bool = False
     offline: bool = False
     db_modes: tuple[DbMode, ...] = ("colocated",)
     query_db: DbMode = "colocated"
@@ -859,8 +821,8 @@ def _run(
     )
 
 
-def aws_argv(cfg: RunConfig, *args: str) -> list[str]:
-    return ["aws", "--profile", cfg.profile, *args]
+def aws_argv(*args: str) -> list[str]:
+    return ["aws", "--profile", PROFILE, *args]
 
 
 def aws_ok(run: Runner, profile: str, *args: str, tolerate: str | None = None) -> str:
@@ -883,30 +845,14 @@ def node_root_gb(cfg: RunConfig, query: bool) -> int:
 
 
 def check_rds_config(cfg: RunConfig) -> None:
-    """Refuses, before any AWS call, an rds fleet whose volume or class would be measured
-    instead of the placement."""
+    """Refuses, before any AWS call, an rds fleet whose volume would be measured instead of the
+    placement."""
     if "rds" not in cfg.db_modes:
         return
-    if cfg.pg_gb < RDS_GB_MIN:
-        raise Refused(
-            f"--pg-gb {cfg.pg_gb}: rds gp3 storage below {RDS_GB_MIN} GiB is fixed at "
-            f"3000 IOPS and 125 MiB/s"
-        )
     if (cfg.pg_iops, cfg.pg_mbps) != (RDS_IOPS, RDS_MBPS):
         raise Refused(
             f"rds needs --pg-iops {RDS_IOPS} and --pg-mbps {RDS_MBPS}, got "
             f"{cfg.pg_iops} and {cfg.pg_mbps}: larger provisioned tiers are not priced"
-        )
-    size = RDS_CLASS_RE.match(cfg.rds_class)
-    if size is None or int(size[1]) < RDS_CLASS_MIN_XLARGE:
-        raise Refused(
-            f"--rds-class {cfg.rds_class}: needs db.<family>.{RDS_CLASS_MIN_XLARGE}xlarge or "
-            f"larger, smaller classes have an EBS baseline below {RDS_MBPS} MB/s"
-        )
-    name = cfg.name if cfg.name is not None else default_run_name()
-    if not RDS_NAME_RE.match(name):
-        raise Refused(
-            f"--name {name!r}: rds identifiers and groups reject '--' and a trailing '-'"
         )
 
 
@@ -914,9 +860,9 @@ def rds_spec(cfg: RunConfig, pre: Preflight) -> RdsSpec | None:
     if "rds" not in cfg.db_modes:
         return None
     return {
-        "instance_class": cfg.rds_class,
+        "instance_class": RDS_CLASS,
         "engine_version": pre["rds_engine_version"],
-        "gb": cfg.pg_gb,
+        "gb": PG_GB,
         "iops": cfg.pg_iops,
         "mbps": cfg.pg_mbps,
     }
@@ -1007,16 +953,6 @@ def phase_seconds(cfg: RunConfig) -> dict[str, tuple[float, float]]:
     }
 
 
-def parse_price(text: str) -> tuple[str, float]:
-    instance_type, sep, price = text.partition("=")
-    if not sep or not instance_type or not price:
-        raise Refused(f"--price must be TYPE=USD, got {text!r}")
-    try:
-        return instance_type, float(price)
-    except ValueError:
-        raise Refused(f"--price must be TYPE=USD, got {text!r}") from None
-
-
 def fetch_prices(
     run: Runner, cfg: RunConfig, types: set[str], cache: Path, now: float
 ) -> Prices:
@@ -1026,7 +962,7 @@ def fetch_prices(
     instances: dict[str, InstancePrice] = {}
     changed = False
     for instance_type in sorted(types):
-        key = f"{cfg.region}:{instance_type}"
+        key = f"{REGION}:{instance_type}"
         entry = stored.get(key)
         if entry is not None and now - entry["fetched_at"] < PRICE_CACHE_TTL_S:
             instances[instance_type] = {
@@ -1034,7 +970,11 @@ def fetch_prices(
                 "source": f"cache {cache}",
             }
             continue
-        usd_hour = _fetch_instance_price(run, cfg, instance_type)
+        if cfg.offline:
+            raise Refused(
+                f"--offline needs a fresh cached price for {instance_type}: run `plan` online first"
+            )
+        usd_hour = _fetch_instance_price(run, instance_type)
         instances[instance_type] = {
             "usd_hour": usd_hour,
             "source": "aws pricing get-products",
@@ -1047,43 +987,41 @@ def fetch_prices(
     return {"instances": instances}
 
 
-def _fetch_instance_price(run: Runner, cfg: RunConfig, instance_type: str) -> float:
+def _fetch_instance_price(run: Runner, instance_type: str) -> float:
     if instance_type.startswith("db."):
-        return fetch_rds_price(run, cfg, instance_type)
+        return fetch_rds_price(run, instance_type)
     filters = [
         {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_type},
-        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": cfg.region},
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": REGION},
         {"Type": "TERM_MATCH", "Field": "operatingSystem", "Value": "Linux"},
         {"Type": "TERM_MATCH", "Field": "tenancy", "Value": "Shared"},
         {"Type": "TERM_MATCH", "Field": "preInstalledSw", "Value": "NA"},
         {"Type": "TERM_MATCH", "Field": "capacitystatus", "Value": "Used"},
     ]
-    return _query_price(run, cfg, "AmazonEC2", filters, instance_type)
+    return _query_price(run, "AmazonEC2", filters, instance_type)
 
 
-def fetch_rds_price(run: Runner, cfg: RunConfig, instance_class: str) -> float:
+def fetch_rds_price(run: Runner, instance_class: str) -> float:
     """Hourly on-demand price of a Single-AZ PostgreSQL instance class."""
     filters = [
         {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_class},
-        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": cfg.region},
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": REGION},
         {"Type": "TERM_MATCH", "Field": "databaseEngine", "Value": "PostgreSQL"},
         {"Type": "TERM_MATCH", "Field": "deploymentOption", "Value": "Single-AZ"},
         {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Database Instance"},
         {"Type": "TERM_MATCH", "Field": "locationType", "Value": "AWS Region"},
     ]
-    return _query_price(run, cfg, "AmazonRDS", filters, instance_class)
+    return _query_price(run, "AmazonRDS", filters, instance_class)
 
 
 def _query_price(
     run: Runner,
-    cfg: RunConfig,
     service_code: str,
     filters: list[dict[str, str]],
     instance_type: str,
 ) -> float:
     result = run(
         aws_argv(
-            cfg,
             "pricing",
             "get-products",
             "--region",
@@ -1098,10 +1036,10 @@ def _query_price(
     )
     if result.returncode != 0:
         raise Refused(
-            f"aws pricing get-products failed for {instance_type} in {cfg.region}: "
-            f"{result.stderr.strip()}; pass --price {instance_type}=<usd/hour>"
+            f"aws pricing get-products failed for {instance_type} in {REGION}: "
+            f"{result.stderr.strip()}"
         )
-    return _parse_price_response(result.stdout, instance_type, cfg.region)
+    return _parse_price_response(result.stdout, instance_type, REGION)
 
 
 def _parse_price_response(stdout: str, instance_type: str, region: str) -> float:
@@ -1109,7 +1047,7 @@ def _parse_price_response(stdout: str, instance_type: str, region: str) -> float
     if len(price_list) != 1:
         raise Refused(
             f"expected exactly one price for {instance_type} in {region}, got "
-            f"{len(price_list)}; pass --price {instance_type}=<usd/hour>"
+            f"{len(price_list)}"
         )
     product = json.loads(price_list[0])
     term = next(iter(product["terms"]["OnDemand"].values()))
@@ -1117,32 +1055,19 @@ def _parse_price_response(stdout: str, instance_type: str, region: str) -> float
     if dimension["unit"] != "Hrs":
         raise Refused(
             f"expected an hourly price for {instance_type}, got unit "
-            f"{dimension['unit']!r}; pass --price {instance_type}=<usd/hour>"
+            f"{dimension['unit']!r}"
         )
     usd = float(dimension["pricePerUnit"]["USD"])
     if usd <= 0:
-        raise Refused(
-            f"got a non-positive price for {instance_type}: {usd}; "
-            f"pass --price {instance_type}=<usd/hour>"
-        )
+        raise Refused(f"got a non-positive price for {instance_type}: {usd}")
     return usd
 
 
 def resolve_prices(run: Runner, cfg: RunConfig, cache: Path, now: float) -> Prices:
     types = {NODE_TYPE, CTL_TYPE}
     if "rds" in cfg.db_modes:
-        types.add(cfg.rds_class)
-    overrides = dict(parse_price(p) for p in cfg.price)
-    missing = types - overrides.keys()
-    if missing and cfg.offline:
-        raise Refused(f"--offline requires --price for: {', '.join(sorted(missing))}")
-    fetched = (
-        fetch_prices(run, cfg, missing, cache, now) if missing else {"instances": {}}
-    )
-    instances = dict(fetched["instances"])
-    for instance_type, usd_hour in overrides.items():
-        instances[instance_type] = {"usd_hour": usd_hour, "source": "--price override"}
-    return {"instances": instances}
+        types.add(RDS_CLASS)
+    return fetch_prices(run, cfg, types, cache, now)
 
 
 def region_minor_prices(region: str) -> dict[str, float]:
@@ -1440,29 +1365,21 @@ def default_run_name(now: datetime | None = None) -> str:
     return f"{getpass.getuser()}-{now.strftime('%Y%m%d-%H%M')}"
 
 
-def new_fleet_dir(out_root: Path, name: str | None) -> Path:
-    fleet_name = name if name is not None else default_run_name()
-    if not NAME_RE.match(fleet_name):
-        raise Refused(f"--name must match {NAME_RE.pattern}: {fleet_name!r}")
-    fleet_dir = out_root / fleet_name
+def new_fleet_dir(out_root: Path) -> Path:
+    name = default_run_name()
+    if not NAME_RE.match(name):
+        raise Refused(f"fleet name must match {NAME_RE.pattern}: {name!r}")
+    fleet_dir = out_root / name
     if fleet_dir.exists():
-        raise Refused(f"fleet {fleet_name} already exists at {fleet_dir}")
+        raise Refused(f"fleet {name} already exists at {fleet_dir}")
     fleet_dir.mkdir(parents=True)
     return fleet_dir
 
 
 def new_run_dir(fleet_dir: Path, name: str) -> Path:
-    if not NAME_RE.match(name):
-        raise Refused(f"--name must match {NAME_RE.pattern}: {name!r}")
     run_dir = fleet_dir / RUNS_DIR / f"{len(run_dirs(fleet_dir)) + 1:02d}-{name}"
     run_dir.mkdir(parents=True)
     return run_dir
-
-
-def require_unused_name(fleet_dir: Path, name: str) -> None:
-    """An explicit `--name` identifies a run; the default, the database mode, repeats."""
-    if any(path.name.partition("-")[2] == name for path in run_dirs(fleet_dir)):
-        raise Refused(f"a run named {name} already exists in {fleet_dir / RUNS_DIR}")
 
 
 def run_index(run_dir: Path) -> int:
@@ -1508,7 +1425,6 @@ def append_event(directory: Path, phase: str, event: str, detail: str | None) ->
 
 def config_to_json(cfg: RunConfig) -> dict[str, Any]:
     data = dataclasses.asdict(cfg)
-    data["out_root"] = str(cfg.out_root)
     data["fleet"] = None if cfg.fleet is None else str(cfg.fleet)
     return data
 
@@ -1586,29 +1502,28 @@ def tools_on_path(
         raise Refused(f"missing tools on PATH: {', '.join(missing)}")
 
 
-def caller_account(run: Runner, cfg: RunConfig) -> str:
+def caller_account(run: Runner) -> str:
     """The account guard: the first AWS call preflight makes, so a mismatch is caught before
     any other `aws` call (a wrong profile must never touch the right account by accident)."""
-    result = run(aws_argv(cfg, "sts", "get-caller-identity", "--output", "json"))
+    result = run(aws_argv("sts", "get-caller-identity", "--output", "json"))
     if result.returncode != 0:
         raise Refused(f"aws sts get-caller-identity failed: {result.stderr.strip()}")
     account = json.loads(result.stdout)["Account"]
-    if account != cfg.account:
+    if account != ACCOUNT:
         raise Refused(
-            f"caller account {account} does not match --account {cfg.account} "
-            f"(wrong --profile {cfg.profile}?)"
+            f"caller account {account} is not {ACCOUNT}: is profile {PROFILE} the benchmark "
+            f"account's?"
         )
     return account
 
 
-def default_vpc(run: Runner, cfg: RunConfig) -> str:
+def default_vpc(run: Runner) -> str:
     result = run(
         aws_argv(
-            cfg,
             "ec2",
             "describe-vpcs",
             "--region",
-            cfg.region,
+            REGION,
             "--filters",
             "Name=is-default,Values=true",
             "--output",
@@ -1619,15 +1534,14 @@ def default_vpc(run: Runner, cfg: RunConfig) -> str:
         raise Refused(f"aws ec2 describe-vpcs failed: {result.stderr.strip()}")
     vpcs = json.loads(result.stdout)["Vpcs"]
     if not vpcs:
-        raise Refused(f"no default VPC in {cfg.region}; the terraform module needs one")
+        raise Refused(f"no default VPC in {REGION}; the terraform module needs one")
     vpc_id = vpcs[0]["VpcId"]
     attr = run(
         aws_argv(
-            cfg,
             "ec2",
             "describe-vpc-attribute",
             "--region",
-            cfg.region,
+            REGION,
             "--vpc-id",
             vpc_id,
             "--attribute",
@@ -1641,21 +1555,18 @@ def default_vpc(run: Runner, cfg: RunConfig) -> str:
     if not json.loads(attr.stdout)["EnableDnsHostnames"]["Value"]:
         raise Refused(
             f"default VPC {vpc_id} has DNS hostnames disabled: aws ec2 modify-vpc-attribute "
-            f"--vpc-id {vpc_id} --enable-dns-hostnames --region {cfg.region}"
+            f"--vpc-id {vpc_id} --enable-dns-hostnames --region {REGION}"
         )
     return vpc_id
 
 
-def describe_instance_types(
-    run: Runner, cfg: RunConfig, types: set[str]
-) -> dict[str, dict[str, Any]]:
+def describe_instance_types(run: Runner, types: set[str]) -> dict[str, dict[str, Any]]:
     result = run(
         aws_argv(
-            cfg,
             "ec2",
             "describe-instance-types",
             "--region",
-            cfg.region,
+            REGION,
             "--instance-types",
             *sorted(types),
             "--query",
@@ -1685,14 +1596,13 @@ def resolve_ami_arch(instance_types: dict[str, dict[str, Any]], types: set[str])
     return "arm64"
 
 
-def resolve_ami(run: Runner, cfg: RunConfig, arch: str) -> str:
+def resolve_ami(run: Runner, arch: str) -> str:
     result = run(
         aws_argv(
-            cfg,
             "ec2",
             "describe-images",
             "--region",
-            cfg.region,
+            REGION,
             "--owners",
             UBUNTU_OWNER_ID,
             "--filters",
@@ -1707,20 +1617,19 @@ def resolve_ami(run: Runner, cfg: RunConfig, arch: str) -> str:
         raise Refused(f"aws ec2 describe-images failed: {result.stderr.strip()}")
     ami_id = result.stdout.strip()
     if not ami_id or ami_id == "None":
-        raise Refused(f"no Ubuntu 24.04 {arch} AMI found in {cfg.region}")
+        raise Refused(f"no Ubuntu 24.04 {arch} AMI found in {REGION}")
     return ami_id
 
 
-def capable_az(run: Runner, cfg: RunConfig, types: set[str]) -> str:
+def capable_az(run: Runner, types: set[str]) -> str:
     az_sets = []
     for instance_type in sorted(types):
         result = run(
             aws_argv(
-                cfg,
                 "ec2",
                 "describe-instance-type-offerings",
                 "--region",
-                cfg.region,
+                REGION,
                 "--location-type",
                 "availability-zone",
                 "--filters",
@@ -1739,27 +1648,19 @@ def capable_az(run: Runner, cfg: RunConfig, types: set[str]) -> str:
     capable = set.intersection(*az_sets) if az_sets else set()
     if not capable:
         raise Refused(
-            f"no AZ in {cfg.region} offers every instance type: {', '.join(sorted(types))}"
+            f"no AZ in {REGION} offers every instance type: {', '.join(sorted(types))}"
         )
-    if cfg.az == "auto":
-        return min(capable)
-    if cfg.az not in capable:
-        raise Refused(
-            f"--az {cfg.az} does not offer every instance type; AZs that do: "
-            f"{', '.join(sorted(capable))}"
-        )
-    return cfg.az
+    return min(capable)
 
 
-def _running_instance_types(run: Runner, cfg: RunConfig) -> list[str]:
+def _running_instance_types(run: Runner) -> list[str]:
     """One entry per running instance, not deduplicated: `vcpu_headroom` sums per instance."""
     result = run(
         aws_argv(
-            cfg,
             "ec2",
             "describe-instances",
             "--region",
-            cfg.region,
+            REGION,
             "--filters",
             "Name=instance-state-name,Values=pending,running",
             "--query",
@@ -1773,14 +1674,13 @@ def _running_instance_types(run: Runner, cfg: RunConfig) -> list[str]:
     return list(json.loads(result.stdout))
 
 
-def _vcpu_quota(run: Runner, cfg: RunConfig) -> float:
+def _vcpu_quota(run: Runner) -> float:
     result = run(
         aws_argv(
-            cfg,
             "service-quotas",
             "get-service-quota",
             "--region",
-            cfg.region,
+            REGION,
             "--service-code",
             "ec2",
             "--quota-code",
@@ -1798,7 +1698,6 @@ def _vcpu_quota(run: Runner, cfg: RunConfig) -> float:
 
 def vcpu_headroom(
     run: Runner,
-    cfg: RunConfig,
     hosts: list[HostSpec],
     running: list[str],
     instance_types: dict[str, dict[str, Any]],
@@ -1808,13 +1707,13 @@ def vcpu_headroom(
     vcpus = {t: row["VCpus"] for t, row in instance_types.items()}
     needed = sum(vcpus[h["instance_type"]] for h in hosts)
     in_use = sum(vcpus[t] for t in running)
-    quota = _vcpu_quota(run, cfg)
+    quota = _vcpu_quota(run)
     if needed + in_use > quota:
         raise Refused(
-            f"vCPU quota {VCPU_QUOTA_CODE} is {quota:.0f} in {cfg.region}; {in_use} in use + "
+            f"vCPU quota {VCPU_QUOTA_CODE} is {quota:.0f} in {REGION}; {in_use} in use + "
             f"{needed} needed exceeds it: aws service-quotas request-service-quota-increase "
             f"--service-code ec2 --quota-code {VCPU_QUOTA_CODE} "
-            f"--desired-value {int(needed + in_use)} --region {cfg.region}"
+            f"--desired-value {int(needed + in_use)} --region {REGION}"
         )
     return needed, in_use, quota
 
@@ -1839,26 +1738,25 @@ def resolve_images(cfg: RunConfig, rds_minor: str | None) -> dict[str, ImageInfo
             if name == "postgres" and rds_minor is not None:
                 raise Refused(
                     f"{exc}; the container must run the rds minor {rds_minor}: "
-                    "pass --rds-engine-version <older minor>"
+                    "RDS_ENGINE_VERSION must name an older minor"
                 ) from exc
             raise
     return images
 
 
 def rds_orderable(run: Runner, cfg: RunConfig, az: str) -> str:
-    """The highest engine minor matching `--rds-engine-version` that `--rds-class` can run on
-    gp3 with the fleet's storage in `az`. No fallback class or version: the operator picks."""
+    """The highest engine minor matching `RDS_ENGINE_VERSION` that `RDS_CLASS` can run on gp3
+    with the fleet's storage in `az`."""
     result = run(
         aws_argv(
-            cfg,
             "rds",
             "describe-orderable-db-instance-options",
             "--region",
-            cfg.region,
+            REGION,
             "--engine",
             "postgres",
             "--db-instance-class",
-            cfg.rds_class,
+            RDS_CLASS,
             "--output",
             "json",
         )
@@ -1875,21 +1773,20 @@ def rds_orderable(run: Runner, cfg: RunConfig, az: str) -> str:
     ]
     if not versions:
         raise Refused(
-            f"{cfg.rds_class} cannot run postgres {cfg.rds_engine_version} on {cfg.pg_gb} GiB "
-            f"gp3 with {cfg.pg_iops} IOPS and {cfg.pg_mbps} MiB/s in {az}: pass --rds-class "
-            f"{RDS_CLASS_FALLBACK}, another --rds-engine-version or --az"
+            f"{RDS_CLASS} cannot run postgres {RDS_ENGINE_VERSION} on {PG_GB} GiB gp3 with "
+            f"{cfg.pg_iops} IOPS and {cfg.pg_mbps} MiB/s in {az}"
         )
     return max(versions, key=lambda v: tuple(int(part) for part in v.split(".")))
 
 
 def _rds_option_fits(option: dict[str, Any], cfg: RunConfig, az: str) -> bool:
-    version, wanted = option["EngineVersion"], cfg.rds_engine_version
+    version, wanted = option["EngineVersion"], RDS_ENGINE_VERSION
     return (
         (version == wanted or version.startswith(f"{wanted}."))
         and option["StorageType"] == "gp3"
         and az in {zone["Name"] for zone in option["AvailabilityZones"]}
         and option["SupportsPerformanceInsights"]
-        and option["MinStorageSize"] <= cfg.pg_gb <= option["MaxStorageSize"]
+        and option["MinStorageSize"] <= PG_GB <= option["MaxStorageSize"]
         and option["MinIopsPerDbInstance"]
         <= cfg.pg_iops
         <= option["MaxIopsPerDbInstance"]
@@ -2029,46 +1926,25 @@ def resolve_image(ref: str, fetch: RegistryFetch = _registry_get) -> ImageInfo:
     return {"ref": ref, "digest": digest, "revision": revision, "platforms": platforms}
 
 
-def check_git_clean(run: Runner, allow_dirty: bool) -> str | None:
-    """`None` for a clean tree. With `allow_dirty`, returns the diff to be recorded as
-    `diff.patch`; without it, a dirty tree is refused. `--untracked-files=no` keeps the
-    dirty check in scope with `git diff HEAD`, which never includes untracked files."""
-    status = run(["git", "status", "--porcelain", "--untracked-files=no"])
-    if status.returncode != 0:
-        raise Refused(f"git status failed: {status.stderr.strip()}")
-    if not status.stdout.strip():
-        return None
-    if not allow_dirty:
-        raise Refused("git tree is dirty; commit the changes or pass --allow-dirty")
-    diff = run(["git", "diff", "HEAD"])
-    if diff.returncode != 0:
-        raise Refused(f"git diff failed: {diff.stderr.strip()}")
-    return diff.stdout
-
-
 def preflight(
     run: Runner,
     cfg: RunConfig,
     hosts: list[HostSpec],
     which: Callable[[str], str | None] = shutil.which,
 ) -> Preflight:
-    tools = [cfg.tf, "aws", "ssh", "scp", "rsync", "git"]
-    if cfg.ssh_key == SSH_KEY_AUTO:
-        tools.append("ssh-keygen")
-    tools_on_path(tools, which)
-    account = caller_account(run, cfg)
-    vpc_id = default_vpc(run, cfg)
+    tools_on_path(["tofu", "aws", "ssh", "scp", "rsync", "git", "ssh-keygen"], which)
+    account = caller_account(run)
+    vpc_id = default_vpc(run)
     types = {h["instance_type"] for h in hosts}
-    az = capable_az(run, cfg, types)
-    running = _running_instance_types(run, cfg)
+    az = capable_az(run, types)
+    running = _running_instance_types(run)
     # Fetched once: resolve_ami_arch and vcpu_headroom both need every requested and running
     # instance type's vCPU count and architecture.
-    instance_types = describe_instance_types(run, cfg, set(running) | types)
-    needed, in_use, quota = vcpu_headroom(run, cfg, hosts, running, instance_types)
-    ami_id = resolve_ami(run, cfg, resolve_ami_arch(instance_types, types))
+    instance_types = describe_instance_types(run, set(running) | types)
+    needed, in_use, quota = vcpu_headroom(run, hosts, running, instance_types)
+    ami_id = resolve_ami(run, resolve_ami_arch(instance_types, types))
     rds_minor = rds_orderable(run, cfg, az) if "rds" in cfg.db_modes else None
     images = resolve_images(cfg, rds_minor)
-    git_diff = check_git_clean(run, cfg.allow_dirty)
     pre: Preflight = {
         "account": account,
         "vpc_id": vpc_id,
@@ -2078,7 +1954,6 @@ def preflight(
         "vcpu_needed": needed,
         "vcpu_in_use": in_use,
         "vcpu_quota": quota,
-        "git_diff": git_diff,
     }
     if rds_minor is not None:
         pre["rds_engine_version"] = rds_minor
@@ -2092,7 +1967,7 @@ def classify_tf_error(stderr: str) -> str:
             f"--service-code ec2 --quota-code {VCPU_QUOTA_CODE} --desired-value <n>"
         )
     if "InsufficientInstanceCapacity" in stderr:
-        return "InsufficientInstanceCapacity: retry with --az <other> or a different instance type"
+        return "InsufficientInstanceCapacity: retry later"
     if "UnauthorizedOperation" in stderr:
         return "UnauthorizedOperation: check IAM permissions for the AWS profile"
     if "AccessDenied" in stderr and ("iam:" in stderr or "scheduler:" in stderr):
@@ -2118,14 +1993,13 @@ class Terraform:
     """`tofu -chdir=<terraform_dir>` through the injectable Runner. `env` is passed to every tofu
     subprocess."""
 
-    def __init__(self, run: Runner, tf: str, terraform_dir: Path, env: dict[str, str]):
+    def __init__(self, run: Runner, terraform_dir: Path, env: dict[str, str]):
         self.run = run
-        self.tf = tf
         self.dir = terraform_dir
         self.env = env
 
     def _tofu(self, *args: str) -> subprocess.CompletedProcess[str]:
-        return self.run([self.tf, f"-chdir={self.dir}", *args], self.env)
+        return self.run(["tofu", f"-chdir={self.dir}", *args], self.env)
 
     def init(self) -> None:
         result = self._tofu("init", "-input=false")
@@ -2175,9 +2049,6 @@ def render_tfvars(
         "name": name,
         "owner": owner,
         "git_rev": git_rev,
-        "account_id": cfg.account,
-        "region": cfg.region,
-        "profile": cfg.profile,
         "az": az,
         "ami_id": ami_id,
         "ssh_public_key": ssh_pub,
@@ -2611,10 +2482,6 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         "--tag", required=tag_required, help="ghcr tag pushed by CI, no default"
     )
     parser.add_argument("--nodes", type=int, default=defaults.nodes)
-    parser.add_argument("--az", default=defaults.az)
-    parser.add_argument("--region", default=defaults.region)
-    parser.add_argument("--profile", default=defaults.profile)
-    parser.add_argument("--account", default=defaults.account)
     parser.add_argument(
         "--steps",
         type=nb.parse_rates,
@@ -2643,25 +2510,7 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     parser.add_argument("--root-gb", default=defaults.root_gb)
     parser.add_argument("--pg-iops", type=int, default=defaults.pg_iops)
     parser.add_argument("--pg-mbps", type=int, default=defaults.pg_mbps)
-    parser.add_argument(
-        "--pg-gb",
-        type=positive_int,
-        default=defaults.pg_gb,
-        help="size of the Postgres volume of --query-db volume; rds: gp3 GiB, at least 400",
-    )
-    parser.add_argument("--rds-class", default=defaults.rds_class)
-    parser.add_argument(
-        "--rds-engine-version",
-        default=defaults.rds_engine_version,
-        help="rds: a major or a major.minor; a major resolves to the highest orderable minor",
-    )
-    parser.add_argument("--operator-cidr", default=defaults.operator_cidr)
-    parser.add_argument("--ssh-key", default=defaults.ssh_key)
     parser.add_argument("--max-usd", type=float, default=defaults.max_usd)
-    parser.add_argument("--price", action="append", default=[], metavar="TYPE=USD")
-    parser.add_argument("--name")
-    parser.add_argument("--out-root", type=Path, default=defaults.out_root)
-    parser.add_argument("--tf", default=defaults.tf)
 
 
 def env_pair(text: str) -> str:
@@ -2688,28 +2537,13 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     return RunConfig(
         tag=args.tag,
         nodes=args.nodes,
-        az=args.az,
-        region=args.region,
-        profile=args.profile,
-        account=args.account,
         load=load,
         node_env=tuple(args.node_env),
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
-        pg_gb=args.pg_gb,
-        rds_class=args.rds_class,
-        rds_engine_version=args.rds_engine_version,
-        operator_cidr=args.operator_cidr,
-        ssh_key=args.ssh_key,
         max_usd=args.max_usd,
-        price=tuple(args.price),
-        name=args.name,
-        out_root=args.out_root,
-        tf=args.tf,
         yes=args.yes,
-        keep=args.keep,
-        allow_dirty=args.allow_dirty,
         offline=args.offline,
     )
 
@@ -2747,15 +2581,6 @@ def add_ttl_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_account_flags(parser: argparse.ArgumentParser) -> None:
-    """For `status --all` and `destroy --orphans`, which have no manifest to read them from."""
-    defaults = RunConfig(tag="")
-    parser.add_argument("--region", default=defaults.region)
-    parser.add_argument("--profile", default=defaults.profile)
-    parser.add_argument("--account", default=defaults.account)
-    parser.add_argument("--out-root", type=Path, default=defaults.out_root)
-
-
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -2772,9 +2597,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
     plan_p.add_argument("--offline", action="store_true", help="use no AWS credentials")
-    plan_p.set_defaults(
-        func=cmd_plan, yes=False, keep=False, allow_dirty=False, max_usd=UP_MAX_USD
-    )
+    plan_p.set_defaults(func=cmd_plan, yes=False, max_usd=UP_MAX_USD)
 
     up_p = sub.add_parser(
         "up",
@@ -2785,11 +2608,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_ttl_flag(up_p)
     up_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
     up_p.add_argument("--yes", action="store_true")
-    up_p.add_argument("--allow-dirty", action="store_true")
     up_p.set_defaults(
         func=cmd_up,
         offline=False,
-        keep=False,
         fleet=None,
         force=False,
         query_db=defaults.query_db,
@@ -2814,10 +2635,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="with --fleet: reset a dirty or stale fleet",
     )
     run_p.add_argument("--yes", action="store_true")
-    run_p.add_argument(
-        "--keep", action="store_true", help="skip destroy; the TTL still applies"
-    )
-    run_p.add_argument("--allow-dirty", action="store_true")
     run_p.set_defaults(func=cmd_run, offline=False, db_modes=defaults.db_modes)
 
     extend_p = sub.add_parser(
@@ -2837,7 +2654,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     status_p.add_argument("dir", type=Path, nargs="?")
     status_p.add_argument("--all", action="store_true")
-    add_account_flags(status_p)
     status_p.set_defaults(func=cmd_status)
 
     collect_p = sub.add_parser(
@@ -2859,7 +2675,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     destroy_p.add_argument("dir", type=Path, nargs="?")
     destroy_p.add_argument("--orphans", action="store_true")
     destroy_p.add_argument("--yes", action="store_true")
-    add_account_flags(destroy_p)
     destroy_p.set_defaults(func=cmd_destroy)
 
     agent_drive_p = sub.add_parser("agent-drive", help="ctl only: run the load driver")
@@ -2898,7 +2713,7 @@ def cmd_plan(
         refuse_fleet_node_env(cfg)
     now = clock.time()
     if cfg.offline:
-        fleet_dir = new_fleet_dir(cfg.out_root, cfg.name)
+        fleet_dir = new_fleet_dir(OUT_ROOT)
         setup_logging(fleet_dir)
         log.debug("argv %s", args.argv)
         hosts = plan_hosts(cfg)
@@ -2907,7 +2722,7 @@ def cmd_plan(
             run,
             cfg,
             hosts,
-            region_minor_prices(cfg.region),
+            region_minor_prices(REGION),
             fleet_dir,
             now,
             fleet=fleet,
@@ -2937,7 +2752,7 @@ def offline_preflight(cfg: RunConfig) -> Preflight:
         for name, ref in image_refs(cfg, offline_rds_version(cfg)).items()
     }
     pre: Preflight = {
-        "account": cfg.account,
+        "account": ACCOUNT,
         "vpc_id": "",
         "az": "",
         "ami_id": "",
@@ -2945,7 +2760,6 @@ def offline_preflight(cfg: RunConfig) -> Preflight:
         "vcpu_needed": 0,
         "vcpu_in_use": 0,
         "vcpu_quota": 0.0,
-        "git_diff": None,
     }
     version = offline_rds_version(cfg)
     if version is not None:
@@ -2955,7 +2769,7 @@ def offline_preflight(cfg: RunConfig) -> Preflight:
 
 def offline_rds_version(cfg: RunConfig) -> str | None:
     """No orderable options offline: the requested version stands in for the resolved minor."""
-    return cfg.rds_engine_version if "rds" in cfg.db_modes else None
+    return RDS_ENGINE_VERSION if "rds" in cfg.db_modes else None
 
 
 def estimate_or_refuse(
@@ -2968,7 +2782,7 @@ def estimate_or_refuse(
     fleet: bool = False,
     rds: RdsSpec | None = None,
 ) -> Estimate:
-    prices = resolve_prices(run, cfg, cfg.out_root / "prices.json", now)
+    prices = resolve_prices(run, cfg, OUT_ROOT / "prices.json", now)
     if fleet:
         estimate = estimate_fleet(hosts, cfg, prices, minor, rds)
         expires = datetime.fromtimestamp(now + estimate["ttl_s"], UTC)
@@ -3045,7 +2859,7 @@ class Interrupts:
 class Remote:
     """ssh and rsync to the fleet through the injectable Runner. ControlMaster sockets live in
     `<fleet>/ssh/` and host keys in `<fleet>/known_hosts`. Pass `fleet_dir` relative (as
-    `out_root` is by default): an absolute path can exceed the 104 byte unix socket limit."""
+    `OUT_ROOT` is): an absolute path can exceed the 104 byte unix socket limit."""
 
     def __init__(
         self, run: Runner, fleet_dir: Path, ssh_key: Path, hosts: dict[str, HostInfo]
@@ -3055,7 +2869,7 @@ class Remote:
         (fleet_dir / "ssh").mkdir(exist_ok=True)
         self.ssh_opts = [
             "-i",
-            str(ssh_key.expanduser()),
+            str(ssh_key),
             "-o",
             "ControlMaster=auto",
             "-o",
@@ -3169,22 +2983,10 @@ class Run:
         return nb.read_json(self.manifest_path)
 
 
-def prompt_destroy(timeout_s: float) -> bool:
-    """Default yes: an unattended run still tears down."""
-    if not sys.stdin.isatty():
-        return True
-    print(
-        f"Destroy the fleet now? [Y/n] (yes in {timeout_s:.0f} s) ", end="", flush=True
-    )
-    ready, _, _ = select.select([sys.stdin], [], [], timeout_s)
-    return not ready or sys.stdin.readline().strip().lower() != "n"
-
-
 def cmd_run(
     args: argparse.Namespace,
     run: Runner = _run,
     interrupts: Interrupts | None = None,
-    ask_destroy: Callable[[float], bool] = prompt_destroy,
 ) -> int:
     if args.fleet is not None:
         return cmd_run_fleet(args, run, interrupts)
@@ -3207,7 +3009,7 @@ def cmd_run(
         with recording(bench_run):
             up_fleet(fleet)
         result = run_on_fleet(bench_run)
-        return teardown(bench_run, result, ask_destroy)
+        return teardown(bench_run, result)
     except Exception:
         log.exception("unexpected error")
         log.error(LEFTOVER_MESSAGE, fleet_dir)
@@ -3232,7 +3034,9 @@ def confirm_create(cfg: RunConfig, fleet_dir: Path, count: int) -> None:
     if "rds" in cfg.db_modes:
         extras += ", 1 rds instance, 1 subnet group, 1 parameter group, 1 schedule"
         extras += ", 1 iam role"
-    prompt = f"Create {count} instances{extras}, 1 security group, 1 key pair in {cfg.account}?"
+    prompt = (
+        f"Create {count} instances{extras}, 1 security group, 1 key pair in {ACCOUNT}?"
+    )
     if not confirm(prompt, cfg.yes, sys.stdin.isatty()):
         append_event(fleet_dir, "planned", "refused", "not confirmed")
         raise Refused("not confirmed; nothing was created")
@@ -3272,9 +3076,9 @@ def plan_fleet(
 ) -> tuple[Path, Path, Terraform, list[HostSpec], Preflight]:
     """Preflight, cost check, render, `tofu init` and `plan`. Shared by `plan` and `run`; makes
     no AWS write. The preflight summary is logged before the cost line."""
-    minor = region_minor_prices(cfg.region)
+    minor = region_minor_prices(REGION)
     hosts = plan_hosts(cfg)
-    fleet_dir = new_fleet_dir(cfg.out_root, cfg.name)
+    fleet_dir = new_fleet_dir(OUT_ROOT)
     setup_logging(fleet_dir)
     log.debug("argv %s", args.argv)
     pre = preflight(run, cfg, hosts)
@@ -3283,11 +3087,11 @@ def plan_fleet(
         run, cfg, hosts, minor, fleet_dir, now, rds=rds_spec(cfg, pre)
     )
     run_dir = render_run_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
-    return fleet_dir, run_dir, init_terraform(run, cfg, fleet_dir), hosts, pre
+    return fleet_dir, run_dir, init_terraform(run, fleet_dir), hosts, pre
 
 
-def init_terraform(run: Runner, cfg: RunConfig, fleet_dir: Path) -> Terraform:
-    tf = Terraform(run, cfg.tf, fleet_dir / "terraform", terraform_env())
+def init_terraform(run: Runner, fleet_dir: Path) -> Terraform:
+    tf = Terraform(run, fleet_dir / "terraform", terraform_env())
     tf.init()
     (fleet_dir / "terraform" / "plan.txt").write_text(tf.plan())
     return tf
@@ -3415,7 +3219,7 @@ def connect(fleet: FleetState) -> Remote:
     fleet.remote = Remote(
         fleet.run,
         fleet.fleet_dir,
-        ssh_key_path(fleet.cfg.ssh_key, fleet.fleet_dir),
+        ssh_key_path(fleet.fleet_dir),
         hosts_info,
     )
     return fleet.remote
@@ -3487,7 +3291,6 @@ def collect_node0_ebs_balance(run: Run) -> None:
         return
     collect_ebs_balance(
         run.fleet.run,
-        run.cfg,
         run.fleet.manifest,
         agent["t0"],
         agent["t1"],
@@ -3525,9 +3328,7 @@ def collect_rds(run: Run) -> None:
         ("rds insights", collect_rds_insights),
         ("rds logs", collect_rds_logs),
     ):
-        best_effort(
-            what, lambda c=collect: c(fleet.run, run.cfg, rds, t0, t1, run.run_dir)
-        )
+        best_effort(what, lambda c=collect: c(fleet.run, rds, t0, t1, run.run_dir))
 
 
 def best_effort(what: str, action: Callable[[], object]) -> None:
@@ -3563,21 +3364,12 @@ def log_result(result: nb.BenchResult) -> None:
     log.info(nb.capacity_line(result["capacity"]).replace("**", ""))
 
 
-def teardown(
-    run: Run, result: nb.BenchResult | None, ask_destroy: Callable[[float], bool]
-) -> int:
+def teardown(run: Run, result: nb.BenchResult | None) -> int:
     """Always attempts the destroy. An exception in the bookkeeping afterwards is logged and
     leaves the exit code to the result if the destroy worked, else to `EXIT_LEFTOVER`."""
     destroyed = False
     try:
-        destroyed = down_fleet(
-            run.fleet,
-            lambda: (
-                run.cfg.yes
-                or not run.interrupted
-                or ask_destroy(DESTROY_PROMPT_TIMEOUT_S)
-            ),
-        )
+        destroyed = down_fleet(run.fleet)
         code = record_outcome(run, result, destroyed)
     except Exception:
         log.exception("teardown failed")
@@ -3587,22 +3379,13 @@ def teardown(
     return code
 
 
-def down_fleet(fleet: FleetState, confirm_destroy: Callable[[], bool]) -> bool:
-    """Destroys the fleet unless `--keep` or `confirm_destroy` says no. True when destroyed."""
-    fleet_dir = fleet.fleet_dir
+def down_fleet(fleet: FleetState) -> bool:
+    """Destroys the fleet. True when destroyed."""
     best_effort(
         "mark destroying", lambda: update_manifest(fleet.manifest_path, "destroying")
     )
-    if fleet.cfg.keep:
-        log.info(
-            "--keep: fleet stays up until its TTL, ssh key kept; then run: aws-bench destroy %s",
-            fleet_dir,
-        )
-        return False
-    if confirm_destroy():
-        log.info("destroying: tofu destroy")
-        return destroy_fleet(fleet)
-    return False
+    log.info("destroying: tofu destroy")
+    return destroy_fleet(fleet)
 
 
 def record_outcome(run: Run, result: nb.BenchResult | None, destroyed: bool) -> int:
@@ -3630,10 +3413,10 @@ def record_outcome(run: Run, result: nb.BenchResult | None, destroyed: bool) -> 
 
 
 def close_fleet(fleet: FleetState, destroyed: bool) -> dict[str, float] | None:
-    """Bookkeeping after `down_fleet`: the auto ssh key, the fleet's cost and its final phase."""
+    """Bookkeeping after `down_fleet`: the ssh key, the fleet's cost and its final phase."""
     cost = None
     if destroyed:
-        remove_ssh_key(fleet.cfg.ssh_key, fleet.fleet_dir)
+        remove_ssh_key(fleet.fleet_dir)
         cost = final_cost(fleet)
     update_manifest(fleet.manifest_path, "done" if destroyed else "left-running")
     return cost
@@ -3685,9 +3468,9 @@ def destroy_fleet(fleet: FleetState) -> bool:
     try:
         swept = sweep(
             fleet.run,
-            fleet.cfg.region,
+            REGION,
             fleet.fleet_dir.name,
-            fleet.cfg.profile,
+            PROFILE,
             fleet.interrupts.clock,
         )
     except RemoteError as exc:
@@ -3743,9 +3526,9 @@ def prepare_up(
     args: argparse.Namespace, cfg: RunConfig, run: Runner, started: float
 ) -> tuple[Path, Terraform]:
     """Everything before the first AWS write, as `prepare_run`, without a run dir."""
-    minor = region_minor_prices(cfg.region)
+    minor = region_minor_prices(REGION)
     hosts = plan_hosts(cfg)
-    fleet_dir = new_fleet_dir(cfg.out_root, cfg.name)
+    fleet_dir = new_fleet_dir(OUT_ROOT)
     setup_logging(fleet_dir)
     log.debug("argv %s", args.argv)
     pre = preflight(run, cfg, hosts)
@@ -3754,7 +3537,7 @@ def prepare_up(
         run, cfg, hosts, minor, fleet_dir, started, fleet=True, rds=rds_spec(cfg, pre)
     )
     render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
-    tf = init_terraform(run, cfg, fleet_dir)
+    tf = init_terraform(run, fleet_dir)
     confirm_create(cfg, fleet_dir, len(hosts))
     stamp_expiry(fleet_dir, tf, datetime.now(UTC), margin_s=0.0)
     return fleet_dir, tf
@@ -3773,7 +3556,7 @@ def announce_idle(fleet: FleetState) -> None:
 
 def abort_up(fleet: FleetState) -> int:
     fleet.interrupts.disarm()
-    destroyed = down_fleet(fleet, lambda: True)
+    destroyed = down_fleet(fleet)
     code = EXIT_FAILED if destroyed else EXIT_LEFTOVER
     cost = close_fleet(fleet, destroyed)
     append_index(fleet.fleet_dir.parent, fleet_index_row(fleet.manifest, 0, cost, code))
@@ -3793,12 +3576,12 @@ def open_fleet(run: Runner, fleet_dir: Path, interrupts: Interrupts) -> FleetSta
     """The `FleetState` of a fleet `up` provisioned, with ssh to its hosts."""
     manifest = read_fleet(fleet_dir)
     cfg = config_from_manifest(manifest["config"])
-    tf = Terraform(run, cfg.tf, fleet_dir / "terraform", terraform_env())
+    tf = Terraform(run, fleet_dir / "terraform", terraform_env())
     fleet = FleetState(run, cfg, fleet_dir, tf, interrupts)
     fleet.remote = Remote(
         run,
         fleet_dir,
-        ssh_key_path(cfg.ssh_key, fleet_dir),
+        ssh_key_path(fleet_dir),
         provisioned_hosts(manifest),
     )
     return fleet
@@ -3825,8 +3608,7 @@ def cmd_run_fleet(
         interrupts.install()
     fleet = open_fleet(run, fleet_dir, interrupts)
     cfg = fleet_run_config(args, manifest)
-    name = cfg.name if cfg.name is not None else cfg.query_db
-    run_dir, estimate = admit_run(fleet_dir, manifest, cfg, name)
+    run_dir, estimate = admit_run(fleet_dir, manifest, cfg)
     bench_run = Run(fleet, run_dir, cfg, interrupts.clock.time(), dotenv_text)
     log.info(
         "run %s: incremental cost $%.2f (%.0f min worst), %.0f min left on the fleet",
@@ -3875,7 +3657,7 @@ def refuse_fleet_node_env(cfg: RunConfig) -> None:
 
 
 def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfig:
-    """The fleet's own config with the flags that belong to one run: image tag, load, name, database mode, node env."""
+    """The fleet's own config with the flags that belong to one run: image tag, load, database mode, node env."""
     base = config_from_manifest(saved["config"])
     cli = fleet_config_from_args(args)
     load = cli.load
@@ -3884,7 +3666,6 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         base,
         tag=base.tag if cli.tag is None else cli.tag,
         load=load,
-        name=cli.name,
         yes=cli.yes,
         query_db=cli.query_db,
         node_env=cli.node_env,
@@ -3902,17 +3683,15 @@ def reject_fleet_flags(argv: list[str]) -> None:
 
 
 def admit_run(
-    fleet_dir: Path, manifest: FleetManifest, cfg: RunConfig, name: str
+    fleet_dir: Path, manifest: FleetManifest, cfg: RunConfig
 ) -> tuple[Path, RunEstimate]:
     """Takes the lock, checks that the fleet can take the run and creates its dir. Any refusal
     releases the lock again and has issued no ssh command."""
-    take_fleet_lock(fleet_dir, name, cfg.force)
+    take_fleet_lock(fleet_dir, cfg.query_db, cfg.force)
     try:
         estimate = check_run_allowed(manifest, cfg, datetime.now(UTC))
-        if cfg.name is not None:
-            require_unused_name(fleet_dir, name)
         fleet = retagged(manifest, cfg)
-        return render_run(fleet_dir, fleet, cfg, name, estimate), estimate
+        return render_run(fleet_dir, fleet, cfg, cfg.query_db, estimate), estimate
     except BaseException:
         release_fleet_lock(fleet_dir)
         raise
@@ -4110,7 +3889,7 @@ def pg_volume_spec(cfg: RunConfig) -> VolumeSpec | None:
     """The volume terraform attaches to the query host, if any run on this fleet may use it."""
     if "volume" not in cfg.db_modes:
         return None
-    return {"gb": cfg.pg_gb, "iops": cfg.pg_iops, "mbps": cfg.pg_mbps}
+    return {"gb": PG_GB, "iops": cfg.pg_iops, "mbps": cfg.pg_mbps}
 
 
 def pg_volume_fields(output: dict[str, Any], manifest: FleetManifest) -> dict[str, str]:
@@ -4334,7 +4113,7 @@ def extend_fleet(fleet: FleetState, ttl_min: int, now: datetime) -> None:
     assert remote is not None
     if "rds" in manifest:
         # Fails before any change once the schedule has deleted the instance.
-        describe_rds(fleet.run, fleet.cfg, manifest["rds"]["identifier"])
+        describe_rds(fleet.run, manifest["rds"]["identifier"])
     remote.parallel(
         lambda host: remote.ssh(host, bounded(rearm_ttl_script(ttl_min))), remote.hosts
     )
@@ -4347,8 +4126,8 @@ def extend_fleet(fleet: FleetState, ttl_min: int, now: datetime) -> None:
         estimate={**manifest["estimate"], "ttl_s": lifetime_s, "bound_usd": bound},
     )
     if "rds" in manifest:
-        update_rds_schedule(fleet.run, fleet.cfg, manifest["rds"], new)
-    retag_expiry(fleet.run, fleet.cfg, manifest["name"], stamp)
+        update_rds_schedule(fleet.run, manifest["rds"], new)
+    retag_expiry(fleet.run, manifest["name"], stamp)
     log.info("expires %s UTC, bound $%.2f", f"{new:%H:%M}", bound)
 
 
@@ -4356,16 +4135,16 @@ def rearm_ttl_script(ttl_min: int) -> str:
     return f"shutdown -c; shutdown -P +{ttl_min}"
 
 
-def retag_expiry(run: Runner, cfg: RunConfig, name: str, expires_at: str) -> None:
-    arns = tagged_resources(run, cfg.region, name, cfg.profile)
+def retag_expiry(run: Runner, name: str, expires_at: str) -> None:
+    arns = tagged_resources(run, REGION, name, PROFILE)
     for start in range(0, len(arns), RETAG_BATCH):
         out = aws_ok(
             run,
-            cfg.profile,
+            PROFILE,
             "resourcegroupstaggingapi",
             "tag-resources",
             "--region",
-            cfg.region,
+            REGION,
             "--resource-arn-list",
             *arns[start : start + RETAG_BATCH],
             "--tags",
@@ -4379,19 +4158,17 @@ def retag_expiry(run: Runner, cfg: RunConfig, name: str, expires_at: str) -> Non
             log.warning("tag-resources failed for: %s", ", ".join(failed))
 
 
-def update_rds_schedule(
-    run: Runner, cfg: RunConfig, rds: RdsInfo, expires: datetime
-) -> None:
+def update_rds_schedule(run: Runner, rds: RdsInfo, expires: datetime) -> None:
     """Moves the one-shot delete to `RDS_REAPER_LEAD_S` before `expires`, keeping the target
     the schedule already has."""
-    name = ("--region", cfg.region, "--group-name", rds["schedule_group"])
+    name = ("--region", REGION, "--group-name", rds["schedule_group"])
     name += ("--name", rds["schedule_name"])
     current = json.loads(
-        aws_ok(run, cfg.profile, "scheduler", "get-schedule", *name, "--output", "json")
+        aws_ok(run, PROFILE, "scheduler", "get-schedule", *name, "--output", "json")
     )
     aws_ok(
         run,
-        cfg.profile,
+        PROFILE,
         "scheduler",
         "update-schedule",
         *name,
@@ -4414,8 +4191,8 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
     log.info(
         "account %s (%s) %s, az %s, ami %s",
         pre["account"],
-        cfg.profile,
-        cfg.region,
+        PROFILE,
+        REGION,
         pre["az"],
         pre["ami_id"],
     )
@@ -4430,9 +4207,9 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
     if "rds" in cfg.db_modes:
         log.info(
             "query db rds: %s postgres %s gp3 %d GB %d IOPS %d MB/s",
-            cfg.rds_class,
+            RDS_CLASS,
             pre["rds_engine_version"],
-            cfg.pg_gb,
+            PG_GB,
             cfg.pg_iops,
             cfg.pg_mbps,
         )
@@ -4502,8 +4279,6 @@ def render_fleet_dir(
         (host_dir / "user-data.sh").write_text(
             render_user_data(host, pre["images"], int(estimate["ttl_s"]))
         )
-    if pre["git_diff"] is not None:
-        (fleet_dir / "diff.patch").write_text(pre["git_diff"])
     tf_dir = fleet_dir / "terraform"
     shutil.copytree(TERRAFORM_SRC, tf_dir)
     # Absolute: `tofu -chdir` changes the directory `file()` resolves user_data_path against.
@@ -4578,28 +4353,22 @@ def run_config_hash(
     )
 
 
-def ssh_key_path(ssh_key: str, fleet_dir: Path) -> Path:
-    if ssh_key == SSH_KEY_AUTO:
-        return fleet_dir / "ssh" / "id_ed25519"
-    return Path(ssh_key).expanduser()
+def ssh_key_path(fleet_dir: Path) -> Path:
+    return fleet_dir / "ssh" / "id_ed25519"
 
 
 def resolve_ssh_pub(
     run: Runner, cfg: RunConfig, fleet_dir: Path, which: Callable[[str], str | None]
 ) -> str:
     """The public key for `var.ssh_public_key`. Offline runs use the placeholder unless
-    `auto` can be generated locally."""
-    if cfg.ssh_key == SSH_KEY_AUTO:
-        if cfg.offline and which("ssh-keygen") is None:
-            return OFFLINE_SSH_PUB
-        return generate_ssh_key(run, fleet_dir)
-    if cfg.offline:
+    `ssh-keygen` is on PATH."""
+    if cfg.offline and which("ssh-keygen") is None:
         return OFFLINE_SSH_PUB
-    return read_ssh_pub(Path(cfg.ssh_key))
+    return generate_ssh_key(run, fleet_dir)
 
 
 def generate_ssh_key(run: Runner, fleet_dir: Path) -> str:
-    key = ssh_key_path(SSH_KEY_AUTO, fleet_dir)
+    key = ssh_key_path(fleet_dir)
     key.parent.mkdir(exist_ok=True)
     result = run(
         [
@@ -4620,40 +4389,29 @@ def generate_ssh_key(run: Runner, fleet_dir: Path) -> str:
     return key.with_name(key.name + ".pub").read_text().strip()
 
 
-def remove_ssh_key(ssh_key: str, fleet_dir: Path) -> None:
-    """Deletes the private half of an `auto` key; the `.pub` stays for the record."""
-    key = ssh_key_path(ssh_key, fleet_dir)
-    if ssh_key != SSH_KEY_AUTO or not key.exists():
+def remove_ssh_key(fleet_dir: Path) -> None:
+    """Deletes the private half of the key; the `.pub` stays for the record."""
+    key = ssh_key_path(fleet_dir)
+    if not key.exists():
         return
     key.unlink()
     log.info("ssh key removed")
 
 
-def read_ssh_pub(ssh_key: Path) -> str:
-    key = ssh_key.expanduser()
-    pub = key.with_name(key.name + ".pub")
-    for path in (key, pub):
-        if not path.exists():
-            raise Refused(f"ssh key file not found: {path} (see --ssh-key)")
-    return pub.read_text().strip()
-
-
 def operator_cidr(cfg: RunConfig) -> str:
-    if cfg.operator_cidr != "auto":
-        return cfg.operator_cidr
     if cfg.offline:
         return OFFLINE_CIDR
     try:
         with urllib.request.urlopen(CHECKIP_URL, timeout=10) as response:
             return f"{response.read().decode().strip()}/32"
     except OSError as exc:
-        raise Refused(f"cannot detect this machine's IP ({exc}); pass --operator-cidr")
+        raise Refused(f"cannot detect this machine's IP ({exc})")
 
 
 def git_head(run: Runner) -> str:
-    result = run(["git", "rev-parse", "HEAD"])
+    result = run(["git", "rev-parse", "--short", "HEAD"])
     if result.returncode != 0:
-        raise Refused(f"git rev-parse HEAD failed: {result.stderr.strip()}")
+        raise Refused(f"git rev-parse --short HEAD failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
@@ -4690,14 +4448,14 @@ def parse_rds_output(output: dict[str, Any]) -> RdsInfo:
     }
 
 
-def describe_rds(run: Runner, cfg: RunConfig, identifier: str) -> dict[str, Any]:
+def describe_rds(run: Runner, identifier: str) -> dict[str, Any]:
     out = aws_ok(
         run,
-        cfg.profile,
+        PROFILE,
         "rds",
         "describe-db-instances",
         "--region",
-        cfg.region,
+        REGION,
         "--db-instance-identifier",
         identifier,
         "--output",
@@ -4713,7 +4471,7 @@ def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
     clock = fleet.interrupts.clock
     deadline = clock.monotonic() + RDS_SYNC_TIMEOUT_S
     while True:
-        instance = describe_rds(fleet.run, fleet.cfg, identifier)
+        instance = describe_rds(fleet.run, identifier)
         state = instance["DBInstanceStatus"]
         applied = instance["DBParameterGroups"][0]["ParameterApplyStatus"]
         if state == "available" and applied == "in-sync":
@@ -4722,11 +4480,11 @@ def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
             log.info("rds %s: parameter group pending-reboot, rebooting", identifier)
             aws_ok(
                 fleet.run,
-                fleet.cfg.profile,
+                PROFILE,
                 "rds",
                 "reboot-db-instance",
                 "--region",
-                fleet.cfg.region,
+                REGION,
                 "--db-instance-identifier",
                 identifier,
             )
@@ -4739,14 +4497,14 @@ def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
         fleet.interrupts.sleep(RDS_POLL_S)
 
 
-def check_rds_schedule(run: Runner, cfg: RunConfig, rds: RdsInfo) -> None:
+def check_rds_schedule(run: Runner, rds: RdsInfo) -> None:
     out = aws_ok(
         run,
-        cfg.profile,
+        PROFILE,
         "scheduler",
         "get-schedule",
         "--region",
-        cfg.region,
+        REGION,
         "--group-name",
         rds["schedule_group"],
         "--name",
@@ -4769,7 +4527,7 @@ def prepare_rds(fleet: FleetState) -> None:
     assert remote is not None, "connect must run first"
     rds = fleet.manifest["rds"]
     instance = wait_rds_in_sync(fleet, rds["identifier"])
-    check_rds_schedule(fleet.run, fleet.cfg, rds)
+    check_rds_schedule(fleet.run, rds)
     rds = {**rds, "created_at": instance["InstanceCreateTime"]}
     update_manifest(fleet.manifest_path, fleet.manifest["phase"], rds=rds)
     tfvars = nb.read_json(fleet.fleet_dir / "terraform" / "terraform.tfvars.json")
@@ -5506,8 +5264,8 @@ def cmd_status(
 def cmd_collect(args: argparse.Namespace, run: Runner = _run) -> int:
     """Collects again from the live hosts into `hosts/<name>/collect-<k>/`, leaving the files
     of the run itself untouched. Only the fleet's last run can be collected, while no run is
-    active: the hosts hold the files of the last run only, and `left-running` is where a
-    `run --keep` stays."""
+    active: the hosts hold the files of the last run only, and `left-running` is where a fleet
+    stays after a failed destroy."""
     run_dir: Path = args.dir
     fleet_dir = fleet_of(run_dir)
     manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
@@ -5522,9 +5280,7 @@ def cmd_collect(args: argparse.Namespace, run: Runner = _run) -> int:
             f"fleet {fleet_dir.name} is {manifest['phase']}: collect needs it idle"
         )
     setup_logging(fleet_dir)
-    remote = Remote(
-        run, fleet_dir, ssh_key_path(manifest["config"]["ssh_key"], fleet_dir), hosts
-    )
+    remote = Remote(run, fleet_dir, ssh_key_path(fleet_dir), hosts)
     subdir = f"collect-{next_collect_index(run_dir)}"
     collect_hosts(remote, list(hosts.values()), run_dir, subdir)
     missing = [
@@ -5591,9 +5347,8 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
         cost = nb.read_json(cost_path)
         print(f"- cost: ${cost['actual']:.2f} actual, bound ${cost['bound']:.2f}")
         return EXIT_OK
-    config = manifest["config"]
     instances = describe_instances(
-        run, config["region"], config["profile"], f"Name=tag:{TAG_RUN},Values={name}"
+        run, REGION, PROFILE, f"Name=tag:{TAG_RUN},Values={name}"
     )
     hosts = manifest.get("hosts_info", {})
     by_id = {info["instance_id"]: host for host, info in hosts.items()}
@@ -5606,9 +5361,7 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
     if ctl and any(
         i["id"] == ctl["instance_id"] and i["state"] == "running" for i in instances
     ):
-        remote = Remote(
-            run, fleet_dir, ssh_key_path(config["ssh_key"], fleet_dir), hosts
-        )
+        remote = Remote(run, fleet_dir, ssh_key_path(fleet_dir), hosts)
         print(f"- agent: {format_agent(read_agent_state(remote))}")
     print_stores(run, manifest)
     print(f"- cost: {status_cost(run, manifest, instances, now)}")
@@ -5617,23 +5370,22 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
 
 def print_stores(run: Runner, manifest: FleetManifest) -> None:
     """The Postgres volume and the rds instance of the fleet, if it has them."""
-    cfg = config_from_manifest(manifest["config"])
     if "pg_volume_id" in manifest:
         volume = manifest["pg_volume_id"]
-        print(f"- pg volume {volume}: {volume_state(run, cfg, volume)}")
+        print(f"- pg volume {volume}: {volume_state(run, volume)}")
     if "rds" in manifest:
         rds = manifest["rds"]
-        print(f"- rds {rds['identifier']}: {rds_state(run, cfg, rds)}")
+        print(f"- rds {rds['identifier']}: {rds_state(run, rds)}")
 
 
-def volume_state(run: Runner, cfg: RunConfig, volume: str) -> str:
+def volume_state(run: Runner, volume: str) -> str:
     out = aws_ok(
         run,
-        cfg.profile,
+        PROFILE,
         "ec2",
         "describe-volumes",
         "--region",
-        cfg.region,
+        REGION,
         "--volume-ids",
         volume,
         "--query",
@@ -5645,16 +5397,16 @@ def volume_state(run: Runner, cfg: RunConfig, volume: str) -> str:
     return out or "gone"
 
 
-def rds_state(run: Runner, cfg: RunConfig, rds: RdsInfo) -> str:
+def rds_state(run: Runner, rds: RdsInfo) -> str:
     """`available, parameters in-sync, schedule armed`; `gone` once the schedule or a destroy
     has deleted the instance."""
     out = aws_ok(
         run,
-        cfg.profile,
+        PROFILE,
         "rds",
         "describe-db-instances",
         "--region",
-        cfg.region,
+        REGION,
         "--db-instance-identifier",
         rds["identifier"],
         "--output",
@@ -5667,19 +5419,19 @@ def rds_state(run: Runner, cfg: RunConfig, rds: RdsInfo) -> str:
     applied = instance["DBParameterGroups"][0]["ParameterApplyStatus"]
     return (
         f"{instance['DBInstanceStatus']}, parameters {applied}, "
-        f"schedule {schedule_state(run, cfg, rds)}"
+        f"schedule {schedule_state(run, rds)}"
     )
 
 
-def schedule_state(run: Runner, cfg: RunConfig, rds: RdsInfo) -> str:
+def schedule_state(run: Runner, rds: RdsInfo) -> str:
     """`armed` while the one-shot delete is enabled, `gone` after it fired or was deleted."""
     out = aws_ok(
         run,
-        cfg.profile,
+        PROFILE,
         "scheduler",
         "get-schedule",
         "--region",
-        cfg.region,
+        REGION,
         "--group-name",
         rds["schedule_group"],
         "--name",
@@ -5724,13 +5476,12 @@ def status_cost(
 
 
 def status_all(run: Runner, args: argparse.Namespace, now: datetime) -> int:
-    cfg = account_config(args)
-    caller_account(run, cfg)
-    runs = find_runs(run, cfg.region, cfg.profile, args.out_root, now)
+    caller_account(run)
+    runs = find_runs(run, REGION, PROFILE, OUT_ROOT, now)
     if not runs:
-        print(f"no espresso-bench resources in {cfg.region}")
+        print(f"no espresso-bench resources in {REGION}")
         return EXIT_OK
-    prices = cached_prices(args.out_root / "prices.json", cfg.region)
+    prices = cached_prices(OUT_ROOT / "prices.json", REGION)
     print("\n".join(format_runs(runs, prices, now)))
     return EXIT_OK
 
@@ -5743,18 +5494,18 @@ def destroy_run(run: Runner, args: argparse.Namespace, clock: nb.Clock) -> int:
         raise Refused(f"{name} was only planned: nothing was created")
     if manifest["phase"] in TERMINAL_PHASES:
         raise Refused(f"{name} is already {manifest['phase']}")
-    prompt = f"Destroy the fleet of {name} in {manifest['config']['account']}?"
+    prompt = f"Destroy the fleet of {name} in {ACCOUNT}?"
     if not confirm(prompt, args.yes, sys.stdin.isatty()):
         raise Refused("not confirmed; nothing was destroyed")
     setup_logging(fleet_dir)
     cfg = config_from_manifest(manifest["config"])
-    tf = Terraform(run, cfg.tf, fleet_dir / "terraform", terraform_env())
+    tf = Terraform(run, fleet_dir / "terraform", terraform_env())
     fleet = FleetState(run, cfg, fleet_dir, tf, Interrupts(clock))
     if manifest["phase"] == "running":
         remote = Remote(
             run,
             fleet_dir,
-            ssh_key_path(cfg.ssh_key, fleet_dir),
+            ssh_key_path(fleet_dir),
             provisioned_hosts(manifest),
         )
         best_effort("stop agent", lambda: stop_agent(remote))
@@ -5804,33 +5555,32 @@ def log_down(fleet_dir: Path, cost: dict[str, float] | None) -> None:
 def destroy_orphans(
     run: Runner, args: argparse.Namespace, now: datetime, clock: nb.Clock
 ) -> int:
-    cfg = account_config(args)
-    caller_account(run, cfg)
-    runs = find_runs(run, cfg.region, cfg.profile, args.out_root, now)
+    caller_account(run)
+    runs = find_runs(run, REGION, PROFILE, OUT_ROOT, now)
     orphans = [r for r in runs if r["orphan"] is not None]
     if not orphans:
-        print(f"no orphaned espresso-bench resources in {cfg.region}")
+        print(f"no orphaned espresso-bench resources in {REGION}")
         return EXIT_OK
-    prices = cached_prices(args.out_root / "prices.json", cfg.region)
+    prices = cached_prices(OUT_ROOT / "prices.json", REGION)
     print("\n".join(format_runs(orphans, prices, now)))
     instances = sum(len(r["instances"]) for r in orphans)
     others = sum(len(r["arns"]) - len(r["instances"]) for r in orphans)
     prompt = (
         f"Terminate {instances} instances and delete {others} other resources "
-        f"of {len(orphans)} runs in {cfg.account}?"
+        f"of {len(orphans)} runs in {ACCOUNT}?"
     )
     if not confirm(prompt, args.yes, sys.stdin.isatty()):
         raise Refused("not confirmed; nothing was destroyed")
     try:
         for orphan in orphans:
             log.info("sweeping %s", orphan["name"])
-            sweep(run, cfg.region, orphan["name"], cfg.profile, clock)
-            mark_swept(args.out_root / orphan["name"])
+            sweep(run, REGION, orphan["name"], PROFILE, clock)
+            mark_swept(OUT_ROOT / orphan["name"])
         # `sweep` removes the role of a fleet that still has rds resources.
         swept_rds = rds_fleets(arn for o in orphans for arn in o["arns"])
         with_role = {o["name"] for o in orphans if has_role(o)} - swept_rds
         if with_role:
-            sweep_iam(run, cfg.profile, with_role)
+            sweep_iam(run, PROFILE, with_role)
     except RemoteError as exc:
         log.error("sweep failed, resources may remain: %s", exc)
         return EXIT_LEFTOVER
@@ -5844,14 +5594,8 @@ def has_role(tagged: TaggedRun) -> bool:
 
 def mark_swept(fleet_dir: Path) -> None:
     if (fleet_dir / FLEET_JSON).exists():
-        manifest = update_manifest(fleet_dir / FLEET_JSON, "swept")
-        remove_ssh_key(manifest["config"]["ssh_key"], fleet_dir)
-
-
-def account_config(args: argparse.Namespace) -> RunConfig:
-    return RunConfig(
-        tag="", region=args.region, profile=args.profile, account=args.account
-    )
+        update_manifest(fleet_dir / FLEET_JSON, "swept")
+        remove_ssh_key(fleet_dir)
 
 
 def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
@@ -5859,8 +5603,6 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     fields: dict[str, Any] = {
         **saved,
         "load": load_config(dict(saved["load"])),
-        "out_root": Path(saved["out_root"]),
-        "price": tuple(saved["price"]),
         "db_modes": tuple(saved["db_modes"]),
         "fleet": None if saved["fleet"] is None else Path(saved["fleet"]),
     }
@@ -6326,7 +6068,6 @@ def parse_clock_offset_ms(tracking: str) -> float:
 
 def collect_ebs_balance(
     run: Runner,
-    cfg: RunConfig,
     manifest: FleetManifest,
     t0: float,
     t1: float,
@@ -6339,11 +6080,11 @@ def collect_ebs_balance(
     start, end = metric_window(t0, t1)
     stdout = aws_ok(
         run,
-        cfg.profile,
+        PROFILE,
         "cloudwatch",
         "get-metric-data",
         "--region",
-        cfg.region,
+        REGION,
         "--start-time",
         datetime.fromtimestamp(start, UTC).isoformat(),
         "--end-time",
@@ -6371,7 +6112,7 @@ def metric_window(t0: float, t1: float) -> tuple[float, float]:
 
 
 def collect_rds_metrics(
-    run: Runner, cfg: RunConfig, rds: RdsInfo, t0: float, t1: float, out: Path
+    run: Runner, rds: RdsInfo, t0: float, t1: float, out: Path
 ) -> None:
     """`cloudwatch/rds.json`, in the format of `cloudwatch/ec2-node0.json`."""
     start, end = metric_window(t0, t1)
@@ -6394,11 +6135,11 @@ def collect_rds_metrics(
     ]
     stdout = aws_ok(
         run,
-        cfg.profile,
+        PROFILE,
         "cloudwatch",
         "get-metric-data",
         "--region",
-        cfg.region,
+        REGION,
         "--start-time",
         datetime.fromtimestamp(start, UTC).isoformat(),
         "--end-time",
@@ -6424,7 +6165,7 @@ def collect_rds_metrics(
 
 
 def collect_rds_insights(
-    run: Runner, cfg: RunConfig, rds: RdsInfo, t0: float, t1: float, out: Path
+    run: Runner, rds: RdsInfo, t0: float, t1: float, out: Path
 ) -> None:
     """`cloudwatch/pi.json`: database load by wait event."""
     start, end = metric_window(t0, t1)
@@ -6433,11 +6174,11 @@ def collect_rds_insights(
     ]
     stdout = aws_ok(
         run,
-        cfg.profile,
+        PROFILE,
         "pi",
         "get-resource-metrics",
         "--region",
-        cfg.region,
+        REGION,
         "--service-type",
         "RDS",
         "--identifier",
@@ -6459,18 +6200,18 @@ def collect_rds_insights(
 
 
 def collect_rds_logs(
-    run: Runner, cfg: RunConfig, rds: RdsInfo, t0: float, t1: float, out: Path
+    run: Runner, rds: RdsInfo, t0: float, t1: float, out: Path
 ) -> None:
     """Every database log written since the load started. The upper bound is left open: the
     log of the current hour is still written after the window and holds most of it."""
     since_ms = int(t0 * 1000)
     listing = aws_ok(
         run,
-        cfg.profile,
+        PROFILE,
         "rds",
         "describe-db-log-files",
         "--region",
-        cfg.region,
+        REGION,
         "--db-instance-identifier",
         rds["identifier"],
         "--file-last-written",
@@ -6488,11 +6229,11 @@ def collect_rds_logs(
     for file in files:
         text = aws_ok(
             run,
-            cfg.profile,
+            PROFILE,
             "rds",
             "download-db-log-file-portion",
             "--region",
-            cfg.region,
+            REGION,
             "--db-instance-identifier",
             rds["identifier"],
             "--log-file-name",
@@ -6667,8 +6408,8 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
     images = manifest["images"]
     return {
         "provider": "aws",
-        "account": config["account"],
-        "region": config["region"],
+        "account": ACCOUNT,
+        "region": REGION,
         "az": manifest["az"],
         "ami": manifest["ami_id"],
         "hosts": {
@@ -6834,7 +6575,7 @@ def log_tail(path: Path, count: int) -> list[str]:
 
 
 def tagged_resources(
-    run: Runner, region: str, name: str | None = None, profile: str = RunConfig.profile
+    run: Runner, region: str, name: str | None = None, profile: str = PROFILE
 ) -> list[str]:
     """ARNs of resources tagged `espresso-bench-run`, of one run when `name` is given."""
     tag = f"Key={TAG_RUN}" + (f",Values={name}" if name is not None else "")
@@ -6945,7 +6686,7 @@ def sweep(
     run: Runner,
     region: str,
     name: str | None,
-    profile: str = RunConfig.profile,
+    profile: str = PROFILE,
     clock: nb.Clock = nb.SYSTEM_CLOCK,
 ) -> list[str]:
     """Deletes what `tagged_resources` finds as `sweep_plan` orders it, then the scheduler role
@@ -7115,11 +6856,10 @@ def actual_cost(run: Runner, manifest: FleetManifest) -> dict[str, float]:
     """expected, bound and actual USD, with the run's wall time in `duration_s`. Actual is the
     estimate's price lines at the time between the first launch and the last termination,
     from `describe-instances` (terminated instances stay listed for about an hour)."""
-    config = manifest["config"]
     rows = describe_instances(
         run,
-        config["region"],
-        config["profile"],
+        REGION,
+        PROFILE,
         f"Name=tag:{TAG_RUN},Values={manifest['name']}",
     )
     if not rows:
@@ -7154,25 +6894,20 @@ def rds_billed_s(run: Runner, manifest: FleetManifest, first_launch: datetime) -
     created = first_launch
     if "rds" in manifest and "created_at" in manifest["rds"]:
         created = datetime.fromisoformat(manifest["rds"]["created_at"])
-    cfg = config_from_manifest(manifest["config"])
-    deleted = rds_delete_time(
-        run, cfg, rds_identifier(manifest["name"]), datetime.now(UTC)
-    )
+    deleted = rds_delete_time(run, rds_identifier(manifest["name"]), datetime.now(UTC))
     return (deleted - created).total_seconds()
 
 
-def rds_delete_time(
-    run: Runner, cfg: RunConfig, identifier: str, fallback: datetime
-) -> datetime:
+def rds_delete_time(run: Runner, identifier: str, fallback: datetime) -> datetime:
     """When RDS logged the deletion, whether the schedule or `tofu destroy` did it; `fallback`
     (the driver's clock after the destroy) when it logged none."""
     out = aws_ok(
         run,
-        cfg.profile,
+        PROFILE,
         "rds",
         "describe-events",
         "--region",
-        cfg.region,
+        REGION,
         "--source-type",
         "db-instance",
         "--source-identifier",
@@ -7208,7 +6943,7 @@ def manifest_cost(
             if line["item"].startswith(("instance ", "rds instance "))
         }
     }
-    minor = region_minor_prices(manifest["config"]["region"])
+    minor = region_minor_prices(REGION)
     lines = _cost_lines(
         manifest["hosts"], prices, minor, duration_s, manifest.get("pg_volume")
     )

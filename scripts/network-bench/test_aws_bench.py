@@ -114,6 +114,45 @@ def two_node_prices() -> "awsb.Prices":
     }
 
 
+ALL_PRICES: "awsb.Prices" = {
+    "instances": {
+        "c8g.4xlarge": {"usd_hour": 0.71, "source": "test"},
+        "c8g.2xlarge": {"usd_hour": 0.355, "source": "test"},
+        "db.m8g.4xlarge": {"usd_hour": 1.82, "source": "test"},
+    }
+}
+
+
+def isolated_env(
+    test: unittest.TestCase, tmp: Path, name: str = "run1", prices: bool = True
+) -> Path:
+    """Runs in `tmp` so that the relative `OUT_ROOT` lands there, with a fixed fleet name and
+    no checkip or pricing call. Returns the out root."""
+    cwd = os.getcwd()
+    os.chdir(tmp)
+    test.addCleanup(os.chdir, cwd)
+    patches = [
+        unittest.mock.patch.object(awsb, "default_run_name", return_value=name),
+        unittest.mock.patch.object(
+            awsb, "operator_cidr", return_value="203.0.113.5/32"
+        ),
+    ]
+    if prices:
+        patches.append(
+            unittest.mock.patch.object(awsb, "resolve_prices", return_value=ALL_PRICES)
+        )
+    for patch in patches:
+        patch.start()
+        test.addCleanup(patch.stop)
+    return tmp / awsb.OUT_ROOT
+
+
+def temp_dir(test: unittest.TestCase) -> Path:
+    tmp = Path(tempfile.mkdtemp())
+    test.addCleanup(shutil.rmtree, tmp)
+    return tmp
+
+
 # REQ:awsbench-topology
 class GeometricStepsTest(unittest.TestCase):
     def test_default_ramp_ends_at_the_target(self):
@@ -319,7 +358,7 @@ class FormatEstimateTest(unittest.TestCase):
             tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
         )
         hosts = awsb.plan_hosts(cfg)
-        minor = awsb.region_minor_prices(cfg.region)
+        minor = awsb.region_minor_prices(awsb.REGION)
         estimate = awsb.estimate_cost(hosts, cfg, two_node_prices(), minor)
         text = awsb.format_estimate_summary(estimate, cfg.max_usd)
         self.assertIn(f"expected ${estimate['expected_usd']:.2f}", text)
@@ -341,22 +380,15 @@ class ConfirmTest(unittest.TestCase):
             self.assertFalse(awsb.confirm("go?", yes=False, stdin_is_tty=True))
 
 
-# EDGE:awsbench-price-override
 class FetchPricesTest(unittest.TestCase):
-    def test_override_skips_fetch_entirely(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = awsb.RunConfig(
-                tag="x", nodes=2, price=("c8g.4xlarge=0.71", "c8g.2xlarge=0.355")
+    def test_offline_without_a_cached_price_refuses(self):
+        runner = FakeRunner({})
+        cfg = awsb.RunConfig(tag="x", offline=True)
+        with self.assertRaisesRegex(awsb.Refused, "--offline"):
+            awsb.fetch_prices(
+                runner, cfg, {"c8g.4xlarge"}, Path("unused.json"), now=0.0
             )
-            runner = FakeRunner({})
-            prices = awsb.resolve_prices(
-                runner, cfg, Path(tmp) / "prices.json", now=0.0
-            )
-            self.assertEqual(runner.calls, [])
-            self.assertEqual(prices["instances"]["c8g.4xlarge"]["usd_hour"], 0.71)
-            self.assertEqual(
-                prices["instances"]["c8g.4xlarge"]["source"], "--price override"
-            )
+        self.assertEqual(runner.calls, [])
 
     def test_fresh_cache_skips_fetch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -431,258 +463,181 @@ class FetchPricesTest(unittest.TestCase):
                 )
 
 
-def online_plan_args(
-    tmp: Path, *extra: str, nodes: str = "2", name: str | None = None
-) -> "awsb.argparse.Namespace":
-    (tmp / "key").write_text("private")
-    (tmp / "key.pub").write_text("ssh-ed25519 AAAA test")
-    return parse_plan_args(
-        [
-            "--tag",
-            "x",
-            "--nodes",
-            nodes,
-            *(["--name", name] if name else []),
-            "--out-root",
-            str(tmp / "out"),
-            "--ssh-key",
-            str(tmp / "key"),
-            "--operator-cidr",
-            "203.0.113.5/32",
-            "--price",
-            "c8g.4xlarge=0.71",
-            "--price",
-            "c8g.2xlarge=0.355",
-            *extra,
-        ]
-    )
+def plan_args(*extra: str, nodes: str = "2") -> "awsb.argparse.Namespace":
+    return parse_plan_args(["--tag", "x", "--nodes", nodes, *extra])
 
 
 # REQ:awsbench-render-offline / REQ:awsbench-budget-refusal / EDGE:awsbench-name-collision
 class CmdPlanTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = temp_dir(self)
+        self.out = isolated_env(self, self.tmp)
+        self.fleet_dir = self.out / "run1"
+
     def test_offline_renders_manifest_and_peers(self):
-        with tempfile.TemporaryDirectory() as out_root:
-            args = parse_plan_args(
-                [
-                    "--tag",
-                    "x",
-                    "--nodes",
-                    "2",
-                    "--offline",
-                    "--name",
-                    "run1",
-                    "--out-root",
-                    out_root,
-                    "--price",
-                    "c8g.4xlarge=0.71",
-                    "--price",
-                    "c8g.2xlarge=0.355",
-                ]
-            )
-            git = ("git", "rev-parse", "HEAD")
-            runner = FakeRunner({git: completed(stdout="a" * 40 + "\n")})
-            code = awsb.cmd_plan(args, run=runner, which=lambda name: None)
-            self.assertEqual(code, awsb.EXIT_OK)
-            self.assertEqual(runner.calls, [list(git)])
-            fleet_dir = Path(out_root) / "run1"
-            for name in (
-                "runs/01-run/genesis.toml",
-                "runs/01-run/config.json",
-                "hosts/ctl/user-data.sh",
-                "hosts/node0/user-data.sh",
-                "terraform/main.tf",
-                "terraform/terraform.tfvars.json",
-            ):
-                self.assertTrue((fleet_dir / name).exists(), name)
-            manifest = json.loads((fleet_dir / "fleet.json").read_text())
-            self.assertEqual(manifest["phase"], "planned")
-            self.assertEqual(manifest["peers"], {"node0": ["node1"], "node1": []})
-            self.assertEqual(len(manifest["hosts"]), 3)
-            self.assertNotIn("expires_at", manifest)
-            self.assertFalse((fleet_dir / "manifest.json").exists())
-            run_manifest = json.loads(
-                (fleet_dir / "runs/01-run/manifest.json").read_text()
-            )
-            self.assertEqual(run_manifest["fleet"], "run1")
-            self.assertEqual(run_manifest["hosts"], manifest["hosts"])
-            self.assertIn("phase_seconds", run_manifest)
-            self.assertNotIn("phase_seconds", manifest)
-            tfvars = json.loads(
-                (fleet_dir / "terraform" / "terraform.tfvars.json").read_text()
-            )
-            self.assertEqual(tfvars["expires_at"], "")
-            self.assertTrue((fleet_dir / "driver.log").exists())
-            self.assertTrue((fleet_dir / "events.jsonl").exists())
+        args = plan_args("--offline")
+        git = ("git", "rev-parse", "--short", "HEAD")
+        runner = FakeRunner({git: completed(stdout="abc1234\n")})
+        code = awsb.cmd_plan(args, run=runner, which=lambda name: None)
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertEqual(runner.calls, [list(git)])
+        for name in (
+            "runs/01-run/genesis.toml",
+            "runs/01-run/config.json",
+            "hosts/ctl/user-data.sh",
+            "hosts/node0/user-data.sh",
+            "terraform/main.tf",
+            "terraform/terraform.tfvars.json",
+        ):
+            self.assertTrue((self.fleet_dir / name).exists(), name)
+        manifest = json.loads((self.fleet_dir / "fleet.json").read_text())
+        self.assertEqual(manifest["phase"], "planned")
+        self.assertEqual(manifest["git_rev"], "abc1234")
+        self.assertEqual(manifest["peers"], {"node0": ["node1"], "node1": []})
+        self.assertEqual(len(manifest["hosts"]), 3)
+        self.assertNotIn("expires_at", manifest)
+        self.assertFalse((self.fleet_dir / "manifest.json").exists())
+        self.assertFalse((self.fleet_dir / "diff.patch").exists())
+        run_manifest = json.loads(
+            (self.fleet_dir / "runs/01-run/manifest.json").read_text()
+        )
+        self.assertEqual(run_manifest["fleet"], "run1")
+        self.assertEqual(run_manifest["hosts"], manifest["hosts"])
+        self.assertIn("phase_seconds", run_manifest)
+        self.assertNotIn("phase_seconds", manifest)
+        tfvars = json.loads(
+            (self.fleet_dir / "terraform" / "terraform.tfvars.json").read_text()
+        )
+        self.assertEqual(tfvars["expires_at"], "")
+        for constant in ("account_id", "region", "profile"):
+            self.assertNotIn(constant, tfvars)
+        self.assertTrue((self.fleet_dir / "driver.log").exists())
+        self.assertTrue((self.fleet_dir / "events.jsonl").exists())
 
-    def test_auto_key_is_generated_into_the_run_dir(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            args = online_plan_args(Path(tmp), "--ssh-key", "auto", name="run1")
-            runner = FleetRunner([])
-            with unittest.mock.patch.object(
-                awsb, "preflight", return_value=fake_preflight()
-            ):
-                self.assertEqual(awsb.cmd_plan(args, run=runner), awsb.EXIT_OK)
-            run_dir = Path(tmp) / "out" / "run1"
-            key = run_dir / "ssh" / "id_ed25519"
-            keygen = next(c for c in runner.calls if c[0] == "ssh-keygen")
-            self.assertEqual(
-                keygen,
-                [
-                    "ssh-keygen",
-                    "-q",
-                    "-t",
-                    "ed25519",
-                    "-N",
-                    "",
-                    "-C",
-                    "run1",
-                    "-f",
-                    str(key),
-                ],
-            )
-            self.assertEqual(key.stat().st_mode & 0o777, 0o600)
-            tfvars = json.loads(
-                (run_dir / "terraform" / "terraform.tfvars.json").read_text()
-            )
-            self.assertEqual(tfvars["ssh_public_key"], "ssh-ed25519 GENERATED run")
-            manifest = json.loads((run_dir / "fleet.json").read_text())
-            self.assertEqual(manifest["config"]["ssh_key"], "auto")
-            self.assertEqual(manifest["ssh_public_key"], "ssh-ed25519 GENERATED run")
+    def test_key_is_generated_into_the_fleet_dir(self):
+        args = plan_args()
+        runner = FleetRunner([])
+        with unittest.mock.patch.object(
+            awsb, "preflight", return_value=fake_preflight()
+        ):
+            self.assertEqual(awsb.cmd_plan(args, run=runner), awsb.EXIT_OK)
+        key = self.fleet_dir / "ssh" / "id_ed25519"
+        keygen = next(c for c in runner.calls if c[0] == "ssh-keygen")
+        self.assertEqual(
+            keygen,
+            [
+                "ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-C",
+                "run1",
+                "-f",
+                str(awsb.OUT_ROOT / "run1" / "ssh" / "id_ed25519"),
+            ],
+        )
+        self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+        tfvars = json.loads(
+            (self.fleet_dir / "terraform" / "terraform.tfvars.json").read_text()
+        )
+        self.assertEqual(tfvars["ssh_public_key"], "ssh-ed25519 GENERATED run")
+        manifest = json.loads((self.fleet_dir / "fleet.json").read_text())
+        self.assertEqual(manifest["ssh_public_key"], "ssh-ed25519 GENERATED run")
 
-    def test_offline_auto_without_ssh_keygen_uses_the_placeholder(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            args = online_plan_args(
-                Path(tmp), "--ssh-key", "auto", "--offline", name="run1"
-            )
-            runner = FakeRunner(
-                {("git", "rev-parse", "HEAD"): completed(stdout="a" * 40)}
-            )
-            code = awsb.cmd_plan(args, run=runner, which=lambda name: None)
-            self.assertEqual(code, awsb.EXIT_OK)
-            self.assertFalse(runner.ran("ssh-keygen"))
-            tfvars = json.loads(
-                (
-                    Path(tmp) / "out" / "run1" / "terraform" / "terraform.tfvars.json"
-                ).read_text()
-            )
-            self.assertEqual(tfvars["ssh_public_key"], awsb.OFFLINE_SSH_PUB)
+    def test_offline_without_ssh_keygen_uses_the_placeholder(self):
+        args = plan_args("--offline")
+        runner = FakeRunner(
+            {("git", "rev-parse", "--short", "HEAD"): completed(stdout="abc1234")}
+        )
+        code = awsb.cmd_plan(args, run=runner, which=lambda name: None)
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertFalse(runner.ran("ssh-keygen"))
+        tfvars = json.loads(
+            (self.fleet_dir / "terraform" / "terraform.tfvars.json").read_text()
+        )
+        self.assertEqual(tfvars["ssh_public_key"], awsb.OFFLINE_SSH_PUB)
 
-    def test_preflight_requires_ssh_keygen_only_for_auto(self):
-        wanted = []
-        for key in ("auto", "/some/key"):
-            cfg = awsb.RunConfig(tag="x", ssh_key=key)
-            with self.assertRaises(awsb.Refused):
-                awsb.preflight(
-                    FakeRunner(), cfg, [], lambda name: wanted.append(name) and None
-                )
-        self.assertEqual(wanted.count("ssh-keygen"), 1)
+    def test_preflight_requires_ssh_keygen(self):
+        with self.assertRaisesRegex(awsb.Refused, "ssh-keygen"):
+            awsb.preflight(
+                FakeRunner(),
+                awsb.RunConfig(tag="x"),
+                [],
+                lambda name: None if name == "ssh-keygen" else "/usr/bin/x",
+            )
 
     def test_budget_refusal_makes_no_tofu_apply(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            args = online_plan_args(Path(tmp), "--max-usd", "0.01", nodes="5")
-            runner = FleetRunner([])
-            with unittest.mock.patch.object(
-                awsb, "preflight", return_value=fake_preflight()
-            ):
-                code = cmd_plan_exit(args, run=runner)
-            self.assertEqual(code, awsb.EXIT_REFUSED)
-            self.assertFalse(runner.ran("tofu"))
+        args = plan_args("--max-usd", "0.01", nodes="5")
+        runner = FleetRunner([])
+        with unittest.mock.patch.object(
+            awsb, "preflight", return_value=fake_preflight()
+        ):
+            code = cmd_plan_exit(args, run=runner)
+        self.assertEqual(code, awsb.EXIT_REFUSED)
+        self.assertFalse(runner.ran("tofu"))
 
     # REQ:awsbench-render-offline
-    def test_offline_without_price_refuses(self):
-        with tempfile.TemporaryDirectory() as out_root:
-            args = parse_plan_args(
-                ["--tag", "x", "--nodes", "2", "--offline", "--out-root", out_root]
-            )
-            runner = FakeRunner({})
-            code = cmd_plan_exit(args, run=runner)
-            self.assertEqual(code, awsb.EXIT_REFUSED)
-            self.assertEqual(runner.calls, [])
+    def test_offline_without_cached_prices_refuses(self):
+        unittest.mock.patch.stopall()
+        isolated_env(self, self.tmp, prices=False)
+        runner = FakeRunner({})
+        code = cmd_plan_exit(plan_args("--offline"), run=runner)
+        self.assertEqual(code, awsb.EXIT_REFUSED)
+        self.assertEqual(runner.calls, [])
 
     def test_name_collision_refuses(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            args = online_plan_args(Path(tmp), name="dup")
-            with unittest.mock.patch.object(
-                awsb, "preflight", return_value=fake_preflight()
-            ):
-                first = awsb.cmd_plan(args, run=FleetRunner([]))
-            self.assertEqual(first, awsb.EXIT_OK)
-            second_runner = FakeRunner({})
-            second = cmd_plan_exit(args, run=second_runner)
-            self.assertEqual(second, awsb.EXIT_REFUSED)
-            # the name collision is caught before any AWS call, including the account guard
-            self.assertEqual(second_runner.calls, [])
-
-    # EDGE:awsbench-name-validation
-    def test_name_path_escape_refuses(self):
-        with tempfile.TemporaryDirectory() as out_root:
-            args = parse_plan_args(
-                [
-                    "--tag",
-                    "x",
-                    "--nodes",
-                    "2",
-                    "--name",
-                    "../escape",
-                    "--out-root",
-                    out_root,
-                    "--price",
-                    "c8g.4xlarge=0.71",
-                    "--price",
-                    "c8g.2xlarge=0.355",
-                ]
-            )
-            runner = FakeRunner({})
-            code = cmd_plan_exit(args, run=runner)
-            self.assertEqual(code, awsb.EXIT_REFUSED)
-            self.assertEqual(runner.calls, [])
-            self.assertFalse((Path(out_root) / ".." / "escape").resolve().exists())
+        with unittest.mock.patch.object(
+            awsb, "preflight", return_value=fake_preflight()
+        ):
+            first = awsb.cmd_plan(plan_args(), run=FleetRunner([]))
+        self.assertEqual(first, awsb.EXIT_OK)
+        second_runner = FakeRunner({})
+        second = cmd_plan_exit(plan_args(), run=second_runner)
+        self.assertEqual(second, awsb.EXIT_REFUSED)
+        # the name collision is caught before any AWS call, including the account guard
+        self.assertEqual(second_runner.calls, [])
 
     def test_default_name_is_valid(self):
+        unittest.mock.patch.stopall()
         self.assertRegex(awsb.default_run_name(), awsb.NAME_RE.pattern)
 
     # REQ:awsbench-account-guard
     def test_online_account_mismatch_makes_exactly_one_call(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            args = online_plan_args(Path(tmp))
-            runner = FakeRunner({STS_CALL: sts_response("999999999999")})
-            with unittest.mock.patch.object(awsb, "tools_on_path"):
-                code = cmd_plan_exit(args, run=runner)
-            self.assertEqual(code, awsb.EXIT_REFUSED)
-            self.assertEqual(len(runner.calls), 1)
+        runner = FakeRunner({STS_CALL: sts_response("999999999999")})
+        with unittest.mock.patch.object(awsb, "tools_on_path"):
+            code = cmd_plan_exit(plan_args(), run=runner)
+        self.assertEqual(code, awsb.EXIT_REFUSED)
+        self.assertEqual(len(runner.calls), 1)
 
     def test_online_runs_preflight_and_tofu_plan_without_apply(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "out"
-            args = online_plan_args(Path(tmp), name="run1")
-            runner = FleetRunner([])
-            with unittest.mock.patch.object(
-                awsb, "preflight", return_value=fake_preflight()
-            ) as preflight:
-                code = awsb.cmd_plan(args, run=runner)
-            self.assertEqual(code, awsb.EXIT_OK)
-            preflight.assert_called_once()
-            manifest = json.loads((out / "run1" / "fleet.json").read_text())
-            self.assertEqual(manifest["phase"], "planned")
-            self.assertEqual(manifest["az"], "eu-west-1b")
-            self.assertEqual(manifest["ami_id"], "ami-0abc")
-            self.assertEqual(set(manifest["images"]), set(fake_images()))
-            self.assertEqual((out / "run1/terraform/plan.txt").read_text(), "plan")
-            self.assertTrue(runner.ran("tofu", "init"))
-            self.assertTrue(runner.ran("tofu", "plan"))
-            self.assertFalse(runner.ran("tofu", "apply"))
+        runner = FleetRunner([])
+        with unittest.mock.patch.object(
+            awsb, "preflight", return_value=fake_preflight()
+        ) as preflight:
+            code = awsb.cmd_plan(plan_args(), run=runner)
+        self.assertEqual(code, awsb.EXIT_OK)
+        preflight.assert_called_once()
+        manifest = json.loads((self.fleet_dir / "fleet.json").read_text())
+        self.assertEqual(manifest["phase"], "planned")
+        self.assertEqual(manifest["az"], "eu-west-1b")
+        self.assertEqual(manifest["ami_id"], "ami-0abc")
+        self.assertEqual(set(manifest["images"]), set(fake_images()))
+        self.assertEqual((self.fleet_dir / "terraform/plan.txt").read_text(), "plan")
+        self.assertTrue(runner.ran("tofu", "init"))
+        self.assertTrue(runner.ran("tofu", "plan"))
+        self.assertFalse(runner.ran("tofu", "apply"))
 
     def test_online_logs_preflight_before_cost(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            args = online_plan_args(Path(tmp), name="run1")
-            with unittest.mock.patch.object(
-                awsb, "preflight", return_value=fake_preflight()
-            ):
-                awsb.cmd_plan(args, run=FleetRunner([]))
-            lines = (Path(tmp) / "out/run1/driver.log").read_text().splitlines()
-            account = next(i for i, line in enumerate(lines) if "account 0275" in line)
-            cost = next(i for i, line in enumerate(lines) if "expected $" in line)
-            self.assertLess(account, cost)
+        with unittest.mock.patch.object(
+            awsb, "preflight", return_value=fake_preflight()
+        ):
+            awsb.cmd_plan(plan_args(), run=FleetRunner([]))
+        lines = (self.fleet_dir / "driver.log").read_text().splitlines()
+        account = next(i for i, line in enumerate(lines) if "account 0275" in line)
+        cost = next(i for i, line in enumerate(lines) if "expected $" in line)
+        self.assertLess(account, cost)
 
 
 def two_node_hosts() -> list["awsb.HostSpec"]:
@@ -706,11 +661,10 @@ class CallerAccountTest(unittest.TestCase):
             }
         )
         with self.assertRaises(awsb.Refused):
-            awsb.caller_account(runner, awsb.RunConfig(tag="x"))
+            awsb.caller_account(runner)
         self.assertEqual(len(runner.calls), 1)
 
     def test_match_returns_account(self):
-        cfg = awsb.RunConfig(tag="x")
         runner = FakeRunner(
             {
                 (
@@ -719,10 +673,10 @@ class CallerAccountTest(unittest.TestCase):
                     "timeboost-dev",
                     "sts",
                     "get-caller-identity",
-                ): completed(stdout=json.dumps({"Account": cfg.account}))
+                ): completed(stdout=json.dumps({"Account": awsb.ACCOUNT}))
             }
         )
-        self.assertEqual(awsb.caller_account(runner, cfg), cfg.account)
+        self.assertEqual(awsb.caller_account(runner), awsb.ACCOUNT)
 
 
 class DefaultVpcTest(unittest.TestCase):
@@ -739,7 +693,7 @@ class DefaultVpcTest(unittest.TestCase):
             }
         )
         with self.assertRaises(awsb.Refused):
-            awsb.default_vpc(runner, awsb.RunConfig(tag="x"))
+            awsb.default_vpc(runner)
 
     def test_dns_hostnames_disabled_refuses(self):
         runner = FakeRunner(
@@ -763,7 +717,7 @@ class DefaultVpcTest(unittest.TestCase):
             }
         )
         with self.assertRaises(awsb.Refused):
-            awsb.default_vpc(runner, awsb.RunConfig(tag="x"))
+            awsb.default_vpc(runner)
 
     def test_ok_returns_vpc_id(self):
         runner = FakeRunner(
@@ -786,7 +740,7 @@ class DefaultVpcTest(unittest.TestCase):
                 ),
             }
         )
-        self.assertEqual(awsb.default_vpc(runner, awsb.RunConfig(tag="x")), "vpc-1")
+        self.assertEqual(awsb.default_vpc(runner), "vpc-1")
 
 
 class CapableAzTest(unittest.TestCase):
@@ -809,7 +763,7 @@ class CapableAzTest(unittest.TestCase):
                 ): self._offerings(["eu-west-1b", "eu-west-1a"])
             }
         )
-        az = awsb.capable_az(runner, awsb.RunConfig(tag="x"), {"c8g.4xlarge"})
+        az = awsb.capable_az(runner, {"c8g.4xlarge"})
         self.assertEqual(az, "eu-west-1a")
 
     def test_no_capable_az_refuses(self):
@@ -825,7 +779,7 @@ class CapableAzTest(unittest.TestCase):
             }
         )
         with self.assertRaises(awsb.Refused):
-            awsb.capable_az(runner, awsb.RunConfig(tag="x"), {"c8g.4xlarge"})
+            awsb.capable_az(runner, {"c8g.4xlarge"})
 
 
 class VcpuHeadroomTest(unittest.TestCase):
@@ -849,7 +803,6 @@ class VcpuHeadroomTest(unittest.TestCase):
         instance_types = self._instance_types({"c8g.4xlarge": 16, "c8g.2xlarge": 8})
         needed, in_use, quota = awsb.vcpu_headroom(
             self._quota_runner(256.0),
-            awsb.RunConfig(tag="x"),
             two_node_hosts(),
             running=[],
             instance_types=instance_types,
@@ -861,7 +814,6 @@ class VcpuHeadroomTest(unittest.TestCase):
         with self.assertRaises(awsb.Refused):
             awsb.vcpu_headroom(
                 self._quota_runner(10.0),
-                awsb.RunConfig(tag="x"),
                 two_node_hosts(),
                 running=[],
                 instance_types=instance_types,
@@ -873,7 +825,6 @@ class VcpuHeadroomTest(unittest.TestCase):
         running = ["c8g.4xlarge", "c8g.4xlarge", "c8g.4xlarge"]
         _needed, in_use, _quota = awsb.vcpu_headroom(
             self._quota_runner(256.0),
-            awsb.RunConfig(tag="x"),
             two_node_hosts(),
             running=running,
             instance_types=instance_types,
@@ -898,7 +849,7 @@ class PreflightTest(unittest.TestCase):
                 "timeboost-dev",
                 "sts",
                 "get-caller-identity",
-            ): completed(stdout=json.dumps({"Account": cfg.account})),
+            ): completed(stdout=json.dumps({"Account": awsb.ACCOUNT})),
             ("aws", "--profile", "timeboost-dev", "ec2", "describe-vpcs"): completed(
                 stdout=json.dumps({"Vpcs": [{"VpcId": "vpc-1"}]})
             ),
@@ -947,7 +898,6 @@ class PreflightTest(unittest.TestCase):
             ("aws", "--profile", "timeboost-dev", "ec2", "describe-images"): completed(
                 stdout="ami-0abc\n"
             ),
-            ("git", "status"): completed(stdout=""),
         }
         runner = FakeRunner(responses)
         fake_image = {
@@ -967,27 +917,6 @@ class PreflightTest(unittest.TestCase):
         self.assertEqual(len(describe_calls), 1)
         self.assertEqual(result["az"], "eu-west-1a")
         self.assertEqual(result["ami_id"], "ami-0abc")
-
-
-class CheckGitCleanTest(unittest.TestCase):
-    def test_clean_tree_returns_none(self):
-        runner = FakeRunner({("git", "status"): completed(stdout="")})
-        self.assertIsNone(awsb.check_git_clean(runner, allow_dirty=False))
-
-    def test_dirty_without_allow_dirty_refuses(self):
-        runner = FakeRunner({("git", "status"): completed(stdout=" M file.py\n")})
-        with self.assertRaises(awsb.Refused):
-            awsb.check_git_clean(runner, allow_dirty=False)
-
-    def test_dirty_with_allow_dirty_returns_diff(self):
-        runner = FakeRunner(
-            {
-                ("git", "status"): completed(stdout=" M file.py\n"),
-                ("git", "diff"): completed(stdout="--- a/file.py\n+++ b/file.py\n"),
-            }
-        )
-        diff = awsb.check_git_clean(runner, allow_dirty=True)
-        self.assertIn("file.py", diff)
 
 
 class ToolsOnPathTest(unittest.TestCase):
@@ -1026,8 +955,6 @@ class RenderTfvarsTest(unittest.TestCase):
         )
         self.assertEqual(tfvars["name"], "run1")
         self.assertEqual(tfvars["owner"], "alice")
-        self.assertEqual(tfvars["account_id"], cfg.account)
-        self.assertEqual(tfvars["profile"], cfg.profile)
         self.assertEqual(tfvars["az"], "eu-west-1a")
         self.assertEqual(tfvars["ami_id"], "ami-0abc")
         self.assertEqual(tfvars["operator_cidr"], "203.0.113.5/32")
@@ -1067,7 +994,8 @@ class ClassifyTfErrorTest(unittest.TestCase):
 
     def test_insufficient_capacity(self):
         self.assertIn(
-            "--az", awsb.classify_tf_error("Error: InsufficientInstanceCapacity")
+            "InsufficientInstanceCapacity",
+            awsb.classify_tf_error("Error: InsufficientInstanceCapacity"),
         )
 
     def test_unauthorized(self):
@@ -1112,7 +1040,7 @@ class TerraformClassTest(unittest.TestCase):
                 ): completed(),
             }
         )
-        tf = awsb.Terraform(runner, "tofu", tf_dir, env={})
+        tf = awsb.Terraform(runner, tf_dir, env={})
         tf.init()
         tf.plan()
         tf.apply()
@@ -1131,7 +1059,7 @@ class TerraformClassTest(unittest.TestCase):
                 ): completed(returncode=1, stderr="Error: VcpuLimitExceeded: ...")
             }
         )
-        tf = awsb.Terraform(runner, "tofu", tf_dir, env={})
+        tf = awsb.Terraform(runner, tf_dir, env={})
         with self.assertRaises(awsb.TfFailed) as ctx:
             tf.apply()
         self.assertEqual(ctx.exception.stage, "apply")
@@ -1148,7 +1076,7 @@ class TerraformClassTest(unittest.TestCase):
                 ): completed(returncode=1, stderr="boom")
             }
         )
-        tf = awsb.Terraform(runner, "tofu", tf_dir, env={})
+        tf = awsb.Terraform(runner, tf_dir, env={})
         with self.assertRaises(awsb.TfFailed) as ctx:
             tf.destroy()
         self.assertEqual(ctx.exception.stage, "destroy")
@@ -1158,7 +1086,7 @@ class TerraformClassTest(unittest.TestCase):
         env = {"TF_PLUGIN_CACHE_DIR": "/tmp/plugins"}
         runner = FakeRunner({("tofu",): completed()})
         before = dict(os.environ)
-        awsb.Terraform(runner, "tofu", tf_dir, env=env).init()
+        awsb.Terraform(runner, tf_dir, env=env).init()
         self.assertEqual(dict(os.environ), before)
         self.assertEqual(runner.envs, [env])
 
@@ -1353,9 +1281,6 @@ class TofuValidateTest(unittest.TestCase):
                 "name": "test-run",
                 "owner": "tester",
                 "git_rev": "abc1234",
-                "account_id": "000000000000",
-                "region": "eu-west-1",
-                "profile": "test",
                 "az": "",
                 "ami_id": "",
                 "ssh_public_key": "ssh-ed25519 AAAAtest test@example.com",
@@ -2006,18 +1931,17 @@ def valid_result(valid: bool = True) -> dict:
 
 
 class RunHarness:
-    """A temp out-root, ssh key and patched waits for driving `cmd_run` end to end."""
+    """A temp working dir with its own out root and patched waits for driving `cmd_run` end to
+    end."""
 
     def __init__(
         self, test: unittest.TestCase, name: str = "run1", confirmed: bool = False
     ):
         self.yes = not confirmed
-        self.tmp = Path(tempfile.mkdtemp())
-        test.addCleanup(shutil.rmtree, self.tmp)
-        (self.tmp / "key").write_text("private")
-        (self.tmp / "key.pub").write_text("ssh-ed25519 AAAA test")
+        self.tmp = temp_dir(test)
+        self.out = isolated_env(test, self.tmp, name)
         self.name = name
-        self.fleet_dir = self.tmp / "out" / name
+        self.fleet_dir = awsb.OUT_ROOT / name
         self.run_dir = self.fleet_dir / "runs" / "01-run"
         patches = [
             unittest.mock.patch.object(
@@ -2041,18 +1965,6 @@ class RunHarness:
             "t",
             "--nodes",
             "2",
-            "--name",
-            self.name,
-            "--out-root",
-            str(self.tmp / "out"),
-            "--ssh-key",
-            str(self.tmp / "key"),
-            "--operator-cidr",
-            "203.0.113.5/32",
-            "--price",
-            "c8g.4xlarge=0.71",
-            "--price",
-            "c8g.2xlarge=0.355",
             *(["--yes"] if self.yes else []),
             *extra,
         ]
@@ -2060,12 +1972,11 @@ class RunHarness:
         args.argv = argv
         return args
 
-    def run(self, runner: FleetRunner, ask=lambda timeout: True, extra=()) -> int:
+    def run(self, runner: FleetRunner, extra=()) -> int:
         return awsb.cmd_run(
             self.args(*extra),
             run=runner,
             interrupts=awsb.Interrupts(FakeClock()),
-            ask_destroy=ask,
         )
 
     def index_log(self) -> str:
@@ -2075,7 +1986,7 @@ class RunHarness:
         return (self.fleet_dir / "driver.log").read_text().splitlines()[-1]
 
     def index(self) -> str:
-        return (self.tmp / "out" / "INDEX.md").read_text()
+        return (self.out / "INDEX.md").read_text()
 
 
 # REQ:awsbench-apply-failure
@@ -2090,7 +2001,7 @@ class RunApplyFailureTest(unittest.TestCase):
         self.assertEqual(code, awsb.EXIT_FAILED)
         self.assertTrue(runner.ran("tofu", "apply"))
         self.assertTrue(runner.ran("tofu", "destroy"))
-        self.assertFalse(runner.ran("ssh"))
+        self.assertFalse(any(call[0] == "ssh" for call in runner.calls))
         log = (harness.fleet_dir / "driver.log").read_text()
         self.assertIn("InsufficientInstanceCapacity", log)
         self.assertIn("| 3 |", harness.index())
@@ -2103,7 +2014,7 @@ class RunApplyFailureTest(unittest.TestCase):
         with self.assertRaises(awsb.Refused):
             awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
         self.assertFalse(runner.ran("tofu", "apply"))
-        self.assertFalse(runner.ran("ssh"))
+        self.assertFalse(any(call[0] == "ssh" for call in runner.calls))
 
 
 class RunFlowTest(unittest.TestCase):
@@ -2209,29 +2120,13 @@ class RunFlowTest(unittest.TestCase):
         self.assertEqual(code, awsb.EXIT_INVALID)
         self.assertTrue(runner.ran("tofu", "destroy"))
 
-    def test_keep_skips_destroy(self):
-        harness = RunHarness(self)
-        runner = FleetRunner([DONE_STATE])
-        with unittest.mock.patch.object(
-            awsb, "write_report", return_value=valid_result()
-        ):
-            code = harness.run(runner, extra=("--keep",))
-        self.assertEqual(code, awsb.EXIT_LEFTOVER)
-        self.assertFalse(runner.ran("tofu", "destroy"))
-        rows = harness.index().splitlines()[2:]
-        self.assertEqual(len(rows), 1)
-        self.assertIn("| valid | 4 |", rows[0])
-        self.assertTrue(
-            harness.last_log_line().endswith(f"aws-bench destroy {harness.fleet_dir}")
-        )
-
-    def test_auto_key_is_removed_after_destroy(self):
+    def test_key_is_removed_after_destroy(self):
         harness = RunHarness(self)
         runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
         with unittest.mock.patch.object(
             awsb, "write_report", return_value=valid_result()
         ):
-            code = harness.run(runner, extra=("--ssh-key", "auto"))
+            code = harness.run(runner)
         self.assertEqual(code, awsb.EXIT_OK)
         ssh_dir = harness.fleet_dir / "ssh"
         self.assertFalse((ssh_dir / "id_ed25519").exists())
@@ -2239,17 +2134,7 @@ class RunFlowTest(unittest.TestCase):
         self.assertIn("ssh key removed", harness.index_log())
         self.assertTrue(runner.ran("-i", str(ssh_dir / "id_ed25519")))
 
-    def test_auto_key_stays_with_keep(self):
-        harness = RunHarness(self)
-        runner = FleetRunner([DONE_STATE])
-        with unittest.mock.patch.object(
-            awsb, "write_report", return_value=valid_result()
-        ):
-            harness.run(runner, extra=("--ssh-key", "auto", "--keep"))
-        self.assertTrue((harness.fleet_dir / "ssh" / "id_ed25519").exists())
-        self.assertIn("ssh key kept", harness.index_log())
-
-    def test_auto_key_stays_after_failed_destroy(self):
+    def test_key_stays_after_failed_destroy(self):
         harness = RunHarness(self)
         runner = FleetRunner(
             [DONE_STATE], destroys=[completed(returncode=1, stderr="locked")]
@@ -2257,18 +2142,9 @@ class RunFlowTest(unittest.TestCase):
         with unittest.mock.patch.object(
             awsb, "write_report", return_value=valid_result()
         ):
-            code = harness.run(runner, extra=("--ssh-key", "auto"))
+            code = harness.run(runner)
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertTrue((harness.fleet_dir / "ssh" / "id_ed25519").exists())
-
-    def test_explicit_key_is_never_removed(self):
-        harness = RunHarness(self)
-        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
-        with unittest.mock.patch.object(
-            awsb, "write_report", return_value=valid_result()
-        ):
-            harness.run(runner)
-        self.assertTrue((harness.tmp / "key").exists())
 
     def test_agent_error_collects_reports_failure_and_exits_3(self):
         harness = RunHarness(self)
@@ -2285,37 +2161,23 @@ class RunFlowTest(unittest.TestCase):
 
 # REQ:awsbench-interrupt
 class RunInterruptTest(unittest.TestCase):
-    def run_interrupted(self, ask) -> tuple[RunHarness, FleetRunner, int]:
-        harness = RunHarness(self, confirmed=True)
+    def run_interrupted(self) -> tuple[RunHarness, FleetRunner, int]:
+        harness = RunHarness(self)
         interrupts = awsb.Interrupts(FakeClock())
         running = {"phase": "loading", "detail": "x"}
         runner = FleetRunner(
             [running], on_poll=lambda n: n == 2 and interrupts.event.set()
         )
-        code = awsb.cmd_run(
-            harness.args(), run=runner, interrupts=interrupts, ask_destroy=ask
-        )
+        code = awsb.cmd_run(harness.args(), run=runner, interrupts=interrupts)
         return harness, runner, code
 
     def test_stops_agent_collects_destroys_and_exits_3(self):
-        asked = []
-        harness, runner, code = self.run_interrupted(
-            lambda timeout: asked.append(timeout) or True
-        )
+        harness, runner, code = self.run_interrupted()
         self.assertEqual(code, awsb.EXIT_FAILED)
-        self.assertEqual(asked, [awsb.DESTROY_PROMPT_TIMEOUT_S])
         self.assertTrue(runner.ran("systemctl stop bench-agent"))
         self.assertTrue(runner.ran("rsync", "/opt/bench/out/"))
         self.assertTrue(runner.ran("tofu", "destroy"))
         self.assertIn("interrupted", (harness.run_dir / "summary.md").read_text())
-
-    def test_declined_destroy_exits_4_with_command_last(self):
-        harness, runner, code = self.run_interrupted(lambda timeout: False)
-        self.assertEqual(code, awsb.EXIT_LEFTOVER)
-        self.assertFalse(runner.ran("tofu", "destroy"))
-        self.assertTrue(
-            harness.last_log_line().endswith(f"aws-bench destroy {harness.fleet_dir}")
-        )
 
     def test_first_signal_logs_the_phase_and_later_ones_remind(self):
         interrupts = awsb.Interrupts(FakeClock())
@@ -2517,7 +2379,8 @@ class RunTeardownGuaranteedTest(unittest.TestCase):
 class RunDirsTest(unittest.TestCase):
     def test_run_dirs_are_numbered_in_the_fleet_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
-            fleet_dir = awsb.new_fleet_dir(Path(tmp), "fleet-a")
+            fleet_dir = Path(tmp) / "fleet-a"
+            fleet_dir.mkdir()
             first = awsb.new_run_dir(fleet_dir, "run")
             second = awsb.new_run_dir(fleet_dir, "other")
             self.assertEqual(first, fleet_dir / "runs" / "01-run")
@@ -2525,21 +2388,17 @@ class RunDirsTest(unittest.TestCase):
             self.assertEqual(awsb.fleet_of(second), fleet_dir)
 
     def test_fleet_name_collision_refuses(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            awsb.new_fleet_dir(Path(tmp), "fleet-a")
-            with self.assertRaisesRegex(awsb.Refused, "already exists"):
-                awsb.new_fleet_dir(Path(tmp), "fleet-a")
+        isolated_env(self, temp_dir(self), "fleet-a")
+        awsb.new_fleet_dir(awsb.OUT_ROOT)
+        with self.assertRaisesRegex(awsb.Refused, "already exists"):
+            awsb.new_fleet_dir(awsb.OUT_ROOT)
 
 
 class ManifestReproTest(unittest.TestCase):
     def render(self) -> tuple[Path, "awsb.RunConfig"]:
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp)
+        tmp = temp_dir(self)
         cfg = awsb.RunConfig(
-            tag="x",
-            nodes=2,
-            load=netbench.BenchConfig(submit_nodes=1),
-            out_root=tmp,
+            tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
         )
         hosts = awsb.plan_hosts(cfg)
         fleet_dir = tmp / "run1"
@@ -2547,7 +2406,7 @@ class ManifestReproTest(unittest.TestCase):
         run_dir = awsb.new_run_dir(fleet_dir, "run")
         prices = two_node_prices()
         estimate = awsb.estimate_cost(
-            hosts, cfg, prices, awsb.region_minor_prices("eu-west-1")
+            hosts, cfg, prices, awsb.region_minor_prices(awsb.REGION)
         )
         fleet = awsb.write_fleet_manifest(
             fleet_dir, cfg, hosts, awsb.plan_peers(hosts), estimate, "planned", ["run"]
@@ -4168,7 +4027,6 @@ class SweepAndCostTest(unittest.TestCase):
         estimate = awsb.estimate_cost(hosts, cfg, two_node_prices(), minor)
         manifest = {
             "name": "run1",
-            "config": {"profile": "p", "region": "eu-west-1"},
             "hosts": hosts,
             "estimate": estimate,
         }
@@ -4191,7 +4049,6 @@ class SweepAndCostTest(unittest.TestCase):
         )
         manifest = {
             "name": "run1",
-            "config": {"profile": "p", "region": "eu-west-1"},
             "hosts": hosts,
             "estimate": estimate,
         }
@@ -4216,7 +4073,6 @@ class SweepAndCostTest(unittest.TestCase):
         )
         manifest = {
             "name": "run1",
-            "config": {"profile": "p", "region": "eu-west-1"},
             "hosts": hosts,
             "estimate": estimate,
         }
@@ -4494,7 +4350,7 @@ class CollectEbsBalanceTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
         manifest = {"hosts_info": two_node_hosts_info()}
-        awsb.collect_ebs_balance(runner, awsb.RunConfig(tag="x"), manifest, t0, t1, tmp)
+        awsb.collect_ebs_balance(runner, manifest, t0, t1, tmp)
         return tmp
 
     def call(self, runner) -> list[str]:
@@ -4947,14 +4803,13 @@ def run_cmd(func, argv: list[str], runner, *args) -> tuple[int, str]:
 
 
 class StatusAllTest(unittest.TestCase):
+    def setUp(self):
+        self.out = isolated_env(self, temp_dir(self))
+
     def test_empty_region(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            code, out = run_cmd(
-                awsb.cmd_status,
-                ["status", "--all", "--out-root", tmp],
-                tag_runner([], []),
-                NOW,
-            )
+        code, out = run_cmd(
+            awsb.cmd_status, ["status", "--all"], tag_runner([], []), NOW
+        )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(out, "no espresso-bench resources in eu-west-1\n")
 
@@ -4964,10 +4819,7 @@ class StatusAllTest(unittest.TestCase):
             tag_mapping("instance", "i-2", "ok", "bob", EXPIRES_LATER),
         ]
         runner = tag_runner(mappings, [instance("i-1"), instance("i-2")])
-        with tempfile.TemporaryDirectory() as tmp:
-            code, out = run_cmd(
-                awsb.cmd_status, ["status", "--all", "--out-root", tmp], runner, NOW
-            )
+        code, out = run_cmd(awsb.cmd_status, ["status", "--all"], runner, NOW)
         self.assertEqual(code, awsb.EXIT_OK)
         lines = out.splitlines()
         self.assertIn("| amy | bob |", lines[2])
@@ -4983,19 +4835,14 @@ class StatusAllTest(unittest.TestCase):
         runner = tag_runner(
             mappings, [instance("i-1", "terminated")], stale_volumes=["vol-1", "vol-2"]
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            code, out = run_cmd(
-                awsb.cmd_status, ["status", "--all", "--out-root", tmp], runner, NOW
-            )
+        code, out = run_cmd(awsb.cmd_status, ["status", "--all"], runner, NOW)
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(out, "no espresso-bench resources in eu-west-1\n")
 
     def test_wrong_account_is_refused_before_listing(self):
         runner = FakeRunner({STS_CALL: sts_response("999")})
-        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(awsb.Refused):
-            run_cmd(
-                awsb.cmd_status, ["status", "--all", "--out-root", tmp], runner, NOW
-            )
+        with self.assertRaises(awsb.Refused):
+            run_cmd(awsb.cmd_status, ["status", "--all"], runner, NOW)
         self.assertEqual(len(runner.calls), 1)
 
     def test_needs_dir_or_all(self):
@@ -5004,6 +4851,9 @@ class StatusAllTest(unittest.TestCase):
 
 
 class DestroyOrphansTest(unittest.TestCase):
+    def setUp(self):
+        self.out = isolated_env(self, temp_dir(self))
+
     def runner(self) -> FakeRunner:
         mappings = [
             tag_mapping("instance", "i-1", "amy", "bob", EXPIRES_PAST),
@@ -5015,13 +4865,7 @@ class DestroyOrphansTest(unittest.TestCase):
         return tag_runner(mappings, [instance("i-1"), instance("i-2")])
 
     def destroy(self, runner, *flags: str) -> tuple[int, str]:
-        with tempfile.TemporaryDirectory() as tmp:
-            return run_cmd(
-                awsb.cmd_destroy,
-                ["destroy", "--orphans", "--out-root", tmp, *flags],
-                runner,
-                NOW,
-            )
+        return run_cmd(awsb.cmd_destroy, ["destroy", "--orphans", *flags], runner, NOW)
 
     def test_sweeps_only_orphans_in_dependency_order(self):
         runner = self.runner()
@@ -5085,23 +4929,17 @@ class DestroyOrphansTest(unittest.TestCase):
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
 
     def test_marks_local_state_swept(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp)
-            (out / "amy").mkdir()
-            netbench.write_json(
-                out / "amy" / "fleet.json",
-                {"phase": "left-running", "config": {"ssh_key": "auto"}},
-            )
-            key = out / "amy" / "ssh" / "id_ed25519"
-            key.parent.mkdir()
-            key.write_text("private")
-            parsed = awsb.parse_args(
-                ["destroy", "--orphans", "--yes", "--out-root", tmp]
-            )
-            with contextlib.redirect_stdout(io.StringIO()):
-                awsb.cmd_destroy(parsed, self.runner(), NOW, FakeClock())
-            manifest = json.loads((out / "amy" / "fleet.json").read_text())
-            self.assertFalse(key.exists())
+        out = self.out
+        (out / "amy").mkdir(parents=True)
+        netbench.write_json(out / "amy" / "fleet.json", {"phase": "left-running"})
+        key = out / "amy" / "ssh" / "id_ed25519"
+        key.parent.mkdir()
+        key.write_text("private")
+        parsed = awsb.parse_args(["destroy", "--orphans", "--yes"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            awsb.cmd_destroy(parsed, self.runner(), NOW, FakeClock())
+        manifest = json.loads((out / "amy" / "fleet.json").read_text())
+        self.assertFalse(key.exists())
         self.assertEqual(manifest["phase"], "swept")
 
     def test_needs_dir_or_orphans(self):
@@ -5164,7 +5002,7 @@ class ManifestCostTest(unittest.TestCase):
         estimate = awsb.estimate_cost(
             hosts, cfg, two_node_prices(), awsb.region_minor_prices("eu-west-1")
         )
-        return {"config": {"region": "eu-west-1"}, "hosts": hosts, "estimate": estimate}
+        return {"hosts": hosts, "estimate": estimate}
 
     def test_is_linear_in_duration_and_covers_instance_hours(self):
         manifest = self.manifest()
@@ -5215,15 +5053,20 @@ STATUS_DESCRIBE = json.dumps(
 
 
 class KeptRunTest(unittest.TestCase):
-    """`status`, `collect` and `destroy DIR` on the dirs of a `run --keep`."""
+    """`status`, `collect` and `destroy DIR` on the dirs of a run whose destroy failed."""
 
     def kept(self, describe: str = STATUS_DESCRIBE, states=None):
         harness = RunHarness(self)
-        runner = FleetRunner(states or [DONE_STATE], describe=describe)
+        runner = FleetRunner(
+            states or [DONE_STATE],
+            describe=describe,
+            destroys=[completed(returncode=1, stderr="locked")],
+        )
         with unittest.mock.patch.object(
             awsb, "write_report", return_value=valid_result()
         ):
-            self.assertEqual(harness.run(runner, extra=("--keep",)), awsb.EXIT_LEFTOVER)
+            self.assertEqual(harness.run(runner), awsb.EXIT_LEFTOVER)
+        runner.destroys = [completed()]
         (harness.fleet_dir / "terraform").mkdir(exist_ok=True)
         return harness, runner
 
@@ -5314,14 +5157,8 @@ class KeptRunTest(unittest.TestCase):
             rows[3], r"^\| run1 \| \S+ \| a{10} \| 1 \| [\d.]+ \| [\d.]+ \| 0 \|$"
         )
 
-    def test_destroy_dir_removes_the_auto_key(self):
-        harness = RunHarness(self)
-        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
-        with unittest.mock.patch.object(
-            awsb, "write_report", return_value=valid_result()
-        ):
-            harness.run(runner, extra=("--ssh-key", "auto", "--keep"))
-        (harness.fleet_dir / "terraform").mkdir(exist_ok=True)
+    def test_destroy_dir_removes_the_key(self):
+        harness, runner = self.kept()
         key = harness.fleet_dir / "ssh" / "id_ed25519"
         self.assertTrue(key.exists())
         runner.describe = STATUS_DESCRIBE
@@ -5347,9 +5184,10 @@ class KeptRunTest(unittest.TestCase):
 
     def test_destroy_dir_declined(self):
         harness, runner = self.kept()
+        destroys = runner.count("tofu", "destroy")
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
             awsb.cmd_destroy(self.args(harness, "destroy"), runner, clock=FakeClock())
-        self.assertFalse(runner.ran("tofu", "destroy"))
+        self.assertEqual(runner.count("tofu", "destroy"), destroys)
 
     def test_failed_destroy_dir_sweeps_and_exits_4(self):
         harness, runner = self.kept()
@@ -5489,7 +5327,6 @@ class ConfigFromManifestTest(unittest.TestCase):
             tag="x",
             nodes=3,
             load=netbench.BenchConfig(submit_nodes=2),
-            price=("a=1",),
             node_env=("A=1",),
         )
         saved = json.loads(json.dumps(awsb.config_to_json(cfg)))

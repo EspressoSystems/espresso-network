@@ -1,10 +1,10 @@
 # offline=true skips every data source and real resource, so validate/plan work with fake
 # credentials; the driver never sets it for a real run.
 provider "aws" {
-  region  = var.region
-  profile = var.offline ? null : var.profile
+  region  = local.region
+  profile = var.offline ? null : "timeboost-dev"
 
-  allowed_account_ids = var.offline ? null : [var.account_id]
+  allowed_account_ids = var.offline ? null : [local.account_id]
 
   skip_credentials_validation = var.offline
   skip_requesting_account_id  = var.offline
@@ -24,8 +24,10 @@ provider "aws" {
 # requested instance type and resolved the arm64 AMI; this module only looks up that AZ's
 # default subnet.
 locals {
-  ami_id    = var.offline ? "ami-0offline00000000" : var.ami_id
-  pinned_az = var.offline ? "eu-west-1a" : var.az
+  region     = "eu-west-1"
+  account_id = "027574771971"
+  ami_id     = var.offline ? "ami-0offline00000000" : var.ami_id
+  pinned_az  = var.offline ? "eu-west-1a" : var.az
 }
 
 data "aws_vpc" "default" {
@@ -158,7 +160,7 @@ resource "aws_instance" "host" {
   lifecycle {
     precondition {
       condition     = var.offline || local.pinned_subnet != ""
-      error_message = "No default subnet for ${var.az} in ${var.region}."
+      error_message = "No default subnet for ${var.az} in ${local.region}."
     }
   }
 }
@@ -268,7 +270,7 @@ resource "aws_iam_role" "scheduler" {
       Effect    = "Allow"
       Principal = { Service = "scheduler.amazonaws.com" }
       Action    = "sts:AssumeRole"
-      Condition = { StringEquals = { "aws:SourceAccount" = var.account_id } }
+      Condition = { StringEquals = { "aws:SourceAccount" = local.account_id } }
     }]
   })
 }
@@ -286,7 +288,7 @@ resource "aws_iam_role_policy" "scheduler" {
     Statement = [{
       Effect   = "Allow"
       Action   = "rds:DeleteDBInstance"
-      Resource = "arn:aws:rds:${var.region}:${var.account_id}:db:${local.rds_name}"
+      Resource = "arn:aws:rds:${local.region}:${local.account_id}:db:${local.rds_name}"
     }]
   })
 }

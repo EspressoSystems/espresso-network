@@ -89,7 +89,7 @@ laptop                       EC2, one AZ, private IPs
 - Stake: equal, orchestrator self-registration; 5 nodes → quorum 4, lagging `node0` never stalls consensus.
 - Peers: `node0` has state peers like every node and no API peers.
 - Keys: test mnemonic, index 20 + i. No `keygen`, no `stake-for-demo`.
-- Network: cliquenet over private IPs, libp2p over private DNS; SG allows ssh from `--operator-cidr` only.
+- Network: cliquenet over private IPs, libp2p over private DNS; SG allows ssh from this machine's IP only (checkip).
 - Images: `ghcr.io/espressosystems/espresso-network/<component>:<--tag>` (CI, `release-*` branch) + foundry + postgres;
   preflight resolves digests, hosts pull by digest, manifest records them.
 
@@ -106,8 +106,8 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> services -> nodes -> m
 
 | Phase       | Does                                                                                                                                               | Gate                                                   |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| preflight   | tools, `sts` account, default VPC + DNS, type offered, vCPU quota, image digests + arm64, git clean, name unused                                   | any miss: exit 2                                       |
-| plan        | render run dir, `tofu init/plan`, prices (Pricing API, 7-day cache, `--price` override), estimate                                                  | over `--max-usd`, declined, no tty w/o `--yes`: exit 2 |
+| preflight   | tools, `sts` account, default VPC + DNS, type offered, vCPU quota, image digests + arm64                                                           | any miss: exit 2                                       |
+| plan        | render run dir, `tofu init/plan`, prices (Pricing API, 7-day cache), estimate                                                                      | over `--max-usd`, declined, no tty w/o `--yes`: exit 2 |
 | apply       | `tofu apply`, local state in run dir; instances terminate on shutdown, cloud-init arms `shutdown -P +TTL` first                                    | tf error classified, destroy, exit 3                   |
 | provisioned | ssh + `cloud-init status --wait`, digests == manifest, render env/start.sh (need private IPs), rsync `/opt/bench`, start `agent-host`              |                                                        |
 | services    | anvil (`eth_chainId`), deploy (code at genesis addresses), orchestrator + relay (`/healthcheck`), postgres (`pg_isready`)                          |                                                        |
@@ -117,20 +117,20 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> services -> nodes -> m
 | report      | `netbench.analyze` + AWS validity → `result.json`, `summary.md`                                                                                    |                                                        |
 | destroying  | `tofu destroy` x3, then tag sweep; `cost.json` from launch/terminate times; `INDEX.md` row                                                         | leftovers: exit 4                                      |
 
-Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 4 resources may remain (also `--keep`).
+Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 4 resources may remain.
 
 ### Failure paths
 
-| Event                          | Handling                                                                                                                          |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `tofu apply` fails             | classify (`VcpuLimitExceeded` + quota command, `InsufficientInstanceCapacity` + `--az`, `UnauthorizedOperation`), destroy, exit 3 |
-| node never ready / agent error | collect all, failure summary with last log lines, destroy, exit 3                                                                 |
-| Ctrl-C                         | finish current phase, bounded collect, destroy prompt (30 s, default yes; `--yes` skips), exit 3 or 4                             |
-| destroy fails x3               | sweep by tag `espresso-bench-run=<name>`; leftovers → exit 4, `status --all` lists them                                           |
-| laptop dies                    | agents keep running, TTL ends instances (and the pg volume), a schedule deletes the rds instance 5 min before the TTL;            |
-|                                | `status/down FLEET`, `collect/render RUN` recover; `run --fleet --force` replaces a stale lock                                    |
-| reset fails on a fleet         | fleet phase `dirty`, lock kept; `run --fleet DIR --force` resets again, or `down DIR`                                             |
-| state lost                     | `destroy --orphans`: list by tag (owner, launch, expiry), confirm, sweep; never another owner's live run                          |
+| Event                          | Handling                                                                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `tofu apply` fails             | classify (`VcpuLimitExceeded` + quota command, `InsufficientInstanceCapacity`, `UnauthorizedOperation`), destroy, exit 3 |
+| node never ready / agent error | collect all, failure summary with last log lines, destroy, exit 3                                                        |
+| Ctrl-C                         | finish current phase, bounded collect, destroy, exit 3 or 4                                                              |
+| destroy fails x3               | sweep by tag `espresso-bench-run=<name>`; leftovers → exit 4, `status --all` lists them                                  |
+| laptop dies                    | agents keep running, TTL ends instances (and the pg volume), a schedule deletes the rds instance 5 min before the TTL;   |
+|                                | `status/down FLEET`, `collect/render RUN` recover; `run --fleet --force` replaces a stale lock                           |
+| reset fails on a fleet         | fleet phase `dirty`, lock kept; `run --fleet DIR --force` resets again, or `down DIR`                                    |
+| state lost                     | `destroy --orphans`: list by tag (owner, launch, expiry), confirm, sweep; never another owner's live run                 |
 
 ### Fleets and query databases
 
@@ -150,11 +150,11 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
 - `fleet.lock` holds pid and hostname; `status DIR` shows whether the holder is alive. Phases: `idle`, `running`,
   `dirty` (reset failed), then `done`.
 
-| `--query-db` | Postgres                                              | Store of `/data/pg`                                    |
-| ------------ | ----------------------------------------------------- | ------------------------------------------------------ |
-| `colocated`  | container on node0                                    | root gp3 (`--pg-iops`, `--pg-mbps`)                    |
-| `volume`     | container on node0                                    | extra gp3 `--pg-gb`, ext4 by-id mount, dies with node0 |
-| `rds`        | RDS PostgreSQL, `--rds-class`, `--rds-engine-version` | gp3 400 GiB or more, 12000 IOPS, 500 MB/s              |
+| `--query-db` | Postgres                            | Store of `/data/pg`                                  |
+| ------------ | ----------------------------------- | ---------------------------------------------------- |
+| `colocated`  | container on node0                  | root gp3 (`--pg-iops`, `--pg-mbps`)                  |
+| `volume`     | container on node0                  | extra gp3 400 GiB, ext4 by-id mount, dies with node0 |
+| `rds`        | RDS PostgreSQL db.m8g.4xlarge, 18.x | gp3 400 GiB or more, 12000 IOPS, 500 MB/s            |
 
 - Same `PG_TUNING` settings in every mode; `pg-settings.json` is checked against them (`noisy` on a difference).
 - rds needs IAM rights `iam:CreateRole`, `iam:PutRolePolicy`, `iam:PassRole`, `scheduler:CreateSchedule`; without them
@@ -210,10 +210,10 @@ per destroyed fleet (runs, bound, actual, exit).
 ### Commands
 
 ```
-just bench aws plan    --tag release-x [--nodes 5] [--offline --price c8g.4xlarge=0.71 --price c8g.2xlarge=0.36]
+just bench aws plan    --tag release-x [--nodes 5] [--offline]
 just bench aws run     --tag release-x [--nodes 5] [--steps 4,6,9,...] [--query-db MODE] [--max-usd 10] [--yes]
 just bench aws up      --tag release-x --db-modes colocated,volume,rds [--ttl-min 180] [--max-usd 60] [--yes]
-just bench aws run     --fleet FLEET_DIR --query-db MODE [--tag release-y] [--name N] [--force] [--yes]
+just bench aws run     --fleet FLEET_DIR --query-db MODE [--tag release-y] [--force] [--yes]
 just bench aws extend  FLEET_DIR --ttl-min N
 just bench aws down    FLEET_DIR [--yes]
 just bench aws status  --all | FLEET_DIR
@@ -222,11 +222,11 @@ just bench aws render  RUN_DIR [--baseline FILE]
 just bench aws destroy FLEET_DIR | --orphans
 ```
 
-- Needs: nix devShell (opentofu, awscli2), AWS profile with EC2 write (`--profile`, `--account`), `ssh-keygen`, rev
-  pushed as `release-*` so CI publishes images.
-- `--ssh-key auto` (default): ed25519 key generated per run in `<fleet>/ssh/`, private half deleted after destroy (kept
-  with `--keep` or a failed destroy).
-- `--ssh-key PATH`: existing key, PATH and PATH.pub must exist, never deleted.
+- Needs: nix devShell (opentofu, awscli2), AWS profile `timeboost-dev` (account 027574771971, eu-west-1; constants in
+  `aws-bench` and `aws/terraform/main.tf`), `ssh-keygen`, rev pushed as `release-*` so CI publishes images.
+- Every fleet gets an ed25519 key in `<fleet>/ssh/`; the private half is deleted after destroy (kept after a failed
+  destroy).
+- `plan --offline` needs fresh cached prices in `tmp/aws-bench/prices.json`: run `plan` online once first.
 
 ### 100 nodes
 

@@ -43,9 +43,11 @@ from test_aws_bench import (
     fake_image,
     fake_images,
     fake_preflight,
+    isolated_env,
     price_response,
     setUpModule,  # noqa: F401  (unittest runs it for this module too)
     tag_runner,
+    temp_dir,
     valid_result,
     write_collected_run,
 )
@@ -62,15 +64,14 @@ def fake_report(run_dir: Path, baseline=None) -> dict:
 
 
 class FleetHarness:
-    """A temp out-root and ssh key, and the argv of `up` and `run --fleet` for one fleet."""
+    """A temp working dir with its own out root, and the argv of `up` and `run --fleet` for one
+    fleet."""
 
     def __init__(self, test: unittest.TestCase, name: str = "fleet1"):
-        self.tmp = Path(tempfile.mkdtemp())
-        test.addCleanup(shutil.rmtree, self.tmp)
-        (self.tmp / "key").write_text("private")
-        (self.tmp / "key.pub").write_text("ssh-ed25519 AAAA test")
+        self.tmp = temp_dir(test)
+        isolated_env(test, self.tmp, name)
         self.name = name
-        self.out = self.tmp / "out"
+        self.out = awsb.OUT_ROOT
         self.fleet_dir = self.out / name
         patches = [
             unittest.mock.patch.object(
@@ -94,18 +95,6 @@ class FleetHarness:
             "t",
             "--nodes",
             "2",
-            "--name",
-            self.name,
-            "--out-root",
-            str(self.out),
-            "--ssh-key",
-            str(self.tmp / "key"),
-            "--operator-cidr",
-            "203.0.113.5/32",
-            "--price",
-            "c8g.4xlarge=0.71",
-            "--price",
-            "c8g.2xlarge=0.355",
             "--yes",
         ]
 
@@ -271,9 +260,9 @@ class RunOnFleetTest(unittest.TestCase):
     def test_two_runs_reset_between_and_leave_the_fleet_idle(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
-        for verb, name in (("first", "01-first"), ("second", "02-second")):
+        for name in ("01-colocated", "02-colocated"):
             mark = len(runner.calls)
-            self.assertEqual(harness.run(runner, "--name", verb), awsb.EXIT_OK)
+            self.assertEqual(harness.run(runner), awsb.EXIT_OK)
             commands = ssh_calls(runner, mark)
             reset = next(i for i, c in enumerate(commands) if "find /data/journal" in c)
             start = next(i for i, c in enumerate(commands) if "docker start anvil" in c)
@@ -291,8 +280,8 @@ class RunOnFleetTest(unittest.TestCase):
             self.assertIn("run_estimate", manifest)
         rows = harness.index()
         self.assertEqual(len(rows), 2)
-        self.assertTrue(rows[0].startswith("| fleet1/01-first |"))
-        self.assertTrue(rows[1].startswith("| fleet1/02-second |"))
+        self.assertTrue(rows[0].startswith("| fleet1/01-colocated |"))
+        self.assertTrue(rows[1].startswith("| fleet1/02-colocated |"))
         self.assertFalse(runner.ran("tofu", "destroy"))
 
     def test_the_run_name_defaults_to_the_database_mode(self):
@@ -538,17 +527,8 @@ class RunRefusalTest(unittest.TestCase):
             ("--nodes", "3"),
             ("--max-usd=5",),
             ("--ttl-min", "10"),
-            ("--keep",),
         ):
             self.refused(harness, runner, r"shape the fleet", *flags)
-
-    # EDGE:fleet-run-name-collision
-    def test_run_name_collision(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        self.assertEqual(harness.run(runner, "--name", "same"), awsb.EXIT_OK)
-        self.refused(harness, runner, "already exists", "--name", "same")
-        self.assertEqual(len(list((harness.fleet_dir / "runs").glob("*"))), 1)
 
     def test_unknown_dir_is_not_a_fleet(self):
         harness = FleetHarness(self)
@@ -875,11 +855,10 @@ class VolumeWiringTest(unittest.TestCase):
             tag="x",
             nodes=2,
             db_modes=("colocated", "volume"),
-            pg_gb=300,
             load=netbench.BenchConfig(submit_nodes=1),
         )
         self.assertEqual(
-            tfvars(volume)["pg_volume"], {"gb": 300, "iops": 12000, "mbps": 500}
+            tfvars(volume)["pg_volume"], {"gb": 400, "iops": 12000, "mbps": 500}
         )
         self.assertIsNone(tfvars(replace(volume, db_modes=("colocated",)))["pg_volume"])
 
@@ -969,12 +948,6 @@ class VolumeWiringTest(unittest.TestCase):
         with self.assertRaisesRegex(awsb.Refused, "--query-db volume was not"):
             harness.run(runner, "--query-db", "volume")
         self.assertEqual(ssh_calls(runner, mark), [])
-
-    def test_the_pg_size_shapes_the_fleet(self):
-        args = awsb.parse_args(["up", "--tag", "t", "--pg-gb", "500"])
-        self.assertEqual(args.pg_gb, 500)
-        with self.assertRaisesRegex(awsb.Refused, "--pg-gb"):
-            awsb.reject_fleet_flags(["run", "--fleet", "d", "--pg-gb", "500"])
 
     def test_db_modes_accept_volume(self):
         self.assertEqual(
@@ -1116,9 +1089,6 @@ class TofuPgVolumeTest(unittest.TestCase):
                 "name": "test-run",
                 "owner": "tester",
                 "git_rev": "abc1234",
-                "account_id": "000000000000",
-                "region": "eu-west-1",
-                "profile": "test",
                 "az": "",
                 "ami_id": "",
                 "ssh_public_key": "ssh-ed25519 AAAAtest test@example.com",
@@ -1396,7 +1366,7 @@ class DownTest(unittest.TestCase):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         harness.run(runner)
-        harness.run(runner, "--name", "again")
+        harness.run(runner)
         self.assertEqual(self.down(harness, runner), awsb.EXIT_OK)
         self.assertTrue(runner.ran("tofu", "destroy"))
         cost = json.loads((harness.fleet_dir / "cost.json").read_text())
@@ -1413,7 +1383,7 @@ class DownTest(unittest.TestCase):
             log, r"destroyed; actual cost \$\d+\.\d\d \(bound \$\d+\.\d\d\); 2 runs"
         )
         self.assertIn("- 01-colocated: valid, $", log)
-        self.assertIn("- 02-again: valid, $", log)
+        self.assertIn("- 02-colocated: valid, $", log)
         self.assertFalse(harness.lock().exists())
 
     def test_leftover_after_failed_destroys_exits_4_without_a_fleet_row(self):
@@ -1661,9 +1631,6 @@ class RdsHarness(FleetHarness):
         patch.start()
         test.addCleanup(patch.stop)
 
-    def fleet_flags(self) -> list[str]:
-        return [*super().fleet_flags(), "--price", "db.m8g.4xlarge=1.82"]
-
     def up_args(self, *extra: str) -> "awsb.argparse.Namespace":
         return super().up_args("--db-modes", self.modes, *extra)
 
@@ -1689,34 +1656,12 @@ class RdsGuardTest(unittest.TestCase):
             harness.up(runner, *extra)
         self.assertEqual(runner.calls, [])
 
-    def test_small_volume_is_refused_before_any_call(self):
-        self.refused("--pg-gb 100", "--pg-gb", "100")
-
     def test_other_iops_or_throughput_are_refused(self):
         self.refused("--pg-iops 12000", "--pg-iops", "6000")
         self.refused("--pg-mbps 500", "--pg-mbps", "250")
 
-    def test_a_class_below_4xlarge_is_refused(self):
-        self.refused("EBS baseline", "--rds-class", "db.r7g.xlarge")
-        self.refused("db.<family>", "--rds-class", "m8g.4xlarge")
-
-    # TEST:querydb-rds-name-fails
-    def test_names_rds_rejects_are_refused(self):
-        for name in ("a--b", "trailing-", "-leading"):
-            harness = RdsHarness(self)
-            runner = FakeRunner()
-            args = harness.up_args()
-            args.name = name
-            with self.assertRaisesRegex(awsb.Refused, "--name"):
-                awsb.cmd_up(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
-            self.assertEqual(runner.calls, [], name)
-
-    def test_the_default_name_passes_the_name_check(self):
-        awsb.check_rds_config(awsb.RunConfig(tag="x", db_modes=("rds",)))
-        self.assertTrue(awsb.RDS_NAME_RE.match(awsb.default_run_name()))
-
     def test_other_modes_skip_the_guards(self):
-        awsb.check_rds_config(awsb.RunConfig(tag="x", pg_gb=1, rds_class="db.t3.micro"))
+        awsb.check_rds_config(awsb.RunConfig(tag="x", pg_iops=1))
 
 
 def orderable(**overrides) -> dict:
@@ -1770,12 +1715,14 @@ class RdsOrderableTest(unittest.TestCase):
         runner = orderable_runner(
             orderable(EngineVersion="18.1"), orderable(EngineVersion="18.10")
         )
-        cfg = awsb.RunConfig(tag="x", db_modes=("rds",), rds_engine_version="18.1")
-        self.assertEqual(awsb.rds_orderable(runner, cfg, "eu-west-1a"), "18.1")
+        with unittest.mock.patch.object(awsb, "RDS_ENGINE_VERSION", "18.1"):
+            self.assertEqual(awsb.rds_orderable(runner, self.cfg, "eu-west-1a"), "18.1")
 
-    def test_an_unorderable_class_names_the_alternative(self):
+    def test_an_unorderable_class_is_refused(self):
         runner = orderable_runner(orderable(AvailabilityZones=[{"Name": "eu-west-1a"}]))
-        with self.assertRaisesRegex(awsb.Refused, "--rds-class db.m7g.4xlarge"):
+        with self.assertRaisesRegex(
+            awsb.Refused, "db.m8g.4xlarge cannot run postgres 18"
+        ):
             awsb.rds_orderable(runner, self.cfg, "eu-west-1b")
 
     def test_storage_iops_and_throughput_ranges_must_cover_the_request(self):
@@ -1811,7 +1758,7 @@ class RdsOrderableTest(unittest.TestCase):
             return image_info(ref)
 
         stubs = {
-            "caller_account": cfg.account,
+            "caller_account": awsb.ACCOUNT,
             "default_vpc": "vpc-1",
             "capable_az": "eu-west-1b",
             "_running_instance_types": [],
@@ -1819,7 +1766,6 @@ class RdsOrderableTest(unittest.TestCase):
             "vcpu_headroom": (40, 0, 256.0),
             "resolve_ami_arch": "arm64",
             "resolve_ami": "ami-1",
-            "check_git_clean": None,
         }
         with contextlib.ExitStack() as stack:
             for name, value in stubs.items():
@@ -1838,7 +1784,7 @@ class RdsOrderableTest(unittest.TestCase):
             pre["images"]["postgres"]["ref"], "docker.io/library/postgres:18.4"
         )
 
-    def test_a_missing_docker_tag_names_the_older_minor_flag(self):
+    def test_a_missing_docker_tag_names_the_minor(self):
         cfg = awsb.RunConfig(tag="x", db_modes=("rds",))
 
         def resolve(ref: str) -> dict:
@@ -1848,7 +1794,9 @@ class RdsOrderableTest(unittest.TestCase):
 
         with (
             unittest.mock.patch.object(awsb, "resolve_image", resolve),
-            self.assertRaisesRegex(awsb.Refused, "--rds-engine-version <older minor>"),
+            self.assertRaisesRegex(
+                awsb.Refused, "RDS_ENGINE_VERSION must name an older minor"
+            ),
         ):
             awsb.resolve_images(cfg, "18.4")
 
@@ -1924,9 +1872,8 @@ class RdsCostTest(unittest.TestCase):
         self.assertEqual(rds["load"], plain["load"])
 
     def test_the_price_comes_from_the_rds_pricing_service(self):
-        cfg = awsb.RunConfig(tag="x", db_modes=("rds",))
         runner = FakeRunner({("aws",): price_response(1.82)})
-        self.assertEqual(awsb.fetch_rds_price(runner, cfg, "db.m8g.4xlarge"), 1.82)
+        self.assertEqual(awsb.fetch_rds_price(runner, "db.m8g.4xlarge"), 1.82)
         argv = runner.calls[0]
         self.assertEqual(argv[argv.index("--service-code") + 1], "AmazonRDS")
         filters = {
@@ -1948,9 +1895,7 @@ class RdsCostTest(unittest.TestCase):
     def test_the_class_price_is_cached_with_the_instance_prices(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp) / "prices.json"
-            cfg = awsb.RunConfig(
-                tag="x", db_modes=("rds",), price=("c8g.4xlarge=1", "c8g.2xlarge=1")
-            )
+            cfg = awsb.RunConfig(tag="x", db_modes=("rds",))
             runner = FakeRunner({("aws",): price_response(1.82)})
             prices = awsb.resolve_prices(runner, cfg, cache, 0.0)
             self.assertEqual(prices["instances"]["db.m8g.4xlarge"]["usd_hour"], 1.82)
@@ -1958,27 +1903,23 @@ class RdsCostTest(unittest.TestCase):
             awsb.resolve_prices(again, cfg, cache, 60.0)
             self.assertEqual(again.calls, [])
 
-    # TEST:cost-rds-price-missing-fails
-    def test_a_missing_price_names_the_flag(self):
-        cfg = awsb.RunConfig(
-            tag="x", db_modes=("rds",), price=("c8g.4xlarge=1", "c8g.2xlarge=1")
-        )
-        runner = FakeRunner({("aws",): completed(returncode=254, stderr="denied")})
-        with (
-            tempfile.TemporaryDirectory() as tmp,
-            self.assertRaisesRegex(awsb.Refused, "--price db.m8g.4xlarge="),
-        ):
-            awsb.resolve_prices(runner, cfg, Path(tmp) / "prices.json", 0.0)
-
     def test_offline_needs_the_class_price_too(self):
-        cfg = awsb.RunConfig(
-            tag="x",
-            db_modes=("rds",),
-            offline=True,
-            price=("c8g.4xlarge=1", "c8g.2xlarge=1"),
-        )
-        with self.assertRaisesRegex(awsb.Refused, "db.m8g.4xlarge"):
-            awsb.resolve_prices(FakeRunner(), cfg, Path("unused.json"), 0.0)
+        cfg = awsb.RunConfig(tag="x", db_modes=("rds",), offline=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "prices.json"
+            cache.write_text(
+                json.dumps(
+                    {
+                        f"eu-west-1:{instance_type}": {
+                            "usd_hour": 1.0,
+                            "fetched_at": 0.0,
+                        }
+                        for instance_type in ("c8g.4xlarge", "c8g.2xlarge")
+                    }
+                )
+            )
+            with self.assertRaisesRegex(awsb.Refused, "db.m8g.4xlarge"):
+                awsb.resolve_prices(FakeRunner(), cfg, cache, 0.0)
 
     def test_the_bound_after_an_extend_bills_the_delete_window(self):
         harness = RdsHarness(self)
@@ -2099,8 +2040,7 @@ class RdsTfvarsTest(unittest.TestCase):
         self.assertNotIn("rds_spec", harness.fleet())
 
     def test_plan_offline_renders_the_rds_variables_and_prices_them(self):
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp)
+        out = isolated_env(self, temp_dir(self), "planned")
         argv = [
             "plan",
             "--offline",
@@ -2110,36 +2050,23 @@ class RdsTfvarsTest(unittest.TestCase):
             "x",
             "--db-modes",
             "colocated,rds",
-            "--out-root",
-            str(tmp),
-            "--name",
-            "planned",
-            "--price",
-            "c8g.4xlarge=0.78",
-            "--price",
-            "c8g.2xlarge=0.39",
-            "--price",
-            "db.m8g.4xlarge=1.82",
-            "--operator-cidr",
-            "203.0.113.5/32",
         ]
         args = awsb.parse_args(argv)
         args.argv = argv
         runner = FakeRunner({("git",): completed("a" * 40)})
         self.assertEqual(awsb.cmd_plan(args, run=runner), awsb.EXIT_OK)
         tfvars = json.loads(
-            (tmp / "planned/terraform/terraform.tfvars.json").read_text()
+            (out / "planned/terraform/terraform.tfvars.json").read_text()
         )
         self.assertEqual(tfvars["rds"]["engine_version"], "18")
-        manifest = json.loads((tmp / "planned/fleet.json").read_text())
+        manifest = json.loads((out / "planned/fleet.json").read_text())
         self.assertEqual(manifest["db_modes"], ["colocated", "rds"])
         items = [line["item"] for line in manifest["estimate"]["lines"]]
         self.assertIn("rds instance db.m8g.4xlarge", items)
         self.assertIn("rds gp3 storage", items)
 
     def test_plan_offline_ttl_min_renders_a_fleet_with_the_up_limit(self):
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp)
+        out = isolated_env(self, temp_dir(self), "planned")
         argv = [
             "plan",
             "--offline",
@@ -2149,22 +2076,12 @@ class RdsTfvarsTest(unittest.TestCase):
             "x",
             "--ttl-min",
             "150",
-            "--out-root",
-            str(tmp),
-            "--name",
-            "planned",
-            "--price",
-            "c8g.4xlarge=0.78",
-            "--price",
-            "c8g.2xlarge=0.39",
-            "--operator-cidr",
-            "203.0.113.5/32",
         ]
         args = awsb.parse_args(argv)
         args.argv = argv
         runner = FakeRunner({("git",): completed("a" * 40)})
         self.assertEqual(awsb.cmd_plan(args, run=runner), awsb.EXIT_OK)
-        estimate = json.loads((tmp / "planned/fleet.json").read_text())["estimate"]
+        estimate = json.loads((out / "planned/fleet.json").read_text())["estimate"]
         self.assertEqual(estimate["ttl_s"], 150 * 60)
 
     def test_plan_ttl_min_without_offline_is_refused(self):
@@ -2497,13 +2414,12 @@ class CollectRdsTest(unittest.TestCase):
     def collect(self, runner: RdsRunner, t0=100.0, t1=160.0) -> Path:
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
-        cfg = awsb.RunConfig(tag="x", db_modes=("rds",))
         for collect in (
             awsb.collect_rds_metrics,
             awsb.collect_rds_insights,
             awsb.collect_rds_logs,
         ):
-            collect(runner, cfg, RDS_OUTPUT, t0, t1, tmp)
+            collect(runner, RDS_OUTPUT, t0, t1, tmp)
         return tmp
 
     def test_metrics_cover_the_padded_window_for_the_instance(self):
@@ -2892,17 +2808,15 @@ class RdsDownTest(unittest.TestCase):
         )
 
     def test_without_a_delete_event_the_driver_clock_ends_the_bill(self):
-        cfg = awsb.RunConfig(tag="x")
         fallback = datetime(2026, 9, 30, 13, 30, tzinfo=UTC)
         runner = RdsRunner([DONE_STATE])
-        got = awsb.rds_delete_time(runner, cfg, "espresso-bench-fleet1", fallback)
+        got = awsb.rds_delete_time(runner, "espresso-bench-fleet1", fallback)
         self.assertEqual(got, fallback)
         argv = next(c for c in runner.calls if "describe-events" in c)
         self.assertEqual(argv[argv.index("--source-type") + 1], "db-instance")
         self.assertEqual(argv[argv.index("--event-categories") + 1], "deletion")
 
     def test_only_deletion_messages_end_the_bill(self):
-        cfg = awsb.RunConfig(tag="x")
         runner = RdsRunner(
             [DONE_STATE],
             events=[
@@ -2915,7 +2829,7 @@ class RdsDownTest(unittest.TestCase):
         )
         fallback = datetime(2026, 9, 30, 14, 0, tzinfo=UTC)
         self.assertEqual(
-            awsb.rds_delete_time(runner, cfg, "x", fallback),
+            awsb.rds_delete_time(runner, "x", fallback),
             datetime(2026, 9, 30, 13, 0, tzinfo=UTC),
         )
 
@@ -2958,7 +2872,8 @@ class TerraformSourceTest(unittest.TestCase):
     def test_the_rds_arn_and_identifier_are_built_from_the_name(self):
         policy = tf_resource("aws_iam_role_policy", "scheduler")
         self.assertIn(
-            "arn:aws:rds:${var.region}:${var.account_id}:db:${local.rds_name}", policy
+            "arn:aws:rds:${local.region}:${local.account_id}:db:${local.rds_name}",
+            policy,
         )
         self.assertIn(
             "DbInstanceIdentifier   = local.rds_name",
@@ -2988,9 +2903,6 @@ class TofuRdsValidateTest(unittest.TestCase):
                 "name": "test-run",
                 "owner": "tester",
                 "git_rev": "abc1234",
-                "account_id": "000000000000",
-                "region": "eu-west-1",
-                "profile": "test",
                 "az": "",
                 "ami_id": "",
                 "ssh_public_key": "ssh-ed25519 AAAAtest test@example.com",
@@ -3316,25 +3228,25 @@ class GroupRdsRunsTest(unittest.TestCase):
 
 # REQ:orphans-rds-expiry
 class DestroyRdsOrphansTest(unittest.TestCase):
-    def destroy(self, runner, out: Path, *flags: str) -> tuple[int, str]:
-        parsed = awsb.parse_args(
-            ["destroy", "--orphans", "--out-root", str(out), *flags]
-        )
+    def setUp(self):
+        self.out = isolated_env(self, temp_dir(self))
+
+    def destroy(self, runner, *flags: str) -> tuple[int, str]:
+        parsed = awsb.parse_args(["destroy", "--orphans", *flags])
         text = io.StringIO()
         with contextlib.redirect_stdout(text):
             code = awsb.cmd_destroy(parsed, runner, SWEEP_NOW, FakeClock())
         return code, text.getvalue()
 
-    def write_fleet(self, out: Path, name: str, phase: str) -> None:
-        (out / name).mkdir()
-        netbench.write_json(out / name / "fleet.json", {"phase": phase})
+    def write_fleet(self, name: str, phase: str) -> None:
+        (self.out / name).mkdir(parents=True)
+        netbench.write_json(self.out / name / "fleet.json", {"phase": phase})
 
     # TEST:orphans-rds-expiry-ok
     def test_an_rds_fleet_past_expiry_is_listed_and_swept(self):
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_PAST)
         runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
-        with tempfile.TemporaryDirectory() as tmp:
-            code, text = self.destroy(runner, Path(tmp), "--yes")
+        code, text = self.destroy(runner, "--yes")
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertIn("| fleet1 | bob |", text)
         self.assertIn("1 instances, 1 volumes, 1 rds, 1 iam, 5 other", text)
@@ -3346,8 +3258,7 @@ class DestroyRdsOrphansTest(unittest.TestCase):
     def test_the_roles_are_listed_once_to_find_and_once_to_sweep(self):
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_PAST)
         runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
-        with tempfile.TemporaryDirectory() as tmp:
-            self.destroy(runner, Path(tmp), "--yes")
+        self.destroy(runner, "--yes")
         self.assertEqual(sum("list-roles" in call for call in runner.calls), 2)
 
     # TEST:orphans-live-fleet-kept-ok
@@ -3355,10 +3266,8 @@ class DestroyRdsOrphansTest(unittest.TestCase):
         user = getpass.getuser()
         mappings = rds_fleet_mappings("fleet1", user, EXPIRES_LATER)
         runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp)
-            self.write_fleet(out, "fleet1", "idle")
-            code, text = self.destroy(runner, out, "--yes")
+        self.write_fleet("fleet1", "idle")
+        code, text = self.destroy(runner, "--yes")
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertIn("no orphaned", text)
         self.assertNotIn(("ec2", "terminate-instances"), aws_verbs(runner))
@@ -3367,15 +3276,13 @@ class DestroyRdsOrphansTest(unittest.TestCase):
     def test_a_fleet_that_lost_its_state_is_swept_for_its_owner(self):
         mappings = rds_fleet_mappings("fleet1", getpass.getuser(), EXPIRES_LATER)
         runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
-        with tempfile.TemporaryDirectory() as tmp:
-            code, text = self.destroy(runner, Path(tmp), "--yes")
+        code, text = self.destroy(runner, "--yes")
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertTrue(text.splitlines()[2].endswith("| no local state |"))
 
     def test_a_role_left_by_a_fleet_with_no_other_resources_is_swept(self):
         runner = rds_tag_runner([], [], roles=[ROLE_ARN])
-        with tempfile.TemporaryDirectory() as tmp:
-            code, text = self.destroy(runner, Path(tmp), "--yes")
+        code, text = self.destroy(runner, "--yes")
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertTrue(text.splitlines()[2].endswith("| role without resources |"))
         self.assertIn("0 instances, 1 iam, 0 other", text)
@@ -3383,10 +3290,8 @@ class DestroyRdsOrphansTest(unittest.TestCase):
 
     def test_a_role_of_a_fleet_being_provisioned_here_is_kept(self):
         runner = rds_tag_runner([], [], roles=[ROLE_ARN])
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp)
-            self.write_fleet(out, "fleet1", "applying")
-            code, text = self.destroy(runner, out, "--yes")
+        self.write_fleet("fleet1", "applying")
+        code, text = self.destroy(runner, "--yes")
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertIn("no orphaned", text)
         self.assertNotIn(("iam", "delete-role"), aws_verbs(runner))
@@ -3400,8 +3305,7 @@ class DestroyRdsOrphansTest(unittest.TestCase):
             ),
             **runner.responses,
         }
-        with tempfile.TemporaryDirectory() as tmp:
-            code, _ = self.destroy(runner, Path(tmp), "--yes")
+        code, _ = self.destroy(runner, "--yes")
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
 
 

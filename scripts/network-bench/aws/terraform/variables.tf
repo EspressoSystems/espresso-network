@@ -14,21 +14,7 @@ variable "owner" {
 
 variable "git_rev" {
   type        = string
-  description = "Short git rev of the tree under test; the aws-bench preflight refuses a dirty tree without --allow-dirty, so this is always known."
-}
-
-variable "account_id" {
-  type        = string
-  description = "Expected caller account; the provider refuses to apply against any other."
-}
-
-variable "region" {
-  type = string
-}
-
-variable "profile" {
-  type        = string
-  description = "AWS CLI profile the provider authenticates with."
+  description = "Short git rev of the tree under test."
 }
 
 variable "az" {
