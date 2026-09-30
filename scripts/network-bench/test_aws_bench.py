@@ -3237,6 +3237,272 @@ class StartSupportTest(unittest.TestCase):
             awsb.start_support(remote, [], awsb.Interrupts(FakeClock()))
 
 
+class SupportPlanTest(unittest.TestCase):
+    def containers(self, query_db: awsb.DbMode) -> list[str | None]:
+        plan = awsb.support_plan(query_db, ["0xabc"])
+        return [step["container"] for step in plan]
+
+    # TEST:support-plan-order-ok
+    def test_containers_start_in_order_and_postgres_last(self):
+        self.assertEqual(
+            self.containers("colocated"),
+            [
+                "anvil",
+                "deploy",
+                None,
+                "orchestrator",
+                "state-relay-server",
+                "postgres",
+                None,
+                None,
+            ],
+        )
+
+    def test_rds_is_gated_but_not_started(self):
+        colocated = awsb.support_plan("colocated", [])
+        rds = awsb.support_plan("rds", [])
+        self.assertNotIn("postgres", [step["container"] for step in rds])
+        self.assertEqual(
+            [step["what"] for step in rds], [step["what"] for step in colocated]
+        )
+        self.assertEqual(rds[-3]["what"], "pg_isready")
+
+    def test_deploy_is_waited_on_not_polled(self):
+        deploy = awsb.support_plan("colocated", [])[1]
+        self.assertEqual(deploy["container"], "deploy")
+        self.assertIsNone(deploy["gate_cmd"])
+        self.assertEqual(deploy["timeout_s"], awsb.DEPLOY_TIMEOUT_S)
+
+    def test_every_contract_is_checked_between_deploy_and_orchestrator(self):
+        plan = awsb.support_plan("colocated", ["0xabc", "0xdef"])
+        whats = [step["what"] for step in plan]
+        self.assertEqual(
+            whats[1:6],
+            [
+                "deploy",
+                "eth_getCode 0xabc",
+                "eth_getCode 0xdef",
+                "orchestrator healthcheck",
+                "relay healthcheck",
+            ],
+        )
+        self.assertIn("0xdef", plan[3]["gate_cmd"] or "")
+
+    def test_gates_use_the_gate_timeout_and_the_right_host(self):
+        for step in awsb.support_plan("colocated", ["0xabc"]):
+            if step["gate_cmd"] is not None:
+                self.assertEqual(step["timeout_s"], awsb.GATE_TIMEOUT_S)
+        hosts = [step["host"] for step in awsb.support_plan("colocated", [])]
+        self.assertEqual(hosts, ["ctl"] * 4 + ["node0"] * 3)
+
+    def test_start_support_starts_the_planned_containers_in_order(self):
+        runner = Scripted({"docker wait deploy": [completed(stdout="0\n")]})
+        remote = scripted_remote(self, runner)
+        awsb.start_support(remote, ["0xabc"], awsb.Interrupts(FakeClock()), "rds")
+        commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
+        started = [
+            c.rpartition("docker start ")[2] for c in commands if "docker start" in c
+        ]
+        self.assertEqual(
+            started, ["anvil", "deploy", "orchestrator", "state-relay-server"]
+        )
+
+
+class CollectPlanTest(unittest.TestCase):
+    # TEST:collect-plan-skip-ok
+    def test_a_clean_run_freezes_collects_and_fetches_the_balance(self):
+        self.assertEqual(
+            awsb.collect_plan(None, True, "colocated"),
+            ["freeze", "collect_hosts", "rsync_out", "ebs_balance"],
+        )
+
+    def test_no_agent_means_no_final_rsync(self):
+        self.assertNotIn("rsync_out", awsb.collect_plan(None, False, "colocated"))
+
+    def test_an_error_stops_the_agent_first(self):
+        plan = awsb.collect_plan("boom", True, "colocated")
+        self.assertEqual(plan[0], "stop_agent")
+        self.assertEqual(plan[1:], awsb.collect_plan(None, True, "colocated"))
+
+    def test_rds_adds_its_collection_last(self):
+        self.assertEqual(awsb.collect_plan(None, True, "rds")[-1], "collect_rds")
+        self.assertNotIn("collect_rds", awsb.collect_plan(None, True, "volume"))
+
+
+class FinishRunSkipTest(unittest.TestCase):
+    """`skip_collect` is checked before every step, not once when the plan is made."""
+
+    def finish(self, on_freeze) -> tuple[list[str], list[str]]:
+        """(steps that ran, warnings) of a `finish_run` whose `freeze` calls `on_freeze`."""
+        tmp = tmp_dir(self)
+        interrupts = awsb.Interrupts(FakeClock())
+        fleet = awsb.FleetState(
+            FakeRunner({}),
+            awsb.RunConfig(tag="x"),
+            tmp,
+            None,
+            interrupts,
+            scripted_remote(self, Scripted({}), tmp),
+        )
+        run = awsb.Run(fleet, tmp, fleet.cfg, 0.0, agent_started=True)
+        ran: list[str] = []
+
+        def step(name: str, after=lambda: None):
+            def action(*args, **kwargs):
+                ran.append(name)
+                after()
+
+            return action
+
+        with (
+            unittest.mock.patch.object(awsb, "update_manifest"),
+            unittest.mock.patch.object(awsb, "report"),
+            unittest.mock.patch.object(
+                awsb, "freeze", step("freeze", lambda: on_freeze(interrupts))
+            ),
+            unittest.mock.patch.object(awsb, "collect_hosts", step("collect")),
+            unittest.mock.patch.object(awsb.Remote, "rsync_from", step("final rsync")),
+            unittest.mock.patch.object(
+                awsb, "collect_node0_ebs_balance", step("node0 EBS balance")
+            ),
+            self.assertLogs(awsb.log, "INFO") as logs,
+        ):
+            awsb.finish_run(run)
+        warnings = [r.getMessage() for r in logs.records if r.levelname == "WARNING"]
+        return ran, warnings
+
+    def test_a_signal_during_a_step_skips_the_steps_after_it(self):
+        ran, warnings = self.finish(lambda i: i.skip_collect.set())
+        self.assertEqual(ran, ["freeze"])
+        self.assertEqual(
+            warnings,
+            ["collect skipped", "final rsync skipped", "node0 EBS balance skipped"],
+        )
+
+    def test_without_a_signal_every_step_runs_in_plan_order(self):
+        ran, warnings = self.finish(lambda i: None)
+        self.assertEqual(ran, ["freeze", "collect", "final rsync", "node0 EBS balance"])
+        self.assertEqual(warnings, [])
+
+
+class DestroyVerdictTest(unittest.TestCase):
+    # TEST:destroy-verdict-ok
+    def test_success_is_done_at_any_attempt(self):
+        for attempt in range(1, awsb.DESTROY_RETRIES + 1):
+            self.assertEqual(awsb.destroy_verdict(attempt, True), "done")
+
+    def test_failure_retries_below_the_bound(self):
+        for attempt in range(1, awsb.DESTROY_RETRIES):
+            self.assertEqual(awsb.destroy_verdict(attempt, False), "retry")
+
+    def test_failure_at_the_bound_sweeps(self):
+        self.assertEqual(awsb.destroy_verdict(awsb.DESTROY_RETRIES, False), "sweep")
+
+
+class DestroyFleetBackoffTest(unittest.TestCase):
+    def destroy(self, failures: int) -> tuple[bool, FakeClock, unittest.mock.Mock]:
+        clock = FakeClock()
+        terraform = unittest.mock.Mock()
+        terraform.destroy.side_effect = [
+            awsb.TfFailed("destroy", "locked")
+        ] * failures + [None]
+        fleet = awsb.FleetState(
+            FakeRunner({}),
+            awsb.RunConfig(tag="x"),
+            tmp_dir(self) / "fleet1",
+            terraform,
+            awsb.Interrupts(clock),
+        )
+        with unittest.mock.patch.object(awsb, "sweep", return_value=[]) as sweep:
+            return awsb.destroy_fleet(fleet), clock, sweep
+
+    def test_backs_off_between_attempts_and_sweeps_after_the_last(self):
+        destroyed, clock, sweep = self.destroy(awsb.DESTROY_RETRIES)
+        self.assertFalse(destroyed)
+        self.assertEqual(clock.sleeps, [awsb.DESTROY_BACKOFF_S] * 2)
+        sweep.assert_called_once()
+
+    def test_a_late_success_does_not_sweep(self):
+        destroyed, clock, sweep = self.destroy(1)
+        self.assertTrue(destroyed)
+        self.assertEqual(clock.sleeps, [awsb.DESTROY_BACKOFF_S])
+        sweep.assert_not_called()
+
+
+SWEEP_ARNS = [
+    "arn:aws:ec2:eu-west-1:1:key-pair/key-1",
+    "arn:aws:ec2:eu-west-1:1:security-group/sg-1",
+    "arn:aws:ec2:eu-west-1:1:volume/vol-1",
+    "arn:aws:rds:eu-west-1:1:pg:espresso-bench-f",
+    "arn:aws:rds:eu-west-1:1:subgrp:espresso-bench-f",
+    "arn:aws:rds:eu-west-1:1:db:espresso-bench-f",
+    "arn:aws:ec2:eu-west-1:1:instance/i-1",
+    "arn:aws:scheduler:eu-west-1:1:schedule-group/espresso-bench-f",
+]
+
+
+class SweepPlanTest(unittest.TestCase):
+    def verbs(self, arns: list[str]) -> list[str]:
+        plan = awsb.sweep_plan(arns, "eu-west-1")
+        return [
+            " ".join(step["args"][:2]) if step["action"] == "aws" else step["action"]
+            for step in plan
+        ]
+
+    # TEST:sweep-plan-order-ok
+    def test_instances_terminate_before_volumes_security_group_and_key(self):
+        self.assertEqual(
+            self.verbs(SWEEP_ARNS),
+            [
+                "scheduler delete-schedule-group",
+                "ec2 terminate-instances",
+                "ec2 wait",
+                "delete_rds",
+                "rds delete-db-subnet-group",
+                "rds delete-db-parameter-group",
+                "ec2 delete-volume",
+                "delete_security_group",
+                "ec2 delete-key-pair",
+            ],
+        )
+
+    def test_no_resources_no_steps(self):
+        self.assertEqual(awsb.sweep_plan([], "eu-west-1"), [])
+
+    def test_steps_carry_region_id_and_tolerated_error(self):
+        plan = awsb.sweep_plan(SWEEP_ARNS[2:3], "eu-west-1")
+        self.assertEqual(
+            plan,
+            [
+                {
+                    "action": "aws",
+                    "args": [
+                        "ec2",
+                        "delete-volume",
+                        "--region",
+                        "eu-west-1",
+                        "--volume-id",
+                        "vol-1",
+                    ],
+                    "tolerate": "InvalidVolume.NotFound",
+                }
+            ],
+        )
+
+    def test_rds_and_security_group_steps_name_their_resource(self):
+        plan = awsb.sweep_plan(SWEEP_ARNS, "eu-west-1")
+        by_action = {step["action"]: step["args"] for step in plan}
+        self.assertEqual(by_action["delete_rds"], ["espresso-bench-f"])
+        self.assertEqual(by_action["delete_security_group"], ["sg-1"])
+
+    def test_instance_ids_are_terminated_and_waited_on_together(self):
+        arns = [f"arn:aws:ec2:eu-west-1:1:instance/i-{n}" for n in (1, 2)]
+        terminate, wait = awsb.sweep_plan(arns, "eu-west-1")
+        self.assertEqual(terminate["args"][-3:], ["--instance-ids", "i-1", "i-2"])
+        self.assertEqual(wait["args"][:2], ["ec2", "wait"])
+        self.assertEqual(wait["args"][-3:], ["--instance-ids", "i-1", "i-2"])
+
+
 class PostgresStatsTest(unittest.TestCase):
     def test_sql_is_one_shell_word_per_command(self):
         for has_checkpointer in (True, False):
