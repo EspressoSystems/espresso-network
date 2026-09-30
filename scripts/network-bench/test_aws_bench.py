@@ -1519,6 +1519,15 @@ class ParseDotenvTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             awsb.parse_dotenv("FOO=bar\nnot a line\n")
 
+    def test_read_dotenv_returns_the_file_text(self):
+        path = tmp_dir(self) / ".env"
+        path.write_text("A=1\n")
+        self.assertEqual(awsb.read_dotenv(path), "A=1\n")
+
+    def test_read_dotenv_missing_file_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            awsb.read_dotenv(tmp_dir(self) / "absent.env")
+
     def test_real_env_file_parses(self):
         env = awsb.parse_dotenv((Path(__file__).parents[2] / ".env").read_text())
         self.assertIn("ESPRESSO_ETH_MNEMONIC", env)
@@ -1608,15 +1617,27 @@ class RenderNodeEnvTest(unittest.TestCase):
         )
 
 
+DOTENV_TEXT = f"""# fixture in the syntax of the repo's .env
+ESPRESSO_ETH_MNEMONIC="{awsb.BENCH_MNEMONIC}"
+ESPRESSO_ORCHESTRATOR_PORT={awsb.ORCHESTRATOR_PORT}
+ESPRESSO_L1_PORT={awsb.L1_PORT}
+ESPRESSO_STATE_RELAY_SERVER_PORT={awsb.RELAY_PORT}
+ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS=0x0000000000000000000000000000000000000001
+ESP_TOKEN_PROXY_ADDRESS=0x0000000000000000000000000000000000000002
+ESPRESSO_STAKE_TABLE_PROXY_ADDRESS=0x0000000000000000000000000000000000000003
+ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS=0x0000000000000000000000000000000000000004
+ESPRESSO_ETH_MULTISIG_ADDRESS=a0Ee7A142d267C1f36714E4a8F75612F20a79720
+ESPRESSO_OPS_TIMELOCK_ADMIN=${{ESPRESSO_ETH_MULTISIG_ADDRESS}}
+"""
+
+
 class RenderCtlEnvTest(unittest.TestCase):
     def setUp(self):
         self.cfg = awsb.RunConfig(
             tag="x", nodes=5, load=netbench.BenchConfig(submit_nodes=4)
         )
         self.hosts = fleet(5)
-        self.dotenv = awsb.parse_dotenv(
-            (Path(__file__).parents[2] / ".env").read_text()
-        )
+        self.dotenv = awsb.parse_dotenv(DOTENV_TEXT)
 
     def env(self) -> dict:
         text = awsb.render_ctl_env(self.hosts, self.cfg, self.dotenv)
@@ -2157,6 +2178,7 @@ class RunHarness:
             unittest.mock.patch.object(
                 awsb, "preflight", return_value=fake_preflight()
             ),
+            unittest.mock.patch.object(awsb, "read_dotenv", return_value=DOTENV_TEXT),
         ]
         if confirmed:
             # An interactive run: `confirm` says yes, but --yes is absent, so an interrupt asks.
@@ -3453,7 +3475,9 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
         run_dir = tmp_dir(self)
         for host in hosts:
             (run_dir / "hosts" / host["name"]).mkdir(parents=True)
-        awsb.render_host_files(run_dir, cfg, manifest, two_node_hosts_info())
+        awsb.render_host_files(
+            run_dir, cfg, manifest, two_node_hosts_info(), DOTENV_TEXT
+        )
         pg_json = run_dir / "hosts/node0/pg.json"
         self.assertEqual(json.loads(pg_json.read_text()), awsb.pg_endpoint())
         self.assertEqual(pg_json.stat().st_mode & 0o777, 0o600)
@@ -4021,7 +4045,9 @@ class RenderHostFilesTest(unittest.TestCase):
             run_dir = Path(tmp)
             for host in hosts:
                 (run_dir / "hosts" / host["name"]).mkdir(parents=True)
-            awsb.render_host_files(run_dir, cfg, manifest, two_node_hosts_info())
+            awsb.render_host_files(
+                run_dir, cfg, manifest, two_node_hosts_info(), DOTENV_TEXT
+            )
             self.assertTrue((run_dir / "hosts/ctl/ctl.env").exists())
             self.assertTrue((run_dir / "hosts/node0/node.env").exists())
             self.assertTrue((run_dir / "hosts/node1/start.sh").exists())
