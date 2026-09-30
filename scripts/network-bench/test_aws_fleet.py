@@ -9,6 +9,8 @@ import contextlib
 import io
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -25,6 +27,7 @@ from test_aws_bench import (
     FleetRunner,
     awsb,
     completed,
+    fake_image,
     fake_images,
     fake_preflight,
     valid_result,
@@ -543,12 +546,6 @@ class RunRefusalTest(unittest.TestCase):
         self.refused(harness, runner, "already exists", "--name", "same")
         self.assertEqual(len(list((harness.fleet_dir / "runs").glob("*"))), 1)
 
-    def test_tag_must_match_the_fleet(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        self.refused(harness, runner, "up a new fleet", "--tag", "other")
-        self.assertEqual(harness.run(runner, "--tag", "t"), awsb.EXIT_OK)
-
     def test_unknown_dir_is_not_a_fleet(self):
         harness = FleetHarness(self)
         with self.assertRaisesRegex(awsb.Refused, "not a fleet dir"):
@@ -559,6 +556,208 @@ class RunRefusalTest(unittest.TestCase):
         args = harness.parse("run", "--nodes", "2")
         with self.assertRaisesRegex(awsb.Refused, "--tag"):
             awsb.cmd_run(args, run=TaggingRunner([DONE_STATE]))
+
+
+NEW_DIGEST = f"sha256:{'1' * 64}"
+
+
+def resolve_tag(ref: str) -> dict:
+    """A registry that knows `:other` at `NEW_DIGEST` and everything else at the fake digest."""
+    image = fake_image(ref)
+    return {**image, "digest": NEW_DIGEST} if ref.endswith(":other") else image
+
+
+class PullingRunner(TaggingRunner):
+    """Answers the pull script with what docker would report: the requested digests, or the
+    ones in `wrong`. The record script echoes a `ready.json` holding the digests it was given."""
+
+    def __init__(self, *args, wrong: dict[str, str] | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.wrong = wrong or {}
+
+    def ssh(self, command: str) -> subprocess.CompletedProcess:
+        script = shlex.split(command)[-1] if command.startswith("sudo timeout") else ""
+        if "docker pull" in script:
+            pulls = re.findall(r"docker pull (\S+)@(\S+) >&2", script)
+            names = re.findall(r"--arg name (\S+) ", script)
+            digests = {
+                name: f"{ref}@{self.wrong.get(name, digest)}"
+                for name, (ref, digest) in zip(names, pulls, strict=True)
+            }
+            return completed(stdout=json.dumps(digests))
+        if "digests.json.tmp" in script:
+            printf = next(l for l in script.splitlines() if l.startswith("printf"))
+            digests = json.loads(shlex.split(printf)[2])
+            return completed(stdout=json.dumps({"digests": digests}))
+        return super().ssh(command)
+
+
+# REQ:fleet-tag-pull
+class TagPullTest(unittest.TestCase):
+    def setUp(self):
+        patch = unittest.mock.patch.object(
+            awsb, "resolve_image", side_effect=resolve_tag
+        )
+        self.resolve = patch.start()
+        self.addCleanup(patch.stop)
+
+    def up_fleet(self, harness: FleetHarness, **kwargs) -> PullingRunner:
+        runner = PullingRunner([DONE_STATE], describe=DESCRIBE, **kwargs)
+        self.assertEqual(harness.up(runner), awsb.EXIT_OK)
+        self.resolve.reset_mock()
+        return runner
+
+    def test_a_different_tag_pulls_every_role_image_by_digest_on_every_host(self):
+        harness = FleetHarness(self)
+        runner = self.up_fleet(harness)
+        mark = len(runner.calls)
+        self.assertEqual(harness.run(runner, "--tag", "other"), awsb.EXIT_OK)
+        commands = ssh_calls(runner, mark)
+        pulls = [c for c in commands if "docker pull" in c]
+        self.assertEqual(len(pulls), 3)
+        for name in awsb.IMAGE_COMPONENTS:
+            ref = f"{awsb.GHCR_ORG}/{name}:other@{NEW_DIGEST}"
+            per_host = 2 if name == "espresso-node" else 1
+            self.assertEqual(
+                sum(c.count(f"docker pull {ref}") for c in pulls), per_host, name
+            )
+        for ref in awsb.SUPPORT_IMAGES.values():
+            self.assertEqual(sum(c.count(f"docker pull {ref}@") for c in pulls), 1, ref)
+        pull_at = min(i for i, c in enumerate(commands) if "docker pull" in c)
+        record_at = max(i for i, c in enumerate(commands) if "digests.json.tmp" in c)
+        reset_at = next(i for i, c in enumerate(commands) if "find /data/journal" in c)
+        self.assertLess(pull_at, record_at)
+        self.assertLess(record_at, reset_at)
+
+    def test_digests_and_ready_json_are_rewritten_on_the_hosts_and_locally(self):
+        harness = FleetHarness(self)
+        runner = self.up_fleet(harness)
+        mark = len(runner.calls)
+        harness.run(runner, "--tag", "other")
+        records = [c for c in ssh_calls(runner, mark) if "digests.json.tmp" in c]
+        self.assertEqual(len(records), 3)
+        for command in records:
+            script = shlex.split(command)[-1]
+            self.assertIn("ready.json.tmp", script)
+            self.assertIn(NEW_DIGEST, script)
+        ready = json.loads(
+            (harness.fleet_dir / "hosts" / "node1" / "ready.json").read_text()
+        )
+        self.assertEqual(set(ready["digests"]), {"espresso-node"})
+        self.assertTrue(ready["digests"]["espresso-node"].endswith(NEW_DIGEST))
+
+    def test_the_new_images_become_the_fleets_and_the_runs(self):
+        harness = FleetHarness(self)
+        runner = self.up_fleet(harness)
+        harness.run(runner, "--tag", "other")
+        fleet = harness.fleet()
+        self.assertEqual(fleet["config"]["tag"], "other")
+        self.assertEqual(fleet["phase"], "idle")
+        for name in awsb.IMAGE_COMPONENTS:
+            self.assertEqual(fleet["images"][name]["digest"], NEW_DIGEST)
+        run_dir = harness.fleet_dir / "runs" / "01-colocated"
+        run = json.loads((run_dir / "manifest.json").read_text())
+        self.assertEqual(run["images"], fleet["images"])
+        self.assertEqual(run["config"]["tag"], "other")
+        self.assertEqual(
+            run["phase_seconds"]["pull"], [awsb.PULL_EXPECTED_S, awsb.PULL_MAX_S]
+        )
+
+    def test_the_same_tag_pulls_nothing(self):
+        harness = FleetHarness(self)
+        runner = self.up_fleet(harness)
+        mark = len(runner.calls)
+        self.assertEqual(harness.run(runner, "--tag", "t"), awsb.EXIT_OK)
+        self.assertEqual(harness.run(runner), awsb.EXIT_OK)
+        self.assertFalse(any("docker pull" in c for c in ssh_calls(runner, mark)))
+        self.resolve.assert_not_called()
+
+    def test_the_pulled_tag_is_not_pulled_again(self):
+        harness = FleetHarness(self)
+        runner = self.up_fleet(harness)
+        harness.run(runner, "--tag", "other")
+        mark = len(runner.calls)
+        self.assertEqual(harness.run(runner, "--tag", "other"), awsb.EXIT_OK)
+        self.assertFalse(any("docker pull" in c for c in ssh_calls(runner, mark)))
+        self.assertEqual(harness.run(runner, "--tag", "t"), awsb.EXIT_OK)
+        self.assertEqual(harness.fleet()["config"]["tag"], "t")
+
+    # EDGE:fleet-pull-digest-mismatch
+    def test_a_pulled_digest_that_differs_fails_before_the_reset(self):
+        harness = FleetHarness(self)
+        runner = self.up_fleet(harness, wrong={"espresso-node": f"sha256:{'2' * 64}"})
+        before = harness.fleet()["images"]
+        mark = len(runner.calls)
+        self.assertEqual(harness.run(runner, "--tag", "other"), awsb.EXIT_FAILED)
+        commands = ssh_calls(runner, mark)
+        self.assertFalse(any("find /data/journal" in c for c in commands))
+        self.assertFalse(any("digests.json.tmp" in c for c in commands))
+        self.assertIn("pulled digests differ", harness.driver_log())
+        self.assertEqual(harness.fleet()["images"], before)
+        self.assertEqual(harness.fleet()["config"]["tag"], "t")
+        self.assertEqual(harness.fleet()["phase"], "dirty")
+        self.assertTrue(harness.lock().exists())
+        self.assertFalse(runner.ran("tofu", "destroy"))
+
+    def test_an_unknown_tag_is_refused_before_any_ssh(self):
+        harness = FleetHarness(self)
+        runner = self.up_fleet(harness)
+        self.resolve.side_effect = awsb.Refused("image not found: x")
+        mark = len(runner.calls)
+        with self.assertRaisesRegex(awsb.Refused, "image not found"):
+            harness.run(runner, "--tag", "nope")
+        self.assertEqual(ssh_calls(runner, mark), [])
+        self.assertFalse(harness.lock().exists())
+        self.assertEqual(len(list((harness.fleet_dir / "runs").glob("*"))), 0)
+
+    def test_a_tag_change_needs_the_ttl_for_the_pull(self):
+        harness = FleetHarness(self)
+        runner = self.up_fleet(harness)
+        manifest = harness.fleet()
+        cfg = awsb.fleet_run_config(harness.run_args(), manifest)
+        needed = awsb.estimate_run(manifest, cfg)["worst_s"] + awsb.NOLOGIN_LEAD_S
+        expires = datetime.now(UTC) + timedelta(
+            seconds=needed + awsb.DESTROY_S + awsb.PULL_MAX_S - 30
+        )
+        harness.set_fleet(expires_at=awsb.expiry_stamp(expires))
+        self.assertEqual(harness.run(runner), awsb.EXIT_OK)
+        mark = len(runner.calls)
+        harness.set_fleet(expires_at=awsb.expiry_stamp(expires))
+        with self.assertRaisesRegex(awsb.Refused, "extend"):
+            harness.run(runner, "--tag", "other")
+        self.assertEqual(ssh_calls(runner, mark), [])
+
+
+class ShipAgentsTest(unittest.TestCase):
+    def test_both_agents_go_to_every_host_and_the_git_revision_is_recorded(self):
+        harness = FleetHarness(self)
+        runner = harness.up_fleet(self)
+        mark = len(runner.calls)
+        harness.run(runner)
+        rsyncs = [c for c in runner.calls[mark:] if c[0] == "rsync"]
+        sends = [c for c in rsyncs if not any(a.startswith("--exclude") for a in c)]
+        agents = [c for c in sends if any(a.endswith("/netbench.py") for a in c)]
+        self.assertEqual(len(agents), 3)
+        for call in agents:
+            self.assertTrue(any(a.endswith("/aws-bench") for a in call))
+        per_run = [c for c in sends if any(a.endswith("/genesis.toml") for a in c)]
+        self.assertEqual(len(per_run), 3)
+        self.assertFalse(
+            any(a.endswith(("/netbench.py", "/aws-bench")) for c in per_run for a in c)
+        )
+        run_dir = harness.fleet_dir / "runs" / "01-colocated"
+        manifest = json.loads((run_dir / "manifest.json").read_text())
+        self.assertEqual(manifest["git_rev"], "a" * 40)
+
+    def test_the_run_records_the_revision_shipped_for_it(self):
+        harness = FleetHarness(self)
+        runner = harness.up_fleet(self)
+        with unittest.mock.patch.object(awsb, "git_head", return_value="b" * 40):
+            harness.run(runner)
+        run_dir = harness.fleet_dir / "runs" / "01-colocated"
+        manifest = json.loads((run_dir / "manifest.json").read_text())
+        self.assertEqual(manifest["git_rev"], "b" * 40)
+        self.assertEqual(harness.fleet()["git_rev"], "a" * 40)
 
 
 class FleetLockTest(unittest.TestCase):
@@ -619,9 +818,26 @@ class RunEstimateTest(unittest.TestCase):
     def test_run_phases_have_no_provision_or_destroy(self):
         phases = awsb.run_phase_seconds(awsb.RunConfig(tag="x"))
         self.assertEqual(
-            list(phases), ["reset", "services", "ready", "load", "collect"]
+            list(phases), ["pull", "reset", "services", "ready", "load", "collect"]
         )
         self.assertEqual(phases["reset"], (awsb.RESET_EXPECTED_S, awsb.RESET_MAX_S))
+        self.assertEqual(phases["pull"], (0.0, 0.0))
+
+    def test_a_tag_change_adds_the_pull_to_the_estimate(self):
+        harness = FleetHarness(self)
+        harness.up_fleet(self)
+        manifest = harness.fleet()
+        same = awsb.fleet_run_config(harness.run_args(), manifest)
+        other = awsb.fleet_run_config(harness.run_args("--tag", "other"), manifest)
+        self.assertEqual(
+            awsb.run_phase_seconds(other, pull=True)["pull"],
+            (awsb.PULL_EXPECTED_S, awsb.PULL_MAX_S),
+        )
+        gap = (
+            awsb.estimate_run(manifest, other)["worst_s"]
+            - awsb.estimate_run(manifest, same)["worst_s"]
+        )
+        self.assertEqual(gap, awsb.PULL_MAX_S)
 
     def test_estimate_is_the_fleet_rate_over_the_phases(self):
         harness = FleetHarness(self)

@@ -100,6 +100,9 @@ NOLOGIN_LEAD_S = 300.0
 # `reset_chain` between two runs on one fleet.
 RESET_EXPECTED_S = 60.0
 RESET_MAX_S = 180.0
+# `pull_images` when `run --fleet --tag` moves the hosts to other images.
+PULL_EXPECTED_S = 120.0
+PULL_MAX_S = 300.0
 # Signal count that abandons the remaining collection and goes straight to destroy.
 SKIP_COLLECT_SIGNALS = 3
 # The load ramp: x1.5 per step from 4 MB/s up to the 200 MB/s target. The staircase stops at the
@@ -994,17 +997,25 @@ def estimate_rate(estimate: Estimate) -> float:
     return usd / (estimate["expected_s"] / 3600)
 
 
-def run_phase_seconds(cfg: RunConfig) -> dict[str, tuple[float, float]]:
-    """phase -> (expected_s, worst_s) of one run on a live fleet: no provision, no destroy."""
+def tag_changed(manifest: FleetManifest, cfg: RunConfig) -> bool:
+    return cfg.tag != manifest["config"]["tag"]
+
+
+def run_phase_seconds(
+    cfg: RunConfig, pull: bool = False
+) -> dict[str, tuple[float, float]]:
+    """phase -> (expected_s, worst_s) of one run on a live fleet: no provision, no destroy.
+    `pull` is set when the run moves the hosts to other images."""
     phases = phase_seconds(cfg)
     return {
+        "pull": (PULL_EXPECTED_S, PULL_MAX_S) if pull else (0.0, 0.0),
         "reset": (RESET_EXPECTED_S, RESET_MAX_S),
         **{name: phases[name] for name in ("services", "ready", "load", "collect")},
     }
 
 
 def estimate_run(manifest: FleetManifest, cfg: RunConfig) -> RunEstimate:
-    phases = run_phase_seconds(cfg)
+    phases = run_phase_seconds(cfg, tag_changed(manifest, cfg))
     expected_s = sum(expected for expected, _ in phases.values())
     worst_s = sum(worst for _, worst in phases.values())
     rate = estimate_rate(manifest["estimate"])
@@ -2876,6 +2887,8 @@ def measure_run(run: Run) -> None:
         enter_phase(
             fleet, run.manifest_path, "shipping", "files, host monitors, containers"
         )
+        git_rev = ship_agents(remote)
+        update_manifest(run.manifest_path, "shipping", git_rev=git_rev)
         ship(remote, run.run_dir)
         start_hostmon(remote)
         create_containers(remote)
@@ -3228,7 +3241,7 @@ def cmd_run_fleet(
     args: argparse.Namespace, run: Runner, interrupts: Interrupts | None = None
 ) -> int:
     """One more measurement on a fleet `up` left idle. The fleet stays up in every outcome:
-    idle again, or `dirty` and locked when the reset failed."""
+    idle again, or `dirty` and locked when the pull or reset failed."""
     reject_fleet_flags(args.argv)
     fleet_dir: Path = args.fleet
     manifest = read_fleet(fleet_dir)
@@ -3251,13 +3264,15 @@ def cmd_run_fleet(
     )
     try:
         with recording(bench_run):
+            assert fleet.remote is not None
+            if tag_changed(manifest, cfg):
+                pull_tag(bench_run)
             enter_phase(
                 fleet,
                 bench_run.manifest_path,
                 "resetting",
                 "stop containers, wipe journal and postgres data",
             )
-            assert fleet.remote is not None
             reset_chain(fleet.remote, interrupts)
         reset_failed = bench_run.error is not None
         result = run_on_fleet(bench_run)
@@ -3279,20 +3294,16 @@ def fleet_config_from_args(args: argparse.Namespace) -> RunConfig:
 
 
 def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfig:
-    """The fleet's own config with the flags that belong to one run: load, block size, ready
-    timeout, name, database mode."""
+    """The fleet's own config with the flags that belong to one run: image tag, load, block
+    size, ready timeout, name, database mode."""
     base = config_from_manifest(saved["config"])
-    if args.tag is not None and args.tag != base.tag:
-        raise Refused(
-            f"fleet {saved['name']} runs images tagged {base.tag}, not {args.tag}: "
-            "up a new fleet"
-        )
     cli = fleet_config_from_args(args)
     load = cli.load
     if args.submit_nodes is None:
         load = dataclasses.replace(load, submit_nodes=base.nodes - 1)
     return dataclasses.replace(
         base,
+        tag=base.tag if cli.tag is None else cli.tag,
         load=load,
         ready_timeout_s=cli.ready_timeout_s,
         max_block_size=cli.max_block_size,
@@ -3322,10 +3333,20 @@ def admit_run(
         estimate = check_run_allowed(manifest, cfg, datetime.now(UTC))
         if cfg.name is not None:
             require_unused_name(fleet_dir, name)
-        return render_run(fleet_dir, manifest, cfg, name, estimate), estimate
+        fleet = retagged(manifest, cfg)
+        return render_run(fleet_dir, fleet, cfg, name, estimate), estimate
     except BaseException:
         release_fleet_lock(fleet_dir)
         raise
+
+
+def retagged(manifest: FleetManifest, cfg: RunConfig) -> FleetManifest:
+    """The fleet manifest with the digests `cfg.tag` resolves to; the manifest itself when the
+    tag is the fleet's, which needs no registry access."""
+    if not tag_changed(manifest, cfg):
+        return manifest
+    images = {name: resolve_image(ref) for name, ref in image_refs(cfg).items()}
+    return {**manifest, "images": images}
 
 
 def take_fleet_lock(fleet_dir: Path, run_name: str, force: bool) -> FleetLock:
@@ -3413,6 +3434,98 @@ def check_run_allowed(
     return estimate
 
 
+def pull_tag(run: Run) -> None:
+    """Moves the hosts to the images of this run, then makes them the fleet's, so that a later
+    run with the same tag pulls nothing."""
+    fleet = run.fleet
+    assert fleet.remote is not None
+    images = run.manifest["images"]
+    enter_phase(
+        fleet,
+        run.manifest_path,
+        "pulling",
+        f"tag {run.cfg.tag} by digest on {len(fleet.remote.hosts)} hosts",
+    )
+    pull_images(fleet.remote, images, fleet.fleet_dir)
+    saved = fleet.manifest
+    update_manifest(
+        fleet.manifest_path,
+        saved["phase"],
+        images=images,
+        config={**saved["config"], "tag": run.cfg.tag},
+    )
+
+
+def pull_images(remote: Remote, images: dict[str, ImageInfo], fleet_dir: Path) -> None:
+    """Pulls every role image by digest on every host and compares what docker reports with
+    `images`. Only when all hosts match are `digests.json` and `ready.json` rewritten (and
+    `hosts/<host>/ready.json` refreshed), so a mismatch leaves the records as `up` wrote them."""
+
+    def pull(host: str) -> dict[str, str]:
+        role = remote.hosts[host]["role"]
+        refs = {
+            name: f"{images[name]['ref']}@{images[name]['digest']}"
+            for name in ROLE_IMAGES[role]
+        }
+        stdout = remote.ssh(host, pull_command(pull_script(refs))).stdout
+        return json.loads(stdout)
+
+    pulled = remote.parallel(pull, remote.hosts)
+    wrong = {
+        host: bad
+        for host, digests in pulled.items()
+        if (bad := digest_mismatches(digests, images))
+    }
+    if wrong:
+        raise RemoteError(
+            "pulled digests differ from the resolved ones: "
+            + "; ".join(f"{host}: {', '.join(bad)}" for host, bad in wrong.items())
+        )
+
+    def record(host: str) -> None:
+        text = remote.ssh(host, pull_command(record_script(pulled[host]))).stdout
+        (fleet_dir / "hosts" / host / "ready.json").write_text(text)
+
+    remote.parallel(record, remote.hosts)
+
+
+def pull_command(script: str) -> str:
+    return f"sudo timeout -k 10 {PULL_MAX_S:.0f} bash -c {shlex.quote(script)}"
+
+
+def pull_script(refs: dict[str, str]) -> str:
+    """Prints `{name: repo@sha256:..}` as `docker image inspect` reports each pulled ref."""
+    lines = ["set -eu", "out='{}'"]
+    for name, ref in refs.items():
+        lines.append(_pull_one(name, ref))
+    return "\n".join([*lines, 'echo "$out"'])
+
+
+def _pull_one(name: str, ref: str) -> str:
+    inspect_format = "{{json .RepoDigests}}"
+    merge = "'$out + {($name): $digest}'"
+    return (
+        f"docker pull {shlex.quote(ref)} >&2\n"
+        f"pulled=$(docker image inspect --format {shlex.quote(inspect_format)} "
+        f"{shlex.quote(ref)} | jq -r '.[0]')\n"
+        f'out=$(jq -cn --argjson out "$out" --arg name {shlex.quote(name)} '
+        f'--arg digest "$pulled" {merge})'
+    )
+
+
+def record_script(digests: dict[str, str]) -> str:
+    """Rewrites `digests.json` and the `digests` of `ready.json`; prints the new `ready.json`."""
+    return (
+        "set -eu\n"
+        f"printf %s {shlex.quote(json.dumps(digests))} > {BENCH_DIR}/digests.json.tmp\n"
+        f"mv {BENCH_DIR}/digests.json.tmp {BENCH_DIR}/digests.json\n"
+        f"jq --slurpfile d {BENCH_DIR}/digests.json '.digests = $d[0]' "
+        f"{BENCH_DIR}/ready.json > {BENCH_DIR}/ready.json.tmp\n"
+        f"mv {BENCH_DIR}/ready.json.tmp {BENCH_DIR}/ready.json\n"
+        f"cat {BENCH_DIR}/ready.json\n"
+    )
+
+
 def reset_script(role: str) -> str:
     """Stops the agents, removes every container and wipes what a run leaves on a host, keeping
     what `up` put there. On the query host it also empties the Postgres data directory."""
@@ -3484,8 +3597,8 @@ def settle_fleet(fleet: FleetState, dirty: bool) -> None:
     if dirty:
         update_manifest(fleet.manifest_path, "dirty")
         log.error(
-            "reset failed, fleet is dirty and locked; run: aws-bench run --fleet %s --force, "
-            "or: aws-bench down %s",
+            "pull or reset failed, fleet is dirty and locked; run: "
+            "aws-bench run --fleet %s --force, or: aws-bench down %s",
             fleet.fleet_dir,
             fleet.fleet_dir,
         )
@@ -3690,7 +3803,11 @@ def render_run(
         Path(cfg.load.genesis).read_bytes(), cfg.nodes, cfg.max_block_size
     )
     run_dir = new_run_dir(fleet_dir, name)
-    phases = phase_seconds(cfg) if run_estimate is None else run_phase_seconds(cfg)
+    phases = (
+        phase_seconds(cfg)
+        if run_estimate is None
+        else run_phase_seconds(cfg, tag_changed(fleet, cfg))
+    )
     manifest = build_run_manifest(
         fleet,
         cfg,
@@ -3942,11 +4059,20 @@ def digest_mismatches(
     ]
 
 
+def ship_agents(remote: Remote) -> str:
+    """The laptop's current `aws-bench` and `netbench.py` to every host, whatever `up` put
+    there. Returns the git revision they were shipped from."""
+    files = [SCRIPT_DIR / "netbench.py", SCRIPT_DIR / "aws-bench"]
+    remote.parallel(
+        lambda host: remote.rsync_to(host, files, f"{BENCH_DIR}/"), remote.hosts
+    )
+    return git_head(remote.run)
+
+
 def ship(remote: Remote, run_dir: Path) -> None:
     def send(host: str) -> None:
         host_dir = run_dir / "hosts" / host
-        files = [SCRIPT_DIR / "netbench.py", SCRIPT_DIR / "aws-bench"]
-        files += [host_dir / f for f in SHIPPED_HOST_FILES if (host_dir / f).exists()]
+        files = [host_dir / f for f in SHIPPED_HOST_FILES if (host_dir / f).exists()]
         files.append(run_dir / "genesis.toml")
         remote.rsync_to(host, files, f"{BENCH_DIR}/")
 
