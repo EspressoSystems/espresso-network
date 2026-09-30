@@ -430,16 +430,7 @@ where
             .unwrap_or(EpochNumber::genesis());
 
         if self.consensus.last_decided_leaf().view_number() == ViewNumber::genesis() {
-            // Genesis DA never flows through the normal block-builder path.
             let genesis_leaf = self.consensus.last_decided_leaf().clone();
-            let (payload, metadata) = T::BlockPayload::empty();
-            self.storage.append_da(
-                ViewNumber::genesis(),
-                EpochNumber::genesis(),
-                payload,
-                metadata,
-                genesis_leaf.payload_commitment(),
-            );
 
             // Emit `LeafDecided` for genesis so persistence sees the header.
             self.outbox.push_back(ConsensusOutput::LeafDecided {
@@ -645,7 +636,6 @@ where
                             self.da_payloads.insert(
                                 (block.view, commit),
                                 PendingDa {
-                                    epoch: block.epoch,
                                     payload: block.payload.payload.clone(),
                                     metadata: block.payload.metadata.clone(),
                                     hashes: manifest.hashes.clone(),
@@ -738,13 +728,6 @@ where
             .insert(out.view, out.payload.txn_bytes());
         self.block_builder
             .on_block_reconstructed(out.view, out.tx_commitments);
-        self.storage.append_da(
-            out.view,
-            out.epoch,
-            out.payload.clone(),
-            out.metadata.clone(),
-            VidCommitment::V2(out.payload_commitment),
-        );
         if let Some(proposal) = self.consensus.proposal_at(out.view) {
             // Only pair the payload with the header if the proposal commits to it
             if proposal.block_header.payload_commitment()
@@ -897,13 +880,6 @@ where
                         // but did not propose puts nothing on the chain, so this is where
                         // its transactions count as included.
                         self.block_builder.on_block_reconstructed(view, da.hashes);
-                        self.storage.append_da(
-                            view,
-                            da.epoch,
-                            da.payload,
-                            da.metadata,
-                            VidCommitment::V2(commit),
-                        );
                     } else {
                         warn!(%node, %view, "no payload for proposed block");
                     }
@@ -2346,9 +2322,8 @@ pub(crate) fn is_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> b
         && *epoch <= current.saturating_add(EPOCH_CHANGE_LOOKAHEAD)
 }
 
-/// A payload built locally and awaiting DA persistence.
+/// A payload built locally, held until consensus proposes it.
 struct PendingDa<T: NodeType> {
-    epoch: EpochNumber,
     payload: T::BlockPayload,
     metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     hashes: Vec<Commitment<T::Transaction>>,
