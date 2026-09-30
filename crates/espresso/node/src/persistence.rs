@@ -2411,25 +2411,6 @@ mod tests {
         );
     }
 
-    /// The payload of a block this node built arrives on the decided leaf and never as a
-    /// reconstruction event. It still goes out on the decided leaf.
-    #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_built_block_payload_attached_to_decided_leaf<P: TestablePersistence>(
-        _p: PhantomData<P>,
-    ) {
-        let tmp = P::tmp_storage().await;
-        let storage = P::connect(&tmp).await;
-        let consumer = DeliveryCollector::default();
-        let mut chain = consecutive_height_chain(2).await;
-        chain[1].0.fill_block_payload_unchecked(Payload::empty().0);
-
-        decide_range(&storage, &chain, 0..2, &consumer).await;
-        assert_eq!(
-            consumer.take().await,
-            Vec::from([Delivered::Decide(1, Some(Payload::empty().0))])
-        );
-    }
-
     #[rstest_reuse::apply(replaying_persistence_types)]
     pub async fn test_pruning<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;

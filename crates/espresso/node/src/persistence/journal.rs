@@ -1009,22 +1009,15 @@ impl SequencerPersistence for Persistence {
             .into_iter()
             .map(|(info, cert)| (info.leaf.clone(), cert))
             .collect();
-        let mut records = Vec::with_capacity(leaf_chain.len());
         for (mut leaf, cert) in leaf_chain {
-            // A block this node built never arrives as a reconstructed payload, only on its leaf.
-            if let Some(payload) = leaf.block_payload() {
-                self.put_pending_payload(leaf.view_number(), leaf.block_header(), &payload)
-                    .await?;
-            }
+            // The payload arrives as a pending payload, also for a block this node built.
             leaf.unfill_block_payload();
-            records.push(Record::Leaf {
+            let record = Record::Leaf {
                 leaf,
                 qc: cert.qc().clone(),
                 next_epoch_qc: cert.next_epoch_qc().cloned(),
-            });
-        }
-        for rec in records {
-            self.put_wal(rec, Class::Enqueue).await?;
+            };
+            self.put_wal(record, Class::Enqueue).await?;
         }
         Ok(())
     }

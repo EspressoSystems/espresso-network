@@ -603,9 +603,9 @@ impl Inner {
             intervals.push(start..=end);
         }
 
-        for (view, (header, payload)) in pending {
+        for (pending_view, (header, payload)) in pending {
             let event = CoordinatorEvent::BlockPayload {
-                view,
+                view: pending_view,
                 header,
                 payload: Arc::new(payload),
             };
@@ -2188,7 +2188,6 @@ impl DhtPersistentStorage for Persistence {
     }
 }
 
-/// Get all paths under `dir` whose name is of the form <view number>.txt.
 /// A file that fails to decode is logged and left out, and is still deleted with the others:
 /// failing the decide instead would retry it forever, holding up GC behind one file.
 fn load_pending_payloads(
@@ -2213,6 +2212,7 @@ fn load_pending_payloads(
     Ok(payloads)
 }
 
+/// Get all paths under `dir` whose name is of the form <view number>.txt.
 fn view_files(
     dir: impl AsRef<Path>,
 ) -> anyhow::Result<impl Iterator<Item = (ViewNumber, PathBuf)>> {

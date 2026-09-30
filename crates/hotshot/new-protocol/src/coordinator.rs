@@ -641,8 +641,8 @@ where
                         self.state_manager.request_header(HeaderRequest::from(&block));
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
-                        // Retain the payload and persist it when consensus proposes this
-                        // exact block (cf. SendProposal):
+                        // Retain the payload until consensus proposes this exact block
+                        // (cf. PersistProposal):
                         if let VidCommitment::V2(commit) = block.payload_commitment {
                             self.da_payloads.insert(
                                 (block.view, commit),
@@ -871,7 +871,7 @@ where
                 debug!(%node, %view, "persist proposal");
                 self.storage.append_proposal(proposal.data.clone());
                 // Two blocks can be built for one view. Here we know which one
-                // wins and we persist just that one:
+                // wins and we hand out just that one:
                 if let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() {
                     if let Some(da) = self.da_payloads.remove(&(view, commit)) {
                         self.payload_txn_bytes.insert(view, da.payload.txn_bytes());
@@ -887,6 +887,13 @@ where
                             view,
                             da.payload.transaction_commitments(&da.metadata),
                         );
+                        // Consensus drops the built block below each decided view, before a
+                        // late decide of this view may arrive, so it has to be handed out now.
+                        self.outbox.push_back(ConsensusOutput::BlockPayload {
+                            view,
+                            header: proposal.data.block_header.clone(),
+                            payload: Arc::new(da.payload),
+                        });
                     } else {
                         warn!(%node, %view, "no payload for proposed block");
                     }
