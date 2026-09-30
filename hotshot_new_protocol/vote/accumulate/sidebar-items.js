@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["CheckedAccumulator"]};
+window.SIDEBAR_ITEMS = {"struct":["CheckedAccumulator"],"type":["Cert"]};

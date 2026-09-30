@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Completion"],"struct":["CertBySenderVerifier","CertVerifier","CertVerifiers","ValidCert"],"trait":["Verifiable"]};
+window.SIDEBAR_ITEMS = {"enum":["Completion"],"fn":["verify_signatures"],"struct":["CertBySenderVerifier","CertVerifier","CertVerifiers","ValidCert"],"trait":["Meta","Verifiable"]};
