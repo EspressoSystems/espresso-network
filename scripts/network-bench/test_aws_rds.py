@@ -1,8 +1,8 @@
-"""Tests for the rds and pg volume query stores of `aws-bench`, and the sweep of their resources."""
-
+import dataclasses
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import netbench
 import pytest
@@ -18,26 +18,25 @@ from fakes import (
     ROLE_ARN,
     STATUS_DESCRIBE,
     VOLUME_ID,
-    FakeClock,
     FakeRunner,
     FakeSystem,
     FleetHarness,
     RdsHarness,
     RdsRunner,
+    arn,
     aws_manifest,
     aws_verbs,
     awsb,
     completed,
     db_instance,
     fake_preflight,
-    instance_row,
+    instance,
     isolated_env,
     mapping,
     mode,
     rds_fleet_mappings,
     rds_spec,
     rds_tag_runner,
-    resource_arn,
     run_cmd,
     ssh_calls,
     two_node_hosts_info,
@@ -45,16 +44,19 @@ from fakes import (
     write_collected_run,
 )
 
+INSTANCE_ROW = {**instance("i-1"), "reason": ""}
+
 
 @pytest.fixture
 def harness(isolated: Path, monkeypatch: pytest.MonkeyPatch) -> RdsHarness:
-    return RdsHarness(monkeypatch)
+    return RdsHarness(monkeypatch, isolated, "rds")
 
 
 def failing(runner: FakeRunner, pattern: str, stderr: str) -> None:
     runner.respond(pattern, lambda _: completed(returncode=254, stderr=stderr))
 
 
+# REQ:querydb-rds-guard
 @pytest.mark.parametrize(
     ("flag", "value", "pattern"),
     [("--pg-iops", "6000", "--pg-iops 12000"), ("--pg-mbps", "250", "--pg-mbps 500")],
@@ -64,6 +66,10 @@ def test_other_iops_or_throughput_are_refused(harness, flag, value, pattern):
     with pytest.raises(awsb.Refused, match=pattern):
         harness.up(runner, flag, value)
     assert runner.calls == []
+
+
+def test_other_modes_skip_the_rds_guards():
+    awsb.check_rds_config(awsb.RunConfig(tag="x", pg_iops=1))
 
 
 def orderable(**overrides) -> dict:
@@ -123,6 +129,7 @@ def test_an_unorderable_rds_is_refused(runner, pattern):
         awsb.rds_orderable(runner, RDS_CFG, "eu-west-1b")
 
 
+# REQ:fleet-cost
 def test_the_fleet_bound_bills_rds_until_its_delete_finishes():
     load = netbench.BenchConfig(submit_nodes=1)
     cfg = awsb.RunConfig(tag="x", nodes=2, ttl_min="150", db_modes=("rds",), load=load)
@@ -153,6 +160,7 @@ def test_a_run_needs_time_for_the_rds_delete(harness):
     awsb.check_run_allowed(manifest, cfg, expires - timedelta(seconds=floor + 60))
 
 
+# REQ:querydb-rds-wiring / REQ:querydb-settings-parity
 # TEST:querydb-settings-parity-ok
 def test_the_parameter_group_renders_from_the_container_settings(harness):
     harness.up_rds()
@@ -197,13 +205,13 @@ def test_a_single_shot_deletes_the_rds_before_its_hosts_end(tmp_path):
     confirmed = datetime(2026, 9, 29, 16, 0, tzinfo=UTC)
     tf = awsb.Terraform(FakeRunner(states=[]), tmp_path / "terraform", {})
     awsb.stamp_expiry(tmp_path, tf, confirmed)
-    written = json.loads(tfvars_path.read_text())
+    written = netbench.read_json(tfvars_path)
     assert written["expires_at"] == "2026-09-29T17:08:00Z"
     assert written["rds"]["delete_at"] == "2026-09-29T16:55:00"
 
 
 def test_plan_renders_the_rds_variables_and_prices_them(isolated, monkeypatch):
-    out = isolated_env(monkeypatch, "planned")
+    out = isolated_env(monkeypatch, isolated, "planned")
     argv = ["plan", "--nodes", "2", "--tag", "x", "--db-modes", "colocated,rds"]
     args = awsb.parse_args(argv)
     args.argv = argv
@@ -211,18 +219,18 @@ def test_plan_renders_the_rds_variables_and_prices_them(isolated, monkeypatch):
     monkeypatch.setattr(awsb, "preflight", lambda *_: pre)
     system = FakeSystem(run=FakeRunner(states=[]))
     assert awsb.cmd_plan(args, system) == awsb.EXIT_OK
-    tfvars = json.loads((out / "planned/terraform/terraform.tfvars.json").read_text())
+    tfvars = netbench.read_json(out / "planned/terraform/terraform.tfvars.json")
     assert tfvars["rds"]["engine_version"] == "18"
-    manifest = json.loads((out / "planned/fleet.json").read_text())
+    manifest = netbench.read_json(out / "planned/fleet.json")
     assert manifest["db_modes"] == ["colocated", "rds"]
     items = {line["item"] for line in manifest["estimate"]["lines"]}
     assert {"rds instance db.m8g.4xlarge", "rds gp3 storage"} <= items
 
 
-def rds_run_dir(harness: RdsHarness) -> tuple[Path, "awsb.RunConfig"]:
+def rds_run_dir(harness: RdsHarness) -> tuple[Path, Any]:
     run_dir = harness.run_dir("01-rds")
     run_dir.mkdir(parents=True)
-    cfg = awsb.dataclasses.replace(
+    cfg = dataclasses.replace(
         awsb.config_from_manifest(harness.fleet()["config"]), query_db="rds"
     )
     return run_dir, cfg
@@ -230,7 +238,7 @@ def rds_run_dir(harness: RdsHarness) -> tuple[Path, "awsb.RunConfig"]:
 
 def test_node0_env_points_at_the_endpoint(harness):
     harness.up_rds()
-    rds = json.loads((harness.fleet_dir / "rds.json").read_text())
+    rds = netbench.read_json(harness.fleet_dir / "rds.json")
     run_dir, cfg = rds_run_dir(harness)
     awsb.render_host_files(run_dir, cfg, harness.fleet(), two_node_hosts_info())
     node0 = run_dir / "hosts/node0"
@@ -241,7 +249,7 @@ def test_node0_env_points_at_the_endpoint(harness):
     assert env["ESPRESSO_NODE_POSTGRES_USER"] == awsb.RDS_USER
     assert env["ESPRESSO_NODE_POSTGRES_PASSWORD"] == rds["password"]
     assert env["ESPRESSO_NODE_POSTGRES_DATABASE"] == "espresso"
-    assert json.loads((node0 / "pg.json").read_text())["host"] == RDS_OUTPUT["endpoint"]
+    assert netbench.read_json(node0 / "pg.json")["host"] == RDS_OUTPUT["endpoint"]
     assert mode(node0 / "pg.json") == 0o600
     assert mode(node0 / "node.env") == 0o600
     assert "--name postgres" not in (node0 / "start.sh").read_text()
@@ -272,12 +280,12 @@ def test_up_records_the_instance_and_gates_node0_on_it(harness):
     manifest = harness.fleet()
     assert manifest["phase"] == "idle"
     assert manifest["rds"] == {**RDS_OUTPUT, "created_at": RDS_CREATED}
-    rds = json.loads((harness.fleet_dir / "rds.json").read_text())
+    rds = netbench.read_json(harness.fleet_dir / "rds.json")
     assert rds["endpoint"] == RDS_OUTPUT["endpoint"]
     assert rds["username"] == awsb.RDS_USER
     assert rds["password"] == harness.tfvars()["rds_password"]
     assert mode(harness.fleet_dir / "rds.json") == 0o600
-    pg = json.loads((harness.fleet_dir / "hosts/node0/pg.json").read_text())
+    pg = netbench.read_json(harness.fleet_dir / "hosts/node0/pg.json")
     assert pg["host"] == RDS_OUTPUT["endpoint"]
     assert runner.ran("rsync", f"{awsb.BENCH_DIR}/pg.json")
     commands = ssh_calls(runner)
@@ -346,7 +354,7 @@ def test_reset_drops_and_recreates_the_database_before_the_services(harness):
 def test_a_colocated_run_after_an_rds_run_starts_its_own_postgres(
     isolated, monkeypatch
 ):
-    harness = RdsHarness(monkeypatch, modes="colocated,rds")
+    harness = RdsHarness(monkeypatch, isolated, "colocated,rds")
     runner = harness.up_rds()
     harness.run(runner, "--query-db", "rds")
     mark = len(runner.calls)
@@ -356,11 +364,11 @@ def test_a_colocated_run_after_an_rds_run_starts_its_own_postgres(
     assert any("docker start postgres" in c for c in commands)
     host_dir = harness.run_dir("02-colocated") / "hosts/node0"
     assert "--name postgres" in (host_dir / "start.sh").read_text()
-    assert json.loads((host_dir / "pg.json").read_text())["host"] == "127.0.0.1"
+    assert netbench.read_json(host_dir / "pg.json")["host"] == "127.0.0.1"
 
 
 def test_an_rds_run_needs_the_mode_in_the_fleet(isolated, monkeypatch):
-    harness = FleetHarness(monkeypatch)
+    harness = FleetHarness(monkeypatch, isolated)
     runner = harness.up_fleet()
     with pytest.raises(awsb.Refused, match="--query-db rds was not provisioned"):
         harness.run(runner, "--query-db", "rds")
@@ -460,6 +468,7 @@ def test_evidence_reads_the_rds_file_of_an_rds_run_only(tmp_path):
 STORE = {"gb": 400, "iops": 12000, "mbps": 500}
 
 
+# REQ:querydb-result-block
 @pytest.mark.parametrize(
     ("query_db", "store"),
     [
@@ -505,13 +514,7 @@ def rds_event(message: str, date: str) -> dict:
     return {"Message": message, "Date": date}
 
 
-def down(harness: RdsHarness, runner: FakeRunner) -> dict:
-    args = harness.parse("down", str(harness.fleet_dir), "--yes")
-    system = FakeSystem(run=runner, clock=FakeClock())
-    assert awsb.cmd_down(args, system) == awsb.EXIT_OK
-    return json.loads((harness.fleet_dir / "cost.json").read_text())
-
-
+# REQ:fleet-down
 # EDGE:reaper-fires-during-down
 @pytest.mark.parametrize(
     "events",
@@ -528,7 +531,8 @@ def test_the_actual_cost_bills_the_rds_from_create_to_the_logged_delete(
     harness, events
 ):
     runner = harness.up_rds(events=events)
-    cost = down(harness, runner)
+    assert harness.down(runner, "--yes") == awsb.EXIT_OK
+    cost = netbench.read_json(harness.fleet_dir / "cost.json")
     deleted = datetime.fromisoformat(events[-1]["Date"])
     rds_s = (deleted - datetime.fromisoformat(RDS_CREATED)).total_seconds()
     manifest = harness.fleet()
@@ -567,7 +571,7 @@ def test_a_fleet_that_failed_before_the_instance_was_seen_counts_from_launch(har
         events=[rds_event("DB instance deleted", "2026-09-30T15:00:00+00:00")],
     )
     assert harness.up(runner) == awsb.EXIT_FAILED
-    cost = json.loads((harness.fleet_dir / "cost.json").read_text())
+    cost = netbench.read_json(harness.fleet_dir / "cost.json")
     assert cost["actual"] > 0
 
 
@@ -593,6 +597,7 @@ def sweep_fleet1(**kwargs) -> FakeRunner:
     return runner
 
 
+# REQ:sweep-rds-volume
 # TEST:sweep-rds-volume-ok
 def test_the_sweep_deletes_in_dependency_order_and_waits_for_the_instance():
     assert aws_verbs(sweep_fleet1()) == [
@@ -639,6 +644,10 @@ def test_a_group_the_destroy_already_deleted_is_tolerated():
     failing(runner, "delete-db-parameter-group", "DBParameterGroupNotFound")
     failing(runner, "delete-schedule-group", "ResourceNotFoundException")
     awsb.sweep(FakeSystem(run=runner), "fleet1")
+    verbs = aws_verbs(runner)
+    assert ("rds", "delete-db-subnet-group") in verbs
+    assert ("rds", "delete-db-parameter-group") in verbs
+    assert ("scheduler", "delete-schedule-group") in verbs
 
 
 def test_another_fleets_role_is_left_alone():
@@ -649,6 +658,13 @@ def test_another_fleets_role_is_left_alone():
     assert ("iam", "delete-role") not in aws_verbs(runner)
 
 
+def test_a_fleet_without_rds_touches_no_iam():
+    mappings = [mapping(arn("ec2", "security-group/sg-1"), "fleet1", None, None)]
+    runner = rds_tag_runner(mappings, [])
+    awsb.sweep(FakeSystem(run=runner), "fleet1")
+    assert not any(service == "iam" for service, _ in aws_verbs(runner))
+
+
 def test_no_iam_permission_lists_no_roles():
     runner = rds_tag_runner([], [])
     runner.responses[LIST_ROLES] = completed(
@@ -657,14 +673,40 @@ def test_no_iam_permission_lists_no_roles():
     assert awsb.list_scheduler_roles(runner) == []
 
 
+def test_other_iam_errors_raise():
+    runner = rds_tag_runner([], [])
+    runner.responses[LIST_ROLES] = completed(returncode=254, stderr="Throttling")
+    with pytest.raises(awsb.Refused, match="Throttling"):
+        awsb.list_scheduler_roles(runner)
+
+
+# REQ:orphans-rds-expiry
 def test_the_latest_expiry_of_a_partly_retagged_fleet_counts():
     mappings = [
-        mapping(resource_arn("ec2", "security-group/sg-1"), "f", "bob", EXPIRES_PAST),
-        mapping(resource_arn("rds", "db:espresso-bench-f"), "f", "bob", EXPIRES_LATER),
-        mapping(resource_arn("ec2", "key-pair/key-1"), "f", "bob", EXPIRES_PAST),
+        mapping(arn("ec2", "security-group/sg-1"), "f", "bob", EXPIRES_PAST),
+        mapping(arn("rds", "db:espresso-bench-f"), "f", "bob", EXPIRES_LATER),
+        mapping(arn("ec2", "key-pair/key-1"), "f", "bob", EXPIRES_PAST),
     ]
     (tagged,) = awsb.group_runs(mappings, [], [])
     assert tagged["expires"] == EXPIRES_LATER
+
+
+def test_a_role_joins_its_fleet_and_stands_alone_without_one():
+    mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
+    lone = "arn:aws:iam::1:role/espresso-bench/espresso-bench-lost"
+    runs = awsb.group_runs(mappings, [INSTANCE_ROW], ["vol-1"], [ROLE_ARN, lone])
+    assert [r["name"] for r in runs] == ["lost", "fleet1"]
+    assert runs[0]["arns"] == [lone]
+    assert ROLE_ARN in runs[1]["arns"]
+
+
+def test_resource_counts_name_each_kind():
+    mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
+    (tagged,) = awsb.group_runs(mappings, [INSTANCE_ROW], ["vol-1"], [ROLE_ARN])
+    assert awsb.format_runs([tagged], NOW)[2].split(" | ")[4] == (
+        "1 db, 1 instance, 1 key-pair, 1 pg, 1 role, 1 schedule-group, "
+        "1 security-group, 1 subgrp, 1 volume"
+    )
 
 
 def test_expiries_compare_as_times_not_strings():
@@ -676,12 +718,16 @@ def test_expiries_compare_as_times_not_strings():
 
 @pytest.fixture
 def out_root(isolated: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    return isolated_env(monkeypatch)
+    return isolated_env(monkeypatch, isolated, "run1")
 
 
-def destroy_orphans(runner: FakeRunner) -> tuple[int, str]:
-    argv = ["destroy", "--orphans", "--yes"]
-    return run_cmd(awsb.cmd_destroy, argv, FakeSystem(run=runner))
+@pytest.fixture
+def destroy_orphans(capsys) -> Any:
+    def destroy(runner: FakeRunner) -> tuple[int, str]:
+        argv = ["destroy", "--orphans", "--yes"]
+        return run_cmd(capsys, awsb.cmd_destroy, argv, FakeSystem(run=runner))
+
+    return destroy
 
 
 def write_fleet(out: Path, name: str, phase: str) -> None:
@@ -691,11 +737,12 @@ def write_fleet(out: Path, name: str, phase: str) -> None:
 
 def fleet1_runner(owner: str, expires: str) -> FakeRunner:
     mappings = rds_fleet_mappings("fleet1", owner, expires)
-    return rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
+    return rds_tag_runner(mappings, [INSTANCE_ROW], roles=[ROLE_ARN])
 
 
 # TEST:orphans-rds-expiry-ok
-def test_an_rds_fleet_past_expiry_is_listed_and_swept(out_root):
+@pytest.mark.usefixtures("out_root")
+def test_an_rds_fleet_past_expiry_is_listed_and_swept(destroy_orphans):
     runner = fleet1_runner("bob", EXPIRES_PAST)
     code, text = destroy_orphans(runner)
     assert code == awsb.EXIT_OK
@@ -708,6 +755,13 @@ def test_an_rds_fleet_past_expiry_is_listed_and_swept(out_root):
     verbs = aws_verbs(runner)
     assert ("rds", "delete-db-instance") in verbs
     assert ("iam", "delete-role") in verbs
+
+
+@pytest.mark.usefixtures("out_root")
+def test_the_roles_are_listed_once_to_find_and_once_to_sweep(destroy_orphans):
+    runner = fleet1_runner("bob", EXPIRES_PAST)
+    destroy_orphans(runner)
+    assert runner.count("list-roles") == 2
 
 
 def lone_role_runner() -> FakeRunner:
@@ -724,7 +778,9 @@ def own_fleet1_runner() -> FakeRunner:
     [(own_fleet1_runner, "idle"), (lone_role_runner, "applying")],
     ids=["live-fleet", "role-of-fleet-provisioning"],
 )
-def test_a_fleet_with_local_state_is_kept(out_root, make_runner, phase):
+def test_a_fleet_with_local_state_is_kept(
+    out_root, destroy_orphans, make_runner, phase
+):
     runner = make_runner()
     write_fleet(out_root, "fleet1", phase)
     code, text = destroy_orphans(runner)
@@ -742,7 +798,10 @@ def test_a_fleet_with_local_state_is_kept(out_root, make_runner, phase):
     ],
     ids=["lost-state", "role-without-resources"],
 )
-def test_an_own_fleet_without_local_state_is_swept(out_root, make_runner, reason):
+@pytest.mark.usefixtures("out_root")
+def test_an_own_fleet_without_local_state_is_swept(
+    destroy_orphans, make_runner, reason
+):
     runner = make_runner()
     code, text = destroy_orphans(runner)
     assert code == awsb.EXIT_OK
@@ -750,7 +809,8 @@ def test_an_own_fleet_without_local_state_is_swept(out_root, make_runner, reason
     assert ("iam", "delete-role") in aws_verbs(runner)
 
 
-def test_a_failed_rds_delete_exits_4(out_root):
+@pytest.mark.usefixtures("out_root")
+def test_a_failed_rds_delete_exits_4(destroy_orphans):
     mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_PAST)
     runner = rds_tag_runner(mappings, [], roles=[ROLE_ARN])
     failing(runner, "delete-db-instance", "InvalidDBInstanceState")
@@ -758,9 +818,9 @@ def test_a_failed_rds_delete_exits_4(out_root):
     assert code == awsb.EXIT_LEFTOVER
 
 
-def test_an_rds_fleet_shows_the_instance_and_parameters(harness):
+def test_an_rds_fleet_shows_the_instance_and_parameters(harness, capsys):
     runner = harness.up_rds()
     runner.describe = STATUS_DESCRIBE
     argv = ["status", str(harness.fleet_dir)]
-    _, text = run_cmd(awsb.cmd_status, argv, FakeSystem(run=runner))
+    _, text = run_cmd(capsys, awsb.cmd_status, argv, FakeSystem(run=runner))
     assert "- rds espresso-bench-fleet1: available, parameters in-sync" in text

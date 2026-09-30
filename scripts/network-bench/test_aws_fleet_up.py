@@ -1,3 +1,4 @@
+import argparse
 import json
 import re
 import shlex
@@ -5,6 +6,7 @@ import signal
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import netbench
 import pytest
@@ -15,7 +17,6 @@ from fakes import (
     NOW,
     STATUS_DESCRIBE,
     VOLUME_ID,
-    FakeClock,
     FakeRunner,
     FakeSystem,
     FleetHarness,
@@ -34,7 +35,7 @@ PG_VOLUME = {"gb": 400, "iops": 12000, "mbps": 500}
 
 @pytest.fixture
 def harness(isolated: Path, monkeypatch: pytest.MonkeyPatch) -> FleetHarness:
-    return FleetHarness(monkeypatch)
+    return FleetHarness(monkeypatch, isolated)
 
 
 @pytest.fixture
@@ -43,7 +44,7 @@ def runner(harness: FleetHarness) -> FakeRunner:
 
 
 def run_manifest(harness: FleetHarness, name: str = "01-colocated") -> dict:
-    return json.loads((harness.fleet_dir / "runs" / name / "manifest.json").read_text())
+    return netbench.read_json(harness.fleet_dir / "runs" / name / "manifest.json")
 
 
 def first(commands: list[str], needle: str) -> int:
@@ -55,6 +56,7 @@ def assert_idle(harness: FleetHarness) -> None:
     assert not harness.lock().exists()
 
 
+# REQ:fleet-up-idle
 def test_up_ends_idle_without_starting_anything(harness):
     runner = FakeRunner(states=[DONE_STATE])
     assert harness.up(runner) == awsb.EXIT_OK
@@ -69,12 +71,35 @@ def test_up_ends_idle_without_starting_anything(harness):
     assert_idle(harness)
 
 
+def test_up_logs_the_cost_and_the_run_command(harness):
+    harness.up(FakeRunner(states=[DONE_STATE]))
+    log = harness.driver_log()
+    assert re.search(
+        r"cost: fleet \$\d+\.\d\d/h, bound \$\d+\.\d\d at TTL 180 min "
+        r"\(self-terminate \d\d:\d\d UTC\), limit \$60\.00",
+        log,
+    )
+    assert f"idle: fleet {harness.fleet_dir}; " in log
+    assert f"run: aws-bench run --fleet {harness.fleet_dir} --query-db colocated" in log
+
+
+def test_fleet_bound_is_the_rate_over_the_ttl_plus_boot(harness):
+    harness.up(FakeRunner(states=[DONE_STATE]))
+    estimate = harness.fleet()["estimate"]
+    assert estimate["ttl_s"] == 180 * 60
+    rate = awsb.estimate_rate(estimate)
+    assert rate > awsb.PRICES["c8g.2xlarge"] + 2 * awsb.PRICES["c8g.4xlarge"]
+    egress = next(l["usd"] for l in estimate["lines"] if l["item"] == "egress")
+    expected = rate * (180 * 60 + awsb.BOOT_ALLOWANCE_S) / 3600 + egress
+    assert estimate["bound_usd"] == pytest.approx(expected)
+
+
 def test_expiry_counts_from_the_confirm_without_a_provision_margin(harness):
     harness.up(FakeRunner(states=[DONE_STATE]))
     expires_at = harness.fleet()["expires_at"]
     assert datetime.fromisoformat(expires_at) == NOW + timedelta(minutes=180)
     tfvars = harness.fleet_dir / "terraform" / "terraform.tfvars.json"
-    assert json.loads(tfvars.read_text())["expires_at"] == expires_at
+    assert netbench.read_json(tfvars)["expires_at"] == expires_at
     user_data = harness.fleet_dir / "hosts" / "ctl" / "user-data.sh"
     assert "shutdown -P +180" in user_data.read_text()
 
@@ -120,6 +145,7 @@ def test_up_refusals(harness, flags, pattern):
     assert not runner.ran("tofu", "apply")
 
 
+# REQ:fleet-run-on-fleet
 def test_two_runs_reset_between_and_leave_the_fleet_idle(harness, runner):
     for name in ("01-colocated", "02-colocated"):
         mark = len(runner.calls)
@@ -137,6 +163,17 @@ def test_two_runs_reset_between_and_leave_the_fleet_idle(harness, runner):
     rows = [r.split(" |")[0] for r in harness.index()]
     assert rows == ["| fleet1/01-colocated", "| fleet1/02-colocated"]
     assert not runner.ran("tofu", "destroy")
+
+
+def test_run_logs_its_incremental_cost_and_the_time_left(harness, runner):
+    harness.run(runner)
+    log = harness.driver_log()
+    assert re.search(
+        r"run 01-colocated: incremental cost \$\d+\.\d\d \(\d+ min worst\), "
+        r"\d+ min left on the fleet",
+        log,
+    )
+    assert re.search(r"run dir .*01-colocated; fleet idle, \d+ min left", log)
 
 
 def test_invalid_result_exits_1_and_the_fleet_stays_up(harness, runner, monkeypatch):
@@ -158,6 +195,7 @@ def test_agent_error_exits_3_collects_and_leaves_the_fleet_idle(harness, runner)
     assert "boom" in summary.read_text()
 
 
+# EDGE:fleet-run-interrupted
 def test_interrupt_collects_without_destroy_and_releases_the_lock(
     harness, runner, system
 ):
@@ -202,6 +240,7 @@ def test_failed_reset_leaves_the_fleet_dirty_and_locked(harness, runner, monkeyp
     assert_idle(harness)
 
 
+# EDGE:fleet-stale-running
 def test_stale_running_fleet_needs_force(harness, runner):
     harness.set_fleet(phase="running")
     dead = FakeSystem(run=runner, dead_pids={999999})
@@ -223,6 +262,7 @@ def test_force_does_not_replace_a_live_holder(harness, runner):
         harness.run(runner, "--force")
 
 
+# REQ:fleet-single-shot-unchanged
 def test_single_shot_does_not_reset_and_writes_its_index_row(harness):
     runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
     code = awsb.cmd_run(harness.single_shot_args(), FakeSystem(run=runner))
@@ -234,27 +274,55 @@ def test_single_shot_does_not_reset_and_writes_its_index_row(harness):
     assert not harness.lock().exists()
 
 
+def expires_in(minutes: int) -> dict:
+    return {"expires_at": awsb.expiry_stamp(NOW + timedelta(minutes=minutes))}
+
+
+# REQ:fleet-run-refusals
 @pytest.mark.parametrize(
-    ("minutes", "changes", "flags", "pattern"),
+    ("changes", "flags", "pattern"),
     [
-        (None, {"phase": "destroying"}, (), "is destroying, not idle"),
-        (10, {}, (), r"\d\d min left.*needs up to \d\d: up a new fleet"),
-        (-5, {}, (), r"expired at .*status.*destroy --orphans"),
-        (None, {}, ("--nodes", "3"), "shape the fleet"),
-        (None, {}, ("--max-usd=5",), "shape the fleet"),
-        (None, {}, ("--ttl-min", "10"), "shape the fleet"),
-        (None, {}, ("--query-db", "volume"), "--query-db volume was not"),
+        ({"phase": "destroying"}, (), "is destroying, not idle"),
+        (expires_in(10), (), r"\d\d min left.*needs up to \d\d: up a new fleet"),
+        # EDGE:fleet-ttl-expired
+        (expires_in(-5), (), r"expired at .*status.*destroy --orphans"),
+        ({}, ("--nodes", "3"), "shape the fleet"),
+        ({}, ("--max-usd=5",), "shape the fleet"),
+        ({}, ("--ttl-min", "10"), "shape the fleet"),
+        ({}, ("--query-db", "volume"), "--query-db volume was not"),
     ],
 )
-def test_fleet_run_refusals(harness, runner, minutes, changes, flags, pattern):
-    if minutes is not None:
-        changes = {"expires_at": awsb.expiry_stamp(NOW + timedelta(minutes=minutes))}
+def test_fleet_run_refusals(harness, runner, changes, flags, pattern):
     harness.set_fleet(**changes)
     mark = len(runner.calls)
     with pytest.raises(awsb.Refused, match=pattern):
         harness.run(runner, *flags)
     assert ssh_calls(runner, mark) == []
     assert not harness.lock().exists()
+
+
+@pytest.mark.parametrize(
+    ("argv", "pattern"),
+    [
+        (("run", "--fleet", str(awsb.OUT_ROOT / "fleet1"), "--yes"), "not a fleet dir"),
+        (("run", "--nodes", "2"), "--tag"),
+    ],
+    ids=["unknown-dir", "single-shot-without-tag"],
+)
+def test_run_refusals_before_any_call(harness, argv, pattern):
+    runner = FakeRunner(states=[DONE_STATE])
+    with pytest.raises(awsb.Refused, match=pattern):
+        awsb.cmd_run(harness.parse(*argv), FakeSystem(run=runner))
+    assert runner.calls == []
+
+
+def test_node_env_belongs_to_one_run(harness, runner):
+    manifest = harness.fleet()
+    assert awsb.fleet_run_config(harness.run_args(), manifest).node_env == ()
+    cfg = awsb.fleet_run_config(harness.run_args("--node-env", "A=1"), manifest)
+    assert cfg.node_env == ("A=1",)
+    with pytest.raises(SystemExit):
+        harness.up_args("--node-env", "A=1")
 
 
 def test_lock_held(harness, runner):
@@ -332,6 +400,7 @@ def pull_fleet(harness: FleetHarness, resolved: list[str], wrong=None) -> FakeRu
     return runner
 
 
+# REQ:fleet-tag-pull
 def test_a_different_tag_pulls_every_role_image_by_digest_on_every_host(
     harness, resolved
 ):
@@ -374,6 +443,7 @@ def test_the_same_tag_pulls_nothing(harness, resolved):
     assert resolved == []
 
 
+# EDGE:fleet-pull-digest-mismatch
 def test_a_pulled_digest_that_differs_fails_before_the_reset(harness, resolved):
     runner = pull_fleet(harness, resolved, {"espresso-node": f"sha256:{'2' * 64}"})
     before = harness.fleet()["images"]
@@ -419,9 +489,25 @@ def test_a_lock_holder_on_another_host_counts_as_alive():
     assert awsb.lock_holder_alive(FakeSystem(dead_pids={1}), lock)
 
 
+def test_lock_is_exclusive_and_names_the_holder(tmp_path: Path):
+    lock = awsb.take_fleet_lock(FakeSystem(), tmp_path, "a", False)
+    assert lock["pid"] == FakeSystem().pid
+    assert netbench.read_json(tmp_path / awsb.FLEET_LOCK) == lock
+    with pytest.raises(awsb.Refused, match="run a, pid"):
+        awsb.take_fleet_lock(FakeSystem(), tmp_path, "b", False)
+    awsb.release_fleet_lock(tmp_path)
+    awsb.take_fleet_lock(FakeSystem(), tmp_path, "b", False)
+
+
+def test_release_without_a_lock_is_fine(tmp_path: Path):
+    awsb.release_fleet_lock(tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize(
     ("modes", "volume"), [(("colocated", "volume"), PG_VOLUME), (("colocated",), None)]
 )
+# REQ:querydb-volume-wiring
 def test_tfvars_carry_the_volume_only_when_the_mode_is_provisioned(modes, volume):
     cfg = awsb.RunConfig(
         tag="x", nodes=2, db_modes=modes, load=netbench.BenchConfig(submit_nodes=1)
@@ -465,20 +551,12 @@ def test_a_volume_failure_during_up_destroys_and_exits_3(harness, volume_id):
     assert runner.ran("mkfs") == (volume_id is not None)
 
 
-def test_the_run_resets_by_mounting_and_wiping_without_reformatting(harness):
+def test_a_volume_run_records_its_store(harness):
     runner = volume_runner([DONE_STATE], describe=DESCRIBE)
     harness.up(runner, "--db-modes", "volume")
-    mark = len(runner.calls)
     assert harness.run(runner, "--query-db", "volume") == awsb.EXIT_OK
-    commands = ssh_calls(runner, mark)
-    assert not any("mkfs" in c for c in commands)
-    resets = [c for c in commands if "find /data/journal" in c]
-    (reset,) = [c for c in resets if NODE0_IP in c]
-    assert f'mount -t ext4 -o "$(findmnt -no OPTIONS /)" {BY_ID}' in reset
-    assert reset.index("docker rm -f") < reset.index("mount -t")
-    assert reset.index("mount -t") < reset.rindex("find /data/pg")
-    assert sum("mount -t" in c or "umount" in c for c in resets) == 1
     manifest = run_manifest(harness, "01-volume")
+    assert manifest["phase"] == "done"
     assert manifest["query_db"] == "volume"
     assert manifest["pg_volume_id"] == VOLUME_ID
 
@@ -486,6 +564,17 @@ def test_the_run_resets_by_mounting_and_wiping_without_reformatting(harness):
 PG_MANIFEST = {"name": "f", "pg_volume_id": VOLUME_ID}
 
 
+def test_the_volume_reset_mounts_and_wipes_without_reformatting():
+    store = awsb.pg_store_script("volume", PG_MANIFEST)
+    script = awsb.reset_script("query", store)
+    assert "mkfs" not in script
+    assert f'mount -t ext4 -o "$(findmnt -no OPTIONS /)" {BY_ID}' in script
+    assert script.index("docker rm -f") < script.index("mount -t")
+    assert script.index("mount -t") < script.rindex("find /data/pg")
+    assert "mount -t" not in awsb.reset_script("validator", store)
+
+
+# TEST:querydb-mode-switch-ok
 def test_colocated_unmounts_after_the_containers_and_before_the_wipe():
     store = awsb.pg_store_script("colocated", PG_MANIFEST)
     script = awsb.reset_script("query", store)
@@ -503,7 +592,7 @@ def test_volume_after_colocated_empties_the_root_copy_before_it_is_hidden():
     assert wipe < mounted.index("mount -t ext4")
 
 
-def volume_rate(volume: "awsb.VolumeSpec | None") -> float:
+def volume_rate(volume: Any) -> float:
     cfg = awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
     lines = awsb._cost_lines(awsb.plan_hosts(cfg), 3600.0, volume)
     return sum(l["usd"] for l in lines if l["item"] != "egress")
@@ -534,10 +623,10 @@ def test_the_fleet_estimate_prices_the_volume_only_when_provisioned():
     assert extra == awsb.PG_GB
 
 
+# REQ:fleet-cost
 def test_run_cost_is_the_rate_over_the_wall_time(harness, runner):
     harness.run(runner)
-    path = harness.fleet_dir / "runs" / "01-colocated" / "cost.json"
-    cost = json.loads(path.read_text())
+    cost = netbench.read_json(harness.fleet_dir / "runs" / "01-colocated" / "cost.json")
     rate = awsb.estimate_rate(harness.fleet()["estimate"])
     assert cost["usd_per_hour"] == pytest.approx(rate)
     assert cost["usd"] == pytest.approx(rate * cost["duration_s"] / 3600)
@@ -551,34 +640,38 @@ def test_explicit_ttl_below_the_worst_case_is_refused_for_a_single_shot():
     assert auto == 3600.0 + awsb.TTL_MARGIN_S
 
 
-def down(harness: FleetHarness, runner: FakeRunner, *extra: str) -> int:
-    args = harness.parse("down", str(harness.fleet_dir), *extra)
-    return awsb.cmd_down(args, FakeSystem(run=runner, clock=FakeClock()))
-
-
-def test_down_destroys_and_prices(harness, runner):
+# REQ:fleet-down
+def test_down_destroys_and_prices_every_run(harness, runner):
     harness.run(runner)
-    assert down(harness, runner, "--yes") == awsb.EXIT_OK
+    harness.run(runner)
+    assert harness.down(runner, "--yes") == awsb.EXIT_OK
     assert runner.ran("tofu", "destroy")
-    assert json.loads((harness.fleet_dir / "cost.json").read_text())["actual"] > 0
+    assert netbench.read_json(harness.fleet_dir / "cost.json")["actual"] > 0
     assert harness.fleet()["phase"] == "done"
     assert not harness.lock().exists()
+    log = harness.driver_log()
+    assert re.search(
+        r"destroyed; actual cost \$\d+\.\d\d \(bound \$\d+\.\d\d\); 2 runs", log
+    )
+    assert "- 01-colocated: valid, $" in log
+    assert "- 02-colocated: valid, $" in log
 
 
 def test_leftover_after_failed_destroys_exits_4(harness, runner):
     runner.destroys = [completed(returncode=1, stderr="locked")]
-    assert down(harness, runner, "--yes") == awsb.EXIT_LEFTOVER
+    assert harness.down(runner, "--yes") == awsb.EXIT_LEFTOVER
     assert runner.count("tofu", "destroy") == awsb.DESTROY_RETRIES
     assert runner.ran("terminate-instances", "i-1")
     assert harness.fleet()["phase"] == "left-running"
     assert not (harness.out / "INDEX.md").exists()
 
 
+# EDGE:fleet-down-while-running
 def test_down_while_running_stops_the_agent_first(harness, runner):
     harness.set_fleet(phase="running")
     awsb.take_fleet_lock(FakeSystem(), harness.fleet_dir, "gone", False)
     mark = len(runner.calls)
-    assert down(harness, runner, "--yes") == awsb.EXIT_OK
+    assert harness.down(runner, "--yes") == awsb.EXIT_OK
     calls = [" ".join(call) for call in runner.calls[mark:]]
     destroy = next(
         i for i, c in enumerate(calls) if c.startswith("tofu") and "destroy" in c
@@ -589,7 +682,7 @@ def test_down_while_running_stops_the_agent_first(harness, runner):
 
 def test_declined_down_destroys_nothing(harness, runner):
     with pytest.raises(awsb.Refused, match="not confirmed"):
-        down(harness, runner)
+        harness.down(runner)
     assert not runner.ran("tofu", "destroy")
 
 
@@ -604,7 +697,41 @@ def test_status_shows_the_time_left_and_the_lock_holder(harness, runner, capsys)
     assert re.search(r"- lock: run measuring, pid \d+ \(alive\)", text)
 
 
-def test_run_does_not_abbreviate_flags(capsys):
+def test_db_modes_dedupe_and_refuse_an_unknown_mode():
+    assert awsb.parse_db_modes("colocated") == ("colocated",)
+    assert awsb.parse_db_modes("colocated,colocated") == ("colocated",)
+    with pytest.raises(argparse.ArgumentTypeError, match="unknown db mode"):
+        awsb.parse_db_modes("colocated,nonsense")
+
+
+@pytest.mark.parametrize("text", ["auto", "90"])
+def test_ttl_min_accepts_auto_and_minutes(text: str):
+    assert awsb.ttl_min_arg(text) == text
+
+
+@pytest.mark.parametrize("text", ["0", "-5", "1.5", "soon"])
+def test_ttl_min_refuses_other_values(text: str):
+    with pytest.raises(argparse.ArgumentTypeError):
+        awsb.ttl_min_arg(text)
+
+
+def test_up_defaults_to_a_long_ttl_and_budget_and_run_to_a_short_one():
+    up = awsb.parse_args(["up", "--tag", "t"])
+    assert (up.ttl_min, up.max_usd) == (awsb.UP_TTL_MIN, awsb.UP_MAX_USD)
+    assert up.db_modes == ("colocated",)
+    run = awsb.parse_args(["run", "--tag", "t"])
+    assert (run.ttl_min, run.max_usd, run.fleet) == ("auto", 10.0, None)
+
+
+def test_up_needs_a_tag_but_run_fleet_does_not():
+    with pytest.raises(SystemExit):
+        awsb.parse_args(["up"])
+    args = awsb.parse_args(["run", "--fleet", "some/dir"])
+    assert args.tag is None
+    assert args.fleet == Path("some/dir")
+
+
+def test_run_does_not_abbreviate_flags():
     with pytest.raises(SystemExit):
         awsb.parse_args(["run", "--fleet", "d", "--node", "3"])
 

@@ -1,14 +1,17 @@
 import ast
 import contextlib
+import io
 import json
 import os
 import re
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import netbench
 import pytest
 from fakes import (
+    CHECKIP_URL,
     DESCRIBE,
     DONE_STATE,
     EXPIRES_LATER,
@@ -17,12 +20,12 @@ from fakes import (
     SCRIPT,
     STATUS_DESCRIBE,
     STS_CALL,
-    FakeClock,
     FakeRunner,
     FakeSystem,
     RunHarness,
     awsb,
     completed,
+    index_manifest,
     instance,
     run_cmd,
     shot_estimate,
@@ -94,31 +97,55 @@ def test_accrued_usd_of_an_unpriced_type_raises():
     ],
     ids=["empty", "stale_volumes_of_a_finished_fleet"],
 )
-def test_status_all_shows_nothing(mappings, instances, stale):
+def test_status_all_shows_nothing(capsys, mappings, instances, stale):
     runner = tag_runner(mappings, instances, stale_volumes=stale)
-    code, out = run_cmd(awsb.cmd_status, ["status", "--all"], FakeSystem(run=runner))
+    argv = ["status", "--all"]
+    code, out = run_cmd(capsys, awsb.cmd_status, argv, FakeSystem(run=runner))
     assert code == awsb.EXIT_OK
     assert out == EMPTY_REGION
 
 
-def test_status_all_marks_orphans():
+def test_status_all_marks_orphans(capsys):
     mappings = [
         tag_mapping("instance", "i-1", "amy", "bob", EXPIRES_PAST),
         tag_mapping("instance", "i-2", "ok", "bob", EXPIRES_LATER),
     ]
     runner = tag_runner(mappings, [instance("i-1"), instance("i-2")])
-    code, out = run_cmd(awsb.cmd_status, ["status", "--all"], FakeSystem(run=runner))
+    argv = ["status", "--all"]
+    code, out = run_cmd(capsys, awsb.cmd_status, argv, FakeSystem(run=runner))
     assert code == awsb.EXIT_OK
     amy, ok = out.splitlines()[2:4]
     assert "| amy | bob |" in amy and amy.endswith("| past expiry |")
     assert ok.endswith("| 0.34 |  |")
 
 
-def test_status_all_refuses_a_wrong_account_before_listing():
+def test_status_all_refuses_a_wrong_account_before_listing(capsys):
     runner = FakeRunner({STS_CALL: sts_response("999")})
     with pytest.raises(awsb.Refused):
-        run_cmd(awsb.cmd_status, ["status", "--all"], FakeSystem(run=runner))
+        run_cmd(capsys, awsb.cmd_status, ["status", "--all"], FakeSystem(run=runner))
     assert len(runner.calls) == 1
+
+
+@pytest.mark.parametrize("argv", [["status"], ["status", "d", "--all"]])
+def test_status_takes_a_dir_or_all(argv: list[str]):
+    runner = FakeRunner()
+    with pytest.raises(awsb.Refused, match="either DIR or --all"):
+        awsb.cmd_status(awsb.parse_args(argv), FakeSystem(run=runner))
+    assert runner.calls == []
+
+
+def test_status_of_a_planned_fleet_makes_no_call(tmp_path: Path, capsys):
+    fleet_dir = tmp_path / "p"
+    fleet_dir.mkdir()
+    netbench.write_json(
+        fleet_dir / "fleet.json",
+        {"name": "p", "phase": "planned", "created_at": "2026-09-29T15:00:00+00:00"},
+    )
+    runner = FakeRunner()
+    argv = ["status", str(fleet_dir)]
+    _, out = run_cmd(capsys, awsb.cmd_status, argv, FakeSystem(run=runner))
+    assert "planned only" in out
+    assert runner.calls == []
 
 
 def _orphans_runner() -> FakeRunner:
@@ -132,14 +159,14 @@ def _orphans_runner() -> FakeRunner:
     return tag_runner(mappings, [instance("i-1"), instance("i-2")])
 
 
-def _destroy_orphans(runner: FakeRunner, *flags: str) -> tuple[int, str]:
+def _destroy_orphans(capsys, runner: FakeRunner, *flags: str) -> tuple[int, str]:
     argv = ["destroy", "--orphans", *flags]
-    return run_cmd(awsb.cmd_destroy, argv, FakeSystem(run=runner))
+    return run_cmd(capsys, awsb.cmd_destroy, argv, FakeSystem(run=runner))
 
 
-def test_destroy_orphans_sweeps_only_orphans_in_dependency_order():
+def test_destroy_orphans_sweeps_only_orphans_in_dependency_order(capsys):
     runner = _orphans_runner()
-    code, out = _destroy_orphans(runner, "--yes")
+    code, out = _destroy_orphans(capsys, runner, "--yes")
     assert code == awsb.EXIT_OK
     assert "| amy | bob |" in out
     assert "| live |" not in out
@@ -152,33 +179,33 @@ def test_destroy_orphans_sweeps_only_orphans_in_dependency_order():
     assert "i-2" not in terminate
 
 
-def test_destroy_orphans_declined_deletes_nothing():
+def test_destroy_orphans_declined_deletes_nothing(capsys):
     runner = _orphans_runner()
     with pytest.raises(awsb.Refused, match="not confirmed"):
-        _destroy_orphans(runner)
+        _destroy_orphans(capsys, runner)
     assert not runner.ran("terminate-instances")
 
 
-def test_destroy_orphans_failed_sweep_exits_4():
+def test_destroy_orphans_failed_sweep_exits_4(capsys):
     runner = _orphans_runner()
     runner.responses = {
         TERMINATE: completed(returncode=1, stderr="denied"),
         **runner.responses,
     }
-    code, _ = _destroy_orphans(runner, "--yes")
+    code, _ = _destroy_orphans(capsys, runner, "--yes")
     assert code == awsb.EXIT_LEFTOVER
 
 
-def test_destroy_orphans_marks_local_state_swept(isolated: Path):
+def test_destroy_orphans_marks_local_state_swept(isolated: Path, capsys):
     fleet_dir = isolated / awsb.OUT_ROOT / "amy"
     fleet_dir.mkdir(parents=True)
     netbench.write_json(fleet_dir / "fleet.json", {"phase": "left-running"})
     key = fleet_dir / "ssh" / "id_ed25519"
     key.parent.mkdir()
     key.write_text("private")
-    _destroy_orphans(_orphans_runner(), "--yes")
+    _destroy_orphans(capsys, _orphans_runner(), "--yes")
     assert not key.exists()
-    assert json.loads((fleet_dir / "fleet.json").read_text())["phase"] == "swept"
+    assert netbench.read_json(fleet_dir / "fleet.json")["phase"] == "swept"
 
 
 @pytest.mark.parametrize(
@@ -208,16 +235,17 @@ def test_manifest_cost_is_linear_and_covers_instance_hours():
     assert hour >= awsb.PRICES["c8g.2xlarge"] + 2 * awsb.PRICES["c8g.4xlarge"]
 
 
+def test_append_index_writes_the_header_once(tmp_path: Path):
+    row = awsb.index_row(index_manifest(), "01-run", None, 3, None)
+    for _ in range(2):
+        awsb.append_index(tmp_path, row)
+    lines = (tmp_path / "INDEX.md").read_text().splitlines()
+    assert len(lines) == 4
+    assert lines[0].startswith("| fleet/run |")
+
+
 def test_append_index_keeps_existing_rows(tmp_path: Path):
-    manifest = {
-        "name": "run1",
-        "created_at": "2026-09-29T15:00:00+00:00",
-        "git_rev": "a" * 40,
-        "config": {"tag": "release-x", "nodes": 5},
-        "fleet": "run1",
-        "query_db": "colocated",
-        "images": {"espresso-node": {"revision": "bd2ad6e1dc7abc"}},
-    }
+    manifest = index_manifest()
     path = tmp_path / "INDEX.md"
     path.write_text(awsb.INDEX_HEADER + "| older | row |\n")
     awsb.append_index(tmp_path, awsb.index_row(manifest, "01-run", None, 4, None))
@@ -253,18 +281,13 @@ def _verb(run_harness: RunHarness, verb: str, *extra: str):
     return awsb.parse_args([verb, str(target), *extra])
 
 
-def _status(run_harness: RunHarness, runner: FakeRunner) -> tuple[int, str]:
+def _status(run_harness: RunHarness, runner: FakeRunner, capsys) -> tuple[int, str]:
     argv = ["status", str(run_harness.fleet_dir)]
-    return run_cmd(awsb.cmd_status, argv, FakeSystem(run=runner))
+    return run_cmd(capsys, awsb.cmd_status, argv, FakeSystem(run=runner))
 
 
-def _down(run_harness: RunHarness, runner: FakeRunner, *extra: str) -> int:
-    system = FakeSystem(run=runner, clock=FakeClock())
-    return awsb.cmd_down(_verb(run_harness, "down", *extra), system)
-
-
-def test_status_shows_phase_instances_agent_and_cost(run_harness, kept):
-    code, text = _status(run_harness, kept)
+def test_status_shows_phase_instances_agent_and_cost(run_harness, kept, capsys):
+    code, text = _status(run_harness, kept, capsys)
     assert code == awsb.EXIT_OK
     assert "- fleet run1: phase left-running" in text
     assert "- 01-run: phase left-running" in text
@@ -273,38 +296,51 @@ def test_status_shows_phase_instances_agent_and_cost(run_harness, kept):
     assert re.search(r"- cost: \$\d+\.\d\d so far, bound \$\d+\.\d\d", text)
 
 
-def test_status_of_a_finished_run_reads_cost_json_without_aws(run_harness, monkeypatch):
+def test_status_of_a_destroyed_fleet_shows_the_actual_cost(run_harness, kept, capsys):
+    reason = "User initiated (2026-09-29 15:30:00 GMT)"
+    kept.describe = json.dumps(
+        [{**instance("i-000000000001", "terminated"), "reason": reason}]
+    )
+    _, text = _status(run_harness, kept, capsys)
+    assert re.search(r"- cost: \$\d+\.\d\d actual, bound", text)
+    assert "agent" not in text
+
+
+def test_status_of_a_finished_run_reads_cost_json_without_aws(
+    run_harness, monkeypatch, capsys
+):
     monkeypatch.setattr(awsb, "write_report", lambda *_: valid_result())
     assert run_harness.run(FakeRunner(states=[DONE_STATE], describe=DESCRIBE)) == 0
     offline = FakeRunner(states=[DONE_STATE])
-    code, text = _status(run_harness, offline)
+    code, text = _status(run_harness, offline, capsys)
     assert code == awsb.EXIT_OK
     assert offline.calls == []
     assert re.search(r"- cost: \$\d+\.\d\d actual, bound \$\d+", text)
 
 
+# REQ:fleet-down
 def test_down_destroys_prices_appends_index_and_refuses_a_second(run_harness, kept):
     kept.describe = DESCRIBE
-    assert _down(run_harness, kept, "--yes") == awsb.EXIT_OK
+    assert run_harness.down(kept, "--yes") == awsb.EXIT_OK
     assert kept.ran("tofu", "destroy")
-    manifest = json.loads((run_harness.fleet_dir / "fleet.json").read_text())
+    manifest = netbench.read_json(run_harness.fleet_dir / "fleet.json")
     assert manifest["phase"] == "done"
     assert manifest["cost_usd"]["actual"] > 0
-    run_manifest = json.loads((run_harness.run_dir / "manifest.json").read_text())
+    run_manifest = netbench.read_json(run_harness.run_dir / "manifest.json")
     assert run_manifest["cost_usd"] == manifest["cost_usd"]
     rows = run_harness.index().splitlines()
     assert len(rows) == 3
     assert "| valid | 4 |" in rows[2]
     with pytest.raises(awsb.Refused, match="already done"):
-        _down(run_harness, kept, "--yes")
+        run_harness.down(kept, "--yes")
 
 
-def test_down_removes_the_private_key(run_harness, kept):
+def test_down_removes_the_private_key(run_harness, kept, capsys):
     key = run_harness.fleet_dir / "ssh" / "id_ed25519"
-    _status(run_harness, kept)
+    _status(run_harness, kept, capsys)
     assert kept.ran("-i", str(key))
     kept.describe = DESCRIBE
-    _down(run_harness, kept, "--yes")
+    run_harness.down(kept, "--yes")
     assert not key.exists()
     assert key.with_name("id_ed25519.pub").exists()
 
@@ -312,15 +348,15 @@ def test_down_removes_the_private_key(run_harness, kept):
 def test_down_declined_destroys_nothing(run_harness, kept):
     destroys = kept.count("tofu", "destroy")
     with pytest.raises(awsb.Refused, match="not confirmed"):
-        _down(run_harness, kept)
+        run_harness.down(kept)
     assert kept.count("tofu", "destroy") == destroys
 
 
 def test_failed_down_sweeps_and_exits_4(run_harness, kept):
     kept.destroys = [completed(returncode=1, stderr="locked")]
-    assert _down(run_harness, kept, "--yes") == awsb.EXIT_LEFTOVER
+    assert run_harness.down(kept, "--yes") == awsb.EXIT_LEFTOVER
     assert kept.ran("terminate-instances", "i-1")
-    manifest = json.loads((run_harness.fleet_dir / "fleet.json").read_text())
+    manifest = netbench.read_json(run_harness.fleet_dir / "fleet.json")
     assert manifest["phase"] == "left-running"
 
 
@@ -374,25 +410,74 @@ def test_collect_of_an_older_run_is_refused_without_calls(run_harness, kept):
 
 def test_collect_while_a_run_is_in_progress_is_refused(run_harness, kept):
     fleet_json = run_harness.fleet_dir / "fleet.json"
-    manifest = json.loads(fleet_json.read_text())
+    manifest = netbench.read_json(fleet_json)
     netbench.write_json(fleet_json, {**manifest, "phase": "running"})
     with pytest.raises(awsb.Refused, match="is running"):
         awsb.cmd_collect(_verb(run_harness, "collect"), FakeSystem(run=kept))
 
 
-def test_render_rewrites_summary_and_compares_a_baseline(tmp_path: Path):
+def unprovisioned_run(tmp_path: Path) -> Path:
+    run_dir = tmp_path / "runs" / "01-run"
+    run_dir.mkdir(parents=True)
+    netbench.write_json(tmp_path / "fleet.json", {"name": "p", "phase": "planned"})
+    return run_dir
+
+
+@pytest.mark.parametrize(
+    ("target", "match"),
+    [(unprovisioned_run, "never provisioned"), (lambda tmp: tmp, "not a run dir")],
+    ids=["unprovisioned", "fleet-dir"],
+)
+def test_collect_refuses_without_calls(
+    tmp_path: Path, target: Callable[[Path], Path], match: str
+):
+    runner = FakeRunner()
+    args = awsb.parse_args(["collect", str(target(tmp_path))])
+    with pytest.raises(awsb.Refused, match=match):
+        awsb.cmd_collect(args, FakeSystem(run=runner))
+    assert runner.calls == []
+
+
+def test_next_collect_index_counts_past_the_highest_across_hosts(tmp_path: Path):
+    assert awsb.next_collect_index(tmp_path) == 1
+    (tmp_path / "hosts" / "a" / "collect-1").mkdir(parents=True)
+    (tmp_path / "hosts" / "b" / "collect-3").mkdir(parents=True)
+    assert awsb.next_collect_index(tmp_path) == 4
+
+
+def render(run_dir: Path, *extra: str) -> int:
+    return awsb.cmd_render(
+        awsb.parse_args(["render", str(run_dir), *extra]), FakeSystem()
+    )
+
+
+def test_render_rewrites_the_result_and_summary_offline(tmp_path: Path):
     write_collected_run(tmp_path)
     (tmp_path / "summary.md").write_text("stale")
-    code = awsb.cmd_render(awsb.parse_args(["render", str(tmp_path)]), FakeSystem())
-    assert code in (awsb.EXIT_OK, awsb.EXIT_INVALID)
-    assert "Deployment" in (tmp_path / "summary.md").read_text()
-    result = json.loads((tmp_path / "result.json").read_text())
-    assert (code == awsb.EXIT_OK) == result["validity"]["valid"]
+    assert render(tmp_path) == awsb.EXIT_OK
+    assert netbench.read_json(tmp_path / "result.json")["validity"]["valid"]
+    summary = (tmp_path / "summary.md").read_text()
+    assert "Deployment" in summary
+    assert "Baseline: reference run" not in summary
+
+
+def test_render_with_a_baseline_compares_against_it(tmp_path: Path):
+    write_collected_run(tmp_path)
+    render(tmp_path)
     baseline = tmp_path / "baseline.json"
     baseline.write_text((tmp_path / "result.json").read_text())
-    argv = ["render", str(tmp_path), "--baseline", str(baseline)]
-    awsb.cmd_render(awsb.parse_args(argv), FakeSystem())
-    assert "baseline" in (tmp_path / "summary.md").read_text().lower()
+    render(tmp_path, "--baseline", str(baseline))
+    assert (
+        "Baseline: reference run [`0123456789`]"
+        in (tmp_path / "summary.md").read_text()
+    )
+
+
+def test_render_without_run_json_is_refused(tmp_path: Path):
+    write_collected_run(tmp_path)
+    (tmp_path / "run.json").unlink()
+    with pytest.raises(awsb.Refused, match="no run.json"):
+        render(tmp_path)
 
 
 def test_config_round_trips_through_the_manifest():
@@ -416,8 +501,19 @@ def test_command_without_system_fails(cmd: str, argv: list[str]):
 
 
 def test_pid_alive_for_this_process_and_not_for_an_impossible_pid():
+    pid_max = int(Path("/proc/sys/kernel/pid_max").read_text())
     assert awsb._pid_alive(os.getpid())
-    assert not awsb._pid_alive(2**22 + 1)
+    assert not awsb._pid_alive(pid_max + 1)
+
+
+# TEST:system-ask-no-tty-refuses-ok
+def test_ask_without_a_tty_refuses(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("y\n"))
+    assert not awsb._ask("go?")
+
+
+def test_checkip_url_matches_the_fake():
+    assert awsb.CHECKIP_URL == CHECKIP_URL
 
 
 BOUNDARY = {"_run", "_ask", "_http_get", "_trap", "_pid_alive", "host_system", "stamp"}

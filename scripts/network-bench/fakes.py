@@ -1,15 +1,15 @@
 """Test doubles and helpers shared by the network-bench tests. Never imported by `netbench.py`
 or `aws-bench`, which ship to hosts without this file."""
 
+import argparse
 import asyncio
 import base64
 import bisect
 import collections
-import contextlib
 import dataclasses
 import heapq
+import http.client
 import importlib.util
-import io
 import itertools
 import json
 import math
@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from typing import Any, ClassVar, TypeVar
+from types import ModuleType
+from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
 import netbench
@@ -137,7 +138,8 @@ class FakeClock:
     `limit_s` raises, so a poller that never reaches its exit condition fails instead of
     spinning. `run` drives a coroutine on an event loop whose timers run on this clock; outside
     `run` a wait advances the clock at once. Inside `run`, executor jobs run at once on the loop
-    thread, or with `threaded` on executor threads that may wait on this clock."""
+    thread, or with `threaded` on executor threads that may wait on this clock. Outside `run`
+    `advance` takes no lock: one thread at a time may wait on the clock."""
 
     def __init__(
         self,
@@ -587,9 +589,6 @@ class FakeRunner:
     contents, the last one repeating. Without `states` an unmatched argv raises, so a test can
     prove a refused plan never reached `aws` or `tofu`."""
 
-    ready_digests: ClassVar[dict[str, str]]
-    """Image name to `ref@digest` as `docker image inspect` reports it on a host."""
-
     def __init__(
         self,
         responses: dict[tuple[str, ...], subprocess.CompletedProcess] | None = None,
@@ -609,8 +608,12 @@ class FakeRunner:
         self.balance = balance or completed(stdout=FULL_BALANCE)
         self.polls = 0
         self.calls: list[list[str]] = []
-        self.envs: list[dict[str, str] | None] = []
         self.lock = threading.Lock()
+        # Image name to `ref@digest` as `docker image inspect` reports it on a host.
+        self.ready_digests = {
+            name: f"{image['ref']}@{image['digest']}"
+            for name, image in fake_images().items()
+        }
         self.table: list[
             tuple[str, Callable[[list[str]], subprocess.CompletedProcess]]
         ] = []
@@ -633,7 +636,6 @@ class FakeRunner:
     ) -> subprocess.CompletedProcess:
         with self.lock:
             self.calls.append(argv)
-            self.envs.append(env)
         joined = " ".join(argv)
         for pattern, reply in self.table:
             if pattern in joined:
@@ -713,6 +715,48 @@ def no_http_pool(clock: netbench.Clock) -> netbench.Http:
     raise AssertionError("unexpected HTTP pool")
 
 
+class FakeConnection:
+    """`http.client.HTTPConnection` answering 200 `body`; with `drops_second` its second
+    request fails as on a kept-alive connection the server closed."""
+
+    sock = None
+    status = 200
+
+    def __init__(self, body: bytes, drops_second: bool) -> None:
+        self.body = body
+        self.drops_second = drops_second
+        self.requests = 0
+        self.closed = False
+
+    def request(self, method: str, path: str, body=None, headers=None) -> None:
+        self.requests += 1
+        if self.drops_second and self.requests == 2:
+            raise http.client.RemoteDisconnected("closed")
+
+    def getresponse(self) -> "FakeConnection":
+        return self
+
+    def read(self) -> bytes:
+        return self.body
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeConnections:
+    """Factory in place of `http.client.HTTPConnection`: the first connection it makes drops
+    its second request."""
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.made: list[FakeConnection] = []
+
+    def __call__(self, netloc: str, timeout: float) -> FakeConnection:
+        conn = FakeConnection(self.body, drops_second=not self.made)
+        self.made.append(conn)
+        return conn
+
+
 @dataclass
 class FakeSystem:
     """Structural twin of `aws-bench`'s `System`, which this file cannot import."""
@@ -778,11 +822,11 @@ TOPOLOGY: netbench.Topology = {
 }
 
 
-def quantiles(p50, p99):
+def quantiles(p50: float, p99: float) -> netbench.Quantiles:
     return {"n": 100, "mean": p50, "p50": p50, "p95": p99, "p99": p99, "max": p99}
 
 
-def node(cpu):
+def node(cpu: float) -> netbench.NodeStats:
     return {
         "role": "validator, sqlite",
         "decided_height_end": 500,
@@ -803,7 +847,13 @@ def node(cpu):
     }
 
 
-def step(rate, decided=None, consensus=(), query=(), consensus_p50=900.0):
+def step(
+    rate: float,
+    decided: float | None = None,
+    consensus: Iterable[str] = (),
+    query: Iterable[str] = (),
+    consensus_p50: float = 900.0,
+) -> netbench.StepResult:
     """A step at `rate` MB/s that decides `decided` (default: all of it)."""
     return {
         "rate_mb_s": rate,
@@ -828,7 +878,11 @@ def step(rate, decided=None, consensus=(), query=(), consensus_p50=900.0):
     }
 
 
-def make_result(steps=None, steal=0.0, config_hash="abc123") -> netbench.BenchResult:
+def make_result(
+    steps: list[netbench.StepResult] | None = None,
+    steal: float = 0.0,
+    config_hash: str = "abc123",
+) -> netbench.BenchResult:
     """Steps at 4, 6 and 8 MB/s, the last failing on decided: capacity 6 MB/s."""
     if steps is None:
         steps = [
@@ -1061,18 +1115,22 @@ def write_run_dir(out):
         (out / name).write_text(json.dumps(data))
 
 
+def load_script(name: str) -> ModuleType:
+    """Imports the extensionless script `name` next to this file as a module."""
+    path = Path(__file__).with_name(name)
+    loader = SourceFileLoader(name.replace("-", "_"), str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
 SCRIPT = Path(__file__).with_name("aws-bench")
-REPO = SCRIPT.resolve().parents[2]
-_spec = importlib.util.spec_from_loader(
-    "aws_bench", SourceFileLoader("aws_bench", str(SCRIPT))
-)
-assert _spec is not None
-awsb = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
-_spec.loader.exec_module(awsb)
+awsb: Any = load_script("aws-bench")
 
 
-def parse_plan_args(argv: list[str]) -> "awsb.argparse.Namespace":
+def parse_plan_args(argv: list[str]) -> argparse.Namespace:
     full = ["plan", *argv]
     args = awsb.parse_args(full)
     args.argv = full
@@ -1086,21 +1144,21 @@ def sts_response(account: str) -> subprocess.CompletedProcess:
 STS_CALL = ("aws", "--profile", "timeboost-dev", "sts", "get-caller-identity")
 
 
-def shot_estimate(hosts: list, cfg: "awsb.RunConfig") -> "awsb.Estimate":
+def shot_estimate(hosts: list, cfg: Any) -> Any:
     return awsb.cost_estimate(hosts, cfg, None, *awsb.shot_seconds(cfg))
 
 
-def isolated_env(monkeypatch: pytest.MonkeyPatch, name: str = "run1") -> Path:
-    """A fixed fleet name. Returns the out root under the cwd, which the `isolated` fixture
-    makes a temp dir."""
+def isolated_env(monkeypatch: pytest.MonkeyPatch, root: Path, name: str) -> Path:
+    """A fixed fleet name. Returns the out root under `root`, the `isolated` temp dir that
+    must be the cwd."""
     cwd = Path.cwd().resolve()
-    if cwd in (REPO, REPO / "scripts"):
+    if cwd != root.resolve():
         raise AssertionError(f"writes OUT_ROOT into {cwd}: use `isolated`")
     monkeypatch.setattr(awsb, "default_run_name", lambda *_: name)
     return cwd / awsb.OUT_ROOT
 
 
-def plan_args(*extra: str, nodes: str = "2") -> "awsb.argparse.Namespace":
+def plan_args(*extra: str, nodes: str = "2") -> argparse.Namespace:
     return parse_plan_args(["--tag", "x", "--nodes", nodes, *extra])
 
 
@@ -1139,11 +1197,6 @@ def fake_images() -> dict:
     return {
         name: fake_image(f"ghcr.io/x/{name}:t") for name in awsb.IMAGE_COMPONENTS
     } | {name: fake_image(ref) for name, ref in awsb.SUPPORT_IMAGES.items()}
-
-
-FakeRunner.ready_digests = {
-    name: f"{image['ref']}@{image['digest']}" for name, image in fake_images().items()
-}
 
 
 def fake_preflight() -> dict:
@@ -1195,47 +1248,34 @@ def valid_result(valid: bool = True) -> dict:
 
 
 class RunHarness:
-    """A temp working dir with its own out root for driving `cmd_run` end to end."""
+    """The `isolated` working dir with its own out root for driving a single-shot `cmd_run`
+    end to end."""
 
-    def __init__(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        name: str = "run1",
-        confirmed: bool = False,
-    ):
-        self.yes = not confirmed
-        self.answer = confirmed
-        self.out = isolated_env(monkeypatch, name)
-        self.name = name
-        self.fleet_dir = awsb.OUT_ROOT / name
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, root: Path):
+        self.out = isolated_env(monkeypatch, root, "run1")
+        self.fleet_dir = awsb.OUT_ROOT / "run1"
         self.run_dir = self.fleet_dir / "runs" / "01-run"
         monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight())
         monkeypatch.setattr(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT))
 
-    def args(self, *extra: str) -> "awsb.argparse.Namespace":
-        argv = [
-            "run",
-            "--tag",
-            "t",
-            "--nodes",
-            "2",
-            *(["--yes"] if self.yes else []),
-            *extra,
-        ]
+    def args(self, *extra: str) -> argparse.Namespace:
+        argv = ["run", "--tag", "t", "--nodes", "2", "--yes", *extra]
         args = awsb.parse_args(argv)
         args.argv = argv
         return args
 
-    def run(self, runner: FakeRunner, extra=()) -> int:
-        return awsb.cmd_run(
-            self.args(*extra), FakeSystem(run=runner, answer=self.answer)
-        )
+    def run(self, runner: FakeRunner, *extra: str) -> int:
+        return awsb.cmd_run(self.args(*extra), FakeSystem(run=runner))
 
-    def index_log(self) -> str:
+    def down(self, runner: FakeRunner, *extra: str) -> int:
+        args = awsb.parse_args(["down", str(self.fleet_dir), *extra])
+        return awsb.cmd_down(args, FakeSystem(run=runner, clock=FakeClock()))
+
+    def log(self) -> str:
         return (self.fleet_dir / "driver.log").read_text()
 
-    def last_log_line(self) -> str:
-        return (self.fleet_dir / "driver.log").read_text().splitlines()[-1]
+    def ends_with_down_command(self) -> bool:
+        return self.log().splitlines()[-1].endswith(f"aws-bench down {self.fleet_dir}")
 
     def index(self) -> str:
         return (self.out / "INDEX.md").read_text()
@@ -1262,7 +1302,7 @@ class Scripted:
         return completed()
 
 
-def remote(runner: Callable[..., Any], tmp: Path) -> "awsb.Remote":
+def remote(runner: Callable[..., Any], tmp: Path) -> Any:
     return awsb.Remote(runner, tmp, Path("~/.ssh/id"), two_node_hosts_info())
 
 
@@ -1279,7 +1319,7 @@ def pg_settings(**overrides) -> dict:
     return {**settings, **overrides}
 
 
-def aws_manifest(steal_hosts: bool = True) -> dict:
+def aws_manifest() -> dict:
     cfg = awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
     return {
         "name": "run1",
@@ -1399,22 +1439,23 @@ EXPIRES_LATER = "2026-09-29T17:00:00Z"
 EXPIRES_PAST = "2026-09-29T15:00:00Z"
 
 
-def arn(kind: str, resource_id: str) -> str:
-    return f"arn:aws:ec2:eu-west-1:1:{kind}/{resource_id}"
+def arn(service: str, resource: str) -> str:
+    return f"arn:aws:{service}:eu-west-1:1:{resource}"
 
 
-def tag_mapping(
-    kind: str, resource_id: str, run: str, owner: str | None, expires: str | None
-) -> dict:
+def mapping(arn: str, run: str, owner: str | None, expires: str | None) -> dict:
     tags = {awsb.TAG_RUN: run}
     if owner:
         tags[awsb.TAG_OWNER] = owner
     if expires:
         tags[awsb.TAG_EXPIRES] = expires
-    return {
-        "arn": arn(kind, resource_id),
-        "tags": [{"Key": k, "Value": v} for k, v in tags.items()],
-    }
+    return {"arn": arn, "tags": [{"Key": k, "Value": v} for k, v in tags.items()]}
+
+
+def tag_mapping(
+    kind: str, resource_id: str, run: str, owner: str | None, expires: str | None
+) -> dict:
+    return mapping(arn("ec2", f"{kind}/{resource_id}"), run, owner, expires)
 
 
 def instance(resource_id: str, state: str = "running", launch: str | None = None):
@@ -1479,12 +1520,13 @@ def tag_runner(
     return runner
 
 
-def run_cmd(func, argv: list[str], system: FakeSystem) -> tuple[int, str]:
-    parsed = awsb.parse_args(argv)
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        code = func(parsed, system)
-    return code, out.getvalue()
+def run_cmd(
+    capsys: pytest.CaptureFixture[str], func, argv: list[str], system: FakeSystem
+) -> tuple[int, str]:
+    """Exit code and stdout of `func` on the parsed `argv`."""
+    capsys.readouterr()
+    code = func(awsb.parse_args(argv), system)
+    return code, capsys.readouterr().out
 
 
 STATUS_DESCRIBE = json.dumps(
@@ -1516,19 +1558,18 @@ def fake_report(run_dir: Path, baseline=None) -> dict:
 
 
 class FleetHarness:
-    """A temp working dir with its own out root, and the argv of `up` and `run --fleet` for one
-    fleet."""
+    """The `isolated` working dir with its own out root, and the argv of `up` and
+    `run --fleet` for one fleet."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, name: str = "fleet1"):
-        isolated_env(monkeypatch, name)
-        self.name = name
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, root: Path):
+        isolated_env(monkeypatch, root, "fleet1")
         self.out = awsb.OUT_ROOT
-        self.fleet_dir = self.out / name
+        self.fleet_dir = self.out / "fleet1"
         monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight())
         monkeypatch.setattr(awsb, "write_report", fake_report)
         monkeypatch.setattr(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT))
 
-    def parse(self, *argv: str) -> "awsb.argparse.Namespace":
+    def parse(self, *argv: str) -> argparse.Namespace:
         args = awsb.parse_args(list(argv))
         args.argv = list(argv)
         return args
@@ -1542,13 +1583,13 @@ class FleetHarness:
             "--yes",
         ]
 
-    def up_args(self, *extra: str) -> "awsb.argparse.Namespace":
+    def up_args(self, *extra: str) -> argparse.Namespace:
         return self.parse("up", *self.fleet_flags(), *extra)
 
-    def single_shot_args(self) -> "awsb.argparse.Namespace":
+    def single_shot_args(self) -> argparse.Namespace:
         return self.parse("run", *self.fleet_flags())
 
-    def run_args(self, *extra: str) -> "awsb.argparse.Namespace":
+    def run_args(self, *extra: str) -> argparse.Namespace:
         return self.parse(
             "run",
             "--fleet",
@@ -1566,8 +1607,12 @@ class FleetHarness:
     def run_with(self, system: FakeSystem, *extra: str) -> int:
         return awsb.cmd_run(self.run_args(*extra), system)
 
+    def down(self, runner: FakeRunner, *extra: str) -> int:
+        args = self.parse("down", str(self.fleet_dir), *extra)
+        return awsb.cmd_down(args, FakeSystem(run=runner, clock=FakeClock()))
+
     def fleet(self) -> dict:
-        return json.loads((self.fleet_dir / "fleet.json").read_text())
+        return netbench.read_json(self.fleet_dir / "fleet.json")
 
     def set_fleet(self, **changes) -> None:
         netbench.write_json(self.fleet_dir / "fleet.json", {**self.fleet(), **changes})
@@ -1721,13 +1766,13 @@ class RdsRunner(FakeRunner):
 class RdsHarness(FleetHarness):
     """`FleetHarness` for an rds fleet: preflight resolved the engine minor 18.2."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, modes: str = "rds"):
-        super().__init__(monkeypatch)
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, root: Path, modes: str):
+        super().__init__(monkeypatch, root)
         self.modes = modes
         pre = {**fake_preflight(), "rds_engine_version": "18.2"}
         monkeypatch.setattr(awsb, "preflight", lambda *_: pre)
 
-    def up_args(self, *extra: str) -> "awsb.argparse.Namespace":
+    def up_args(self, *extra: str) -> argparse.Namespace:
         return super().up_args("--db-modes", self.modes, *extra)
 
     def up_rds(self, **kwargs) -> RdsRunner:
@@ -1736,8 +1781,9 @@ class RdsHarness(FleetHarness):
         return runner
 
     def tfvars(self) -> dict:
-        path = self.fleet_dir / "terraform" / "terraform.tfvars.json"
-        return json.loads(path.read_text())
+        return netbench.read_json(
+            self.fleet_dir / "terraform" / "terraform.tfvars.json"
+        )
 
     def run_dir(self, name: str) -> Path:
         return self.fleet_dir / "runs" / name
@@ -1749,44 +1795,21 @@ LIST_ROLES = ("aws", "--profile", "timeboost-dev", "iam", "list-roles")
 ROLE_ARN = "arn:aws:iam::1:role/espresso-bench/espresso-bench-fleet1"
 
 
-def resource_arn(service: str, resource: str) -> str:
-    return f"arn:aws:{service}:eu-west-1:1:{resource}"
-
-
-def mapping(arn: str, run: str, owner: str | None, expires: str | None) -> dict:
-    tags = {awsb.TAG_RUN: run}
-    if owner:
-        tags[awsb.TAG_OWNER] = owner
-    if expires:
-        tags[awsb.TAG_EXPIRES] = expires
-    return {"arn": arn, "tags": [{"Key": k, "Value": v} for k, v in tags.items()]}
-
-
 def rds_fleet_mappings(
     run: str, owner: str, expires: str, instance_id: str = "i-1"
 ) -> list[dict]:
     name = f"espresso-bench-{run}"
     arns = [
-        resource_arn("ec2", f"instance/{instance_id}"),
-        resource_arn("ec2", "security-group/sg-1"),
-        resource_arn("ec2", "key-pair/key-1"),
-        resource_arn("ec2", "volume/vol-1"),
-        resource_arn("rds", f"db:{name}"),
-        resource_arn("rds", f"subgrp:{name}"),
-        resource_arn("rds", f"pg:{name}"),
-        resource_arn("scheduler", f"schedule-group/{name}"),
+        arn("ec2", f"instance/{instance_id}"),
+        arn("ec2", "security-group/sg-1"),
+        arn("ec2", "key-pair/key-1"),
+        arn("ec2", "volume/vol-1"),
+        arn("rds", f"db:{name}"),
+        arn("rds", f"subgrp:{name}"),
+        arn("rds", f"pg:{name}"),
+        arn("scheduler", f"schedule-group/{name}"),
     ]
-    return [mapping(arn, run, owner, expires) for arn in arns]
-
-
-def instance_row(instance_id: str) -> dict:
-    return {
-        "id": instance_id,
-        "type": "c8g.4xlarge",
-        "state": "running",
-        "launch": "2026-09-29T15:30:00+00:00",
-        "reason": "",
-    }
+    return [mapping(a, run, owner, expires) for a in arns]
 
 
 def rds_tag_runner(
@@ -1820,3 +1843,16 @@ def rds_tag_runner(
 
 def aws_verbs(runner: FakeRunner) -> list[tuple[str, str]]:
     return [(c[3], c[4]) for c in runner.calls if c[0] == "aws"]
+
+
+def index_manifest() -> dict:
+    """The run manifest keys an INDEX.md row reads."""
+    return {
+        "name": "run1",
+        "created_at": "2026-09-29T15:00:00+00:00",
+        "git_rev": "a" * 40,
+        "config": {"tag": "release-x", "nodes": 5},
+        "fleet": "run1",
+        "query_db": "colocated",
+        "images": {"espresso-node": {"revision": "bd2ad6e1dc7abc"}},
+    }

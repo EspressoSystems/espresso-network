@@ -1,18 +1,14 @@
 import dataclasses
 import functools
-import http.client
 import inspect
 import itertools
-import json
 import logging
 import math
-import operator
 import statistics
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
-from unittest import mock
+from typing import Any, Literal, TypeVar
 
 import fakes
 import netbench
@@ -52,7 +48,12 @@ def deployment() -> netbench.DeploymentMeta:
     }
 
 
-def compare(current, runs, error=None, source="main"):
+def compare(
+    current: netbench.BenchResult,
+    runs: list[netbench.BenchResult],
+    error: str | None = None,
+    source: Literal["main", "reference"] = "main",
+) -> netbench.Comparison:
     return netbench.compare(current, {"runs": runs, "error": error, "source": source})
 
 
@@ -139,10 +140,10 @@ def test_deployment_and_hosts_sections():
 
 def test_load_baseline_single_result(tmp_path: Path):
     path = tmp_path / "result.json"
-    path.write_text(json.dumps(make_result()))
+    netbench.write_json(path, make_result())
     baseline = netbench.load_baseline(path)
     assert (len(baseline["runs"]), baseline["source"]) == (1, "reference")
-    path.write_text(json.dumps({"runs": []}))
+    netbench.write_json(path, {"runs": []})
     assert netbench.load_baseline(path)["source"] == "main"
     path.write_text("[]")
     with pytest.raises(ValueError):
@@ -208,7 +209,9 @@ def edited(edits: dict[str, Any]) -> netbench.BenchResult:
     result = make_result()
     for path, value in edits.items():
         *parents, leaf = path.split(".")
-        target: Any = functools.reduce(operator.getitem, parents, result)
+        target: Any = result
+        for key in parents:
+            target = target[key]
         target[leaf] = value
     return result
 
@@ -261,6 +264,14 @@ def test_validity(result, answered, valid, noisy, reason):
     validity = netbench.check_validity(result, ALL_ANSWERED | answered)
     assert (validity["valid"], validity["noisy"]) == (valid, noisy)
     assert any(reason in r for r in validity["reasons"])
+
+
+def test_a_stalled_node_and_a_partial_answer_add_their_own_reasons():
+    validity = netbench.check_validity(edited(STALLED), ALL_ANSWERED | {"node1": 0.5})
+    assert not validity["valid"]
+    assert len(validity["reasons"]) == 3
+    assert "node1 metrics answered for only 50% of the window" in validity["reasons"]
+    assert "node2 decided no blocks in the window" in validity["reasons"]
 
 
 class ScriptedPool:
@@ -340,12 +351,14 @@ class Load:
 NODE_KEYS = frozenset(inspect.signature(fakes.FakeNode).parameters) - {"clock"}
 
 
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text().splitlines()]
-
-
 def run_load(
-    out: Path, duration: float, rate=0.02, cap_txs=1000, nodes=1, **kwargs: Any
+    out: Path,
+    duration: float,
+    rate=0.02,
+    cap_txs=1000,
+    nodes=1,
+    tx_size=1000,
+    **kwargs: Any,
 ) -> Load:
     """One step of `duration` clock seconds at `rate` MB/s with at most `cap_txs` in flight,
     no warmup, unless `kwargs` sets `steps`. `FakeNode` arguments in `kwargs` go to the node."""
@@ -353,12 +366,12 @@ def run_load(
     clock = fakes.FakeClock(threaded=any(k.endswith("_delay") for k in fake))
     node = fakes.FakeNode(clock, **fake)
     defaults: dict[str, Any] = {
-        "tx_size": 1000,
+        "tx_size": tx_size,
         "workers": 3,
         "steps": (rate,),
         "step_s": duration,
         "warmup_s": 0,
-        "cap_s": cap_txs * 1000 / (rate * 1e6),
+        "cap_s": cap_txs * tx_size / (rate * 1e6),
     }
     config = netbench.BenchConfig(**defaults | kwargs)
     urls = [node.url] * nodes
@@ -368,10 +381,10 @@ def run_load(
     clock.run(load)
     return Load(
         node,
-        read_jsonl(out / "load.jsonl"),
-        json.loads((out / "load-meta.json").read_text()),
-        json.loads((out / "steps.json").read_text()),
-        read_jsonl(out / "heights.jsonl"),
+        list(netbench.read_jsonl(out / "load.jsonl")),
+        netbench.read_json(out / "load-meta.json"),
+        netbench.read_json(out / "steps.json"),
+        list(netbench.read_jsonl(out / "heights.jsonl")),
     )
 
 
@@ -382,8 +395,8 @@ def load(tmp_path: Path) -> Callable[..., Load]:
 
 @pytest.fixture
 def staircase(load: Callable[..., Load]) -> Callable[..., Load]:
-    """4 txs of 1000 bytes per 50 ms block: 0.08 MB/s of capacity."""
-    return functools.partial(load, STEP_S, include=True, block_txs=4)
+    """1 tx of 4000 bytes per 50 ms block: 0.08 MB/s of capacity."""
+    return functools.partial(load, STEP_S, include=True, block_txs=1, tx_size=4000)
 
 
 def verdicts(steps: list[dict[str, Any]]) -> list[tuple[float, bool, bool]]:
@@ -507,8 +520,8 @@ def test_staircase_stops_at_the_first_failing_step_and_refines(staircase):
 
 
 def test_refine_starts_after_the_backlog_drained(staircase):
-    """0.1 MB/s leaves 160 txs behind; 0.07 MB/s alone keeps up but drains that backlog only
-    at 10 tx/s, adding latency over the 300 ms target."""
+    """0.1 MB/s leaves 40 txs behind; 0.07 MB/s alone keeps up but drains that backlog only
+    at 2.5 tx/s, adding latency over the 300 ms target."""
     run = staircase(steps=(0.04, 0.1), latency_target_ms=300, tx_timeout_s=10)
     assert verdicts(run.steps) == [
         (0.04, False, True),
@@ -520,7 +533,7 @@ def test_refine_starts_after_the_backlog_drained(staircase):
 
 
 def test_keep_going_runs_every_step_then_waits_for_the_backlog(staircase):
-    """Both steps fail and leave 60 txs behind."""
+    """Both steps fail and leave 15 txs behind."""
     run = staircase(steps=(0.1, 0.12), tx_timeout_s=10, keep_going=True)
     assert [
         (s["rate_mb_s"], s["refine"], bool(s["consensus_fails"])) for s in run.steps
@@ -555,7 +568,7 @@ def test_steps_survive_a_failure_in_the_last_drain(
     monkeypatch.setattr(netbench, "drain", gone)
     with pytest.raises(netbench.NetworkError):
         staircase(steps=(0.1, 0.12), tx_timeout_s=1, keep_going=True)
-    steps = json.loads((tmp_path / "steps.json").read_text())
+    steps = netbench.read_json(tmp_path / "steps.json")
     assert [s["rate_mb_s"] for s in steps] == [0.1, 0.12]
 
 
@@ -599,7 +612,14 @@ def test_writes_stake_table_and_final_metrics(tmp_path: Path):
 
 def test_dead_network_raises_without_starting_load(tmp_path: Path):
     with pytest.raises(netbench.NetworkError, match="before load"):
-        netbench.drive_load(netbench.BenchConfig(), TOPOLOGY, tmp_path, lambda: False)
+        netbench.drive_load(
+            netbench.BenchConfig(),
+            TOPOLOGY,
+            tmp_path,
+            lambda: False,
+            fakes.FakeClock(),
+            fakes.no_http_pool,
+        )
     assert list(tmp_path.iterdir()) == []
 
 
@@ -618,14 +638,14 @@ def test_cut_short_load_keeps_raw_files_without_steps(tmp_path: Path):
         "load-meta.json",
         "load.jsonl",
     ]
-    assert json.loads(files["load-meta.json"])["start_height"] == 7
+    assert netbench.read_json(tmp_path / "load-meta.json")["start_height"] == 7
 
 
 def test_txs_never_sent_are_left_out(tmp_path: Path):
     state = netbench.LoadState()
     state.txs = [netbench.Tx(id=0, node=0, t_submit=1.0), netbench.Tx(id=1, node=0)]
-    lines = write_load_files(tmp_path, state)["load.jsonl"].splitlines()
-    assert [json.loads(line)["id"] for line in lines] == [0]
+    write_load_files(tmp_path, state)
+    assert [tx["id"] for tx in netbench.read_jsonl(tmp_path / "load.jsonl")] == [0]
 
 
 def analyze(out: Path) -> netbench.BenchResult:
@@ -671,9 +691,9 @@ def test_result_json_is_finite(tmp_path: Path):
 def test_report_keeps_the_ramp_verdict(tmp_path: Path):
     write_run_dir(tmp_path)
     path = tmp_path / "steps.json"
-    steps = json.loads(path.read_text())
+    steps = netbench.read_json(path)
     steps[0]["consensus_fails"] = ["decided 10% of offered"]
-    path.write_text(json.dumps(steps))
+    netbench.write_json(path, steps)
     result = analyze(tmp_path)
     assert not result["steps"][0]["passed"]
     assert result["capacity"]["overall"] == {"mb_s": None, "bounded": True}
@@ -681,12 +701,13 @@ def test_report_keeps_the_ramp_verdict(tmp_path: Path):
 
 def test_no_scrapes_is_invalid_not_a_crash(tmp_path: Path):
     write_run_dir(tmp_path)
-    (tmp_path / "metrics.jsonl").write_text(
-        "".join(
-            json.dumps({"ts": ts, "node": node, "ok": False}) + "\n"
+    netbench.write_jsonl(
+        tmp_path / "metrics.jsonl",
+        (
+            {"ts": ts, "node": node, "ok": False}
             for ts in range(90, 175, 5)
             for node in TOPOLOGY["nodes"]
-        )
+        ),
     )
     result = analyze(tmp_path)
     assert not result["validity"]["valid"]
@@ -740,6 +761,40 @@ def test_drain_without_pending_ignores_stuck_transactions():
     heights = heights_at(5, 5)
     assert drain(state, heights, 0.3, fakes.FakeClock()) is None
     assert drain(state, heights, 0.3, fakes.FakeClock(), wait_pending=False) is not None
+
+
+@pytest.mark.parametrize(
+    ("drain_s", "keep_going", "lines"),
+    [
+        (None, False, []),
+        (3.0, False, ["- backlog drained in 3.0 s before the refine step"]),
+        (3.0, True, ["- backlog drained in 3.0 s after the last step"]),
+        (None, True, ["- backlog did not drain in 600 s after the last step"]),
+    ],
+)
+def test_drain_lines(drain_s, keep_going, lines):
+    assert netbench.drain_lines(drain_s, keep_going) == lines
+
+
+def test_theil_sen_ignores_an_outlier():
+    points = [(float(x), 2.0 * x) for x in range(10)] + [(10.0, 100.0)]
+    assert netbench.theil_sen(points) == pytest.approx(2.0)
+    assert netbench.theil_sen([(1.0, 1.0)]) is None
+
+
+def test_pace_follows_the_rate():
+    assert netbench.tx_interval_s(1_000_000, 20.0) == pytest.approx(0.05)
+    assert netbench.step_cap(netbench.BenchConfig(), 7.0) == 35
+
+
+def test_window_without_samples_has_zero_heights():
+    series: dict[str, list[Any]] = {node: [] for node in TOPOLOGY["nodes"]}
+    assert netbench.window(series, TOPOLOGY["query_node"], 1.0, 2.0) == {
+        "t0": 1.0,
+        "t1": 2.0,
+        "height_start": 0,
+        "height_end": 0,
+    }
 
 
 def test_keep_going_changes_the_config_hash():
@@ -965,20 +1020,13 @@ def test_histogram_quantiles(buckets, total_s, expected):
 
 
 def test_stale_connection_is_retried_on_a_fresh_one(monkeypatch: pytest.MonkeyPatch):
-    made: list[mock.Mock] = []
-
-    def connect(netloc: str, timeout: float) -> mock.Mock:
-        conn = mock.Mock(sock=None)
-        conn.request.side_effect = [None, http.client.RemoteDisconnected("closed")]
-        conn.getresponse.return_value = mock.Mock(status=200, read=lambda: b"42")
-        made.append(conn)
-        return conn
-
-    monkeypatch.setattr(netbench.http.client, "HTTPConnection", connect)
+    connections = fakes.FakeConnections(b"42")
+    monkeypatch.setattr(netbench.http.client, "HTTPConnection", connections)
     pool = netbench.HttpPool(fakes.FakeClock())
     assert pool.request("GET", "http://x/y") == (200, b"42")
     assert pool.request("GET", "http://x/y") == (200, b"42")
-    assert len(made) == 2
+    stale, fresh = connections.made
+    assert (stale.closed, stale.requests, fresh.requests) == (True, 2, 1)
 
 
 def test_submit_rate_counts_sent_transactions_in_the_window():

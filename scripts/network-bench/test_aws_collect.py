@@ -1,3 +1,4 @@
+import argparse
 import dataclasses
 import json
 import logging
@@ -18,10 +19,10 @@ from fakes import (
     NOW,
     FakeClock,
     FakeNode,
+    FakePool,
     FakeRunner,
     FakeSystem,
     RunHarness,
-    Scripted,
     aws_manifest,
     awsb,
     balance_file,
@@ -52,13 +53,13 @@ def query_spec() -> dict:
     }
 
 
-def two_node_cfg(**extra: Any) -> "awsb.RunConfig":
+def two_node_cfg(**extra: Any) -> Any:
     return awsb.RunConfig(
         tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1), **extra
     )
 
 
-def render_run_dir(run_dir: Path, cfg: "awsb.RunConfig") -> None:
+def render_run_dir(run_dir: Path, cfg: Any) -> None:
     hosts = awsb.plan_hosts(cfg)
     for host in hosts:
         (run_dir / "hosts" / host["name"]).mkdir(parents=True)
@@ -94,7 +95,7 @@ def test_sample_pg_writes_lines_and_skips_failed_ticks(tmp_path: Path) -> None:
     awsb.sample_pg(out, stop, awsb.pg_endpoint(), FakeSystem(run=run, clock=clock))
     assert clock.sleeps == [awsb.PG_SAMPLE_S] * 2
     assert envs == [{"PGPASSWORD": "password"}] * 3
-    [line] = [json.loads(line) for line in out.read_text().splitlines()]
+    [line] = netbench.read_jsonl(out)
     assert line["xact_commit"] == 7
     assert "ts" in line
 
@@ -103,7 +104,7 @@ def test_agent_host_role_query_starts_pg_sampler(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pg_json = tmp_path / "pg.json"
-    pg_json.write_text(json.dumps(awsb.pg_endpoint()))
+    netbench.write_json(pg_json, awsb.pg_endpoint())
     args = awsb.parse_args(
         ["agent-host", str(tmp_path / "host.jsonl"), "--role", "query"]
         + ["--pg", str(pg_json)]
@@ -111,20 +112,22 @@ def test_agent_host_role_query_starts_pg_sampler(
     probed = threading.Event()
 
     def run(argv: list[str], env: dict | None = None) -> Any:
+        system.fire(signal.SIGINT)
         probed.set()
         return completed(returncode=1)
 
-    def stop_once_probed(now: float) -> None:
-        assert probed.wait(5)
-        system.fire(signal.SIGINT)
+    def await_probe(now: float) -> None:
+        # The sampler thread never advances the clock: its first probe stops the loop.
+        assert probed.wait(1), "the pg sampler never probed"
 
-    system = FakeSystem(run=run, clock=FakeClock(on_advance=stop_once_probed))
+    system = FakeSystem(run=run, clock=FakeClock(on_advance=await_probe))
     monkeypatch.setattr(awsb, "BENCH_DIR", str(tmp_path))
     monkeypatch.setattr(awsb, "host_sample", lambda *a: {"ts": 1})
     assert awsb.cmd_agent_host(args, system) == awsb.EXIT_OK
     assert (tmp_path / "pg-stats.jsonl").exists()
 
 
+# REQ:querydb-settings-parity
 def test_container_args_render_every_tuning_key() -> None:
     settings = container_settings()
     assert {k: settings[k] for k in awsb.PG_TUNING} == {
@@ -254,6 +257,7 @@ def test_psql_password_is_in_the_environment_only() -> None:
     assert argv[argv.index("-d") + 1] == "espresso"
 
 
+# REQ:querydb-colocated-wiring
 def test_node_env_reads_the_endpoint() -> None:
     pg = {**awsb.pg_endpoint(), "host": "db.internal", "port": 6432}
     text = awsb.render_node_env(query_spec(), fleet(5), pg)
@@ -270,32 +274,12 @@ def test_node_env_of_query_role_needs_an_endpoint() -> None:
 def test_pg_json_is_written_0600_for_the_query_host_only(tmp_path: Path) -> None:
     render_run_dir(tmp_path, two_node_cfg(node_env=("A=1",)))
     pg_json = tmp_path / "hosts/node0/pg.json"
-    assert json.loads(pg_json.read_text()) == awsb.pg_endpoint()
+    assert netbench.read_json(pg_json) == awsb.pg_endpoint()
     assert pg_json.stat().st_mode & 0o777 == 0o600
     assert not (tmp_path / "hosts/node1/pg.json").exists()
     assert not (tmp_path / "hosts/ctl/pg.json").exists()
     for node in ("node0", "node1"):
         assert "\nA=1\n" in (tmp_path / "hosts" / node / "node.env").read_text()
-
-
-def test_gates_check_readiness_then_extension_then_reset(tmp_path: Path) -> None:
-    runner = Scripted({"docker wait deploy": [completed(stdout="0\n")]})
-    awsb.start_support(remote(runner, tmp_path), [], awsb.Interrupts(FakeClock()))
-    commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
-    order = [
-        next(i for i, c in enumerate(commands) if needle in c)
-        for needle in (
-            "docker start postgres",
-            "pg_isready",
-            "CREATE EXTENSION IF NOT EXISTS",
-            "pg_stat_reset_shared",
-        )
-    ]
-    assert order == sorted(order)
-    gate = commands[order[1]]
-    assert gate.startswith("sudo bash -c ")
-    assert awsb.PG_JSON in gate
-    assert "PGPASSWORD=password" not in gate
 
 
 def test_agent_host_query_role_without_endpoint_is_refused(
@@ -308,11 +292,12 @@ def test_agent_host_query_role_without_endpoint_is_refused(
     assert system.handlers == {}
 
 
+@pytest.mark.slow
 def test_every_node_waits_concurrently_whatever_the_pool_size(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Boundary test: real threads meet at a `Barrier`; a pool of 1 would time out."""
-    barrier = threading.Barrier(2, timeout=2)
+    barrier = threading.Barrier(2, timeout=0.5)
 
     def runner(argv: list[str]) -> Any:
         if "docker start" in argv[-1]:
@@ -357,6 +342,7 @@ def ebs(byte: float | None, io: float | None) -> dict:
 QUIET, INVALID, NOISY = (True, False), (False, False), (True, True)
 
 
+# REQ:awsbench-validity-aws
 @pytest.mark.parametrize(
     ("verdict", "reason", "setup"),
     [
@@ -503,24 +489,20 @@ def test_actual_cost_skips_rows_without_a_reason() -> None:
         awsb.actual_cost(only_none, manifest, NOW)
 
 
-def test_append_index_writes_the_header_once(tmp_path: Path) -> None:
-    manifest = {
-        "name": "run1",
-        "created_at": "2026-09-29T15:00:00+00:00",
-        "git_rev": "a" * 40,
-        "config": {"tag": "release-x", "nodes": 5},
-        "fleet": "run1",
-        "query_db": "colocated",
-        "images": {"espresso-node": {"revision": "bd2ad6e1dc7abc"}},
-    }
-    for _ in range(2):
-        awsb.append_index(tmp_path, awsb.index_row(manifest, "01-run", None, 3, None))
-    lines = (tmp_path / "INDEX.md").read_text().splitlines()
-    assert len(lines) == 4
-    assert lines[0].startswith("| fleet/run |")
+@dataclasses.dataclass
+class Agent:
+    """`cmd_agent_drive` on a clock and node of its own; `sample_metrics` does nothing."""
 
+    args: argparse.Namespace
+    clock: FakeClock
+    node: FakeNode
+    monkeypatch: pytest.MonkeyPatch
 
-AgentRun = Callable[[Callable[..., Any], Callable[..., Any]], int]
+    def run(self, ready: Callable[..., Any], load: Callable[..., Any]) -> int:
+        self.monkeypatch.setattr(netbench, "wait_ready", ready)
+        self.monkeypatch.setattr(netbench, "drive_load", load)
+        system = FakeSystem(clock=self.clock, http_pool=self.node.connect)
+        return awsb.cmd_agent_drive(self.args, system)
 
 
 @pytest.fixture
@@ -537,9 +519,7 @@ def agent_out(tmp_path: Path) -> Iterator[Path]:
 
 
 @pytest.fixture
-def run_agent(
-    tmp_path: Path, agent_out: Path, monkeypatch: pytest.MonkeyPatch
-) -> AgentRun:
+def agent(tmp_path: Path, agent_out: Path, monkeypatch: pytest.MonkeyPatch) -> Agent:
     topo = {
         "nodes": {"node0": "http://10.0.0.2:8080"},
         "roles": {"node0": "validator"},
@@ -547,36 +527,54 @@ def run_agent(
     }
     cfg = dataclasses.asdict(netbench.BenchConfig())
     config = tmp_path / "agent.json"
-    config.write_text(json.dumps({"cfg": cfg, "topology": topo, "ready_timeout_s": 5}))
+    netbench.write_json(config, {"cfg": cfg, "topology": topo, "ready_timeout_s": 5})
     args = awsb.parse_args(["agent-drive", str(config), str(agent_out)])
     monkeypatch.setattr(netbench, "sample_metrics", lambda *a, **k: None)
     # `logging.basicConfig` sets INFO only on a root logger without handlers.
     logging.getLogger().setLevel(logging.INFO)
-
-    def run(ready: Callable[..., Any], load: Callable[..., Any]) -> int:
-        monkeypatch.setattr(netbench, "wait_ready", ready)
-        monkeypatch.setattr(netbench, "drive_load", load)
-        clock = FakeClock()
-        node = FakeNode(clock, include=False)
-        return awsb.cmd_agent_drive(
-            args, FakeSystem(clock=clock, http_pool=node.connect)
-        )
-
-    return run
+    clock = FakeClock()
+    return Agent(args, clock, FakeNode(clock, include=False), monkeypatch)
 
 
 def agent_state(out: Path) -> dict:
-    return json.loads((out / "agent-state.json").read_text())
+    return netbench.read_json(out / "agent-state.json")
+
+
+def test_the_clock_reaches_sampler_readiness_and_load(agent: Agent) -> None:
+    clocks: list[Any] = []
+    pools: list[Any] = []
+
+    def sampler(*args: Any) -> None:
+        clocks.append(args[-1])
+
+    def ready(*args: Any) -> float:
+        clocks.append(args[-1])
+        pools.append(args[0])
+        return 1.0
+
+    def load(*args: Any) -> tuple[float, float]:
+        clocks.append(args[4])
+        pools.append(args[5])
+        return (1.0, 2.0)
+
+    agent.monkeypatch.setattr(netbench, "sample_metrics", sampler)
+    assert agent.run(ready, load) == awsb.EXIT_OK
+    assert clocks == [agent.clock] * 3
+    ready_pool, load_http = pools
+    assert isinstance(ready_pool, FakePool)
+    assert ready_pool.node is agent.node
+    assert ready_pool.clock is agent.clock
+    assert load_http == agent.node.connect
 
 
 def test_agent_done_state_carries_ready_window_and_progress(
-    run_agent: AgentRun, agent_out: Path
+    agent: Agent, agent_out: Path
 ) -> None:
     def load(*args: Any) -> tuple[float, float]:
         netbench.log.info("height 7: 3 submitted")
         return (100.0, 200.0)
 
-    assert run_agent(lambda *a: 12.0, load) == awsb.EXIT_OK
+    assert agent.run(lambda *a: 12.0, load) == awsb.EXIT_OK
     state = agent_state(agent_out)
     assert state["phase"] == "done"
     assert (state["ready_s"], state["t0"], state["t1"]) == (12.0, 100.0, 200.0)
@@ -596,13 +594,13 @@ def test_agent_done_state_carries_ready_window_and_progress(
     ids=["not-ready", "interrupted"],
 )
 def test_agent_failure_is_an_error_state(
-    run_agent: AgentRun,
+    agent: Agent,
     agent_out: Path,
     ready: Callable[..., Any],
     load: Callable[..., Any],
     error: str,
 ) -> None:
-    assert run_agent(ready, load) == awsb.EXIT_INVALID
+    assert agent.run(ready, load) == awsb.EXIT_INVALID
     state = agent_state(agent_out)
     assert state["phase"] == "error"
     assert error in state["error"]
@@ -616,13 +614,13 @@ def test_render_host_files_writes_env_start_topology_and_agent_config(
     assert (tmp_path / "hosts/ctl/ctl.env").exists()
     assert (tmp_path / "hosts/node0/node.env").exists()
     assert (tmp_path / "hosts/node1/start.sh").exists()
-    topo = json.loads((tmp_path / "topology.json").read_text())
+    topo = netbench.read_json(tmp_path / "topology.json")
     assert topo["nodes"]["node1"] == "http://10.0.0.3:8080"
     assert topo["query_node"] == "node0"
-    agent = json.loads((tmp_path / "hosts/ctl/agent.json").read_text())
-    assert agent["topology"] == topo
-    assert agent["cfg"]["submit_nodes"] == 1
-    assert awsb.load_config(agent["cfg"]) == cfg.load
+    config = netbench.read_json(tmp_path / "hosts/ctl/agent.json")
+    assert config["topology"] == topo
+    assert config["cfg"]["submit_nodes"] == 1
+    assert awsb.load_config(config["cfg"]) == cfg.load
 
 
 def test_parse_hosts_output_takes_role_from_the_spec() -> None:
@@ -645,7 +643,7 @@ def test_genesis_contracts_are_deduplicated(tmp_path: Path) -> None:
 def collect_ebs(runner: FakeRunner, out: Path) -> dict:
     manifest = {"hosts_info": two_node_hosts_info()}
     awsb.collect_ebs_balance(runner, manifest, 100.0, 160.0, out)
-    return json.loads((out / awsb.EC2_NODE0_FILE).read_text())
+    return netbench.read_json(out / awsb.EC2_NODE0_FILE)
 
 
 def test_collect_ebs_queries_node0_over_the_padded_window(tmp_path: Path) -> None:
@@ -694,9 +692,7 @@ def test_collect_ebs_failure_raises(
 
 def test_metric_min_counts_only_periods_overlapping_the_load(tmp_path: Path) -> None:
     path = tmp_path / "ec2.json"
-    path.write_text(
-        json.dumps(balance_file([50.0, 97.0, 99.0, 30.0], [100.0] * 4, 0.0))
-    )
+    netbench.write_json(path, balance_file([50.0, 97.0, 99.0, 30.0], [100.0] * 4, 0.0))
     # Periods start at 0, 60, 120, 180; the load is 100..160: periods 60 and 120.
     low = awsb.metric_min(path, 100.0, 160.0)
     assert low == {"EBSByteBalance%": 97.0, "EBSIOBalance%": 100.0}
@@ -732,7 +728,7 @@ def test_no_load_window_fetches_no_balance(run_harness: RunHarness) -> None:
     assert runner.count("get-metric-data") == 0
 
 
-def lagging_run(system: FakeSystem, tmp_path: Path) -> "awsb.Run":
+def lagging_run(system: FakeSystem, tmp_path: Path) -> Any:
     fleet = awsb.FleetState(
         system,
         awsb.RunConfig(tag="x"),
@@ -776,11 +772,15 @@ def test_report_has_hosts_deployment_and_summary_blocks(collected_run: Path) -> 
     assert deployment["clock_offset_ms_max"] == pytest.approx(0.01)
     assert deployment["cost_usd"] == {"expected": 1.0, "bound": 2.0}
     assert result["runner"]["cpu_model"] == "Neoverse-V2"
-    saved = json.loads((collected_run / "result.json").read_text())
+    saved = netbench.read_json(collected_run / "result.json")
     assert saved["deployment"] == deployment
     summary = (collected_run / "summary.md").read_text()
     assert "Deployment" in summary
     assert "| node1 |" in summary
+
+
+def test_render_is_repeatable(collected_run: Path) -> None:
+    assert awsb.write_report(collected_run) == awsb.write_report(collected_run)
 
 
 def test_uncollected_host_makes_the_run_invalid(collected_run: Path) -> None:
@@ -798,6 +798,8 @@ def empty_io_balance() -> dict:
     return data
 
 
+# REQ:ebs-balance-evidence
+# TEST:ebs-balance-noisy-ok
 @pytest.mark.parametrize(
     ("balance", "reason"),
     [
@@ -818,9 +820,8 @@ def test_ebs_balance_validity(
     if balance is None:
         path.unlink()
     else:
-        path.write_text(json.dumps(balance))
+        netbench.write_json(path, balance)
     validity = awsb.write_report(collected_run)["validity"]
     assert validity["valid"]
+    assert validity["reasons"] == ([] if reason is None else [reason])
     assert validity["noisy"] == (reason is not None)
-    if reason is not None:
-        assert reason in validity["reasons"]

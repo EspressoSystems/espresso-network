@@ -1,3 +1,4 @@
+import argparse
 import json
 import re
 import shutil
@@ -6,6 +7,7 @@ import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import Any
 
 import netbench
 import pytest
@@ -21,6 +23,7 @@ from fakes import (
     fake_images,
     fake_preflight,
     fleet,
+    isolated_env,
     plan_args,
     shot_estimate,
     sts_response,
@@ -30,7 +33,7 @@ HERE = Path(__file__).parent
 TF_DIR = Path("/tmp/aws-bench/run1/terraform")
 
 
-def cmd_plan_exit(args: "awsb.argparse.Namespace", run: "awsb.Runner") -> int:
+def cmd_plan_exit(args: argparse.Namespace, run: FakeRunner) -> int:
     """Mirrors `main`'s single `Refused` catch."""
     try:
         return awsb.cmd_plan(args, FakeSystem(run=run))
@@ -38,7 +41,7 @@ def cmd_plan_exit(args: "awsb.argparse.Namespace", run: "awsb.Runner") -> int:
         return awsb.EXIT_REFUSED
 
 
-def small_cfg(nodes: int = 2, submit: int = 1, **kw) -> "awsb.RunConfig":
+def small_cfg(nodes: int = 2, submit: int = 1, **kw) -> Any:
     load = netbench.BenchConfig(submit_nodes=submit)
     return awsb.RunConfig(tag="x", nodes=nodes, load=load, **kw)
 
@@ -58,6 +61,7 @@ def host(name: str, role: str) -> dict:
     }
 
 
+# REQ:awsbench-topology
 def test_geometric_steps_end_at_the_target():
     steps = awsb.geometric_steps(4.0, 1.5, 200.0)
     assert steps[:4] == (4.0, 6.0, 9.0, 13.5)
@@ -120,6 +124,34 @@ def test_load_seconds(keep_going, expected):
     assert awsb.load_seconds(load) == expected
 
 
+@pytest.mark.parametrize(
+    ("flags", "keep_going"), [((), False), (("--keep-going",), True)]
+)
+def test_keep_going_flag(flags, keep_going):
+    args = awsb.parse_args(["run", "--tag", "x", *flags])
+    assert awsb.config_from_args(args).load.keep_going == keep_going
+
+
+def test_worst_uses_ready_timeout_and_collect_max():
+    expected_s, worst_s = awsb.shot_seconds(awsb.RunConfig(tag="x"))
+    assert worst_s - expected_s == (
+        awsb.READY_TIMEOUT_S
+        - awsb.READY_EXPECTED_S
+        + awsb.COLLECT_MAX_S
+        - awsb.COLLECT_EXPECTED_S
+    )
+
+
+# REQ:fleet-cost
+def test_a_run_has_no_provision_or_destroy():
+    cfg = awsb.RunConfig(tag="x")
+    run_expected, run_worst = awsb.run_seconds(cfg)
+    shot_expected, shot_worst = awsb.shot_seconds(cfg)
+    fixed = awsb.PROVISION_S + awsb.DESTROY_S
+    assert run_expected - awsb.RESET_EXPECTED_S == shot_expected - fixed
+    assert run_worst - awsb.RESET_MAX_S == shot_worst - fixed
+
+
 # REQ:awsbench-cost-bound
 def test_estimate_matches_hand_computed_totals():
     # Literal dollar values for this 2-node config at PRICES, hand-computed independently
@@ -132,25 +164,55 @@ def test_estimate_matches_hand_computed_totals():
     assert estimate["bound_usd"] == pytest.approx(1.754221, abs=1e-5)
 
 
-@pytest.mark.parametrize(
-    ("yes", "answer", "confirmed", "prompts"),
-    [(True, False, True, 0), (False, False, False, 1), (False, True, True, 1)],
-)
-def test_confirm_create(tmp_path, yes, answer, confirmed, prompts):
-    system = FakeSystem(answer=answer)
-    cfg = awsb.RunConfig(tag="x", yes=yes)
-    if confirmed:
-        awsb.confirm_create(system.ask, cfg, tmp_path, 2)
-    else:
-        with pytest.raises(awsb.Refused, match="not confirmed"):
-            awsb.confirm_create(system.ask, cfg, tmp_path, 2)
+def test_bound_is_cost_at_ttl():
+    cfg = small_cfg(pg_iops=6000, pg_mbps=500)
+    estimate = shot_estimate(awsb.plan_hosts(cfg), cfg)
+    ratio = (estimate["ttl_s"] + awsb.BOOT_ALLOWANCE_S) / estimate["expected_s"]
+    # Every line scales with the duration except egress, which is flat per host.
+    egress = next(line["usd"] for line in estimate["lines"] if line["item"] == "egress")
+    scaled = (estimate["expected_usd"] - egress) * ratio + egress
+    assert estimate["bound_usd"] == pytest.approx(scaled, abs=1e-4)
+
+
+def test_estimate_summary_has_expected_bound_and_limit():
+    cfg = small_cfg()
+    estimate = shot_estimate(awsb.plan_hosts(cfg), cfg)
+    text = awsb.format_estimate_summary(estimate, cfg.max_usd)
+    assert f"expected ${estimate['expected_usd']:.2f}" in text
+    assert f"hard bound ${estimate['bound_usd']:.2f}" in text
+    assert "limit $10.00" in text
+
+
+def test_run_estimate_is_the_fleet_rate_over_the_phases():
+    cfg = small_cfg()
+    manifest = {
+        "estimate": shot_estimate(awsb.plan_hosts(cfg), cfg),
+        "config": {"tag": "x"},
+    }
+    estimate = awsb.estimate_run(manifest, cfg)
+    assert estimate["worst_s"] == awsb.run_seconds(cfg)[1]
+    rate = awsb.estimate_rate(manifest["estimate"])
+    assert estimate["worst_usd"] == pytest.approx(rate * estimate["worst_s"] / 3600)
+    assert estimate["expected_usd"] < estimate["worst_usd"]
+
+
+@pytest.mark.parametrize(("yes", "prompts"), [(True, 0), (False, 1)])
+def test_a_confirmed_create_goes_ahead(tmp_path, yes, prompts):
+    system = FakeSystem(answer=True)
+    awsb.confirm_create(system.ask, awsb.RunConfig(tag="x", yes=yes), tmp_path, 2)
     assert len(system.prompts) == prompts
+
+
+def test_an_unanswered_prompt_refuses(tmp_path):
+    system = FakeSystem(answer=False)
+    with pytest.raises(awsb.Refused, match="not confirmed"):
+        awsb.confirm_create(system.ask, awsb.RunConfig(tag="x"), tmp_path, 2)
+    assert len(system.prompts) == 1
 
 
 @pytest.fixture
 def fleet_dir(isolated: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setattr(awsb, "default_run_name", lambda *_: "run1")
-    return isolated / awsb.OUT_ROOT / "run1"
+    return isolated_env(monkeypatch, isolated, "run1") / "run1"
 
 
 @pytest.fixture
@@ -163,10 +225,6 @@ def preflighted(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
 
     monkeypatch.setattr(awsb, "preflight", preflight)
     return calls
-
-
-def read_json(path: Path) -> dict:
-    return json.loads(path.read_text())
 
 
 # REQ:awsbench-render
@@ -184,7 +242,7 @@ def test_plan_renders_manifest_and_peers(fleet_dir):
         "events.jsonl",
     ):
         assert (fleet_dir / name).exists(), name
-    manifest = read_json(fleet_dir / "fleet.json")
+    manifest = netbench.read_json(fleet_dir / "fleet.json")
     assert manifest["phase"] == "planned"
     assert manifest["git_rev"] == "a" * 40
     assert manifest["peers"] == {"node0": ["node1"], "node1": []}
@@ -192,12 +250,52 @@ def test_plan_renders_manifest_and_peers(fleet_dir):
     assert "expires_at" not in manifest
     assert not (fleet_dir / "manifest.json").exists()
     assert not (fleet_dir / "diff.patch").exists()
-    run_manifest = read_json(fleet_dir / "runs/01-run/manifest.json")
+    run_manifest = netbench.read_json(fleet_dir / "runs/01-run/manifest.json")
     assert run_manifest["fleet"] == "run1"
     assert run_manifest["hosts"] == manifest["hosts"]
-    tfvars = read_json(fleet_dir / "terraform" / "terraform.tfvars.json")
+    tfvars = netbench.read_json(fleet_dir / "terraform" / "terraform.tfvars.json")
     assert tfvars["expires_at"] == ""
     assert not {"account_id", "region", "profile"} & tfvars.keys()
+
+
+@pytest.mark.usefixtures("preflighted")
+def test_key_is_generated_into_the_fleet_dir(fleet_dir):
+    runner = FakeRunner(states=[])
+    assert awsb.cmd_plan(plan_args(), FakeSystem(run=runner)) == awsb.EXIT_OK
+    key = fleet_dir / "ssh" / "id_ed25519"
+    keygen = next(c for c in runner.calls if c[0] == "ssh-keygen")
+    assert keygen == [
+        "ssh-keygen",
+        "-q",
+        "-t",
+        "ed25519",
+        "-N",
+        "",
+        "-C",
+        "run1",
+        "-f",
+        str(awsb.OUT_ROOT / "run1" / "ssh" / "id_ed25519"),
+    ]
+    assert key.stat().st_mode & 0o777 == 0o600
+    tfvars = netbench.read_json(fleet_dir / "terraform" / "terraform.tfvars.json")
+    assert tfvars["ssh_public_key"] == "ssh-ed25519 GENERATED run"
+    manifest = netbench.read_json(fleet_dir / "fleet.json")
+    assert manifest["ssh_public_key"] == "ssh-ed25519 GENERATED run"
+
+
+def test_preflight_requires_ssh_keygen():
+    system = FakeSystem(tools={"tofu", "aws", "ssh", "scp", "rsync", "git"})
+    with pytest.raises(awsb.Refused, match="ssh-keygen"):
+        awsb.preflight(system, awsb.RunConfig(tag="x"), [])
+
+
+@pytest.mark.usefixtures("preflighted")
+def test_plan_logs_preflight_before_cost(fleet_dir):
+    awsb.cmd_plan(plan_args(), FakeSystem(run=FakeRunner(states=[])))
+    lines = (fleet_dir / "driver.log").read_text().splitlines()
+    account = next(i for i, line in enumerate(lines) if "account 0275" in line)
+    cost = next(i for i, line in enumerate(lines) if "expected $" in line)
+    assert account < cost
 
 
 # REQ:awsbench-budget-refusal
@@ -227,11 +325,42 @@ def test_account_mismatch_refuses_after_one_call():
     assert len(runner.calls) == 1
 
 
+# REQ:awsbench-account-guard
+def test_caller_account_returns_the_matching_account():
+    runner = FakeRunner({STS_CALL: sts_response(awsb.ACCOUNT)})
+    assert awsb.caller_account(runner) == awsb.ACCOUNT
+
+
+def offerings(*azs: str) -> subprocess.CompletedProcess:
+    body = {"InstanceTypeOfferings": [{"Location": az} for az in azs]}
+    return completed(stdout=json.dumps(body))
+
+
+def test_capable_az_is_the_lowest_az_offering_every_type():
+    runner = FakeRunner()
+    runner.respond(
+        "Values=c8g.2xlarge", lambda _: offerings("eu-west-1c", "eu-west-1b")
+    )
+    runner.respond(
+        "Values=c8g.4xlarge",
+        lambda _: offerings("eu-west-1b", "eu-west-1c", "eu-west-1a"),
+    )
+    assert awsb.capable_az(runner, {"c8g.2xlarge", "c8g.4xlarge"}) == "eu-west-1b"
+
+
+def test_no_capable_az_refuses():
+    runner = FakeRunner()
+    runner.respond("Values=c8g.2xlarge", lambda _: offerings("eu-west-1a"))
+    runner.respond("Values=c8g.4xlarge", lambda _: offerings("eu-west-1b"))
+    with pytest.raises(awsb.Refused, match="no AZ in eu-west-1 offers"):
+        awsb.capable_az(runner, {"c8g.2xlarge", "c8g.4xlarge"})
+
+
 def test_plan_runs_preflight_and_tofu_plan_without_apply(fleet_dir, preflighted):
     runner = FakeRunner(states=[])
     assert awsb.cmd_plan(plan_args(), FakeSystem(run=runner)) == awsb.EXIT_OK
     assert len(preflighted) == 1
-    manifest = read_json(fleet_dir / "fleet.json")
+    manifest = netbench.read_json(fleet_dir / "fleet.json")
     assert manifest["phase"] == "planned"
     assert manifest["az"] == "eu-west-1b"
     assert manifest["ami_id"] == "ami-0abc"
@@ -285,7 +414,7 @@ def test_tofu_failure_raises_with_stage_and_last_line(stage, stderr, message):
     assert str(err.value) == message
 
 
-def resolve_with(registry: FakeRegistry) -> "awsb.ImageInfo":
+def resolve_with(registry: FakeRegistry) -> dict:
     return awsb.resolve_image(FakeSystem(http=registry).http_get, registry.ref)
 
 
@@ -356,8 +485,11 @@ def test_resolve_image_refuses(make, message):
 
 
 @pytest.fixture
-def served(registry: FakeRegistry) -> Iterator[str]:
+def served(registry: FakeRegistry, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     """Loopback server relaying to a `FakeRegistry`: the boundary test for `_http_get`."""
+    for proxy in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        monkeypatch.delenv(proxy, raising=False)
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -385,6 +517,7 @@ def served(registry: FakeRegistry) -> Iterator[str]:
     server.server_close()
 
 
+@pytest.mark.slow
 def test_http_get_returns_body(served, registry):
     url = f"{served}/v2/test/image/blobs/{registry.config_digest}"
     status, _, body = awsb._http_get(url, {})
@@ -392,6 +525,7 @@ def test_http_get_returns_body(served, registry):
     assert json.loads(body)["architecture"] == "arm64"
 
 
+@pytest.mark.slow
 def test_http_get_returns_error_status_not_raised(served):
     status, headers, _ = awsb._http_get(f"{served}/v2/test/image/manifests/v1", {})
     assert status == 401
@@ -499,7 +633,7 @@ def test_node_env_overrides_reach_every_node():
         assert text.count("RUST_LOG=") == 1
 
 
-def node_env_config(*flags: str) -> "awsb.RunConfig":
+def node_env_config(*flags: str) -> Any:
     return awsb.config_from_args(awsb.parse_args(["run", "--tag", "x", *flags]))
 
 
