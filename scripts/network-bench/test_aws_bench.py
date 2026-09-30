@@ -23,7 +23,6 @@ import signal
 import subprocess
 import tempfile
 import threading
-import time
 import unittest
 import unittest.mock
 from collections.abc import Iterable
@@ -34,7 +33,7 @@ from pathlib import Path
 
 import netbench
 import test_netbench
-from fakes import SLOW, FakeRegistry
+from fakes import SLOW, FakeClock, FakeRegistry
 
 SCRIPT = Path(__file__).with_name("aws-bench")
 _spec = importlib.util.spec_from_loader(
@@ -2154,14 +2153,7 @@ class RunHarness:
         self.fleet_dir = self.tmp / "out" / name
         self.run_dir = self.fleet_dir / "runs" / "01-run"
         patches = [
-            unittest.mock.patch.multiple(
-                awsb,
-                SSH_RETRY_S=0.0,
-                AGENT_POLL_S=0.0,
-                GATE_RETRY_S=0.0,
-                DESTROY_BACKOFF_S=0.0,
-                DOCKER_START_LEAD_S=0.0,
-            ),
+            unittest.mock.patch.object(awsb, "DOCKER_START_LEAD_S", 0.0),
             unittest.mock.patch.object(
                 awsb, "preflight", return_value=fake_preflight()
             ),
@@ -2207,7 +2199,7 @@ class RunHarness:
         return awsb.cmd_run(
             self.args(*extra),
             run=runner,
-            interrupts=awsb.Interrupts(),
+            interrupts=awsb.Interrupts(FakeClock()),
             ask_destroy=ask,
         )
 
@@ -2244,7 +2236,7 @@ class RunApplyFailureTest(unittest.TestCase):
         args = harness.args()
         args.yes = False
         with self.assertRaises(awsb.Refused):
-            awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts())
+            awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
         self.assertFalse(runner.ran("tofu", "apply"))
         self.assertFalse(runner.ran("ssh"))
 
@@ -2430,7 +2422,7 @@ class RunFlowTest(unittest.TestCase):
 class RunInterruptTest(unittest.TestCase):
     def run_interrupted(self, ask) -> tuple[RunHarness, FleetRunner, int]:
         harness = RunHarness(self, confirmed=True)
-        interrupts = awsb.Interrupts()
+        interrupts = awsb.Interrupts(FakeClock())
         running = {"phase": "loading", "detail": "x"}
         runner = FleetRunner(
             [running], on_poll=lambda n: n == 2 and interrupts.event.set()
@@ -2461,7 +2453,7 @@ class RunInterruptTest(unittest.TestCase):
         )
 
     def test_first_signal_logs_the_phase_and_later_ones_remind(self):
-        interrupts = awsb.Interrupts()
+        interrupts = awsb.Interrupts(FakeClock())
         interrupts.phase = "services"
         with self.assertLogs("aws-bench", "WARNING") as logs:
             interrupts._handle(2, None)
@@ -2474,14 +2466,14 @@ class RunInterruptTest(unittest.TestCase):
         self.assertIn("still waiting for the current step (services)", logs.output[1])
 
     def test_sighup_is_handled_like_sigint(self):
-        interrupts = awsb.Interrupts()
+        interrupts = awsb.Interrupts(FakeClock())
         with unittest.mock.patch.object(awsb.signal, "signal") as register:
             interrupts.install()
         registered = {call.args[0] for call in register.call_args_list}
         self.assertEqual(registered, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
 
     def test_third_signal_skips_the_collection_even_after_disarm(self):
-        interrupts = awsb.Interrupts()
+        interrupts = awsb.Interrupts(FakeClock())
         interrupts.disarm()
         interrupts._handle(1, None)
         interrupts._handle(1, None)
@@ -2491,7 +2483,7 @@ class RunInterruptTest(unittest.TestCase):
 
     def test_skipped_collection_still_destroys(self):
         harness = RunHarness(self)
-        interrupts = awsb.Interrupts()
+        interrupts = awsb.Interrupts(FakeClock())
 
         def third_signal(polls: int) -> None:
             if polls == 2:
@@ -2506,8 +2498,17 @@ class RunInterruptTest(unittest.TestCase):
         self.assertFalse(runner.ran("rsync", "/opt/bench/out/"))
         self.assertTrue(runner.ran("tofu", "destroy"))
 
+    # TEST:interrupt-during-fake-sleep-fails
+    def test_a_signal_during_the_poll_sleep_raises_after_the_wait(self):
+        clock = FakeClock()
+        interrupts = awsb.Interrupts(clock)
+        clock.on_advance = lambda now: interrupts._handle(signal.SIGINT, None)
+        with self.assertRaises(awsb.Interrupted):
+            interrupts.sleep(awsb.AGENT_POLL_S)
+        self.assertEqual(clock.sleeps, [awsb.AGENT_POLL_S])
+
     def test_interrupts_are_ignored_after_disarm(self):
-        interrupts = awsb.Interrupts()
+        interrupts = awsb.Interrupts(FakeClock())
         interrupts.disarm()
         interrupts._handle(2, None)
         interrupts.check()
@@ -2793,30 +2794,47 @@ class RemoteTest(unittest.TestCase):
             return results[len(calls) - 1]
 
         remote = self.remote(runner)
-        with unittest.mock.patch.object(awsb, "SSH_RETRY_S", 0.0):
-            awsb.wait_ssh(remote, "ctl", awsb.Interrupts())
+        clock = FakeClock()
+        awsb.wait_ssh(remote, "ctl", awsb.Interrupts(clock))
         self.assertEqual(len(calls), 3)
+        self.assertEqual(clock.sleeps, [awsb.SSH_RETRY_S, awsb.SSH_RETRY_S * 1.5])
 
     def test_wait_ssh_gives_up_after_the_timeout(self):
         remote = self.remote(
             FakeRunner({("ssh",): completed(returncode=255, stderr="refused")})
         )
-        with (
-            unittest.mock.patch.object(awsb, "SSH_RETRY_S", 0.0),
-            unittest.mock.patch.object(awsb, "SSH_READY_TIMEOUT_S", 0.05),
-            self.assertRaisesRegex(awsb.RemoteError, "not reachable"),
-        ):
-            awsb.wait_ssh(remote, "ctl", awsb.Interrupts())
+        clock = FakeClock()
+        with self.assertRaisesRegex(awsb.RemoteError, "not reachable"):
+            awsb.wait_ssh(remote, "ctl", awsb.Interrupts(clock))
+        self.assertGreaterEqual(clock.time(), awsb.SSH_READY_TIMEOUT_S)
 
     def test_gate_times_out_naming_the_gate(self):
         remote = self.remote(
             FakeRunner({("ssh",): completed(returncode=1, stderr="no")})
         )
-        with (
-            unittest.mock.patch.object(awsb, "GATE_RETRY_S", 0.0),
-            self.assertRaisesRegex(awsb.RemoteError, "gate `anvil`"),
-        ):
-            awsb.gate(remote, "ctl", "anvil", "curl x", awsb.Interrupts(), 0.05)
+        clock = FakeClock()
+        with self.assertRaisesRegex(awsb.RemoteError, "gate `anvil`"):
+            awsb.gate(remote, "ctl", "anvil", "curl x", awsb.Interrupts(clock), 0.05)
+        self.assertEqual(clock.sleeps, [awsb.GATE_RETRY_S])
+
+    # TEST:gate-timeout-fails
+    def test_gate_retries_until_its_timeout_on_the_clock(self):
+        remote = self.remote(
+            FakeRunner({("ssh",): completed(returncode=1, stderr="no")})
+        )
+        clock = FakeClock(limit_s=10 * awsb.GATE_TIMEOUT_S)
+        with self.assertRaisesRegex(awsb.RemoteError, "gate `anvil`"):
+            awsb.gate(remote, "ctl", "anvil", "curl x", awsb.Interrupts(clock))
+        self.assertGreaterEqual(clock.time(), awsb.GATE_TIMEOUT_S)
+
+    # TEST:fakeclock-limit-fails
+    def test_a_gate_that_never_passes_hits_the_clock_limit(self):
+        remote = self.remote(
+            FakeRunner({("ssh",): completed(returncode=1, stderr="no")})
+        )
+        clock = FakeClock(limit_s=awsb.GATE_TIMEOUT_S / 2)
+        with self.assertRaisesRegex(RuntimeError, "FakeClock: advanced past"):
+            awsb.gate(remote, "ctl", "anvil", "curl x", awsb.Interrupts(clock))
 
     def test_start_nodes_spread_from_started_at(self):
         stamps = {
@@ -2927,14 +2945,13 @@ class CollectBoundTest(unittest.TestCase):
 
 # REQ:awsbench-poll-tolerant
 class PollAgentTest(unittest.TestCase):
-    def poll(self, runner) -> "awsb.AgentState":
+    def poll(self, runner, clock: FakeClock | None = None) -> "awsb.AgentState":
         cfg = awsb.RunConfig(
             tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
         )
         tmp = tmp_dir(self)
         remote = scripted_remote(self, runner, tmp)
-        with unittest.mock.patch.object(awsb, "AGENT_POLL_S", 0.0):
-            return awsb.poll_agent(remote, tmp, cfg, awsb.Interrupts())
+        return awsb.poll_agent(remote, tmp, cfg, awsb.Interrupts(clock or FakeClock()))
 
     def state(self, state: dict) -> "subprocess.CompletedProcess":
         return completed(stdout=json.dumps(state))
@@ -2947,7 +2964,18 @@ class PollAgentTest(unittest.TestCase):
                 "agent-state.json": [self.state(DONE_STATE)],
             }
         )
-        self.assertEqual(self.poll(runner)["phase"], "done")
+        clock = FakeClock()
+        self.assertEqual(self.poll(runner, clock)["phase"], "done")
+        self.assertEqual(clock.sleeps, [awsb.AGENT_POLL_S] * 2)
+
+    # TEST:poll-agent-deadline-fails
+    def test_an_agent_that_never_finishes_hits_the_deadline(self):
+        loading = self.state({"phase": "loading", "detail": "x"})
+        runner = Scripted({"agent-state.json": [loading]})
+        clock = FakeClock(limit_s=1e6)
+        with self.assertRaisesRegex(awsb.RemoteError, "did not finish within"):
+            self.poll(runner, clock)
+        self.assertGreater(clock.time(), 0)
 
     def test_persistent_ssh_failure_raises(self):
         runner = Scripted({"is-active": [completed(returncode=255, stderr="down")]})
@@ -2997,13 +3025,12 @@ class PollAgentTest(unittest.TestCase):
 
     def test_failed_partial_rsync_only_warns(self):
         loading = self.state({"phase": "loading", "detail": "x"})
+        polls = int(awsb.OUT_RSYNC_S / awsb.AGENT_POLL_S) + 1
         runner = Scripted(
-            {"agent-state.json": [loading, self.state(DONE_STATE)]}, rsync_rc=23
+            {"agent-state.json": [loading] * polls + [self.state(DONE_STATE)]},
+            rsync_rc=23,
         )
-        with (
-            unittest.mock.patch.object(awsb, "OUT_RSYNC_S", 0.0),
-            self.assertLogs("aws-bench", "WARNING") as logs,
-        ):
+        with self.assertLogs("aws-bench", "WARNING") as logs:
             self.assertEqual(self.poll(runner)["phase"], "done")
         self.assertIn("partial rsync failed", logs.output[0])
 
@@ -3040,13 +3067,13 @@ class StartSupportTest(unittest.TestCase):
         with self.assertRaisesRegex(
             awsb.RemoteError, f"still running after {awsb.DEPLOY_TIMEOUT_S} s"
         ):
-            awsb.start_support(remote, [], awsb.Interrupts())
+            awsb.start_support(remote, [], awsb.Interrupts(FakeClock()))
 
     def test_deploy_failure_status_is_reported(self):
         runner = Scripted({"docker wait deploy": [completed(stdout="1\n")]})
         remote = scripted_remote(self, runner)
         with self.assertRaisesRegex(awsb.RemoteError, "deploy exited with status 1"):
-            awsb.start_support(remote, [], awsb.Interrupts())
+            awsb.start_support(remote, [], awsb.Interrupts(FakeClock()))
 
 
 class PostgresStatsTest(unittest.TestCase):
@@ -3102,8 +3129,9 @@ class PostgresStatsTest(unittest.TestCase):
             return reply
 
         out = tmp / "pg-stats.jsonl"
-        with unittest.mock.patch.object(awsb, "PG_SAMPLE_S", 0):
-            awsb.sample_pg(out, stop, awsb.pg_endpoint(), run)
+        clock = FakeClock()
+        awsb.sample_pg(out, stop, awsb.pg_endpoint(), run, clock)
+        self.assertEqual(clock.sleeps, [awsb.PG_SAMPLE_S] * 2)
         lines = [json.loads(line) for line in out.read_text().splitlines()]
         self.assertEqual(len(lines), 1)
         self.assertEqual(lines[0]["xact_commit"], 7)
@@ -3439,7 +3467,7 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
     def test_gates_check_readiness_then_extension_then_reset(self):
         runner = Scripted({"docker wait deploy": [completed(stdout="0\n")]})
         remote = scripted_remote(self, runner)
-        awsb.start_support(remote, [], awsb.Interrupts())
+        awsb.start_support(remote, [], awsb.Interrupts(FakeClock()))
         commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
         order = [
             next(i for i, c in enumerate(commands) if needle in c)
@@ -3747,25 +3775,23 @@ class SweepAndCostTest(unittest.TestCase):
                 stderr="DependencyViolation: has a dependent object" if busy else "",
             )
 
-        with unittest.mock.patch.object(awsb, "SG_DELETE_BACKOFF_S", 0.0):
-            awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p")
+        clock = FakeClock()
+        awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p", clock)
         self.assertEqual(len(attempts), 3)
+        self.assertEqual(clock.sleeps, [awsb.SG_DELETE_BACKOFF_S] * 2)
 
     def test_security_group_delete_gives_up_after_the_retry_bound(self):
         runner = FakeRunner(
             {("aws",): completed(returncode=254, stderr="DependencyViolation")}
         )
-        with (
-            unittest.mock.patch.object(awsb, "SG_DELETE_BACKOFF_S", 0.0),
-            self.assertRaisesRegex(awsb.RemoteError, "DependencyViolation"),
-        ):
-            awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p")
+        with self.assertRaisesRegex(awsb.RemoteError, "DependencyViolation"):
+            awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p", FakeClock())
         self.assertEqual(len(runner.calls), awsb.SG_DELETE_RETRIES)
 
     def test_security_group_delete_does_not_retry_other_errors(self):
         runner = FakeRunner({("aws",): completed(returncode=254, stderr="denied")})
         with self.assertRaisesRegex(awsb.RemoteError, "denied"):
-            awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p")
+            awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p", FakeClock())
         self.assertEqual(len(runner.calls), 1)
 
     def test_tagged_resources_without_name_matches_every_run(self):
@@ -3924,14 +3950,29 @@ class AgentDriveTest(unittest.TestCase):
     def state(self) -> dict:
         return json.loads((self.tmp / "out" / "agent-state.json").read_text())
 
-    def run_agent(self, ready, load) -> int:
+    def run_agent(self, ready, load, sampler=None, clock=None) -> int:
         with (
             unittest.mock.patch.object(netbench, "wait_ready", ready),
             unittest.mock.patch.object(netbench, "drive_load", load),
-            unittest.mock.patch.object(netbench, "sample_metrics"),
+            unittest.mock.patch.object(
+                netbench, "sample_metrics", sampler or unittest.mock.Mock()
+            ),
             unittest.mock.patch.object(awsb.signal, "signal"),
         ):
-            return awsb.cmd_agent_drive(self.args)
+            if clock is None:
+                return awsb.cmd_agent_drive(self.args)
+            return awsb.cmd_agent_drive(self.args, clock)
+
+    def test_the_clock_reaches_sampler_readiness_and_load(self):
+        clock = FakeClock()
+        clocks = []
+        self.run_agent(
+            lambda *a: clocks.append(a[-1]) or 1.0,
+            lambda *a: clocks.append(a[-1]) or {"t0": 1.0, "t1": 2.0},
+            lambda *a, **k: clocks.append(a[-1]),
+            clock,
+        )
+        self.assertEqual(clocks, [clock, clock, clock])
 
     def test_done_state_carries_ready_and_window(self):
         code = self.run_agent(lambda *a: 12.0, lambda *a: {"t0": 100.0, "t1": 200.0})
@@ -4202,7 +4243,7 @@ class FinishCollectsEbsBalanceTest(unittest.TestCase):
 
     def test_waits_for_the_lag_and_skips_on_third_signal(self):
         harness = RunHarness(self)
-        interrupts = awsb.Interrupts()
+        interrupts = awsb.Interrupts(FakeClock())
         interrupts.skip_collect.set()
         fleet = awsb.FleetState(
             FleetRunner([DONE_STATE]),
@@ -4211,10 +4252,25 @@ class FinishCollectsEbsBalanceTest(unittest.TestCase):
             None,
             interrupts,
         )
-        agent = DONE_STATE | {"t1": time.time()}
+        agent = DONE_STATE | {"t1": interrupts.clock.time()}
         run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, agent=agent)
         awsb.collect_node0_ebs_balance(run)
         self.assertEqual(fleet.run.count("get-metric-data"), 0)
+
+    def test_published_window_waits_out_the_lag_on_the_clock(self):
+        harness = RunHarness(self)
+        clock = FakeClock()
+        fleet = awsb.FleetState(
+            FleetRunner([DONE_STATE]),
+            awsb.RunConfig(tag="x"),
+            harness.fleet_dir,
+            None,
+            awsb.Interrupts(clock),
+        )
+        agent = DONE_STATE | {"t1": clock.time()}
+        run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, agent=agent)
+        self.assertEqual(awsb.published_window(run, "x"), agent)
+        self.assertEqual(clock.sleeps, [awsb.CLOUDWATCH_LAG_S])
 
 
 class WriteReportTest(unittest.TestCase):
@@ -4687,7 +4743,7 @@ class DestroyOrphansTest(unittest.TestCase):
                 ["destroy", "--orphans", "--yes", "--out-root", tmp]
             )
             with contextlib.redirect_stdout(io.StringIO()):
-                awsb.cmd_destroy(parsed, self.runner(), NOW)
+                awsb.cmd_destroy(parsed, self.runner(), NOW, FakeClock())
             manifest = json.loads((out / "amy" / "fleet.json").read_text())
             self.assertFalse(key.exists())
         self.assertEqual(manifest["phase"], "swept")
@@ -4885,7 +4941,9 @@ class KeptRunTest(unittest.TestCase):
 
     def test_destroy_dir_destroys_prices_and_appends_index(self):
         harness, runner = self.kept(describe=DESCRIBE)
-        code = awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
+        code = awsb.cmd_destroy(
+            self.args(harness, "destroy", "--yes"), runner, clock=FakeClock()
+        )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertTrue(runner.ran("tofu", "destroy"))
         manifest = json.loads((harness.fleet_dir / "fleet.json").read_text())
@@ -4915,26 +4973,34 @@ class KeptRunTest(unittest.TestCase):
             awsb.cmd_status(self.args(harness, "status"), runner, NOW)
         self.assertTrue(runner.ran("-i", str(key)))
         runner.describe = DESCRIBE
-        awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
+        awsb.cmd_destroy(
+            self.args(harness, "destroy", "--yes"), runner, clock=FakeClock()
+        )
         self.assertFalse(key.exists())
         self.assertTrue(key.with_name("id_ed25519.pub").exists())
 
     def test_destroy_dir_twice_is_refused(self):
         harness, runner = self.kept(describe=DESCRIBE)
-        awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
+        awsb.cmd_destroy(
+            self.args(harness, "destroy", "--yes"), runner, clock=FakeClock()
+        )
         with self.assertRaisesRegex(awsb.Refused, "already done"):
-            awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
+            awsb.cmd_destroy(
+                self.args(harness, "destroy", "--yes"), runner, clock=FakeClock()
+            )
 
     def test_destroy_dir_declined(self):
         harness, runner = self.kept()
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
-            awsb.cmd_destroy(self.args(harness, "destroy"), runner)
+            awsb.cmd_destroy(self.args(harness, "destroy"), runner, clock=FakeClock())
         self.assertFalse(runner.ran("tofu", "destroy"))
 
     def test_failed_destroy_dir_sweeps_and_exits_4(self):
         harness, runner = self.kept()
         runner.destroys = [completed(returncode=1, stderr="locked")]
-        code = awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
+        code = awsb.cmd_destroy(
+            self.args(harness, "destroy", "--yes"), runner, clock=FakeClock()
+        )
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertTrue(runner.ran("terminate-instances", "i-1"))
         manifest = json.loads((harness.fleet_dir / "fleet.json").read_text())
