@@ -971,10 +971,10 @@ struct DecidedLeaf {
     cert: CertificatePair<SeqTypes>,
 }
 
-struct ReconstructedPayload {
-    view: ViewNumber,
-    header: Header,
-    payload: Payload,
+struct ReconstructedPayloadRow {
+    view: i64,
+    header: Vec<u8>,
+    payload: Vec<u8>,
 }
 
 fn decide_events_from_chain(
@@ -1345,20 +1345,12 @@ impl Persistence {
                     )
                     .await?
                     .into_iter()
-                    .map(|row| {
-                        let view: i64 = row.get("view");
-                        let header_bytes: Vec<u8> = row.get("header");
-                        let payload_bytes: Vec<u8> = row.get("payload");
-                        let header = bincode::deserialize::<Header>(&header_bytes)
-                            .context("deserializing reconstructed payload header")?;
-                        let payload = Payload::from_bytes(&payload_bytes, header.metadata());
-                        Ok(ReconstructedPayload {
-                            view: ViewNumber::new(view as u64),
-                            header,
-                            payload,
-                        })
+                    .map(|row| ReconstructedPayloadRow {
+                        view: row.get("view"),
+                        header: row.get("header"),
+                        payload: row.get("payload"),
                     })
-                    .collect::<anyhow::Result<Vec<_>>>()?;
+                    .collect::<Vec<_>>();
                 drop(tx);
                 Ok(Some((
                     from_view,
@@ -1436,18 +1428,30 @@ impl Persistence {
                 consumer.handle_event(&event).await?;
             }
 
-            let replayed = reconstructed
-                .iter()
-                .map(|reconstructed| reconstructed.view.u64() as i64)
-                .collect::<Vec<_>>();
-            for ReconstructedPayload {
+            let mut replayed = Vec::with_capacity(reconstructed.len());
+            for ReconstructedPayloadRow {
                 view,
                 header,
                 payload,
             } in reconstructed
             {
+                replayed.push(view);
+                // Dropped rather than failing the batch, which would retry forever and hold up
+                // the cursor and GC behind one row.
+                let header = match bincode::deserialize::<Header>(&header) {
+                    Ok(header) => header,
+                    Err(err) => {
+                        tracing::warn!(
+                            view,
+                            err = %format_args!("{err:#}"),
+                            "dropping reconstructed payload with undecodable header"
+                        );
+                        continue;
+                    },
+                };
+                let payload = Payload::from_bytes(&payload, header.metadata());
                 let event = CoordinatorEvent::BlockPayloadReconstructed {
-                    view,
+                    view: ViewNumber::new(view as u64),
                     header,
                     payload: Arc::new(payload),
                 };
@@ -1526,11 +1530,15 @@ impl Persistence {
                 .await?;
                 // Not `view <= to_view`: a payload for an older view stored after the read above
                 // was never replayed, and has to survive for the next decide.
-                for view in &replayed {
-                    tx.execute(
-                        query("DELETE FROM reconstructed_payload WHERE view = $1").bind(*view),
-                    )
-                    .await?;
+                if !replayed.is_empty() {
+                    let mut delete =
+                        QueryBuilder::new("DELETE FROM reconstructed_payload WHERE view IN (");
+                    let mut views = delete.separated(", ");
+                    for view in &replayed {
+                        views.push_bind(*view);
+                    }
+                    views.push_unseparated(")");
+                    delete.build().execute(tx.as_mut()).await?;
                 }
 
                 // Clean up leaves, but do not delete the most recent one (all leaves with a view
@@ -4086,6 +4094,67 @@ mod test {
             storage.load_processed_view().await.unwrap(),
             Some(ViewNumber::new(10))
         );
+    }
+
+    /// A reconstructed payload row that cannot be decoded is dropped, instead of failing this
+    /// and every later decide.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_undecodable_reconstructed_payload_is_dropped() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+
+        let node_state = NodeState::mock().with_genesis_version(versions::NEW_PROTOCOL_VERSION);
+        let leaf = Leaf2::genesis(
+            &ValidatedState::default(),
+            &node_state,
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let mut qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &node_state,
+            TEST_VERSIONS.test,
+        )
+        .await;
+        qc.data.leaf_commit = Committable::commit(&leaf);
+        let info = LeafInfo {
+            leaf,
+            vid_share: None,
+            state: Default::default(),
+            delta: None,
+            state_cert: None,
+        };
+        storage
+            .persist_decided_leaves(
+                ViewNumber::genesis(),
+                [(&info, CertificatePair::non_epoch_change(qc))],
+                None,
+                &NullEventConsumer,
+            )
+            .await
+            .unwrap();
+
+        let mut tx = storage.db.write().await.unwrap();
+        tx.upsert(
+            "reconstructed_payload",
+            ["view", "header", "payload"],
+            ["view"],
+            [(0i64, Vec::from([0xffu8]), Vec::<u8>::new())],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        storage
+            .process_decided_events(ViewNumber::genesis(), None, &NullEventConsumer)
+            .await
+            .unwrap();
+        let mut tx = storage.db.read().await.unwrap();
+        let (rows,): (i64,) = query_as("SELECT count(*) FROM reconstructed_payload")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
     }
 
     /// The probe is taken in `create()` and only reaches the exported registry through

@@ -958,13 +958,17 @@ where
             return Ok(());
         }
         // Storing is an upsert that rewrites the whole payload, and the same block arrives
-        // again on every replay, so skip blocks that are already stored.
+        // again on every replay, so skip blocks that are already stored. The payload row is
+        // shared by every height with the same payload, so it only counts once this height's
+        // transactions are indexed too.
         match tx
             .get_payload_metadata(BlockId::Number(height as usize))
             .await
         {
-            Ok(_) => return Ok(()),
-            Err(QueryError::Missing | QueryError::NotFound) => {},
+            Ok(stored) if stored.num_transactions == 0 || !stored.namespaces.is_empty() => {
+                return Ok(());
+            },
+            Ok(_) | Err(QueryError::Missing | QueryError::NotFound) => {},
             Err(err) => {
                 return Err(err).context(format!("checking whether block {height} is stored"));
             },
