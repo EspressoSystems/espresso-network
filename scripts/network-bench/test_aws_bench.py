@@ -56,6 +56,13 @@ assert _spec.loader is not None
 _spec.loader.exec_module(awsb)
 
 
+def setUpModule():
+    """Prompts must see a non-tty stdin so the suite passes in a terminal."""
+    patcher = unittest.mock.patch("sys.stdin", io.StringIO(""))
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
+
 def price_response(usd_hour: float) -> subprocess.CompletedProcess:
     product = json.dumps(
         {
@@ -3770,9 +3777,14 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
         self.assertIn("--role query", with_pg[0])
 
     def test_agent_host_query_role_without_endpoint_is_refused(self):
+        """Refused before installing signal handlers, which would outlive the call."""
         args = awsb.parse_args(["agent-host", "host.jsonl", "--role", "query"])
-        with self.assertRaisesRegex(awsb.Refused, "--pg"):
+        with (
+            unittest.mock.patch.object(awsb.signal, "signal") as register,
+            self.assertRaisesRegex(awsb.Refused, "--pg"),
+        ):
             awsb.cmd_agent_host(args)
+        register.assert_not_called()
 
     def test_sampler_passes_the_password_in_the_environment(self):
         stop = threading.Event()

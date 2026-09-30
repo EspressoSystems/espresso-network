@@ -44,6 +44,7 @@ from test_aws_bench import (
     fake_images,
     fake_preflight,
     price_response,
+    setUpModule,  # noqa: F401  (unittest runs it for this module too)
     tag_runner,
     valid_result,
     write_collected_run,

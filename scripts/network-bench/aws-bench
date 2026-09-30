@@ -7557,13 +7557,13 @@ def cmd_agent_host(
     args: argparse.Namespace, run: Runner = _run, clock: nb.Clock = nb.SYSTEM_CLOCK
 ) -> int:
     containers_path = Path(BENCH_DIR) / "containers.json"
+    if args.role == "query" and args.pg is None:
+        raise Refused("agent-host --role query needs --pg")
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
     pg_thread = None
     if args.role == "query":
-        if args.pg is None:
-            raise Refused("agent-host --role query needs --pg")
         pg_out = args.out.with_name("pg-stats.jsonl")
         pg = cast(PgEndpoint, json.loads(args.pg.read_text()))
         pg_thread = threading.Thread(
