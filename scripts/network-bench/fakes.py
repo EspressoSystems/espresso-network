@@ -436,6 +436,18 @@ class FakeSystem:
     )
     clock: netbench.Clock = field(default_factory=FakeClock)
     handlers: dict[int, Callable[[int, Any], None]] = field(default_factory=dict)
+    tools: set[str] | None = None
+    answer: bool = False
+    prompts: list[str] = field(default_factory=list)
+
+    def which(self, name: str) -> str | None:
+        if self.tools is None or name in self.tools:
+            return f"/usr/bin/{name}"
+        return None
+
+    def ask(self, prompt: str) -> bool:
+        self.prompts.append(prompt)
+        return self.answer
 
     def trap(
         self,

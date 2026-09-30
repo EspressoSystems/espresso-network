@@ -751,6 +751,8 @@ class System:
     run: Runner
     clock: nb.Clock
     trap: Callable[[tuple[signal.Signals, ...], SignalHandler], None]
+    which: Callable[[str], str | None]
+    ask: Callable[[str], bool]
 
 
 Command = Callable[[argparse.Namespace, System], int]
@@ -761,8 +763,20 @@ def _trap(signals: tuple[signal.Signals, ...], handler: SignalHandler) -> None:
         signal.signal(sig, handler)
 
 
+def _ask(prompt: str) -> bool:
+    if not sys.stdin.isatty():
+        return False
+    return input(f"{prompt} [y/N] ").strip().lower() == "y"
+
+
 def host_system() -> System:
-    return System(run=_run, clock=nb.SYSTEM_CLOCK, trap=_trap)
+    return System(
+        run=_run,
+        clock=nb.SYSTEM_CLOCK,
+        trap=_trap,
+        which=shutil.which,
+        ask=_ask,
+    )
 
 
 def utc_now(clock: nb.Clock) -> datetime:
@@ -1104,12 +1118,8 @@ def format_estimate_lines(estimate: Estimate) -> list[str]:
     ]
 
 
-def confirm(prompt: str, yes: bool) -> bool:
-    if yes:
-        return True
-    if not sys.stdin.isatty():
-        return False
-    return input(f"{prompt} [y/N] ").strip().lower() == "y"
+def confirm(ask: Callable[[str], bool], prompt: str, yes: bool) -> bool:
+    return yes or ask(prompt)
 
 
 def default_run_name() -> str:
@@ -1243,8 +1253,8 @@ def update_manifest(path: Path, phase: str, **extra: Any) -> Manifest:
     return cast(Manifest, merged)
 
 
-def tools_on_path(names: Iterable[str]) -> None:
-    missing = [name for name in names if shutil.which(name) is None]
+def tools_on_path(which: Callable[[str], str | None], names: Iterable[str]) -> None:
+    missing = [name for name in names if which(name) is None]
     if missing:
         raise Refused(f"missing tools on PATH: {', '.join(missing)}")
 
@@ -1449,8 +1459,11 @@ def resolve_image(ref: str) -> ImageInfo:
     return {"ref": ref, "digest": digest, "revision": revision, "platforms": platforms}
 
 
-def preflight(run: Runner, cfg: RunConfig, hosts: list[HostSpec]) -> Preflight:
-    tools_on_path(["tofu", "aws", "ssh", "scp", "rsync", "git", "ssh-keygen"])
+def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Preflight:
+    run = system.run
+    tools_on_path(
+        system.which, ["tofu", "aws", "ssh", "scp", "rsync", "git", "ssh-keygen"]
+    )
     account = caller_account(run)
     az = capable_az(run, {h["instance_type"] for h in hosts})
     ami_id = resolve_ami(run)
@@ -2120,7 +2133,7 @@ def cmd_plan(args: argparse.Namespace, system: System) -> int:
     cfg = dataclasses.replace(
         config_from_args(args), db_modes=args.db_modes, ttl_min=args.ttl_min
     )
-    fleet_dir, *_ = plan_fleet(args, cfg, system.run, system.clock.time())
+    fleet_dir, *_ = plan_fleet(args, cfg, system, system.clock.time())
     log.info("rendered %s (phase=planned)", fleet_dir)
     return EXIT_OK
 
@@ -2347,7 +2360,7 @@ def cmd_run(args: argparse.Namespace, system: System) -> int:
     interrupts = Interrupts(system.clock)
     started = system.clock.time()
     try:
-        fleet_dir, run_dir, tf = prepare_run(args, cfg, system.run, started)
+        fleet_dir, run_dir, tf = prepare_run(args, cfg, system, started)
     except KeyboardInterrupt:
         raise Refused("interrupted; nothing was created") from None
     interrupts.install(system.trap)
@@ -2365,17 +2378,19 @@ def cmd_run(args: argparse.Namespace, system: System) -> int:
 
 
 def prepare_run(
-    args: argparse.Namespace, cfg: RunConfig, run: Runner, started: float
+    args: argparse.Namespace, cfg: RunConfig, system: System, started: float
 ) -> tuple[Path, Path, Terraform]:
     """Everything before the first AWS write: `plan_fleet` and the prompt. Any failure or
     Ctrl-C leaves nothing to destroy."""
-    fleet_dir, run_dir, tf, hosts, _ = plan_fleet(args, cfg, run, started)
-    confirm_create(cfg, fleet_dir, len(hosts))
+    fleet_dir, run_dir, tf, hosts, _ = plan_fleet(args, cfg, system, started)
+    confirm_create(system.ask, cfg, fleet_dir, len(hosts))
     stamp_expiry(fleet_dir, tf, datetime.now(UTC))
     return fleet_dir, run_dir, tf
 
 
-def confirm_create(cfg: RunConfig, fleet_dir: Path, count: int) -> None:
+def confirm_create(
+    ask: Callable[[str], bool], cfg: RunConfig, fleet_dir: Path, count: int
+) -> None:
     extras = ""
     if "volume" in cfg.db_modes:
         extras += ", 1 extra volume"
@@ -2385,7 +2400,7 @@ def confirm_create(cfg: RunConfig, fleet_dir: Path, count: int) -> None:
     prompt = (
         f"Create {count} instances{extras}, 1 security group, 1 key pair in {ACCOUNT}?"
     )
-    if not confirm(prompt, cfg.yes):
+    if not confirm(ask, prompt, cfg.yes):
         append_event(fleet_dir, "planned", "refused", "not confirmed")
         raise Refused("not confirmed; nothing was created")
 
@@ -2420,15 +2435,16 @@ def stamp_expiry(
 
 
 def plan_fleet(
-    args: argparse.Namespace, cfg: RunConfig, run: Runner, now: float
+    args: argparse.Namespace, cfg: RunConfig, system: System, now: float
 ) -> tuple[Path, Path, Terraform, list[HostSpec], Preflight]:
     """Preflight, cost check, render, `tofu init` and `plan`. Shared by `plan` and `run`; makes
     no AWS write. The preflight summary is logged before the cost line."""
+    run = system.run
     hosts = plan_hosts(cfg)
     fleet_dir = new_fleet_dir(OUT_ROOT)
     setup_logging(fleet_dir)
     log.debug("argv %s", args.argv)
-    pre = preflight(run, cfg, hosts)
+    pre = preflight(system, cfg, hosts)
     log_preflight(cfg, pre, hosts)
     estimate = estimate_or_refuse(cfg, hosts, fleet_dir, now, rds=rds_spec(cfg, pre))
     run_dir = render_run_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
@@ -2832,7 +2848,7 @@ def cmd_up(args: argparse.Namespace, system: System) -> int:
     interrupts = Interrupts(system.clock)
     started = system.clock.time()
     try:
-        fleet_dir, tf = prepare_up(args, cfg, system.run, started)
+        fleet_dir, tf = prepare_up(args, cfg, system, started)
     except KeyboardInterrupt:
         raise Refused("interrupted; nothing was created") from None
     interrupts.install(system.trap)
@@ -2852,21 +2868,22 @@ def cmd_up(args: argparse.Namespace, system: System) -> int:
 
 
 def prepare_up(
-    args: argparse.Namespace, cfg: RunConfig, run: Runner, started: float
+    args: argparse.Namespace, cfg: RunConfig, system: System, started: float
 ) -> tuple[Path, Terraform]:
     """Everything before the first AWS write, as `prepare_run`, without a run dir."""
+    run = system.run
     hosts = plan_hosts(cfg)
     fleet_dir = new_fleet_dir(OUT_ROOT)
     setup_logging(fleet_dir)
     log.debug("argv %s", args.argv)
-    pre = preflight(run, cfg, hosts)
+    pre = preflight(system, cfg, hosts)
     log_preflight(cfg, pre, hosts)
     estimate = estimate_or_refuse(
         cfg, hosts, fleet_dir, started, fleet=True, rds=rds_spec(cfg, pre)
     )
     render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
     tf = init_terraform(run, fleet_dir)
-    confirm_create(cfg, fleet_dir, len(hosts))
+    confirm_create(system.ask, cfg, fleet_dir, len(hosts))
     stamp_expiry(fleet_dir, tf, datetime.now(UTC), margin_s=0.0)
     return fleet_dir, tf
 
@@ -4572,7 +4589,7 @@ def destroy_run(system: System, args: argparse.Namespace) -> int:
     if manifest["phase"] in TERMINAL_PHASES:
         raise Refused(f"{name} is already {manifest['phase']}")
     prompt = f"Destroy the fleet of {name} in {ACCOUNT}?"
-    if not confirm(prompt, args.yes):
+    if not confirm(system.ask, prompt, args.yes):
         raise Refused("not confirmed; nothing was destroyed")
     setup_logging(fleet_dir)
     cfg = config_from_manifest(manifest["config"])
@@ -4639,7 +4656,7 @@ def destroy_orphans(system: System, args: argparse.Namespace, now: datetime) -> 
         f"Terminate {instances} instances and delete {others} other resources "
         f"of {len(orphans)} runs in {ACCOUNT}?"
     )
-    if not confirm(prompt, args.yes):
+    if not confirm(system.ask, prompt, args.yes):
         raise Refused("not confirmed; nothing was destroyed")
     try:
         for orphan in orphans:

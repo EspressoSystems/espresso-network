@@ -44,7 +44,6 @@ from test_aws_bench import (
     fake_images,
     fake_preflight,
     isolated_env,
-    setUpModule,  # noqa: F401  (unittest runs it for this module too)
     tag_runner,
     temp_dir,
     valid_result,
@@ -1477,10 +1476,7 @@ class RdsOrderableTest(unittest.TestCase):
             stack.enter_context(
                 unittest.mock.patch.object(awsb, "resolve_image", resolve)
             )
-            stack.enter_context(
-                unittest.mock.patch("shutil.which", return_value="/usr/bin/x")
-            )
-            pre = awsb.preflight(runner, cfg, awsb.plan_hosts(cfg))
+            pre = awsb.preflight(FakeSystem(run=runner), cfg, awsb.plan_hosts(cfg))
         self.assertEqual(pre["rds_engine_version"], "18.4")
         self.assertIn("docker.io/library/postgres:18.4", resolved)
         self.assertEqual(
@@ -1767,20 +1763,20 @@ class RdsUpTest(unittest.TestCase):
         harness = RdsHarness(self)
         args = harness.up_args()
         args.yes = False
-        with unittest.mock.patch.object(awsb, "confirm", return_value=True) as confirm:
-            awsb.cmd_up(args, FakeSystem(run=RdsRunner([DONE_STATE])))
+        system = FakeSystem(run=RdsRunner([DONE_STATE]), answer=True)
+        awsb.cmd_up(args, system)
         self.assertIn(
             "1 rds instance, 1 subnet group, 1 parameter group, 1 schedule, 1 iam role",
-            confirm.call_args.args[0],
+            system.prompts[0],
         )
 
     def test_the_prompt_lists_the_extra_volume(self):
         harness = FleetHarness(self)
         args = harness.up_args("--db-modes", "colocated,volume")
         args.yes = False
-        with unittest.mock.patch.object(awsb, "confirm", return_value=True) as confirm:
-            awsb.cmd_up(args, FakeSystem(run=volume_runner([DONE_STATE])))
-        self.assertIn("1 extra volume", confirm.call_args.args[0])
+        system = FakeSystem(run=volume_runner([DONE_STATE]), answer=True)
+        awsb.cmd_up(args, system)
+        self.assertIn("1 extra volume", system.prompts[0])
 
     # TEST:querydb-rds-pending-reboot-ok
     def test_pending_reboot_reboots_once_and_waits(self):

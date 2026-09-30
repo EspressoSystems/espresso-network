@@ -57,13 +57,6 @@ assert _spec.loader is not None
 _spec.loader.exec_module(awsb)
 
 
-def setUpModule():
-    """Prompts must see a non-tty stdin so the suite passes in a terminal."""
-    patcher = unittest.mock.patch("sys.stdin", io.StringIO(""))
-    patcher.start()
-    unittest.addModuleCleanup(patcher.stop)
-
-
 def parse_plan_args(argv: list[str]) -> "awsb.argparse.Namespace":
     full = ["plan", *argv]
     args = awsb.parse_args(full)
@@ -307,17 +300,18 @@ class FormatEstimateTest(unittest.TestCase):
 
 class ConfirmTest(unittest.TestCase):
     def test_yes_flag_always_confirms(self):
-        self.assertTrue(awsb.confirm("go?", yes=True))
+        system = FakeSystem()
+        self.assertTrue(awsb.confirm(system.ask, "go?", yes=True))
+        self.assertEqual(system.prompts, [])
 
-    def test_non_tty_without_yes_refuses(self):
-        self.assertFalse(awsb.confirm("go?", yes=False))
+    def test_unanswered_prompt_refuses(self):
+        system = FakeSystem()
+        self.assertFalse(awsb.confirm(system.ask, "go?", yes=False))
+        self.assertEqual(system.prompts, ["go?"])
 
-    def test_tty_reads_input(self):
-        with unittest.mock.patch("sys.stdin.isatty", return_value=True):
-            with unittest.mock.patch("builtins.input", return_value="y"):
-                self.assertTrue(awsb.confirm("go?", yes=False))
-            with unittest.mock.patch("builtins.input", return_value="n"):
-                self.assertFalse(awsb.confirm("go?", yes=False))
+    def test_answer_decides(self):
+        system = FakeSystem(answer=True)
+        self.assertTrue(awsb.confirm(system.ask, "go?", yes=False))
 
 
 def plan_args(*extra: str, nodes: str = "2") -> "awsb.argparse.Namespace":
@@ -401,12 +395,9 @@ class CmdPlanTest(unittest.TestCase):
         self.assertEqual(manifest["ssh_public_key"], "ssh-ed25519 GENERATED run")
 
     def test_preflight_requires_ssh_keygen(self):
-        which = unittest.mock.patch(
-            "shutil.which",
-            side_effect=lambda name: None if name == "ssh-keygen" else "/usr/bin/x",
-        )
-        with which, self.assertRaisesRegex(awsb.Refused, "ssh-keygen"):
-            awsb.preflight(FakeRunner(), awsb.RunConfig(tag="x"), [])
+        system = FakeSystem(tools={"tofu", "aws", "ssh", "scp", "rsync", "git"})
+        with self.assertRaisesRegex(awsb.Refused, "ssh-keygen"):
+            awsb.preflight(system, awsb.RunConfig(tag="x"), [])
 
     def test_budget_refusal_makes_no_tofu_apply(self):
         args = plan_args("--max-usd", "0.01", nodes="5")
@@ -437,8 +428,7 @@ class CmdPlanTest(unittest.TestCase):
     # REQ:awsbench-account-guard
     def test_online_account_mismatch_makes_exactly_one_call(self):
         runner = FakeRunner({STS_CALL: sts_response("999999999999")})
-        with unittest.mock.patch.object(awsb, "tools_on_path"):
-            code = cmd_plan_exit(plan_args(), run=runner)
+        code = cmd_plan_exit(plan_args(), run=runner)
         self.assertEqual(code, awsb.EXIT_REFUSED)
         self.assertEqual(len(runner.calls), 1)
 
@@ -570,11 +560,8 @@ class PreflightTest(unittest.TestCase):
                 ),
             }
         )
-        with (
-            unittest.mock.patch.object(awsb, "resolve_image", fake_image),
-            unittest.mock.patch("shutil.which", return_value="/usr/bin/x"),
-        ):
-            result = awsb.preflight(runner, cfg, awsb.plan_hosts(cfg))
+        with unittest.mock.patch.object(awsb, "resolve_image", fake_image):
+            result = awsb.preflight(FakeSystem(run=runner), cfg, awsb.plan_hosts(cfg))
         self.assertEqual(result["az"], "eu-west-1a")
         self.assertEqual(result["ami_id"], "ami-0abc")
         self.assertEqual(set(result["images"]), set(awsb.image_refs(cfg)))
@@ -1451,6 +1438,7 @@ class RunHarness:
         self, test: unittest.TestCase, name: str = "run1", confirmed: bool = False
     ):
         self.yes = not confirmed
+        self.answer = confirmed
         self.tmp = temp_dir(test)
         self.out = isolated_env(test, self.tmp, name)
         self.name = name
@@ -1462,11 +1450,6 @@ class RunHarness:
             ),
             unittest.mock.patch.object(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT)),
         ]
-        if confirmed:
-            # An interactive run: `confirm` says yes, but --yes is absent, so an interrupt asks.
-            patches.append(
-                unittest.mock.patch.object(awsb, "confirm", return_value=True)
-            )
         for patch in patches:
             patch.start()
             test.addCleanup(patch.stop)
@@ -1486,7 +1469,9 @@ class RunHarness:
         return args
 
     def run(self, runner: FleetRunner, extra=()) -> int:
-        return awsb.cmd_run(self.args(*extra), FakeSystem(run=runner))
+        return awsb.cmd_run(
+            self.args(*extra), FakeSystem(run=runner, answer=self.answer)
+        )
 
     def index_log(self) -> str:
         return (self.fleet_dir / "driver.log").read_text()
