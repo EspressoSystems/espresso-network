@@ -317,6 +317,9 @@ PG_OBSERVABILITY = {
     "shared_preload_libraries": "pg_stat_statements",
     "pg_stat_statements.track": "all",
     "log_min_duration_statement": "200ms",
+    # The default (-1) logs bind parameters in full: each slow payload INSERT would log its ~6 MB
+    # bytea as ~12 MB of hex, and `docker logs postgres | gzip` then exceeds COLLECT_HOST_TIMEOUT_S.
+    "log_parameter_max_length": "0",
     "log_checkpoints": "on",
     "log_lock_waits": "on",
 }

@@ -3481,6 +3481,16 @@ class PgTuningTest(unittest.TestCase):
         self.assertEqual({k: settings[k] for k in awsb.PG_TUNING}, awsb.PG_TUNING)
         self.assertEqual(settings["ssl"], "on")
 
+    def test_bind_parameters_are_not_logged(self):
+        """Slow payload INSERT statements would otherwise log their ~6 MB bytea binds as hex."""
+        args = awsb.render_postgres_args()
+        settings = dict(setting.split("=", 1) for setting in args[1::2])
+        self.assertEqual(settings["log_parameter_max_length"], "0")
+        rds = awsb.rds_tfvars({}, "pw", datetime(2026, 1, 1, tzinfo=UTC))["rds"][
+            "parameters"
+        ]
+        self.assertEqual(rds["log_parameter_max_length"], "0")
+
     def test_memory_budget_fits_the_query_host(self):
         """node0 is a c8g.4xlarge with 32 GiB; the same map runs on the 64 GiB RDS class."""
         self.assertEqual(awsb.RunConfig(tag="x").node_type, "c8g.4xlarge")
