@@ -1,9 +1,8 @@
 set positional-arguments
 
-mod aws "aws/justfile"
-
 repo_root := source_directory() / ".." / ".."
 bench := source_directory() / "bench"
+aws_bench := source_directory() / "aws-bench"
 target_dir := env_var_or_default("CARGO_TARGET_DIR", repo_root / "target")
 bin_dir := env_var_or_default("BENCH_BIN_DIR", target_dir / "release")
 out := env_var_or_default("BENCH_OUT", "bench-out")
@@ -16,6 +15,10 @@ default:
 build:
     cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node --bin espresso-node --bin orchestrator --bin state-relay-server --bin deploy
     cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node-sqlite
+
+# AWS harness: plan|up|run|down|status|collect|render|destroy; see README.md.
+aws *args:
+    cd {{quote(repo_root)}} && {{quote(aws_bench)}} "$@"
 
 # Start the network, load and measure it, tear it down; writes result.json and summary.md.
 run *args:
