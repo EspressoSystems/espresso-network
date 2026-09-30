@@ -107,7 +107,7 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> services -> nodes -> m
 | Phase       | Does                                                                                                                                               | Gate                                                   |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | preflight   | tools, `sts` account, default VPC + DNS, type offered, vCPU quota, image digests + arm64                                                           | any miss: exit 2                                       |
-| plan        | render run dir, `tofu init/plan`, prices (Pricing API, 7-day cache), estimate                                                                      | over `--max-usd`, declined, no tty w/o `--yes`: exit 2 |
+| plan        | render run dir, `tofu init/plan`, estimate at the `PRICES` constants (eu-west-1 on-demand)                                                         | over `--max-usd`, declined, no tty w/o `--yes`: exit 2 |
 | apply       | `tofu apply`, local state in run dir; instances terminate on shutdown, cloud-init arms `shutdown -P +TTL` first                                    | tf error classified, destroy, exit 3                   |
 | provisioned | ssh + `cloud-init status --wait`, digests == manifest, render env/start.sh (need private IPs), rsync `/opt/bench`, start `agent-host`              |                                                        |
 | services    | anvil (`eth_chainId`), deploy (code at genesis addresses), orchestrator + relay (`/healthcheck`), postgres (`pg_isready`)                          |                                                        |
@@ -191,7 +191,7 @@ fleet.lock               pid, hostname, run name; present while a run holds the 
 rds.json (0600)          rds fleets: endpoint, identifier, password
 cost.json                expected, bound, actual USD of the fleet (instances, volume, rds)
 runs/01-run/             one measurement
-  manifest.json          fleet.json copy plus fleet, phase_seconds, start_spread_s, config_hash
+  manifest.json          fleet.json copy plus fleet, start_spread_s, config_hash
   genesis.toml topology.json config.json
   hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz,
                          cloud-init-output.log, chrony.txt, host.jsonl, pg-stats.json (node0)

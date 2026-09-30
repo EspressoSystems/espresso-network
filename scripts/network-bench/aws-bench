@@ -136,31 +136,21 @@ NODE_ROOT_GB_MIN = 100
 VALIDATOR_DISK_FACTOR = 2
 QUERY_DISK_FACTOR = 3
 
-# Instance prices drift slowly; avoids hammering the API.
-PRICE_CACHE_TTL_S = 7 * 24 * 3600
-# The Pricing API is only ever queried from us-east-1.
-PRICING_API_REGION = "us-east-1"
-
-# Minor EC2/EBS items, priced per region: gp3 GB-month, gp3 IOPS above the 3000 baseline
-# (per IOPS-month), gp3 throughput above the 125 MB/s baseline (per MB/s-month), RDS PostgreSQL
-# Single-AZ gp3 storage (per GB-month; the IOPS and MB/s of a 400 GiB volume are included), a
-# public IPv4 address (per hour, charged since 2024-02-01), and internet egress (per GB, first
-# tier). Source: https://aws.amazon.com/ebs/pricing/, https://aws.amazon.com/vpc/pricing/ and
-# https://aws.amazon.com/rds/postgresql/pricing/; not yet checked against a live pricing call,
-# re-check before trusting a stale estimate.
-MINOR_PRICE_SOURCE = (
-    "https://aws.amazon.com/ebs/pricing/ https://aws.amazon.com/vpc/pricing/ "
-    "https://aws.amazon.com/rds/postgresql/pricing/"
-)
-MINOR_PRICES: dict[str, dict[str, float]] = {
-    "eu-west-1": {
-        "gp3_gb_month_usd": 0.088,
-        "gp3_iops_month_usd": 0.005,
-        "gp3_mbps_month_usd": 0.04,
-        "rds_gp3_gb_month_usd": 0.127,
-        "public_ipv4_hour_usd": 0.005,
-        "egress_gb_usd": 0.09,
-    },
+# On-demand USD, eu-west-1, as of 2026-09-30 (`aws pricing get-products`, EBS/VPC/RDS pages).
+# Instances per hour; gp3 GB-month, gp3 IOPS above the 3000 baseline (per IOPS-month), gp3
+# throughput above the 125 MB/s baseline (per MB/s-month), RDS PostgreSQL Single-AZ gp3 storage
+# (per GB-month; the IOPS and MB/s of a 400 GiB volume are included), a public IPv4 address (per
+# hour), internet egress (per GB, first tier).
+PRICES = {
+    "c8g.4xlarge": 0.68224,
+    "c8g.2xlarge": 0.34112,
+    "db.m8g.4xlarge": 1.488,
+    "gp3_gb_month_usd": 0.088,
+    "gp3_iops_month_usd": 0.005,
+    "gp3_mbps_month_usd": 0.04,
+    "rds_gp3_gb_month_usd": 0.127,
+    "public_ipv4_hour_usd": 0.005,
+    "egress_gb_usd": 0.09,
 }
 
 # Identical to the terraform module's `name` variable validation (variables.tf); matching it
@@ -265,65 +255,46 @@ VOLUME_BY_ID = "/dev/disk/by-id"
 # Seconds `up` waits for udev to publish the by-id link of the attached volume.
 PG_VOLUME_WAIT_S = 60
 # Sized for the 32 GiB of node0 (c8g.4xlarge), which also runs espresso-node and the journal's
-# page cache; the 64 GiB RDS class takes the same values. One map for every placement: rendered
-# into the container's `-c` flags by `render_postgres_args` and into the RDS parameter group by
-# `rds_parameter`. The last group pins what RDS defaults differently from postgres.
-PG_TUNING = {
-    "shared_buffers": "8GB",
-    "effective_cache_size": "24GB",
-    "huge_pages": "off",
-    "work_mem": "64MB",
-    "maintenance_work_mem": "2GB",
-    "max_wal_size": "16GB",
-    "min_wal_size": "4GB",
-    "checkpoint_timeout": "15min",
-    "checkpoint_completion_target": "0.9",
+# page cache; the 64 GiB RDS class takes the same values. One map for every placement: key ->
+# (postgresql.conf text for the container's `-c` flags, the same value as pg_settings.setting
+# reports it and the RDS parameter group takes it). The last group pins what RDS defaults
+# differently from postgres.
+PG_TUNING: dict[str, tuple[str, str]] = {
+    "shared_buffers": ("8GB", "1048576"),
+    "effective_cache_size": ("24GB", "3145728"),
+    "huge_pages": ("off", "off"),
+    "work_mem": ("64MB", "65536"),
+    "maintenance_work_mem": ("2GB", "2097152"),
+    "max_wal_size": ("16GB", "16384"),
+    "min_wal_size": ("4GB", "4096"),
+    "checkpoint_timeout": ("15min", "900"),
+    "checkpoint_completion_target": ("0.9", "0.9"),
     # VID shares and payloads do not compress: pglz on them was two thirds of the Postgres CPU
     # in run lulu-20260930-1649 (perf). lz4 gives up on such input at once.
-    "wal_compression": "lz4",
-    "default_toast_compression": "lz4",
-    "random_page_cost": "1.1",
-    "effective_io_concurrency": "200",
-    "autovacuum_vacuum_cost_limit": "2000",
-    "autovacuum_max_workers": "4",
-    "autovacuum_work_mem": "512MB",
-    "autovacuum_naptime": "1min",
-    "autovacuum_vacuum_scale_factor": "0.2",
-    "autovacuum_analyze_scale_factor": "0.1",
-    "track_io_timing": "off",
+    "wal_compression": ("lz4", "lz4"),
+    "default_toast_compression": ("lz4", "lz4"),
+    "random_page_cost": ("1.1", "1.1"),
+    "effective_io_concurrency": ("200", "200"),
+    "autovacuum_vacuum_cost_limit": ("2000", "2000"),
+    "autovacuum_max_workers": ("4", "4"),
+    "autovacuum_work_mem": ("512MB", "524288"),
+    "autovacuum_naptime": ("1min", "60"),
+    "autovacuum_vacuum_scale_factor": ("0.2", "0.2"),
+    "autovacuum_analyze_scale_factor": ("0.1", "0.1"),
+    "track_io_timing": ("off", "off"),
     # Serial ~6 MB block transactions overflow 16MB: wal_buffers_full 821466 in run
     # lulu-20260930-1207, a backend WAL write every ~32 kB on average.
-    "wal_buffers": "256MB",
-    "max_connections": "100",
+    "wal_buffers": ("256MB", "32768"),
+    "max_connections": ("100", "100"),
 }
 # Docker's default /dev/shm of 64 MB is the limit of parallel query's dynamic shared memory;
 # RDS has none.
 PG_SHM_SIZE = "8g"
-# Unit of the RDS parameter group (and of pg_settings.setting) for the PG_TUNING keys whose
-# value there is a bare number.
-RDS_PARAMETER_UNITS = {
-    "shared_buffers": "8kB",
-    "effective_cache_size": "8kB",
-    "work_mem": "kB",
-    "maintenance_work_mem": "kB",
-    "max_wal_size": "MB",
-    "min_wal_size": "MB",
-    "checkpoint_timeout": "s",
-    "autovacuum_work_mem": "kB",
-    "autovacuum_naptime": "s",
-    "wal_buffers": "8kB",
-}
-# Same, for the PG_OBSERVABILITY keys that carry a time unit.
-RDS_OBSERVABILITY_UNITS = {"log_min_duration_statement": "ms"}
-_SIZE_BYTES = {"kB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
-_UNIT_BYTES = {"8kB": 8192, "kB": 1024, "MB": 1024**2}
-_TIME_MS = {"ms": 1, "s": 1000, "min": 60_000, "h": 3_600_000}
-_TIME_UNIT_MS = {"ms": 1, "s": 1000}
 # pg_settings reports the canonical spelling of an enum value that has aliases.
 PG_OBSERVABILITY = {
     "shared_preload_libraries": "pg_stat_statements",
     "pg_stat_statements.track": "all",
-    "log_min_duration_statement": "200ms",
+    "log_min_duration_statement": "200",
     # The default (-1) logs bind parameters in full: each slow payload INSERT would log its ~6 MB
     # bytea as ~12 MB of hex, and `docker logs postgres | gzip` then exceeds COLLECT_HOST_TIMEOUT_S.
     "log_parameter_max_length": "0",
@@ -578,22 +549,12 @@ class Preflight(TypedDict):
     rds_engine_version: NotRequired[str]
 
 
-class InstancePrice(TypedDict):
-    usd_hour: float
-    source: str
-
-
-class Prices(TypedDict):
-    instances: dict[str, InstancePrice]
-
-
 class CostLine(TypedDict):
     item: str
     qty: float
     unit: str
     usd_per_unit: float
     usd: float
-    source: str
 
 
 class Estimate(TypedDict):
@@ -678,7 +639,6 @@ class Manifest(FleetManifest):
     fleet: str
     index: int
     query_db: DbMode
-    phase_seconds: dict[str, list[float]]
     run_estimate: NotRequired[RunEstimate]
     start_spread_s: NotRequired[float]
     config_hash: NotRequired[str]
@@ -921,160 +881,54 @@ def load_seconds(load: nb.BenchConfig) -> float:
     )
 
 
-def phase_seconds(cfg: RunConfig) -> dict[str, tuple[float, float]]:
-    """phase -> (expected_s, worst_s). `worst_s` swaps in the timeouts that bound a laptop
+def shot_seconds(cfg: RunConfig) -> tuple[float, float]:
+    """(expected_s, worst_s) of a single shot: provision, one run, destroy."""
+    expected_s, worst_s = _measure_seconds(cfg)
+    expected_s += PROVISION_S + DESTROY_S
+    worst_s += PROVISION_S + DESTROY_S
+    if "rds" in cfg.db_modes:
+        expected_s += RDS_CREATE_S
+        worst_s += RDS_CREATE_MAX_S
+    return expected_s, worst_s
+
+
+def run_seconds(cfg: RunConfig, pull: bool = False) -> tuple[float, float]:
+    """(expected_s, worst_s) of one run on a live fleet. `pull` is set when the run moves the
+    hosts to other images."""
+    expected_s, worst_s = _measure_seconds(cfg)
+    expected_s += RESET_EXPECTED_S
+    worst_s += RESET_MAX_S
+    if pull:
+        expected_s += PULL_EXPECTED_S
+        worst_s += PULL_MAX_S
+    return expected_s, worst_s
+
+
+def _measure_seconds(cfg: RunConfig) -> tuple[float, float]:
+    """Services, ready, load and collect. `worst_s` swaps in the timeouts that bound a laptop
     disconnect: the ready timeout and the collection cap."""
-    load_s = load_seconds(cfg.load)
-    provision = (PROVISION_S, PROVISION_S)
-    if "rds" in cfg.db_modes:
-        provision = (PROVISION_S + RDS_CREATE_S, PROVISION_S + RDS_CREATE_MAX_S)
-    return {
-        "provision": provision,
-        "services": (SERVICES_S, SERVICES_S),
-        "ready": (READY_EXPECTED_S, READY_TIMEOUT_S),
-        "load": (load_s, load_s),
-        "collect": (COLLECT_EXPECTED_S, COLLECT_MAX_S),
-        "destroy": (DESTROY_S, DESTROY_S),
-    }
-
-
-def fetch_prices(
-    run: Runner, cfg: RunConfig, types: set[str], cache: Path, now: float
-) -> Prices:
-    stored: dict[str, dict[str, float]] = (
-        json.loads(cache.read_text()) if cache.exists() else {}
+    fixed = SERVICES_S + load_seconds(cfg.load)
+    return (
+        fixed + READY_EXPECTED_S + COLLECT_EXPECTED_S,
+        fixed + READY_TIMEOUT_S + COLLECT_MAX_S,
     )
-    instances: dict[str, InstancePrice] = {}
-    changed = False
-    for instance_type in sorted(types):
-        key = f"{REGION}:{instance_type}"
-        entry = stored.get(key)
-        if entry is not None and now - entry["fetched_at"] < PRICE_CACHE_TTL_S:
-            instances[instance_type] = {
-                "usd_hour": entry["usd_hour"],
-                "source": f"cache {cache}",
-            }
-            continue
-        usd_hour = _fetch_instance_price(run, instance_type)
-        instances[instance_type] = {
-            "usd_hour": usd_hour,
-            "source": "aws pricing get-products",
-        }
-        stored[key] = {"usd_hour": usd_hour, "fetched_at": now}
-        changed = True
-    if changed:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(stored, indent=2, sort_keys=True) + "\n")
-    return {"instances": instances}
 
 
-def _fetch_instance_price(run: Runner, instance_type: str) -> float:
-    if instance_type.startswith("db."):
-        return fetch_rds_price(run, instance_type)
-    filters = [
-        {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_type},
-        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": REGION},
-        {"Type": "TERM_MATCH", "Field": "operatingSystem", "Value": "Linux"},
-        {"Type": "TERM_MATCH", "Field": "tenancy", "Value": "Shared"},
-        {"Type": "TERM_MATCH", "Field": "preInstalledSw", "Value": "NA"},
-        {"Type": "TERM_MATCH", "Field": "capacitystatus", "Value": "Used"},
-    ]
-    return _query_price(run, "AmazonEC2", filters, instance_type)
-
-
-def fetch_rds_price(run: Runner, instance_class: str) -> float:
-    """Hourly on-demand price of a Single-AZ PostgreSQL instance class."""
-    filters = [
-        {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_class},
-        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": REGION},
-        {"Type": "TERM_MATCH", "Field": "databaseEngine", "Value": "PostgreSQL"},
-        {"Type": "TERM_MATCH", "Field": "deploymentOption", "Value": "Single-AZ"},
-        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Database Instance"},
-        {"Type": "TERM_MATCH", "Field": "locationType", "Value": "AWS Region"},
-    ]
-    return _query_price(run, "AmazonRDS", filters, instance_class)
-
-
-def _query_price(
-    run: Runner,
-    service_code: str,
-    filters: list[dict[str, str]],
-    instance_type: str,
-) -> float:
-    result = run(
-        aws_argv(
-            "pricing",
-            "get-products",
-            "--region",
-            PRICING_API_REGION,
-            "--service-code",
-            service_code,
-            "--filters",
-            json.dumps(filters),
-            "--output",
-            "json",
-        )
-    )
-    if result.returncode != 0:
-        raise Refused(
-            f"aws pricing get-products failed for {instance_type} in {REGION}: "
-            f"{result.stderr.strip()}"
-        )
-    return _parse_price_response(result.stdout, instance_type, REGION)
-
-
-def _parse_price_response(stdout: str, instance_type: str, region: str) -> float:
-    price_list = json.loads(stdout)["PriceList"]
-    if len(price_list) != 1:
-        raise Refused(
-            f"expected exactly one price for {instance_type} in {region}, got "
-            f"{len(price_list)}"
-        )
-    product = json.loads(price_list[0])
-    term = next(iter(product["terms"]["OnDemand"].values()))
-    dimension = next(iter(term["priceDimensions"].values()))
-    if dimension["unit"] != "Hrs":
-        raise Refused(
-            f"expected an hourly price for {instance_type}, got unit "
-            f"{dimension['unit']!r}"
-        )
-    usd = float(dimension["pricePerUnit"]["USD"])
-    if usd <= 0:
-        raise Refused(f"got a non-positive price for {instance_type}: {usd}")
-    return usd
-
-
-def resolve_prices(run: Runner, cfg: RunConfig, cache: Path, now: float) -> Prices:
-    types = {NODE_TYPE, CTL_TYPE}
-    if "rds" in cfg.db_modes:
-        types.add(RDS_CLASS)
-    return fetch_prices(run, cfg, types, cache, now)
-
-
-def region_minor_prices(region: str) -> dict[str, float]:
-    try:
-        return MINOR_PRICES[region]
-    except KeyError:
-        raise Refused(f"add EBS/IPv4/egress prices for {region}") from None
-
-
-def estimate_cost(
+def cost_estimate(
     hosts: list[HostSpec],
     cfg: RunConfig,
-    prices: Prices,
-    minor: dict[str, float],
-    rds: RdsSpec | None = None,
+    rds: RdsSpec | None,
+    expected_s: float,
+    worst_s: float,
 ) -> Estimate:
-    phases = phase_seconds(cfg)
-    expected_s = sum(expected for expected, _ in phases.values())
-    worst_s = sum(worst for _, worst in phases.values())
-    ttl_s = single_shot_ttl_s(cfg, worst_s)
+    """The bound adds the boot before the shutdown timer is armed, and the rds delete."""
+    ttl_s = ttl_seconds(cfg, worst_s)
     volume = pg_volume_spec(cfg)
-    lines = _cost_lines(hosts, prices, minor, expected_s, volume)
-    bound_lines = _cost_lines(hosts, prices, minor, ttl_s + BOOT_ALLOWANCE_S, volume)
+    lines = _cost_lines(hosts, expected_s, volume)
+    bound_lines = _cost_lines(hosts, ttl_s + BOOT_ALLOWANCE_S, volume)
     if rds is not None:
-        lines += rds_cost_lines(rds, prices, minor, expected_s)
-        bound_lines += rds_cost_lines(rds, prices, minor, ttl_s + RDS_DELETE_S)
+        lines += rds_cost_lines(rds, expected_s)
+        bound_lines += rds_cost_lines(rds, ttl_s + RDS_DELETE_S)
     return {
         "expected_s": expected_s,
         "worst_s": worst_s,
@@ -1085,7 +939,7 @@ def estimate_cost(
     }
 
 
-def single_shot_ttl_s(cfg: RunConfig, worst_s: float) -> float:
+def ttl_seconds(cfg: RunConfig, worst_s: float) -> float:
     if cfg.ttl_min == "auto":
         return worst_s + TTL_MARGIN_S
     ttl_s = int(cfg.ttl_min) * 60.0
@@ -1094,36 +948,6 @@ def single_shot_ttl_s(cfg: RunConfig, worst_s: float) -> float:
             f"--ttl-min {cfg.ttl_min} is below the worst case of {math.ceil(worst_s / 60)} min"
         )
     return ttl_s
-
-
-def estimate_fleet(
-    hosts: list[HostSpec],
-    cfg: RunConfig,
-    prices: Prices,
-    minor: dict[str, float],
-    rds: RdsSpec | None = None,
-) -> Estimate:
-    """A fleet lives until its TTL whatever is measured on it, so expected and worst case are
-    both the TTL; the bound adds the boot before the shutdown timer is armed."""
-    if cfg.ttl_min == "auto":
-        raise Refused(
-            "up needs --ttl-min N minutes: a fleet has no worst case to derive it from"
-        )
-    ttl_s = int(cfg.ttl_min) * 60.0
-    volume = pg_volume_spec(cfg)
-    lines = _cost_lines(hosts, prices, minor, ttl_s, volume)
-    bound_lines = _cost_lines(hosts, prices, minor, ttl_s + BOOT_ALLOWANCE_S, volume)
-    if rds is not None:
-        lines += rds_cost_lines(rds, prices, minor, ttl_s)
-        bound_lines += rds_cost_lines(rds, prices, minor, ttl_s + RDS_DELETE_S)
-    return {
-        "expected_s": ttl_s,
-        "worst_s": ttl_s,
-        "ttl_s": ttl_s,
-        "lines": lines,
-        "expected_usd": sum(line["usd"] for line in lines),
-        "bound_usd": sum(line["usd"] for line in bound_lines),
-    }
 
 
 def estimate_rate(estimate: Estimate) -> float:
@@ -1136,23 +960,8 @@ def tag_changed(manifest: FleetManifest, cfg: RunConfig) -> bool:
     return cfg.tag != manifest["config"]["tag"]
 
 
-def run_phase_seconds(
-    cfg: RunConfig, pull: bool = False
-) -> dict[str, tuple[float, float]]:
-    """phase -> (expected_s, worst_s) of one run on a live fleet: no provision, no destroy.
-    `pull` is set when the run moves the hosts to other images."""
-    phases = phase_seconds(cfg)
-    return {
-        "pull": (PULL_EXPECTED_S, PULL_MAX_S) if pull else (0.0, 0.0),
-        "reset": (RESET_EXPECTED_S, RESET_MAX_S),
-        **{name: phases[name] for name in ("services", "ready", "load", "collect")},
-    }
-
-
 def estimate_run(manifest: FleetManifest, cfg: RunConfig) -> RunEstimate:
-    phases = run_phase_seconds(cfg, tag_changed(manifest, cfg))
-    expected_s = sum(expected for expected, _ in phases.values())
-    worst_s = sum(worst for _, worst in phases.values())
+    expected_s, worst_s = run_seconds(cfg, tag_changed(manifest, cfg))
     rate = estimate_rate(manifest["estimate"])
     return {
         "expected_s": expected_s,
@@ -1164,138 +973,88 @@ def estimate_run(manifest: FleetManifest, cfg: RunConfig) -> RunEstimate:
 
 
 def _cost_lines(
-    hosts: list[HostSpec],
-    prices: Prices,
-    minor: dict[str, float],
-    duration_s: float,
-    pg_volume: VolumeSpec | None = None,
+    hosts: list[HostSpec], duration_s: float, pg_volume: VolumeSpec | None
 ) -> list[CostLine]:
+    """The pg volume, if any, bills at the root volumes' gp3 rates."""
     hours = duration_s / 3600
     lines: list[CostLine] = []
-    by_type: dict[str, int] = {}
-    for host in hosts:
-        by_type[host["instance_type"]] = by_type.get(host["instance_type"], 0) + 1
+    by_type = Counter(host["instance_type"] for host in hosts)
     for instance_type, count in sorted(by_type.items()):
-        price = prices["instances"][instance_type]
-        usd = count * hours * price["usd_hour"]
         lines.append(
-            {
-                "item": f"instance {instance_type}",
-                "qty": count * hours,
-                "unit": "host-hour",
-                "usd_per_unit": price["usd_hour"],
-                "usd": usd,
-                "source": price["source"],
-            }
+            _line(
+                f"instance {instance_type}",
+                count * hours,
+                "host-hour",
+                PRICES[instance_type],
+            )
         )
-    gb_hours = sum(h["root_gb"] for h in hosts) * hours
+    disks = [(h["root_gb"], h["root_iops"], h["root_mbps"]) for h in hosts]
+    if pg_volume is not None:
+        disks.append((pg_volume["gb"], pg_volume["iops"], pg_volume["mbps"]))
+    gb_hours = sum(gb for gb, _, _ in disks) * hours
     lines.append(
-        _minor_line(
+        _line(
             "gp3 storage",
             gb_hours,
             "gb-hour",
-            minor["gp3_gb_month_usd"] / HOURS_PER_MONTH,
+            PRICES["gp3_gb_month_usd"] / HOURS_PER_MONTH,
         )
     )
-    iops_hours = sum(max(0, h["root_iops"] - GP3_BASELINE_IOPS) for h in hosts) * hours
+    iops_hours = sum(max(0, iops - GP3_BASELINE_IOPS) for _, iops, _ in disks) * hours
     if iops_hours:
         lines.append(
-            _minor_line(
+            _line(
                 "gp3 iops",
                 iops_hours,
                 "iops-hour",
-                minor["gp3_iops_month_usd"] / HOURS_PER_MONTH,
+                PRICES["gp3_iops_month_usd"] / HOURS_PER_MONTH,
             )
         )
-    mbps_hours = sum(max(0, h["root_mbps"] - GP3_BASELINE_MBPS) for h in hosts) * hours
+    mbps_hours = sum(max(0, mbps - GP3_BASELINE_MBPS) for _, _, mbps in disks) * hours
     if mbps_hours:
         lines.append(
-            _minor_line(
+            _line(
                 "gp3 throughput",
                 mbps_hours,
                 "mbps-hour",
-                minor["gp3_mbps_month_usd"] / HOURS_PER_MONTH,
+                PRICES["gp3_mbps_month_usd"] / HOURS_PER_MONTH,
             )
         )
-    if pg_volume is not None:
-        lines += pg_volume_cost_lines(pg_volume, minor, hours)
     ipv4_hours = len(hosts) * hours
     lines.append(
-        _minor_line(
-            "public ipv4", ipv4_hours, "host-hour", minor["public_ipv4_hour_usd"]
-        )
+        _line("public ipv4", ipv4_hours, "host-hour", PRICES["public_ipv4_hour_usd"])
     )
     egress_gb = len(hosts) * EGRESS_MB_PER_HOST / 1024
-    lines.append(_minor_line("egress", egress_gb, "gb", minor["egress_gb_usd"]))
+    lines.append(_line("egress", egress_gb, "gb", PRICES["egress_gb_usd"]))
     return lines
 
 
-def pg_volume_cost_lines(
-    volume: VolumeSpec, minor: dict[str, float], hours: float
-) -> list[CostLine]:
-    """The gp3 volume at the root volume's rates: size, IOPS and MB/s above the free baseline."""
-    lines = [
-        _minor_line(
-            "ebs pg volume storage",
-            volume["gb"] * hours,
-            "gb-hour",
-            minor["gp3_gb_month_usd"] / HOURS_PER_MONTH,
-        )
-    ]
-    extra_iops = max(0, volume["iops"] - GP3_BASELINE_IOPS)
-    if extra_iops:
-        lines.append(
-            _minor_line(
-                "ebs pg volume iops",
-                extra_iops * hours,
-                "iops-hour",
-                minor["gp3_iops_month_usd"] / HOURS_PER_MONTH,
-            )
-        )
-    extra_mbps = max(0, volume["mbps"] - GP3_BASELINE_MBPS)
-    if extra_mbps:
-        lines.append(
-            _minor_line(
-                "ebs pg volume throughput",
-                extra_mbps * hours,
-                "mbps-hour",
-                minor["gp3_mbps_month_usd"] / HOURS_PER_MONTH,
-            )
-        )
-    return lines
-
-
-def rds_cost_lines(
-    rds: RdsSpec, prices: Prices, minor: dict[str, float], duration_s: float
-) -> list[CostLine]:
+def rds_cost_lines(rds: RdsSpec, duration_s: float) -> list[CostLine]:
     """RDS bills from create to delete, so the caller passes its own duration."""
     hours = duration_s / 3600
-    price = prices["instances"][rds["instance_class"]]
-    instance: CostLine = {
-        "item": f"rds instance {rds['instance_class']}",
-        "qty": hours,
-        "unit": "hour",
-        "usd_per_unit": price["usd_hour"],
-        "usd": hours * price["usd_hour"],
-        "source": price["source"],
-    }
-    storage = _minor_line(
-        "rds gp3 storage",
-        rds["gb"] * hours,
-        "gb-hour",
-        minor["rds_gp3_gb_month_usd"] / HOURS_PER_MONTH,
-    )
-    return [instance, storage]
+    return [
+        _line(
+            f"rds instance {rds['instance_class']}",
+            hours,
+            "hour",
+            PRICES[rds["instance_class"]],
+        ),
+        _line(
+            "rds gp3 storage",
+            rds["gb"] * hours,
+            "gb-hour",
+            PRICES["rds_gp3_gb_month_usd"] / HOURS_PER_MONTH,
+        ),
+    ]
 
 
-def _minor_line(item: str, qty: float, unit: str, usd_per_unit: float) -> CostLine:
+def _line(item: str, qty: float, unit: str, usd_per_unit: float) -> CostLine:
     return {
         "item": item,
         "qty": qty,
         "unit": unit,
         "usd_per_unit": usd_per_unit,
         "usd": qty * usd_per_unit,
-        "source": MINOR_PRICE_SOURCE,
     }
 
 
@@ -1318,7 +1077,7 @@ def format_fleet_summary(estimate: Estimate, max_usd: float, expires: datetime) 
 def format_estimate_lines(estimate: Estimate) -> list[str]:
     return [
         f"  {line['item']}: {line['qty']:g} {line['unit']} @ ${line['usd_per_unit']:.4f} "
-        f"= ${line['usd']:.2f} ({line['source']})"
+        f"= ${line['usd']:.2f}"
         for line in estimate["lines"]
     ]
 
@@ -1431,7 +1190,6 @@ def build_run_manifest(
     fleet: FleetManifest,
     cfg: RunConfig,
     index: int,
-    phases: dict[str, tuple[float, float]],
     config_hash: str,
     run_estimate: RunEstimate | None,
 ) -> Manifest:
@@ -1445,7 +1203,6 @@ def build_run_manifest(
         "fleet": fleet["name"],
         "index": index,
         "query_db": cfg.query_db,
-        "phase_seconds": {name: list(bounds) for name, bounds in phases.items()},
         "config_hash": config_hash,
     }
     if run_estimate is not None:
@@ -2039,11 +1796,11 @@ def rds_schedule_at(expires: datetime) -> str:
 def rds_tfvars(rds: RdsSpec, password: str, expires: datetime) -> dict[str, Any]:
     """The `rds` and `rds_password` variables: the container's tuning and observability
     settings in the units of the parameter group."""
-    parameters = {**PG_TUNING, **PG_OBSERVABILITY}
+    tuning = {key: setting for key, (_, setting) in PG_TUNING.items()}
     return {
         "rds": {
             **rds,
-            "parameters": {k: rds_parameter(k, v) for k, v in parameters.items()},
+            "parameters": {**tuning, **PG_OBSERVABILITY},
             "delete_at": rds_schedule_at(expires),
         },
         "rds_password": password,
@@ -2199,36 +1956,14 @@ def psql_argv(
 
 
 def render_postgres_args() -> list[str]:
-    settings = {**PG_TUNING, **PG_OBSERVABILITY, **PG_SSL}
+    tuning = {key: conf for key, (conf, _) in PG_TUNING.items()}
+    settings = {**tuning, **PG_OBSERVABILITY, **PG_SSL}
     return [arg for key, value in settings.items() for arg in ("-c", f"{key}={value}")]
-
-
-def rds_parameter(name: str, value: str) -> str:
-    """A PG_TUNING value in the unit of the RDS parameter group; unchanged when the parameter
-    takes the same text as postgres.conf."""
-    unit = RDS_PARAMETER_UNITS.get(name, RDS_OBSERVABILITY_UNITS.get(name))
-    if unit is None:
-        return value
-    match = re.fullmatch(r"(\d+)([A-Za-z]+)", value)
-    if match is None:
-        raise ValueError(f"{name}={value!r} is not a number with a unit")
-    number, suffix = int(match[1]), match[2]
-    if unit in _TIME_UNIT_MS:
-        total, per = number * _TIME_MS[suffix], _TIME_UNIT_MS[unit]
-    else:
-        total, per = number * _SIZE_BYTES[suffix], _UNIT_BYTES[unit]
-    if total % per:
-        raise ValueError(f"{name}={value} is not a whole number of {unit}")
-    return str(total // per)
 
 
 def check_pg_tuning(settings: dict[str, Any]) -> list[str]:
     """Keys of PG_TUNING whose collected pg_settings value differs from the configured one."""
-    differing = []
-    for key, value in PG_TUNING.items():
-        if settings[key] != rds_parameter(key, value):
-            differing.append(key)
-    return differing
+    return [key for key, (_, setting) in PG_TUNING.items() if settings[key] != setting]
 
 
 def pg_tls(backends: dict[str, int]) -> bool | None:
@@ -2648,22 +2383,24 @@ def cmd_plan(
 
 
 def estimate_or_refuse(
-    run: Runner,
     cfg: RunConfig,
     hosts: list[HostSpec],
-    minor: dict[str, float],
     fleet_dir: Path,
     now: float,
     fleet: bool = False,
     rds: RdsSpec | None = None,
 ) -> Estimate:
-    prices = resolve_prices(run, cfg, OUT_ROOT / "prices.json", now)
     if fleet:
-        estimate = estimate_fleet(hosts, cfg, prices, minor, rds)
+        if cfg.ttl_min == "auto":
+            raise Refused(
+                "up needs --ttl-min N minutes: a fleet has no worst case to derive it from"
+            )
+        ttl_s = int(cfg.ttl_min) * 60.0
+        estimate = cost_estimate(hosts, cfg, rds, ttl_s, ttl_s)
         expires = datetime.fromtimestamp(now + estimate["ttl_s"], UTC)
         log.info(format_fleet_summary(estimate, cfg.max_usd, expires))
     else:
-        estimate = estimate_cost(hosts, cfg, prices, minor, rds)
+        estimate = cost_estimate(hosts, cfg, rds, *shot_seconds(cfg))
         log.info(format_estimate_summary(estimate, cfg.max_usd))
     for line in format_estimate_lines(estimate):
         log.debug(line)
@@ -2951,16 +2688,13 @@ def plan_fleet(
 ) -> tuple[Path, Path, Terraform, list[HostSpec], Preflight]:
     """Preflight, cost check, render, `tofu init` and `plan`. Shared by `plan` and `run`; makes
     no AWS write. The preflight summary is logged before the cost line."""
-    minor = region_minor_prices(REGION)
     hosts = plan_hosts(cfg)
     fleet_dir = new_fleet_dir(OUT_ROOT)
     setup_logging(fleet_dir)
     log.debug("argv %s", args.argv)
     pre = preflight(run, cfg, hosts)
     log_preflight(cfg, pre, hosts)
-    estimate = estimate_or_refuse(
-        run, cfg, hosts, minor, fleet_dir, now, rds=rds_spec(cfg, pre)
-    )
+    estimate = estimate_or_refuse(cfg, hosts, fleet_dir, now, rds=rds_spec(cfg, pre))
     run_dir = render_run_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
     return fleet_dir, run_dir, init_terraform(run, fleet_dir), hosts, pre
 
@@ -3395,7 +3129,6 @@ def prepare_up(
     args: argparse.Namespace, cfg: RunConfig, run: Runner, started: float
 ) -> tuple[Path, Terraform]:
     """Everything before the first AWS write, as `prepare_run`, without a run dir."""
-    minor = region_minor_prices(REGION)
     hosts = plan_hosts(cfg)
     fleet_dir = new_fleet_dir(OUT_ROOT)
     setup_logging(fleet_dir)
@@ -3403,7 +3136,7 @@ def prepare_up(
     pre = preflight(run, cfg, hosts)
     log_preflight(cfg, pre, hosts)
     estimate = estimate_or_refuse(
-        run, cfg, hosts, minor, fleet_dir, started, fleet=True, rds=rds_spec(cfg, pre)
+        cfg, hosts, fleet_dir, started, fleet=True, rds=rds_spec(cfg, pre)
     )
     render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
     tf = init_terraform(run, fleet_dir)
@@ -3979,10 +3712,6 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
         pre["vcpu_in_use"],
         pre["vcpu_quota"],
     )
-    phases = ", ".join(
-        f"{name} {worst / 60:.0f}m" for name, (_, worst) in phase_seconds(cfg).items()
-    )
-    log.info("phases (worst case): %s", phases)
 
 
 def render_run_dir(
@@ -4073,16 +3802,10 @@ def render_run(
     `run_estimate` this is the run of a single shot, which also provisions."""
     genesis = render_genesis((SCRIPT_DIR / "genesis.toml").read_bytes(), cfg.nodes)
     run_dir = new_run_dir(fleet_dir, name)
-    phases = (
-        phase_seconds(cfg)
-        if run_estimate is None
-        else run_phase_seconds(cfg, tag_changed(fleet, cfg))
-    )
     manifest = build_run_manifest(
         fleet,
         cfg,
         run_index(run_dir),
-        phases,
         run_config_hash(cfg, fleet["hosts"], fleet["images"], genesis),
         run_estimate,
     )
@@ -5153,8 +4876,7 @@ def status_all(run: Runner, args: argparse.Namespace, now: datetime) -> int:
     if not runs:
         print(f"no espresso-bench resources in {REGION}")
         return EXIT_OK
-    prices = cached_prices(OUT_ROOT / "prices.json", REGION)
-    print("\n".join(format_runs(runs, prices, now)))
+    print("\n".join(format_runs(runs, now)))
     return EXIT_OK
 
 
@@ -5229,8 +4951,7 @@ def destroy_orphans(
     if not orphans:
         print(f"no orphaned espresso-bench resources in {REGION}")
         return EXIT_OK
-    prices = cached_prices(OUT_ROOT / "prices.json", REGION)
-    print("\n".join(format_runs(orphans, prices, now)))
+    print("\n".join(format_runs(orphans, now)))
     instances = sum(len(r["instances"]) for r in orphans)
     others = sum(len(r["arns"]) - len(r["instances"]) for r in orphans)
     prompt = (
@@ -5487,35 +5208,17 @@ def role_orphan(tagged: TaggedRun, phase: str | None) -> str | None:
     return "role without resources" if only_roles and phase is None else None
 
 
-def cached_prices(cache: Path, region: str) -> dict[str, float]:
-    """USD per hour by instance type from the pricing cache `fetch_prices` writes."""
-    if not cache.exists():
-        return {}
-    prefix = f"{region}:"
-    return {
-        key.removeprefix(prefix): entry["usd_hour"]
-        for key, entry in json.loads(cache.read_text()).items()
-        if key.startswith(prefix)
-    }
+def accrued_usd(instances: list[Instance], now: datetime) -> float:
+    """Instance-hours since launch at PRICES."""
+    return sum(
+        (now - datetime.fromisoformat(i["launch"])).total_seconds()
+        / 3600
+        * PRICES[i["type"]]
+        for i in instances
+    )
 
 
-def accrued_usd(
-    instances: list[Instance], prices: dict[str, float], now: datetime
-) -> float | None:
-    """Instance-hours since launch at cached prices; None if a type has no price."""
-    total = 0.0
-    for instance in instances:
-        if instance["type"] not in prices:
-            return None
-        launched = datetime.fromisoformat(instance["launch"])
-        hours = (now - launched).total_seconds() / 3600
-        total += hours * prices[instance["type"]]
-    return total
-
-
-def format_runs(
-    runs: list[TaggedRun], prices: dict[str, float], now: datetime
-) -> list[str]:
+def format_runs(runs: list[TaggedRun], now: datetime) -> list[str]:
     lines = [
         "| run | owner | launched | expires | resources | instance USD | orphan |",
         "|---|---|---|---|---|---|---|",
@@ -5523,8 +5226,7 @@ def format_runs(
     for tagged in runs:
         instances = tagged["instances"]
         launched = min((i["launch"] for i in instances), default="-")[:16]
-        usd = accrued_usd(instances, prices, now)
-        cost = "-" if not instances else "n/a" if usd is None else f"{usd:.2f}"
+        cost = f"{accrued_usd(instances, now):.2f}" if instances else "-"
         kinds = Counter(arn_parts(arn)[0] for arn in tagged["arns"])
         cells = [
             tagged["name"],
@@ -6053,7 +5755,7 @@ def query_db_meta(manifest: Manifest, evidence: Evidence) -> nb.QueryDbMeta:
     mode = manifest["query_db"]
     tls = "ssl_backends" in evidence and pg_tls(evidence["ssl_backends"]) is True
     tag = manifest["images"]["postgres"]["ref"].rpartition(":")[2]
-    tuning = dict(PG_TUNING)
+    tuning = {key: conf for key, (conf, _) in PG_TUNING.items()}
     match mode:
         case "colocated":
             node0 = next(h for h in manifest["hosts"] if h["name"] == "node0")
@@ -6144,7 +5846,7 @@ def check_validity_aws(
         settings = evidence["pg_settings"]
         for key in check_pg_tuning(settings):
             noisy.append(
-                f"node0 postgres {key}={settings[key]} differs from the tuned {PG_TUNING[key]}"
+                f"node0 postgres {key}={settings[key]} differs from the tuned {PG_TUNING[key][0]}"
             )
     if "ssl_backends" in evidence and pg_tls(evidence["ssl_backends"]) is False:
         noisy.append("node0 postgres backends connected without TLS")
@@ -6539,28 +6241,12 @@ def rds_delete_time(run: Runner, identifier: str, fallback: datetime) -> datetim
 def manifest_cost(
     manifest: FleetManifest, duration_s: float, rds_duration_s: float | None = None
 ) -> float:
-    """USD of the whole fleet running `duration_s`, at the prices the estimate recorded. The
-    rds instance, if any, runs `rds_duration_s` (default `duration_s`)."""
-    estimate = manifest["estimate"]
-    prices: Prices = {
-        "instances": {
-            line["item"].removeprefix("rds ").removeprefix("instance "): {
-                "usd_hour": line["usd_per_unit"],
-                "source": line["source"],
-            }
-            for line in estimate["lines"]
-            if line["item"].startswith(("instance ", "rds instance "))
-        }
-    }
-    minor = region_minor_prices(REGION)
-    lines = _cost_lines(
-        manifest["hosts"], prices, minor, duration_s, manifest.get("pg_volume")
-    )
+    """USD of the whole fleet running `duration_s` at PRICES. The rds instance, if any, runs
+    `rds_duration_s` (default `duration_s`)."""
+    lines = _cost_lines(manifest["hosts"], duration_s, manifest.get("pg_volume"))
     if "rds_spec" in manifest:
         lines += rds_cost_lines(
             manifest["rds_spec"],
-            prices,
-            minor,
             duration_s if rds_duration_s is None else rds_duration_s,
         )
     return sum(line["usd"] for line in lines)

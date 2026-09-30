@@ -42,7 +42,6 @@ from test_aws_bench import (
     fake_images,
     fake_preflight,
     isolated_env,
-    price_response,
     setUpModule,  # noqa: F401  (unittest runs it for this module too)
     tag_runner,
     temp_dir,
@@ -202,7 +201,9 @@ class UpTest(unittest.TestCase):
         estimate = harness.fleet()["estimate"]
         self.assertEqual(estimate["ttl_s"], 180 * 60)
         rate = awsb.estimate_rate(estimate)
-        self.assertGreater(rate, 0.355 + 2 * 0.71)
+        self.assertGreater(
+            rate, awsb.PRICES["c8g.2xlarge"] + 2 * awsb.PRICES["c8g.4xlarge"]
+        )
         egress = next(l["usd"] for l in estimate["lines"] if l["item"] == "egress")
         expected = rate * (180 * 60 + awsb.BOOT_ALLOWANCE_S) / 3600 + egress
         self.assertAlmostEqual(estimate["bound_usd"], expected)
@@ -648,9 +649,6 @@ class TagPullTest(unittest.TestCase):
         run = json.loads((run_dir / "manifest.json").read_text())
         self.assertEqual(run["images"], fleet["images"])
         self.assertEqual(run["config"]["tag"], "other")
-        self.assertEqual(
-            run["phase_seconds"]["pull"], [awsb.PULL_EXPECTED_S, awsb.PULL_MAX_S]
-        )
 
     def test_the_same_tag_pulls_nothing(self):
         harness = FleetHarness(self)
@@ -1002,45 +1000,29 @@ class PgStoreScriptTest(unittest.TestCase):
 
 # REQ:fleet-cost
 class PgVolumeCostTest(unittest.TestCase):
-    MINOR = awsb.MINOR_PRICES["eu-west-1"]
-
     def rate(self, volume: "awsb.VolumeSpec | None") -> float:
         hosts = awsb.plan_hosts(
             awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
         )
-        prices = {
-            "instances": {
-                t: {"usd_hour": 1.0, "source": "test"}
-                for t in ("c8g.4xlarge", "c8g.2xlarge")
-            }
-        }
-        lines = awsb._cost_lines(hosts, prices, self.MINOR, 3600.0, volume)
+        lines = awsb._cost_lines(hosts, 3600.0, volume)
         return sum(l["usd"] for l in lines if l["item"] != "egress")
 
     def test_the_volume_adds_size_iops_and_throughput_above_the_baseline(self):
         volume: awsb.VolumeSpec = {"gb": 400, "iops": 12000, "mbps": 500}
         expected = (
-            400 * self.MINOR["gp3_gb_month_usd"]
-            + 9000 * self.MINOR["gp3_iops_month_usd"]
-            + 375 * self.MINOR["gp3_mbps_month_usd"]
+            400 * awsb.PRICES["gp3_gb_month_usd"]
+            + 9000 * awsb.PRICES["gp3_iops_month_usd"]
+            + 375 * awsb.PRICES["gp3_mbps_month_usd"]
         ) / awsb.HOURS_PER_MONTH
         self.assertAlmostEqual(self.rate(volume) - self.rate(None), expected)
 
-    def test_a_baseline_volume_has_a_storage_line_only(self):
-        lines = awsb.pg_volume_cost_lines(
-            {"gb": 100, "iops": 3000, "mbps": 125}, self.MINOR, 1.0
-        )
-        self.assertEqual([l["item"] for l in lines], ["ebs pg volume storage"])
+    def test_a_baseline_volume_adds_storage_only(self):
+        volume: awsb.VolumeSpec = {"gb": 100, "iops": 3000, "mbps": 125}
+        expected = 100 * awsb.PRICES["gp3_gb_month_usd"] / awsb.HOURS_PER_MONTH
+        self.assertAlmostEqual(self.rate(volume) - self.rate(None), expected)
 
     def test_the_fleet_estimate_prices_the_volume_only_when_provisioned(self):
-        prices = {
-            "instances": {
-                t: {"usd_hour": 1.0, "source": "test"}
-                for t in ("c8g.4xlarge", "c8g.2xlarge")
-            }
-        }
-
-        def items(modes: tuple) -> set[str]:
+        def gb_hours(modes: tuple) -> float:
             cfg = awsb.RunConfig(
                 tag="x",
                 nodes=2,
@@ -1048,13 +1030,14 @@ class PgVolumeCostTest(unittest.TestCase):
                 ttl_min="60",
                 load=netbench.BenchConfig(submit_nodes=1),
             )
-            estimate = awsb.estimate_fleet(
-                awsb.plan_hosts(cfg), cfg, prices, self.MINOR
+            estimate = awsb.cost_estimate(awsb.plan_hosts(cfg), cfg, None, 3600, 3600)
+            return next(
+                l["qty"] for l in estimate["lines"] if l["item"] == "gp3 storage"
             )
-            return {l["item"] for l in estimate["lines"]}
 
-        self.assertIn("ebs pg volume storage", items(("colocated", "volume")))
-        self.assertNotIn("ebs pg volume storage", items(("colocated",)))
+        self.assertEqual(
+            gb_hours(("colocated", "volume")) - gb_hours(("colocated",)), awsb.PG_GB
+        )
 
     def test_actual_cost_of_a_fleet_includes_the_volume(self):
         harness = FleetHarness(self)
@@ -1070,13 +1053,13 @@ class PgVolumeCostTest(unittest.TestCase):
 
 # REQ:fleet-cost
 class RunEstimateTest(unittest.TestCase):
-    def test_run_phases_have_no_provision_or_destroy(self):
-        phases = awsb.run_phase_seconds(awsb.RunConfig(tag="x"))
-        self.assertEqual(
-            list(phases), ["pull", "reset", "services", "ready", "load", "collect"]
-        )
-        self.assertEqual(phases["reset"], (awsb.RESET_EXPECTED_S, awsb.RESET_MAX_S))
-        self.assertEqual(phases["pull"], (0.0, 0.0))
+    def test_a_run_has_no_provision_or_destroy(self):
+        cfg = awsb.RunConfig(tag="x")
+        run_expected, run_worst = awsb.run_seconds(cfg)
+        shot_expected, shot_worst = awsb.shot_seconds(cfg)
+        fixed = awsb.PROVISION_S + awsb.DESTROY_S
+        self.assertEqual(run_expected - awsb.RESET_EXPECTED_S, shot_expected - fixed)
+        self.assertEqual(run_worst - awsb.RESET_MAX_S, shot_worst - fixed)
 
     def test_a_tag_change_adds_the_pull_to_the_estimate(self):
         harness = FleetHarness(self)
@@ -1084,10 +1067,6 @@ class RunEstimateTest(unittest.TestCase):
         manifest = harness.fleet()
         same = awsb.fleet_run_config(harness.run_args(), manifest)
         other = awsb.fleet_run_config(harness.run_args("--tag", "other"), manifest)
-        self.assertEqual(
-            awsb.run_phase_seconds(other, pull=True)["pull"],
-            (awsb.PULL_EXPECTED_S, awsb.PULL_MAX_S),
-        )
         gap = (
             awsb.estimate_run(manifest, other)["worst_s"]
             - awsb.estimate_run(manifest, same)["worst_s"]
@@ -1100,8 +1079,7 @@ class RunEstimateTest(unittest.TestCase):
         manifest = harness.fleet()
         cfg = awsb.fleet_run_config(harness.run_args(), manifest)
         estimate = awsb.estimate_run(manifest, cfg)
-        phases = awsb.run_phase_seconds(cfg)
-        self.assertEqual(estimate["worst_s"], sum(w for _, w in phases.values()))
+        self.assertEqual(estimate["worst_s"], awsb.run_seconds(cfg)[1])
         self.assertAlmostEqual(
             estimate["worst_usd"], estimate["usd_per_hour"] * estimate["worst_s"] / 3600
         )
@@ -1119,13 +1097,13 @@ class RunEstimateTest(unittest.TestCase):
 
     def test_explicit_ttl_below_the_worst_case_is_refused_for_a_single_shot(self):
         with self.assertRaisesRegex(awsb.Refused, "below the worst case"):
-            awsb.single_shot_ttl_s(awsb.RunConfig(tag="x", ttl_min="5"), 3600.0)
+            awsb.ttl_seconds(awsb.RunConfig(tag="x", ttl_min="5"), 3600.0)
         self.assertEqual(
-            awsb.single_shot_ttl_s(awsb.RunConfig(tag="x", ttl_min="90"), 3600.0),
+            awsb.ttl_seconds(awsb.RunConfig(tag="x", ttl_min="90"), 3600.0),
             5400.0,
         )
         self.assertEqual(
-            awsb.single_shot_ttl_s(awsb.RunConfig(tag="x"), 3600.0),
+            awsb.ttl_seconds(awsb.RunConfig(tag="x"), 3600.0),
             3600.0 + awsb.TTL_MARGIN_S,
         )
 
@@ -1552,25 +1530,13 @@ class RdsOrderableTest(unittest.TestCase):
 
 # REQ:fleet-cost
 class RdsCostTest(unittest.TestCase):
-    def setUp(self):
-        self.prices = {
-            "instances": {
-                "c8g.4xlarge": {"usd_hour": 0.78, "source": "test"},
-                "c8g.2xlarge": {"usd_hour": 0.39, "source": "test"},
-                "db.m8g.4xlarge": {"usd_hour": 1.82, "source": "test"},
-            }
-        }
-        self.minor = awsb.MINOR_PRICES["eu-west-1"]
-
     def test_rds_lines_are_the_instance_and_the_storage(self):
-        instance, storage = awsb.rds_cost_lines(
-            rds_spec(), self.prices, self.minor, 7200.0
-        )
+        instance, storage = awsb.rds_cost_lines(rds_spec(), 7200.0)
         self.assertEqual(instance["item"], "rds instance db.m8g.4xlarge")
-        self.assertAlmostEqual(instance["usd"], 2 * 1.82)
+        self.assertAlmostEqual(instance["usd"], 2 * awsb.PRICES["db.m8g.4xlarge"])
         self.assertEqual(storage["item"], "rds gp3 storage")
         self.assertAlmostEqual(
-            storage["usd"], 400 * 2 * self.minor["rds_gp3_gb_month_usd"] / 730.0
+            storage["usd"], 400 * 2 * awsb.PRICES["rds_gp3_gb_month_usd"] / 730.0
         )
 
     def test_the_fleet_bound_bills_rds_until_its_delete_finishes(self):
@@ -1582,69 +1548,31 @@ class RdsCostTest(unittest.TestCase):
             load=netbench.BenchConfig(submit_nodes=1),
         )
         hosts = awsb.plan_hosts(cfg)
-        without = awsb.estimate_fleet(hosts, cfg, self.prices, self.minor)
-        rds = rds_spec()
-        with_rds = awsb.estimate_fleet(hosts, cfg, self.prices, self.minor, rds)
         ttl_s = 150 * 60.0
-        expected = awsb.rds_cost_lines(rds, self.prices, self.minor, ttl_s)
+        without = awsb.cost_estimate(hosts, cfg, None, ttl_s, ttl_s)
+        rds = rds_spec()
+        with_rds = awsb.cost_estimate(hosts, cfg, rds, ttl_s, ttl_s)
+        expected = awsb.rds_cost_lines(rds, ttl_s)
         self.assertAlmostEqual(
             with_rds["expected_usd"] - without["expected_usd"],
             sum(line["usd"] for line in expected),
         )
-        bound = awsb.rds_cost_lines(
-            rds, self.prices, self.minor, ttl_s + awsb.RDS_DELETE_S
-        )
+        bound = awsb.rds_cost_lines(rds, ttl_s + awsb.RDS_DELETE_S)
         self.assertAlmostEqual(
             with_rds["bound_usd"] - without["bound_usd"],
             sum(line["usd"] for line in bound),
         )
         self.assertGreater(
-            awsb.estimate_rate(with_rds), awsb.estimate_rate(without) + 1.82
+            awsb.estimate_rate(with_rds),
+            awsb.estimate_rate(without) + awsb.PRICES["db.m8g.4xlarge"],
         )
 
     def test_a_single_shot_provisions_for_the_rds_create(self):
-        plain = awsb.phase_seconds(awsb.RunConfig(tag="x"))
-        rds = awsb.phase_seconds(awsb.RunConfig(tag="x", db_modes=("rds",)))
+        plain = awsb.shot_seconds(awsb.RunConfig(tag="x"))
+        rds = awsb.shot_seconds(awsb.RunConfig(tag="x", db_modes=("rds",)))
         self.assertEqual(
-            rds["provision"],
-            (
-                plain["provision"][0] + awsb.RDS_CREATE_S,
-                plain["provision"][1] + awsb.RDS_CREATE_MAX_S,
-            ),
+            rds, (plain[0] + awsb.RDS_CREATE_S, plain[1] + awsb.RDS_CREATE_MAX_S)
         )
-        self.assertEqual(rds["load"], plain["load"])
-
-    def test_the_price_comes_from_the_rds_pricing_service(self):
-        runner = FakeRunner({("aws",): price_response(1.82)})
-        self.assertEqual(awsb.fetch_rds_price(runner, "db.m8g.4xlarge"), 1.82)
-        argv = runner.calls[0]
-        self.assertEqual(argv[argv.index("--service-code") + 1], "AmazonRDS")
-        filters = {
-            f["Field"]: f["Value"]
-            for f in json.loads(argv[argv.index("--filters") + 1])
-        }
-        self.assertEqual(
-            filters,
-            {
-                "instanceType": "db.m8g.4xlarge",
-                "regionCode": "eu-west-1",
-                "databaseEngine": "PostgreSQL",
-                "deploymentOption": "Single-AZ",
-                "productFamily": "Database Instance",
-                "locationType": "AWS Region",
-            },
-        )
-
-    def test_the_class_price_is_cached_with_the_instance_prices(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache = Path(tmp) / "prices.json"
-            cfg = awsb.RunConfig(tag="x", db_modes=("rds",))
-            runner = FakeRunner({("aws",): price_response(1.82)})
-            prices = awsb.resolve_prices(runner, cfg, cache, 0.0)
-            self.assertEqual(prices["instances"]["db.m8g.4xlarge"]["usd_hour"], 1.82)
-            again = FakeRunner()
-            awsb.resolve_prices(again, cfg, cache, 60.0)
-            self.assertEqual(again.calls, [])
 
     def test_a_run_needs_time_for_the_rds_delete(self):
         harness = RdsHarness(self)
@@ -1680,8 +1608,8 @@ class RdsTfvarsTest(unittest.TestCase):
         harness = RdsHarness(self)
         harness.up_rds(self)
         parameters = harness.tfvars()["rds"]["parameters"]
-        for key, value in awsb.PG_TUNING.items():
-            self.assertEqual(parameters[key], awsb.rds_parameter(key, value), key)
+        for key, (_, setting) in awsb.PG_TUNING.items():
+            self.assertEqual(parameters[key], setting, key)
         self.assertEqual(parameters["shared_buffers"], "1048576")
         self.assertEqual(parameters["shared_preload_libraries"], "pg_stat_statements")
         self.assertEqual(parameters["log_min_duration_statement"], "200")
@@ -2239,7 +2167,7 @@ class QueryDbMetaTest(unittest.TestCase):
             },
         )
         self.assertTrue(meta["tls"])
-        self.assertEqual(meta["tuning"], awsb.PG_TUNING)
+        self.assertEqual(meta["tuning"]["shared_buffers"], "8GB")
 
     def test_colocated_records_the_root_volume(self):
         manifest = aws_manifest()
@@ -2716,7 +2644,7 @@ class GroupRdsRunsTest(unittest.TestCase):
             mappings, [instance_row("i-1")], ["vol-1"], [ROLE_ARN]
         )
         self.assertEqual(
-            awsb.format_runs([tagged], {}, SWEEP_NOW)[2].split(" | ")[4],
+            awsb.format_runs([tagged], SWEEP_NOW)[2].split(" | ")[4],
             "1 db, 1 instance, 1 key-pair, 1 pg, 1 role, 1 schedule-group, "
             "1 security-group, 1 subgrp, 1 volume",
         )

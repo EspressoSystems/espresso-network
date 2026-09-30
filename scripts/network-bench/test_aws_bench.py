@@ -63,26 +63,6 @@ def setUpModule():
     unittest.addModuleCleanup(patcher.stop)
 
 
-def price_response(usd_hour: float) -> subprocess.CompletedProcess:
-    product = json.dumps(
-        {
-            "terms": {
-                "OnDemand": {
-                    "x": {
-                        "priceDimensions": {
-                            "y": {
-                                "unit": "Hrs",
-                                "pricePerUnit": {"USD": str(usd_hour)},
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    )
-    return completed(stdout=json.dumps({"PriceList": [product]}))
-
-
 def parse_plan_args(argv: list[str]) -> "awsb.argparse.Namespace":
     full = ["plan", *argv]
     args = awsb.parse_args(full)
@@ -105,29 +85,13 @@ def sts_response(account: str) -> subprocess.CompletedProcess:
 STS_CALL = ("aws", "--profile", "timeboost-dev", "sts", "get-caller-identity")
 
 
-def two_node_prices() -> "awsb.Prices":
-    return {
-        "instances": {
-            "c8g.4xlarge": {"usd_hour": 0.71, "source": "test"},
-            "c8g.2xlarge": {"usd_hour": 0.355, "source": "test"},
-        }
-    }
+def shot_estimate(hosts: list, cfg: "awsb.RunConfig") -> "awsb.Estimate":
+    return awsb.cost_estimate(hosts, cfg, None, *awsb.shot_seconds(cfg))
 
 
-ALL_PRICES: "awsb.Prices" = {
-    "instances": {
-        "c8g.4xlarge": {"usd_hour": 0.71, "source": "test"},
-        "c8g.2xlarge": {"usd_hour": 0.355, "source": "test"},
-        "db.m8g.4xlarge": {"usd_hour": 1.82, "source": "test"},
-    }
-}
-
-
-def isolated_env(
-    test: unittest.TestCase, tmp: Path, name: str = "run1", prices: bool = True
-) -> Path:
+def isolated_env(test: unittest.TestCase, tmp: Path, name: str = "run1") -> Path:
     """Runs in `tmp` so that the relative `OUT_ROOT` lands there, with a fixed fleet name and
-    no checkip or pricing call. Returns the out root."""
+    no checkip call. Returns the out root."""
     cwd = os.getcwd()
     os.chdir(tmp)
     test.addCleanup(os.chdir, cwd)
@@ -137,10 +101,6 @@ def isolated_env(
             awsb, "operator_cidr", return_value="203.0.113.5/32"
         ),
     ]
-    if prices:
-        patches.append(
-            unittest.mock.patch.object(awsb, "resolve_prices", return_value=ALL_PRICES)
-        )
     for patch in patches:
         patch.start()
         test.addCleanup(patch.stop)
@@ -286,11 +246,13 @@ class PhaseSecondsTest(unittest.TestCase):
         )
 
     def test_worst_uses_ready_timeout_and_collect_max(self):
-        cfg = awsb.RunConfig(tag="x")
-        phases = awsb.phase_seconds(cfg)
-        self.assertEqual(phases["ready"], (awsb.READY_EXPECTED_S, awsb.READY_TIMEOUT_S))
+        expected_s, worst_s = awsb.shot_seconds(awsb.RunConfig(tag="x"))
         self.assertEqual(
-            phases["collect"], (awsb.COLLECT_EXPECTED_S, awsb.COLLECT_MAX_S)
+            worst_s - expected_s,
+            awsb.READY_TIMEOUT_S
+            - awsb.READY_EXPECTED_S
+            + awsb.COLLECT_MAX_S
+            - awsb.COLLECT_EXPECTED_S,
         )
 
 
@@ -305,30 +267,18 @@ class EstimateCostTest(unittest.TestCase):
             load=netbench.BenchConfig(submit_nodes=1),
         )
         self.hosts = awsb.plan_hosts(self.cfg)
-        self.prices = two_node_prices()
-        self.minor = awsb.MINOR_PRICES["eu-west-1"]
 
     def test_matches_hand_computed_totals(self):
-        # Literal dollar values for this 2-node config, hand-computed independently of
-        # estimate_cost's formula, so a formula regression trips this test.
-        estimate = awsb.estimate_cost(self.hosts, self.cfg, self.prices, self.minor)
+        # Literal dollar values for this 2-node config at PRICES, hand-computed independently
+        # of cost_estimate's formula, so a formula regression trips this test.
+        estimate = shot_estimate(self.hosts, self.cfg)
         self.assertEqual(estimate["expected_s"], 1695.0)
         self.assertEqual(estimate["ttl_s"], 3315.0)
-        self.assertAlmostEqual(estimate["expected_usd"], 0.891583212043379, places=6)
-        expected_bound = sum(
-            line["usd"]
-            for line in awsb._cost_lines(
-                self.hosts,
-                self.prices,
-                self.minor,
-                estimate["ttl_s"] + awsb.BOOT_ALLOWANCE_S,
-            )
-        )
-        self.assertAlmostEqual(estimate["bound_usd"], expected_bound, places=6)
-        self.assertGreater(estimate["bound_usd"], 1.7260121694254185)
+        self.assertAlmostEqual(estimate["expected_usd"], 0.858907, places=5)
+        self.assertAlmostEqual(estimate["bound_usd"], 1.754221, places=5)
 
     def test_bound_is_cost_at_ttl(self):
-        estimate = awsb.estimate_cost(self.hosts, self.cfg, self.prices, self.minor)
+        estimate = shot_estimate(self.hosts, self.cfg)
         ratio = (estimate["ttl_s"] + awsb.BOOT_ALLOWANCE_S) / estimate["expected_s"]
         # every line scales with duration except egress, which is flat per host
         egress_line = next(
@@ -342,24 +292,12 @@ class EstimateCostTest(unittest.TestCase):
         )
 
 
-# EDGE:awsbench-unknown-region
-class RegionMinorPricesTest(unittest.TestCase):
-    def test_unknown_region_refuses(self):
-        with self.assertRaises(awsb.Refused):
-            awsb.region_minor_prices("ap-south-2")
-
-    def test_known_region_ok(self):
-        self.assertIn("gp3_gb_month_usd", awsb.region_minor_prices("eu-west-1"))
-
-
 class FormatEstimateTest(unittest.TestCase):
     def test_contains_expected_and_bound(self):
         cfg = awsb.RunConfig(
             tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
         )
-        hosts = awsb.plan_hosts(cfg)
-        minor = awsb.region_minor_prices(awsb.REGION)
-        estimate = awsb.estimate_cost(hosts, cfg, two_node_prices(), minor)
+        estimate = shot_estimate(awsb.plan_hosts(cfg), cfg)
         text = awsb.format_estimate_summary(estimate, cfg.max_usd)
         self.assertIn(f"expected ${estimate['expected_usd']:.2f}", text)
         self.assertIn(f"hard bound ${estimate['bound_usd']:.2f}", text)
@@ -379,80 +317,6 @@ class ConfirmTest(unittest.TestCase):
                 self.assertTrue(awsb.confirm("go?", yes=False))
             with unittest.mock.patch("builtins.input", return_value="n"):
                 self.assertFalse(awsb.confirm("go?", yes=False))
-
-
-class FetchPricesTest(unittest.TestCase):
-    def test_fresh_cache_skips_fetch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache = Path(tmp) / "prices.json"
-            cache.write_text(
-                json.dumps(
-                    {"eu-west-1:c8g.4xlarge": {"usd_hour": 0.5, "fetched_at": 1000.0}}
-                )
-            )
-            runner = FakeRunner({})
-            prices = awsb.fetch_prices(
-                runner,
-                awsb.RunConfig(tag="x"),
-                {"c8g.4xlarge"},
-                cache,
-                now=1000.0 + 3600,
-            )
-            self.assertEqual(runner.calls, [])
-            self.assertEqual(prices["instances"]["c8g.4xlarge"]["usd_hour"], 0.5)
-
-    def test_expired_cache_refetches(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache = Path(tmp) / "prices.json"
-            old = 1000.0
-            cache.write_text(
-                json.dumps(
-                    {"eu-west-1:c8g.4xlarge": {"usd_hour": 0.5, "fetched_at": old}}
-                )
-            )
-            now = old + awsb.PRICE_CACHE_TTL_S + 1
-            runner = FakeRunner(
-                {
-                    (
-                        "aws",
-                        "--profile",
-                        "timeboost-dev",
-                        "pricing",
-                        "get-products",
-                    ): price_response(0.9)
-                }
-            )
-            prices = awsb.fetch_prices(
-                runner, awsb.RunConfig(tag="x"), {"c8g.4xlarge"}, cache, now=now
-            )
-            self.assertTrue(
-                runner.ran(
-                    "aws", "--profile", "timeboost-dev", "pricing", "get-products"
-                )
-            )
-            self.assertEqual(prices["instances"]["c8g.4xlarge"]["usd_hour"], 0.9)
-            self.assertEqual(
-                json.loads(cache.read_text())["eu-west-1:c8g.4xlarge"]["usd_hour"], 0.9
-            )
-
-    def test_api_failure_without_override_raises(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache = Path(tmp) / "prices.json"
-            runner = FakeRunner(
-                {
-                    (
-                        "aws",
-                        "--profile",
-                        "timeboost-dev",
-                        "pricing",
-                        "get-products",
-                    ): completed(returncode=1, stderr="AccessDenied")
-                }
-            )
-            with self.assertRaises(awsb.Refused):
-                awsb.fetch_prices(
-                    runner, awsb.RunConfig(tag="x"), {"c8g.4xlarge"}, cache, now=0.0
-                )
 
 
 def plan_args(*extra: str, nodes: str = "2") -> "awsb.argparse.Namespace":
@@ -494,8 +358,6 @@ class CmdPlanTest(unittest.TestCase):
         )
         self.assertEqual(run_manifest["fleet"], "run1")
         self.assertEqual(run_manifest["hosts"], manifest["hosts"])
-        self.assertIn("phase_seconds", run_manifest)
-        self.assertNotIn("phase_seconds", manifest)
         tfvars = json.loads(
             (self.fleet_dir / "terraform" / "terraform.tfvars.json").read_text()
         )
@@ -1662,7 +1524,7 @@ class RenderStartShTest(unittest.TestCase):
         for setting in (
             "shared_preload_libraries=pg_stat_statements",
             "pg_stat_statements.track=all",
-            "log_min_duration_statement=200ms",
+            "log_min_duration_statement=200",
             "log_checkpoints=on",
             "log_lock_waits=on",
         ):
@@ -2277,16 +2139,11 @@ class ManifestReproTest(unittest.TestCase):
         fleet_dir = tmp / "run1"
         fleet_dir.mkdir()
         run_dir = awsb.new_run_dir(fleet_dir, "run")
-        prices = two_node_prices()
-        estimate = awsb.estimate_cost(
-            hosts, cfg, prices, awsb.region_minor_prices(awsb.REGION)
-        )
+        estimate = shot_estimate(hosts, cfg)
         fleet = awsb.write_fleet_manifest(
             fleet_dir, cfg, hosts, awsb.plan_peers(hosts), estimate, "planned", ["run"]
         )
-        manifest = awsb.build_run_manifest(
-            fleet, cfg, 1, awsb.phase_seconds(cfg), "hash", None
-        )
+        manifest = awsb.build_run_manifest(fleet, cfg, 1, "hash", None)
         netbench.write_json(run_dir / "manifest.json", manifest)
         return run_dir, cfg
 
@@ -3224,9 +3081,7 @@ class PostgresStatsTest(unittest.TestCase):
 
 def pg_settings(**overrides) -> dict:
     """pg-settings.json of a node0 whose container took every PG_TUNING value."""
-    settings = {
-        key: awsb.rds_parameter(key, value) for key, value in awsb.PG_TUNING.items()
-    }
+    settings = {key: setting for key, (_, setting) in awsb.PG_TUNING.items()}
     return {**settings, **overrides}
 
 
@@ -3248,7 +3103,10 @@ class PgTuningTest(unittest.TestCase):
         flags = args[0::2]
         self.assertEqual(set(flags), {"-c"})
         settings = dict(setting.split("=", 1) for setting in args[1::2])
-        self.assertEqual({k: settings[k] for k in awsb.PG_TUNING}, awsb.PG_TUNING)
+        self.assertEqual(
+            {k: settings[k] for k in awsb.PG_TUNING},
+            {k: conf for k, (conf, _) in awsb.PG_TUNING.items()},
+        )
         self.assertEqual(settings["ssl"], "on")
 
     def test_bind_parameters_are_not_logged(self):
@@ -3269,12 +3127,12 @@ class PgTuningTest(unittest.TestCase):
         tuning = awsb.PG_TUNING
 
         def size(key: str, unit: int) -> int:
-            return int(awsb.rds_parameter(key, tuning[key])) * unit
+            return int(tuning[key][1]) * unit
 
         peak = (
             size("shared_buffers", pages)
             + size("wal_buffers", pages)
-            + int(tuning["autovacuum_max_workers"]) * size("autovacuum_work_mem", kib)
+            + size("autovacuum_max_workers", 1) * size("autovacuum_work_mem", kib)
         )
         self.assertLessEqual(peak, ram // 3)
         self.assertLessEqual(size("effective_cache_size", pages), ram)
@@ -3291,33 +3149,29 @@ class PgTuningTest(unittest.TestCase):
         ):
             self.assertIn(key, awsb.PG_TUNING)
 
-    def test_rds_parameter_converts_to_group_units(self):
-        convert = awsb.rds_parameter
-        self.assertEqual(convert("shared_buffers", "8GB"), "1048576")
-        self.assertEqual(convert("autovacuum_naptime", "1min"), "60")
-        self.assertEqual(convert("autovacuum_work_mem", "512MB"), "524288")
-        self.assertEqual(convert("wal_buffers", "16MB"), "2048")
-        self.assertEqual(convert("effective_cache_size", "48GB"), "6291456")
-        self.assertEqual(convert("work_mem", "64MB"), "65536")
-        self.assertEqual(convert("maintenance_work_mem", "2GB"), "2097152")
-        self.assertEqual(convert("max_wal_size", "16GB"), "16384")
-        self.assertEqual(convert("min_wal_size", "4GB"), "4096")
-        self.assertEqual(convert("checkpoint_timeout", "15min"), "900")
-
-    def test_rds_parameter_keeps_plain_values(self):
-        self.assertEqual(awsb.rds_parameter("huge_pages", "off"), "off")
-        self.assertEqual(awsb.rds_parameter("random_page_cost", "1.1"), "1.1")
-
-    def test_every_unit_key_is_a_tuning_key(self):
-        self.assertLessEqual(set(awsb.RDS_PARAMETER_UNITS), set(awsb.PG_TUNING))
-
-    def test_value_that_is_not_a_whole_unit_raises(self):
-        with self.assertRaisesRegex(ValueError, "whole number"):
-            awsb.rds_parameter("shared_buffers", "1kB")
-
-    def test_value_without_unit_raises(self):
-        with self.assertRaisesRegex(ValueError, "number with a unit"):
-            awsb.rds_parameter("work_mem", "lots")
+    def test_rds_values_are_the_conf_values_in_setting_units(self):
+        sizes = {"kB": 1024, "MB": 1024**2, "GB": 1024**3}
+        times = {"s": 1, "min": 60}
+        units = {
+            "shared_buffers": 8192,
+            "effective_cache_size": 8192,
+            "wal_buffers": 8192,
+            "work_mem": 1024,
+            "maintenance_work_mem": 1024,
+            "autovacuum_work_mem": 1024,
+            "max_wal_size": 1024**2,
+            "min_wal_size": 1024**2,
+        }
+        for key, (conf, setting) in awsb.PG_TUNING.items():
+            match = re.fullmatch(r"(\d+)([A-Za-z]+)", conf)
+            if match is None:
+                self.assertEqual(setting, conf, key)
+                continue
+            number, suffix = int(match[1]), match[2]
+            if suffix in times:
+                self.assertEqual(int(setting), number * times[suffix], key)
+            else:
+                self.assertEqual(int(setting) * units[key], number * sizes[suffix], key)
 
     def test_matching_settings_report_nothing(self):
         self.assertEqual(awsb.check_pg_tuning(pg_settings()), [])
@@ -3860,8 +3714,7 @@ class SweepAndCostTest(unittest.TestCase):
             tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
         )
         hosts = awsb.plan_hosts(cfg)
-        minor = awsb.region_minor_prices("eu-west-1")
-        estimate = awsb.estimate_cost(hosts, cfg, two_node_prices(), minor)
+        estimate = shot_estimate(hosts, cfg)
         manifest = {
             "name": "run1",
             "hosts": hosts,
@@ -3870,7 +3723,7 @@ class SweepAndCostTest(unittest.TestCase):
         runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
         cost = awsb.actual_cost(runner, manifest)
         self.assertEqual(cost["duration_s"], 1800.0)
-        expected_lines = awsb._cost_lines(hosts, two_node_prices(), minor, 1800.0)
+        expected_lines = awsb._cost_lines(hosts, 1800.0, None)
         self.assertAlmostEqual(
             cost["actual"], sum(line["usd"] for line in expected_lines)
         )
@@ -3881,9 +3734,7 @@ class SweepAndCostTest(unittest.TestCase):
             tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
         )
         hosts = awsb.plan_hosts(cfg)
-        estimate = awsb.estimate_cost(
-            hosts, cfg, two_node_prices(), awsb.region_minor_prices("eu-west-1")
-        )
+        estimate = shot_estimate(hosts, cfg)
         manifest = {
             "name": "run1",
             "hosts": hosts,
@@ -3905,9 +3756,7 @@ class SweepAndCostTest(unittest.TestCase):
             tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
         )
         hosts = awsb.plan_hosts(cfg)
-        estimate = awsb.estimate_cost(
-            hosts, cfg, two_node_prices(), awsb.region_minor_prices("eu-west-1")
-        )
+        estimate = shot_estimate(hosts, cfg)
         manifest = {
             "name": "run1",
             "hosts": hosts,
@@ -4531,28 +4380,14 @@ class LocalPhaseTest(unittest.TestCase):
 
 
 class FormatRunsTest(unittest.TestCase):
-    def test_accrued_usd_is_instance_hours_at_cached_price(self):
+    def test_accrued_usd_is_instance_hours_at_the_price(self):
         two = [instance("i-1"), instance("i-2", launch="2026-09-29T15:00:00+00:00")]
-        usd = awsb.accrued_usd(two, {"c8g.4xlarge": 0.8}, NOW)
-        self.assertAlmostEqual(usd, 0.5 * 0.8 + 1.0 * 0.8)
+        usd = awsb.accrued_usd(two, NOW)
+        self.assertAlmostEqual(usd, 1.5 * awsb.PRICES["c8g.4xlarge"])
 
-    def test_accrued_usd_without_a_price_is_none(self):
-        self.assertIsNone(awsb.accrued_usd([instance("i-1")], {}, NOW))
-
-    def test_cached_prices_reads_one_region(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cache = Path(tmp) / "prices.json"
-            self.assertEqual(awsb.cached_prices(cache, "eu-west-1"), {})
-            netbench.write_json(
-                cache,
-                {
-                    "eu-west-1:c8g.4xlarge": {"usd_hour": 0.7, "fetched_at": 1},
-                    "us-east-1:c8g.4xlarge": {"usd_hour": 0.6, "fetched_at": 1},
-                },
-            )
-            self.assertEqual(
-                awsb.cached_prices(cache, "eu-west-1"), {"c8g.4xlarge": 0.7}
-            )
+    def test_accrued_usd_of_an_unpriced_type_raises(self):
+        with self.assertRaises(KeyError):
+            awsb.accrued_usd([{**instance("i-1"), "type": "t4g.nano"}], NOW)
 
     def test_table_row_shows_owner_cost_and_orphan(self):
         runs = awsb.group_runs(
@@ -4564,11 +4399,11 @@ class FormatRunsTest(unittest.TestCase):
             [],
         )
         runs[0]["orphan"] = "past expiry"
-        lines = awsb.format_runs(runs, {"c8g.4xlarge": 0.8}, NOW)
+        lines = awsb.format_runs(runs, NOW)
         self.assertEqual(
             lines[2],
             "| amy | bob | 2026-09-29T15:30 | 2026-09-29T15:00 | 1 instance, 1 key-pair "
-            "| 0.40 | past expiry |",
+            "| 0.34 | past expiry |",
         )
 
 
@@ -4652,7 +4487,7 @@ class StatusAllTest(unittest.TestCase):
         lines = out.splitlines()
         self.assertIn("| amy | bob |", lines[2])
         self.assertTrue(lines[2].endswith("| past expiry |"))
-        self.assertTrue(lines[3].endswith("| n/a |  |"), lines[3])
+        self.assertTrue(lines[3].endswith("| 0.34 |  |"), lines[3])
 
     def test_a_finished_fleet_whose_volumes_only_the_tag_api_lists_is_not_shown(self):
         mappings = [
@@ -4823,9 +4658,7 @@ class ManifestCostTest(unittest.TestCase):
             tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
         )
         hosts = awsb.plan_hosts(cfg)
-        estimate = awsb.estimate_cost(
-            hosts, cfg, two_node_prices(), awsb.region_minor_prices("eu-west-1")
-        )
+        estimate = shot_estimate(hosts, cfg)
         return {"hosts": hosts, "estimate": estimate}
 
     def test_is_linear_in_duration_and_covers_instance_hours(self):
@@ -4835,7 +4668,9 @@ class ManifestCostTest(unittest.TestCase):
             awsb.manifest_cost(manifest, 7200) - awsb.manifest_cost(manifest, 3600),
             hour,
         )
-        self.assertGreaterEqual(hour, 0.355 + 2 * 0.71)
+        self.assertGreaterEqual(
+            hour, awsb.PRICES["c8g.2xlarge"] + 2 * awsb.PRICES["c8g.4xlarge"]
+        )
 
 
 class IndexKeepsRowsTest(unittest.TestCase):
