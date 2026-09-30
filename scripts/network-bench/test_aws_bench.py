@@ -2541,8 +2541,10 @@ class CollectPlanTest(unittest.TestCase):
         self.assertEqual(plan[1:], awsb.collect_plan(None, True, "colocated"))
 
     def test_rds_adds_its_collection_last(self):
-        self.assertEqual(awsb.collect_plan(None, True, "rds")[-1], "collect_rds")
-        self.assertNotIn("collect_rds", awsb.collect_plan(None, True, "volume"))
+        self.assertEqual(
+            awsb.collect_plan(None, True, "rds")[-2:], ["rds_metrics", "rds_logs"]
+        )
+        self.assertNotIn("rds_metrics", awsb.collect_plan(None, True, "volume"))
 
 
 class FinishRunSkipTest(unittest.TestCase):

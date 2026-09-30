@@ -2467,16 +2467,27 @@ def plan_fleet(
 ) -> tuple[Path, Path, Terraform, list[HostSpec], Preflight]:
     """Preflight, cost check, render, `tofu init` and `plan`. Shared by `plan` and `run`; makes
     no AWS write. The preflight summary is logged before the cost line."""
-    run = system.run
+    fleet_dir, hosts, pre, estimate = plan_common(system, args, cfg, now, fleet=False)
+    fleet = render_fleet_dir(system, cfg, fleet_dir, hosts, pre, estimate, args.argv)
+    run_dir = render_run(fleet_dir, fleet, cfg, SINGLE_RUN)
+    return fleet_dir, run_dir, init_terraform(system.run, fleet_dir), hosts, pre
+
+
+def plan_common(
+    system: System, args: argparse.Namespace, cfg: RunConfig, now: float, fleet: bool
+) -> tuple[Path, list[HostSpec], Preflight, Estimate]:
+    """New fleet dir with logging, preflight and cost check: the prefix of `plan_fleet` and
+    `prepare_up`."""
     hosts = plan_hosts(cfg)
     fleet_dir = new_fleet_dir(system, OUT_ROOT)
     setup_logging(fleet_dir)
     log.debug("argv %s", args.argv)
     pre = preflight(system, cfg, hosts)
     log_preflight(cfg, pre, hosts)
-    estimate = estimate_or_refuse(cfg, hosts, fleet_dir, now, rds=rds_spec(cfg, pre))
-    run_dir = render_run_dir(system, cfg, fleet_dir, hosts, pre, estimate, args.argv)
-    return fleet_dir, run_dir, init_terraform(run, fleet_dir), hosts, pre
+    estimate = estimate_or_refuse(
+        cfg, hosts, fleet_dir, now, fleet=fleet, rds=rds_spec(cfg, pre)
+    )
+    return fleet_dir, hosts, pre, estimate
 
 
 def init_terraform(run: Runner, fleet_dir: Path) -> Terraform:
@@ -2499,16 +2510,21 @@ def recording(run: Run) -> Iterator[None]:
     teardown, whatever failed."""
     try:
         yield
-    except Interrupted:
-        run.interrupted = True
-        run.error = "interrupted"
+    except Exception as exc:  # noqa: BLE001 - failure() logs it
+        run.error, interrupted = failure(exc)
+        run.interrupted = run.interrupted or interrupted
+
+
+def failure(exc: Exception) -> tuple[str, bool]:
+    """Logs a failure of a fleet step; the error message and whether it was an interrupt."""
+    if isinstance(exc, Interrupted):
         log.error("interrupted")
-    except (TfFailed, RemoteError, nb.NetworkError) as exc:
-        run.error = str(exc)
+        return "interrupted", True
+    if isinstance(exc, (TfFailed, RemoteError, nb.NetworkError)):
         log.error("error: %s", exc)
-    except Exception as exc:
-        log.exception("unexpected error")
-        run.error = f"{type(exc).__name__}: {exc}"
+        return str(exc), False
+    log.exception("unexpected error")
+    return f"{type(exc).__name__}: {exc}", False
 
 
 def up_fleet(fleet: FleetState) -> None:
@@ -2615,8 +2631,15 @@ def connect(fleet: FleetState) -> Remote:
 
 
 CollectStep = Literal[
-    "stop_agent", "freeze", "collect_hosts", "rsync_out", "ebs_balance", "collect_rds"
+    "stop_agent",
+    "freeze",
+    "collect_hosts",
+    "rsync_out",
+    "ebs_balance",
+    "rds_metrics",
+    "rds_logs",
 ]
+RdsCollect = Callable[[Runner, RdsInfo, float, float, Path], None]
 
 
 def collect_plan(
@@ -2630,7 +2653,7 @@ def collect_plan(
         steps.append("rsync_out")
     steps.append("ebs_balance")
     if query_db == "rds":
-        steps.append("collect_rds")
+        steps += ["rds_metrics", "rds_logs"]
     return steps
 
 
@@ -2658,9 +2681,13 @@ def finish_run(run: Run) -> nb.BenchResult | None:
                 "node0 EBS balance",
                 lambda: collect_node0_ebs_balance(run),
             ),
-            "collect_rds": (
-                "rds metrics, logs",
-                lambda: collect_rds(run),
+            "rds_metrics": (
+                "rds metrics",
+                lambda: collect_rds(run, "rds metrics", collect_rds_metrics),
+            ),
+            "rds_logs": (
+                "rds logs",
+                lambda: collect_rds(run, "rds logs", collect_rds_logs),
             ),
         }
         for name in collect_plan(run.error, run.agent_started, run.cfg.query_db):
@@ -2703,22 +2730,15 @@ def published_window(run: Run, what: str) -> AgentState | None:
     return agent
 
 
-def collect_rds(run: Run) -> None:
-    """The RDS side of the load window into the run dir: CloudWatch metrics
-    and the database logs. Each part is best effort."""
-    agent = published_window(run, "rds metrics")
+def collect_rds(run: Run, what: str, collect: RdsCollect) -> None:
+    """One RDS part of the load window into the run dir, once CloudWatch has published it."""
+    agent = published_window(run, what)
     if agent is None:
         return
     fleet = run.fleet
-    rds = fleet.manifest["rds"]
-    t0, t1 = agent["t0"], agent["t1"]
-    for what, collect in (
-        ("rds metrics", collect_rds_metrics),
-        ("rds logs", collect_rds_logs),
-    ):
-        best_effort(
-            what, lambda c=collect: c(fleet.system.run, rds, t0, t1, run.run_dir)
-        )
+    collect(
+        fleet.system.run, fleet.manifest["rds"], agent["t0"], agent["t1"], run.run_dir
+    )
 
 
 def best_effort(what: str, action: Callable[[], object]) -> None:
@@ -2885,34 +2905,22 @@ def cmd_up(args: argparse.Namespace, system: System) -> int:
     fleet = FleetState(system, cfg, fleet_dir, tf, interrupts)
     try:
         up_fleet(fleet)
-    except Interrupted:
-        log.error("interrupted")
-    except (TfFailed, RemoteError, nb.NetworkError) as exc:
-        log.error("error: %s", exc)
-    except Exception:
-        log.exception("unexpected error")
-    else:
-        announce_idle(fleet)
-        return EXIT_OK
-    return abort_up(fleet)
+    except Exception as exc:  # noqa: BLE001 - failure() logs it
+        failure(exc)
+        return abort_up(fleet)
+    announce_idle(fleet)
+    return EXIT_OK
 
 
 def prepare_up(
     args: argparse.Namespace, cfg: RunConfig, system: System, started: float
 ) -> tuple[Path, Terraform]:
     """Everything before the first AWS write, as `prepare_run`, without a run dir."""
-    run = system.run
-    hosts = plan_hosts(cfg)
-    fleet_dir = new_fleet_dir(system, OUT_ROOT)
-    setup_logging(fleet_dir)
-    log.debug("argv %s", args.argv)
-    pre = preflight(system, cfg, hosts)
-    log_preflight(cfg, pre, hosts)
-    estimate = estimate_or_refuse(
-        cfg, hosts, fleet_dir, started, fleet=True, rds=rds_spec(cfg, pre)
+    fleet_dir, hosts, pre, estimate = plan_common(
+        system, args, cfg, started, fleet=True
     )
     render_fleet_dir(system, cfg, fleet_dir, hosts, pre, estimate, args.argv)
-    tf = init_terraform(run, fleet_dir)
+    tf = init_terraform(system.run, fleet_dir)
     confirm_create(system.ask, cfg, fleet_dir, len(hosts))
     stamp_expiry(fleet_dir, tf, utc_now(system.clock), margin_s=0.0)
     return fleet_dir, tf
@@ -3477,22 +3485,6 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
         )
 
 
-def render_run_dir(
-    system: System,
-    cfg: RunConfig,
-    fleet_dir: Path,
-    hosts: list[HostSpec],
-    pre: Preflight,
-    estimate: Estimate,
-    argv: list[str],
-) -> Path:
-    """The fleet dir and its first run dir, everything known before `tofu apply`. Files that
-    need the hosts' addresses (env files, start.sh, topology) are written by `render_host_files`
-    after it."""
-    fleet = render_fleet_dir(system, cfg, fleet_dir, hosts, pre, estimate, argv)
-    return render_run(fleet_dir, fleet, cfg, SINGLE_RUN)
-
-
 def render_fleet_dir(
     system: System,
     cfg: RunConfig,
@@ -3502,6 +3494,8 @@ def render_fleet_dir(
     estimate: Estimate,
     argv: list[str],
 ) -> FleetManifest:
+    """The fleet dir, everything known before `tofu apply`. Files that need the hosts'
+    addresses (env files, start.sh, topology) are written by `render_host_files` after it."""
     ssh_pub = generate_ssh_key(system.run, fleet_dir)
     cidr = operator_cidr(system.http_get)
     git_rev = git_head(system.run)
@@ -4828,17 +4822,7 @@ def group_runs(
         if kind == "volume" and resource_id not in existing:
             continue
         tags = {tag["Key"]: tag["Value"] for tag in mapping["tags"]}
-        tagged = runs.setdefault(
-            tags[TAG_RUN],
-            {
-                "name": tags[TAG_RUN],
-                "owner": None,
-                "expires": None,
-                "arns": [],
-                "instances": [],
-                "orphan": None,
-            },
-        )
+        tagged = runs.setdefault(tags[TAG_RUN], empty_tagged_run(tags[TAG_RUN]))
         tagged["owner"] = tags.get(TAG_OWNER, tagged["owner"])
         tagged["expires"] = later(tags.get(TAG_EXPIRES), tagged["expires"])
         tagged["arns"].append(mapping["arn"])
@@ -4846,19 +4830,20 @@ def group_runs(
             tagged["instances"].append(live[resource_id])
     for arn in roles:
         fleet = role_fleet(arn)
-        tagged = runs.setdefault(
-            fleet,
-            {
-                "name": fleet,
-                "owner": None,
-                "expires": None,
-                "arns": [],
-                "instances": [],
-                "orphan": None,
-            },
-        )
+        tagged = runs.setdefault(fleet, empty_tagged_run(fleet))
         tagged["arns"].append(arn)
     return sorted(runs.values(), key=lambda r: (r["owner"] or "", r["name"]))
+
+
+def empty_tagged_run(name: str) -> TaggedRun:
+    return {
+        "name": name,
+        "owner": None,
+        "expires": None,
+        "arns": [],
+        "instances": [],
+        "orphan": None,
+    }
 
 
 def later(a: str | None, b: str | None) -> str | None:
@@ -5140,17 +5125,9 @@ def collect_ebs_balance(
     container or volume placements, Postgres."""
     instance_id = manifest["hosts_info"]["node0"]["instance_id"]
     start, end = metric_window(t0, t1)
-    stdout = aws_json(
-        run,
-        "cloudwatch",
-        "get-metric-data",
-        "--start-time",
-        datetime.fromtimestamp(start, UTC).isoformat(),
-        "--end-time",
-        datetime.fromtimestamp(end, UTC).isoformat(),
-        "--metric-data-queries",
-        json.dumps(ebs_balance_queries(instance_id)),
-    )
+    metrics = {qid: (metric, "Minimum") for qid, metric in EBS_BALANCE_METRICS.items()}
+    queries = metric_queries("AWS/EC2", ("InstanceId", instance_id), metrics)
+    stdout = get_metric_data(run, queries, start, end)
     balance: Ec2Balance = {
         "instance_id": instance_id,
         "period_s": CLOUDWATCH_PERIOD_S,
@@ -5173,34 +5150,9 @@ def collect_rds_metrics(
 ) -> None:
     """`cloudwatch/rds.json`, in the format of `cloudwatch/ec2-node0.json`."""
     start, end = metric_window(t0, t1)
-    queries = [
-        {
-            "Id": query_id,
-            "MetricStat": {
-                "Metric": {
-                    "Namespace": "AWS/RDS",
-                    "MetricName": metric,
-                    "Dimensions": [
-                        {"Name": "DBInstanceIdentifier", "Value": rds["identifier"]}
-                    ],
-                },
-                "Period": CLOUDWATCH_PERIOD_S,
-                "Stat": stat,
-            },
-        }
-        for query_id, (metric, stat) in RDS_METRICS.items()
-    ]
-    stdout = aws_json(
-        run,
-        "cloudwatch",
-        "get-metric-data",
-        "--start-time",
-        datetime.fromtimestamp(start, UTC).isoformat(),
-        "--end-time",
-        datetime.fromtimestamp(end, UTC).isoformat(),
-        "--metric-data-queries",
-        json.dumps(queries),
-    )
+    dimension = ("DBInstanceIdentifier", rds["identifier"])
+    queries = metric_queries("AWS/RDS", dimension, RDS_METRICS)
+    stdout = get_metric_data(run, queries, start, end)
     names = {query_id: metric for query_id, (metric, _) in RDS_METRICS.items()}
     path = out / RDS_CLOUDWATCH_FILE
     path.parent.mkdir(exist_ok=True)
@@ -5250,22 +5202,43 @@ def collect_rds_logs(
     log.info("rds logs: %d files in %s", len(files), directory)
 
 
-def ebs_balance_queries(instance_id: str) -> list[dict[str, Any]]:
+def metric_queries(
+    namespace: str, dimension: tuple[str, str], metrics: dict[str, tuple[str, str]]
+) -> list[dict[str, Any]]:
+    """`--metric-data-queries` for one resource, `metrics` mapping query Id to (metric,
+    stat)."""
+    name, value = dimension
     return [
         {
             "Id": query_id,
             "MetricStat": {
                 "Metric": {
-                    "Namespace": "AWS/EC2",
+                    "Namespace": namespace,
                     "MetricName": metric,
-                    "Dimensions": [{"Name": "InstanceId", "Value": instance_id}],
+                    "Dimensions": [{"Name": name, "Value": value}],
                 },
                 "Period": CLOUDWATCH_PERIOD_S,
-                "Stat": "Minimum",
+                "Stat": stat,
             },
         }
-        for query_id, metric in EBS_BALANCE_METRICS.items()
+        for query_id, (metric, stat) in metrics.items()
     ]
+
+
+def get_metric_data(
+    run: Runner, queries: list[dict[str, Any]], start: float, end: float
+) -> dict[str, Any]:
+    return aws_json(
+        run,
+        "cloudwatch",
+        "get-metric-data",
+        "--start-time",
+        datetime.fromtimestamp(start, UTC).isoformat(),
+        "--end-time",
+        datetime.fromtimestamp(end, UTC).isoformat(),
+        "--metric-data-queries",
+        json.dumps(queries),
+    )
 
 
 def parse_metric_results(
@@ -5364,11 +5337,12 @@ def load_evidence(
         journal = host_dir / "du-journal.txt"
         if spec["role"] != "ctl" and journal.exists():
             evidence["journal_bytes"][name] = parse_du_bytes(journal.read_text())
-        ready = host_dir / "ready.json"
+        ready_path = host_dir / "ready.json"
+        ready = nb.read_json(ready_path) if ready_path.exists() else None
         tracking = [
             text
             for text in (
-                nb.read_json(ready)["chronyc_tracking"] if ready.exists() else None,
+                None if ready is None else ready["chronyc_tracking"],
                 (host_dir / "chrony.txt").read_text()
                 if (host_dir / "chrony.txt").exists()
                 else None,
@@ -5386,9 +5360,9 @@ def load_evidence(
         samples = host_dir / "pg-stats.jsonl"
         if samples.exists():
             evidence["ssl_backends"] = sum_ssl_backends(nb.read_jsonl(samples), t0, t1)
-        if ready.exists():
+        if ready is not None:
             evidence["digest_mismatch"][name] = digest_mismatches(
-                nb.read_json(ready)["digests"], manifest["images"]
+                ready["digests"], manifest["images"]
             )
     return stats, evidence
 
@@ -5437,52 +5411,47 @@ def query_db_meta(manifest: Manifest, evidence: Evidence) -> nb.QueryDbMeta:
     load; no backend counts as off."""
     mode = manifest["query_db"]
     tls = "ssl_backends" in evidence and pg_tls(evidence["ssl_backends"]) is True
-    tag = manifest["images"]["postgres"]["ref"].rpartition(":")[2]
     tuning = {key: conf for key, (conf, _) in PG_TUNING.items()}
+    engine, store = db_store(manifest)
+    meta: nb.QueryDbMeta = {
+        "mode": mode,
+        "engine": engine,
+        "store": store,
+        "tls": tls,
+        "tuning": tuning,
+    }
+    if mode == "rds":
+        meta["instance_class"] = manifest["rds_spec"]["instance_class"]
+    return meta
+
+
+def db_store(manifest: Manifest) -> tuple[str, dict[str, Any]]:
+    """The engine and backing store of node0's Postgres."""
+    mode = manifest["query_db"]
+    tag = manifest["images"]["postgres"]["ref"].rpartition(":")[2]
     match mode:
         case "colocated":
             node0 = next(h for h in manifest["hosts"] if h["name"] == "node0")
-            store = {
+            return f"postgres {tag}", {
                 "type": "root",
                 "gb": node0["root_gb"],
                 "iops": node0["root_iops"],
                 "mbps": node0["root_mbps"],
             }
-            return {
-                "mode": mode,
-                "engine": f"postgres {tag}",
-                "store": store,
-                "tls": tls,
-                "tuning": tuning,
-            }
         case "volume":
-            return {
-                "mode": mode,
-                "engine": f"postgres {tag}",
-                "store": {
-                    "type": "ebs",
-                    "volume_id": manifest["pg_volume_id"],
-                    **manifest["pg_volume"],
-                },
-                "tls": tls,
-                "tuning": tuning,
+            return f"postgres {tag}", {
+                "type": "ebs",
+                "volume_id": manifest["pg_volume_id"],
+                **manifest["pg_volume"],
             }
         case "rds":
             rds = manifest["rds_spec"]
-            store = {
+            return f"postgres {rds['engine_version']}", {
                 "type": "rds-gp3",
                 "identifier": rds_identifier(manifest["fleet"]),
                 "gb": rds["gb"],
                 "iops": rds["iops"],
                 "mbps": rds["mbps"],
-            }
-            return {
-                "mode": mode,
-                "engine": f"postgres {rds['engine_version']}",
-                "store": store,
-                "tls": tls,
-                "tuning": tuning,
-                "instance_class": rds["instance_class"],
             }
         case _:
             raise ValueError(f"no query db metadata for {mode}")
