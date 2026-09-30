@@ -1638,7 +1638,7 @@ class RenderNodeEnvTest(unittest.TestCase):
 
     def env(self, name: str) -> dict:
         host = next(h for h in awsb.plan_hosts(self.cfg) if h["name"] == name)
-        text = awsb.render_node_env(host, self.hosts)
+        text = awsb.render_node_env(host, self.hosts, awsb.pg_endpoint())
         return dict(line.split("=", 1) for line in text.splitlines())
 
     def test_key_index_offset_by_twenty(self):
@@ -1679,7 +1679,9 @@ class RenderNodeEnvTest(unittest.TestCase):
         host = next(h for h in awsb.plan_hosts(cfg) if h["name"] == "node1")
         env = dict(
             line.split("=", 1)
-            for line in awsb.render_node_env(host, hosts).splitlines()
+            for line in awsb.render_node_env(
+                host, hosts, awsb.pg_endpoint()
+            ).splitlines()
         )
         self.assertNotIn("ESPRESSO_NODE_STATE_PEERS", env)
 
@@ -3150,12 +3152,11 @@ class PostgresStatsTest(unittest.TestCase):
         for name in ("pg-stats.json", "pg-statements.json", "pg-settings.json"):
             self.assertIn(f"> {awsb.BENCH_DIR}/{name}", script)
         for line, sql in zip(
-            script.splitlines(),
+            script.splitlines()[-3:],
             (awsb.PG_STATS_SQL, awsb.PG_STATEMENTS_SQL, awsb.PG_SETTINGS_SQL),
         ):
             words = shlex.split(line)
-            self.assertEqual(words[: len(awsb.PSQL)], list(awsb.PSQL))
-            self.assertEqual(words[-5:-2], ["-At", "-c", sql])
+            self.assertEqual(words[:4], ["psql", "-At", "-c", sql])
 
     def test_collect_script_for_node0_dumps_statements_and_settings(self):
         runner = Scripted({})
@@ -3185,7 +3186,7 @@ class PostgresStatsTest(unittest.TestCase):
         ]
         commands: list[list[str]] = []
 
-        def run(argv):
+        def run(argv, env=None):
             commands.append(argv)
             reply = replies.pop(0)
             if not replies:
@@ -3194,7 +3195,7 @@ class PostgresStatsTest(unittest.TestCase):
 
         out = tmp / "pg-stats.jsonl"
         with unittest.mock.patch.object(awsb, "PG_SAMPLE_S", 0):
-            awsb.sample_pg(out, stop, run)
+            awsb.sample_pg(out, stop, awsb.pg_endpoint(), run)
         lines = [json.loads(line) for line in out.read_text().splitlines()]
         self.assertEqual(len(lines), 1)
         self.assertEqual(lines[0]["xact_commit"], 7)
@@ -3204,13 +3205,22 @@ class PostgresStatsTest(unittest.TestCase):
 
     def test_agent_host_role_query_starts_pg_sampler(self):
         tmp = tmp_dir(self)
+        pg_json = tmp / "pg.json"
+        pg_json.write_text(json.dumps(awsb.pg_endpoint()))
         args = awsb.parse_args(
-            ["agent-host", str(tmp / "host.jsonl"), "--role", "query"]
+            [
+                "agent-host",
+                str(tmp / "host.jsonl"),
+                "--role",
+                "query",
+                "--pg",
+                str(pg_json),
+            ]
         )
         probed = threading.Event()
         handlers = []
 
-        def run(argv):
+        def run(argv, env=None):
             probed.set()
             return completed(returncode=1)
 
@@ -3241,9 +3251,271 @@ class PostgresStatsTest(unittest.TestCase):
             i for i, c in enumerate(commands) if "CREATE EXTENSION IF NOT EXISTS" in c
         )
         self.assertGreater(extension, ready)
-        self.assertIn(
-            "pg_isready -h 127.0.0.1 -p 5432 -U root -d espresso", commands[ready]
+        self.assertIn(awsb.PG_JSON, commands[ready])
+
+
+def pg_settings(**overrides) -> dict:
+    """pg-settings.json of a node0 whose container took every PG_TUNING value."""
+    settings = {
+        key: awsb.rds_parameter(key, value) for key, value in awsb.PG_TUNING.items()
+    }
+    settings["wal_compression"] = "pglz"
+    settings["pg_stat_ssl"] = {"true": 3}
+    return {**settings, **overrides}
+
+
+def query_spec() -> dict:
+    return {
+        "name": "node0",
+        "role": "query",
+        "instance_type": "x",
+        "root_gb": 100,
+        "root_iops": 6000,
+        "root_mbps": 500,
+    }
+
+
+# REQ:querydb-settings-parity
+class PgTuningTest(unittest.TestCase):
+    def test_container_args_render_every_tuning_key(self):
+        args = awsb.render_postgres_args()
+        flags = args[0::2]
+        self.assertEqual(set(flags), {"-c"})
+        settings = dict(setting.split("=", 1) for setting in args[1::2])
+        self.assertEqual({k: settings[k] for k in awsb.PG_TUNING}, awsb.PG_TUNING)
+        self.assertEqual(settings["ssl"], "on")
+
+    def test_rds_parameter_converts_to_group_units(self):
+        convert = awsb.rds_parameter
+        self.assertEqual(convert("shared_buffers", "16GB"), "2097152")
+        self.assertEqual(convert("effective_cache_size", "48GB"), "6291456")
+        self.assertEqual(convert("work_mem", "64MB"), "65536")
+        self.assertEqual(convert("maintenance_work_mem", "2GB"), "2097152")
+        self.assertEqual(convert("max_wal_size", "16GB"), "16384")
+        self.assertEqual(convert("min_wal_size", "4GB"), "4096")
+        self.assertEqual(convert("checkpoint_timeout", "15min"), "900")
+
+    def test_rds_parameter_keeps_plain_values(self):
+        self.assertEqual(awsb.rds_parameter("huge_pages", "off"), "off")
+        self.assertEqual(awsb.rds_parameter("random_page_cost", "1.1"), "1.1")
+
+    def test_every_unit_key_is_a_tuning_key(self):
+        self.assertLessEqual(set(awsb.RDS_PARAMETER_UNITS), set(awsb.PG_TUNING))
+
+    def test_value_that_is_not_a_whole_unit_raises(self):
+        with self.assertRaisesRegex(ValueError, "whole number"):
+            awsb.rds_parameter("shared_buffers", "1kB")
+
+    def test_value_without_unit_raises(self):
+        with self.assertRaisesRegex(ValueError, "number with a unit"):
+            awsb.rds_parameter("work_mem", "lots")
+
+    def test_matching_settings_report_nothing(self):
+        self.assertEqual(awsb.check_pg_tuning(pg_settings()), [])
+
+    def test_wal_compression_reported_under_either_spelling(self):
+        for spelling in ("on", "pglz"):
+            settings = pg_settings(wal_compression=spelling)
+            self.assertEqual(awsb.check_pg_tuning(settings), [])
+
+    def test_differing_setting_is_named(self):
+        settings = pg_settings(shared_buffers="16384", max_wal_size="1024")
+        self.assertEqual(
+            awsb.check_pg_tuning(settings), ["shared_buffers", "max_wal_size"]
         )
+
+    def test_missing_setting_raises(self):
+        settings = pg_settings()
+        del settings["work_mem"]
+        with self.assertRaises(KeyError):
+            awsb.check_pg_tuning(settings)
+
+    def test_settings_query_selects_every_tuning_key(self):
+        for key in awsb.PG_TUNING:
+            self.assertIn(f"'{key}'", awsb.PG_SETTINGS_SQL)
+        self.assertIn("pg_stat_ssl", awsb.PG_SETTINGS_SQL)
+
+    def test_tls_is_none_without_backends(self):
+        self.assertIsNone(awsb.pg_tls(pg_settings(pg_stat_ssl={})))
+        self.assertTrue(awsb.pg_tls(pg_settings()))
+        self.assertFalse(awsb.pg_tls(pg_settings(pg_stat_ssl={"true": 2, "false": 1})))
+
+    def test_stats_reset_covers_checkpoint_shared_and_statements(self):
+        sql = awsb.reset_pg_stats_sql()
+        for part in (
+            "CHECKPOINT",
+            "pg_stat_reset_shared(NULL)",
+            "pg_stat_statements_reset()",
+        ):
+            self.assertIn(part, sql)
+
+
+# REQ:querydb-settings-parity
+class PgValidityTest(unittest.TestCase):
+    def check(self, **evidence):
+        return awsb.check_validity_aws(
+            clean_result(), aws_manifest(), {**clean_evidence(), **evidence}
+        )
+
+    def test_matching_settings_and_tls_are_quiet(self):
+        verdict = self.check(pg_settings=pg_settings())
+        self.assertEqual(verdict, {"valid": True, "noisy": False, "reasons": []})
+
+    def test_missing_settings_are_not_judged(self):
+        self.assertFalse(self.check()["noisy"])
+
+    def test_differing_setting_is_noisy_with_its_value(self):
+        verdict = self.check(pg_settings=pg_settings(shared_buffers="16384"))
+        self.assertTrue(verdict["valid"])
+        self.assertTrue(verdict["noisy"])
+        self.assertEqual(len(verdict["reasons"]), 1)
+        self.assertIn("shared_buffers=16384", verdict["reasons"][0])
+
+    def test_backend_without_tls_is_noisy(self):
+        verdict = self.check(pg_settings=pg_settings(pg_stat_ssl={"false": 1}))
+        self.assertTrue(verdict["noisy"])
+        self.assertIn("without TLS", verdict["reasons"][0])
+
+    def test_no_backends_at_collect_time_is_quiet(self):
+        verdict = self.check(pg_settings=pg_settings(pg_stat_ssl={}))
+        self.assertFalse(verdict["noisy"])
+
+    def test_evidence_reads_settings_and_ignores_an_empty_file(self):
+        tmp = tmp_dir(self)
+        manifest = aws_manifest()
+        node0 = tmp / "hosts" / "node0"
+        node0.mkdir(parents=True)
+        (node0 / "pg-settings.json").write_text(json.dumps(pg_settings()))
+        _, evidence = awsb.load_evidence(tmp, manifest, 0.0, 1.0)
+        self.assertEqual(evidence["pg_settings"], pg_settings())
+        (node0 / "pg-settings.json").write_text("")
+        _, evidence = awsb.load_evidence(tmp, manifest, 0.0, 1.0)
+        self.assertNotIn("pg_settings", evidence)
+
+
+# REQ:querydb-colocated-wiring
+class ColocatedPostgresWiringTest(unittest.TestCase):
+    def setUp(self):
+        self.images = fake_images()
+
+    def test_psql_password_is_in_the_environment_only(self):
+        argv, env = awsb.psql_argv(awsb.pg_endpoint())
+        self.assertEqual(argv[:1], ["psql"])
+        self.assertEqual(env, {"PGPASSWORD": "password"})
+        self.assertNotIn("password", argv)
+        self.assertEqual(argv[argv.index("-d") + 1], "espresso")
+
+    def test_psql_database_override(self):
+        argv, _ = awsb.psql_argv(awsb.pg_endpoint(), "postgres")
+        self.assertEqual(argv[argv.index("-d") + 1], "postgres")
+
+    def test_container_enables_ssl_with_the_mounted_cert(self):
+        script = awsb.render_start_sh(query_spec(), self.images)
+        self.assertIn(f"-v {awsb.PG_TLS_DIR}:/tls:ro", script)
+        for setting in (
+            "ssl=on",
+            "ssl_cert_file=/tls/server.crt",
+            "ssl_key_file=/tls/server.key",
+            "shared_buffers=16GB",
+            "checkpoint_timeout=15min",
+        ):
+            self.assertIn(setting, script)
+
+    def test_query_user_data_installs_client_and_makes_owned_cert(self):
+        text = awsb.render_user_data(query_spec(), self.images, ttl_s=60)
+        self.assertIn("jq curl postgresql-client openssl", text)
+        self.assertIn("openssl req -x509", text)
+        self.assertIn(f"chown 999:999 {awsb.PG_TLS_DIR}/server.key", text)
+        self.assertIn(f"chmod 0600 {awsb.PG_TLS_DIR}/server.key", text)
+
+    def test_validator_user_data_has_no_client_or_cert(self):
+        validator = {**query_spec(), "name": "node1", "role": "validator"}
+        text = awsb.render_user_data(validator, self.images, ttl_s=60)
+        self.assertNotIn("postgresql-client", text)
+        self.assertNotIn("openssl", text)
+
+    def test_node_env_reads_the_endpoint(self):
+        pg = {**awsb.pg_endpoint(), "host": "db.internal", "port": 6432}
+        hosts = fleet(5)
+        env = dict(
+            line.split("=", 1)
+            for line in awsb.render_node_env(query_spec(), hosts, pg).splitlines()
+        )
+        self.assertEqual(env["ESPRESSO_NODE_POSTGRES_HOST"], "db.internal")
+        self.assertEqual(env["ESPRESSO_NODE_POSTGRES_PORT"], "6432")
+
+    def test_node_env_of_query_role_needs_an_endpoint(self):
+        with self.assertRaisesRegex(ValueError, "PgEndpoint"):
+            awsb.render_node_env(query_spec(), fleet(5), None)
+
+    def test_pg_json_is_written_0600_for_the_query_host_only(self):
+        cfg = awsb.RunConfig(
+            tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
+        )
+        hosts = awsb.plan_hosts(cfg)
+        manifest = {"hosts": hosts, "images": fake_images()}
+        run_dir = tmp_dir(self)
+        for host in hosts:
+            (run_dir / "hosts" / host["name"]).mkdir(parents=True)
+        awsb.render_host_files(run_dir, cfg, manifest, two_node_hosts_info())
+        pg_json = run_dir / "hosts/node0/pg.json"
+        self.assertEqual(json.loads(pg_json.read_text()), awsb.pg_endpoint())
+        self.assertEqual(pg_json.stat().st_mode & 0o777, 0o600)
+        self.assertFalse((run_dir / "hosts/node1/pg.json").exists())
+        self.assertFalse((run_dir / "hosts/ctl/pg.json").exists())
+
+    def test_pg_json_is_shipped_and_not_collected_back(self):
+        self.assertIn("pg.json", awsb.SHIPPED_HOST_FILES)
+        self.assertIn("--exclude=/pg.json", awsb.COLLECT_EXCLUDES)
+
+    def test_gates_check_readiness_then_extension_then_reset(self):
+        runner = Scripted({"docker wait deploy": [completed(stdout="0\n")]})
+        remote = scripted_remote(self, runner)
+        awsb.start_support(remote, [], awsb.Interrupts())
+        commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
+        order = [
+            next(i for i, c in enumerate(commands) if needle in c)
+            for needle in (
+                "docker start postgres",
+                "pg_isready",
+                "CREATE EXTENSION IF NOT EXISTS",
+                "pg_stat_reset_shared",
+            )
+        ]
+        self.assertEqual(order, sorted(order))
+        gate = commands[order[1]]
+        self.assertTrue(gate.startswith("sudo bash -c "))
+        self.assertIn(awsb.PG_JSON, gate)
+        self.assertNotIn("PGPASSWORD=password", gate)
+
+    def test_hostmon_gives_only_the_query_host_the_endpoint(self):
+        runner = Scripted({})
+        remote = scripted_remote(self, runner)
+        awsb.start_hostmon(remote)
+        commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
+        with_pg = [c for c in commands if f"--pg {awsb.PG_JSON}" in c]
+        self.assertEqual(len(commands), 3)
+        self.assertEqual(len(with_pg), 1)
+        self.assertIn("--role query", with_pg[0])
+
+    def test_agent_host_query_role_without_endpoint_is_refused(self):
+        args = awsb.parse_args(["agent-host", "host.jsonl", "--role", "query"])
+        with self.assertRaisesRegex(awsb.Refused, "--pg"):
+            awsb.cmd_agent_host(args)
+
+    def test_sampler_passes_the_password_in_the_environment(self):
+        stop = threading.Event()
+        seen = []
+
+        def run(argv, env=None):
+            seen.append((argv, env))
+            stop.set()
+            return completed(returncode=1)
+
+        awsb.sample_pg(tmp_dir(self) / "pg-stats.jsonl", stop, awsb.pg_endpoint(), run)
+        argv, env = seen[0]
+        self.assertEqual(env, {"PGPASSWORD": "password"})
+        self.assertNotIn("password", argv)
 
 
 class StartNodesSyncTest(unittest.TestCase):
@@ -4649,7 +4921,7 @@ class KeptRunTest(unittest.TestCase):
                 code = awsb.cmd_collect(self.args(harness, "collect"), runner)
             self.assertEqual(code, awsb.EXIT_OK)
             self.assertTrue((expected / "df.txt").exists())
-        self.assertTrue(runner.ran("docker exec postgres psql"))
+        self.assertTrue(runner.ran("psql -At -c"))
 
     def test_collect_reports_hosts_that_yielded_nothing(self):
         harness, runner = self.kept()

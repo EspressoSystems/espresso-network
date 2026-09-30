@@ -10,7 +10,7 @@ uv python install 3.14
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y docker.io chrony rsync gzip jq curl
+apt-get install -y docker.io chrony rsync gzip jq curl$EXTRA_PACKAGES
 
 cat >> /etc/chrony/chrony.conf <<'CHRONY'
 server 169.254.169.123 prefer iburst minpoll 4 maxpoll 4
@@ -24,7 +24,7 @@ DAEMON
 systemctl restart docker
 
 mkdir -p /data/journal /opt/bench
-$EXTRA_DIRS
+$QUERY_SETUP
 
 echo '{}' > /opt/bench/digests.json
 $DOCKER_PULLS
