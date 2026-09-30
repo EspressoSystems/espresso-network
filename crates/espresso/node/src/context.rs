@@ -666,11 +666,10 @@ async fn handle_events<N, P, C>(
                 }
             },
             CoordinatorEvent::BlockPayload { .. } => {
-                // Forward straight to the consumer: reconstructed payloads might not yet
-                // have been stored by consensus storage,
-                // Query service verifies the block against a decided leaf before storing it.
+                // Lands only if the leaf is already stored. Otherwise the copy that
+                // `persist_event` saves goes out with the decide.
                 if let Err(err) = event_consumer.handle_event(&event).await {
-                    tracing::warn!("failed to handle reconstructed payload: {err:#}");
+                    tracing::warn!("failed to handle block payload: {err:#}");
                 }
             },
             _ => {},

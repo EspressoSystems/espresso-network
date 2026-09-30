@@ -936,24 +936,19 @@ where
         let leaf = match tx.get_leaf(LeafId::Number(height as usize)).await {
             Ok(leaf) => leaf,
             Err(QueryError::Missing | QueryError::NotFound) => {
-                tracing::info!(
-                    height,
-                    "dropping reconstructed payload; leaf not yet available"
-                );
+                tracing::debug!(height, "dropping block payload; leaf not yet available");
                 return Ok(());
             },
             Err(err) => {
-                return Err(err).context(format!(
-                    "loading leaf {height} to verify reconstructed payload"
-                ));
+                return Err(err).context(format!("loading leaf {height} to verify block payload"));
             },
         };
         if leaf.block_hash() != block.hash() {
             tracing::warn!(
                 height,
                 decided = %leaf.block_hash(),
-                reconstructed = %block.hash(),
-                "reconstructed payload does not match decided block; discarding"
+                payload_block = %block.hash(),
+                "block payload does not match decided block; discarding"
             );
             return Ok(());
         }
