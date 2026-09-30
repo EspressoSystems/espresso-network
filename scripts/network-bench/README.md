@@ -18,7 +18,7 @@ scripts/network-bench/
   aws-bench             AWS driver (laptop) + host agents (agent-drive, agent-host)
   genesis.toml          0.6, 100 MB blocks, 1 wei base fee
   process-compose.yaml  local 3-node network
-  aws/justfile          just bench aws plan|up|run|down|status|collect|render|destroy
+  justfile              recipe `aws` forwards to aws-bench: just bench aws <verb>
   aws/user-data.sh      cloud-init template, every host
   aws/terraform/        key pair, security group, instances, pg volume, rds instance, delete schedule
   test_*.py             just py::test
@@ -39,9 +39,9 @@ scripts/network-bench/
   `--tx-timeout-s` times transactions out. Consensus latency of a lagging step is not reliable. Transactions of a lost
   payload stay pending until `--tx-timeout-s`, which the end of the run waits for. Not for the CI job: its step timeout
   is 15 min.
-- `--node-env KEY=VALUE` (repeatable, on `run` only; `up` refuses it): added to every node's environment, overriding the
-  harness's own value; taken verbatim, not for secrets; listed in the summary's deployment block and part of the config
-  hash.
+- `--node-env KEY=VALUE` (repeatable; `up` refuses it, pass it to `run --fleet`): added to every node's environment,
+  overriding the harness's own value; taken verbatim, not for secrets; listed in the summary's deployment block and part
+  of the config hash.
 - Query node: pg_stat_database/checkpointer/wal/activity every 5 s, pg_stat_statements and settings at collect, slow
   statements (>200 ms) in the postgres log.
 - Per step, second half judged:
@@ -147,7 +147,7 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
   lock-out, fleet flags given. Exit 2, nothing sent to the hosts. `--tag` differing from the fleet's pulls by digest.
 - Each run wipes journals, containers and the database; every run starts at height 0.
 - `fleet.lock` holds pid and hostname; `status DIR` shows whether the holder is alive. Phases: `idle`, `running`,
-  `dirty` (reset failed), then `done`.
+  `dirty` (reset failed), then `done`; `planned` after `plan`, `left-running` after a failed destroy.
 
 | `--query-db` | Postgres                            | Store of `/data/pg`                                  |
 | ------------ | ----------------------------------- | ---------------------------------------------------- |
@@ -193,7 +193,7 @@ cost.json                expected, bound, actual USD of the fleet (instances, vo
 runs/01-run/             one measurement
   manifest.json          fleet.json copy plus fleet, start_spread_s, config_hash
   genesis.toml topology.json config.json
-  hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz,
+  hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz, collect-<k>/ (`collect`),
                          cloud-init-output.log, chrony.txt, host.jsonl, pg-stats.json (node0)
                          pg-stats.jsonl pg-statements.json pg-settings.json (node0)
   cloudwatch/            ec2-node0.json (EBS balance, every run); rds.json (rds runs)
