@@ -1071,6 +1071,36 @@ class WaitReadyTest(unittest.TestCase):
         self.assertEqual(clock.sleeps, [2.0, 2.0])
 
 
+class ReadyStatusTest(unittest.TestCase):
+    def status(self, heights, elapsed=0.0, alive=True):
+        return netbench.ready_status(heights, 5, elapsed, 60.0, alive)
+
+    def test_all_nodes_at_the_minimum_are_ready(self):
+        self.assertEqual(self.status({"a": 5, "b": 9}), "ready")
+
+    def test_a_silent_or_low_node_waits(self):
+        self.assertEqual(self.status({"a": 5, "b": None}), "wait")
+        self.assertEqual(self.status({"a": 5, "b": 4}), "wait")
+
+    def test_dead_process_is_reported_before_the_timeout(self):
+        self.assertEqual(self.status({"a": None}, elapsed=99.0, alive=False), "dead")
+
+    def test_timeout_needs_elapsed_strictly_over_the_limit(self):
+        self.assertEqual(self.status({"a": 1}, elapsed=60.0), "wait")
+        self.assertEqual(self.status({"a": 1}, elapsed=60.1), "timeout")
+
+    def test_ready_wins_over_dead_and_timeout(self):
+        self.assertEqual(self.status({"a": 5}, elapsed=99.0, alive=False), "ready")
+
+
+class IsDrainedTest(unittest.TestCase):
+    def test_drained_needs_all_three_conditions(self):
+        self.assertTrue(netbench.is_drained(0, True, True))
+        self.assertFalse(netbench.is_drained(1, True, True))
+        self.assertFalse(netbench.is_drained(0, False, True))
+        self.assertFalse(netbench.is_drained(0, True, False))
+
+
 class DriveLoadTest(unittest.TestCase):
     def test_writes_stake_table_and_final_metrics(self):
         clock = fakes.ScaledClock(50)

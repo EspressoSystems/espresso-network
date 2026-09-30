@@ -549,15 +549,34 @@ def wait_ready(
     start = clock.time()
     while True:
         heights = {node: block_height(pool, url) for node, url in urls.items()}
-        if all(h is not None and h >= min_height for h in heights.values()):
-            return clock.time() - start
-        if not alive():
-            raise NetworkError("network process exited during startup")
-        if clock.time() - start > timeout_s:
-            raise NetworkError(
-                f"network not ready after {timeout_s:.0f} s: heights {heights}"
-            )
+        elapsed = clock.time() - start
+        match ready_status(heights, min_height, elapsed, timeout_s, alive()):
+            case "ready":
+                return elapsed
+            case "dead":
+                raise NetworkError("network process exited during startup")
+            case "timeout":
+                raise NetworkError(
+                    f"network not ready after {timeout_s:.0f} s: heights {heights}"
+                )
         clock.sleep(2)
+
+
+def ready_status(
+    heights: dict[str, int | None],
+    min_height: int,
+    elapsed: float,
+    timeout_s: float,
+    alive: bool,
+) -> Literal["ready", "wait", "dead", "timeout"]:
+    """Verdict of one `wait_ready` poll; a node whose API does not answer has height None."""
+    if all(h is not None and h >= min_height for h in heights.values()):
+        return "ready"
+    if not alive:
+        return "dead"
+    if elapsed > timeout_s:
+        return "timeout"
+    return "wait"
 
 
 def block_height(pool: Http, url: str) -> int | None:
@@ -948,13 +967,20 @@ async def drain(
             len(counters) >= 2
             and counters[-1]["decided_bytes"] == counters[-2]["decided_bytes"]
         )
-        if target is None and flat and not (wait_pending and state.pending):
+        pending = len(state.pending) if wait_pending else 0
+        if target is None and is_drained(pending, flat, caught_up=True):
             # Fixed once settled: empty blocks keep the validator height moving.
             target = heights.top("validator")
         if target is not None and heights.top("query") >= target:
             return clock.time() - start
         await clock.asleep(0.1)
     return None
+
+
+def is_drained(pending: int, flat: bool, caught_up: bool) -> bool:
+    """True when no transaction is pending, decided bytes stopped growing and the query node
+    reached the validators' height."""
+    return pending == 0 and flat and caught_up
 
 
 def log_step(m: dict[str, Any], fails: list[str]) -> None:
