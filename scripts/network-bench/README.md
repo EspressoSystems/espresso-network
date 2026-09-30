@@ -78,6 +78,7 @@ laptop                       EC2, one AZ, private IPs
 | `node1..` | `--node-type`             | espresso-node `-- storage-journal -- http -- status -- submit -- catchup -- config`, `agent-host`        |
 
 - Stake: equal, orchestrator self-registration; 5 nodes → quorum 4, lagging `node0` never stalls consensus.
+- Peers: `node0` has state peers like every node and no API peers.
 - Keys: test mnemonic, index 20 + i. No `keygen`, no `stake-for-demo`.
 - Network: cliquenet over private IPs, libp2p over private DNS; SG allows ssh from `--operator-cidr` only.
 - Images: `ghcr.io/espressosystems/espresso-network/<component>:<--tag>` (CI, `release-*` branch) + foundry + postgres;

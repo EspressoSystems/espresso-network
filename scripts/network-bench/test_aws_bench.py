@@ -68,9 +68,13 @@ class FakeRunner:
     ):
         self.responses = responses or {}
         self.calls: list[list[str]] = []
+        self.envs: list[dict[str, str] | None] = []
 
-    def __call__(self, argv: list[str]) -> subprocess.CompletedProcess:
+    def __call__(
+        self, argv: list[str], env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess:
         self.calls.append(argv)
+        self.envs.append(env)
         if argv[0] == "ssh-keygen":
             return fake_ssh_keygen(argv)
         for prefix, result in self.responses.items():
@@ -217,12 +221,35 @@ class PlanHostsTest(unittest.TestCase):
             awsb.plan_hosts(cfg)
 
 
+class NodeRootGbTest(unittest.TestCase):
+    def test_default_ramp_hits_the_minimum(self):
+        cfg = awsb.RunConfig(tag="x")
+        self.assertEqual(awsb.node_root_gb(cfg, query=False), 100)
+        self.assertEqual(awsb.node_root_gb(cfg, query=True), 100)
+
+    def test_scales_with_offered_payload(self):
+        load = netbench.BenchConfig(steps=(100.0, 200.0), step_s=300)
+        cfg = awsb.RunConfig(tag="x", load=load)
+        self.assertEqual(awsb.node_root_gb(cfg, query=False), 20 + 2 * 90)
+        self.assertEqual(awsb.node_root_gb(cfg, query=True), 20 + 3 * 90)
+        load = netbench.BenchConfig(steps=(1000.0,), step_s=300)
+        cfg = awsb.RunConfig(tag="x", load=load)
+        self.assertEqual(awsb.node_root_gb(cfg, query=False), 620)
+        self.assertEqual(awsb.node_root_gb(cfg, query=True), 920)
+
+    def test_override(self):
+        cfg = awsb.RunConfig(tag="x", root_gb="250")
+        self.assertEqual(awsb.node_root_gb(cfg, query=True), 250)
+
+
 class PhaseSecondsTest(unittest.TestCase):
     def test_load_seconds(self):
         load = netbench.BenchConfig(
             steps=(4.0, 8.0), step_s=30, warmup_s=60, tx_timeout_s=30
         )
-        self.assertEqual(awsb.load_seconds(load), 60 + 3 * 30 + 30)
+        self.assertEqual(
+            awsb.load_seconds(load), 60 + 3 * 30 + 2 * 30 + netbench.DRAIN_SLACK_S
+        )
 
     def test_worst_uses_ready_timeout_and_collect_max(self):
         cfg = awsb.RunConfig(tag="x", ready_timeout_s=900.0)
@@ -251,10 +278,10 @@ class EstimateCostTest(unittest.TestCase):
         # Literal dollar values for this 2-node config, hand-computed independently of
         # estimate_cost's formula, so a formula regression trips this test.
         estimate = awsb.estimate_cost(self.hosts, self.cfg, self.prices, self.minor)
-        self.assertEqual(estimate["expected_s"], 1650.0)
-        self.assertEqual(estimate["ttl_s"], 3270.0)
-        self.assertAlmostEqual(estimate["expected_usd"], 0.8683328695776255, places=6)
-        self.assertAlmostEqual(estimate["bound_usd"], 1.7053451983447487, places=6)
+        self.assertEqual(estimate["expected_s"], 1690.0)
+        self.assertEqual(estimate["ttl_s"], 3310.0)
+        self.assertAlmostEqual(estimate["expected_usd"], 0.8889998406582952, places=6)
+        self.assertAlmostEqual(estimate["bound_usd"], 1.7260121694254185, places=6)
 
     def test_bound_is_cost_at_ttl(self):
         estimate = awsb.estimate_cost(self.hosts, self.cfg, self.prices, self.minor)
@@ -289,7 +316,7 @@ class FormatEstimateTest(unittest.TestCase):
         hosts = awsb.plan_hosts(cfg)
         minor = awsb.region_minor_prices(cfg.region)
         estimate = awsb.estimate_cost(hosts, cfg, two_node_prices(), minor)
-        text = awsb.format_estimate(estimate, cfg.max_usd)
+        text = awsb.format_estimate_summary(estimate, cfg.max_usd)
         self.assertIn(f"expected ${estimate['expected_usd']:.2f}", text)
         self.assertIn(f"hard bound ${estimate['bound_usd']:.2f}", text)
         self.assertIn("limit $10.00", text)
@@ -1114,18 +1141,22 @@ class TerraformClassTest(unittest.TestCase):
             tf.destroy()
         self.assertEqual(ctx.exception.stage, "destroy")
 
-    def test_env_is_exported(self):
-        # A key that never varies between tests: a per-run value like AWS_REGION would leak
-        # into every test that runs afterward, since os.environ is process-global.
+    def test_env_is_passed_to_the_runner_not_exported(self):
         tf_dir = Path("/tmp/aws-bench/run1/terraform")
-        with unittest.mock.patch.dict(os.environ, {}, clear=False):
-            awsb.Terraform(
-                FakeRunner({}),
-                "tofu",
-                tf_dir,
-                env={"TF_PLUGIN_CACHE_DIR": "/tmp/plugins"},
-            )
-            self.assertEqual(os.environ["TF_PLUGIN_CACHE_DIR"], "/tmp/plugins")
+        env = {"TF_PLUGIN_CACHE_DIR": "/tmp/plugins"}
+        runner = FakeRunner({("tofu",): completed()})
+        before = dict(os.environ)
+        awsb.Terraform(runner, "tofu", tf_dir, env=env).init()
+        self.assertEqual(dict(os.environ), before)
+        self.assertEqual(runner.envs, [env])
+
+    def test_terraform_env_creates_the_plugin_cache_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "a" / "plugins"
+            with unittest.mock.patch.object(awsb, "TF_PLUGIN_CACHE_DIR", cache):
+                env = awsb.terraform_env()
+            self.assertEqual(env, {"TF_PLUGIN_CACHE_DIR": str(cache)})
+            self.assertTrue(cache.is_dir())
 
 
 SINGLE_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
@@ -1621,7 +1652,7 @@ class RenderNodeEnvTest(unittest.TestCase):
     def test_journal_max_bytes_reserves_disk_and_halves_for_query(self):
         validator_gb = self.env("node1")["ESPRESSO_NODE_JOURNAL_MAX_BYTES"]
         query_gb = self.env("node0")["ESPRESSO_NODE_JOURNAL_MAX_BYTES"]
-        usable = (awsb.NODE_ROOT_GB_DEFAULT - awsb.RESERVED_GB) * 1_000_000_000
+        usable = (awsb.NODE_ROOT_GB_MIN - awsb.RESERVED_GB) * 1_000_000_000
         self.assertEqual(
             int(validator_gb), int(usable * awsb.JOURNAL_MAX_BYTES_FRACTION)
         )
@@ -2015,7 +2046,9 @@ class FleetRunner:
     def count(self, *needle: str) -> int:
         return sum(all(n in " ".join(c) for n in needle) for c in self.calls)
 
-    def __call__(self, argv: list[str]) -> subprocess.CompletedProcess:
+    def __call__(
+        self, argv: list[str], env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess:
         with self.lock:
             self.calls.append(argv)
         if argv[0] == "git":
@@ -2653,7 +2686,7 @@ class Scripted:
         self.calls: list[list[str]] = []
         self.lock = threading.Lock()
 
-    def __call__(self, argv):
+    def __call__(self, argv, env=None):
         with self.lock:
             self.calls.append(argv)
             if argv[0] == "rsync":
@@ -2930,6 +2963,9 @@ class PostgresStatsTest(unittest.TestCase):
             i for i, c in enumerate(commands) if "CREATE EXTENSION IF NOT EXISTS" in c
         )
         self.assertGreater(extension, ready)
+        self.assertIn(
+            "pg_isready -h 127.0.0.1 -p 5432 -U root -d espresso", commands[ready]
+        )
 
 
 class StartNodesSyncTest(unittest.TestCase):
@@ -3659,7 +3695,9 @@ class TagRunner(FakeRunner):
 
     mappings: list[dict]
 
-    def __call__(self, argv: list[str]) -> subprocess.CompletedProcess:
+    def __call__(
+        self, argv: list[str], env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess:
         if "resourcegroupstaggingapi" in argv:
             self.calls.append(argv)
             arns = "ResourceTagMappingList[].ResourceARN" in argv

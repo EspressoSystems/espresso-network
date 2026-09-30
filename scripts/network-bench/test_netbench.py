@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, TypeVar
@@ -1081,6 +1082,31 @@ class DriveLoadTest(unittest.TestCase):
             for thread in threads:
                 thread.join()
             node.server_close()
+
+    def submit_urls(self, submit_nodes):
+        topo: netbench.Topology = {
+            "nodes": {"node0": "q", "node1": "v1", "node2": "v2"},
+            "roles": {"node0": "", "node1": "", "node2": ""},
+            "query_node": "node0",
+        }
+        config = netbench.BenchConfig(submit_nodes=submit_nodes)
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            unittest.mock.patch.object(netbench, "wait_ready"),
+            unittest.mock.patch.object(netbench, "get_ok", return_value=b""),
+            unittest.mock.patch.object(
+                netbench, "generate_load", new=unittest.mock.Mock()
+            ) as generate,
+            unittest.mock.patch.object(
+                netbench.asyncio, "run", return_value=(0.0, 1.0)
+            ),
+        ):
+            netbench.drive_load(config, topo, Path(tmp), lambda: True)
+        return generate.call_args.args[1][: config.submit_nodes]
+
+    def test_query_node_is_last_submit_target(self):
+        self.assertEqual(self.submit_urls(2), ["v1", "v2"])
+        self.assertEqual(self.submit_urls(3), ["v1", "v2", "q"])
 
     def test_dead_network_raises_without_starting_load(self):
         with tempfile.TemporaryDirectory() as tmp:
