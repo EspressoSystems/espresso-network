@@ -494,29 +494,35 @@ class CmdPlanTest(unittest.TestCase):
             code = awsb.cmd_plan(args, run=runner, which=lambda name: None)
             self.assertEqual(code, awsb.EXIT_OK)
             self.assertEqual(runner.calls, [list(git)])
-            run_dir = Path(out_root) / "run1"
+            fleet_dir = Path(out_root) / "run1"
             for name in (
-                "genesis.toml",
-                "config.json",
+                "runs/01-run/genesis.toml",
+                "runs/01-run/config.json",
                 "hosts/ctl/user-data.sh",
                 "hosts/node0/user-data.sh",
                 "terraform/main.tf",
                 "terraform/terraform.tfvars.json",
             ):
-                self.assertTrue((run_dir / name).exists(), name)
-            manifest = json.loads(
-                (Path(out_root) / "run1" / "manifest.json").read_text()
-            )
+                self.assertTrue((fleet_dir / name).exists(), name)
+            manifest = json.loads((fleet_dir / "fleet.json").read_text())
             self.assertEqual(manifest["phase"], "planned")
             self.assertEqual(manifest["peers"], {"node0": ["node1"], "node1": []})
             self.assertEqual(len(manifest["hosts"]), 3)
             self.assertNotIn("expires_at", manifest)
+            self.assertFalse((fleet_dir / "manifest.json").exists())
+            run_manifest = json.loads(
+                (fleet_dir / "runs/01-run/manifest.json").read_text()
+            )
+            self.assertEqual(run_manifest["fleet"], "run1")
+            self.assertEqual(run_manifest["hosts"], manifest["hosts"])
+            self.assertIn("phase_seconds", run_manifest)
+            self.assertNotIn("phase_seconds", manifest)
             tfvars = json.loads(
-                (run_dir / "terraform" / "terraform.tfvars.json").read_text()
+                (fleet_dir / "terraform" / "terraform.tfvars.json").read_text()
             )
             self.assertEqual(tfvars["expires_at"], "")
-            self.assertTrue((Path(out_root) / "run1" / "driver.log").exists())
-            self.assertTrue((Path(out_root) / "run1" / "events.jsonl").exists())
+            self.assertTrue((fleet_dir / "driver.log").exists())
+            self.assertTrue((fleet_dir / "events.jsonl").exists())
 
     def test_auto_key_is_generated_into_the_run_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -549,7 +555,7 @@ class CmdPlanTest(unittest.TestCase):
                 (run_dir / "terraform" / "terraform.tfvars.json").read_text()
             )
             self.assertEqual(tfvars["ssh_public_key"], "ssh-ed25519 GENERATED run")
-            manifest = json.loads((run_dir / "manifest.json").read_text())
+            manifest = json.loads((run_dir / "fleet.json").read_text())
             self.assertEqual(manifest["config"]["ssh_key"], "auto")
             self.assertEqual(manifest["ssh_public_key"], "ssh-ed25519 GENERATED run")
 
@@ -666,7 +672,7 @@ class CmdPlanTest(unittest.TestCase):
                 code = awsb.cmd_plan(args, run=runner)
             self.assertEqual(code, awsb.EXIT_OK)
             preflight.assert_called_once()
-            manifest = json.loads((out / "run1" / "manifest.json").read_text())
+            manifest = json.loads((out / "run1" / "fleet.json").read_text())
             self.assertEqual(manifest["phase"], "planned")
             self.assertEqual(manifest["az"], "eu-west-1b")
             self.assertEqual(manifest["ami_id"], "ami-0abc")
@@ -2199,7 +2205,8 @@ class RunHarness:
         (self.tmp / "key").write_text("private")
         (self.tmp / "key.pub").write_text("ssh-ed25519 AAAA test")
         self.name = name
-        self.run_dir = self.tmp / "out" / name
+        self.fleet_dir = self.tmp / "out" / name
+        self.run_dir = self.fleet_dir / "runs" / "01-run"
         patches = [
             unittest.mock.patch.multiple(
                 awsb,
@@ -2259,10 +2266,10 @@ class RunHarness:
         )
 
     def index_log(self) -> str:
-        return (self.run_dir / "driver.log").read_text()
+        return (self.fleet_dir / "driver.log").read_text()
 
     def last_log_line(self) -> str:
-        return (self.run_dir / "driver.log").read_text().splitlines()[-1]
+        return (self.fleet_dir / "driver.log").read_text().splitlines()[-1]
 
     def index(self) -> str:
         return (self.tmp / "out" / "INDEX.md").read_text()
@@ -2281,7 +2288,7 @@ class RunApplyFailureTest(unittest.TestCase):
         self.assertTrue(runner.ran("tofu", "apply"))
         self.assertTrue(runner.ran("tofu", "destroy"))
         self.assertFalse(runner.ran("ssh"))
-        log = (harness.run_dir / "driver.log").read_text()
+        log = (harness.fleet_dir / "driver.log").read_text()
         self.assertIn("InsufficientInstanceCapacity", log)
         self.assertIn("| 3 |", harness.index())
 
@@ -2320,18 +2327,50 @@ class RunFlowTest(unittest.TestCase):
             for needle in order
         ]
         self.assertEqual(positions, sorted(positions))
-        cost = json.loads((harness.run_dir / "cost.json").read_text())
+        cost = json.loads((harness.fleet_dir / "cost.json").read_text())
         self.assertAlmostEqual(cost["duration_s"], 1800.0)
         self.assertGreater(cost["actual"], 0)
         self.assertLess(cost["actual"], cost["bound"])
+        fleet = json.loads((harness.fleet_dir / "fleet.json").read_text())
+        self.assertEqual(fleet["phase"], "done")
         manifest = json.loads((harness.run_dir / "manifest.json").read_text())
         self.assertEqual(manifest["phase"], "done")
+        self.assertEqual(manifest["fleet"], "run1")
         self.assertEqual(manifest["cost_usd"]["actual"], cost["actual"])
         self.assertEqual(manifest["start_spread_s"], 0.0)
         row = harness.index().splitlines()[-1]
         self.assertIn("| run1 |", row)
         self.assertIn("| valid | 0 |", row)
         self.assertTrue(row.endswith("| yes |"))
+
+    def test_fleet_files_and_run_files_live_in_their_own_dirs(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        with unittest.mock.patch.object(
+            awsb, "write_report", return_value=valid_result()
+        ):
+            harness.run(runner)
+        for name in (
+            "fleet.json",
+            "hosts.json",
+            "cost.json",
+            "terraform/plan.txt",
+            "hosts/ctl/user-data.sh",
+            "hosts/ctl/ready.json",
+        ):
+            self.assertTrue((harness.fleet_dir / name).exists(), name)
+        for name in (
+            "manifest.json",
+            "genesis.toml",
+            "topology.json",
+            "hosts/ctl/agent.json",
+            "hosts/node0/start.sh",
+            "hosts/node0/node.env",
+        ):
+            self.assertTrue((harness.run_dir / name).exists(), name)
+        for name in ("manifest.json", "topology.json", "genesis.toml"):
+            self.assertFalse((harness.fleet_dir / name).exists(), name)
+        self.assertEqual([p.name for p in harness.fleet_dir.glob("runs/*")], ["01-run"])
 
     def test_expiry_is_stamped_after_confirm_and_matches_the_manifest(self):
         harness = RunHarness(self, confirmed=True)
@@ -2341,9 +2380,9 @@ class RunFlowTest(unittest.TestCase):
             awsb, "write_report", return_value=valid_result()
         ):
             harness.run(runner, extra=("--yes",))
-        manifest = json.loads((harness.run_dir / "manifest.json").read_text())
+        manifest = json.loads((harness.fleet_dir / "fleet.json").read_text())
         tfvars = json.loads(
-            (harness.run_dir / "terraform" / "terraform.tfvars.json").read_text()
+            (harness.fleet_dir / "terraform" / "terraform.tfvars.json").read_text()
         )
         self.assertEqual(tfvars["expires_at"], manifest["expires_at"])
         expires = datetime.fromisoformat(tfvars["expires_at"])
@@ -2373,7 +2412,7 @@ class RunFlowTest(unittest.TestCase):
         self.assertFalse(runner.ran("tofu", "destroy"))
         self.assertIn("| no |", harness.index())
         self.assertTrue(
-            harness.last_log_line().endswith(f"aws-bench destroy {harness.run_dir}")
+            harness.last_log_line().endswith(f"aws-bench destroy {harness.fleet_dir}")
         )
 
     def test_auto_key_is_removed_after_destroy(self):
@@ -2384,7 +2423,7 @@ class RunFlowTest(unittest.TestCase):
         ):
             code = harness.run(runner, extra=("--ssh-key", "auto"))
         self.assertEqual(code, awsb.EXIT_OK)
-        ssh_dir = harness.run_dir / "ssh"
+        ssh_dir = harness.fleet_dir / "ssh"
         self.assertFalse((ssh_dir / "id_ed25519").exists())
         self.assertTrue((ssh_dir / "id_ed25519.pub").exists())
         self.assertIn("ssh key removed", harness.index_log())
@@ -2397,7 +2436,7 @@ class RunFlowTest(unittest.TestCase):
             awsb, "write_report", return_value=valid_result()
         ):
             harness.run(runner, extra=("--ssh-key", "auto", "--keep"))
-        self.assertTrue((harness.run_dir / "ssh" / "id_ed25519").exists())
+        self.assertTrue((harness.fleet_dir / "ssh" / "id_ed25519").exists())
         self.assertIn("ssh key kept", harness.index_log())
 
     def test_auto_key_stays_after_failed_destroy(self):
@@ -2410,7 +2449,7 @@ class RunFlowTest(unittest.TestCase):
         ):
             code = harness.run(runner, extra=("--ssh-key", "auto"))
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
-        self.assertTrue((harness.run_dir / "ssh" / "id_ed25519").exists())
+        self.assertTrue((harness.fleet_dir / "ssh" / "id_ed25519").exists())
 
     def test_explicit_key_is_never_removed(self):
         harness = RunHarness(self)
@@ -2465,7 +2504,7 @@ class RunInterruptTest(unittest.TestCase):
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertFalse(runner.ran("tofu", "destroy"))
         self.assertTrue(
-            harness.last_log_line().endswith(f"aws-bench destroy {harness.run_dir}")
+            harness.last_log_line().endswith(f"aws-bench destroy {harness.fleet_dir}")
         )
 
     def test_first_signal_logs_the_phase_and_later_ones_remind(self):
@@ -2537,7 +2576,7 @@ class RunDestroyFallbackTest(unittest.TestCase):
         self.assertTrue(runner.ran("delete-security-group", "sg-1"))
         self.assertTrue(runner.ran("delete-key-pair", "key-1"))
         self.assertTrue(
-            harness.last_log_line().endswith(f"aws-bench destroy {harness.run_dir}")
+            harness.last_log_line().endswith(f"aws-bench destroy {harness.fleet_dir}")
         )
         self.assertIn("| 4 |", harness.index())
 
@@ -2612,7 +2651,7 @@ class RunTeardownGuaranteedTest(unittest.TestCase):
             code = harness.run(runner)
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertTrue(
-            harness.last_log_line().endswith(f"aws-bench destroy {harness.run_dir}")
+            harness.last_log_line().endswith(f"aws-bench destroy {harness.fleet_dir}")
         )
 
     def test_exception_in_destroy_exits_4_with_command_last(self):
@@ -2629,7 +2668,7 @@ class RunTeardownGuaranteedTest(unittest.TestCase):
             code = harness.run(runner)
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertTrue(
-            harness.last_log_line().endswith(f"aws-bench destroy {harness.run_dir}")
+            harness.last_log_line().endswith(f"aws-bench destroy {harness.fleet_dir}")
         )
 
     def test_truncated_node_log_does_not_break_the_failure_summary(self):
@@ -2656,6 +2695,24 @@ class RunTeardownGuaranteedTest(unittest.TestCase):
 
 
 # REQ:awsbench-manifest-repro
+class RunDirsTest(unittest.TestCase):
+    def test_run_dirs_are_numbered_in_the_fleet_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fleet_dir = awsb.new_fleet_dir(Path(tmp), "fleet-a")
+            first = awsb.new_run_dir(fleet_dir, "run")
+            second = awsb.new_run_dir(fleet_dir, "other")
+            self.assertEqual(first, fleet_dir / "runs" / "01-run")
+            self.assertEqual(second, fleet_dir / "runs" / "02-other")
+            self.assertEqual(awsb.last_run_dir(fleet_dir), second)
+            self.assertEqual(awsb.fleet_of(second), fleet_dir)
+
+    def test_fleet_name_collision_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            awsb.new_fleet_dir(Path(tmp), "fleet-a")
+            with self.assertRaisesRegex(awsb.Refused, "already exists"):
+                awsb.new_fleet_dir(Path(tmp), "fleet-a")
+
+
 class ManifestReproTest(unittest.TestCase):
     def render(self) -> tuple[Path, "awsb.RunConfig"]:
         tmp = Path(tempfile.mkdtemp())
@@ -2667,22 +2724,30 @@ class ManifestReproTest(unittest.TestCase):
             out_root=tmp,
         )
         hosts = awsb.plan_hosts(cfg)
-        run_dir = tmp / "run1"
-        run_dir.mkdir()
+        fleet_dir = tmp / "run1"
+        run_dir = awsb.new_run_dir(fleet_dir, "run")
         prices = two_node_prices()
         estimate = awsb.estimate_cost(
             hosts, cfg, prices, awsb.region_minor_prices("eu-west-1")
         )
         awsb.write_manifest(
-            run_dir, cfg, hosts, awsb.plan_peers(hosts), estimate, "planned", ["run"]
+            fleet_dir,
+            run_dir,
+            cfg,
+            hosts,
+            awsb.plan_peers(hosts),
+            estimate,
+            "planned",
+            ["run"],
         )
         return run_dir, cfg
 
     def test_manifest_round_trips_and_update_keeps_keys(self):
         run_dir, _ = self.render()
-        before = json.loads((run_dir / "manifest.json").read_text())
-        updated = awsb.update_manifest(run_dir, "measuring", start_spread_s=0.4)
-        after = json.loads((run_dir / "manifest.json").read_text())
+        path = run_dir / "manifest.json"
+        before = json.loads(path.read_text())
+        updated = awsb.update_manifest(path, "measuring", start_spread_s=0.4)
+        after = json.loads(path.read_text())
         self.assertEqual(updated, after)
         self.assertEqual(after["phase"], "measuring")
         self.assertEqual(after["start_spread_s"], 0.4)
@@ -3829,14 +3894,14 @@ class LocalPhaseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             (out / "r").mkdir()
-            netbench.write_json(out / "r" / "manifest.json", {"phase": "applying"})
+            netbench.write_json(out / "r" / "fleet.json", {"phase": "applying"})
             self.assertEqual(awsb.local_phase(out, "r"), "applying")
 
     def test_terminal_phase_needs_terraform_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
             (out / "r" / "terraform").mkdir(parents=True)
-            netbench.write_json(out / "r" / "manifest.json", {"phase": "done"})
+            netbench.write_json(out / "r" / "fleet.json", {"phase": "done"})
             self.assertIsNone(awsb.local_phase(out, "r"))
             (out / "r" / "terraform" / "terraform.tfstate").write_text("{}")
             self.assertEqual(awsb.local_phase(out, "r"), "done")
@@ -4053,7 +4118,7 @@ class DestroyOrphansTest(unittest.TestCase):
             out = Path(tmp)
             (out / "amy").mkdir()
             netbench.write_json(
-                out / "amy" / "manifest.json",
+                out / "amy" / "fleet.json",
                 {"phase": "left-running", "config": {"ssh_key": "auto"}},
             )
             key = out / "amy" / "ssh" / "id_ed25519"
@@ -4064,7 +4129,7 @@ class DestroyOrphansTest(unittest.TestCase):
             )
             with contextlib.redirect_stdout(io.StringIO()):
                 awsb.cmd_destroy(parsed, self.runner(), NOW)
-            manifest = json.loads((out / "amy" / "manifest.json").read_text())
+            manifest = json.loads((out / "amy" / "fleet.json").read_text())
             self.assertFalse(key.exists())
         self.assertEqual(manifest["phase"], "swept")
 
@@ -4175,7 +4240,7 @@ STATUS_DESCRIBE = json.dumps(
 
 
 class KeptRunTest(unittest.TestCase):
-    """`status`, `collect` and `destroy DIR` on the run dir of a `run --keep`."""
+    """`status`, `collect` and `destroy DIR` on the dirs of a `run --keep`."""
 
     def kept(self, describe: str = STATUS_DESCRIBE, states=None):
         harness = RunHarness(self)
@@ -4184,11 +4249,12 @@ class KeptRunTest(unittest.TestCase):
             awsb, "write_report", return_value=valid_result()
         ):
             self.assertEqual(harness.run(runner, extra=("--keep",)), awsb.EXIT_LEFTOVER)
-        (harness.run_dir / "terraform").mkdir(exist_ok=True)
+        (harness.fleet_dir / "terraform").mkdir(exist_ok=True)
         return harness, runner
 
     def args(self, harness, verb: str, *extra: str):
-        return awsb.parse_args([verb, str(harness.run_dir), *extra])
+        target = harness.run_dir if verb == "collect" else harness.fleet_dir
+        return awsb.parse_args([verb, str(target), *extra])
 
     def test_status_shows_phase_instances_agent_and_cost(self):
         harness, runner = self.kept()
@@ -4198,6 +4264,7 @@ class KeptRunTest(unittest.TestCase):
         self.assertEqual(code, awsb.EXIT_OK)
         text = out.getvalue()
         self.assertIn("- run run1: phase left-running", text)
+        self.assertIn("- 01-run: phase left-running", text)
         self.assertIn("- ctl: running, c8g.4xlarge, launched 2026-09-29T15:00", text)
         self.assertIn("- agent: done, load finished", text)
         self.assertRegex(text, r"- cost: \$\d+\.\d\d so far, bound \$\d+\.\d\d")
@@ -4239,7 +4306,7 @@ class KeptRunTest(unittest.TestCase):
             run_dir = Path(tmp) / "p"
             run_dir.mkdir()
             netbench.write_json(
-                run_dir / "manifest.json",
+                run_dir / "fleet.json",
                 {
                     "name": "p",
                     "phase": "planned",
@@ -4258,9 +4325,11 @@ class KeptRunTest(unittest.TestCase):
         code = awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertTrue(runner.ran("tofu", "destroy"))
-        manifest = json.loads((harness.run_dir / "manifest.json").read_text())
+        manifest = json.loads((harness.fleet_dir / "fleet.json").read_text())
         self.assertEqual(manifest["phase"], "done")
         self.assertGreater(manifest["cost_usd"]["actual"], 0)
+        run_manifest = json.loads((harness.run_dir / "manifest.json").read_text())
+        self.assertEqual(run_manifest["cost_usd"], manifest["cost_usd"])
         rows = harness.index().splitlines()
         self.assertEqual(len(rows), 4)
         self.assertTrue(rows[2].endswith("| no |"))
@@ -4273,8 +4342,8 @@ class KeptRunTest(unittest.TestCase):
             awsb, "write_report", return_value=valid_result()
         ):
             harness.run(runner, extra=("--ssh-key", "auto", "--keep"))
-        (harness.run_dir / "terraform").mkdir(exist_ok=True)
-        key = harness.run_dir / "ssh" / "id_ed25519"
+        (harness.fleet_dir / "terraform").mkdir(exist_ok=True)
+        key = harness.fleet_dir / "ssh" / "id_ed25519"
         self.assertTrue(key.exists())
         runner.describe = STATUS_DESCRIBE
         with contextlib.redirect_stdout(io.StringIO()):
@@ -4303,7 +4372,7 @@ class KeptRunTest(unittest.TestCase):
         code = awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertTrue(runner.ran("terminate-instances", "i-1"))
-        manifest = json.loads((harness.run_dir / "manifest.json").read_text())
+        manifest = json.loads((harness.fleet_dir / "fleet.json").read_text())
         self.assertEqual(manifest["phase"], "left-running")
 
     def test_collect_writes_numbered_subdirs(self):
@@ -4332,11 +4401,22 @@ class KeptRunTest(unittest.TestCase):
 
     def test_collect_of_an_unprovisioned_run_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "runs" / "01-run"
+            run_dir.mkdir(parents=True)
             netbench.write_json(
-                Path(tmp) / "manifest.json", {"name": "p", "phase": "planned"}
+                Path(tmp) / "fleet.json", {"name": "p", "phase": "planned"}
             )
             with self.assertRaisesRegex(awsb.Refused, "never provisioned"):
-                awsb.cmd_collect(awsb.parse_args(["collect", tmp]), FakeRunner())
+                awsb.cmd_collect(
+                    awsb.parse_args(["collect", str(run_dir)]), FakeRunner()
+                )
+
+    def test_collect_of_a_fleet_dir_is_refused(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            self.assertRaisesRegex(awsb.Refused, "not a run dir"),
+        ):
+            awsb.cmd_collect(awsb.parse_args(["collect", tmp]), FakeRunner())
 
 
 class NextCollectIndexTest(unittest.TestCase):

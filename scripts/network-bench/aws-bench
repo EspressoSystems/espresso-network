@@ -290,6 +290,10 @@ TAG_OWNER = "espresso-bench-owner"
 TAG_EXPIRES = "espresso-bench-expires"
 # Manifest phases after which no resources of the run remain.
 TERMINAL_PHASES = ("done", "swept")
+# A fleet dir holds `fleet.json` and `runs/<nn>-<name>/`, one dir per measurement.
+FLEET_JSON = "fleet.json"
+RUNS_DIR = "runs"
+SINGLE_RUN = "run"
 # Thread pool size for parallel ssh/rsync calls; also the espresso-deploy fan-out limit.
 REMOTE_POOL_SIZE = 16
 # Chrony-synced clocks give a wall-clock start command room to land within this spread; a start
@@ -439,14 +443,16 @@ class FleetManifest(TypedDict):
     cost_usd: NotRequired[dict[str, float]]
     expires_at: NotRequired[str]
     ssh_public_key: NotRequired[str]
+    git_rev: NotRequired[str]
 
 
 class Manifest(FleetManifest):
-    """`manifest.json`: the fleet plus what is specific to one measurement."""
+    """`manifest.json` of a run dir: a copy of the fleet plus what is specific to one
+    measurement. `fleet` is the name of the fleet dir."""
 
+    fleet: str
     phase_seconds: dict[str, list[float]]
     start_spread_s: NotRequired[float]
-    git_rev: NotRequired[str]
     config_hash: NotRequired[str]
 
 
@@ -889,24 +895,44 @@ def default_run_name(now: datetime | None = None) -> str:
     return f"{getpass.getuser()}-{now.strftime('%Y%m%d-%H%M')}"
 
 
-def new_run_dir(out_root: Path, name: str | None) -> Path:
-    run_name = name if name is not None else default_run_name()
-    if not NAME_RE.match(run_name):
-        raise Refused(f"--name must match {NAME_RE.pattern}: {run_name!r}")
-    run_dir = out_root / run_name
-    if run_dir.exists():
-        raise Refused(f"run {run_name} already exists at {run_dir}")
+def new_fleet_dir(out_root: Path, name: str | None) -> Path:
+    fleet_name = name if name is not None else default_run_name()
+    if not NAME_RE.match(fleet_name):
+        raise Refused(f"--name must match {NAME_RE.pattern}: {fleet_name!r}")
+    fleet_dir = out_root / fleet_name
+    if fleet_dir.exists():
+        raise Refused(f"fleet {fleet_name} already exists at {fleet_dir}")
+    fleet_dir.mkdir(parents=True)
+    return fleet_dir
+
+
+def new_run_dir(fleet_dir: Path, name: str) -> Path:
+    runs = fleet_dir / RUNS_DIR
+    index = len(list(runs.glob("*"))) + 1 if runs.exists() else 1
+    run_dir = runs / f"{index:02d}-{name}"
     run_dir.mkdir(parents=True)
     return run_dir
 
 
-def setup_logging(run_dir: Path) -> None:
+def fleet_of(run_dir: Path) -> Path:
+    if run_dir.parent.name != RUNS_DIR:
+        raise Refused(
+            f"{run_dir} is not a run dir: expected <fleet>/{RUNS_DIR}/<nn>-<name>"
+        )
+    return run_dir.parent.parent
+
+
+def last_run_dir(fleet_dir: Path) -> Path:
+    return max((fleet_dir / RUNS_DIR).glob("*"))
+
+
+def setup_logging(directory: Path) -> None:
     for handler in list(log.handlers):
         log.removeHandler(handler)
         handler.close()
     log.setLevel(logging.DEBUG)
     log.propagate = False
-    file_handler = logging.FileHandler(run_dir / "driver.log")
+    file_handler = logging.FileHandler(directory / "driver.log")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)s %(message)s")
@@ -918,14 +944,14 @@ def setup_logging(run_dir: Path) -> None:
     log.addHandler(stream_handler)
 
 
-def append_event(run_dir: Path, phase: str, event: str, detail: str | None) -> None:
+def append_event(directory: Path, phase: str, event: str, detail: str | None) -> None:
     record = {
         "ts": datetime.now(UTC).isoformat(),
         "phase": phase,
         "event": event,
         "detail": detail,
     }
-    with (run_dir / "events.jsonl").open("a") as f:
+    with (directory / "events.jsonl").open("a") as f:
         f.write(json.dumps(record) + "\n")
 
 
@@ -936,6 +962,7 @@ def config_to_json(cfg: RunConfig) -> dict[str, Any]:
 
 
 def write_manifest(
+    fleet_dir: Path,
     run_dir: Path,
     cfg: RunConfig,
     hosts: list[HostSpec],
@@ -944,30 +971,36 @@ def write_manifest(
     phase: str,
     argv: list[str],
 ) -> None:
-    manifest: Manifest = {
-        "name": run_dir.name,
+    fleet: FleetManifest = {
+        "name": fleet_dir.name,
         "created_at": datetime.now(UTC).isoformat(),
         "argv": argv,
         "config": config_to_json(cfg),
         "hosts": hosts,
         "peers": peers_by_node,
         "phase": phase,
+        "estimate": estimate,
+    }
+    manifest: Manifest = {
+        **fleet,
+        "fleet": fleet_dir.name,
         "phase_seconds": {
             name: list(bounds) for name, bounds in phase_seconds(cfg).items()
         },
-        "estimate": estimate,
     }
+    nb.write_json(fleet_dir / FLEET_JSON, fleet)
     nb.write_json(run_dir / "manifest.json", manifest)
-    append_event(run_dir, phase, "manifest-written", None)
+    append_event(fleet_dir, phase, "manifest-written", None)
 
 
-def update_manifest(run_dir: Path, phase: str, **extra: Any) -> Manifest:
-    """Advances `manifest.json.phase` and merges in whatever the caller now knows (`az`,
-    `hosts_info`, `start_spread_s`, ...); every previous key is kept."""
-    merged: dict[str, Any] = {**nb.read_json(run_dir / "manifest.json"), "phase": phase}
+def update_manifest(path: Path, phase: str, **extra: Any) -> Manifest:
+    """Advances the `phase` of a `fleet.json` or run `manifest.json` and merges in whatever
+    the caller now knows (`az`, `hosts_info`, `start_spread_s`, ...); every previous key is
+    kept. The event lands in the `events.jsonl` next to the file."""
+    merged: dict[str, Any] = {**nb.read_json(path), "phase": phase}
     merged.update(extra)
-    nb.write_json(run_dir / "manifest.json", merged)
-    append_event(run_dir, phase, "manifest-written", None)
+    nb.write_json(path, merged)
+    append_event(path.parent, phase, "manifest-written", None)
     return cast(Manifest, merged)
 
 
@@ -1463,7 +1496,7 @@ class Terraform:
 
 def render_tfvars(
     cfg: RunConfig,
-    run_dir: Path,
+    fleet_dir: Path,
     name: str,
     owner: str,
     hosts: list[HostSpec],
@@ -1497,7 +1530,7 @@ def render_tfvars(
                 "root_gb": h["root_gb"],
                 "root_iops": h["root_iops"],
                 "root_mbps": h["root_mbps"],
-                "user_data_path": str(run_dir / "hosts" / h["name"] / "user-data.sh"),
+                "user_data_path": str(fleet_dir / "hosts" / h["name"] / "user-data.sh"),
             }
             for h in hosts
         },
@@ -1976,19 +2009,26 @@ def cmd_plan(
     cfg = config_from_args(args)
     now = time.time()
     if cfg.offline:
-        run_dir = new_run_dir(cfg.out_root, cfg.name)
-        setup_logging(run_dir)
+        fleet_dir = new_fleet_dir(cfg.out_root, cfg.name)
+        setup_logging(fleet_dir)
         log.debug("argv %s", args.argv)
         hosts = plan_hosts(cfg)
         estimate = estimate_or_refuse(
-            run, cfg, hosts, region_minor_prices(cfg.region), run_dir, now
+            run, cfg, hosts, region_minor_prices(cfg.region), fleet_dir, now
         )
         render_run_dir(
-            run, cfg, run_dir, hosts, offline_preflight(cfg), estimate, args.argv, which
+            run,
+            cfg,
+            fleet_dir,
+            hosts,
+            offline_preflight(cfg),
+            estimate,
+            args.argv,
+            which,
         )
     else:
-        run_dir, _, _, _ = plan_fleet(args, cfg, run, now)
-    log.info("rendered %s (phase=planned)", run_dir)
+        fleet_dir, *_ = plan_fleet(args, cfg, run, now)
+    log.info("rendered %s (phase=planned)", fleet_dir)
     return EXIT_OK
 
 
@@ -2023,7 +2063,7 @@ def estimate_or_refuse(
     cfg: RunConfig,
     hosts: list[HostSpec],
     minor: dict[str, float],
-    run_dir: Path,
+    fleet_dir: Path,
     now: float,
 ) -> Estimate:
     prices = resolve_prices(run, cfg, cfg.out_root / "prices.json", now)
@@ -2033,7 +2073,7 @@ def estimate_or_refuse(
         log.debug(line)
     if estimate["bound_usd"] > cfg.max_usd:
         append_event(
-            run_dir,
+            fleet_dir,
             "planned",
             "refused",
             f"bound ${estimate['bound_usd']:.2f} exceeds --max-usd ${cfg.max_usd:.2f}",
@@ -2093,15 +2133,15 @@ class Interrupts:
 
 class Remote:
     """ssh and rsync to the fleet through the injectable Runner. ControlMaster sockets live in
-    `<run>/ssh/` and host keys in `<run>/known_hosts`. Pass `run_dir` relative (as `out_root`
-    is by default): an absolute path can exceed the 104 byte unix socket limit."""
+    `<fleet>/ssh/` and host keys in `<fleet>/known_hosts`. Pass `fleet_dir` relative (as
+    `out_root` is by default): an absolute path can exceed the 104 byte unix socket limit."""
 
     def __init__(
-        self, run: Runner, run_dir: Path, ssh_key: Path, hosts: dict[str, HostInfo]
+        self, run: Runner, fleet_dir: Path, ssh_key: Path, hosts: dict[str, HostInfo]
     ):
         self.run = run
         self.hosts = hosts
-        (run_dir / "ssh").mkdir(exist_ok=True)
+        (fleet_dir / "ssh").mkdir(exist_ok=True)
         self.ssh_opts = [
             "-i",
             str(ssh_key.expanduser()),
@@ -2110,9 +2150,9 @@ class Remote:
             "-o",
             "ControlPersist=10m",
             "-o",
-            f"ControlPath={run_dir / 'ssh' / '%C'}",
+            f"ControlPath={fleet_dir / 'ssh' / '%C'}",
             "-o",
-            f"UserKnownHostsFile={run_dir / 'known_hosts'}",
+            f"UserKnownHostsFile={fleet_dir / 'known_hosts'}",
             "-o",
             "StrictHostKeyChecking=accept-new",
             "-o",
@@ -2186,8 +2226,12 @@ class FleetState:
     remote: Remote | None = None
 
     @property
+    def manifest_path(self) -> Path:
+        return self.fleet_dir / FLEET_JSON
+
+    @property
     def manifest(self) -> FleetManifest:
-        return nb.read_json(self.fleet_dir / "manifest.json")
+        return nb.read_json(self.manifest_path)
 
 
 @dataclass
@@ -2205,8 +2249,12 @@ class Run:
     interrupted: bool = False
 
     @property
+    def manifest_path(self) -> Path:
+        return self.run_dir / "manifest.json"
+
+    @property
     def manifest(self) -> Manifest:
-        return nb.read_json(self.run_dir / "manifest.json")
+        return nb.read_json(self.manifest_path)
 
 
 def prompt_destroy(timeout_s: float) -> bool:
@@ -2229,14 +2277,14 @@ def cmd_run(
     cfg = config_from_args(args)
     started = time.time()
     try:
-        run_dir, tf = prepare_run(args, cfg, run, started)
+        fleet_dir, run_dir, tf = prepare_run(args, cfg, run, started)
     except KeyboardInterrupt:
         raise Refused("interrupted; nothing was created") from None
     if interrupts is None:
         interrupts = Interrupts()
         interrupts.install()
     try:
-        fleet = FleetState(run, cfg, run_dir, tf, interrupts)
+        fleet = FleetState(run, cfg, fleet_dir, tf, interrupts)
         bench_run = Run(fleet, run_dir, cfg, started)
         with recording(bench_run):
             up_fleet(fleet)
@@ -2244,65 +2292,65 @@ def cmd_run(
         return teardown(bench_run, result, ask_destroy)
     except Exception:
         log.exception("unexpected error")
-        log.error(LEFTOVER_MESSAGE, run_dir)
+        log.error(LEFTOVER_MESSAGE, fleet_dir)
         return EXIT_LEFTOVER
 
 
 def prepare_run(
     args: argparse.Namespace, cfg: RunConfig, run: Runner, started: float
-) -> tuple[Path, Terraform]:
+) -> tuple[Path, Path, Terraform]:
     """Everything before the first AWS write: `plan_fleet` and the prompt. Any failure or
     Ctrl-C leaves nothing to destroy."""
-    run_dir, tf, hosts, _ = plan_fleet(args, cfg, run, started)
+    fleet_dir, run_dir, tf, hosts, _ = plan_fleet(args, cfg, run, started)
     prompt = (
         f"Create {len(hosts)} instances, 1 security group, 1 key pair in {cfg.account}?"
     )
     if not confirm(prompt, cfg.yes, sys.stdin.isatty()):
-        append_event(run_dir, "planned", "refused", "not confirmed")
+        append_event(fleet_dir, "planned", "refused", "not confirmed")
         raise Refused("not confirmed; nothing was created")
-    stamp_expiry(run_dir, tf, datetime.now(UTC))
-    return run_dir, tf
+    stamp_expiry(fleet_dir, tf, datetime.now(UTC))
+    return fleet_dir, run_dir, tf
 
 
-def stamp_expiry(run_dir: Path, tf: Terraform, confirmed_at: datetime) -> None:
+def stamp_expiry(fleet_dir: Path, tf: Terraform, confirmed_at: datetime) -> None:
     """The `espresso-bench-expires` tag counts from the apply, not from the render: a run that
     waited at the prompt must not look expired. Re-plans because a plan file fixes variables."""
-    manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+    manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
     expires = confirmed_at + timedelta(
         seconds=manifest["estimate"]["ttl_s"] + PROVISION_S
     )
     stamp = expires.strftime("%Y-%m-%dT%H:%M:%SZ")
-    tfvars_path = run_dir / "terraform" / "terraform.tfvars.json"
+    tfvars_path = fleet_dir / "terraform" / "terraform.tfvars.json"
     tfvars = nb.read_json(tfvars_path)
     nb.write_json(tfvars_path, {**tfvars, "expires_at": stamp})
-    update_manifest(run_dir, manifest["phase"], expires_at=stamp)
+    update_manifest(fleet_dir / FLEET_JSON, manifest["phase"], expires_at=stamp)
     tf.plan()
 
 
 def plan_fleet(
     args: argparse.Namespace, cfg: RunConfig, run: Runner, now: float
-) -> tuple[Path, Terraform, list[HostSpec], Preflight]:
+) -> tuple[Path, Path, Terraform, list[HostSpec], Preflight]:
     """Preflight, cost check, render, `tofu init` and `plan`. Shared by `plan` and `run`; makes
     no AWS write. The preflight summary is logged before the cost line."""
     minor = region_minor_prices(cfg.region)
     hosts = plan_hosts(cfg)
-    run_dir = new_run_dir(cfg.out_root, cfg.name)
-    setup_logging(run_dir)
+    fleet_dir = new_fleet_dir(cfg.out_root, cfg.name)
+    setup_logging(fleet_dir)
     log.debug("argv %s", args.argv)
     pre = preflight(run, cfg, hosts)
     log_preflight(cfg, pre, hosts)
-    estimate = estimate_or_refuse(run, cfg, hosts, minor, run_dir, now)
-    render_run_dir(run, cfg, run_dir, hosts, pre, estimate, args.argv)
-    tf = Terraform(run, cfg.tf, run_dir / "terraform", terraform_env())
+    estimate = estimate_or_refuse(run, cfg, hosts, minor, fleet_dir, now)
+    run_dir = render_run_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
+    tf = Terraform(run, cfg.tf, fleet_dir / "terraform", terraform_env())
     tf.init()
-    (run_dir / "terraform" / "plan.txt").write_text(tf.plan())
-    return run_dir, tf, hosts, pre
+    (fleet_dir / "terraform" / "plan.txt").write_text(tf.plan())
+    return fleet_dir, run_dir, tf, hosts, pre
 
 
-def enter_phase(fleet: FleetState, name: str, message: str) -> None:
+def enter_phase(fleet: FleetState, manifest: Path, name: str, message: str) -> None:
     fleet.interrupts.check()
     fleet.interrupts.phase = name
-    update_manifest(fleet.fleet_dir, name)
+    update_manifest(manifest, name)
     log.info("%s: %s", name, message)
 
 
@@ -2327,11 +2375,14 @@ def recording(run: Run) -> Iterator[None]:
 def up_fleet(fleet: FleetState) -> None:
     """`tofu apply` until every host is reachable and cloud-init is done. Raises; `remote` is
     set as soon as the hosts are known, so a failed wait can still be collected."""
-    enter_phase(fleet, "applying", "tofu apply")
+    enter_phase(fleet, fleet.manifest_path, "applying", "tofu apply")
     fleet.tf.apply()
     remote = connect(fleet)
     enter_phase(
-        fleet, "waiting-hosts", f"ssh and cloud-init on {len(remote.hosts)} hosts"
+        fleet,
+        fleet.manifest_path,
+        "waiting-hosts",
+        f"ssh and cloud-init on {len(remote.hosts)} hosts",
     )
     wait_hosts(remote, fleet.manifest, fleet.fleet_dir, fleet.interrupts)
 
@@ -2356,16 +2407,24 @@ def measure_run(run: Run) -> None:
     with recording(run):
         remote = fleet.remote
         assert remote is not None, "up_fleet must run first"
-        enter_phase(fleet, "shipping", "files, host monitors, containers")
+        render_host_files(run.run_dir, run.cfg, fleet.manifest, remote.hosts)
+        enter_phase(
+            fleet, run.manifest_path, "shipping", "files, host monitors, containers"
+        )
         ship(remote, run.run_dir)
         start_hostmon(remote)
         create_containers(remote)
-        enter_phase(fleet, "services", "anvil, deploy, orchestrator, relay, postgres")
+        enter_phase(
+            fleet,
+            run.manifest_path,
+            "services",
+            "anvil, deploy, orchestrator, relay, postgres",
+        )
         start_support(remote, genesis_contracts(run.run_dir), fleet.interrupts)
-        enter_phase(fleet, "nodes", "synchronized docker start")
+        enter_phase(fleet, run.manifest_path, "nodes", "synchronized docker start")
         at = fleet_time(remote) + DOCKER_START_LEAD_S
         spread = start_nodes(remote, node_hosts(remote.hosts), at)
-        update_manifest(run.run_dir, "measuring", start_spread_s=spread)
+        update_manifest(run.manifest_path, "measuring", start_spread_s=spread)
         log.info("measuring: nodes started within %.2f s of each other", spread)
         start_agent(remote)
         run.agent_started = True
@@ -2376,8 +2435,7 @@ def connect(fleet: FleetState) -> Remote:
     manifest = fleet.manifest
     hosts_info = parse_hosts_output(fleet.tf.output(), manifest["hosts"])
     nb.write_json(fleet.fleet_dir / "hosts.json", hosts_info)
-    update_manifest(fleet.fleet_dir, "provisioned", hosts_info=hosts_info)
-    render_host_files(fleet.fleet_dir, fleet.cfg, manifest, hosts_info)
+    update_manifest(fleet.manifest_path, "provisioned", hosts_info=hosts_info)
     fleet.remote = Remote(
         fleet.run,
         fleet.fleet_dir,
@@ -2394,7 +2452,7 @@ def finish_run(run: Run) -> nb.BenchResult | None:
     interrupts.disarm()
     remote = run.fleet.remote
     if remote is not None:
-        update_manifest(run.run_dir, "collecting")
+        update_manifest(run.manifest_path, "collecting")
         log.info("collecting: stop, freeze, logs, host samples, final rsync")
 
         def step(what: str, action: Callable[[], object]) -> None:
@@ -2471,14 +2529,16 @@ def teardown(
         log.exception("teardown failed")
         code = exit_code(run.error, result, destroyed)
     if not destroyed:
-        log.error(LEFTOVER_MESSAGE, run.run_dir)
+        log.error(LEFTOVER_MESSAGE, run.fleet.fleet_dir)
     return code
 
 
 def down_fleet(fleet: FleetState, confirm_destroy: Callable[[], bool]) -> bool:
     """Destroys the fleet unless `--keep` or `confirm_destroy` says no. True when destroyed."""
     fleet_dir = fleet.fleet_dir
-    best_effort("mark destroying", lambda: update_manifest(fleet_dir, "destroying"))
+    best_effort(
+        "mark destroying", lambda: update_manifest(fleet.manifest_path, "destroying")
+    )
     if fleet.cfg.keep:
         log.info(
             "--keep: fleet stays up until its TTL, ssh key kept; then run: aws-bench destroy %s",
@@ -2495,10 +2555,12 @@ def record_outcome(run: Run, result: nb.BenchResult | None, destroyed: bool) -> 
     cfg, run_dir = run.cfg, run.run_dir
     cost = None
     if destroyed:
-        remove_ssh_key(cfg.ssh_key, run_dir)
+        remove_ssh_key(cfg.ssh_key, run.fleet.fleet_dir)
         cost = final_cost(run.fleet)
     code = exit_code(run.error, result, destroyed)
-    update_manifest(run_dir, "done" if destroyed else "left-running")
+    phase = "done" if destroyed else "left-running"
+    update_manifest(run.fleet.manifest_path, phase)
+    update_manifest(run.manifest_path, phase)
     append_index(cfg.out_root, run.manifest, result, code, destroyed, cost)
     if cost is not None:
         log.info(
@@ -2527,7 +2589,9 @@ def final_cost(fleet: FleetState) -> dict[str, float] | None:
         log.warning("actual cost unavailable: %s", exc)
         return None
     nb.write_json(fleet.fleet_dir / "cost.json", cost)
-    update_manifest(fleet.fleet_dir, "destroyed", cost_usd=cost)
+    update_manifest(fleet.manifest_path, "destroyed", cost_usd=cost)
+    for path in (fleet.fleet_dir / RUNS_DIR).glob("*/manifest.json"):
+        nb.write_json(path, {**nb.read_json(path), "cost_usd": cost})
     return cost
 
 
@@ -2590,50 +2654,60 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
 def render_run_dir(
     run: Runner,
     cfg: RunConfig,
-    run_dir: Path,
+    fleet_dir: Path,
     hosts: list[HostSpec],
     pre: Preflight,
     estimate: Estimate,
     argv: list[str],
     which: Callable[[str], str | None] = shutil.which,
-) -> None:
-    """Everything known before `tofu apply`. Files that need the hosts' addresses (env files,
-    start.sh, topology) are written by `render_host_files` after it."""
-    ssh_pub = resolve_ssh_pub(run, cfg, run_dir, which)
+) -> Path:
+    """Everything known before `tofu apply`, returning the run dir. Files that need the hosts'
+    addresses (env files, start.sh, topology) are written by `render_host_files` after it."""
+    ssh_pub = resolve_ssh_pub(run, cfg, fleet_dir, which)
     cidr = operator_cidr(cfg)
     git_rev = git_head(run)
     genesis = render_genesis(
         Path(cfg.load.genesis).read_bytes(), cfg.nodes, cfg.max_block_size
     )
-    write_manifest(run_dir, cfg, hosts, plan_peers(hosts), estimate, "planned", argv)
+    run_dir = new_run_dir(fleet_dir, SINGLE_RUN)
+    write_manifest(
+        fleet_dir, run_dir, cfg, hosts, plan_peers(hosts), estimate, "planned", argv
+    )
+    known = {
+        "az": pre["az"],
+        "ami_id": pre["ami_id"],
+        "images": pre["images"],
+        "git_rev": git_rev,
+        "ssh_public_key": ssh_pub,
+        "cost_usd": {
+            "expected": estimate["expected_usd"],
+            "bound": estimate["bound_usd"],
+        },
+    }
+    update_manifest(fleet_dir / FLEET_JSON, "planned", **known)
     update_manifest(
-        run_dir,
+        run_dir / "manifest.json",
         "planned",
-        az=pre["az"],
-        ami_id=pre["ami_id"],
-        images=pre["images"],
-        git_rev=git_rev,
-        ssh_public_key=ssh_pub,
+        **known,
         config_hash=run_config_hash(cfg, hosts, pre["images"], genesis),
-        cost_usd={"expected": estimate["expected_usd"], "bound": estimate["bound_usd"]},
     )
     (run_dir / "genesis.toml").write_bytes(genesis)
     nb.write_json(run_dir / "config.json", dataclasses.asdict(cfg.load))
     for host in hosts:
-        host_dir = run_dir / "hosts" / host["name"]
+        host_dir = fleet_dir / "hosts" / host["name"]
         host_dir.mkdir(parents=True)
         (host_dir / "user-data.sh").write_text(
             render_user_data(host, pre["images"], int(estimate["ttl_s"]))
         )
     if pre["git_diff"] is not None:
-        (run_dir / "diff.patch").write_text(pre["git_diff"])
-    tf_dir = run_dir / "terraform"
+        (fleet_dir / "diff.patch").write_text(pre["git_diff"])
+    tf_dir = fleet_dir / "terraform"
     shutil.copytree(TERRAFORM_SRC, tf_dir)
     # Absolute: `tofu -chdir` changes the directory `file()` resolves user_data_path against.
     tfvars = render_tfvars(
         cfg,
-        run_dir.resolve(),
-        run_dir.name,
+        fleet_dir.resolve(),
+        fleet_dir.name,
         getpass.getuser(),
         hosts,
         ssh_pub,
@@ -2644,6 +2718,7 @@ def render_run_dir(
         pre["ami_id"],
     )
     nb.write_json(tf_dir / "terraform.tfvars.json", tfvars)
+    return run_dir
 
 
 def run_config_hash(
@@ -2662,28 +2737,28 @@ def run_config_hash(
     )
 
 
-def ssh_key_path(ssh_key: str, run_dir: Path) -> Path:
+def ssh_key_path(ssh_key: str, fleet_dir: Path) -> Path:
     if ssh_key == SSH_KEY_AUTO:
-        return run_dir / "ssh" / "id_ed25519"
+        return fleet_dir / "ssh" / "id_ed25519"
     return Path(ssh_key).expanduser()
 
 
 def resolve_ssh_pub(
-    run: Runner, cfg: RunConfig, run_dir: Path, which: Callable[[str], str | None]
+    run: Runner, cfg: RunConfig, fleet_dir: Path, which: Callable[[str], str | None]
 ) -> str:
     """The public key for `var.ssh_public_key`. Offline runs use the placeholder unless
     `auto` can be generated locally."""
     if cfg.ssh_key == SSH_KEY_AUTO:
         if cfg.offline and which("ssh-keygen") is None:
             return OFFLINE_SSH_PUB
-        return generate_ssh_key(run, run_dir)
+        return generate_ssh_key(run, fleet_dir)
     if cfg.offline:
         return OFFLINE_SSH_PUB
     return read_ssh_pub(Path(cfg.ssh_key))
 
 
-def generate_ssh_key(run: Runner, run_dir: Path) -> str:
-    key = ssh_key_path(SSH_KEY_AUTO, run_dir)
+def generate_ssh_key(run: Runner, fleet_dir: Path) -> str:
+    key = ssh_key_path(SSH_KEY_AUTO, fleet_dir)
     key.parent.mkdir(exist_ok=True)
     result = run(
         [
@@ -2694,7 +2769,7 @@ def generate_ssh_key(run: Runner, run_dir: Path) -> str:
             "-N",
             "",
             "-C",
-            run_dir.name,
+            fleet_dir.name,
             "-f",
             str(key),
         ]
@@ -2704,9 +2779,9 @@ def generate_ssh_key(run: Runner, run_dir: Path) -> str:
     return key.with_name(key.name + ".pub").read_text().strip()
 
 
-def remove_ssh_key(ssh_key: str, run_dir: Path) -> None:
+def remove_ssh_key(ssh_key: str, fleet_dir: Path) -> None:
     """Deletes the private half of an `auto` key; the `.pub` stays for the record."""
-    key = ssh_key_path(ssh_key, run_dir)
+    key = ssh_key_path(ssh_key, fleet_dir)
     if ssh_key != SSH_KEY_AUTO or not key.exists():
         return
     key.unlink()
@@ -2784,6 +2859,7 @@ def render_host_files(
     dotenv = parse_dotenv((REPO_ROOT / ".env").read_text())
     for spec in manifest["hosts"]:
         host_dir = run_dir / "hosts" / spec["name"]
+        host_dir.mkdir(parents=True, exist_ok=True)
         (host_dir / "start.sh").write_text(render_start_sh(spec, manifest["images"]))
         if spec["role"] == "ctl":
             (host_dir / "ctl.env").write_text(render_ctl_env(hosts, cfg, dotenv))
@@ -2828,7 +2904,7 @@ def wait_ssh(remote: Remote, host: str, interrupts: Interrupts) -> None:
 
 
 def wait_hosts(
-    remote: Remote, manifest: FleetManifest, run_dir: Path, interrupts: Interrupts
+    remote: Remote, manifest: FleetManifest, fleet_dir: Path, interrupts: Interrupts
 ) -> None:
     """Per host: ssh reachable, `cloud-init status --wait`, then `ready.json` saved. Pulled
     digests that differ from the manifest are only logged here; `check_validity_aws` marks the
@@ -2838,7 +2914,7 @@ def wait_hosts(
         wait_ssh(remote, host, interrupts)
         wait_cloud_init(remote, host)
         text = remote.ssh(host, f"cat {BENCH_DIR}/ready.json").stdout
-        host_dir = run_dir / "hosts" / host
+        host_dir = fleet_dir / "hosts" / host
         (host_dir / "ready.json").write_text(text)
         bad = digest_mismatches(json.loads(text)["digests"], manifest["images"])
         if bad:
@@ -3231,11 +3307,12 @@ def cmd_collect(args: argparse.Namespace, run: Runner = _run) -> int:
     """Collects again from the live hosts into `hosts/<name>/collect-<k>/`, leaving the files
     of the run itself untouched."""
     run_dir: Path = args.dir
-    manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+    fleet_dir = fleet_of(run_dir)
+    manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
     hosts = provisioned_hosts(manifest)
-    setup_logging(run_dir)
+    setup_logging(fleet_dir)
     remote = Remote(
-        run, run_dir, ssh_key_path(manifest["config"]["ssh_key"], run_dir), hosts
+        run, fleet_dir, ssh_key_path(manifest["config"]["ssh_key"], fleet_dir), hosts
     )
     subdir = f"collect-{next_collect_index(run_dir)}"
     collect_hosts(remote, list(hosts.values()), run_dir, subdir)
@@ -3282,16 +3359,18 @@ def cmd_destroy(
     return destroy_run(run, args)
 
 
-def status_run(run: Runner, run_dir: Path, now: datetime) -> int:
-    manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
+    manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
     name = manifest["name"]
     print(
         f"- run {name}: phase {manifest['phase']}, created {manifest['created_at'][:16]}"
     )
+    for path in sorted((fleet_dir / RUNS_DIR).glob("*/manifest.json")):
+        print(f"- {path.parent.name}: phase {nb.read_json(path)['phase']}")
     if manifest["phase"] == "planned":
         print("- no instances: planned only")
         return EXIT_OK
-    cost_path = run_dir / "cost.json"
+    cost_path = fleet_dir / "cost.json"
     if manifest["phase"] in TERMINAL_PHASES and cost_path.exists():
         cost = nb.read_json(cost_path)
         print(f"- cost: ${cost['actual']:.2f} actual, bound ${cost['bound']:.2f}")
@@ -3311,7 +3390,9 @@ def status_run(run: Runner, run_dir: Path, now: datetime) -> int:
     if ctl and any(
         i["id"] == ctl["instance_id"] and i["state"] == "running" for i in instances
     ):
-        remote = Remote(run, run_dir, ssh_key_path(config["ssh_key"], run_dir), hosts)
+        remote = Remote(
+            run, fleet_dir, ssh_key_path(config["ssh_key"], fleet_dir), hosts
+        )
         print(f"- agent: {format_agent(read_agent_state(remote))}")
     print(f"- cost: {status_cost(run, manifest, instances, now)}")
     return EXIT_OK
@@ -3324,7 +3405,7 @@ def format_agent(state: AgentState | None) -> str:
 
 
 def status_cost(
-    run: Runner, manifest: Manifest, instances: list[Instance], now: datetime
+    run: Runner, manifest: FleetManifest, instances: list[Instance], now: datetime
 ) -> str:
     bound = f"bound ${manifest['estimate']['bound_usd']:.2f}"
     if not instances:
@@ -3349,8 +3430,8 @@ def status_all(run: Runner, args: argparse.Namespace, now: datetime) -> int:
 
 
 def destroy_run(run: Runner, args: argparse.Namespace) -> int:
-    run_dir: Path = args.dir
-    manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+    fleet_dir: Path = args.dir
+    manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
     name = manifest["name"]
     if manifest["phase"] == "planned":
         raise Refused(f"{name} was only planned: nothing was created")
@@ -3359,25 +3440,22 @@ def destroy_run(run: Runner, args: argparse.Namespace) -> int:
     prompt = f"Destroy the fleet of {name} in {manifest['config']['account']}?"
     if not confirm(prompt, args.yes, sys.stdin.isatty()):
         raise Refused("not confirmed; nothing was destroyed")
-    setup_logging(run_dir)
+    setup_logging(fleet_dir)
     cfg = config_from_manifest(manifest["config"])
-    tf = Terraform(run, cfg.tf, run_dir / "terraform", terraform_env())
-    fleet = FleetState(run, cfg, run_dir, tf, Interrupts())
-    update_manifest(run_dir, "destroying")
+    tf = Terraform(run, cfg.tf, fleet_dir / "terraform", terraform_env())
+    fleet = FleetState(run, cfg, fleet_dir, tf, Interrupts())
+    update_manifest(fleet.manifest_path, "destroying")
     if not destroy_fleet(fleet):
-        update_manifest(run_dir, "left-running")
-        log.error("resources may remain, run: aws-bench destroy %s", run_dir)
+        update_manifest(fleet.manifest_path, "left-running")
+        log.error("resources may remain, run: aws-bench destroy %s", fleet_dir)
         return EXIT_LEFTOVER
     cost = final_cost(fleet)
-    update_manifest(run_dir, "done")
-    result = (
-        nb.read_json(run_dir / "result.json")
-        if (run_dir / "result.json").exists()
-        else None
-    )
+    update_manifest(fleet.manifest_path, "done")
+    result_path = last_run_dir(fleet_dir) / "result.json"
+    result = nb.read_json(result_path) if result_path.exists() else None
     code = exit_code(None, result, True)
-    append_index(run_dir.parent, manifest, result, code, True, cost)
-    remove_ssh_key(cfg.ssh_key, run_dir)
+    append_index(fleet_dir.parent, manifest, result, code, True, cost)
+    remove_ssh_key(cfg.ssh_key, fleet_dir)
     log.info("destroyed %s", name)
     return EXIT_OK
 
@@ -3412,10 +3490,10 @@ def destroy_orphans(run: Runner, args: argparse.Namespace, now: datetime) -> int
     return EXIT_OK
 
 
-def mark_swept(run_dir: Path) -> None:
-    if (run_dir / "manifest.json").exists():
-        manifest = update_manifest(run_dir, "swept")
-        remove_ssh_key(manifest["config"]["ssh_key"], run_dir)
+def mark_swept(fleet_dir: Path) -> None:
+    if (fleet_dir / FLEET_JSON).exists():
+        manifest = update_manifest(fleet_dir / FLEET_JSON, "swept")
+        remove_ssh_key(manifest["config"]["ssh_key"], fleet_dir)
 
 
 def account_config(args: argparse.Namespace) -> RunConfig:
@@ -3435,7 +3513,7 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     return RunConfig(**fields)
 
 
-def provisioned_hosts(manifest: Manifest) -> dict[str, HostInfo]:
+def provisioned_hosts(manifest: FleetManifest) -> dict[str, HostInfo]:
     if "hosts_info" not in manifest:
         raise Refused(
             f"{manifest['name']} has no hosts: the fleet was never provisioned"
@@ -3540,15 +3618,16 @@ def group_runs(
 
 
 def local_phase(out_root: Path, name: str) -> str | None:
-    """The run's manifest phase, or None when this machine no longer has its state: no manifest,
-    or a terminal phase without terraform state. A live run has no tfstate during `tofu apply`."""
-    run_dir = out_root / name
-    if not (run_dir / "manifest.json").exists():
+    """The fleet's manifest phase, or None when this machine no longer has its state: no
+    `fleet.json`, or a terminal phase without terraform state. A live fleet has no tfstate
+    during `tofu apply`."""
+    fleet_dir = out_root / name
+    if not (fleet_dir / FLEET_JSON).exists():
         return None
-    phase = nb.read_json(run_dir / "manifest.json")["phase"]
+    phase = nb.read_json(fleet_dir / FLEET_JSON)["phase"]
     if (
         phase in TERMINAL_PHASES
-        and not (run_dir / "terraform" / "terraform.tfstate").exists()
+        and not (fleet_dir / "terraform" / "terraform.tfstate").exists()
     ):
         return None
     return phase
@@ -4090,7 +4169,7 @@ INDEX_HEADER = (
 
 
 def index_row(
-    manifest: Manifest,
+    manifest: FleetManifest,
     result: nb.BenchResult | None,
     code: int,
     destroyed: bool,
@@ -4134,7 +4213,7 @@ def index_row(
 
 def append_index(
     out_root: Path,
-    manifest: Manifest,
+    manifest: FleetManifest,
     result: nb.BenchResult | None,
     code: int,
     destroyed: bool,

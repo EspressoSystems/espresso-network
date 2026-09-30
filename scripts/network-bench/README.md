@@ -118,25 +118,29 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
 | node never ready / agent error | collect all, failure summary with last log lines, destroy, exit 3                                                                 |
 | Ctrl-C                         | finish current phase, bounded collect, destroy prompt (30 s, default yes; `--yes` skips), exit 3 or 4                             |
 | destroy fails x3               | sweep by tag `espresso-bench-run=<name>`; leftovers → exit 4, `status --all` lists them                                           |
-| laptop dies                    | agents keep running, TTL terminates instances; `status/collect/render/destroy DIR` recover                                        |
+| laptop dies                    | agents keep running, TTL ends instances; `status/destroy FLEET`, `collect/render RUN` recover                                     |
 | state lost                     | `destroy --orphans`: list by tag (owner, launch, expiry), confirm, sweep; never another owner's live run                          |
 
 ### Artifacts
 
-`tmp/aws-bench/<owner>-<yyyymmdd-hhmm>/`, never deleted:
+`tmp/aws-bench/<owner>-<yyyymmdd-hhmm>/` (the fleet dir), never deleted:
 
 ```
-manifest.json            argv, config, git rev, tools, account, AZ, AMI, digests, prices+sources, estimate, phase
+fleet.json               argv, config, git rev, account, AZ, AMI, digests, estimate, phase, hosts_info
 events.jsonl driver.log  phase transitions, DEBUG log
 terraform/               module copy, tfvars, plan.txt, terraform.tfstate
 hosts.json               role, public/private IP, private DNS per host
-genesis.toml topology.json agent.json config.json
-hosts/<host>/            user-data.sh, node.env|ctl.env, start.sh, ready.json, <container>.log.gz,
+hosts/<host>/            user-data.sh, ready.json
+cost.json                expected, bound, actual USD of the fleet
+runs/01-run/             one measurement
+  manifest.json          fleet.json copy plus fleet, phase_seconds, start_spread_s, config_hash
+  genesis.toml topology.json config.json
+  hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz,
                          cloud-init-output.log, chrony.txt, host.jsonl, pg-stats.json (node0)
                          pg-stats.jsonl pg-statements.json pg-settings.json (node0)
-metrics.jsonl heights.jsonl consensus.jsonl load.jsonl load-meta.json steps.json
-stake-table.json final-<node>.prom
-run.json agent-state.json agent.log result.json summary.md cost.json
+  metrics.jsonl heights.jsonl consensus.jsonl load.jsonl load-meta.json steps.json
+  stake-table.json final-<node>.prom
+  run.json agent-state.json agent.log result.json summary.md
 ```
 
 `tmp/aws-bench/INDEX.md`: one row per run (name, rev, tag, N, capacity, validity, exit, cost bound/actual, destroyed).
@@ -146,15 +150,15 @@ run.json agent-state.json agent.log result.json summary.md cost.json
 ```
 just bench aws plan    --tag release-x [--nodes 5] [--offline --price c8g.4xlarge=0.71 --price c8g.2xlarge=0.36]
 just bench aws run     --tag release-x [--nodes 5] [--steps 4,6,9,...] [--max-usd 10] [--yes]
-just bench aws status  --all | DIR
-just bench aws collect DIR
-just bench aws render  DIR [--baseline FILE]
-just bench aws destroy DIR | --orphans
+just bench aws status  --all | FLEET_DIR
+just bench aws collect RUN_DIR
+just bench aws render  RUN_DIR [--baseline FILE]
+just bench aws destroy FLEET_DIR | --orphans
 ```
 
 - Needs: nix devShell (opentofu, awscli2), AWS profile with EC2 write (`--profile`, `--account`), `ssh-keygen`, rev
   pushed as `release-*` so CI publishes images.
-- `--ssh-key auto` (default): ed25519 key generated per run in `<run>/ssh/`, private half deleted after destroy (kept
+- `--ssh-key auto` (default): ed25519 key generated per run in `<fleet>/ssh/`, private half deleted after destroy (kept
   with `--keep` or a failed destroy).
 - `--ssh-key PATH`: existing key, PATH and PATH.pub must exist, never deleted.
 
