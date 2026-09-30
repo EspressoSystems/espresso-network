@@ -2338,10 +2338,15 @@ class RunFlowTest(unittest.TestCase):
         self.assertEqual(manifest["fleet"], "run1")
         self.assertEqual(manifest["cost_usd"]["actual"], cost["actual"])
         self.assertEqual(manifest["start_spread_s"], 0.0)
-        row = harness.index().splitlines()[-1]
-        self.assertIn("| run1 |", row)
-        self.assertIn("| valid | 0 |", row)
-        self.assertTrue(row.endswith("| yes |"))
+        *_, run_row, fleet_row = harness.index().splitlines()
+        self.assertTrue(run_row.startswith("| run1/01-run |"))
+        self.assertIn("| colocated |", run_row)
+        self.assertIn("| valid | 0 |", run_row)
+        self.assertRegex(
+            fleet_row, r"^\| run1 \| .* \| 1 \| \d+\.\d\d \| \d+\.\d\d \| 0 \|$"
+        )
+        run_cost = json.loads((harness.run_dir / "cost.json").read_text())
+        self.assertGreater(run_cost["usd"], 0)
 
     def test_fleet_files_and_run_files_live_in_their_own_dirs(self):
         harness = RunHarness(self)
@@ -2410,7 +2415,9 @@ class RunFlowTest(unittest.TestCase):
             code = harness.run(runner, extra=("--keep",))
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertFalse(runner.ran("tofu", "destroy"))
-        self.assertIn("| no |", harness.index())
+        rows = harness.index().splitlines()[2:]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("| valid | 4 |", rows[0])
         self.assertTrue(
             harness.last_log_line().endswith(f"aws-bench destroy {harness.fleet_dir}")
         )
@@ -2703,7 +2710,6 @@ class RunDirsTest(unittest.TestCase):
             second = awsb.new_run_dir(fleet_dir, "other")
             self.assertEqual(first, fleet_dir / "runs" / "01-run")
             self.assertEqual(second, fleet_dir / "runs" / "02-other")
-            self.assertEqual(awsb.last_run_dir(fleet_dir), second)
             self.assertEqual(awsb.fleet_of(second), fleet_dir)
 
     def test_fleet_name_collision_refuses(self):
@@ -2725,21 +2731,19 @@ class ManifestReproTest(unittest.TestCase):
         )
         hosts = awsb.plan_hosts(cfg)
         fleet_dir = tmp / "run1"
+        fleet_dir.mkdir()
         run_dir = awsb.new_run_dir(fleet_dir, "run")
         prices = two_node_prices()
         estimate = awsb.estimate_cost(
             hosts, cfg, prices, awsb.region_minor_prices("eu-west-1")
         )
-        awsb.write_manifest(
-            fleet_dir,
-            run_dir,
-            cfg,
-            hosts,
-            awsb.plan_peers(hosts),
-            estimate,
-            "planned",
-            ["run"],
+        fleet = awsb.write_fleet_manifest(
+            fleet_dir, cfg, hosts, awsb.plan_peers(hosts), estimate, "planned", ["run"]
         )
+        manifest = awsb.build_run_manifest(
+            fleet, cfg, 1, awsb.phase_seconds(cfg), "hash", None
+        )
+        netbench.write_json(run_dir / "manifest.json", manifest)
         return run_dir, cfg
 
     def test_manifest_round_trips_and_update_keeps_keys(self):
@@ -3537,29 +3541,41 @@ class IndexTest(unittest.TestCase):
             "created_at": "2026-09-29T15:00:00+00:00",
             "git_rev": "a" * 40,
             "config": {"tag": "release-x", "nodes": 5},
+            "fleet": "run1",
+            "query_db": "colocated",
             "images": {"espresso-node": {"revision": "bd2ad6e1dc7abc"}},
             "estimate": {"bound_usd": 4.6},
         }
 
     def test_row_of_a_result(self):
-        row = awsb.index_row(self.manifest(), valid_result(), 0, True, {"actual": 2.4})
+        row = awsb.index_row(self.manifest(), "01-run", valid_result(), 0, {"usd": 2.4})
         self.assertEqual(
             row,
-            "| run1 | 2026-09-29T15:00 | aaaaaaaaaa | release-x@bd2ad6e1dc | 5 | 8 | 8 "
-            "| yes | 120 | valid | 0 | 4.60/2.40 | yes |\n",
+            "| run1/01-run | 2026-09-29T15:00 | aaaaaaaaaa | release-x@bd2ad6e1dc | 5 "
+            "| colocated | 8 | 8 | yes | 120 | valid | 0 | 2.40 |\n",
         )
 
     def test_row_without_result_or_cost(self):
-        row = awsb.index_row(self.manifest(), None, 3, False, None)
-        self.assertIn("| - | - | - | - | failed | 3 | 4.60/- | no |", row)
+        row = awsb.index_row(self.manifest(), "01-run", None, 3, None)
+        self.assertIn("| colocated | - | - | - | - | failed | 3 | - |", row)
+
+    def test_fleet_row(self):
+        manifest = self.manifest()
+        row = awsb.fleet_index_row(manifest, 6, {"actual": 9.1}, 0)
+        self.assertEqual(
+            row, "| run1 | 2026-09-29T15:00 | aaaaaaaaaa | 6 | 4.60 | 9.10 | 0 |\n"
+        )
+        self.assertIn("| - | 3 |", awsb.fleet_index_row(manifest, 0, None, 3))
 
     def test_append_writes_the_header_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             for _ in range(2):
-                awsb.append_index(Path(tmp), self.manifest(), None, 3, False, None)
+                awsb.append_index(
+                    Path(tmp), awsb.index_row(self.manifest(), "01-run", None, 3, None)
+                )
             lines = (Path(tmp) / "INDEX.md").read_text().splitlines()
         self.assertEqual(len(lines), 4)
-        self.assertTrue(lines[0].startswith("| name |"))
+        self.assertTrue(lines[0].startswith("| fleet/run |"))
 
 
 class AgentDriveTest(unittest.TestCase):
@@ -4211,14 +4227,18 @@ class IndexKeepsRowsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "INDEX.md"
             path.write_text(awsb.INDEX_HEADER + "| older | row |\n")
-            awsb.append_index(Path(tmp), manifest, None, 4, False, None)
-            awsb.append_index(Path(tmp), manifest, None, 0, True, {"actual": 1.0})
+            awsb.append_index(
+                Path(tmp), awsb.index_row(manifest, "01-run", None, 4, None)
+            )
+            awsb.append_index(
+                Path(tmp), awsb.index_row(manifest, "02-run", None, 0, {"usd": 1.0})
+            )
             lines = path.read_text().splitlines()
         self.assertEqual(lines[2], "| older | row |")
         self.assertEqual(len(lines), 5)
-        self.assertEqual(sum(l.startswith("| name |") for l in lines), 1)
-        self.assertIn("| 4 | 4.60/- | no |", lines[3])
-        self.assertIn("| 0 | 4.60/1.00 | yes |", lines[4])
+        self.assertEqual(sum(l.startswith("| fleet/run |") for l in lines), 1)
+        self.assertTrue(lines[3].endswith("| failed | 4 | - |"))
+        self.assertTrue(lines[4].endswith("| failed | 0 | 1.00 |"))
 
 
 STATUS_DESCRIBE = json.dumps(
@@ -4332,8 +4352,10 @@ class KeptRunTest(unittest.TestCase):
         self.assertEqual(run_manifest["cost_usd"], manifest["cost_usd"])
         rows = harness.index().splitlines()
         self.assertEqual(len(rows), 4)
-        self.assertTrue(rows[2].endswith("| no |"))
-        self.assertTrue(rows[3].endswith("| yes |"))
+        self.assertIn("| valid | 4 |", rows[2])
+        self.assertRegex(
+            rows[3], r"^\| run1 \| \S+ \| a{10} \| 1 \| [\d.]+ \| [\d.]+ \| 0 \|$"
+        )
 
     def test_destroy_dir_removes_the_auto_key(self):
         harness = RunHarness(self)

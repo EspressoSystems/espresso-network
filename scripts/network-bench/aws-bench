@@ -8,7 +8,10 @@ r"""AWS benchmark harness for espresso-node: fleet lifecycle, load, and query-se
 Runs the shared `netbench` load driver against a Terraform-provisioned fleet in one AWS account
 and region, replacing manual `espresso-deploy` runs for this purpose. `plan` renders every file
 and prints a cost estimate without writing anything to AWS; `run` additionally provisions,
-measures, collects and destroys.
+measures, collects and destroys. `up` provisions a fleet that stays idle for several
+measurements: `run --fleet DIR` measures on it (`fleet.lock` admits one run at a time and a reset
+wipes the chain between runs), `extend DIR --ttl-min N` moves its expiry and `down DIR`
+destroys it.
 
 `status` shows one run (phase, instances, agent progress, cost so far) or, with `--all`, every
 tagged resource in the region. `destroy DIR` tears one run down; `destroy --orphans` sweeps runs
@@ -19,16 +22,20 @@ uv-managed python 3.14 from /opt/bench.
 Prerequisites: opentofu and awscli2 (nix devShell), an AWS profile for the benchmark account
 (`--profile`, default `timeboost-dev`), an ssh key (`--ssh-key`, default `auto`: a fresh key per run, deleted after destroy), and
 `--tag` naming the ghcr tag CI pushed for a `release-*` branch.
-Recipes: `just bench aws plan|run|status|collect|render|destroy`.
+Recipes: `just bench aws plan|up|run|extend|down|status|collect|render|destroy`.
 
 Exit codes of `run`: 0 valid, 1 invalid result, 2 refused before any AWS write, 3 failed after
 writes but destroyed, 4 resources may remain (the last log line is the destroy command; also the
-exit code with `--keep`).
+exit code with `--keep`). `run --fleet` never destroys: 3 leaves the fleet up. `up` exits 0 with
+the fleet idle, 3 or 4 after a failed provision.
 
 Examples:
     scripts/network-bench/aws-bench plan --tag release-x --offline \
         --price c8g.4xlarge=0.71 --price c8g.2xlarge=0.355
     scripts/network-bench/aws-bench plan --tag release-x --nodes 5
+    scripts/network-bench/aws-bench up --tag release-x --ttl-min 180
+    scripts/network-bench/aws-bench run --fleet tmp/aws-bench/<fleet> --query-db colocated
+    scripts/network-bench/aws-bench down tmp/aws-bench/<fleet>
 """
 
 import argparse
@@ -45,6 +52,7 @@ import select
 import shlex
 import shutil
 import signal
+import socket
 import string
 import subprocess
 import sys
@@ -87,6 +95,11 @@ DESTROY_S = 180.0
 TTL_MARGIN_S = 900.0
 # Instance boot before cloud-init arms the shutdown timer; billing starts at launch.
 BOOT_ALLOWANCE_S = 180.0
+# `shutdown -P +N` writes /run/nologin this long before the deadline, which locks out ssh.
+NOLOGIN_LEAD_S = 300.0
+# `reset_chain` between two runs on one fleet.
+RESET_EXPECTED_S = 60.0
+RESET_MAX_S = 180.0
 # Signal count that abandons the remaining collection and goes straight to destroy.
 SKIP_COLLECT_SIGNALS = 3
 # The load ramp: x1.5 per step from 4 MB/s up to the 200 MB/s target. The staircase stops at the
@@ -292,8 +305,48 @@ TAG_EXPIRES = "espresso-bench-expires"
 TERMINAL_PHASES = ("done", "swept")
 # A fleet dir holds `fleet.json` and `runs/<nn>-<name>/`, one dir per measurement.
 FLEET_JSON = "fleet.json"
+FLEET_LOCK = "fleet.lock"
 RUNS_DIR = "runs"
 SINGLE_RUN = "run"
+# Fleet phases with hosts that may still be up: `idle` admits a run, `running` holds the lock,
+# `dirty` is a failed reset that needs `run --force` or `down`.
+LIVE_PHASES = ("idle", "running", "dirty")
+# `up` defaults: several measurements need a longer TTL and budget than a single shot.
+UP_TTL_MIN = "180"
+UP_MAX_USD = 60.0
+# resourcegroupstaggingapi tag-resources takes at most 20 ARNs per call.
+RETAG_BATCH = 20
+# What `reset_chain` leaves in BENCH_DIR: `up` wrote these and the shipped agents run from here.
+RESET_KEEP = (
+    "netbench.py",
+    "aws-bench",
+    "ready.json",
+    "digests.json",
+    "chrony.txt",
+    "pg.json",
+)
+# Flags that shape the fleet, refused by `run --fleet` (the values are in fleet.json).
+FLEET_ONLY_FLAGS = (
+    "--nodes",
+    "--node-type",
+    "--ctl-type",
+    "--az",
+    "--region",
+    "--profile",
+    "--account",
+    "--root-gb",
+    "--pg-iops",
+    "--pg-mbps",
+    "--operator-cidr",
+    "--ssh-key",
+    "--ttl-min",
+    "--max-usd",
+    "--price",
+    "--out-root",
+    "--tf",
+    "--allow-dirty",
+    "--keep",
+)
 # Thread pool size for parallel ssh/rsync calls; also the espresso-deploy fan-out limit.
 REMOTE_POOL_SIZE = 16
 # Chrony-synced clocks give a wall-clock start command room to land within this spread; a start
@@ -354,6 +407,10 @@ class RemoteError(Exception):
 class Interrupted(Exception):
     """Raised by `Interrupts.check` after a SIGINT/SIGTERM, caught once in `measure` so `cmd_run`
     runs a bounded collection and a destroy prompt instead of an abrupt exit."""
+
+
+DbMode = Literal["colocated"]
+DB_MODES: tuple[DbMode, ...] = ("colocated",)
 
 
 class HostSpec(TypedDict):
@@ -423,6 +480,25 @@ class Estimate(TypedDict):
     bound_usd: float
 
 
+class FleetLock(TypedDict):
+    """`fleet.lock`: who is measuring on the fleet."""
+
+    pid: int
+    hostname: str
+    run: str
+    taken_at: str
+
+
+class RunEstimate(TypedDict):
+    """Incremental cost of one run on a live fleet, at the fleet's hourly rate."""
+
+    expected_s: float
+    worst_s: float
+    usd_per_hour: float
+    expected_usd: float
+    worst_usd: float
+
+
 class FleetManifest(TypedDict):
     """What describes the provisioned fleet, whatever is measured on it."""
 
@@ -434,6 +510,7 @@ class FleetManifest(TypedDict):
     peers: dict[str, list[str]]
     phase: str
     estimate: Estimate
+    db_modes: list[DbMode]
     # Filled in by preflight for `run` (absent for an offline `plan`): needed again at
     # `wait_hosts` to check pulled digests, and at `render` for the deployment block.
     az: NotRequired[str]
@@ -451,7 +528,10 @@ class Manifest(FleetManifest):
     measurement. `fleet` is the name of the fleet dir."""
 
     fleet: str
+    index: int
+    query_db: DbMode
     phase_seconds: dict[str, list[float]]
+    run_estimate: NotRequired[RunEstimate]
     start_spread_s: NotRequired[float]
     config_hash: NotRequired[str]
 
@@ -528,6 +608,11 @@ class RunConfig:
     keep: bool = False
     allow_dirty: bool = False
     offline: bool = False
+    db_modes: tuple[DbMode, ...] = ("colocated",)
+    query_db: DbMode = "colocated"
+    ttl_min: str = "auto"
+    fleet: Path | None = None
+    force: bool = False
 
 
 # Callers need the return code and stderr, unlike scripts/release's Runner, to classify a
@@ -781,7 +866,7 @@ def estimate_cost(
     phases = phase_seconds(cfg)
     expected_s = sum(expected for expected, _ in phases.values())
     worst_s = sum(worst for _, worst in phases.values())
-    ttl_s = worst_s + TTL_MARGIN_S
+    ttl_s = single_shot_ttl_s(cfg, worst_s)
     lines = _cost_lines(hosts, prices, minor, expected_s)
     bound_lines = _cost_lines(hosts, prices, minor, ttl_s + BOOT_ALLOWANCE_S)
     return {
@@ -792,6 +877,76 @@ def estimate_cost(
         "expected_usd": sum(line["usd"] for line in lines),
         "bound_usd": sum(line["usd"] for line in bound_lines),
     }
+
+
+def single_shot_ttl_s(cfg: RunConfig, worst_s: float) -> float:
+    if cfg.ttl_min == "auto":
+        return worst_s + TTL_MARGIN_S
+    ttl_s = int(cfg.ttl_min) * 60.0
+    if ttl_s < worst_s:
+        raise Refused(
+            f"--ttl-min {cfg.ttl_min} is below the worst case of {math.ceil(worst_s / 60)} min"
+        )
+    return ttl_s
+
+
+def estimate_fleet(
+    hosts: list[HostSpec], cfg: RunConfig, prices: Prices, minor: dict[str, float]
+) -> Estimate:
+    """A fleet lives until its TTL whatever is measured on it, so expected and worst case are
+    both the TTL; the bound adds the boot before the shutdown timer is armed."""
+    if cfg.ttl_min == "auto":
+        raise Refused(
+            "up needs --ttl-min N minutes: a fleet has no worst case to derive it from"
+        )
+    ttl_s = int(cfg.ttl_min) * 60.0
+    lines = _cost_lines(hosts, prices, minor, ttl_s)
+    bound_lines = _cost_lines(hosts, prices, minor, ttl_s + BOOT_ALLOWANCE_S)
+    return {
+        "expected_s": ttl_s,
+        "worst_s": ttl_s,
+        "ttl_s": ttl_s,
+        "lines": lines,
+        "expected_usd": sum(line["usd"] for line in lines),
+        "bound_usd": sum(line["usd"] for line in bound_lines),
+    }
+
+
+def estimate_rate(estimate: Estimate) -> float:
+    """USD per hour of the fleet: the estimate's lines without the one-off egress."""
+    usd = sum(line["usd"] for line in estimate["lines"] if line["item"] != "egress")
+    return usd / (estimate["expected_s"] / 3600)
+
+
+def run_phase_seconds(cfg: RunConfig) -> dict[str, tuple[float, float]]:
+    """phase -> (expected_s, worst_s) of one run on a live fleet: no provision, no destroy."""
+    phases = phase_seconds(cfg)
+    return {
+        "reset": (RESET_EXPECTED_S, RESET_MAX_S),
+        **{name: phases[name] for name in ("services", "ready", "load", "collect")},
+    }
+
+
+def estimate_run(manifest: FleetManifest, cfg: RunConfig) -> RunEstimate:
+    phases = run_phase_seconds(cfg)
+    expected_s = sum(expected for expected, _ in phases.values())
+    worst_s = sum(worst for _, worst in phases.values())
+    rate = estimate_rate(manifest["estimate"])
+    return {
+        "expected_s": expected_s,
+        "worst_s": worst_s,
+        "usd_per_hour": rate,
+        "expected_usd": rate * expected_s / 3600,
+        "worst_usd": rate * worst_s / 3600,
+    }
+
+
+def fleet_bound_usd(manifest: FleetManifest, expires: datetime) -> float:
+    """Spent plus remaining until `expires`, from the fleet's creation."""
+    lifetime_s = (
+        expires - datetime.fromisoformat(manifest["created_at"])
+    ).total_seconds()
+    return manifest_cost(manifest, lifetime_s + BOOT_ALLOWANCE_S)
 
 
 def _cost_lines(
@@ -874,6 +1029,14 @@ def format_estimate_summary(estimate: Estimate, max_usd: float) -> str:
     )
 
 
+def format_fleet_summary(estimate: Estimate, max_usd: float, expires: datetime) -> str:
+    return (
+        f"cost: fleet ${estimate_rate(estimate):.2f}/h, bound ${estimate['bound_usd']:.2f} "
+        f"at TTL {round(estimate['ttl_s'] / 60)} min "
+        f"(self-terminate {expires:%H:%M} UTC), limit ${max_usd:.2f}"
+    )
+
+
 def format_estimate_lines(estimate: Estimate) -> list[str]:
     return [
         f"  {line['item']}: {line['qty']:g} {line['unit']} @ ${line['usd_per_unit']:.4f} "
@@ -907,11 +1070,21 @@ def new_fleet_dir(out_root: Path, name: str | None) -> Path:
 
 
 def new_run_dir(fleet_dir: Path, name: str) -> Path:
-    runs = fleet_dir / RUNS_DIR
-    index = len(list(runs.glob("*"))) + 1 if runs.exists() else 1
-    run_dir = runs / f"{index:02d}-{name}"
+    if not NAME_RE.match(name):
+        raise Refused(f"--name must match {NAME_RE.pattern}: {name!r}")
+    run_dir = fleet_dir / RUNS_DIR / f"{len(run_dirs(fleet_dir)) + 1:02d}-{name}"
     run_dir.mkdir(parents=True)
     return run_dir
+
+
+def require_unused_name(fleet_dir: Path, name: str) -> None:
+    """An explicit `--name` identifies a run; the default, the database mode, repeats."""
+    if any(path.name.partition("-")[2] == name for path in run_dirs(fleet_dir)):
+        raise Refused(f"a run named {name} already exists in {fleet_dir / RUNS_DIR}")
+
+
+def run_index(run_dir: Path) -> int:
+    return int(run_dir.name.partition("-")[0])
 
 
 def fleet_of(run_dir: Path) -> Path:
@@ -920,10 +1093,6 @@ def fleet_of(run_dir: Path) -> Path:
             f"{run_dir} is not a run dir: expected <fleet>/{RUNS_DIR}/<nn>-<name>"
         )
     return run_dir.parent.parent
-
-
-def last_run_dir(fleet_dir: Path) -> Path:
-    return max((fleet_dir / RUNS_DIR).glob("*"))
 
 
 def setup_logging(directory: Path) -> None:
@@ -958,19 +1127,19 @@ def append_event(directory: Path, phase: str, event: str, detail: str | None) ->
 def config_to_json(cfg: RunConfig) -> dict[str, Any]:
     data = dataclasses.asdict(cfg)
     data["out_root"] = str(cfg.out_root)
+    data["fleet"] = None if cfg.fleet is None else str(cfg.fleet)
     return data
 
 
-def write_manifest(
+def write_fleet_manifest(
     fleet_dir: Path,
-    run_dir: Path,
     cfg: RunConfig,
     hosts: list[HostSpec],
     peers_by_node: dict[str, list[str]],
     estimate: Estimate,
     phase: str,
     argv: list[str],
-) -> None:
+) -> FleetManifest:
     fleet: FleetManifest = {
         "name": fleet_dir.name,
         "created_at": datetime.now(UTC).isoformat(),
@@ -980,17 +1149,37 @@ def write_manifest(
         "peers": peers_by_node,
         "phase": phase,
         "estimate": estimate,
-    }
-    manifest: Manifest = {
-        **fleet,
-        "fleet": fleet_dir.name,
-        "phase_seconds": {
-            name: list(bounds) for name, bounds in phase_seconds(cfg).items()
-        },
+        "db_modes": list(cfg.db_modes),
     }
     nb.write_json(fleet_dir / FLEET_JSON, fleet)
-    nb.write_json(run_dir / "manifest.json", manifest)
     append_event(fleet_dir, phase, "manifest-written", None)
+    return fleet
+
+
+def build_run_manifest(
+    fleet: FleetManifest,
+    cfg: RunConfig,
+    index: int,
+    phases: dict[str, tuple[float, float]],
+    config_hash: str,
+    run_estimate: RunEstimate | None,
+) -> Manifest:
+    """A copy of the fleet manifest, so that `render` needs only the run dir, plus what is
+    specific to this measurement."""
+    manifest: Manifest = {
+        **fleet,
+        "config": config_to_json(cfg),
+        "created_at": datetime.now(UTC).isoformat(),
+        "phase": "planned",
+        "fleet": fleet["name"],
+        "index": index,
+        "query_db": cfg.query_db,
+        "phase_seconds": {name: list(bounds) for name, bounds in phases.items()},
+        "config_hash": config_hash,
+    }
+    if run_estimate is not None:
+        manifest["run_estimate"] = run_estimate
+    return manifest
 
 
 def update_manifest(path: Path, phase: str, **extra: Any) -> Manifest:
@@ -1820,11 +2009,11 @@ def aws_load() -> nb.BenchConfig:
     )
 
 
-def add_run_flags(parser: argparse.ArgumentParser) -> None:
+def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) -> None:
     defaults = RunConfig(tag="")
     load = defaults.load
     parser.add_argument(
-        "--tag", required=True, help="ghcr tag pushed by CI, no default"
+        "--tag", required=tag_required, help="ghcr tag pushed by CI, no default"
     )
     parser.add_argument("--nodes", type=int, default=defaults.nodes)
     parser.add_argument("--node-type", default=defaults.node_type)
@@ -1917,6 +2106,39 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     )
 
 
+def ttl_min_arg(text: str) -> str:
+    if text != "auto" and not (text.isdigit() and int(text) > 0):
+        raise argparse.ArgumentTypeError(
+            f"expected auto or a positive number of minutes: {text}"
+        )
+    return text
+
+
+def positive_int(text: str) -> int:
+    if not (text.isdigit() and int(text) > 0):
+        raise argparse.ArgumentTypeError(f"expected a positive number: {text}")
+    return int(text)
+
+
+def parse_db_modes(text: str) -> tuple[DbMode, ...]:
+    modes = text.split(",")
+    unknown = [mode for mode in modes if mode not in DB_MODES]
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"unknown db mode {', '.join(unknown)}; choose from {', '.join(DB_MODES)}"
+        )
+    return cast(tuple[DbMode, ...], tuple(dict.fromkeys(modes)))
+
+
+def add_ttl_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--ttl-min",
+        type=ttl_min_arg,
+        default=RunConfig.ttl_min,
+        help="minutes until the hosts terminate themselves; auto: worst case plus margin",
+    )
+
+
 def add_account_flags(parser: argparse.ArgumentParser) -> None:
     """For `status --all` and `destroy --orphans`, which have no manifest to read them from."""
     defaults = RunConfig(tag="")
@@ -1931,6 +2153,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    defaults = RunConfig(tag="")
 
     plan_p = sub.add_parser(
         "plan",
@@ -1941,18 +2164,61 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     plan_p.add_argument("--offline", action="store_true", help="use no AWS credentials")
     plan_p.set_defaults(func=cmd_plan, yes=False, keep=False, allow_dirty=False)
 
-    run_p = sub.add_parser(
-        "run",
-        help="plan, confirm, provision, load, measure, collect, destroy",
+    up_p = sub.add_parser(
+        "up",
+        help="plan, confirm, provision a fleet and leave it idle for `run --fleet`",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    add_run_flags(run_p)
+    add_run_flags(up_p)
+    add_ttl_flag(up_p)
+    up_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
+    up_p.add_argument("--yes", action="store_true")
+    up_p.add_argument("--allow-dirty", action="store_true")
+    up_p.set_defaults(
+        func=cmd_up,
+        offline=False,
+        keep=False,
+        fleet=None,
+        force=False,
+        query_db=defaults.query_db,
+        max_usd=UP_MAX_USD,
+        ttl_min=UP_TTL_MIN,
+    )
+
+    run_p = sub.add_parser(
+        "run",
+        help="plan, confirm, provision, load, measure, collect, destroy; with --fleet, "
+        "measure on a fleet from `up`",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        allow_abbrev=False,
+    )
+    add_run_flags(run_p, tag_required=False)
+    add_ttl_flag(run_p)
+    run_p.add_argument("--fleet", type=Path, help="fleet dir from `up`")
+    run_p.add_argument("--query-db", choices=DB_MODES, default=defaults.query_db)
+    run_p.add_argument(
+        "--force",
+        action="store_true",
+        help="with --fleet: reset a dirty or stale fleet",
+    )
     run_p.add_argument("--yes", action="store_true")
     run_p.add_argument(
         "--keep", action="store_true", help="skip destroy; the TTL still applies"
     )
     run_p.add_argument("--allow-dirty", action="store_true")
-    run_p.set_defaults(func=cmd_run, offline=False)
+    run_p.set_defaults(func=cmd_run, offline=False, db_modes=defaults.db_modes)
+
+    extend_p = sub.add_parser(
+        "extend", help="move a fleet's expiry to now plus --ttl-min minutes"
+    )
+    extend_p.add_argument("dir", type=Path)
+    extend_p.add_argument("--ttl-min", type=positive_int, required=True)
+    extend_p.set_defaults(func=cmd_extend)
+
+    down_p = sub.add_parser("down", help="destroy a fleet")
+    down_p.add_argument("dir", type=Path)
+    down_p.add_argument("--yes", action="store_true")
+    down_p.set_defaults(func=cmd_down)
 
     status_p = sub.add_parser(
         "status", help="list tagged resources or one run's progress"
@@ -2065,10 +2331,16 @@ def estimate_or_refuse(
     minor: dict[str, float],
     fleet_dir: Path,
     now: float,
+    fleet: bool = False,
 ) -> Estimate:
     prices = resolve_prices(run, cfg, cfg.out_root / "prices.json", now)
-    estimate = estimate_cost(hosts, cfg, prices, minor)
-    log.info(format_estimate_summary(estimate, cfg.max_usd))
+    if fleet:
+        estimate = estimate_fleet(hosts, cfg, prices, minor)
+        expires = datetime.fromtimestamp(now + estimate["ttl_s"], UTC)
+        log.info(format_fleet_summary(estimate, cfg.max_usd, expires))
+    else:
+        estimate = estimate_cost(hosts, cfg, prices, minor)
+        log.info(format_estimate_summary(estimate, cfg.max_usd))
     for line in format_estimate_lines(estimate):
         log.debug(line)
     if estimate["bound_usd"] > cfg.max_usd:
@@ -2274,7 +2546,11 @@ def cmd_run(
     interrupts: Interrupts | None = None,
     ask_destroy: Callable[[float], bool] = prompt_destroy,
 ) -> int:
-    cfg = config_from_args(args)
+    if args.fleet is not None:
+        return cmd_run_fleet(args, run, interrupts)
+    if args.tag is None:
+        raise Refused("run needs --tag, or --fleet DIR to measure on a fleet from `up`")
+    cfg = dataclasses.replace(fleet_config_from_args(args), db_modes=(args.query_db,))
     started = time.time()
     try:
         fleet_dir, run_dir, tf = prepare_run(args, cfg, run, started)
@@ -2302,24 +2578,35 @@ def prepare_run(
     """Everything before the first AWS write: `plan_fleet` and the prompt. Any failure or
     Ctrl-C leaves nothing to destroy."""
     fleet_dir, run_dir, tf, hosts, _ = plan_fleet(args, cfg, run, started)
-    prompt = (
-        f"Create {len(hosts)} instances, 1 security group, 1 key pair in {cfg.account}?"
-    )
-    if not confirm(prompt, cfg.yes, sys.stdin.isatty()):
-        append_event(fleet_dir, "planned", "refused", "not confirmed")
-        raise Refused("not confirmed; nothing was created")
+    confirm_create(cfg, fleet_dir, len(hosts))
     stamp_expiry(fleet_dir, tf, datetime.now(UTC))
     return fleet_dir, run_dir, tf
 
 
-def stamp_expiry(fleet_dir: Path, tf: Terraform, confirmed_at: datetime) -> None:
+def confirm_create(cfg: RunConfig, fleet_dir: Path, count: int) -> None:
+    prompt = f"Create {count} instances, 1 security group, 1 key pair in {cfg.account}?"
+    if not confirm(prompt, cfg.yes, sys.stdin.isatty()):
+        append_event(fleet_dir, "planned", "refused", "not confirmed")
+        raise Refused("not confirmed; nothing was created")
+
+
+def expiry_stamp(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def stamp_expiry(
+    fleet_dir: Path,
+    tf: Terraform,
+    confirmed_at: datetime,
+    margin_s: float = PROVISION_S,
+) -> None:
     """The `espresso-bench-expires` tag counts from the apply, not from the render: a run that
-    waited at the prompt must not look expired. Re-plans because a plan file fixes variables."""
+    waited at the prompt must not look expired. Re-plans because a plan file fixes variables.
+    A single shot adds the provisioning time; a fleet passes 0, so that `run --fleet` never
+    counts on time after the earliest possible self-terminate."""
     manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
-    expires = confirmed_at + timedelta(
-        seconds=manifest["estimate"]["ttl_s"] + PROVISION_S
-    )
-    stamp = expires.strftime("%Y-%m-%dT%H:%M:%SZ")
+    expires = confirmed_at + timedelta(seconds=manifest["estimate"]["ttl_s"] + margin_s)
+    stamp = expiry_stamp(expires)
     tfvars_path = fleet_dir / "terraform" / "terraform.tfvars.json"
     tfvars = nb.read_json(tfvars_path)
     nb.write_json(tfvars_path, {**tfvars, "expires_at": stamp})
@@ -2341,10 +2628,14 @@ def plan_fleet(
     log_preflight(cfg, pre, hosts)
     estimate = estimate_or_refuse(run, cfg, hosts, minor, fleet_dir, now)
     run_dir = render_run_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
+    return fleet_dir, run_dir, init_terraform(run, cfg, fleet_dir), hosts, pre
+
+
+def init_terraform(run: Runner, cfg: RunConfig, fleet_dir: Path) -> Terraform:
     tf = Terraform(run, cfg.tf, fleet_dir / "terraform", terraform_env())
     tf.init()
     (fleet_dir / "terraform" / "plan.txt").write_text(tf.plan())
-    return fleet_dir, run_dir, tf, hosts, pre
+    return tf
 
 
 def enter_phase(fleet: FleetState, manifest: Path, name: str, message: str) -> None:
@@ -2385,12 +2676,14 @@ def up_fleet(fleet: FleetState) -> None:
         f"ssh and cloud-init on {len(remote.hosts)} hosts",
     )
     wait_hosts(remote, fleet.manifest, fleet.fleet_dir, fleet.interrupts)
+    update_manifest(fleet.manifest_path, "idle")
 
 
 def run_on_fleet(run: Run) -> nb.BenchResult | None:
     """One measurement, then collect and report. Never raises. A `run.error` from `up_fleet`
     skips the load; the collect still runs against whatever hosts are known."""
     if run.error is None:
+        update_manifest(run.fleet.manifest_path, "running")
         measure_run(run)
     try:
         return finish_run(run)
@@ -2552,24 +2845,37 @@ def down_fleet(fleet: FleetState, confirm_destroy: Callable[[], bool]) -> bool:
 
 
 def record_outcome(run: Run, result: nb.BenchResult | None, destroyed: bool) -> int:
-    cfg, run_dir = run.cfg, run.run_dir
-    cost = None
-    if destroyed:
-        remove_ssh_key(cfg.ssh_key, run.fleet.fleet_dir)
-        cost = final_cost(run.fleet)
+    fleet = run.fleet
+    cost = close_fleet(fleet, destroyed)
     code = exit_code(run.error, result, destroyed)
-    phase = "done" if destroyed else "left-running"
-    update_manifest(run.fleet.manifest_path, phase)
-    update_manifest(run.manifest_path, phase)
-    append_index(cfg.out_root, run.manifest, result, code, destroyed, cost)
+    update_manifest(run.manifest_path, "done" if destroyed else "left-running")
+    append_index(
+        fleet.fleet_dir.parent,
+        index_row(run.manifest, run.run_dir.name, result, code, write_run_cost(run)),
+    )
+    if destroyed:
+        append_index(
+            fleet.fleet_dir.parent,
+            fleet_index_row(fleet.manifest, len(run_dirs(fleet.fleet_dir)), cost, code),
+        )
     if cost is not None:
         log.info(
             "destroyed; actual cost $%.2f (bound $%.2f); run dir %s",
             cost["actual"],
             cost["bound"],
-            run_dir,
+            run.run_dir,
         )
     return code
+
+
+def close_fleet(fleet: FleetState, destroyed: bool) -> dict[str, float] | None:
+    """Bookkeeping after `down_fleet`: the auto ssh key, the fleet's cost and its final phase."""
+    cost = None
+    if destroyed:
+        remove_ssh_key(fleet.cfg.ssh_key, fleet.fleet_dir)
+        cost = final_cost(fleet)
+    update_manifest(fleet.manifest_path, "done" if destroyed else "left-running")
+    return cost
 
 
 def exit_code(
@@ -2622,6 +2928,457 @@ def destroy_fleet(fleet: FleetState) -> bool:
     return False
 
 
+def cmd_up(
+    args: argparse.Namespace,
+    run: Runner = _run,
+    interrupts: Interrupts | None = None,
+) -> int:
+    """Plans, confirms and provisions a fleet, then leaves it `idle` for `run --fleet`. A
+    failure destroys it again (exit 3, or 4 when resources may remain)."""
+    cfg = fleet_config_from_args(args)
+    started = time.time()
+    try:
+        fleet_dir, tf = prepare_up(args, cfg, run, started)
+    except KeyboardInterrupt:
+        raise Refused("interrupted; nothing was created") from None
+    if interrupts is None:
+        interrupts = Interrupts()
+        interrupts.install()
+    fleet = FleetState(run, cfg, fleet_dir, tf, interrupts)
+    try:
+        up_fleet(fleet)
+    except Interrupted:
+        log.error("interrupted")
+    except (TfFailed, RemoteError, nb.NetworkError) as exc:
+        log.error("error: %s", exc)
+    except Exception:
+        log.exception("unexpected error")
+    else:
+        announce_idle(fleet)
+        return EXIT_OK
+    return abort_up(fleet)
+
+
+def prepare_up(
+    args: argparse.Namespace, cfg: RunConfig, run: Runner, started: float
+) -> tuple[Path, Terraform]:
+    """Everything before the first AWS write, as `prepare_run`, without a run dir."""
+    minor = region_minor_prices(cfg.region)
+    hosts = plan_hosts(cfg)
+    fleet_dir = new_fleet_dir(cfg.out_root, cfg.name)
+    setup_logging(fleet_dir)
+    log.debug("argv %s", args.argv)
+    pre = preflight(run, cfg, hosts)
+    log_preflight(cfg, pre, hosts)
+    estimate = estimate_or_refuse(
+        run, cfg, hosts, minor, fleet_dir, started, fleet=True
+    )
+    render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
+    tf = init_terraform(run, cfg, fleet_dir)
+    confirm_create(cfg, fleet_dir, len(hosts))
+    stamp_expiry(fleet_dir, tf, datetime.now(UTC), margin_s=0.0)
+    return fleet_dir, tf
+
+
+def announce_idle(fleet: FleetState) -> None:
+    manifest = fleet.manifest
+    left = minutes_left(manifest, datetime.now(UTC))
+    log.info("idle: fleet %s; %.0f min left", fleet.fleet_dir, left)
+    log.info(
+        "run: aws-bench run --fleet %s --query-db %s",
+        fleet.fleet_dir,
+        manifest["db_modes"][0],
+    )
+
+
+def abort_up(fleet: FleetState) -> int:
+    fleet.interrupts.disarm()
+    destroyed = down_fleet(fleet, lambda: True)
+    code = EXIT_FAILED if destroyed else EXIT_LEFTOVER
+    cost = close_fleet(fleet, destroyed)
+    append_index(fleet.fleet_dir.parent, fleet_index_row(fleet.manifest, 0, cost, code))
+    if not destroyed:
+        log.error(LEFTOVER_MESSAGE, fleet.fleet_dir)
+    return code
+
+
+def read_fleet(fleet_dir: Path) -> FleetManifest:
+    path = fleet_dir / FLEET_JSON
+    if not path.exists():
+        raise Refused(f"{fleet_dir} is not a fleet dir: no {FLEET_JSON}")
+    return nb.read_json(path)
+
+
+def open_fleet(run: Runner, fleet_dir: Path, interrupts: Interrupts) -> FleetState:
+    """The `FleetState` of a fleet `up` provisioned, with ssh to its hosts."""
+    manifest = read_fleet(fleet_dir)
+    cfg = config_from_manifest(manifest["config"])
+    tf = Terraform(run, cfg.tf, fleet_dir / "terraform", terraform_env())
+    fleet = FleetState(run, cfg, fleet_dir, tf, interrupts)
+    fleet.remote = Remote(
+        run,
+        fleet_dir,
+        ssh_key_path(cfg.ssh_key, fleet_dir),
+        provisioned_hosts(manifest),
+    )
+    return fleet
+
+
+def minutes_left(manifest: FleetManifest, now: datetime) -> float:
+    expires = datetime.fromisoformat(manifest["expires_at"])
+    return (expires - now).total_seconds() / 60
+
+
+def cmd_run_fleet(
+    args: argparse.Namespace, run: Runner, interrupts: Interrupts | None = None
+) -> int:
+    """One more measurement on a fleet `up` left idle. The fleet stays up in every outcome:
+    idle again, or `dirty` and locked when the reset failed."""
+    reject_fleet_flags(args.argv)
+    fleet_dir: Path = args.fleet
+    manifest = read_fleet(fleet_dir)
+    setup_logging(fleet_dir)
+    log.debug("argv %s", args.argv)
+    if interrupts is None:
+        interrupts = Interrupts()
+        interrupts.install()
+    fleet = open_fleet(run, fleet_dir, interrupts)
+    cfg = fleet_run_config(args, manifest)
+    name = cfg.name if cfg.name is not None else cfg.query_db
+    run_dir, estimate = admit_run(fleet_dir, manifest, cfg, name)
+    bench_run = Run(fleet, run_dir, cfg, time.time())
+    log.info(
+        "run %s: incremental cost $%.2f (%.0f min worst), %.0f min left on the fleet",
+        run_dir.name,
+        estimate["worst_usd"],
+        estimate["worst_s"] / 60,
+        minutes_left(manifest, datetime.now(UTC)),
+    )
+    try:
+        with recording(bench_run):
+            enter_phase(
+                fleet,
+                bench_run.manifest_path,
+                "resetting",
+                "stop containers, wipe journal and postgres data",
+            )
+            assert fleet.remote is not None
+            reset_chain(fleet.remote, interrupts)
+        reset_failed = bench_run.error is not None
+        result = run_on_fleet(bench_run)
+        return end_fleet_run(bench_run, result, reset_failed)
+    except Exception:
+        log.exception("unexpected error")
+        return EXIT_FAILED
+
+
+def fleet_config_from_args(args: argparse.Namespace) -> RunConfig:
+    return dataclasses.replace(
+        config_from_args(args),
+        db_modes=args.db_modes,
+        query_db=args.query_db,
+        ttl_min=args.ttl_min,
+        fleet=args.fleet,
+        force=args.force,
+    )
+
+
+def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfig:
+    """The fleet's own config with the flags that belong to one run: load, block size, ready
+    timeout, name, database mode."""
+    base = config_from_manifest(saved["config"])
+    if args.tag is not None and args.tag != base.tag:
+        raise Refused(
+            f"fleet {saved['name']} runs images tagged {base.tag}, not {args.tag}: "
+            "up a new fleet"
+        )
+    cli = fleet_config_from_args(args)
+    load = cli.load
+    if args.submit_nodes is None:
+        load = dataclasses.replace(load, submit_nodes=base.nodes - 1)
+    return dataclasses.replace(
+        base,
+        load=load,
+        ready_timeout_s=cli.ready_timeout_s,
+        max_block_size=cli.max_block_size,
+        name=cli.name,
+        yes=cli.yes,
+        query_db=cli.query_db,
+        fleet=cli.fleet,
+        force=cli.force,
+    )
+
+
+def reject_fleet_flags(argv: list[str]) -> None:
+    given = sorted({tok.partition("=")[0] for tok in argv} & set(FLEET_ONLY_FLAGS))
+    if given:
+        raise Refused(
+            f"{', '.join(given)} shape the fleet: with --fleet they come from its {FLEET_JSON}"
+        )
+
+
+def admit_run(
+    fleet_dir: Path, manifest: FleetManifest, cfg: RunConfig, name: str
+) -> tuple[Path, RunEstimate]:
+    """Takes the lock, checks that the fleet can take the run and creates its dir. Any refusal
+    releases the lock again and has issued no ssh command."""
+    take_fleet_lock(fleet_dir, name, cfg.force)
+    try:
+        estimate = check_run_allowed(manifest, cfg, datetime.now(UTC))
+        if cfg.name is not None:
+            require_unused_name(fleet_dir, name)
+        return render_run(fleet_dir, manifest, cfg, name, estimate), estimate
+    except BaseException:
+        release_fleet_lock(fleet_dir)
+        raise
+
+
+def take_fleet_lock(fleet_dir: Path, run_name: str, force: bool) -> FleetLock:
+    """Creates `fleet.lock` exclusively. `force` replaces a lock whose holder is gone."""
+    path = fleet_dir / FLEET_LOCK
+    lock: FleetLock = {
+        "pid": os.getpid(),
+        "hostname": socket.gethostname(),
+        "run": run_name,
+        "taken_at": datetime.now(UTC).isoformat(),
+    }
+    if force and path.exists():
+        holder: FleetLock = nb.read_json(path)
+        if lock_holder_alive(holder):
+            raise Refused(f"cannot --force: {describe_lock(holder)}")
+        path.unlink()
+    try:
+        with path.open("x") as f:
+            json.dump(lock, f)
+    except FileExistsError:
+        holder = nb.read_json(path)
+        hint = (
+            ""
+            if lock_holder_alive(holder)
+            else f"; if it is gone, run: aws-bench run --fleet {fleet_dir} --force "
+            f"(resets the fleet), or: aws-bench down {fleet_dir}"
+        )
+        raise Refused(f"fleet is locked: {describe_lock(holder)}{hint}") from None
+    return lock
+
+
+def release_fleet_lock(fleet_dir: Path) -> None:
+    (fleet_dir / FLEET_LOCK).unlink(missing_ok=True)
+
+
+def lock_holder_alive(lock: FleetLock) -> bool:
+    """A lock from another host is assumed alive: its pid cannot be checked from here."""
+    if lock["hostname"] != socket.gethostname():
+        return True
+    try:
+        os.kill(lock["pid"], 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def describe_lock(lock: FleetLock) -> str:
+    state = "alive" if lock_holder_alive(lock) else "dead"
+    return (
+        f"run {lock['run']}, pid {lock['pid']} ({state}) on {lock['hostname']}, "
+        f"since {lock['taken_at'][:16]}"
+    )
+
+
+def check_run_allowed(
+    manifest: FleetManifest, cfg: RunConfig, now: datetime
+) -> RunEstimate:
+    """Raises `Refused` unless the fleet is idle (or, with `--force`, dirty or stale), has the
+    database mode and lives long enough for the run's worst case, the `/run/nologin` lock-out
+    and the destroy."""
+    name, phase = manifest["name"], manifest["phase"]
+    if phase not in (LIVE_PHASES if cfg.force else ("idle",)):
+        raise Refused(f"fleet {name} is {phase}, not idle")
+    if cfg.query_db not in manifest["db_modes"]:
+        raise Refused(
+            f"--query-db {cfg.query_db} was not provisioned: fleet {name} has "
+            f"{', '.join(manifest['db_modes'])}"
+        )
+    remaining_s = (datetime.fromisoformat(manifest["expires_at"]) - now).total_seconds()
+    if remaining_s <= 0:
+        raise Refused(
+            f"fleet {name} expired at {manifest['expires_at']}: see `aws-bench status "
+            f"{cfg.fleet}` and `aws-bench destroy --orphans`"
+        )
+    estimate = estimate_run(manifest, cfg)
+    needed_s = estimate["worst_s"] + NOLOGIN_LEAD_S + DESTROY_S
+    if remaining_s < needed_s:
+        raise Refused(
+            f"{remaining_s / 60:.0f} min left on fleet {name}, this run needs up to "
+            f"{needed_s / 60:.0f}: run: aws-bench extend {cfg.fleet} "
+            f"--ttl-min {math.ceil(needed_s / 60)}"
+        )
+    return estimate
+
+
+def reset_script(role: str) -> str:
+    """Stops the agents, removes every container and wipes what a run leaves on a host, keeping
+    what `up` put there. On the query host it also empties the Postgres data directory."""
+    keep = " ".join(f"! -name {name}" for name in RESET_KEEP)
+    script = (
+        "set -eu\n"
+        "for unit in bench-agent bench-host; do "
+        "if systemctl is-active --quiet $unit; then systemctl stop $unit; fi; done\n"
+        "ids=$(docker ps -aq)\n"
+        f'if [ -n "$ids" ]; then docker stop -t {int(FREEZE_STOP_TIMEOUT_S)} $ids; '
+        "docker rm -f $ids; fi\n"
+        "find /data/journal -mindepth 1 -delete\n"
+        f"find {BENCH_DIR} -mindepth 1 -maxdepth 1 {keep} -exec rm -rf {{}} +\n"
+    )
+    if role == "query":
+        script += "find /data/pg -mindepth 1 -delete\n"
+    return script
+
+
+def reset_chain(remote: Remote, interrupts: Interrupts) -> None:
+    """Every host in parallel: back to the state `up` left. Idempotent, so `run --force` can
+    repeat it after a failure. Anvil restarts from genesis afterwards, so every run starts at
+    height 0."""
+
+    def reset(host: str) -> None:
+        interrupts.check()
+        remote.ssh(host, bounded(reset_script(remote.hosts[host]["role"])))
+
+    remote.parallel(reset, remote.hosts)
+
+
+def write_run_cost(run: Run) -> dict[str, float]:
+    """The fleet's hourly rate over the run's wall time, from its start to now."""
+    rate = estimate_rate(run.fleet.manifest["estimate"])
+    duration_s = time.time() - run.started
+    cost = {
+        "usd_per_hour": rate,
+        "duration_s": duration_s,
+        "usd": rate * duration_s / 3600,
+    }
+    nb.write_json(run.run_dir / "cost.json", cost)
+    return cost
+
+
+def end_fleet_run(run: Run, result: nb.BenchResult | None, reset_failed: bool) -> int:
+    fleet = run.fleet
+    code = exit_code(run.error, result, True)
+    try:
+        cost = write_run_cost(run)
+        update_manifest(run.manifest_path, "done")
+        append_index(
+            fleet.fleet_dir.parent,
+            index_row(run.manifest, run.run_dir.name, result, code, cost),
+        )
+    finally:
+        settle_fleet(fleet, reset_failed)
+    log.info(
+        "run dir %s; fleet %s, %.0f min left",
+        run.run_dir,
+        fleet.manifest["phase"],
+        minutes_left(fleet.manifest, datetime.now(UTC)),
+    )
+    return code
+
+
+def settle_fleet(fleet: FleetState, dirty: bool) -> None:
+    """Back to `idle` and unlocked, or `dirty` with the lock kept so that only `--force` or
+    `down` can follow a failed reset."""
+    if dirty:
+        update_manifest(fleet.manifest_path, "dirty")
+        log.error(
+            "reset failed, fleet is dirty and locked; run: aws-bench run --fleet %s --force, "
+            "or: aws-bench down %s",
+            fleet.fleet_dir,
+            fleet.fleet_dir,
+        )
+        return
+    update_manifest(fleet.manifest_path, "idle")
+    release_fleet_lock(fleet.fleet_dir)
+
+
+def cmd_extend(
+    args: argparse.Namespace, run: Runner = _run, now: datetime | None = None
+) -> int:
+    fleet_dir: Path = args.dir
+    read_fleet(fleet_dir)
+    setup_logging(fleet_dir)
+    fleet = open_fleet(run, fleet_dir, Interrupts())
+    extend_fleet(fleet, args.ttl_min, now or datetime.now(UTC))
+    return EXIT_OK
+
+
+def extend_fleet(fleet: FleetState, ttl_min: int, now: datetime) -> None:
+    """Moves the expiry to `now` + `ttl_min`: the shutdown timer on every host, then the
+    `espresso-bench-expires` tag on every resource, then `fleet.json`."""
+    manifest = fleet.manifest
+    if manifest["phase"] not in LIVE_PHASES:
+        raise Refused(f"fleet {manifest['name']} is {manifest['phase']}, not live")
+    old = datetime.fromisoformat(manifest["expires_at"])
+    lockout = old - timedelta(seconds=NOLOGIN_LEAD_S)
+    if now >= lockout:
+        raise Refused(
+            f"ssh has been locked out since {lockout:%H:%M} UTC, the hosts end at "
+            f"{old:%H:%M} UTC: up a new fleet"
+        )
+    new = (now + timedelta(minutes=ttl_min)).replace(microsecond=0)
+    if new <= old:
+        raise Refused(f"{new:%H:%M} UTC is not after the expiry, {old:%H:%M} UTC")
+    bound = fleet_bound_usd(manifest, new)
+    max_usd = manifest["config"]["max_usd"]
+    if bound > max_usd:
+        raise Refused(
+            f"bound ${bound:.2f} at {new:%H:%M} UTC exceeds the fleet's --max-usd ${max_usd:.2f}"
+        )
+    remote = fleet.remote
+    assert remote is not None
+    remote.parallel(
+        lambda host: remote.ssh(host, bounded(rearm_ttl_script(ttl_min))), remote.hosts
+    )
+    stamp = expiry_stamp(new)
+    retag_expiry(fleet.run, fleet.cfg, manifest["name"], stamp)
+    lifetime_s = (new - datetime.fromisoformat(manifest["created_at"])).total_seconds()
+    update_manifest(
+        fleet.manifest_path,
+        manifest["phase"],
+        expires_at=stamp,
+        estimate={**manifest["estimate"], "ttl_s": lifetime_s, "bound_usd": bound},
+    )
+    log.info("expires %s UTC, bound $%.2f", f"{new:%H:%M}", bound)
+
+
+def rearm_ttl_script(ttl_min: int) -> str:
+    return f"shutdown -c; shutdown -P +{ttl_min}"
+
+
+def retag_expiry(run: Runner, cfg: RunConfig, name: str, expires_at: str) -> None:
+    arns = tagged_resources(run, cfg.region, name, cfg.profile)
+    for start in range(0, len(arns), RETAG_BATCH):
+        out = aws_ok(
+            run,
+            cfg.profile,
+            "resourcegroupstaggingapi",
+            "tag-resources",
+            "--region",
+            cfg.region,
+            "--resource-arn-list",
+            *arns[start : start + RETAG_BATCH],
+            "--tags",
+            f"{TAG_EXPIRES}={expires_at}",
+            "--output",
+            "json",
+        )
+        failed = json.loads(out)["FailedResourcesMap"]
+        if failed:
+            raise RemoteError(f"tag-resources failed for: {', '.join(failed)}")
+
+
+def cmd_down(args: argparse.Namespace, run: Runner = _run) -> int:
+    return destroy_run(run, args)
+
+
 def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None:
     log.info(
         "account %s (%s) %s, az %s, ami %s",
@@ -2661,38 +3418,42 @@ def render_run_dir(
     argv: list[str],
     which: Callable[[str], str | None] = shutil.which,
 ) -> Path:
-    """Everything known before `tofu apply`, returning the run dir. Files that need the hosts'
-    addresses (env files, start.sh, topology) are written by `render_host_files` after it."""
+    """The fleet dir and its first run dir, everything known before `tofu apply`. Files that
+    need the hosts' addresses (env files, start.sh, topology) are written by `render_host_files`
+    after it."""
+    fleet = render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, argv, which)
+    return render_run(fleet_dir, fleet, cfg, SINGLE_RUN)
+
+
+def render_fleet_dir(
+    run: Runner,
+    cfg: RunConfig,
+    fleet_dir: Path,
+    hosts: list[HostSpec],
+    pre: Preflight,
+    estimate: Estimate,
+    argv: list[str],
+    which: Callable[[str], str | None] = shutil.which,
+) -> FleetManifest:
     ssh_pub = resolve_ssh_pub(run, cfg, fleet_dir, which)
     cidr = operator_cidr(cfg)
     git_rev = git_head(run)
-    genesis = render_genesis(
-        Path(cfg.load.genesis).read_bytes(), cfg.nodes, cfg.max_block_size
+    write_fleet_manifest(
+        fleet_dir, cfg, hosts, plan_peers(hosts), estimate, "planned", argv
     )
-    run_dir = new_run_dir(fleet_dir, SINGLE_RUN)
-    write_manifest(
-        fleet_dir, run_dir, cfg, hosts, plan_peers(hosts), estimate, "planned", argv
-    )
-    known = {
-        "az": pre["az"],
-        "ami_id": pre["ami_id"],
-        "images": pre["images"],
-        "git_rev": git_rev,
-        "ssh_public_key": ssh_pub,
-        "cost_usd": {
+    fleet = update_manifest(
+        fleet_dir / FLEET_JSON,
+        "planned",
+        az=pre["az"],
+        ami_id=pre["ami_id"],
+        images=pre["images"],
+        git_rev=git_rev,
+        ssh_public_key=ssh_pub,
+        cost_usd={
             "expected": estimate["expected_usd"],
             "bound": estimate["bound_usd"],
         },
-    }
-    update_manifest(fleet_dir / FLEET_JSON, "planned", **known)
-    update_manifest(
-        run_dir / "manifest.json",
-        "planned",
-        **known,
-        config_hash=run_config_hash(cfg, hosts, pre["images"], genesis),
     )
-    (run_dir / "genesis.toml").write_bytes(genesis)
-    nb.write_json(run_dir / "config.json", dataclasses.asdict(cfg.load))
     for host in hosts:
         host_dir = fleet_dir / "hosts" / host["name"]
         host_dir.mkdir(parents=True)
@@ -2718,6 +3479,35 @@ def render_run_dir(
         pre["ami_id"],
     )
     nb.write_json(tf_dir / "terraform.tfvars.json", tfvars)
+    return fleet
+
+
+def render_run(
+    fleet_dir: Path,
+    fleet: FleetManifest,
+    cfg: RunConfig,
+    name: str,
+    run_estimate: RunEstimate | None = None,
+) -> Path:
+    """`runs/<nn>-<name>/` with its manifest, genesis and load config. Without a
+    `run_estimate` this is the run of a single shot, which also provisions."""
+    genesis = render_genesis(
+        Path(cfg.load.genesis).read_bytes(), cfg.nodes, cfg.max_block_size
+    )
+    run_dir = new_run_dir(fleet_dir, name)
+    phases = phase_seconds(cfg) if run_estimate is None else run_phase_seconds(cfg)
+    manifest = build_run_manifest(
+        fleet,
+        cfg,
+        run_index(run_dir),
+        phases,
+        run_config_hash(cfg, fleet["hosts"], fleet["images"], genesis),
+        run_estimate,
+    )
+    nb.write_json(run_dir / "manifest.json", manifest)
+    append_event(run_dir, "planned", "manifest-written", None)
+    (run_dir / "genesis.toml").write_bytes(genesis)
+    nb.write_json(run_dir / "config.json", dataclasses.asdict(cfg.load))
     return run_dir
 
 
@@ -3367,6 +4157,8 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
     )
     for path in sorted((fleet_dir / RUNS_DIR).glob("*/manifest.json")):
         print(f"- {path.parent.name}: phase {nb.read_json(path)['phase']}")
+    if manifest["phase"] in LIVE_PHASES:
+        print_fleet_live(fleet_dir, manifest, now)
     if manifest["phase"] == "planned":
         print("- no instances: planned only")
         return EXIT_OK
@@ -3396,6 +4188,16 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
         print(f"- agent: {format_agent(read_agent_state(remote))}")
     print(f"- cost: {status_cost(run, manifest, instances, now)}")
     return EXIT_OK
+
+
+def print_fleet_live(fleet_dir: Path, manifest: FleetManifest, now: datetime) -> None:
+    print(
+        f"- expires {manifest['expires_at'][:16]} UTC, "
+        f"{minutes_left(manifest, now):.0f} min left"
+    )
+    lock_path = fleet_dir / FLEET_LOCK
+    if lock_path.exists():
+        print(f"- lock: {describe_lock(nb.read_json(lock_path))}")
 
 
 def format_agent(state: AgentState | None) -> str:
@@ -3431,7 +4233,7 @@ def status_all(run: Runner, args: argparse.Namespace, now: datetime) -> int:
 
 def destroy_run(run: Runner, args: argparse.Namespace) -> int:
     fleet_dir: Path = args.dir
-    manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
+    manifest = read_fleet(fleet_dir)
     name = manifest["name"]
     if manifest["phase"] == "planned":
         raise Refused(f"{name} was only planned: nothing was created")
@@ -3444,20 +4246,55 @@ def destroy_run(run: Runner, args: argparse.Namespace) -> int:
     cfg = config_from_manifest(manifest["config"])
     tf = Terraform(run, cfg.tf, fleet_dir / "terraform", terraform_env())
     fleet = FleetState(run, cfg, fleet_dir, tf, Interrupts())
+    if manifest["phase"] == "running":
+        remote = Remote(
+            run,
+            fleet_dir,
+            ssh_key_path(cfg.ssh_key, fleet_dir),
+            provisioned_hosts(manifest),
+        )
+        best_effort("stop agent", lambda: stop_agent(remote))
     update_manifest(fleet.manifest_path, "destroying")
     if not destroy_fleet(fleet):
         update_manifest(fleet.manifest_path, "left-running")
         log.error("resources may remain, run: aws-bench destroy %s", fleet_dir)
         return EXIT_LEFTOVER
-    cost = final_cost(fleet)
-    update_manifest(fleet.manifest_path, "done")
-    result_path = last_run_dir(fleet_dir) / "result.json"
-    result = nb.read_json(result_path) if result_path.exists() else None
-    code = exit_code(None, result, True)
-    append_index(fleet_dir.parent, manifest, result, code, True, cost)
-    remove_ssh_key(cfg.ssh_key, fleet_dir)
-    log.info("destroyed %s", name)
+    cost = close_fleet(fleet, True)
+    release_fleet_lock(fleet_dir)
+    append_index(
+        fleet_dir.parent,
+        fleet_index_row(manifest, len(run_dirs(fleet_dir)), cost, EXIT_OK),
+    )
+    log_down(fleet_dir, cost)
     return EXIT_OK
+
+
+def run_dirs(fleet_dir: Path) -> list[Path]:
+    return sorted((fleet_dir / RUNS_DIR).glob("*"))
+
+
+def log_down(fleet_dir: Path, cost: dict[str, float] | None) -> None:
+    """The fleet's actual cost, then one row per run."""
+    runs = run_dirs(fleet_dir)
+    if cost is None:
+        log.info("destroyed %s; %d runs", fleet_dir.name, len(runs))
+    else:
+        log.info(
+            "destroyed; actual cost $%.2f (bound $%.2f); %d runs",
+            cost["actual"],
+            cost["bound"],
+            len(runs),
+        )
+    for run_dir in runs:
+        result_path = run_dir / "result.json"
+        status = (
+            nb.verdict_word(nb.read_json(result_path)["validity"])
+            if result_path.exists()
+            else "failed"
+        )
+        cost_path = run_dir / "cost.json"
+        usd = f"${nb.read_json(cost_path)['usd']:.2f}" if cost_path.exists() else "-"
+        log.info("- %s: %s, %s", run_dir.name, status, usd)
 
 
 def destroy_orphans(run: Runner, args: argparse.Namespace, now: datetime) -> int:
@@ -3509,6 +4346,8 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
         "load": load_config(dict(saved["load"])),
         "out_root": Path(saved["out_root"]),
         "price": tuple(saved["price"]),
+        "db_modes": tuple(saved["db_modes"]),
+        "fleet": None if saved["fleet"] is None else Path(saved["fleet"]),
     }
     return RunConfig(**fields)
 
@@ -4162,19 +5001,20 @@ def manifest_cost(manifest: FleetManifest, duration_s: float) -> float:
 
 
 INDEX_HEADER = (
-    "| name | utc | git | tag@rev | N | rate MB/s | decided MB/s | kept up | lag p99 ms "
-    "| status | exit | cost bound/actual | destroyed |\n"
+    "| fleet/run | utc | git | tag@rev | N | db | rate MB/s | decided MB/s | kept up "
+    "| lag p99 ms | status | exit | cost run |\n"
     "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
 )
 
 
 def index_row(
-    manifest: FleetManifest,
+    manifest: Manifest,
+    run_name: str,
     result: nb.BenchResult | None,
     code: int,
-    destroyed: bool,
     cost: dict[str, float] | None,
 ) -> str:
+    """One measurement. The fleet rows written by `fleet_index_row` share the file."""
     rate = decided = kept_up = lag = "-"
     status = "failed"
     if result is not None:
@@ -4192,38 +5032,46 @@ def index_row(
             quantiles = passing[-1]["query_lag_ms"]
             lag = f"{quantiles['p99']:.0f}" if quantiles else "-"
     revision = (manifest["images"]["espresso-node"]["revision"] or "-")[:10]
-    actual = f"{cost['actual']:.2f}" if cost else "-"
     cells = [
-        manifest["name"],
+        f"{manifest['fleet']}/{run_name}",
         manifest["created_at"][:16],
         manifest["git_rev"][:10],
         f"{manifest['config']['tag']}@{revision}",
         str(manifest["config"]["nodes"]),
+        manifest["query_db"],
         rate,
         decided,
         kept_up,
         lag,
         status,
         str(code),
-        f"{manifest['estimate']['bound_usd']:.2f}/{actual}",
-        "yes" if destroyed else "no",
+        f"{cost['usd']:.2f}" if cost else "-",
     ]
     return "| " + " | ".join(cells) + " |\n"
 
 
-def append_index(
-    out_root: Path,
-    manifest: FleetManifest,
-    result: nb.BenchResult | None,
-    code: int,
-    destroyed: bool,
-    cost: dict[str, float] | None,
-) -> None:
+def fleet_index_row(
+    manifest: FleetManifest, runs: int, cost: dict[str, float] | None, code: int
+) -> str:
+    """`fleet | utc | git | runs | bound | actual | exit`, written when the fleet is destroyed."""
+    cells = [
+        manifest["name"],
+        manifest["created_at"][:16],
+        manifest["git_rev"][:10],
+        str(runs),
+        f"{manifest['estimate']['bound_usd']:.2f}",
+        f"{cost['actual']:.2f}" if cost else "-",
+        str(code),
+    ]
+    return "| " + " | ".join(cells) + " |\n"
+
+
+def append_index(out_root: Path, row: str) -> None:
     path = out_root / "INDEX.md"
     with path.open("a") as f:
         if f.tell() == 0:
             f.write(INDEX_HEADER)
-        f.write(index_row(manifest, result, code, destroyed, cost))
+        f.write(row)
 
 
 class AgentReporter(logging.Handler):
@@ -4507,7 +5355,7 @@ def main() -> int:
     argv = sys.argv[1:]
     args = parse_args(argv)
     args.argv = argv
-    if args.command in ("status", "destroy"):
+    if args.command in ("status", "destroy", "down", "extend"):
         logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         return args.func(args)
