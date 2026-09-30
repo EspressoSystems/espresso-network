@@ -327,7 +327,7 @@ where
                     }
                 }
             },
-            CoordinatorEvent::BlockPayloadReconstructed {
+            CoordinatorEvent::BlockPayload {
                 header, payload, ..
             } => {
                 let block = BlockQueryData::new(header.clone(), payload.as_ref().clone());

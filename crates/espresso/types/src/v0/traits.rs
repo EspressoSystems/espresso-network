@@ -913,7 +913,7 @@ pub trait SequencerPersistence:
                 }
                 Some((decided_view, None))
             },
-            CoordinatorEvent::BlockPayloadReconstructed {
+            CoordinatorEvent::BlockPayload {
                 view,
                 header,
                 payload,
@@ -1026,7 +1026,7 @@ pub trait SequencerPersistence:
     /// [`process_decided_events`](Self::process_decided_events) attaches a stored payload to the
     /// decided leaf of the same view and header. It sends every other stored payload at or below
     /// the newest decided view to its consumer as a separate
-    /// [`CoordinatorEvent::BlockPayloadReconstructed`], then deletes them all. A payload stored
+    /// [`CoordinatorEvent::BlockPayload`], then deletes them all. A payload stored
     /// for a view that was already processed goes out with the next decide. The consumer must
     /// check separate payloads against the decided leaf, since forks and timed-out views are sent
     /// too.

@@ -158,7 +158,7 @@ pub enum ConsensusOutput<T: NodeType> {
     /// Notifies downstream consumers (e.g. the query service) so they can store
     /// the payload even if the corresponding view has already been decided
     /// without a payload in the decide event.
-    BlockPayloadReconstructed {
+    BlockPayload {
         view: ViewNumber,
         header: T::BlockHeader,
         payload: Arc<T::BlockPayload>,
