@@ -973,15 +973,15 @@ class LoadTest(unittest.TestCase):
 
     def test_keep_going_runs_every_step_then_waits_for_the_backlog(self):
         # 0.08 MB/s of capacity: both steps fail and leave 60 txs behind.
-        with mock.patch.object(netbench, "COUNTER_POLL_S", 0.05):
-            _, _, _, meta = self.run_load(
-                True,
-                1.0,
-                block_txs=4,
-                steps=(0.1, 0.12),
-                tx_timeout_s=10,
-                keep_going=True,
-            )
+        _, _, _, meta = self.run_load(
+            True,
+            STEP_S,
+            block_txs=4,
+            steps=(0.1, 0.12),
+            tx_timeout_s=10,
+            keep_going=True,
+            scale=50,
+        )
         self.assertEqual(
             [
                 (s["rate_mb_s"], s["refine"], bool(s["consensus_fails"]))
@@ -994,17 +994,17 @@ class LoadTest(unittest.TestCase):
 
     def test_keep_going_reports_a_backlog_that_does_not_drain(self):
         with (
-            mock.patch.object(netbench, "COUNTER_POLL_S", 0.05),
             mock.patch.object(netbench, "drain", mock.AsyncMock(return_value=None)),
             self.assertLogs(netbench.log, "WARNING"),
         ):
             _, _, _, meta = self.run_load(
                 True,
-                1.0,
+                STEP_S,
                 block_txs=4,
                 steps=(0.1, 0.12),
                 tx_timeout_s=1,
                 keep_going=True,
+                scale=50,
             )
         self.assertEqual([s["rate_mb_s"] for s in self.steps], [0.1, 0.12])
         self.assertIsNone(meta["drain_s"])
@@ -1012,7 +1012,6 @@ class LoadTest(unittest.TestCase):
 
     def test_steps_survive_a_failure_in_the_last_drain(self):
         with (
-            mock.patch.object(netbench, "COUNTER_POLL_S", 0.05),
             mock.patch.object(
                 netbench, "drain", mock.AsyncMock(side_effect=OSError("gone"))
             ),
@@ -1020,11 +1019,12 @@ class LoadTest(unittest.TestCase):
         ):
             self.run_load(
                 True,
-                1.0,
+                STEP_S,
                 block_txs=4,
                 steps=(0.1, 0.12),
                 tx_timeout_s=1,
                 keep_going=True,
+                scale=50,
             )
         self.assertEqual([s["rate_mb_s"] for s in self.steps], [0.1, 0.12])
 
@@ -1094,11 +1094,10 @@ class ReadyStatusTest(unittest.TestCase):
 
 
 class IsDrainedTest(unittest.TestCase):
-    def test_drained_needs_all_three_conditions(self):
-        self.assertTrue(netbench.is_drained(0, True, True))
-        self.assertFalse(netbench.is_drained(1, True, True))
-        self.assertFalse(netbench.is_drained(0, False, True))
-        self.assertFalse(netbench.is_drained(0, True, False))
+    def test_drained_needs_no_pending_and_flat_bytes(self):
+        self.assertTrue(netbench.is_drained(0, True))
+        self.assertFalse(netbench.is_drained(1, True))
+        self.assertFalse(netbench.is_drained(0, False))
 
 
 class DriveLoadTest(unittest.TestCase):
@@ -1742,13 +1741,15 @@ class ClosingHandler(BaseHTTPRequestHandler):
 class HttpPoolTest(unittest.TestCase):
     def test_stale_connection_is_retried_on_a_fresh_one(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), ClosingHandler)
-        thread = threading.Thread(target=server.serve_forever)
+        thread = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.01}
+        )
         thread.start()
         url = f"http://127.0.0.1:{server.server_address[1]}/x"
         pool = netbench.HttpPool()
         try:
             self.assertEqual(pool.request("GET", url), (200, b"42"))
-            time.sleep(0.1)
+            time.sleep(0.02)
             self.assertEqual(pool.request("GET", url), (200, b"42"))
         finally:
             pool.close()

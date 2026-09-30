@@ -4,6 +4,7 @@ Only a single test over `--max-test-s` fails the run. The suite total is advisor
 """
 
 import argparse
+import functools
 import sys
 import time
 import unittest
@@ -11,10 +12,9 @@ from typing import Any
 
 
 class TimedResult(unittest.TextTestResult):
-    slowest_n = 10
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, slowest_n: int = 10, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        self.slowest_n = slowest_n
         self.timings: list[tuple[float, str]] = []
         self._started = 0.0
 
@@ -57,17 +57,17 @@ def main(argv: list[str]) -> int:
         loader.testNamePatterns = [n if "*" in n else f"*{n}*" for n in args.names]
     suite = loader.discover(args.start_directory, pattern=args.pattern)
 
-    TimedResult.slowest_n = args.slowest
-    result = unittest.TextTestRunner(resultclass=TimedResult, stream=sys.stderr).run(
-        suite
-    )
+    result = unittest.TextTestRunner(
+        resultclass=functools.partial(TimedResult, slowest_n=args.slowest),
+        stream=sys.stderr,
+    ).run(suite)
     assert isinstance(result, TimedResult)
 
     if args.max_test_s is not None:
         slow = result.over_limit(args.max_test_s)
         for seconds, name in slow:
             print(
-                f"test {name} took {seconds:.1f} s, limit {args.max_test_s:g} s",
+                f"test {name} took {seconds:.2f} s, limit {args.max_test_s:g} s",
                 file=sys.stderr,
             )
         if slow:

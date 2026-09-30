@@ -70,7 +70,6 @@ class FleetHarness:
         self.out = self.tmp / "out"
         self.fleet_dir = self.out / name
         patches = [
-            unittest.mock.patch.object(awsb, "DOCKER_START_LEAD_S", 0.0),
             unittest.mock.patch.object(
                 awsb, "preflight", return_value=fake_preflight()
             ),
@@ -563,6 +562,8 @@ def respond_to_pulls(runner: FleetRunner, wrong: dict[str, str] | None = None) -
     replaced = wrong or {}
 
     def pull(argv: list[str]) -> subprocess.CompletedProcess:
+        if not argv[-1].startswith("sudo timeout"):
+            return runner.default(argv)
         script = shlex.split(argv[-1])[-1]
         pulls = re.findall(r"docker pull (\S+)@(\S+) >&2", script)
         names = re.findall(r"--arg name (\S+) ", script)
@@ -573,6 +574,8 @@ def respond_to_pulls(runner: FleetRunner, wrong: dict[str, str] | None = None) -
         return completed(stdout=json.dumps(digests))
 
     def record(argv: list[str]) -> subprocess.CompletedProcess:
+        if not argv[-1].startswith("sudo timeout"):
+            return runner.default(argv)
         script = shlex.split(argv[-1])[-1]
         printf = next(l for l in script.splitlines() if l.startswith("printf"))
         digests = json.loads(shlex.split(printf)[2])

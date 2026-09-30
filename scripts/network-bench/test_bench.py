@@ -120,6 +120,8 @@ class CmdRunTest(unittest.TestCase):
     def cmd_run(self, tmp, **patches):
         out, storage = Path(tmp) / "out", Path(tmp) / "storage"
         storage.mkdir()
+        env_file = Path(tmp) / ".env"
+        env_file.write_text("A=1\n")
         args = bench.parse_args(["run", "--bin-dir", "/nonexistent", "--out", str(out)])
         calib = {"sha256_1t_mb_s": 1.0, "sha256_mt_mb_s": 1.0, "fsync_per_s": 1.0}
         stubs = {
@@ -134,6 +136,7 @@ class CmdRunTest(unittest.TestCase):
                 # Moved symbols are called through `nb.`; patch them on netbench.
                 target = bench if hasattr(bench, name) else netbench
                 stack.enter_context(mock.patch.object(target, name, stub))
+            stack.enter_context(mock.patch.object(bench, "ENV_FILE", env_file))
             stack.enter_context(mock.patch("builtins.print"))
             code = bench.cmd_run(args)
         return code, out

@@ -44,6 +44,7 @@ import dataclasses
 import getpass
 import gzip
 import hashlib
+import itertools
 import json
 import logging
 import math
@@ -59,7 +60,6 @@ import string
 import subprocess
 import sys
 import threading
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -2892,6 +2892,7 @@ def cmd_plan(
     args: argparse.Namespace,
     run: Runner = _run,
     which: Callable[[str], str | None] = shutil.which,
+    clock: nb.Clock = nb.SYSTEM_CLOCK,
 ) -> int:
     cfg = dataclasses.replace(
         config_from_args(args), db_modes=args.db_modes, ttl_min=args.ttl_min
@@ -2899,7 +2900,7 @@ def cmd_plan(
     fleet = cfg.ttl_min != "auto"
     if fleet and not cfg.offline:
         raise Refused("plan --ttl-min renders a fleet and needs --offline")
-    now = time.time()
+    now = clock.time()
     if cfg.offline:
         fleet_dir = new_fleet_dir(cfg.out_root, cfg.name)
         setup_logging(fleet_dir)
@@ -3157,6 +3158,7 @@ class Run:
     run_dir: Path
     cfg: RunConfig
     started: float
+    dotenv_text: str
     agent: AgentState | None = None
     agent_started: bool = False
     error: str | None = None
@@ -3193,6 +3195,7 @@ def cmd_run(
     if args.tag is None:
         raise Refused("run needs --tag, or --fleet DIR to measure on a fleet from `up`")
     cfg = dataclasses.replace(fleet_config_from_args(args), db_modes=(args.query_db,))
+    dotenv_text = read_dotenv(REPO_ROOT / ".env")
     install = interrupts is None
     interrupts = interrupts or Interrupts()
     started = interrupts.clock.time()
@@ -3204,7 +3207,7 @@ def cmd_run(
         interrupts.install()
     try:
         fleet = FleetState(run, cfg, fleet_dir, tf, interrupts)
-        bench_run = Run(fleet, run_dir, cfg, started)
+        bench_run = Run(fleet, run_dir, cfg, started, dotenv_text)
         with recording(bench_run):
             up_fleet(fleet)
         result = run_on_fleet(bench_run)
@@ -3370,7 +3373,7 @@ def measure_run(run: Run) -> None:
             run.cfg,
             fleet.manifest,
             remote.hosts,
-            read_dotenv(REPO_ROOT / ".env"),
+            run.dotenv_text,
         )
         enter_phase(
             fleet, run.manifest_path, "shipping", "files, host monitors, containers"
@@ -3672,9 +3675,7 @@ def destroy_verdict(attempt: int, ok: bool) -> Literal["done", "retry", "sweep"]
 def destroy_fleet(fleet: FleetState) -> bool:
     """`tofu destroy` with retries, then a tag sweep. False when `tofu destroy` never worked,
     even if the sweep found and terminated everything: the state file is then out of date."""
-    attempt = 0
-    while True:
-        attempt += 1
+    for attempt in itertools.count(1):
         verdict = destroy_verdict(attempt, try_destroy(fleet, attempt))
         if verdict == "done":
             return True
@@ -3816,6 +3817,7 @@ def cmd_run_fleet(
     """One more measurement on a fleet `up` left idle. The fleet stays up in every outcome:
     idle again, or `dirty` and locked when the pull or reset failed."""
     reject_fleet_flags(args.argv)
+    dotenv_text = read_dotenv(REPO_ROOT / ".env")
     fleet_dir: Path = args.fleet
     manifest = read_fleet(fleet_dir)
     setup_logging(fleet_dir)
@@ -3827,7 +3829,7 @@ def cmd_run_fleet(
     cfg = fleet_run_config(args, manifest)
     name = cfg.name if cfg.name is not None else cfg.query_db
     run_dir, estimate = admit_run(fleet_dir, manifest, cfg, name)
-    bench_run = Run(fleet, run_dir, cfg, interrupts.clock.time())
+    bench_run = Run(fleet, run_dir, cfg, interrupts.clock.time(), dotenv_text)
     log.info(
         "run %s: incremental cost $%.2f (%.0f min worst), %.0f min left on the fleet",
         run_dir.name,
@@ -4871,11 +4873,11 @@ def genesis_contracts(run_dir: Path) -> list[str]:
 
 
 def retry_verdict(
-    rc: int, ok_rcs: tuple[int, ...], now: float, deadline: float
+    ok: bool, now: float, deadline: float
 ) -> Literal["ok", "retry", "timeout"]:
-    """Outcome of one attempt of a poll-until-ready loop: `rc` accepted, or retry until
-    `deadline` on the clock `now` reads."""
-    if rc in ok_rcs:
+    """Outcome of one attempt of a poll-until-ready loop: `ok`, or retry until `deadline` on
+    the clock `now` reads."""
+    if ok:
         return "ok"
     return "timeout" if now >= deadline else "retry"
 
@@ -4886,7 +4888,7 @@ def wait_ssh(remote: Remote, host: str, interrupts: Interrupts) -> None:
     while True:
         result = remote.ssh(host, "true", check=False)
         verdict = retry_verdict(
-            result.returncode, (0,), interrupts.clock.monotonic(), deadline
+            result.returncode == 0, interrupts.clock.monotonic(), deadline
         )
         if verdict == "ok":
             return
@@ -5000,7 +5002,7 @@ def gate(
     while True:
         result = remote.ssh(host, command, check=False)
         verdict = retry_verdict(
-            result.returncode, (0,), interrupts.clock.monotonic(), deadline
+            result.returncode == 0, interrupts.clock.monotonic(), deadline
         )
         if verdict == "ok":
             return
@@ -5020,39 +5022,54 @@ def rpc_check(method: str, params: list[str], jq_filter: str) -> str:
     )
 
 
-class SupportStart(TypedDict):
+class GateStart(TypedDict):
+    kind: Literal["gate"]
     host: str
     # `docker start` target; None for a check on a container that is already running.
     container: str | None
     what: str
-    # None for `deploy`, which exits instead of serving: `docker wait` for at most `timeout_s`.
-    gate_cmd: str | None
+    gate_cmd: str
     timeout_s: float
+
+
+class DeployStart(TypedDict):
+    """`deploy` exits instead of serving: `docker wait` for at most `timeout_s`."""
+
+    kind: Literal["deploy"]
+    host: str
+    container: str
+    what: str
+    timeout_s: float
+
+
+SupportStart = GateStart | DeployStart
 
 
 def support_plan(query_db: DbMode, contracts: list[str]) -> list[SupportStart]:
     """The support services in start order, each with the check that gates the next. The rds
     instance is only checked: it is already running."""
-    plan = [
-        SupportStart(
+    plan: list[SupportStart] = [
+        GateStart(
+            kind="gate",
             host="ctl",
             container="anvil",
             what="anvil eth_chainId",
             gate_cmd=rpc_check("eth_chainId", [], ".result"),
             timeout_s=GATE_TIMEOUT_S,
         ),
-        SupportStart(
+        DeployStart(
+            kind="deploy",
             host="ctl",
             container="deploy",
             what="deploy",
-            gate_cmd=None,
             timeout_s=DEPLOY_TIMEOUT_S,
         ),
     ]
     for address in contracts:
         check = rpc_check("eth_getCode", [address, "latest"], '.result != "0x"')
         plan.append(
-            SupportStart(
+            GateStart(
+                kind="gate",
                 host="ctl",
                 container=None,
                 what=f"eth_getCode {address}",
@@ -5061,21 +5078,24 @@ def support_plan(query_db: DbMode, contracts: list[str]) -> list[SupportStart]:
             )
         )
     plan += [
-        SupportStart(
+        GateStart(
+            kind="gate",
             host="ctl",
             container="orchestrator",
             what="orchestrator healthcheck",
             gate_cmd=f"curl -sf http://localhost:{ORCHESTRATOR_PORT}/healthcheck",
             timeout_s=GATE_TIMEOUT_S,
         ),
-        SupportStart(
+        GateStart(
+            kind="gate",
             host="ctl",
             container="state-relay-server",
             what="relay healthcheck",
             gate_cmd=f"curl -sf http://localhost:{RELAY_PORT}/healthcheck",
             timeout_s=GATE_TIMEOUT_S,
         ),
-        SupportStart(
+        GateStart(
+            kind="gate",
             host="node0",
             container=None if query_db == "rds" else "postgres",
             what="pg_isready",
@@ -5088,7 +5108,8 @@ def support_plan(query_db: DbMode, contracts: list[str]) -> list[SupportStart]:
         ("pg stats reset", reset_pg_stats_sql()),
     ):
         plan.append(
-            SupportStart(
+            GateStart(
+                kind="gate",
                 host="node0",
                 container=None,
                 what=what,
@@ -5111,8 +5132,8 @@ def start_support(
         host = step["host"]
         if step["container"] is not None:
             remote.ssh(host, f"sudo docker start {step['container']}")
-        if step["gate_cmd"] is None:
-            wait_deploy(remote, step["timeout_s"])
+        if step["kind"] == "deploy":
+            wait_deploy(remote, host, step["container"], step["timeout_s"])
         else:
             gate(
                 remote,
@@ -5124,19 +5145,20 @@ def start_support(
             )
 
 
-def wait_deploy(remote: Remote, timeout_s: float) -> None:
+def wait_deploy(remote: Remote, host: str, container: str, timeout_s: float) -> None:
     waited = remote.ssh(
-        "ctl", f"sudo timeout {timeout_s} docker wait deploy", check=False
+        host, f"sudo timeout {timeout_s} docker wait {container}", check=False
     )
     if waited.returncode == TIMEOUT_RC:
-        raise RemoteError(f"deploy still running after {timeout_s} s")
+        raise RemoteError(f"{container} still running after {timeout_s} s")
     if waited.returncode != 0:
         raise RemoteError(
-            f"docker wait deploy exited {waited.returncode}: {waited.stderr.strip()}"
+            f"docker wait {container} exited {waited.returncode}: {waited.stderr.strip()}"
         )
     if waited.stdout.strip() != "0":
         raise RemoteError(
-            f"deploy exited with status {waited.stdout.strip()}; see docker logs on ctl"
+            f"{container} exited with status {waited.stdout.strip()}; "
+            f"see docker logs on {host}"
         )
 
 
@@ -5310,12 +5332,14 @@ def poll_agent(
         poll = step["state"]
         if step["error"] is not None:
             raise RemoteError(step["error"])
-        latest = cast(AgentState, poll["state"])
+        latest = poll["state"]
         if step["done"]:
+            assert latest is not None
             return latest
         if step["retry"]:
             log.warning("ctl unreachable, retrying: %s", probe.stderr.strip())
         if step["log"]:
+            assert latest is not None
             log.info(
                 "%s: %s", latest["phase"], latest.get("progress", latest["detail"])
             )
@@ -6805,11 +6829,19 @@ def tagged_resources(
     return list(json.loads(out))
 
 
-class SweepStep(TypedDict):
-    action: Literal["aws", "delete_rds", "delete_security_group"]
-    # `aws_ok` arguments after the profile for "aws"; else the id of the resource.
+class AwsStep(TypedDict):
+    action: Literal["aws"]
+    # `aws_ok` arguments after the profile.
     args: list[str]
     tolerate: str | None
+
+
+class ResourceStep(TypedDict):
+    action: Literal["delete_rds", "delete_security_group"]
+    resource: str
+
+
+SweepStep = AwsStep | ResourceStep
 
 
 def sweep_plan(arns: list[str], region: str) -> list[SweepStep]:
@@ -6824,11 +6856,11 @@ def sweep_plan(arns: list[str], region: str) -> list[SweepStep]:
 
     def delete(
         service: str, verb: str, id_flag: str, resource_id: str, tolerate: str | None
-    ) -> SweepStep:
+    ) -> AwsStep:
         args = [service, verb, "--region", region, id_flag, resource_id]
-        return SweepStep(action="aws", args=args, tolerate=tolerate)
+        return AwsStep(action="aws", args=args, tolerate=tolerate)
 
-    plan = [
+    plan: list[SweepStep] = [
         delete(
             "scheduler",
             "delete-schedule-group",
@@ -6842,9 +6874,9 @@ def sweep_plan(arns: list[str], region: str) -> list[SweepStep]:
         ids = ["--instance-ids", *instances]
         for verb in (["terminate-instances"], ["wait", "instance-terminated"]):
             args = ["ec2", *verb, "--region", region, *ids]
-            plan.append(SweepStep(action="aws", args=args, tolerate=None))
+            plan.append(AwsStep(action="aws", args=args, tolerate=None))
     plan += [
-        SweepStep(action="delete_rds", args=[identifier], tolerate=None)
+        ResourceStep(action="delete_rds", resource=identifier)
         for identifier in by_kind["db"]
     ]
     plan += [
@@ -6873,7 +6905,7 @@ def sweep_plan(arns: list[str], region: str) -> list[SweepStep]:
         for volume in by_kind["volume"]
     ]
     plan += [
-        SweepStep(action="delete_security_group", args=[group], tolerate=None)
+        ResourceStep(action="delete_security_group", resource=group)
         for group in by_kind["security-group"]
     ]
     plan += [
@@ -6894,14 +6926,12 @@ def sweep(
     of an rds fleet. Returns every ARN found."""
     arns = tagged_resources(run, region, name, profile)
     for step in sweep_plan(arns, region):
-        args = step["args"]
-        match step["action"]:
-            case "delete_rds":
-                delete_rds(run, region, args[0], profile)
-            case "delete_security_group":
-                delete_security_group(run, region, args[0], profile, clock)
-            case "aws":
-                aws_ok(run, profile, *args, tolerate=step["tolerate"])
+        if step["action"] == "aws":
+            aws_ok(run, profile, *step["args"], tolerate=step["tolerate"])
+        elif step["action"] == "delete_rds":
+            delete_rds(run, region, step["resource"], profile)
+        else:
+            delete_security_group(run, region, step["resource"], profile, clock)
     if fleets := rds_fleets(arns):
         sweep_iam(run, profile, fleets)
     return arns

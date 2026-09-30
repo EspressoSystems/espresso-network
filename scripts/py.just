@@ -9,6 +9,8 @@ lint *args:
 check *args:
     ty check --extra-search-path network-bench {{scripts}} {{args}}
 
+# Arguments: -k SUBSTR (repeatable), -s, -p, --slowest, --max-test-s; not unittest's -v or test ids.
+# The per-test limit is 5 s: the `LoadTest` staircase cases need STEP_S = 8 virtual seconds at scale 20.
 test *args:
     python3 timed_tests.py --max-test-s 5 {{args}}
     python3 timed_tests.py -s network-bench --max-test-s 5 {{args}}
@@ -18,6 +20,6 @@ test-timing *args:
     python3 timed_tests.py --slowest 40 {{args}}
     python3 timed_tests.py -s network-bench --slowest 40 {{args}}
 
-# Needs tofu on PATH and internet for `tofu init`.
+# Needs tofu on PATH and internet for `tofu init`, and the repo `.env`.
 test-slow *args:
-    SLOW_TESTS=1 python3 timed_tests.py -s network-bench -k Tofu {{args}}
+    SLOW_TESTS=1 python3 timed_tests.py -s network-bench -k Tofu -k real_env_file {{args}}

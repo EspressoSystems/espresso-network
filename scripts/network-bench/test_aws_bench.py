@@ -1484,6 +1484,7 @@ class ParseDotenvTest(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             awsb.read_dotenv(tmp_dir(self) / "absent.env")
 
+    @SLOW
     def test_real_env_file_parses(self):
         env = awsb.parse_dotenv((Path(__file__).parents[2] / ".env").read_text())
         self.assertIn("ESPRESSO_ETH_MNEMONIC", env)
@@ -2001,7 +2002,6 @@ class RunHarness:
         self.fleet_dir = self.tmp / "out" / name
         self.run_dir = self.fleet_dir / "runs" / "01-run"
         patches = [
-            unittest.mock.patch.object(awsb, "DOCKER_START_LEAD_S", 0.0),
             unittest.mock.patch.object(
                 awsb, "preflight", return_value=fake_preflight()
             ),
@@ -3009,18 +3009,18 @@ class PollStepTest(unittest.TestCase):
 
 class RetryVerdictTest(unittest.TestCase):
     # TEST:retry-verdict-ok
-    def test_accepted_rc_is_ok_even_past_the_deadline(self):
-        self.assertEqual(awsb.retry_verdict(0, (0,), 0.0, 10.0), "ok")
-        self.assertEqual(awsb.retry_verdict(2, (0, 2), 99.0, 10.0), "ok")
+    def test_ok_even_past_the_deadline(self):
+        self.assertEqual(awsb.retry_verdict(True, 0.0, 10.0), "ok")
+        self.assertEqual(awsb.retry_verdict(True, 99.0, 10.0), "ok")
 
     def test_other_rc_before_the_deadline_retries(self):
-        self.assertEqual(awsb.retry_verdict(1, (0,), 9.9, 10.0), "retry")
-        self.assertEqual(awsb.retry_verdict(2, (0,), 0.0, 10.0), "retry")
+        self.assertEqual(awsb.retry_verdict(False, 9.9, 10.0), "retry")
+        self.assertEqual(awsb.retry_verdict(False, 0.0, 10.0), "retry")
 
     # TEST:retry-verdict-timeout-fails
     def test_other_rc_at_or_after_the_deadline_times_out(self):
-        self.assertEqual(awsb.retry_verdict(1, (0,), 10.0, 10.0), "timeout")
-        self.assertEqual(awsb.retry_verdict(1, (0,), 11.0, 10.0), "timeout")
+        self.assertEqual(awsb.retry_verdict(False, 10.0, 10.0), "timeout")
+        self.assertEqual(awsb.retry_verdict(False, 11.0, 10.0), "timeout")
 
 
 class WaitCloudInitTest(unittest.TestCase):
@@ -3097,7 +3097,7 @@ class SupportPlanTest(unittest.TestCase):
     def test_deploy_is_waited_on_not_polled(self):
         deploy = awsb.support_plan("colocated", [])[1]
         self.assertEqual(deploy["container"], "deploy")
-        self.assertIsNone(deploy["gate_cmd"])
+        self.assertEqual(deploy["kind"], "deploy")
         self.assertEqual(deploy["timeout_s"], awsb.DEPLOY_TIMEOUT_S)
 
     def test_every_contract_is_checked_between_deploy_and_orchestrator(self):
@@ -3113,11 +3113,13 @@ class SupportPlanTest(unittest.TestCase):
                 "relay healthcheck",
             ],
         )
-        self.assertIn("0xdef", plan[3]["gate_cmd"] or "")
+        check = plan[3]
+        assert check["kind"] == "gate"
+        self.assertIn("0xdef", check["gate_cmd"])
 
     def test_gates_use_the_gate_timeout_and_the_right_host(self):
         for step in awsb.support_plan("colocated", ["0xabc"]):
-            if step["gate_cmd"] is not None:
+            if step["kind"] == "gate":
                 self.assertEqual(step["timeout_s"], awsb.GATE_TIMEOUT_S)
         hosts = [step["host"] for step in awsb.support_plan("colocated", [])]
         self.assertEqual(hosts, ["ctl"] * 4 + ["node0"] * 3)
@@ -3171,7 +3173,7 @@ class FinishRunSkipTest(unittest.TestCase):
             interrupts,
             scripted_remote(self, Scripted({}), tmp),
         )
-        run = awsb.Run(fleet, tmp, fleet.cfg, 0.0, agent_started=True)
+        run = awsb.Run(fleet, tmp, fleet.cfg, 0.0, "", agent_started=True)
         ran: list[str] = []
 
         def step(name: str, after=lambda: None):
@@ -3318,13 +3320,18 @@ class SweepPlanTest(unittest.TestCase):
 
     def test_rds_and_security_group_steps_name_their_resource(self):
         plan = awsb.sweep_plan(SWEEP_ARNS, "eu-west-1")
-        by_action = {step["action"]: step["args"] for step in plan}
-        self.assertEqual(by_action["delete_rds"], ["espresso-bench-f"])
-        self.assertEqual(by_action["delete_security_group"], ["sg-1"])
+        resources = {
+            step["action"]: step["resource"] for step in plan if step["action"] != "aws"
+        }
+        self.assertEqual(
+            resources,
+            {"delete_rds": "espresso-bench-f", "delete_security_group": "sg-1"},
+        )
 
     def test_instance_ids_are_terminated_and_waited_on_together(self):
         arns = [f"arn:aws:ec2:eu-west-1:1:instance/i-{n}" for n in (1, 2)]
         terminate, wait = awsb.sweep_plan(arns, "eu-west-1")
+        assert terminate["action"] == "aws" and wait["action"] == "aws"
         self.assertEqual(terminate["args"][-3:], ["--instance-ids", "i-1", "i-2"])
         self.assertEqual(wait["args"][:2], ["ec2", "wait"])
         self.assertEqual(wait["args"][-3:], ["--instance-ids", "i-1", "i-2"])
@@ -4511,7 +4518,7 @@ class FinishCollectsEbsBalanceTest(unittest.TestCase):
             interrupts,
         )
         agent = DONE_STATE | {"t1": interrupts.clock.time()}
-        run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, agent=agent)
+        run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, "", agent=agent)
         awsb.collect_node0_ebs_balance(run)
         self.assertEqual(fleet.run.count("get-metric-data"), 0)
 
@@ -4526,7 +4533,7 @@ class FinishCollectsEbsBalanceTest(unittest.TestCase):
             awsb.Interrupts(clock),
         )
         agent = DONE_STATE | {"t1": clock.time()}
-        run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, agent=agent)
+        run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, "", agent=agent)
         self.assertEqual(awsb.published_window(run, "x"), agent)
         self.assertEqual(clock.sleeps, [awsb.CLOUDWATCH_LAG_S])
 

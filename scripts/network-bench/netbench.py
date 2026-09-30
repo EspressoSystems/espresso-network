@@ -968,7 +968,7 @@ async def drain(
             and counters[-1]["decided_bytes"] == counters[-2]["decided_bytes"]
         )
         pending = len(state.pending) if wait_pending else 0
-        if target is None and is_drained(pending, flat, caught_up=True):
+        if target is None and is_drained(pending, flat):
             # Fixed once settled: empty blocks keep the validator height moving.
             target = heights.top("validator")
         if target is not None and heights.top("query") >= target:
@@ -977,10 +977,10 @@ async def drain(
     return None
 
 
-def is_drained(pending: int, flat: bool, caught_up: bool) -> bool:
-    """True when no transaction is pending, decided bytes stopped growing and the query node
-    reached the validators' height."""
-    return pending == 0 and flat and caught_up
+def is_drained(pending: int, flat: bool) -> bool:
+    """True when no transaction is pending and decided bytes stopped growing. `drain` checks
+    separately that the query node reached the validators' height."""
+    return pending == 0 and flat
 
 
 def log_step(m: dict[str, Any], fails: list[str]) -> None:
