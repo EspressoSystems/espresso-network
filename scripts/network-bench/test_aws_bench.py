@@ -8,6 +8,7 @@ made no `aws` call at all.
     just py::test
 """
 
+import ast
 import contextlib
 import dataclasses
 import gzip
@@ -4783,6 +4784,51 @@ class CommandSystemTest(unittest.TestCase):
         args = awsb.parse_args(["render", "run"])
         with self.assertRaises(TypeError):
             awsb.cmd_render(args)
+
+
+BOUNDARY = {"_run", "_ask", "_http_get", "_trap", "_pid_alive", "host_system", "stamp"}
+SIDE_EFFECTS = {
+    "subprocess.run",
+    "shutil.which",
+    "sys.stdin",
+    "datetime.now",
+    "time.time",
+    "time.sleep",
+    "signal.signal",
+    "getpass.getuser",
+    "socket.gethostname",
+    "os.getpid",
+    "os.kill",
+    "urllib.request.urlopen",
+}
+
+
+def side_effect_uses(tree: ast.AST) -> list[tuple[str, str]]:
+    """(enclosing top-level function, side effect) for every use in `tree`."""
+    found = []
+    for top in ast.iter_child_nodes(tree):
+        owner = top.name if isinstance(top, ast.FunctionDef) else "<module>"
+        for node in ast.walk(top):
+            if isinstance(node, ast.Attribute):
+                name = ast.unparse(node)
+            elif isinstance(node, ast.Name) and node.id == "input":
+                name = "input"
+            else:
+                continue
+            if name in SIDE_EFFECTS or name == "input":
+                found.append((owner, name))
+    return found
+
+
+class BoundaryTest(unittest.TestCase):
+    def test_side_effects_only_in_boundary_helpers(self):
+        tree = ast.parse(SCRIPT.read_text())
+        stray = [u for u in side_effect_uses(tree) if u[0] not in BOUNDARY]
+        self.assertEqual(stray, [])
+
+    def test_scan_flags_a_stray_call(self):
+        tree = ast.parse("def f():\n    return time.time() + len(input())\n")
+        self.assertEqual(side_effect_uses(tree), [("f", "time.time"), ("f", "input")])
 
 
 if __name__ == "__main__":
