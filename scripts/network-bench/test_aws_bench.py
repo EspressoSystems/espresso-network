@@ -201,13 +201,6 @@ class PlanHostsTest(unittest.TestCase):
         with self.assertRaises(awsb.Refused):
             awsb.plan_hosts(awsb.RunConfig(tag="x", nodes=1))
 
-    def test_rejects_submit_nodes_out_of_range(self):
-        cfg = awsb.RunConfig(
-            tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=2)
-        )
-        with self.assertRaises(awsb.Refused):
-            awsb.plan_hosts(cfg)
-
 
 class NodeRootGbTest(unittest.TestCase):
     def test_default_ramp_hits_the_minimum(self):
@@ -254,9 +247,9 @@ class PhaseSecondsTest(unittest.TestCase):
         )
 
     def test_worst_uses_ready_timeout_and_collect_max(self):
-        cfg = awsb.RunConfig(tag="x", ready_timeout_s=900.0)
+        cfg = awsb.RunConfig(tag="x")
         phases = awsb.phase_seconds(cfg)
-        self.assertEqual(phases["ready"], (awsb.READY_EXPECTED_S, 900.0))
+        self.assertEqual(phases["ready"], (awsb.READY_EXPECTED_S, awsb.READY_TIMEOUT_S))
         self.assertEqual(
             phases["collect"], (awsb.COLLECT_EXPECTED_S, awsb.COLLECT_MAX_S)
         )
@@ -456,8 +449,6 @@ def online_plan_args(
             str(tmp / "key"),
             "--operator-cidr",
             "203.0.113.5/32",
-            "--genesis",
-            str(Path(__file__).with_name("genesis.toml")),
             "--price",
             "c8g.4xlarge=0.71",
             "--price",
@@ -482,8 +473,6 @@ class CmdPlanTest(unittest.TestCase):
                     "run1",
                     "--out-root",
                     out_root,
-                    "--genesis",
-                    str(Path(__file__).with_name("genesis.toml")),
                     "--price",
                     "c8g.4xlarge=0.71",
                     "--price",
@@ -1436,29 +1425,18 @@ class RenderGenesisTest(unittest.TestCase):
         self.template = (Path(__file__).parent / "genesis.toml").read_bytes()
 
     def test_capacity_at_least_ten(self):
-        rendered = awsb.render_genesis(
-            self.template, n=3, max_block_size="100mb"
-        ).decode()
+        rendered = awsb.render_genesis(self.template, n=3).decode()
         self.assertIn("stake_table_capacity = 10", rendered)
         self.assertIn("capacity = 10", rendered)
 
     def test_capacity_scales_above_ten(self):
-        rendered = awsb.render_genesis(
-            self.template, n=50, max_block_size="100mb"
-        ).decode()
+        rendered = awsb.render_genesis(self.template, n=50).decode()
         self.assertIn("stake_table_capacity = 50", rendered)
         self.assertIn("capacity = 50", rendered)
 
-    def test_max_block_size_set_in_both_chain_configs(self):
-        rendered = awsb.render_genesis(
-            self.template, n=5, max_block_size="64mb"
-        ).decode()
-        self.assertEqual(rendered.count('max_block_size = "64mb"'), 2)
-        self.assertNotIn("100mb", rendered)
-
     def test_raises_if_template_shape_changes(self):
         with self.assertRaises(ValueError):
-            awsb.render_genesis(b"no capacity fields here", n=5, max_block_size="64mb")
+            awsb.render_genesis(b"no capacity fields here", n=5)
 
 
 class ParseDotenvTest(unittest.TestCase):
@@ -2071,8 +2049,6 @@ class RunHarness:
             str(self.tmp / "key"),
             "--operator-cidr",
             "203.0.113.5/32",
-            "--genesis",
-            str(Path(__file__).with_name("genesis.toml")),
             "--price",
             "c8g.4xlarge=0.71",
             "--price",
@@ -3566,7 +3542,7 @@ class PgTuningTest(unittest.TestCase):
 
     def test_memory_budget_fits_the_query_host(self):
         """node0 is a c8g.4xlarge with 32 GiB; the same map runs on the 64 GiB RDS class."""
-        self.assertEqual(awsb.RunConfig(tag="x").node_type, "c8g.4xlarge")
+        self.assertEqual(awsb.NODE_TYPE, "c8g.4xlarge")
         ram = 32 * 1024**3
         pages, kib = 8192, 1024
         tuning = awsb.PG_TUNING

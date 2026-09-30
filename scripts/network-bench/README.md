@@ -46,12 +46,12 @@ scripts/network-bench/
   statements (>200 ms) in the postgres log.
 - Per step, second half judged:
 
-| Rule              | Source                                                       | Fails when                                |
-| ----------------- | ------------------------------------------------------------ | ----------------------------------------- |
-| decided MB/s      | validators' `consensus_finalized_bytes_sum`, Theil-Sen slope | < 80% of submitted                        |
-| view timeouts     | `consensus_number_of_timeouts`                               | > 0                                       |
-| consensus latency | submit until header on a validator                           | p50 > `--latency-target-ms`               |
-| query lag         | header on query node minus header on a validator             | p50 > `--query-lag-target-ms`, or growing |
+| Rule              | Source                                                       | Fails when                |
+| ----------------- | ------------------------------------------------------------ | ------------------------- |
+| decided MB/s      | validators' `consensus_finalized_bytes_sum`, Theil-Sen slope | < 80% of submitted        |
+| view timeouts     | `consensus_number_of_timeouts`                               | > 0                       |
+| consensus latency | submit until header on a validator                           | p50 > 1000 ms             |
+| query lag         | header on query node minus header on a validator             | p50 > 1000 ms, or growing |
 
 - Capacity: highest passing rate; overall, consensus-only rules, query-node-only rules.
 - Per node: CPU, RSS, tokio busy, top ops from `/v1/status/metrics` (`consensus_`, `journal_`, `sql`, `storage`, ...).
@@ -80,11 +80,11 @@ laptop                       EC2, one AZ, private IPs
                              +-------------------------------------------------+
 ```
 
-| Host      | Type (default)            | Runs                                                                                                     |
-| --------- | ------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `ctl`     | `--ctl-type` c8g.2xlarge  | anvil, `deploy`, orchestrator, state-relay-server, `agent-drive`, `agent-host`                           |
-| `node0`   | `--node-type` c8g.4xlarge | espresso-node `-- storage-journal -- storage-sql -- http -- query ...`, postgres container, `agent-host` |
-| `node1..` | `--node-type`             | espresso-node `-- storage-journal -- http -- status -- submit -- catchup -- config`, `agent-host`        |
+| Host      | Type          | Runs                                                                                                     |
+| --------- | ------------- | -------------------------------------------------------------------------------------------------------- |
+| `ctl`     | `c8g.2xlarge` | anvil, `deploy`, orchestrator, state-relay-server, `agent-drive`, `agent-host`                           |
+| `node0`   | `c8g.4xlarge` | espresso-node `-- storage-journal -- storage-sql -- http -- query ...`, postgres container, `agent-host` |
+| `node1..` | `c8g.4xlarge` | espresso-node `-- storage-journal -- http -- status -- submit -- catchup -- config`, `agent-host`        |
 
 - Stake: equal, orchestrator self-registration; 5 nodes → quorum 4, lagging `node0` never stalls consensus.
 - Peers: `node0` has state peers like every node and no API peers.

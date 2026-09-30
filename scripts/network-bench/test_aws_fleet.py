@@ -50,8 +50,6 @@ from test_aws_bench import (
     write_collected_run,
 )
 
-GENESIS = Path(__file__).with_name("genesis.toml")
-
 
 def fake_report(run_dir: Path, baseline=None) -> dict:
     # The real report reads these keys from the run manifest a driver command wrote.
@@ -115,15 +113,13 @@ class FleetHarness:
         return self.parse("up", *self.fleet_flags(), *extra)
 
     def single_shot_args(self) -> "awsb.argparse.Namespace":
-        return self.parse("run", "--genesis", str(GENESIS), *self.fleet_flags())
+        return self.parse("run", *self.fleet_flags())
 
     def run_args(self, *extra: str) -> "awsb.argparse.Namespace":
         return self.parse(
             "run",
             "--fleet",
             str(self.fleet_dir),
-            "--genesis",
-            str(GENESIS),
             "--yes",
             *extra,
         )
@@ -913,8 +909,6 @@ class VolumeWiringTest(unittest.TestCase):
         runner = volume_runner([DONE_STATE], describe=DESCRIBE)
         args = harness.parse(
             "run",
-            "--genesis",
-            str(GENESIS),
             *harness.fleet_flags(),
             "--query-db",
             "volume",
@@ -2114,8 +2108,6 @@ class RdsTfvarsTest(unittest.TestCase):
             "2",
             "--tag",
             "x",
-            "--genesis",
-            str(GENESIS),
             "--db-modes",
             "colocated,rds",
             "--out-root",
@@ -2155,8 +2147,6 @@ class RdsTfvarsTest(unittest.TestCase):
             "2",
             "--tag",
             "x",
-            "--genesis",
-            str(GENESIS),
             "--ttl-min",
             "150",
             "--out-root",
@@ -2489,8 +2479,6 @@ class RdsRunTest(unittest.TestCase):
         runner = RdsRunner([DONE_STATE], describe=DESCRIBE)
         args = harness.parse(
             "run",
-            "--genesis",
-            str(GENESIS),
             *harness.fleet_flags(),
             "--query-db",
             "rds",

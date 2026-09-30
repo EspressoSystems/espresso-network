@@ -114,6 +114,9 @@ STEP_FACTOR = 1.5
 STEP_TOP_MB_S = 200.0
 # Submit threads: a 1 MB POST takes tens of ms on the private network; 200 tx/s needs this many.
 SUBMIT_WORKERS = 32
+NODE_TYPE = "c8g.4xlarge"
+CTL_TYPE = "c8g.2xlarge"
+READY_TIMEOUT_S = 600.0
 
 # gp3 includes this many IOPS and this much throughput at no extra charge.
 GP3_BASELINE_IOPS = 3000
@@ -404,8 +407,6 @@ RESET_KEEP = (
 # Flags that shape the fleet, refused by `run --fleet` (the values are in fleet.json).
 FLEET_ONLY_FLAGS = (
     "--nodes",
-    "--node-type",
-    "--ctl-type",
     "--az",
     "--region",
     "--profile",
@@ -802,15 +803,11 @@ class Ec2Balance(TypedDict):
 class RunConfig:
     tag: str
     nodes: int = 5
-    node_type: str = "c8g.4xlarge"
-    ctl_type: str = "c8g.2xlarge"
     az: str = "auto"
     region: str = "eu-west-1"
     profile: str = "timeboost-dev"
     account: str = "027574771971"
     load: nb.BenchConfig = field(default_factory=lambda: aws_load())
-    ready_timeout_s: float = 600.0
-    max_block_size: str = "100mb"
     root_gb: str = "auto"
     pg_iops: int = 12000
     pg_mbps: int = 500
@@ -929,16 +926,11 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     check_rds_config(cfg)
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
-    if not 1 <= cfg.load.submit_nodes <= cfg.nodes - 1:
-        raise Refused(
-            f"--submit-nodes must be between 1 and {cfg.nodes - 1}: "
-            f"{cfg.load.submit_nodes}"
-        )
     hosts: list[HostSpec] = [
         {
             "name": "ctl",
             "role": "ctl",
-            "instance_type": cfg.ctl_type,
+            "instance_type": CTL_TYPE,
             "root_gb": CTL_ROOT_GB,
             "root_iops": GP3_BASELINE_IOPS,
             "root_mbps": GP3_BASELINE_MBPS,
@@ -950,7 +942,7 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
             {
                 "name": f"node{i}",
                 "role": "query" if query else "validator",
-                "instance_type": cfg.node_type,
+                "instance_type": NODE_TYPE,
                 "root_gb": node_root_gb(cfg, query),
                 "root_iops": cfg.pg_iops if query else GP3_BASELINE_IOPS,
                 "root_mbps": cfg.pg_mbps if query else GP3_BASELINE_MBPS,
@@ -1008,7 +1000,7 @@ def phase_seconds(cfg: RunConfig) -> dict[str, tuple[float, float]]:
     return {
         "provision": provision,
         "services": (SERVICES_S, SERVICES_S),
-        "ready": (READY_EXPECTED_S, cfg.ready_timeout_s),
+        "ready": (READY_EXPECTED_S, READY_TIMEOUT_S),
         "load": (load_s, load_s),
         "collect": (COLLECT_EXPECTED_S, COLLECT_MAX_S),
         "destroy": (DESTROY_S, DESTROY_S),
@@ -1137,7 +1129,7 @@ def _parse_price_response(stdout: str, instance_type: str, region: str) -> float
 
 
 def resolve_prices(run: Runner, cfg: RunConfig, cache: Path, now: float) -> Prices:
-    types = {cfg.node_type, cfg.ctl_type}
+    types = {NODE_TYPE, CTL_TYPE}
     if "rds" in cfg.db_modes:
         types.add(cfg.rds_class)
     overrides = dict(parse_price(p) for p in cfg.price)
@@ -2236,7 +2228,7 @@ def write_private_json(path: Path, data: Any) -> None:
     nb.write_json(path, data)
 
 
-def render_genesis(template: bytes, n: int, max_block_size: str) -> bytes:
+def render_genesis(template: bytes, n: int) -> bytes:
     """`n` validators need a stake table at least as large; contract addresses stay as the
     template's, since they are deterministic from the deployer nonce."""
     capacity = max(10, n)
@@ -2245,16 +2237,9 @@ def render_genesis(template: bytes, n: int, max_block_size: str) -> bytes:
         r"(?m)^stake_table_capacity = \d+$", f"stake_table_capacity = {capacity}", text
     )
     text, cap_n = re.subn(r"(?m)^capacity = \d+$", f"capacity = {capacity}", text)
-    text, block_n = re.subn(
-        r'(?m)^max_block_size = "[^"]*"$', f'max_block_size = "{max_block_size}"', text
-    )
     if stake_n + cap_n != 2:
         raise ValueError(
             f"expected 2 capacity fields in genesis template, replaced {stake_n + cap_n}"
-        )
-    if block_n != 2:
-        raise ValueError(
-            f"expected 2 max_block_size fields in genesis template, replaced {block_n}"
         )
     return text.encode()
 
@@ -2626,8 +2611,6 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         "--tag", required=tag_required, help="ghcr tag pushed by CI, no default"
     )
     parser.add_argument("--nodes", type=int, default=defaults.nodes)
-    parser.add_argument("--node-type", default=defaults.node_type)
-    parser.add_argument("--ctl-type", default=defaults.ctl_type)
     parser.add_argument("--az", default=defaults.az)
     parser.add_argument("--region", default=defaults.region)
     parser.add_argument("--profile", default=defaults.profile)
@@ -2640,18 +2623,8 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     )
     parser.add_argument("--step-s", type=int, default=load.step_s)
     parser.add_argument("--cap-s", type=float, default=load.cap_s)
-    parser.add_argument("--tx-size", type=int, default=load.tx_size)
-    parser.add_argument(
-        "--submit-nodes", type=int, default=None, help="default: --nodes - 1"
-    )
     parser.add_argument("--tx-timeout-s", type=int, default=load.tx_timeout_s)
-    parser.add_argument("--workers", type=int, default=load.workers)
-    parser.add_argument("--seed", type=int, default=load.seed)
     parser.add_argument("--warmup-s", type=int, default=load.warmup_s)
-    parser.add_argument("--latency-target-ms", type=int, default=load.latency_target_ms)
-    parser.add_argument(
-        "--query-lag-target-ms", type=int, default=load.query_lag_target_ms
-    )
     parser.add_argument(
         "--keep-going",
         action="store_true",
@@ -2667,11 +2640,6 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         "repeatable; the value is taken verbatim (no quoting) and lands in the manifest "
         "and the summary, so not for secrets",
     )
-    parser.add_argument(
-        "--ready-timeout-s", type=float, default=defaults.ready_timeout_s
-    )
-    parser.add_argument("--genesis", type=Path, default=Path(load.genesis))
-    parser.add_argument("--max-block-size", default=defaults.max_block_size)
     parser.add_argument("--root-gb", default=defaults.root_gb)
     parser.add_argument("--pg-iops", type=int, default=defaults.pg_iops)
     parser.add_argument("--pg-mbps", type=int, default=defaults.pg_mbps)
@@ -2703,40 +2671,28 @@ def env_pair(text: str) -> str:
 
 
 def config_from_args(args: argparse.Namespace) -> RunConfig:
-    submit_nodes = (
-        args.submit_nodes if args.submit_nodes is not None else args.nodes - 1
-    )
     keys = [pair.partition("=")[0] for pair in args.node_env]
     for key in keys:
         if keys.count(key) > 1:
             raise Refused(f"--node-env repeats {key}")
     load = nb.BenchConfig(
-        genesis=str(args.genesis),
-        tx_size=args.tx_size,
         steps=args.steps,
         step_s=args.step_s,
-        submit_nodes=submit_nodes,
-        workers=args.workers,
+        submit_nodes=args.nodes - 1,
+        workers=SUBMIT_WORKERS,
         cap_s=args.cap_s,
         tx_timeout_s=args.tx_timeout_s,
         warmup_s=args.warmup_s,
-        seed=args.seed,
-        latency_target_ms=args.latency_target_ms,
-        query_lag_target_ms=args.query_lag_target_ms,
         keep_going=args.keep_going,
     )
     return RunConfig(
         tag=args.tag,
         nodes=args.nodes,
-        node_type=args.node_type,
-        ctl_type=args.ctl_type,
         az=args.az,
         region=args.region,
         profile=args.profile,
         account=args.account,
         load=load,
-        ready_timeout_s=args.ready_timeout_s,
-        max_block_size=args.max_block_size,
         node_env=tuple(args.node_env),
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
@@ -3919,19 +3875,15 @@ def refuse_fleet_node_env(cfg: RunConfig) -> None:
 
 
 def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfig:
-    """The fleet's own config with the flags that belong to one run: image tag, load, block
-    size, ready timeout, name, database mode, node env."""
+    """The fleet's own config with the flags that belong to one run: image tag, load, name, database mode, node env."""
     base = config_from_manifest(saved["config"])
     cli = fleet_config_from_args(args)
     load = cli.load
-    if args.submit_nodes is None:
-        load = dataclasses.replace(load, submit_nodes=base.nodes - 1)
+    load = dataclasses.replace(load, submit_nodes=base.nodes - 1)
     return dataclasses.replace(
         base,
         tag=base.tag if cli.tag is None else cli.tag,
         load=load,
-        ready_timeout_s=cli.ready_timeout_s,
-        max_block_size=cli.max_block_size,
         name=cli.name,
         yes=cli.yes,
         query_db=cli.query_db,
@@ -4471,9 +4423,9 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
     log.info("images %s: %s", cfg.tag, images)
     log.info(
         "hosts: ctl %s; %d x %s (node0 validator+query, postgres)",
-        cfg.ctl_type,
+        CTL_TYPE,
         cfg.nodes,
-        cfg.node_type,
+        NODE_TYPE,
     )
     if "rds" in cfg.db_modes:
         log.info(
@@ -4586,9 +4538,7 @@ def render_run(
 ) -> Path:
     """`runs/<nn>-<name>/` with its manifest, genesis and load config. Without a
     `run_estimate` this is the run of a single shot, which also provisions."""
-    genesis = render_genesis(
-        Path(cfg.load.genesis).read_bytes(), cfg.nodes, cfg.max_block_size
-    )
+    genesis = render_genesis((SCRIPT_DIR / "genesis.toml").read_bytes(), cfg.nodes)
     run_dir = new_run_dir(fleet_dir, name)
     phases = (
         phase_seconds(cfg)
@@ -4907,7 +4857,7 @@ def render_host_files(
         {
             "cfg": dataclasses.asdict(cfg.load),
             "topology": topo,
-            "ready_timeout_s": cfg.ready_timeout_s,
+            "ready_timeout_s": READY_TIMEOUT_S,
         },
     )
 
@@ -5364,7 +5314,7 @@ def poll_agent(
     begin = clock.monotonic()
     poll = PollState(
         begin=begin,
-        deadline=begin + cfg.ready_timeout_s + load_seconds(cfg.load) + AGENT_SLACK_S,
+        deadline=begin + READY_TIMEOUT_S + load_seconds(cfg.load) + AGENT_SLACK_S,
         next_log=begin + AGENT_LOG_S,
         next_sync=begin + OUT_RSYNC_S,
         unreachable=0,
