@@ -3320,50 +3320,28 @@ impl Provider<SeqTypes, PayloadRequest> for Persistence {
             },
         };
 
-        match query_as::<(Vec<u8>, Vec<u8>)>(
+        let (header, payload) = match query_as::<(Vec<u8>, Vec<u8>)>(
             "SELECT header, payload FROM pending_payload WHERE payload_hash = $1 LIMIT 1",
         )
         .bind(req.0.to_string())
         .fetch_optional(tx.as_mut())
         .await
         {
-            Ok(Some((header, payload))) => match bincode::deserialize::<Header>(&header) {
-                Ok(header) => return Some(Payload::from_bytes(&payload, header.metadata())),
-                Err(err) => tracing::error!("error decoding pending payload header: {err:#}"),
-            },
-            Ok(None) => {},
-            Err(err) => tracing::warn!("error loading pending payload: {err:#}"),
-        }
-
-        // Payloads of blocks from before 0.6 are only in the DA proposals.
-        let bytes = match query_as::<(Vec<u8>,)>(
-            "SELECT data FROM da_proposal2 WHERE payload_hash = $1 LIMIT 1",
-        )
-        .bind(req.0.to_string())
-        .fetch_optional(tx.as_mut())
-        .await
-        {
-            Ok(Some((bytes,))) => bytes,
+            Ok(Some(row)) => row,
             Ok(None) => return None,
             Err(err) => {
-                tracing::warn!("error loading DA proposal: {err:#}");
+                tracing::warn!("error loading pending payload: {err:#}");
                 return None;
             },
         };
 
-        let proposal: Proposal<SeqTypes, DaProposal2<SeqTypes>> = match bincode::deserialize(&bytes)
-        {
-            Ok(proposal) => proposal,
+        match bincode::deserialize::<Header>(&header) {
+            Ok(header) => Some(Payload::from_bytes(&payload, header.metadata())),
             Err(err) => {
-                tracing::error!("error decoding DA proposal: {err:#}");
-                return None;
+                tracing::error!("error decoding pending payload header: {err:#}");
+                None
             },
-        };
-
-        Some(Payload::from_bytes(
-            &proposal.data.encoded_transactions,
-            &proposal.data.metadata,
-        ))
+        }
     }
 }
 
