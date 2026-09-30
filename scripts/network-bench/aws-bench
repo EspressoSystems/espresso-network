@@ -2999,7 +2999,8 @@ class Interrupts:
     next phase boundary or wait, so a `tofu apply` or rsync in flight always finishes. After
     `disarm` signals are logged and ignored, except that the third one sets `skip_collect`."""
 
-    def __init__(self) -> None:
+    def __init__(self, clock: nb.Clock = nb.SYSTEM_CLOCK) -> None:
+        self.clock = clock
         self.event = threading.Event()
         self.skip_collect = threading.Event()
         self.signals = 0
@@ -3029,11 +3030,14 @@ class Interrupts:
         if self.armed and self.event.is_set():
             raise Interrupted("interrupted")
 
+    def wait(self, event: threading.Event, seconds: float) -> bool:
+        return self.clock.wait(event, seconds)
+
     def sleep(self, seconds: float) -> None:
         if not self.armed:
-            time.sleep(seconds)
+            self.clock.sleep(seconds)
             return
-        self.event.wait(seconds)
+        self.wait(self.event, seconds)
         self.check()
 
     def disarm(self) -> None:
@@ -3188,13 +3192,14 @@ def cmd_run(
     if args.tag is None:
         raise Refused("run needs --tag, or --fleet DIR to measure on a fleet from `up`")
     cfg = dataclasses.replace(fleet_config_from_args(args), db_modes=(args.query_db,))
-    started = time.time()
+    install = interrupts is None
+    interrupts = interrupts or Interrupts()
+    started = interrupts.clock.time()
     try:
         fleet_dir, run_dir, tf = prepare_run(args, cfg, run, started)
     except KeyboardInterrupt:
         raise Refused("interrupted; nothing was created") from None
-    if interrupts is None:
-        interrupts = Interrupts()
+    if install:
         interrupts.install()
     try:
         fleet = FleetState(run, cfg, fleet_dir, tf, interrupts)
@@ -3466,10 +3471,11 @@ def published_window(run: Run, what: str) -> AgentState | None:
     if agent is None:
         log.warning("no load window: %s not collected", what)
         return None
-    wait_s = agent["t1"] + CLOUDWATCH_LAG_S - time.time()
+    interrupts = run.fleet.interrupts
+    wait_s = agent["t1"] + CLOUDWATCH_LAG_S - interrupts.clock.time()
     if wait_s > 0:
         log.info("waiting %.0f s for CloudWatch to publish the load window", wait_s)
-        if run.fleet.interrupts.skip_collect.wait(wait_s):
+        if interrupts.wait(interrupts.skip_collect, wait_s):
             return None
     return agent
 
@@ -3637,13 +3643,17 @@ def destroy_fleet(fleet: FleetState) -> bool:
                 "destroy attempt %d/%d failed: %s", attempt, DESTROY_RETRIES, exc
             )
             if attempt < DESTROY_RETRIES:
-                time.sleep(DESTROY_BACKOFF_S)
+                fleet.interrupts.clock.sleep(DESTROY_BACKOFF_S)
     log.warning(
         "tofu destroy failed; sweeping resources tagged %s", fleet.fleet_dir.name
     )
     try:
         swept = sweep(
-            fleet.run, fleet.cfg.region, fleet.fleet_dir.name, fleet.cfg.profile
+            fleet.run,
+            fleet.cfg.region,
+            fleet.fleet_dir.name,
+            fleet.cfg.profile,
+            fleet.interrupts.clock,
         )
     except RemoteError as exc:
         log.error("sweep failed: %s", exc)
@@ -3660,13 +3670,14 @@ def cmd_up(
     """Plans, confirms and provisions a fleet, then leaves it `idle` for `run --fleet`. A
     failure destroys it again (exit 3, or 4 when resources may remain)."""
     cfg = fleet_config_from_args(args)
-    started = time.time()
+    install = interrupts is None
+    interrupts = interrupts or Interrupts()
+    started = interrupts.clock.time()
     try:
         fleet_dir, tf = prepare_up(args, cfg, run, started)
     except KeyboardInterrupt:
         raise Refused("interrupted; nothing was created") from None
-    if interrupts is None:
-        interrupts = Interrupts()
+    if install:
         interrupts.install()
     fleet = FleetState(run, cfg, fleet_dir, tf, interrupts)
     try:
@@ -3770,7 +3781,7 @@ def cmd_run_fleet(
     cfg = fleet_run_config(args, manifest)
     name = cfg.name if cfg.name is not None else cfg.query_db
     run_dir, estimate = admit_run(fleet_dir, manifest, cfg, name)
-    bench_run = Run(fleet, run_dir, cfg, time.time())
+    bench_run = Run(fleet, run_dir, cfg, interrupts.clock.time())
     log.info(
         "run %s: incremental cost $%.2f (%.0f min worst), %.0f min left on the fleet",
         run_dir.name,
@@ -4188,7 +4199,7 @@ def reset_rds_store(remote: Remote, fleet_dir: Path, interrupts: Interrupts) -> 
 def write_run_cost(run: Run) -> dict[str, float]:
     """The fleet's hourly rate over the run's wall time, from its start to now."""
     rate = estimate_rate(run.fleet.manifest["estimate"])
-    duration_s = time.time() - run.started
+    duration_s = run.fleet.interrupts.clock.time() - run.started
     cost = {
         "usd_per_hour": rate,
         "duration_s": duration_s,
@@ -4344,8 +4355,10 @@ def update_rds_schedule(
     )
 
 
-def cmd_down(args: argparse.Namespace, run: Runner = _run) -> int:
-    return destroy_run(run, args)
+def cmd_down(
+    args: argparse.Namespace, run: Runner = _run, clock: nb.Clock = nb.SYSTEM_CLOCK
+) -> int:
+    return destroy_run(run, args, clock)
 
 
 def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None:
@@ -4649,7 +4662,8 @@ def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
     """The description of the instance once it is `available` with an `in-sync` parameter
     group. A group that reports `pending-reboot` gets one reboot."""
     rebooted = False
-    deadline = time.monotonic() + RDS_SYNC_TIMEOUT_S
+    clock = fleet.interrupts.clock
+    deadline = clock.monotonic() + RDS_SYNC_TIMEOUT_S
     while True:
         instance = describe_rds(fleet.run, fleet.cfg, identifier)
         state = instance["DBInstanceStatus"]
@@ -4669,7 +4683,7 @@ def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
                 identifier,
             )
             rebooted = True
-        if time.monotonic() >= deadline:
+        if clock.monotonic() >= deadline:
             raise RemoteError(
                 f"rds {identifier} is {state} with parameters {applied} "
                 f"{RDS_SYNC_TIMEOUT_S:.0f} s after apply"
@@ -4806,13 +4820,13 @@ def genesis_contracts(run_dir: Path) -> list[str]:
 
 
 def wait_ssh(remote: Remote, host: str, interrupts: Interrupts) -> None:
-    deadline = time.monotonic() + SSH_READY_TIMEOUT_S
+    deadline = interrupts.clock.monotonic() + SSH_READY_TIMEOUT_S
     delay = SSH_RETRY_S
     while True:
         result = remote.ssh(host, "true", check=False)
         if result.returncode == 0:
             return
-        if time.monotonic() >= deadline:
+        if interrupts.clock.monotonic() >= deadline:
             raise RemoteError(
                 f"{host}: ssh not reachable after {SSH_READY_TIMEOUT_S:.0f} s: "
                 f"{result.stderr.strip()}"
@@ -4918,12 +4932,12 @@ def gate(
     interrupts: Interrupts,
     timeout_s: float = GATE_TIMEOUT_S,
 ) -> None:
-    deadline = time.monotonic() + timeout_s
+    deadline = interrupts.clock.monotonic() + timeout_s
     while True:
         result = remote.ssh(host, command, check=False)
         if result.returncode == 0:
             return
-        if time.monotonic() >= deadline:
+        if interrupts.clock.monotonic() >= deadline:
             raise RemoteError(
                 f"gate `{what}` on {host} not passed after {timeout_s:.0f} s: "
                 f"{(result.stdout + result.stderr).strip()}"
@@ -5063,7 +5077,8 @@ def poll_agent(
 ) -> AgentState:
     """Until the agent reports `done`: reads its state every AGENT_POLL_S, logs its progress
     every AGENT_LOG_S and rsyncs its output every OUT_RSYNC_S."""
-    begin = time.monotonic()
+    clock = interrupts.clock
+    begin = clock.monotonic()
     deadline = begin + cfg.ready_timeout_s + load_seconds(cfg.load) + AGENT_SLACK_S
     next_log = begin + AGENT_LOG_S
     next_sync = begin + OUT_RSYNC_S
@@ -5090,7 +5105,7 @@ def poll_agent(
             )
         active = probe.returncode == 0
         state = read_agent_state(remote) or state
-        now = time.monotonic()
+        now = clock.monotonic()
         if state is not None and state["phase"] == "done":
             return state
         if state is not None and state["phase"] == "error":
@@ -5314,13 +5329,16 @@ def cmd_render(args: argparse.Namespace) -> int:
 
 
 def cmd_destroy(
-    args: argparse.Namespace, run: Runner = _run, now: datetime | None = None
+    args: argparse.Namespace,
+    run: Runner = _run,
+    now: datetime | None = None,
+    clock: nb.Clock = nb.SYSTEM_CLOCK,
 ) -> int:
     if (args.dir is not None) == args.orphans:
         raise Refused("destroy takes either DIR or --orphans")
     if args.orphans:
-        return destroy_orphans(run, args, now or datetime.now(UTC))
-    return destroy_run(run, args)
+        return destroy_orphans(run, args, now or datetime.now(UTC), clock)
+    return destroy_run(run, args, clock)
 
 
 def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
@@ -5485,7 +5503,7 @@ def status_all(run: Runner, args: argparse.Namespace, now: datetime) -> int:
     return EXIT_OK
 
 
-def destroy_run(run: Runner, args: argparse.Namespace) -> int:
+def destroy_run(run: Runner, args: argparse.Namespace, clock: nb.Clock) -> int:
     fleet_dir: Path = args.dir
     manifest = read_fleet(fleet_dir)
     name = manifest["name"]
@@ -5499,7 +5517,7 @@ def destroy_run(run: Runner, args: argparse.Namespace) -> int:
     setup_logging(fleet_dir)
     cfg = config_from_manifest(manifest["config"])
     tf = Terraform(run, cfg.tf, fleet_dir / "terraform", terraform_env())
-    fleet = FleetState(run, cfg, fleet_dir, tf, Interrupts())
+    fleet = FleetState(run, cfg, fleet_dir, tf, Interrupts(clock))
     if manifest["phase"] == "running":
         remote = Remote(
             run,
@@ -5551,7 +5569,9 @@ def log_down(fleet_dir: Path, cost: dict[str, float] | None) -> None:
         log.info("- %s: %s, %s", run_dir.name, status, usd)
 
 
-def destroy_orphans(run: Runner, args: argparse.Namespace, now: datetime) -> int:
+def destroy_orphans(
+    run: Runner, args: argparse.Namespace, now: datetime, clock: nb.Clock
+) -> int:
     cfg = account_config(args)
     caller_account(run, cfg)
     runs = find_runs(run, cfg.region, cfg.profile, args.out_root, now)
@@ -5572,7 +5592,7 @@ def destroy_orphans(run: Runner, args: argparse.Namespace, now: datetime) -> int
     try:
         for orphan in orphans:
             log.info("sweeping %s", orphan["name"])
-            sweep(run, cfg.region, orphan["name"], cfg.profile)
+            sweep(run, cfg.region, orphan["name"], cfg.profile, clock)
             mark_swept(args.out_root / orphan["name"])
         # `sweep` removes the role of a fleet that still has rds resources.
         swept_rds = rds_fleets(arn for o in orphans for arn in o["arns"])
@@ -5893,7 +5913,13 @@ def write_run_json(run: Run) -> None:
     assert agent is not None
     nb.write_json(
         run.run_dir / "run.json",
-        run_json(run.manifest, run.cfg.tag, agent, run.started, time.time()),
+        run_json(
+            run.manifest,
+            run.cfg.tag,
+            agent,
+            run.started,
+            run.fleet.interrupts.clock.time(),
+        ),
     )
 
 
@@ -6584,7 +6610,11 @@ def tagged_resources(
 
 
 def sweep(
-    run: Runner, region: str, name: str | None, profile: str = RunConfig.profile
+    run: Runner,
+    region: str,
+    name: str | None,
+    profile: str = RunConfig.profile,
+    clock: nb.Clock = nb.SYSTEM_CLOCK,
 ) -> list[str]:
     """Deletes what `tagged_resources` finds, in dependency order: the delete schedule group
     (so it cannot fire mid-sweep), instances, the rds instance (waiting for it) with its subnet
@@ -6655,7 +6685,7 @@ def sweep(
             tolerate="InvalidVolume.NotFound",
         )
     for group in by_kind["security-group"]:
-        delete_security_group(run, region, group, profile)
+        delete_security_group(run, region, group, profile, clock)
     for key in by_kind["key-pair"]:
         aws_ok(
             run,
@@ -6794,7 +6824,9 @@ def sweep_iam(run: Runner, profile: str, fleets: set[str]) -> None:
         )
 
 
-def delete_security_group(run: Runner, region: str, group: str, profile: str) -> None:
+def delete_security_group(
+    run: Runner, region: str, group: str, profile: str, clock: nb.Clock
+) -> None:
     for attempt in range(1, SG_DELETE_RETRIES + 1):
         try:
             aws_ok(
@@ -6812,7 +6844,7 @@ def delete_security_group(run: Runner, region: str, group: str, profile: str) ->
             if "DependencyViolation" not in str(exc) or attempt == SG_DELETE_RETRIES:
                 raise
             log.debug("security group %s still in use, retrying", group)
-            time.sleep(SG_DELETE_BACKOFF_S)
+            clock.sleep(SG_DELETE_BACKOFF_S)
 
 
 TERMINATION_TIME = re.compile(r"\((\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) GMT\)")
@@ -7036,7 +7068,7 @@ def raise_interrupt(signum: int, frame: Any) -> None:
     raise KeyboardInterrupt
 
 
-def cmd_agent_drive(args: argparse.Namespace) -> int:
+def cmd_agent_drive(args: argparse.Namespace, clock: nb.Clock = nb.SYSTEM_CLOCK) -> int:
     """Runs on ctl under systemd-run: waits for the nodes, then `netbench.drive_load` against
     their private URLs. SIGTERM unwinds like Ctrl-C so `drive_load` flushes its output."""
     agent = nb.read_json(args.config)
@@ -7054,10 +7086,16 @@ def cmd_agent_drive(args: argparse.Namespace) -> int:
     stop = threading.Event()
     sampler = threading.Thread(
         target=nb.sample_metrics,
-        args=(topo["nodes"], nb.METRIC_PREFIXES, args.out / "metrics.jsonl", stop),
+        args=(
+            topo["nodes"],
+            nb.METRIC_PREFIXES,
+            args.out / "metrics.jsonl",
+            stop,
+            clock,
+        ),
     )
     sampler.start()
-    pool = nb.HttpPool()
+    pool = nb.HttpPool(clock)
     try:
         ready_s = nb.wait_ready(
             pool,
@@ -7065,10 +7103,11 @@ def cmd_agent_drive(args: argparse.Namespace) -> int:
             nb.MIN_READY_HEIGHT,
             agent["ready_timeout_s"],
             lambda: True,
+            clock,
         )
         reporter.state["ready_s"] = ready_s
         reporter.set_phase("loading", f"ready after {ready_s:.0f} s")
-        outcome = nb.drive_load(cfg, topo, args.out, lambda: True)
+        outcome = nb.drive_load(cfg, topo, args.out, lambda: True, clock)
         reporter.state["t0"], reporter.state["t1"] = outcome["t0"], outcome["t1"]
         reporter.set_phase("done", "load finished")
         return EXIT_OK
@@ -7174,12 +7213,12 @@ def load_containers(path: Path) -> dict[str, str]:
 
 
 def host_sample(
-    containers: dict[str, str], cgroup_root: Path = CGROUP_ROOT
+    containers: dict[str, str], clock: nb.Clock, cgroup_root: Path = CGROUP_ROOT
 ) -> dict[str, Any]:
     """Same shape as bench.sample_host's record, plus disk and net throughput counters and
     per-container cpu/mem in place of bench's per-process labels."""
     return {
-        "ts": time.time(),
+        "ts": clock.time(),
         "cpu": nb.usable_cpu_jiffies(),
         "load1": float(Path("/proc/loadavg").read_text().split()[0]),
         "psi_cpu": nb.psi("cpu"),
@@ -7234,7 +7273,7 @@ def pg_sample_sql(has_checkpointer: bool) -> str:
 
 
 def pg_sample(
-    run: Runner, pg: PgEndpoint, has_checkpointer: bool
+    run: Runner, pg: PgEndpoint, has_checkpointer: bool, clock: nb.Clock
 ) -> dict[str, Any] | None:
     """None when psql fails (Postgres not up yet, or stopped at freeze)."""
     argv, env = psql_argv(pg)
@@ -7242,7 +7281,7 @@ def pg_sample(
     if result.returncode != 0:
         log.debug("pg sample failed: %s", result.stderr.strip())
         return None
-    return {"ts": time.time(), **json.loads(result.stdout)}
+    return {"ts": clock.time(), **json.loads(result.stdout)}
 
 
 def has_checkpointer_view(run: Runner, pg: PgEndpoint) -> bool | None:
@@ -7256,7 +7295,11 @@ def has_checkpointer_view(run: Runner, pg: PgEndpoint) -> bool | None:
 
 
 def sample_pg(
-    out: Path, stop: threading.Event, pg: PgEndpoint, run: Runner = _run
+    out: Path,
+    stop: threading.Event,
+    pg: PgEndpoint,
+    run: Runner = _run,
+    clock: nb.Clock = nb.SYSTEM_CLOCK,
 ) -> None:
     has_checkpointer = None
     with out.open("a", buffering=1) as f:
@@ -7264,13 +7307,15 @@ def sample_pg(
             if has_checkpointer is None:
                 has_checkpointer = has_checkpointer_view(run, pg)
             if has_checkpointer is not None:
-                sample = pg_sample(run, pg, has_checkpointer)
+                sample = pg_sample(run, pg, has_checkpointer, clock)
                 if sample is not None:
                     f.write(json.dumps(sample) + "\n")
-            stop.wait(PG_SAMPLE_S)
+            clock.wait(stop, PG_SAMPLE_S)
 
 
-def cmd_agent_host(args: argparse.Namespace, run: Runner = _run) -> int:
+def cmd_agent_host(
+    args: argparse.Namespace, run: Runner = _run, clock: nb.Clock = nb.SYSTEM_CLOCK
+) -> int:
     containers_path = Path(BENCH_DIR) / "containers.json"
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -7281,12 +7326,15 @@ def cmd_agent_host(args: argparse.Namespace, run: Runner = _run) -> int:
             raise Refused("agent-host --role query needs --pg")
         pg_out = args.out.with_name("pg-stats.jsonl")
         pg = cast(PgEndpoint, json.loads(args.pg.read_text()))
-        pg_thread = threading.Thread(target=sample_pg, args=(pg_out, stop, pg, run))
+        pg_thread = threading.Thread(
+            target=sample_pg, args=(pg_out, stop, pg, run, clock)
+        )
         pg_thread.start()
     with args.out.open("a", buffering=1) as f:
         while not stop.is_set():
-            f.write(json.dumps(host_sample(load_containers(containers_path))) + "\n")
-            stop.wait(HOST_SAMPLE_S)
+            sample = host_sample(load_containers(containers_path), clock)
+            f.write(json.dumps(sample) + "\n")
+            clock.wait(stop, HOST_SAMPLE_S)
     if pg_thread is not None:
         pg_thread.join()
     return EXIT_OK

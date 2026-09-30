@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import netbench
-from fakes import SLOW
+from fakes import SLOW, FakeClock
 from test_aws_bench import (
     DESCRIBE,
     DONE_STATE,
@@ -85,14 +85,7 @@ class FleetHarness:
         self.out = self.tmp / "out"
         self.fleet_dir = self.out / name
         patches = [
-            unittest.mock.patch.multiple(
-                awsb,
-                SSH_RETRY_S=0.0,
-                AGENT_POLL_S=0.0,
-                GATE_RETRY_S=0.0,
-                DESTROY_BACKOFF_S=0.0,
-                DOCKER_START_LEAD_S=0.0,
-            ),
+            unittest.mock.patch.object(awsb, "DOCKER_START_LEAD_S", 0.0),
             unittest.mock.patch.object(
                 awsb, "preflight", return_value=fake_preflight()
             ),
@@ -147,14 +140,14 @@ class FleetHarness:
 
     def up(self, runner, *extra: str) -> int:
         return awsb.cmd_up(
-            self.up_args(*extra), run=runner, interrupts=awsb.Interrupts()
+            self.up_args(*extra), run=runner, interrupts=awsb.Interrupts(FakeClock())
         )
 
     def run(self, runner, *extra: str, interrupts: "awsb.Interrupts | None" = None):
         return awsb.cmd_run(
             self.run_args(*extra),
             run=runner,
-            interrupts=interrupts or awsb.Interrupts(),
+            interrupts=interrupts or awsb.Interrupts(FakeClock()),
         )
 
     def fleet(self) -> dict:
@@ -269,7 +262,7 @@ class UpTest(unittest.TestCase):
         args = harness.up_args()
         args.yes = False
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
-            awsb.cmd_up(args, run=runner, interrupts=awsb.Interrupts())
+            awsb.cmd_up(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
         self.assertFalse(runner.ran("tofu", "apply"))
 
     def test_up_needs_explicit_minutes(self):
@@ -367,7 +360,7 @@ class RunOnFleetTest(unittest.TestCase):
     def test_interrupt_collects_without_destroy_and_releases_the_lock(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
-        interrupts = awsb.Interrupts()
+        interrupts = awsb.Interrupts(FakeClock())
 
         def sigint(polls: int) -> None:
             if polls == 2:
@@ -458,7 +451,7 @@ class RunOnFleetTest(unittest.TestCase):
         harness = FleetHarness(self)
         runner = TaggingRunner([DONE_STATE], describe=DESCRIBE)
         args = harness.single_shot_args()
-        code = awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts())
+        code = awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertFalse(runner.ran("find /data/journal"))
         self.assertEqual(harness.fleet()["db_modes"], ["colocated"])
@@ -814,7 +807,7 @@ class ResetScriptTest(unittest.TestCase):
     def test_reset_chain_runs_the_script_on_every_host(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
-        fleet = awsb.open_fleet(runner, harness.fleet_dir, awsb.Interrupts())
+        fleet = awsb.open_fleet(runner, harness.fleet_dir, awsb.Interrupts(FakeClock()))
         assert fleet.remote is not None
         mark = len(runner.calls)
         awsb.reset_chain(fleet.remote, "colocated", fleet.manifest, fleet.interrupts)
@@ -923,7 +916,7 @@ class VolumeWiringTest(unittest.TestCase):
             "--query-db",
             "volume",
         )
-        code = awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts())
+        code = awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(runner.count("mkfs.ext4"), 1)
         self.assertFalse(runner.ran("find /data/journal"))
@@ -1392,7 +1385,7 @@ class ExtendTest(unittest.TestCase):
 class DownTest(unittest.TestCase):
     def down(self, harness, runner, *extra: str) -> int:
         args = harness.parse("down", str(harness.fleet_dir), "--yes", *extra)
-        return awsb.cmd_down(args, run=runner)
+        return awsb.cmd_down(args, run=runner, clock=FakeClock())
 
     def test_down_destroys_prices_and_appends_the_fleet_row(self):
         harness = FleetHarness(self)
@@ -1449,14 +1442,16 @@ class DownTest(unittest.TestCase):
         runner = harness.up_fleet(self)
         args = harness.parse("down", str(harness.fleet_dir))
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
-            awsb.cmd_down(args, run=runner)
+            awsb.cmd_down(args, run=runner, clock=FakeClock())
         self.assertFalse(runner.ran("tofu", "destroy"))
 
     def test_destroy_dir_is_the_same_command(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         args = harness.parse("destroy", str(harness.fleet_dir), "--yes")
-        self.assertEqual(awsb.cmd_destroy(args, run=runner), awsb.EXIT_OK)
+        self.assertEqual(
+            awsb.cmd_destroy(args, run=runner, clock=FakeClock()), awsb.EXIT_OK
+        )
         self.assertEqual(harness.fleet()["phase"], "done")
 
 
@@ -1708,7 +1703,7 @@ class RdsGuardTest(unittest.TestCase):
             args = harness.up_args()
             args.name = name
             with self.assertRaisesRegex(awsb.Refused, "--name"):
-                awsb.cmd_up(args, run=runner, interrupts=awsb.Interrupts())
+                awsb.cmd_up(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
             self.assertEqual(runner.calls, [], name)
 
     def test_the_default_name_passes_the_name_check(self):
@@ -2295,7 +2290,11 @@ class RdsUpTest(unittest.TestCase):
         args = harness.up_args()
         args.yes = False
         with unittest.mock.patch.object(awsb, "confirm", return_value=True) as confirm:
-            awsb.cmd_up(args, run=RdsRunner([DONE_STATE]), interrupts=awsb.Interrupts())
+            awsb.cmd_up(
+                args,
+                run=RdsRunner([DONE_STATE]),
+                interrupts=awsb.Interrupts(FakeClock()),
+            )
         self.assertIn(
             "1 rds instance, 1 subnet group, 1 parameter group, 1 schedule, 1 iam role",
             confirm.call_args.args[0],
@@ -2307,7 +2306,9 @@ class RdsUpTest(unittest.TestCase):
         args.yes = False
         with unittest.mock.patch.object(awsb, "confirm", return_value=True) as confirm:
             awsb.cmd_up(
-                args, run=VolumeRunner([DONE_STATE]), interrupts=awsb.Interrupts()
+                args,
+                run=VolumeRunner([DONE_STATE]),
+                interrupts=awsb.Interrupts(FakeClock()),
             )
         self.assertIn("1 extra volume", confirm.call_args.args[0])
 
@@ -2319,8 +2320,7 @@ class RdsUpTest(unittest.TestCase):
             db_instance(state="rebooting", applied="pending-reboot"),
             db_instance(applied="in-sync"),
         ]
-        with unittest.mock.patch.object(awsb, "RDS_POLL_S", 0.0):
-            runner = harness.up_rds(self, instances=instances)
+        runner = harness.up_rds(self, instances=instances)
         self.assertEqual(runner.count("reboot-db-instance"), 1)
         self.assertEqual(harness.fleet()["phase"], "idle")
 
@@ -2329,10 +2329,7 @@ class RdsUpTest(unittest.TestCase):
         runner = RdsRunner(
             [DONE_STATE], instances=[db_instance(applied="pending-reboot")]
         )
-        with unittest.mock.patch.multiple(
-            awsb, RDS_POLL_S=0.0, RDS_SYNC_TIMEOUT_S=0.05
-        ):
-            self.assertEqual(harness.up(runner), awsb.EXIT_FAILED)
+        self.assertEqual(harness.up(runner), awsb.EXIT_FAILED)
         self.assertEqual(runner.count("reboot-db-instance"), 1)
         self.assertTrue(runner.ran("tofu", "destroy"))
         self.assertIn("pending-reboot", harness.driver_log())
@@ -2483,7 +2480,7 @@ class RdsRunTest(unittest.TestCase):
             "--query-db",
             "rds",
         )
-        code = awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts())
+        code = awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(harness.fleet()["db_modes"], ["rds"])
         self.assertIn("rds", harness.tfvars())
@@ -2832,7 +2829,7 @@ class RdsExtendTest(unittest.TestCase):
 class RdsDownTest(unittest.TestCase):
     def down(self, harness, runner) -> int:
         args = harness.parse("down", str(harness.fleet_dir), "--yes")
-        return awsb.cmd_down(args, run=runner)
+        return awsb.cmd_down(args, run=runner, clock=FakeClock())
 
     def cost(self, harness) -> dict:
         return json.loads((harness.fleet_dir / "cost.json").read_text())
@@ -2916,10 +2913,7 @@ class RdsDownTest(unittest.TestCase):
                 {"Message": "DB instance deleted", "Date": "2026-09-30T15:00:00+00:00"}
             ],
         )
-        with unittest.mock.patch.multiple(
-            awsb, RDS_POLL_S=0.0, RDS_SYNC_TIMEOUT_S=0.05
-        ):
-            self.assertEqual(harness.up(runner), awsb.EXIT_FAILED)
+        self.assertEqual(harness.up(runner), awsb.EXIT_FAILED)
         self.assertGreater(self.cost(harness)["actual"], 0)
 
 
@@ -3312,7 +3306,7 @@ class DestroyRdsOrphansTest(unittest.TestCase):
         )
         text = io.StringIO()
         with contextlib.redirect_stdout(text):
-            code = awsb.cmd_destroy(parsed, runner, SWEEP_NOW)
+            code = awsb.cmd_destroy(parsed, runner, SWEEP_NOW, FakeClock())
         return code, text.getvalue()
 
     def write_fleet(self, out: Path, name: str, phase: str) -> None:
