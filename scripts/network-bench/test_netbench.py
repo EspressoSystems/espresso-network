@@ -536,7 +536,10 @@ def test_keep_going_runs_every_step_then_waits_for_the_backlog(staircase):
 def test_backlog_not_drained(
     staircase, monkeypatch: pytest.MonkeyPatch, steps, keep_going, refine_skipped
 ):
-    monkeypatch.setattr(netbench, "drain", mock.AsyncMock(return_value=None))
+    async def undrained(*_: Any, **__: Any) -> None:
+        return None
+
+    monkeypatch.setattr(netbench, "drain", undrained)
     run = staircase(steps=steps, tx_timeout_s=1, keep_going=keep_going)
     assert [s["rate_mb_s"] for s in run.steps] == list(steps)
     assert run.meta["drain_s"] is None
@@ -546,7 +549,10 @@ def test_backlog_not_drained(
 def test_steps_survive_a_failure_in_the_last_drain(
     staircase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(netbench, "drain", mock.AsyncMock(side_effect=OSError("gone")))
+    async def gone(*_: Any, **__: Any) -> None:
+        raise OSError("gone")
+
+    monkeypatch.setattr(netbench, "drain", gone)
     with pytest.raises(netbench.NetworkError):
         staircase(steps=(0.1, 0.12), tx_timeout_s=1, keep_going=True)
     steps = json.loads((tmp_path / "steps.json").read_text())

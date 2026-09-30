@@ -14,14 +14,10 @@ import itertools
 import json
 import math
 import selectors
-import shutil
 import signal
 import stat
 import subprocess
-import tempfile
 import threading
-import unittest
-import unittest.mock
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -31,6 +27,7 @@ from typing import Any, ClassVar, TypeVar
 from urllib.parse import urlsplit
 
 import netbench
+import pytest
 
 SINGLE_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
 INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
@@ -1093,22 +1090,14 @@ def shot_estimate(hosts: list, cfg: "awsb.RunConfig") -> "awsb.Estimate":
     return awsb.cost_estimate(hosts, cfg, None, *awsb.shot_seconds(cfg))
 
 
-def isolated_env(test: unittest.TestCase, name: str = "run1") -> Path:
+def isolated_env(monkeypatch: pytest.MonkeyPatch, name: str = "run1") -> Path:
     """A fixed fleet name. Returns the out root under the cwd, which the `isolated` fixture
     makes a temp dir."""
     cwd = Path.cwd().resolve()
     if cwd in (REPO, REPO / "scripts"):
-        raise AssertionError(f"{test.id()} writes OUT_ROOT into {cwd}: use `isolated`")
-    patch = unittest.mock.patch.object(awsb, "default_run_name", return_value=name)
-    patch.start()
-    test.addCleanup(patch.stop)
+        raise AssertionError(f"writes OUT_ROOT into {cwd}: use `isolated`")
+    monkeypatch.setattr(awsb, "default_run_name", lambda *_: name)
     return cwd / awsb.OUT_ROOT
-
-
-def temp_dir(test: unittest.TestCase) -> Path:
-    tmp = Path(tempfile.mkdtemp())
-    test.addCleanup(shutil.rmtree, tmp)
-    return tmp
 
 
 def plan_args(*extra: str, nodes: str = "2") -> "awsb.argparse.Namespace":
@@ -1209,24 +1198,19 @@ class RunHarness:
     """A temp working dir with its own out root for driving `cmd_run` end to end."""
 
     def __init__(
-        self, test: unittest.TestCase, name: str = "run1", confirmed: bool = False
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        name: str = "run1",
+        confirmed: bool = False,
     ):
         self.yes = not confirmed
         self.answer = confirmed
-        self.tmp = Path.cwd()
-        self.out = isolated_env(test, name)
+        self.out = isolated_env(monkeypatch, name)
         self.name = name
         self.fleet_dir = awsb.OUT_ROOT / name
         self.run_dir = self.fleet_dir / "runs" / "01-run"
-        patches = [
-            unittest.mock.patch.object(
-                awsb, "preflight", return_value=fake_preflight()
-            ),
-            unittest.mock.patch.object(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT)),
-        ]
-        for patch in patches:
-            patch.start()
-            test.addCleanup(patch.stop)
+        monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight())
+        monkeypatch.setattr(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT))
 
     def args(self, *extra: str) -> "awsb.argparse.Namespace":
         argv = [
@@ -1278,17 +1262,15 @@ class Scripted:
         return completed()
 
 
-def tmp_dir(test: unittest.TestCase) -> Path:
-    tmp = Path(tempfile.mkdtemp())
-    test.addCleanup(shutil.rmtree, tmp)
-    return tmp
-
-
-def scripted_remote(
-    test: unittest.TestCase, runner, tmp: Path | None = None
-) -> "awsb.Remote":
-    tmp = tmp or tmp_dir(test)
+def remote(runner: Callable[..., Any], tmp: Path) -> "awsb.Remote":
     return awsb.Remote(runner, tmp, Path("~/.ssh/id"), two_node_hosts_info())
+
+
+def raiser(error: BaseException) -> Callable[..., Any]:
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise error
+
+    return fail
 
 
 def pg_settings(**overrides) -> dict:
@@ -1537,22 +1519,14 @@ class FleetHarness:
     """A temp working dir with its own out root, and the argv of `up` and `run --fleet` for one
     fleet."""
 
-    def __init__(self, test: unittest.TestCase, name: str = "fleet1"):
-        self.tmp = Path.cwd()
-        isolated_env(test, name)
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, name: str = "fleet1"):
+        isolated_env(monkeypatch, name)
         self.name = name
         self.out = awsb.OUT_ROOT
         self.fleet_dir = self.out / name
-        patches = [
-            unittest.mock.patch.object(
-                awsb, "preflight", return_value=fake_preflight()
-            ),
-            unittest.mock.patch.object(awsb, "write_report", fake_report),
-            unittest.mock.patch.object(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT)),
-        ]
-        for patch in patches:
-            patch.start()
-            test.addCleanup(patch.stop)
+        monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight())
+        monkeypatch.setattr(awsb, "write_report", fake_report)
+        monkeypatch.setattr(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT))
 
     def parse(self, *argv: str) -> "awsb.argparse.Namespace":
         args = awsb.parse_args(list(argv))
@@ -1607,9 +1581,9 @@ class FleetHarness:
     def driver_log(self) -> str:
         return (self.fleet_dir / "driver.log").read_text()
 
-    def up_fleet(self, test: unittest.TestCase) -> FakeRunner:
+    def up_fleet(self) -> FakeRunner:
         runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
-        test.assertEqual(self.up(runner), awsb.EXIT_OK)
+        assert self.up(runner) == awsb.EXIT_OK
         return runner
 
 
@@ -1747,23 +1721,18 @@ class RdsRunner(FakeRunner):
 class RdsHarness(FleetHarness):
     """`FleetHarness` for an rds fleet: preflight resolved the engine minor 18.2."""
 
-    def __init__(self, test: unittest.TestCase, modes: str = "rds"):
-        super().__init__(test)
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, modes: str = "rds"):
+        super().__init__(monkeypatch)
         self.modes = modes
-        patch = unittest.mock.patch.object(
-            awsb,
-            "preflight",
-            return_value={**fake_preflight(), "rds_engine_version": "18.2"},
-        )
-        patch.start()
-        test.addCleanup(patch.stop)
+        pre = {**fake_preflight(), "rds_engine_version": "18.2"}
+        monkeypatch.setattr(awsb, "preflight", lambda *_: pre)
 
     def up_args(self, *extra: str) -> "awsb.argparse.Namespace":
         return super().up_args("--db-modes", self.modes, *extra)
 
-    def up_rds(self, test: unittest.TestCase, **kwargs) -> RdsRunner:
+    def up_rds(self, **kwargs) -> RdsRunner:
         runner = RdsRunner([DONE_STATE], describe=DESCRIBE, **kwargs)
-        test.assertEqual(self.up(runner), awsb.EXIT_OK)
+        assert self.up(runner) == awsb.EXIT_OK
         return runner
 
     def tfvars(self) -> dict:

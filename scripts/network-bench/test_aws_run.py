@@ -23,6 +23,8 @@ from fakes import (
     fake_image,
     fake_images,
     fake_preflight,
+    raiser,
+    remote,
     two_node_hosts_info,
     valid_result,
 )
@@ -62,22 +64,6 @@ def harness(isolated: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
     monkeypatch.setattr(awsb, "preflight", lambda *a, **k: fake_preflight())
     monkeypatch.setattr(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT))
     return Harness(isolated / awsb.OUT_ROOT)
-
-
-@pytest.fixture
-def valid(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(awsb, "write_report", lambda *a, **k: valid_result())
-
-
-def raiser(error: BaseException):
-    def fail(*args, **kwargs):
-        raise error
-
-    return fail
-
-
-def remote(runner, tmp: Path) -> "awsb.Remote":
-    return awsb.Remote(runner, tmp, Path("~/.ssh/id"), two_node_hosts_info())
 
 
 def ran_ssh(runner: FakeRunner) -> bool:

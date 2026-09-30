@@ -3,8 +3,7 @@ import contextlib
 import json
 import os
 import re
-import unittest
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 
 import netbench
@@ -234,14 +233,7 @@ def test_append_index_keeps_existing_rows(tmp_path: Path):
 
 
 @pytest.fixture
-def harness(isolated: Path) -> Iterator[RunHarness]:
-    case = unittest.TestCase()  # RunHarness registers its patches as TestCase cleanups
-    yield RunHarness(case)
-    case.doCleanups()
-
-
-@pytest.fixture
-def kept(harness: RunHarness, monkeypatch: pytest.MonkeyPatch) -> FakeRunner:
+def kept(run_harness: RunHarness, monkeypatch: pytest.MonkeyPatch) -> FakeRunner:
     """A run whose destroy failed, left running with a working destroy for later verbs."""
     runner = FakeRunner(
         states=[DONE_STATE],
@@ -250,29 +242,29 @@ def kept(harness: RunHarness, monkeypatch: pytest.MonkeyPatch) -> FakeRunner:
     )
     with monkeypatch.context() as m:
         m.setattr(awsb, "write_report", lambda *_: valid_result())
-        assert harness.run(runner) == awsb.EXIT_LEFTOVER
+        assert run_harness.run(runner) == awsb.EXIT_LEFTOVER
     runner.destroys = [completed()]
-    (harness.fleet_dir / "terraform").mkdir(exist_ok=True)
+    (run_harness.fleet_dir / "terraform").mkdir(exist_ok=True)
     return runner
 
 
-def _verb(harness: RunHarness, verb: str, *extra: str):
-    target = harness.run_dir if verb == "collect" else harness.fleet_dir
+def _verb(run_harness: RunHarness, verb: str, *extra: str):
+    target = run_harness.run_dir if verb == "collect" else run_harness.fleet_dir
     return awsb.parse_args([verb, str(target), *extra])
 
 
-def _status(harness: RunHarness, runner: FakeRunner) -> tuple[int, str]:
-    argv = ["status", str(harness.fleet_dir)]
+def _status(run_harness: RunHarness, runner: FakeRunner) -> tuple[int, str]:
+    argv = ["status", str(run_harness.fleet_dir)]
     return run_cmd(awsb.cmd_status, argv, FakeSystem(run=runner))
 
 
-def _down(harness: RunHarness, runner: FakeRunner, *extra: str) -> int:
+def _down(run_harness: RunHarness, runner: FakeRunner, *extra: str) -> int:
     system = FakeSystem(run=runner, clock=FakeClock())
-    return awsb.cmd_down(_verb(harness, "down", *extra), system)
+    return awsb.cmd_down(_verb(run_harness, "down", *extra), system)
 
 
-def test_status_shows_phase_instances_agent_and_cost(harness, kept):
-    code, text = _status(harness, kept)
+def test_status_shows_phase_instances_agent_and_cost(run_harness, kept):
+    code, text = _status(run_harness, kept)
     assert code == awsb.EXIT_OK
     assert "- fleet run1: phase left-running" in text
     assert "- 01-run: phase left-running" in text
@@ -281,54 +273,54 @@ def test_status_shows_phase_instances_agent_and_cost(harness, kept):
     assert re.search(r"- cost: \$\d+\.\d\d so far, bound \$\d+\.\d\d", text)
 
 
-def test_status_of_a_finished_run_reads_cost_json_without_aws(harness, monkeypatch):
+def test_status_of_a_finished_run_reads_cost_json_without_aws(run_harness, monkeypatch):
     monkeypatch.setattr(awsb, "write_report", lambda *_: valid_result())
-    assert harness.run(FakeRunner(states=[DONE_STATE], describe=DESCRIBE)) == 0
+    assert run_harness.run(FakeRunner(states=[DONE_STATE], describe=DESCRIBE)) == 0
     offline = FakeRunner(states=[DONE_STATE])
-    code, text = _status(harness, offline)
+    code, text = _status(run_harness, offline)
     assert code == awsb.EXIT_OK
     assert offline.calls == []
     assert re.search(r"- cost: \$\d+\.\d\d actual, bound \$\d+", text)
 
 
-def test_down_destroys_prices_appends_index_and_refuses_a_second(harness, kept):
+def test_down_destroys_prices_appends_index_and_refuses_a_second(run_harness, kept):
     kept.describe = DESCRIBE
-    assert _down(harness, kept, "--yes") == awsb.EXIT_OK
+    assert _down(run_harness, kept, "--yes") == awsb.EXIT_OK
     assert kept.ran("tofu", "destroy")
-    manifest = json.loads((harness.fleet_dir / "fleet.json").read_text())
+    manifest = json.loads((run_harness.fleet_dir / "fleet.json").read_text())
     assert manifest["phase"] == "done"
     assert manifest["cost_usd"]["actual"] > 0
-    run_manifest = json.loads((harness.run_dir / "manifest.json").read_text())
+    run_manifest = json.loads((run_harness.run_dir / "manifest.json").read_text())
     assert run_manifest["cost_usd"] == manifest["cost_usd"]
-    rows = harness.index().splitlines()
+    rows = run_harness.index().splitlines()
     assert len(rows) == 3
     assert "| valid | 4 |" in rows[2]
     with pytest.raises(awsb.Refused, match="already done"):
-        _down(harness, kept, "--yes")
+        _down(run_harness, kept, "--yes")
 
 
-def test_down_removes_the_private_key(harness, kept):
-    key = harness.fleet_dir / "ssh" / "id_ed25519"
-    _status(harness, kept)
+def test_down_removes_the_private_key(run_harness, kept):
+    key = run_harness.fleet_dir / "ssh" / "id_ed25519"
+    _status(run_harness, kept)
     assert kept.ran("-i", str(key))
     kept.describe = DESCRIBE
-    _down(harness, kept, "--yes")
+    _down(run_harness, kept, "--yes")
     assert not key.exists()
     assert key.with_name("id_ed25519.pub").exists()
 
 
-def test_down_declined_destroys_nothing(harness, kept):
+def test_down_declined_destroys_nothing(run_harness, kept):
     destroys = kept.count("tofu", "destroy")
     with pytest.raises(awsb.Refused, match="not confirmed"):
-        _down(harness, kept)
+        _down(run_harness, kept)
     assert kept.count("tofu", "destroy") == destroys
 
 
-def test_failed_down_sweeps_and_exits_4(harness, kept):
+def test_failed_down_sweeps_and_exits_4(run_harness, kept):
     kept.destroys = [completed(returncode=1, stderr="locked")]
-    assert _down(harness, kept, "--yes") == awsb.EXIT_LEFTOVER
+    assert _down(run_harness, kept, "--yes") == awsb.EXIT_LEFTOVER
     assert kept.ran("terminate-instances", "i-1")
-    manifest = json.loads((harness.fleet_dir / "fleet.json").read_text())
+    manifest = json.loads((run_harness.fleet_dir / "fleet.json").read_text())
     assert manifest["phase"] == "left-running"
 
 
@@ -337,12 +329,12 @@ def _copy_df(remote, host, source, local: Path, *flags) -> None:
     (local / "df.txt").write_text("x")
 
 
-def test_collect_writes_numbered_subdirs(harness, kept, monkeypatch):
+def test_collect_writes_numbered_subdirs(run_harness, kept, monkeypatch):
     monkeypatch.setattr(awsb.Remote, "rsync_from", _copy_df)
     for index in (1, 2):
-        code = awsb.cmd_collect(_verb(harness, "collect"), FakeSystem(run=kept))
+        code = awsb.cmd_collect(_verb(run_harness, "collect"), FakeSystem(run=kept))
         assert code == awsb.EXIT_OK
-        host = harness.run_dir / "hosts" / "node0"
+        host = run_harness.run_dir / "hosts" / "node0"
         assert (host / f"collect-{index}" / "df.txt").exists()
     assert kept.ran("psql -At -c")
 
@@ -365,27 +357,27 @@ def _script_fails(m: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize("breaks", [_copies_nothing, _script_fails])
 def test_collect_fails_for_a_host_that_yielded_nothing(
-    harness, kept, monkeypatch, breaks: Callable[[pytest.MonkeyPatch], None]
+    run_harness, kept, monkeypatch, breaks: Callable[[pytest.MonkeyPatch], None]
 ):
     breaks(monkeypatch)
-    code = awsb.cmd_collect(_verb(harness, "collect"), FakeSystem(run=kept))
+    code = awsb.cmd_collect(_verb(run_harness, "collect"), FakeSystem(run=kept))
     assert code == awsb.EXIT_FAILED
 
 
-def test_collect_of_an_older_run_is_refused_without_calls(harness, kept):
-    (harness.fleet_dir / "runs" / "02-later").mkdir()
+def test_collect_of_an_older_run_is_refused_without_calls(run_harness, kept):
+    (run_harness.fleet_dir / "runs" / "02-later").mkdir()
     mark = len(kept.calls)
     with pytest.raises(awsb.Refused, match="not the last run"):
-        awsb.cmd_collect(_verb(harness, "collect"), FakeSystem(run=kept))
+        awsb.cmd_collect(_verb(run_harness, "collect"), FakeSystem(run=kept))
     assert len(kept.calls) == mark
 
 
-def test_collect_while_a_run_is_in_progress_is_refused(harness, kept):
-    fleet_json = harness.fleet_dir / "fleet.json"
+def test_collect_while_a_run_is_in_progress_is_refused(run_harness, kept):
+    fleet_json = run_harness.fleet_dir / "fleet.json"
     manifest = json.loads(fleet_json.read_text())
     netbench.write_json(fleet_json, {**manifest, "phase": "running"})
     with pytest.raises(awsb.Refused, match="is running"):
-        awsb.cmd_collect(_verb(harness, "collect"), FakeSystem(run=kept))
+        awsb.cmd_collect(_verb(run_harness, "collect"), FakeSystem(run=kept))
 
 
 def test_render_rewrites_summary_and_compares_a_baseline(tmp_path: Path):

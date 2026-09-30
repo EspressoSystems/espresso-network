@@ -12,7 +12,6 @@ from fakes import (
     BY_ID,
     DESCRIBE,
     DONE_STATE,
-    DOTENV_TEXT,
     NOW,
     STATUS_DESCRIBE,
     VOLUME_ID,
@@ -23,8 +22,6 @@ from fakes import (
     awsb,
     completed,
     fake_image,
-    fake_preflight,
-    fake_report,
     ssh_calls,
     valid_result,
     volume_runner,
@@ -37,23 +34,12 @@ PG_VOLUME = {"gb": 400, "iops": 12000, "mbps": 500}
 
 @pytest.fixture
 def harness(isolated: Path, monkeypatch: pytest.MonkeyPatch) -> FleetHarness:
-    monkeypatch.setattr(awsb, "default_run_name", lambda *_: "fleet1")
-    monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight())
-    monkeypatch.setattr(awsb, "write_report", fake_report)
-    monkeypatch.setattr(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT))
-    fleet = FleetHarness.__new__(FleetHarness)
-    fleet.tmp = isolated
-    fleet.name = "fleet1"
-    fleet.out = awsb.OUT_ROOT
-    fleet.fleet_dir = fleet.out / "fleet1"
-    return fleet
+    return FleetHarness(monkeypatch)
 
 
 @pytest.fixture
 def runner(harness: FleetHarness) -> FakeRunner:
-    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
-    assert harness.up(runner) == awsb.EXIT_OK
-    return runner
+    return harness.up_fleet()
 
 
 def run_manifest(harness: FleetHarness, name: str = "01-colocated") -> dict:

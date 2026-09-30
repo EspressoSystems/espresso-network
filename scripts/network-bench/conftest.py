@@ -2,7 +2,14 @@ import os
 from pathlib import Path
 
 import pytest
-from fakes import FakeClock, FakeRegistry, FakeSystem
+from fakes import (
+    FakeClock,
+    FakeRegistry,
+    FakeSystem,
+    RunHarness,
+    awsb,
+    valid_result,
+)
 
 
 def pytest_collection_modifyitems(
@@ -37,3 +44,13 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def registry() -> FakeRegistry:
     return FakeRegistry("test/image", "v1", [("linux", "arm64")])
+
+
+@pytest.fixture
+def run_harness(isolated: Path, monkeypatch: pytest.MonkeyPatch) -> RunHarness:
+    return RunHarness(monkeypatch)
+
+
+@pytest.fixture
+def valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(awsb, "write_report", lambda *a, **k: valid_result())

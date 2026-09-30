@@ -7,7 +7,7 @@ import threading
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import netbench
 import pytest
@@ -33,15 +33,12 @@ from fakes import (
     host_sample,
     metric_data,
     pg_settings,
+    raiser,
+    remote,
     shot_estimate,
     two_node_hosts_info,
-    valid_result,
     write_collected_run,
 )
-
-
-def remote_of(runner: Callable[..., Any], tmp: Path) -> "awsb.Remote":
-    return awsb.Remote(runner, tmp, Path("~/.ssh/id"), two_node_hosts_info())
 
 
 def query_spec() -> dict:
@@ -283,7 +280,7 @@ def test_pg_json_is_written_0600_for_the_query_host_only(tmp_path: Path) -> None
 
 def test_gates_check_readiness_then_extension_then_reset(tmp_path: Path) -> None:
     runner = Scripted({"docker wait deploy": [completed(stdout="0\n")]})
-    awsb.start_support(remote_of(runner, tmp_path), [], awsb.Interrupts(FakeClock()))
+    awsb.start_support(remote(runner, tmp_path), [], awsb.Interrupts(FakeClock()))
     commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
     order = [
         next(i for i, c in enumerate(commands) if needle in c)
@@ -324,10 +321,10 @@ def test_every_node_waits_concurrently_whatever_the_pool_size(
             return completed(stdout="2026-09-29T15:00:00.1Z\n")
         return completed()
 
-    remote = remote_of(runner, tmp_path)
+    ssh = remote(runner, tmp_path)
     monkeypatch.setattr(awsb, "REMOTE_POOL_SIZE", 1)
-    hosts = [remote.hosts["node0"], remote.hosts["node1"]]
-    assert awsb.start_nodes(remote, hosts, 0.0) == 0.0
+    hosts = [ssh.hosts["node0"], ssh.hosts["node1"]]
+    assert awsb.start_nodes(ssh, hosts, 0.0) == 0.0
 
 
 def test_digest_mismatches() -> None:
@@ -586,13 +583,6 @@ def test_agent_done_state_carries_ready_window_and_progress(
     assert state["progress"] == "height 7: 3 submitted"
 
 
-def raiser(exc: BaseException) -> Callable[..., Any]:
-    def raise_(*args: Any) -> Any:
-        raise exc
-
-    return raise_
-
-
 @pytest.mark.parametrize(
     ("ready", "load", "error"),
     [
@@ -712,49 +702,33 @@ def test_metric_min_counts_only_periods_overlapping_the_load(tmp_path: Path) -> 
     assert low == {"EBSByteBalance%": 97.0, "EBSIOBalance%": 100.0}
 
 
-class _Cleanups:
-    """The slice of `unittest.TestCase` that `RunHarness` uses."""
-
-    def __init__(self, request: pytest.FixtureRequest) -> None:
-        self.request = request
-
-    def id(self) -> str:
-        return self.request.node.nodeid
-
-    def addCleanup(self, func: Callable[..., Any], *args: Any) -> None:
-        self.request.addfinalizer(lambda: func(*args))
-
-
-@pytest.fixture
-def harness(
-    isolated: Path, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> RunHarness:
-    monkeypatch.setattr(awsb, "write_report", lambda *a, **k: valid_result())
-    return RunHarness(cast(Any, _Cleanups(request)))
-
-
-def test_finish_saves_node0_balance(harness: RunHarness) -> None:
+@pytest.mark.usefixtures("valid")
+def test_finish_saves_node0_balance(run_harness: RunHarness) -> None:
     runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
-    assert harness.run(runner) == awsb.EXIT_OK
+    assert run_harness.run(runner) == awsb.EXIT_OK
     assert runner.count("get-metric-data") == 1
-    assert (harness.run_dir / awsb.EC2_NODE0_FILE).exists()
+    assert (run_harness.run_dir / awsb.EC2_NODE0_FILE).exists()
 
 
-def test_balance_fetch_failure_does_not_stop_the_teardown(harness: RunHarness) -> None:
+@pytest.mark.usefixtures("valid")
+def test_balance_fetch_failure_does_not_stop_the_teardown(
+    run_harness: RunHarness,
+) -> None:
     runner = FakeRunner(
         states=[DONE_STATE],
         describe=DESCRIBE,
         balance=completed(returncode=254, stderr="denied"),
     )
-    assert harness.run(runner) == awsb.EXIT_OK
-    assert not (harness.run_dir / awsb.EC2_NODE0_FILE).exists()
+    assert run_harness.run(runner) == awsb.EXIT_OK
+    assert not (run_harness.run_dir / awsb.EC2_NODE0_FILE).exists()
     assert runner.ran("tofu", "destroy")
 
 
-def test_no_load_window_fetches_no_balance(harness: RunHarness) -> None:
+@pytest.mark.usefixtures("valid")
+def test_no_load_window_fetches_no_balance(run_harness: RunHarness) -> None:
     error = {"phase": "error", "detail": "x", "error": "network not ready"}
     runner = FakeRunner(states=[error], describe=DESCRIBE)
-    assert harness.run(runner) == awsb.EXIT_FAILED
+    assert run_harness.run(runner) == awsb.EXIT_FAILED
     assert runner.count("get-metric-data") == 0
 
 

@@ -1,9 +1,6 @@
 """Tests for the rds and pg volume query stores of `aws-bench`, and the sweep of their resources."""
 
 import json
-import unittest
-import unittest.mock
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -50,16 +47,8 @@ from fakes import (
 
 
 @pytest.fixture
-def case() -> Iterator[unittest.TestCase]:
-    """The cleanup and assert target the `fakes` harnesses take."""
-    case = unittest.TestCase()
-    yield case
-    case.doCleanups()
-
-
-@pytest.fixture
-def harness(isolated: Path, case: unittest.TestCase) -> RdsHarness:
-    return RdsHarness(case)
+def harness(isolated: Path, monkeypatch: pytest.MonkeyPatch) -> RdsHarness:
+    return RdsHarness(monkeypatch)
 
 
 def failing(runner: FakeRunner, pattern: str, stderr: str) -> None:
@@ -152,8 +141,8 @@ def test_the_fleet_bound_bills_rds_until_its_delete_finishes():
     )
 
 
-def test_a_run_needs_time_for_the_rds_delete(harness, case):
-    harness.up_rds(case)
+def test_a_run_needs_time_for_the_rds_delete(harness):
+    harness.up_rds()
     manifest = harness.fleet()
     cfg = awsb.fleet_run_config(harness.run_args("--query-db", "rds"), manifest)
     worst_s = awsb.estimate_run(manifest, cfg)["worst_s"]
@@ -165,8 +154,8 @@ def test_a_run_needs_time_for_the_rds_delete(harness, case):
 
 
 # TEST:querydb-settings-parity-ok
-def test_the_parameter_group_renders_from_the_container_settings(harness, case):
-    harness.up_rds(case)
+def test_the_parameter_group_renders_from_the_container_settings(harness):
+    harness.up_rds()
     parameters = harness.tfvars()["rds"]["parameters"]
     for key, (_, setting) in awsb.PG_TUNING.items():
         assert parameters[key] == setting, key
@@ -178,8 +167,8 @@ def test_the_parameter_group_renders_from_the_container_settings(harness, case):
     assert "rds.force_ssl" not in parameters
 
 
-def test_the_password_is_generated_private_and_rds_safe(harness, case):
-    harness.up_rds(case)
+def test_the_password_is_generated_private_and_rds_safe(harness):
+    harness.up_rds()
     password = harness.tfvars()["rds_password"]
     assert len(password) >= 24
     assert password.replace("_", "").replace("-", "").isalnum()
@@ -190,8 +179,8 @@ def test_the_password_is_generated_private_and_rds_safe(harness, case):
     assert password not in harness.driver_log()
 
 
-def test_the_delete_time_follows_the_confirmed_expiry(harness, case):
-    harness.up_rds(case)
+def test_the_delete_time_follows_the_confirmed_expiry(harness):
+    harness.up_rds()
     delete_at = datetime.fromisoformat(harness.tfvars()["rds"]["delete_at"] + "+00:00")
     expected = NOW + timedelta(minutes=180, seconds=-awsb.RDS_REAPER_LEAD_S)
     assert abs((delete_at - expected).total_seconds()) < 60
@@ -206,14 +195,15 @@ def test_a_single_shot_deletes_the_rds_before_its_hosts_end(tmp_path):
     tfvars_path = tmp_path / "terraform" / "terraform.tfvars.json"
     netbench.write_json(tfvars_path, {"expires_at": "x", "rds": {"delete_at": "x"}})
     confirmed = datetime(2026, 9, 29, 16, 0, tzinfo=UTC)
-    awsb.stamp_expiry(tmp_path, unittest.mock.Mock(), confirmed)
+    tf = awsb.Terraform(FakeRunner(states=[]), tmp_path / "terraform", {})
+    awsb.stamp_expiry(tmp_path, tf, confirmed)
     written = json.loads(tfvars_path.read_text())
     assert written["expires_at"] == "2026-09-29T17:08:00Z"
     assert written["rds"]["delete_at"] == "2026-09-29T16:55:00"
 
 
-def test_plan_renders_the_rds_variables_and_prices_them(isolated, case, monkeypatch):
-    out = isolated_env(case, "planned")
+def test_plan_renders_the_rds_variables_and_prices_them(isolated, monkeypatch):
+    out = isolated_env(monkeypatch, "planned")
     argv = ["plan", "--nodes", "2", "--tag", "x", "--db-modes", "colocated,rds"]
     args = awsb.parse_args(argv)
     args.argv = argv
@@ -238,8 +228,8 @@ def rds_run_dir(harness: RdsHarness) -> tuple[Path, "awsb.RunConfig"]:
     return run_dir, cfg
 
 
-def test_node0_env_points_at_the_endpoint(harness, case):
-    harness.up_rds(case)
+def test_node0_env_points_at_the_endpoint(harness):
+    harness.up_rds()
     rds = json.loads((harness.fleet_dir / "rds.json").read_text())
     run_dir, cfg = rds_run_dir(harness)
     awsb.render_host_files(run_dir, cfg, harness.fleet(), two_node_hosts_info())
@@ -257,10 +247,8 @@ def test_node0_env_points_at_the_endpoint(harness, case):
     assert "--name postgres" not in (node0 / "start.sh").read_text()
 
 
-def test_the_password_files_are_private_before_they_are_written(
-    harness, case, monkeypatch
-):
-    harness.up_rds(case)
+def test_the_password_files_are_private_before_they_are_written(harness, monkeypatch):
+    harness.up_rds()
     run_dir, cfg = rds_run_dir(harness)
     modes: dict[str, int | None] = {}
 
@@ -279,8 +267,8 @@ def test_the_password_files_are_private_before_they_are_written(
     assert modes["node0/pg.json"] == 0o600
 
 
-def test_up_records_the_instance_and_gates_node0_on_it(harness, case):
-    runner = harness.up_rds(case)
+def test_up_records_the_instance_and_gates_node0_on_it(harness):
+    runner = harness.up_rds()
     manifest = harness.fleet()
     assert manifest["phase"] == "idle"
     assert manifest["rds"] == {**RDS_OUTPUT, "created_at": RDS_CREATED}
@@ -300,13 +288,13 @@ def test_up_records_the_instance_and_gates_node0_on_it(harness, case):
 
 
 # TEST:querydb-rds-pending-reboot-ok
-def test_pending_reboot_reboots_once_and_waits(harness, case):
+def test_pending_reboot_reboots_once_and_waits(harness):
     instances = [
         db_instance(applied="pending-reboot"),
         db_instance(state="rebooting", applied="pending-reboot"),
         db_instance(applied="in-sync"),
     ]
-    runner = harness.up_rds(case, instances=instances)
+    runner = harness.up_rds(instances=instances)
     assert runner.count("reboot-db-instance") == 1
     assert harness.fleet()["phase"] == "idle"
 
@@ -332,8 +320,8 @@ def test_a_null_rds_output_is_an_error():
         awsb.parse_rds_output({"rds": {"value": None}})
 
 
-def test_reset_drops_and_recreates_the_database_before_the_services(harness, case):
-    runner = harness.up_rds(case)
+def test_reset_drops_and_recreates_the_database_before_the_services(harness):
+    runner = harness.up_rds()
     mark = len(runner.calls)
     assert harness.run(runner, "--query-db", "rds") == awsb.EXIT_OK
     calls = [" ".join(call) for call in runner.calls[mark:]]
@@ -355,9 +343,11 @@ def test_reset_drops_and_recreates_the_database_before_the_services(harness, cas
 
 
 # EDGE:querydb-mode-switch
-def test_a_colocated_run_after_an_rds_run_starts_its_own_postgres(isolated, case):
-    harness = RdsHarness(case, modes="colocated,rds")
-    runner = harness.up_rds(case)
+def test_a_colocated_run_after_an_rds_run_starts_its_own_postgres(
+    isolated, monkeypatch
+):
+    harness = RdsHarness(monkeypatch, modes="colocated,rds")
+    runner = harness.up_rds()
     harness.run(runner, "--query-db", "rds")
     mark = len(runner.calls)
     harness.run(runner, "--query-db", "colocated")
@@ -369,16 +359,16 @@ def test_a_colocated_run_after_an_rds_run_starts_its_own_postgres(isolated, case
     assert json.loads((host_dir / "pg.json").read_text())["host"] == "127.0.0.1"
 
 
-def test_an_rds_run_needs_the_mode_in_the_fleet(isolated, case):
-    harness = FleetHarness(case)
-    runner = harness.up_fleet(case)
+def test_an_rds_run_needs_the_mode_in_the_fleet(isolated, monkeypatch):
+    harness = FleetHarness(monkeypatch)
+    runner = harness.up_fleet()
     with pytest.raises(awsb.Refused, match="--query-db rds was not provisioned"):
         harness.run(runner, "--query-db", "rds")
 
 
 # EDGE:fleet-reset-fails
-def test_a_failed_database_drop_leaves_the_fleet_dirty(harness, case):
-    runner = harness.up_rds(case)
+def test_a_failed_database_drop_leaves_the_fleet_dirty(harness):
+    runner = harness.up_rds()
     failing(runner, "DROP DATABASE", "permission denied")
     assert harness.run(runner, "--query-db", "rds") == awsb.EXIT_FAILED
     assert harness.fleet()["phase"] == "dirty"
@@ -412,8 +402,8 @@ def test_every_log_written_since_the_load_started_is_downloaded(tmp_path):
     assert text == "log of error/postgresql.log.11\n"
 
 
-def test_a_failed_rds_call_does_not_stop_the_other_collections(harness, case):
-    runner = harness.up_rds(case)
+def test_a_failed_rds_call_does_not_stop_the_other_collections(harness):
+    runner = harness.up_rds()
     failing(runner, "describe-db-log-files", "logs denied")
     assert harness.run(runner, "--query-db", "rds") == awsb.EXIT_OK
     run_dir = harness.run_dir("01-rds")
@@ -535,9 +525,9 @@ def down(harness: RdsHarness, runner: FakeRunner) -> dict:
     ids=["down-deletes", "reaper-deleted"],
 )
 def test_the_actual_cost_bills_the_rds_from_create_to_the_logged_delete(
-    harness, case, events
+    harness, events
 ):
-    runner = harness.up_rds(case, events=events)
+    runner = harness.up_rds(events=events)
     cost = down(harness, runner)
     deleted = datetime.fromisoformat(events[-1]["Date"])
     rds_s = (deleted - datetime.fromisoformat(RDS_CREATED)).total_seconds()
@@ -685,8 +675,8 @@ def test_expiries_compare_as_times_not_strings():
 
 
 @pytest.fixture
-def out_root(isolated: Path, case: unittest.TestCase) -> Path:
-    return isolated_env(case)
+def out_root(isolated: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    return isolated_env(monkeypatch)
 
 
 def destroy_orphans(runner: FakeRunner) -> tuple[int, str]:
@@ -768,8 +758,8 @@ def test_a_failed_rds_delete_exits_4(out_root):
     assert code == awsb.EXIT_LEFTOVER
 
 
-def test_an_rds_fleet_shows_the_instance_and_parameters(harness, case):
-    runner = harness.up_rds(case)
+def test_an_rds_fleet_shows_the_instance_and_parameters(harness):
+    runner = harness.up_rds()
     runner.describe = STATUS_DESCRIBE
     argv = ["status", str(harness.fleet_dir)]
     _, text = run_cmd(awsb.cmd_status, argv, FakeSystem(run=runner))

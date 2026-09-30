@@ -3,7 +3,6 @@ import re
 import shutil
 import subprocess
 import threading
-import unittest.mock
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -155,11 +154,15 @@ def fleet_dir(isolated: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
-def preflighted() -> Iterator[unittest.mock.MagicMock]:
-    with unittest.mock.patch.object(
-        awsb, "preflight", return_value=fake_preflight()
-    ) as preflight:
-        yield preflight
+def preflighted(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    calls: list[tuple] = []
+
+    def preflight(*args: object) -> dict:
+        calls.append(args)
+        return fake_preflight()
+
+    monkeypatch.setattr(awsb, "preflight", preflight)
+    return calls
 
 
 def read_json(path: Path) -> dict:
@@ -227,7 +230,7 @@ def test_account_mismatch_refuses_after_one_call():
 def test_plan_runs_preflight_and_tofu_plan_without_apply(fleet_dir, preflighted):
     runner = FakeRunner(states=[])
     assert awsb.cmd_plan(plan_args(), FakeSystem(run=runner)) == awsb.EXIT_OK
-    preflighted.assert_called_once()
+    assert len(preflighted) == 1
     manifest = read_json(fleet_dir / "fleet.json")
     assert manifest["phase"] == "planned"
     assert manifest["az"] == "eu-west-1b"
@@ -238,7 +241,7 @@ def test_plan_runs_preflight_and_tofu_plan_without_apply(fleet_dir, preflighted)
     assert not runner.ran("tofu", "apply")
 
 
-def test_preflight_resolves_az_ami_and_images():
+def test_preflight_resolves_az_ami_and_images(monkeypatch: pytest.MonkeyPatch):
     cfg = small_cfg()
     prefix = ("aws", "--profile", "timeboost-dev")
     offerings = {"InstanceTypeOfferings": [{"Location": "eu-west-1a"}]}
@@ -253,10 +256,8 @@ def test_preflight_resolves_az_ami_and_images():
             ),
         }
     )
-    with unittest.mock.patch.object(
-        awsb, "resolve_image", lambda _http_get, ref: fake_image(ref)
-    ):
-        result = awsb.preflight(FakeSystem(run=runner), cfg, awsb.plan_hosts(cfg))
+    monkeypatch.setattr(awsb, "resolve_image", lambda _http_get, ref: fake_image(ref))
+    result = awsb.preflight(FakeSystem(run=runner), cfg, awsb.plan_hosts(cfg))
     assert result["az"] == "eu-west-1a"
     assert result["ami_id"] == "ami-0abc"
     assert set(result["images"]) == set(awsb.image_refs(cfg))
