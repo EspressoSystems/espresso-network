@@ -283,7 +283,9 @@ PG_TUNING = {
     "autovacuum_vacuum_scale_factor": "0.2",
     "autovacuum_analyze_scale_factor": "0.1",
     "track_io_timing": "off",
-    "wal_buffers": "16MB",
+    # Serial ~6 MB block transactions overflow 16MB: wal_buffers_full 821466 in run
+    # lulu-20260930-1207, a backend WAL write every ~32 kB on average.
+    "wal_buffers": "256MB",
     "max_connections": "100",
 }
 # Docker's default /dev/shm of 64 MB is the limit of parallel query's dynamic shared memory;

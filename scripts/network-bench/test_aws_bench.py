@@ -3491,9 +3491,11 @@ class PgTuningTest(unittest.TestCase):
         def size(key: str, unit: int) -> int:
             return int(awsb.rds_parameter(key, tuning[key])) * unit
 
-        peak = size("shared_buffers", pages) + int(
-            tuning["autovacuum_max_workers"]
-        ) * size("autovacuum_work_mem", kib)
+        peak = (
+            size("shared_buffers", pages)
+            + size("wal_buffers", pages)
+            + int(tuning["autovacuum_max_workers"]) * size("autovacuum_work_mem", kib)
+        )
         self.assertLessEqual(peak, ram // 3)
         self.assertLessEqual(size("effective_cache_size", pages), ram)
 
