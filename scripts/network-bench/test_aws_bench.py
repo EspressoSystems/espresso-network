@@ -27,12 +27,13 @@ import time
 import unittest
 import unittest.mock
 from datetime import UTC, datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import netbench
 import test_netbench
+from fakes import FakeRegistry
 
 SCRIPT = Path(__file__).with_name("aws-bench")
 _spec = importlib.util.spec_from_loader(
@@ -1193,248 +1194,131 @@ class TerraformClassTest(unittest.TestCase):
             self.assertTrue(cache.is_dir())
 
 
-SINGLE_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
-
-
-class FakeRegistry(ThreadingHTTPServer):
-    """A minimal OCI/Docker registry: one repository and tag, anonymous token challenge.
-    `platforms` is a list of `(os, architecture)` pairs for the index; a `tag` of `"missing"`
-    makes the manifest request 404, `deny_token` makes the token endpoint 401 (a private
-    image), `deny_manifest_status` makes the manifest request fail with that status without
-    ever offering a token challenge, and `index=False` serves a single manifest at the tag
-    instead of a multi-platform index."""
-
-    def __init__(
-        self,
-        repository: str,
-        tag: str,
-        platforms: list[tuple[str, str]],
-        revision: str | None = None,
-        deny_token: bool = False,
-        deny_manifest_status: int | None = None,
-        index: bool = True,
-    ):
-        super().__init__(("127.0.0.1", 0), FakeRegistryHandler)
-        self.repository = repository
-        self.tag = tag
-        self.platforms = platforms
-        self.revision = revision
-        self.deny_token = deny_token
-        self.deny_manifest_status = deny_manifest_status
-        self.index = index
-        self.digests = {p: f"sha256:{i:064d}" for i, p in enumerate(platforms)}
-        self.config_digest = "sha256:" + "c" * 64
-
-    @property
-    def host(self) -> str:
-        return f"127.0.0.1:{self.server_address[1]}"
-
-    @property
-    def ref(self) -> str:
-        return f"{self.host}/{self.repository}:{self.tag}"
-
-
-class FakeRegistryHandler(BaseHTTPRequestHandler):
-    server: FakeRegistry
-
-    def log_message(self, format, *args):
-        pass
-
-    def _reply_json(
-        self, status: int, obj: dict, content_type: str = "application/json"
-    ):
-        body = json.dumps(obj).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self):
-        server = self.server
-        if self.path.startswith("/token"):
-            if server.deny_token:
-                self.send_response(401)
-                self.end_headers()
-                return
-            self._reply_json(200, {"token": "faketoken"})
-            return
-
-        manifest_prefix = f"/v2/{server.repository}/manifests/"
-        blob_prefix = f"/v2/{server.repository}/blobs/"
-
-        if self.path.startswith(manifest_prefix):
-            if server.deny_manifest_status is not None:
-                self.send_response(server.deny_manifest_status)
-                self.end_headers()
-                return
-            if self.headers.get("Authorization") != "Bearer faketoken":
-                self.send_response(401)
-                self.send_header(
-                    "WWW-Authenticate",
-                    f'Bearer realm="http://{server.host}/token",service="fake",'
-                    f'scope="repository:{server.repository}:pull"',
-                )
-                self.end_headers()
-                return
-            ref = self.path[len(manifest_prefix) :]
-            if ref == server.tag:
-                if server.tag == "missing":
-                    self.send_response(404)
-                    self.end_headers()
-                    return
-                if not server.index:
-                    self._reply_json(
-                        200,
-                        {
-                            "mediaType": SINGLE_MANIFEST_MEDIA_TYPE,
-                            "config": {"digest": server.config_digest},
-                        },
-                    )
-                    return
-                manifests = [
-                    {
-                        "mediaType": SINGLE_MANIFEST_MEDIA_TYPE,
-                        "digest": server.digests[p],
-                        "platform": {"os": p[0], "architecture": p[1]},
-                    }
-                    for p in server.platforms
-                ]
-                self._reply_json(
-                    200,
-                    {
-                        "mediaType": "application/vnd.oci.image.index.v1+json",
-                        "manifests": manifests,
-                    },
-                    content_type="application/vnd.oci.image.index.v1+json",
-                )
-                return
-            if ref == server.config_digest:
-                self.send_response(404)
-                self.end_headers()
-                return
-            matching = [p for p, digest in server.digests.items() if digest == ref]
-            if not matching:
-                self.send_response(404)
-                self.end_headers()
-                return
-            self._reply_json(
-                200,
-                {
-                    "mediaType": SINGLE_MANIFEST_MEDIA_TYPE,
-                    "config": {"digest": server.config_digest},
-                },
-            )
-            return
-
-        if self.path.startswith(blob_prefix):
-            digest = self.path[len(blob_prefix) :]
-            if digest != server.config_digest:
-                self.send_response(404)
-                self.end_headers()
-                return
-            labels = (
-                {"org.opencontainers.image.revision": server.revision}
-                if server.revision is not None
-                else {}
-            )
-            self._reply_json(
-                200,
-                {"architecture": "arm64", "os": "linux", "config": {"Labels": labels}},
-            )
-            return
-
-        self.send_response(404)
-        self.end_headers()
-
-
 # REQ:awsbench-image-check
 class ResolveImageTest(unittest.TestCase):
-    def _serve(self, **kwargs) -> FakeRegistry:
-        server = FakeRegistry(**kwargs)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        # addCleanup is LIFO: register in reverse of the intended shutdown -> join ->
-        # server_close order, since join() needs shutdown() to have stopped serve_forever.
-        self.addCleanup(server.server_close)
-        self.addCleanup(thread.join)
-        self.addCleanup(server.shutdown)
-        return server
-
     def test_resolves_digest_platforms_and_revision(self):
-        server = self._serve(
+        server = FakeRegistry(
             repository="test/image",
             tag="v1",
             platforms=[("linux", "amd64"), ("linux", "arm64")],
             revision="abc1234",
         )
-        info = awsb.resolve_image(server.ref)
+        info = awsb.resolve_image(server.ref, server)
         self.assertEqual(info["digest"], server.digests[("linux", "arm64")])
         self.assertCountEqual(info["platforms"], ["linux/amd64", "linux/arm64"])
         self.assertEqual(info["revision"], "abc1234")
         self.assertEqual(info["ref"], server.ref)
 
     def test_no_revision_label_is_none(self):
-        server = self._serve(repository="x", tag="v1", platforms=[("linux", "arm64")])
-        info = awsb.resolve_image(server.ref)
+        server = FakeRegistry(repository="x", tag="v1", platforms=[("linux", "arm64")])
+        info = awsb.resolve_image(server.ref, server)
         self.assertIsNone(info["revision"])
 
     def test_single_manifest_without_index(self):
-        server = self._serve(
+        server = FakeRegistry(
             repository="x", tag="v1", platforms=[("linux", "arm64")], index=False
         )
-        info = awsb.resolve_image(server.ref)
+        info = awsb.resolve_image(server.ref, server)
         self.assertEqual(info["platforms"], ["linux/arm64"])
         self.assertTrue(info["digest"].startswith("sha256:"))
 
     def test_attestation_platform_ignored(self):
         # buildx publishes an extra unknown/unknown manifest for SBOM/provenance attestations.
-        server = self._serve(
+        server = FakeRegistry(
             repository="x",
             tag="v1",
             platforms=[("unknown", "unknown"), ("linux", "arm64")],
         )
-        info = awsb.resolve_image(server.ref)
+        info = awsb.resolve_image(server.ref, server)
         self.assertEqual(info["platforms"], ["linux/arm64"])
 
     # EDGE:awsbench-image-no-arm64
     def test_missing_arm64_refuses(self):
-        server = self._serve(repository="x", tag="v1", platforms=[("linux", "amd64")])
+        server = FakeRegistry(repository="x", tag="v1", platforms=[("linux", "amd64")])
         with self.assertRaises(awsb.Refused) as ctx:
-            awsb.resolve_image(server.ref)
+            awsb.resolve_image(server.ref, server)
         self.assertIn("no linux/arm64 platform", str(ctx.exception))
         self.assertIn(server.ref, str(ctx.exception))
 
     def test_missing_tag_refuses(self):
-        server = self._serve(
+        server = FakeRegistry(
             repository="x", tag="missing", platforms=[("linux", "arm64")]
         )
         with self.assertRaises(awsb.Refused) as ctx:
-            awsb.resolve_image(server.ref)
+            awsb.resolve_image(server.ref, server)
         self.assertIn("image not found", str(ctx.exception))
         self.assertIn(server.ref, str(ctx.exception))
 
     # EDGE:awsbench-image-private
     def test_private_image_denied_token_refuses(self):
-        server = self._serve(
+        server = FakeRegistry(
             repository="x", tag="v1", platforms=[("linux", "arm64")], deny_token=True
         )
         with self.assertRaises(awsb.Refused) as ctx:
-            awsb.resolve_image(server.ref)
+            awsb.resolve_image(server.ref, server)
         self.assertIn("token request", str(ctx.exception))
         self.assertIn(server.ref, str(ctx.exception))
 
     def test_private_image_403_refuses(self):
-        server = self._serve(
+        server = FakeRegistry(
             repository="x",
             tag="v1",
             platforms=[("linux", "arm64")],
             deny_manifest_status=403,
         )
         with self.assertRaises(awsb.Refused) as ctx:
-            awsb.resolve_image(server.ref)
+            awsb.resolve_image(server.ref, server)
         self.assertIn("private or inaccessible", str(ctx.exception))
         self.assertIn(server.ref, str(ctx.exception))
+
+
+class RegistryGetTest(unittest.TestCase):
+    """`_registry_get` against a loopback server that relays to a `FakeRegistry`."""
+
+    def _serve(self, registry: FakeRegistry) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def do_GET(self):
+                status, headers, body = registry(
+                    f"http://{registry.host}{self.path}", dict(self.headers)
+                )
+                self.send_response(status)
+                for name, value in headers.items():
+                    self.send_header(name, value)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        registry.host = f"127.0.0.1:{server.server_address[1]}"
+        thread = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        )
+        thread.start()
+        # LIFO: shutdown, join, then server_close.
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join)
+        self.addCleanup(server.shutdown)
+
+    def test_token_challenge_and_authorized_retry(self):
+        registry = FakeRegistry(
+            "x", "v1", [("linux", "arm64")], revision="abc1234", host="placeholder"
+        )
+        self._serve(registry)
+        info = awsb.resolve_image(registry.ref)
+        self.assertEqual(info["digest"], registry.digests[("linux", "arm64")])
+        self.assertEqual(info["revision"], "abc1234")
+
+    def test_http_error_status_is_returned_not_raised(self):
+        registry = FakeRegistry(
+            "x", "missing", [("linux", "arm64")], host="placeholder"
+        )
+        self._serve(registry)
+        with self.assertRaises(awsb.Refused) as ctx:
+            awsb.resolve_image(registry.ref)
+        self.assertIn("image not found", str(ctx.exception))
 
 
 class ParseRefTest(unittest.TestCase):
