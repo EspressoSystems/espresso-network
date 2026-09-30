@@ -1371,11 +1371,15 @@ impl Persistence {
                     .transpose()?;
 
                 // No lower bound: a payload stored for a view an earlier decide already passed
-                // still has to reach the consumer.
+                // still has to reach the consumer. Each row is a whole block, so a backlog is
+                // drained a few rows per pass, oldest first.
                 let pending = tx
                     .fetch_all(
-                        query("SELECT view, header, payload FROM pending_payload WHERE view <= $1")
-                            .bind(to_view.u64() as i64),
+                        query(
+                            "SELECT view, header, payload FROM pending_payload WHERE view <= $1 \
+                             ORDER BY view LIMIT 16",
+                        )
+                        .bind(to_view.u64() as i64),
                     )
                     .await?
                     .into_iter()
