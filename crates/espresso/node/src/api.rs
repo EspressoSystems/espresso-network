@@ -4443,7 +4443,13 @@ mod test {
             .await;
 
         for peer in &network.peers {
-            let state = peer.decided_state().await.unwrap();
+            // A node can decide a leaf before it has validated that leaf's state itself.
+            let state = loop {
+                if let Some(state) = peer.decided_state().await {
+                    break state;
+                }
+                sleep(Duration::from_millis(100)).await;
+            };
 
             assert_eq!(state.chain_config.resolve().unwrap(), chain_config)
         }
@@ -4518,7 +4524,13 @@ mod test {
             .await;
 
         for peer in &network.peers {
-            let state = peer.decided_state().await.unwrap();
+            // A node can decide a leaf before it has validated that leaf's state itself.
+            let state = loop {
+                if let Some(state) = peer.decided_state().await {
+                    break state;
+                }
+                sleep(Duration::from_millis(100)).await;
+            };
 
             assert_eq!(state.chain_config.resolve().unwrap(), cf)
         }
