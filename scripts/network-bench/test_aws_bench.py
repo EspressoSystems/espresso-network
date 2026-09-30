@@ -33,7 +33,18 @@ from pathlib import Path
 
 import netbench
 import test_netbench
-from fakes import SLOW, FakeClock, FakeRegistry
+from fakes import (
+    FULL_BALANCE,
+    SLOW,
+    FakeClock,
+    FakeRegistry,
+    FakeRunner,
+    FleetRunner,
+    completed,
+    host_info,
+    metric_data,
+    two_node_hosts_info,
+)
 
 SCRIPT = Path(__file__).with_name("aws-bench")
 _spec = importlib.util.spec_from_loader(
@@ -43,50 +54,6 @@ assert _spec is not None
 awsb = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(awsb)
-
-
-def completed(
-    stdout: str = "", returncode: int = 0, stderr: str = ""
-) -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(
-        args=[], returncode=returncode, stdout=stdout, stderr=stderr
-    )
-
-
-def fake_ssh_keygen(argv: list[str]) -> subprocess.CompletedProcess:
-    key = Path(argv[argv.index("-f") + 1])
-    key.write_text("private")
-    key.chmod(0o600)
-    key.with_name(key.name + ".pub").write_text("ssh-ed25519 GENERATED run\n")
-    return completed()
-
-
-class FakeRunner:
-    """Maps an argv prefix to a canned `CompletedProcess`; records every call. An argv with no
-    matching prefix raises, so a test can prove a refused plan never reached `aws` or `tofu`."""
-
-    def __init__(
-        self,
-        responses: dict[tuple[str, ...], subprocess.CompletedProcess] | None = None,
-    ):
-        self.responses = responses or {}
-        self.calls: list[list[str]] = []
-        self.envs: list[dict[str, str] | None] = []
-
-    def __call__(
-        self, argv: list[str], env: dict[str, str] | None = None
-    ) -> subprocess.CompletedProcess:
-        self.calls.append(argv)
-        self.envs.append(env)
-        if argv[0] == "ssh-keygen":
-            return fake_ssh_keygen(argv)
-        for prefix, result in self.responses.items():
-            if tuple(argv[: len(prefix)]) == prefix:
-                return result
-        raise AssertionError(f"unexpected command: {argv!r}")
-
-    def ran(self, *prefix: str) -> bool:
-        return any(tuple(call[: len(prefix)]) == prefix for call in self.calls)
 
 
 def price_response(usd_hour: float) -> subprocess.CompletedProcess:
@@ -1449,17 +1416,6 @@ class TofuValidateTest(unittest.TestCase):
             self.assertEqual(plan.returncode, 0, plan.stderr)
 
 
-def host_info(name: str, role: str, index: int) -> dict:
-    return {
-        "name": name,
-        "role": role,
-        "public_ip": f"203.0.113.{index}",
-        "private_ip": f"10.0.0.{index}",
-        "private_dns": f"ip-10-0-0-{index}.eu-west-1.compute.internal",
-        "instance_id": f"i-{index:012x}",
-    }
-
-
 def fleet(n: int) -> dict:
     hosts = {"ctl": host_info("ctl", "ctl", 1)}
     for i in range(n):
@@ -1688,6 +1644,11 @@ def fake_images() -> dict:
     return {
         name: fake_image(f"ghcr.io/x/{name}:t") for name in awsb.IMAGE_COMPONENTS
     } | {name: fake_image(ref) for name, ref in awsb.SUPPORT_IMAGES.items()}
+
+
+FleetRunner.ready_digests = {
+    name: f"{image['ref']}@{image['digest']}" for name, image in fake_images().items()
+}
 
 
 # REQ:awsbench-user-data
@@ -1975,14 +1936,6 @@ class CgroupParsersTest(unittest.TestCase):
             self.assertEqual(stats, {})
 
 
-def two_node_hosts_info() -> dict:
-    return {
-        "ctl": host_info("ctl", "ctl", 1),
-        "node0": host_info("node0", "query", 2),
-        "node1": host_info("node1", "validator", 3),
-    }
-
-
 def fake_preflight() -> dict:
     return {
         "account": "027574771971",
@@ -1995,132 +1948,6 @@ def fake_preflight() -> dict:
         "vcpu_quota": 256.0,
         "git_diff": None,
     }
-
-
-def metric_data(
-    byte: list[float | None], io: list[float | None], first: float = 60.0
-) -> str:
-    """`cloudwatch get-metric-data` output; one period per list item starting at `first`, a
-    None item is a period without datapoint."""
-
-    def result(query_id: str, values: list[float | None]) -> dict:
-        points = [
-            (datetime.fromtimestamp(first + 60.0 * i, UTC).isoformat(), v)
-            for i, v in enumerate(values)
-            if v is not None
-        ]
-        return {
-            "Id": query_id,
-            "Label": query_id,
-            "Timestamps": [ts for ts, _ in points],
-            "Values": [v for _, v in points],
-            "StatusCode": "Complete",
-        }
-
-    return json.dumps(
-        {"MetricDataResults": [result("byte", byte), result("io", io)], "Messages": []}
-    )
-
-
-FULL_BALANCE = metric_data([100.0, 100.0, 100.0], [100.0, 100.0, 100.0])
-
-
-class FleetRunner:
-    """Answers every command `cmd_run` issues (git, tofu, ssh, rsync, aws) for a 2-node fleet.
-    `states` are the successive agent-state.json contents; the last one repeats."""
-
-    def __init__(
-        self,
-        states: list[dict],
-        apply: subprocess.CompletedProcess | None = None,
-        destroys: list[subprocess.CompletedProcess] | None = None,
-        on_poll=None,
-        describe: str = "[]",
-        balance: subprocess.CompletedProcess | None = None,
-    ):
-        self.states = states
-        self.apply = apply or completed()
-        self.destroys = destroys or [completed()]
-        self.on_poll = on_poll
-        self.describe = describe
-        self.balance = balance or completed(stdout=FULL_BALANCE)
-        self.polls = 0
-        self.calls: list[list[str]] = []
-        self.lock = threading.Lock()
-
-    def ran(self, *needle: str) -> bool:
-        return any(all(n in " ".join(call) for n in needle) for call in self.calls)
-
-    def count(self, *needle: str) -> int:
-        return sum(all(n in " ".join(c) for n in needle) for c in self.calls)
-
-    def __call__(
-        self, argv: list[str], env: dict[str, str] | None = None
-    ) -> subprocess.CompletedProcess:
-        with self.lock:
-            self.calls.append(argv)
-        if argv[0] == "git":
-            return completed(stdout="a" * 40 + "\n")
-        if argv[0] == "ssh-keygen":
-            return fake_ssh_keygen(argv)
-        if argv[0] == "tofu":
-            return self.tofu(argv[2])
-        if argv[0] == "ssh":
-            return self.ssh(argv[-1])
-        if argv[0] == "rsync":
-            return completed()
-        return self.aws(argv)
-
-    def tofu(self, verb: str) -> subprocess.CompletedProcess:
-        if verb == "apply":
-            return self.apply
-        if verb == "output":
-            hosts = two_node_hosts_info()
-            return completed(stdout=json.dumps({"hosts": {"value": hosts}}))
-        if verb == "destroy":
-            with self.lock:
-                return (
-                    self.destroys.pop(0) if len(self.destroys) > 1 else self.destroys[0]
-                )
-        return completed(stdout="plan")
-
-    def ssh(self, command: str) -> subprocess.CompletedProcess:
-        if "cloud-init status --format json" in command:
-            return completed(stdout=json.dumps({"status": "done"}))
-        if "ready.json" in command:
-            digests = {n: f"{i['ref']}@{i['digest']}" for n, i in fake_images().items()}
-            tracking = "System time     : 0.000001000 seconds fast of NTP time\n"
-            return completed(
-                stdout=json.dumps({"digests": digests, "chronyc_tracking": tracking})
-            )
-        if "agent-state.json" in command:
-            with self.lock:
-                index = min(self.polls, len(self.states) - 1)
-                self.polls += 1
-            if self.on_poll:
-                self.on_poll(self.polls)
-            return completed(stdout=json.dumps(self.states[index]))
-        if "date +%s.%N" in command:
-            return completed(stdout="1000.5\n")
-        if "docker inspect -f" in command:
-            return completed(stdout="2026-09-29T15:00:00.100000000Z\n")
-        if "docker wait deploy" in command:
-            return completed(stdout="0\n")
-        return completed()
-
-    def aws(self, argv: list[str]) -> subprocess.CompletedProcess:
-        if "describe-instances" in argv:
-            return completed(stdout=self.describe)
-        if "get-metric-data" in argv:
-            return self.balance
-        if "get-resources" in argv:
-            arns = [
-                "arn:aws:ec2:eu-west-1:1:instance/i-1",
-                "arn:aws:ec2:eu-west-1:1:security-group/sg-1",
-                "arn:aws:ec2:eu-west-1:1:key-pair/key-1",
-            ]
-            return completed(stdout=json.dumps(arns))
-        return completed()
 
 
 DONE_STATE = {

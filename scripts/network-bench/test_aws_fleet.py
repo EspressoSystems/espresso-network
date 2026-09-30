@@ -1,6 +1,6 @@
 """Tests for the fleet lifecycle of `aws-bench`: `up`, `run --fleet`, `extend` and `down`.
 
-Reuses the fake runner and fixtures of `test_aws_bench`.
+Reuses the fake runners of `fakes` and the fixtures of `test_aws_bench`.
 
     just py::test
 """
@@ -24,48 +24,32 @@ from pathlib import Path
 from typing import ClassVar
 
 import netbench
-from fakes import SLOW, FakeClock
+from fakes import (
+    FLEET_ARNS,
+    SLOW,
+    FakeClock,
+    FakeRunner,
+    FleetRunner,
+    completed,
+    two_node_hosts_info,
+)
 from test_aws_bench import (
     DESCRIBE,
     DONE_STATE,
     DOTENV_TEXT,
     STATUS_DESCRIBE,
-    FakeRunner,
-    FleetRunner,
     aws_manifest,
     awsb,
-    completed,
     fake_image,
     fake_images,
     fake_preflight,
     price_response,
     tag_runner,
-    two_node_hosts_info,
     valid_result,
     write_collected_run,
 )
 
 GENESIS = Path(__file__).with_name("genesis.toml")
-
-
-class TaggingRunner(FleetRunner):
-    """Adds `arns` more tagged resources than the three of `FleetRunner`, and `tag-resources`."""
-
-    def __init__(self, *args, arns: int = 0, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.arns = arns
-
-    def aws(self, argv: list[str]) -> subprocess.CompletedProcess:
-        if "get-resources" in argv:
-            extra = [
-                f"arn:aws:ec2:eu-west-1:1:volume/vol-{i:03d}" for i in range(self.arns)
-            ]
-            return completed(
-                stdout=json.dumps([*json.loads(super().aws(argv).stdout), *extra])
-            )
-        if "tag-resources" in argv:
-            return completed(stdout=json.dumps({"FailedResourcesMap": {}}))
-        return super().aws(argv)
 
 
 def fake_report(run_dir: Path, baseline=None) -> dict:
@@ -167,8 +151,8 @@ class FleetHarness:
     def driver_log(self) -> str:
         return (self.fleet_dir / "driver.log").read_text()
 
-    def up_fleet(self, test: unittest.TestCase) -> TaggingRunner:
-        runner = TaggingRunner([DONE_STATE], describe=DESCRIBE)
+    def up_fleet(self, test: unittest.TestCase) -> FleetRunner:
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
         test.assertEqual(self.up(runner), awsb.EXIT_OK)
         return runner
 
@@ -181,7 +165,7 @@ def ssh_calls(runner: FleetRunner, since: int = 0) -> list[str]:
 class UpTest(unittest.TestCase):
     def test_up_ends_idle_without_starting_anything(self):
         harness = FleetHarness(self)
-        runner = TaggingRunner([DONE_STATE])
+        runner = FleetRunner([DONE_STATE])
         self.assertEqual(harness.up(runner), awsb.EXIT_OK)
         manifest = harness.fleet()
         self.assertEqual(manifest["phase"], "idle")
@@ -198,7 +182,7 @@ class UpTest(unittest.TestCase):
 
     def test_up_prints_cost_and_the_run_command(self):
         harness = FleetHarness(self)
-        harness.up(TaggingRunner([DONE_STATE]))
+        harness.up(FleetRunner([DONE_STATE]))
         log = harness.driver_log()
         self.assertRegex(
             log,
@@ -213,7 +197,7 @@ class UpTest(unittest.TestCase):
     def test_expiry_counts_from_the_confirm_without_a_provision_margin(self):
         harness = FleetHarness(self)
         before = datetime.now(UTC).replace(microsecond=0)
-        harness.up(TaggingRunner([DONE_STATE]))
+        harness.up(FleetRunner([DONE_STATE]))
         manifest = harness.fleet()
         expires = datetime.fromisoformat(manifest["expires_at"])
         self.assertGreaterEqual(expires, before + timedelta(minutes=180))
@@ -227,7 +211,7 @@ class UpTest(unittest.TestCase):
 
     def test_fleet_bound_is_the_rate_over_the_ttl_plus_boot(self):
         harness = FleetHarness(self)
-        harness.up(TaggingRunner([DONE_STATE]))
+        harness.up(FleetRunner([DONE_STATE]))
         estimate = harness.fleet()["estimate"]
         self.assertEqual(estimate["ttl_s"], 180 * 60)
         rate = awsb.estimate_rate(estimate)
@@ -238,7 +222,7 @@ class UpTest(unittest.TestCase):
 
     def test_apply_failure_destroys_and_exits_3(self):
         harness = FleetHarness(self)
-        runner = TaggingRunner(
+        runner = FleetRunner(
             [DONE_STATE],
             apply=completed(returncode=1, stderr="Error: InsufficientInstanceCapacity"),
         )
@@ -249,7 +233,7 @@ class UpTest(unittest.TestCase):
 
     def test_apply_failure_with_a_failed_destroy_exits_4(self):
         harness = FleetHarness(self)
-        runner = TaggingRunner(
+        runner = FleetRunner(
             [DONE_STATE],
             apply=completed(returncode=1, stderr="Error: boom"),
             destroys=[completed(returncode=1, stderr="locked")],
@@ -260,7 +244,7 @@ class UpTest(unittest.TestCase):
 
     def test_declined_prompt_creates_nothing(self):
         harness = FleetHarness(self)
-        runner = TaggingRunner([DONE_STATE])
+        runner = FleetRunner([DONE_STATE])
         args = harness.up_args()
         args.yes = False
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
@@ -269,14 +253,14 @@ class UpTest(unittest.TestCase):
 
     def test_up_needs_explicit_minutes(self):
         harness = FleetHarness(self)
-        runner = TaggingRunner([DONE_STATE])
+        runner = FleetRunner([DONE_STATE])
         with self.assertRaisesRegex(awsb.Refused, "--ttl-min"):
             harness.up(runner, "--ttl-min", "auto")
         self.assertFalse(runner.ran("tofu", "apply"))
 
     def test_bound_above_max_usd_is_refused(self):
         harness = FleetHarness(self)
-        runner = TaggingRunner([DONE_STATE])
+        runner = FleetRunner([DONE_STATE])
         with self.assertRaisesRegex(awsb.Refused, "exceeds --max-usd"):
             harness.up(runner, "--max-usd", "1")
         self.assertFalse(runner.ran("tofu", "apply"))
@@ -451,7 +435,7 @@ class RunOnFleetTest(unittest.TestCase):
     # REQ:fleet-single-shot-unchanged
     def test_single_shot_does_not_reset_and_writes_both_index_rows(self):
         harness = FleetHarness(self)
-        runner = TaggingRunner([DONE_STATE], describe=DESCRIBE)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
         args = harness.single_shot_args()
         code = awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
         self.assertEqual(code, awsb.EXIT_OK)
@@ -555,13 +539,13 @@ class RunRefusalTest(unittest.TestCase):
     def test_unknown_dir_is_not_a_fleet(self):
         harness = FleetHarness(self)
         with self.assertRaisesRegex(awsb.Refused, "not a fleet dir"):
-            harness.run(TaggingRunner([DONE_STATE]))
+            harness.run(FleetRunner([DONE_STATE]))
 
     def test_single_shot_needs_a_tag(self):
         harness = FleetHarness(self)
         args = harness.parse("run", "--nodes", "2")
         with self.assertRaisesRegex(awsb.Refused, "--tag"):
-            awsb.cmd_run(args, run=TaggingRunner([DONE_STATE]))
+            awsb.cmd_run(args, run=FleetRunner([DONE_STATE]))
 
 
 NEW_DIGEST = f"sha256:{'1' * 64}"
@@ -573,29 +557,29 @@ def resolve_tag(ref: str) -> dict:
     return {**image, "digest": NEW_DIGEST} if ref.endswith(":other") else image
 
 
-class PullingRunner(TaggingRunner):
+def respond_to_pulls(runner: FleetRunner, wrong: dict[str, str] | None = None) -> None:
     """Answers the pull script with what docker would report: the requested digests, or the
     ones in `wrong`. The record script echoes a `ready.json` holding the digests it was given."""
+    replaced = wrong or {}
 
-    def __init__(self, *args, wrong: dict[str, str] | None = None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.wrong = wrong or {}
+    def pull(argv: list[str]) -> subprocess.CompletedProcess:
+        script = shlex.split(argv[-1])[-1]
+        pulls = re.findall(r"docker pull (\S+)@(\S+) >&2", script)
+        names = re.findall(r"--arg name (\S+) ", script)
+        digests = {
+            name: f"{ref}@{replaced.get(name, digest)}"
+            for name, (ref, digest) in zip(names, pulls, strict=True)
+        }
+        return completed(stdout=json.dumps(digests))
 
-    def ssh(self, command: str) -> subprocess.CompletedProcess:
-        script = shlex.split(command)[-1] if command.startswith("sudo timeout") else ""
-        if "docker pull" in script:
-            pulls = re.findall(r"docker pull (\S+)@(\S+) >&2", script)
-            names = re.findall(r"--arg name (\S+) ", script)
-            digests = {
-                name: f"{ref}@{self.wrong.get(name, digest)}"
-                for name, (ref, digest) in zip(names, pulls, strict=True)
-            }
-            return completed(stdout=json.dumps(digests))
-        if "digests.json.tmp" in script:
-            printf = next(l for l in script.splitlines() if l.startswith("printf"))
-            digests = json.loads(shlex.split(printf)[2])
-            return completed(stdout=json.dumps({"digests": digests}))
-        return super().ssh(command)
+    def record(argv: list[str]) -> subprocess.CompletedProcess:
+        script = shlex.split(argv[-1])[-1]
+        printf = next(l for l in script.splitlines() if l.startswith("printf"))
+        digests = json.loads(shlex.split(printf)[2])
+        return completed(stdout=json.dumps({"digests": digests}))
+
+    runner.respond("docker pull", pull)
+    runner.respond("digests.json.tmp", record)
 
 
 # REQ:fleet-tag-pull
@@ -607,8 +591,11 @@ class TagPullTest(unittest.TestCase):
         self.resolve = patch.start()
         self.addCleanup(patch.stop)
 
-    def up_fleet(self, harness: FleetHarness, **kwargs) -> PullingRunner:
-        runner = PullingRunner([DONE_STATE], describe=DESCRIBE, **kwargs)
+    def up_fleet(
+        self, harness: FleetHarness, wrong: dict[str, str] | None = None
+    ) -> FleetRunner:
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        respond_to_pulls(runner, wrong)
         self.assertEqual(harness.up(runner), awsb.EXIT_OK)
         self.resolve.reset_mock()
         return runner
@@ -824,29 +811,21 @@ BY_ID = "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0abc123def456"
 NODE0_IP = "203.0.113.2"
 
 
-class VolumeRunner(TaggingRunner):
-    """Adds the `pg_volume_id` output of a fleet with a Postgres volume."""
+def volume_runner(
+    states: list[dict], volume_id: str | None = VOLUME_ID, **kwargs
+) -> FleetRunner:
+    """A `FleetRunner` whose `tofu output` has the `pg_volume_id` of a fleet with a Postgres
+    volume."""
+    runner = FleetRunner(states, **kwargs)
 
-    def __init__(self, *args, volume_id: str | None = VOLUME_ID, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.volume_id = volume_id
-
-    def tofu(self, verb: str) -> subprocess.CompletedProcess:
-        result = super().tofu(verb)
-        if verb != "output":
-            return result
+    def output(argv: list[str]) -> subprocess.CompletedProcess:
+        outputs = json.loads(runner.default(argv).stdout)
         return completed(
-            stdout=json.dumps(
-                {**json.loads(result.stdout), "pg_volume_id": {"value": self.volume_id}}
-            )
+            stdout=json.dumps({**outputs, "pg_volume_id": {"value": volume_id}})
         )
 
-
-class MissingDeviceRunner(VolumeRunner):
-    def ssh(self, command: str) -> subprocess.CompletedProcess:
-        if "mkfs.ext4" in command:
-            return completed(returncode=1, stderr=f"{BY_ID} missing after 60 s")
-        return super().ssh(command)
+    runner.respond("output -json", output)
+    return runner
 
 
 def node0_calls(runner: FleetRunner, since: int = 0) -> list[str]:
@@ -888,7 +867,7 @@ class VolumeWiringTest(unittest.TestCase):
 
     def test_up_makes_and_mounts_the_volume_on_the_query_host_only(self):
         harness = FleetHarness(self)
-        runner = VolumeRunner([DONE_STATE])
+        runner = volume_runner([DONE_STATE])
         self.assertEqual(harness.up(runner, "--db-modes", "volume"), awsb.EXIT_OK)
         manifest = harness.fleet()
         self.assertEqual(manifest["phase"], "idle")
@@ -909,7 +888,7 @@ class VolumeWiringTest(unittest.TestCase):
 
     def test_a_single_shot_volume_run_formats_once_and_does_not_reset(self):
         harness = FleetHarness(self)
-        runner = VolumeRunner([DONE_STATE], describe=DESCRIBE)
+        runner = volume_runner([DONE_STATE], describe=DESCRIBE)
         args = harness.parse(
             "run",
             "--genesis",
@@ -932,21 +911,25 @@ class VolumeWiringTest(unittest.TestCase):
 
     def test_missing_device_destroys_and_exits_3(self):
         harness = FleetHarness(self)
-        runner = MissingDeviceRunner([DONE_STATE], describe=DESCRIBE)
+        runner = volume_runner([DONE_STATE], describe=DESCRIBE)
+        runner.respond(
+            "mkfs.ext4",
+            lambda argv: completed(returncode=1, stderr=f"{BY_ID} missing after 60 s"),
+        )
         self.assertEqual(harness.up(runner, "--db-modes", "volume"), awsb.EXIT_FAILED)
         self.assertTrue(runner.ran("tofu", "destroy"))
         self.assertIn("missing after 60 s", harness.driver_log())
 
     def test_a_null_volume_output_fails_up(self):
         harness = FleetHarness(self)
-        runner = VolumeRunner([DONE_STATE], volume_id=None, describe=DESCRIBE)
+        runner = volume_runner([DONE_STATE], volume_id=None, describe=DESCRIBE)
         self.assertEqual(harness.up(runner, "--db-modes", "volume"), awsb.EXIT_FAILED)
         self.assertTrue(runner.ran("tofu", "destroy"))
         self.assertFalse(runner.ran("mkfs"))
 
     def test_the_run_resets_by_mounting_and_wiping_without_reformatting(self):
         harness = FleetHarness(self)
-        runner = VolumeRunner([DONE_STATE], describe=DESCRIBE)
+        runner = volume_runner([DONE_STATE], describe=DESCRIBE)
         harness.up(runner, "--db-modes", "volume")
         mark = len(runner.calls)
         self.assertEqual(harness.run(runner, "--query-db", "volume"), awsb.EXIT_OK)
@@ -1088,7 +1071,7 @@ class PgVolumeCostTest(unittest.TestCase):
 
     def test_actual_cost_of_a_fleet_includes_the_volume(self):
         harness = FleetHarness(self)
-        runner = VolumeRunner([DONE_STATE], describe=DESCRIBE)
+        runner = volume_runner([DONE_STATE], describe=DESCRIBE)
         harness.up(runner, "--db-modes", "volume")
         manifest = harness.fleet()
         with_volume = awsb.manifest_cost(manifest, 3600.0)
@@ -1287,7 +1270,11 @@ class ExtendTest(unittest.TestCase):
     def test_retags_every_arn_of_the_fleet_in_batches(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
-        runner.arns = 42
+        extra = [f"arn:aws:ec2:eu-west-1:1:volume/vol-{i:03d}" for i in range(42)]
+        runner.respond(
+            "get-resources",
+            lambda argv: completed(stdout=json.dumps(FLEET_ARNS + extra)),
+        )
         now = datetime.now(UTC)
         self.extend(harness, runner, 240, now)
         tagged = [c for c in runner.calls if "tag-resources" in c]
@@ -1587,8 +1574,8 @@ def mode(path: Path) -> int:
     return stat.S_IMODE(path.stat().st_mode)
 
 
-class RdsRunner(TaggingRunner):
-    """`TaggingRunner` with the rds output of `tofu`, and the `aws rds`, `scheduler`, `pi`
+class RdsRunner(FleetRunner):
+    """`FleetRunner` with the rds output of `tofu`, and the `aws rds`, `scheduler`, `pi`
     and CloudWatch calls an rds fleet makes. `instances` are the successive
     describe-db-instances answers; the last one repeats."""
 
@@ -2313,7 +2300,7 @@ class RdsUpTest(unittest.TestCase):
         with unittest.mock.patch.object(awsb, "confirm", return_value=True) as confirm:
             awsb.cmd_up(
                 args,
-                run=VolumeRunner([DONE_STATE]),
+                run=volume_runner([DONE_STATE]),
                 interrupts=awsb.Interrupts(FakeClock()),
             )
         self.assertIn("1 extra volume", confirm.call_args.args[0])
@@ -3434,7 +3421,7 @@ class StatusStoresTest(unittest.TestCase):
 
     def test_a_pg_volume_shows_its_state(self):
         harness = FleetHarness(self)
-        runner = VolumeRunner([DONE_STATE], describe=DESCRIBE)
+        runner = volume_runner([DONE_STATE], describe=DESCRIBE)
         self.assertEqual(harness.up(runner, "--db-modes", "volume"), awsb.EXIT_OK)
         aws = runner.aws
 

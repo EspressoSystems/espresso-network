@@ -146,5 +146,49 @@ class FakeNodeTest(unittest.TestCase):
         )
 
 
+class FleetRunnerTest(unittest.TestCase):
+    def test_a_matching_pattern_answers_and_the_call_is_recorded(self):
+        runner = fakes.FleetRunner([])
+        runner.respond("tofu -chdir=x output", lambda argv: fakes.completed("out"))
+        self.assertEqual(runner(["tofu", "-chdir=x", "output", "-json"]).stdout, "out")
+        self.assertTrue(runner.ran("tofu", "output"))
+
+    def test_the_first_matching_pattern_wins(self):
+        runner = fakes.FleetRunner([])
+        runner.respond("output", lambda argv: fakes.completed("first"))
+        runner.respond("output -json", lambda argv: fakes.completed("second"))
+        self.assertEqual(
+            runner(["tofu", "-chdir=x", "output", "-json"]).stdout, "first"
+        )
+
+    # EDGE:runner-table-no-match
+    def test_an_argv_matching_no_pattern_gets_the_default_answer(self):
+        runner = fakes.FleetRunner([])
+        runner.respond("tofu", lambda argv: fakes.completed("table"))
+        self.assertEqual(runner(["git", "rev-parse"]).stdout, "a" * 40 + "\n")
+        self.assertEqual(runner(["rsync", "a", "b"]).returncode, 0)
+
+    def test_a_reply_can_extend_the_default_answer(self):
+        runner = fakes.FleetRunner([])
+        runner.respond(
+            "get-resources",
+            lambda argv: fakes.completed(
+                json.dumps([*json.loads(runner.default(argv).stdout), "arn:extra"])
+            ),
+        )
+        arns = json.loads(runner(["aws", "tagging", "get-resources"]).stdout)
+        self.assertEqual(arns, [*fakes.FLEET_ARNS, "arn:extra"])
+        self.assertEqual(len(runner.calls), 1)
+
+
+class FakeRunnerTest(unittest.TestCase):
+    def test_an_argv_without_a_matching_prefix_raises(self):
+        runner = fakes.FakeRunner({("aws", "sts"): fakes.completed("ok")})
+        self.assertEqual(runner(["aws", "sts", "x"]).stdout, "ok")
+        with self.assertRaisesRegex(AssertionError, "unexpected command"):
+            runner(["aws", "ec2"])
+        self.assertTrue(runner.ran("aws", "ec2"))
+
+
 if __name__ == "__main__":
     unittest.main()

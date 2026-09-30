@@ -5,11 +5,14 @@ import asyncio
 import base64
 import json
 import os
+import subprocess
 import threading
 import time
 import unittest
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import Any, TypeVar
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, ClassVar, TypeVar
 from urllib.parse import urlsplit
 
 import netbench
@@ -322,3 +325,219 @@ class FakeNode:
                 self.pending = self.pending[len(taken) :]
             self.blocks.append(b"".join(taken))
             self.made.append(self.made[-1] + BLOCK_S)
+
+
+def completed(
+    stdout: str = "", returncode: int = 0, stderr: str = ""
+) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(
+        args=[], returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def fake_ssh_keygen(argv: list[str]) -> subprocess.CompletedProcess:
+    key = Path(argv[argv.index("-f") + 1])
+    key.write_text("private")
+    key.chmod(0o600)
+    key.with_name(key.name + ".pub").write_text("ssh-ed25519 GENERATED run\n")
+    return completed()
+
+
+def host_info(name: str, role: str, index: int) -> dict:
+    return {
+        "name": name,
+        "role": role,
+        "public_ip": f"203.0.113.{index}",
+        "private_ip": f"10.0.0.{index}",
+        "private_dns": f"ip-10-0-0-{index}.eu-west-1.compute.internal",
+        "instance_id": f"i-{index:012x}",
+    }
+
+
+def two_node_hosts_info() -> dict:
+    return {
+        "ctl": host_info("ctl", "ctl", 1),
+        "node0": host_info("node0", "query", 2),
+        "node1": host_info("node1", "validator", 3),
+    }
+
+
+def metric_data(
+    byte: list[float | None], io: list[float | None], first: float = 60.0
+) -> str:
+    """`cloudwatch get-metric-data` output; one period per list item starting at `first`, a
+    None item is a period without datapoint."""
+
+    def result(query_id: str, values: list[float | None]) -> dict:
+        points = [
+            (datetime.fromtimestamp(first + 60.0 * i, UTC).isoformat(), v)
+            for i, v in enumerate(values)
+            if v is not None
+        ]
+        return {
+            "Id": query_id,
+            "Label": query_id,
+            "Timestamps": [ts for ts, _ in points],
+            "Values": [v for _, v in points],
+            "StatusCode": "Complete",
+        }
+
+    return json.dumps(
+        {"MetricDataResults": [result("byte", byte), result("io", io)], "Messages": []}
+    )
+
+
+FULL_BALANCE = metric_data([100.0, 100.0, 100.0], [100.0, 100.0, 100.0])
+
+
+class FakeRunner:
+    """Maps an argv prefix to a canned `CompletedProcess`; records every call. An argv with no
+    matching prefix raises, so a test can prove a refused plan never reached `aws` or `tofu`."""
+
+    def __init__(
+        self,
+        responses: dict[tuple[str, ...], subprocess.CompletedProcess] | None = None,
+    ):
+        self.responses = responses or {}
+        self.calls: list[list[str]] = []
+        self.envs: list[dict[str, str] | None] = []
+
+    def __call__(
+        self, argv: list[str], env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess:
+        self.calls.append(argv)
+        self.envs.append(env)
+        if argv[0] == "ssh-keygen":
+            return fake_ssh_keygen(argv)
+        for prefix, result in self.responses.items():
+            if tuple(argv[: len(prefix)]) == prefix:
+                return result
+        raise AssertionError(f"unexpected command: {argv!r}")
+
+    def ran(self, *prefix: str) -> bool:
+        return any(tuple(call[: len(prefix)]) == prefix for call in self.calls)
+
+
+FLEET_ARNS = [
+    "arn:aws:ec2:eu-west-1:1:instance/i-1",
+    "arn:aws:ec2:eu-west-1:1:security-group/sg-1",
+    "arn:aws:ec2:eu-west-1:1:key-pair/key-1",
+]
+
+
+class FleetRunner:
+    """Answers every command `cmd_run` issues (git, tofu, ssh, rsync, aws) for a 2-node fleet.
+    `states` are the successive agent-state.json contents; the last one repeats. `respond`
+    overrides the answer to the commands it matches; `default` is the answer to the rest."""
+
+    ready_digests: ClassVar[dict[str, str]]
+    """Image name to `ref@digest` as `docker image inspect` reports it on a host. Set by the
+    test module that loads `aws-bench`, which knows the image names."""
+
+    def __init__(
+        self,
+        states: list[dict],
+        apply: subprocess.CompletedProcess | None = None,
+        destroys: list[subprocess.CompletedProcess] | None = None,
+        on_poll=None,
+        describe: str = "[]",
+        balance: subprocess.CompletedProcess | None = None,
+    ):
+        self.states = states
+        self.apply = apply or completed()
+        self.destroys = destroys or [completed()]
+        self.on_poll = on_poll
+        self.describe = describe
+        self.balance = balance or completed(stdout=FULL_BALANCE)
+        self.polls = 0
+        self.calls: list[list[str]] = []
+        self.lock = threading.Lock()
+        self.table: list[
+            tuple[str, Callable[[list[str]], subprocess.CompletedProcess]]
+        ] = []
+
+    def respond(
+        self, pattern: str, reply: Callable[[list[str]], subprocess.CompletedProcess]
+    ) -> None:
+        """`reply(argv)` answers every argv whose space-joined form contains `pattern`. The first
+        pattern added that matches wins."""
+        self.table.append((pattern, reply))
+
+    def ran(self, *needle: str) -> bool:
+        return any(all(n in " ".join(call) for n in needle) for call in self.calls)
+
+    def count(self, *needle: str) -> int:
+        return sum(all(n in " ".join(c) for n in needle) for c in self.calls)
+
+    def __call__(
+        self, argv: list[str], env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess:
+        with self.lock:
+            self.calls.append(argv)
+        joined = " ".join(argv)
+        for pattern, reply in self.table:
+            if pattern in joined:
+                return reply(argv)
+        return self.default(argv)
+
+    def default(self, argv: list[str]) -> subprocess.CompletedProcess:
+        if argv[0] == "git":
+            return completed(stdout="a" * 40 + "\n")
+        if argv[0] == "ssh-keygen":
+            return fake_ssh_keygen(argv)
+        if argv[0] == "tofu":
+            return self.tofu(argv[2])
+        if argv[0] == "ssh":
+            return self.ssh(argv[-1])
+        if argv[0] == "rsync":
+            return completed()
+        return self.aws(argv)
+
+    def tofu(self, verb: str) -> subprocess.CompletedProcess:
+        if verb == "apply":
+            return self.apply
+        if verb == "output":
+            hosts = two_node_hosts_info()
+            return completed(stdout=json.dumps({"hosts": {"value": hosts}}))
+        if verb == "destroy":
+            with self.lock:
+                return (
+                    self.destroys.pop(0) if len(self.destroys) > 1 else self.destroys[0]
+                )
+        return completed(stdout="plan")
+
+    def ssh(self, command: str) -> subprocess.CompletedProcess:
+        if "cloud-init status --format json" in command:
+            return completed(stdout=json.dumps({"status": "done"}))
+        if "ready.json" in command:
+            tracking = "System time     : 0.000001000 seconds fast of NTP time\n"
+            return completed(
+                stdout=json.dumps(
+                    {"digests": self.ready_digests, "chronyc_tracking": tracking}
+                )
+            )
+        if "agent-state.json" in command:
+            with self.lock:
+                index = min(self.polls, len(self.states) - 1)
+                self.polls += 1
+            if self.on_poll:
+                self.on_poll(self.polls)
+            return completed(stdout=json.dumps(self.states[index]))
+        if "date +%s.%N" in command:
+            return completed(stdout="1000.5\n")
+        if "docker inspect -f" in command:
+            return completed(stdout="2026-09-29T15:00:00.100000000Z\n")
+        if "docker wait deploy" in command:
+            return completed(stdout="0\n")
+        return completed()
+
+    def aws(self, argv: list[str]) -> subprocess.CompletedProcess:
+        if "describe-instances" in argv:
+            return completed(stdout=self.describe)
+        if "get-metric-data" in argv:
+            return self.balance
+        if "get-resources" in argv:
+            return completed(stdout=json.dumps(FLEET_ARNS))
+        if "tag-resources" in argv:
+            return completed(stdout=json.dumps({"FailedResourcesMap": {}}))
+        return completed()
