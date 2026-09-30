@@ -766,6 +766,7 @@ class Evidence(TypedDict):
     journal_bytes: dict[str, int]
     clock_offset_ms: dict[str, float]
     digest_mismatch: dict[str, list[str]]  # host -> images whose pulled digest differs
+    collect_failed: list[str]  # hosts whose collect script failed (see COLLECT_ERROR_FILE)
     pg_settings: NotRequired[dict[str, Any]]  # node0's pg-settings.json
     # The espresso backends node0's Postgres sampler saw inside the load window, by TLS use
     # (keys "true" and "false"); absent when `pg-stats.jsonl` was not collected.
@@ -5443,6 +5444,9 @@ def _pg_dump(sql: str, filename: str) -> str:
     return f"psql -At -c {shlex.quote(sql)} > {BENCH_DIR}/{filename}\n"
 
 
+# Written by `collect_hosts` into `hosts/<name>/` when the collect script failed. The copy
+# has no --delete, so it survives.
+COLLECT_ERROR_FILE = "collect-error.txt"
 PG_STATS_SCRIPT = (
     PG_SHELL_ENV
     + _pg_dump(PG_STATS_SQL, "pg-stats.json")
@@ -5470,8 +5474,17 @@ def collect_hosts(
         script = (
             COLLECT_SCRIPT + (PG_STATS_SCRIPT if role == "query" else "") + "true\n"
         )
+        # The copy runs even when the script failed or timed out: files already on the
+        # host (host.jsonl) are still wanted.
         try:
             remote.ssh(name, bounded(script))
+        except RemoteError as exc:
+            log.warning("collect script %s failed: %s", name, exc)
+            if not subdir:  # a marker in collect-<k>/ would hide an empty collect
+                local = out / "hosts" / name
+                local.mkdir(parents=True, exist_ok=True)
+                (local / COLLECT_ERROR_FILE).write_text(f"{exc}\n")
+        try:
             remote.rsync_from(
                 name,
                 f"{BENCH_DIR}/",
@@ -5480,7 +5493,7 @@ def collect_hosts(
                 "--exclude=__pycache__",
             )
         except RemoteError as exc:
-            log.warning("collect %s failed: %s", name, exc)
+            log.warning("collect %s rsync failed: %s", name, exc)
 
     remote.parallel(collect, [h["name"] for h in hosts])
 
@@ -6588,6 +6601,7 @@ def load_evidence(
         "journal_bytes": {},
         "clock_offset_ms": {},
         "digest_mismatch": {},
+        "collect_failed": [],
         "ebs_balance_min": {},
     }
     balance = run_dir / EC2_NODE0_FILE
@@ -6605,6 +6619,9 @@ def load_evidence(
             stats[name], evidence["coverage"][name] = host_sample_stats(
                 list(nb.read_jsonl(samples)), t0, t1
             )
+        marker = host_dir / COLLECT_ERROR_FILE
+        if marker.exists():
+            evidence["collect_failed"].append(name)
         journal = host_dir / "du-journal.txt"
         if spec["role"] != "ctl" and journal.exists():
             evidence["journal_bytes"][name] = parse_du_bytes(journal.read_text())
@@ -6735,13 +6752,18 @@ def check_validity_aws(
 ) -> nb.Validity:
     """`result["validity"]` (netbench's own rules) plus the fleet rules: invalid on missing host
     samples, a digest that differs from the manifest or a clock offset above
-    CLOCK_OFFSET_INVALID_MS; noisy on start spread, clock offset, ctl CPU, journal size, steal
-    or node0's EBS balance below 100% (also when it has no datapoints or was not collected)."""
+    CLOCK_OFFSET_INVALID_MS; noisy on a failed collect script, start spread, clock offset, ctl
+    CPU, journal size, steal or node0's EBS balance below 100% (also when it has no datapoints
+    or was not collected)."""
     invalid: list[str] = []
     noisy: list[str] = []
     for host, frac in evidence["coverage"].items():
         if frac < nb.SCRAPE_OK_MIN:
             invalid.append(f"{host} host samples cover only {frac:.0%} of the window")
+    # Files after the failing step are missing and their checks skipped: noisy, since the
+    # measurement itself stands.
+    for host in evidence["collect_failed"]:
+        noisy.append(f"{host} collect script failed (see {COLLECT_ERROR_FILE})")
     for host, names in evidence["digest_mismatch"].items():
         if names:
             invalid.append(

@@ -2774,6 +2774,36 @@ class CollectBoundTest(unittest.TestCase):
         with self.assertLogs("aws-bench", "WARNING"):
             awsb.collect_hosts(remote, list(remote.hosts.values()), tmp)
 
+    def test_a_timed_out_collect_script_still_copies_back_what_is_on_the_host(self):
+        runner = Scripted({"docker logs": [completed(returncode=124)]})
+        tmp = tmp_dir(self)
+        remote = scripted_remote(self, runner, tmp)
+        with self.assertLogs("aws-bench", "WARNING") as logs:
+            awsb.collect_hosts(remote, [remote.hosts["node0"]], tmp)
+        rsyncs = [c for c in runner.calls if c[0] == "rsync"]
+        self.assertEqual(len(rsyncs), 1)
+        self.assertIn("collect script node0 failed", logs.output[0])
+        marker = tmp / "hosts" / "node0" / awsb.COLLECT_ERROR_FILE
+        self.assertIn("exited 124", marker.read_text())
+
+    def test_a_failed_script_and_rsync_are_both_reported(self):
+        runner = Scripted({"docker logs": [completed(returncode=124)]}, rsync_rc=23)
+        tmp = tmp_dir(self)
+        remote = scripted_remote(self, runner, tmp)
+        with self.assertLogs("aws-bench", "WARNING") as logs:
+            awsb.collect_hosts(remote, [remote.hosts["node0"]], tmp, "sub")
+        self.assertEqual(len(logs.output), 2)
+        self.assertIn("collect script node0 failed", logs.output[0])
+        self.assertIn("collect node0 rsync failed", logs.output[1])
+        sub = tmp / "hosts" / "node0" / "sub"
+        self.assertFalse((sub / awsb.COLLECT_ERROR_FILE).exists())
+
+    def test_a_clean_collect_leaves_no_marker(self):
+        tmp = tmp_dir(self)
+        remote = scripted_remote(self, Scripted({}), tmp)
+        awsb.collect_hosts(remote, [remote.hosts["node0"]], tmp)
+        self.assertFalse((tmp / "hosts" / "node0" / awsb.COLLECT_ERROR_FILE).exists())
+
     def test_freeze_names_each_roles_containers(self):
         runner = Scripted({})
         remote = scripted_remote(self, runner)
@@ -3662,6 +3692,14 @@ class PgValidityTest(unittest.TestCase):
         _, evidence = awsb.load_evidence(tmp, manifest, 0.0, 1.0)
         self.assertNotIn("pg_settings", evidence)
 
+    def test_evidence_reads_the_collect_error_marker(self):
+        tmp = tmp_dir(self)
+        node0 = tmp / "hosts" / "node0"
+        node0.mkdir(parents=True)
+        (node0 / awsb.COLLECT_ERROR_FILE).write_text("boom\n")
+        _, evidence = awsb.load_evidence(tmp, aws_manifest(), 0.0, 1.0)
+        self.assertEqual(evidence["collect_failed"], ["node0"])
+
 
 # REQ:querydb-colocated-wiring
 class ColocatedPostgresWiringTest(unittest.TestCase):
@@ -3860,6 +3898,7 @@ def clean_evidence() -> dict:
         "journal_bytes": {"node0": 1_000_000, "node1": 1_000_000},
         "clock_offset_ms": {"ctl": 0.2, "node0": 0.3, "node1": 0.4},
         "digest_mismatch": {"ctl": [], "node0": [], "node1": []},
+        "collect_failed": [],
         "ebs_balance_min": {"EBSByteBalance%": 100.0, "EBSIOBalance%": 100.0},
     }
 
@@ -3890,6 +3929,21 @@ class CheckValidityAwsTest(unittest.TestCase):
         self.assertFalse(verdict["valid"])
         self.assertTrue(verdict["noisy"])
         self.assertEqual(verdict["reasons"], ["base"])
+
+    def test_failed_collect_is_noisy_and_names_the_marker(self):
+        runner = Scripted({"docker logs": [completed(returncode=124)]})
+        tmp = tmp_dir(self)
+        remote = scripted_remote(self, runner, tmp)
+        with self.assertLogs("aws-bench", "WARNING"):
+            awsb.collect_hosts(remote, [remote.hosts["node0"]], tmp)
+        _, evidence = awsb.load_evidence(tmp, aws_manifest(), 0.0, 1.0)
+        verdict = self.check(collect_failed=evidence["collect_failed"])
+        self.assertTrue(verdict["valid"])
+        self.assertTrue(verdict["noisy"])
+        self.assertEqual(
+            verdict["reasons"],
+            [f"node0 collect script failed (see {awsb.COLLECT_ERROR_FILE})"],
+        )
 
     def test_low_sample_coverage_is_invalid(self):
         verdict = self.check(coverage={"ctl": 1.0, "node0": 0.5, "node1": 1.0})
@@ -5316,6 +5370,22 @@ class KeptRunTest(unittest.TestCase):
     def test_collect_reports_hosts_that_yielded_nothing(self):
         harness, runner = self.kept()
         with unittest.mock.patch.object(awsb.Remote, "rsync_from", autospec=True):
+            code = awsb.cmd_collect(self.args(harness, "collect"), runner)
+        self.assertEqual(code, awsb.EXIT_FAILED)
+
+    def test_collect_reports_a_host_whose_script_failed_and_copied_nothing(self):
+        harness, runner = self.kept()
+        real_ssh = awsb.Remote.ssh
+
+        def failing(self, host, command, check=True):
+            if "docker logs" in command:
+                raise awsb.RemoteError(f"{host}: exited 255")
+            return real_ssh(self, host, command, check)
+
+        with (
+            unittest.mock.patch.object(awsb.Remote, "rsync_from", autospec=True),
+            unittest.mock.patch.object(awsb.Remote, "ssh", failing),
+        ):
             code = awsb.cmd_collect(self.args(harness, "collect"), runner)
         self.assertEqual(code, awsb.EXIT_FAILED)
 

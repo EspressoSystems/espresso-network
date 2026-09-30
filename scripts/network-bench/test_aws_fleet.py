@@ -2600,6 +2600,7 @@ class RdsValidityTest(unittest.TestCase):
             "journal_bytes": {},
             "clock_offset_ms": {},
             "digest_mismatch": {},
+            "collect_failed": [],
             "ebs_balance_min": {"EBSByteBalance%": 100.0, "EBSIOBalance%": 100.0},
             "rds_min": rds_min,
         }
