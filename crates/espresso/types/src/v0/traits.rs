@@ -922,7 +922,7 @@ pub trait SequencerPersistence:
                     tracing::warn!(
                         %view,
                         err = %format_args!("{err:#}"),
-                        "failed to persist reconstructed payload"
+                        "failed to persist block payload"
                     );
                 }
                 None
