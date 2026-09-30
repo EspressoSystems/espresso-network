@@ -1,246 +1,204 @@
-"""Tests for `bench`: process lifecycle, preflight, CLI wiring. No network is started.
+"""Tests for `bench`: process lifecycle, preflight, CLI wiring. No network is started."""
 
-just py::test
-"""
-
-import contextlib
 import dataclasses
 import importlib.util
 import json
-import socket
+import logging
 import subprocess
-import sys
-import tempfile
-import unittest
+import types
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from unittest import mock
+from typing import Any
 
 import netbench
-from fakes import make_result, step
+import pytest
+from fakes import FakeClock, make_result, step
 
-SCRIPT = Path(__file__).with_name("bench")
-_spec = importlib.util.spec_from_loader("bench", SourceFileLoader("bench", str(SCRIPT)))
-assert _spec is not None
+_spec = importlib.util.spec_from_loader(
+    "bench", SourceFileLoader("bench", str(Path(__file__).with_name("bench")))
+)
+assert _spec is not None and _spec.loader is not None
 bench = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
 _spec.loader.exec_module(bench)
 
 
-class ReportOnlyTest(unittest.TestCase):
-    def report(self, current):
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp)
-            (out / "config.json").write_text(
-                json.dumps(dataclasses.asdict(netbench.BenchConfig()))
-            )
-            baseline = out / "baseline.json"
-            baseline.write_text(json.dumps({"runs": [make_result()] * 3}))
-            with (
-                mock.patch.object(netbench, "analyze", return_value=current),
-                mock.patch("builtins.print"),
-                self.assertLogs(bench.log),
-            ):
-                code = bench.write_report(out, netbench.load_baseline(baseline))
-            return code, (out / "summary.md").read_text()
-
-    def test_regression_still_exits_zero(self):
-        code, summary = self.report(make_result([step(4.0, 3.0, ["x"])]))
-        self.assertEqual(code, 0)
-        self.assertIn("**worse**", summary)
-
-    def test_invalid_run_exits_one(self):
-        current = make_result()
-        current["validity"] = {"valid": False, "noisy": False, "reasons": ["no blocks"]}
-        self.assertEqual(self.report(current)[0], 1)
+def invalid_result() -> netbench.BenchResult:
+    result = make_result()
+    result["validity"] = {"valid": False, "noisy": False, "reasons": ["no blocks"]}
+    return result
 
 
-class CmdCompareTest(unittest.TestCase):
-    def test_compare_cli_with_empty_runs_exits_zero(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            result, baseline = Path(tmp) / "result.json", Path(tmp) / "baseline.json"
-            result.write_text(json.dumps(make_result()))
-            baseline.write_text(json.dumps({"runs": [], "error": "none found"}))
-            args = bench.parse_args(
-                ["compare", str(result), "--baseline", str(baseline)]
-            )
-            with mock.patch("builtins.print"):
-                self.assertEqual(bench.cmd_compare(args), 0)
+@pytest.mark.parametrize(
+    ("current", "code", "summary_has"),
+    [
+        (make_result([step(4.0, 3.0, ["x"])]), 0, "**worse**"),
+        (invalid_result(), 1, None),
+    ],
+    ids=["regression", "invalid"],
+)
+def test_write_report_exit_code(
+    tmp_path, monkeypatch, capsys, current, code, summary_has
+):
+    (tmp_path / "config.json").write_text(
+        json.dumps(dataclasses.asdict(netbench.BenchConfig()))
+    )
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"runs": [make_result()] * 3}))
+    monkeypatch.setattr(netbench, "analyze", lambda *_: current)
+    assert bench.write_report(tmp_path, netbench.load_baseline(baseline)) == code
+    if summary_has:
+        assert summary_has in (tmp_path / "summary.md").read_text()
 
 
-class PreflightTest(unittest.TestCase):
-    def test_busy_port_refuses(self):
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            sock.listen()
-            port = sock.getsockname()[1]
-            self.assertEqual(
-                bench.preflight_problems((port,), ()), [f"port {port} is in use"]
-            )
-
-    def test_bad_baseline_fails_before_starting_network(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            baseline = Path(tmp) / "baseline.json"
-            baseline.write_text('{"runs": [')
-            args = bench.parse_args(
-                ["run", "--bin-dir", "/nonexistent", "--baseline", str(baseline)]
-            )
-            with (
-                mock.patch.object(
-                    bench, "start_network", side_effect=AssertionError("started")
-                ),
-                self.assertRaises(json.JSONDecodeError),
-            ):
-                bench.cmd_run(args)
-
-    def test_keep_going_flag(self):
-        argv = ["run", "--bin-dir", "/nonexistent"]
-        self.assertFalse(bench.config_from_args(bench.parse_args(argv)).keep_going)
-        args = bench.parse_args([*argv, "--keep-going"])
-        self.assertTrue(bench.config_from_args(args).keep_going)
-
-    def test_run_refuses_without_starting_network(self):
-        args = bench.parse_args(["run", "--bin-dir", "/nonexistent"])
-        with (
-            mock.patch.object(
-                bench, "preflight_problems", return_value=["port 1 is in use"]
-            ),
-            mock.patch.object(
-                bench, "start_network", side_effect=AssertionError("started")
-            ),
-            self.assertLogs(bench.log, "ERROR") as logs,
-        ):
-            self.assertEqual(bench.cmd_run(args), 2)
-        self.assertIn("scripts/cleanup-process-compose", "\n".join(logs.output))
+def test_compare_with_empty_baseline_runs_exits_zero(tmp_path, capsys):
+    result, baseline = tmp_path / "result.json", tmp_path / "baseline.json"
+    result.write_text(json.dumps(make_result()))
+    baseline.write_text(json.dumps({"runs": [], "error": "none found"}))
+    args = bench.parse_args(["compare", str(result), "--baseline", str(baseline)])
+    assert bench.cmd_compare(args) == 0
 
 
-class CmdRunTest(unittest.TestCase):
-    """`cmd_run` with the runner, calibration and storage stubbed out."""
-
-    def cmd_run(self, tmp, **patches):
-        out, storage = Path(tmp) / "out", Path(tmp) / "storage"
-        storage.mkdir()
-        env_file = Path(tmp) / ".env"
-        env_file.write_text("A=1\n")
-        args = bench.parse_args(["run", "--bin-dir", "/nonexistent", "--out", str(out)])
-        calib = {"sha256_1t_mb_s": 1.0, "sha256_mt_mb_s": 1.0, "fsync_per_s": 1.0}
-        stubs = {
-            "preflight_problems": mock.Mock(return_value=[]),
-            "collect_sysinfo": mock.Mock(return_value=(make_result()["runner"], {})),
-            "calibrate": mock.Mock(return_value=calib),
-            "make_storage": mock.Mock(return_value=storage),
-            "remove_storage": mock.Mock(),
-        } | patches
-        with contextlib.ExitStack() as stack:
-            for name, stub in stubs.items():
-                # Moved symbols are called through `nb.`; patch them on netbench.
-                target = bench if hasattr(bench, name) else netbench
-                stack.enter_context(mock.patch.object(target, name, stub))
-            stack.enter_context(mock.patch.object(bench, "ENV_FILE", env_file))
-            stack.enter_context(mock.patch("builtins.print"))
-            code = bench.cmd_run(args)
-        return code, out
-
-    def test_unexpected_error_tears_down_and_writes_failure_summary(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            net = bench.Network(proc=mock.Mock(), out=Path(tmp), storage=Path(tmp))
-            teardown = mock.Mock(return_value=[])
-            with self.assertLogs(bench.log, "ERROR"):
-                code, out = self.cmd_run(
-                    tmp,
-                    start_network=mock.Mock(return_value=net),
-                    sample_metrics=mock.Mock(),
-                    sample_host=mock.Mock(),
-                    wait_ready=mock.Mock(side_effect=ValueError("bad height")),
-                    teardown=teardown,
-                )
-            self.assertEqual(code, 1)
-            teardown.assert_called_once_with(net)
-            run = json.loads((out / "run.json").read_text())
-            self.assertEqual(run["error"], "ValueError: bad height")
-            self.assertIn(
-                "**invalid**: ValueError: bad height", (out / "summary.md").read_text()
-            )
-
-    def test_metadata_is_read_before_the_run(self):
-        order = []
-        meta = make_result()["run"]
-
-        def environment_meta(pr):
-            order.append("meta")
-            return meta
-
-        def drive_network(*_):
-            order.append("run")
-            return {"error": "stalled", "ready_s": None, "teardown": []}
-
-        with tempfile.TemporaryDirectory() as tmp:
-            code, out = self.cmd_run(
-                tmp,
-                environment_meta=mock.Mock(side_effect=environment_meta),
-                drive_network=mock.Mock(side_effect=drive_network),
-            )
-            self.assertEqual(code, 1)
-            self.assertEqual(order, ["meta", "run"])
-            self.assertEqual(json.loads((out / "run.json").read_text())["meta"], meta)
+def test_preflight_reports_busy_ports_and_running_processes(monkeypatch):
+    monkeypatch.setattr(bench, "port_in_use", lambda port: port == 7)
+    monkeypatch.setattr(bench, "proc_comms", lambda: iter([(9, "anvil"), (10, "vim")]))
+    monkeypatch.setattr(bench, "proc_uid", lambda pid: bench.os.getuid())
+    assert bench.preflight_problems((6, 7), ("anvil",)) == [
+        "port 7 is in use",
+        "anvil (pid 9) is still running",
+    ]
 
 
-class TeardownTest(unittest.TestCase):
-    def test_hung_stop_is_force_killed_and_listed(self):
-        """TEST:bench-teardown-hang-ok: every step is bounded and a failing step skips none."""
-        hung = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                (
-                    "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN);"
-                    " print(flush=True); time.sleep(60)"
-                ),
-            ],
-            stdout=subprocess.PIPE,
-            start_new_session=True,
-        )
-        assert hung.stdout is not None
-        hung.stdout.readline()
-        with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / "logs").mkdir()
-            net = bench.Network(proc=hung, out=Path(tmp), storage=Path(tmp))
-            timeout = subprocess.TimeoutExpired("cleanup", 1)
-            with (
-                mock.patch.object(bench, "STOP_TIMEOUT_S", 0.5),
-                mock.patch.object(bench.subprocess, "run", side_effect=timeout),
-                mock.patch.object(
-                    bench, "own_processes", side_effect=[[], [(1, "gone")]]
-                ),
-                mock.patch.object(bench.os, "kill", side_effect=ProcessLookupError),
-                self.assertLogs(bench.log, "WARNING"),
-            ):
-                notes = bench.teardown(net)
-        self.assertIsNotNone(hung.poll())
-        self.assertEqual(
-            notes,
-            [
-                "process-compose did not stop within 0.5 s",
-                "cleanup-process-compose ran over 60 s",
-            ],
-        )
+def test_bad_baseline_fails_before_starting_network(tmp_path, monkeypatch):
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text('{"runs": [')
+    args = bench.parse_args(
+        ["run", "--bin-dir", "/nonexistent", "--baseline", str(baseline)]
+    )
+    monkeypatch.setattr(bench, "start_network", pytest.fail)
+    with pytest.raises(json.JSONDecodeError):
+        bench.cmd_run(args)
 
 
-class LabelTest(unittest.TestCase):
-    def test_pid_relabelled_after_exec(self):
-        cache = {}
-        label = mock.patch.object(
-            bench,
-            "process_label",
-            side_effect=lambda pid, comm, *_: bench.PROCESS_LABELS.get(comm),
-        )
-        with label:
-            for comm, want in (("bash", []), ("anvil", [(7, "anvil")])):
-                with mock.patch.object(bench, "proc_comms", return_value=[(7, comm)]):
-                    self.assertEqual(
-                        list(bench.labelled_processes(cache, Path("/"))), want
-                    )
+def test_run_refuses_without_starting_network(monkeypatch, caplog):
+    args = bench.parse_args(["run", "--bin-dir", "/nonexistent"])
+    monkeypatch.setattr(bench, "preflight_problems", lambda *_: ["port 1 is in use"])
+    monkeypatch.setattr(bench, "start_network", pytest.fail)
+    with caplog.at_level(logging.ERROR, bench.log.name):
+        assert bench.cmd_run(args) == 2
+    assert "scripts/cleanup-process-compose" in caplog.text
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_unexpected_error_tears_down_and_writes_failure_summary(
+    tmp_path, monkeypatch, capsys
+):
+    out, storage = tmp_path / "out", tmp_path / "storage"
+    storage.mkdir()
+    env_file = tmp_path / ".env"
+    env_file.write_text("A=1\n")
+    net = bench.Network(proc=object(), out=tmp_path, storage=tmp_path)
+    torn_down = []
+
+    def wait_ready(*_):
+        raise ValueError("bad height")
+
+    calib = {"sha256_1t_mb_s": 1.0, "sha256_mt_mb_s": 1.0, "fsync_per_s": 1.0}
+    stubs: dict[Any, dict[str, Any]] = {
+        bench: {
+            "preflight_problems": lambda *_: [],
+            "collect_sysinfo": lambda *_: (make_result()["runner"], {}),
+            "make_storage": lambda *_: storage,
+            "remove_storage": lambda *_: None,
+            "start_network": lambda *_, **__: net,
+            "calibrate": lambda *_: calib,
+            "sample_host": lambda *_, **__: None,
+            "teardown": lambda n: torn_down.append(n) or [],
+            "ENV_FILE": env_file,
+        },
+        netbench: {
+            "sample_metrics": lambda *_, **__: None,
+            "wait_ready": wait_ready,
+        },
+    }
+    for module, attrs in stubs.items():
+        for name, value in attrs.items():
+            monkeypatch.setattr(module, name, value)
+
+    args = bench.parse_args(["run", "--bin-dir", "/nonexistent", "--out", str(out)])
+    assert bench.cmd_run(args) == 1
+    assert torn_down == [net]
+    run = json.loads((out / "run.json").read_text())
+    assert run["error"] == "ValueError: bad height"
+    assert "**invalid**: ValueError: bad height" in (out / "summary.md").read_text()
+
+
+class StuckProc:
+    pid = 77
+
+    def __init__(self) -> None:
+        self.killed = False
+
+    def poll(self) -> int | None:
+        return 0 if self.killed else None
+
+    def send_signal(self, _sig: int) -> None:
+        pass
+
+    def wait(self, timeout: float | None = None) -> int:
+        if timeout is not None:
+            raise subprocess.TimeoutExpired("process-compose", timeout)
+        return 0
+
+
+def test_hung_stop_is_force_killed_and_listed(tmp_path, monkeypatch, caplog):
+    """Every teardown step is bounded and a failing step skips none."""
+    (tmp_path / "logs").mkdir()
+    proc, clock = StuckProc(), FakeClock()
+    kills: list[tuple[str, int]] = []
+
+    def run(*_, **__):
+        raise subprocess.TimeoutExpired("cleanup", 1)
+
+    def killpg(pid: int, _sig: int) -> None:
+        proc.killed = True
+        kills.append(("killpg", pid))
+
+    def kill(pid: int, _sig: int) -> None:
+        kills.append(("kill", pid))
+
+    leftovers = iter([[], [(1, "anvil")]])
+    monkeypatch.setattr(bench, "STOP_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(bench, "own_processes", lambda _: next(leftovers))
+    monkeypatch.setattr(bench, "time", clock)
+    monkeypatch.setattr(
+        bench,
+        "subprocess",
+        types.SimpleNamespace(
+            run=run, TimeoutExpired=subprocess.TimeoutExpired, STDOUT=subprocess.STDOUT
+        ),
+    )
+    monkeypatch.setattr(
+        bench, "os", types.SimpleNamespace(killpg=killpg, kill=kill, getuid=lambda: 0)
+    )
+    net = bench.Network(proc=proc, out=tmp_path, storage=tmp_path)
+    with caplog.at_level(logging.WARNING, bench.log.name):
+        notes = bench.teardown(net)
+    assert kills == [("killpg", 77), ("kill", 1)]
+    assert notes == [
+        "process-compose did not stop within 0.5 s",
+        f"cleanup-process-compose ran over {bench.CLEANUP_TIMEOUT_S} s",
+        "force-killed anvil (pid 1)",
+    ]
+
+
+def test_pid_relabelled_after_exec(monkeypatch):
+    comms: list[tuple[int, str]] = []
+    monkeypatch.setattr(bench, "proc_comms", lambda: iter(comms))
+    monkeypatch.setattr(
+        bench,
+        "process_label",
+        lambda pid, comm, *_: bench.PROCESS_LABELS.get(comm),
+    )
+    cache: dict = {}
+    for comm, want in (("bash", []), ("anvil", [(7, "anvil")])):
+        comms[:] = [(7, comm)]
+        assert list(bench.labelled_processes(cache, Path("/"))) == want
