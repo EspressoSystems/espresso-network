@@ -125,6 +125,27 @@ resource "aws_instance" "host" {
     }
   }
 
+  # Inline rather than aws_ebs_volume plus attachment: the volume is deleted with the instance
+  # at the shutdown timer, so an abandoned fleet leaves no volume behind.
+  dynamic "ebs_block_device" {
+    for_each = each.value.role == "query" && var.pg_volume != null ? [var.pg_volume] : []
+
+    content {
+      device_name           = "/dev/sdf"
+      volume_type           = "gp3"
+      volume_size           = ebs_block_device.value.gb
+      iops                  = ebs_block_device.value.iops
+      throughput            = ebs_block_device.value.mbps
+      delete_on_termination = true
+
+      tags = {
+        Name                = "${var.name}-${each.key}-pg"
+        espresso-bench-run  = var.name
+        espresso-bench-role = "pg"
+      }
+    }
+  }
+
   tags = {
     Name                = "${var.name}-${each.key}"
     espresso-bench-role = each.value.role

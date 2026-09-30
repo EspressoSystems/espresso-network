@@ -76,3 +76,13 @@ variable "hosts" {
     user_data_path = string
   }))
 }
+
+variable "pg_volume" {
+  description = "Separate gp3 volume for Postgres on the query host, attached inline so it terminates with the instance; null keeps Postgres on the root volume."
+  type = object({
+    gb   = number
+    iops = number
+    mbps = number
+  })
+  default = null
+}

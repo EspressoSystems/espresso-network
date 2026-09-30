@@ -21,3 +21,11 @@ output "ami_id" {
 output "security_group_id" {
   value = aws_security_group.this.id
 }
+
+output "pg_volume_id" {
+  description = "Volume id of the query host's Postgres volume; null without one."
+  value = one(flatten([
+    for k, i in aws_instance.host : [for d in i.ebs_block_device : d.volume_id]
+    if var.hosts[k].role == "query"
+  ]))
+}

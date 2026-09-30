@@ -16,8 +16,10 @@ import subprocess
 import tempfile
 import unittest
 import unittest.mock
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 
 import netbench
 from test_aws_bench import (
@@ -806,11 +808,371 @@ class ResetScriptTest(unittest.TestCase):
         fleet = awsb.open_fleet(runner, harness.fleet_dir, awsb.Interrupts())
         assert fleet.remote is not None
         mark = len(runner.calls)
-        awsb.reset_chain(fleet.remote, fleet.interrupts)
+        awsb.reset_chain(fleet.remote, "colocated", fleet.manifest, fleet.interrupts)
         commands = ssh_calls(runner, mark)
         self.assertEqual(len(commands), 3)
         self.assertEqual(sum("find /data/pg" in c for c in commands), 1)
         self.assertTrue(all("sudo timeout" in c for c in commands))
+
+
+VOLUME_ID = "vol-0abc123def456"
+BY_ID = "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0abc123def456"
+NODE0_IP = "203.0.113.2"
+
+
+class VolumeRunner(TaggingRunner):
+    """Adds the `pg_volume_id` output of a fleet with a Postgres volume."""
+
+    def __init__(self, *args, volume_id: str | None = VOLUME_ID, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.volume_id = volume_id
+
+    def tofu(self, verb: str) -> subprocess.CompletedProcess:
+        result = super().tofu(verb)
+        if verb != "output":
+            return result
+        return completed(
+            stdout=json.dumps(
+                {**json.loads(result.stdout), "pg_volume_id": {"value": self.volume_id}}
+            )
+        )
+
+
+class MissingDeviceRunner(VolumeRunner):
+    def ssh(self, command: str) -> subprocess.CompletedProcess:
+        if "mkfs.ext4" in command:
+            return completed(returncode=1, stderr=f"{BY_ID} missing after 60 s")
+        return super().ssh(command)
+
+
+def node0_calls(runner: FleetRunner, since: int = 0) -> list[str]:
+    return [c for c in ssh_calls(runner, since) if NODE0_IP in c]
+
+
+# REQ:querydb-volume-wiring
+class VolumeWiringTest(unittest.TestCase):
+    def test_by_id_path_drops_the_dash_of_the_volume_id(self):
+        self.assertEqual(awsb.volume_device(VOLUME_ID), BY_ID)
+
+    def test_tfvars_carry_the_volume_only_when_the_mode_is_provisioned(self):
+        def tfvars(cfg: "awsb.RunConfig") -> dict:
+            return awsb.render_tfvars(
+                cfg,
+                Path("/tmp/f"),
+                "f",
+                "alice",
+                awsb.plan_hosts(cfg),
+                "k",
+                "203.0.113.5/32",
+                "2026-01-01T00:00:00Z",
+                "abc1234",
+                "eu-west-1a",
+                "ami-0abc",
+            )
+
+        volume = awsb.RunConfig(
+            tag="x",
+            nodes=2,
+            db_modes=("colocated", "volume"),
+            pg_gb=300,
+            load=netbench.BenchConfig(submit_nodes=1),
+        )
+        self.assertEqual(
+            tfvars(volume)["pg_volume"], {"gb": 300, "iops": 12000, "mbps": 500}
+        )
+        self.assertIsNone(tfvars(replace(volume, db_modes=("colocated",)))["pg_volume"])
+
+    def test_up_makes_and_mounts_the_volume_on_the_query_host_only(self):
+        harness = FleetHarness(self)
+        runner = VolumeRunner([DONE_STATE])
+        self.assertEqual(harness.up(runner, "--db-modes", "volume"), awsb.EXIT_OK)
+        manifest = harness.fleet()
+        self.assertEqual(manifest["phase"], "idle")
+        self.assertEqual(manifest["pg_volume_id"], VOLUME_ID)
+        self.assertEqual(manifest["pg_volume"], {"gb": 400, "iops": 12000, "mbps": 500})
+        formats = [c for c in ssh_calls(runner) if "mkfs.ext4" in c]
+        self.assertEqual(len(formats), 1)
+        self.assertIn(NODE0_IP, formats[0])
+        for needle in (
+            f"mkfs.ext4 -q -F -E lazy_itable_init=0,lazy_journal_init=0 {BY_ID}",
+            "seq 60",
+            "udevadm settle",
+            "findmnt -no OPTIONS /",
+            f'mount -t ext4 -o "$(findmnt -no OPTIONS /)" {BY_ID} /data/pg',
+        ):
+            self.assertIn(needle, formats[0])
+        self.assertLess(formats[0].index("mkfs.ext4"), formats[0].index("mount -t"))
+
+    def test_a_single_shot_volume_run_formats_once_and_does_not_reset(self):
+        harness = FleetHarness(self)
+        runner = VolumeRunner([DONE_STATE], describe=DESCRIBE)
+        args = harness.parse(
+            "run",
+            "--genesis",
+            str(GENESIS),
+            *harness.fleet_flags(),
+            "--query-db",
+            "volume",
+        )
+        code = awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts())
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertEqual(runner.count("mkfs.ext4"), 1)
+        self.assertFalse(runner.ran("find /data/journal"))
+        self.assertEqual(harness.fleet()["db_modes"], ["volume"])
+
+    def test_up_without_the_volume_mode_issues_no_mkfs(self):
+        harness = FleetHarness(self)
+        runner = harness.up_fleet(self)
+        self.assertFalse(runner.ran("mkfs"))
+        self.assertNotIn("pg_volume", harness.fleet())
+
+    def test_missing_device_destroys_and_exits_3(self):
+        harness = FleetHarness(self)
+        runner = MissingDeviceRunner([DONE_STATE], describe=DESCRIBE)
+        self.assertEqual(harness.up(runner, "--db-modes", "volume"), awsb.EXIT_FAILED)
+        self.assertTrue(runner.ran("tofu", "destroy"))
+        self.assertIn("missing after 60 s", harness.driver_log())
+
+    def test_a_null_volume_output_fails_up(self):
+        harness = FleetHarness(self)
+        runner = VolumeRunner([DONE_STATE], volume_id=None, describe=DESCRIBE)
+        self.assertEqual(harness.up(runner, "--db-modes", "volume"), awsb.EXIT_FAILED)
+        self.assertTrue(runner.ran("tofu", "destroy"))
+        self.assertFalse(runner.ran("mkfs"))
+
+    def test_the_run_resets_by_mounting_and_wiping_without_reformatting(self):
+        harness = FleetHarness(self)
+        runner = VolumeRunner([DONE_STATE], describe=DESCRIBE)
+        harness.up(runner, "--db-modes", "volume")
+        mark = len(runner.calls)
+        self.assertEqual(harness.run(runner, "--query-db", "volume"), awsb.EXIT_OK)
+        commands = ssh_calls(runner, mark)
+        self.assertFalse(any("mkfs" in c for c in commands))
+        reset = next(c for c in node0_calls(runner, mark) if "find /data/journal" in c)
+        self.assertIn(f'mount -t ext4 -o "$(findmnt -no OPTIONS /)" {BY_ID}', reset)
+        self.assertLess(reset.index("docker rm -f"), reset.index("mount -t"))
+        self.assertLess(reset.index("mount -t"), reset.index("find /data/pg"))
+        others = [c for c in ssh_calls(runner, mark) if "find /data/journal" in c]
+        self.assertEqual(sum("mount -t" in c or "umount" in c for c in others), 1)
+        run_dir = harness.fleet_dir / "runs" / "01-volume"
+        manifest = json.loads((run_dir / "manifest.json").read_text())
+        self.assertEqual(manifest["query_db"], "volume")
+        self.assertEqual(manifest["pg_volume_id"], VOLUME_ID)
+
+    def test_a_volume_run_needs_the_mode_provisioned(self):
+        harness = FleetHarness(self)
+        runner = harness.up_fleet(self)
+        mark = len(runner.calls)
+        with self.assertRaisesRegex(awsb.Refused, "--query-db volume was not"):
+            harness.run(runner, "--query-db", "volume")
+        self.assertEqual(ssh_calls(runner, mark), [])
+
+    def test_the_pg_size_shapes_the_fleet(self):
+        args = awsb.parse_args(["up", "--tag", "t", "--pg-gb", "500"])
+        self.assertEqual(args.pg_gb, 500)
+        with self.assertRaisesRegex(awsb.Refused, "--pg-gb"):
+            awsb.reject_fleet_flags(["run", "--fleet", "d", "--pg-gb", "500"])
+
+    def test_db_modes_accept_volume(self):
+        self.assertEqual(
+            awsb.parse_db_modes("colocated,volume"), ("colocated", "volume")
+        )
+
+
+# REQ:querydb-volume-wiring
+class PgStoreScriptTest(unittest.TestCase):
+    manifest: ClassVar = {"name": "f", "pg_volume_id": VOLUME_ID}
+
+    def reset(self, mode: str) -> str:
+        store = awsb.pg_store_script(mode, self.manifest)
+        return awsb.reset_script("query", store)
+
+    # TEST:querydb-mode-switch-ok
+    def test_colocated_unmounts_after_the_containers_and_before_the_wipe(self):
+        script = self.reset("colocated")
+        self.assertNotIn("mount -t", script)
+        unmount = script.index("umount /data/pg")
+        self.assertIn("mountpoint -q /data/pg", script)
+        self.assertLess(script.index("docker rm -f"), unmount)
+        self.assertLess(unmount, script.index("find /data/pg"))
+
+    def test_volume_mounts_only_when_not_mounted(self):
+        script = self.reset("volume")
+        self.assertIn(
+            f"if ! mountpoint -q /data/pg; then\n  mount -t ext4 -o "
+            f'"$(findmnt -no OPTIONS /)" {BY_ID} /data/pg\nfi\n',
+            script,
+        )
+        self.assertNotIn("umount", script)
+
+    def test_validators_never_touch_the_store(self):
+        script = awsb.reset_script(
+            "validator", awsb.pg_store_script("volume", self.manifest)
+        )
+        self.assertNotIn("/data/pg", script)
+
+    def test_volume_without_a_volume_id_is_refused(self):
+        with self.assertRaisesRegex(awsb.Refused, "no pg volume"):
+            awsb.pg_store_script("volume", {"name": "f"})
+
+
+# REQ:fleet-cost
+class PgVolumeCostTest(unittest.TestCase):
+    MINOR = awsb.MINOR_PRICES["eu-west-1"]
+
+    def rate(self, volume: "awsb.VolumeSpec | None") -> float:
+        hosts = awsb.plan_hosts(
+            awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
+        )
+        prices = {
+            "instances": {
+                t: {"usd_hour": 1.0, "source": "test"}
+                for t in ("c8g.4xlarge", "c8g.2xlarge")
+            }
+        }
+        lines = awsb._cost_lines(hosts, prices, self.MINOR, 3600.0, volume)
+        return sum(l["usd"] for l in lines if l["item"] != "egress")
+
+    def test_the_volume_adds_size_iops_and_throughput_above_the_baseline(self):
+        volume: awsb.VolumeSpec = {"gb": 400, "iops": 12000, "mbps": 500}
+        expected = (
+            400 * self.MINOR["gp3_gb_month_usd"]
+            + 9000 * self.MINOR["gp3_iops_month_usd"]
+            + 375 * self.MINOR["gp3_mbps_month_usd"]
+        ) / awsb.HOURS_PER_MONTH
+        self.assertAlmostEqual(self.rate(volume) - self.rate(None), expected)
+
+    def test_a_baseline_volume_has_a_storage_line_only(self):
+        lines = awsb.pg_volume_cost_lines(
+            {"gb": 100, "iops": 3000, "mbps": 125}, self.MINOR, 1.0
+        )
+        self.assertEqual([l["item"] for l in lines], ["ebs pg volume storage"])
+
+    def test_the_fleet_estimate_prices_the_volume_only_when_provisioned(self):
+        prices = {
+            "instances": {
+                t: {"usd_hour": 1.0, "source": "test"}
+                for t in ("c8g.4xlarge", "c8g.2xlarge")
+            }
+        }
+
+        def items(modes: tuple) -> set[str]:
+            cfg = awsb.RunConfig(
+                tag="x",
+                nodes=2,
+                db_modes=modes,
+                ttl_min="60",
+                load=netbench.BenchConfig(submit_nodes=1),
+            )
+            estimate = awsb.estimate_fleet(
+                awsb.plan_hosts(cfg), cfg, prices, self.MINOR
+            )
+            return {l["item"] for l in estimate["lines"]}
+
+        self.assertIn("ebs pg volume storage", items(("colocated", "volume")))
+        self.assertNotIn("ebs pg volume storage", items(("colocated",)))
+
+    def test_actual_cost_of_a_fleet_includes_the_volume(self):
+        harness = FleetHarness(self)
+        runner = VolumeRunner([DONE_STATE], describe=DESCRIBE)
+        harness.up(runner, "--db-modes", "volume")
+        manifest = harness.fleet()
+        with_volume = awsb.manifest_cost(manifest, 3600.0)
+        without = awsb.manifest_cost(
+            {k: v for k, v in manifest.items() if k != "pg_volume"}, 3600.0
+        )
+        self.assertGreater(with_volume, without)
+
+
+@unittest.skipUnless(shutil.which("tofu"), "tofu/opentofu not on PATH")
+class TofuPgVolumeTest(unittest.TestCase):
+    """TEST:tofu-validate-modes-ok for `pg_volume`: validates the module and plans it offline
+    with the volume set and null; skipped when the providers cannot be installed."""
+
+    def node0_after(self, pg_volume: dict | None) -> dict:
+        """The planned `aws_instance.host["node0"]`: its `after` values and `after_unknown`."""
+        tofu = shutil.which("tofu")
+        assert tofu is not None
+        with tempfile.TemporaryDirectory() as tmp:
+            module = Path(tmp) / "terraform"
+            shutil.copytree(Path(__file__).parent / "aws" / "terraform", module)
+            user_data = module / "user-data.sh"
+            user_data.write_text("#!/bin/sh\necho ok\n")
+            tfvars = {
+                "name": "test-run",
+                "owner": "tester",
+                "git_rev": "abc1234",
+                "account_id": "000000000000",
+                "region": "eu-west-1",
+                "profile": "test",
+                "az": "",
+                "ami_id": "",
+                "ssh_public_key": "ssh-ed25519 AAAAtest test@example.com",
+                "operator_cidr": "203.0.113.5/32",
+                "expires_at": "2026-01-01T00:00:00Z",
+                "offline": True,
+                "pg_volume": pg_volume,
+                "hosts": {
+                    name: {
+                        "role": role,
+                        "instance_type": "c8g.2xlarge",
+                        "root_gb": 40,
+                        "root_iops": 3000,
+                        "root_mbps": 125,
+                        "user_data_path": str(user_data),
+                    }
+                    for name, role in (("ctl", "ctl"), ("node0", "query"))
+                },
+            }
+            (module / "terraform.tfvars.json").write_text(json.dumps(tfvars))
+            env = {
+                **os.environ,
+                "AWS_ACCESS_KEY_ID": "test",
+                "AWS_SECRET_ACCESS_KEY": "test",
+                "AWS_REGION": "eu-west-1",
+            }
+
+            def tofu_run(*args: str) -> subprocess.CompletedProcess:
+                return subprocess.run(
+                    [tofu, f"-chdir={module}", *args],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    check=False,
+                )
+
+            init = tofu_run("init", "-input=false")
+            if init.returncode != 0:
+                self.skipTest(f"providers unavailable: {init.stderr.strip()[-200:]}")
+            validate = tofu_run("validate")
+            self.assertEqual(validate.returncode, 0, validate.stderr)
+            plan = tofu_run("plan", "-input=false", "-refresh=false", "-out=plan.bin")
+            self.assertEqual(plan.returncode, 0, plan.stderr)
+            shown = tofu_run("show", "-json", "plan.bin")
+            self.assertEqual(shown.returncode, 0, shown.stderr)
+            changes = json.loads(shown.stdout)["resource_changes"]
+            return next(
+                c["change"]
+                for c in changes
+                if c["address"] == 'aws_instance.host["node0"]'
+            )
+
+    def test_the_volume_is_an_inline_block_on_the_query_host(self):
+        change = self.node0_after({"gb": 400, "iops": 12000, "mbps": 500})
+        (block,) = change["after"]["ebs_block_device"]
+        self.assertEqual(block["device_name"], "/dev/sdf")
+        self.assertEqual(block["volume_type"], "gp3")
+        self.assertEqual(
+            (block["volume_size"], block["iops"], block["throughput"]),
+            (400, 12000, 500),
+        )
+        self.assertTrue(block["delete_on_termination"])
+        self.assertEqual(block["tags"]["espresso-bench-run"], "test-run")
+        self.assertEqual(block["tags"]["espresso-bench-role"], "pg")
+
+    def test_without_the_volume_the_block_is_absent(self):
+        change = self.node0_after(None)
+        self.assertNotIn("ebs_block_device", change["after"])
 
 
 # REQ:fleet-cost
