@@ -3,6 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
     num::NonZeroU64,
+    sync::Arc,
 };
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
@@ -160,7 +161,7 @@ pub enum ConsensusOutput<T: NodeType> {
     BlockPayloadReconstructed {
         view: ViewNumber,
         header: T::BlockHeader,
-        payload: T::BlockPayload,
+        payload: Arc<T::BlockPayload>,
     },
     /// Broadcast our own VID share so peers can reconstruct the block. Emitted
     /// right after `SendVote1` so it never delays the cert-forming vote.
@@ -874,10 +875,10 @@ impl<T: NodeType> Consensus<T> {
                 let c = Commitment::default_commitment_no_preimage();
                 let floor = self.decide_floor();
                 self.headers = self.headers.split_off(&(view, c));
-                self.proposed_views = self.proposed_views.split_off(&view);
+                self.proposed_views = self.proposed_views.split_off(&floor);
                 self.states_verified = self.states_verified.split_off(&view);
                 self.timeout_certs = self.timeout_certs.split_off(&view);
-                self.voted_1_views = self.voted_1_views.split_off(&view);
+                self.voted_1_views = self.voted_1_views.split_off(&floor);
                 self.voted_2_views = self.voted_2_views.split_off(&floor);
                 if self
                     .formed_upgrade_certificate
