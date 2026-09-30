@@ -39,6 +39,7 @@ import argparse
 import dataclasses
 import getpass
 import gzip
+import itertools
 import json
 import logging
 import math
@@ -48,6 +49,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import socket
 import string
 import subprocess
 import sys
@@ -334,6 +336,8 @@ AGENT_START_GRACE_S = 30.0
 AGENT_SLACK_S = 300.0
 # ssh exits 255 when it cannot connect; `systemctl is-active` exits 3 for an inactive unit.
 SSH_FAILED_RC = 255
+# `timeout` exits 124 when it killed the command.
+TIMEOUT_RC = 124
 SYSTEMCTL_INACTIVE_RC = 3
 # `systemd-run --collect` removes the unit once it exits, so `is-active` then exits 4.
 SYSTEMCTL_NO_UNIT_RC = 4
@@ -572,6 +576,15 @@ class RdsInfo(TypedDict):
     port: int
     engine_version: str
     created_at: NotRequired[str]
+
+
+class FleetLock(TypedDict):
+    """`fleet.lock`: who is measuring on the fleet."""
+
+    pid: int
+    hostname: str
+    run: str
+    taken_at: str
 
 
 class RunEstimate(TypedDict):
@@ -2399,8 +2412,7 @@ def plan_fleet(
     pre = preflight(run, cfg, hosts)
     log_preflight(cfg, pre, hosts)
     estimate = estimate_or_refuse(cfg, hosts, fleet_dir, now, rds=rds_spec(cfg, pre))
-    fleet = render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
-    run_dir = render_run(fleet_dir, fleet, cfg, SINGLE_RUN)
+    run_dir = render_run_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
     return fleet_dir, run_dir, init_terraform(run, fleet_dir), hosts, pre
 
 
@@ -2520,18 +2532,16 @@ def measure_run(run: Run) -> None:
 def connect(fleet: FleetState) -> Remote:
     manifest = fleet.manifest
     output = fleet.tf.output()
-    value = output["hosts"]["value"]
-    hosts_info: dict[str, HostInfo] = {
-        spec["name"]: {"name": spec["name"], **value[spec["name"]]}
-        for spec in manifest["hosts"]
-    }
+    hosts_info = parse_hosts_output(output, manifest["hosts"])
     nb.write_json(fleet.fleet_dir / "hosts.json", hosts_info)
-    extra = {}
-    if "pg_volume" in manifest:
-        extra["pg_volume_id"] = output["pg_volume_id"]["value"]
-    if "rds_spec" in manifest:
-        extra["rds"] = output["rds"]["value"]
-    update_manifest(fleet.manifest_path, "provisioned", hosts_info=hosts_info, **extra)
+    rds = {"rds": parse_rds_output(output)} if "rds_spec" in manifest else {}
+    update_manifest(
+        fleet.manifest_path,
+        "provisioned",
+        hosts_info=hosts_info,
+        **pg_volume_fields(output, manifest),
+        **rds,
+    )
     fleet.remote = Remote(
         fleet.run,
         fleet.fleet_dir,
@@ -2541,38 +2551,61 @@ def connect(fleet: FleetState) -> Remote:
     return fleet.remote
 
 
+CollectStep = Literal[
+    "stop_agent", "freeze", "collect_hosts", "rsync_out", "ebs_balance", "collect_rds"
+]
+
+
+def collect_plan(
+    error: str | None, agent_started: bool, query_db: DbMode
+) -> list[CollectStep]:
+    """The collection steps in order. `skip_collect` is not an input: it can be set by a signal
+    during any step, so `finish_run` checks it before each one."""
+    steps: list[CollectStep] = ["stop_agent"] if error is not None else []
+    steps += ["freeze", "collect_hosts"]
+    if agent_started:
+        steps.append("rsync_out")
+    steps.append("ebs_balance")
+    if query_db == "rds":
+        steps.append("collect_rds")
+    return steps
+
+
 def finish_run(run: Run) -> nb.BenchResult | None:
     """Stops the load if it still runs, freezes and collects every host, then reports. Signals
-    are ignored from here on: teardown must not be cut short. A signal during any step skips
-    the steps after it."""
+    are ignored from here on: teardown must not be cut short."""
     interrupts = run.fleet.interrupts
     interrupts.disarm()
     remote = run.fleet.remote
     if remote is not None:
         update_manifest(run.manifest_path, "collecting")
         log.info("collecting: stop, freeze, logs, host samples, final rsync")
-
-        def step(what: str, action: Callable[[], object]) -> None:
+        actions: dict[CollectStep, tuple[str, Callable[[], object]]] = {
+            "stop_agent": ("stop agent", lambda: stop_agent(remote)),
+            "freeze": ("freeze", lambda: freeze(remote)),
+            "collect_hosts": (
+                "collect",
+                lambda: collect_hosts(remote, list(remote.hosts.values()), run.run_dir),
+            ),
+            "rsync_out": (
+                "final rsync",
+                lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", run.run_dir),
+            ),
+            "ebs_balance": (
+                "node0 EBS balance",
+                lambda: collect_node0_ebs_balance(run),
+            ),
+            "collect_rds": (
+                "rds metrics, logs",
+                lambda: collect_rds(run),
+            ),
+        }
+        for name in collect_plan(run.error, run.agent_started, run.cfg.query_db):
+            what, action = actions[name]
             if interrupts.skip_collect.is_set():
                 log.warning("%s skipped", what)
             else:
                 best_effort(what, action)
-
-        if run.error is not None:
-            step("stop agent", lambda: stop_agent(remote))
-        step("freeze", lambda: freeze(remote))
-        step(
-            "collect",
-            lambda: collect_hosts(remote, list(remote.hosts.values()), run.run_dir),
-        )
-        if run.agent_started:
-            step(
-                "final rsync",
-                lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", run.run_dir),
-            )
-        step("node0 EBS balance", lambda: collect_node0_ebs_balance(run))
-        if run.cfg.query_db == "rds":
-            step("rds metrics, logs", lambda: collect_rds(run))
     return report(run)
 
 
@@ -2732,19 +2765,23 @@ def final_cost(fleet: FleetState) -> dict[str, float] | None:
     return cost
 
 
+def destroy_verdict(attempt: int, ok: bool) -> Literal["done", "retry", "sweep"]:
+    """What follows `tofu destroy` attempt number `attempt` (1-based)."""
+    if ok:
+        return "done"
+    return "retry" if attempt < DESTROY_RETRIES else "sweep"
+
+
 def destroy_fleet(fleet: FleetState) -> bool:
     """`tofu destroy` with retries, then a tag sweep. False when `tofu destroy` never worked,
     even if the sweep found and terminated everything: the state file is then out of date."""
-    for attempt in range(1, DESTROY_RETRIES + 1):
-        try:
-            fleet.tf.destroy()
+    for attempt in itertools.count(1):
+        verdict = destroy_verdict(attempt, try_destroy(fleet, attempt))
+        if verdict == "done":
             return True
-        except TfFailed as exc:
-            log.warning(
-                "destroy attempt %d/%d failed: %s", attempt, DESTROY_RETRIES, exc
-            )
-        if attempt < DESTROY_RETRIES:
-            fleet.interrupts.clock.sleep(DESTROY_BACKOFF_S)
+        if verdict == "sweep":
+            break
+        fleet.interrupts.clock.sleep(DESTROY_BACKOFF_S)
     log.warning(
         "tofu destroy failed; sweeping resources tagged %s", fleet.fleet_dir.name
     )
@@ -2755,6 +2792,15 @@ def destroy_fleet(fleet: FleetState) -> bool:
     else:
         log.warning("sweep terminated %d resources: %s", len(swept), ", ".join(swept))
     return False
+
+
+def try_destroy(fleet: FleetState, attempt: int) -> bool:
+    try:
+        fleet.tf.destroy()
+    except TfFailed as exc:
+        log.warning("destroy attempt %d/%d failed: %s", attempt, DESTROY_RETRIES, exc)
+        return False
+    return True
 
 
 def cmd_up(
@@ -2952,7 +2998,7 @@ def admit_run(
 ) -> tuple[Path, RunEstimate]:
     """Takes the lock, checks that the fleet can take the run and creates its dir. Any refusal
     releases the lock again and has issued no ssh command."""
-    take_fleet_lock(fleet_dir, cfg.force)
+    take_fleet_lock(fleet_dir, cfg.query_db, cfg.force)
     try:
         estimate = check_run_allowed(manifest, cfg, datetime.now(UTC))
         fleet = retagged(manifest, cfg)
@@ -2971,20 +3017,58 @@ def retagged(manifest: FleetManifest, cfg: RunConfig) -> FleetManifest:
     return {**manifest, "images": images}
 
 
-def take_fleet_lock(fleet_dir: Path, force: bool) -> None:
-    """Creates `fleet.lock` holding this pid exclusively. `force` removes a held lock first."""
+def take_fleet_lock(fleet_dir: Path, run_name: str, force: bool) -> FleetLock:
+    """Creates `fleet.lock` exclusively. `force` replaces a lock whose holder is gone."""
     path = fleet_dir / FLEET_LOCK
-    if force:
-        path.unlink(missing_ok=True)
+    lock: FleetLock = {
+        "pid": os.getpid(),
+        "hostname": socket.gethostname(),
+        "run": run_name,
+        "taken_at": datetime.now(UTC).isoformat(),
+    }
+    if force and path.exists():
+        holder: FleetLock = nb.read_json(path)
+        if lock_holder_alive(holder):
+            raise Refused(f"cannot --force: {describe_lock(holder)}")
+        path.unlink()
     try:
         with path.open("x") as f:
-            f.write(f"{os.getpid()}\n")
+            json.dump(lock, f)
     except FileExistsError:
-        raise Refused(f"fleet is locked by pid {path.read_text().strip()}") from None
+        holder = nb.read_json(path)
+        hint = (
+            ""
+            if lock_holder_alive(holder)
+            else f"; if it is gone, run: aws-bench run --fleet {fleet_dir} --force "
+            f"(resets the fleet), or: aws-bench down {fleet_dir}"
+        )
+        raise Refused(f"fleet is locked: {describe_lock(holder)}{hint}") from None
+    return lock
 
 
 def release_fleet_lock(fleet_dir: Path) -> None:
     (fleet_dir / FLEET_LOCK).unlink(missing_ok=True)
+
+
+def lock_holder_alive(lock: FleetLock) -> bool:
+    """A lock from another host is assumed alive: its pid cannot be checked from here."""
+    if lock["hostname"] != socket.gethostname():
+        return True
+    try:
+        os.kill(lock["pid"], 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def describe_lock(lock: FleetLock) -> str:
+    state = "alive" if lock_holder_alive(lock) else "dead"
+    return (
+        f"run {lock['run']}, pid {lock['pid']} ({state}) on {lock['hostname']}, "
+        f"since {lock['taken_at'][:16]}"
+    )
 
 
 def check_run_allowed(
@@ -3002,6 +3086,11 @@ def check_run_allowed(
             f"{', '.join(manifest['db_modes'])}"
         )
     remaining_s = (datetime.fromisoformat(manifest["expires_at"]) - now).total_seconds()
+    if remaining_s <= 0:
+        raise Refused(
+            f"fleet {name} expired at {manifest['expires_at']}: see `aws-bench status "
+            f"{cfg.fleet}` and `aws-bench destroy --orphans`"
+        )
     estimate = estimate_run(manifest, cfg)
     needed_s = estimate["worst_s"] + NOLOGIN_LEAD_S + DESTROY_S
     if "rds" in manifest["db_modes"]:
@@ -3048,7 +3137,7 @@ def pull_images(remote: Remote, images: dict[str, ImageInfo], fleet_dir: Path) -
             for name in ROLE_IMAGES[role]
         }
         stdout = remote.ssh(host, pull_command(pull_script(refs))).stdout
-        return dict(line.split(" ", 1) for line in stdout.splitlines())
+        return json.loads(stdout)
 
     pulled = remote.parallel(pull, remote.hosts)
     wrong = {
@@ -3063,15 +3152,8 @@ def pull_images(remote: Remote, images: dict[str, ImageInfo], fleet_dir: Path) -
         )
 
     def record(host: str) -> None:
-        path = fleet_dir / "hosts" / host / "ready.json"
-        ready = {**json.loads(path.read_text()), "digests": pulled[host]}
-        files = {"digests.json": pulled[host], "ready.json": ready}
-        script = "\n".join(
-            f"printf %s {shlex.quote(json.dumps(data))} > {BENCH_DIR}/{name}"
-            for name, data in files.items()
-        )
-        remote.ssh(host, pull_command(script))
-        path.write_text(json.dumps(ready))
+        text = remote.ssh(host, pull_command(record_script(pulled[host]))).stdout
+        (fleet_dir / "hosts" / host / "ready.json").write_text(text)
 
     remote.parallel(record, remote.hosts)
 
@@ -3081,16 +3163,36 @@ def pull_command(script: str) -> str:
 
 
 def pull_script(refs: dict[str, str]) -> str:
-    """Prints `name repo@sha256:..` per ref, as `docker image inspect` reports it pulled."""
-    lines = ["set -eu"]
+    """Prints `{name: repo@sha256:..}` as `docker image inspect` reports each pulled ref."""
+    lines = ["set -eu", "out='{}'"]
     for name, ref in refs.items():
-        quoted = shlex.quote(ref)
-        lines += [
-            f"docker pull {quoted} >&2",
-            f"pulled=$(docker image inspect --format '{{{{index .RepoDigests 0}}}}' {quoted})",
-            f'echo {shlex.quote(name)} "$pulled"',
-        ]
-    return "\n".join(lines)
+        lines.append(_pull_one(name, ref))
+    return "\n".join([*lines, 'echo "$out"'])
+
+
+def _pull_one(name: str, ref: str) -> str:
+    inspect_format = "{{json .RepoDigests}}"
+    merge = "'$out + {($name): $digest}'"
+    return (
+        f"docker pull {shlex.quote(ref)} >&2\n"
+        f"pulled=$(docker image inspect --format {shlex.quote(inspect_format)} "
+        f"{shlex.quote(ref)} | jq -r '.[0]')\n"
+        f'out=$(jq -cn --argjson out "$out" --arg name {shlex.quote(name)} '
+        f'--arg digest "$pulled" {merge})'
+    )
+
+
+def record_script(digests: dict[str, str]) -> str:
+    """Rewrites `digests.json` and the `digests` of `ready.json`; prints the new `ready.json`."""
+    return (
+        "set -eu\n"
+        f"printf %s {shlex.quote(json.dumps(digests))} > {BENCH_DIR}/digests.json.tmp\n"
+        f"mv {BENCH_DIR}/digests.json.tmp {BENCH_DIR}/digests.json\n"
+        f"jq --slurpfile d {BENCH_DIR}/digests.json '.digests = $d[0]' "
+        f"{BENCH_DIR}/ready.json > {BENCH_DIR}/ready.json.tmp\n"
+        f"mv {BENCH_DIR}/ready.json.tmp {BENCH_DIR}/ready.json\n"
+        f"cat {BENCH_DIR}/ready.json\n"
+    )
 
 
 def pg_volume_spec(cfg: RunConfig) -> VolumeSpec | None:
@@ -3098,6 +3200,18 @@ def pg_volume_spec(cfg: RunConfig) -> VolumeSpec | None:
     if "volume" not in cfg.db_modes:
         return None
     return {"gb": PG_GB, "iops": cfg.pg_iops, "mbps": cfg.pg_mbps}
+
+
+def pg_volume_fields(output: dict[str, Any], manifest: FleetManifest) -> dict[str, str]:
+    """`pg_volume_id` from `tofu output -json` when the fleet has a Postgres volume."""
+    if "pg_volume" not in manifest:
+        return {}
+    volume_id = output["pg_volume_id"]["value"]
+    if volume_id is None:
+        raise RemoteError(
+            "tofu output has no pg_volume_id although a pg volume was planned"
+        )
+    return {"pg_volume_id": volume_id}
 
 
 def volume_device(volume_id: str) -> str:
@@ -3140,8 +3254,12 @@ def pg_store_script(mode: DbMode, manifest: FleetManifest) -> str:
     if mode == "colocated":
         return "if mountpoint -q /data/pg; then umount /data/pg; fi\n"
     if mode == "volume":
+        if "pg_volume_id" not in manifest:
+            raise Refused(f"fleet {manifest['name']} has no pg volume")
         return mount_pg_volume_script(manifest["pg_volume_id"])
-    return ""
+    if mode == "rds":
+        return ""
+    raise ValueError(f"no store reset for query db mode {mode!r}")
 
 
 def prepare_stores(fleet: FleetState) -> None:
@@ -3300,6 +3418,22 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
         )
 
 
+def render_run_dir(
+    run: Runner,
+    cfg: RunConfig,
+    fleet_dir: Path,
+    hosts: list[HostSpec],
+    pre: Preflight,
+    estimate: Estimate,
+    argv: list[str],
+) -> Path:
+    """The fleet dir and its first run dir, everything known before `tofu apply`. Files that
+    need the hosts' addresses (env files, start.sh, topology) are written by `render_host_files`
+    after it."""
+    fleet = render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, argv)
+    return render_run(fleet_dir, fleet, cfg, SINGLE_RUN)
+
+
 def render_fleet_dir(
     run: Runner,
     cfg: RunConfig,
@@ -3454,6 +3588,35 @@ def git_head(run: Runner) -> str:
     return result.stdout.strip()
 
 
+def parse_hosts_output(
+    output: dict[str, Any], specs: list[HostSpec]
+) -> dict[str, HostInfo]:
+    value = output["hosts"]["value"]
+    return {
+        spec["name"]: {
+            "name": spec["name"],
+            "role": spec["role"],
+            "public_ip": value[spec["name"]]["public_ip"],
+            "private_ip": value[spec["name"]]["private_ip"],
+            "private_dns": value[spec["name"]]["private_dns"],
+            "instance_id": value[spec["name"]]["instance_id"],
+        }
+        for spec in specs
+    }
+
+
+def parse_rds_output(output: dict[str, Any]) -> RdsInfo:
+    value = output["rds"]["value"]
+    if value is None:
+        raise RemoteError("tofu output rds is null, but the fleet has an rds instance")
+    return {
+        "identifier": value["identifier"],
+        "endpoint": value["endpoint"],
+        "port": value["port"],
+        "engine_version": value["engine_version"],
+    }
+
+
 def describe_rds(run: Runner, identifier: str) -> dict[str, Any]:
     return aws_json(
         run,
@@ -3597,11 +3760,27 @@ def genesis_contracts(run_dir: Path) -> list[str]:
     return sorted(set(found))
 
 
+def retry_verdict(
+    ok: bool, now: float, deadline: float
+) -> Literal["ok", "retry", "timeout"]:
+    """Outcome of one attempt of a poll-until-ready loop: `ok`, or retry until `deadline` on
+    the clock `now` reads."""
+    if ok:
+        return "ok"
+    return "timeout" if now >= deadline else "retry"
+
+
 def wait_ssh(remote: Remote, host: str, interrupts: Interrupts) -> None:
     deadline = interrupts.clock.monotonic() + SSH_READY_TIMEOUT_S
     delay = SSH_RETRY_S
-    while (result := remote.ssh(host, "true", check=False)).returncode != 0:
-        if interrupts.clock.monotonic() >= deadline:
+    while True:
+        result = remote.ssh(host, "true", check=False)
+        verdict = retry_verdict(
+            result.returncode == 0, interrupts.clock.monotonic(), deadline
+        )
+        if verdict == "ok":
+            return
+        if verdict == "timeout":
             raise RemoteError(
                 f"{host}: ssh not reachable after {SSH_READY_TIMEOUT_S:.0f} s: "
                 f"{result.stderr.strip()}"
@@ -3641,6 +3820,11 @@ def wait_cloud_init(remote: Remote, host: str) -> None:
             f"{host}: cloud-init status --wait exited {waited.returncode}: "
             f"{waited.stderr.strip()}"
         )
+    status = json.loads(
+        remote.ssh(host, "cloud-init status --format json", check=False).stdout
+    )["status"]
+    if status != "done":
+        raise RemoteError(f"{host}: cloud-init finished as {status!r}, not 'done'")
 
 
 def digest_mismatches(
@@ -3703,8 +3887,14 @@ def gate(
     timeout_s: float = GATE_TIMEOUT_S,
 ) -> None:
     deadline = interrupts.clock.monotonic() + timeout_s
-    while (result := remote.ssh(host, command, check=False)).returncode != 0:
-        if interrupts.clock.monotonic() >= deadline:
+    while True:
+        result = remote.ssh(host, command, check=False)
+        verdict = retry_verdict(
+            result.returncode == 0, interrupts.clock.monotonic(), deadline
+        )
+        if verdict == "ok":
+            return
+        if verdict == "timeout":
             raise RemoteError(
                 f"gate `{what}` on {host} not passed after {timeout_s:.0f} s: "
                 f"{(result.stdout + result.stderr).strip()}"
@@ -3720,6 +3910,107 @@ def rpc_check(method: str, params: list[str], jq_filter: str) -> str:
     )
 
 
+class GateStart(TypedDict):
+    kind: Literal["gate"]
+    host: str
+    # `docker start` target; None for a check on a container that is already running.
+    container: str | None
+    what: str
+    gate_cmd: str
+    timeout_s: float
+
+
+class DeployStart(TypedDict):
+    """`deploy` exits instead of serving: `docker wait` for at most `timeout_s`."""
+
+    kind: Literal["deploy"]
+    host: str
+    container: str
+    what: str
+    timeout_s: float
+
+
+SupportStart = GateStart | DeployStart
+
+
+def support_plan(query_db: DbMode, contracts: list[str]) -> list[SupportStart]:
+    """The support services in start order, each with the check that gates the next. The rds
+    instance is only checked: it is already running."""
+    plan: list[SupportStart] = [
+        GateStart(
+            kind="gate",
+            host="ctl",
+            container="anvil",
+            what="anvil eth_chainId",
+            gate_cmd=rpc_check("eth_chainId", [], ".result"),
+            timeout_s=GATE_TIMEOUT_S,
+        ),
+        DeployStart(
+            kind="deploy",
+            host="ctl",
+            container="deploy",
+            what="deploy",
+            timeout_s=DEPLOY_TIMEOUT_S,
+        ),
+    ]
+    for address in contracts:
+        check = rpc_check("eth_getCode", [address, "latest"], '.result != "0x"')
+        plan.append(
+            GateStart(
+                kind="gate",
+                host="ctl",
+                container=None,
+                what=f"eth_getCode {address}",
+                gate_cmd=check,
+                timeout_s=GATE_TIMEOUT_S,
+            )
+        )
+    plan += [
+        GateStart(
+            kind="gate",
+            host="ctl",
+            container="orchestrator",
+            what="orchestrator healthcheck",
+            gate_cmd=f"curl -sf http://localhost:{ORCHESTRATOR_PORT}/healthcheck",
+            timeout_s=GATE_TIMEOUT_S,
+        ),
+        GateStart(
+            kind="gate",
+            host="ctl",
+            container="state-relay-server",
+            what="relay healthcheck",
+            gate_cmd=f"curl -sf http://localhost:{RELAY_PORT}/healthcheck",
+            timeout_s=GATE_TIMEOUT_S,
+        ),
+        GateStart(
+            kind="gate",
+            host="node0",
+            container=None if query_db == "rds" else "postgres",
+            what="pg_isready",
+            gate_cmd=pg_shell("pg_isready"),
+            timeout_s=GATE_TIMEOUT_S,
+        ),
+    ]
+    for what, sql in (
+        ("pg_stat_statements", PG_EXTENSION_SQL),
+        (
+            "pg stats reset",
+            "CHECKPOINT; SELECT pg_stat_reset_shared(NULL); SELECT pg_stat_statements_reset()",
+        ),
+    ):
+        plan.append(
+            GateStart(
+                kind="gate",
+                host="node0",
+                container=None,
+                what=what,
+                gate_cmd=pg_shell(f"psql -c {shlex.quote(sql)}"),
+                timeout_s=GATE_TIMEOUT_S,
+            )
+        )
+    return plan
+
+
 def start_support(
     remote: Remote,
     contracts: list[str],
@@ -3728,49 +4019,37 @@ def start_support(
 ) -> None:
     """On ctl, in order and each gated on a check: anvil, contract deployment, orchestrator,
     relay; then Postgres on node0 (the rds instance is only gated, it is already running)."""
-
-    def start(host: str, container: str | None, what: str, command: str) -> None:
-        if container is not None:
-            remote.ssh(host, f"sudo docker start {container}")
-        gate(remote, host, what, command, interrupts)
-
-    start("ctl", "anvil", "anvil eth_chainId", rpc_check("eth_chainId", [], ".result"))
-    remote.ssh("ctl", "sudo docker start deploy")
-    wait_deploy(remote)
-    for address in contracts:
-        check = rpc_check("eth_getCode", [address, "latest"], '.result != "0x"')
-        start("ctl", None, f"eth_getCode {address}", check)
-    start(
-        "ctl",
-        "orchestrator",
-        "orchestrator healthcheck",
-        f"curl -sf http://localhost:{ORCHESTRATOR_PORT}/healthcheck",
-    )
-    start(
-        "ctl",
-        "state-relay-server",
-        "relay healthcheck",
-        f"curl -sf http://localhost:{RELAY_PORT}/healthcheck",
-    )
-    postgres = None if query_db == "rds" else "postgres"
-    start("node0", postgres, "pg_isready", pg_shell("pg_isready"))
-    reset = "CHECKPOINT; SELECT pg_stat_reset_shared(NULL); SELECT pg_stat_statements_reset()"
-    for what, sql in (
-        ("pg_stat_statements", PG_EXTENSION_SQL),
-        ("pg stats reset", reset),
-    ):
-        start("node0", None, what, pg_shell(f"psql -c {shlex.quote(sql)}"))
+    for step in support_plan(query_db, contracts):
+        host = step["host"]
+        if step["container"] is not None:
+            remote.ssh(host, f"sudo docker start {step['container']}")
+        if step["kind"] == "deploy":
+            wait_deploy(remote, host, step["container"], step["timeout_s"])
+        else:
+            gate(
+                remote,
+                host,
+                step["what"],
+                step["gate_cmd"],
+                interrupts,
+                step["timeout_s"],
+            )
 
 
-def wait_deploy(remote: Remote) -> None:
-    """`deploy` exits instead of serving: `docker wait` for at most DEPLOY_TIMEOUT_S."""
+def wait_deploy(remote: Remote, host: str, container: str, timeout_s: float) -> None:
     waited = remote.ssh(
-        "ctl", f"sudo timeout {DEPLOY_TIMEOUT_S} docker wait deploy", check=False
+        host, f"sudo timeout {timeout_s} docker wait {container}", check=False
     )
-    if waited.returncode != 0 or waited.stdout.strip() != "0":
+    if waited.returncode == TIMEOUT_RC:
+        raise RemoteError(f"{container} still running after {timeout_s} s")
+    if waited.returncode != 0:
         raise RemoteError(
-            f"deploy on ctl: docker wait exited {waited.returncode} within "
-            f"{DEPLOY_TIMEOUT_S} s, status {waited.stdout.strip()!r}: {waited.stderr.strip()}"
+            f"docker wait {container} exited {waited.returncode}: {waited.stderr.strip()}"
+        )
+    if waited.stdout.strip() != "0":
+        raise RemoteError(
+            f"{container} exited with status {waited.stdout.strip()}; "
+            f"see docker logs on {host}"
         )
 
 
@@ -3830,57 +4109,132 @@ def read_agent_state(remote: Remote) -> AgentState | None:
     return json.loads(result.stdout) if result.returncode == 0 else None
 
 
+class PollState(TypedDict):
+    """`poll_agent` loop state. `begin`, `deadline` and the `next_*` times are on the clock's
+    monotonic scale; `state` is the latest agent state read."""
+
+    begin: float
+    deadline: float
+    next_log: float
+    next_sync: float
+    unreachable: int
+    state: AgentState | None
+
+
+class PollStep(TypedDict):
+    """What `poll_agent` does after one probe: `error` raises, `done` returns `state["state"]`,
+    `retry` warns that ctl was unreachable, `log` and `rsync` are due; then it sleeps."""
+
+    state: PollState
+    done: bool
+    error: str | None
+    log: bool
+    rsync: bool
+    retry: bool
+
+
+def poll_result(
+    state: PollState,
+    *,
+    done: bool = False,
+    error: str | None = None,
+    log: bool = False,
+    rsync: bool = False,
+    retry: bool = False,
+) -> PollStep:
+    return PollStep(
+        state=state, done=done, error=error, log=log, rsync=rsync, retry=retry
+    )
+
+
+def poll_step(
+    state: PollState,
+    probe_rc: int,
+    probe_stderr: str,
+    agent: AgentState | None,
+    now: float,
+) -> PollStep:
+    """One decision of `poll_agent`. `probe_rc` and `probe_stderr` are of `systemctl is-active`
+    on ctl; `agent` is the state file just read, None when absent or not read. Rules apply in
+    order: unreachable ctl, unexpected rc, done, agent error, inactive unit, no state file,
+    deadline, then log and rsync due."""
+    if probe_rc == SSH_FAILED_RC:
+        unreachable = state["unreachable"] + 1
+        state = {**state, "unreachable": unreachable}
+        if unreachable > AGENT_POLL_SSH_FAILURES_MAX:
+            return poll_result(
+                state,
+                error=f"ctl unreachable for {unreachable} polls: {probe_stderr.strip()}",
+            )
+        return poll_result(state, retry=True)
+    if probe_rc not in AGENT_PROBE_RCS:
+        return poll_result(
+            state,
+            error=f"systemctl is-active exited {probe_rc}: {probe_stderr.strip()}",
+        )
+    latest = agent if agent is not None else state["state"]
+    state = {**state, "unreachable": 0, "state": latest}
+    if latest is not None and latest["phase"] == "done":
+        return poll_result(state, done=True)
+    if latest is not None and latest["phase"] == "error":
+        return poll_result(state, error=f"agent failed: {latest['error']}")
+    if probe_rc != 0:
+        phase = latest["phase"] if latest else "start"
+        return poll_result(
+            state, error=f"agent exited in phase {phase} without finishing"
+        )
+    if latest is None and now - state["begin"] > AGENT_START_GRACE_S:
+        return poll_result(state, error="agent wrote no state file")
+    if now > state["deadline"]:
+        return poll_result(state, error="agent did not finish within the expected time")
+    log_due = latest is not None and now >= state["next_log"]
+    rsync_due = now >= state["next_sync"]
+    if log_due:
+        state = {**state, "next_log": now + AGENT_LOG_S}
+    if rsync_due:
+        state = {**state, "next_sync": now + OUT_RSYNC_S}
+    return poll_result(state, log=log_due, rsync=rsync_due)
+
+
 def poll_agent(
     remote: Remote, run_dir: Path, cfg: RunConfig, interrupts: Interrupts
 ) -> AgentState:
     """Until the agent reports `done`: reads its state every AGENT_POLL_S, logs its progress
-    every AGENT_LOG_S and rsyncs its output every OUT_RSYNC_S. An unreadable state file keeps
-    the state read before."""
+    every AGENT_LOG_S and rsyncs its output every OUT_RSYNC_S."""
     clock = interrupts.clock
     begin = clock.monotonic()
-    deadline = begin + READY_TIMEOUT_S + load_seconds(cfg.load) + AGENT_SLACK_S
-    next_log = begin + AGENT_LOG_S
-    next_sync = begin + OUT_RSYNC_S
-    unreachable = 0
-    latest: AgentState | None = None
+    poll = PollState(
+        begin=begin,
+        deadline=begin + READY_TIMEOUT_S + load_seconds(cfg.load) + AGENT_SLACK_S,
+        next_log=begin + AGENT_LOG_S,
+        next_sync=begin + OUT_RSYNC_S,
+        unreachable=0,
+        state=None,
+    )
     while True:
         interrupts.check()
         probe = remote.ssh(
             "ctl", "systemctl is-active --quiet bench-agent", check=False
         )
-        stderr = probe.stderr.strip()
-        if probe.returncode == SSH_FAILED_RC:
-            unreachable += 1
-            if unreachable > AGENT_POLL_SSH_FAILURES_MAX:
-                raise RemoteError(f"ctl unreachable for {unreachable} polls: {stderr}")
-            log.warning("ctl unreachable, retrying: %s", stderr)
-            interrupts.sleep(AGENT_POLL_S)
-            continue
-        if probe.returncode not in AGENT_PROBE_RCS:
-            raise RemoteError(
-                f"systemctl is-active exited {probe.returncode}: {stderr}"
-            )
-        unreachable = 0
-        latest = read_agent_state(remote) or latest
-        now = clock.monotonic()
-        if latest is not None and latest["phase"] == "done":
+        agent = (
+            read_agent_state(remote) if probe.returncode in AGENT_PROBE_RCS else None
+        )
+        step = poll_step(poll, probe.returncode, probe.stderr, agent, clock.monotonic())
+        poll = step["state"]
+        if step["error"] is not None:
+            raise RemoteError(step["error"])
+        latest = poll["state"]
+        if step["done"]:
+            assert latest is not None
             return latest
-        if latest is not None and latest["phase"] == "error":
-            raise RemoteError(f"agent failed: {latest['error']}")
-        if probe.returncode != 0:
-            phase = latest["phase"] if latest else "start"
-            raise RemoteError(f"agent exited in phase {phase} without finishing")
-        if latest is None and now - begin > AGENT_START_GRACE_S:
-            raise RemoteError("agent wrote no state file")
-        if now > deadline:
-            raise RemoteError("agent did not finish within the expected time")
-        if latest is not None and now >= next_log:
-            next_log = now + AGENT_LOG_S
+        if step["retry"]:
+            log.warning("ctl unreachable, retrying: %s", probe.stderr.strip())
+        if step["log"]:
+            assert latest is not None
             log.info(
                 "%s: %s", latest["phase"], latest.get("progress", latest["detail"])
             )
-        if now >= next_sync:
-            next_sync = now + OUT_RSYNC_S
+        if step["rsync"]:
             best_effort(
                 "partial rsync",
                 lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", run_dir),
@@ -4112,7 +4466,7 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
         )
         lock_path = fleet_dir / FLEET_LOCK
         if lock_path.exists():
-            print(f"- lock: pid {lock_path.read_text().strip()}")
+            print(f"- lock: {describe_lock(nb.read_json(lock_path))}")
     if manifest["phase"] == "planned":
         print("- no instances: planned only")
         return EXIT_OK
@@ -4291,11 +4645,20 @@ def destroy_orphans(
             log.info("sweeping %s", orphan["name"])
             sweep(run, orphan["name"], clock)
             mark_swept(OUT_ROOT / orphan["name"])
+        # `sweep` removes the role of a fleet that still has rds resources.
+        swept_rds = rds_fleets(arn for o in orphans for arn in o["arns"])
+        with_role = {o["name"] for o in orphans if has_role(o)} - swept_rds
+        if with_role:
+            sweep_iam(run, with_role)
     except Refused as exc:
         log.error("sweep failed, resources may remain: %s", exc)
         return EXIT_LEFTOVER
     log.info("swept %d runs", len(orphans))
     return EXIT_OK
+
+
+def has_role(tagged: TaggedRun) -> bool:
+    return any(arn_parts(arn)[0] == "role" for arn in tagged["arns"])
 
 
 def mark_swept(fleet_dir: Path) -> None:
@@ -5167,66 +5530,117 @@ def tagged_resources(run: Runner, name: str | None = None) -> list[str]:
     )
 
 
-def sweep(run: Runner, name: str, clock: nb.Clock = nb.SYSTEM_CLOCK) -> list[str]:
-    """Deletes what `tagged_resources` finds in dependency order: the delete schedule group (so
-    it cannot fire mid-sweep), instances, the rds instance (waiting for it) with its subnet and
-    parameter groups, volumes, security group (the rds network interfaces hold it until the
-    instance is gone) and key pair; then the fleet's scheduler role. Returns every ARN found."""
-    arns = tagged_resources(run, name)
+class AwsStep(TypedDict):
+    action: Literal["aws"]
+    # `aws_json` arguments.
+    args: list[str]
+    tolerate: str | None
+
+
+class ResourceStep(TypedDict):
+    action: Literal["delete_rds", "delete_security_group"]
+    resource: str
+
+
+SweepStep = AwsStep | ResourceStep
+
+
+def sweep_plan(arns: list[str]) -> list[SweepStep]:
+    """The deletions for `arns` in dependency order: the delete schedule group (so it cannot
+    fire mid-sweep), instances, the rds instance (waiting for it) with its subnet and parameter
+    groups, volumes, security group (the rds network interfaces hold it until the instance is
+    gone) and key pair."""
     by_kind: defaultdict[str, list[str]] = defaultdict(list)
     for arn in arns:
         kind, resource_id = arn_parts(arn)
         by_kind[kind].append(resource_id)
-    for group in by_kind["schedule-group"]:
-        aws_json(
-            run,
+
+    def delete(
+        service: str, verb: str, id_flag: str, resource_id: str, tolerate: str | None
+    ) -> AwsStep:
+        args = [service, verb, id_flag, resource_id]
+        return AwsStep(action="aws", args=args, tolerate=tolerate)
+
+    plan: list[SweepStep] = [
+        delete(
             "scheduler",
             "delete-schedule-group",
             "--name",
             group,
-            tolerate="ResourceNotFoundException",
+            "ResourceNotFoundException",
         )
+        for group in by_kind["schedule-group"]
+    ]
     if instances := by_kind["instance"]:
-        aws_json(run, "ec2", "terminate-instances", "--instance-ids", *instances)
-        aws_json(
-            run, "ec2", "wait", "instance-terminated", "--instance-ids", *instances
-        )
-    for identifier in by_kind["db"]:
-        delete_rds(run, identifier)
-    for group in by_kind["subgrp"]:
-        aws_json(
-            run,
+        ids = ["--instance-ids", *instances]
+        for verb in (["terminate-instances"], ["wait", "instance-terminated"]):
+            args = ["ec2", *verb, *ids]
+            plan.append(AwsStep(action="aws", args=args, tolerate=None))
+    plan += [
+        ResourceStep(action="delete_rds", resource=identifier)
+        for identifier in by_kind["db"]
+    ]
+    plan += [
+        delete(
             "rds",
             "delete-db-subnet-group",
             "--db-subnet-group-name",
             group,
-            tolerate="DBSubnetGroupNotFound",
+            "DBSubnetGroupNotFound",
         )
-    for group in by_kind["pg"]:
-        aws_json(
-            run,
+        for group in by_kind["subgrp"]
+    ]
+    plan += [
+        delete(
             "rds",
             "delete-db-parameter-group",
             "--db-parameter-group-name",
             group,
-            tolerate="DBParameterGroupNotFound",
+            "DBParameterGroupNotFound",
         )
+        for group in by_kind["pg"]
+    ]
     # Root volumes normally vanish with their instance.
-    for volume in by_kind["volume"]:
-        aws_json(
-            run,
-            "ec2",
-            "delete-volume",
-            "--volume-id",
-            volume,
-            tolerate="InvalidVolume.NotFound",
-        )
-    for group in by_kind["security-group"]:
-        delete_security_group(run, group, clock)
-    for key in by_kind["key-pair"]:
-        aws_json(run, "ec2", "delete-key-pair", "--key-pair-id", key)
-    delete_role(run, RDS_PREFIX + name)
+    plan += [
+        delete("ec2", "delete-volume", "--volume-id", volume, "InvalidVolume.NotFound")
+        for volume in by_kind["volume"]
+    ]
+    plan += [
+        ResourceStep(action="delete_security_group", resource=group)
+        for group in by_kind["security-group"]
+    ]
+    plan += [
+        delete("ec2", "delete-key-pair", "--key-pair-id", key, None)
+        for key in by_kind["key-pair"]
+    ]
+    return plan
+
+
+def sweep(
+    run: Runner, name: str | None, clock: nb.Clock = nb.SYSTEM_CLOCK
+) -> list[str]:
+    """Deletes what `tagged_resources` finds as `sweep_plan` orders it, then the scheduler role
+    of an rds fleet. Returns every ARN found."""
+    arns = tagged_resources(run, name)
+    for step in sweep_plan(arns):
+        if step["action"] == "aws":
+            aws_json(run, *step["args"], tolerate=step["tolerate"])
+        elif step["action"] == "delete_rds":
+            delete_rds(run, step["resource"])
+        else:
+            delete_security_group(run, step["resource"], clock)
+    if fleets := rds_fleets(arns):
+        sweep_iam(run, fleets)
     return arns
+
+
+def rds_fleets(arns: Iterable[str]) -> set[str]:
+    """Names of the fleets that own an rds instance or delete schedule group among `arns`."""
+    return {
+        resource_id.removeprefix(RDS_PREFIX)
+        for kind, resource_id in map(arn_parts, arns)
+        if kind in ("db", "schedule-group")
+    }
 
 
 def delete_rds(run: Runner, identifier: str) -> None:
@@ -5285,32 +5699,42 @@ def list_scheduler_roles(run: Runner) -> list[str]:
     return out
 
 
-def delete_role(run: Runner, role: str) -> None:
-    """Deletes the IAM role `role` if it exists, inline policies first."""
-    listed = aws_json(
-        run,
-        "iam",
-        "list-role-policies",
-        "--role-name",
-        role,
-        "--query",
-        "PolicyNames",
-        tolerate="NoSuchEntity",
-    )
-    if listed is None:
-        return
-    for policy in listed:
+def sweep_iam(run: Runner, fleets: set[str]) -> None:
+    """Deletes the scheduler role of each fleet in `fleets` that has one, inline policies
+    first."""
+    for arn in list_scheduler_roles(run):
+        if role_fleet(arn) not in fleets:
+            continue
+        role = arn_parts(arn)[1].rpartition("/")[2]
+        listed = aws_json(
+            run,
+            "iam",
+            "list-role-policies",
+            "--role-name",
+            role,
+            "--query",
+            "PolicyNames",
+            tolerate="NoSuchEntity",
+        )
+        for policy in listed or []:
+            aws_json(
+                run,
+                "iam",
+                "delete-role-policy",
+                "--role-name",
+                role,
+                "--policy-name",
+                policy,
+                tolerate="NoSuchEntity",
+            )
         aws_json(
             run,
             "iam",
-            "delete-role-policy",
+            "delete-role",
             "--role-name",
             role,
-            "--policy-name",
-            policy,
             tolerate="NoSuchEntity",
         )
-    aws_json(run, "iam", "delete-role", "--role-name", role, tolerate="NoSuchEntity")
 
 
 def delete_security_group(run: Runner, group: str, clock: nb.Clock) -> None:

@@ -128,7 +128,7 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
 | Ctrl-C                         | finish current phase, bounded collect, destroy, exit 3 or 4                                                            |
 | destroy fails x3               | sweep by tag `espresso-bench-run=<name>`; leftovers → exit 4, `status --all` lists them                                |
 | laptop dies                    | agents keep running, TTL ends instances (and the pg volume), a schedule deletes the rds instance 5 min before the TTL; |
-|                                | `status/down FLEET`, `collect/render RUN` recover; `run --fleet --force` removes the lock                              |
+|                                | `status/down FLEET`, `collect/render RUN` recover; `run --fleet --force` replaces a stale lock                         |
 | reset fails on a fleet         | fleet phase `dirty`, lock kept; `run --fleet DIR --force` resets again, or `down DIR`                                  |
 | state lost                     | `destroy --orphans`: list by tag (owner, launch, expiry), confirm, sweep; never another owner's live run               |
 
@@ -146,8 +146,8 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
 - `run --fleet` refuses: phase not `idle`, lock held, MODE not in `--db-modes`, TTL left below the run's worst case plus
   lock-out, fleet flags given. Exit 2, nothing sent to the hosts. `--tag` differing from the fleet's pulls by digest.
 - Each run wipes journals, containers and the database; every run starts at height 0.
-- `fleet.lock` holds the pid of the run; `--force` removes it. Phases: `idle`, `running`, `dirty` (reset failed), then
-  `done`.
+- `fleet.lock` holds pid and hostname; `status DIR` shows whether the holder is alive. Phases: `idle`, `running`,
+  `dirty` (reset failed), then `done`.
 
 | `--query-db` | Postgres                            | Store of `/data/pg`                                  |
 | ------------ | ----------------------------------- | ---------------------------------------------------- |
@@ -167,7 +167,7 @@ TTL. An EventBridge one-shot schedule deletes the rds instance 5 min earlier.
 
 | Command             | Covers                                                                                                        |
 | ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `status DIR`        | phase, time left, runs, lock pid, instances, pg volume, rds state, cost                                       |
+| `status DIR`        | phase, time left, runs, lock holder (alive or dead), instances, pg volume, rds state, cost                    |
 | `status --all`      | tagged resources per fleet (count per kind), latest expiry, orphan reason                                     |
 | `destroy --orphans` | fleets past expiry, in a terminal phase, or of this owner without `fleet.json`; never a live fleet with state |
 
@@ -187,7 +187,7 @@ events.jsonl driver.log  phase transitions, DEBUG log
 terraform/               module copy, tfvars, plan.txt, terraform.tfstate
 hosts.json               role, public/private IP, private DNS per host
 hosts/<host>/            user-data.sh, ready.json
-fleet.lock               pid; present while a run holds the fleet
+fleet.lock               pid, hostname, run name; present while a run holds the fleet
 rds.json (0600)          rds fleets: endpoint, identifier, password
 cost.json                expected, bound, actual USD of the fleet (instances, volume, rds)
 runs/01-run/             one measurement
