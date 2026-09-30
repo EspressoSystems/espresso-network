@@ -1803,34 +1803,26 @@ impl SequencerPersistence for Persistence {
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
-        let mut values = Vec::new();
-        let mut payloads = Vec::new();
-        for (info, cert) in leaf_chain {
-            let mut leaf = info.leaf.clone();
-            let view = cert.view_number().u64() as i64;
-            // The payload is kept out of the leaf row. At 0.6 the only leaf that arrives with one
-            // is a block this node built, and it goes to `pending_payload` like a reconstructed
-            // one. Older leaves get theirs from the DA proposal.
-            if let Some(payload) = leaf.unfill_block_payload()
-                && !self.consensus_only
-                && leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
-            {
-                payloads.push((
-                    view,
-                    leaf.block_header().payload_commitment().to_string(),
-                    bincode::serialize(leaf.block_header())?,
-                    payload.encode().to_vec(),
-                ));
-            }
+        let values = leaf_chain
+            .into_iter()
+            .map(|(info, cert)| {
+                // The leaf may come with a large payload attached. We don't care about this payload
+                // because we already store it separately, in `pending_payload` or, before 0.6, as
+                // part of the DA proposal. Storing it here contributes to load on the DB for no
+                // reason, so we remove it before serializing the leaf.
+                let mut leaf = info.leaf.clone();
+                leaf.unfill_block_payload();
 
-            let leaf_bytes = bincode::serialize(&leaf)?;
-            let qc_bytes = bincode::serialize(cert.qc())?;
-            let next_epoch_qc_bytes = match cert.next_epoch_qc() {
-                Some(qc) => Some(bincode::serialize(qc)?),
-                None => None,
-            };
-            values.push((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes));
-        }
+                let view = cert.view_number().u64() as i64;
+                let leaf_bytes = bincode::serialize(&leaf)?;
+                let qc_bytes = bincode::serialize(cert.qc())?;
+                let next_epoch_qc_bytes = match cert.next_epoch_qc() {
+                    Some(qc) => Some(bincode::serialize(qc)?),
+                    None => None,
+                };
+                Ok((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         // Append the new leaves. We do this in its own transaction because even if GC or the
         // event consumer later fails, there is no need to abort the storage of the leaves.
@@ -1843,15 +1835,6 @@ impl SequencerPersistence for Persistence {
                 values.clone(),
             )
             .await?;
-            if !payloads.is_empty() {
-                tx.upsert(
-                    "pending_payload",
-                    ["view", "payload_hash", "header", "payload"],
-                    ["view"],
-                    payloads.clone(),
-                )
-                .await?;
-            }
             tx.commit().await
         })
         .await?;
