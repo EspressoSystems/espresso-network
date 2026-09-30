@@ -154,10 +154,11 @@ pub enum ConsensusOutput<T: NodeType> {
         view: ViewNumber,
         payload_commitment: VidCommitment2,
     },
-    /// Emitted when a node has reconstructed a block payload from VID shares.
-    /// Notifies downstream consumers (e.g. the query service) so they can store
-    /// the payload even if the corresponding view has already been decided
-    /// without a payload in the decide event.
+    /// A block payload this node obtained for `view`: reconstructed from VID
+    /// shares, fetched from a peer, or built and proposed by this node. The view
+    /// may never be decided. Notifies downstream consumers (e.g. the query
+    /// service) so they can store the payload even if the view has already been
+    /// decided without one.
     BlockPayload {
         view: ViewNumber,
         header: T::BlockHeader,
