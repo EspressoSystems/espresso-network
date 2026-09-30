@@ -875,10 +875,10 @@
 <a href=#875 id=875 data-nosnippet>875</a>                <span class="kw">let </span>c = Commitment::default_commitment_no_preimage();
 <a href=#876 id=876 data-nosnippet>876</a>                <span class="kw">let </span>floor = <span class="self">self</span>.decide_floor();
 <a href=#877 id=877 data-nosnippet>877</a>                <span class="self">self</span>.headers = <span class="self">self</span>.headers.split_off(<span class="kw-2">&amp;</span>(view, c));
-<a href=#878 id=878 data-nosnippet>878</a>                <span class="self">self</span>.proposed_views = <span class="self">self</span>.proposed_views.split_off(<span class="kw-2">&amp;</span>view);
+<a href=#878 id=878 data-nosnippet>878</a>                <span class="self">self</span>.proposed_views = <span class="self">self</span>.proposed_views.split_off(<span class="kw-2">&amp;</span>floor);
 <a href=#879 id=879 data-nosnippet>879</a>                <span class="self">self</span>.states_verified = <span class="self">self</span>.states_verified.split_off(<span class="kw-2">&amp;</span>view);
 <a href=#880 id=880 data-nosnippet>880</a>                <span class="self">self</span>.timeout_certs = <span class="self">self</span>.timeout_certs.split_off(<span class="kw-2">&amp;</span>view);
-<a href=#881 id=881 data-nosnippet>881</a>                <span class="self">self</span>.voted_1_views = <span class="self">self</span>.voted_1_views.split_off(<span class="kw-2">&amp;</span>view);
+<a href=#881 id=881 data-nosnippet>881</a>                <span class="self">self</span>.voted_1_views = <span class="self">self</span>.voted_1_views.split_off(<span class="kw-2">&amp;</span>floor);
 <a href=#882 id=882 data-nosnippet>882</a>                <span class="self">self</span>.voted_2_views = <span class="self">self</span>.voted_2_views.split_off(<span class="kw-2">&amp;</span>floor);
 <a href=#883 id=883 data-nosnippet>883</a>                <span class="kw">if </span><span class="self">self
 <a href=#884 id=884 data-nosnippet>884</a>                    </span>.formed_upgrade_certificate
