@@ -38,6 +38,7 @@ import gzip
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import select
@@ -58,7 +59,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, NotRequired, TypedDict, TypeVar, cast
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar, cast
 
 import netbench as nb
 
@@ -105,8 +106,11 @@ EGRESS_MB_PER_HOST = 60.0
 
 # OS and support container logs only; no journal or Postgres data.
 CTL_ROOT_GB = 40
-# OS + journal headroom for the default 7-step staircase to 16 MB/s.
-NODE_ROOT_GB_DEFAULT = 100
+NODE_ROOT_GB_MIN = 100
+# Root disk multiples of the offered payload: journal on validators, journal + Postgres + WAL
+# on the query host.
+VALIDATOR_DISK_FACTOR = 2
+QUERY_DISK_FACTOR = 3
 
 # Instance prices drift slowly; avoids hammering the API.
 PRICE_CACHE_TTL_S = 7 * 24 * 3600
@@ -144,7 +148,7 @@ GHCR_ORG = "ghcr.io/espressosystems/espresso-network"
 IMAGE_COMPONENTS = ("espresso-node", "orchestrator", "state-relay-server", "deploy")
 # Fixed refs, independent of --tag.
 SUPPORT_IMAGES = {
-    "postgres": "docker.io/library/postgres:latest",
+    "postgres": "docker.io/library/postgres:18",
     "foundry": "ghcr.io/foundry-rs/foundry:latest",
 }
 # Images each role's user-data pulls ahead of time and start.sh runs.
@@ -512,15 +516,26 @@ class RunConfig:
 
 # Callers need the return code and stderr, unlike scripts/release's Runner, to classify a
 # failed `tofu apply` and to add context to a failed `aws` call.
-Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
+class Runner(Protocol):
+    def __call__(
+        self, argv: list[str], env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]: ...
 
 
-def _run(argv: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(
+    argv: list[str], env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """`env` is added to the inherited environment."""
     log.debug("+ %s", " ".join(argv))
     # A new session keeps the terminal's Ctrl-C away from tofu and rsync: the driver gets it
     # first, then decides (see `Interrupts`).
     return subprocess.run(
-        argv, capture_output=True, text=True, check=False, start_new_session=True
+        argv,
+        capture_output=True,
+        text=True,
+        check=False,
+        start_new_session=True,
+        env=None if env is None else {**os.environ, **env},
     )
 
 
@@ -537,6 +552,16 @@ def aws_ok(run: Runner, profile: str, *args: str, tolerate: str | None = None) -
     return result.stdout
 
 
+def node_root_gb(cfg: RunConfig, query: bool) -> int:
+    """`--root-gb` if given, else sized from the bytes offered over the whole ramp (an upper
+    bound, the staircase stops early) at 1 MB per MB/s-second."""
+    if cfg.root_gb != "auto":
+        return int(cfg.root_gb)
+    payload_gb = sum(cfg.load.steps) * cfg.load.step_s / 1000
+    factor = QUERY_DISK_FACTOR if query else VALIDATOR_DISK_FACTOR
+    return max(NODE_ROOT_GB_MIN, math.ceil(RESERVED_GB + factor * payload_gb))
+
+
 def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
@@ -545,7 +570,6 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
             f"--submit-nodes must be between 1 and {cfg.nodes - 1}: "
             f"{cfg.load.submit_nodes}"
         )
-    node_root_gb = NODE_ROOT_GB_DEFAULT if cfg.root_gb == "auto" else int(cfg.root_gb)
     hosts: list[HostSpec] = [
         {
             "name": "ctl",
@@ -563,7 +587,7 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
                 "name": f"node{i}",
                 "role": "query" if query else "validator",
                 "instance_type": cfg.node_type,
-                "root_gb": node_root_gb,
+                "root_gb": node_root_gb(cfg, query),
                 "root_iops": cfg.pg_iops if query else GP3_BASELINE_IOPS,
                 "root_mbps": cfg.pg_mbps if query else GP3_BASELINE_MBPS,
             }
@@ -593,8 +617,14 @@ def plan_peers(hosts: list[HostSpec]) -> dict[str, list[str]]:
 
 
 def load_seconds(load: nb.BenchConfig) -> float:
-    """warmup, every step, the refine step, and the final drain (`tx_timeout_s`)."""
-    return load.warmup_s + (len(load.steps) + 1) * load.step_s + load.tx_timeout_s
+    """warmup, every step, the refine step, and the two drains (before the refine step and at
+    the end)."""
+    return (
+        load.warmup_s
+        + (len(load.steps) + 1) * load.step_s
+        + 2 * load.tx_timeout_s
+        + nb.DRAIN_SLACK_S
+    )
 
 
 def phase_seconds(cfg: RunConfig) -> dict[str, tuple[float, float]]:
@@ -834,12 +864,6 @@ def format_estimate_lines(estimate: Estimate) -> list[str]:
         f"= ${line['usd']:.2f} ({line['source']})"
         for line in estimate["lines"]
     ]
-
-
-def format_estimate(estimate: Estimate, max_usd: float) -> str:
-    return "\n".join(
-        [format_estimate_summary(estimate, max_usd), *format_estimate_lines(estimate)]
-    )
 
 
 def confirm(prompt: str, yes: bool, stdin_is_tty: bool) -> bool:
@@ -1382,50 +1406,47 @@ def terraform_env() -> dict[str, str]:
     """Region, profile and account go into `terraform.tfvars.json` and the provider block, not
     the environment: `region` and `profile` are provider arguments. `TF_PLUGIN_CACHE_DIR` has
     no HCL equivalent, so it stays here."""
+    TF_PLUGIN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return {"TF_PLUGIN_CACHE_DIR": str(TF_PLUGIN_CACHE_DIR)}
 
 
 class Terraform:
-    """`tofu -chdir=<terraform_dir>` through the injectable Runner. `env` is exported into the
-    current process's environment once at construction, since neither `tofu` nor the Runner
-    interface takes a subprocess environment; keep it to values constant for the process
-    lifetime (like `TF_PLUGIN_CACHE_DIR`), never per-run values, or later tests observe them."""
+    """`tofu -chdir=<terraform_dir>` through the injectable Runner. `env` is passed to every tofu
+    subprocess."""
 
     def __init__(self, run: Runner, tf: str, terraform_dir: Path, env: dict[str, str]):
         self.run = run
         self.tf = tf
         self.dir = terraform_dir
-        os.environ.update(env)
+        self.env = env
 
-    def _argv(self, *args: str) -> list[str]:
-        return [self.tf, f"-chdir={self.dir}", *args]
+    def _tofu(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return self.run([self.tf, f"-chdir={self.dir}", *args], self.env)
 
     def init(self) -> None:
-        result = self.run(self._argv("init", "-input=false"))
+        result = self._tofu("init", "-input=false")
         if result.returncode != 0:
             raise Refused(f"tofu init failed: {result.stderr.strip()}")
 
     def plan(self, out: str = "plan.bin") -> str:
-        result = self.run(self._argv("plan", "-input=false", f"-out={out}"))
+        result = self._tofu("plan", "-input=false", f"-out={out}")
         if result.returncode != 0:
             raise Refused(f"tofu plan failed: {result.stderr.strip()}")
         return result.stdout
 
     def apply(self, plan_file: str = "plan.bin") -> None:
-        result = self.run(
-            self._argv("apply", "-input=false", "-auto-approve", plan_file)
-        )
+        result = self._tofu("apply", "-input=false", "-auto-approve", plan_file)
         if result.returncode != 0:
             raise TfFailed("apply", classify_tf_error(result.stderr))
 
     def output(self) -> dict[str, Any]:
-        result = self.run(self._argv("output", "-json"))
+        result = self._tofu("output", "-json")
         if result.returncode != 0:
             raise TfFailed("output", f"tofu output failed: {result.stderr.strip()}")
         return json.loads(result.stdout)
 
     def destroy(self) -> None:
-        result = self.run(self._argv("destroy", "-input=false", "-auto-approve"))
+        result = self._tofu("destroy", "-input=false", "-auto-approve")
         if result.returncode != 0:
             raise TfFailed("destroy", f"tofu destroy failed: {result.stderr.strip()}")
 
@@ -2900,7 +2921,7 @@ def start_support(remote: Remote, contracts: list[str], interrupts: Interrupts) 
         remote,
         "node0",
         "pg_isready",
-        "sudo docker exec postgres pg_isready -U root -d espresso",
+        "sudo docker exec postgres pg_isready -h 127.0.0.1 -p 5432 -U root -d espresso",
         interrupts,
     )
     gate(

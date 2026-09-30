@@ -49,6 +49,7 @@ TRACKER_LAG_NOISY_MS = 1000.0
 SCRAPE_OK_MIN = 0.9
 MIN_READY_HEIGHT = 5
 PROGRESS_S = 30
+DRAIN_SLACK_S = 10
 # Payloads are read a block behind the query node's height: a payload requested as soon as its
 # header is stored can start a peer fetch that races the node's own insert.
 PAYLOAD_LAG_BLOCKS = 1
@@ -441,8 +442,9 @@ def drive_load(
         validators = [
             url for node, url in topo["nodes"].items() if node != topo["query_node"]
         ]
+        submit_urls = [*validators, query_url]
         t0, t1 = asyncio.run(
-            generate_load(cfg, list(topo["nodes"].values()), query_url, validators, out)
+            generate_load(cfg, submit_urls, query_url, validators, out)
         )
         for node, url in topo["nodes"].items():
             prom = get_ok(pool, url + "/v1/status/metrics")
@@ -767,7 +769,7 @@ async def run_staircase(
         while (rate := next_rate(cfg.steps, passed)) is not None:
             if not all(passed):
                 drained = await drain(
-                    load.state, counters, heights, cfg.tx_timeout_s + 10
+                    load.state, counters, heights, cfg.tx_timeout_s + DRAIN_SLACK_S
                 )
                 if drained is None:
                     log.warning("backlog did not drain, skipping the refine step")
