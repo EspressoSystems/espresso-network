@@ -621,14 +621,11 @@ impl Transaction<Prune> {
     ///
     /// Only deletes nodes having `created <= to` that are not the newest node at their position.
     ///
-    /// A node only becomes deletable once a newer version of it is created, so the delete is
-    /// driven by the versions created in `from..=to` and a table with none is skipped. This is
-    /// exact because consecutive batches tile the heights without gaps and the state cursor never
-    /// passes the last state height, so no state is written below it and every superseding version
-    /// falls in exactly one batch's window.
-    /// Bounding the window below keeps each batch proportional to its own rows: tables with
-    /// never-superseded nodes, like the append-only block Merkle tree, would otherwise rescan
-    /// every row from genesis on each batch.
+    /// A table with no rows created in `from..=to` is skipped. This is exact because a node only
+    /// becomes deletable once a newer version of it is created, and consecutive batches tile the
+    /// heights without gaps, so every version is seen by exactly one batch's probe. The delete
+    /// only looks up versions superseded by a row created in `from..=to`, so it relies on no state
+    /// being written below the pruned height.
     #[instrument(skip(self))]
     pub(super) async fn delete_state_batch(
         &mut self,
