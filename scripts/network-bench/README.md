@@ -33,6 +33,8 @@ scripts/network-bench/
   inclusion found by scanning the query node's blocks.
 - Default ramp: CI linear 4..16 MB/s; AWS x1.5 per step from 4 to 200 MB/s (the target), stops at the first failing
   step, then one refine step halfway back.
+- Query node: pg_stat_database/checkpointer/wal/activity every 5 s, pg_stat_statements and settings at collect, slow
+  statements (>200 ms) in the postgres log.
 - Per step, second half judged:
 
 | Rule              | Source                                                       | Fails when                                |
@@ -130,6 +132,7 @@ hosts.json               role, public/private IP, private DNS per host
 genesis.toml topology.json agent.json config.json
 hosts/<host>/            user-data.sh, node.env|ctl.env, start.sh, ready.json, <container>.log.gz,
                          cloud-init-output.log, chrony.txt, host.jsonl, pg-stats.json (node0)
+                         pg-stats.jsonl pg-statements.json pg-settings.json (node0)
 metrics.jsonl heights.jsonl consensus.jsonl load.jsonl load-meta.json steps.json
 stake-table.json final-<node>.prom
 run.json agent-state.json agent.log result.json summary.md cost.json

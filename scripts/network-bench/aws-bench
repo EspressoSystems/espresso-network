@@ -213,6 +213,20 @@ SHIPPED_HOST_FILES = ("node.env", "ctl.env", "start.sh", "agent.json")
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 # Matches bench.sample_host, so host_stats/process_stats coverage math is unchanged.
 HOST_SAMPLE_S = 2.0
+PG_SAMPLE_S = 5.0
+PSQL = ("docker", "exec", "postgres", "psql", "-U", "root", "-d", "espresso")
+POSTGRES_ARGS = (
+    "-c",
+    "shared_preload_libraries=pg_stat_statements",
+    "-c",
+    "pg_stat_statements.track=all",
+    "-c",
+    "log_min_duration_statement=200ms",
+    "-c",
+    "log_checkpoints=on",
+    "-c",
+    "log_lock_waits=on",
+)
 
 # OCI/Docker registry token flow and manifest media types (docker.io and ghcr.io both implement
 # the same spec, so no registry-specific code is needed).
@@ -1693,6 +1707,7 @@ def render_start_sh(host: HostSpec, images: dict[str, ImageInfo]) -> str:
                 "-e",
                 "POSTGRES_DB=espresso",
                 f"{pg['ref']}@{pg['digest']}",
+                *POSTGRES_ARGS,
             ],
         )
     node = images["espresso-node"]
@@ -1903,6 +1918,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "agent-host", help="every host: sample /proc and cgroups"
     )
     agent_host_p.add_argument("out", type=Path)
+    agent_host_p.add_argument(
+        "--role", required=True, choices=("ctl", "query", "validator")
+    )
     agent_host_p.set_defaults(func=cmd_agent_host)
 
     return parser.parse_args(argv)
@@ -2718,11 +2736,15 @@ def ship(remote: Remote, run_dir: Path) -> None:
 
 
 def start_hostmon(remote: Remote) -> None:
-    command = (
-        f"sudo systemd-run --unit bench-host --collect python3 {BENCH_DIR}/aws-bench "
-        f"agent-host {BENCH_DIR}/host.jsonl"
-    )
-    remote.parallel(lambda host: remote.ssh(host, command), remote.hosts)
+    def start(host: str) -> None:
+        role = remote.hosts[host]["role"]
+        remote.ssh(
+            host,
+            f"sudo systemd-run --unit bench-host --collect python3 {BENCH_DIR}/aws-bench "
+            f"agent-host {BENCH_DIR}/host.jsonl --role {role}",
+        )
+
+    remote.parallel(start, remote.hosts)
 
 
 def create_containers(remote: Remote) -> None:
@@ -2815,6 +2837,13 @@ def start_support(remote: Remote, contracts: list[str], interrupts: Interrupts) 
         "node0",
         "pg_isready",
         "sudo docker exec postgres pg_isready -U root -d espresso",
+        interrupts,
+    )
+    gate(
+        remote,
+        "node0",
+        "pg_stat_statements",
+        f"sudo {shlex.join(PSQL)} -c {shlex.quote(PG_EXTENSION_SQL)}",
         interrupts,
     )
 
@@ -2980,9 +3009,29 @@ PG_STATS_SQL = (
     "pg_total_relation_size(relid) as total_bytes from pg_stat_user_tables "
     "order by total_bytes desc limit 20) t))"
 )
+PG_EXTENSION_SQL = "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
+PG_STATEMENTS_SQL = (
+    "select coalesce(json_agg(s), '[]'::json) from (select queryid, calls, total_exec_time, "
+    "mean_exec_time, max_exec_time, rows, shared_blks_read, shared_blks_hit, "
+    "temp_blks_written, wal_bytes, left(query, 300) as query from pg_stat_statements "
+    "order by total_exec_time desc limit 50) s"
+)
+PG_SETTINGS_SQL = (
+    "select json_object_agg(name, setting) from pg_settings where source <> 'default' "
+    "or name in ('shared_buffers','max_wal_size','synchronous_commit','checkpoint_timeout',"
+    "'wal_compression','effective_io_concurrency','work_mem','maintenance_work_mem','fsync',"
+    "'full_page_writes')"
+)
+
+
+def _pg_dump(sql: str, filename: str) -> str:
+    return f"{shlex.join(PSQL)} -At -c {shlex.quote(sql)} > {BENCH_DIR}/{filename}\n"
+
+
 PG_STATS_SCRIPT = (
-    f"docker exec postgres psql -U root -d espresso -At -c {shlex.quote(PG_STATS_SQL)} "
-    f"> {BENCH_DIR}/pg-stats.json\n"
+    _pg_dump(PG_STATS_SQL, "pg-stats.json")
+    + _pg_dump(PG_STATEMENTS_SQL, "pg-statements.json")
+    + _pg_dump(PG_SETTINGS_SQL, "pg-settings.json")
 )
 # Shipped inputs and the agent's output, which `poll_agent` and the final rsync fetch.
 COLLECT_EXCLUDES = ("--exclude=/out/", "--exclude=/aws-bench", "--exclude=/netbench.py")
@@ -4016,6 +4065,12 @@ def diskstats(text: str) -> dict[str, dict[str, int]]:
             "read_bytes": int(fields[5]) * sector_bytes,
             "write_bytes": int(fields[9]) * sector_bytes,
             "io_ticks_ms": int(fields[12]),
+            "reads": int(fields[3]),
+            "writes": int(fields[7]),
+            "read_ms": int(fields[6]),
+            "write_ms": int(fields[10]),
+            "in_flight": int(fields[11]),
+            "weighted_ms": int(fields[13]),
         }
     return stats
 
@@ -4097,15 +4152,92 @@ def host_sample(
     }
 
 
-def cmd_agent_host(args: argparse.Namespace) -> int:
+def pg_sample_sql(has_checkpointer: bool) -> str:
+    """One json object of cumulative counters. PG17 moved checkpoint counters from
+    pg_stat_bgwriter to pg_stat_checkpointer; both are reported under the new names."""
+    checkpoints = (
+        "'num_timed', c.num_timed, 'num_requested', c.num_requested, "
+        "'buffers_written', c.buffers_written"
+        if has_checkpointer
+        else "'num_timed', b.checkpoints_timed, 'num_requested', b.checkpoints_req, "
+        "'buffers_written', b.buffers_checkpoint"
+    )
+    checkpointer = ", pg_stat_checkpointer c" if has_checkpointer else ""
+    backends = (
+        "from pg_stat_activity where datname = 'espresso' and pid <> pg_backend_pid()"
+    )
+    wal_keys = (
+        "'wal_records','wal_bytes','wal_buffers_full','wal_write_time','wal_sync_time'"
+    )
+    return (
+        "select (jsonb_build_object("
+        "'xact_commit', d.xact_commit, 'xact_rollback', d.xact_rollback, "
+        "'blks_read', d.blks_read, 'blks_hit', d.blks_hit, "
+        "'tup_inserted', d.tup_inserted, 'tup_updated', d.tup_updated, "
+        "'tup_deleted', d.tup_deleted, 'temp_bytes', d.temp_bytes, "
+        "'deadlocks', d.deadlocks, 'active_time', d.active_time, "
+        "'idle_in_transaction_time', d.idle_in_transaction_time, "
+        f"{checkpoints}, "
+        "'buffers_clean', b.buffers_clean, 'maxwritten_clean', b.maxwritten_clean, "
+        f"'active_backends', (select count(*) {backends} and state = 'active'), "
+        "'wait_events', (select coalesce(jsonb_object_agg(wt, n), '{}'::jsonb) from "
+        f"(select coalesce(wait_event_type, 'none') as wt, count(*) as n {backends} "
+        "group by 1) g), "
+        "'database_bytes', pg_database_size('espresso')) "
+        "|| (select jsonb_object_agg(key, value) from jsonb_each(to_jsonb(w)) "
+        f"where key in ({wal_keys})))::text "
+        f"from pg_stat_database d, pg_stat_bgwriter b, pg_stat_wal w{checkpointer} "
+        "where d.datname = 'espresso'"
+    )
+
+
+def pg_sample(run: Runner, has_checkpointer: bool) -> dict[str, Any] | None:
+    """None when psql fails (Postgres not up yet, or stopped at freeze)."""
+    result = run([*PSQL, "-At", "-c", pg_sample_sql(has_checkpointer)])
+    if result.returncode != 0:
+        log.debug("pg sample failed: %s", result.stderr.strip())
+        return None
+    return {"ts": time.time(), **json.loads(result.stdout)}
+
+
+def has_checkpointer_view(run: Runner) -> bool | None:
+    probe = "select to_regclass('pg_stat_checkpointer') is not null"
+    result = run([*PSQL, "-At", "-c", probe])
+    if result.returncode != 0:
+        log.debug("pg probe failed: %s", result.stderr.strip())
+        return None
+    return result.stdout.strip() == "t"
+
+
+def sample_pg(out: Path, stop: threading.Event, run: Runner = _run) -> None:
+    has_checkpointer = None
+    with out.open("a", buffering=1) as f:
+        while not stop.is_set():
+            if has_checkpointer is None:
+                has_checkpointer = has_checkpointer_view(run)
+            if has_checkpointer is not None:
+                sample = pg_sample(run, has_checkpointer)
+                if sample is not None:
+                    f.write(json.dumps(sample) + "\n")
+            stop.wait(PG_SAMPLE_S)
+
+
+def cmd_agent_host(args: argparse.Namespace, run: Runner = _run) -> int:
     containers_path = Path(BENCH_DIR) / "containers.json"
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
+    pg_thread = None
+    if args.role == "query":
+        pg_out = args.out.with_name("pg-stats.jsonl")
+        pg_thread = threading.Thread(target=sample_pg, args=(pg_out, stop, run))
+        pg_thread.start()
     with args.out.open("a", buffering=1) as f:
         while not stop.is_set():
             f.write(json.dumps(host_sample(load_containers(containers_path))) + "\n")
             stop.wait(HOST_SAMPLE_S)
+    if pg_thread is not None:
+        pg_thread.join()
     return EXIT_OK
 
 

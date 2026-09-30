@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -1868,6 +1869,16 @@ class RenderStartShTest(unittest.TestCase):
         script = awsb.render_start_sh(query, self.images)
         self.assertIn("-- storage-journal -- storage-sql", script)
         self.assertIn("--name postgres", script)
+        for setting in (
+            "shared_preload_libraries=pg_stat_statements",
+            "pg_stat_statements.track=all",
+            "log_min_duration_statement=200ms",
+            "log_checkpoints=on",
+            "log_lock_waits=on",
+        ):
+            self.assertIn(setting, script)
+        image_at = script.index("@sha256")
+        self.assertGreater(script.index("shared_preload_libraries"), image_at)
 
 
 # REQ:awsbench-hostmon-parsers
@@ -1877,7 +1888,17 @@ class DiskstatsTest(unittest.TestCase):
         result = awsb.diskstats(line)
         self.assertEqual(
             result["nvme0n1"],
-            {"read_bytes": 2000 * 512, "write_bytes": 4000 * 512, "io_ticks_ms": 20},
+            {
+                "read_bytes": 2000 * 512,
+                "write_bytes": 4000 * 512,
+                "io_ticks_ms": 20,
+                "reads": 100,
+                "writes": 200,
+                "read_ms": 5,
+                "write_ms": 10,
+                "in_flight": 0,
+                "weighted_ms": 20,
+            },
         )
 
     def test_raises_on_short_line(self):
@@ -2805,6 +2826,110 @@ class StartSupportTest(unittest.TestCase):
         remote = scripted_remote(self, runner)
         with self.assertRaisesRegex(awsb.RemoteError, "deploy exited with status 1"):
             awsb.start_support(remote, [], awsb.Interrupts())
+
+
+class PostgresStatsTest(unittest.TestCase):
+    def test_sql_is_one_shell_word_per_command(self):
+        for has_checkpointer in (True, False):
+            sql = awsb.pg_sample_sql(has_checkpointer)
+            self.assertEqual(sql.count("("), sql.count(")"))
+            self.assertEqual(sql.count("'") % 2, 0)
+            self.assertIn("pg_stat_checkpointer" in sql, [has_checkpointer])
+        script = awsb.PG_STATS_SCRIPT
+        for name in ("pg-stats.json", "pg-statements.json", "pg-settings.json"):
+            self.assertIn(f"> {awsb.BENCH_DIR}/{name}", script)
+        for line, sql in zip(
+            script.splitlines(),
+            (awsb.PG_STATS_SQL, awsb.PG_STATEMENTS_SQL, awsb.PG_SETTINGS_SQL),
+        ):
+            words = shlex.split(line)
+            self.assertEqual(words[: len(awsb.PSQL)], list(awsb.PSQL))
+            self.assertEqual(words[-5:-2], ["-At", "-c", sql])
+
+    def test_collect_script_for_node0_dumps_statements_and_settings(self):
+        runner = Scripted({})
+        tmp = tmp_dir(self)
+        remote = scripted_remote(self, runner, tmp)
+        awsb.collect_hosts(remote, [remote.hosts["node0"]], tmp)
+        script = runner.calls[0][-1]
+        self.assertIn("pg-statements.json", script)
+        self.assertIn("pg-settings.json", script)
+        self.assertIn("pg_stat_statements", script)
+
+    def test_collect_script_for_validator_has_no_postgres_dump(self):
+        runner = Scripted({})
+        tmp = tmp_dir(self)
+        remote = scripted_remote(self, runner, tmp)
+        awsb.collect_hosts(remote, [remote.hosts["node1"]], tmp)
+        self.assertNotIn("pg-statements.json", runner.calls[0][-1])
+
+    def test_agent_host_writes_pg_lines_and_skips_failed_ticks(self):
+        tmp = tmp_dir(self)
+        stop = threading.Event()
+        replies = [
+            completed(returncode=1, stderr="no such container"),
+            completed(stdout="t\n"),
+            completed(returncode=1, stderr="not ready"),
+            completed(stdout='{"xact_commit": 7, "wait_events": {"IO": 1}}\n'),
+        ]
+        commands: list[list[str]] = []
+
+        def run(argv):
+            commands.append(argv)
+            reply = replies.pop(0)
+            if not replies:
+                stop.set()
+            return reply
+
+        out = tmp / "pg-stats.jsonl"
+        with unittest.mock.patch.object(awsb, "PG_SAMPLE_S", 0):
+            awsb.sample_pg(out, stop, run)
+        lines = [json.loads(line) for line in out.read_text().splitlines()]
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["xact_commit"], 7)
+        self.assertIn("ts", lines[0])
+        self.assertIn("pg_stat_checkpointer", commands[-1][-1])
+        self.assertEqual(len(commands), 4)
+
+    def test_agent_host_role_query_starts_pg_sampler(self):
+        tmp = tmp_dir(self)
+        args = awsb.parse_args(
+            ["agent-host", str(tmp / "host.jsonl"), "--role", "query"]
+        )
+        probed = threading.Event()
+        handlers = []
+
+        def run(argv):
+            probed.set()
+            return completed(returncode=1)
+
+        def stop_soon():
+            probed.wait(5)
+            handlers[0]()
+
+        with (
+            unittest.mock.patch.object(awsb, "BENCH_DIR", str(tmp)),
+            unittest.mock.patch.object(awsb, "host_sample", return_value={"ts": 1}),
+            unittest.mock.patch.object(
+                awsb.signal, "signal", lambda _, h: handlers.append(lambda: h(0, None))
+            ),
+        ):
+            threading.Thread(target=stop_soon).start()
+            self.assertEqual(awsb.cmd_agent_host(args, run), awsb.EXIT_OK)
+        self.assertTrue((tmp / "pg-stats.jsonl").exists())
+
+    def test_extension_created_after_pg_isready(self):
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        with unittest.mock.patch.object(
+            awsb, "write_report", return_value=valid_result()
+        ):
+            RunHarness(self).run(runner)
+        commands = [" ".join(c) for c in runner.calls]
+        ready = next(i for i, c in enumerate(commands) if "pg_isready" in c)
+        extension = next(
+            i for i, c in enumerate(commands) if "CREATE EXTENSION IF NOT EXISTS" in c
+        )
+        self.assertGreater(extension, ready)
 
 
 class StartNodesSyncTest(unittest.TestCase):
