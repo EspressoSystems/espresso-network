@@ -2663,7 +2663,8 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         type=env_pair,
         metavar="KEY=VALUE",
         help="added to every node's environment, overriding the harness's own value; "
-        "repeatable",
+        "repeatable; the value is taken verbatim (no quoting) and lands in the manifest "
+        "and the summary, so not for secrets",
     )
     parser.add_argument(
         "--ready-timeout-s", type=float, default=defaults.ready_timeout_s
@@ -2704,6 +2705,10 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     submit_nodes = (
         args.submit_nodes if args.submit_nodes is not None else args.nodes - 1
     )
+    keys = [pair.partition("=")[0] for pair in args.node_env]
+    for key in keys:
+        if keys.count(key) > 1:
+            raise Refused(f"--node-env repeats {key}")
     load = nb.BenchConfig(
         genesis=str(args.genesis),
         tx_size=args.tx_size,
@@ -2721,7 +2726,6 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     )
     return RunConfig(
         tag=args.tag,
-        node_env=tuple(args.node_env),
         nodes=args.nodes,
         node_type=args.node_type,
         ctl_type=args.ctl_type,
@@ -2732,6 +2736,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         load=load,
         ready_timeout_s=args.ready_timeout_s,
         max_block_size=args.max_block_size,
+        node_env=tuple(args.node_env),
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
@@ -2932,6 +2937,8 @@ def cmd_plan(
     fleet = cfg.ttl_min != "auto"
     if fleet and not cfg.offline:
         raise Refused("plan --ttl-min renders a fleet and needs --offline")
+    if fleet:
+        refuse_fleet_node_env(cfg)
     now = clock.time()
     if cfg.offline:
         fleet_dir = new_fleet_dir(cfg.out_root, cfg.name)
@@ -3750,6 +3757,7 @@ def cmd_up(
     """Plans, confirms and provisions a fleet, then leaves it `idle` for `run --fleet`. A
     failure destroys it again (exit 3, or 4 when resources may remain)."""
     cfg = fleet_config_from_args(args)
+    refuse_fleet_node_env(cfg)
     install = interrupts is None
     interrupts = interrupts or Interrupts()
     started = interrupts.clock.time()
@@ -3903,9 +3911,15 @@ def fleet_config_from_args(args: argparse.Namespace) -> RunConfig:
     )
 
 
+def refuse_fleet_node_env(cfg: RunConfig) -> None:
+    """A fleet keeps no node env: every `run --fleet` takes its own."""
+    if cfg.node_env:
+        raise Refused("--node-env belongs to one run: pass it to `run --fleet`")
+
+
 def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfig:
     """The fleet's own config with the flags that belong to one run: image tag, load, block
-    size, ready timeout, name, database mode."""
+    size, ready timeout, name, database mode, node env."""
     base = config_from_manifest(saved["config"])
     cli = fleet_config_from_args(args)
     load = cli.load
@@ -5899,7 +5913,7 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
         "db_modes": tuple(saved["db_modes"]),
         "fleet": None if saved["fleet"] is None else Path(saved["fleet"]),
     }
-    # Fleet dirs from before the flag have no such key.
+    # Dirs from before the flag have no such key.
     if "node_env" in saved:
         fields["node_env"] = tuple(saved["node_env"])
     return RunConfig(**fields)

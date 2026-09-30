@@ -1530,6 +1530,14 @@ class RenderNodeEnvTest(unittest.TestCase):
         self.assertEqual(awsb.config_from_args(awsb.parse_args(argv)).node_env, ())
         args = awsb.parse_args([*argv, "--node-env", "A=1", "--node-env", "B="])
         self.assertEqual(awsb.config_from_args(args).node_env, ("A=1", "B="))
+        repeated = awsb.parse_args([*argv, "--node-env", "A=1", "--node-env", "A=2"])
+        with self.assertRaisesRegex(awsb.Refused, "repeats A"):
+            awsb.config_from_args(repeated)
+        fleet_plan = parse_plan_args(
+            ["--tag", "x", "--ttl-min", "60", "--offline", "--node-env", "A=1"]
+        )
+        with self.assertRaisesRegex(awsb.Refused, "run --fleet"):
+            awsb.cmd_plan(fleet_plan)
         for bad in ("A", "=1", "1A=2", "A B=1"):
             with (
                 self.subTest(bad),
@@ -3793,7 +3801,10 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
 
     def test_pg_json_is_written_0600_for_the_query_host_only(self):
         cfg = awsb.RunConfig(
-            tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
+            tag="x",
+            nodes=2,
+            load=netbench.BenchConfig(submit_nodes=1),
+            node_env=("A=1",),
         )
         hosts = awsb.plan_hosts(cfg)
         manifest = {"hosts": hosts, "images": fake_images()}
@@ -3808,6 +3819,9 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
         self.assertEqual(pg_json.stat().st_mode & 0o777, 0o600)
         self.assertFalse((run_dir / "hosts/node1/pg.json").exists())
         self.assertFalse((run_dir / "hosts/ctl/pg.json").exists())
+        for node in ("node0", "node1"):
+            node_env = (run_dir / "hosts" / node / "node.env").read_text()
+            self.assertIn("\nA=1\n", node_env)
 
     def test_pg_json_is_shipped_and_not_collected_back(self):
         self.assertIn("pg.json", awsb.SHIPPED_HOST_FILES)
@@ -5502,10 +5516,16 @@ class CmdRenderTest(unittest.TestCase):
 class ConfigFromManifestTest(unittest.TestCase):
     def test_round_trips_config_to_json(self):
         cfg = awsb.RunConfig(
-            tag="x", nodes=3, load=netbench.BenchConfig(submit_nodes=2), price=("a=1",)
+            tag="x",
+            nodes=3,
+            load=netbench.BenchConfig(submit_nodes=2),
+            price=("a=1",),
+            node_env=("A=1",),
         )
         saved = json.loads(json.dumps(awsb.config_to_json(cfg)))
         self.assertEqual(awsb.config_from_manifest(saved), cfg)
+        del saved["node_env"]
+        self.assertEqual(awsb.config_from_manifest(saved).node_env, ())
 
 
 if __name__ == "__main__":

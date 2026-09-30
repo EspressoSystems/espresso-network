@@ -284,9 +284,8 @@ class DeploymentMeta(TypedDict):
     fleet: NotRequired[str]
     run_index: NotRequired[int]
     query_db: NotRequired[QueryDbMeta]
-    node_env: NotRequired[
-        list[str]
-    ]  # `KEY=VALUE` overrides of every node's environment
+    # `KEY=VALUE` overrides of every node's environment.
+    node_env: NotRequired[list[str]]
 
 
 class BenchResult(TypedDict):
@@ -2306,7 +2305,11 @@ def deployment_lines(result: BenchResult) -> list[str]:
         ),
         f"- cost: {cost_line}",
         *([query_db_line(d["query_db"])] if "query_db" in d else []),
-        *([f"- node env: {', '.join(d['node_env'])}"] if "node_env" in d else []),
+        *(
+            ["- node env: " + ", ".join(f"`{pair}`" for pair in d["node_env"])]
+            if "node_env" in d
+            else []
+        ),
     ]
 
 

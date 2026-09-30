@@ -39,8 +39,9 @@ scripts/network-bench/
   `--tx-timeout-s` times transactions out. Consensus latency of a lagging step is not reliable. Transactions of a lost
   payload stay pending until `--tx-timeout-s`, which the end of the run waits for. Not for the CI job: its step timeout
   is 15 min.
-- `--node-env KEY=VALUE` (repeatable): added to every node's environment, overriding the harness's own value; listed in
-  the summary's deployment block and part of the config hash.
+- `--node-env KEY=VALUE` (repeatable, on `run` only; `up` refuses it): added to every node's environment, overriding the
+  harness's own value; taken verbatim, not for secrets; listed in the summary's deployment block and part of the config
+  hash.
 - Query node: pg_stat_database/checkpointer/wal/activity every 5 s, pg_stat_statements and settings at collect, slow
   statements (>200 ms) in the postgres log.
 - Per step, second half judged:

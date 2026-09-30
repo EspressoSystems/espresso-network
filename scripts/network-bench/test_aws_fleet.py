@@ -487,6 +487,10 @@ class RunRefusalTest(unittest.TestCase):
         )
         cfg = awsb.fleet_run_config(harness.run_args("--node-env", "A=1"), manifest)
         self.assertEqual(cfg.node_env, ("A=1",))
+        with self.assertRaisesRegex(awsb.Refused, "run --fleet"):
+            awsb.cmd_up(
+                harness.up_args("--node-env", "A=1"), run=FleetRunner([DONE_STATE])
+            )
 
     def test_mode_missing(self):
         harness = FleetHarness(self)
@@ -2748,6 +2752,9 @@ class QueryDbMetaTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
         manifest = write_collected_run(tmp)
+        self.assertNotIn("node_env", awsb.write_report(tmp)["deployment"])
+        del manifest["config"]["node_env"]
+        netbench.write_json(tmp / "manifest.json", manifest)
         self.assertNotIn("node_env", awsb.write_report(tmp)["deployment"])
         manifest["config"]["node_env"] = ["A=1"]
         netbench.write_json(tmp / "manifest.json", manifest)
