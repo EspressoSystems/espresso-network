@@ -638,11 +638,11 @@ where
                 sender: sender.clone(),
             })
         },
-        ConsensusOutput::BlockPayloadReconstructed {
+        ConsensusOutput::BlockPayload {
             view,
             header,
             payload,
-        } => Some(CoordinatorEvent::BlockPayloadReconstructed {
+        } => Some(CoordinatorEvent::BlockPayload {
             view: *view,
             header: header.clone(),
             payload: Arc::clone(payload),

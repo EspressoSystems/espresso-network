@@ -77,7 +77,7 @@ use crate::{
 /// cheaper than fetching the payload through catchup.
 ///
 /// Proposals are retained with the same margin: when a reconstruction
-/// finishes, `BlockPayloadReconstructed` is only emitted if the proposal
+/// finishes, `BlockPayload` is only emitted if the proposal
 /// (the block header) for that view is still available.
 pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 
@@ -733,12 +733,11 @@ where
             if proposal.block_header.payload_commitment()
                 == VidCommitment::V2(out.payload_commitment)
             {
-                self.outbox
-                    .push_back(ConsensusOutput::BlockPayloadReconstructed {
-                        view: out.view,
-                        header: proposal.block_header.clone(),
-                        payload: Arc::new(out.payload),
-                    });
+                self.outbox.push_back(ConsensusOutput::BlockPayload {
+                    view: out.view,
+                    header: proposal.block_header.clone(),
+                    payload: Arc::new(out.payload),
+                });
             } else {
                 warn!(
                     view = %out.view,
@@ -1119,7 +1118,7 @@ where
                     .unwrap_or_else(EpochNumber::genesis);
                 self.gc(epoch, GcScope::Timeout(view))?;
             },
-            ConsensusOutput::BlockPayloadReconstructed { .. } => {},
+            ConsensusOutput::BlockPayload { .. } => {},
             ConsensusOutput::UpgradeDecided(cert) => {
                 info!(
                     %node,

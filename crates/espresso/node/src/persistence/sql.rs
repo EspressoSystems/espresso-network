@@ -1494,7 +1494,7 @@ impl Persistence {
             }
 
             for (view, PendingPayload { header, payload }) in pending {
-                let event = CoordinatorEvent::BlockPayloadReconstructed {
+                let event = CoordinatorEvent::BlockPayload {
                     view,
                     header,
                     payload: Arc::new(payload),
