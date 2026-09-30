@@ -247,6 +247,9 @@ PG_SAMPLE_S = 5.0
 PG_JSON = f"{BENCH_DIR}/pg.json"
 # Self-signed cert made by user-data on the query role, mounted read-only into the container.
 PG_TLS_DIR = "/data/pg-tls"
+VOLUME_BY_ID = "/dev/disk/by-id"
+# Seconds `up` waits for udev to publish the by-id link of the attached volume.
+PG_VOLUME_WAIT_S = 60
 # Values for 16 vCPU / 64 GiB. One map for every placement: rendered into the container's `-c`
 # flags by `render_postgres_args` and into the RDS parameter group by `rds_parameter`.
 PG_TUNING = {
@@ -375,6 +378,7 @@ FLEET_ONLY_FLAGS = (
     "--root-gb",
     "--pg-iops",
     "--pg-mbps",
+    "--pg-gb",
     "--operator-cidr",
     "--ssh-key",
     "--ttl-min",
@@ -458,8 +462,8 @@ class Interrupted(Exception):
     runs a bounded collection and a destroy prompt instead of an abrupt exit."""
 
 
-DbMode = Literal["colocated"]
-DB_MODES: tuple[DbMode, ...] = ("colocated",)
+DbMode = Literal["colocated", "volume"]
+DB_MODES: tuple[DbMode, ...] = ("colocated", "volume")
 
 
 class HostSpec(TypedDict):
@@ -469,6 +473,14 @@ class HostSpec(TypedDict):
     root_gb: int
     root_iops: int
     root_mbps: int
+
+
+class VolumeSpec(TypedDict):
+    """The gp3 volume on the query host that holds Postgres in `volume` mode."""
+
+    gb: int
+    iops: int
+    mbps: int
 
 
 class ImageInfo(TypedDict):
@@ -570,6 +582,9 @@ class FleetManifest(TypedDict):
     expires_at: NotRequired[str]
     ssh_public_key: NotRequired[str]
     git_rev: NotRequired[str]
+    # Present when `volume` is in db_modes; the id comes from `tofu output` after apply.
+    pg_volume: NotRequired[VolumeSpec]
+    pg_volume_id: NotRequired[str]
 
 
 class Manifest(FleetManifest):
@@ -673,6 +688,7 @@ class RunConfig:
     root_gb: str = "auto"
     pg_iops: int = 12000
     pg_mbps: int = 500
+    pg_gb: int = 400
     operator_cidr: str = "auto"
     ssh_key: str = SSH_KEY_AUTO
     max_usd: float = 10.0
@@ -943,8 +959,9 @@ def estimate_cost(
     expected_s = sum(expected for expected, _ in phases.values())
     worst_s = sum(worst for _, worst in phases.values())
     ttl_s = single_shot_ttl_s(cfg, worst_s)
-    lines = _cost_lines(hosts, prices, minor, expected_s)
-    bound_lines = _cost_lines(hosts, prices, minor, ttl_s + BOOT_ALLOWANCE_S)
+    volume = pg_volume_spec(cfg)
+    lines = _cost_lines(hosts, prices, minor, expected_s, volume)
+    bound_lines = _cost_lines(hosts, prices, minor, ttl_s + BOOT_ALLOWANCE_S, volume)
     return {
         "expected_s": expected_s,
         "worst_s": worst_s,
@@ -976,8 +993,9 @@ def estimate_fleet(
             "up needs --ttl-min N minutes: a fleet has no worst case to derive it from"
         )
     ttl_s = int(cfg.ttl_min) * 60.0
-    lines = _cost_lines(hosts, prices, minor, ttl_s)
-    bound_lines = _cost_lines(hosts, prices, minor, ttl_s + BOOT_ALLOWANCE_S)
+    volume = pg_volume_spec(cfg)
+    lines = _cost_lines(hosts, prices, minor, ttl_s, volume)
+    bound_lines = _cost_lines(hosts, prices, minor, ttl_s + BOOT_ALLOWANCE_S, volume)
     return {
         "expected_s": ttl_s,
         "worst_s": ttl_s,
@@ -1026,7 +1044,11 @@ def fleet_bound_usd(manifest: FleetManifest, expires: datetime) -> float:
 
 
 def _cost_lines(
-    hosts: list[HostSpec], prices: Prices, minor: dict[str, float], duration_s: float
+    hosts: list[HostSpec],
+    prices: Prices,
+    minor: dict[str, float],
+    duration_s: float,
+    pg_volume: VolumeSpec | None = None,
 ) -> list[CostLine]:
     hours = duration_s / 3600
     lines: list[CostLine] = []
@@ -1075,6 +1097,8 @@ def _cost_lines(
                 minor["gp3_mbps_month_usd"] / HOURS_PER_MONTH,
             )
         )
+    if pg_volume is not None:
+        lines += pg_volume_cost_lines(pg_volume, minor, hours)
     ipv4_hours = len(hosts) * hours
     lines.append(
         _minor_line(
@@ -1083,6 +1107,41 @@ def _cost_lines(
     )
     egress_gb = len(hosts) * EGRESS_MB_PER_HOST / 1024
     lines.append(_minor_line("egress", egress_gb, "gb", minor["egress_gb_usd"]))
+    return lines
+
+
+def pg_volume_cost_lines(
+    volume: VolumeSpec, minor: dict[str, float], hours: float
+) -> list[CostLine]:
+    """The gp3 volume at the root volume's rates: size, IOPS and MB/s above the free baseline."""
+    lines = [
+        _minor_line(
+            "ebs pg volume storage",
+            volume["gb"] * hours,
+            "gb-hour",
+            minor["gp3_gb_month_usd"] / HOURS_PER_MONTH,
+        )
+    ]
+    extra_iops = max(0, volume["iops"] - GP3_BASELINE_IOPS)
+    if extra_iops:
+        lines.append(
+            _minor_line(
+                "ebs pg volume iops",
+                extra_iops * hours,
+                "iops-hour",
+                minor["gp3_iops_month_usd"] / HOURS_PER_MONTH,
+            )
+        )
+    extra_mbps = max(0, volume["mbps"] - GP3_BASELINE_MBPS)
+    if extra_mbps:
+        lines.append(
+            _minor_line(
+                "ebs pg volume throughput",
+                extra_mbps * hours,
+                "mbps-hour",
+                minor["gp3_mbps_month_usd"] / HOURS_PER_MONTH,
+            )
+        )
     return lines
 
 
@@ -1227,6 +1286,9 @@ def write_fleet_manifest(
         "estimate": estimate,
         "db_modes": list(cfg.db_modes),
     }
+    volume = pg_volume_spec(cfg)
+    if volume is not None:
+        fleet["pg_volume"] = volume
     nb.write_json(fleet_dir / FLEET_JSON, fleet)
     append_event(fleet_dir, phase, "manifest-written", None)
     return fleet
@@ -1788,6 +1850,7 @@ def render_tfvars(
         "operator_cidr": operator_cidr,
         "expires_at": expires_at,
         "offline": cfg.offline,
+        "pg_volume": pg_volume_spec(cfg),
         "hosts": {
             h["name"]: {
                 "role": h["role"],
@@ -2219,6 +2282,12 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     parser.add_argument("--root-gb", default=defaults.root_gb)
     parser.add_argument("--pg-iops", type=int, default=defaults.pg_iops)
     parser.add_argument("--pg-mbps", type=int, default=defaults.pg_mbps)
+    parser.add_argument(
+        "--pg-gb",
+        type=positive_int,
+        default=defaults.pg_gb,
+        help="size of the separate Postgres volume of --query-db volume",
+    )
     parser.add_argument("--operator-cidr", default=defaults.operator_cidr)
     parser.add_argument("--ssh-key", default=defaults.ssh_key)
     parser.add_argument("--max-usd", type=float, default=defaults.max_usd)
@@ -2261,6 +2330,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
+        pg_gb=args.pg_gb,
         operator_cidr=args.operator_cidr,
         ssh_key=args.ssh_key,
         max_usd=args.max_usd,
@@ -2848,6 +2918,7 @@ def up_fleet(fleet: FleetState) -> None:
         f"ssh and cloud-init on {len(remote.hosts)} hosts",
     )
     wait_hosts(remote, fleet.manifest, fleet.fleet_dir, fleet.interrupts)
+    prepare_stores(fleet)
     update_manifest(fleet.manifest_path, "idle")
 
 
@@ -2898,9 +2969,15 @@ def measure_run(run: Run) -> None:
 
 def connect(fleet: FleetState) -> Remote:
     manifest = fleet.manifest
-    hosts_info = parse_hosts_output(fleet.tf.output(), manifest["hosts"])
+    output = fleet.tf.output()
+    hosts_info = parse_hosts_output(output, manifest["hosts"])
     nb.write_json(fleet.fleet_dir / "hosts.json", hosts_info)
-    update_manifest(fleet.manifest_path, "provisioned", hosts_info=hosts_info)
+    update_manifest(
+        fleet.manifest_path,
+        "provisioned",
+        hosts_info=hosts_info,
+        **pg_volume_fields(output, manifest),
+    )
     fleet.remote = Remote(
         fleet.run,
         fleet.fleet_dir,
@@ -3258,7 +3335,7 @@ def cmd_run_fleet(
                 "stop containers, wipe journal and postgres data",
             )
             assert fleet.remote is not None
-            reset_chain(fleet.remote, interrupts)
+            reset_chain(fleet.remote, cfg.query_db, manifest, interrupts)
         reset_failed = bench_run.error is not None
         result = run_on_fleet(bench_run)
         return end_fleet_run(bench_run, result, reset_failed)
@@ -3413,9 +3490,93 @@ def check_run_allowed(
     return estimate
 
 
-def reset_script(role: str) -> str:
+def pg_volume_spec(cfg: RunConfig) -> VolumeSpec | None:
+    """The volume terraform attaches to the query host, if any run on this fleet may use it."""
+    if "volume" not in cfg.db_modes:
+        return None
+    return {"gb": cfg.pg_gb, "iops": cfg.pg_iops, "mbps": cfg.pg_mbps}
+
+
+def pg_volume_fields(output: dict[str, Any], manifest: FleetManifest) -> dict[str, str]:
+    """`pg_volume_id` from `tofu output -json` when the fleet has a Postgres volume."""
+    if "pg_volume" not in manifest:
+        return {}
+    volume_id = output["pg_volume_id"]["value"]
+    if volume_id is None:
+        raise RemoteError(
+            "tofu output has no pg_volume_id although a pg volume was planned"
+        )
+    return {"pg_volume_id": volume_id}
+
+
+def volume_device(volume_id: str) -> str:
+    """The stable NVMe name of an EBS volume: `/dev/sdf` is not what the kernel calls it, and
+    the nvme index is not stable across boots."""
+    return (
+        f"{VOLUME_BY_ID}/nvme-Amazon_Elastic_Block_Store_{volume_id.replace('-', '')}"
+    )
+
+
+def mount_pg_volume_script(volume_id: str) -> str:
+    """Mounts the volume on /data/pg with the root filesystem's options, so that the placement
+    differs from `colocated` by the device only."""
+    return (
+        "if ! mountpoint -q /data/pg; then\n"
+        f'  mount -t ext4 -o "$(findmnt -no OPTIONS /)" {volume_device(volume_id)} /data/pg\n'
+        "fi\n"
+    )
+
+
+def format_pg_volume_script(volume_id: str) -> str:
+    """Waits for the device, then makes the filesystem once. Eager inode and journal init keeps
+    the kernel's background zeroing out of the measurement."""
+    device = volume_device(volume_id)
+    return (
+        "set -eu\n"
+        "udevadm settle\n"
+        f"for _ in $(seq {PG_VOLUME_WAIT_S}); do [ -b {device} ] && break; sleep 1; done\n"
+        f"[ -b {device} ] || {{ echo {device} missing after {PG_VOLUME_WAIT_S} s >&2; exit 1; }}\n"
+        f"mkfs.ext4 -q -F -E lazy_itable_init=0,lazy_journal_init=0 {device}\n"
+        + mount_pg_volume_script(volume_id)
+    )
+
+
+def pg_store_script(mode: DbMode, manifest: FleetManifest) -> str:
+    """Runs on the query host after its containers are gone and before /data/pg is wiped:
+    `colocated` must not inherit a volume mounted by an earlier run."""
+    if mode == "colocated":
+        return "if mountpoint -q /data/pg; then umount /data/pg; fi\n"
+    if mode == "volume":
+        if "pg_volume_id" not in manifest:
+            raise Refused(f"fleet {manifest['name']} has no pg volume")
+        return mount_pg_volume_script(manifest["pg_volume_id"])
+    raise ValueError(f"no store reset for query db mode {mode!r}")
+
+
+def prepare_stores(fleet: FleetState) -> None:
+    """What `up` does to the query host's storage once cloud-init is done: makes and mounts the
+    Postgres volume. The volume is reused by every run; `reset_chain` only empties it."""
+    manifest = fleet.manifest
+    if "pg_volume_id" not in manifest:
+        return
+    remote = fleet.remote
+    assert remote is not None, "connect must run first"
+    enter_phase(
+        fleet,
+        fleet.manifest_path,
+        "preparing-stores",
+        f"mkfs and mount {manifest['pg_volume_id']} on the query host",
+    )
+    script = format_pg_volume_script(manifest["pg_volume_id"])
+    for name, host in remote.hosts.items():
+        if host["role"] == "query":
+            remote.ssh(name, bounded(script))
+
+
+def reset_script(role: str, pg_store: str = "") -> str:
     """Stops the agents, removes every container and wipes what a run leaves on a host, keeping
-    what `up` put there. On the query host it also empties the Postgres data directory."""
+    what `up` put there. On the query host it also empties the Postgres data directory, after
+    `pg_store` has put the run's placement under /data/pg."""
     keep = " ".join(f"! -name {name}" for name in RESET_KEEP)
     script = (
         "set -eu\n"
@@ -3428,18 +3589,22 @@ def reset_script(role: str) -> str:
         f"find {BENCH_DIR} -mindepth 1 -maxdepth 1 {keep} -exec rm -rf {{}} +\n"
     )
     if role == "query":
-        script += "find /data/pg -mindepth 1 -delete\n"
+        script += pg_store + "find /data/pg -mindepth 1 -delete\n"
     return script
 
 
-def reset_chain(remote: Remote, interrupts: Interrupts) -> None:
+def reset_chain(
+    remote: Remote, mode: DbMode, manifest: FleetManifest, interrupts: Interrupts
+) -> None:
     """Every host in parallel: back to the state `up` left. Idempotent, so `run --force` can
     repeat it after a failure. Anvil restarts from genesis afterwards, so every run starts at
     height 0."""
+    pg_store = pg_store_script(mode, manifest)
 
     def reset(host: str) -> None:
         interrupts.check()
-        remote.ssh(host, bounded(reset_script(remote.hosts[host]["role"])))
+        role = remote.hosts[host]["role"]
+        remote.ssh(host, bounded(reset_script(role, pg_store)))
 
     remote.parallel(reset, remote.hosts)
 
@@ -5345,6 +5510,7 @@ def manifest_cost(manifest: FleetManifest, duration_s: float) -> float:
         prices,
         region_minor_prices(manifest["config"]["region"]),
         duration_s,
+        manifest.get("pg_volume"),
     )
     return sum(line["usd"] for line in lines)
 
