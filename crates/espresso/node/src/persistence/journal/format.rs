@@ -49,6 +49,7 @@ pub enum Kind {
     Vid = 11,
     Da = 12,
     Processed = 13,
+    PendingPayload = 14,
 }
 
 impl Kind {
@@ -67,6 +68,7 @@ impl Kind {
             11 => Self::Vid,
             12 => Self::Da,
             13 => Self::Processed,
+            14 => Self::PendingPayload,
             _ => return None,
         })
     }

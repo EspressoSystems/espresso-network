@@ -66,7 +66,7 @@ use crate::{
     v0_4::{PermittedRewardMerkleTreeV2, RewardAccountV2, RewardMerkleCommitmentV2},
 };
 #[cfg(feature = "node")]
-use crate::{NetworkConfig, v0::impls::ValidatedState};
+use crate::{NetworkConfig, Payload, v0::impls::ValidatedState};
 
 #[async_trait]
 pub trait StateCatchup: Send + Sync {
@@ -913,6 +913,20 @@ pub trait SequencerPersistence:
                 }
                 Some((decided_view, None))
             },
+            CoordinatorEvent::BlockPayloadReconstructed {
+                view,
+                header,
+                payload,
+            } => {
+                if let Err(err) = self.append_pending_payload(*view, header, payload).await {
+                    tracing::warn!(
+                        %view,
+                        err = %format_args!("{err:#}"),
+                        "failed to persist reconstructed payload"
+                    );
+                }
+                None
+            },
             _ => None,
         }
     }
@@ -1006,6 +1020,27 @@ pub trait SequencerPersistence:
         proposal: &Proposal<SeqTypes, DaProposal<SeqTypes>>,
         vid_commit: VidCommitment,
     ) -> anyhow::Result<()>;
+
+    /// Persist the payload obtained for `view`, whether or not `view` is ever decided.
+    ///
+    /// [`process_decided_events`](Self::process_decided_events) attaches a stored payload to the
+    /// decided leaf of the same view and header. It sends every other stored payload at or below
+    /// the newest decided view to its consumer as a separate
+    /// [`CoordinatorEvent::BlockPayloadReconstructed`], then deletes them all. A payload stored
+    /// for a view that was already processed goes out with the next decide. The consumer must
+    /// check separate payloads against the decided leaf, since forks and timed-out views are sent
+    /// too.
+    ///
+    /// Default does nothing: backends with no replayable storage keep only the live event.
+    async fn append_pending_payload(
+        &self,
+        _view: ViewNumber,
+        _header: &Header,
+        _payload: &Payload,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn record_action(
         &self,
         view: ViewNumber,

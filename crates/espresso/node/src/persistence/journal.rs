@@ -14,7 +14,11 @@ pub mod lane;
 pub mod state;
 
 use std::{
-    collections::BTreeMap, fs, io, os::unix::fs::FileExt as _, path::PathBuf, sync::Arc,
+    collections::{BTreeMap, BTreeSet},
+    fs, io,
+    os::unix::fs::FileExt as _,
+    path::PathBuf,
+    sync::Arc,
     time::Instant,
 };
 
@@ -41,6 +45,7 @@ use hotshot_types::{
     drb::{DrbInput, DrbResult},
     event::{HotShotAction, LeafInfo},
     message::Proposal,
+    new_protocol::CoordinatorEvent,
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
@@ -256,6 +261,9 @@ struct Inner {
     replay_seconds: f64,
     /// `Some` exactly on a query node, which replays decided blocks into its query service.
     replay_index: Option<DataIndex>,
+    /// Views with a pending payload not yet delivered to the query service, so a decide need not
+    /// scan the whole data index for them.
+    pending_payloads: parking_lot::Mutex<BTreeSet<ViewNumber>>,
     _lock: std::fs::File,
 }
 
@@ -418,6 +426,17 @@ impl Persistence {
             ),
             None => None,
         };
+        let pending_payloads = replay_index
+            .iter()
+            .flat_map(|index| {
+                index
+                    .lock()
+                    .keys()
+                    .filter(|(_, kind)| *kind == Kind::PendingPayload)
+                    .map(|(view, _)| ViewNumber::new(*view))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
 
         let segments = Arc::new(parking_lot::Mutex::new(SegmentSet {
             wal: wal_recovered.segments,
@@ -480,6 +499,7 @@ impl Persistence {
                 limits,
                 replay_seconds,
                 replay_index,
+                pending_payloads: parking_lot::Mutex::new(pending_payloads),
                 _lock: lock_file,
             }),
             metrics: Arc::new(PersistenceMetricsValue::default()),
@@ -697,6 +717,7 @@ impl Persistence {
                 break;
             };
             let mut chain = Vec::with_capacity(leaves.len());
+            let mut attached = Vec::new();
             for (
                 view,
                 ReplayLeaf {
@@ -706,21 +727,8 @@ impl Persistence {
                 },
             ) in leaves.into_iter().rev()
             {
-                match self
-                    .read_data::<Proposal<SeqTypes, DaProposal2<SeqTypes>>>(Kind::Da, view)
-                    .await?
-                {
-                    Some(proposal) => leaf.fill_block_payload_unchecked(Payload::from_bytes(
-                        &proposal.data.encoded_transactions,
-                        &proposal.data.metadata,
-                    )),
-                    // The genesis view has no DA proposal, and its payload is always empty.
-                    None if view == ViewNumber::genesis() => {
-                        leaf.fill_block_payload_unchecked(Payload::empty().0)
-                    },
-                    None => {
-                        tracing::warn!(%view, "DA proposal not available at replay, the query service must fetch this block")
-                    },
+                if self.fill_payload(view, &mut leaf).await? {
+                    attached.push(view);
                 }
                 let vid_share = self
                     .read_data::<Proposal<SeqTypes, VidDisperseShare<SeqTypes>>>(Kind::Vid, view)
@@ -748,7 +756,103 @@ impl Persistence {
                 Class::Durable,
             )
             .await?;
+            // Only once the batch is processed: a failed batch is retried and needs its payloads.
+            let mut pending = self.inner.pending_payloads.lock();
+            for view in attached {
+                pending.remove(&view);
+            }
         }
+        Ok(())
+    }
+
+    /// Fill `leaf` with its payload, from a pending payload of the same block, else from a DA
+    /// proposal. Returns whether a pending payload was used.
+    async fn fill_payload(&self, view: ViewNumber, leaf: &mut Leaf2) -> anyhow::Result<bool> {
+        if let Some((header, payload)) = self.read_pending_payload(view).await?
+            && header == *leaf.block_header()
+        {
+            leaf.fill_block_payload_unchecked(payload);
+            return Ok(true);
+        }
+        match self
+            .read_data::<Proposal<SeqTypes, DaProposal2<SeqTypes>>>(Kind::Da, view)
+            .await?
+        {
+            Some(proposal) => leaf.fill_block_payload_unchecked(Payload::from_bytes(
+                &proposal.data.encoded_transactions,
+                &proposal.data.metadata,
+            )),
+            // The genesis view has no DA proposal, and its payload is always empty.
+            None if view == ViewNumber::genesis() => {
+                leaf.fill_block_payload_unchecked(Payload::empty().0)
+            },
+            None => {
+                tracing::warn!(%view, "payload not available at replay, the query service must fetch this block")
+            },
+        }
+        Ok(false)
+    }
+
+    async fn read_pending_payload(
+        &self,
+        view: ViewNumber,
+    ) -> anyhow::Result<Option<(Header, Payload)>> {
+        Ok(self
+            .read_data::<(Header, Vec<u8>)>(Kind::PendingPayload, view)
+            .await?
+            .map(|(header, bytes)| {
+                let payload = Payload::from_bytes(&bytes, header.metadata());
+                (header, payload)
+            }))
+    }
+
+    /// Send every pending payload at or below `cursor` that no replayed leaf took: forks,
+    /// timed-out views, and payloads that arrived after their view was replayed. A restart
+    /// between sending and forgetting one sends it again, which the consumer tolerates since it
+    /// checks every separate payload against the decided chain.
+    async fn send_unattached_payloads(
+        &self,
+        cursor: ViewNumber,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<()> {
+        let views = {
+            let mut pending = self.inner.pending_payloads.lock();
+            let newer = pending.split_off(&(cursor + 1));
+            std::mem::replace(&mut *pending, newer)
+        };
+        for view in views {
+            // `None` once GC has unlinked the segment holding it.
+            let Some((header, payload)) = self.read_pending_payload(view).await? else {
+                continue;
+            };
+            let event = CoordinatorEvent::BlockPayloadReconstructed {
+                view,
+                header,
+                payload: Arc::new(payload),
+            };
+            consumer.handle_event(&event).await?;
+        }
+        Ok(())
+    }
+
+    /// On a query node, keep `payload` for the query service. Durable: the query service is
+    /// replayed from this record, so it must survive a power loss.
+    async fn put_pending_payload(
+        &self,
+        view: ViewNumber,
+        header: &Header,
+        payload: &Payload,
+    ) -> anyhow::Result<()> {
+        if self.inner.replay_index.is_none() {
+            return Ok(());
+        }
+        let record = Record::PendingPayload {
+            view,
+            header: header.clone(),
+            payload: payload.clone(),
+        };
+        self.put_data(record, Class::Durable).await?;
+        self.inner.pending_payloads.lock().insert(view);
         Ok(())
     }
 
@@ -901,18 +1005,24 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<()> {
         // No event consumer call: a query node replays these from `process_decided_events`, off
         // the voting path, and any other node runs `NullEventConsumer`.
-        let records: Vec<_> = leaf_chain
+        let leaf_chain: Vec<_> = leaf_chain
             .into_iter()
-            .map(|(info, cert)| {
-                let mut leaf = info.leaf.clone();
-                leaf.unfill_block_payload();
-                Record::Leaf {
-                    leaf,
-                    qc: cert.qc().clone(),
-                    next_epoch_qc: cert.next_epoch_qc().cloned(),
-                }
-            })
+            .map(|(info, cert)| (info.leaf.clone(), cert))
             .collect();
+        let mut records = Vec::with_capacity(leaf_chain.len());
+        for (mut leaf, cert) in leaf_chain {
+            // A block this node built never arrives as a reconstructed payload, only on its leaf.
+            if let Some(payload) = leaf.block_payload() {
+                self.put_pending_payload(leaf.view_number(), leaf.block_header(), &payload)
+                    .await?;
+            }
+            leaf.unfill_block_payload();
+            records.push(Record::Leaf {
+                leaf,
+                qc: cert.qc().clone(),
+                next_epoch_qc: cert.next_epoch_qc().cloned(),
+            });
+        }
         for rec in records {
             self.put_wal(rec, Class::Enqueue).await?;
         }
@@ -934,6 +1044,9 @@ impl SequencerPersistence for Persistence {
             self.gc(decided_view, Some(cursor.map_or(0, |view| view.u64())))
                 .await?;
             replayed?;
+            if let Some(cursor) = cursor {
+                self.send_unattached_payloads(cursor, consumer).await?;
+            }
             cursor
         } else {
             self.gc(decided_view, None).await?;
@@ -1121,6 +1234,15 @@ impl SequencerPersistence for Persistence {
             .internal_append_da2_duration
             .add_point(now.elapsed().as_secs_f64());
         res
+    }
+
+    async fn append_pending_payload(
+        &self,
+        view: ViewNumber,
+        header: &Header,
+        payload: &Payload,
+    ) -> anyhow::Result<()> {
+        self.put_pending_payload(view, header, payload).await
     }
 
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
