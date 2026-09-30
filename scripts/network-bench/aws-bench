@@ -766,7 +766,9 @@ class Evidence(TypedDict):
     journal_bytes: dict[str, int]
     clock_offset_ms: dict[str, float]
     digest_mismatch: dict[str, list[str]]  # host -> images whose pulled digest differs
-    collect_failed: list[str]  # hosts whose collect script failed (see COLLECT_ERROR_FILE)
+    collect_failed: list[
+        str
+    ]  # hosts whose collect script failed (see COLLECT_ERROR_FILE)
     pg_settings: NotRequired[dict[str, Any]]  # node0's pg-settings.json
     # The espresso backends node0's Postgres sampler saw inside the load window, by TLS use
     # (keys "true" and "false"); absent when `pg-stats.jsonl` was not collected.
@@ -3385,7 +3387,9 @@ def measure_run(run: Run) -> None:
             fleet, run.manifest_path, "shipping", "files, host monitors, containers"
         )
         git_rev = ship_agents(remote)
-        update_manifest(run.manifest_path, "shipping", git_rev=git_rev)
+        # A single shot renders its run manifest before `connect` learns the volume id.
+        volume = {k: v for k, v in fleet.manifest.items() if k == "pg_volume_id"}
+        update_manifest(run.manifest_path, "shipping", git_rev=git_rev, **volume)
         ship(remote, run.run_dir)
         start_hostmon(remote)
         create_containers(remote)
