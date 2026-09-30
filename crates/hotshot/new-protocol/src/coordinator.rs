@@ -630,6 +630,7 @@ where
                                 PendingDa {
                                     payload: block.payload.payload.clone(),
                                     metadata: block.payload.metadata.clone(),
+                                    tx_commitments: manifest.hashes.clone(),
                                 },
                             );
                         } else {
@@ -861,10 +862,8 @@ where
                         // A leader never reconstructs its own block, and a block it built
                         // but did not propose puts nothing on the chain, so this is where
                         // its transactions count as included.
-                        self.block_builder.on_block_reconstructed(
-                            view,
-                            da.payload.transaction_commitments(&da.metadata),
-                        );
+                        self.block_builder
+                            .on_block_reconstructed(view, da.tx_commitments);
                     } else {
                         warn!(%node, %view, "no payload for proposed block");
                     }
@@ -1748,8 +1747,8 @@ where
                     None => self.participation.current_vote_participation(),
                 });
             },
-            ClientRequest::SubmitTransaction { tx, respond } => {
-                self.block_builder.on_submit_transaction(tx);
+            ClientRequest::SubmitTransaction { tx, hash, respond } => {
+                self.block_builder.on_submit_transaction(hash, tx);
                 let _ = respond.send(());
             },
             ClientRequest::UpdateLeaf { update, respond } => {
@@ -2202,6 +2201,7 @@ pub(crate) fn is_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> b
 struct PendingDa<T: NodeType> {
     payload: T::BlockPayload,
     metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    tx_commitments: Vec<Commitment<T::Transaction>>,
 }
 
 type ProposalFetchResponseSender<T> =

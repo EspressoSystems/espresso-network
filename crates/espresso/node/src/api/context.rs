@@ -11,7 +11,7 @@ use ::light_client::{
 };
 use async_lock::RwLock;
 use async_trait::async_trait;
-use committable::{Commitment, Committable};
+use committable::Commitment;
 use espresso_types::{
     Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
     v0::traits::SequencerPersistence,
@@ -129,9 +129,7 @@ where
     }
 
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
-        let commitment = tx.commit();
-        ConsensusHandle::submit_transaction(self, tx).await?;
-        Ok(commitment)
+        ConsensusHandle::submit_transaction(self, tx).await
     }
 
     async fn update_leaf(

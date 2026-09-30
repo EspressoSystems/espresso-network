@@ -30,6 +30,10 @@ fn view(n: u64) -> ViewNumber {
     ViewNumber::new(n)
 }
 
+fn submit(b: &mut BlockBuilder<TestTypes>, tx: TestTransaction) {
+    b.on_submit_transaction(tx.commit(), tx);
+}
+
 fn tx_msg(v: ViewNumber, transactions: Vec<TestTransaction>) -> TransactionMessage<TestTypes> {
     TransactionMessage {
         view: v,
@@ -74,8 +78,8 @@ async fn test_retry_buffer() {
     let mut b = builder();
     let t1 = tx(1);
     let t2 = tx(2);
-    b.on_submit_transaction(t1.clone());
-    b.on_submit_transaction(t2.clone());
+    submit(&mut b, t1.clone());
+    submit(&mut b, t2.clone());
 
     // t1 reconstructed and should be removed from retry
     b.on_block_reconstructed(view(1), vec![t1.commit()]);
@@ -98,10 +102,10 @@ async fn test_forward_batch_stops_at_one_block() {
         block_sizes: sizes(2),
         ..small_config()
     });
-    b.on_submit_transaction(tx(1));
+    submit(&mut b, tx(1));
     b.on_view_changed(view(1));
-    b.on_submit_transaction(tx(2));
-    b.on_submit_transaction(tx(3));
+    submit(&mut b, tx(2));
+    submit(&mut b, tx(3));
 
     let forwarded = b.on_view_changed(view(2));
     assert_eq!(forwarded.len(), 2, "batch should stop at one block");
@@ -146,7 +150,7 @@ fn builder_upgrading(old_size: u64, new_size: u64) -> BlockBuilder<TestTypes> {
 async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
     let mut b = builder_upgrading(2, 4);
     for n in 1..=4 {
-        b.on_submit_transaction(tx(n));
+        submit(&mut b, tx(n));
     }
 
     assert_eq!(
@@ -168,8 +172,8 @@ async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
 #[tokio::test]
 async fn test_smaller_blocks_drop_what_no_longer_fits() {
     let mut b = builder_upgrading(4, 2);
-    b.on_submit_transaction(TestTransaction::new(vec![0; 3]));
-    b.on_submit_transaction(tx(1));
+    submit(&mut b, TestTransaction::new(vec![0; 3]));
+    submit(&mut b, tx(1));
 
     assert_eq!(b.on_view_changed(view(1)).len(), 2);
     assert_eq!(
@@ -187,7 +191,7 @@ async fn test_block_size_follows_the_running_version() {
         block_sizes: BTreeMap::from([(versions::version(0, 0), 2), (later, 100)]),
         ..small_config()
     });
-    b.on_submit_transaction(TestTransaction::new(vec![0; 5]));
+    submit(&mut b, TestTransaction::new(vec![0; 5]));
 
     assert!(b.on_view_changed(view(1)).is_empty());
 }
@@ -198,10 +202,10 @@ async fn test_forward_batch_fills_the_block_with_later_transactions() {
         block_sizes: sizes(5),
         ..small_config()
     });
-    b.on_submit_transaction(TestTransaction::new(vec![1; 3]));
+    submit(&mut b, TestTransaction::new(vec![1; 3]));
     b.on_view_changed(view(1));
-    b.on_submit_transaction(TestTransaction::new(vec![2; 3]));
-    b.on_submit_transaction(TestTransaction::new(vec![3; 2]));
+    submit(&mut b, TestTransaction::new(vec![2; 3]));
+    submit(&mut b, TestTransaction::new(vec![3; 2]));
 
     let forwarded = b.on_view_changed(view(2));
     assert_eq!(
@@ -219,7 +223,7 @@ async fn test_transaction_larger_than_a_block_is_rejected() {
         block_sizes: sizes(2),
         ..small_config()
     });
-    b.on_submit_transaction(TestTransaction::new(vec![0; 5]));
+    submit(&mut b, TestTransaction::new(vec![0; 5]));
 
     assert!(b.on_view_changed(view(1)).is_empty());
 }
@@ -238,7 +242,7 @@ async fn test_full_forward_fits_in_a_message() {
     for n in 0..limit.get() / tx_len + 1 {
         let mut payload = vec![0; tx_len];
         payload[..8].copy_from_slice(&n.to_le_bytes());
-        b.on_submit_transaction(TestTransaction::new(payload));
+        submit(&mut b, TestTransaction::new(payload));
     }
 
     let transactions = b.on_view_changed(view(1));

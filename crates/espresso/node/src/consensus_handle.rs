@@ -2,7 +2,7 @@ use std::{collections::HashMap, mem, sync::Arc};
 
 use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use async_lock::RwLock as AsyncRwLock;
-use committable::Commitment;
+use committable::{Commitment, Committable as _};
 use futures::{
     FutureExt, StreamExt,
     future::BoxFuture,
@@ -400,19 +400,25 @@ where
         Ok(future.boxed())
     }
 
-    pub async fn submit_transaction(&self, tx: T::Transaction) -> anyhow::Result<()> {
+    /// Returns the commitment of `tx`.
+    pub async fn submit_transaction(
+        &self,
+        tx: T::Transaction,
+    ) -> anyhow::Result<Commitment<T::Transaction>> {
         if let Some(client_api) = self.client_api().await {
             return client_api
                 .submit_transaction(tx)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"));
         }
+        let hash = tx.commit();
         self.legacy_handle
             .read()
             .await
             .submit_transaction(tx)
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(hash)
     }
 
     pub async fn update_leaf(
