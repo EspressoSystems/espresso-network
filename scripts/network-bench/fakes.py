@@ -28,6 +28,8 @@ JSON_MEDIA_TYPE = "application/json"
 Reply = tuple[int, dict[str, str], bytes]
 
 FAKE_EPOCH = datetime(2026, 9, 29, 16, 0, tzinfo=UTC).timestamp()
+# Mirrors `aws-bench`'s CHECKIP_URL.
+CHECKIP_URL = "https://checkip.amazonaws.com"
 
 
 def _json_reply(obj: dict[str, Any], content_type: str = JSON_MEDIA_TYPE) -> Reply:
@@ -429,6 +431,10 @@ class FakeRunner:
         return any(tuple(call[: len(prefix)]) == prefix for call in self.calls)
 
 
+def no_http_pool(clock: netbench.Clock) -> netbench.Http:
+    raise AssertionError("unexpected HTTP pool")
+
+
 @dataclass
 class FakeSystem:
     """Structural twin of `aws-bench`'s `System`, which this file cannot import."""
@@ -442,8 +448,9 @@ class FakeSystem:
     answer: bool = False
     prompts: list[str] = field(default_factory=list)
     http: Callable[[str, dict[str, str]], Reply] | None = None
-    user: str = "tester"
-    hostname: str = "testhost"
+    http_pool: Callable[[netbench.Clock], netbench.Http] = no_http_pool
+    user: Callable[[], str] = lambda: "tester"
+    hostname: Callable[[], str] = lambda: "testhost"
     pid: int = 4242
     dead_pids: set[int] = field(default_factory=set)
 
@@ -457,10 +464,10 @@ class FakeSystem:
         return self.answer
 
     def http_get(self, url: str, headers: dict[str, str]) -> Reply:
+        if url == CHECKIP_URL:
+            return 200, {}, b"203.0.113.5\n"
         if self.http is not None:
             return self.http(url, headers)
-        if "checkip" in url:
-            return 200, {}, b"203.0.113.5\n"
         raise AssertionError(f"unexpected http GET {url}")
 
     def trap(

@@ -114,8 +114,11 @@ class FleetHarness:
     def up(self, runner, *extra: str) -> int:
         return awsb.cmd_up(self.up_args(*extra), FakeSystem(run=runner))
 
-    def run(self, runner, *extra: str, system: FakeSystem | None = None):
-        return awsb.cmd_run(self.run_args(*extra), system or FakeSystem(run=runner))
+    def run(self, runner, *extra: str) -> int:
+        return self.run_with(FakeSystem(run=runner), *extra)
+
+    def run_with(self, system: FakeSystem, *extra: str) -> int:
+        return awsb.cmd_run(self.run_args(*extra), system)
 
     def fleet(self) -> dict:
         return json.loads((self.fleet_dir / "fleet.json").read_text())
@@ -335,7 +338,7 @@ class RunOnFleetTest(unittest.TestCase):
         runner.states = [{"phase": "loading", "detail": "x"}]
         runner.polls = 0
         runner.on_poll = sigint
-        self.assertEqual(harness.run(runner, system=system), awsb.EXIT_FAILED)
+        self.assertEqual(harness.run_with(system), awsb.EXIT_FAILED)
         self.assertTrue(runner.ran("systemctl stop bench-agent"))
         self.assertTrue(runner.ran("rsync", "/opt/bench/out/"))
         self.assertFalse(runner.ran("tofu", "destroy"))
@@ -363,9 +366,9 @@ class RunOnFleetTest(unittest.TestCase):
         mark = len(runner.calls)
         dead = FakeSystem(run=runner, dead_pids={FakeSystem().pid})
         with self.assertRaisesRegex(awsb.Refused, r"--force.*down"):
-            harness.run(runner, system=dead)
+            harness.run_with(dead)
         self.assertEqual(ssh_calls(runner, mark), [])
-        self.assertEqual(harness.run(runner, "--force", system=dead), awsb.EXIT_OK)
+        self.assertEqual(harness.run_with(dead, "--force"), awsb.EXIT_OK)
         self.assertEqual(harness.fleet()["phase"], "idle")
         self.assertFalse(harness.lock().exists())
 
@@ -379,7 +382,7 @@ class RunOnFleetTest(unittest.TestCase):
             json.dumps(
                 {
                     "pid": 999999,
-                    "hostname": dead.hostname,
+                    "hostname": dead.hostname(),
                     "run": "old",
                     "taken_at": "2026-09-30T10:00:00+00:00",
                 }
@@ -387,9 +390,9 @@ class RunOnFleetTest(unittest.TestCase):
         )
         mark = len(runner.calls)
         with self.assertRaisesRegex(awsb.Refused, r"pid 999999 \(dead\).*--force"):
-            harness.run(runner, system=dead)
+            harness.run_with(dead)
         self.assertEqual(ssh_calls(runner, mark), [])
-        code = harness.run(runner, "--force", system=dead)
+        code = harness.run_with(dead, "--force")
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertTrue(any("find /data/journal" in c for c in ssh_calls(runner, mark)))
         self.assertEqual(harness.fleet()["phase"], "idle")
@@ -453,11 +456,8 @@ class RunRefusalTest(unittest.TestCase):
         )
         cfg = awsb.fleet_run_config(harness.run_args("--node-env", "A=1"), manifest)
         self.assertEqual(cfg.node_env, ("A=1",))
-        with self.assertRaisesRegex(awsb.Refused, "run --fleet"):
-            awsb.cmd_up(
-                harness.up_args("--node-env", "A=1"),
-                FakeSystem(run=FleetRunner([DONE_STATE])),
-            )
+        with unittest.mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            harness.up_args("--node-env", "A=1")
 
     def test_mode_missing(self):
         harness = FleetHarness(self)
@@ -750,7 +750,7 @@ class FleetLockTest(unittest.TestCase):
 
     def test_a_holder_on_another_host_counts_as_alive(self):
         lock = {"pid": 1, "hostname": "elsewhere", "run": "r", "taken_at": "t"}
-        self.assertTrue(awsb.lock_holder_alive(FakeSystem(), lock))
+        self.assertTrue(awsb.lock_holder_alive(FakeSystem(dead_pids={1}), lock))
 
 
 class ResetScriptTest(unittest.TestCase):
@@ -2318,7 +2318,6 @@ LIST_ROLES = ("aws", "--profile", "timeboost-dev", "iam", "list-roles")
 ROLE_ARN = "arn:aws:iam::1:role/espresso-bench/espresso-bench-fleet1"
 EXPIRES_LATER = "2026-09-29T17:00:00Z"
 EXPIRES_PAST = "2026-09-29T15:00:00Z"
-SWEEP_NOW = datetime(2026, 9, 29, 16, 0, tzinfo=UTC)
 
 
 def resource_arn(service: str, resource: str) -> str:
@@ -2575,7 +2574,7 @@ class GroupRdsRunsTest(unittest.TestCase):
             mappings, [instance_row("i-1")], ["vol-1"], [ROLE_ARN]
         )
         self.assertEqual(
-            awsb.format_runs([tagged], SWEEP_NOW)[2].split(" | ")[4],
+            awsb.format_runs([tagged], NOW)[2].split(" | ")[4],
             "1 db, 1 instance, 1 key-pair, 1 pg, 1 role, 1 schedule-group, "
             "1 security-group, 1 subgrp, 1 volume",
         )
@@ -2592,7 +2591,7 @@ class DestroyRdsOrphansTest(unittest.TestCase):
         with contextlib.redirect_stdout(text):
             code = awsb.cmd_destroy(
                 parsed,
-                FakeSystem(run=runner, clock=FakeClock(start=SWEEP_NOW.timestamp())),
+                FakeSystem(run=runner),
             )
         return code, text.getvalue()
 
@@ -2624,7 +2623,7 @@ class DestroyRdsOrphansTest(unittest.TestCase):
 
     # TEST:orphans-live-fleet-kept-ok
     def test_a_live_fleet_of_this_user_with_state_is_kept(self):
-        user = FakeSystem().user
+        user = FakeSystem().user()
         mappings = rds_fleet_mappings("fleet1", user, EXPIRES_LATER)
         runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
         self.write_fleet("fleet1", "idle")
@@ -2635,7 +2634,7 @@ class DestroyRdsOrphansTest(unittest.TestCase):
         self.assertNotIn(("iam", "delete-role"), aws_verbs(runner))
 
     def test_a_fleet_that_lost_its_state_is_swept_for_its_owner(self):
-        mappings = rds_fleet_mappings("fleet1", FakeSystem().user, EXPIRES_LATER)
+        mappings = rds_fleet_mappings("fleet1", FakeSystem().user(), EXPIRES_LATER)
         runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
         code, text = self.destroy(runner, "--yes")
         self.assertEqual(code, awsb.EXIT_OK)

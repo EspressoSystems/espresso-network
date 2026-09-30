@@ -58,7 +58,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -744,7 +744,10 @@ class Runner(Protocol):
 
 
 SignalHandler = Callable[[int, Any], None]
-HttpReply = tuple[int, Any, bytes]
+Trap = Callable[[tuple[signal.Signals, ...], SignalHandler], None]
+Ask = Callable[[str], bool]
+Which = Callable[[str], str | None]
+HttpReply = tuple[int, Mapping[str, str], bytes]
 HttpGet = Callable[[str, dict[str, str]], HttpReply]
 
 
@@ -752,12 +755,13 @@ HttpGet = Callable[[str, dict[str, str]], HttpReply]
 class System:
     run: Runner
     clock: nb.Clock
-    trap: Callable[[tuple[signal.Signals, ...], SignalHandler], None]
-    which: Callable[[str], str | None]
-    ask: Callable[[str], bool]
+    trap: Trap
+    which: Which
+    ask: Ask
     http_get: HttpGet
-    user: str
-    hostname: str
+    http_pool: nb.HttpFactory
+    user: Callable[[], str]
+    hostname: Callable[[], str]
     pid: int
     pid_alive: Callable[[int], bool]
 
@@ -794,8 +798,9 @@ def host_system() -> System:
         which=shutil.which,
         ask=_ask,
         http_get=_http_get,
-        user=getpass.getuser(),
-        hostname=socket.gethostname(),
+        http_pool=nb.HttpPool,
+        user=getpass.getuser,
+        hostname=socket.gethostname,
         pid=os.getpid(),
         pid_alive=_pid_alive,
     )
@@ -1145,16 +1150,12 @@ def format_estimate_lines(estimate: Estimate) -> list[str]:
     ]
 
 
-def confirm(ask: Callable[[str], bool], prompt: str, yes: bool) -> bool:
-    return yes or ask(prompt)
-
-
 def default_run_name(user: str, now: datetime) -> str:
     return f"{user}-{now.strftime('%Y%m%d-%H%M')}"
 
 
 def new_fleet_dir(system: System, out_root: Path) -> Path:
-    name = default_run_name(system.user, utc_now(system.clock))
+    name = default_run_name(system.user(), utc_now(system.clock))
     if not NAME_RE.match(name):
         raise Refused(f"fleet name must match {NAME_RE.pattern}: {name!r}")
     fleet_dir = out_root / name
@@ -1280,7 +1281,7 @@ def update_manifest(path: Path, phase: str, **extra: Any) -> Manifest:
     return cast(Manifest, merged)
 
 
-def tools_on_path(which: Callable[[str], str | None], names: Iterable[str]) -> None:
+def tools_on_path(which: Which, names: Iterable[str]) -> None:
     missing = [name for name in names if which(name) is None]
     if missing:
         raise Refused(f"missing tools on PATH: {', '.join(missing)}")
@@ -1399,10 +1400,11 @@ def _http_get(url: str, headers: dict[str, str]) -> HttpReply:
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
-            return response.status, response.headers, response.read()
+            reply_headers = cast(Mapping[str, str], response.headers)
+            return response.status, reply_headers, response.read()
     except urllib.error.HTTPError as exc:
         with exc:
-            return exc.code, exc.headers, exc.read()
+            return exc.code, cast(Mapping[str, str], exc.headers), exc.read()
 
 
 def _bearer_token(http_get: HttpGet, www_authenticate: str, ref: str) -> str:
@@ -1976,6 +1978,13 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         action="store_true",
         help="run every step whatever its verdict, then wait for the query node to catch up",
     )
+    parser.add_argument("--root-gb", default=defaults.root_gb)
+    parser.add_argument("--pg-iops", type=int, default=defaults.pg_iops)
+    parser.add_argument("--pg-mbps", type=int, default=defaults.pg_mbps)
+    parser.add_argument("--max-usd", type=float, default=defaults.max_usd)
+
+
+def add_node_env_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--node-env",
         action="append",
@@ -1986,10 +1995,6 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         "repeatable; the value is taken verbatim (no quoting) and lands in the manifest "
         "and the summary, so not for secrets",
     )
-    parser.add_argument("--root-gb", default=defaults.root_gb)
-    parser.add_argument("--pg-iops", type=int, default=defaults.pg_iops)
-    parser.add_argument("--pg-mbps", type=int, default=defaults.pg_mbps)
-    parser.add_argument("--max-usd", type=float, default=defaults.max_usd)
 
 
 def env_pair(text: str) -> str:
@@ -2066,6 +2071,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     add_run_flags(plan_p)
+    add_node_env_flag(plan_p)
     add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
     plan_p.set_defaults(func=cmd_plan, yes=False, max_usd=UP_MAX_USD)
@@ -2081,6 +2087,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     up_p.add_argument("--yes", action="store_true")
     up_p.set_defaults(
         func=cmd_up,
+        node_env=[],
         fleet=None,
         force=False,
         query_db=defaults.query_db,
@@ -2096,6 +2103,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         allow_abbrev=False,
     )
     add_run_flags(run_p, tag_required=False)
+    add_node_env_flag(run_p)
     add_ttl_flag(run_p)
     run_p.add_argument("--fleet", type=Path, help="fleet dir from `up`")
     run_p.add_argument("--query-db", choices=DB_MODES, default=defaults.query_db)
@@ -2161,7 +2169,7 @@ def cmd_plan(args: argparse.Namespace, system: System) -> int:
     cfg = dataclasses.replace(
         config_from_args(args), db_modes=args.db_modes, ttl_min=args.ttl_min
     )
-    fleet_dir, *_ = plan_fleet(args, cfg, system, system.clock.time())
+    fleet_dir, *_ = plan_fleet(args, cfg, system)
     log.info("rendered %s (phase=planned)", fleet_dir)
     return EXIT_OK
 
@@ -2215,9 +2223,7 @@ class Interrupts:
         self.armed = True
         self.phase = "starting"
 
-    def install(
-        self, trap: Callable[[tuple[signal.Signals, ...], SignalHandler], None]
-    ) -> None:
+    def install(self, trap: Trap) -> None:
         trap((signal.SIGINT, signal.SIGTERM, signal.SIGHUP), self._handle)
 
     def _handle(self, signum: int, frame: Any) -> None:
@@ -2388,7 +2394,7 @@ def cmd_run(args: argparse.Namespace, system: System) -> int:
     interrupts = Interrupts(system.clock)
     started = system.clock.time()
     try:
-        fleet_dir, run_dir, tf = prepare_run(args, cfg, system, started)
+        fleet_dir, run_dir, tf = prepare_run(args, cfg, system)
     except KeyboardInterrupt:
         raise Refused("interrupted; nothing was created") from None
     interrupts.install(system.trap)
@@ -2406,19 +2412,17 @@ def cmd_run(args: argparse.Namespace, system: System) -> int:
 
 
 def prepare_run(
-    args: argparse.Namespace, cfg: RunConfig, system: System, started: float
+    args: argparse.Namespace, cfg: RunConfig, system: System
 ) -> tuple[Path, Path, Terraform]:
     """Everything before the first AWS write: `plan_fleet` and the prompt. Any failure or
     Ctrl-C leaves nothing to destroy."""
-    fleet_dir, run_dir, tf, hosts, _ = plan_fleet(args, cfg, system, started)
+    fleet_dir, run_dir, tf, hosts, _ = plan_fleet(args, cfg, system)
     confirm_create(system.ask, cfg, fleet_dir, len(hosts))
     stamp_expiry(fleet_dir, tf, utc_now(system.clock))
     return fleet_dir, run_dir, tf
 
 
-def confirm_create(
-    ask: Callable[[str], bool], cfg: RunConfig, fleet_dir: Path, count: int
-) -> None:
+def confirm_create(ask: Ask, cfg: RunConfig, fleet_dir: Path, count: int) -> None:
     extras = ""
     if "volume" in cfg.db_modes:
         extras += ", 1 extra volume"
@@ -2428,7 +2432,7 @@ def confirm_create(
     prompt = (
         f"Create {count} instances{extras}, 1 security group, 1 key pair in {ACCOUNT}?"
     )
-    if not confirm(ask, prompt, cfg.yes):
+    if not (cfg.yes or ask(prompt)):
         append_event(fleet_dir, "planned", "refused", "not confirmed")
         raise Refused("not confirmed; nothing was created")
 
@@ -2463,18 +2467,20 @@ def stamp_expiry(
 
 
 def plan_fleet(
-    args: argparse.Namespace, cfg: RunConfig, system: System, now: float
+    args: argparse.Namespace, cfg: RunConfig, system: System
 ) -> tuple[Path, Path, Terraform, list[HostSpec], Preflight]:
     """Preflight, cost check, render, `tofu init` and `plan`. Shared by `plan` and `run`; makes
     no AWS write. The preflight summary is logged before the cost line."""
-    fleet_dir, hosts, pre, estimate = plan_common(system, args, cfg, now, fleet=False)
+    fleet_dir, hosts, pre, estimate = plan_new_fleet(
+        args, cfg, system, idle_fleet=False
+    )
     fleet = render_fleet_dir(system, cfg, fleet_dir, hosts, pre, estimate, args.argv)
     run_dir = render_run(fleet_dir, fleet, cfg, SINGLE_RUN)
     return fleet_dir, run_dir, init_terraform(system.run, fleet_dir), hosts, pre
 
 
-def plan_common(
-    system: System, args: argparse.Namespace, cfg: RunConfig, now: float, fleet: bool
+def plan_new_fleet(
+    args: argparse.Namespace, cfg: RunConfig, system: System, idle_fleet: bool
 ) -> tuple[Path, list[HostSpec], Preflight, Estimate]:
     """New fleet dir with logging, preflight and cost check: the prefix of `plan_fleet` and
     `prepare_up`."""
@@ -2485,7 +2491,12 @@ def plan_common(
     pre = preflight(system, cfg, hosts)
     log_preflight(cfg, pre, hosts)
     estimate = estimate_or_refuse(
-        cfg, hosts, fleet_dir, now, fleet=fleet, rds=rds_spec(cfg, pre)
+        cfg,
+        hosts,
+        fleet_dir,
+        system.clock.time(),
+        fleet=idle_fleet,
+        rds=rds_spec(cfg, pre),
     )
     return fleet_dir, hosts, pre, estimate
 
@@ -2681,14 +2692,8 @@ def finish_run(run: Run) -> nb.BenchResult | None:
                 "node0 EBS balance",
                 lambda: collect_node0_ebs_balance(run),
             ),
-            "rds_metrics": (
-                "rds metrics",
-                lambda: collect_rds(run, "rds metrics", collect_rds_metrics),
-            ),
-            "rds_logs": (
-                "rds logs",
-                lambda: collect_rds(run, "rds logs", collect_rds_logs),
-            ),
+            "rds_metrics": rds_step(run, "rds metrics", collect_rds_metrics),
+            "rds_logs": rds_step(run, "rds logs", collect_rds_logs),
         }
         for name in collect_plan(run.error, run.agent_started, run.cfg.query_db):
             what, action = actions[name]
@@ -2722,12 +2727,18 @@ def published_window(run: Run, what: str) -> AgentState | None:
         log.warning("no load window: %s not collected", what)
         return None
     interrupts = run.fleet.interrupts
-    wait_s = agent["t1"] + CLOUDWATCH_LAG_S - interrupts.clock.time()
+    wait_s = agent["t1"] + CLOUDWATCH_LAG_S - run.fleet.system.clock.time()
     if wait_s > 0:
         log.info("waiting %.0f s for CloudWatch to publish the load window", wait_s)
         if interrupts.wait(interrupts.skip_collect, wait_s):
             return None
     return agent
+
+
+def rds_step(
+    run: Run, what: str, collect: RdsCollect
+) -> tuple[str, Callable[[], object]]:
+    return what, lambda: collect_rds(run, what, collect)
 
 
 def collect_rds(run: Run, what: str, collect: RdsCollect) -> None:
@@ -2868,7 +2879,7 @@ def destroy_fleet(fleet: FleetState) -> bool:
             return True
         if verdict == "sweep":
             break
-        fleet.interrupts.clock.sleep(DESTROY_BACKOFF_S)
+        fleet.system.clock.sleep(DESTROY_BACKOFF_S)
     log.warning(
         "tofu destroy failed; sweeping resources tagged %s", fleet.fleet_dir.name
     )
@@ -2894,11 +2905,9 @@ def cmd_up(args: argparse.Namespace, system: System) -> int:
     """Plans, confirms and provisions a fleet, then leaves it `idle` for `run --fleet`. A
     failure destroys it again (exit 3, or 4 when resources may remain)."""
     cfg = fleet_config_from_args(args)
-    refuse_fleet_node_env(cfg)
     interrupts = Interrupts(system.clock)
-    started = system.clock.time()
     try:
-        fleet_dir, tf = prepare_up(args, cfg, system, started)
+        fleet_dir, tf = prepare_up(args, cfg, system)
     except KeyboardInterrupt:
         raise Refused("interrupted; nothing was created") from None
     interrupts.install(system.trap)
@@ -2913,12 +2922,10 @@ def cmd_up(args: argparse.Namespace, system: System) -> int:
 
 
 def prepare_up(
-    args: argparse.Namespace, cfg: RunConfig, system: System, started: float
+    args: argparse.Namespace, cfg: RunConfig, system: System
 ) -> tuple[Path, Terraform]:
     """Everything before the first AWS write, as `prepare_run`, without a run dir."""
-    fleet_dir, hosts, pre, estimate = plan_common(
-        system, args, cfg, started, fleet=True
-    )
+    fleet_dir, hosts, pre, estimate = plan_new_fleet(args, cfg, system, idle_fleet=True)
     render_fleet_dir(system, cfg, fleet_dir, hosts, pre, estimate, args.argv)
     tf = init_terraform(system.run, fleet_dir)
     confirm_create(system.ask, cfg, fleet_dir, len(hosts))
@@ -3028,12 +3035,6 @@ def fleet_config_from_args(args: argparse.Namespace) -> RunConfig:
     )
 
 
-def refuse_fleet_node_env(cfg: RunConfig) -> None:
-    """A fleet keeps no node env: every `run --fleet` takes its own."""
-    if cfg.node_env:
-        raise Refused("--node-env belongs to one run: pass it to `run --fleet`")
-
-
 def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfig:
     """The fleet's own config with the flags that belong to one run: image tag, load, database mode, node env."""
     base = config_from_manifest(saved["config"])
@@ -3082,10 +3083,7 @@ def retagged(
     tag is the fleet's, which needs no registry access."""
     if not tag_changed(manifest, cfg):
         return manifest
-    images = {
-        name: resolve_image(http_get, ref) for name, ref in image_refs(cfg).items()
-    }
-    return {**manifest, "images": images}
+    return {**manifest, "images": resolve_images(http_get, cfg, None)}
 
 
 def take_fleet_lock(
@@ -3095,28 +3093,29 @@ def take_fleet_lock(
     path = fleet_dir / FLEET_LOCK
     lock: FleetLock = {
         "pid": system.pid,
-        "hostname": system.hostname,
+        "hostname": system.hostname(),
         "run": run_name,
         "taken_at": stamp(),
     }
     if force and path.exists():
         holder: FleetLock = nb.read_json(path)
         if lock_holder_alive(system, holder):
-            raise Refused(f"cannot --force: {describe_lock(system, holder)}")
+            raise Refused(f"cannot --force: {describe_lock(holder, True)}")
         path.unlink()
     try:
         with path.open("x") as f:
             json.dump(lock, f)
     except FileExistsError:
         holder = nb.read_json(path)
+        alive = lock_holder_alive(system, holder)
         hint = (
             ""
-            if lock_holder_alive(system, holder)
+            if alive
             else f"; if it is gone, run: aws-bench run --fleet {fleet_dir} --force "
             f"(resets the fleet), or: aws-bench down {fleet_dir}"
         )
         raise Refused(
-            f"fleet is locked: {describe_lock(system, holder)}{hint}"
+            f"fleet is locked: {describe_lock(holder, alive)}{hint}"
         ) from None
     return lock
 
@@ -3127,13 +3126,13 @@ def release_fleet_lock(fleet_dir: Path) -> None:
 
 def lock_holder_alive(system: System, lock: FleetLock) -> bool:
     """A lock from another host is assumed alive: its pid cannot be checked from here."""
-    if lock["hostname"] != system.hostname:
+    if lock["hostname"] != system.hostname():
         return True
     return system.pid_alive(lock["pid"])
 
 
-def describe_lock(system: System, lock: FleetLock) -> str:
-    state = "alive" if lock_holder_alive(system, lock) else "dead"
+def describe_lock(lock: FleetLock, alive: bool) -> str:
+    state = "alive" if alive else "dead"
     return (
         f"run {lock['run']}, pid {lock['pid']} ({state}) on {lock['hostname']}, "
         f"since {lock['taken_at'][:16]}"
@@ -3406,7 +3405,7 @@ def reset_rds_store(remote: Remote, fleet_dir: Path, interrupts: Interrupts) -> 
 def write_run_cost(run: Run) -> dict[str, float]:
     """The fleet's hourly rate over the run's wall time, from its start to now."""
     rate = estimate_rate(run.fleet.manifest["estimate"])
-    duration_s = run.fleet.interrupts.clock.time() - run.started
+    duration_s = run.fleet.system.clock.time() - run.started
     cost = {
         "usd_per_hour": rate,
         "duration_s": duration_s,
@@ -3451,10 +3450,6 @@ def settle_fleet(fleet: FleetState, dirty: bool) -> None:
         return
     update_manifest(fleet.manifest_path, "idle")
     release_fleet_lock(fleet.fleet_dir)
-
-
-def cmd_down(args: argparse.Namespace, system: System) -> int:
-    return destroy_run(system, args)
 
 
 def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None:
@@ -3530,7 +3525,7 @@ def render_fleet_dir(
         cfg,
         fleet_dir.resolve(),
         fleet_dir.name,
-        system.user,
+        system.user(),
         hosts,
         ssh_pub,
         cidr,
@@ -3686,7 +3681,7 @@ def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
     """The description of the instance once it is `available` with an `in-sync` parameter
     group. A group that reports `pending-reboot` gets one reboot."""
     rebooted = False
-    clock = fleet.interrupts.clock
+    clock = fleet.system.clock
     deadline = clock.monotonic() + RDS_SYNC_TIMEOUT_S
     while True:
         instance = describe_rds(fleet.system.run, identifier)
@@ -4495,10 +4490,6 @@ def cmd_render(args: argparse.Namespace, system: System) -> int:
     return EXIT_OK if result["validity"]["valid"] else EXIT_INVALID
 
 
-def cmd_destroy(args: argparse.Namespace, system: System) -> int:
-    return destroy_orphans(system, args, utc_now(system.clock))
-
-
 def status_run(system: System, fleet_dir: Path, now: datetime) -> int:
     run = system.run
     manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
@@ -4515,7 +4506,8 @@ def status_run(system: System, fleet_dir: Path, now: datetime) -> int:
         )
         lock_path = fleet_dir / FLEET_LOCK
         if lock_path.exists():
-            print(f"- lock: {describe_lock(system, nb.read_json(lock_path))}")
+            lock: FleetLock = nb.read_json(lock_path)
+            print(f"- lock: {describe_lock(lock, lock_holder_alive(system, lock))}")
     if manifest["phase"] == "planned":
         print("- no instances: planned only")
         return EXIT_OK
@@ -4601,7 +4593,7 @@ def status_cost(
 
 def status_all(system: System, args: argparse.Namespace, now: datetime) -> int:
     caller_account(system.run)
-    runs = find_runs(system.run, OUT_ROOT, now, system.user)
+    runs = find_runs(system.run, OUT_ROOT, now, system.user())
     if not runs:
         print(f"no espresso-bench resources in {REGION}")
         return EXIT_OK
@@ -4609,7 +4601,7 @@ def status_all(system: System, args: argparse.Namespace, now: datetime) -> int:
     return EXIT_OK
 
 
-def destroy_run(system: System, args: argparse.Namespace) -> int:
+def cmd_down(args: argparse.Namespace, system: System) -> int:
     fleet_dir: Path = args.dir
     manifest = read_fleet(fleet_dir)
     name = manifest["name"]
@@ -4618,7 +4610,7 @@ def destroy_run(system: System, args: argparse.Namespace) -> int:
     if manifest["phase"] in TERMINAL_PHASES:
         raise Refused(f"{name} is already {manifest['phase']}")
     prompt = f"Destroy the fleet of {name} in {ACCOUNT}?"
-    if not confirm(system.ask, prompt, args.yes):
+    if not (args.yes or system.ask(prompt)):
         raise Refused("not confirmed; nothing was destroyed")
     setup_logging(fleet_dir)
     cfg = config_from_manifest(manifest["config"])
@@ -4671,9 +4663,10 @@ def log_down(fleet_dir: Path, cost: dict[str, float] | None) -> None:
         log.info("- %s: %s, %s", run_dir.name, status, usd)
 
 
-def destroy_orphans(system: System, args: argparse.Namespace, now: datetime) -> int:
+def cmd_destroy(args: argparse.Namespace, system: System) -> int:
+    now = utc_now(system.clock)
     caller_account(system.run)
-    runs = find_runs(system.run, OUT_ROOT, now, system.user)
+    runs = find_runs(system.run, OUT_ROOT, now, system.user())
     orphans = [r for r in runs if r["orphan"] is not None]
     if not orphans:
         print(f"no orphaned espresso-bench resources in {REGION}")
@@ -4685,7 +4678,7 @@ def destroy_orphans(system: System, args: argparse.Namespace, now: datetime) -> 
         f"Terminate {instances} instances and delete {others} other resources "
         f"of {len(orphans)} runs in {ACCOUNT}?"
     )
-    if not confirm(system.ask, prompt, args.yes):
+    if not (args.yes or system.ask(prompt)):
         raise Refused("not confirmed; nothing was destroyed")
     try:
         for orphan in orphans:
@@ -4942,7 +4935,7 @@ def write_run_json(run: Run) -> None:
             run.cfg.tag,
             agent,
             run.started,
-            run.fleet.interrupts.clock.time(),
+            run.fleet.system.clock.time(),
         ),
     )
 
@@ -5978,7 +5971,7 @@ def cmd_agent_drive(args: argparse.Namespace, system: System) -> int:
         ),
     )
     sampler.start()
-    pool = nb.HttpPool(system.clock)
+    pool = system.http_pool(system.clock)
     try:
         ready_s = nb.wait_ready(
             pool,
@@ -5991,7 +5984,7 @@ def cmd_agent_drive(args: argparse.Namespace, system: System) -> int:
         reporter.state["ready_s"] = ready_s
         reporter.set_phase("loading", f"ready after {ready_s:.0f} s")
         reporter.state["t0"], reporter.state["t1"] = nb.drive_load(
-            cfg, topo, args.out, lambda: True, system.clock
+            cfg, topo, args.out, lambda: True, system.clock, system.http_pool
         )
         reporter.set_phase("done", "load finished")
         return EXIT_OK
@@ -6195,7 +6188,8 @@ def main() -> int:
     if args.command in ("status", "destroy", "down"):
         logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        return args.func(args, system)
+        command: Command = args.func
+        return command(args, system)
     except (Refused, TfFailed) as exc:
         log.error("error: %s", exc)
         return EXIT_REFUSED

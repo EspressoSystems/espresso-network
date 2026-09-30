@@ -197,5 +197,20 @@ class FakeRunnerTest(unittest.TestCase):
         self.assertTrue(runner.ran("aws", "ec2"))
 
 
+class FakeSystemTest(unittest.TestCase):
+    # TEST:system-unknown-url-fails
+    def test_an_unexpected_url_raises(self):
+        with self.assertRaisesRegex(AssertionError, "unexpected http GET"):
+            fakes.FakeSystem().http_get("https://x.test/", {})
+
+    def test_checkip_is_answered_before_the_registry(self):
+        def registry(url: str, headers: dict[str, str]) -> fakes.Reply:
+            raise AssertionError(f"registry got {url}")
+
+        system = fakes.FakeSystem(http=registry)
+        status, _, body = system.http_get(fakes.CHECKIP_URL, {})
+        self.assertEqual((status, body), (200, b"203.0.113.5\n"))
+
+
 if __name__ == "__main__":
     unittest.main()

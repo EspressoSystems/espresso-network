@@ -22,6 +22,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -35,10 +36,13 @@ from pathlib import Path
 import netbench
 import test_netbench
 from fakes import (
+    CHECKIP_URL,
     FAKE_EPOCH,
     FULL_BALANCE,
     SLOW,
     FakeClock,
+    FakeNode,
+    FakePool,
     FakeRegistry,
     FakeRunner,
     FakeSystem,
@@ -86,17 +90,14 @@ def shot_estimate(hosts: list, cfg: "awsb.RunConfig") -> "awsb.Estimate":
 
 
 def isolated_env(test: unittest.TestCase, tmp: Path, name: str = "run1") -> Path:
-    """Runs in `tmp` so that the relative `OUT_ROOT` lands there, with a fixed fleet name and
-    no checkip call. Returns the out root."""
+    """Runs in `tmp` so that the relative `OUT_ROOT` lands there, with a fixed fleet name.
+    Returns the out root."""
     cwd = os.getcwd()
     os.chdir(tmp)
     test.addCleanup(os.chdir, cwd)
-    patches = [
-        unittest.mock.patch.object(awsb, "default_run_name", return_value=name),
-    ]
-    for patch in patches:
-        patch.start()
-        test.addCleanup(patch.stop)
+    patch = unittest.mock.patch.object(awsb, "default_run_name", return_value=name)
+    patch.start()
+    test.addCleanup(patch.stop)
     return tmp / awsb.OUT_ROOT
 
 
@@ -297,20 +298,28 @@ class FormatEstimateTest(unittest.TestCase):
         self.assertIn("limit $10.00", text)
 
 
-class ConfirmTest(unittest.TestCase):
-    def test_yes_flag_always_confirms(self):
+class ConfirmCreateTest(unittest.TestCase):
+    def test_yes_flag_skips_the_prompt(self):
         system = FakeSystem()
-        self.assertTrue(awsb.confirm(system.ask, "go?", yes=True))
+        cfg = awsb.RunConfig(tag="x", yes=True)
+        awsb.confirm_create(system.ask, cfg, temp_dir(self), 2)
         self.assertEqual(system.prompts, [])
 
     def test_unanswered_prompt_refuses(self):
         system = FakeSystem()
-        self.assertFalse(awsb.confirm(system.ask, "go?", yes=False))
-        self.assertEqual(system.prompts, ["go?"])
+        with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
+            awsb.confirm_create(system.ask, awsb.RunConfig(tag="x"), temp_dir(self), 2)
+        self.assertEqual(len(system.prompts), 1)
 
     def test_answer_decides(self):
         system = FakeSystem(answer=True)
-        self.assertTrue(awsb.confirm(system.ask, "go?", yes=False))
+        awsb.confirm_create(system.ask, awsb.RunConfig(tag="x"), temp_dir(self), 2)
+        self.assertEqual(len(system.prompts), 1)
+
+
+class DefaultRunNameTest(unittest.TestCase):
+    def test_default_name_is_valid(self):
+        self.assertRegex(awsb.default_run_name("tester", NOW), awsb.NAME_RE.pattern)
 
 
 def plan_args(*extra: str, nodes: str = "2") -> "awsb.argparse.Namespace":
@@ -419,10 +428,6 @@ class CmdPlanTest(unittest.TestCase):
         self.assertEqual(second, awsb.EXIT_REFUSED)
         # the name collision is caught before any AWS call, including the account guard
         self.assertEqual(second_runner.calls, [])
-
-    def test_default_name_is_valid(self):
-        unittest.mock.patch.stopall()
-        self.assertRegex(awsb.default_run_name("tester", NOW), awsb.NAME_RE.pattern)
 
     # REQ:awsbench-account-guard
     def test_online_account_mismatch_makes_exactly_one_call(self):
@@ -776,7 +781,7 @@ class ResolveImageTest(unittest.TestCase):
 
 
 class RegistryGetTest(unittest.TestCase):
-    """`_http_get` against a loopback server that relays to a `FakeRegistry`."""
+    """Boundary test: `_http_get` against a loopback server that relays to a `FakeRegistry`."""
 
     def _serve(self, registry: FakeRegistry) -> str:
         class Handler(BaseHTTPRequestHandler):
@@ -1431,8 +1436,7 @@ def valid_result(valid: bool = True) -> dict:
 
 
 class RunHarness:
-    """A temp working dir with its own out root and patched waits for driving `cmd_run` end to
-    end."""
+    """A temp working dir with its own out root for driving `cmd_run` end to end."""
 
     def __init__(
         self, test: unittest.TestCase, name: str = "run1", confirmed: bool = False
@@ -2111,6 +2115,8 @@ def scripted_remote(
 
 # REQ:awsbench-collect-bounded
 class CollectBoundTest(unittest.TestCase):
+    """Boundary test in `run_freeze`: real bash runs `freeze_command` with a stub docker."""
+
     def test_stop_freeze_and_collect_run_under_timeout(self):
         runner = Scripted({})
         tmp = tmp_dir(self)
@@ -2800,17 +2806,15 @@ class PostgresStatsTest(unittest.TestCase):
             probed.set()
             return completed(returncode=1)
 
-        system = FakeSystem(run=run, clock=netbench.SYSTEM_CLOCK)
-
-        def stop_soon():
-            probed.wait(5)
+        def stop_once_probed(now: float) -> None:
+            self.assertTrue(probed.wait(5))
             system.fire(signal.SIGINT)
 
+        system = FakeSystem(run=run, clock=FakeClock(on_advance=stop_once_probed))
         with (
             unittest.mock.patch.object(awsb, "BENCH_DIR", str(tmp)),
             unittest.mock.patch.object(awsb, "host_sample", return_value={"ts": 1}),
         ):
-            threading.Thread(target=stop_soon).start()
             self.assertEqual(awsb.cmd_agent_host(args, system), awsb.EXIT_OK)
         self.assertTrue((tmp / "pg-stats.jsonl").exists())
 
@@ -3157,6 +3161,8 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
 
 
 class StartNodesSyncTest(unittest.TestCase):
+    """Boundary test: real threads meet at a `Barrier` with a wall-clock timeout."""
+
     def test_every_node_waits_concurrently_whatever_the_pool_size(self):
         # Both calls must be inside `docker start` at once; a pool of 1 would time out here.
         barrier = threading.Barrier(2, timeout=2)
@@ -3585,20 +3591,26 @@ class AgentDriveTest(unittest.TestCase):
                 netbench, "sample_metrics", sampler or unittest.mock.Mock()
             ),
         ):
+            clock = FakeClock() if clock is None else clock
+            node = FakeNode(clock, include=False)
             return awsb.cmd_agent_drive(
-                self.args, FakeSystem(clock=FakeClock() if clock is None else clock)
+                self.args, FakeSystem(clock=clock, http_pool=node.connect)
             )
 
     def test_the_clock_reaches_sampler_readiness_and_load(self):
         clock = FakeClock()
         clocks = []
+        pools = []
         self.run_agent(
-            lambda *a: clocks.append(a[-1]) or 1.0,
-            lambda *a: clocks.append(a[-1]) or (1.0, 2.0),
+            lambda *a: clocks.append(a[-1]) or pools.append(a[0]) or 1.0,
+            lambda *a: clocks.append(a[4]) or pools.append(a[5]) or (1.0, 2.0),
             lambda *a, **k: clocks.append(a[-1]),
             clock,
         )
         self.assertEqual(clocks, [clock, clock, clock])
+        ready_pool, load_http = pools
+        self.assertIsInstance(ready_pool, FakePool)
+        self.assertEqual(load_http, ready_pool.node.connect)
 
     def test_done_state_carries_ready_and_window(self):
         code = self.run_agent(lambda *a: 12.0, lambda *a: (100.0, 200.0))
@@ -4196,10 +4208,6 @@ def tag_runner(
     return runner
 
 
-def at(moment: datetime) -> FakeClock:
-    return FakeClock(start=moment.timestamp())
-
-
 def run_cmd(func, argv: list[str], system: FakeSystem) -> tuple[int, str]:
     parsed = awsb.parse_args(argv)
     out = io.StringIO()
@@ -4216,7 +4224,7 @@ class StatusAllTest(unittest.TestCase):
         code, out = run_cmd(
             awsb.cmd_status,
             ["status", "--all"],
-            FakeSystem(run=tag_runner([], []), clock=at(NOW)),
+            FakeSystem(run=tag_runner([], [])),
         )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(out, "no espresso-bench resources in eu-west-1\n")
@@ -4228,7 +4236,7 @@ class StatusAllTest(unittest.TestCase):
         ]
         runner = tag_runner(mappings, [instance("i-1"), instance("i-2")])
         code, out = run_cmd(
-            awsb.cmd_status, ["status", "--all"], FakeSystem(run=runner, clock=at(NOW))
+            awsb.cmd_status, ["status", "--all"], FakeSystem(run=runner)
         )
         self.assertEqual(code, awsb.EXIT_OK)
         lines = out.splitlines()
@@ -4246,7 +4254,7 @@ class StatusAllTest(unittest.TestCase):
             mappings, [instance("i-1", "terminated")], stale_volumes=["vol-1", "vol-2"]
         )
         code, out = run_cmd(
-            awsb.cmd_status, ["status", "--all"], FakeSystem(run=runner, clock=at(NOW))
+            awsb.cmd_status, ["status", "--all"], FakeSystem(run=runner)
         )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(out, "no espresso-bench resources in eu-west-1\n")
@@ -4257,13 +4265,13 @@ class StatusAllTest(unittest.TestCase):
             run_cmd(
                 awsb.cmd_status,
                 ["status", "--all"],
-                FakeSystem(run=runner, clock=at(NOW)),
+                FakeSystem(run=runner),
             )
         self.assertEqual(len(runner.calls), 1)
 
     def test_needs_dir_or_all(self):
         with self.assertRaises(awsb.Refused):
-            run_cmd(awsb.cmd_status, ["status"], FakeSystem(clock=at(NOW)))
+            run_cmd(awsb.cmd_status, ["status"], FakeSystem())
 
 
 class DestroyOrphansTest(unittest.TestCase):
@@ -4284,7 +4292,7 @@ class DestroyOrphansTest(unittest.TestCase):
         return run_cmd(
             awsb.cmd_destroy,
             ["destroy", "--orphans", *flags],
-            FakeSystem(run=runner, clock=at(NOW)),
+            FakeSystem(run=runner),
         )
 
     def test_sweeps_only_orphans_in_dependency_order(self):
@@ -4357,7 +4365,7 @@ class DestroyOrphansTest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             awsb.cmd_destroy(
                 parsed,
-                FakeSystem(run=self.runner(), clock=at(NOW)),
+                FakeSystem(run=self.runner()),
             )
         manifest = json.loads((out / "amy" / "fleet.json").read_text())
         self.assertFalse(key.exists())
@@ -4497,7 +4505,7 @@ class KeptRunTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             code = awsb.cmd_status(
                 self.args(harness, "status"),
-                FakeSystem(run=runner, clock=at(NOW)),
+                FakeSystem(run=runner),
             )
         self.assertEqual(code, awsb.EXIT_OK)
         text = out.getvalue()
@@ -4522,7 +4530,7 @@ class KeptRunTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             awsb.cmd_status(
                 self.args(harness, "status"),
-                FakeSystem(run=runner, clock=at(NOW)),
+                FakeSystem(run=runner),
             )
         self.assertRegex(out.getvalue(), r"- cost: \$\d+\.\d\d actual, bound")
         self.assertNotIn("agent", out.getvalue())
@@ -4539,7 +4547,7 @@ class KeptRunTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             code = awsb.cmd_status(
                 self.args(harness, "status"),
-                FakeSystem(run=offline, clock=at(NOW)),
+                FakeSystem(run=offline),
             )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(offline.calls, [])
@@ -4562,7 +4570,7 @@ class KeptRunTest(unittest.TestCase):
             with contextlib.redirect_stdout(out):
                 awsb.cmd_status(
                     awsb.parse_args(["status", str(run_dir)]),
-                    FakeSystem(run=runner, clock=at(NOW)),
+                    FakeSystem(run=runner),
                 )
         self.assertIn("planned only", out.getvalue())
         self.assertEqual(runner.calls, [])
@@ -4592,7 +4600,7 @@ class KeptRunTest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             awsb.cmd_status(
                 self.args(harness, "status"),
-                FakeSystem(run=runner, clock=at(NOW)),
+                FakeSystem(run=runner),
             )
         self.assertTrue(runner.ran("-i", str(key)))
         runner.describe = DESCRIBE
@@ -4782,10 +4790,47 @@ class ConfigFromManifestTest(unittest.TestCase):
 
 
 class CommandSystemTest(unittest.TestCase):
+    # TEST:system-cmd-requires-system-fails
     def test_command_without_system_fails(self):
         args = awsb.parse_args(["render", "run"])
         with self.assertRaises(TypeError):
             awsb.cmd_render(args)
+        with self.assertRaises(TypeError):
+            awsb.cmd_status(awsb.parse_args(["status", "--all"]))
+
+
+class HostSystemTest(unittest.TestCase):
+    """Boundary tests: the real helpers `host_system` wires in."""
+
+    # TEST:system-ask-no-tty-refuses-ok
+    def test_ask_without_a_tty_refuses(self):
+        code = (
+            "import importlib.util, sys\n"
+            "from importlib.machinery import SourceFileLoader\n"
+            f"loader = SourceFileLoader('aws_bench', {str(SCRIPT)!r})\n"
+            "spec = importlib.util.spec_from_loader('aws_bench', loader)\n"
+            "m = importlib.util.module_from_spec(spec)\n"
+            "loader.exec_module(m)\n"
+            "print(m._ask('go?'))\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "PYTHONPATH": str(SCRIPT.parent)},
+        )
+        self.assertEqual(result.stdout, "False\n")
+
+    def test_pid_alive_for_this_process_and_not_for_a_reaped_child(self):
+        child = subprocess.Popen(["true"])
+        child.wait()
+        self.assertTrue(awsb._pid_alive(os.getpid()))
+        self.assertFalse(awsb._pid_alive(child.pid))
+
+    def test_checkip_url_matches_the_fake(self):
+        self.assertEqual(awsb.CHECKIP_URL, CHECKIP_URL)
 
 
 BOUNDARY = {"_run", "_ask", "_http_get", "_trap", "_pid_alive", "host_system", "stamp"}
@@ -4802,6 +4847,11 @@ SIDE_EFFECTS = {
     "os.getpid",
     "os.kill",
     "urllib.request.urlopen",
+    "nb.SYSTEM_CLOCK",
+    "nb.HttpPool",
+    "time.monotonic",
+    "subprocess.Popen",
+    "subprocess.check_output",
 }
 
 

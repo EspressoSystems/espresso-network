@@ -39,7 +39,7 @@ scripts/network-bench/
   `--tx-timeout-s` times transactions out. Consensus latency of a lagging step is not reliable. Transactions of a lost
   payload stay pending until `--tx-timeout-s`, which the end of the run waits for. Not for the CI job: its step timeout
   is 15 min.
-- `--node-env KEY=VALUE` (repeatable; `up` refuses it, pass it to `run --fleet`): added to every node's environment,
+- `--node-env KEY=VALUE` (repeatable; not an `up` flag, pass it to `run --fleet`): added to every node's environment,
   overriding the harness's own value; taken verbatim, not for secrets; listed in the summary's deployment block and part
   of the config hash.
 - Query node: pg_stat_database/checkpointer/wal/activity every 5 s, pg_stat_statements and settings at collect, slow
@@ -211,7 +211,7 @@ runs/01-run/             one measurement
 just bench aws plan    --tag release-x [--nodes 5]
 just bench aws run     --tag release-x [--nodes 5] [--steps 4,6,9,...] [--query-db MODE] [--max-usd 10] [--yes]
 just bench aws up      --tag release-x --db-modes colocated,volume,rds [--ttl-min 180] [--max-usd 60] [--yes]
-just bench aws run     --fleet FLEET_DIR --query-db MODE [--tag release-y] [--force] [--yes]
+just bench aws run     --fleet FLEET_DIR --query-db MODE [--tag release-y] [--node-env KEY=VALUE] [--force] [--yes]
 just bench aws down    FLEET_DIR [--yes]
 just bench aws status  --all | FLEET_DIR
 just bench aws collect RUN_DIR                 # the fleet's last run, fleet idle or left-running
