@@ -49,6 +49,14 @@ def completed(
     )
 
 
+def fake_ssh_keygen(argv: list[str]) -> subprocess.CompletedProcess:
+    key = Path(argv[argv.index("-f") + 1])
+    key.write_text("private")
+    key.chmod(0o600)
+    key.with_name(key.name + ".pub").write_text("ssh-ed25519 GENERATED run\n")
+    return completed()
+
+
 class FakeRunner:
     """Maps an argv prefix to a canned `CompletedProcess`; records every call. An argv with no
     matching prefix raises, so a test can prove a refused plan never reached `aws` or `tofu`."""
@@ -62,6 +70,8 @@ class FakeRunner:
 
     def __call__(self, argv: list[str]) -> subprocess.CompletedProcess:
         self.calls.append(argv)
+        if argv[0] == "ssh-keygen":
+            return fake_ssh_keygen(argv)
         for prefix, result in self.responses.items():
             if tuple(argv[: len(prefix)]) == prefix:
                 return result
@@ -442,7 +452,7 @@ class CmdPlanTest(unittest.TestCase):
             )
             git = ("git", "rev-parse", "HEAD")
             runner = FakeRunner({git: completed(stdout="a" * 40 + "\n")})
-            code = awsb.cmd_plan(args, run=runner)
+            code = awsb.cmd_plan(args, run=runner, which=lambda name: None)
             self.assertEqual(code, awsb.EXIT_OK)
             self.assertEqual(runner.calls, [list(git)])
             run_dir = Path(out_root) / "run1"
@@ -463,6 +473,69 @@ class CmdPlanTest(unittest.TestCase):
             self.assertEqual(len(manifest["hosts"]), 3)
             self.assertTrue((Path(out_root) / "run1" / "driver.log").exists())
             self.assertTrue((Path(out_root) / "run1" / "events.jsonl").exists())
+
+    def test_auto_key_is_generated_into_the_run_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = online_plan_args(Path(tmp), "--ssh-key", "auto", name="run1")
+            runner = FleetRunner([])
+            with unittest.mock.patch.object(
+                awsb, "preflight", return_value=fake_preflight()
+            ):
+                self.assertEqual(awsb.cmd_plan(args, run=runner), awsb.EXIT_OK)
+            run_dir = Path(tmp) / "out" / "run1"
+            key = run_dir / "ssh" / "id_ed25519"
+            keygen = next(c for c in runner.calls if c[0] == "ssh-keygen")
+            self.assertEqual(
+                keygen,
+                [
+                    "ssh-keygen",
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-C",
+                    "run1",
+                    "-f",
+                    str(key),
+                ],
+            )
+            self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+            tfvars = json.loads(
+                (run_dir / "terraform" / "terraform.tfvars.json").read_text()
+            )
+            self.assertEqual(tfvars["ssh_public_key"], "ssh-ed25519 GENERATED run")
+            manifest = json.loads((run_dir / "manifest.json").read_text())
+            self.assertEqual(manifest["config"]["ssh_key"], "auto")
+            self.assertEqual(manifest["ssh_public_key"], "ssh-ed25519 GENERATED run")
+
+    def test_offline_auto_without_ssh_keygen_uses_the_placeholder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = online_plan_args(
+                Path(tmp), "--ssh-key", "auto", "--offline", name="run1"
+            )
+            runner = FakeRunner(
+                {("git", "rev-parse", "HEAD"): completed(stdout="a" * 40)}
+            )
+            code = awsb.cmd_plan(args, run=runner, which=lambda name: None)
+            self.assertEqual(code, awsb.EXIT_OK)
+            self.assertFalse(runner.ran("ssh-keygen"))
+            tfvars = json.loads(
+                (
+                    Path(tmp) / "out" / "run1" / "terraform" / "terraform.tfvars.json"
+                ).read_text()
+            )
+            self.assertEqual(tfvars["ssh_public_key"], awsb.OFFLINE_SSH_PUB)
+
+    def test_preflight_requires_ssh_keygen_only_for_auto(self):
+        wanted = []
+        for key in ("auto", "/some/key"):
+            cfg = awsb.RunConfig(tag="x", ssh_key=key)
+            with self.assertRaises(awsb.Refused):
+                awsb.preflight(
+                    FakeRunner(), cfg, [], lambda name: wanted.append(name) and None
+                )
+        self.assertEqual(wanted.count("ssh-keygen"), 1)
 
     def test_budget_refusal_makes_no_tofu_apply(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1926,6 +1999,8 @@ class FleetRunner:
             self.calls.append(argv)
         if argv[0] == "git":
             return completed(stdout="a" * 40 + "\n")
+        if argv[0] == "ssh-keygen":
+            return fake_ssh_keygen(argv)
         if argv[0] == "tofu":
             return self.tofu(argv[2])
         if argv[0] == "ssh":
@@ -2186,6 +2261,51 @@ class RunFlowTest(unittest.TestCase):
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertFalse(runner.ran("tofu", "destroy"))
         self.assertIn("| no |", harness.index())
+
+    def test_auto_key_is_removed_after_destroy(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        with unittest.mock.patch.object(
+            awsb, "write_report", return_value=valid_result()
+        ):
+            code = harness.run(runner, extra=("--ssh-key", "auto"))
+        self.assertEqual(code, awsb.EXIT_OK)
+        ssh_dir = harness.run_dir / "ssh"
+        self.assertFalse((ssh_dir / "id_ed25519").exists())
+        self.assertTrue((ssh_dir / "id_ed25519.pub").exists())
+        self.assertIn("ssh key removed", harness.index_log())
+        self.assertTrue(runner.ran("-i", str(ssh_dir / "id_ed25519")))
+
+    def test_auto_key_stays_with_keep(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE])
+        with unittest.mock.patch.object(
+            awsb, "write_report", return_value=valid_result()
+        ):
+            harness.run(runner, extra=("--ssh-key", "auto", "--keep"))
+        self.assertTrue((harness.run_dir / "ssh" / "id_ed25519").exists())
+        self.assertIn("ssh key kept", harness.index_log())
+
+    def test_auto_key_stays_after_failed_destroy(self):
+        harness = RunHarness(self)
+        runner = FleetRunner(
+            [DONE_STATE], destroys=[completed(returncode=1, stderr="locked")]
+        )
+        with unittest.mock.patch.object(
+            awsb, "write_report", return_value=valid_result()
+        ):
+            code = harness.run(runner, extra=("--ssh-key", "auto"))
+        self.assertEqual(code, awsb.EXIT_LEFTOVER)
+        self.assertTrue((harness.run_dir / "ssh" / "id_ed25519").exists())
+
+    def test_explicit_key_is_never_removed(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        with unittest.mock.patch.object(
+            awsb, "write_report", return_value=valid_result()
+        ):
+            harness.run(runner)
+        self.assertTrue((harness.tmp / "key").exists())
 
     def test_agent_error_collects_reports_failure_and_exits_3(self):
         harness = RunHarness(self)
@@ -3576,14 +3696,19 @@ class DestroyOrphansTest(unittest.TestCase):
             out = Path(tmp)
             (out / "amy").mkdir()
             netbench.write_json(
-                out / "amy" / "manifest.json", {"phase": "left-running"}
+                out / "amy" / "manifest.json",
+                {"phase": "left-running", "config": {"ssh_key": "auto"}},
             )
+            key = out / "amy" / "ssh" / "id_ed25519"
+            key.parent.mkdir()
+            key.write_text("private")
             parsed = awsb.parse_args(
                 ["destroy", "--orphans", "--yes", "--out-root", tmp]
             )
             with contextlib.redirect_stdout(io.StringIO()):
                 awsb.cmd_destroy(parsed, self.runner(), NOW)
             manifest = json.loads((out / "amy" / "manifest.json").read_text())
+            self.assertFalse(key.exists())
         self.assertEqual(manifest["phase"], "swept")
 
     def test_needs_dir_or_orphans(self):
@@ -3768,6 +3893,25 @@ class KeptRunTest(unittest.TestCase):
         self.assertEqual(len(rows), 4)
         self.assertTrue(rows[2].endswith("| no |"))
         self.assertTrue(rows[3].endswith("| yes |"))
+
+    def test_destroy_dir_removes_the_auto_key(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        with unittest.mock.patch.object(
+            awsb, "write_report", return_value=valid_result()
+        ):
+            harness.run(runner, extra=("--ssh-key", "auto", "--keep"))
+        (harness.run_dir / "terraform").mkdir(exist_ok=True)
+        key = harness.run_dir / "ssh" / "id_ed25519"
+        self.assertTrue(key.exists())
+        runner.describe = STATUS_DESCRIBE
+        with contextlib.redirect_stdout(io.StringIO()):
+            awsb.cmd_status(self.args(harness, "status"), runner, NOW)
+        self.assertTrue(runner.ran("-i", str(key)))
+        runner.describe = DESCRIBE
+        awsb.cmd_destroy(self.args(harness, "destroy", "--yes"), runner)
+        self.assertFalse(key.exists())
+        self.assertTrue(key.with_name("id_ed25519.pub").exists())
 
     def test_destroy_dir_twice_is_refused(self):
         harness, runner = self.kept(describe=DESCRIBE)

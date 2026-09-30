@@ -148,8 +148,11 @@ just bench aws render  DIR [--baseline FILE]
 just bench aws destroy DIR | --orphans
 ```
 
-- Needs: nix devShell (opentofu, awscli2), AWS profile with EC2 write (`--profile`, `--account`), ssh key (`--ssh-key`),
-  rev pushed as `release-*` so CI publishes images.
+- Needs: nix devShell (opentofu, awscli2), AWS profile with EC2 write (`--profile`, `--account`), `ssh-keygen`, rev
+  pushed as `release-*` so CI publishes images.
+- `--ssh-key auto` (default): ed25519 key generated per run in `<run>/ssh/`, private half deleted after destroy (kept
+  with `--keep` or a failed destroy).
+- `--ssh-key PATH`: existing key, PATH and PATH.pub must exist, never deleted.
 
 ### 100 nodes
 

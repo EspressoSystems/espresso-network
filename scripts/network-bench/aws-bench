@@ -17,7 +17,7 @@ existing run dir. `agent-drive` (on ctl) and `agent-host` (on every host) run un
 python3 from /opt/bench.
 
 Prerequisites: opentofu and awscli2 (nix devShell), an AWS profile for the benchmark account
-(`--profile`, default `timeboost-dev`), an ssh key (`--ssh-key`, default ~/.ssh/id_ed25519), and
+(`--profile`, default `timeboost-dev`), an ssh key (`--ssh-key`, default `auto`: a fresh key per run, deleted after destroy), and
 `--tag` naming the ghcr tag CI pushed for a `release-*` branch.
 Recipes: `just bench aws plan|run|status|collect|render|destroy`.
 
@@ -269,6 +269,7 @@ FAILURE_LOG_LINES = 10
 CHECKIP_URL = "https://checkip.amazonaws.com"
 # `plan --offline` touches neither the operator's key nor the network (unless --operator-cidr).
 OFFLINE_SSH_PUB = "ssh-ed25519 OFFLINE-PLACEHOLDER"
+SSH_KEY_AUTO = "auto"
 OFFLINE_CIDR = "192.0.2.1/32"
 AGENT_POLL_S = 5.0
 AGENT_LOG_S = 30.0
@@ -407,6 +408,7 @@ class Manifest(TypedDict):
     cost_usd: NotRequired[dict[str, float]]
     git_rev: NotRequired[str]
     config_hash: NotRequired[str]
+    ssh_public_key: NotRequired[str]
 
 
 class AgentState(TypedDict):
@@ -471,7 +473,7 @@ class RunConfig:
     pg_iops: int = 6000
     pg_mbps: int = 500
     operator_cidr: str = "auto"
-    ssh_key: Path = Path("~/.ssh/id_ed25519")
+    ssh_key: str = SSH_KEY_AUTO
     max_usd: float = 10.0
     price: tuple[str, ...] = ()
     name: str | None = None
@@ -870,7 +872,6 @@ def append_event(run_dir: Path, phase: str, event: str, detail: str | None) -> N
 
 def config_to_json(cfg: RunConfig) -> dict[str, Any]:
     data = dataclasses.asdict(cfg)
-    data["ssh_key"] = str(cfg.ssh_key)
     data["out_root"] = str(cfg.out_root)
     return data
 
@@ -1307,7 +1308,10 @@ def preflight(
     hosts: list[HostSpec],
     which: Callable[[str], str | None] = shutil.which,
 ) -> Preflight:
-    tools_on_path((cfg.tf, "aws", "ssh", "scp", "rsync", "git"), which)
+    tools = [cfg.tf, "aws", "ssh", "scp", "rsync", "git"]
+    if cfg.ssh_key == SSH_KEY_AUTO:
+        tools.append("ssh-keygen")
+    tools_on_path(tools, which)
     account = caller_account(run, cfg)
     vpc_id = default_vpc(run, cfg)
     types = {h["instance_type"] for h in hosts}
@@ -1768,7 +1772,7 @@ def add_run_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--pg-iops", type=int, default=defaults.pg_iops)
     parser.add_argument("--pg-mbps", type=int, default=defaults.pg_mbps)
     parser.add_argument("--operator-cidr", default=defaults.operator_cidr)
-    parser.add_argument("--ssh-key", type=Path, default=defaults.ssh_key)
+    parser.add_argument("--ssh-key", default=defaults.ssh_key)
     parser.add_argument("--max-usd", type=float, default=defaults.max_usd)
     parser.add_argument("--price", action="append", default=[], metavar="TYPE=USD")
     parser.add_argument("--name")
@@ -1904,7 +1908,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def cmd_plan(args: argparse.Namespace, run: Runner = _run) -> int:
+def cmd_plan(
+    args: argparse.Namespace,
+    run: Runner = _run,
+    which: Callable[[str], str | None] = shutil.which,
+) -> int:
     cfg = config_from_args(args)
     now = time.time()
     if cfg.offline:
@@ -1916,7 +1924,7 @@ def cmd_plan(args: argparse.Namespace, run: Runner = _run) -> int:
             run, cfg, hosts, region_minor_prices(cfg.region), run_dir, now
         )
         render_run_dir(
-            run, cfg, run_dir, hosts, offline_preflight(cfg), estimate, args.argv
+            run, cfg, run_dir, hosts, offline_preflight(cfg), estimate, args.argv, which
         )
     else:
         run_dir, _, _, _ = plan_fleet(args, cfg, run, now)
@@ -2243,7 +2251,12 @@ def connect(fleet: Fleet) -> Remote:
     nb.write_json(fleet.run_dir / "hosts.json", hosts_info)
     update_manifest(fleet.run_dir, "provisioned", hosts_info=hosts_info)
     render_host_files(fleet.run_dir, fleet.cfg, manifest, hosts_info)
-    fleet.remote = Remote(fleet.run, fleet.run_dir, fleet.cfg.ssh_key, hosts_info)
+    fleet.remote = Remote(
+        fleet.run,
+        fleet.run_dir,
+        ssh_key_path(fleet.cfg.ssh_key, fleet.run_dir),
+        hosts_info,
+    )
     return fleet.remote
 
 
@@ -2308,7 +2321,7 @@ def teardown(
     destroyed = False
     if cfg.keep:
         log.info(
-            "--keep: fleet stays up until its TTL; then run: aws-bench destroy %s",
+            "--keep: fleet stays up until its TTL, ssh key kept; then run: aws-bench destroy %s",
             run_dir,
         )
     elif cfg.yes or not fleet.interrupted or ask_destroy(DESTROY_PROMPT_TIMEOUT_S):
@@ -2317,6 +2330,7 @@ def teardown(
     cost = None
     if destroyed:
         cost = final_cost(fleet)
+        remove_ssh_key(cfg.ssh_key, run_dir)
     code = exit_code(fleet, result, cfg.keep or destroyed)
     update_manifest(run_dir, "done" if destroyed else "left-running")
     append_index(cfg.out_root, fleet.manifest, result, code, destroyed, cost)
@@ -2413,10 +2427,11 @@ def render_run_dir(
     pre: Preflight,
     estimate: Estimate,
     argv: list[str],
+    which: Callable[[str], str | None] = shutil.which,
 ) -> None:
     """Everything known before `tofu apply`. Files that need the hosts' addresses (env files,
     start.sh, topology) are written by `render_host_files` after it."""
-    ssh_pub = OFFLINE_SSH_PUB if cfg.offline else read_ssh_pub(cfg.ssh_key)
+    ssh_pub = resolve_ssh_pub(run, cfg, run_dir, which)
     cidr = operator_cidr(cfg)
     git_rev = git_head(run)
     genesis = render_genesis(
@@ -2430,6 +2445,7 @@ def render_run_dir(
         ami_id=pre["ami_id"],
         images=pre["images"],
         git_rev=git_rev,
+        ssh_public_key=ssh_pub,
         config_hash=run_config_hash(cfg, hosts, pre["images"], genesis),
         cost_usd={"expected": estimate["expected_usd"], "bound": estimate["bound_usd"]},
     )
@@ -2477,6 +2493,57 @@ def run_config_hash(
             json.dumps(hosts, sort_keys=True).encode(),
         ],
     )
+
+
+def ssh_key_path(ssh_key: str, run_dir: Path) -> Path:
+    if ssh_key == SSH_KEY_AUTO:
+        return run_dir / "ssh" / "id_ed25519"
+    return Path(ssh_key).expanduser()
+
+
+def resolve_ssh_pub(
+    run: Runner, cfg: RunConfig, run_dir: Path, which: Callable[[str], str | None]
+) -> str:
+    """The public key for `var.ssh_public_key`. Offline runs use the placeholder unless
+    `auto` can be generated locally."""
+    if cfg.ssh_key == SSH_KEY_AUTO:
+        if cfg.offline and which("ssh-keygen") is None:
+            return OFFLINE_SSH_PUB
+        return generate_ssh_key(run, run_dir)
+    if cfg.offline:
+        return OFFLINE_SSH_PUB
+    return read_ssh_pub(Path(cfg.ssh_key))
+
+
+def generate_ssh_key(run: Runner, run_dir: Path) -> str:
+    key = ssh_key_path(SSH_KEY_AUTO, run_dir)
+    key.parent.mkdir(exist_ok=True)
+    result = run(
+        [
+            "ssh-keygen",
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-C",
+            run_dir.name,
+            "-f",
+            str(key),
+        ]
+    )
+    if result.returncode != 0:
+        raise Refused(f"ssh-keygen failed: {result.stderr.strip()}")
+    return key.with_name(key.name + ".pub").read_text().strip()
+
+
+def remove_ssh_key(ssh_key: str, run_dir: Path) -> None:
+    """Deletes the private half of an `auto` key; the `.pub` stays for the record."""
+    key = ssh_key_path(ssh_key, run_dir)
+    if ssh_key != SSH_KEY_AUTO or not key.exists():
+        return
+    key.unlink()
+    log.info("ssh key removed")
 
 
 def read_ssh_pub(ssh_key: Path) -> str:
@@ -2966,7 +3033,9 @@ def cmd_collect(args: argparse.Namespace, run: Runner = _run) -> int:
     manifest: Manifest = nb.read_json(run_dir / "manifest.json")
     hosts = provisioned_hosts(manifest)
     setup_logging(run_dir)
-    remote = Remote(run, run_dir, Path(manifest["config"]["ssh_key"]), hosts)
+    remote = Remote(
+        run, run_dir, ssh_key_path(manifest["config"]["ssh_key"], run_dir), hosts
+    )
     subdir = f"collect-{next_collect_index(run_dir)}"
     collect_hosts(remote, list(hosts.values()), run_dir, subdir)
     missing = [
@@ -3028,7 +3097,7 @@ def status_run(run: Runner, run_dir: Path, now: datetime) -> int:
     if ctl and any(
         i["id"] == ctl["instance_id"] and i["state"] == "running" for i in instances
     ):
-        remote = Remote(run, run_dir, Path(config["ssh_key"]), hosts)
+        remote = Remote(run, run_dir, ssh_key_path(config["ssh_key"], run_dir), hosts)
         print(f"- agent: {format_agent(read_agent_state(remote))}")
     print(f"- cost: {status_cost(run, manifest, instances, now)}")
     return EXIT_OK
@@ -3094,6 +3163,7 @@ def destroy_run(run: Runner, args: argparse.Namespace) -> int:
     )
     code = exit_code(fleet, result, True)
     append_index(run_dir.parent, fleet.manifest, result, code, True, cost)
+    remove_ssh_key(cfg.ssh_key, run_dir)
     log.info("destroyed %s", name)
     return EXIT_OK
 
@@ -3130,7 +3200,8 @@ def destroy_orphans(run: Runner, args: argparse.Namespace, now: datetime) -> int
 
 def mark_swept(run_dir: Path) -> None:
     if (run_dir / "manifest.json").exists():
-        update_manifest(run_dir, "swept")
+        manifest = update_manifest(run_dir, "swept")
+        remove_ssh_key(manifest["config"]["ssh_key"], run_dir)
 
 
 def account_config(args: argparse.Namespace) -> RunConfig:
@@ -3144,7 +3215,6 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     fields: dict[str, Any] = {
         **saved,
         "load": load_config(dict(saved["load"])),
-        "ssh_key": Path(saved["ssh_key"]),
         "out_root": Path(saved["out_root"]),
         "price": tuple(saved["price"]),
     }
