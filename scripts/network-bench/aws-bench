@@ -1731,7 +1731,7 @@ def render_start_sh(host: HostSpec, images: dict[str, ImageInfo]) -> str:
             "postgres",
             [
                 "-v",
-                "/data/pg:/var/lib/postgresql/data",
+                "/data/pg:/var/lib/postgresql",
                 "-e",
                 "POSTGRES_USER=root",
                 "-e",
@@ -2177,6 +2177,7 @@ class Fleet:
     started: float
     remote: Remote | None = None
     agent: AgentState | None = None
+    agent_started: bool = False
     error: str | None = None
     interrupted: bool = False
 
@@ -2311,6 +2312,7 @@ def measure(fleet: Fleet) -> None:
         update_manifest(fleet.run_dir, "measuring", start_spread_s=spread)
         log.info("measuring: nodes started within %.2f s of each other", spread)
         start_agent(remote)
+        fleet.agent_started = True
         fleet.agent = poll_agent(remote, fleet.run_dir, fleet.cfg, fleet.interrupts)
     except Interrupted:
         fleet.interrupted = True
@@ -2361,10 +2363,11 @@ def finish(fleet: Fleet) -> nb.BenchResult | None:
             "collect",
             lambda: collect_hosts(remote, list(remote.hosts.values()), fleet.run_dir),
         )
-        step(
-            "final rsync",
-            lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", fleet.run_dir),
-        )
+        if fleet.agent_started:
+            step(
+                "final rsync",
+                lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", fleet.run_dir),
+            )
     return report(fleet)
 
 
