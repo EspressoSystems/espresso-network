@@ -932,23 +932,21 @@ where
     /// [`append`](Self::append) fetches it.
     async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         let height = block.height();
-        let leaf = {
-            let mut tx = self.read().await.context("opening read transaction")?;
-            match tx.get_leaf(LeafId::Number(height as usize)).await {
-                Ok(leaf) => leaf,
-                Err(QueryError::Missing | QueryError::NotFound) => {
-                    tracing::info!(
-                        height,
-                        "dropping reconstructed payload; leaf not yet available"
-                    );
-                    return Ok(());
-                },
-                Err(err) => {
-                    return Err(err).context(format!(
-                        "loading leaf {height} to verify reconstructed payload"
-                    ));
-                },
-            }
+        let mut tx = self.read().await.context("opening read transaction")?;
+        let leaf = match tx.get_leaf(LeafId::Number(height as usize)).await {
+            Ok(leaf) => leaf,
+            Err(QueryError::Missing | QueryError::NotFound) => {
+                tracing::info!(
+                    height,
+                    "dropping reconstructed payload; leaf not yet available"
+                );
+                return Ok(());
+            },
+            Err(err) => {
+                return Err(err).context(format!(
+                    "loading leaf {height} to verify reconstructed payload"
+                ));
+            },
         };
         if leaf.block_hash() != block.hash() {
             tracing::warn!(
@@ -959,6 +957,19 @@ where
             );
             return Ok(());
         }
+        // Storing is an upsert that rewrites the whole payload, and the same block arrives
+        // again on every replay, so skip blocks that are already stored.
+        match tx
+            .get_payload_metadata(BlockId::Number(height as usize))
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(QueryError::Missing | QueryError::NotFound) => {},
+            Err(err) => {
+                return Err(err).context(format!("checking whether block {height} is stored"));
+            },
+        }
+        drop(tx);
         self.fetcher.store_and_notify(&block).await;
         Ok(())
     }
