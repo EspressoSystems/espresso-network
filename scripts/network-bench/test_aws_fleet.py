@@ -1,6 +1,6 @@
 """Tests for the fleet lifecycle of `aws-bench`: `up`, `run --fleet`, `extend` and `down`.
 
-Reuses the fake runners of `fakes` and the fixtures of `test_aws_bench`.
+Shared helpers live in `fakes` and `conftest`.
 
     just py::test
 """
@@ -12,7 +12,6 @@ import re
 import shlex
 import shutil
 import signal
-import stat
 import subprocess
 import tempfile
 import unittest
@@ -23,133 +22,57 @@ from pathlib import Path
 from typing import ClassVar
 
 import netbench
+import pytest
 from fakes import (
+    BY_ID,
+    DESCRIBE,
+    DONE_STATE,
+    EXPIRES_LATER,
+    EXPIRES_PAST,
     FAKE_EPOCH,
+    LIST_ROLES,
+    NOW,
+    RDS_CREATED,
+    RDS_OUTPUT,
+    ROLE_ARN,
+    STATUS_DESCRIBE,
+    VOLUME_ID,
     FakeClock,
     FakeRunner,
     FakeSystem,
-    FleetRunner,
-    completed,
-    two_node_hosts_info,
-)
-from test_aws_bench import (
-    DESCRIBE,
-    DONE_STATE,
-    DOTENV_TEXT,
-    NOW,
-    STATUS_DESCRIBE,
+    FleetHarness,
+    RdsHarness,
+    RdsRunner,
     aws_manifest,
+    aws_verbs,
     awsb,
+    completed,
+    db_instance,
     fake_image,
     fake_images,
     fake_preflight,
+    instance_row,
     isolated_env,
-    tag_runner,
-    temp_dir,
+    mapping,
+    mode,
+    rds_fleet_mappings,
+    rds_spec,
+    rds_tag_runner,
+    resource_arn,
+    ssh_calls,
+    two_node_hosts_info,
     valid_result,
+    volume_runner,
     write_collected_run,
 )
 
 
-def fake_report(run_dir: Path, baseline=None) -> dict:
-    # The real report reads these keys from the run manifest a driver command wrote.
-    awsb.deployment_meta(
-        netbench.read_json(run_dir / "manifest.json"), {"clock_offset_ms": {}}
-    )
-    result = valid_result()
-    netbench.write_json(run_dir / "result.json", result)
-    return result
-
-
-class FleetHarness:
-    """A temp working dir with its own out root, and the argv of `up` and `run --fleet` for one
-    fleet."""
-
-    def __init__(self, test: unittest.TestCase, name: str = "fleet1"):
-        self.tmp = temp_dir(test)
-        isolated_env(test, self.tmp, name)
-        self.name = name
-        self.out = awsb.OUT_ROOT
-        self.fleet_dir = self.out / name
-        patches = [
-            unittest.mock.patch.object(
-                awsb, "preflight", return_value=fake_preflight()
-            ),
-            unittest.mock.patch.object(awsb, "write_report", fake_report),
-            unittest.mock.patch.object(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT)),
-        ]
-        for patch in patches:
-            patch.start()
-            test.addCleanup(patch.stop)
-
-    def parse(self, *argv: str) -> "awsb.argparse.Namespace":
-        args = awsb.parse_args(list(argv))
-        args.argv = list(argv)
-        return args
-
-    def fleet_flags(self) -> list[str]:
-        return [
-            "--tag",
-            "t",
-            "--nodes",
-            "2",
-            "--yes",
-        ]
-
-    def up_args(self, *extra: str) -> "awsb.argparse.Namespace":
-        return self.parse("up", *self.fleet_flags(), *extra)
-
-    def single_shot_args(self) -> "awsb.argparse.Namespace":
-        return self.parse("run", *self.fleet_flags())
-
-    def run_args(self, *extra: str) -> "awsb.argparse.Namespace":
-        return self.parse(
-            "run",
-            "--fleet",
-            str(self.fleet_dir),
-            "--yes",
-            *extra,
-        )
-
-    def up(self, runner, *extra: str) -> int:
-        return awsb.cmd_up(self.up_args(*extra), FakeSystem(run=runner))
-
-    def run(self, runner, *extra: str) -> int:
-        return self.run_with(FakeSystem(run=runner), *extra)
-
-    def run_with(self, system: FakeSystem, *extra: str) -> int:
-        return awsb.cmd_run(self.run_args(*extra), system)
-
-    def fleet(self) -> dict:
-        return json.loads((self.fleet_dir / "fleet.json").read_text())
-
-    def set_fleet(self, **changes) -> None:
-        netbench.write_json(self.fleet_dir / "fleet.json", {**self.fleet(), **changes})
-
-    def index(self) -> list[str]:
-        return (self.out / "INDEX.md").read_text().splitlines()[2:]
-
-    def lock(self) -> Path:
-        return self.fleet_dir / awsb.FLEET_LOCK
-
-    def driver_log(self) -> str:
-        return (self.fleet_dir / "driver.log").read_text()
-
-    def up_fleet(self, test: unittest.TestCase) -> FleetRunner:
-        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
-        test.assertEqual(self.up(runner), awsb.EXIT_OK)
-        return runner
-
-
-def ssh_calls(runner: FleetRunner, since: int = 0) -> list[str]:
-    return [" ".join(call) for call in runner.calls[since:] if call[0] == "ssh"]
-
-
 # REQ:fleet-up-idle
+@pytest.mark.usefixtures("isolated")
 class UpTest(unittest.TestCase):
     def test_up_ends_idle_without_starting_anything(self):
         harness = FleetHarness(self)
-        runner = FleetRunner([DONE_STATE])
+        runner = FakeRunner(states=[DONE_STATE])
         self.assertEqual(harness.up(runner), awsb.EXIT_OK)
         manifest = harness.fleet()
         self.assertEqual(manifest["phase"], "idle")
@@ -166,7 +89,7 @@ class UpTest(unittest.TestCase):
 
     def test_up_prints_cost_and_the_run_command(self):
         harness = FleetHarness(self)
-        harness.up(FleetRunner([DONE_STATE]))
+        harness.up(FakeRunner(states=[DONE_STATE]))
         log = harness.driver_log()
         self.assertRegex(
             log,
@@ -180,7 +103,7 @@ class UpTest(unittest.TestCase):
 
     def test_expiry_counts_from_the_confirm_without_a_provision_margin(self):
         harness = FleetHarness(self)
-        harness.up(FleetRunner([DONE_STATE]))
+        harness.up(FakeRunner(states=[DONE_STATE]))
         manifest = harness.fleet()
         expires = datetime.fromisoformat(manifest["expires_at"])
         self.assertEqual(expires, NOW + timedelta(minutes=180))
@@ -193,7 +116,7 @@ class UpTest(unittest.TestCase):
 
     def test_fleet_bound_is_the_rate_over_the_ttl_plus_boot(self):
         harness = FleetHarness(self)
-        harness.up(FleetRunner([DONE_STATE]))
+        harness.up(FakeRunner(states=[DONE_STATE]))
         estimate = harness.fleet()["estimate"]
         self.assertEqual(estimate["ttl_s"], 180 * 60)
         rate = awsb.estimate_rate(estimate)
@@ -206,8 +129,8 @@ class UpTest(unittest.TestCase):
 
     def test_apply_failure_destroys_and_exits_3(self):
         harness = FleetHarness(self)
-        runner = FleetRunner(
-            [DONE_STATE],
+        runner = FakeRunner(
+            states=[DONE_STATE],
             apply=completed(returncode=1, stderr="Error: InsufficientInstanceCapacity"),
         )
         self.assertEqual(harness.up(runner), awsb.EXIT_FAILED)
@@ -216,8 +139,8 @@ class UpTest(unittest.TestCase):
 
     def test_apply_failure_with_a_failed_destroy_exits_4(self):
         harness = FleetHarness(self)
-        runner = FleetRunner(
-            [DONE_STATE],
+        runner = FakeRunner(
+            states=[DONE_STATE],
             apply=completed(returncode=1, stderr="Error: boom"),
             destroys=[completed(returncode=1, stderr="locked")],
         )
@@ -227,7 +150,7 @@ class UpTest(unittest.TestCase):
 
     def test_declined_prompt_creates_nothing(self):
         harness = FleetHarness(self)
-        runner = FleetRunner([DONE_STATE])
+        runner = FakeRunner(states=[DONE_STATE])
         args = harness.up_args()
         args.yes = False
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
@@ -236,20 +159,21 @@ class UpTest(unittest.TestCase):
 
     def test_up_needs_explicit_minutes(self):
         harness = FleetHarness(self)
-        runner = FleetRunner([DONE_STATE])
+        runner = FakeRunner(states=[DONE_STATE])
         with self.assertRaisesRegex(awsb.Refused, "--ttl-min"):
             harness.up(runner, "--ttl-min", "auto")
         self.assertFalse(runner.ran("tofu", "apply"))
 
     def test_bound_above_max_usd_is_refused(self):
         harness = FleetHarness(self)
-        runner = FleetRunner([DONE_STATE])
+        runner = FakeRunner(states=[DONE_STATE])
         with self.assertRaisesRegex(awsb.Refused, "exceeds --max-usd"):
             harness.up(runner, "--max-usd", "1")
         self.assertFalse(runner.ran("tofu", "apply"))
 
 
 # REQ:fleet-run-on-fleet
+@pytest.mark.usefixtures("isolated")
 class RunOnFleetTest(unittest.TestCase):
     def test_two_runs_reset_between_and_leave_the_fleet_idle(self):
         harness = FleetHarness(self)
@@ -409,7 +333,7 @@ class RunOnFleetTest(unittest.TestCase):
     # REQ:fleet-single-shot-unchanged
     def test_single_shot_does_not_reset_and_writes_its_index_row(self):
         harness = FleetHarness(self)
-        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
         args = harness.single_shot_args()
         code = awsb.cmd_run(args, FakeSystem(run=runner))
         self.assertEqual(code, awsb.EXIT_OK)
@@ -421,6 +345,7 @@ class RunOnFleetTest(unittest.TestCase):
 
 
 # REQ:fleet-run-refusals
+@pytest.mark.usefixtures("isolated")
 class RunRefusalTest(unittest.TestCase):
     def refused(self, harness: FleetHarness, runner, pattern: str, *extra: str) -> None:
         mark = len(runner.calls)
@@ -517,13 +442,13 @@ class RunRefusalTest(unittest.TestCase):
     def test_unknown_dir_is_not_a_fleet(self):
         harness = FleetHarness(self)
         with self.assertRaisesRegex(awsb.Refused, "not a fleet dir"):
-            harness.run(FleetRunner([DONE_STATE]))
+            harness.run(FakeRunner(states=[DONE_STATE]))
 
     def test_single_shot_needs_a_tag(self):
         harness = FleetHarness(self)
         args = harness.parse("run", "--nodes", "2")
         with self.assertRaisesRegex(awsb.Refused, "--tag"):
-            awsb.cmd_run(args, FakeSystem(run=FleetRunner([DONE_STATE])))
+            awsb.cmd_run(args, FakeSystem(run=FakeRunner(states=[DONE_STATE])))
 
 
 NEW_DIGEST = f"sha256:{'1' * 64}"
@@ -535,7 +460,7 @@ def resolve_tag(_http_get, ref: str) -> dict:
     return {**image, "digest": NEW_DIGEST} if ref.endswith(":other") else image
 
 
-def respond_to_pulls(runner: FleetRunner, wrong: dict[str, str] | None = None) -> None:
+def respond_to_pulls(runner: FakeRunner, wrong: dict[str, str] | None = None) -> None:
     """Answers the pull script with what docker would report: the requested digests, or the
     ones in `wrong`. The record script echoes a `ready.json` holding the digests it was given."""
     replaced = wrong or {}
@@ -565,6 +490,7 @@ def respond_to_pulls(runner: FleetRunner, wrong: dict[str, str] | None = None) -
 
 
 # REQ:fleet-tag-pull
+@pytest.mark.usefixtures("isolated")
 class TagPullTest(unittest.TestCase):
     def setUp(self):
         patch = unittest.mock.patch.object(
@@ -575,8 +501,8 @@ class TagPullTest(unittest.TestCase):
 
     def up_fleet(
         self, harness: FleetHarness, wrong: dict[str, str] | None = None
-    ) -> FleetRunner:
-        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+    ) -> FakeRunner:
+        runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
         respond_to_pulls(runner, wrong)
         self.assertEqual(harness.up(runner), awsb.EXIT_OK)
         self.resolve.reset_mock()
@@ -700,6 +626,7 @@ class TagPullTest(unittest.TestCase):
         self.assertEqual(ssh_calls(runner, mark), [])
 
 
+@pytest.mark.usefixtures("isolated")
 class ShipAgentsTest(unittest.TestCase):
     def test_both_agents_go_to_every_host_and_the_git_revision_is_recorded(self):
         harness = FleetHarness(self)
@@ -753,6 +680,7 @@ class FleetLockTest(unittest.TestCase):
         self.assertTrue(awsb.lock_holder_alive(FakeSystem(dead_pids={1}), lock))
 
 
+@pytest.mark.usefixtures("isolated")
 class ResetScriptTest(unittest.TestCase):
     def test_every_host_stops_units_removes_containers_and_wipes_the_journal(self):
         script = awsb.reset_script("validator")
@@ -787,33 +715,15 @@ class ResetScriptTest(unittest.TestCase):
         self.assertTrue(all("sudo timeout" in c for c in commands))
 
 
-VOLUME_ID = "vol-0abc123def456"
-BY_ID = "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol0abc123def456"
 NODE0_IP = "203.0.113.2"
 
 
-def volume_runner(
-    states: list[dict], volume_id: str | None = VOLUME_ID, **kwargs
-) -> FleetRunner:
-    """A `FleetRunner` whose `tofu output` has the `pg_volume_id` of a fleet with a Postgres
-    volume."""
-    runner = FleetRunner(states, **kwargs)
-
-    def output(argv: list[str]) -> subprocess.CompletedProcess:
-        outputs = json.loads(runner.default(argv).stdout)
-        return completed(
-            stdout=json.dumps({**outputs, "pg_volume_id": {"value": volume_id}})
-        )
-
-    runner.respond("output -json", output)
-    return runner
-
-
-def node0_calls(runner: FleetRunner, since: int = 0) -> list[str]:
+def node0_calls(runner: FakeRunner, since: int = 0) -> list[str]:
     return [c for c in ssh_calls(runner, since) if NODE0_IP in c]
 
 
 # REQ:querydb-volume-wiring
+@pytest.mark.usefixtures("isolated")
 class VolumeWiringTest(unittest.TestCase):
     def test_by_id_path_drops_the_dash_of_the_volume_id(self):
         self.assertEqual(awsb.volume_device(VOLUME_ID), BY_ID)
@@ -986,6 +896,7 @@ class PgStoreScriptTest(unittest.TestCase):
 
 
 # REQ:fleet-cost
+@pytest.mark.usefixtures("isolated")
 class PgVolumeCostTest(unittest.TestCase):
     def rate(self, volume: "awsb.VolumeSpec | None") -> float:
         hosts = awsb.plan_hosts(
@@ -1039,6 +950,7 @@ class PgVolumeCostTest(unittest.TestCase):
 
 
 # REQ:fleet-cost
+@pytest.mark.usefixtures("isolated")
 class RunEstimateTest(unittest.TestCase):
     def test_a_run_has_no_provision_or_destroy(self):
         cfg = awsb.RunConfig(tag="x")
@@ -1096,6 +1008,7 @@ class RunEstimateTest(unittest.TestCase):
 
 
 # REQ:fleet-down
+@pytest.mark.usefixtures("isolated")
 class DownTest(unittest.TestCase):
     def down(self, harness, runner, *extra: str) -> int:
         args = harness.parse("down", str(harness.fleet_dir), "--yes", *extra)
@@ -1154,6 +1067,7 @@ class DownTest(unittest.TestCase):
         self.assertFalse(runner.ran("tofu", "destroy"))
 
 
+@pytest.mark.usefixtures("isolated")
 class StatusTest(unittest.TestCase):
     def test_status_shows_the_time_left_and_the_lock_holder(self):
         harness = FleetHarness(self)
@@ -1213,6 +1127,7 @@ class ParseArgsTest(unittest.TestCase):
         self.assertEqual(awsb.config_from_manifest(saved), cfg)
 
 
+@pytest.mark.usefixtures("isolated")
 class RunManifestTest(unittest.TestCase):
     def test_the_run_manifest_copies_the_fleet(self):
         harness = FleetHarness(self)
@@ -1226,139 +1141,8 @@ class RunManifestTest(unittest.TestCase):
         self.assertEqual(set(run_manifest["images"]), set(fake_images()))
 
 
-RDS_OUTPUT = {
-    "identifier": "espresso-bench-fleet1",
-    "endpoint": "espresso-bench-fleet1.abc.eu-west-1.rds.amazonaws.com",
-    "port": 5432,
-    "engine_version": "18.2",
-}
-RDS_CREATED = "2026-09-30T11:05:00+00:00"
-
-
-def db_instance(state: str = "available", applied: str = "in-sync") -> dict:
-    return {
-        "DBInstanceStatus": state,
-        "DBParameterGroups": [
-            {"DBParameterGroupName": "g", "ParameterApplyStatus": applied}
-        ],
-        "InstanceCreateTime": RDS_CREATED,
-    }
-
-
-def rds_metric_data(missing: tuple[str, ...] = (), value: float = 100.0) -> str:
-    def result(query_id: str) -> dict:
-        points = [] if query_id in missing else [(60.0 * i, value) for i in (1, 2, 3)]
-        return {
-            "Id": query_id,
-            "Label": query_id,
-            "Timestamps": [
-                datetime.fromtimestamp(ts, UTC).isoformat() for ts, _ in points
-            ],
-            "Values": [v for _, v in points],
-            "StatusCode": "Complete",
-        }
-
-    return json.dumps(
-        {"MetricDataResults": [result(i) for i in awsb.RDS_METRICS], "Messages": []}
-    )
-
-
-def rds_spec(**overrides) -> dict:
-    return {
-        "instance_class": "db.m8g.4xlarge",
-        "engine_version": "18.2",
-        "gb": 400,
-        "iops": 12000,
-        "mbps": 500,
-        **overrides,
-    }
-
-
-def mode(path: Path) -> int:
-    return stat.S_IMODE(path.stat().st_mode)
-
-
-class RdsRunner(FleetRunner):
-    """`FleetRunner` with the rds output of `tofu`, and the `aws rds`
-    and CloudWatch calls an rds fleet makes. `instances` are the successive
-    describe-db-instances answers; the last one repeats."""
-
-    def __init__(
-        self,
-        *args,
-        instances: list[dict] | None = None,
-        events: list[dict] | None = None,
-        logs: list[dict] | None = None,
-        **kwargs,
-    ):
-        super().__init__(*args, **kwargs)
-        self.instances = instances or [db_instance()]
-        self.events = events or []
-        self.logs = logs or []
-        self.metrics = rds_metric_data()
-
-    def tofu(self, verb: str) -> subprocess.CompletedProcess:
-        if verb == "output":
-            output = {
-                "hosts": {"value": two_node_hosts_info()},
-                "rds": {"value": RDS_OUTPUT},
-            }
-            return completed(stdout=json.dumps(output))
-        return super().tofu(verb)
-
-    def aws(self, argv: list[str]) -> subprocess.CompletedProcess:
-        if "describe-db-instances" in argv:
-            with self.lock:
-                if len(self.instances) > 1:
-                    instance = self.instances.pop(0)
-                else:
-                    instance = self.instances[0]
-            return completed(stdout=json.dumps({"DBInstances": [instance]}))
-        if "describe-events" in argv:
-            return completed(stdout=json.dumps({"Events": self.events}))
-        if "get-metric-data" in argv and "AWS/RDS" in " ".join(argv):
-            return completed(stdout=self.metrics)
-        if "describe-db-log-files" in argv:
-            return completed(stdout=json.dumps({"DescribeDBLogFiles": self.logs}))
-        if "download-db-log-file-portion" in argv:
-            name = argv[argv.index("--log-file-name") + 1]
-            return completed(stdout=json.dumps({"LogFileData": f"log of {name}\n"}))
-        if "reboot-db-instance" in argv:
-            return completed()
-        return super().aws(argv)
-
-
-class RdsHarness(FleetHarness):
-    """`FleetHarness` for an rds fleet: preflight resolved the engine minor 18.2."""
-
-    def __init__(self, test: unittest.TestCase, modes: str = "rds"):
-        super().__init__(test)
-        self.modes = modes
-        patch = unittest.mock.patch.object(
-            awsb,
-            "preflight",
-            return_value={**fake_preflight(), "rds_engine_version": "18.2"},
-        )
-        patch.start()
-        test.addCleanup(patch.stop)
-
-    def up_args(self, *extra: str) -> "awsb.argparse.Namespace":
-        return super().up_args("--db-modes", self.modes, *extra)
-
-    def up_rds(self, test: unittest.TestCase, **kwargs) -> RdsRunner:
-        runner = RdsRunner([DONE_STATE], describe=DESCRIBE, **kwargs)
-        test.assertEqual(self.up(runner), awsb.EXIT_OK)
-        return runner
-
-    def tfvars(self) -> dict:
-        path = self.fleet_dir / "terraform" / "terraform.tfvars.json"
-        return json.loads(path.read_text())
-
-    def run_dir(self, name: str) -> Path:
-        return self.fleet_dir / "runs" / name
-
-
 # REQ:querydb-rds-guard
+@pytest.mark.usefixtures("isolated")
 class RdsGuardTest(unittest.TestCase):
     def refused(self, pattern: str, *extra: str) -> None:
         harness = RdsHarness(self)
@@ -1478,6 +1262,7 @@ class RdsOrderableTest(unittest.TestCase):
 
 
 # REQ:fleet-cost
+@pytest.mark.usefixtures("isolated")
 class RdsCostTest(unittest.TestCase):
     def test_rds_lines_are_the_instance_and_the_storage(self):
         instance, storage = awsb.rds_cost_lines(rds_spec(), 7200.0)
@@ -1539,6 +1324,7 @@ class RdsCostTest(unittest.TestCase):
 
 
 # REQ:querydb-rds-wiring
+@pytest.mark.usefixtures("isolated")
 class RdsTfvarsTest(unittest.TestCase):
     def test_the_variables_carry_the_spec_the_parameters_and_the_delete_time(self):
         harness = RdsHarness(self)
@@ -1614,7 +1400,7 @@ class RdsTfvarsTest(unittest.TestCase):
         self.assertNotIn("rds_spec", harness.fleet())
 
     def test_plan_renders_the_rds_variables_and_prices_them(self):
-        out = isolated_env(self, temp_dir(self), "planned")
+        out = isolated_env(self, "planned")
         argv = [
             "plan",
             "--nodes",
@@ -1629,7 +1415,7 @@ class RdsTfvarsTest(unittest.TestCase):
         pre = {**fake_preflight(), "rds_engine_version": "18"}
         with unittest.mock.patch.object(awsb, "preflight", return_value=pre):
             self.assertEqual(
-                awsb.cmd_plan(args, FakeSystem(run=FleetRunner([]))), awsb.EXIT_OK
+                awsb.cmd_plan(args, FakeSystem(run=FakeRunner(states=[]))), awsb.EXIT_OK
             )
         tfvars = json.loads(
             (out / "planned/terraform/terraform.tfvars.json").read_text()
@@ -1643,6 +1429,7 @@ class RdsTfvarsTest(unittest.TestCase):
 
 
 # REQ:querydb-rds-wiring
+@pytest.mark.usefixtures("isolated")
 class RdsRenderTest(unittest.TestCase):
     def setUp(self):
         self.images = fake_images()
@@ -1719,6 +1506,7 @@ class RdsRenderTest(unittest.TestCase):
 
 
 # REQ:querydb-rds-wiring
+@pytest.mark.usefixtures("isolated")
 class RdsUpTest(unittest.TestCase):
     def test_up_records_the_instance_and_gates_node0_on_it(self):
         harness = RdsHarness(self)
@@ -1803,6 +1591,7 @@ class RdsUpTest(unittest.TestCase):
 
 
 # REQ:querydb-rds-wiring
+@pytest.mark.usefixtures("isolated")
 class RdsRunTest(unittest.TestCase):
     def test_reset_drops_and_recreates_the_database_before_the_services(self):
         harness = RdsHarness(self)
@@ -1917,6 +1706,7 @@ class RdsRunTest(unittest.TestCase):
 
 
 # REQ:querydb-rds-wiring
+@pytest.mark.usefixtures("isolated")
 class CollectRdsTest(unittest.TestCase):
     def collect(self, runner: RdsRunner, t0=100.0, t1=160.0) -> Path:
         tmp = Path(tempfile.mkdtemp())
@@ -2188,6 +1978,7 @@ class QueryDbMetaTest(unittest.TestCase):
 
 
 # REQ:fleet-down
+@pytest.mark.usefixtures("isolated")
 class RdsDownTest(unittest.TestCase):
     def down(self, harness, runner) -> int:
         args = harness.parse("down", str(harness.fleet_dir), "--yes")
@@ -2312,85 +2103,6 @@ class TerraformSourceTest(unittest.TestCase):
 
     def test_hosts_report_ec2_metrics_every_minute(self):
         self.assertIn("monitoring", tf_resource("aws_instance", "host"))
-
-
-LIST_ROLES = ("aws", "--profile", "timeboost-dev", "iam", "list-roles")
-ROLE_ARN = "arn:aws:iam::1:role/espresso-bench/espresso-bench-fleet1"
-EXPIRES_LATER = "2026-09-29T17:00:00Z"
-EXPIRES_PAST = "2026-09-29T15:00:00Z"
-
-
-def resource_arn(service: str, resource: str) -> str:
-    return f"arn:aws:{service}:eu-west-1:1:{resource}"
-
-
-def mapping(arn: str, run: str, owner: str | None, expires: str | None) -> dict:
-    tags = {awsb.TAG_RUN: run}
-    if owner:
-        tags[awsb.TAG_OWNER] = owner
-    if expires:
-        tags[awsb.TAG_EXPIRES] = expires
-    return {"arn": arn, "tags": [{"Key": k, "Value": v} for k, v in tags.items()]}
-
-
-def rds_fleet_mappings(
-    run: str, owner: str, expires: str, instance_id: str = "i-1"
-) -> list[dict]:
-    name = f"espresso-bench-{run}"
-    arns = [
-        resource_arn("ec2", f"instance/{instance_id}"),
-        resource_arn("ec2", "security-group/sg-1"),
-        resource_arn("ec2", "key-pair/key-1"),
-        resource_arn("ec2", "volume/vol-1"),
-        resource_arn("rds", f"db:{name}"),
-        resource_arn("rds", f"subgrp:{name}"),
-        resource_arn("rds", f"pg:{name}"),
-        resource_arn("scheduler", f"schedule-group/{name}"),
-    ]
-    return [mapping(arn, run, owner, expires) for arn in arns]
-
-
-def instance_row(instance_id: str) -> dict:
-    return {
-        "id": instance_id,
-        "type": "c8g.4xlarge",
-        "state": "running",
-        "launch": "2026-09-29T15:30:00+00:00",
-        "reason": "",
-    }
-
-
-def rds_tag_runner(
-    mappings: list[dict],
-    instances: list[dict],
-    roles: list[str] | None = None,
-    rds_status: str = "available",
-    role_missing: bool = False,
-) -> FakeRunner:
-    """The tag API, describe-instances, the rds and scheduler calls of a sweep, and the role
-    listing: `roles` are the ARNs under the scheduler path."""
-    runner = tag_runner(mappings, instances)
-    prefix = ("aws", "--profile", "timeboost-dev")
-    gone = completed(returncode=254, stderr="NoSuchEntity: gone")
-    runner.responses = {
-        LIST_ROLES: completed(stdout=json.dumps(roles or [])),
-        (*prefix, "iam", "list-role-policies"): (
-            gone if role_missing else completed(stdout='["delete-rds"]')
-        ),
-        (*prefix, "iam", "delete-role-policy"): completed(),
-        (*prefix, "iam", "delete-role"): gone if role_missing else completed(),
-        (*prefix, "rds", "describe-db-instances"): (
-            completed(stdout=json.dumps(rds_status))
-            if rds_status
-            else completed(returncode=254, stderr="DBInstanceNotFound")
-        ),
-        **runner.responses,
-    }
-    return runner
-
-
-def aws_verbs(runner: FakeRunner) -> list[tuple[str, str]]:
-    return [(c[3], c[4]) for c in runner.calls if c[0] == "aws"]
 
 
 # REQ:sweep-rds-volume
@@ -2581,9 +2293,10 @@ class GroupRdsRunsTest(unittest.TestCase):
 
 
 # REQ:orphans-rds-expiry
+@pytest.mark.usefixtures("isolated")
 class DestroyRdsOrphansTest(unittest.TestCase):
     def setUp(self):
-        self.out = isolated_env(self, temp_dir(self))
+        self.out = isolated_env(self)
 
     def destroy(self, runner, *flags: str) -> tuple[int, str]:
         parsed = awsb.parse_args(["destroy", "--orphans", *flags])
@@ -2670,6 +2383,7 @@ class DestroyRdsOrphansTest(unittest.TestCase):
 
 
 # REQ:sweep-rds-volume
+@pytest.mark.usefixtures("isolated")
 class StatusStoresTest(unittest.TestCase):
     def status(self, harness, runner) -> str:
         runner.describe = STATUS_DESCRIBE

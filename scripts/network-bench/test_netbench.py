@@ -4,7 +4,6 @@ rendering. No network is started.
     just py::test
 """
 
-import asyncio
 import dataclasses
 import json
 import math
@@ -21,21 +20,7 @@ from unittest import mock
 
 import fakes
 import netbench
-
-TOPOLOGY: netbench.Topology = {
-    "nodes": {
-        "node0": "http://localhost:24000",
-        "node1": "http://localhost:24001",
-        "node2": "http://localhost:24002",
-    },
-    "roles": {
-        "node0": "validator, sqlite",
-        "node1": "validator, sqlite",
-        "node2": "validator, sqlite",
-    },
-    "query_node": "node0",
-}
-
+from fakes import TOPOLOGY, make_result, quantiles, step, write_run_dir
 
 _T = TypeVar("_T")
 
@@ -44,31 +29,6 @@ def some(x: _T | None) -> _T:
     """Narrows an Optional value in an assertion; fails loudly if it is None."""
     assert x is not None
     return x
-
-
-def quantiles(p50, p99):
-    return {"n": 100, "mean": p50, "p50": p50, "p95": p99, "p99": p99, "max": p99}
-
-
-def node(cpu):
-    return {
-        "role": "validator, sqlite",
-        "decided_height_end": 500,
-        "decided_blocks": 400,
-        "view_lag_end": 0,
-        "cpu_cores": cpu,
-        "rss_peak_bytes": 500_000_000,
-        "tokio_busy_frac": 0.2,
-        "ops": {
-            "consensus_storage_append_da": {
-                "per_s": 2.0,
-                "mean_ms": 5.0,
-                "p50_ms": 4.0,
-                "p99_ms": 20.0,
-                "busy_frac": 0.01,
-            }
-        },
-    }
 
 
 def host_sample(disk_mb_s=12.0, net_mb_s=5.0) -> netbench.HostSample:
@@ -126,128 +86,6 @@ def query_db(mode="colocated") -> netbench.QueryDbMeta:
         "tls": True,
         "tuning": tuning,
     }
-
-
-def step(rate, decided=None, consensus=(), query=(), consensus_p50=900.0):
-    """A step at `rate` MB/s that decides `decided` (default: all of it)."""
-    return {
-        "rate_mb_s": rate,
-        "refine": False,
-        "t_start": 0.0,
-        "t_mid": 15.0,
-        "t_end": 30.0,
-        "submitted_mb_s": rate,
-        "decided_mb_s": rate if decided is None else decided,
-        "timeouts": 0,
-        "consensus_latency_ms": quantiles(consensus_p50, 2000.0),
-        "query_lag_ms": quantiles(200.0, 400.0),
-        "query_lag_slope_ms_s": 0.0,
-        "latency_ms": quantiles(1200.0, 2500.0),
-        "mean_view_ms": 500.0,
-        "cpu_s_per_mb": 0.5,
-        "node_cpu": {"node0": 1.0, "node1": 0.5, "node2": 0.5},
-        "postgres_cpu": 0.3,
-        "consensus_fails": list(consensus),
-        "query_fails": list(query),
-        "passed": not consensus and not query,
-    }
-
-
-def make_result(steps=None, steal=0.0, config_hash="abc123") -> netbench.BenchResult:
-    """Steps at 4, 6 and 8 MB/s, the last failing on decided: capacity 6 MB/s."""
-    if steps is None:
-        steps = [
-            step(4.0),
-            step(6.0),
-            step(8.0, 7.0, consensus=["decided 88% of offered"]),
-        ]
-    result: netbench.BenchResult = {
-        "schema_version": netbench.SCHEMA_VERSION,
-        "run": {
-            "sha": "0123456789abcdef",
-            "ref": "refs/heads/main",
-            "event": "push",
-            "run_id": "1",
-            "run_url": "https://github.com/o/r/actions/runs/1",
-            "pr": None,
-            "started_at": "2026-01-01T00:00:00+00:00",
-            "wall_s": 400.0,
-            "ready_s": 40.0,
-            "local": False,
-            "teardown": [],
-        },
-        "runner": {
-            "cpu_model": "Test CPU",
-            "nproc": 4,
-            "affinity": 4,
-            "cgroup_cpu_max": None,
-            "mhz": [3000.0],
-            "flags": [],
-            "mem_total_bytes": 16_000_000_000,
-            "kernel": "6",
-            "image_os": "ubuntu24",
-            "image_version": "1",
-            "runner_name": "r",
-        },
-        "calibration": {
-            "before": {
-                "sha256_1t_mb_s": 2000.0,
-                "sha256_mt_mb_s": 8000.0,
-                "fsync_per_s": 300.0,
-            },
-            "after": {
-                "sha256_1t_mb_s": 2000.0,
-                "sha256_mt_mb_s": 8000.0,
-                "fsync_per_s": 300.0,
-            },
-            "drift_pct": 0.0,
-        },
-        "config": {
-            "workers": 6,
-            "tx_size": 100_000,
-            "submit_nodes": 3,
-            "steps": [4.0, 6.0, 8.0],
-            "step_s": 30,
-            "warmup_s": 60,
-            "cap_s": 5.0,
-            "latency_target_ms": 1000,
-            "query_lag_target_ms": 1000,
-            "keep_going": False,
-        },
-        "config_hash": config_hash,
-        "window": {"t0": 0.0, "t1": 180.0, "height_start": 100, "height_end": 500},
-        "steps": steps,
-        "capacity": netbench.capacity(steps),
-        "nodes": {"node0": node(1.0), "node1": node(0.5), "node2": node(0.5)},
-        "processes": {
-            "postgres": {"cpu_cores_mean": 0.3, "cpu_s": 54.0, "rss_peak_bytes": 10}
-        },
-        "host": {
-            "util_mean": 0.5,
-            "util_max": 0.7,
-            "steal_pct": steal,
-            "iowait_pct": 1.0,
-            "mem_avail_min_bytes": 8_000_000_000,
-        },
-        "load": {
-            "submitted": 1000,
-            "included": 990,
-            "timeouts": 10,
-            "submit_errors": 0,
-            "max_in_flight": 48,
-            "cap_waits": 0,
-            "missing_payloads": [],
-            "tracker_lag_ms": quantiles(50.0, 100.0),
-            "drain_s": 3.0,
-            "refine_skipped": False,
-        },
-        "stake_table": ["0x1", "0x1", "0x1"],
-        "validity": {"valid": True, "noisy": False, "reasons": []},
-    }
-    result["validity"] = netbench.check_validity(
-        result, {n: 1.0 for n in TOPOLOGY["nodes"]}
-    )
-    return result
 
 
 def compare(current, runs, error=None, source="main"):
@@ -729,13 +567,13 @@ class LoadTest(unittest.TestCase):
         block_txs=None,
         rate=0.02,
         cap_txs=1000,
-        scale=20,
         **cfg,
     ):
         """One step of `duration` clock seconds at `rate` MB/s with at most `cap_txs` in
-        flight, no warmup, unless `cfg` sets `steps`. The clock runs `scale` times faster than
-        the wall."""
-        clock = fakes.ScaledClock(scale)
+        flight, no warmup, unless `cfg` sets `steps`."""
+        clock = fakes.FakeClock(
+            threaded=bool(accept_delay or reply_delay or payload_delay)
+        )
         node = fakes.FakeNode(
             clock,
             include,
@@ -759,7 +597,7 @@ class LoadTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             start = clock.time()
             try:
-                asyncio.run(
+                clock.run(
                     netbench.generate_load(
                         config,
                         [node.url] * nodes,
@@ -901,8 +739,6 @@ class LoadTest(unittest.TestCase):
             rate=0.02,
             cap_txs=8,
             tx_timeout_s=3,
-            # Steady state is 6 in flight against the cap of 8: coarser scales jitter into it.
-            scale=10,
         )
         self.assertEqual(meta["missing_payloads"], [])
         self.assertEqual(meta["cap_waits"], 0)
@@ -977,7 +813,6 @@ class LoadTest(unittest.TestCase):
             steps=(0.1, 0.12),
             tx_timeout_s=10,
             keep_going=True,
-            scale=50,
         )
         self.assertEqual(
             [
@@ -1001,7 +836,6 @@ class LoadTest(unittest.TestCase):
                 steps=(0.1, 0.12),
                 tx_timeout_s=1,
                 keep_going=True,
-                scale=50,
             )
         self.assertEqual([s["rate_mb_s"] for s in self.steps], [0.1, 0.12])
         self.assertIsNone(meta["drain_s"])
@@ -1021,7 +855,6 @@ class LoadTest(unittest.TestCase):
                 steps=(0.1, 0.12),
                 tx_timeout_s=1,
                 keep_going=True,
-                scale=50,
             )
         self.assertEqual([s["rate_mb_s"] for s in self.steps], [0.1, 0.12])
 
@@ -1070,7 +903,7 @@ class WaitReadyTest(unittest.TestCase):
 
 class DriveLoadTest(unittest.TestCase):
     def test_writes_stake_table_and_final_metrics(self):
-        clock = fakes.ScaledClock(50)
+        clock = fakes.FakeClock()
         node = fakes.FakeNode(clock, True)
         topo: netbench.Topology = {
             "nodes": {"node0": node.url, "node1": node.url},
@@ -1129,142 +962,6 @@ class DriveLoadTest(unittest.TestCase):
                     netbench.BenchConfig(), TOPOLOGY, Path(tmp), lambda: False
                 )
             self.assertEqual(list(Path(tmp).iterdir()), [])
-
-
-def write_run_dir(out):
-    """Steps at 1 MB/s (t 100 to 130) and 2 MB/s (130 to 160). Every node decides 1 MB/s in 2
-    blocks/s and 4 views/s and uses 0.5 cores, the host is half busy, and a 1 MB transaction
-    goes out every second from 110 to 150 (one times out): its block shows on a validator
-    after 0.5 s and on node0 after 0.8 s, and is scanned 1.1 s after that."""
-    t0, t1 = 100.0, 160.0
-
-    def jsonl(name, records):
-        (out / name).write_text("".join(json.dumps(r) + "\n" for r in records))
-
-    metrics = {
-        "consensus_finalized_bytes_sum": 1e6,
-        "consensus_finalized_bytes_count": 2.0,
-        "consensus_last_decided_view": 4.0,
-        "consensus_last_synced_block_height": 2.0,
-        "process_cpu_seconds_total": 0.5,
-    }
-    jsonl(
-        "metrics.jsonl",
-        (
-            {
-                "ts": ts,
-                "node": node,
-                "ok": True,
-                "m": {k: v * ts for k, v in metrics.items()},
-            }
-            for ts in range(90, 175, 5)
-            for node in TOPOLOGY["nodes"]
-        ),
-    )
-    jsonl(
-        "host.jsonl",
-        (
-            {
-                "ts": ts,
-                "cpu": [50 * ts, 0, 0, 50 * ts, 0, 0, 0, 0, 0, 0],
-                "mem_avail": 1000 + ts,
-                "procs": {"node0": {"cpu_s": 0.5 * ts, "rss": 10 * ts}},
-            }
-            for ts in range(90, 172, 2)
-        ),
-    )
-    txs: list[dict] = [
-        {
-            "id": i,
-            "node": 0,
-            "t_submit": t,
-            "t_included": t + 0.8,
-            "height": 1000 + i,
-            "status": "included",
-        }
-        for i, t in enumerate(range(110, 151))
-    ]
-    txs.append(
-        {
-            "id": 99,
-            "node": 0,
-            "t_submit": 120.5,
-            "t_included": None,
-            "height": None,
-            "status": "timeout",
-        }
-    )
-    jsonl("load.jsonl", txs)
-    heights = [
-        {
-            "height": tx["height"],
-            "validator": tx["t_submit"] + 0.5,
-            "query": tx["t_included"],
-            "scanned": tx["t_included"] + 1.1,
-        }
-        for tx in txs[:-1]
-    ]
-    heights.append(
-        {"height": 2000, "validator": 130.0, "query": 130.5, "scanned": None}
-    )
-    jsonl("heights.jsonl", heights)
-    # 1 MB/s until 130 s, then 0.2 MB/s: half of the 0.4 MB/s that the second step's measured
-    # half submits (6 transactions in 15 s).
-    counters = [
-        {"ts": float(ts), "decided_bytes": 1e6 * min(ts, 104 + ts / 5), "timeouts": 0}
-        for ts in range(100, 161)
-    ]
-    jsonl("consensus.jsonl", counters)
-    steps: list[netbench.StepWindow] = [
-        {
-            "rate_mb_s": 1.0,
-            "refine": False,
-            "t_start": 100.0,
-            "t_mid": 115.0,
-            "t_end": 130.0,
-        },
-        {
-            "rate_mb_s": 2.0,
-            "refine": False,
-            "t_start": 130.0,
-            "t_mid": 145.0,
-            "t_end": 160.0,
-        },
-    ]
-    calib = {"sha256_1t_mb_s": 2000.0, "sha256_mt_mb_s": 8000.0, "fsync_per_s": 300.0}
-    files = {
-        "load-meta.json": {
-            "submit_errors": 0,
-            "max_in_flight": 4,
-            "cap_waits": 0,
-            "missing_payloads": [],
-            "drain_s": None,
-            "refine_skipped": False,
-        },
-        "calibration.json": {"before": calib, "after": calib},
-        "steps.json": [
-            netbench.judge_step(
-                s, netbench.BenchConfig(), txs, heights, counters, s["t_end"]
-            )
-            for s in steps
-        ],
-        "sysinfo.json": {"runner": make_result()["runner"]},
-        "stake-table.json": {
-            "stake_table": [{"stake_table_entry": {"stake_amount": "0x1"}}] * 3
-        },
-        "run.json": {
-            "t0": t0,
-            "t1": t1,
-            "started": 0.0,
-            "wall_s": 300.0,
-            "ready_s": 40.0,
-            "teardown": [],
-            "config_hash": "abc",
-            "meta": make_result()["run"],
-        },
-    }
-    for name, data in files.items():
-        (out / name).write_text(json.dumps(data))
 
 
 class WriteLoadFilesTest(unittest.TestCase):
@@ -1398,16 +1095,14 @@ class StaircaseTest(unittest.TestCase):
         heights = netbench.Heights(0)
         heights.saw("validator", 5, 0.0)
         heights.saw("query", 5, 0.0)
+        clock = fakes.FakeClock()
         self.assertIsNone(
-            asyncio.run(
-                netbench.drain(state, counters, heights, 0.3, fakes.FakeClock())
-            )
+            clock.run(netbench.drain(state, counters, heights, 0.3, clock))
         )
+        clock = fakes.FakeClock()
         self.assertIsNotNone(
-            asyncio.run(
-                netbench.drain(
-                    state, counters, heights, 0.3, fakes.FakeClock(), wait_pending=False
-                )
+            clock.run(
+                netbench.drain(state, counters, heights, 0.3, clock, wait_pending=False)
             )
         )
 
@@ -1451,11 +1146,11 @@ class StaircaseTest(unittest.TestCase):
         heights.saw("query", 3, 0.0)
         clock = fakes.FakeClock()
         self.assertIsNone(
-            asyncio.run(netbench.drain(state, counters, heights, 0.3, clock))
+            clock.run(netbench.drain(state, counters, heights, 0.3, clock))
         )
         heights.saw("query", 5, 0.0)
         self.assertIsNotNone(
-            asyncio.run(netbench.drain(state, counters, heights, 0.3, clock))
+            clock.run(netbench.drain(state, counters, heights, 0.3, clock))
         )
 
     def test_drain_does_not_chase_new_validator_heights(self):
@@ -1471,7 +1166,7 @@ class StaircaseTest(unittest.TestCase):
 
         clock = fakes.FakeClock(on_advance=grow)
         self.assertIsNotNone(
-            asyncio.run(netbench.drain(state, counters, heights, 1.0, clock))
+            clock.run(netbench.drain(state, counters, heights, 1.0, clock))
         )
 
     def test_theil_sen_ignores_an_outlier(self):

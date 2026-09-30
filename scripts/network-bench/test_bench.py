@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 import netbench
-from test_netbench import make_result, step
+from fakes import make_result, step
 
 SCRIPT = Path(__file__).with_name("bench")
 _spec = importlib.util.spec_from_loader("bench", SourceFileLoader("bench", str(SCRIPT)))

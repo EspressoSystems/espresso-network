@@ -20,7 +20,15 @@ import re
 import statistics
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import (
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -403,6 +411,8 @@ class Clock(Protocol):
 
     async def wait_for(self, aw: Awaitable[T], s: float) -> T: ...
 
+    def run(self, main: Coroutine[Any, Any, T]) -> T: ...
+
 
 class SystemClock:
     def time(self) -> float:
@@ -422,6 +432,9 @@ class SystemClock:
 
     async def wait_for(self, aw: Awaitable[T], s: float) -> T:
         return await asyncio.wait_for(aw, s)
+
+    def run(self, main: Coroutine[Any, Any, T]) -> T:
+        return asyncio.run(main)
 
 
 SYSTEM_CLOCK = SystemClock()
@@ -527,7 +540,7 @@ def drive_load(
             url for node, url in topo["nodes"].items() if node != topo["query_node"]
         ]
         submit_urls = [*validators, query_url]
-        t0, t1 = asyncio.run(
+        t0, t1 = clock.run(
             generate_load(cfg, submit_urls, query_url, validators, out, clock, http)
         )
         for node, url in topo["nodes"].items():
