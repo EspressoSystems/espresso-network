@@ -802,7 +802,9 @@ def write_load_files(
     drained: float | None,
     skipped: bool,
 ) -> None:
-    write_jsonl(out / "load.jsonl", (dataclasses.asdict(tx) for tx in state.txs))
+    # A load cut short leaves txs still queued for a submit thread (`t_submit` inf, not JSON).
+    sent = (tx for tx in state.txs if math.isfinite(tx.t_submit))
+    write_jsonl(out / "load.jsonl", (dataclasses.asdict(tx) for tx in sent))
     write_jsonl(out / "heights.jsonl", heights.records())
     write_jsonl(out / "consensus.jsonl", iter(counters))
     if steps:
