@@ -91,9 +91,6 @@ def isolated_env(test: unittest.TestCase, tmp: Path, name: str = "run1") -> Path
     test.addCleanup(os.chdir, cwd)
     patches = [
         unittest.mock.patch.object(awsb, "default_run_name", return_value=name),
-        unittest.mock.patch.object(
-            awsb, "operator_cidr", return_value="203.0.113.5/32"
-        ),
     ]
     for patch in patches:
         patch.start()
@@ -560,7 +557,9 @@ class PreflightTest(unittest.TestCase):
                 ),
             }
         )
-        with unittest.mock.patch.object(awsb, "resolve_image", fake_image):
+        with unittest.mock.patch.object(
+            awsb, "resolve_image", lambda _http_get, ref: fake_image(ref)
+        ):
             result = awsb.preflight(FakeSystem(run=runner), cfg, awsb.plan_hosts(cfg))
         self.assertEqual(result["az"], "eu-west-1a")
         self.assertEqual(result["ami_id"], "ami-0abc")
@@ -693,8 +692,7 @@ class TerraformClassTest(unittest.TestCase):
 
 
 def resolve_with(registry: FakeRegistry) -> "awsb.ImageInfo":
-    with unittest.mock.patch.object(awsb, "_registry_get", registry):
-        return awsb.resolve_image(registry.ref)
+    return awsb.resolve_image(FakeSystem(http=registry).http_get, registry.ref)
 
 
 # REQ:awsbench-image-check
@@ -776,7 +774,7 @@ class ResolveImageTest(unittest.TestCase):
 
 
 class RegistryGetTest(unittest.TestCase):
-    """`_registry_get` against a loopback server that relays to a `FakeRegistry`."""
+    """`_http_get` against a loopback server that relays to a `FakeRegistry`."""
 
     def _serve(self, registry: FakeRegistry) -> str:
         class Handler(BaseHTTPRequestHandler):
@@ -808,7 +806,7 @@ class RegistryGetTest(unittest.TestCase):
     def test_ok_status_headers_and_body(self):
         registry = FakeRegistry("x", "v1", [("linux", "arm64")])
         base = self._serve(registry)
-        status, _, body = awsb._registry_get(
+        status, _, body = awsb._http_get(
             f"{base}/v2/x/blobs/{registry.config_digest}", {}
         )
         self.assertEqual(status, 200)
@@ -817,7 +815,7 @@ class RegistryGetTest(unittest.TestCase):
     def test_http_error_status_is_returned_not_raised(self):
         registry = FakeRegistry("x", "v1", [("linux", "arm64")])
         base = self._serve(registry)
-        status, headers, _ = awsb._registry_get(f"{base}/v2/x/manifests/v1", {})
+        status, headers, _ = awsb._http_get(f"{base}/v2/x/manifests/v1", {})
         self.assertEqual(status, 401)
         self.assertIn("realm=", headers["WWW-Authenticate"])
 

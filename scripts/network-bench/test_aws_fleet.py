@@ -540,7 +540,7 @@ class RunRefusalTest(unittest.TestCase):
 NEW_DIGEST = f"sha256:{'1' * 64}"
 
 
-def resolve_tag(ref: str) -> dict:
+def resolve_tag(_http_get, ref: str) -> dict:
     """A registry that knows `:other` at `NEW_DIGEST` and everything else at the fake digest."""
     image = fake_image(ref)
     return {**image, "digest": NEW_DIGEST} if ref.endswith(":other") else image
@@ -1459,7 +1459,7 @@ class RdsOrderableTest(unittest.TestCase):
         runner = orderable_runner(orderable(EngineVersion="18.4"))
         resolved: list[str] = []
 
-        def resolve(ref: str) -> dict:
+        def resolve(_http_get, ref: str) -> dict:
             resolved.append(ref)
             return image_info(ref)
 

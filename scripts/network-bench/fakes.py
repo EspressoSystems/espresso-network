@@ -33,7 +33,7 @@ def _json_reply(obj: dict[str, Any], content_type: str = JSON_MEDIA_TYPE) -> Rep
 
 
 class FakeRegistry:
-    """A minimal OCI/Docker registry usable in place of `aws-bench`'s `_registry_get`: one
+    """A minimal OCI/Docker registry usable as `FakeSystem.http`: one
     repository and tag, anonymous token challenge. `platforms` is a list of `(os,
     architecture)` pairs for the index; a `tag` of `"missing"` makes the manifest request 404,
     `deny_token` makes the token endpoint 401 (a private image), `deny_manifest_status` makes
@@ -439,6 +439,7 @@ class FakeSystem:
     tools: set[str] | None = None
     answer: bool = False
     prompts: list[str] = field(default_factory=list)
+    http: Callable[[str, dict[str, str]], Reply] | None = None
 
     def which(self, name: str) -> str | None:
         if self.tools is None or name in self.tools:
@@ -448,6 +449,13 @@ class FakeSystem:
     def ask(self, prompt: str) -> bool:
         self.prompts.append(prompt)
         return self.answer
+
+    def http_get(self, url: str, headers: dict[str, str]) -> Reply:
+        if self.http is not None:
+            return self.http(url, headers)
+        if "checkip" in url:
+            return 200, {}, b"203.0.113.5\n"
+        raise AssertionError(f"unexpected http GET {url}")
 
     def trap(
         self,
