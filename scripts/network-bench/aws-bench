@@ -757,6 +757,9 @@ class System:
     ask: Callable[[str], bool]
     http_get: HttpGet
     user: str
+    hostname: str
+    pid: int
+    pid_alive: Callable[[int], bool]
 
 
 Command = Callable[[argparse.Namespace, System], int]
@@ -773,6 +776,16 @@ def _ask(prompt: str) -> bool:
     return input(f"{prompt} [y/N] ").strip().lower() == "y"
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def host_system() -> System:
     return System(
         run=_run,
@@ -782,6 +795,9 @@ def host_system() -> System:
         ask=_ask,
         http_get=_http_get,
         user=getpass.getuser(),
+        hostname=socket.gethostname(),
+        pid=os.getpid(),
+        pid_alive=_pid_alive,
     )
 
 
@@ -3041,7 +3057,7 @@ def admit_run(
 ) -> tuple[Path, RunEstimate]:
     """Takes the lock, checks that the fleet can take the run and creates its dir. Any refusal
     releases the lock again and has issued no ssh command."""
-    take_fleet_lock(fleet_dir, cfg.query_db, cfg.force)
+    take_fleet_lock(system, fleet_dir, cfg.query_db, cfg.force)
     try:
         estimate = check_run_allowed(manifest, cfg, utc_now(system.clock))
         fleet = retagged(system.http_get, manifest, cfg)
@@ -3064,19 +3080,21 @@ def retagged(
     return {**manifest, "images": images}
 
 
-def take_fleet_lock(fleet_dir: Path, run_name: str, force: bool) -> FleetLock:
+def take_fleet_lock(
+    system: System, fleet_dir: Path, run_name: str, force: bool
+) -> FleetLock:
     """Creates `fleet.lock` exclusively. `force` replaces a lock whose holder is gone."""
     path = fleet_dir / FLEET_LOCK
     lock: FleetLock = {
-        "pid": os.getpid(),
-        "hostname": socket.gethostname(),
+        "pid": system.pid,
+        "hostname": system.hostname,
         "run": run_name,
         "taken_at": stamp(),
     }
     if force and path.exists():
         holder: FleetLock = nb.read_json(path)
-        if lock_holder_alive(holder):
-            raise Refused(f"cannot --force: {describe_lock(holder)}")
+        if lock_holder_alive(system, holder):
+            raise Refused(f"cannot --force: {describe_lock(system, holder)}")
         path.unlink()
     try:
         with path.open("x") as f:
@@ -3085,11 +3103,13 @@ def take_fleet_lock(fleet_dir: Path, run_name: str, force: bool) -> FleetLock:
         holder = nb.read_json(path)
         hint = (
             ""
-            if lock_holder_alive(holder)
+            if lock_holder_alive(system, holder)
             else f"; if it is gone, run: aws-bench run --fleet {fleet_dir} --force "
             f"(resets the fleet), or: aws-bench down {fleet_dir}"
         )
-        raise Refused(f"fleet is locked: {describe_lock(holder)}{hint}") from None
+        raise Refused(
+            f"fleet is locked: {describe_lock(system, holder)}{hint}"
+        ) from None
     return lock
 
 
@@ -3097,21 +3117,15 @@ def release_fleet_lock(fleet_dir: Path) -> None:
     (fleet_dir / FLEET_LOCK).unlink(missing_ok=True)
 
 
-def lock_holder_alive(lock: FleetLock) -> bool:
+def lock_holder_alive(system: System, lock: FleetLock) -> bool:
     """A lock from another host is assumed alive: its pid cannot be checked from here."""
-    if lock["hostname"] != socket.gethostname():
+    if lock["hostname"] != system.hostname:
         return True
-    try:
-        os.kill(lock["pid"], 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return system.pid_alive(lock["pid"])
 
 
-def describe_lock(lock: FleetLock) -> str:
-    state = "alive" if lock_holder_alive(lock) else "dead"
+def describe_lock(system: System, lock: FleetLock) -> str:
+    state = "alive" if lock_holder_alive(system, lock) else "dead"
     return (
         f"run {lock['run']}, pid {lock['pid']} ({state}) on {lock['hostname']}, "
         f"since {lock['taken_at'][:16]}"
@@ -4429,7 +4443,7 @@ def cmd_status(args: argparse.Namespace, system: System) -> int:
     now = utc_now(system.clock)
     if args.all:
         return status_all(system, args, now)
-    return status_run(system.run, args.dir, now)
+    return status_run(system, args.dir, now)
 
 
 def cmd_collect(args: argparse.Namespace, system: System) -> int:
@@ -4491,7 +4505,8 @@ def cmd_destroy(args: argparse.Namespace, system: System) -> int:
     return destroy_orphans(system, args, utc_now(system.clock))
 
 
-def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
+def status_run(system: System, fleet_dir: Path, now: datetime) -> int:
+    run = system.run
     manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
     name = manifest["name"]
     print(
@@ -4506,7 +4521,7 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
         )
         lock_path = fleet_dir / FLEET_LOCK
         if lock_path.exists():
-            print(f"- lock: {describe_lock(nb.read_json(lock_path))}")
+            print(f"- lock: {describe_lock(system, nb.read_json(lock_path))}")
     if manifest["phase"] == "planned":
         print("- no instances: planned only")
         return EXIT_OK

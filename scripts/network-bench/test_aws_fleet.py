@@ -8,7 +8,6 @@ Reuses the fake runners of `fakes` and the fixtures of `test_aws_bench`.
 import contextlib
 import io
 import json
-import os
 import re
 import shlex
 import shutil
@@ -362,14 +361,11 @@ class RunOnFleetTest(unittest.TestCase):
         self.assertFalse(runner.ran("tofu", "destroy"))
         self.assertRegex(harness.index()[-1], r"\| failed \| 3 \|")
         mark = len(runner.calls)
-        dead = unittest.mock.patch.object(
-            awsb.os, "kill", side_effect=ProcessLookupError
-        )
-        with dead, self.assertRaisesRegex(awsb.Refused, r"--force.*down"):
-            harness.run(runner)
+        dead = FakeSystem(run=runner, dead_pids={FakeSystem().pid})
+        with self.assertRaisesRegex(awsb.Refused, r"--force.*down"):
+            harness.run(runner, system=dead)
         self.assertEqual(ssh_calls(runner, mark), [])
-        with dead:
-            self.assertEqual(harness.run(runner, "--force"), awsb.EXIT_OK)
+        self.assertEqual(harness.run(runner, "--force", system=dead), awsb.EXIT_OK)
         self.assertEqual(harness.fleet()["phase"], "idle")
         self.assertFalse(harness.lock().exists())
 
@@ -378,28 +374,22 @@ class RunOnFleetTest(unittest.TestCase):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         harness.set_fleet(phase="running")
+        dead = FakeSystem(run=runner, dead_pids={999999})
         harness.lock().write_text(
             json.dumps(
                 {
                     "pid": 999999,
-                    "hostname": awsb.socket.gethostname(),
+                    "hostname": dead.hostname,
                     "run": "old",
                     "taken_at": "2026-09-30T10:00:00+00:00",
                 }
             )
         )
         mark = len(runner.calls)
-        dead = unittest.mock.patch.object(
-            awsb.os, "kill", side_effect=ProcessLookupError
-        )
-        with (
-            dead,
-            self.assertRaisesRegex(awsb.Refused, r"pid 999999 \(dead\).*--force"),
-        ):
-            harness.run(runner)
+        with self.assertRaisesRegex(awsb.Refused, r"pid 999999 \(dead\).*--force"):
+            harness.run(runner, system=dead)
         self.assertEqual(ssh_calls(runner, mark), [])
-        with dead:
-            code = harness.run(runner, "--force")
+        code = harness.run(runner, "--force", system=dead)
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertTrue(any("find /data/journal" in c for c in ssh_calls(runner, mark)))
         self.assertEqual(harness.fleet()["phase"], "idle")
@@ -409,7 +399,7 @@ class RunOnFleetTest(unittest.TestCase):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         harness.set_fleet(phase="running")
-        awsb.take_fleet_lock(harness.fleet_dir, "other", False)
+        awsb.take_fleet_lock(FakeSystem(), harness.fleet_dir, "other", False)
         with self.assertRaisesRegex(awsb.Refused, r"cannot --force.*\(alive\)"):
             harness.run(runner, "--force")
 
@@ -445,7 +435,7 @@ class RunRefusalTest(unittest.TestCase):
     def test_lock_held(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
-        awsb.take_fleet_lock(harness.fleet_dir, "other", False)
+        awsb.take_fleet_lock(FakeSystem(), harness.fleet_dir, "other", False)
         mark = len(runner.calls)
         with self.assertRaisesRegex(
             awsb.Refused, r"locked: run other, pid \d+ \(alive\)"
@@ -746,13 +736,13 @@ class FleetLockTest(unittest.TestCase):
     def test_lock_is_exclusive_and_names_the_holder(self):
         with tempfile.TemporaryDirectory() as tmp:
             fleet_dir = Path(tmp)
-            lock = awsb.take_fleet_lock(fleet_dir, "a", False)
-            self.assertEqual(lock["pid"], os.getpid())
+            lock = awsb.take_fleet_lock(FakeSystem(), fleet_dir, "a", False)
+            self.assertEqual(lock["pid"], FakeSystem().pid)
             self.assertEqual(json.loads((fleet_dir / "fleet.lock").read_text()), lock)
             with self.assertRaisesRegex(awsb.Refused, "run a, pid"):
-                awsb.take_fleet_lock(fleet_dir, "b", False)
+                awsb.take_fleet_lock(FakeSystem(), fleet_dir, "b", False)
             awsb.release_fleet_lock(fleet_dir)
-            awsb.take_fleet_lock(fleet_dir, "b", False)
+            awsb.take_fleet_lock(FakeSystem(), fleet_dir, "b", False)
 
     def test_release_without_a_lock_is_fine(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -760,7 +750,7 @@ class FleetLockTest(unittest.TestCase):
 
     def test_a_holder_on_another_host_counts_as_alive(self):
         lock = {"pid": 1, "hostname": "elsewhere", "run": "r", "taken_at": "t"}
-        self.assertTrue(awsb.lock_holder_alive(lock))
+        self.assertTrue(awsb.lock_holder_alive(FakeSystem(), lock))
 
 
 class ResetScriptTest(unittest.TestCase):
@@ -1144,7 +1134,7 @@ class DownTest(unittest.TestCase):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         harness.set_fleet(phase="running")
-        awsb.take_fleet_lock(harness.fleet_dir, "gone", False)
+        awsb.take_fleet_lock(FakeSystem(), harness.fleet_dir, "gone", False)
         mark = len(runner.calls)
         self.assertEqual(self.down(harness, runner), awsb.EXIT_OK)
         calls = [" ".join(call) for call in runner.calls[mark:]]
@@ -1169,7 +1159,7 @@ class StatusTest(unittest.TestCase):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         runner.describe = STATUS_DESCRIBE
-        awsb.take_fleet_lock(harness.fleet_dir, "measuring", False)
+        awsb.take_fleet_lock(FakeSystem(), harness.fleet_dir, "measuring", False)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             awsb.cmd_status(

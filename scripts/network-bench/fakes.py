@@ -443,6 +443,9 @@ class FakeSystem:
     prompts: list[str] = field(default_factory=list)
     http: Callable[[str, dict[str, str]], Reply] | None = None
     user: str = "tester"
+    hostname: str = "testhost"
+    pid: int = 4242
+    dead_pids: set[int] = field(default_factory=set)
 
     def which(self, name: str) -> str | None:
         if self.tools is None or name in self.tools:
@@ -467,6 +470,9 @@ class FakeSystem:
     ) -> None:
         for sig in signals:
             self.handlers[sig] = handler
+
+    def pid_alive(self, pid: int) -> bool:
+        return pid not in self.dead_pids
 
     def fire(self, signum: int) -> None:
         self.handlers[signum](signum, None)
