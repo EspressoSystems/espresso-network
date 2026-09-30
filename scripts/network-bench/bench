@@ -13,12 +13,14 @@ down, and writes `result.json` plus a markdown `summary.md` into the output dire
 Load is a staircase: after a warmup, `tx_size` transactions go out evenly spaced at each rate
 of `steps` for `step_s`, round-robin over the first `submit_nodes` nodes, independent of
 inclusion; `cap_s` of load caps the transactions in flight. Each step is judged on its second
-half: it fails if decided falls behind the offered rate, the backlog grows, a view times out,
+half: it fails if decided falls behind the offered rate, a view times out,
 consensus latency (submit to the block on a validator) exceeds its target, or the query node's
 lag behind the validators exceeds its target or grows. At the first failing step the ramp stops
-and one refine step runs halfway back. Capacity is the highest passing rate, split into the
-consensus and query node limits. Each transaction carries a per-run marker and its id, so
-inclusion is found by scanning node0's block payloads, one fetch per block.
+and, once its backlog has drained (consensus settled, query node caught up), one refine step
+runs halfway back; the refine step is skipped if the backlog does not drain in time. Capacity
+is the highest passing rate, split into the consensus and query node limits. Each transaction
+carries a per-run marker and its id, so inclusion is found by scanning node0's block payloads,
+one fetch per block.
 
 A run is `noisy` when steal time, calibration drift, submit errors, lost payloads or a lagging
 payload scan suggest the runner, not the code, moved the numbers; noisy runs are kept but never
@@ -59,7 +61,6 @@ import sys
 import tempfile
 import threading
 import time
-from bisect import bisect_right
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -73,7 +74,7 @@ log = logging.getLogger("network-bench")
 T = TypeVar("T")
 
 # Bump when a metric's meaning changes: config_hash covers the inputs, not the analysis code.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BENCH_DIR = Path(__file__).resolve().parent
 REPO = BENCH_DIR.parents[1]
 COMPOSE_FILE = BENCH_DIR / "process-compose.yaml"
@@ -163,7 +164,6 @@ COUNTER_POLL_S = 1.0
 METRICS_EVERY_S = 1.0
 KEEP_UP_RATIO = 0.95
 # Step rules, see step_fails.
-BACKLOG_GROWTH_FRAC = 0.05
 QUERY_LAG_GROWTH_MS_S = 50.0
 TOOL_VERSIONS = (
     ["process-compose", "version"],
@@ -257,7 +257,7 @@ class HostStats(TypedDict):
 
 
 class LoadStats(TypedDict):
-    """Over all steps."""
+    """Over the whole load, warmup included."""
 
     submitted: int
     included: int
@@ -268,6 +268,9 @@ class LoadStats(TypedDict):
     missing_payloads: list[int]
     # Per height: the bench finished scanning its payload after it could start.
     tracker_lag_ms: Quantiles | None
+    # Before the refine step; skipped if the failed step's backlog did not drain in time.
+    drain_s: float | None
+    refine_skipped: bool
 
 
 class StepWindow(TypedDict):
@@ -281,9 +284,8 @@ class StepWindow(TypedDict):
 
 
 class StepMeasures(TypedDict):
+    # Theil-Sen slope of the decided payload bytes.
     decided_mb_s: float | None
-    # Submitted minus decided bytes, Theil-Sen slope over the measured half.
-    backlog_slope_mb_s: float | None
     timeouts: int | None
     consensus_latency_ms: Quantiles | None
     query_lag_ms: Quantiles | None
@@ -399,15 +401,25 @@ class Comparison(TypedDict):
     error: str | None
     source: Literal["main", "reference"]
     used: list[RunMeta]
-    rows: list[Row]
+    capacity: list["CapacityRow"]
     steps: list["StepComparison"]
+
+
+class CapacityRow(TypedDict):
+    label: str
+    current: Limit
+    # The baseline runs' median, a run below the first step ranking lowest.
+    baseline: Limit | None
+    n: int
+    delta_mb_s: float | None
+    resolution_mb_s: float
+    verdict: str
 
 
 class StepComparison(TypedDict):
     rate_mb_s: float
     # Baseline runs that ran this rate.
     n: int
-    reached: bool
     rows: list[Row]
 
 
@@ -965,12 +977,17 @@ class LoadState:
             self.txs.remove(tx)
             self.room.set()
 
-    async def wait_for_room(self) -> None:
+    async def wait_for_room(self, until: float) -> bool:
+        """False if there is no room before `until`."""
         if len(self.pending) >= self.cap:
             self.cap_waits += 1
         while len(self.pending) >= self.cap:
             self.room.clear()
-            await self.room.wait()
+            try:
+                await asyncio.wait_for(self.room.wait(), until - time.time())
+            except TimeoutError:
+                return False
+        return True
 
     def resolve(self, tx_id: int, status: str, now: float) -> None:
         tx = self.pending.pop(tx_id, None)
@@ -1031,7 +1048,7 @@ async def generate_load(
             load = Load(
                 cfg, state, submitter, submit_urls[: cfg.submit_nodes], marker, bodies
             )
-            steps = await run_staircase(load, heights, counters)
+            steps, drained, skipped = await run_staircase(load, heights, counters)
             done.set()
             await tracker
             for poller in pollers:
@@ -1054,6 +1071,8 @@ async def generate_load(
             "cap_waits": state.cap_waits,
             "submit_errors": state.submit_errors,
             "missing_payloads": state.missing_payloads,
+            "drain_s": drained,
+            "refine_skipped": skipped,
             "marker": marker.hex(),
         },
     )
@@ -1092,15 +1111,27 @@ class Load:
 
 async def run_staircase(
     load: Load, heights: "Heights", counters: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    """Warmup, then steps up the ramp until one fails, then one refine step. Each step's
-    verdict here uses what is known at its end; the report recomputes it from all data."""
+) -> tuple[list[dict[str, Any]], float | None, bool]:
+    """Warmup, then steps up the ramp until one fails, then one refine step once the failed
+    step's backlog drained. Each step is judged on what is known at its end; the report keeps
+    that verdict. Returns the steps, the drain time and whether the drain timed out, which
+    skips the refine step."""
     cfg = load.cfg
     steps: list[dict[str, Any]] = []
     passed: list[bool] = []
+    drained, skipped = None, False
     async with asyncio.TaskGroup() as submits:
         await pace(load, submits, cfg.steps[0], time.time() + cfg.warmup_s)
         while (rate := next_rate(cfg.steps, passed)) is not None:
+            if not all(passed):
+                drained = await drain(
+                    load.state, counters, heights, cfg.tx_timeout_s + 10
+                )
+                if drained is None:
+                    log.warning("backlog did not drain, skipping the refine step")
+                    skipped = True
+                    break
+                log.info("backlog drained in %.1f s", drained)
             start = time.time()
             await pace(load, submits, rate, start + cfg.step_s)
             step: StepWindow = {
@@ -1111,26 +1142,48 @@ async def run_staircase(
                 "t_end": time.time(),
             }
             txs = [dataclasses.asdict(tx) for tx in load.state.txs]
-            m = step_measures(
+            judged = judge_step(
                 step, cfg, txs, list(heights.records()), counters, time.time()
             )
-            consensus, query = step_fails(m, rate, cfg)
-            log_step(rate, m, consensus + query)
-            passed.append(not consensus and not query)
-            steps.append({**step, "online_passed": passed[-1]})
-    return steps
+            fails = judged["consensus_fails"] + judged["query_fails"]
+            log_step(judged, fails)
+            passed.append(not fails)
+            steps.append(judged)
+    return steps, drained, skipped
 
 
-def log_step(rate: float, m: StepMeasures, fails: list[str]) -> None:
+async def drain(
+    state: LoadState,
+    counters: list[dict[str, Any]],
+    heights: "Heights",
+    timeout_s: float,
+) -> float | None:
+    """Submits nothing until no transaction is pending, decided bytes stopped growing and the
+    query node caught up with the validators. Seconds that took, or None after `timeout_s`."""
+    start, target = time.time(), None
+    while time.time() - start < timeout_s:
+        # Once nothing is pending, two equal samples (~1 s apart) mean consensus is idle.
+        flat = (
+            len(counters) >= 2
+            and counters[-1]["decided_bytes"] == counters[-2]["decided_bytes"]
+        )
+        if target is None and not state.pending and flat:
+            # Fixed once settled: empty blocks keep the validator height moving.
+            target = heights.top("validator")
+        if target is not None and heights.top("query") >= target:
+            return time.time() - start
+        await asyncio.sleep(0.1)
+    return None
+
+
+def log_step(m: dict[str, Any], fails: list[str]) -> None:
     consensus, lag = m["consensus_latency_ms"], m["query_lag_ms"]
     log.info(
-        "step %s MB/s: decided %s MB/s, consensus p50 %s ms, query lag p50 %s ms, "
-        "backlog %s MB/s: %s",
-        fmt_num(rate),
+        "step %s MB/s: decided %s MB/s, consensus p50 %s ms, query lag p50 %s ms: %s",
+        fmt_num(m["rate_mb_s"]),
         fmt_num(m["decided_mb_s"]),
         fmt_num(consensus["p50"] if consensus else None),
         fmt_num(lag["p50"] if lag else None),
-        fmt_num(m["backlog_slope_mb_s"]),
         "; ".join(fails) or "pass",
     )
 
@@ -1147,9 +1200,8 @@ async def pace(
     due = time.time()
     while True:
         await asyncio.sleep(max(0.0, due - time.time()))
-        if time.time() >= until:
+        if time.time() >= until or not await state.wait_for_room(until):
             return
-        await state.wait_for_room()
         tx_id = next(load.ids)
         tx = Tx(id=tx_id, node=tx_id % len(load.urls))
         state.submitted(tx)
@@ -1354,6 +1406,20 @@ def next_rate(ramp: Sequence[float], passed: list[bool]) -> float | None:
     return (ramp[first_fail - 1] + ramp[first_fail]) / 2
 
 
+def judge_step(
+    step: StepWindow,
+    cfg: BenchConfig,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    counters: list[dict[str, Any]],
+    now: float,
+) -> dict[str, Any]:
+    """The one verdict on a step, as the ramp takes it at `now`; stored in steps.json."""
+    m = step_measures(step, cfg, txs, heights, counters, now)
+    consensus, query = step_fails(m, step["rate_mb_s"], cfg)
+    return {**step, **m, "consensus_fails": consensus, "query_fails": query}
+
+
 def step_measures(
     step: StepWindow,
     cfg: BenchConfig,
@@ -1362,27 +1428,22 @@ def step_measures(
     counters: list[dict[str, Any]],
     now: float,
 ) -> StepMeasures:
-    """Over the measured half, from what is known at `now`. A height still missing on the
-    query node counts with its lag so far once that exceeds the target."""
+    """Over the measured half, from what is known at `now`. A transaction not yet on a
+    validator, and a height not yet on the query node, count with their time so far once that
+    exceeds the target."""
     t0, t1 = step["t_mid"], step["t_end"]
     inside = [c for c in counters if t0 <= c["ts"] <= t1]
-    sent = sorted(tx["t_submit"] for tx in txs if math.isfinite(tx["t_submit"]))
-    backlog = [
-        (
-            c["ts"],
-            (bisect_right(sent, c["ts"]) * cfg.tx_size - c["decided_bytes"]) / 1e6,
-        )
-        for c in inside
-    ]
     first, last = (inside[0], inside[-1]) if len(inside) >= 2 else (None, None)
     on_validator = {h["height"]: h["validator"] for h in heights}
-    consensus = [
-        (on_validator[tx["height"]] - tx["t_submit"]) * 1000
-        for tx in txs
-        if t0 <= tx["t_submit"] <= t1
-        and tx["height"] is not None
-        and on_validator.get(tx["height"]) is not None
-    ]
+    consensus = []
+    for tx in txs:
+        if not t0 <= tx["t_submit"] <= t1:
+            continue
+        seen = on_validator.get(tx["height"])
+        if seen is not None:
+            consensus.append((seen - tx["t_submit"]) * 1000)
+        elif (now - tx["t_submit"]) * 1000 > cfg.latency_target_ms:
+            consensus.append((now - tx["t_submit"]) * 1000)
     lags = []
     for h in heights:
         seen = h["validator"]
@@ -1392,15 +1453,10 @@ def step_measures(
             lags.append((seen, (h["query"] - seen) * 1000))
         elif (now - seen) * 1000 > cfg.query_lag_target_ms:
             lags.append((seen, (now - seen) * 1000))
+    # A slope over all samples: two samples see whole blocks, off by up to one block.
+    decided = theil_sen([(c["ts"], c["decided_bytes"] / 1e6) for c in inside])
     return {
-        "decided_mb_s": (
-            (last["decided_bytes"] - first["decided_bytes"])
-            / (last["ts"] - first["ts"])
-            / 1e6
-            if first and last
-            else None
-        ),
-        "backlog_slope_mb_s": theil_sen(backlog),
+        "decided_mb_s": decided,
         "timeouts": int(last["timeouts"] - first["timeouts"])
         if first and last
         else None,
@@ -1425,13 +1481,11 @@ def step_fails(
 ) -> tuple[list[str], list[str]]:
     """Failed rules of a step: consensus-side, then query-node-side."""
     consensus, query = [], []
-    decided, backlog = m["decided_mb_s"], m["backlog_slope_mb_s"]
+    decided = m["decided_mb_s"]
     if decided is None:
         consensus.append("no consensus metrics")
     elif decided < KEEP_UP_RATIO * rate:
         consensus.append(f"decided {decided / rate:.0%} of offered")
-    if backlog is not None and backlog > BACKLOG_GROWTH_FRAC * rate:
-        consensus.append(f"backlog grows {fmt_num(backlog)} MB/s")
     if m["timeouts"]:
         consensus.append(f"{m['timeouts']} view timeouts")
     latency = m["consensus_latency_ms"]
@@ -1450,7 +1504,11 @@ def step_fails(
 
 
 def capacity(steps: Sequence[Mapping[str, Any]]) -> Capacity:
-    """Highest passing rate below the lowest failing one, overall and per rule side."""
+    """Highest passing rate below the lowest failing one, overall and per rule side.
+
+    A side can fail at one rate and pass at a higher one: noise, or a refine step below the
+    first failure that trips the other side. Its limit is still below its lowest failing
+    rate, so the two limits need not bracket the steps the ramp passed."""
     ordered = sorted(steps, key=lambda s: s["rate_mb_s"])
 
     def limit(fails: Callable[[Mapping[str, Any]], list[str]]) -> tuple[Limit, Any]:
@@ -1796,12 +1854,10 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
     host = list(read_jsonl(out / "host.jsonl"))
     txs = list(read_jsonl(out / "load.jsonl"))
     heights = list(read_jsonl(out / "heights.jsonl"))
-    counters = list(read_jsonl(out / "consensus.jsonl"))
     calib = read_json(out / "calibration.json")
     before, after = calib["before"], calib["after"]
     steps = [
-        step_result(step, cfg, txs, heights, counters, series, host)
-        for step in read_json(out / "steps.json")
+        step_result(step, txs, series, host) for step in read_json(out / "steps.json")
     ]
     result: BenchResult = {
         "schema_version": SCHEMA_VERSION,
@@ -1831,24 +1887,13 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
 
 
 def step_result(
-    raw: dict[str, Any],
-    cfg: BenchConfig,
+    judged: dict[str, Any],
     txs: list[dict[str, Any]],
-    heights: list[dict[str, Any]],
-    counters: list[dict[str, Any]],
     series: dict[str, list[Sample]],
     host: list[dict[str, Any]],
 ) -> StepResult:
-    step: StepWindow = {
-        "rate_mb_s": raw["rate_mb_s"],
-        "refine": raw["refine"],
-        "t_start": raw["t_start"],
-        "t_mid": raw["t_mid"],
-        "t_end": raw["t_end"],
-    }
-    t0, t1 = step["t_mid"], step["t_end"]
-    m = step_measures(step, cfg, txs, heights, counters, math.inf)
-    consensus, query = step_fails(m, step["rate_mb_s"], cfg)
+    """The ramp's verdict on a step (see judge_step) plus metrics that decide nothing."""
+    t0, t1 = judged["t_mid"], judged["t_end"]
     views = [
         rate(s, t0, t1, "consensus_last_decided_view") for s in series.values() if s
     ]
@@ -1858,11 +1903,20 @@ def step_result(
         for node, s in series.items()
         if s
     }
-    decided = m["decided_mb_s"]
+    decided = judged["decided_mb_s"]
     procs = process_stats(host, t0, t1)
+    fails = judged["consensus_fails"] + judged["query_fails"]
     return {
-        **step,
-        **m,
+        "rate_mb_s": judged["rate_mb_s"],
+        "refine": judged["refine"],
+        "t_start": judged["t_start"],
+        "t_mid": t0,
+        "t_end": t1,
+        "decided_mb_s": decided,
+        "timeouts": judged["timeouts"],
+        "consensus_latency_ms": judged["consensus_latency_ms"],
+        "query_lag_ms": judged["query_lag_ms"],
+        "query_lag_slope_ms_s": judged["query_lag_slope_ms_s"],
         "latency_ms": quantiles(
             [
                 (tx["t_included"] - tx["t_submit"]) * 1000
@@ -1876,9 +1930,9 @@ def step_result(
         "postgres_cpu": (
             procs["postgres"]["cpu_cores_mean"] if "postgres" in procs else None
         ),
-        "consensus_fails": consensus,
-        "query_fails": query,
-        "passed": not consensus and not query,
+        "consensus_fails": judged["consensus_fails"],
+        "query_fails": judged["query_fails"],
+        "passed": not fails,
     }
 
 
@@ -2201,6 +2255,8 @@ def load_stats(
         "cap_waits": meta["cap_waits"],
         "missing_payloads": meta["missing_payloads"],
         "tracker_lag_ms": quantiles(scan_lags(heights, t0, t1)),
+        "drain_s": meta["drain_s"],
+        "refine_skipped": meta["refine_skipped"],
     }
 
 
@@ -2252,10 +2308,10 @@ class Metric:
     floor_pct: float
 
 
-CAPACITY_METRICS = (
-    Metric("capacity", "capacity.overall.mb_s", "MB/s", "higher", 10),
-    Metric("consensus limit", "capacity.consensus.mb_s", "MB/s", "higher", 10),
-    Metric("query node limit", "capacity.query_node.mb_s", "MB/s", "higher", 10),
+CAPACITY_LIMITS = (
+    ("capacity", "overall"),
+    ("consensus limit", "consensus"),
+    ("query node limit", "query_node"),
 )
 # Paths into one step of result.json's `steps`.
 STEP_METRICS = (
@@ -2309,14 +2365,16 @@ def compare(current: BenchResult, baseline: Baseline) -> Comparison:
             usable.append(run)
     usable = usable[:BASELINE_RUNS]
     noisy = current["validity"]["noisy"]
-    rows = [
-        compare_metric(
-            metric,
-            lookup(current, metric.path),
-            [lookup(run, metric.path) for run in usable],
+    resolution = ramp_resolution(current["config"]["steps"])
+    capacity_rows = [
+        compare_capacity(
+            label,
+            current["capacity"][key],
+            [run["capacity"][key] for run in usable],
+            resolution,
             noisy,
         )
-        for metric in CAPACITY_METRICS
+        for label, key in CAPACITY_LIMITS
     ]
     rates = sorted(
         {step["rate_mb_s"] for run in [current, *usable] for step in run["steps"]}
@@ -2327,8 +2385,49 @@ def compare(current: BenchResult, baseline: Baseline) -> Comparison:
         "error": baseline["error"],
         "source": baseline["source"],
         "used": [run["run"] for run in usable],
-        "rows": rows,
+        "capacity": capacity_rows,
         "steps": [compare_step(rate, current, usable, noisy) for rate in rates],
+    }
+
+
+def ramp_resolution(steps: Sequence[float]) -> float:
+    """The smallest capacity change the ramp can show: a refine step, half a step gap."""
+    gaps = [b - a for a, b in itertools.pairwise(steps)]
+    return min(gaps) / 2 if gaps else steps[0] / 2
+
+
+def compare_capacity(
+    label: str, current: Limit, history: list[Limit], resolution: float, noisy: bool
+) -> CapacityRow:
+    """In MB/s, not percent: capacity moves in ramp steps. A capacity below the first step
+    ranks lowest; a lower bound (no step failed) below the baseline says nothing."""
+    ordered = sorted(
+        history, key=lambda lim: -math.inf if lim["mb_s"] is None else lim["mb_s"]
+    )
+    baseline = ordered[(len(ordered) - 1) // 2] if ordered else None
+    cur = current["mb_s"]
+    base = baseline["mb_s"] if baseline else None
+    delta = cur - base if cur is not None and base is not None else None
+    if baseline is None:
+        verdict = "n/a"
+    elif noisy:
+        verdict = "inconclusive"
+    elif cur is None or base is None:
+        verdict = "same" if cur == base else ("worse" if cur is None else "better")
+    elif delta is not None and abs(delta) < resolution - 1e-9:
+        verdict = "same"
+    elif delta is not None and delta < 0:
+        verdict = "worse" if current["bounded"] else "inconclusive"
+    else:
+        verdict = "better" if baseline["bounded"] else "inconclusive"
+    return {
+        "label": label,
+        "current": current,
+        "baseline": baseline,
+        "n": len(history),
+        "delta_mb_s": delta,
+        "resolution_mb_s": resolution,
+        "verdict": verdict,
     }
 
 
@@ -2340,7 +2439,6 @@ def compare_step(
     return {
         "rate_mb_s": rate,
         "n": len(theirs),
-        "reached": mine is not None,
         "rows": [
             compare_metric(
                 metric,
@@ -2549,49 +2647,66 @@ def capacity_table(result: BenchResult, comparison: Comparison | None) -> list[s
     """Capacity against the baseline; nothing without one."""
     if comparison is None or not comparison["used"]:
         return []
+    first = result["config"]["steps"][0]
     lines = [
-        f"| metric | this run | {baseline_label(comparison)} | delta | verdict (threshold) |",
-        "|---|---:|---:|---:|---|",
+        (
+            f"| metric | this run | {baseline_label(comparison)} | runs | delta "
+            "| verdict (resolution) |"
+        ),
+        "|---|---:|---:|---:|---:|---|",
     ]
-    for row in comparison["rows"]:
-        delta_cell = f"{row['delta_pct']:+.1f}%" if row["delta_pct"] is not None else ""
+    for row in comparison["capacity"]:
+        delta = row["delta_mb_s"]
         mark = {"worse": "**worse**", "better": "better"}.get(
             row["verdict"], row["verdict"]
         )
+        base = fmt_limit(row["baseline"], first) if row["baseline"] else ""
         lines.append(
-            f"| {row['label']} | {fmt_value(row['current'], row['unit'])} "
-            f"| {fmt_value(row['baseline'], row['unit'])} "
-            f"| {delta_cell} | {mark} (±{row['threshold_pct']:.0f}%) |"
+            f"| {row['label']} | {fmt_limit(row['current'], first)} | {base} "
+            f"| {row['n']} | {f'{delta:+g} MB/s' if delta is not None else ''} "
+            f"| {mark} (±{fmt_num(row['resolution_mb_s'])} MB/s) |"
         )
     return [*lines, ""]
 
 
+def fmt_limit(limit: Limit, first: float) -> str:
+    if limit["mb_s"] is None:
+        return f"< {fmt_num(first)} MB/s"
+    bound = "" if limit["bounded"] else ">= "
+    return f"{bound}{fmt_num(limit['mb_s'])} MB/s"
+
+
 def step_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
-    """One row per rate this run or the baseline ran; a cell beyond its threshold against the
-    baseline median at that rate carries the delta, bold when worse."""
+    """One row per rate this run ran, and per ramp rate the baseline ran but this run did not
+    reach; a cell beyond its threshold against the baseline median at that rate carries the
+    delta, bold when worse. Refine rates only the baseline ran are left out."""
     by_rate = (
         {c["rate_mb_s"]: c for c in comparison["steps"]}
         if comparison and comparison["used"]
         else {}
     )
-    rates = sorted({s["rate_mb_s"] for s in result["steps"]} | set(by_rate))
-    top = max(s["rate_mb_s"] for s in result["steps"])
+    ramp = set(result["config"]["steps"])
+    rates = sorted({s["rate_mb_s"] for s in result["steps"]} | (set(by_rate) & ramp))
+    runs = (
+        "main runs"
+        if comparison and comparison["source"] == "main"
+        else "reference runs"
+    )
     lines = [
         "| MB/s | "
         + " | ".join(STEP_COLUMNS)
         + " | verdict |"
-        + (" main runs |" if by_rate else ""),
+        + (f" {runs} |" if by_rate else ""),
         "|---:|" + "---:|" * len(STEP_COLUMNS) + "---|" + ("---:|" if by_rate else ""),
     ]
     for rate in rates:
         step, other = step_at(result, rate), by_rate.get(rate)
         tail = f" {other['n']} |" if other else (" 0 |" if by_rate else "")
         if step is None:
-            missing = "**not reached**" if rate > top else "not run"
             lines.append(
                 f"| {fmt_num(rate)} |"
                 + " |" * len(STEP_COLUMNS)
-                + f" {missing} |{tail}"
+                + f" **not reached** |{tail}"
             )
             continue
         rows = {row["label"]: row for row in other["rows"]} if other else {}
@@ -2619,27 +2734,44 @@ def step_cell(step: StepResult, label: str, row: Row | None) -> str:
 
 def step_verdict(step: StepResult) -> str:
     fails = step["consensus_fails"] + step["query_fails"]
-    return "pass" if not fails else "fail: " + "; ".join(fails)
+    return "pass" if not fails else "fail: " + ", ".join(map(fail_code, fails))
+
+
+# Rule text prefix -> the short name in the step table; see step_fails.
+FAIL_CODES = (
+    ("decided", "decided"),
+    ("no consensus metrics", "no metrics"),
+    ("consensus latency", "latency"),
+    ("query lag grows", "query lag growth"),
+    ("query lag p50", "query lag"),
+)
+
+
+def fail_code(rule: str) -> str:
+    if rule.endswith("view timeouts"):
+        return "timeouts"
+    return next((code for prefix, code in FAIL_CODES if rule.startswith(prefix)), rule)
 
 
 def step_details(result: BenchResult) -> list[str]:
     lines = [
         (
-            "| MB/s | decided | backlog MB/s | view timeouts | consensus p50/p99 ms "
+            "| MB/s | decided | view timeouts | consensus p50/p99 ms "
             "| query lag p50/p99 ms | query lag slope ms/s | e2e p50/p99 ms | view ms "
-            "| CPU-s/MB | node0/1/2 CPU | postgres CPU |"
+            "| CPU-s/MB | node0/1/2 CPU | postgres CPU | failed rules |"
         ),
-        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"]):
         cpu = "/".join(fmt_num(s["node_cpu"].get(node)) for node in NODES)
         lines.append(
             f"| {fmt_num(s['rate_mb_s'])} | {fmt_num(s['decided_mb_s'])} "
-            f"| {fmt_num(s['backlog_slope_mb_s'])} | {s['timeouts']} "
+            f"| {s['timeouts']} "
             f"| {pair(s['consensus_latency_ms'])} | {pair(s['query_lag_ms'])} "
             f"| {fmt_num(s['query_lag_slope_ms_s'])} | {pair(s['latency_ms'])} "
             f"| {fmt_num(s['mean_view_ms'])} | {fmt_num(s['cpu_s_per_mb'])} | {cpu} "
-            f"| {fmt_num(s['postgres_cpu'])} |"
+            f"| {fmt_num(s['postgres_cpu'])} "
+            f"| {'; '.join(s['consensus_fails'] + s['query_fails'])} |"
         )
     return lines
 
@@ -2733,8 +2865,7 @@ def load_lines(result: BenchResult) -> list[str]:
             "of load"
         ),
         (
-            f"- step rules: decided >= {KEEP_UP_RATIO:.0%} of offered, backlog growth <= "
-            f"{BACKLOG_GROWTH_FRAC:.0%} of offered, no view timeouts, consensus latency p50 "
+            f"- step rules: decided >= {KEEP_UP_RATIO:.0%} of offered, no view timeouts, consensus latency p50 "
             f"<= {cfg['latency_target_ms']} ms; query lag p50 <= "
             f"{cfg['query_lag_target_ms']} ms, growth <= {QUERY_LAG_GROWTH_MS_S:.0f} ms/s"
         ),
@@ -2744,6 +2875,16 @@ def load_lines(result: BenchResult) -> list[str]:
             f"peak in flight {load['max_in_flight']}, {load['cap_waits']} submits waited"
         ),
         f"- benchmark tracker lag: {spread(load['tracker_lag_ms'])}",
+        *(
+            ["- refine step skipped: the failed step's backlog did not drain"]
+            if load["refine_skipped"]
+            else []
+        ),
+        *(
+            [f"- backlog drained in {load['drain_s']:.1f} s before the refine step"]
+            if load["drain_s"] is not None
+            else []
+        ),
     ]
 
 
@@ -2822,7 +2963,8 @@ def read_json(path: Path) -> Any:
 
 
 def write_json(path: Path, data: Any) -> None:
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    """Strict JSON: NaN and Infinity are not JSON and break readers of result.json."""
+    path.write_text(json.dumps(data, indent=2, allow_nan=False) + "\n")
 
 
 def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
