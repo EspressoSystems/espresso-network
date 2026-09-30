@@ -52,7 +52,7 @@ use hotshot_query_service::{
     types::HeightIndexed,
 };
 use hotshot_types::{
-    data::EpochNumber,
+    data::{EpochNumber, VidCommon},
     utils::{epoch_from_block_number, root_block_in_epoch},
 };
 use jf_merkle_tree_compat::{
@@ -465,7 +465,7 @@ where
         + Sync,
 {
     type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
-    type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
+    type IncorrectEncodingProof = NsProof;
     type StateCertQueryDataV1 = espresso_types::StateCertQueryDataV1<SeqTypes>;
     type StateCertQueryDataV2 = espresso_types::StateCertQueryDataV2<SeqTypes>;
 
@@ -680,51 +680,58 @@ where
             },
         };
 
+        // The header carries the namespace table, so a block whose payload never decoded can
+        // still be resolved.
         let ds = &*self.data_source;
         let timeout = FETCH_TIMEOUT;
-        let (block_fetch, vid_fetch) =
-            join!(ds.get_block(hs_block_id), ds.get_vid_common(hs_block_id));
-        let (block, vid_common) = join!(
-            block_fetch.with_timeout(timeout),
+        let (header_fetch, vid_fetch) =
+            join!(ds.get_header(hs_block_id), ds.get_vid_common(hs_block_id));
+        let (header, vid_common) = join!(
+            header_fetch.with_timeout(timeout),
             vid_fetch.with_timeout(timeout)
         );
 
-        let block = block.ok_or_else(|| anyhow::anyhow!("block not found"))?;
+        let header = header.ok_or_else(|| anyhow::anyhow!("block not found"))?;
         let vid_common = vid_common.ok_or_else(|| anyhow::anyhow!("VID common data not found"))?;
 
-        let ns_table = block.payload().ns_table();
+        let ns_table = header.ns_table();
         let ns_index = ns_table
             .find_ns_id(&ns_id)
             .ok_or_else(|| anyhow::anyhow!("namespace {} not present in block", namespace))?;
+        let commit = vid_common.payload_hash();
+        let common = vid_common.common();
 
-        if NsProof::new(block.payload(), &ns_index, vid_common.common()).is_some() {
+        // A payload in hand that proves the namespace against the block's commitment settles
+        // it. An undecodable block has no payload anywhere, so that fetch times out.
+        let payload = ds
+            .get_payload(hs_block_id)
+            .await
+            .with_timeout(timeout)
+            .await;
+        if payload.is_some_and(|payload| {
+            NsProof::new(payload.data(), &ns_index, common)
+                .is_some_and(|proof| proof.verify(ns_table, &commit, common).is_some())
+        }) {
             return Err(anyhow::anyhow!("block was correctly encoded"));
         }
 
-        // Block has incorrect encoding: fetch VID shares to construct the proof.
-        let vid_shares_future = ds
-            .request_vid_shares(block.height(), vid_common.clone(), Duration::from_secs(40))
-            .await;
-        let mut vid_shares = vid_shares_future
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to fetch VID shares: {e:#}"))?;
-
-        if let Ok(local_share) = ds.vid_share(block.height() as usize).await {
-            vid_shares.push(local_share);
+        let mut shares = match common {
+            // The legacy request-response network serves AvidM shares on demand.
+            VidCommon::V1(_) => ds
+                .request_vid_shares(header.height(), vid_common.clone(), Duration::from_secs(40))
+                .await
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to fetch VID shares: {e:#}"))?,
+            // AvidmGf2 shares reach every validator by broadcast and nothing serves them on
+            // request, so the proof is built from the shares this node holds.
+            _ => vec![],
+        };
+        if let Ok(local_share) = ds.vid_share(header.height() as usize).await {
+            shares.push(local_share);
         }
 
-        match NsProof::new_with_incorrect_encoding(
-            &vid_shares,
-            ns_table,
-            &ns_index,
-            &vid_common.payload_hash(),
-            vid_common.common(),
-        ) {
-            Some(NsProof::V1IncorrectEncoding(proof)) => Ok(proof),
-            _ => Err(anyhow::anyhow!(
-                "failed to generate incorrect encoding proof"
-            )),
-        }
+        NsProof::new_with_incorrect_encoding(&shares, ns_table, &ns_index, &commit, common)
+            .ok_or_else(|| anyhow::anyhow!("failed to generate incorrect encoding proof"))
     }
 
     async fn get_state_cert(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV1> {

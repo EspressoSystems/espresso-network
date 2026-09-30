@@ -753,7 +753,8 @@ message GetIncorrectEncodingProofRequest {
 }
 
 message IncorrectEncodingProofResponse {
-  AvidmBadEncodingNsProof proof = 1;
+  // The incorrect_encoding arm for the block's VID scheme
+  NsProof proof = 1;
 }
 
 message StateSignatureV1 {
@@ -997,7 +998,8 @@ service AvailabilityService {
     option (google.api.http) = {get: "/v2/availability/namespace-proof-range"};
   }
 
-  // Get the proof that an AvidM block's disperser encoded a namespace incorrectly
+  // Get the proof that a block's disperser encoded a namespace incorrectly, which makes the
+  // namespace empty in that block
   rpc GetIncorrectEncodingProof(GetIncorrectEncodingProofRequest) returns (IncorrectEncodingProofResponse) {
     option (google.api.http) = {get: "/v2/availability/incorrect-encoding-proof"};
   }
