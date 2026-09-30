@@ -20,12 +20,12 @@ import re
 import statistics
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, NotRequired, TypedDict, TypeVar
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar
 from urllib.parse import urlsplit
 
 log = logging.getLogger("netbench")
@@ -382,12 +382,71 @@ class StepComparison(TypedDict):
     rows: list[Row]
 
 
+class Clock(Protocol):
+    """Every wait and every elapsed-time read of the load path, so tests can run it on virtual
+    time."""
+
+    def time(self) -> float: ...
+
+    def monotonic(self) -> float: ...
+
+    def sleep(self, s: float) -> None: ...
+
+    def wait(self, event: threading.Event, s: float) -> bool: ...
+
+    async def asleep(self, s: float) -> None: ...
+
+    async def wait_for(self, aw: Awaitable[T], s: float) -> T: ...
+
+
+class SystemClock:
+    def time(self) -> float:
+        return time.time()
+
+    def monotonic(self) -> float:
+        return time.monotonic()
+
+    def sleep(self, s: float) -> None:
+        time.sleep(s)
+
+    def wait(self, event: threading.Event, s: float) -> bool:
+        return event.wait(s)
+
+    async def asleep(self, s: float) -> None:
+        await asyncio.sleep(s)
+
+    async def wait_for(self, aw: Awaitable[T], s: float) -> T:
+        return await asyncio.wait_for(aw, s)
+
+
+SYSTEM_CLOCK = SystemClock()
+
+
+class Http(Protocol):
+    """What the load path needs of an HTTP client. `clock` times its retrying readers,
+    `closed` tells them to give up."""
+
+    clock: Clock
+    closed: threading.Event
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+    ) -> tuple[int, bytes]: ...
+
+    def close(self) -> None: ...
+
+
+# Builds one client per thread pool: `HttpPool` or a test double's `connect`.
+HttpFactory = Callable[[Clock], Http]
+
+
 class HttpPool:
     """Keep-alive connections shared by threads, one request per connection at a time. A
     reused connection the server closed is retried once on a fresh one; any other failure
     raises OSError. `closed` tells retrying readers to give up."""
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Clock = SYSTEM_CLOCK) -> None:
+        self.clock = clock
         self._idle: dict[str, list[http.client.HTTPConnection]] = {}
         self._lock = threading.Lock()
         self.closed = threading.Event()
@@ -440,13 +499,15 @@ def drive_load(
     topo: Topology,
     out: Path,
     alive: Callable[[], bool],
+    clock: Clock = SYSTEM_CLOCK,
+    http: HttpFactory = HttpPool,
 ) -> LoadOutcome:
     """Saves the stake table, runs the load staircase, then writes every node's final metrics
     snapshot. The caller must have already waited for readiness with `wait_ready`. Raises
     NetworkError if the network died since or the load generator hits an unrecoverable error."""
     if not alive():
         raise NetworkError("network process exited before load")
-    pool = HttpPool()
+    pool = http(clock)
     try:
         query_url = topo["nodes"][topo["query_node"]]
         stake_table = get_ok(pool, query_url + "/v1/node/stake-table/current")
@@ -462,7 +523,7 @@ def drive_load(
         ]
         submit_urls = [*validators, query_url]
         t0, t1 = asyncio.run(
-            generate_load(cfg, submit_urls, query_url, validators, out)
+            generate_load(cfg, submit_urls, query_url, validators, out, clock, http)
         )
         for node, url in topo["nodes"].items():
             prom = get_ok(pool, url + "/v1/status/metrics")
@@ -473,27 +534,28 @@ def drive_load(
 
 
 def wait_ready(
-    pool: HttpPool,
+    pool: Http,
     urls: dict[str, str],
     min_height: int,
     timeout_s: float,
     alive: Callable[[], bool],
+    clock: Clock = SYSTEM_CLOCK,
 ) -> float:
-    start = time.time()
+    start = clock.time()
     while True:
         heights = {node: block_height(pool, url) for node, url in urls.items()}
         if all(h is not None and h >= min_height for h in heights.values()):
-            return time.time() - start
+            return clock.time() - start
         if not alive():
             raise NetworkError("network process exited during startup")
-        if time.time() - start > timeout_s:
+        if clock.time() - start > timeout_s:
             raise NetworkError(
                 f"network not ready after {timeout_s:.0f} s: heights {heights}"
             )
-        time.sleep(2)
+        clock.sleep(2)
 
 
-def block_height(pool: HttpPool, url: str) -> int | None:
+def block_height(pool: Http, url: str) -> int | None:
     """None until the node's API answers."""
     try:
         status, body = pool.request("GET", url + "/v1/status/block-height", timeout=2)
@@ -502,17 +564,17 @@ def block_height(pool: HttpPool, url: str) -> int | None:
     return int(body) if status == 200 else None
 
 
-def get_ok(pool: HttpPool, url: str) -> bytes:
+def get_ok(pool: Http, url: str) -> bytes:
     status, body = read(pool, url)
     if status != 200:
         raise NetworkError(f"GET {url}: HTTP {status}")
     return body
 
 
-def read(pool: HttpPool, url: str) -> tuple[int, bytes]:
+def read(pool: Http, url: str) -> tuple[int, bytes]:
     """GET, retrying failed requests and 5xx answers until READ_DEADLINE_S or until the
     pool is closed."""
-    deadline = time.time() + READ_DEADLINE_S
+    deadline = pool.clock.time() + READ_DEADLINE_S
     for attempt in itertools.count():
         try:
             status, body = pool.request("GET", url)
@@ -522,22 +584,22 @@ def read(pool: HttpPool, url: str) -> tuple[int, bytes]:
             if status < 500:
                 return status, body
             problem = f"GET {url}: HTTP {status}"
-        if time.time() >= deadline:
+        if pool.clock.time() >= deadline:
             raise NetworkError(f"{problem}, retried for {READ_DEADLINE_S:.0f} s")
         log.log(logging.DEBUG if attempt else logging.WARNING, "%s, retrying", problem)
-        if pool.closed.wait(READ_RETRY_S):
+        if pool.clock.wait(pool.closed, READ_RETRY_S):
             raise NetworkError(f"{problem}, stopped retrying")
     raise AssertionError("unreachable")
 
 
-def query_height(pool: HttpPool, query_url: str) -> int:
+def query_height(pool: Http, query_url: str) -> int:
     status, body = read(pool, query_url + "/v1/node/block-height")
     if status != 200:
         raise NetworkError(f"block height from query node: HTTP {status}")
     return int(body)
 
 
-def validator_height(pool: HttpPool, url: str) -> int:
+def validator_height(pool: Http, url: str) -> int:
     """Blocks decided on a validator: its status API reports the newest decided height."""
     status, body = read(pool, url + "/v1/status/block-height")
     if status != 200:
@@ -545,7 +607,7 @@ def validator_height(pool: HttpPool, url: str) -> int:
     return int(body) + 1
 
 
-def block_payload(pool: HttpPool, query_url: str, height: int) -> bytes | None:
+def block_payload(pool: Http, query_url: str, height: int) -> bytes | None:
     """Raw payload bytes of block `height`, or None if the query node does not have it yet."""
     url = f"{query_url}/v1/availability/payload/{height}"
     status, body = read(pool, url)
@@ -571,7 +633,7 @@ class Tx:
 class Client:
     """HTTP on its own threads, so requests of one kind never queue behind another's."""
 
-    pool: HttpPool
+    pool: Http
     executor: ThreadPoolExecutor
 
     async def call(self, fn: Callable[..., T], *args: Any) -> T:
@@ -610,14 +672,14 @@ class LoadState:
             self.txs.remove(tx)
             self.room.set()
 
-    async def wait_for_room(self, until: float) -> bool:
+    async def wait_for_room(self, until: float, clock: Clock) -> bool:
         """False if there is no room before `until`."""
         if len(self.pending) >= self.cap:
             self.cap_waits += 1
         while len(self.pending) >= self.cap:
             self.room.clear()
             try:
-                await asyncio.wait_for(self.room.wait(), until - time.time())
+                await clock.wait_for(self.room.wait(), until - clock.time())
             except TimeoutError:
                 return False
         return True
@@ -644,6 +706,8 @@ async def generate_load(
     query_url: str,
     validator_urls: list[str],
     out: Path,
+    clock: Clock,
+    http: HttpFactory,
 ) -> tuple[float, float]:
     """The load staircase, then up to `tx_timeout_s` for the stragglers. Returns when the
     steps started and ended. Writes one line per transaction to load.jsonl, per block height
@@ -652,9 +716,9 @@ async def generate_load(
     state = LoadState()
     marker = hashlib.sha256(f"network-bench:{cfg.seed}".encode()).digest()[:16]
     bodies = tx_bodies(cfg, len(marker) + 8)
-    submitter = Client(HttpPool(), ThreadPoolExecutor(cfg.workers))
-    tracking = Client(HttpPool(), ThreadPoolExecutor(TRACKER_THREADS))
-    polling = Client(HttpPool(), ThreadPoolExecutor(2 + len(validator_urls)))
+    submitter = Client(http(clock), ThreadPoolExecutor(cfg.workers))
+    tracking = Client(http(clock), ThreadPoolExecutor(TRACKER_THREADS))
+    polling = Client(http(clock), ThreadPoolExecutor(2 + len(validator_urls)))
     done = asyncio.Event()
     counters: list[dict[str, Any]] = []
     heights: Heights | None = None
@@ -666,25 +730,43 @@ async def generate_load(
         async with asyncio.TaskGroup() as group:
             pollers = [
                 group.create_task(
-                    poll_heights(polling, query_url, query_height, heights, "query")
+                    poll_heights(
+                        polling, query_url, query_height, heights, "query", clock
+                    )
                 ),
                 *(
                     group.create_task(
                         poll_heights(
-                            polling, url, validator_height, heights, "validator"
+                            polling, url, validator_height, heights, "validator", clock
                         )
                     )
                     for url in validator_urls
                 ),
-                group.create_task(poll_counters(polling, validator_urls[0], counters)),
+                group.create_task(
+                    poll_counters(polling, validator_urls[0], counters, clock)
+                ),
             ]
             tracker = group.create_task(
                 track_inclusion(
-                    cfg, state, tracking, query_url, marker, heights, counters, done
+                    cfg,
+                    state,
+                    tracking,
+                    query_url,
+                    marker,
+                    heights,
+                    counters,
+                    done,
+                    clock,
                 )
             )
             load = Load(
-                cfg, state, submitter, submit_urls[: cfg.submit_nodes], marker, bodies
+                cfg,
+                state,
+                submitter,
+                submit_urls[: cfg.submit_nodes],
+                marker,
+                bodies,
+                clock,
             )
             steps, drained, skipped = await run_staircase(load, heights, counters)
             done.set()
@@ -770,6 +852,7 @@ class Load:
     urls: list[str]
     marker: bytes
     bodies: list[bytes]
+    clock: Clock
     ids: Iterator[int] = dataclasses.field(default_factory=itertools.count)
 
 
@@ -785,29 +868,33 @@ async def run_staircase(
     passed: list[bool] = []
     drained, skipped = None, False
     async with asyncio.TaskGroup() as submits:
-        await pace(load, submits, cfg.steps[0], time.time() + cfg.warmup_s)
+        await pace(load, submits, cfg.steps[0], load.clock.time() + cfg.warmup_s)
         while (rate := next_rate(cfg.steps, passed)) is not None:
             if not all(passed):
                 drained = await drain(
-                    load.state, counters, heights, cfg.tx_timeout_s + DRAIN_SLACK_S
+                    load.state,
+                    counters,
+                    heights,
+                    cfg.tx_timeout_s + DRAIN_SLACK_S,
+                    load.clock,
                 )
                 if drained is None:
                     log.warning("backlog did not drain, skipping the refine step")
                     skipped = True
                     break
                 log.info("backlog drained in %.1f s", drained)
-            start = time.time()
+            start = load.clock.time()
             await pace(load, submits, rate, start + cfg.step_s)
             step: StepWindow = {
                 "rate_mb_s": rate,
                 "refine": not all(passed),
                 "t_start": start,
                 "t_mid": start + cfg.step_s / 2,
-                "t_end": time.time(),
+                "t_end": load.clock.time(),
             }
             txs = [dataclasses.asdict(tx) for tx in load.state.txs]
             judged = judge_step(
-                step, cfg, txs, list(heights.records()), counters, time.time()
+                step, cfg, txs, list(heights.records()), counters, load.clock.time()
             )
             fails = judged["consensus_fails"] + judged["query_fails"]
             log_step(judged, fails)
@@ -821,11 +908,12 @@ async def drain(
     counters: list[dict[str, Any]],
     heights: "Heights",
     timeout_s: float,
+    clock: Clock,
 ) -> float | None:
     """Submits nothing until no transaction is pending, decided bytes stopped growing and the
     query node caught up with the validators. Seconds that took, or None after `timeout_s`."""
-    start, target = time.time(), None
-    while time.time() - start < timeout_s:
+    start, target = clock.time(), None
+    while clock.time() - start < timeout_s:
         # Once nothing is pending, two equal samples (~1 s apart) mean consensus is idle.
         flat = (
             len(counters) >= 2
@@ -835,8 +923,8 @@ async def drain(
             # Fixed once settled: empty blocks keep the validator height moving.
             target = heights.top("validator")
         if target is not None and heights.top("query") >= target:
-            return time.time() - start
-        await asyncio.sleep(0.1)
+            return clock.time() - start
+        await clock.asleep(0.1)
     return None
 
 
@@ -861,16 +949,17 @@ async def pace(
     state.cap = step_cap(load.cfg, rate_mb_s)
     state.room.set()
     interval = tx_interval_s(load.cfg.tx_size, rate_mb_s)
-    due = time.time()
+    clock = load.clock
+    due = clock.time()
     while True:
-        await asyncio.sleep(max(0.0, due - time.time()))
-        if time.time() >= until or not await state.wait_for_room(until):
+        await clock.asleep(max(0.0, due - clock.time()))
+        if clock.time() >= until or not await state.wait_for_room(until, clock):
             return
         tx_id = next(load.ids)
         tx = Tx(id=tx_id, node=tx_id % len(load.urls))
         state.submitted(tx)
         submits.create_task(submit_tx(load, tx))
-        due = next_due(due, interval, time.time())
+        due = next_due(due, interval, clock.time())
 
 
 async def submit_tx(load: Load, tx: Tx) -> None:
@@ -890,10 +979,10 @@ async def submit_tx(load: Load, tx: Tx) -> None:
         load.state.failed(tx)
 
 
-def post_tx(pool: HttpPool, tx: Tx, url: str, body: bytes) -> int:
+def post_tx(pool: Http, tx: Tx, url: str, body: bytes) -> int:
     """HTTP status, 0 if the request failed. Stamps `t_submit` as the request goes out, not
     when it was queued for a thread."""
-    tx.t_submit = time.time()
+    tx.t_submit = pool.clock.time()
     try:
         status, _ = pool.request("POST", url, body)
     except OSError:
@@ -937,27 +1026,28 @@ class Heights:
 async def poll_heights(
     client: Client,
     url: str,
-    count: Callable[[HttpPool, str], int],
+    count: Callable[[Http, str], int],
     heights: Heights,
     source: HeightSource,
+    clock: Clock,
 ) -> None:
     """On its own thread, so block times never wait for payload scans."""
     while True:
-        heights.saw(source, await client.call(count, url), time.time())
-        await asyncio.sleep(HEIGHT_POLL_S)
+        heights.saw(source, await client.call(count, url), clock.time())
+        await clock.asleep(HEIGHT_POLL_S)
 
 
 async def poll_counters(
-    client: Client, url: str, counters: list[dict[str, Any]]
+    client: Client, url: str, counters: list[dict[str, Any]], clock: Clock
 ) -> None:
     """Decided payload bytes and view timeouts of one validator, every COUNTER_POLL_S."""
     while True:
         m = await client.call(consensus_counters, url)
-        counters.append({"ts": time.time(), **m})
-        await asyncio.sleep(COUNTER_POLL_S)
+        counters.append({"ts": clock.time(), **m})
+        await clock.asleep(COUNTER_POLL_S)
 
 
-def consensus_counters(pool: HttpPool, url: str) -> dict[str, float]:
+def consensus_counters(pool: Http, url: str) -> dict[str, float]:
     m = parse_prom(get_ok(pool, url + "/v1/status/metrics").decode())
     # Both appear only once the first block is decided or view timed out.
     return {
@@ -975,17 +1065,18 @@ async def track_inclusion(
     heights: Heights,
     counters: list[dict[str, Any]],
     done: asyncio.Event,
+    clock: Clock,
 ) -> None:
     """Scan every new block's payload for our marker; time out transactions that never show.
     A transaction counts as included when its block's header appeared on the query node. A
     payload the query node lacks is retried after each scan until MISSING_PAYLOAD_S."""
     pattern = re.compile(re.escape(marker) + b"(.{8})", re.DOTALL)
     deadline = None
-    report = time.time() + PROGRESS_S
+    report = clock.time() + PROGRESS_S
     height = heights.start
     missing: dict[int, float] = {}
     while True:
-        now = time.time()
+        now = clock.time()
         if now >= report:
             log_progress(state, heights, counters, now)
             report = now + PROGRESS_S
@@ -1005,10 +1096,10 @@ async def track_inclusion(
             if raw is None:
                 missing[height] = heights.seen["query"][height]
             else:
-                record_inclusions(state, pattern, raw, heights, height)
+                record_inclusions(state, pattern, raw, heights, height, clock)
             height += 1
-        await retry_missing(state, client, query_url, pattern, heights, missing)
-        await asyncio.sleep(0.1)
+        await retry_missing(state, client, query_url, pattern, heights, missing, clock)
+        await clock.asleep(0.1)
 
 
 async def retry_missing(
@@ -1018,19 +1109,20 @@ async def retry_missing(
     pattern: re.Pattern[bytes],
     heights: Heights,
     missing: dict[int, float],
+    clock: Clock,
 ) -> None:
     """One fetch per missing payload. Past MISSING_PAYLOAD_S after its block appeared a
     payload counts as lost; its transactions, which cannot be told apart, time out."""
     for height, at_height in list(missing.items()):
         raw = await client.call(block_payload, query_url, height)
-        if raw is None and time.time() - at_height < MISSING_PAYLOAD_S:
+        if raw is None and clock.time() - at_height < MISSING_PAYLOAD_S:
             continue
         del missing[height]
         if raw is None:
             log.warning("payload %d missing on the query node, skipping", height)
             state.missing_payloads.append(height)
         else:
-            record_inclusions(state, pattern, raw, heights, height)
+            record_inclusions(state, pattern, raw, heights, height, clock)
 
 
 def record_inclusions(
@@ -1039,11 +1131,12 @@ def record_inclusions(
     raw: bytes,
     heights: Heights,
     height: int,
+    clock: Clock,
 ) -> None:
     at = heights.seen["query"][height]
     for match in pattern.finditer(raw):
         state.include(int.from_bytes(match.group(1), "big"), height, at)
-    heights.scanned[height] = time.time()
+    heights.scanned[height] = clock.time()
 
 
 class ProgressStats(TypedDict):
@@ -1285,16 +1378,20 @@ def capacity_line(cap: Capacity) -> str:
 
 
 def sample_metrics(
-    urls: dict[str, str], prefixes: tuple[str, ...], out: Path, stop: threading.Event
+    urls: dict[str, str],
+    prefixes: tuple[str, ...],
+    out: Path,
+    stop: threading.Event,
+    clock: Clock = SYSTEM_CLOCK,
 ) -> None:
     """Every METRICS_EVERY_S, one JSON line per node: {ts, node, ok, m}; `m` keeps the
     families in `prefixes`. Often enough for rates over a step's measured half."""
-    pool = HttpPool()
+    pool = HttpPool(clock)
     with open(out, "a", buffering=1) as f:
         while not stop.is_set():
-            start = time.time()
+            start = clock.time()
             for node, url in urls.items():
-                rec: dict[str, Any] = {"ts": time.time(), "node": node, "ok": False}
+                rec: dict[str, Any] = {"ts": clock.time(), "node": node, "ok": False}
                 try:
                     status, body = pool.request(
                         "GET", url + "/v1/status/metrics", timeout=4
@@ -1309,7 +1406,7 @@ def sample_metrics(
                 except OSError:
                     pass
                 f.write(json.dumps(rec) + "\n")
-            stop.wait(max(0.0, METRICS_EVERY_S - (time.time() - start)))
+            clock.wait(stop, max(0.0, METRICS_EVERY_S - (clock.time() - start)))
     pool.close()
 
 

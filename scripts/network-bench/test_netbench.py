@@ -5,7 +5,6 @@ rendering. No network is started.
 """
 
 import asyncio
-import base64
 import json
 import math
 import statistics
@@ -19,6 +18,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 from unittest import mock
 
+import fakes
 import netbench
 
 TOPOLOGY: netbench.Topology = {
@@ -656,153 +656,62 @@ class ValidityTest(unittest.TestCase):
 
 class ReadRetryTest(unittest.TestCase):
     def test_retries_failed_reads(self):
-        pool = mock.Mock(closed=threading.Event())
-        pool.request.side_effect = [OSError("timed out"), (503, b""), (200, b"7")]
+        clock = fakes.FakeClock()
+        pool = netbench.HttpPool(clock)
+        replies = [OSError("timed out"), (503, b""), (200, b"7")]
         with (
-            mock.patch.object(netbench, "READ_RETRY_S", 0),
+            mock.patch.object(pool, "request", side_effect=replies) as request,
             self.assertLogs(netbench.log, "WARNING"),
         ):
             self.assertEqual(netbench.query_height(pool, "http://x"), 7)
-        self.assertEqual(pool.request.call_count, 3)
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(clock.sleeps, [netbench.READ_RETRY_S] * 2)
 
     def test_gives_up_after_the_deadline(self):
-        pool = mock.Mock(closed=threading.Event())
-        pool.request.side_effect = OSError("timed out")
+        clock = fakes.FakeClock()
+        pool = netbench.HttpPool(clock)
         with (
-            mock.patch.object(netbench, "READ_RETRY_S", 0.01),
-            mock.patch.object(netbench, "READ_DEADLINE_S", 0.05),
+            mock.patch.object(
+                pool, "request", side_effect=OSError("timed out")
+            ) as request,
             self.assertLogs(netbench.log, "WARNING"),
             self.assertRaises(netbench.NetworkError),
         ):
             netbench.query_height(pool, "http://x")
+        retries = math.ceil(netbench.READ_DEADLINE_S / netbench.READ_RETRY_S)
+        self.assertEqual(request.call_count, retries + 1)
+        self.assertGreaterEqual(clock.time(), netbench.READ_DEADLINE_S)
 
     def test_closing_the_pool_stops_retries(self):
-        pool = netbench.HttpPool()
-        threading.Timer(0.2, pool.close).start()
-        start = time.time()
+        closing_at = 4 * netbench.READ_RETRY_S
+
+        def close_late(now):
+            if now >= closing_at:
+                pool.close()
+
+        clock = fakes.FakeClock(on_advance=close_late)
+        pool = netbench.HttpPool(clock)
         with (
             mock.patch.object(pool, "request", side_effect=OSError("timed out")),
-            mock.patch.object(netbench, "READ_RETRY_S", 0.05),
             self.assertLogs(netbench.log, "DEBUG") as logs,
             self.assertRaises(netbench.NetworkError),
         ):
             netbench.query_height(pool, "http://x")
-        self.assertLess(time.time() - start, 1.0)
+        self.assertEqual(clock.time(), closing_at)
         levels = [record.levelname for record in logs.records]
         self.assertEqual(levels[0], "WARNING")
         self.assertEqual(set(levels[1:]), {"DEBUG"})
 
     def test_not_found_is_not_retried(self):
-        pool = mock.Mock(closed=threading.Event())
+        pool = mock.Mock(clock=fakes.FakeClock(), closed=threading.Event())
         pool.request.return_value = (404, b"")
         self.assertIsNone(netbench.block_payload(pool, "http://x", 3))
         self.assertEqual(pool.request.call_count, 1)
 
 
-class FakeNode(ThreadingHTTPServer):
-    """Submit, block height and payload endpoints; `include` decides whether blocks carry the
-    submitted transactions. A submit takes `accept_delay` s before the transaction is taken
-    and `reply_delay` s after. Payloads in `lost` are never served, those in `late` only
-    `late[height]` s after their block was made; every payload answer takes `payload_delay` s.
-    The query API shows a block `query_lag` s after the validator status API. A block takes at
-    most `block_txs` transactions."""
-
-    def __init__(
-        self,
-        include,
-        lost=frozenset(),
-        accept_delay=0.0,
-        reply_delay=0.0,
-        late=None,
-        payload_delay=0.0,
-        query_lag=0.0,
-        block_txs=None,
-    ):
-        super().__init__(("127.0.0.1", 0), FakeHandler)
-        self.query_lag = query_lag
-        self.block_txs = block_txs
-        self.include = include
-        self.lost = lost
-        self.late = late or {}
-        self.accept_delay = accept_delay
-        self.reply_delay = reply_delay
-        self.payload_delay = payload_delay
-        self.lock = threading.Lock()
-        self.pending = []
-        self.blocks = [b""]
-        self.made = [time.time()]
-        self.submits = []
-        self.max_outstanding = 0
-        self.stop = threading.Event()
-
-    @property
-    def url(self):
-        return f"http://127.0.0.1:{self.server_address[1]}"
-
-    def produce(self):
-        while not self.stop.wait(0.05):
-            with self.lock:
-                taken = self.pending[: self.block_txs] if self.include else []
-                if self.include:
-                    self.pending = self.pending[len(taken) :]
-                self.blocks.append(b"".join(taken))
-                self.made.append(time.time())
-
-
-class FakeHandler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-    # Headers and body go out as separate writes; with Nagle each response waits for a
-    # delayed ACK.
-    disable_nagle_algorithm = True
-    server: FakeNode
-
-    def log_message(self, format, *args):
-        pass
-
-    def reply(self, status, body):
-        data = body if isinstance(body, bytes) else json.dumps(body).encode()
-        self.send_response(status)
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-    def do_POST(self):
-        node = self.server
-        tx = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        time.sleep(node.accept_delay)
-        with node.lock:
-            node.pending.append(base64.b64decode(tx["payload"]))
-            node.submits.append(time.time())
-            node.max_outstanding = max(node.max_outstanding, len(node.pending))
-        time.sleep(node.reply_delay)
-        self.reply(200, "TX~fake")
-
-    def do_GET(self):
-        node = self.server
-        if self.path.startswith("/v1/availability/"):
-            time.sleep(node.payload_delay)
-        with node.lock:
-            if self.path == "/v1/node/block-height":
-                shown = time.time() - node.query_lag
-                return self.reply(200, sum(1 for t in node.made if t <= shown))
-            if self.path == "/v1/status/block-height":
-                return self.reply(200, len(node.blocks) - 1)
-            if self.path == "/v1/node/stake-table/current":
-                return self.reply(200, {"stake_table": []})
-            if self.path == "/v1/status/metrics":
-                decided = sum(len(block) for block in node.blocks)
-                return self.reply(
-                    200,
-                    f"consensus_finalized_bytes_sum {decided}\n"
-                    "consensus_number_of_timeouts 0\n".encode(),
-                )
-            height = int(self.path.removeprefix("/v1/availability/payload/"))
-            if height >= len(node.blocks) or height in node.lost:
-                return self.reply(404, "not found")
-            if time.time() - node.made[height] < node.late.get(height, 0.0):
-                return self.reply(404, "not found")
-            raw = base64.b64encode(node.blocks[height]).decode()
-        self.reply(200, {"data": {"raw_payload": raw, "ns_table": {"bytes": ""}}})
+# The measured half of a step holds STEP_S / 2 counter samples, COUNTER_POLL_S apart; fewer
+# make the decided rate too noisy for the ramp verdicts.
+STEP_S = 8.0
 
 
 class LoadTest(unittest.TestCase):
@@ -820,11 +729,15 @@ class LoadTest(unittest.TestCase):
         block_txs=None,
         rate=0.02,
         cap_txs=1000,
+        scale=20,
         **cfg,
     ):
-        """One step of `duration` s at `rate` MB/s with at most `cap_txs` in flight, no
-        warmup, unless `cfg` sets `steps`."""
-        node = FakeNode(
+        """One step of `duration` clock seconds at `rate` MB/s with at most `cap_txs` in
+        flight, no warmup, unless `cfg` sets `steps`. The clock runs `scale` times faster than
+        the wall."""
+        clock = fakes.ScaledClock(scale)
+        node = fakes.FakeNode(
+            clock,
             include,
             lost=lost,
             accept_delay=accept_delay,
@@ -834,12 +747,6 @@ class LoadTest(unittest.TestCase):
             query_lag=query_lag,
             block_txs=block_txs,
         )
-        threads = [
-            threading.Thread(target=node.serve_forever),
-            threading.Thread(target=node.produce),
-        ]
-        for thread in threads:
-            thread.start()
         overrides: dict[str, Any] = {
             "tx_size": 1000,
             "workers": 3,
@@ -849,32 +756,27 @@ class LoadTest(unittest.TestCase):
             "cap_s": cap_txs * 1000 / (rate * 1e6),
         } | cfg
         config = netbench.BenchConfig(**overrides)
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                start = time.time()
-                asyncio.run(
-                    netbench.generate_load(
-                        config,
-                        [node.url] * nodes,
-                        node.url,
-                        [node.url, node.url],
-                        Path(tmp),
-                    )
+        with tempfile.TemporaryDirectory() as tmp:
+            start = clock.time()
+            asyncio.run(
+                netbench.generate_load(
+                    config,
+                    [node.url] * nodes,
+                    node.url,
+                    [node.url, node.url],
+                    Path(tmp),
+                    clock,
+                    node.connect,
                 )
-                lines = (Path(tmp) / "load.jsonl").read_text().splitlines()
-                txs = [json.loads(line) for line in lines]
-                self.heights = [
-                    json.loads(line)
-                    for line in (Path(tmp) / "heights.jsonl").read_text().splitlines()
-                ]
-                meta = json.loads((Path(tmp) / "load-meta.json").read_text())
-                self.steps = json.loads((Path(tmp) / "steps.json").read_text())
-        finally:
-            node.stop.set()
-            node.shutdown()
-            for thread in threads:
-                thread.join()
-            node.server_close()
+            )
+            lines = (Path(tmp) / "load.jsonl").read_text().splitlines()
+            txs = [json.loads(line) for line in lines]
+            self.heights = [
+                json.loads(line)
+                for line in (Path(tmp) / "heights.jsonl").read_text().splitlines()
+            ]
+            meta = json.loads((Path(tmp) / "load-meta.json").read_text())
+            self.steps = json.loads((Path(tmp) / "steps.json").read_text())
         return start, node, txs, meta
 
     def test_submits_at_the_offered_rate(self):
@@ -972,16 +874,14 @@ class LoadTest(unittest.TestCase):
         self.assertTrue(all(tx["status"] == "included" for tx in txs))
 
     def test_lost_payload_does_not_stall_later_blocks(self):
-        with (
-            mock.patch.object(netbench, "MISSING_PAYLOAD_S", 1.0),
-            self.assertLogs(netbench.log, "WARNING"),
-        ):
+        with self.assertLogs(netbench.log, "WARNING"):
             _, _, txs, meta = self.run_load(
                 True,
-                2.0,
+                netbench.MISSING_PAYLOAD_S + 2 * fakes.BLOCK_S + 1.0,
                 lost={10},
                 rate=0.02,
-                cap_txs=8,
+                # Steady state is 6 in flight, 8 on a jittery run; a stall gains 20 per second.
+                cap_txs=12,
                 tx_timeout_s=1.5,
             )
         self.assertEqual(meta["missing_payloads"], [10])
@@ -998,6 +898,8 @@ class LoadTest(unittest.TestCase):
             rate=0.02,
             cap_txs=8,
             tx_timeout_s=3,
+            # Steady state is 6 in flight against the cap of 8: coarser scales jitter into it.
+            scale=10,
         )
         self.assertEqual(meta["missing_payloads"], [])
         self.assertEqual(meta["cap_waits"], 0)
@@ -1005,12 +907,10 @@ class LoadTest(unittest.TestCase):
         self.assertLess(max(tx["t_included"] - tx["t_submit"] for tx in txs), 0.7)
 
     def test_staircase_stops_at_the_first_failing_step_and_refines(self):
-        # 4 txs of 1000 bytes per 50 ms block: 0.08 MB/s of capacity. 2 s steps: a shorter
-        # measured half holds too few transactions for a steady decided rate.
-        with mock.patch.object(netbench, "COUNTER_POLL_S", 0.05):
-            self.run_load(
-                True, 2.0, block_txs=4, steps=(0.02, 0.04, 0.16), tx_timeout_s=1
-            )
+        # 4 txs of 1000 bytes per 50 ms block: 0.08 MB/s of capacity.
+        self.run_load(
+            True, STEP_S, block_txs=4, steps=(0.02, 0.04, 0.16), tx_timeout_s=1
+        )
         self.assertEqual(
             [
                 (
@@ -1029,17 +929,16 @@ class LoadTest(unittest.TestCase):
         )
 
     def test_refine_starts_after_the_backlog_drained(self):
-        # 80 tx/s of capacity: 0.1 MB/s leaves 40 txs behind; 0.07 MB/s alone keeps up but
+        # 80 tx/s of capacity: 0.1 MB/s leaves 160 txs behind; 0.07 MB/s alone keeps up but
         # drains that backlog only at 10 tx/s, adding latency over the 300 ms target.
-        with mock.patch.object(netbench, "COUNTER_POLL_S", 0.05):
-            _, _, _, meta = self.run_load(
-                True,
-                2.0,
-                block_txs=4,
-                steps=(0.04, 0.1),
-                latency_target_ms=300,
-                tx_timeout_s=10,
-            )
+        _, _, _, meta = self.run_load(
+            True,
+            STEP_S,
+            block_txs=4,
+            steps=(0.04, 0.1),
+            latency_target_ms=300,
+            tx_timeout_s=10,
+        )
         verdicts = [
             (s["rate_mb_s"], s["refine"], not s["consensus_fails"] + s["query_fails"])
             for s in self.steps
@@ -1057,12 +956,11 @@ class LoadTest(unittest.TestCase):
 
     def test_refine_is_skipped_when_the_backlog_does_not_drain(self):
         with (
-            mock.patch.object(netbench, "COUNTER_POLL_S", 0.05),
             mock.patch.object(netbench, "drain", mock.AsyncMock(return_value=None)),
             self.assertLogs(netbench.log, "WARNING"),
         ):
             _, _, _, meta = self.run_load(
-                True, 1.0, block_txs=4, steps=(0.02, 0.16), tx_timeout_s=1
+                True, STEP_S, block_txs=4, steps=(0.02, 0.16), tx_timeout_s=1
             )
         self.assertEqual([s["rate_mb_s"] for s in self.steps], [0.02, 0.16])
         self.assertTrue(meta["refine_skipped"])
@@ -1074,12 +972,13 @@ class LoadTest(unittest.TestCase):
         self.assertLess(step["t_end"] - step["t_start"], 1.3)
 
     def test_lost_payload_is_skipped(self):
-        with (
-            mock.patch.object(netbench, "MISSING_PAYLOAD_S", 0.2),
-            self.assertLogs(netbench.log, "WARNING"),
-        ):
+        with self.assertLogs(netbench.log, "WARNING"):
             _, _, txs, meta = self.run_load(
-                True, 1.0, lost={3}, rate=0.02, tx_timeout_s=1
+                True,
+                netbench.MISSING_PAYLOAD_S + 2 * fakes.BLOCK_S + 1.0,
+                lost={3},
+                rate=0.02,
+                tx_timeout_s=1,
             )
         self.assertEqual(meta["missing_payloads"], [3])
         self.assertGreater(sum(tx["status"] == "included" for tx in txs), 4)
@@ -1087,24 +986,32 @@ class LoadTest(unittest.TestCase):
 
 class WaitReadyTest(unittest.TestCase):
     def test_dead_process_raises_immediately(self):
-        pool = netbench.HttpPool()
-        start = time.time()
+        clock = fakes.FakeClock()
+        pool = netbench.HttpPool(clock)
+        start = clock.time()
         with self.assertRaises(netbench.NetworkError):
             netbench.wait_ready(
-                pool, {"node0": "http://127.0.0.1:1"}, 1, 5.0, lambda: False
+                pool, {"node0": "http://127.0.0.1:1"}, 1, 5.0, lambda: False, clock
             )
-        self.assertLess(time.time() - start, 5.0)
+        self.assertLess(clock.time() - start, 5.0)
+        self.assertEqual(clock.sleeps, [])
+
+    def test_polls_every_two_seconds_until_the_height_is_reached(self):
+        clock = fakes.FakeClock()
+        pool = netbench.HttpPool(clock)
+        heights = [(200, b"1"), (200, b"3"), (200, b"5")]
+        with mock.patch.object(pool, "request", side_effect=heights):
+            waited = netbench.wait_ready(
+                pool, {"node0": "http://x"}, 5, 60.0, lambda: True, clock
+            )
+        self.assertEqual(waited, 4.0)
+        self.assertEqual(clock.sleeps, [2.0, 2.0])
 
 
 class DriveLoadTest(unittest.TestCase):
     def test_writes_stake_table_and_final_metrics(self):
-        node = FakeNode(True)
-        threads = [
-            threading.Thread(target=node.serve_forever),
-            threading.Thread(target=node.produce),
-        ]
-        for thread in threads:
-            thread.start()
+        clock = fakes.ScaledClock(50)
+        node = fakes.FakeNode(clock, True)
         topo: netbench.Topology = {
             "nodes": {"node0": node.url, "node1": node.url},
             "roles": {"node0": "validator, sqlite", "node1": "validator, sqlite"},
@@ -1120,20 +1027,15 @@ class DriveLoadTest(unittest.TestCase):
             submit_nodes=1,
             tx_timeout_s=5,
         )
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                out = Path(tmp)
-                outcome = netbench.drive_load(config, topo, out, lambda: True)
-                self.assertGreater(outcome["t1"], outcome["t0"])
-                self.assertTrue((out / "stake-table.json").exists())
-                self.assertTrue((out / "final-node0.prom").exists())
-                self.assertTrue((out / "final-node1.prom").exists())
-        finally:
-            node.stop.set()
-            node.shutdown()
-            for thread in threads:
-                thread.join()
-            node.server_close()
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            outcome = netbench.drive_load(
+                config, topo, out, lambda: True, clock, node.connect
+            )
+            self.assertGreater(outcome["t1"], outcome["t0"])
+            self.assertTrue((out / "stake-table.json").exists())
+            self.assertTrue((out / "final-node0.prom").exists())
+            self.assertTrue((out / "final-node1.prom").exists())
 
     def submit_urls(self, submit_nodes):
         topo: netbench.Topology = {
@@ -1420,9 +1322,14 @@ class StaircaseTest(unittest.TestCase):
         heights = netbench.Heights(0)
         heights.saw("validator", 5, 0.0)
         heights.saw("query", 3, 0.0)
-        self.assertIsNone(asyncio.run(netbench.drain(state, counters, heights, 0.3)))
+        clock = fakes.FakeClock()
+        self.assertIsNone(
+            asyncio.run(netbench.drain(state, counters, heights, 0.3, clock))
+        )
         heights.saw("query", 5, 0.0)
-        self.assertIsNotNone(asyncio.run(netbench.drain(state, counters, heights, 0.3)))
+        self.assertIsNotNone(
+            asyncio.run(netbench.drain(state, counters, heights, 0.3, clock))
+        )
 
     def test_drain_does_not_chase_new_validator_heights(self):
         state = netbench.LoadState()
@@ -1430,14 +1337,15 @@ class StaircaseTest(unittest.TestCase):
         heights = netbench.Heights(0)
         heights.saw("validator", 5, 0.0)
 
-        async def run() -> float | None:
-            task = asyncio.create_task(netbench.drain(state, counters, heights, 1.0))
-            await asyncio.sleep(0.05)
-            heights.saw("validator", 6, 0.0)
-            heights.saw("query", 5, 0.0)
-            return await task
+        def grow(now: float) -> None:
+            if now >= 0.05:
+                heights.saw("validator", 6, now)
+                heights.saw("query", 5, now)
 
-        self.assertIsNotNone(asyncio.run(run()))
+        clock = fakes.FakeClock(on_advance=grow)
+        self.assertIsNotNone(
+            asyncio.run(netbench.drain(state, counters, heights, 1.0, clock))
+        )
 
     def test_theil_sen_ignores_an_outlier(self):
         points = [(float(x), 2.0 * x) for x in range(10)] + [(10.0, 100.0)]
