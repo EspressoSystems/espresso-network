@@ -7,7 +7,7 @@ use hotshot_example_types::{
     state_types::TestValidatedState,
 };
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
     message::Proposal as SignedProposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutEvidence},
     simple_vote::HasEpoch,
@@ -1386,6 +1386,80 @@ async fn test_timeout_proposal_chains_from_lock_not_timed_out_cert1() {
         vec![1],
         "timeout-backed proposal must chain from the locked cert1(1), not the timed-out view's \
          cert1(2)"
+    );
+}
+
+/// A node casts at most one vote1 in a view, even after it has left the view.
+///
+/// The node votes for view 1's proposal. A timeout certificate for view 1
+/// reaches it before its own timer fires, so it moves to view 2 and prunes what
+/// lies behind, as the coordinator does. A second proposal for view 1 then
+/// arrives, another block under the next epoch, together with a share for it.
+/// At an epoch boundary two leaders, one from each epoch, lead the same view.
+/// The node must not vote again: a second vote1 also replaces the record of the
+/// branch the first endorsed, which is what keeps it from a vote2 in a view
+/// that branch skipped.
+#[tokio::test]
+async fn test_node_votes_once_in_a_view_it_has_left() {
+    let test_data = TestData::new(2).await;
+    let view = &test_data.views[0];
+    let node_index = 0;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], node_index).0;
+    let mut harness = ConsensusHarness::new(node_index).await;
+
+    harness
+        .apply_pair(view.proposal_input_consensus(&node_key))
+        .await;
+    assert_eq!(
+        count_matching(harness.outputs(), |o| is_vote1_for_view(o, 1)),
+        1,
+        "setup: the node votes for view 1's proposal"
+    );
+
+    // View 1 times out elsewhere. The certificate moves the node into view 2
+    // before its own timer fires, and the coordinator prunes on both outputs.
+    harness.apply(view.timeout_cert_input()).await;
+    assert_eq!(harness.consensus.current_view(), ViewNumber::new(2));
+    harness.consensus.gc(GcScope::Local(ViewNumber::new(2)));
+    harness.consensus.gc(GcScope::Timeout(ViewNumber::new(1)));
+
+    // Another block for view 1 under the next epoch, with a share paired to it.
+    let next_epoch = view.epoch_number + 1;
+    let mut rival = view.proposal.data.clone();
+    rival.epoch = next_epoch;
+    let rival_payload = VidCommitment2::default();
+    rival.block_header.payload_commitment = VidCommitment::V2(rival_payload);
+    let signature = <BLSPubKey as SignatureKey>::sign(
+        &view.leader_private_key,
+        proposal_commitment(&rival).as_ref(),
+    )
+    .expect("sign the rival proposal");
+    let mut rival_share = view.vid_share_for(&node_key);
+    rival_share.epoch = Some(next_epoch);
+    rival_share.target_epoch = Some(next_epoch);
+    rival_share.payload_commitment = rival_payload;
+    harness
+        .apply_pair((
+            ConsensusInput::Proposal(
+                view.leader_public_key,
+                ProposalMessage::validated(SignedProposal::new(rival, signature)),
+            ),
+            ConsensusInput::VidShare(rival_share),
+        ))
+        .await;
+
+    let voted: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|output| match output {
+            ConsensusOutput::SendVote1(v) if *v.view_number() == 1 => Some(v.vote.data.leaf_commit),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        voted,
+        vec![proposal_commitment(&view.proposal.data)],
+        "the node must not vote1 in view 1 a second time"
     );
 }
 
