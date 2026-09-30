@@ -1,5 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
+use committable::Committable;
 use hotshot::{traits::ValidatedState, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::TestBlockHeader,
@@ -8,20 +9,25 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
-    message::Proposal as SignedProposal,
-    simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutEvidence},
-    simple_vote::HasEpoch,
+    message::{Proposal as SignedProposal, UpgradeLock},
+    simple_certificate::{
+        LightClientStateUpdateCertificateV2, TimeoutEvidence, UpgradeCertificate,
+    },
+    simple_vote::{HasEpoch, UpgradeProposalData},
     traits::signature_key::SignatureKey,
     utils::is_epoch_root,
     vote::HasViewNumber,
 };
+use versions::{ASYNC_VID_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade};
 
 use super::common::utils::{TestData, TestView, build_state_cert_for_test, build_timeout_cert3};
 use crate::{
     cert_verifier::ValidCert,
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::GcScope,
-    helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
+    helpers::{
+        proposal_commitment, test_async_vid_lock, test_timeout_epoch_lock, test_upgrade_lock,
+    },
     message::{Proposal, ProposalMessage, TimeoutVote},
     outbox::Outbox,
     proposal::{ProposalValidator, ValidationError},
@@ -896,6 +902,160 @@ async fn test_vote2_block_reconstructed_arrives_late() {
     assert!(
         any(harness.outputs(), is_vote2),
         "Vote2 should fire when BlockReconstructed arrives late"
+    );
+}
+
+/// From `ASYNC_VID_VERSION` vote1 no longer waits for the parent block: the
+/// node's own share for the proposal is what it attests to.
+#[tokio::test]
+async fn test_vote1_without_parent_reconstructed_at_async_vid() {
+    let mut harness = ConsensusHarness::new_with_upgrade_lock(0, 10, test_async_vid_lock()).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // View 1 held with its share but never reconstructed.
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+
+    assert!(
+        any(harness.outputs(), |o| is_vote1_for_view(o, 2)),
+        "vote1 fires on the child without the parent block reconstructed"
+    );
+}
+
+/// From `ASYNC_VID_VERSION` vote2, the lock and the view change need only
+/// cert1 and the proposal.
+#[tokio::test]
+async fn test_vote2_without_block_reconstructed_at_async_vid() {
+    let mut harness = ConsensusHarness::new_with_upgrade_lock(0, 10, test_async_vid_lock()).await;
+    let test_data = TestData::new(2).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+
+    assert!(
+        any(harness.outputs(), is_view_changed),
+        "the lock moves on cert1 alone"
+    );
+    assert!(
+        any(harness.outputs(), |o| is_vote2_for_view(o, 1)),
+        "vote2 fires without the block reconstructed"
+    );
+}
+
+/// From `ASYNC_VID_VERSION` a timeout certificate no longer asks for a
+/// missing payload: no vote is waiting on it. The pre-upgrade counterpart is
+/// `liveness::missing_certificate_still_requests_the_payload`.
+#[tokio::test]
+async fn test_no_payload_request_at_async_vid() {
+    let mut harness = ConsensusHarness::new_with_upgrade_lock(0, 10, test_async_vid_lock()).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Views 1 and 2 held with their shares, neither reconstructed.
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+
+    // View 2 times out; from 0.7 on the certificate binds its epoch.
+    let timed_out = &test_data.views[1];
+    let epoch = timed_out.epoch_number;
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(epoch))
+        .expect("the epoch resolves");
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            build_timeout_cert3(
+                timed_out.view_number,
+                epoch,
+                &membership,
+                &timed_out.leader_public_key,
+                &timed_out.leader_private_key,
+            ),
+            epoch,
+        )))
+        .await;
+
+    assert!(
+        any(harness.outputs(), is_view_changed),
+        "the timeout certificate advances the view"
+    );
+    assert!(
+        !any(harness.outputs(), |o| matches!(
+            o,
+            ConsensusOutput::RequestMissingPayload { .. }
+        )),
+        "nothing is waiting on the payload, so it is not requested"
+    );
+}
+
+/// An upgrade from `TIMEOUT_EPOCH_VERSION` to `ASYNC_VID_VERSION` taking
+/// effect at `first_view`. The signatures are never checked by
+/// `UpgradeLock::version`, so the certificate carries none.
+fn async_vid_from(first_view: ViewNumber) -> UpgradeLock<TestTypes> {
+    let data = UpgradeProposalData {
+        old_version: TIMEOUT_EPOCH_VERSION,
+        new_version: ASYNC_VID_VERSION,
+        decide_by: first_view,
+        new_version_hash: Vec::new(),
+        old_version_last_view: first_view - 1,
+        new_version_first_view: first_view,
+    };
+    let commitment = data.commit();
+    let cert = UpgradeCertificate::new(data, commitment, first_view, None, PhantomData);
+    UpgradeLock::from_certificate(
+        Upgrade::new(TIMEOUT_EPOCH_VERSION, ASYNC_VID_VERSION),
+        &Some(cert),
+    )
+}
+
+/// The payload gate lifts at `new_version_first_view`: the view before it
+/// still waits for the block, the view at it does not.
+#[tokio::test]
+async fn test_payload_gate_lifts_at_the_upgrade_view() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, async_vid_from(ViewNumber::new(2))).await;
+    let test_data = TestData::new(2).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // View 1 runs under 0.7: cert1 without the block reconstructed is not
+    // enough for vote2.
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    assert!(
+        any(harness.outputs(), |o| is_vote1_for_view(o, 1)),
+        "vote1 at the genesis child needs no parent block"
+    );
+    assert!(
+        !any(harness.outputs(), |o| is_vote2_for_view(o, 1)),
+        "before the upgrade vote2 waits for the block"
+    );
+
+    // View 2 runs under 0.8: vote1 needs no parent block and vote2 no block.
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    assert!(
+        any(harness.outputs(), |o| is_vote1_for_view(o, 2)),
+        "from the upgrade view vote1 no longer waits for the parent block"
+    );
+    harness.apply(test_data.views[1].cert1_input()).await;
+    assert!(
+        any(harness.outputs(), |o| is_vote2_for_view(o, 2)),
+        "from the upgrade view vote2 no longer waits for the block"
     );
 }
 

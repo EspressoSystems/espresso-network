@@ -6,7 +6,7 @@ use espresso_types::UpgradeMode;
 use futures::{StreamExt, future::join_all};
 use hotshot_types::{traits::block_contents::BlockHeader, utils::epoch_from_block_number};
 use versions::{
-    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, LARGE_BLOCK_VERSION,
+    ASYNC_VID_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, LARGE_BLOCK_VERSION,
     NEW_PROTOCOL_VERSION, Upgrade,
 };
 
@@ -165,6 +165,15 @@ async fn test_native_demo_large_block_upgrade() -> Result<()> {
     run_upgrade_test(
         "data/genesis/demo-large-block-upgrade.toml",
         Upgrade::new(NEW_PROTOCOL_VERSION, LARGE_BLOCK_VERSION),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_async_vid_upgrade() -> Result<()> {
+    run_upgrade_test(
+        "data/genesis/demo-async-vid-upgrade.toml",
+        Upgrade::new(LARGE_BLOCK_VERSION, ASYNC_VID_VERSION),
     )
     .await
 }

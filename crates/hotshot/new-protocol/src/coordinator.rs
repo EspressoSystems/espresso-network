@@ -71,9 +71,11 @@ use crate::{
 ///
 /// A decide can land while an earlier view's payload is still being
 /// reconstructed, and GC at the decided view would abort that task.
-/// A decide proves a quorum reconstructed the payload
-/// so it can be fetched later assuming the quorum includes at
-/// least one query node serving catchup.
+/// Before `ASYNC_VID_VERSION` a decide proves a quorum reconstructed the
+/// payload, so it can be fetched later assuming the quorum includes at
+/// least one query node serving catchup. From then on it proves a quorum
+/// holds verified shares, and the payload is reconstructed from those
+/// outside consensus.
 /// The margin gives in flight reconstruction tasks time to finish, which is
 /// cheaper than fetching the payload through catchup.
 ///

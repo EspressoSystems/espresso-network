@@ -21,8 +21,8 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
 use versions::{
-    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION,
-    Upgrade,
+    ASYNC_VID_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
+    TIMEOUT_EPOCH_VERSION, Upgrade,
 };
 
 /// The version we should expect for external messages
@@ -780,6 +780,16 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
     pub fn timeout_epoch_bound(&self, timed_out_view: ViewNumber) -> bool {
         let v = ViewNumber::new(timed_out_view.u64().saturating_add(1));
         self.version_infallible(v) >= TIMEOUT_EPOCH_VERSION
+    }
+
+    /// Whether a vote cast in `view` waits for the block payload.
+    ///
+    /// Before [`ASYNC_VID_VERSION`] a node votes only on a block it holds in
+    /// full: vote1 needs the parent reconstructed and vote2 the block itself.
+    /// From then on a vote attests to the node's own VID share and the payload
+    /// is reconstructed outside consensus.
+    pub fn payload_gates_votes(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) < ASYNC_VID_VERSION
     }
 
     /// Return whether the new protocol (HotShot 0.8) is active for the given view.

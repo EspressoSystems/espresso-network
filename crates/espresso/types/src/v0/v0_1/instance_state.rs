@@ -14,6 +14,7 @@ pub enum UpgradeType {
     NewProtocol { chain_config: ChainConfig },
     EpochReward { chain_config: ChainConfig },
     LargeBlock { chain_config: ChainConfig },
+    AsyncVid { chain_config: ChainConfig },
 }
 
 impl UpgradeType {
@@ -27,6 +28,7 @@ impl UpgradeType {
             UpgradeType::NewProtocol { chain_config } => Some(*chain_config),
             UpgradeType::EpochReward { chain_config } => Some(*chain_config),
             UpgradeType::LargeBlock { chain_config } => Some(*chain_config),
+            UpgradeType::AsyncVid { chain_config } => Some(*chain_config),
         }
     }
 }

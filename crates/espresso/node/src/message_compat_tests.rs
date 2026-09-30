@@ -826,3 +826,24 @@ async fn test_v7_new_protocol_message_compat() {
         &unchecked,
     );
 }
+
+/// The 0.8 vectors differ from 0.7 only where the header is involved: the
+/// version is the only change, and every message carrying a block header, a
+/// leaf commitment derived from one, or a signature over either moves with it.
+#[cfg(feature = "testing")]
+#[tokio::test(flavor = "multi_thread")]
+async fn test_v8_new_protocol_message_compat() {
+    let messages =
+        reference_new_protocol_messages(<StaticVersion<0, 8> as StaticVersionType>::VERSION).await;
+    let unchecked: Vec<NewProtocolMessage<SeqTypes, Unchecked>> = messages
+        .iter()
+        .cloned()
+        .map(NewProtocolMessage::into_unchecked)
+        .collect();
+
+    check_reference_messages::<StaticVersion<0, 8>, _, _>(
+        "new_protocol_messages",
+        &messages,
+        &unchecked,
+    );
+}

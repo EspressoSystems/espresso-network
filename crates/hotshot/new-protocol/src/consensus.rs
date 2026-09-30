@@ -453,11 +453,55 @@ impl<T: NodeType> Consensus<T> {
         self.stored_high_qc.is_some_and(|stored| stored >= required)
     }
 
+    /// Whether vote1 in `view` may proceed as far as the parent's payload is
+    /// concerned.
+    ///
+    /// From `ASYNC_VID_VERSION` it always may: a vote attests to this node's
+    /// own share, and the payload is reconstructed outside consensus. Before
+    /// that the parent block must be reconstructed (see
+    /// [`Self::parent_reconstructed`]).
+    fn parent_payload_ready(
+        &self,
+        view: ViewNumber,
+        proposal: &Proposal<T>,
+        parent: &Proposal<T>,
+    ) -> bool {
+        if !self.upgrade_lock.payload_gates_votes(view) {
+            return true;
+        }
+        let block = proposal.block_header.block_number();
+        let epoch = proposal.epoch;
+        let parent_view = parent.view_number();
+        let parent_block = parent.block_header.block_number();
+        let parent_epoch = parent.epoch;
+        let VidCommitment::V2(parent_block_commitment) = parent.block_header.payload_commitment()
+        else {
+            warn!(
+                %view, %block, %epoch, %parent_view, %parent_block, %parent_epoch,
+                "prev. proposal payload commitment is not a V2 VID commitment"
+            );
+            return false;
+        };
+        if !self.parent_reconstructed(
+            parent_view,
+            parent_block_commitment,
+            proposal_commitment(parent),
+        ) {
+            debug!(
+                %view, %block, %epoch, %parent_view, %parent_block, %parent_epoch,
+                "no reconstructed block matching the parent block commitment"
+            );
+            return false;
+        }
+        true
+    }
+
     /// Whether the parent block counts as reconstructed for voting: either we
     /// hold its payload, or our locked QC certifies exactly this parent leaf.
-    /// A lock is only ever taken on a reconstructed block, so a lock matching
-    /// the parent is itself proof of reconstruction — letting a restarted node
-    /// vote on the first proposal built on its restored lock.
+    /// Before `ASYNC_VID_VERSION` a lock is only ever taken on a reconstructed
+    /// block, so a lock matching the parent is itself proof of reconstruction,
+    /// letting a restarted node vote on the first proposal built on its
+    /// restored lock.
     fn parent_reconstructed(
         &self,
         parent_view: ViewNumber,
@@ -469,6 +513,40 @@ impl<T: NodeType> Consensus<T> {
             || self.locked_cert.as_ref().is_some_and(|lock| {
                 lock.view_number() == parent_view && lock.data().leaf_commit == parent_leaf
             })
+    }
+
+    /// Whether vote2 in `view` may proceed as far as the block's payload is
+    /// concerned.
+    ///
+    /// From `ASYNC_VID_VERSION` it always may. Before that the block must be
+    /// reconstructed, so the lock is only ever taken on a block this node
+    /// holds in full.
+    fn own_payload_ready(&self, view: ViewNumber, proposal: &Proposal<T>) -> bool {
+        if !self.upgrade_lock.payload_gates_votes(view) {
+            return true;
+        }
+        let block = proposal.block_header.block_number();
+        let epoch = proposal.epoch;
+        let qc_view = proposal.justify_qc.view_number();
+        let qc_epoch = proposal.justify_qc.epoch();
+        let VidCommitment::V2(block_commitment) = proposal.block_header.payload_commitment() else {
+            warn!(
+                %view, %block, %epoch, %qc_view, ?qc_epoch,
+                "proposal payload commitment is not a V2 VID commitment"
+            );
+            return false;
+        };
+        if !self
+            .blocks_reconstructed
+            .contains(&(view, block_commitment))
+        {
+            debug!(
+                %view, %block, %epoch, %qc_view, ?qc_epoch,
+                "no reconstructed block matching the proposal commitment"
+            );
+            return false;
+        }
+        true
     }
 
     /// Seed a state certificate loaded from storage on restart, so a leader
@@ -1333,6 +1411,12 @@ impl<T: NodeType> Consensus<T> {
         let Some((_, child)) = self.proposals.last_key_value() else {
             return;
         };
+
+        // From `ASYNC_VID_VERSION` no vote waits for a payload, so there is
+        // nothing a fetch could unblock.
+        if !self.upgrade_lock.payload_gates_votes(child.view_number()) {
+            return;
+        }
 
         let view = child.justify_qc.view_number();
 
@@ -2436,34 +2520,13 @@ impl<T: NodeType> Consensus<T> {
                 debug!(%view, %parent_view, "proposal not available");
                 return;
             };
-            let parent_block = prev_proposal.block_header.block_number();
-            let parent_epoch = prev_proposal.epoch;
-
-            let VidCommitment::V2(prev_block_commitment) =
-                prev_proposal.block_header.payload_commitment()
-            else {
-                warn! {
-                    %view, block = %block_number, %epoch,
-                    %parent_view, %parent_block, %parent_epoch,
-                    "prev. proposal payload commitment is not a V2 VID commitment"
-                }
-                return;
-            };
-            // Parent must be reconstructed (see `parent_reconstructed`).
-            if !self.parent_reconstructed(
-                parent_view,
-                prev_block_commitment,
-                proposal_commitment(prev_proposal),
-            ) {
-                debug!(
-                    %view, block = %block_number, %epoch,
-                    %parent_view, %parent_block, %parent_epoch,
-                    "no reconstructed block matching the parent block commitment"
-                );
+            if !self.parent_payload_ready(view, proposal, prev_proposal) {
                 return;
             }
 
             if proposal.justify_qc.data().leaf_commit != proposal_commitment(prev_proposal) {
+                let parent_block = prev_proposal.block_header.block_number();
+                let parent_epoch = prev_proposal.epoch;
                 debug!(
                     %view, block = %block_number, %epoch,
                     %parent_view, %parent_block, %parent_epoch,
@@ -2565,28 +2628,12 @@ impl<T: NodeType> Consensus<T> {
             );
             return;
         }
-        let VidCommitment::V2(proposal_block_commitment) =
-            proposal.block_header.payload_commitment()
-        else {
-            warn!(
-                %view, %block, epoch = %proposal_epoch, %qc_view, ?qc_epoch,
-                "proposal payload commitment is not a V2 VID commitment"
-            );
-            return;
-        };
-        if !self
-            .blocks_reconstructed
-            .contains(&(view, proposal_block_commitment))
-        {
-            debug!(
-                %view, %block, epoch = %proposal_epoch, %qc_view, ?qc_epoch,
-                "no reconstructed block matching the proposal commitment"
-            );
+        if !self.own_payload_ready(view, proposal) {
             return;
         }
 
-        // We have a valid certificate, proposal, and reconstructed block
-        // We can now update the lock, change view and vote
+        // We have a valid certificate and proposal, and the block if this
+        // version needs it. We can now update the lock, change view and vote
         if self
             .locked_cert
             .as_mut()

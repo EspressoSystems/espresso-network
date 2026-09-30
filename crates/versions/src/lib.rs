@@ -19,8 +19,11 @@ pub const NEW_PROTOCOL_VERSION: Version = version(0, 6);
 pub const TIMEOUT_EPOCH_VERSION: Version = version(0, 7);
 // The LargeBlock chain-config change ships in the same upgrade as the timeout-epoch binding.
 pub const LARGE_BLOCK_VERSION: Version = TIMEOUT_EPOCH_VERSION;
+// Votes no longer wait for the block payload: a vote attests to the node's own VID share, and
+// reconstruction runs outside consensus.
+pub const ASYNC_VID_VERSION: Version = version(0, 8);
 pub const MIN_SUPPORTED_VERSION: Version = VERSION_0_1;
-pub const MAX_SUPPORTED_VERSION: Version = TIMEOUT_EPOCH_VERSION;
+pub const MAX_SUPPORTED_VERSION: Version = ASYNC_VID_VERSION;
 
 // Known upgrade hashes:
 
@@ -237,8 +240,8 @@ mod tests {
     };
 
     use super::{
-        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION,
-        VersionError, decode, encode, parse_version, version,
+        ASYNC_VID_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
+        TIMEOUT_EPOCH_VERSION, VersionError, decode, encode, parse_version, version,
     };
 
     /// Ensure our `encode`/`decode` matches `vbs`'s.
@@ -293,6 +296,7 @@ mod tests {
             check_encoding::<_, StaticVersion<0, 5>>(&s);
             check_encoding::<_, StaticVersion<0, 6>>(&s);
             check_encoding::<_, StaticVersion<0, 7>>(&s);
+            check_encoding::<_, StaticVersion<0, 8>>(&s);
         }
 
         QuickCheck::new()
@@ -306,6 +310,7 @@ mod tests {
             EPOCH_VERSION,
             NEW_PROTOCOL_VERSION,
             TIMEOUT_EPOCH_VERSION,
+            ASYNC_VID_VERSION,
             DRB_AND_HEADER_UPGRADE_VERSION,
             version(0, 0),
             version(u16::MAX, u16::MAX),
