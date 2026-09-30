@@ -107,8 +107,8 @@ PULL_EXPECTED_S = 120.0
 PULL_MAX_S = 300.0
 # Signal count that abandons the remaining collection and goes straight to destroy.
 SKIP_COLLECT_SIGNALS = 3
-# The load ramp: x1.5 per step from 4 MB/s up to the 200 MB/s target. The staircase stops at the
-# first failing step, so the tail costs nothing on a slower network.
+# The load ramp: x1.5 per step from 4 MB/s up to the 200 MB/s target. Without --keep-going the
+# staircase stops at the first failing step, so the tail costs nothing on a slower network.
 STEP_START_MB_S = 4.0
 STEP_FACTOR = 1.5
 STEP_TOP_MB_S = 200.0
@@ -846,7 +846,7 @@ def aws_ok(run: Runner, profile: str, *args: str, tolerate: str | None = None) -
 
 def node_root_gb(cfg: RunConfig, query: bool) -> int:
     """`--root-gb` if given, else sized from the bytes offered over the whole ramp (an upper
-    bound, the staircase stops early) at 1 MB per MB/s-second."""
+    bound, the staircase stops early without keep_going) at 1 MB per MB/s-second."""
     if cfg.root_gb != "auto":
         return int(cfg.root_gb)
     payload_gb = sum(cfg.load.steps) * cfg.load.step_s / 1000

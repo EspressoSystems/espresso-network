@@ -93,6 +93,12 @@ class PreflightTest(unittest.TestCase):
             ):
                 bench.cmd_run(args)
 
+    def test_keep_going_flag(self):
+        argv = ["run", "--bin-dir", "/nonexistent"]
+        self.assertFalse(bench.config_from_args(bench.parse_args(argv)).keep_going)
+        args = bench.parse_args([*argv, "--keep-going"])
+        self.assertTrue(bench.config_from_args(args).keep_going)
+
     def test_run_refuses_without_starting_network(self):
         args = bench.parse_args(["run", "--bin-dir", "/nonexistent"])
         with (

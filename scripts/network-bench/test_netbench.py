@@ -6,6 +6,8 @@ rendering. No network is started.
 
 import asyncio
 import base64
+import dataclasses
+import hashlib
 import json
 import math
 import statistics
@@ -853,15 +855,19 @@ class LoadTest(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 start = time.time()
-                asyncio.run(
-                    netbench.generate_load(
-                        config,
-                        [node.url] * nodes,
-                        node.url,
-                        [node.url, node.url],
-                        Path(tmp),
+                try:
+                    asyncio.run(
+                        netbench.generate_load(
+                            config,
+                            [node.url] * nodes,
+                            node.url,
+                            [node.url, node.url],
+                            Path(tmp),
+                        )
                     )
-                )
+                finally:
+                    steps = Path(tmp) / "steps.json"
+                    self.steps = json.loads(steps.read_text()) if steps.exists() else []
                 lines = (Path(tmp) / "load.jsonl").read_text().splitlines()
                 txs = [json.loads(line) for line in lines]
                 self.heights = [
@@ -869,7 +875,6 @@ class LoadTest(unittest.TestCase):
                     for line in (Path(tmp) / "heights.jsonl").read_text().splitlines()
                 ]
                 meta = json.loads((Path(tmp) / "load-meta.json").read_text())
-                self.steps = json.loads((Path(tmp) / "steps.json").read_text())
         finally:
             node.stop.set()
             node.shutdown()
@@ -1088,6 +1093,42 @@ class LoadTest(unittest.TestCase):
         )
         self.assertGreater(meta["drain_s"], 0.2)
         self.assertFalse(meta["refine_skipped"])
+
+    def test_keep_going_reports_a_backlog_that_does_not_drain(self):
+        with (
+            mock.patch.object(netbench, "COUNTER_POLL_S", 0.05),
+            mock.patch.object(netbench, "drain", mock.AsyncMock(return_value=None)),
+            self.assertLogs(netbench.log, "WARNING"),
+        ):
+            _, _, _, meta = self.run_load(
+                True,
+                1.0,
+                block_txs=4,
+                steps=(0.1, 0.12),
+                tx_timeout_s=1,
+                keep_going=True,
+            )
+        self.assertEqual([s["rate_mb_s"] for s in self.steps], [0.1, 0.12])
+        self.assertIsNone(meta["drain_s"])
+        self.assertFalse(meta["refine_skipped"])
+
+    def test_steps_survive_a_failure_in_the_last_drain(self):
+        with (
+            mock.patch.object(netbench, "COUNTER_POLL_S", 0.05),
+            mock.patch.object(
+                netbench, "drain", mock.AsyncMock(side_effect=OSError("gone"))
+            ),
+            self.assertRaises(netbench.NetworkError),
+        ):
+            self.run_load(
+                True,
+                1.0,
+                block_txs=4,
+                steps=(0.1, 0.12),
+                tx_timeout_s=1,
+                keep_going=True,
+            )
+        self.assertEqual([s["rate_mb_s"] for s in self.steps], [0.1, 0.12])
 
     def test_step_ends_on_time_while_waiting_for_room(self):
         # Nothing is included: the cap fills at once and frees only on timeouts after 3 s.
@@ -1435,6 +1476,51 @@ class StaircaseTest(unittest.TestCase):
 
     def test_first_step_failing_ends_the_ramp(self):
         self.assertIsNone(netbench.next_rate((4.0, 6.0), [False]))
+
+    def test_keep_going_runs_the_whole_ramp(self):
+        ramp = (4.0, 6.0)
+        self.assertEqual(netbench.next_rate(ramp, [False], keep_going=True), 6.0)
+        self.assertIsNone(netbench.next_rate(ramp, [False, True], keep_going=True))
+
+    def test_drain_without_pending_ignores_stuck_transactions(self):
+        state = netbench.LoadState()
+        state.submitted(netbench.Tx(id=0, node=0))
+        counters = [{"decided_bytes": 1}, {"decided_bytes": 1}]
+        heights = netbench.Heights(0)
+        heights.saw("validator", 5, 0.0)
+        heights.saw("query", 5, 0.0)
+        self.assertIsNone(asyncio.run(netbench.drain(state, counters, heights, 0.3)))
+        self.assertIsNotNone(
+            asyncio.run(
+                netbench.drain(state, counters, heights, 0.3, wait_pending=False)
+            )
+        )
+
+    def test_keep_going_off_keeps_the_config_hash_of_older_runs(self):
+        cfg = netbench.BenchConfig()
+        older = dataclasses.asdict(cfg)
+        del older["keep_going"]
+        digest = hashlib.sha256(json.dumps(older, sort_keys=True).encode())
+        self.assertEqual(netbench.config_hash(cfg, []), digest.hexdigest()[:12])
+        self.assertNotEqual(
+            netbench.config_hash(dataclasses.replace(cfg, keep_going=True), []),
+            netbench.config_hash(cfg, []),
+        )
+
+    def test_drain_lines(self):
+        self.assertEqual(netbench.drain_lines(None, False), [])
+        self.assertEqual(
+            netbench.drain_lines(3.0, False),
+            ["- backlog drained in 3.0 s before the refine step"],
+        )
+        self.assertEqual(
+            netbench.drain_lines(3.0, True),
+            ["- backlog drained in 3.0 s after the last step"],
+        )
+        self.assertEqual(
+            netbench.drain_lines(None, True),
+            ["- backlog did not drain in 600 s after the last step"],
+        )
 
     def test_drain_waits_for_the_query_node(self):
         state = netbench.LoadState()

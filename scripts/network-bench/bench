@@ -182,7 +182,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default = getattr(defaults, field.name)
         flag = f"--{field.name.replace('_', '-')}"
         if isinstance(default, bool):
-            run.add_argument(flag, action="store_true")
+            run.add_argument(
+                flag, action=argparse.BooleanOptionalAction, default=default
+            )
             continue
         run.add_argument(
             flag,

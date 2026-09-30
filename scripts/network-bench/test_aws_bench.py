@@ -264,6 +264,12 @@ class PhaseSecondsTest(unittest.TestCase):
             awsb.load_seconds(load), 60 + 3 * 30 + 2 * 30 + netbench.DRAIN_SLACK_S
         )
 
+    def test_keep_going_flag(self):
+        argv = ["run", "--tag", "x"]
+        self.assertFalse(awsb.config_from_args(awsb.parse_args(argv)).load.keep_going)
+        args = awsb.parse_args([*argv, "--keep-going"])
+        self.assertTrue(awsb.config_from_args(args).load.keep_going)
+
     def test_load_seconds_keep_going(self):
         load = netbench.BenchConfig(
             steps=(4.0, 8.0), step_s=30, warmup_s=60, tx_timeout_s=30, keep_going=True

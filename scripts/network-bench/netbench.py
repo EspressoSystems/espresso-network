@@ -691,7 +691,7 @@ async def generate_load(
             load = Load(
                 cfg, state, submitter, submit_urls[: cfg.submit_nodes], marker, bodies
             )
-            steps, drained, skipped = await run_staircase(load, heights, counters)
+            drained, skipped = await run_staircase(load, heights, counters, steps)
             done.set()
             await tracker
             for poller in pollers:
@@ -779,21 +779,25 @@ class Load:
 
 
 async def run_staircase(
-    load: Load, heights: "Heights", counters: list[dict[str, Any]]
-) -> tuple[list[dict[str, Any]], float | None, bool]:
+    load: Load,
+    heights: "Heights",
+    counters: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+) -> tuple[float | None, bool]:
     """Warmup, then steps up the ramp until one fails, then one refine step once the failed
     step's backlog drained. Each step is judged on what is known at its end; the report keeps
-    that verdict. Returns the steps, the drain time and whether the drain timed out, which
-    skips the refine step. With `keep_going` every step of the ramp runs, without a refine
-    step, and the drain follows the last step."""
+    that verdict. Appends to `steps` as they end, so a run cut short keeps them. Returns the
+    drain time and whether the drain timed out, which skips the refine step. With
+    `keep_going` every step of the ramp runs, without a refine step, and the drain follows
+    the last step."""
     cfg = load.cfg
-    steps: list[dict[str, Any]] = []
     passed: list[bool] = []
     drained, skipped = None, False
     async with asyncio.TaskGroup() as submits:
         await pace(load, submits, cfg.steps[0], time.time() + cfg.warmup_s)
-        while (rate := next_rate(cfg.steps, passed)) is not None:
-            if not all(passed):
+        while (rate := next_rate(cfg.steps, passed, cfg.keep_going)) is not None:
+            refine = not cfg.keep_going and not all(passed)
+            if refine:
                 drained = await drain(
                     load.state, counters, heights, cfg.tx_timeout_s + DRAIN_SLACK_S
                 )
@@ -806,7 +810,7 @@ async def run_staircase(
             await pace(load, submits, rate, start + cfg.step_s)
             step: StepWindow = {
                 "rate_mb_s": rate,
-                "refine": not all(passed),
+                "refine": refine,
                 "t_start": start,
                 "t_mid": start + cfg.step_s / 2,
                 "t_end": time.time(),
@@ -817,15 +821,19 @@ async def run_staircase(
             )
             fails = judged["consensus_fails"] + judged["query_fails"]
             log_step(judged, fails)
-            passed.append(cfg.keep_going or not fails)
+            passed.append(not fails)
             steps.append(judged)
         if cfg.keep_going:
-            drained = await drain(load.state, counters, heights, CATCHUP_TIMEOUT_S)
+            # Not waiting for pending: a transaction of a lost payload stays pending until its
+            # timeout, which `keep_going` runs set above the lag.
+            drained = await drain(
+                load.state, counters, heights, CATCHUP_TIMEOUT_S, wait_pending=False
+            )
             if drained is None:
                 log.warning("backlog did not drain in %d s", CATCHUP_TIMEOUT_S)
             else:
                 log.info("backlog drained in %.1f s", drained)
-    return steps, drained, skipped
+    return drained, skipped
 
 
 async def drain(
@@ -833,9 +841,11 @@ async def drain(
     counters: list[dict[str, Any]],
     heights: "Heights",
     timeout_s: float,
+    wait_pending: bool = True,
 ) -> float | None:
-    """Submits nothing until no transaction is pending, decided bytes stopped growing and the
-    query node caught up with the validators. Seconds that took, or None after `timeout_s`."""
+    """Submits nothing until no transaction is pending (unless `wait_pending` is off), decided
+    bytes stopped growing and the query node caught up with the validators. Seconds that took,
+    or None after `timeout_s`."""
     start, target = time.time(), None
     while time.time() - start < timeout_s:
         # Once nothing is pending, two equal samples (~1 s apart) mean consensus is idle.
@@ -843,7 +853,7 @@ async def drain(
             len(counters) >= 2
             and counters[-1]["decided_bytes"] == counters[-2]["decided_bytes"]
         )
-        if target is None and not state.pending and flat:
+        if target is None and flat and not (wait_pending and state.pending):
             # Fixed once settled: empty blocks keep the validator height moving.
             target = heights.top("validator")
         if target is not None and heights.top("query") >= target:
@@ -1137,10 +1147,13 @@ def fmt_lag(stats: ProgressStats) -> str:
     return f"lag {fmt_num(stats['lag_ms'])} ms"
 
 
-def next_rate(ramp: Sequence[float], passed: list[bool]) -> float | None:
+def next_rate(
+    ramp: Sequence[float], passed: list[bool], keep_going: bool = False
+) -> float | None:
     """The rate of the next step after steps with `passed` verdicts: up the ramp until a step
-    fails, then one refine step halfway back, then none."""
-    if all(passed):
+    fails, then one refine step halfway back, then none. With `keep_going` up the whole ramp,
+    whatever the verdicts."""
+    if keep_going or all(passed):
         return ramp[len(passed)] if len(passed) < len(ramp) else None
     first_fail = passed.index(False)
     if first_fail == 0 or len(passed) > first_fail + 1:
@@ -1513,9 +1526,11 @@ def run_meta(run: dict[str, Any]) -> RunMeta:
 
 
 def config_hash(cfg: BenchConfig, extra: list[bytes]) -> str:
-    digest = hashlib.sha256(
-        json.dumps(dataclasses.asdict(cfg), sort_keys=True).encode()
-    )
+    data = dataclasses.asdict(cfg)
+    # Runs from before `keep_going` existed hashed without it and stay comparable.
+    if not cfg.keep_going:
+        del data["keep_going"]
+    digest = hashlib.sha256(json.dumps(data, sort_keys=True).encode())
     for chunk in extra:
         digest.update(chunk)
     return digest.hexdigest()[:12]
