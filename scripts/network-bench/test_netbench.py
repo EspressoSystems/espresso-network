@@ -1248,9 +1248,10 @@ def write_run_dir(out):
         {"height": 2000, "validator": 130.0, "query": 130.5, "scanned": None}
     )
     jsonl("heights.jsonl", heights)
-    # 1 MB/s, as submitted, in the first step; half of it in the second.
+    # 1 MB/s until 130 s, then 0.2 MB/s: half of the 0.4 MB/s that the second step's measured
+    # half submits (6 transactions in 15 s).
     counters = [
-        {"ts": float(ts), "decided_bytes": 1e6 * min(ts, 65 + ts / 2), "timeouts": 0}
+        {"ts": float(ts), "decided_bytes": 1e6 * min(ts, 104 + ts / 5), "timeouts": 0}
         for ts in range(100, 161)
     ]
     jsonl("consensus.jsonl", counters)
