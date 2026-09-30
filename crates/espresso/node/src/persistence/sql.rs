@@ -1,7 +1,7 @@
 #[cfg(feature = "embedded-db")]
 use std::path::Path;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, btree_map},
     future::Future,
     num::NonZeroUsize,
     path::PathBuf,
@@ -971,10 +971,46 @@ struct DecidedLeaf {
     cert: CertificatePair<SeqTypes>,
 }
 
-struct ReconstructedPayloadRow {
+struct PendingPayloadRow {
     view: i64,
     header: Vec<u8>,
     payload: Vec<u8>,
+}
+
+struct PendingPayload {
+    header: Header,
+    payload: Payload,
+}
+
+/// A row that fails to decode is logged and left out, and is still deleted with the others:
+/// failing the batch instead would retry it forever, holding up the cursor and GC behind one row.
+fn decode_pending_payloads(rows: Vec<PendingPayloadRow>) -> BTreeMap<ViewNumber, PendingPayload> {
+    rows.into_iter()
+        .filter_map(
+            |PendingPayloadRow {
+                 view,
+                 header,
+                 payload,
+             }| {
+                let header = match bincode::deserialize::<Header>(&header) {
+                    Ok(header) => header,
+                    Err(err) => {
+                        tracing::warn!(
+                            view,
+                            err = %format_args!("{err:#}"),
+                            "dropping pending payload with undecodable header"
+                        );
+                        return None;
+                    },
+                };
+                let payload = Payload::from_bytes(&payload, header.metadata());
+                Some((
+                    ViewNumber::new(view as u64),
+                    PendingPayload { header, payload },
+                ))
+            },
+        )
+        .collect()
 }
 
 fn decide_events_from_chain(
@@ -1158,7 +1194,7 @@ impl Persistence {
                 mut da_proposals,
                 state_certs,
                 cert2,
-                reconstructed,
+                pending,
             )) = serializable_retry!(self, || async {
                 let mut tx = self.db.read().await?;
 
@@ -1335,17 +1371,14 @@ impl Persistence {
 
                 // No lower bound: a payload stored for a view an earlier decide already passed
                 // still has to reach the consumer.
-                let reconstructed = tx
+                let pending = tx
                     .fetch_all(
-                        query(
-                            "SELECT view, header, payload FROM reconstructed_payload WHERE view \
-                             <= $1 ORDER BY view",
-                        )
-                        .bind(to_view.u64() as i64),
+                        query("SELECT view, header, payload FROM pending_payload WHERE view <= $1")
+                            .bind(to_view.u64() as i64),
                     )
                     .await?
                     .into_iter()
-                    .map(|row| ReconstructedPayloadRow {
+                    .map(|row| PendingPayloadRow {
                         view: row.get("view"),
                         header: row.get("header"),
                         payload: row.get("payload"),
@@ -1361,7 +1394,7 @@ impl Persistence {
                     da_proposals,
                     state_certs,
                     cert2,
-                    reconstructed,
+                    pending,
                 )))
             })
             .await?
@@ -1372,6 +1405,9 @@ impl Persistence {
             let to_height = leaves
                 .last()
                 .map(|(leaf, _)| leaf.block_header().block_number());
+
+            let delivered = pending.iter().map(|row| row.view).collect::<Vec<_>>();
+            let mut pending = decode_pending_payloads(pending);
 
             // Collate all the information by view number and construct a chain of leaves.
             let chain = leaves
@@ -1388,17 +1424,29 @@ impl Persistence {
                     }
                     let vid_share = vid_proposal.as_ref().map(|proposal| proposal.data.clone());
 
-                    // Fill in the full block payload using the DA proposals we had persisted.
-                    if let Some(proposal) = da_proposals.remove(&view) {
-                        let payload =
-                            Payload::from_bytes(&proposal.encoded_transactions, &proposal.metadata);
+                    // A pending payload is keyed by view, so it only belongs to this leaf if it
+                    // was obtained for this exact block.
+                    let pending_payload = match pending.entry(view) {
+                        btree_map::Entry::Occupied(entry)
+                            if entry.get().header == *leaf.block_header() =>
+                        {
+                            Some(entry.remove().payload)
+                        },
+                        btree_map::Entry::Occupied(_) | btree_map::Entry::Vacant(_) => None,
+                    };
+                    let payload = pending_payload.or_else(|| {
+                        da_proposals.remove(&view).map(|proposal| {
+                            Payload::from_bytes(&proposal.encoded_transactions, &proposal.metadata)
+                        })
+                    });
+                    if let Some(payload) = payload {
                         leaf.fill_block_payload_unchecked(payload);
                     } else if view == ViewNumber::genesis() {
                         // We don't get a DA proposal for the genesis view, but we know what the
                         // payload always is.
                         leaf.fill_block_payload_unchecked(Payload::empty().0);
                     } else {
-                        tracing::debug!(?view, "DA proposal not available at decide");
+                        tracing::debug!(?view, "block payload not available at decide");
                     }
 
                     let state_cert = state_certs.get(&view).cloned();
@@ -1428,30 +1476,9 @@ impl Persistence {
                 consumer.handle_event(&event).await?;
             }
 
-            let mut replayed = Vec::with_capacity(reconstructed.len());
-            for ReconstructedPayloadRow {
-                view,
-                header,
-                payload,
-            } in reconstructed
-            {
-                replayed.push(view);
-                // Dropped rather than failing the batch, which would retry forever and hold up
-                // the cursor and GC behind one row.
-                let header = match bincode::deserialize::<Header>(&header) {
-                    Ok(header) => header,
-                    Err(err) => {
-                        tracing::warn!(
-                            view,
-                            err = %format_args!("{err:#}"),
-                            "dropping reconstructed payload with undecodable header"
-                        );
-                        continue;
-                    },
-                };
-                let payload = Payload::from_bytes(&payload, header.metadata());
+            for (view, PendingPayload { header, payload }) in pending {
                 let event = CoordinatorEvent::BlockPayloadReconstructed {
-                    view: ViewNumber::new(view as u64),
+                    view,
                     header,
                     payload: Arc::new(payload),
                 };
@@ -1529,12 +1556,12 @@ impl Persistence {
                 )
                 .await?;
                 // Not `view <= to_view`: a payload for an older view stored after the read above
-                // was never replayed, and has to survive for the next decide.
-                if !replayed.is_empty() {
+                // was never delivered, and has to survive for the next decide.
+                if !delivered.is_empty() {
                     let mut delete =
-                        QueryBuilder::new("DELETE FROM reconstructed_payload WHERE view IN (");
+                        QueryBuilder::new("DELETE FROM pending_payload WHERE view IN (");
                     let mut views = delete.separated(", ");
-                    for view in &replayed {
+                    for view in &delivered {
                         views.push_bind(*view);
                     }
                     views.push_unseparated(")");
@@ -1694,7 +1721,7 @@ const PRUNE_TABLES: &[&str] = &[
     "quorum_certificate2",
     "state_cert",
     "decided_cert2",
-    "reconstructed_payload",
+    "pending_payload",
 ];
 
 async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
@@ -1781,16 +1808,16 @@ impl SequencerPersistence for Persistence {
         for (info, cert) in leaf_chain {
             let mut leaf = info.leaf.clone();
             let view = cert.view_number().u64() as i64;
-            // Storing the payload inside the leaf would only add DB load: the query service gets
-            // it from the DA proposal. At 0.6 the only leaf that arrives with a payload is a block
-            // this node built, and its DA write is not ordered with the decide processor, so it
-            // is also queued for replay.
+            // The payload is kept out of the leaf row. At 0.6 the only leaf that arrives with one
+            // is a block this node built, and it goes to `pending_payload` like a reconstructed
+            // one. Older leaves get theirs from the DA proposal.
             if let Some(payload) = leaf.unfill_block_payload()
                 && !self.consensus_only
                 && leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
             {
                 payloads.push((
                     view,
+                    leaf.block_header().payload_commitment().to_string(),
                     bincode::serialize(leaf.block_header())?,
                     payload.encode().to_vec(),
                 ));
@@ -1818,8 +1845,8 @@ impl SequencerPersistence for Persistence {
             .await?;
             if !payloads.is_empty() {
                 tx.upsert(
-                    "reconstructed_payload",
-                    ["view", "header", "payload"],
+                    "pending_payload",
+                    ["view", "payload_hash", "header", "payload"],
                     ["view"],
                     payloads.clone(),
                 )
@@ -2105,7 +2132,7 @@ impl SequencerPersistence for Persistence {
         res
     }
 
-    async fn append_reconstructed_payload(
+    async fn append_pending_payload(
         &self,
         view: ViewNumber,
         header: &Header,
@@ -2116,14 +2143,15 @@ impl SequencerPersistence for Persistence {
         }
         let row = (
             view.u64() as i64,
+            header.payload_commitment().to_string(),
             bincode::serialize(header).context("serializing header")?,
             payload.encode().to_vec(),
         );
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
             tx.upsert(
-                "reconstructed_payload",
-                ["view", "header", "payload"],
+                "pending_payload",
+                ["view", "payload_hash", "header", "payload"],
                 ["view"],
                 [row.clone()],
             )
@@ -3305,6 +3333,22 @@ impl Provider<SeqTypes, PayloadRequest> for Persistence {
             },
         };
 
+        match query_as::<(Vec<u8>, Vec<u8>)>(
+            "SELECT header, payload FROM pending_payload WHERE payload_hash = $1 LIMIT 1",
+        )
+        .bind(req.0.to_string())
+        .fetch_optional(tx.as_mut())
+        .await
+        {
+            Ok(Some((header, payload))) => match bincode::deserialize::<Header>(&header) {
+                Ok(header) => return Some(Payload::from_bytes(&payload, header.metadata())),
+                Err(err) => tracing::error!("error decoding pending payload header: {err:#}"),
+            },
+            Ok(None) => {},
+            Err(err) => tracing::warn!("error loading pending payload: {err:#}"),
+        }
+
+        // Payloads of blocks from before 0.6 are only in the DA proposals.
         let bytes = match query_as::<(Vec<u8>,)>(
             "SELECT data FROM da_proposal2 WHERE payload_hash = $1 LIMIT 1",
         )
@@ -4096,10 +4140,10 @@ mod test {
         );
     }
 
-    /// A reconstructed payload row that cannot be decoded is dropped, instead of failing this
-    /// and every later decide.
+    /// A pending payload row that cannot be decoded is dropped, instead of failing this and every
+    /// later decide.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_undecodable_reconstructed_payload_is_dropped() {
+    async fn test_undecodable_pending_payload_is_dropped() {
         let tmp = Persistence::tmp_storage().await;
         let storage = Persistence::connect(&tmp).await;
 
@@ -4136,10 +4180,15 @@ mod test {
 
         let mut tx = storage.db.write().await.unwrap();
         tx.upsert(
-            "reconstructed_payload",
-            ["view", "header", "payload"],
+            "pending_payload",
+            ["view", "payload_hash", "header", "payload"],
             ["view"],
-            [(0i64, Vec::from([0xffu8]), Vec::<u8>::new())],
+            [(
+                0i64,
+                String::from("unused"),
+                Vec::from([0xffu8]),
+                Vec::<u8>::new(),
+            )],
         )
         .await
         .unwrap();
@@ -4150,7 +4199,7 @@ mod test {
             .await
             .unwrap();
         let mut tx = storage.db.read().await.unwrap();
-        let (rows,): (i64,) = query_as("SELECT count(*) FROM reconstructed_payload")
+        let (rows,): (i64,) = query_as("SELECT count(*) FROM pending_payload")
             .fetch_one(tx.as_mut())
             .await
             .unwrap();

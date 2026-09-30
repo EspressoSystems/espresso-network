@@ -918,10 +918,7 @@ pub trait SequencerPersistence:
                 header,
                 payload,
             } => {
-                if let Err(err) = self
-                    .append_reconstructed_payload(*view, header, payload)
-                    .await
-                {
+                if let Err(err) = self.append_pending_payload(*view, header, payload).await {
                     tracing::warn!(
                         %view,
                         err = %format_args!("{err:#}"),
@@ -1024,16 +1021,18 @@ pub trait SequencerPersistence:
         vid_commit: VidCommitment,
     ) -> anyhow::Result<()>;
 
-    /// Persist a payload reconstructed for `view`, whether or not `view` is ever decided.
+    /// Persist the payload obtained for `view`, whether or not `view` is ever decided.
     ///
-    /// [`process_decided_events`](Self::process_decided_events) sends each stored payload at or
-    /// below the newest decided view to its consumer as a
-    /// [`CoordinatorEvent::BlockPayloadReconstructed`], then deletes it. A payload stored for a
-    /// view that was already processed goes out with the next decide. The consumer must check it
-    /// against the decided leaf, since forks and timed-out views are replayed too.
+    /// [`process_decided_events`](Self::process_decided_events) attaches a stored payload to the
+    /// decided leaf of the same view and header. It sends every other stored payload at or below
+    /// the newest decided view to its consumer as a separate
+    /// [`CoordinatorEvent::BlockPayloadReconstructed`], then deletes them all. A payload stored
+    /// for a view that was already processed goes out with the next decide. The consumer must
+    /// check separate payloads against the decided leaf, since forks and timed-out views are sent
+    /// too.
     ///
     /// Default does nothing: backends with no replayable storage keep only the live event.
-    async fn append_reconstructed_payload(
+    async fn append_pending_payload(
         &self,
         _view: ViewNumber,
         _header: &Header,
