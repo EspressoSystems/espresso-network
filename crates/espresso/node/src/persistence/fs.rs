@@ -146,6 +146,9 @@ pub struct Options {
         default_value = "130000"
     )]
     pub(crate) consensus_view_retention: u64,
+
+    #[clap(skip)]
+    pub(crate) consensus_only: bool,
 }
 
 impl Default for Options {
@@ -159,6 +162,7 @@ impl Options {
         Self {
             path,
             consensus_view_retention: 130000,
+            consensus_only: false,
         }
     }
 
@@ -173,6 +177,10 @@ impl PersistenceOptions for Options {
 
     fn set_view_retention(&mut self, view_retention: u64) {
         self.consensus_view_retention = view_retention;
+    }
+
+    fn set_consensus_only(&mut self) {
+        self.consensus_only = true;
     }
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
@@ -190,6 +198,7 @@ impl PersistenceOptions for Options {
             })),
             metrics: Arc::new(PersistenceMetricsValue::default()),
             probe,
+            consensus_only: self.consensus_only,
         })
     }
 
@@ -209,6 +218,7 @@ pub struct Persistence {
     metrics: Arc<PersistenceMetricsValue>,
     /// Startup findings about the filesystem backing the data directory.
     probe: StorageProbe,
+    consensus_only: bool,
 }
 
 #[derive(Debug)]
@@ -578,6 +588,18 @@ impl Inner {
         Ok(intervals)
     }
 
+    fn skip_decide_events(
+        &mut self,
+        view: ViewNumber,
+    ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
+        for (leaf_view, _) in view_files(self.decided_leaf2_path())? {
+            if leaf_view <= view {
+                self.store_finalized_state_cert(leaf_view)?;
+            }
+        }
+        Ok(Vec::from([ViewNumber::genesis()..=view]))
+    }
+
     fn load_da_proposal(
         &self,
         view: ViewNumber,
@@ -841,12 +863,15 @@ impl SequencerPersistence for Persistence {
         let now = Instant::now();
         // On error, GC does not run over the failed range, so the leaves stay on disk and are
         // retried; no data is lost.
-        let intervals = self
-            .inner
-            .write()
-            .await
-            .generate_decide_events(view, deciding_qc, consumer)
-            .await?;
+        let mut inner = self.inner.write().await;
+        let intervals = if self.consensus_only {
+            inner.skip_decide_events(view)?
+        } else {
+            inner
+                .generate_decide_events(view, deciding_qc, consumer)
+                .await?
+        };
+        drop(inner);
 
         // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).
         let processed = intervals.iter().map(|i| *i.end()).max();
@@ -1295,6 +1320,9 @@ impl SequencerPersistence for Persistence {
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         _vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
+        if self.consensus_only {
+            return Ok(());
+        }
         let mut inner = self.inner.write().await;
         let view_number = proposal.data.view_number().u64();
         let dir_path = inner.da2_dir_path();
