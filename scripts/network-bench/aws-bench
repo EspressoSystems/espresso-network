@@ -363,6 +363,7 @@ TIMEOUT_RC = 124
 SYSTEMCTL_INACTIVE_RC = 3
 # `systemd-run --collect` removes the unit once it exits, so `is-active` then exits 4.
 SYSTEMCTL_NO_UNIT_RC = 4
+AGENT_PROBE_RCS = (0, SYSTEMCTL_INACTIVE_RC, SYSTEMCTL_NO_UNIT_RC)
 # Consecutive polls that may fail to reach ctl (about a minute) before the run fails.
 AGENT_POLL_SSH_FAILURES_MAX = 6
 # The tag every terraform resource carries (default_tags), and the key `sweep` filters on.
@@ -4819,14 +4820,27 @@ def genesis_contracts(run_dir: Path) -> list[str]:
     return sorted(set(found))
 
 
+def retry_verdict(
+    rc: int, ok_rcs: tuple[int, ...], now: float, deadline: float
+) -> Literal["ok", "retry", "timeout"]:
+    """Outcome of one attempt of a poll-until-ready loop: `rc` accepted, or retry until
+    `deadline` on the clock `now` reads."""
+    if rc in ok_rcs:
+        return "ok"
+    return "timeout" if now >= deadline else "retry"
+
+
 def wait_ssh(remote: Remote, host: str, interrupts: Interrupts) -> None:
     deadline = interrupts.clock.monotonic() + SSH_READY_TIMEOUT_S
     delay = SSH_RETRY_S
     while True:
         result = remote.ssh(host, "true", check=False)
-        if result.returncode == 0:
+        verdict = retry_verdict(
+            result.returncode, (0,), interrupts.clock.monotonic(), deadline
+        )
+        if verdict == "ok":
             return
-        if interrupts.clock.monotonic() >= deadline:
+        if verdict == "timeout":
             raise RemoteError(
                 f"{host}: ssh not reachable after {SSH_READY_TIMEOUT_S:.0f} s: "
                 f"{result.stderr.strip()}"
@@ -4935,9 +4949,12 @@ def gate(
     deadline = interrupts.clock.monotonic() + timeout_s
     while True:
         result = remote.ssh(host, command, check=False)
-        if result.returncode == 0:
+        verdict = retry_verdict(
+            result.returncode, (0,), interrupts.clock.monotonic(), deadline
+        )
+        if verdict == "ok":
             return
-        if interrupts.clock.monotonic() >= deadline:
+        if verdict == "timeout":
             raise RemoteError(
                 f"gate `{what}` on {host} not passed after {timeout_s:.0f} s: "
                 f"{(result.stdout + result.stderr).strip()}"
@@ -5072,6 +5089,93 @@ def read_agent_state(remote: Remote) -> AgentState | None:
     return json.loads(result.stdout) if result.returncode == 0 else None
 
 
+class PollState(TypedDict):
+    """`poll_agent` loop state. `begin`, `deadline` and the `next_*` times are on the clock's
+    monotonic scale; `state` is the latest agent state read."""
+
+    begin: float
+    deadline: float
+    next_log: float
+    next_sync: float
+    unreachable: int
+    state: AgentState | None
+
+
+class PollStep(TypedDict):
+    """What `poll_agent` does after one probe: `error` raises, `done` returns `state["state"]`,
+    `retry` warns that ctl was unreachable, `log` and `rsync` are due; then it sleeps."""
+
+    state: PollState
+    done: bool
+    error: str | None
+    log: bool
+    rsync: bool
+    retry: bool
+
+
+def poll_result(
+    state: PollState,
+    *,
+    done: bool = False,
+    error: str | None = None,
+    log: bool = False,
+    rsync: bool = False,
+    retry: bool = False,
+) -> PollStep:
+    return PollStep(
+        state=state, done=done, error=error, log=log, rsync=rsync, retry=retry
+    )
+
+
+def poll_step(
+    state: PollState,
+    probe_rc: int,
+    probe_stderr: str,
+    agent: AgentState | None,
+    now: float,
+) -> PollStep:
+    """One decision of `poll_agent`. `probe_rc` and `probe_stderr` are of `systemctl is-active`
+    on ctl; `agent` is the state file just read, None when absent or not read. Rules apply in
+    order: unreachable ctl, unexpected rc, done, agent error, inactive unit, no state file,
+    deadline, then log and rsync due."""
+    if probe_rc == SSH_FAILED_RC:
+        unreachable = state["unreachable"] + 1
+        state = {**state, "unreachable": unreachable}
+        if unreachable > AGENT_POLL_SSH_FAILURES_MAX:
+            return poll_result(
+                state,
+                error=f"ctl unreachable for {unreachable} polls: {probe_stderr.strip()}",
+            )
+        return poll_result(state, retry=True)
+    if probe_rc not in AGENT_PROBE_RCS:
+        return poll_result(
+            state,
+            error=f"systemctl is-active exited {probe_rc}: {probe_stderr.strip()}",
+        )
+    latest = agent if agent is not None else state["state"]
+    state = {**state, "unreachable": 0, "state": latest}
+    if latest is not None and latest["phase"] == "done":
+        return poll_result(state, done=True)
+    if latest is not None and latest["phase"] == "error":
+        return poll_result(state, error=f"agent failed: {latest['error']}")
+    if probe_rc != 0:
+        phase = latest["phase"] if latest else "start"
+        return poll_result(
+            state, error=f"agent exited in phase {phase} without finishing"
+        )
+    if latest is None and now - state["begin"] > AGENT_START_GRACE_S:
+        return poll_result(state, error="agent wrote no state file")
+    if now > state["deadline"]:
+        return poll_result(state, error="agent did not finish within the expected time")
+    log_due = latest is not None and now >= state["next_log"]
+    rsync_due = now >= state["next_sync"]
+    if log_due:
+        state = {**state, "next_log": now + AGENT_LOG_S}
+    if rsync_due:
+        state = {**state, "next_sync": now + OUT_RSYNC_S}
+    return poll_result(state, log=log_due, rsync=rsync_due)
+
+
 def poll_agent(
     remote: Remote, run_dir: Path, cfg: RunConfig, interrupts: Interrupts
 ) -> AgentState:
@@ -5079,55 +5183,40 @@ def poll_agent(
     every AGENT_LOG_S and rsyncs its output every OUT_RSYNC_S."""
     clock = interrupts.clock
     begin = clock.monotonic()
-    deadline = begin + cfg.ready_timeout_s + load_seconds(cfg.load) + AGENT_SLACK_S
-    next_log = begin + AGENT_LOG_S
-    next_sync = begin + OUT_RSYNC_S
-    state: AgentState | None = None
-    unreachable = 0
+    poll = PollState(
+        begin=begin,
+        deadline=begin + cfg.ready_timeout_s + load_seconds(cfg.load) + AGENT_SLACK_S,
+        next_log=begin + AGENT_LOG_S,
+        next_sync=begin + OUT_RSYNC_S,
+        unreachable=0,
+        state=None,
+    )
     while True:
         interrupts.check()
         probe = remote.ssh(
             "ctl", "systemctl is-active --quiet bench-agent", check=False
         )
-        if probe.returncode == SSH_FAILED_RC:
-            unreachable += 1
-            if unreachable > AGENT_POLL_SSH_FAILURES_MAX:
-                raise RemoteError(
-                    f"ctl unreachable for {unreachable} polls: {probe.stderr.strip()}"
-                )
+        agent = (
+            read_agent_state(remote) if probe.returncode in AGENT_PROBE_RCS else None
+        )
+        step = poll_step(poll, probe.returncode, probe.stderr, agent, clock.monotonic())
+        poll = step["state"]
+        if step["error"] is not None:
+            raise RemoteError(step["error"])
+        latest = cast(AgentState, poll["state"])
+        if step["done"]:
+            return latest
+        if step["retry"]:
             log.warning("ctl unreachable, retrying: %s", probe.stderr.strip())
-            interrupts.sleep(AGENT_POLL_S)
-            continue
-        unreachable = 0
-        if probe.returncode not in (0, SYSTEMCTL_INACTIVE_RC, SYSTEMCTL_NO_UNIT_RC):
-            raise RemoteError(
-                f"systemctl is-active exited {probe.returncode}: {probe.stderr.strip()}"
+        if step["log"]:
+            log.info(
+                "%s: %s", latest["phase"], latest.get("progress", latest["detail"])
             )
-        active = probe.returncode == 0
-        state = read_agent_state(remote) or state
-        now = clock.monotonic()
-        if state is not None and state["phase"] == "done":
-            return state
-        if state is not None and state["phase"] == "error":
-            raise RemoteError(f"agent failed: {state['error']}")
-        if not active:
-            raise RemoteError(
-                f"agent exited in phase {state['phase'] if state else 'start'} "
-                "without finishing"
-            )
-        if state is None and now - begin > AGENT_START_GRACE_S:
-            raise RemoteError("agent wrote no state file")
-        if now > deadline:
-            raise RemoteError("agent did not finish within the expected time")
-        if state is not None and now >= next_log:
-            log.info("%s: %s", state["phase"], state.get("progress", state["detail"]))
-            next_log = now + AGENT_LOG_S
-        if now >= next_sync:
+        if step["rsync"]:
             best_effort(
                 "partial rsync",
                 lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", run_dir),
             )
-            next_sync = now + OUT_RSYNC_S
         interrupts.sleep(AGENT_POLL_S)
 
 

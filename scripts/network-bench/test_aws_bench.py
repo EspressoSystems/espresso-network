@@ -3035,6 +3035,145 @@ class PollAgentTest(unittest.TestCase):
         self.assertIn("partial rsync failed", logs.output[0])
 
 
+class PollStepTest(unittest.TestCase):
+    BEGIN = 100.0
+
+    def poll_state(self, **overrides) -> "awsb.PollState":
+        state = awsb.PollState(
+            begin=self.BEGIN,
+            deadline=self.BEGIN + 1000,
+            next_log=self.BEGIN + awsb.AGENT_LOG_S,
+            next_sync=self.BEGIN + awsb.OUT_RSYNC_S,
+            unreachable=0,
+            state=None,
+        )
+        return {**state, **overrides}
+
+    def step(self, state, rc=0, agent=None, now=BEGIN, stderr="") -> "awsb.PollStep":
+        return awsb.poll_step(state, rc, stderr, agent, now)
+
+    # TEST:poll-step-done-ok
+    def test_done_phase_is_done(self):
+        step = self.step(self.poll_state(), agent=DONE_STATE)
+        self.assertTrue(step["done"])
+        self.assertIsNone(step["error"])
+        self.assertEqual(step["state"]["state"], DONE_STATE)
+
+    def test_done_wins_over_an_inactive_unit_and_the_deadline(self):
+        step = self.step(
+            self.poll_state(),
+            rc=awsb.SYSTEMCTL_NO_UNIT_RC,
+            agent=DONE_STATE,
+            now=self.BEGIN + 5000,
+        )
+        self.assertTrue(step["done"])
+
+    def test_error_phase_reports_the_agent_error(self):
+        agent = {"phase": "error", "detail": "x", "error": "boom"}
+        step = self.step(self.poll_state(), agent=agent)
+        self.assertEqual(step["error"], "agent failed: boom")
+        self.assertFalse(step["done"])
+
+    # TEST:poll-step-unreachable-fails
+    def test_unreachable_ctl_fails_after_the_bound(self):
+        state = self.poll_state()
+        for count in range(1, awsb.AGENT_POLL_SSH_FAILURES_MAX + 1):
+            step = self.step(state, rc=awsb.SSH_FAILED_RC, stderr="down")
+            self.assertIsNone(step["error"])
+            self.assertTrue(step["retry"])
+            self.assertEqual(step["state"]["unreachable"], count)
+            state = step["state"]
+        step = self.step(state, rc=awsb.SSH_FAILED_RC, stderr=" down\n")
+        self.assertEqual(
+            step["error"],
+            f"ctl unreachable for {awsb.AGENT_POLL_SSH_FAILURES_MAX + 1} polls: down",
+        )
+        self.assertFalse(step["retry"])
+
+    def test_a_reachable_probe_resets_the_unreachable_count(self):
+        loading = {"phase": "loading", "detail": "x"}
+        step = self.step(self.poll_state(unreachable=3), agent=loading)
+        self.assertEqual(step["state"]["unreachable"], 0)
+        self.assertFalse(step["retry"])
+
+    def test_unexpected_probe_rc_is_an_error(self):
+        step = self.step(self.poll_state(), rc=1, stderr="odd\n")
+        self.assertEqual(step["error"], "systemctl is-active exited 1: odd")
+
+    def test_inactive_unit_without_done_is_an_error(self):
+        loading = {"phase": "loading", "detail": "x"}
+        for rc in (awsb.SYSTEMCTL_INACTIVE_RC, awsb.SYSTEMCTL_NO_UNIT_RC):
+            step = self.step(self.poll_state(), rc=rc, agent=loading)
+            self.assertEqual(
+                step["error"], "agent exited in phase loading without finishing"
+            )
+
+    def test_inactive_unit_without_state_names_the_start_phase(self):
+        step = self.step(self.poll_state(), rc=awsb.SYSTEMCTL_INACTIVE_RC)
+        self.assertEqual(step["error"], "agent exited in phase start without finishing")
+
+    def test_no_state_file_after_the_grace_is_an_error(self):
+        state = self.poll_state()
+        within = self.step(state, now=self.BEGIN + awsb.AGENT_START_GRACE_S)
+        self.assertIsNone(within["error"])
+        after = self.step(state, now=self.BEGIN + awsb.AGENT_START_GRACE_S + 1)
+        self.assertEqual(after["error"], "agent wrote no state file")
+
+    def test_earlier_state_is_kept_when_the_file_is_unreadable(self):
+        loading = {"phase": "loading", "detail": "x"}
+        step = self.step(self.poll_state(state=loading), now=self.BEGIN + 5000)
+        self.assertEqual(step["state"]["state"], loading)
+        self.assertEqual(step["error"], "agent did not finish within the expected time")
+
+    def test_deadline_is_exclusive(self):
+        loading = {"phase": "loading", "detail": "x"}
+        state = self.poll_state(deadline=self.BEGIN + 10)
+        self.assertIsNone(self.step(state, agent=loading, now=self.BEGIN + 10)["error"])
+        late = self.step(state, agent=loading, now=self.BEGIN + 10.5)
+        self.assertEqual(late["error"], "agent did not finish within the expected time")
+
+    def test_log_and_rsync_come_due_and_reschedule(self):
+        loading = {"phase": "loading", "detail": "x"}
+        state = self.poll_state()
+        idle = self.step(state, agent=loading, now=self.BEGIN)
+        self.assertEqual((idle["log"], idle["rsync"]), (False, False))
+        now = self.BEGIN + max(awsb.AGENT_LOG_S, awsb.OUT_RSYNC_S)
+        due = self.step(state, agent=loading, now=now)
+        self.assertEqual((due["log"], due["rsync"]), (True, True))
+        self.assertEqual(due["state"]["next_log"], now + awsb.AGENT_LOG_S)
+        self.assertEqual(due["state"]["next_sync"], now + awsb.OUT_RSYNC_S)
+
+    def test_log_waits_for_a_state_but_rsync_does_not(self):
+        now = self.BEGIN + awsb.AGENT_START_GRACE_S
+        state = self.poll_state(next_log=now, next_sync=now)
+        step = self.step(state, now=now)
+        self.assertEqual((step["log"], step["rsync"]), (False, True))
+        self.assertEqual(step["state"]["next_log"], now)
+
+    def test_input_state_is_not_mutated(self):
+        state = self.poll_state()
+        before = dict(state)
+        self.step(state, rc=awsb.SSH_FAILED_RC)
+        self.step(state, agent=DONE_STATE, now=self.BEGIN + 5000)
+        self.assertEqual(state, before)
+
+
+class RetryVerdictTest(unittest.TestCase):
+    # TEST:retry-verdict-ok
+    def test_accepted_rc_is_ok_even_past_the_deadline(self):
+        self.assertEqual(awsb.retry_verdict(0, (0,), 0.0, 10.0), "ok")
+        self.assertEqual(awsb.retry_verdict(2, (0, 2), 99.0, 10.0), "ok")
+
+    def test_other_rc_before_the_deadline_retries(self):
+        self.assertEqual(awsb.retry_verdict(1, (0,), 9.9, 10.0), "retry")
+        self.assertEqual(awsb.retry_verdict(2, (0,), 0.0, 10.0), "retry")
+
+    # TEST:retry-verdict-timeout-fails
+    def test_other_rc_at_or_after_the_deadline_times_out(self):
+        self.assertEqual(awsb.retry_verdict(1, (0,), 10.0, 10.0), "timeout")
+        self.assertEqual(awsb.retry_verdict(1, (0,), 11.0, 10.0), "timeout")
+
+
 class WaitCloudInitTest(unittest.TestCase):
     def wait(self, rc: int, status: str) -> None:
         runner = Scripted(
