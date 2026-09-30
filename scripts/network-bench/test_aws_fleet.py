@@ -13,6 +13,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
@@ -112,18 +113,10 @@ class FleetHarness:
         )
 
     def up(self, runner, *extra: str) -> int:
-        return awsb.cmd_up(
-            self.up_args(*extra),
-            FakeSystem(run=runner),
-            interrupts=awsb.Interrupts(FakeClock()),
-        )
+        return awsb.cmd_up(self.up_args(*extra), FakeSystem(run=runner))
 
-    def run(self, runner, *extra: str, interrupts: "awsb.Interrupts | None" = None):
-        return awsb.cmd_run(
-            self.run_args(*extra),
-            FakeSystem(run=runner),
-            interrupts=interrupts or awsb.Interrupts(FakeClock()),
-        )
+    def run(self, runner, *extra: str, system: FakeSystem | None = None):
+        return awsb.cmd_run(self.run_args(*extra), system or FakeSystem(run=runner))
 
     def fleet(self) -> dict:
         return json.loads((self.fleet_dir / "fleet.json").read_text())
@@ -238,9 +231,7 @@ class UpTest(unittest.TestCase):
         args = harness.up_args()
         args.yes = False
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
-            awsb.cmd_up(
-                args, FakeSystem(run=runner), interrupts=awsb.Interrupts(FakeClock())
-            )
+            awsb.cmd_up(args, FakeSystem(run=runner))
         self.assertFalse(runner.ran("tofu", "apply"))
 
     def test_up_needs_explicit_minutes(self):
@@ -338,16 +329,16 @@ class RunOnFleetTest(unittest.TestCase):
     def test_interrupt_collects_without_destroy_and_releases_the_lock(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
-        interrupts = awsb.Interrupts(FakeClock())
+        system = FakeSystem(run=runner)
 
         def sigint(polls: int) -> None:
             if polls == 2:
-                interrupts.event.set()
+                system.fire(signal.SIGINT)
 
         runner.states = [{"phase": "loading", "detail": "x"}]
         runner.polls = 0
         runner.on_poll = sigint
-        self.assertEqual(harness.run(runner, interrupts=interrupts), awsb.EXIT_FAILED)
+        self.assertEqual(harness.run(runner, system=system), awsb.EXIT_FAILED)
         self.assertTrue(runner.ran("systemctl stop bench-agent"))
         self.assertTrue(runner.ran("rsync", "/opt/bench/out/"))
         self.assertFalse(runner.ran("tofu", "destroy"))
@@ -429,9 +420,7 @@ class RunOnFleetTest(unittest.TestCase):
         harness = FleetHarness(self)
         runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
         args = harness.single_shot_args()
-        code = awsb.cmd_run(
-            args, FakeSystem(run=runner), interrupts=awsb.Interrupts(FakeClock())
-        )
+        code = awsb.cmd_run(args, FakeSystem(run=runner))
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertFalse(runner.ran("find /data/journal"))
         self.assertEqual(harness.fleet()["db_modes"], ["colocated"])
@@ -798,7 +787,9 @@ class ResetScriptTest(unittest.TestCase):
     def test_reset_chain_runs_the_script_on_every_host(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
-        fleet = awsb.open_fleet(runner, harness.fleet_dir, awsb.Interrupts(FakeClock()))
+        fleet = awsb.open_fleet(
+            FakeSystem(run=runner), harness.fleet_dir, awsb.Interrupts(FakeClock())
+        )
         assert fleet.remote is not None
         mark = len(runner.calls)
         awsb.reset_chain(fleet.remote, "colocated", fleet.manifest, fleet.interrupts)
@@ -896,9 +887,7 @@ class VolumeWiringTest(unittest.TestCase):
             "--query-db",
             "volume",
         )
-        code = awsb.cmd_run(
-            args, FakeSystem(run=runner), interrupts=awsb.Interrupts(FakeClock())
-        )
+        code = awsb.cmd_run(args, FakeSystem(run=runner))
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(runner.count("mkfs.ext4"), 1)
         self.assertFalse(runner.ran("find /data/journal"))
@@ -1779,11 +1768,7 @@ class RdsUpTest(unittest.TestCase):
         args = harness.up_args()
         args.yes = False
         with unittest.mock.patch.object(awsb, "confirm", return_value=True) as confirm:
-            awsb.cmd_up(
-                args,
-                FakeSystem(run=RdsRunner([DONE_STATE])),
-                interrupts=awsb.Interrupts(FakeClock()),
-            )
+            awsb.cmd_up(args, FakeSystem(run=RdsRunner([DONE_STATE])))
         self.assertIn(
             "1 rds instance, 1 subnet group, 1 parameter group, 1 schedule, 1 iam role",
             confirm.call_args.args[0],
@@ -1794,11 +1779,7 @@ class RdsUpTest(unittest.TestCase):
         args = harness.up_args("--db-modes", "colocated,volume")
         args.yes = False
         with unittest.mock.patch.object(awsb, "confirm", return_value=True) as confirm:
-            awsb.cmd_up(
-                args,
-                FakeSystem(run=volume_runner([DONE_STATE])),
-                interrupts=awsb.Interrupts(FakeClock()),
-            )
+            awsb.cmd_up(args, FakeSystem(run=volume_runner([DONE_STATE])))
         self.assertIn("1 extra volume", confirm.call_args.args[0])
 
     # TEST:querydb-rds-pending-reboot-ok
@@ -1944,9 +1925,7 @@ class RdsRunTest(unittest.TestCase):
             "--query-db",
             "rds",
         )
-        code = awsb.cmd_run(
-            args, FakeSystem(run=runner), interrupts=awsb.Interrupts(FakeClock())
-        )
+        code = awsb.cmd_run(args, FakeSystem(run=runner))
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(harness.fleet()["db_modes"], ["rds"])
         self.assertIn("rds", harness.tfvars())
@@ -2465,7 +2444,7 @@ class SweepRdsTest(unittest.TestCase):
     def sweep(self, **kwargs) -> tuple[FakeRunner, list[str]]:
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
         runner = rds_tag_runner(mappings, [], roles=[ROLE_ARN], **kwargs)
-        return runner, awsb.sweep(runner, "fleet1")
+        return runner, awsb.sweep(FakeSystem(run=runner), "fleet1")
 
     # TEST:sweep-rds-volume-ok
     def test_deletes_in_dependency_order_and_waits_for_the_instance(self):
@@ -2543,13 +2522,13 @@ class SweepRdsTest(unittest.TestCase):
             ): (completed(returncode=254, stderr="ResourceNotFoundException")),
             **runner.responses,
         }
-        awsb.sweep(runner, "fleet1")
+        awsb.sweep(FakeSystem(run=runner), "fleet1")
 
     def test_another_fleets_role_is_left_alone(self):
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
         other = "arn:aws:iam::1:role/espresso-bench/espresso-bench-other"
         runner = rds_tag_runner(mappings, [], roles=[other])
-        awsb.sweep(runner, "fleet1")
+        awsb.sweep(FakeSystem(run=runner), "fleet1")
         self.assertNotIn(("iam", "delete-role"), aws_verbs(runner))
 
     def test_a_fleet_without_rds_touches_no_iam(self):
@@ -2557,7 +2536,7 @@ class SweepRdsTest(unittest.TestCase):
             mapping(resource_arn("ec2", "security-group/sg-1"), "fleet1", None, None)
         ]
         runner = rds_tag_runner(mappings, [])
-        awsb.sweep(runner, "fleet1")
+        awsb.sweep(FakeSystem(run=runner), "fleet1")
         self.assertFalse(any(service == "iam" for service, _ in aws_verbs(runner)))
 
     def test_no_iam_permission_lists_no_roles(self):

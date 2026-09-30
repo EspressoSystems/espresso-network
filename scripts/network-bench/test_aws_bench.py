@@ -1486,11 +1486,7 @@ class RunHarness:
         return args
 
     def run(self, runner: FleetRunner, extra=()) -> int:
-        return awsb.cmd_run(
-            self.args(*extra),
-            FakeSystem(run=runner),
-            interrupts=awsb.Interrupts(FakeClock()),
-        )
+        return awsb.cmd_run(self.args(*extra), FakeSystem(run=runner))
 
     def index_log(self) -> str:
         return (self.fleet_dir / "driver.log").read_text()
@@ -1525,9 +1521,7 @@ class RunApplyFailureTest(unittest.TestCase):
         args = harness.args()
         args.yes = False
         with self.assertRaises(awsb.Refused):
-            awsb.cmd_run(
-                args, FakeSystem(run=runner), interrupts=awsb.Interrupts(FakeClock())
-            )
+            awsb.cmd_run(args, FakeSystem(run=runner))
         self.assertFalse(runner.ran("tofu", "apply"))
         self.assertFalse(any(call[0] == "ssh" for call in runner.calls))
 
@@ -1675,14 +1669,12 @@ class RunFlowTest(unittest.TestCase):
 class RunInterruptTest(unittest.TestCase):
     def run_interrupted(self) -> tuple[RunHarness, FleetRunner, int]:
         harness = RunHarness(self)
-        interrupts = awsb.Interrupts(FakeClock())
         running = {"phase": "loading", "detail": "x"}
         runner = FleetRunner(
-            [running], on_poll=lambda n: n == 2 and interrupts.event.set()
+            [running], on_poll=lambda n: n == 2 and system.fire(signal.SIGINT)
         )
-        code = awsb.cmd_run(
-            harness.args(), FakeSystem(run=runner), interrupts=interrupts
-        )
+        system = FakeSystem(run=runner)
+        code = awsb.cmd_run(harness.args(), system)
         return harness, runner, code
 
     def test_stops_agent_collects_destroys_and_exits_3(self):
@@ -1708,10 +1700,11 @@ class RunInterruptTest(unittest.TestCase):
 
     def test_sighup_is_handled_like_sigint(self):
         interrupts = awsb.Interrupts(FakeClock())
-        with unittest.mock.patch.object(awsb.signal, "signal") as register:
-            interrupts.install()
-        registered = {call.args[0] for call in register.call_args_list}
-        self.assertEqual(registered, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+        system = FakeSystem()
+        interrupts.install(system.trap)
+        self.assertEqual(
+            set(system.handlers), {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+        )
 
     def test_third_signal_skips_the_collection_even_after_disarm(self):
         interrupts = awsb.Interrupts(FakeClock())
@@ -1724,19 +1717,17 @@ class RunInterruptTest(unittest.TestCase):
 
     def test_skipped_collection_still_destroys(self):
         harness = RunHarness(self)
-        interrupts = awsb.Interrupts(FakeClock())
 
         def third_signal(polls: int) -> None:
             if polls == 2:
-                interrupts.event.set()
-                interrupts.skip_collect.set()
+                for _ in range(awsb.SKIP_COLLECT_SIGNALS):
+                    system.fire(signal.SIGINT)
 
         runner = FleetRunner(
             [{"phase": "loading", "detail": "x"}], on_poll=third_signal
         )
-        code = awsb.cmd_run(
-            harness.args(), FakeSystem(run=runner), interrupts=interrupts
-        )
+        system = FakeSystem(run=runner)
+        code = awsb.cmd_run(harness.args(), system)
         self.assertEqual(code, awsb.EXIT_FAILED)
         self.assertFalse(runner.ran("rsync", "/opt/bench/out/"))
         self.assertTrue(runner.ran("tofu", "destroy"))
@@ -2577,7 +2568,7 @@ class FinishRunSkipTest(unittest.TestCase):
         tmp = tmp_dir(self)
         interrupts = awsb.Interrupts(FakeClock())
         fleet = awsb.FleetState(
-            FakeRunner({}),
+            FakeSystem(),
             awsb.RunConfig(tag="x"),
             tmp,
             None,
@@ -2647,7 +2638,7 @@ class DestroyFleetBackoffTest(unittest.TestCase):
             awsb.TfFailed("destroy", "locked")
         ] * failures + [None]
         fleet = awsb.FleetState(
-            FakeRunner({}),
+            FakeSystem(clock=clock),
             awsb.RunConfig(tag="x"),
             tmp_dir(self) / "fleet1",
             terraform,
@@ -2793,7 +2784,7 @@ class PostgresStatsTest(unittest.TestCase):
 
         out = tmp / "pg-stats.jsonl"
         clock = FakeClock()
-        awsb.sample_pg(out, stop, awsb.pg_endpoint(), run, clock)
+        awsb.sample_pg(out, stop, awsb.pg_endpoint(), FakeSystem(run=run, clock=clock))
         self.assertEqual(clock.sleeps, [awsb.PG_SAMPLE_S] * 2)
         lines = [json.loads(line) for line in out.read_text().splitlines()]
         self.assertEqual(len(lines), 1)
@@ -2817,30 +2808,23 @@ class PostgresStatsTest(unittest.TestCase):
             ]
         )
         probed = threading.Event()
-        handlers = []
 
         def run(argv, env=None):
             probed.set()
             return completed(returncode=1)
 
+        system = FakeSystem(run=run, clock=netbench.SYSTEM_CLOCK)
+
         def stop_soon():
             probed.wait(5)
-            handlers[0]()
+            system.fire(signal.SIGINT)
 
         with (
             unittest.mock.patch.object(awsb, "BENCH_DIR", str(tmp)),
             unittest.mock.patch.object(awsb, "host_sample", return_value={"ts": 1}),
-            unittest.mock.patch.object(
-                awsb.signal, "signal", lambda _, h: handlers.append(lambda: h(0, None))
-            ),
         ):
             threading.Thread(target=stop_soon).start()
-            self.assertEqual(
-                awsb.cmd_agent_host(
-                    args, FakeSystem(run=run, clock=netbench.SYSTEM_CLOCK)
-                ),
-                awsb.EXIT_OK,
-            )
+            self.assertEqual(awsb.cmd_agent_host(args, system), awsb.EXIT_OK)
         self.assertTrue((tmp / "pg-stats.jsonl").exists())
 
     def test_extension_created_after_pg_isready(self):
@@ -3160,12 +3144,10 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
     def test_agent_host_query_role_without_endpoint_is_refused(self):
         """Refused before installing signal handlers, which would outlive the call."""
         args = awsb.parse_args(["agent-host", "host.jsonl", "--role", "query"])
-        with (
-            unittest.mock.patch.object(awsb.signal, "signal") as register,
-            self.assertRaisesRegex(awsb.Refused, "--pg"),
-        ):
-            awsb.cmd_agent_host(args, FakeSystem())
-        register.assert_not_called()
+        system = FakeSystem()
+        with self.assertRaisesRegex(awsb.Refused, "--pg"):
+            awsb.cmd_agent_host(args, system)
+        self.assertEqual(system.handlers, {})
 
     def test_sampler_passes_the_password_in_the_environment(self):
         stop = threading.Event()
@@ -3180,8 +3162,7 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
             tmp_dir(self) / "pg-stats.jsonl",
             stop,
             awsb.pg_endpoint(),
-            run,
-            FakeClock(),
+            FakeSystem(run=run),
         )
         argv, env = seen[0]
         self.assertEqual(env, {"PGPASSWORD": "password"})
@@ -3423,7 +3404,7 @@ class EvidenceParsersTest(unittest.TestCase):
 class SweepAndCostTest(unittest.TestCase):
     def test_sweep_terminates_then_deletes_group_and_key(self):
         runner = FleetRunner([DONE_STATE])
-        arns = awsb.sweep(runner, "run1")
+        arns = awsb.sweep(FakeSystem(run=runner), "run1")
         self.assertEqual(len(arns), 3)
         names = [c[3:5] for c in runner.calls if c[0] == "aws"]
         self.assertEqual(
@@ -3450,7 +3431,7 @@ class SweepAndCostTest(unittest.TestCase):
             )
 
         clock = FakeClock()
-        awsb.delete_security_group(runner, "sg-1", clock)
+        awsb.delete_security_group(FakeSystem(run=runner, clock=clock), "sg-1")
         self.assertEqual(len(attempts), 3)
         self.assertEqual(clock.sleeps, [awsb.SG_DELETE_BACKOFF_S] * 2)
 
@@ -3459,13 +3440,13 @@ class SweepAndCostTest(unittest.TestCase):
             {("aws",): completed(returncode=254, stderr="DependencyViolation")}
         )
         with self.assertRaisesRegex(awsb.Refused, "DependencyViolation"):
-            awsb.delete_security_group(runner, "sg-1", FakeClock())
+            awsb.delete_security_group(FakeSystem(run=runner), "sg-1")
         self.assertEqual(len(runner.calls), awsb.SG_DELETE_RETRIES)
 
     def test_security_group_delete_does_not_retry_other_errors(self):
         runner = FakeRunner({("aws",): completed(returncode=254, stderr="denied")})
         with self.assertRaisesRegex(awsb.Refused, "denied"):
-            awsb.delete_security_group(runner, "sg-1", FakeClock())
+            awsb.delete_security_group(FakeSystem(run=runner), "sg-1")
         self.assertEqual(len(runner.calls), 1)
 
     def test_tagged_resources_without_name_matches_every_run(self):
@@ -3614,7 +3595,6 @@ class AgentDriveTest(unittest.TestCase):
             unittest.mock.patch.object(
                 netbench, "sample_metrics", sampler or unittest.mock.Mock()
             ),
-            unittest.mock.patch.object(awsb.signal, "signal"),
         ):
             return awsb.cmd_agent_drive(
                 self.args, FakeSystem(clock=FakeClock() if clock is None else clock)
@@ -3900,25 +3880,27 @@ class FinishCollectsEbsBalanceTest(unittest.TestCase):
 
     def test_waits_for_the_lag_and_skips_on_third_signal(self):
         harness = RunHarness(self)
-        interrupts = awsb.Interrupts(FakeClock())
+        runner = FleetRunner([DONE_STATE])
+        system = FakeSystem(run=runner)
+        interrupts = awsb.Interrupts(system.clock)
         interrupts.skip_collect.set()
         fleet = awsb.FleetState(
-            FleetRunner([DONE_STATE]),
+            system,
             awsb.RunConfig(tag="x"),
             harness.fleet_dir,
             None,
             interrupts,
         )
-        agent = DONE_STATE | {"t1": interrupts.clock.time()}
+        agent = DONE_STATE | {"t1": system.clock.time()}
         run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, agent=agent)
         awsb.collect_node0_ebs_balance(run)
-        self.assertEqual(fleet.run.count("get-metric-data"), 0)
+        self.assertEqual(runner.count("get-metric-data"), 0)
 
     def test_published_window_waits_out_the_lag_on_the_clock(self):
         harness = RunHarness(self)
         clock = FakeClock()
         fleet = awsb.FleetState(
-            FleetRunner([DONE_STATE]),
+            FakeSystem(run=FleetRunner([DONE_STATE]), clock=clock),
             awsb.RunConfig(tag="x"),
             harness.fleet_dir,
             None,
@@ -4404,7 +4386,7 @@ class SweepVolumeTest(unittest.TestCase):
             ],
             [],
         )
-        awsb.sweep(runner, "r")
+        awsb.sweep(FakeSystem(run=runner), "r")
         ec2 = [c[4] for c in runner.calls if c[3:4] == ["ec2"]]
         self.assertEqual(
             ec2,
@@ -4425,7 +4407,7 @@ class SweepVolumeTest(unittest.TestCase):
             ),
             **runner.responses,
         }
-        awsb.sweep(runner, "r")
+        awsb.sweep(FakeSystem(run=runner), "r")
 
     def test_other_volume_errors_raise(self):
         runner = tag_runner([tag_mapping("volume", "vol-1", "r", None, None)], [])
@@ -4436,7 +4418,7 @@ class SweepVolumeTest(unittest.TestCase):
             **runner.responses,
         }
         with self.assertRaisesRegex(awsb.Refused, "VolumeInUse"):
-            awsb.sweep(runner, "r")
+            awsb.sweep(FakeSystem(run=runner), "r")
 
 
 class ManifestCostTest(unittest.TestCase):

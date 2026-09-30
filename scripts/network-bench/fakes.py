@@ -5,6 +5,7 @@ import asyncio
 import base64
 import json
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -434,6 +435,18 @@ class FakeSystem:
         default_factory=FakeRunner
     )
     clock: netbench.Clock = field(default_factory=FakeClock)
+    handlers: dict[int, Callable[[int, Any], None]] = field(default_factory=dict)
+
+    def trap(
+        self,
+        signals: tuple[signal.Signals, ...],
+        handler: Callable[[int, Any], None],
+    ) -> None:
+        for sig in signals:
+            self.handlers[sig] = handler
+
+    def fire(self, signum: int) -> None:
+        self.handlers[signum](signum, None)
 
 
 FLEET_ARNS = [
