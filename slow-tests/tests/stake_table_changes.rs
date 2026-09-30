@@ -207,28 +207,34 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
 }
 
 /// The committee {0..3} is replaced wholesale by the disjoint set {4..7};
-/// the chain must keep deciding throughout.
+/// the chain must keep deciding throughout. The incoming committee holds no
+/// pre-swap VID shares and joins via the boundary handoff (the seeded
+/// Cert2-final boundary state plus catchup from node 0). HotShot-layer
+/// counterpart: `hotshot-new-protocol`'s
+/// `validator_set_replaced_at_epoch_boundary`.
 ///
 /// Node 0 — the query node — is in the *outgoing* set on purpose: it
 /// validated the pre-swap chain, so it can serve the incoming cohort's
-/// state catchup at the handoff. At 0.6 the outgoing nodes legitimately
-/// stall once dropped from the cliquenet peer windows, so nothing is
-/// asserted on them after the swap and progress is observed through an
-/// incoming node's event stream.
-async fn full_set_replacement(version: Upgrade, epoch_height: u64) -> anyhow::Result<()> {
+/// state catchup at the handoff. The outgoing nodes legitimately stall once
+/// dropped from the cliquenet peer windows, so nothing is asserted on them
+/// after the swap and progress is observed through an incoming node's event
+/// stream.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_stake_table_full_set_replacement() -> anyhow::Result<()> {
     const NUM_NODES: usize = 8;
+    const EPOCH_HEIGHT: u64 = 20;
     let outgoing = [0, 1, 2, 3];
     let incoming = [4, 5, 6, 7];
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
-        .epoch_height(epoch_height)
+        .epoch_height(EPOCH_HEIGHT)
         .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .build();
 
     let net = StakeTableTestNetwork::start(
         network_config.clone(),
-        version,
+        V6,
         StakeTableContractVersion::V3,
         DelegationConfig::MultipleDelegators,
         &outgoing,
@@ -246,7 +252,7 @@ async fn full_set_replacement(version: Upgrade, epoch_height: u64) -> anyhow::Re
 
     // Send the swap while epoch 2 is running, so the events are finalized on
     // L1 well before the roots that fix epochs 4 and 5.
-    wait_for_epochs(&mut events, epoch_height, 1).await;
+    wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
 
     let epoch3 = net.committee(FIRST_CONTRACT_EPOCH).await;
     assert_eq!(
@@ -269,7 +275,7 @@ async fn full_set_replacement(version: Upgrade, epoch_height: u64) -> anyhow::Re
     let (activation_epoch, committee) = wait_for_committee(
         &net.client,
         &mut events,
-        epoch_height,
+        EPOCH_HEIGHT,
         FIRST_CONTRACT_EPOCH,
         MAX_ACTIVATION_EPOCHS,
         committee_is(incoming_addrs),
@@ -277,49 +283,37 @@ async fn full_set_replacement(version: Upgrade, epoch_height: u64) -> anyhow::Re
     .await;
     tracing::info!(activation_epoch, "full set replacement activated");
 
-    if version.base >= NEW_PROTOCOL_VERSION {
-        // Cliquenet connects the committees of epochs {e-1, e, e+1} at epoch
-        // e; the incoming nodes (members of genesis epochs 1-2) stay
-        // continuously connected only if the swap activates by epoch 5.
+    // Cliquenet connects the committees of epochs {e-1, e, e+1} at epoch e;
+    // the incoming nodes (members of genesis epochs 1-2) stay continuously
+    // connected only if the swap activates by epoch 5.
+    assert!(
+        activation_epoch <= 5,
+        "swap activated at epoch {activation_epoch}, too late for continuous cliquenet peer \
+         windows"
+    );
+    for (address, validator) in &committee {
         assert!(
-            activation_epoch <= 5,
-            "swap activated at epoch {activation_epoch}, too late for continuous cliquenet peer \
-             windows"
+            validator.x25519_key.is_some() && validator.p2p_addr.is_some(),
+            "incoming validator {address} is missing cliquenet connect info"
         );
-        for (address, validator) in &committee {
-            assert!(
-                validator.x25519_key.is_some() && validator.p2p_addr.is_some(),
-                "incoming validator {address} is missing cliquenet connect info"
-            );
-        }
     }
 
-    assert_node_live(net.network.node(incoming[0]), epoch_height, 2).await;
+    assert_node_live(net.network.node(incoming[0]), EPOCH_HEIGHT, 2).await;
     let incoming_nodes: Vec<_> = incoming.iter().map(|&i| net.network.node(i)).collect();
-    assert_nodes_agree(&incoming_nodes, activation_epoch * epoch_height).await;
+    assert_nodes_agree(&incoming_nodes, activation_epoch * EPOCH_HEIGHT).await;
 
     Ok(())
-}
-
-/// Full set replacement at 0.6: the incoming committee holds no pre-swap VID
-/// shares and joins via the boundary handoff (the seeded Cert2-final
-/// boundary state plus catchup from node 0). HotShot-layer counterpart:
-/// `hotshot-new-protocol`'s `validator_set_replaced_at_epoch_boundary`.
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_full_set_replacement_v6() -> anyhow::Result<()> {
-    full_set_replacement(V6, 20).await
 }
 
 /// The committee starts as the initial cohort, grows to all 8 nodes when
 /// the rest register mid-run, and shrinks back when they deregister again.
 /// Node 0 is a member throughout, so the query API never depends on the
-/// changing cohort. At 0.6 the grown committee's first block needs joiner
-/// votes (4 continuing members are below the 6-of-8 threshold), so this
-/// also exercises the boundary handoff for joins (see
-/// `test_stake_table_full_set_replacement_v6`).
+/// changing cohort. The grown committee's first block needs joiner votes
+/// (4 continuing members are below the 6-of-8 threshold), so this also
+/// exercises the boundary handoff for joins (see
+/// `test_stake_table_full_set_replacement`).
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_stake_table_grow_and_shrink() -> anyhow::Result<()> {
-    let version = V6;
     const NUM_NODES: usize = 8;
     const EPOCH_HEIGHT: u64 = 15;
     const INITIAL_COUNT: usize = 4;
@@ -334,7 +328,7 @@ async fn test_stake_table_grow_and_shrink() -> anyhow::Result<()> {
 
     let net = StakeTableTestNetwork::start(
         network_config.clone(),
-        version,
+        V6,
         StakeTableContractVersion::V3,
         DelegationConfig::EqualAmounts,
         &initial,
@@ -367,12 +361,10 @@ async fn test_stake_table_grow_and_shrink() -> anyhow::Result<()> {
     )
     .await;
     tracing::info!(grow_epoch, "committee grew to the full node set");
-    if version.base >= NEW_PROTOCOL_VERSION {
-        assert!(
-            grow_epoch <= 5,
-            "grow activated at epoch {grow_epoch}, too late for continuous cliquenet peer windows"
-        );
-    }
+    assert!(
+        grow_epoch <= 5,
+        "grow activated at epoch {grow_epoch}, too late for continuous cliquenet peer windows"
+    );
     assert_node_live(&net.network.server, EPOCH_HEIGHT, 1).await;
 
     // Shrink: the second cohort deregisters again (but keeps running).
@@ -399,11 +391,13 @@ async fn test_stake_table_grow_and_shrink() -> anyhow::Result<()> {
 /// No registration events at all: delegation moves alone reshape the active
 /// set. Validators 3-4 fully undelegate (zero stake filters them out of
 /// `select_active_validator_set`), then fresh delegations bring them back —
-/// at 0.6 the first post-return block needs a rejoiner's vote (3 continuing
-/// members, threshold 4 of 5), exercising the boundary handoff.
+/// the first post-return block needs a rejoiner's vote (3 continuing
+/// members, threshold 4 of 5), exercising the boundary handoff. A whale
+/// phase follows: one enormous delegation pushes the minimum-stake
+/// threshold (max stake / 1000) above everyone else's stake, shrinking the
+/// committee to a single validator; undelegating it restores the full set.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_stake_table_delegation_reshuffle() -> anyhow::Result<()> {
-    let version = V6;
     const NUM_NODES: usize = 5;
     const EPOCH_HEIGHT: u64 = 15;
     let dropped: &[usize] = &[3, 4];
@@ -420,12 +414,14 @@ async fn test_stake_table_delegation_reshuffle() -> anyhow::Result<()> {
 
     let net = StakeTableTestNetwork::start(
         network_config.clone(),
-        version,
+        V6,
         StakeTableContractVersion::V3,
         DelegationConfig::EqualAmounts,
         &(0..NUM_NODES).collect::<Vec<_>>(),
         &[],
-        None,
+        // The whale phase needs far more ESP than the funding leaves over
+        // from the default supply.
+        Some(U256::from(1_000_000u64)),
     )
     .await;
     let token = net
@@ -495,6 +491,60 @@ async fn test_stake_table_delegation_reshuffle() -> anyhow::Result<()> {
     );
     assert_node_live(&net.network.server, EPOCH_HEIGHT, 1).await;
 
+    // Whale phase.
+    let whale_stake = parse_ether("150000").unwrap();
+    let (validator0, _) = providers[0];
+    let whale = delegate_new(
+        &network_config,
+        token,
+        net.stake_table,
+        validator0,
+        whale_stake,
+    )
+    .await?;
+
+    // min stake = max stake / 1000 = ~150.1 ESP > 100 ESP, so every other
+    // validator is displaced.
+    let (whale_epoch, committee) = wait_for_committee(
+        &net.client,
+        &mut events,
+        EPOCH_HEIGHT,
+        return_epoch + 1,
+        MAX_ACTIVATION_EPOCHS,
+        committee_is(HashSet::from([validator0])),
+    )
+    .await;
+    tracing::info!(
+        whale_epoch,
+        "whale delegation displaced all other validators"
+    );
+    assert_eq!(
+        committee[&validator0].stake,
+        whale_stake + stake,
+        "whale-backed validator should hold its own and the whale's stake"
+    );
+
+    let receipt = StakingTransaction::Undelegate {
+        stake_table: net.stake_table,
+        validator: validator0,
+        amount: whale_stake,
+    }
+    .send(&whale)
+    .await?
+    .get_receipt()
+    .await?;
+    anyhow::ensure!(receipt.status(), "whale undelegation reverted");
+    wait_for_committee(
+        &net.client,
+        &mut events,
+        EPOCH_HEIGHT,
+        whale_epoch + 1,
+        MAX_ACTIVATION_EPOCHS,
+        committee_is(all_addrs),
+    )
+    .await;
+    assert_node_live(&net.network.server, EPOCH_HEIGHT, 1).await;
+
     Ok(())
 }
 
@@ -502,21 +552,25 @@ async fn test_stake_table_delegation_reshuffle() -> anyhow::Result<()> {
 /// epochs in with no history, syncs through catchup from node 0's query
 /// API, and must be selected into the committee and participate from its
 /// activation epoch. (It is part of the genesis-seeded committees of epochs
-/// 1-2 but offline for them, so its leader views there time out.)
-async fn fresh_node_joins(version: Upgrade, epoch_height: u64) -> anyhow::Result<()> {
+/// 1-2 but offline for them, so its leader views there time out.) The node
+/// is outside every cliquenet peer window until its activation epoch's
+/// committees connect to it, so all of its syncing happens in the epoch
+/// before its duties begin.
+async fn fresh_node_joins() -> anyhow::Result<()> {
     const NUM_NODES: usize = 5;
+    const EPOCH_HEIGHT: u64 = 20;
     const FRESH: usize = 4;
     let initial = [0, 1, 2, 3];
 
     let network_config = TestConfigBuilder::<NUM_NODES>::default()
-        .epoch_height(epoch_height)
+        .epoch_height(EPOCH_HEIGHT)
         .builder_timeout(BUILDER_TIMEOUT)
         .epoch_start_block(0)
         .build();
 
     let mut net = StakeTableTestNetwork::start(
         network_config.clone(),
-        version,
+        V6,
         StakeTableContractVersion::V3,
         DelegationConfig::EqualAmounts,
         &initial,
@@ -527,7 +581,7 @@ async fn fresh_node_joins(version: Upgrade, epoch_height: u64) -> anyhow::Result
 
     let all_addrs = staking_addresses(&network_config, &(0..NUM_NODES).collect::<Vec<_>>());
     let mut events = net.network.server.event_stream();
-    wait_for_epochs(&mut events, epoch_height, 1).await;
+    wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
 
     register_validators(
         &network_config,
@@ -541,7 +595,7 @@ async fn fresh_node_joins(version: Upgrade, epoch_height: u64) -> anyhow::Result
     let (activation_epoch, committee) = wait_for_committee(
         &net.client,
         &mut events,
-        epoch_height,
+        EPOCH_HEIGHT,
         FIRST_CONTRACT_EPOCH,
         MAX_ACTIVATION_EPOCHS,
         committee_is(all_addrs),
@@ -549,38 +603,35 @@ async fn fresh_node_joins(version: Upgrade, epoch_height: u64) -> anyhow::Result
     .await;
     tracing::info!(activation_epoch, "fresh validator joined the committee");
 
-    if version.base >= NEW_PROTOCOL_VERSION {
-        for (address, validator) in &committee {
-            assert!(
-                validator.x25519_key.is_some() && validator.p2p_addr.is_some(),
-                "validator {address} is missing cliquenet connect info"
-            );
-        }
+    for (address, validator) in &committee {
+        assert!(
+            validator.x25519_key.is_some() && validator.p2p_addr.is_some(),
+            "validator {address} is missing cliquenet connect info"
+        );
     }
 
-    assert_node_live(&net.network.server, epoch_height, 2).await;
+    assert_node_live(&net.network.server, EPOCH_HEIGHT, 2).await;
 
     let mut fresh_events = net.network.node(FRESH).event_stream();
     timeout(
         Duration::from_secs(600),
-        wait_for_epochs(&mut fresh_events, epoch_height, activation_epoch),
+        wait_for_epochs(&mut fresh_events, EPOCH_HEIGHT, activation_epoch),
     )
     .await
     .expect("the fresh node did not catch up to its activation epoch");
-    assert_node_live(net.network.node(FRESH), epoch_height, 1).await;
+    assert_node_live(net.network.node(FRESH), EPOCH_HEIGHT, 1).await;
 
     let all_nodes: Vec<_> = (0..NUM_NODES).map(|i| net.network.node(i)).collect();
-    assert_nodes_agree(&all_nodes, activation_epoch * epoch_height).await;
+    assert_nodes_agree(&all_nodes, activation_epoch * EPOCH_HEIGHT).await;
 
     Ok(())
 }
 
-/// Fresh join at 0.6: the node is outside every cliquenet peer window until
-/// its activation epoch's committees connect to it, so all of its syncing
-/// happens in the epoch before its duties begin; see [`fresh_node_joins`].
+/// See [`fresh_node_joins`]; boxed to keep its state machine off the test
+/// thread's stack.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_fresh_node_joins_v6() -> anyhow::Result<()> {
-    Box::pin(fresh_node_joins(V6, 20)).await
+async fn test_stake_table_fresh_node_joins() -> anyhow::Result<()> {
+    Box::pin(fresh_node_joins()).await
 }
 
 /// How [`rotate_validator`] rotates the validator's on-chain identity.
@@ -733,11 +784,11 @@ async fn rotate_validator(rotation: Rotation) -> anyhow::Result<()> {
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_rotate_p2p_address_v6() -> anyhow::Result<()> {
+async fn test_stake_table_rotate_p2p_address() -> anyhow::Result<()> {
     Box::pin(rotate_validator(Rotation::P2pAddr)).await
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_stake_table_rotate_consensus_keys_v6() -> anyhow::Result<()> {
+async fn test_stake_table_rotate_consensus_keys() -> anyhow::Result<()> {
     Box::pin(rotate_validator(Rotation::ConsensusKeys)).await
 }
