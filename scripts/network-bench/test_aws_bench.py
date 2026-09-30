@@ -23,6 +23,7 @@ import signal
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 import unittest.mock
 from datetime import UTC, datetime
@@ -2063,6 +2064,34 @@ def fake_preflight() -> dict:
     }
 
 
+def metric_data(
+    byte: list[float | None], io: list[float | None], first: float = 60.0
+) -> str:
+    """`cloudwatch get-metric-data` output; one period per list item starting at `first`, a
+    None item is a period without datapoint."""
+
+    def result(query_id: str, values: list[float | None]) -> dict:
+        points = [
+            (datetime.fromtimestamp(first + 60.0 * i, UTC).isoformat(), v)
+            for i, v in enumerate(values)
+            if v is not None
+        ]
+        return {
+            "Id": query_id,
+            "Label": query_id,
+            "Timestamps": [ts for ts, _ in points],
+            "Values": [v for _, v in points],
+            "StatusCode": "Complete",
+        }
+
+    return json.dumps(
+        {"MetricDataResults": [result("byte", byte), result("io", io)], "Messages": []}
+    )
+
+
+FULL_BALANCE = metric_data([100.0, 100.0, 100.0], [100.0, 100.0, 100.0])
+
+
 class FleetRunner:
     """Answers every command `cmd_run` issues (git, tofu, ssh, rsync, aws) for a 2-node fleet.
     `states` are the successive agent-state.json contents; the last one repeats."""
@@ -2074,12 +2103,14 @@ class FleetRunner:
         destroys: list[subprocess.CompletedProcess] | None = None,
         on_poll=None,
         describe: str = "[]",
+        balance: subprocess.CompletedProcess | None = None,
     ):
         self.states = states
         self.apply = apply or completed()
         self.destroys = destroys or [completed()]
         self.on_poll = on_poll
         self.describe = describe
+        self.balance = balance or completed(stdout=FULL_BALANCE)
         self.polls = 0
         self.calls: list[list[str]] = []
         self.lock = threading.Lock()
@@ -2147,6 +2178,8 @@ class FleetRunner:
     def aws(self, argv: list[str]) -> subprocess.CompletedProcess:
         if "describe-instances" in argv:
             return completed(stdout=self.describe)
+        if "get-metric-data" in argv:
+            return self.balance
         if "get-resources" in argv:
             arns = [
                 "arn:aws:ec2:eu-west-1:1:instance/i-1",
@@ -3259,6 +3292,7 @@ def clean_evidence() -> dict:
         "journal_bytes": {"node0": 1_000_000, "node1": 1_000_000},
         "clock_offset_ms": {"ctl": 0.2, "node0": 0.3, "node1": 0.4},
         "digest_mismatch": {"ctl": [], "node0": [], "node1": []},
+        "ebs_balance_min": {"EBSByteBalance%": 100.0, "EBSIOBalance%": 100.0},
     }
 
 
@@ -3343,6 +3377,34 @@ class CheckValidityAwsTest(unittest.TestCase):
         self.assertTrue(verdict["valid"])
         self.assertTrue(verdict["noisy"])
         self.assertIn("node1 journal", verdict["reasons"][0])
+
+    # REQ:ebs-balance-evidence
+    def test_ebs_balance_below_100_is_noisy_not_invalid(self):
+        verdict = self.check(
+            ebs_balance_min={"EBSByteBalance%": 82.4, "EBSIOBalance%": 100.0}
+        )
+        self.assertTrue(verdict["valid"])
+        self.assertTrue(verdict["noisy"])
+        self.assertEqual(
+            verdict["reasons"], ["node0 EBSByteBalance% fell to 82% during the load"]
+        )
+
+    # REQ:ebs-balance-evidence
+    def test_ebs_balance_metric_without_datapoint_is_noisy_not_invalid(self):
+        verdict = self.check(
+            ebs_balance_min={"EBSByteBalance%": 100.0, "EBSIOBalance%": None}
+        )
+        self.assertTrue(verdict["valid"])
+        self.assertTrue(verdict["noisy"])
+        self.assertEqual(
+            verdict["reasons"],
+            ["node0 EBSIOBalance% has no datapoint in the load window"],
+        )
+
+    def test_ebs_balance_not_collected_is_noisy_not_invalid(self):
+        verdict = self.check(ebs_balance_min={})
+        self.assertTrue(verdict["valid"])
+        self.assertEqual(verdict["reasons"], ["node0 EBS balance not collected"])
 
 
 class EvidenceParsersTest(unittest.TestCase):
@@ -3695,6 +3757,21 @@ class RenderHostFilesTest(unittest.TestCase):
             )
 
 
+def balance_file(byte: list[float], io: list[float], first: float = 60.0) -> dict:
+    """`cloudwatch/ec2-node0.json` with one period per item from `first`."""
+    times = [first + 60.0 * i for i in range(len(byte))]
+    return {
+        "instance_id": "i-1",
+        "period_s": 60,
+        "start": 40.0,
+        "end": 220.0,
+        "metrics": {
+            "EBSByteBalance%": {"timestamps": times, "values": byte},
+            "EBSIOBalance%": {"timestamps": times, "values": io},
+        },
+    }
+
+
 def write_collected_run(run_dir: Path) -> dict:
     """A 3-node run dir as `cmd_run` leaves it after collection: netbench's synthetic run plus
     manifest, config, topology and `hosts/<name>/` files."""
@@ -3737,11 +3814,140 @@ def write_collected_run(run_dir: Path) -> dict:
             host_dir / "ready.json",
             {"digests": digests, "chronyc_tracking": tracking},
         )
+    (run_dir / "cloudwatch").mkdir()
+    (run_dir / awsb.EC2_NODE0_FILE).write_text(
+        json.dumps(balance_file([100.0, 100.0, 100.0], [100.0, 100.0, 100.0]))
+    )
     node0 = run_dir / "hosts" / "node0"
     (node0 / "lscpu.txt").write_text("CPU(s): 16\nModel name: Neoverse-V2\nFlags: fp\n")
     (node0 / "meminfo.txt").write_text("MemTotal:       32000000 kB\n")
     (node0 / "uname.txt").write_text("6.8.0-aws\n")
     return manifest
+
+
+class CollectEbsBalanceTest(unittest.TestCase):
+    def collect(self, runner, t0=100.0, t1=160.0) -> Path:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        manifest = {"hosts_info": two_node_hosts_info()}
+        awsb.collect_ebs_balance(runner, awsb.RunConfig(tag="x"), manifest, t0, t1, tmp)
+        return tmp
+
+    def call(self, runner) -> list[str]:
+        return next(c for c in runner.calls if "get-metric-data" in c)
+
+    def test_queries_node0_over_the_padded_window_and_saves_the_series(self):
+        runner = FleetRunner([DONE_STATE], balance=completed(stdout=FULL_BALANCE))
+        out = self.collect(runner)
+        argv = self.call(runner)
+        self.assertEqual(
+            argv[:5],
+            ["aws", "--profile", "timeboost-dev", "cloudwatch", "get-metric-data"],
+        )
+        self.assertEqual(argv[argv.index("--region") + 1], "eu-west-1")
+        self.assertEqual(
+            argv[argv.index("--start-time") + 1], "1970-01-01T00:00:40+00:00"
+        )
+        self.assertEqual(
+            argv[argv.index("--end-time") + 1], "1970-01-01T00:03:40+00:00"
+        )
+        queries = json.loads(argv[argv.index("--metric-data-queries") + 1])
+        self.assertEqual(
+            [q["MetricStat"]["Metric"]["MetricName"] for q in queries],
+            ["EBSByteBalance%", "EBSIOBalance%"],
+        )
+        for query in queries:
+            self.assertEqual(query["MetricStat"]["Metric"]["Namespace"], "AWS/EC2")
+            self.assertEqual(
+                query["MetricStat"]["Metric"]["Dimensions"],
+                [{"Name": "InstanceId", "Value": "i-000000000002"}],
+            )
+            self.assertEqual(query["MetricStat"]["Period"], 60)
+        saved = json.loads((out / awsb.EC2_NODE0_FILE).read_text())
+        self.assertEqual(saved["instance_id"], "i-000000000002")
+        self.assertEqual(
+            saved["metrics"]["EBSByteBalance%"],
+            {"timestamps": [60.0, 120.0, 180.0], "values": [100.0, 100.0, 100.0]},
+        )
+
+    def test_metric_without_datapoints_is_saved_empty(self):
+        data = metric_data([100.0], [None])
+        out = self.collect(FleetRunner([DONE_STATE], balance=completed(stdout=data)))
+        saved = json.loads((out / awsb.EC2_NODE0_FILE).read_text())
+        self.assertEqual(saved["metrics"]["EBSIOBalance%"]["values"], [])
+
+    def test_status_other_than_complete_raises(self):
+        data = json.loads(FULL_BALANCE)
+        data["MetricDataResults"][0]["StatusCode"] = "Forbidden"
+        runner = FleetRunner([DONE_STATE], balance=completed(stdout=json.dumps(data)))
+        with self.assertRaisesRegex(awsb.RemoteError, "EBSByteBalance%: Forbidden"):
+            self.collect(runner)
+
+    def test_failed_aws_call_raises(self):
+        runner = FleetRunner(
+            [DONE_STATE], balance=completed(returncode=254, stderr="denied")
+        )
+        with self.assertRaisesRegex(awsb.RemoteError, "denied"):
+            self.collect(runner)
+
+    def test_min_counts_only_periods_overlapping_the_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ec2.json"
+            path.write_text(
+                json.dumps(balance_file([50.0, 97.0, 99.0, 30.0], [100.0] * 4, 0.0))
+            )
+            # Periods start at 0, 60, 120, 180; the load is 100..160: periods 60 and 120.
+            low = awsb.ebs_balance_min(path, 100.0, 160.0)
+        self.assertEqual(low, {"EBSByteBalance%": 97.0, "EBSIOBalance%": 100.0})
+
+
+class FinishCollectsEbsBalanceTest(unittest.TestCase):
+    def run_flow(self, runner, harness):
+        with unittest.mock.patch.object(
+            awsb, "write_report", return_value=valid_result()
+        ):
+            return harness.run(runner)
+
+    def test_valid_run_saves_node0_balance(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        self.assertEqual(self.run_flow(runner, harness), awsb.EXIT_OK)
+        self.assertEqual(runner.count("get-metric-data"), 1)
+        self.assertTrue((harness.run_dir / awsb.EC2_NODE0_FILE).exists())
+
+    def test_balance_fetch_failure_does_not_stop_the_teardown(self):
+        harness = RunHarness(self)
+        runner = FleetRunner(
+            [DONE_STATE],
+            describe=DESCRIBE,
+            balance=completed(returncode=254, stderr="denied"),
+        )
+        self.assertEqual(self.run_flow(runner, harness), awsb.EXIT_OK)
+        self.assertFalse((harness.run_dir / awsb.EC2_NODE0_FILE).exists())
+        self.assertTrue(runner.ran("tofu", "destroy"))
+
+    def test_no_load_window_fetches_nothing(self):
+        harness = RunHarness(self)
+        error = {"phase": "error", "detail": "x", "error": "network not ready"}
+        runner = FleetRunner([error], describe=DESCRIBE)
+        self.assertEqual(harness.run(runner), awsb.EXIT_FAILED)
+        self.assertEqual(runner.count("get-metric-data"), 0)
+
+    def test_waits_for_the_lag_and_skips_on_third_signal(self):
+        harness = RunHarness(self)
+        interrupts = awsb.Interrupts()
+        interrupts.skip_collect.set()
+        fleet = awsb.FleetState(
+            FleetRunner([DONE_STATE]),
+            awsb.RunConfig(tag="x"),
+            harness.fleet_dir,
+            None,
+            interrupts,
+        )
+        agent = DONE_STATE | {"t1": time.time()}
+        run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, agent=agent)
+        awsb.collect_node0_ebs_balance(run)
+        self.assertEqual(fleet.run.count("get-metric-data"), 0)
 
 
 class WriteReportTest(unittest.TestCase):
@@ -3779,6 +3985,47 @@ class WriteReportTest(unittest.TestCase):
             result["validity"]["reasons"],
         )
         self.assertFalse(result["validity"]["valid"])
+
+    # TEST:ebs-balance-noisy-ok
+    def test_ebs_balance_drop_inside_the_load_makes_the_run_noisy(self):
+        def drop(d: Path) -> None:
+            data = balance_file([100.0, 91.0, 100.0], [100.0, 100.0, 100.0])
+            (d / awsb.EC2_NODE0_FILE).write_text(json.dumps(data))
+
+        _, result = self.report(drop)
+        self.assertTrue(result["validity"]["valid"])
+        self.assertTrue(result["validity"]["noisy"])
+        self.assertIn(
+            "node0 EBSByteBalance% fell to 91% during the load",
+            result["validity"]["reasons"],
+        )
+
+    def test_ebs_balance_drop_after_the_load_is_ignored(self):
+        def drop(d: Path) -> None:
+            data = balance_file([100.0, 100.0, 40.0], [100.0, 100.0, 40.0])
+            (d / awsb.EC2_NODE0_FILE).write_text(json.dumps(data))
+
+        _, result = self.report(drop)
+        self.assertFalse(result["validity"]["noisy"])
+
+    # TEST:cloudwatch-datapoint-missing-noisy
+    def test_ebs_balance_without_datapoints_in_the_window_is_noisy(self):
+        def empty(d: Path) -> None:
+            data = balance_file([100.0, 100.0, 100.0], [], first=60.0)
+            data["metrics"]["EBSIOBalance%"] = {"timestamps": [], "values": []}
+            (d / awsb.EC2_NODE0_FILE).write_text(json.dumps(data))
+
+        _, result = self.report(empty)
+        self.assertTrue(result["validity"]["valid"])
+        self.assertIn(
+            "node0 EBSIOBalance% has no datapoint in the load window",
+            result["validity"]["reasons"],
+        )
+
+    def test_uncollected_ebs_balance_makes_the_run_noisy(self):
+        _, result = self.report(lambda d: (d / awsb.EC2_NODE0_FILE).unlink())
+        self.assertTrue(result["validity"]["valid"])
+        self.assertIn("node0 EBS balance not collected", result["validity"]["reasons"])
 
     def test_render_is_repeatable(self):
         run_dir, first = self.report()
