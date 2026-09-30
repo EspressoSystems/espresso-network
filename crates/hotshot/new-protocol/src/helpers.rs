@@ -48,3 +48,12 @@ pub fn test_timeout_epoch_lock<T: NodeType>() -> hotshot_types::message::Upgrade
 
     hotshot_types::message::UpgradeLock::new(Upgrade::trivial(TIMEOUT_EPOCH_VERSION))
 }
+
+/// An upgrade lock with [`ASYNC_VID_VERSION`] already in effect, so votes no
+/// longer wait for the block payload.
+#[cfg(test)]
+pub fn test_async_vid_lock<T: NodeType>() -> hotshot_types::message::UpgradeLock<T> {
+    use versions::{ASYNC_VID_VERSION, Upgrade};
+
+    hotshot_types::message::UpgradeLock::new(Upgrade::trivial(ASYNC_VID_VERSION))
+}

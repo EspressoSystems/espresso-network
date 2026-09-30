@@ -26,8 +26,16 @@
   the epoch is then covered by no signature and names no committee. The same upgrade carries the `LargeBlock`
   chain-config change raising `max_block_size`; it is the first upgrade run by the new protocol's own upgrade
   sub-protocol (`crates/hotshot/new-protocol/src/upgrade.rs`).
-- V0_8, `ASYNC_VID_VERSION` (also `MAX_SUPPORTED_VERSION`): votes stop waiting for the block payload. `Header::V8`
-  reuses the V0_6 header's fields and commits its own version.
+- V0_8, `ASYNC_VID_VERSION` (also `MAX_SUPPORTED_VERSION`): votes no longer wait for the block payload. Before it a node
+  votes only on a block it holds in full: vote1 needs the parent block reconstructed from VID shares and vote2 the block
+  itself, and a node stuck without one fetches the whole payload from a peer. From V0_8 a vote attests to the node's own
+  verified VID share; vote2 still waits for that share to be persisted, so a decided block has a quorum of durably
+  stored shares and reconstruction happens outside consensus. The gate is `UpgradeLock::payload_gates_votes`, keyed on
+  the view the vote is cast in. Consequence: a leader that disperses a non-codeword can now get its block decided; the
+  payload is then provably undecodable and the block must be treated as empty, so no network should be upgraded to V0_8
+  before the query service can produce that proof for AvidmGf2. `Header::V8` reuses the V0_6 header's fields and commits
+  its own version. Reconstruction, the payload fetch and its server still run so nodes on either side of the upgrade
+  interoperate; they can be removed once no network runs below V0_8.
 
 What a network runs: `base_version` and `upgrade_version` in `data/genesis/<network>.toml`. Live confirmation is
 `consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see `doc/agents/live-chains.md`.

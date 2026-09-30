@@ -32,6 +32,10 @@
 //! re-commit to what our own proposal names, and then come back as an
 //! ordinary `BlockReconstructed`. The first test walks the stall up to the
 //! emitted request; the second walks through the exit.
+//!
+//! All of this is the protocol before `ASYNC_VID_VERSION`, which the harness
+//! runs by default. From that version no vote waits for a payload, so the
+//! stall cannot arise and no request is made; `tests::consensus` covers that.
 
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::{block_types::TestBlockHeader, node_types::TEST_VERSIONS};
