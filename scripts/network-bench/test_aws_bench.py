@@ -34,6 +34,7 @@ from pathlib import Path
 import netbench
 import test_netbench
 from fakes import (
+    FAKE_EPOCH,
     FULL_BALANCE,
     SLOW,
     FakeClock,
@@ -420,7 +421,7 @@ class CmdPlanTest(unittest.TestCase):
 
     def test_default_name_is_valid(self):
         unittest.mock.patch.stopall()
-        self.assertRegex(awsb.default_run_name(), awsb.NAME_RE.pattern)
+        self.assertRegex(awsb.default_run_name("tester", NOW), awsb.NAME_RE.pattern)
 
     # REQ:awsbench-account-guard
     def test_online_account_mismatch_makes_exactly_one_call(self):
@@ -1396,8 +1397,8 @@ DONE_STATE = {
     "phase": "done",
     "detail": "load finished",
     "ready_s": 30.0,
-    "t0": 100.0,
-    "t1": 200.0,
+    "t0": FAKE_EPOCH + 100.0,
+    "t1": FAKE_EPOCH + 200.0,
 }
 DESCRIBE = json.dumps(
     [
@@ -1580,10 +1581,10 @@ class RunFlowTest(unittest.TestCase):
             self.assertFalse((harness.fleet_dir / name).exists(), name)
         self.assertEqual([p.name for p in harness.fleet_dir.glob("runs/*")], ["01-run"])
 
+    # TEST:system-expiry-exact-ok
     def test_expiry_is_stamped_after_confirm_and_matches_the_manifest(self):
         harness = RunHarness(self, confirmed=True)
         runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
-        before = datetime.now(UTC).replace(microsecond=0)
         with unittest.mock.patch.object(
             awsb, "write_report", return_value=valid_result()
         ):
@@ -1594,8 +1595,8 @@ class RunFlowTest(unittest.TestCase):
         )
         self.assertEqual(tfvars["expires_at"], manifest["expires_at"])
         expires = datetime.fromisoformat(tfvars["expires_at"])
-        earliest = before.timestamp() + manifest["estimate"]["ttl_s"] + awsb.PROVISION_S
-        self.assertGreaterEqual(expires.timestamp(), earliest)
+        exact = FAKE_EPOCH + manifest["estimate"]["ttl_s"] + awsb.PROVISION_S
+        self.assertEqual(expires.timestamp(), exact)
         plans = [c for c in runner.calls if c[0] == "tofu" and c[2] == "plan"]
         self.assertEqual(len(plans), 2)
 
@@ -1879,9 +1880,9 @@ class RunDirsTest(unittest.TestCase):
 
     def test_fleet_name_collision_refuses(self):
         isolated_env(self, temp_dir(self), "fleet-a")
-        awsb.new_fleet_dir(awsb.OUT_ROOT)
+        awsb.new_fleet_dir(FakeSystem(), awsb.OUT_ROOT)
         with self.assertRaisesRegex(awsb.Refused, "already exists"):
-            awsb.new_fleet_dir(awsb.OUT_ROOT)
+            awsb.new_fleet_dir(FakeSystem(), awsb.OUT_ROOT)
 
 
 class ManifestReproTest(unittest.TestCase):
@@ -3455,7 +3456,7 @@ class SweepAndCostTest(unittest.TestCase):
             "estimate": estimate,
         }
         runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
-        cost = awsb.actual_cost(runner, manifest)
+        cost = awsb.actual_cost(runner, manifest, NOW)
         self.assertEqual(cost["duration_s"], 1800.0)
         expected_lines = awsb._cost_lines(hosts, 1800.0, None)
         self.assertAlmostEqual(
@@ -3480,10 +3481,12 @@ class SweepAndCostTest(unittest.TestCase):
             {"launch": launch, "reason": "User initiated (2026-09-29 15:30:00 GMT)"},
         ]
         runner = FleetRunner([DONE_STATE], describe=json.dumps(rows))
-        self.assertEqual(awsb.actual_cost(runner, manifest)["duration_s"], 1800.0)
+        self.assertEqual(awsb.actual_cost(runner, manifest, NOW)["duration_s"], 1800.0)
         only_none = json.dumps(rows[:1])
         with self.assertRaises(ValueError):
-            awsb.actual_cost(FleetRunner([DONE_STATE], describe=only_none), manifest)
+            awsb.actual_cost(
+                FleetRunner([DONE_STATE], describe=only_none), manifest, NOW
+            )
 
     def test_actual_cost_without_termination_time_raises(self):
         cfg = awsb.RunConfig(
@@ -3498,7 +3501,7 @@ class SweepAndCostTest(unittest.TestCase):
         }
         running = json.dumps([{"launch": "2026-09-29T15:00:00+00:00", "reason": ""}])
         with self.assertRaises(ValueError):
-            awsb.actual_cost(FleetRunner([DONE_STATE], describe=running), manifest)
+            awsb.actual_cost(FleetRunner([DONE_STATE], describe=running), manifest, NOW)
 
 
 class IndexTest(unittest.TestCase):
@@ -3977,7 +3980,7 @@ class WriteReportTest(unittest.TestCase):
         self.assertEqual(awsb.write_report(run_dir), first)
 
 
-NOW = datetime(2026, 9, 29, 16, 0, tzinfo=UTC)
+NOW = datetime.fromtimestamp(FAKE_EPOCH, UTC)
 EXPIRES_LATER = "2026-09-29T17:00:00Z"
 EXPIRES_PAST = "2026-09-29T15:00:00Z"
 

@@ -27,6 +27,8 @@ JSON_MEDIA_TYPE = "application/json"
 
 Reply = tuple[int, dict[str, str], bytes]
 
+FAKE_EPOCH = datetime(2026, 9, 29, 16, 0, tzinfo=UTC).timestamp()
+
 
 def _json_reply(obj: dict[str, Any], content_type: str = JSON_MEDIA_TYPE) -> Reply:
     return 200, {"Content-Type": content_type}, json.dumps(obj).encode()
@@ -434,12 +436,13 @@ class FakeSystem:
     run: Callable[..., subprocess.CompletedProcess[str]] = field(
         default_factory=FakeRunner
     )
-    clock: netbench.Clock = field(default_factory=FakeClock)
+    clock: netbench.Clock = field(default_factory=lambda: FakeClock(start=FAKE_EPOCH))
     handlers: dict[int, Callable[[int, Any], None]] = field(default_factory=dict)
     tools: set[str] | None = None
     answer: bool = False
     prompts: list[str] = field(default_factory=list)
     http: Callable[[str, dict[str, str]], Reply] | None = None
+    user: str = "tester"
 
     def which(self, name: str) -> str | None:
         if self.tools is None or name in self.tools:

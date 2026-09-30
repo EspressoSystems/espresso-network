@@ -6,7 +6,6 @@ Reuses the fake runners of `fakes` and the fixtures of `test_aws_bench`.
 """
 
 import contextlib
-import getpass
 import io
 import json
 import os
@@ -26,6 +25,7 @@ from typing import ClassVar
 
 import netbench
 from fakes import (
+    FAKE_EPOCH,
     FakeClock,
     FakeRunner,
     FakeSystem,
@@ -37,6 +37,7 @@ from test_aws_bench import (
     DESCRIBE,
     DONE_STATE,
     DOTENV_TEXT,
+    NOW,
     STATUS_DESCRIBE,
     aws_manifest,
     awsb,
@@ -177,12 +178,10 @@ class UpTest(unittest.TestCase):
 
     def test_expiry_counts_from_the_confirm_without_a_provision_margin(self):
         harness = FleetHarness(self)
-        before = datetime.now(UTC).replace(microsecond=0)
         harness.up(FleetRunner([DONE_STATE]))
         manifest = harness.fleet()
         expires = datetime.fromisoformat(manifest["expires_at"])
-        self.assertGreaterEqual(expires, before + timedelta(minutes=180))
-        self.assertLess(expires, before + timedelta(minutes=181))
+        self.assertEqual(expires, NOW + timedelta(minutes=180))
         tfvars = json.loads(
             (harness.fleet_dir / "terraform" / "terraform.tfvars.json").read_text()
         )
@@ -477,12 +476,12 @@ class RunRefusalTest(unittest.TestCase):
         cfg = awsb.fleet_run_config(harness.run_args(), manifest)
         cfg = awsb.dataclasses.replace(cfg, query_db="volume")
         with self.assertRaisesRegex(awsb.Refused, "was not provisioned"):
-            awsb.check_run_allowed(manifest, cfg, datetime.now(UTC))
+            awsb.check_run_allowed(manifest, cfg, NOW)
 
     def test_ttl_too_short_names_the_minutes(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
-        expires = datetime.now(UTC) + timedelta(minutes=10)
+        expires = NOW + timedelta(minutes=10)
         harness.set_fleet(expires_at=awsb.expiry_stamp(expires))
         self.refused(
             harness, runner, r"\d\d min left.*needs up to \d\d: up a new fleet"
@@ -494,7 +493,7 @@ class RunRefusalTest(unittest.TestCase):
         manifest = harness.fleet()
         cfg = awsb.fleet_run_config(harness.run_args(), manifest)
         worst = awsb.estimate_run(manifest, cfg)["worst_s"]
-        now = datetime.now(UTC)
+        now = NOW
         without_lockout = now + timedelta(seconds=worst + awsb.DESTROY_S + 60)
         with self.assertRaisesRegex(awsb.Refused, "up a new fleet"):
             awsb.check_run_allowed(
@@ -511,7 +510,7 @@ class RunRefusalTest(unittest.TestCase):
     def test_expired_fleet_names_status_and_orphans(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
-        past = datetime.now(UTC) - timedelta(minutes=5)
+        past = NOW - timedelta(minutes=5)
         harness.set_fleet(expires_at=awsb.expiry_stamp(past))
         self.refused(harness, runner, r"expired at .*status.*destroy --orphans")
 
@@ -699,7 +698,7 @@ class TagPullTest(unittest.TestCase):
         manifest = harness.fleet()
         cfg = awsb.fleet_run_config(harness.run_args(), manifest)
         needed = awsb.estimate_run(manifest, cfg)["worst_s"] + awsb.NOLOGIN_LEAD_S
-        expires = datetime.now(UTC) + timedelta(
+        expires = NOW + timedelta(
             seconds=needed + awsb.DESTROY_S + awsb.PULL_MAX_S - 30
         )
         harness.set_fleet(expires_at=awsb.expiry_stamp(expires))
@@ -1175,9 +1174,7 @@ class StatusTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             awsb.cmd_status(
                 harness.parse("status", str(harness.fleet_dir)),
-                FakeSystem(
-                    run=runner, clock=FakeClock(start=datetime.now(UTC).timestamp())
-                ),
+                FakeSystem(run=runner),
             )
         text = out.getvalue()
         self.assertIn("- fleet fleet1: phase idle", text)
@@ -1593,12 +1590,11 @@ class RdsTfvarsTest(unittest.TestCase):
 
     def test_the_delete_time_follows_the_confirmed_expiry(self):
         harness = RdsHarness(self)
-        before = datetime.now(UTC)
         harness.up_rds(self)
         delete_at = datetime.fromisoformat(
             harness.tfvars()["rds"]["delete_at"] + "+00:00"
         )
-        expected = before + timedelta(minutes=180, seconds=-awsb.RDS_REAPER_LEAD_S)
+        expected = NOW + timedelta(minutes=180, seconds=-awsb.RDS_REAPER_LEAD_S)
         self.assertLess(abs((delete_at - expected).total_seconds()), 60)
 
     def test_a_single_shot_deletes_the_rds_before_its_hosts_end(self):
@@ -1988,7 +1984,8 @@ class CollectRdsTest(unittest.TestCase):
 
     def test_a_run_collects_the_rds_files_and_the_ec2_balance(self):
         harness = RdsHarness(self)
-        logs = [{"LogFileName": "error/postgresql.log.x", "LastWritten": 1_000_000}]
+        written_ms = int((FAKE_EPOCH + 1000) * 1000)
+        logs = [{"LogFileName": "error/postgresql.log.x", "LastWritten": written_ms}]
         runner = harness.up_rds(self, logs=logs)
         harness.run(runner, "--query-db", "rds")
         run_dir = harness.run_dir("01-rds")
@@ -2637,7 +2634,7 @@ class DestroyRdsOrphansTest(unittest.TestCase):
 
     # TEST:orphans-live-fleet-kept-ok
     def test_a_live_fleet_of_this_user_with_state_is_kept(self):
-        user = getpass.getuser()
+        user = FakeSystem().user
         mappings = rds_fleet_mappings("fleet1", user, EXPIRES_LATER)
         runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
         self.write_fleet("fleet1", "idle")
@@ -2648,7 +2645,7 @@ class DestroyRdsOrphansTest(unittest.TestCase):
         self.assertNotIn(("iam", "delete-role"), aws_verbs(runner))
 
     def test_a_fleet_that_lost_its_state_is_swept_for_its_owner(self):
-        mappings = rds_fleet_mappings("fleet1", getpass.getuser(), EXPIRES_LATER)
+        mappings = rds_fleet_mappings("fleet1", FakeSystem().user, EXPIRES_LATER)
         runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
         code, text = self.destroy(runner, "--yes")
         self.assertEqual(code, awsb.EXIT_OK)

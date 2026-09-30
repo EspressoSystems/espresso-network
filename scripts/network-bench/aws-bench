@@ -756,6 +756,7 @@ class System:
     which: Callable[[str], str | None]
     ask: Callable[[str], bool]
     http_get: HttpGet
+    user: str
 
 
 Command = Callable[[argparse.Namespace, System], int]
@@ -780,11 +781,17 @@ def host_system() -> System:
         which=shutil.which,
         ask=_ask,
         http_get=_http_get,
+        user=getpass.getuser(),
     )
 
 
 def utc_now(clock: nb.Clock) -> datetime:
     return datetime.fromtimestamp(clock.time(), UTC)
+
+
+def stamp() -> str:
+    """Wall-clock time for records only; decisions use `utc_now`."""
+    return datetime.now(UTC).isoformat()
 
 
 def _run(
@@ -1126,12 +1133,12 @@ def confirm(ask: Callable[[str], bool], prompt: str, yes: bool) -> bool:
     return yes or ask(prompt)
 
 
-def default_run_name() -> str:
-    return f"{getpass.getuser()}-{datetime.now(UTC).strftime('%Y%m%d-%H%M')}"
+def default_run_name(user: str, now: datetime) -> str:
+    return f"{user}-{now.strftime('%Y%m%d-%H%M')}"
 
 
-def new_fleet_dir(out_root: Path) -> Path:
-    name = default_run_name()
+def new_fleet_dir(system: System, out_root: Path) -> Path:
+    name = default_run_name(system.user, utc_now(system.clock))
     if not NAME_RE.match(name):
         raise Refused(f"fleet name must match {NAME_RE.pattern}: {name!r}")
     fleet_dir = out_root / name
@@ -1179,7 +1186,7 @@ def setup_logging(directory: Path) -> None:
 
 def append_event(directory: Path, phase: str, event: str, detail: str | None) -> None:
     record = {
-        "ts": datetime.now(UTC).isoformat(),
+        "ts": stamp(),
         "phase": phase,
         "event": event,
         "detail": detail,
@@ -1205,7 +1212,7 @@ def write_fleet_manifest(
 ) -> FleetManifest:
     fleet: FleetManifest = {
         "name": fleet_dir.name,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": stamp(),
         "argv": argv,
         "config": config_to_json(cfg),
         "hosts": hosts,
@@ -1234,7 +1241,7 @@ def build_run_manifest(
     manifest: Manifest = {
         **fleet,
         "config": config_to_json(cfg),
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": stamp(),
         "phase": "planned",
         "fleet": fleet["name"],
         "index": index,
@@ -2389,7 +2396,7 @@ def prepare_run(
     Ctrl-C leaves nothing to destroy."""
     fleet_dir, run_dir, tf, hosts, _ = plan_fleet(args, cfg, system, started)
     confirm_create(system.ask, cfg, fleet_dir, len(hosts))
-    stamp_expiry(fleet_dir, tf, datetime.now(UTC))
+    stamp_expiry(fleet_dir, tf, utc_now(system.clock))
     return fleet_dir, run_dir, tf
 
 
@@ -2446,7 +2453,7 @@ def plan_fleet(
     no AWS write. The preflight summary is logged before the cost line."""
     run = system.run
     hosts = plan_hosts(cfg)
-    fleet_dir = new_fleet_dir(OUT_ROOT)
+    fleet_dir = new_fleet_dir(system, OUT_ROOT)
     setup_logging(fleet_dir)
     log.debug("argv %s", args.argv)
     pre = preflight(system, cfg, hosts)
@@ -2796,7 +2803,9 @@ def exit_code(
 
 def final_cost(fleet: FleetState) -> dict[str, float] | None:
     try:
-        cost = actual_cost(fleet.system.run, fleet.manifest)
+        cost = actual_cost(
+            fleet.system.run, fleet.manifest, utc_now(fleet.system.clock)
+        )
     except (RemoteError, Refused, ValueError) as exc:
         log.warning("actual cost unavailable: %s", exc)
         return None
@@ -2878,7 +2887,7 @@ def prepare_up(
     """Everything before the first AWS write, as `prepare_run`, without a run dir."""
     run = system.run
     hosts = plan_hosts(cfg)
-    fleet_dir = new_fleet_dir(OUT_ROOT)
+    fleet_dir = new_fleet_dir(system, OUT_ROOT)
     setup_logging(fleet_dir)
     log.debug("argv %s", args.argv)
     pre = preflight(system, cfg, hosts)
@@ -2889,13 +2898,13 @@ def prepare_up(
     render_fleet_dir(system, cfg, fleet_dir, hosts, pre, estimate, args.argv)
     tf = init_terraform(run, fleet_dir)
     confirm_create(system.ask, cfg, fleet_dir, len(hosts))
-    stamp_expiry(fleet_dir, tf, datetime.now(UTC), margin_s=0.0)
+    stamp_expiry(fleet_dir, tf, utc_now(system.clock), margin_s=0.0)
     return fleet_dir, tf
 
 
 def announce_idle(fleet: FleetState) -> None:
     manifest = fleet.manifest
-    left = minutes_left(manifest, datetime.now(UTC))
+    left = minutes_left(manifest, utc_now(fleet.system.clock))
     log.info("idle: fleet %s; %.0f min left", fleet.fleet_dir, left)
     log.info(
         "run: aws-bench run --fleet %s --query-db %s",
@@ -2960,7 +2969,7 @@ def cmd_run_fleet(args: argparse.Namespace, system: System) -> int:
         run_dir.name,
         estimate["worst_usd"],
         estimate["worst_s"] / 60,
-        minutes_left(manifest, datetime.now(UTC)),
+        minutes_left(manifest, utc_now(system.clock)),
     )
     try:
         with recording(bench_run):
@@ -3034,7 +3043,7 @@ def admit_run(
     releases the lock again and has issued no ssh command."""
     take_fleet_lock(fleet_dir, cfg.query_db, cfg.force)
     try:
-        estimate = check_run_allowed(manifest, cfg, datetime.now(UTC))
+        estimate = check_run_allowed(manifest, cfg, utc_now(system.clock))
         fleet = retagged(system.http_get, manifest, cfg)
         return render_run(fleet_dir, fleet, cfg, cfg.query_db, estimate), estimate
     except BaseException:
@@ -3062,7 +3071,7 @@ def take_fleet_lock(fleet_dir: Path, run_name: str, force: bool) -> FleetLock:
         "pid": os.getpid(),
         "hostname": socket.gethostname(),
         "run": run_name,
-        "taken_at": datetime.now(UTC).isoformat(),
+        "taken_at": stamp(),
     }
     if force and path.exists():
         holder: FleetLock = nb.read_json(path)
@@ -3401,7 +3410,7 @@ def end_fleet_run(run: Run, result: nb.BenchResult | None, reset_failed: bool) -
         "run dir %s; fleet %s, %.0f min left",
         run.run_dir,
         fleet.manifest["phase"],
-        minutes_left(fleet.manifest, datetime.now(UTC)),
+        minutes_left(fleet.manifest, utc_now(fleet.system.clock)),
     )
     return code
 
@@ -3513,7 +3522,7 @@ def render_fleet_dir(
         cfg,
         fleet_dir.resolve(),
         fleet_dir.name,
-        getpass.getuser(),
+        system.user,
         hosts,
         ssh_pub,
         cidr,
@@ -3523,7 +3532,7 @@ def render_fleet_dir(
         pre["ami_id"],
     )
     if rds is not None:
-        expires = datetime.now(UTC) + timedelta(seconds=estimate["ttl_s"])
+        expires = utc_now(system.clock) + timedelta(seconds=estimate["ttl_s"])
         tfvars.update(rds_tfvars(rds, secrets.token_urlsafe(24), expires))
     # The tfvars and state carry the rds password.
     tf_dir.chmod(0o700)
@@ -4419,7 +4428,7 @@ def cmd_status(args: argparse.Namespace, system: System) -> int:
         raise Refused("status takes either DIR or --all")
     now = utc_now(system.clock)
     if args.all:
-        return status_all(system.run, args, now)
+        return status_all(system, args, now)
     return status_run(system.run, args.dir, now)
 
 
@@ -4575,15 +4584,15 @@ def status_cost(
     if not instances:
         return f"no instances, {bound}"
     if all(i["state"] == "terminated" for i in instances):
-        return f"${actual_cost(run, manifest)['actual']:.2f} actual, {bound}"
+        return f"${actual_cost(run, manifest, now)['actual']:.2f} actual, {bound}"
     launched = min(datetime.fromisoformat(i["launch"]) for i in instances)
     usd = manifest_cost(manifest, (now - launched).total_seconds())
     return f"${usd:.2f} so far, {bound}"
 
 
-def status_all(run: Runner, args: argparse.Namespace, now: datetime) -> int:
-    caller_account(run)
-    runs = find_runs(run, OUT_ROOT, now)
+def status_all(system: System, args: argparse.Namespace, now: datetime) -> int:
+    caller_account(system.run)
+    runs = find_runs(system.run, OUT_ROOT, now, system.user)
     if not runs:
         print(f"no espresso-bench resources in {REGION}")
         return EXIT_OK
@@ -4655,7 +4664,7 @@ def log_down(fleet_dir: Path, cost: dict[str, float] | None) -> None:
 
 def destroy_orphans(system: System, args: argparse.Namespace, now: datetime) -> int:
     caller_account(system.run)
-    runs = find_runs(system.run, OUT_ROOT, now)
+    runs = find_runs(system.run, OUT_ROOT, now, system.user)
     orphans = [r for r in runs if r["orphan"] is not None]
     if not orphans:
         print(f"no orphaned espresso-bench resources in {REGION}")
@@ -4726,7 +4735,7 @@ def next_collect_index(run_dir: Path) -> int:
     return max(indices, default=0) + 1
 
 
-def find_runs(run: Runner, out_root: Path, now: datetime) -> list[TaggedRun]:
+def find_runs(run: Runner, out_root: Path, now: datetime, user: str) -> list[TaggedRun]:
     """Every run with a resource tagged `espresso-bench-run`, with the reason
     it counts as an orphan (if it does)."""
     out = aws_json(
@@ -4741,7 +4750,6 @@ def find_runs(run: Runner, out_root: Path, now: datetime) -> list[TaggedRun]:
     instances = describe_instances(run, f"Name=tag-key,Values={TAG_RUN}")
     volumes = describe_volumes(run, f"Name=tag-key,Values={TAG_RUN}")
     runs = group_runs(out, instances, volumes, list_scheduler_roles(run))
-    user = getpass.getuser()
     for tagged in runs:
         phase = local_phase(out_root, tagged["name"])
         tagged["orphan"] = classify_orphan(tagged, phase, now, user) or role_orphan(
@@ -5785,7 +5793,9 @@ def delete_security_group(system: System, group: str) -> None:
 TERMINATION_TIME = re.compile(r"\((\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) GMT\)")
 
 
-def actual_cost(run: Runner, manifest: FleetManifest) -> dict[str, float]:
+def actual_cost(
+    run: Runner, manifest: FleetManifest, now: datetime
+) -> dict[str, float]:
     """expected, bound and actual USD, with the run's wall time in `duration_s`. Actual is the
     estimate's price lines at the time between the first launch and the last termination,
     from `describe-instances` (terminated instances stay listed for about an hour)."""
@@ -5806,7 +5816,9 @@ def actual_cost(run: Runner, manifest: FleetManifest) -> dict[str, float]:
     duration_s = (max(ends) - min(launches)).total_seconds()
     estimate = manifest["estimate"]
     rds_s = (
-        rds_billed_s(run, manifest, min(launches)) if "rds_spec" in manifest else None
+        rds_billed_s(run, manifest, min(launches), now)
+        if "rds_spec" in manifest
+        else None
     )
     return {
         "expected": estimate["expected_usd"],
@@ -5816,13 +5828,15 @@ def actual_cost(run: Runner, manifest: FleetManifest) -> dict[str, float]:
     }
 
 
-def rds_billed_s(run: Runner, manifest: FleetManifest, first_launch: datetime) -> float:
+def rds_billed_s(
+    run: Runner, manifest: FleetManifest, first_launch: datetime, now: datetime
+) -> float:
     """Create to delete. The instance is created alongside the hosts, so a fleet that failed
     before `prepare_rds` recorded its creation time counts from the first launch."""
     created = first_launch
     if "rds" in manifest and "created_at" in manifest["rds"]:
         created = datetime.fromisoformat(manifest["rds"]["created_at"])
-    deleted = rds_delete_time(run, rds_identifier(manifest["name"]), datetime.now(UTC))
+    deleted = rds_delete_time(run, rds_identifier(manifest["name"]), now)
     return (deleted - created).total_seconds()
 
 
