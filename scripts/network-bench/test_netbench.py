@@ -137,6 +137,7 @@ def step(rate, decided=None, consensus=(), query=(), consensus_p50=900.0):
         "t_start": 0.0,
         "t_mid": 15.0,
         "t_end": 30.0,
+        "submitted_mb_s": rate,
         "decided_mb_s": rate if decided is None else decided,
         "timeouts": 0,
         "consensus_latency_ms": quantiles(consensus_p50, 2000.0),
@@ -1247,8 +1248,9 @@ def write_run_dir(out):
         {"height": 2000, "validator": 130.0, "query": 130.5, "scanned": None}
     )
     jsonl("heights.jsonl", heights)
+    # 1 MB/s, as submitted, in the first step; half of it in the second.
     counters = [
-        {"ts": float(ts), "decided_bytes": 1e6 * ts, "timeouts": 0}
+        {"ts": float(ts), "decided_bytes": 1e6 * min(ts, 65 + ts / 2), "timeouts": 0}
         for ts in range(100, 161)
     ]
     jsonl("consensus.jsonl", counters)
@@ -1352,7 +1354,9 @@ class AnalyzeTest(unittest.TestCase):
         self.assertEqual(one["node_cpu"], {"node0": 0.5, "node1": 0.5, "node2": 0.5})
         self.assertIsNone(one["postgres_cpu"])
         self.assertTrue(one["passed"])
-        self.assertEqual(two["consensus_fails"], ["decided 50% of offered"])
+        # 16 included and one timed out, of 1 MB each, in the 15 s measured half.
+        self.assertAlmostEqual(one["submitted_mb_s"], 17 / 15)
+        self.assertEqual(two["consensus_fails"], ["decided 50% of submitted"])
         self.assertEqual(result["capacity"]["overall"], {"mb_s": 1.0, "bounded": True})
         node0, load = result["nodes"]["node0"], result["load"]
         self.assertEqual((node0["decided_blocks"], node0["cpu_cores"]), (120, 0.5))
@@ -1557,24 +1561,33 @@ class StepMeasuresTest(unittest.TestCase):
     def test_keeping_up(self):
         m = self.measures()
         self.assertAlmostEqual(m["decided_mb_s"], 10.0)
+        self.assertAlmostEqual(m["submitted_mb_s"], 10.0, delta=0.1)
         self.assertEqual(m["timeouts"], 0)
         self.assertAlmostEqual(m["consensus_latency_ms"]["p50"], 500.0)
         self.assertAlmostEqual(m["query_lag_ms"]["p50"], 200.0)
         self.assertAlmostEqual(m["query_lag_slope_ms_s"], 0.0)
-        self.assertEqual(netbench.step_fails(m, 10.0, netbench.BenchConfig()), ([], []))
+        self.assertEqual(netbench.step_fails(m, netbench.BenchConfig()), ([], []))
 
     def test_consensus_rules(self):
-        m = self.measures(decided_mb_s=9.0, timeouts=1, consensus_s=1.5)
-        consensus, query = netbench.step_fails(m, 10.0, netbench.BenchConfig())
+        m = self.measures(decided_mb_s=7.0, timeouts=1, consensus_s=1.5)
+        consensus, query = netbench.step_fails(m, netbench.BenchConfig())
         self.assertEqual(query, [])
         self.assertEqual(
             consensus,
             [
-                "decided 90% of offered",
+                "decided 70% of submitted",
                 "1 view timeouts",
                 "consensus latency p50 1500 ms > 1000 ms",
             ],
         )
+
+    def test_decided_is_judged_against_the_submitted_rate(self):
+        # 10 MB/s go out: 8.5 MB/s decided keeps up, whatever the step's nominal rate.
+        m = self.measures(decided_mb_s=8.5)
+        self.assertEqual(netbench.step_fails(m, netbench.BenchConfig()), ([], []))
+        m = self.measures(decided_mb_s=7.9)
+        consensus, _ = netbench.step_fails(m, netbench.BenchConfig())
+        self.assertEqual(consensus, ["decided 79% of submitted"])
 
     def test_pending_transactions_count_once_over_target(self):
         cfg = netbench.BenchConfig()
@@ -1600,12 +1613,12 @@ class StepMeasuresTest(unittest.TestCase):
             step_window(), netbench.BenchConfig(), [], [], counters, 30.0
         )
         self.assertAlmostEqual(some(m["decided_mb_s"]), 10.0, delta=0.3)
-        self.assertEqual(netbench.step_fails(m, 10.0, netbench.BenchConfig()), ([], []))
+        self.assertEqual(netbench.step_fails(m, netbench.BenchConfig()), ([], []))
 
     def test_growing_query_lag(self):
         m = self.measures(query_growth=0.2)
         self.assertAlmostEqual(m["query_lag_slope_ms_s"], 200.0, delta=1)
-        consensus, query = netbench.step_fails(m, 10.0, netbench.BenchConfig())
+        consensus, query = netbench.step_fails(m, netbench.BenchConfig())
         self.assertEqual(consensus, [])
         self.assertEqual(query[0], "query lag grows 200 ms/s")
 
@@ -1613,7 +1626,7 @@ class StepMeasuresTest(unittest.TestCase):
         # At t 22 nothing is on the query node yet: heights older than the target lag.
         m = self.measures(query_s=100.0, now=22.0)
         self.assertGreater(m["query_lag_ms"]["p50"], 1000.0)
-        _, query = netbench.step_fails(m, 10.0, netbench.BenchConfig())
+        _, query = netbench.step_fails(m, netbench.BenchConfig())
         self.assertIn("query lag p50", query[0])
 
 
@@ -1831,7 +1844,8 @@ class ProgressWindowTest(unittest.TestCase):
             netbench.Tx(id=i, node=0, t_submit=t)
             for i, t in enumerate((50.0, 80.0, 99.0, math.inf))
         ]
-        self.near(netbench.submit_mb_s(txs, 1_500_000, 100.0, 30), 0.1)
+        times = [tx.t_submit for tx in txs]
+        self.near(netbench.submit_mb_s(times, 1_500_000, 70.0, 100.0), 0.1)
 
     def test_progress_line_shows_the_submitted_and_the_offered_rate(self):
         state = netbench.LoadState()

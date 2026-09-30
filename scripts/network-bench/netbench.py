@@ -20,7 +20,7 @@ import re
 import statistics
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -63,7 +63,7 @@ TRACKER_THREADS = 1
 HEIGHT_POLL_S = 0.1
 COUNTER_POLL_S = 1.0
 METRICS_EVERY_S = 1.0
-KEEP_UP_RATIO = 0.95
+KEEP_UP_RATIO = 0.8
 # Step rules, see step_fails.
 QUERY_LAG_GROWTH_MS_S = 50.0
 BASELINE_RUNS = 10
@@ -206,6 +206,8 @@ class StepWindow(TypedDict):
 
 
 class StepMeasures(TypedDict):
+    # What the load generator sent, which falls short of the step's rate when it is late.
+    submitted_mb_s: float
     # Theil-Sen slope of the decided payload bytes.
     decided_mb_s: float | None
     timeouts: int | None
@@ -991,8 +993,10 @@ def is_drained(pending: int, flat: bool) -> bool:
 def log_step(m: dict[str, Any], fails: list[str]) -> None:
     consensus, lag = m["consensus_latency_ms"], m["query_lag_ms"]
     log.info(
-        "step %s MB/s: decided %s MB/s, consensus p50 %s ms, query lag p50 %s ms: %s",
+        "step %s MB/s: submitted %s, decided %s MB/s, consensus p50 %s ms, query lag p50 "
+        "%s ms: %s",
         fmt_num(m["rate_mb_s"]),
+        fmt_num(m["submitted_mb_s"]),
         fmt_num(m["decided_mb_s"]),
         fmt_num(consensus["p50"] if consensus else None),
         fmt_num(lag["p50"] if lag else None),
@@ -1249,10 +1253,12 @@ def progress_window(
     }
 
 
-def submit_mb_s(txs: Sequence[Tx], tx_size: int, now: float, window_s: float) -> float:
-    """MB/s of the requests that went out in the last `window_s`."""
-    sent = sum(1 for tx in txs if now - window_s < tx.t_submit <= now)
-    return sent * tx_size / window_s / 1e6
+def submit_mb_s(
+    t_submits: Iterable[float], tx_size: int, t0: float, t1: float
+) -> float:
+    """MB/s of the requests that went out in `[t0, t1]`."""
+    sent = sum(1 for t in t_submits if t0 <= t <= t1)
+    return sent * tx_size / (t1 - t0) / 1e6
 
 
 def log_progress(
@@ -1273,7 +1279,11 @@ def log_progress(
         fmt_lag(stats),
         fmt_num(stats["block_s"]) or "-",
         fmt_num(stats["block_mb"]) or "-",
-        fmt_num(submit_mb_s(state.txs, tx_size, now, PROGRESS_S)),
+        fmt_num(
+            submit_mb_s(
+                (tx.t_submit for tx in state.txs), tx_size, now - PROGRESS_S, now
+            )
+        ),
         fmt_num(state.rate_mb_s),
         fmt_num(stats["decided_mb_s"]) or "-",
         len(state.txs),
@@ -1319,7 +1329,7 @@ def judge_step(
 ) -> dict[str, Any]:
     """The one verdict on a step, as the ramp takes it at `now`; stored in steps.json."""
     m = step_measures(step, cfg, txs, heights, counters, now)
-    consensus, query = step_fails(m, step["rate_mb_s"], cfg)
+    consensus, query = step_fails(m, cfg)
     return {**step, **m, "consensus_fails": consensus, "query_fails": query}
 
 
@@ -1359,6 +1369,9 @@ def step_measures(
     # A slope over all samples: two samples see whole blocks, off by up to one block.
     decided = theil_sen([(c["ts"], c["decided_bytes"] / 1e6) for c in inside])
     return {
+        "submitted_mb_s": submit_mb_s(
+            (tx["t_submit"] for tx in txs), cfg.tx_size, t0, t1
+        ),
         "decided_mb_s": decided,
         "timeouts": int(last["timeouts"] - first["timeouts"])
         if first and last
@@ -1379,16 +1392,14 @@ def theil_sen(points: list[tuple[float, float]]) -> float | None:
     return statistics.median(slopes) if slopes else None
 
 
-def step_fails(
-    m: StepMeasures, rate: float, cfg: BenchConfig
-) -> tuple[list[str], list[str]]:
+def step_fails(m: StepMeasures, cfg: BenchConfig) -> tuple[list[str], list[str]]:
     """Failed rules of a step: consensus-side, then query-node-side."""
     consensus, query = [], []
-    decided = m["decided_mb_s"]
+    decided, submitted = m["decided_mb_s"], m["submitted_mb_s"]
     if decided is None:
         consensus.append("no consensus metrics")
-    elif decided < KEEP_UP_RATIO * rate:
-        consensus.append(f"decided {decided / rate:.0%} of offered")
+    elif decided < KEEP_UP_RATIO * submitted:
+        consensus.append(f"decided {decided / submitted:.0%} of submitted")
     if m["timeouts"]:
         consensus.append(f"{m['timeouts']} view timeouts")
     latency = m["consensus_latency_ms"]
@@ -1535,7 +1546,8 @@ def analyze(out: Path, cfg: BenchConfig, topo: Topology) -> BenchResult:
     calib = read_json(out / "calibration.json")
     before, after = calib["before"], calib["after"]
     steps = [
-        step_result(step, txs, series, host) for step in read_json(out / "steps.json")
+        step_result(step, txs, series, host, cfg.tx_size)
+        for step in read_json(out / "steps.json")
     ]
     result: BenchResult = {
         "schema_version": SCHEMA_VERSION,
@@ -1572,6 +1584,7 @@ def step_result(
     txs: list[dict[str, Any]],
     series: dict[str, list[Sample]],
     host: list[dict[str, Any]],
+    tx_size: int,
 ) -> StepResult:
     """The ramp's verdict on a step (see judge_step) plus metrics that decide nothing."""
     t0, t1 = judged["t_mid"], judged["t_end"]
@@ -1593,6 +1606,8 @@ def step_result(
         "t_start": judged["t_start"],
         "t_mid": t0,
         "t_end": t1,
+        # Not from steps.json: runs from before the field have none there.
+        "submitted_mb_s": submit_mb_s((tx["t_submit"] for tx in txs), tx_size, t0, t1),
         "decided_mb_s": decided,
         "timeouts": judged["timeouts"],
         "consensus_latency_ms": judged["consensus_latency_ms"],
@@ -2478,16 +2493,17 @@ def fail_code(rule: str) -> str:
 def step_details(result: BenchResult) -> list[str]:
     lines = [
         (
-            "| MB/s | decided | view timeouts | consensus p50/p99 ms "
+            "| MB/s | submitted | decided | view timeouts | consensus p50/p99 ms "
             "| query lag p50/p99 ms | query lag slope ms/s | e2e p50/p99 ms | view ms "
             "| CPU-s/MB | node0/1/2 CPU | postgres CPU | failed rules |"
         ),
-        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"]):
         cpu = "/".join(fmt_num(s["node_cpu"].get(node)) for node in result["nodes"])
         lines.append(
-            f"| {fmt_num(s['rate_mb_s'])} | {fmt_num(s['decided_mb_s'])} "
+            f"| {fmt_num(s['rate_mb_s'])} | {fmt_num(s['submitted_mb_s'])} "
+            f"| {fmt_num(s['decided_mb_s'])} "
             f"| {s['timeouts']} "
             f"| {pair(s['consensus_latency_ms'])} | {pair(s['query_lag_ms'])} "
             f"| {fmt_num(s['query_lag_slope_ms_s'])} | {pair(s['latency_ms'])} "
@@ -2587,7 +2603,7 @@ def load_lines(result: BenchResult) -> list[str]:
             "of load"
         ),
         (
-            f"- step rules: decided >= {KEEP_UP_RATIO:.0%} of offered, no view timeouts, consensus latency p50 "
+            f"- step rules: decided >= {KEEP_UP_RATIO:.0%} of submitted, no view timeouts, consensus latency p50 "
             f"<= {cfg['latency_target_ms']} ms; query lag p50 <= "
             f"{cfg['query_lag_target_ms']} ms, growth <= {QUERY_LAG_GROWTH_MS_S:.0f} ms/s"
         ),

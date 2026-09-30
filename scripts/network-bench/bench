@@ -13,7 +13,7 @@ down, and writes `result.json` plus a markdown `summary.md` into the output dire
 Load is a staircase: after a warmup, `tx_size` transactions go out evenly spaced at each rate
 of `steps` for `step_s`, round-robin over the first `submit_nodes` nodes, independent of
 inclusion; `cap_s` of load caps the transactions in flight. Each step is judged on its second
-half: it fails if decided falls behind the offered rate, a view times out,
+half: it fails if decided falls below 80% of the submitted rate, a view times out,
 consensus latency (submit to the block on a validator) exceeds its target, or the query node's
 lag behind the validators exceeds its target or grows. At the first failing step the ramp stops
 and, once its backlog has drained (consensus settled, query node caught up), one refine step

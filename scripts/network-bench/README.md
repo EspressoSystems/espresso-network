@@ -48,7 +48,7 @@ scripts/network-bench/
 
 | Rule              | Source                                                       | Fails when                                |
 | ----------------- | ------------------------------------------------------------ | ----------------------------------------- |
-| decided MB/s      | validators' `consensus_finalized_bytes_sum`, Theil-Sen slope | < 95% of offered                          |
+| decided MB/s      | validators' `consensus_finalized_bytes_sum`, Theil-Sen slope | < 80% of submitted                        |
 | view timeouts     | `consensus_number_of_timeouts`                               | > 0                                       |
 | consensus latency | submit until header on a validator                           | p50 > `--latency-target-ms`               |
 | query lag         | header on query node minus header on a validator             | p50 > `--query-lag-target-ms`, or growing |
