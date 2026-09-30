@@ -23,6 +23,13 @@ class FakeClockTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "advanced past 10 s"):
             clock.sleep(0.1)
 
+    def test_limit_counts_from_start(self):
+        clock = fakes.FakeClock(limit_s=10.0, start=1000.0)
+        clock.sleep(10.0)
+        self.assertEqual(clock.time(), 1010.0)
+        with self.assertRaisesRegex(RuntimeError, "advanced past 10 s"):
+            clock.sleep(0.1)
+
     def test_wait_on_a_set_event_does_not_advance(self):
         clock = fakes.FakeClock()
         event = threading.Event()

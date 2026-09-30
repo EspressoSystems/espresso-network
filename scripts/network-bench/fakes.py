@@ -10,6 +10,7 @@ import threading
 import time
 import unittest
 from collections.abc import Awaitable, Callable, Coroutine
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, TypeVar
@@ -139,10 +140,12 @@ class FakeClock:
         self,
         limit_s: float = 3600.0,
         on_advance: Callable[[float], None] | None = None,
+        start: float = 0.0,
     ) -> None:
         self.limit_s = limit_s
         self.on_advance = on_advance
-        self.now = 0.0
+        self.now = start
+        self.start = start
         self.sleeps: list[float] = []
 
     def time(self) -> float:
@@ -154,7 +157,7 @@ class FakeClock:
     def sleep(self, s: float) -> None:
         self.sleeps.append(s)
         self.now += s
-        if self.now > self.limit_s:
+        if self.now - self.start > self.limit_s:
             raise RuntimeError(f"FakeClock: advanced past {self.limit_s:g} s")
         if self.on_advance is not None:
             self.on_advance(self.now)
@@ -421,6 +424,16 @@ class FakeRunner:
 
     def ran(self, *prefix: str) -> bool:
         return any(tuple(call[: len(prefix)]) == prefix for call in self.calls)
+
+
+@dataclass
+class FakeSystem:
+    """Structural twin of `aws-bench`'s `System`, which this file cannot import."""
+
+    run: Callable[..., subprocess.CompletedProcess[str]] = field(
+        default_factory=FakeRunner
+    )
+    clock: netbench.Clock = field(default_factory=FakeClock)
 
 
 FLEET_ARNS = [

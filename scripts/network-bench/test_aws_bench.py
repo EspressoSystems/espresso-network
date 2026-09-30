@@ -39,6 +39,7 @@ from fakes import (
     FakeClock,
     FakeRegistry,
     FakeRunner,
+    FakeSystem,
     FleetRunner,
     completed,
     host_info,
@@ -73,7 +74,7 @@ def parse_plan_args(argv: list[str]) -> "awsb.argparse.Namespace":
 def cmd_plan_exit(args: "awsb.argparse.Namespace", run: "awsb.Runner") -> int:
     """Mirrors `main`'s single `Refused` catch, since these tests call `cmd_plan` directly."""
     try:
-        return awsb.cmd_plan(args, run=run)
+        return awsb.cmd_plan(args, FakeSystem(run=run))
     except awsb.Refused:
         return awsb.EXIT_REFUSED
 
@@ -334,7 +335,7 @@ class CmdPlanTest(unittest.TestCase):
         with unittest.mock.patch.object(
             awsb, "preflight", return_value=fake_preflight()
         ):
-            code = awsb.cmd_plan(plan_args(), run=FleetRunner([]))
+            code = awsb.cmd_plan(plan_args(), FakeSystem(run=FleetRunner([])))
         self.assertEqual(code, awsb.EXIT_OK)
         for name in (
             "runs/01-run/genesis.toml",
@@ -373,7 +374,7 @@ class CmdPlanTest(unittest.TestCase):
         with unittest.mock.patch.object(
             awsb, "preflight", return_value=fake_preflight()
         ):
-            self.assertEqual(awsb.cmd_plan(args, run=runner), awsb.EXIT_OK)
+            self.assertEqual(awsb.cmd_plan(args, FakeSystem(run=runner)), awsb.EXIT_OK)
         key = self.fleet_dir / "ssh" / "id_ed25519"
         keygen = next(c for c in runner.calls if c[0] == "ssh-keygen")
         self.assertEqual(
@@ -421,7 +422,7 @@ class CmdPlanTest(unittest.TestCase):
         with unittest.mock.patch.object(
             awsb, "preflight", return_value=fake_preflight()
         ):
-            first = awsb.cmd_plan(plan_args(), run=FleetRunner([]))
+            first = awsb.cmd_plan(plan_args(), FakeSystem(run=FleetRunner([])))
         self.assertEqual(first, awsb.EXIT_OK)
         second_runner = FakeRunner({})
         second = cmd_plan_exit(plan_args(), run=second_runner)
@@ -446,7 +447,7 @@ class CmdPlanTest(unittest.TestCase):
         with unittest.mock.patch.object(
             awsb, "preflight", return_value=fake_preflight()
         ) as preflight:
-            code = awsb.cmd_plan(plan_args(), run=runner)
+            code = awsb.cmd_plan(plan_args(), FakeSystem(run=runner))
         self.assertEqual(code, awsb.EXIT_OK)
         preflight.assert_called_once()
         manifest = json.loads((self.fleet_dir / "fleet.json").read_text())
@@ -463,7 +464,7 @@ class CmdPlanTest(unittest.TestCase):
         with unittest.mock.patch.object(
             awsb, "preflight", return_value=fake_preflight()
         ):
-            awsb.cmd_plan(plan_args(), run=FleetRunner([]))
+            awsb.cmd_plan(plan_args(), FakeSystem(run=FleetRunner([])))
         lines = (self.fleet_dir / "driver.log").read_text().splitlines()
         account = next(i for i, line in enumerate(lines) if "account 0275" in line)
         cost = next(i for i, line in enumerate(lines) if "expected $" in line)
@@ -1487,7 +1488,7 @@ class RunHarness:
     def run(self, runner: FleetRunner, extra=()) -> int:
         return awsb.cmd_run(
             self.args(*extra),
-            run=runner,
+            FakeSystem(run=runner),
             interrupts=awsb.Interrupts(FakeClock()),
         )
 
@@ -1524,7 +1525,9 @@ class RunApplyFailureTest(unittest.TestCase):
         args = harness.args()
         args.yes = False
         with self.assertRaises(awsb.Refused):
-            awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
+            awsb.cmd_run(
+                args, FakeSystem(run=runner), interrupts=awsb.Interrupts(FakeClock())
+            )
         self.assertFalse(runner.ran("tofu", "apply"))
         self.assertFalse(any(call[0] == "ssh" for call in runner.calls))
 
@@ -1677,7 +1680,9 @@ class RunInterruptTest(unittest.TestCase):
         runner = FleetRunner(
             [running], on_poll=lambda n: n == 2 and interrupts.event.set()
         )
-        code = awsb.cmd_run(harness.args(), run=runner, interrupts=interrupts)
+        code = awsb.cmd_run(
+            harness.args(), FakeSystem(run=runner), interrupts=interrupts
+        )
         return harness, runner, code
 
     def test_stops_agent_collects_destroys_and_exits_3(self):
@@ -1729,7 +1734,9 @@ class RunInterruptTest(unittest.TestCase):
         runner = FleetRunner(
             [{"phase": "loading", "detail": "x"}], on_poll=third_signal
         )
-        code = awsb.cmd_run(harness.args(), run=runner, interrupts=interrupts)
+        code = awsb.cmd_run(
+            harness.args(), FakeSystem(run=runner), interrupts=interrupts
+        )
         self.assertEqual(code, awsb.EXIT_FAILED)
         self.assertFalse(runner.ran("rsync", "/opt/bench/out/"))
         self.assertTrue(runner.ran("tofu", "destroy"))
@@ -2828,7 +2835,12 @@ class PostgresStatsTest(unittest.TestCase):
             ),
         ):
             threading.Thread(target=stop_soon).start()
-            self.assertEqual(awsb.cmd_agent_host(args, run), awsb.EXIT_OK)
+            self.assertEqual(
+                awsb.cmd_agent_host(
+                    args, FakeSystem(run=run, clock=netbench.SYSTEM_CLOCK)
+                ),
+                awsb.EXIT_OK,
+            )
         self.assertTrue((tmp / "pg-stats.jsonl").exists())
 
     def test_extension_created_after_pg_isready(self):
@@ -3152,7 +3164,7 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
             unittest.mock.patch.object(awsb.signal, "signal") as register,
             self.assertRaisesRegex(awsb.Refused, "--pg"),
         ):
-            awsb.cmd_agent_host(args)
+            awsb.cmd_agent_host(args, FakeSystem())
         register.assert_not_called()
 
     def test_sampler_passes_the_password_in_the_environment(self):
@@ -3164,7 +3176,13 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
             stop.set()
             return completed(returncode=1)
 
-        awsb.sample_pg(tmp_dir(self) / "pg-stats.jsonl", stop, awsb.pg_endpoint(), run)
+        awsb.sample_pg(
+            tmp_dir(self) / "pg-stats.jsonl",
+            stop,
+            awsb.pg_endpoint(),
+            run,
+            FakeClock(),
+        )
         argv, env = seen[0]
         self.assertEqual(env, {"PGPASSWORD": "password"})
         self.assertNotIn("password", argv)
@@ -3598,9 +3616,9 @@ class AgentDriveTest(unittest.TestCase):
             ),
             unittest.mock.patch.object(awsb.signal, "signal"),
         ):
-            if clock is None:
-                return awsb.cmd_agent_drive(self.args)
-            return awsb.cmd_agent_drive(self.args, clock)
+            return awsb.cmd_agent_drive(
+                self.args, FakeSystem(clock=FakeClock() if clock is None else clock)
+            )
 
     def test_the_clock_reaches_sampler_readiness_and_load(self):
         clock = FakeClock()
@@ -4207,11 +4225,15 @@ def tag_runner(
     return runner
 
 
-def run_cmd(func, argv: list[str], runner, *args) -> tuple[int, str]:
+def at(moment: datetime) -> FakeClock:
+    return FakeClock(start=moment.timestamp())
+
+
+def run_cmd(func, argv: list[str], system: FakeSystem) -> tuple[int, str]:
     parsed = awsb.parse_args(argv)
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        code = func(parsed, runner, *args)
+        code = func(parsed, system)
     return code, out.getvalue()
 
 
@@ -4221,7 +4243,9 @@ class StatusAllTest(unittest.TestCase):
 
     def test_empty_region(self):
         code, out = run_cmd(
-            awsb.cmd_status, ["status", "--all"], tag_runner([], []), NOW
+            awsb.cmd_status,
+            ["status", "--all"],
+            FakeSystem(run=tag_runner([], []), clock=at(NOW)),
         )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(out, "no espresso-bench resources in eu-west-1\n")
@@ -4232,7 +4256,9 @@ class StatusAllTest(unittest.TestCase):
             tag_mapping("instance", "i-2", "ok", "bob", EXPIRES_LATER),
         ]
         runner = tag_runner(mappings, [instance("i-1"), instance("i-2")])
-        code, out = run_cmd(awsb.cmd_status, ["status", "--all"], runner, NOW)
+        code, out = run_cmd(
+            awsb.cmd_status, ["status", "--all"], FakeSystem(run=runner, clock=at(NOW))
+        )
         self.assertEqual(code, awsb.EXIT_OK)
         lines = out.splitlines()
         self.assertIn("| amy | bob |", lines[2])
@@ -4248,19 +4274,25 @@ class StatusAllTest(unittest.TestCase):
         runner = tag_runner(
             mappings, [instance("i-1", "terminated")], stale_volumes=["vol-1", "vol-2"]
         )
-        code, out = run_cmd(awsb.cmd_status, ["status", "--all"], runner, NOW)
+        code, out = run_cmd(
+            awsb.cmd_status, ["status", "--all"], FakeSystem(run=runner, clock=at(NOW))
+        )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(out, "no espresso-bench resources in eu-west-1\n")
 
     def test_wrong_account_is_refused_before_listing(self):
         runner = FakeRunner({STS_CALL: sts_response("999")})
         with self.assertRaises(awsb.Refused):
-            run_cmd(awsb.cmd_status, ["status", "--all"], runner, NOW)
+            run_cmd(
+                awsb.cmd_status,
+                ["status", "--all"],
+                FakeSystem(run=runner, clock=at(NOW)),
+            )
         self.assertEqual(len(runner.calls), 1)
 
     def test_needs_dir_or_all(self):
         with self.assertRaises(awsb.Refused):
-            run_cmd(awsb.cmd_status, ["status"], FakeRunner(), NOW)
+            run_cmd(awsb.cmd_status, ["status"], FakeSystem(clock=at(NOW)))
 
 
 class DestroyOrphansTest(unittest.TestCase):
@@ -4278,7 +4310,11 @@ class DestroyOrphansTest(unittest.TestCase):
         return tag_runner(mappings, [instance("i-1"), instance("i-2")])
 
     def destroy(self, runner, *flags: str) -> tuple[int, str]:
-        return run_cmd(awsb.cmd_destroy, ["destroy", "--orphans", *flags], runner, NOW)
+        return run_cmd(
+            awsb.cmd_destroy,
+            ["destroy", "--orphans", *flags],
+            FakeSystem(run=runner, clock=at(NOW)),
+        )
 
     def test_sweeps_only_orphans_in_dependency_order(self):
         runner = self.runner()
@@ -4348,7 +4384,10 @@ class DestroyOrphansTest(unittest.TestCase):
         key.write_text("private")
         parsed = awsb.parse_args(["destroy", "--orphans", "--yes"])
         with contextlib.redirect_stdout(io.StringIO()):
-            awsb.cmd_destroy(parsed, self.runner(), NOW, FakeClock())
+            awsb.cmd_destroy(
+                parsed,
+                FakeSystem(run=self.runner(), clock=at(NOW)),
+            )
         manifest = json.loads((out / "amy" / "fleet.json").read_text())
         self.assertFalse(key.exists())
         self.assertEqual(manifest["phase"], "swept")
@@ -4485,7 +4524,10 @@ class KeptRunTest(unittest.TestCase):
         harness, runner = self.kept()
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = awsb.cmd_status(self.args(harness, "status"), runner, NOW)
+            code = awsb.cmd_status(
+                self.args(harness, "status"),
+                FakeSystem(run=runner, clock=at(NOW)),
+            )
         self.assertEqual(code, awsb.EXIT_OK)
         text = out.getvalue()
         self.assertIn("- fleet run1: phase left-running", text)
@@ -4507,7 +4549,10 @@ class KeptRunTest(unittest.TestCase):
         runner.describe = terminated
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            awsb.cmd_status(self.args(harness, "status"), runner, NOW)
+            awsb.cmd_status(
+                self.args(harness, "status"),
+                FakeSystem(run=runner, clock=at(NOW)),
+            )
         self.assertRegex(out.getvalue(), r"- cost: \$\d+\.\d\d actual, bound")
         self.assertNotIn("agent", out.getvalue())
 
@@ -4521,7 +4566,10 @@ class KeptRunTest(unittest.TestCase):
         offline = FleetRunner([DONE_STATE])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = awsb.cmd_status(self.args(harness, "status"), offline, NOW)
+            code = awsb.cmd_status(
+                self.args(harness, "status"),
+                FakeSystem(run=offline, clock=at(NOW)),
+            )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(offline.calls, [])
         self.assertRegex(out.getvalue(), r"- cost: \$\d+\.\d\d actual, bound \$\d+")
@@ -4541,14 +4589,18 @@ class KeptRunTest(unittest.TestCase):
             runner = FakeRunner()
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                awsb.cmd_status(awsb.parse_args(["status", str(run_dir)]), runner, NOW)
+                awsb.cmd_status(
+                    awsb.parse_args(["status", str(run_dir)]),
+                    FakeSystem(run=runner, clock=at(NOW)),
+                )
         self.assertIn("planned only", out.getvalue())
         self.assertEqual(runner.calls, [])
 
     def test_down_destroys_and_prices(self):
         harness, runner = self.kept(describe=DESCRIBE)
         code = awsb.cmd_down(
-            self.args(harness, "down", "--yes"), runner, clock=FakeClock()
+            self.args(harness, "down", "--yes"),
+            FakeSystem(run=runner, clock=FakeClock()),
         )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertTrue(runner.ran("tofu", "destroy"))
@@ -4567,33 +4619,46 @@ class KeptRunTest(unittest.TestCase):
         self.assertTrue(key.exists())
         runner.describe = STATUS_DESCRIBE
         with contextlib.redirect_stdout(io.StringIO()):
-            awsb.cmd_status(self.args(harness, "status"), runner, NOW)
+            awsb.cmd_status(
+                self.args(harness, "status"),
+                FakeSystem(run=runner, clock=at(NOW)),
+            )
         self.assertTrue(runner.ran("-i", str(key)))
         runner.describe = DESCRIBE
-        awsb.cmd_down(self.args(harness, "down", "--yes"), runner, clock=FakeClock())
+        awsb.cmd_down(
+            self.args(harness, "down", "--yes"),
+            FakeSystem(run=runner, clock=FakeClock()),
+        )
         self.assertFalse(key.exists())
         self.assertTrue(key.with_name("id_ed25519.pub").exists())
 
     def test_down_twice_is_refused(self):
         harness, runner = self.kept(describe=DESCRIBE)
-        awsb.cmd_down(self.args(harness, "down", "--yes"), runner, clock=FakeClock())
+        awsb.cmd_down(
+            self.args(harness, "down", "--yes"),
+            FakeSystem(run=runner, clock=FakeClock()),
+        )
         with self.assertRaisesRegex(awsb.Refused, "already done"):
             awsb.cmd_down(
-                self.args(harness, "down", "--yes"), runner, clock=FakeClock()
+                self.args(harness, "down", "--yes"),
+                FakeSystem(run=runner, clock=FakeClock()),
             )
 
     def test_down_declined(self):
         harness, runner = self.kept()
         destroys = runner.count("tofu", "destroy")
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
-            awsb.cmd_down(self.args(harness, "down"), runner, clock=FakeClock())
+            awsb.cmd_down(
+                self.args(harness, "down"), FakeSystem(run=runner, clock=FakeClock())
+            )
         self.assertEqual(runner.count("tofu", "destroy"), destroys)
 
     def test_failed_destroy_dir_sweeps_and_exits_4(self):
         harness, runner = self.kept()
         runner.destroys = [completed(returncode=1, stderr="locked")]
         code = awsb.cmd_down(
-            self.args(harness, "down", "--yes"), runner, clock=FakeClock()
+            self.args(harness, "down", "--yes"),
+            FakeSystem(run=runner, clock=FakeClock()),
         )
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertTrue(runner.ran("terminate-instances", "i-1"))
@@ -4613,7 +4678,9 @@ class KeptRunTest(unittest.TestCase):
                     (local / "df.txt").write_text("x"),
                 ),
             ):
-                code = awsb.cmd_collect(self.args(harness, "collect"), runner)
+                code = awsb.cmd_collect(
+                    self.args(harness, "collect"), FakeSystem(run=runner)
+                )
             self.assertEqual(code, awsb.EXIT_OK)
             self.assertTrue((expected / "df.txt").exists())
         self.assertTrue(runner.ran("psql -At -c"))
@@ -4621,7 +4688,9 @@ class KeptRunTest(unittest.TestCase):
     def test_collect_reports_hosts_that_yielded_nothing(self):
         harness, runner = self.kept()
         with unittest.mock.patch.object(awsb.Remote, "rsync_from", autospec=True):
-            code = awsb.cmd_collect(self.args(harness, "collect"), runner)
+            code = awsb.cmd_collect(
+                self.args(harness, "collect"), FakeSystem(run=runner)
+            )
         self.assertEqual(code, awsb.EXIT_FAILED)
 
     def test_collect_reports_a_host_whose_script_failed_and_copied_nothing(self):
@@ -4637,7 +4706,9 @@ class KeptRunTest(unittest.TestCase):
             unittest.mock.patch.object(awsb.Remote, "rsync_from", autospec=True),
             unittest.mock.patch.object(awsb.Remote, "ssh", failing),
         ):
-            code = awsb.cmd_collect(self.args(harness, "collect"), runner)
+            code = awsb.cmd_collect(
+                self.args(harness, "collect"), FakeSystem(run=runner)
+            )
         self.assertEqual(code, awsb.EXIT_FAILED)
 
     def test_collect_of_an_older_run_is_refused(self):
@@ -4645,7 +4716,7 @@ class KeptRunTest(unittest.TestCase):
         (harness.fleet_dir / "runs" / "02-later").mkdir()
         mark = len(runner.calls)
         with self.assertRaisesRegex(awsb.Refused, "not the last run"):
-            awsb.cmd_collect(self.args(harness, "collect"), runner)
+            awsb.cmd_collect(self.args(harness, "collect"), FakeSystem(run=runner))
         self.assertEqual(len(runner.calls), mark)
 
     def test_collect_while_a_run_is_in_progress_is_refused(self):
@@ -4654,7 +4725,7 @@ class KeptRunTest(unittest.TestCase):
         manifest = json.loads(fleet_json.read_text())
         netbench.write_json(fleet_json, {**manifest, "phase": "running"})
         with self.assertRaisesRegex(awsb.Refused, "is running"):
-            awsb.cmd_collect(self.args(harness, "collect"), runner)
+            awsb.cmd_collect(self.args(harness, "collect"), FakeSystem(run=runner))
 
     def test_collect_of_an_unprovisioned_run_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4665,7 +4736,8 @@ class KeptRunTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(awsb.Refused, "never provisioned"):
                 awsb.cmd_collect(
-                    awsb.parse_args(["collect", str(run_dir)]), FakeRunner()
+                    awsb.parse_args(["collect", str(run_dir)]),
+                    FakeSystem(run=FakeRunner()),
                 )
 
     def test_collect_of_a_fleet_dir_is_refused(self):
@@ -4673,7 +4745,9 @@ class KeptRunTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             self.assertRaisesRegex(awsb.Refused, "not a run dir"),
         ):
-            awsb.cmd_collect(awsb.parse_args(["collect", tmp]), FakeRunner())
+            awsb.cmd_collect(
+                awsb.parse_args(["collect", tmp]), FakeSystem(run=FakeRunner())
+            )
 
 
 class NextCollectIndexTest(unittest.TestCase):
@@ -4696,7 +4770,7 @@ class CmdRenderTest(unittest.TestCase):
     def test_rewrites_result_and_summary_offline(self):
         run_dir = self.collected()
         (run_dir / "summary.md").write_text("stale")
-        code = awsb.cmd_render(awsb.parse_args(["render", str(run_dir)]))
+        code = awsb.cmd_render(awsb.parse_args(["render", str(run_dir)]), FakeSystem())
         self.assertIn(code, (awsb.EXIT_OK, awsb.EXIT_INVALID))
         self.assertIn("Deployment", (run_dir / "summary.md").read_text())
         self.assertEqual(
@@ -4710,7 +4784,8 @@ class CmdRenderTest(unittest.TestCase):
         baseline = run_dir / "baseline.json"
         baseline.write_text((run_dir / "result.json").read_text())
         awsb.cmd_render(
-            awsb.parse_args(["render", str(run_dir), "--baseline", str(baseline)])
+            awsb.parse_args(["render", str(run_dir), "--baseline", str(baseline)]),
+            FakeSystem(),
         )
         self.assertIn("baseline", (run_dir / "summary.md").read_text().lower())
 
@@ -4718,7 +4793,7 @@ class CmdRenderTest(unittest.TestCase):
         run_dir = self.collected()
         (run_dir / "run.json").unlink()
         with self.assertRaisesRegex(awsb.Refused, "no run.json"):
-            awsb.cmd_render(awsb.parse_args(["render", str(run_dir)]))
+            awsb.cmd_render(awsb.parse_args(["render", str(run_dir)]), FakeSystem())
 
 
 class ConfigFromManifestTest(unittest.TestCase):
@@ -4733,6 +4808,13 @@ class ConfigFromManifestTest(unittest.TestCase):
         self.assertEqual(awsb.config_from_manifest(saved), cfg)
         del saved["node_env"]
         self.assertEqual(awsb.config_from_manifest(saved).node_env, ())
+
+
+class CommandSystemTest(unittest.TestCase):
+    def test_command_without_system_fails(self):
+        args = awsb.parse_args(["render", "run"])
+        with self.assertRaises(TypeError):
+            awsb.cmd_render(args)
 
 
 if __name__ == "__main__":

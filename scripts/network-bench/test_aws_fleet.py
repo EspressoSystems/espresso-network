@@ -27,6 +27,7 @@ import netbench
 from fakes import (
     FakeClock,
     FakeRunner,
+    FakeSystem,
     FleetRunner,
     completed,
     two_node_hosts_info,
@@ -112,13 +113,15 @@ class FleetHarness:
 
     def up(self, runner, *extra: str) -> int:
         return awsb.cmd_up(
-            self.up_args(*extra), run=runner, interrupts=awsb.Interrupts(FakeClock())
+            self.up_args(*extra),
+            FakeSystem(run=runner),
+            interrupts=awsb.Interrupts(FakeClock()),
         )
 
     def run(self, runner, *extra: str, interrupts: "awsb.Interrupts | None" = None):
         return awsb.cmd_run(
             self.run_args(*extra),
-            run=runner,
+            FakeSystem(run=runner),
             interrupts=interrupts or awsb.Interrupts(FakeClock()),
         )
 
@@ -235,7 +238,9 @@ class UpTest(unittest.TestCase):
         args = harness.up_args()
         args.yes = False
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
-            awsb.cmd_up(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
+            awsb.cmd_up(
+                args, FakeSystem(run=runner), interrupts=awsb.Interrupts(FakeClock())
+            )
         self.assertFalse(runner.ran("tofu", "apply"))
 
     def test_up_needs_explicit_minutes(self):
@@ -424,7 +429,9 @@ class RunOnFleetTest(unittest.TestCase):
         harness = FleetHarness(self)
         runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
         args = harness.single_shot_args()
-        code = awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
+        code = awsb.cmd_run(
+            args, FakeSystem(run=runner), interrupts=awsb.Interrupts(FakeClock())
+        )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertFalse(runner.ran("find /data/journal"))
         self.assertEqual(harness.fleet()["db_modes"], ["colocated"])
@@ -471,7 +478,8 @@ class RunRefusalTest(unittest.TestCase):
         self.assertEqual(cfg.node_env, ("A=1",))
         with self.assertRaisesRegex(awsb.Refused, "run --fleet"):
             awsb.cmd_up(
-                harness.up_args("--node-env", "A=1"), run=FleetRunner([DONE_STATE])
+                harness.up_args("--node-env", "A=1"),
+                FakeSystem(run=FleetRunner([DONE_STATE])),
             )
 
     def test_mode_missing(self):
@@ -538,7 +546,7 @@ class RunRefusalTest(unittest.TestCase):
         harness = FleetHarness(self)
         args = harness.parse("run", "--nodes", "2")
         with self.assertRaisesRegex(awsb.Refused, "--tag"):
-            awsb.cmd_run(args, run=FleetRunner([DONE_STATE]))
+            awsb.cmd_run(args, FakeSystem(run=FleetRunner([DONE_STATE])))
 
 
 NEW_DIGEST = f"sha256:{'1' * 64}"
@@ -888,7 +896,9 @@ class VolumeWiringTest(unittest.TestCase):
             "--query-db",
             "volume",
         )
-        code = awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
+        code = awsb.cmd_run(
+            args, FakeSystem(run=runner), interrupts=awsb.Interrupts(FakeClock())
+        )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(runner.count("mkfs.ext4"), 1)
         self.assertFalse(runner.ran("find /data/journal"))
@@ -1112,7 +1122,7 @@ class RunEstimateTest(unittest.TestCase):
 class DownTest(unittest.TestCase):
     def down(self, harness, runner, *extra: str) -> int:
         args = harness.parse("down", str(harness.fleet_dir), "--yes", *extra)
-        return awsb.cmd_down(args, run=runner, clock=FakeClock())
+        return awsb.cmd_down(args, FakeSystem(run=runner, clock=FakeClock()))
 
     def test_down_destroys_and_prices(self):
         harness = FleetHarness(self)
@@ -1163,7 +1173,7 @@ class DownTest(unittest.TestCase):
         runner = harness.up_fleet(self)
         args = harness.parse("down", str(harness.fleet_dir))
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
-            awsb.cmd_down(args, run=runner, clock=FakeClock())
+            awsb.cmd_down(args, FakeSystem(run=runner, clock=FakeClock()))
         self.assertFalse(runner.ran("tofu", "destroy"))
 
 
@@ -1175,7 +1185,12 @@ class StatusTest(unittest.TestCase):
         awsb.take_fleet_lock(harness.fleet_dir, "measuring", False)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            awsb.cmd_status(harness.parse("status", str(harness.fleet_dir)), runner)
+            awsb.cmd_status(
+                harness.parse("status", str(harness.fleet_dir)),
+                FakeSystem(
+                    run=runner, clock=FakeClock(start=datetime.now(UTC).timestamp())
+                ),
+            )
         text = out.getvalue()
         self.assertIn("- fleet fleet1: phase idle", text)
         self.assertRegex(text, r"- expires \S+ UTC, 1[78]\d min left")
@@ -1642,7 +1657,9 @@ class RdsTfvarsTest(unittest.TestCase):
         args.argv = argv
         pre = {**fake_preflight(), "rds_engine_version": "18"}
         with unittest.mock.patch.object(awsb, "preflight", return_value=pre):
-            self.assertEqual(awsb.cmd_plan(args, run=FleetRunner([])), awsb.EXIT_OK)
+            self.assertEqual(
+                awsb.cmd_plan(args, FakeSystem(run=FleetRunner([]))), awsb.EXIT_OK
+            )
         tfvars = json.loads(
             (out / "planned/terraform/terraform.tfvars.json").read_text()
         )
@@ -1764,7 +1781,7 @@ class RdsUpTest(unittest.TestCase):
         with unittest.mock.patch.object(awsb, "confirm", return_value=True) as confirm:
             awsb.cmd_up(
                 args,
-                run=RdsRunner([DONE_STATE]),
+                FakeSystem(run=RdsRunner([DONE_STATE])),
                 interrupts=awsb.Interrupts(FakeClock()),
             )
         self.assertIn(
@@ -1779,7 +1796,7 @@ class RdsUpTest(unittest.TestCase):
         with unittest.mock.patch.object(awsb, "confirm", return_value=True) as confirm:
             awsb.cmd_up(
                 args,
-                run=volume_runner([DONE_STATE]),
+                FakeSystem(run=volume_runner([DONE_STATE])),
                 interrupts=awsb.Interrupts(FakeClock()),
             )
         self.assertIn("1 extra volume", confirm.call_args.args[0])
@@ -1927,7 +1944,9 @@ class RdsRunTest(unittest.TestCase):
             "--query-db",
             "rds",
         )
-        code = awsb.cmd_run(args, run=runner, interrupts=awsb.Interrupts(FakeClock()))
+        code = awsb.cmd_run(
+            args, FakeSystem(run=runner), interrupts=awsb.Interrupts(FakeClock())
+        )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertEqual(harness.fleet()["db_modes"], ["rds"])
         self.assertIn("rds", harness.tfvars())
@@ -2210,7 +2229,7 @@ class QueryDbMetaTest(unittest.TestCase):
 class RdsDownTest(unittest.TestCase):
     def down(self, harness, runner) -> int:
         args = harness.parse("down", str(harness.fleet_dir), "--yes")
-        return awsb.cmd_down(args, run=runner, clock=FakeClock())
+        return awsb.cmd_down(args, FakeSystem(run=runner, clock=FakeClock()))
 
     def cost(self, harness) -> dict:
         return json.loads((harness.fleet_dir / "cost.json").read_text())
@@ -2609,7 +2628,10 @@ class DestroyRdsOrphansTest(unittest.TestCase):
         parsed = awsb.parse_args(["destroy", "--orphans", *flags])
         text = io.StringIO()
         with contextlib.redirect_stdout(text):
-            code = awsb.cmd_destroy(parsed, runner, SWEEP_NOW, FakeClock())
+            code = awsb.cmd_destroy(
+                parsed,
+                FakeSystem(run=runner, clock=FakeClock(start=SWEEP_NOW.timestamp())),
+            )
         return code, text.getvalue()
 
     def write_fleet(self, name: str, phase: str) -> None:
@@ -2692,7 +2714,9 @@ class StatusStoresTest(unittest.TestCase):
         runner.describe = STATUS_DESCRIBE
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            awsb.cmd_status(harness.parse("status", str(harness.fleet_dir)), runner)
+            awsb.cmd_status(
+                harness.parse("status", str(harness.fleet_dir)), FakeSystem(run=runner)
+            )
         return out.getvalue()
 
     def test_an_rds_fleet_shows_the_instance_and_parameters(self):

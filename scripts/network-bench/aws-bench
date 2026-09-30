@@ -743,6 +743,23 @@ class Runner(Protocol):
     ) -> subprocess.CompletedProcess[str]: ...
 
 
+@dataclass(frozen=True)
+class System:
+    run: Runner
+    clock: nb.Clock
+
+
+Command = Callable[[argparse.Namespace, System], int]
+
+
+def host_system() -> System:
+    return System(run=_run, clock=nb.SYSTEM_CLOCK)
+
+
+def utc_now(clock: nb.Clock) -> datetime:
+    return datetime.fromtimestamp(clock.time(), UTC)
+
+
 def _run(
     argv: list[str], env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -2090,13 +2107,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def cmd_plan(
-    args: argparse.Namespace, run: Runner = _run, clock: nb.Clock = nb.SYSTEM_CLOCK
-) -> int:
+def cmd_plan(args: argparse.Namespace, system: System) -> int:
     cfg = dataclasses.replace(
         config_from_args(args), db_modes=args.db_modes, ttl_min=args.ttl_min
     )
-    fleet_dir, *_ = plan_fleet(args, cfg, run, clock.time())
+    fleet_dir, *_ = plan_fleet(args, cfg, system.run, system.clock.time())
     log.info("rendered %s (phase=planned)", fleet_dir)
     return EXIT_OK
 
@@ -2315,11 +2330,11 @@ class Run:
 
 def cmd_run(
     args: argparse.Namespace,
-    run: Runner = _run,
+    system: System,
     interrupts: Interrupts | None = None,
 ) -> int:
     if args.fleet is not None:
-        return cmd_run_fleet(args, run, interrupts)
+        return cmd_run_fleet(args, system, interrupts)
     if args.tag is None:
         raise Refused("run needs --tag, or --fleet DIR to measure on a fleet from `up`")
     cfg = dataclasses.replace(fleet_config_from_args(args), db_modes=(args.query_db,))
@@ -2327,13 +2342,13 @@ def cmd_run(
     interrupts = interrupts or Interrupts()
     started = interrupts.clock.time()
     try:
-        fleet_dir, run_dir, tf = prepare_run(args, cfg, run, started)
+        fleet_dir, run_dir, tf = prepare_run(args, cfg, system.run, started)
     except KeyboardInterrupt:
         raise Refused("interrupted; nothing was created") from None
     if install:
         interrupts.install()
     try:
-        fleet = FleetState(run, cfg, fleet_dir, tf, interrupts)
+        fleet = FleetState(system.run, cfg, fleet_dir, tf, interrupts)
         bench_run = Run(fleet, run_dir, cfg, started)
         with recording(bench_run):
             up_fleet(fleet)
@@ -2805,7 +2820,7 @@ def try_destroy(fleet: FleetState, attempt: int) -> bool:
 
 def cmd_up(
     args: argparse.Namespace,
-    run: Runner = _run,
+    system: System,
     interrupts: Interrupts | None = None,
 ) -> int:
     """Plans, confirms and provisions a fleet, then leaves it `idle` for `run --fleet`. A
@@ -2816,12 +2831,12 @@ def cmd_up(
     interrupts = interrupts or Interrupts()
     started = interrupts.clock.time()
     try:
-        fleet_dir, tf = prepare_up(args, cfg, run, started)
+        fleet_dir, tf = prepare_up(args, cfg, system.run, started)
     except KeyboardInterrupt:
         raise Refused("interrupted; nothing was created") from None
     if install:
         interrupts.install()
-    fleet = FleetState(run, cfg, fleet_dir, tf, interrupts)
+    fleet = FleetState(system.run, cfg, fleet_dir, tf, interrupts)
     try:
         up_fleet(fleet)
     except Interrupted:
@@ -2905,7 +2920,7 @@ def minutes_left(manifest: FleetManifest, now: datetime) -> float:
 
 
 def cmd_run_fleet(
-    args: argparse.Namespace, run: Runner, interrupts: Interrupts | None = None
+    args: argparse.Namespace, system: System, interrupts: Interrupts | None = None
 ) -> int:
     """One more measurement on a fleet `up` left idle. The fleet stays up in every outcome:
     idle again, or `dirty` and locked when the pull or reset failed."""
@@ -2917,7 +2932,7 @@ def cmd_run_fleet(
     if interrupts is None:
         interrupts = Interrupts()
         interrupts.install()
-    fleet = open_fleet(run, fleet_dir, interrupts)
+    fleet = open_fleet(system.run, fleet_dir, interrupts)
     cfg = fleet_run_config(args, manifest)
     run_dir, estimate = admit_run(fleet_dir, manifest, cfg)
     bench_run = Run(fleet, run_dir, cfg, interrupts.clock.time())
@@ -3384,10 +3399,8 @@ def settle_fleet(fleet: FleetState, dirty: bool) -> None:
     release_fleet_lock(fleet.fleet_dir)
 
 
-def cmd_down(
-    args: argparse.Namespace, run: Runner = _run, clock: nb.Clock = nb.SYSTEM_CLOCK
-) -> int:
-    return destroy_run(run, args, clock)
+def cmd_down(args: argparse.Namespace, system: System) -> int:
+    return destroy_run(system.run, args, system.clock)
 
 
 def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None:
@@ -4376,18 +4389,16 @@ def collect_hosts(
     remote.parallel(collect, [h["name"] for h in hosts])
 
 
-def cmd_status(
-    args: argparse.Namespace, run: Runner = _run, now: datetime | None = None
-) -> int:
+def cmd_status(args: argparse.Namespace, system: System) -> int:
     if (args.dir is not None) == args.all:
         raise Refused("status takes either DIR or --all")
-    now = now or datetime.now(UTC)
+    now = utc_now(system.clock)
     if args.all:
-        return status_all(run, args, now)
-    return status_run(run, args.dir, now)
+        return status_all(system.run, args, now)
+    return status_run(system.run, args.dir, now)
 
 
-def cmd_collect(args: argparse.Namespace, run: Runner = _run) -> int:
+def cmd_collect(args: argparse.Namespace, system: System) -> int:
     """Collects again from the live hosts into `hosts/<name>/collect-<k>/`, leaving the files
     of the run itself untouched. Only the fleet's last run can be collected, while no run is
     active: the hosts hold the files of the last run only, and `left-running` is where a fleet
@@ -4406,7 +4417,7 @@ def cmd_collect(args: argparse.Namespace, run: Runner = _run) -> int:
             f"fleet {fleet_dir.name} is {manifest['phase']}: collect needs it idle"
         )
     setup_logging(fleet_dir)
-    remote = Remote(run, fleet_dir, ssh_key_path(fleet_dir), hosts)
+    remote = Remote(system.run, fleet_dir, ssh_key_path(fleet_dir), hosts)
     subdir = f"collect-{next_collect_index(run_dir)}"
     collect_hosts(remote, list(hosts.values()), run_dir, subdir)
     missing = [
@@ -4419,7 +4430,7 @@ def cmd_collect(args: argparse.Namespace, run: Runner = _run) -> int:
     return EXIT_OK
 
 
-def cmd_render(args: argparse.Namespace) -> int:
+def cmd_render(args: argparse.Namespace, system: System) -> int:
     """Analyzes the collected files again, offline; `--baseline` adds the comparison."""
     run_dir: Path = args.dir
     agent = finished_agent_state(run_dir)
@@ -4442,13 +4453,8 @@ def cmd_render(args: argparse.Namespace) -> int:
     return EXIT_OK if result["validity"]["valid"] else EXIT_INVALID
 
 
-def cmd_destroy(
-    args: argparse.Namespace,
-    run: Runner = _run,
-    now: datetime | None = None,
-    clock: nb.Clock = nb.SYSTEM_CLOCK,
-) -> int:
-    return destroy_orphans(run, args, now or datetime.now(UTC), clock)
+def cmd_destroy(args: argparse.Namespace, system: System) -> int:
+    return destroy_orphans(system.run, args, utc_now(system.clock), system.clock)
 
 
 def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
@@ -5927,7 +5933,7 @@ def raise_interrupt(signum: int, frame: Any) -> None:
     raise KeyboardInterrupt
 
 
-def cmd_agent_drive(args: argparse.Namespace, clock: nb.Clock = nb.SYSTEM_CLOCK) -> int:
+def cmd_agent_drive(args: argparse.Namespace, system: System) -> int:
     """Runs on ctl under systemd-run: waits for the nodes, then `netbench.drive_load` against
     their private URLs. SIGTERM unwinds like Ctrl-C so `drive_load` flushes its output."""
     agent = nb.read_json(args.config)
@@ -5949,11 +5955,11 @@ def cmd_agent_drive(args: argparse.Namespace, clock: nb.Clock = nb.SYSTEM_CLOCK)
             topo["nodes"],
             args.out / "metrics.jsonl",
             stop,
-            clock,
+            system.clock,
         ),
     )
     sampler.start()
-    pool = nb.HttpPool(clock)
+    pool = nb.HttpPool(system.clock)
     try:
         ready_s = nb.wait_ready(
             pool,
@@ -5961,12 +5967,12 @@ def cmd_agent_drive(args: argparse.Namespace, clock: nb.Clock = nb.SYSTEM_CLOCK)
             nb.MIN_READY_HEIGHT,
             agent["ready_timeout_s"],
             lambda: True,
-            clock,
+            system.clock,
         )
         reporter.state["ready_s"] = ready_s
         reporter.set_phase("loading", f"ready after {ready_s:.0f} s")
         reporter.state["t0"], reporter.state["t1"] = nb.drive_load(
-            cfg, topo, args.out, lambda: True, clock
+            cfg, topo, args.out, lambda: True, system.clock
         )
         reporter.set_phase("done", "load finished")
         return EXIT_OK
@@ -6135,8 +6141,8 @@ def sample_pg(
     out: Path,
     stop: threading.Event,
     pg: PgEndpoint,
-    run: Runner = _run,
-    clock: nb.Clock = nb.SYSTEM_CLOCK,
+    run: Runner,
+    clock: nb.Clock,
 ) -> None:
     with out.open("a", buffering=1) as f:
         while not stop.is_set():
@@ -6146,9 +6152,7 @@ def sample_pg(
             clock.wait(stop, PG_SAMPLE_S)
 
 
-def cmd_agent_host(
-    args: argparse.Namespace, run: Runner = _run, clock: nb.Clock = nb.SYSTEM_CLOCK
-) -> int:
+def cmd_agent_host(args: argparse.Namespace, system: System) -> int:
     containers_path = Path(BENCH_DIR) / "containers.json"
     if args.role == "query" and args.pg is None:
         raise Refused("agent-host --role query needs --pg")
@@ -6160,14 +6164,14 @@ def cmd_agent_host(
         pg_out = args.out.with_name("pg-stats.jsonl")
         pg = cast(PgEndpoint, json.loads(args.pg.read_text()))
         pg_thread = threading.Thread(
-            target=sample_pg, args=(pg_out, stop, pg, run, clock)
+            target=sample_pg, args=(pg_out, stop, pg, system.run, system.clock)
         )
         pg_thread.start()
     with args.out.open("a", buffering=1) as f:
         while not stop.is_set():
-            sample = host_sample(load_containers(containers_path), clock)
+            sample = host_sample(load_containers(containers_path), system.clock)
             f.write(json.dumps(sample) + "\n")
-            clock.wait(stop, HOST_SAMPLE_S)
+            system.clock.wait(stop, HOST_SAMPLE_S)
     if pg_thread is not None:
         pg_thread.join()
     return EXIT_OK
@@ -6177,10 +6181,11 @@ def main() -> int:
     argv = sys.argv[1:]
     args = parse_args(argv)
     args.argv = argv
+    system = host_system()
     if args.command in ("status", "destroy", "down"):
         logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
-        return args.func(args)
+        return args.func(args, system)
     except (Refused, TfFailed) as exc:
         log.error("error: %s", exc)
         return EXIT_REFUSED
