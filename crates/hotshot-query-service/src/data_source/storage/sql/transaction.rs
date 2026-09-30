@@ -63,7 +63,7 @@ use crate::{
     Header, Payload, QueryError, QueryResult,
     availability::{
         BlockQueryData, Certificate2, LeafQueryData, QueryableHeader, QueryablePayload,
-        VidCommonQueryData,
+        VidCommonQueryData, sql::payload_dir,
     },
     data_source::{
         storage::{NodeStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
@@ -839,9 +839,23 @@ where
 
         // Multiple blocks in the range might have the same payload. We must filter out such
         // duplicates, because SQL does not allow conflicting rows in a single upsert statement.
-        let payload_rows = payload_rows
+        let mut payload_rows = payload_rows
             .into_iter()
-            .unique_by(|(hash, ns_table, ..)| (hash.clone(), ns_table.clone()));
+            .unique_by(|(hash, ns_table, ..)| (hash.clone(), ns_table.clone()))
+            .collect::<Vec<_>>();
+        if let Some(dir) = payload_dir() {
+            for row in &mut payload_rows {
+                // Write then rename so concurrent readers never see a partial file.
+                let path = dir.join(&row.0);
+                let tmp = path.with_extension("tmp");
+                tokio::fs::write(&tmp, std::mem::take(&mut row.4))
+                    .await
+                    .with_context(|| format!("writing payload file {}", tmp.display()))?;
+                tokio::fs::rename(&tmp, &path)
+                    .await
+                    .with_context(|| format!("renaming payload file {}", path.display()))?;
+            }
+        }
 
         self.upsert(
             "payload",
