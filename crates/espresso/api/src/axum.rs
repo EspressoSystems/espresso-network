@@ -4848,6 +4848,15 @@ mod tests {
             "/v2/token/total-issued-supply",
             "/v2/token/total-minted-supply",
             "/v2/token/total-reward-distributed",
+            "/v2/merklized-state/block/path",
+            "/v2/merklized-state/fee/path",
+            "/v2/merklized-state/reward/amounts",
+            "/v2/merklized-state/reward/balance",
+            "/v2/merklized-state/reward/claim-input",
+            "/v2/merklized-state/reward/proof",
+            "/v2/merklized-state/reward/tree",
+            "/v2/merklized-state/fee/balance",
+            "/v2/merklized-state/height",
             "/v2/availability/limits",
             "/v2/availability/header",
             "/v2/availability/header-range",
@@ -5343,6 +5352,78 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetMigrationStatusRequest>,
         ) -> Result<tonic::Response<crate::proto::MigrationStatusResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::merklized_state_service_server::MerklizedStateService for MockV2State {
+        async fn get_block_state_path(
+            &self,
+            _request: tonic::Request<crate::proto::GetBlockStatePathRequest>,
+        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_fee_state_path(
+            &self,
+            _request: tonic::Request<crate::proto::GetFeeStatePathRequest>,
+        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_latest_fee_balance(
+            &self,
+            _request: tonic::Request<crate::proto::GetLatestFeeBalanceRequest>,
+        ) -> Result<tonic::Response<crate::proto::FeeBalanceResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_state_height(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateHeightRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateHeightResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::reward_state_service_server::RewardStateService for MockV2State {
+        async fn get_reward_balance(
+            &self,
+            _request: tonic::Request<crate::proto::GetRewardBalanceRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardBalanceResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_reward_account_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetRewardAccountProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardAccountProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_reward_claim_input(
+            &self,
+            _request: tonic::Request<crate::proto::GetRewardClaimInputRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardClaimInputResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_reward_amounts(
+            &self,
+            _request: tonic::Request<crate::proto::GetRewardAmountsRequest>,
+        ) -> Result<tonic::Response<crate::proto::RewardAmountsResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_reward_merkle_tree_v2(
+            &self,
+            _request: tonic::Request<crate::proto::GetRewardMerkleTreeV2Request>,
+        ) -> Result<tonic::Response<crate::proto::RewardMerkleTreeV2Response>, tonic::Status>
+        {
             Err(tonic::Status::internal("mock"))
         }
     }

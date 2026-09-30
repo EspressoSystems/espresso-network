@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     data::ViewNumber,
     event::{Event, LeafInfo},
@@ -35,7 +37,7 @@ pub enum CoordinatorEvent<TYPES: NodeType> {
     BlockPayloadReconstructed {
         view: ViewNumber,
         header: TYPES::BlockHeader,
-        payload: TYPES::BlockPayload,
+        payload: Arc<TYPES::BlockPayload>,
     },
 }
 
