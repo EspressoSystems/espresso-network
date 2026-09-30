@@ -223,25 +223,63 @@ REPO_ROOT = SCRIPT_DIR.parents[1]
 USER_DATA_TEMPLATE = SCRIPT_DIR / "aws" / "user-data.sh"
 TERRAFORM_SRC = SCRIPT_DIR / "aws" / "terraform"
 # Rendered per host after `tofu apply`, shipped to /opt/bench next to netbench.py and aws-bench.
-SHIPPED_HOST_FILES = ("node.env", "ctl.env", "start.sh", "agent.json")
+SHIPPED_HOST_FILES = ("node.env", "ctl.env", "start.sh", "agent.json", "pg.json")
 
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 # Matches bench.sample_host, so host_stats/process_stats coverage math is unchanged.
 HOST_SAMPLE_S = 2.0
 PG_SAMPLE_S = 5.0
-PSQL = ("docker", "exec", "postgres", "psql", "-U", "root", "-d", "espresso")
-POSTGRES_ARGS = (
-    "-c",
-    "shared_preload_libraries=pg_stat_statements",
-    "-c",
-    "pg_stat_statements.track=all",
-    "-c",
-    "log_min_duration_statement=200ms",
-    "-c",
-    "log_checkpoints=on",
-    "-c",
-    "log_lock_waits=on",
-)
+# Endpoint of the query database, written next to the run's other host files; agent-host and the
+# collect and gate scripts read it, so psql runs natively against any placement.
+PG_JSON = f"{BENCH_DIR}/pg.json"
+# Self-signed cert made by user-data on the query role, mounted read-only into the container.
+PG_TLS_DIR = "/data/pg-tls"
+# Values for 16 vCPU / 64 GiB. One map for every placement: rendered into the container's `-c`
+# flags by `render_postgres_args` and into the RDS parameter group by `rds_parameter`.
+PG_TUNING = {
+    "shared_buffers": "16GB",
+    "effective_cache_size": "48GB",
+    "huge_pages": "off",
+    "work_mem": "64MB",
+    "maintenance_work_mem": "2GB",
+    "max_wal_size": "16GB",
+    "min_wal_size": "4GB",
+    "checkpoint_timeout": "15min",
+    "checkpoint_completion_target": "0.9",
+    "wal_compression": "on",
+    "random_page_cost": "1.1",
+    "effective_io_concurrency": "200",
+    "autovacuum_vacuum_cost_limit": "2000",
+    "autovacuum_max_workers": "4",
+}
+# Unit of the RDS parameter group (and of pg_settings.setting) for the PG_TUNING keys whose
+# value there is a bare number.
+RDS_PARAMETER_UNITS = {
+    "shared_buffers": "8kB",
+    "effective_cache_size": "8kB",
+    "work_mem": "kB",
+    "maintenance_work_mem": "kB",
+    "max_wal_size": "MB",
+    "min_wal_size": "MB",
+    "checkpoint_timeout": "s",
+}
+_SIZE_BYTES = {"kB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+_UNIT_BYTES = {"8kB": 8192, "kB": 1024, "MB": 1024**2}
+_TIME_SECONDS = {"s": 1, "min": 60, "h": 3600}
+# pg_settings reports the canonical spelling of an enum value that has aliases.
+PG_SETTING_ALIASES = {("wal_compression", "on"): "pglz"}
+PG_OBSERVABILITY = {
+    "shared_preload_libraries": "pg_stat_statements",
+    "pg_stat_statements.track": "all",
+    "log_min_duration_statement": "200ms",
+    "log_checkpoints": "on",
+    "log_lock_waits": "on",
+}
+PG_SSL = {
+    "ssl": "on",
+    "ssl_cert_file": "/tls/server.crt",
+    "ssl_key_file": "/tls/server.key",
+}
 
 # OCI/Docker registry token flow and manifest media types (docker.io and ghcr.io both implement
 # the same spec, so no registry-specific code is needed).
@@ -490,6 +528,14 @@ class TaggedRun(TypedDict):
     orphan: str | None
 
 
+class PgEndpoint(TypedDict):
+    host: str
+    port: int
+    user: str
+    password: str
+    database: str
+
+
 class Evidence(TypedDict):
     """Per-host facts `check_validity_aws` judges, read back from the collected files."""
 
@@ -499,6 +545,7 @@ class Evidence(TypedDict):
     journal_bytes: dict[str, int]
     clock_offset_ms: dict[str, float]
     digest_mismatch: dict[str, list[str]]  # host -> images whose pulled digest differs
+    pg_settings: NotRequired[dict[str, Any]]  # node0's pg-settings.json
 
 
 @dataclass(frozen=True)
@@ -1599,7 +1646,9 @@ def _journal_max_bytes(host: HostSpec) -> int:
     return int(usable_gb * 1_000_000_000 * fraction)
 
 
-def render_node_env(host: HostSpec, hosts: dict[str, HostInfo]) -> str:
+def render_node_env(
+    host: HostSpec, hosts: dict[str, HostInfo], pg: PgEndpoint | None
+) -> str:
     self_info = hosts[host["name"]]
     ctl_info = hosts["ctl"]
     node_names = _node_names(hosts)
@@ -1631,16 +1680,95 @@ def render_node_env(host: HostSpec, hosts: dict[str, HostInfo]) -> str:
     if peer_urls:
         env["ESPRESSO_NODE_STATE_PEERS"] = ",".join(peer_urls)
     if host["role"] == "query":
+        if pg is None:
+            raise ValueError(
+                f"{host['name']} runs the query service and needs a PgEndpoint"
+            )
         env.update(
             {
-                "ESPRESSO_NODE_POSTGRES_HOST": "127.0.0.1",
-                "ESPRESSO_NODE_POSTGRES_PORT": str(POSTGRES_PORT),
-                "ESPRESSO_NODE_POSTGRES_USER": "root",
-                "ESPRESSO_NODE_POSTGRES_PASSWORD": "password",
-                "ESPRESSO_NODE_POSTGRES_DATABASE": "espresso",
+                "ESPRESSO_NODE_POSTGRES_HOST": pg["host"],
+                "ESPRESSO_NODE_POSTGRES_PORT": str(pg["port"]),
+                "ESPRESSO_NODE_POSTGRES_USER": pg["user"],
+                "ESPRESSO_NODE_POSTGRES_PASSWORD": pg["password"],
+                "ESPRESSO_NODE_POSTGRES_DATABASE": pg["database"],
             }
         )
     return "".join(f"{key}={value}\n" for key, value in env.items())
+
+
+def pg_endpoint() -> PgEndpoint:
+    """The postgres container on node0."""
+    return {
+        "host": "127.0.0.1",
+        "port": POSTGRES_PORT,
+        "user": "root",
+        "password": "password",
+        "database": "espresso",
+    }
+
+
+def psql_argv(
+    pg: PgEndpoint, database: str | None = None
+) -> tuple[list[str], dict[str, str]]:
+    """psql argv and the environment carrying the password, which never goes on argv."""
+    name = pg["database"] if database is None else database
+    argv = [
+        "psql",
+        "-h",
+        pg["host"],
+        "-p",
+        str(pg["port"]),
+        "-U",
+        pg["user"],
+        "-d",
+        name,
+    ]
+    return argv, {"PGPASSWORD": pg["password"]}
+
+
+def render_postgres_args() -> list[str]:
+    settings = {**PG_TUNING, **PG_OBSERVABILITY, **PG_SSL}
+    return [arg for key, value in settings.items() for arg in ("-c", f"{key}={value}")]
+
+
+def rds_parameter(name: str, value: str) -> str:
+    """A PG_TUNING value in the unit of the RDS parameter group; unchanged when the parameter
+    takes the same text as postgres.conf."""
+    unit = RDS_PARAMETER_UNITS.get(name)
+    if unit is None:
+        return value
+    match = re.fullmatch(r"(\d+)([A-Za-z]+)", value)
+    if match is None:
+        raise ValueError(f"{name}={value!r} is not a number with a unit")
+    number, suffix = int(match[1]), match[2]
+    if unit == "s":
+        total, per = number * _TIME_SECONDS[suffix], 1
+    else:
+        total, per = number * _SIZE_BYTES[suffix], _UNIT_BYTES[unit]
+    if total % per:
+        raise ValueError(f"{name}={value} is not a whole number of {unit}")
+    return str(total // per)
+
+
+def check_pg_tuning(settings: dict[str, Any]) -> list[str]:
+    """Keys of PG_TUNING whose collected pg_settings value differs from the configured one."""
+    differing = []
+    for key, value in PG_TUNING.items():
+        accepted = {rds_parameter(key, value), PG_SETTING_ALIASES.get((key, value))}
+        if settings[key] not in accepted:
+            differing.append(key)
+    return differing
+
+
+def pg_tls(settings: dict[str, Any]) -> bool | None:
+    """Whether every backend of the espresso database used TLS; None when none was connected
+    at collect time."""
+    backends = settings["pg_stat_ssl"]
+    return None if not backends else "false" not in backends
+
+
+def reset_pg_stats_sql() -> str:
+    return "CHECKPOINT; SELECT pg_stat_reset_shared(NULL); SELECT pg_stat_statements_reset()"
 
 
 def _assert_ports_match_dotenv(dotenv: dict[str, str]) -> None:
@@ -1688,18 +1816,27 @@ def _pull_and_record_digest(name: str, ref: str) -> str:
     )
 
 
+# The key must be 0600 and owned by the postgres user of the official image (uid 999).
+QUERY_SETUP = f"""mkdir -p /data/pg {PG_TLS_DIR}
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj /CN=postgres \\
+  -keyout {PG_TLS_DIR}/server.key -out {PG_TLS_DIR}/server.crt
+chown 999:999 {PG_TLS_DIR}/server.key {PG_TLS_DIR}/server.crt
+chmod 0600 {PG_TLS_DIR}/server.key"""
+
+
 def render_user_data(host: HostSpec, images: dict[str, ImageInfo], ttl_s: int) -> str:
     needed = ROLE_IMAGES[host["role"]]
     pulls = "\n".join(
         _pull_and_record_digest(name, f"{images[name]['ref']}@{images[name]['digest']}")
         for name in needed
     )
-    extra_dirs = "mkdir -p /data/pg" if host["role"] == "query" else ""
+    query = host["role"] == "query"
     ttl_min = max(1, -(-ttl_s // 60))
     template = string.Template(USER_DATA_TEMPLATE.read_text())
     return template.substitute(
         TTL_MIN=str(ttl_min),
-        EXTRA_DIRS=extra_dirs,
+        EXTRA_PACKAGES=" postgresql-client openssl" if query else "",
+        QUERY_SETUP=QUERY_SETUP if query else "",
         DOCKER_PULLS=pulls,
     )
 
@@ -1770,19 +1907,22 @@ def render_start_sh(host: HostSpec, images: dict[str, ImageInfo]) -> str:
         return script
     if host["role"] == "query":
         pg = images["postgres"]
+        endpoint = pg_endpoint()
         script += _docker_create(
             "postgres",
             [
                 "-v",
                 "/data/pg:/var/lib/postgresql",
+                "-v",
+                f"{PG_TLS_DIR}:/tls:ro",
                 "-e",
-                "POSTGRES_USER=root",
+                f"POSTGRES_USER={endpoint['user']}",
                 "-e",
-                "POSTGRES_PASSWORD=password",
+                f"POSTGRES_PASSWORD={endpoint['password']}",
                 "-e",
-                "POSTGRES_DB=espresso",
+                f"POSTGRES_DB={endpoint['database']}",
                 f"{pg['ref']}@{pg['digest']}",
-                *POSTGRES_ARGS,
+                *render_postgres_args(),
             ],
         )
     node = images["espresso-node"]
@@ -1995,6 +2135,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     agent_host_p.add_argument("out", type=Path)
     agent_host_p.add_argument(
         "--role", required=True, choices=("ctl", "query", "validator")
+    )
+    agent_host_p.add_argument(
+        "--pg", type=Path, help="pg.json; required for --role query"
     )
     agent_host_p.set_defaults(func=cmd_agent_host)
 
@@ -2864,7 +3007,12 @@ def render_host_files(
         if spec["role"] == "ctl":
             (host_dir / "ctl.env").write_text(render_ctl_env(hosts, cfg, dotenv))
         else:
-            (host_dir / "node.env").write_text(render_node_env(spec, hosts))
+            pg = pg_endpoint() if spec["role"] == "query" else None
+            (host_dir / "node.env").write_text(render_node_env(spec, hosts, pg))
+            if pg is not None:
+                pg_json = host_dir / "pg.json"
+                nb.write_json(pg_json, pg)
+                pg_json.chmod(0o600)
     topo = topology(hosts)
     nb.write_json(run_dir / "topology.json", topo)
     nb.write_json(
@@ -2966,10 +3114,11 @@ def ship(remote: Remote, run_dir: Path) -> None:
 def start_hostmon(remote: Remote) -> None:
     def start(host: str) -> None:
         role = remote.hosts[host]["role"]
+        pg = f" --pg {PG_JSON}" if role == "query" else ""
         remote.ssh(
             host,
             f"sudo systemd-run --unit bench-host --collect {AGENT_PYTHON} {BENCH_DIR}/aws-bench "
-            f"agent-host {BENCH_DIR}/host.jsonl --role {role}",
+            f"agent-host {BENCH_DIR}/host.jsonl --role {role}{pg}",
         )
 
     remote.parallel(start, remote.hosts)
@@ -3060,20 +3209,12 @@ def start_support(remote: Remote, contracts: list[str], interrupts: Interrupts) 
         interrupts,
     )
     start("node0", "postgres")
-    gate(
-        remote,
-        "node0",
-        "pg_isready",
-        "sudo docker exec postgres pg_isready -h 127.0.0.1 -p 5432 -U root -d espresso",
-        interrupts,
-    )
-    gate(
-        remote,
-        "node0",
-        "pg_stat_statements",
-        f"sudo {shlex.join(PSQL)} -c {shlex.quote(PG_EXTENSION_SQL)}",
-        interrupts,
-    )
+    gate(remote, "node0", "pg_isready", pg_shell("pg_isready"), interrupts)
+    for what, sql in (
+        ("pg_stat_statements", PG_EXTENSION_SQL),
+        ("pg stats reset", reset_pg_stats_sql()),
+    ):
+        gate(remote, "node0", what, pg_shell(f"psql -c {shlex.quote(sql)}"), interrupts)
 
 
 def fleet_time(remote: Remote) -> float:
@@ -3237,6 +3378,24 @@ PG_STATS_SQL = (
     "pg_total_relation_size(relid) as total_bytes from pg_stat_user_tables "
     "order by total_bytes desc limit 20) t))"
 )
+# libpq reads these; the password is read on the host so it is not on the ssh command line.
+PG_SHELL_ENV = "".join(
+    f"export {var}=$(jq -r .{key} {PG_JSON})\n"
+    for var, key in (
+        ("PGHOST", "host"),
+        ("PGPORT", "port"),
+        ("PGUSER", "user"),
+        ("PGPASSWORD", "password"),
+        ("PGDATABASE", "database"),
+    )
+)
+
+
+def pg_shell(script: str) -> str:
+    """`script` as root with the PG* variables of pg.json."""
+    return f"sudo bash -c {shlex.quote(PG_SHELL_ENV + script)}"
+
+
 PG_EXTENSION_SQL = "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
 PG_STATEMENTS_SQL = (
     "select coalesce(json_agg(s), '[]'::json) from (select queryid, calls, total_exec_time, "
@@ -3244,25 +3403,38 @@ PG_STATEMENTS_SQL = (
     "temp_blks_written, wal_bytes, left(query, 300) as query from pg_stat_statements "
     "order by total_exec_time desc limit 50) s"
 )
+_PG_SETTING_NAMES = sorted(
+    {"synchronous_commit", "fsync", "full_page_writes", *PG_TUNING}
+)
+# pg_stat_ssl counts the espresso backends by TLS use, keyed "true" and "false".
 PG_SETTINGS_SQL = (
-    "select json_object_agg(name, setting) from pg_settings where source <> 'default' "
-    "or name in ('shared_buffers','max_wal_size','synchronous_commit','checkpoint_timeout',"
-    "'wal_compression','effective_io_concurrency','work_mem','maintenance_work_mem','fsync',"
-    "'full_page_writes')"
+    "select (jsonb_object_agg(name, setting) || jsonb_build_object('pg_stat_ssl', "
+    "(select coalesce(jsonb_object_agg(ssl::text, n), '{}'::jsonb) from "
+    "(select s.ssl, count(*) as n from pg_stat_ssl s join pg_stat_activity a using (pid) "
+    "where a.datname = 'espresso' group by s.ssl) g)))::text "
+    "from pg_settings where source <> 'default' or name in ("
+    + ",".join(f"'{name}'" for name in _PG_SETTING_NAMES)
+    + ")"
 )
 
 
 def _pg_dump(sql: str, filename: str) -> str:
-    return f"{shlex.join(PSQL)} -At -c {shlex.quote(sql)} > {BENCH_DIR}/{filename}\n"
+    return f"psql -At -c {shlex.quote(sql)} > {BENCH_DIR}/{filename}\n"
 
 
 PG_STATS_SCRIPT = (
-    _pg_dump(PG_STATS_SQL, "pg-stats.json")
+    PG_SHELL_ENV
+    + _pg_dump(PG_STATS_SQL, "pg-stats.json")
     + _pg_dump(PG_STATEMENTS_SQL, "pg-statements.json")
     + _pg_dump(PG_SETTINGS_SQL, "pg-settings.json")
 )
 # Shipped inputs and the agent's output, which `poll_agent` and the final rsync fetch.
-COLLECT_EXCLUDES = ("--exclude=/out/", "--exclude=/aws-bench", "--exclude=/netbench.py")
+COLLECT_EXCLUDES = (
+    "--exclude=/out/",
+    "--exclude=/aws-bench",
+    "--exclude=/netbench.py",
+    "--exclude=/pg.json",
+)
 
 
 def collect_hosts(
@@ -3915,6 +4087,10 @@ def load_evidence(
             evidence["clock_offset_ms"][name] = max(
                 map(parse_clock_offset_ms, tracking)
             )
+        settings = host_dir / "pg-settings.json"
+        # Empty when psql failed at collect time; treated like a missing file.
+        if settings.exists() and settings.read_text().strip():
+            evidence["pg_settings"] = nb.read_json(settings)
         if ready.exists():
             evidence["digest_mismatch"][name] = digest_mismatches(
                 nb.read_json(ready)["digests"], manifest["images"]
@@ -3978,6 +4154,14 @@ def check_validity_aws(
             noisy.append(
                 f"{name} steal {stats['steal_pct']:.1f}% > {nb.STEAL_NOISY_PCT:.0f}%"
             )
+    if "pg_settings" in evidence:
+        settings = evidence["pg_settings"]
+        for key in check_pg_tuning(settings):
+            noisy.append(
+                f"node0 postgres {key}={settings[key]} differs from the tuned {PG_TUNING[key]}"
+            )
+        if pg_tls(settings) is False:
+            noisy.append("node0 postgres backends connected without TLS")
     specs = {h["name"]: h for h in manifest["hosts"]}
     for name, size in evidence["journal_bytes"].items():
         limit = _journal_max_bytes(specs[name])
@@ -4453,32 +4637,38 @@ def pg_sample_sql(has_checkpointer: bool) -> str:
     )
 
 
-def pg_sample(run: Runner, has_checkpointer: bool) -> dict[str, Any] | None:
+def pg_sample(
+    run: Runner, pg: PgEndpoint, has_checkpointer: bool
+) -> dict[str, Any] | None:
     """None when psql fails (Postgres not up yet, or stopped at freeze)."""
-    result = run([*PSQL, "-At", "-c", pg_sample_sql(has_checkpointer)])
+    argv, env = psql_argv(pg)
+    result = run([*argv, "-At", "-c", pg_sample_sql(has_checkpointer)], env)
     if result.returncode != 0:
         log.debug("pg sample failed: %s", result.stderr.strip())
         return None
     return {"ts": time.time(), **json.loads(result.stdout)}
 
 
-def has_checkpointer_view(run: Runner) -> bool | None:
+def has_checkpointer_view(run: Runner, pg: PgEndpoint) -> bool | None:
     probe = "select to_regclass('pg_stat_checkpointer') is not null"
-    result = run([*PSQL, "-At", "-c", probe])
+    argv, env = psql_argv(pg)
+    result = run([*argv, "-At", "-c", probe], env)
     if result.returncode != 0:
         log.debug("pg probe failed: %s", result.stderr.strip())
         return None
     return result.stdout.strip() == "t"
 
 
-def sample_pg(out: Path, stop: threading.Event, run: Runner = _run) -> None:
+def sample_pg(
+    out: Path, stop: threading.Event, pg: PgEndpoint, run: Runner = _run
+) -> None:
     has_checkpointer = None
     with out.open("a", buffering=1) as f:
         while not stop.is_set():
             if has_checkpointer is None:
-                has_checkpointer = has_checkpointer_view(run)
+                has_checkpointer = has_checkpointer_view(run, pg)
             if has_checkpointer is not None:
-                sample = pg_sample(run, has_checkpointer)
+                sample = pg_sample(run, pg, has_checkpointer)
                 if sample is not None:
                     f.write(json.dumps(sample) + "\n")
             stop.wait(PG_SAMPLE_S)
@@ -4491,8 +4681,11 @@ def cmd_agent_host(args: argparse.Namespace, run: Runner = _run) -> int:
         signal.signal(sig, lambda *_: stop.set())
     pg_thread = None
     if args.role == "query":
+        if args.pg is None:
+            raise Refused("agent-host --role query needs --pg")
         pg_out = args.out.with_name("pg-stats.jsonl")
-        pg_thread = threading.Thread(target=sample_pg, args=(pg_out, stop, run))
+        pg = cast(PgEndpoint, json.loads(args.pg.read_text()))
+        pg_thread = threading.Thread(target=sample_pg, args=(pg_out, stop, pg, run))
         pg_thread.start()
     with args.out.open("a", buffering=1) as f:
         while not stop.is_set():
