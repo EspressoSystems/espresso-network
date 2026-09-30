@@ -103,6 +103,10 @@ resource "aws_instance" "host" {
   associate_public_ip_address          = true
   instance_initiated_shutdown_behavior = "terminate"
 
+  # The EBS balance metrics of the query host are read in 60 s periods; basic monitoring
+  # publishes AWS/EC2 every 300 s, which leaves short loads without a datapoint.
+  monitoring = each.value.role == "query"
+
   metadata_options {
     http_tokens = "required"
   }
@@ -238,6 +242,11 @@ resource "aws_db_instance" "this" {
     delete = var.rds.timeout
   }
 
+  # The schedule is the dead-man switch: it must exist before the instance starts billing. If it
+  # fires while the instance is still creating, the scheduler's default retry policy (24 h)
+  # repeats the delete until the instance is deletable.
+  depends_on = [aws_scheduler_schedule.rds_delete]
+
   lifecycle {
     precondition {
       condition     = var.rds_password != null
@@ -264,6 +273,8 @@ resource "aws_iam_role" "scheduler" {
   })
 }
 
+# The instance ARN and identifier are built from the name, not read from aws_db_instance: the
+# schedule then exists before the instance does and covers its 10-25 minute creation.
 resource "aws_iam_role_policy" "scheduler" {
   count = local.rds_enabled ? 1 : 0
 
@@ -275,7 +286,7 @@ resource "aws_iam_role_policy" "scheduler" {
     Statement = [{
       Effect   = "Allow"
       Action   = "rds:DeleteDBInstance"
-      Resource = aws_db_instance.this[0].arn
+      Resource = "arn:aws:rds:${var.region}:${var.account_id}:db:${local.rds_name}"
     }]
   })
 }
@@ -304,7 +315,7 @@ resource "aws_scheduler_schedule" "rds_delete" {
     arn      = "arn:aws:scheduler:::aws-sdk:rds:deleteDBInstance"
     role_arn = aws_iam_role.scheduler[0].arn
     input = jsonencode({
-      DbInstanceIdentifier   = aws_db_instance.this[0].identifier
+      DbInstanceIdentifier   = local.rds_name
       SkipFinalSnapshot      = true
       DeleteAutomatedBackups = true
     })

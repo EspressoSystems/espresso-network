@@ -26,6 +26,7 @@ import threading
 import time
 import unittest
 import unittest.mock
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.machinery import SourceFileLoader
@@ -2841,6 +2842,10 @@ class ManifestReproTest(unittest.TestCase):
         self.assertNotEqual(
             base, awsb.run_config_hash(other_load, hosts, images, genesis)
         )
+        other_db = dataclasses.replace(cfg, query_db="rds")
+        self.assertNotEqual(
+            base, awsb.run_config_hash(other_db, hosts, images, genesis)
+        )
 
 
 class RemoteTest(unittest.TestCase):
@@ -3272,7 +3277,6 @@ def pg_settings(**overrides) -> dict:
         key: awsb.rds_parameter(key, value) for key, value in awsb.PG_TUNING.items()
     }
     settings["wal_compression"] = "pglz"
-    settings["pg_stat_ssl"] = {"true": 3}
     return {**settings, **overrides}
 
 
@@ -3297,9 +3301,40 @@ class PgTuningTest(unittest.TestCase):
         self.assertEqual({k: settings[k] for k in awsb.PG_TUNING}, awsb.PG_TUNING)
         self.assertEqual(settings["ssl"], "on")
 
+    def test_memory_budget_fits_the_query_host(self):
+        """node0 is a c8g.4xlarge with 32 GiB; the same map runs on the 64 GiB RDS class."""
+        self.assertEqual(awsb.RunConfig(tag="x").node_type, "c8g.4xlarge")
+        ram = 32 * 1024**3
+        pages, kib = 8192, 1024
+        tuning = awsb.PG_TUNING
+
+        def size(key: str, unit: int) -> int:
+            return int(awsb.rds_parameter(key, tuning[key])) * unit
+
+        peak = size("shared_buffers", pages) + int(
+            tuning["autovacuum_max_workers"]
+        ) * size("autovacuum_work_mem", kib)
+        self.assertLessEqual(peak, ram // 3)
+        self.assertLessEqual(size("effective_cache_size", pages), ram)
+
+    def test_settings_whose_rds_default_differs_are_pinned(self):
+        for key in (
+            "autovacuum_naptime",
+            "autovacuum_vacuum_scale_factor",
+            "autovacuum_analyze_scale_factor",
+            "autovacuum_work_mem",
+            "track_io_timing",
+            "wal_buffers",
+            "max_connections",
+        ):
+            self.assertIn(key, awsb.PG_TUNING)
+
     def test_rds_parameter_converts_to_group_units(self):
         convert = awsb.rds_parameter
-        self.assertEqual(convert("shared_buffers", "16GB"), "2097152")
+        self.assertEqual(convert("shared_buffers", "8GB"), "1048576")
+        self.assertEqual(convert("autovacuum_naptime", "1min"), "60")
+        self.assertEqual(convert("autovacuum_work_mem", "512MB"), "524288")
+        self.assertEqual(convert("wal_buffers", "16MB"), "2048")
         self.assertEqual(convert("effective_cache_size", "48GB"), "6291456")
         self.assertEqual(convert("work_mem", "64MB"), "65536")
         self.assertEqual(convert("maintenance_work_mem", "2GB"), "2097152")
@@ -3345,12 +3380,20 @@ class PgTuningTest(unittest.TestCase):
     def test_settings_query_selects_every_tuning_key(self):
         for key in awsb.PG_TUNING:
             self.assertIn(f"'{key}'", awsb.PG_SETTINGS_SQL)
-        self.assertIn("pg_stat_ssl", awsb.PG_SETTINGS_SQL)
+
+    def test_tls_is_counted_by_the_load_samples_not_the_collect_query(self):
+        """Freeze stops espresso-node before the settings query, so only the sampler sees it."""
+        self.assertNotIn("pg_stat_ssl", awsb.PG_SETTINGS_SQL)
+        for has_checkpointer in (True, False):
+            sql = awsb.pg_sample_sql(has_checkpointer)
+            ssl = sql[sql.index("'ssl_backends'") :]
+            self.assertIn("pg_stat_ssl", ssl)
+            self.assertIn("pid <> pg_backend_pid()", ssl)
 
     def test_tls_is_none_without_backends(self):
-        self.assertIsNone(awsb.pg_tls(pg_settings(pg_stat_ssl={})))
-        self.assertTrue(awsb.pg_tls(pg_settings()))
-        self.assertFalse(awsb.pg_tls(pg_settings(pg_stat_ssl={"true": 2, "false": 1})))
+        self.assertIsNone(awsb.pg_tls({}))
+        self.assertTrue(awsb.pg_tls({"true": 3}))
+        self.assertFalse(awsb.pg_tls({"true": 2, "false": 1}))
 
     def test_stats_reset_covers_checkpoint_shared_and_statements(self):
         sql = awsb.reset_pg_stats_sql()
@@ -3370,7 +3413,7 @@ class PgValidityTest(unittest.TestCase):
         )
 
     def test_matching_settings_and_tls_are_quiet(self):
-        verdict = self.check(pg_settings=pg_settings())
+        verdict = self.check(pg_settings=pg_settings(), ssl_backends={"true": 3})
         self.assertEqual(verdict, {"valid": True, "noisy": False, "reasons": []})
 
     def test_missing_settings_are_not_judged(self):
@@ -3384,13 +3427,29 @@ class PgValidityTest(unittest.TestCase):
         self.assertIn("shared_buffers=16384", verdict["reasons"][0])
 
     def test_backend_without_tls_is_noisy(self):
-        verdict = self.check(pg_settings=pg_settings(pg_stat_ssl={"false": 1}))
+        verdict = self.check(ssl_backends={"true": 4, "false": 1})
         self.assertTrue(verdict["noisy"])
         self.assertIn("without TLS", verdict["reasons"][0])
 
-    def test_no_backends_at_collect_time_is_quiet(self):
-        verdict = self.check(pg_settings=pg_settings(pg_stat_ssl={}))
-        self.assertFalse(verdict["noisy"])
+    def test_no_backends_during_the_load_is_quiet(self):
+        self.assertFalse(self.check(ssl_backends={})["noisy"])
+
+    def test_evidence_sums_the_backends_of_the_samples_inside_the_load_window(self):
+        tmp = tmp_dir(self)
+        node0 = tmp / "hosts" / "node0"
+        node0.mkdir(parents=True)
+        samples = [
+            {"ts": 5.0, "ssl_backends": {"false": 1}},
+            {"ts": 10.0, "ssl_backends": {"true": 2}},
+            {"ts": 15.0, "ssl_backends": {"true": 1}},
+            {"ts": 25.0, "ssl_backends": {"false": 1}},
+        ]
+        netbench.write_jsonl(node0 / "pg-stats.jsonl", iter(samples))
+        _, evidence = awsb.load_evidence(tmp, aws_manifest(), 10.0, 20.0)
+        self.assertEqual(evidence["ssl_backends"], {"true": 3})
+        (node0 / "pg-stats.jsonl").unlink()
+        _, evidence = awsb.load_evidence(tmp, aws_manifest(), 10.0, 20.0)
+        self.assertNotIn("ssl_backends", evidence)
 
     def test_evidence_reads_settings_and_ignores_an_empty_file(self):
         tmp = tmp_dir(self)
@@ -3428,10 +3487,16 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
             "ssl=on",
             "ssl_cert_file=/tls/server.crt",
             "ssl_key_file=/tls/server.key",
-            "shared_buffers=16GB",
+            "shared_buffers=8GB",
             "checkpoint_timeout=15min",
         ):
             self.assertIn(setting, script)
+
+    def test_container_has_the_shared_memory_rds_has(self):
+        script = awsb.render_start_sh(query_spec(), self.images)
+        create = next(line for line in script.splitlines() if "--name postgres" in line)
+        self.assertIn("--shm-size=8g", create)
+        self.assertNotIn("--shm-size", script.replace(create, ""))
 
     def test_query_user_data_installs_client_and_makes_owned_cert(self):
         text = awsb.render_user_data(query_spec(), self.images, ttl_s=60)
@@ -4208,7 +4273,7 @@ class CollectEbsBalanceTest(unittest.TestCase):
                 json.dumps(balance_file([50.0, 97.0, 99.0, 30.0], [100.0] * 4, 0.0))
             )
             # Periods start at 0, 60, 120, 180; the load is 100..160: periods 60 and 120.
-            low = awsb.ebs_balance_min(path, 100.0, 160.0)
+            low = awsb.metric_min(path, 100.0, 160.0)
         self.assertEqual(low, {"EBSByteBalance%": 97.0, "EBSIOBalance%": 100.0})
 
 
@@ -4386,7 +4451,7 @@ class GroupRunsTest(unittest.TestCase):
             tag_mapping("volume", "vol-2", "lost", None, None),
         ]
         instances = [instance("i-1"), instance("i-2"), instance("i-dead", "terminated")]
-        runs = awsb.group_runs(mappings, instances)
+        runs = awsb.group_runs(mappings, instances, ["vol-1", "vol-2"])
         self.assertEqual([r["name"] for r in runs], ["lost", "zed", "amy"])
         zed = runs[1]
         self.assertEqual(zed["owner"], "alice")
@@ -4404,7 +4469,20 @@ class GroupRunsTest(unittest.TestCase):
         self.assertEqual(runs[0]["instances"], [])
 
     def test_nothing_tagged_gives_no_runs(self):
-        self.assertEqual(awsb.group_runs([], []), [])
+        self.assertEqual(awsb.group_runs([], [], []), [])
+
+    def test_drops_volumes_the_tag_api_lists_after_their_deletion(self):
+        mappings = [
+            tag_mapping("instance", "i-1", "amy", "bob", EXPIRES_LATER),
+            tag_mapping("volume", "vol-live", "amy", None, None),
+            tag_mapping("volume", "vol-gone", "amy", None, None),
+            tag_mapping("volume", "vol-orphan", "old", None, None),
+        ]
+        runs = awsb.group_runs(mappings, [instance("i-1")], ["vol-live"])
+        (amy,) = runs
+        self.assertEqual(
+            amy["arns"], [arn("instance", "i-1"), arn("volume", "vol-live")]
+        )
 
     def test_arn_parts(self):
         self.assertEqual(
@@ -4496,6 +4574,7 @@ class FormatRunsTest(unittest.TestCase):
                 tag_mapping("key-pair", "key-1", "amy", "bob", EXPIRES_PAST),
             ],
             [instance("i-1")],
+            [],
         )
         runs[0]["orphan"] = "past expiry"
         lines = awsb.format_runs(runs, {"c8g.4xlarge": 0.8}, NOW)
@@ -4511,10 +4590,22 @@ class TagRunner(FakeRunner):
     asks for `ResourceARN` only (`tagged_resources`)."""
 
     mappings: list[dict]
+    # Volume ids the tag API still lists although EC2 no longer has them.
+    stale_volumes: frozenset[str] = frozenset()
 
     def __call__(
         self, argv: list[str], env: dict[str, str] | None = None
     ) -> subprocess.CompletedProcess:
+        if "describe-volumes" in argv:
+            self.calls.append(argv)
+            ids = [
+                resource_id
+                for kind, resource_id in (
+                    awsb.arn_parts(m["arn"]) for m in self.mappings
+                )
+                if kind == "volume" and resource_id not in self.stale_volumes
+            ]
+            return completed(stdout=json.dumps(ids))
         if "resourcegroupstaggingapi" in argv:
             self.calls.append(argv)
             arns = "ResourceTagMappingList[].ResourceARN" in argv
@@ -4523,7 +4614,9 @@ class TagRunner(FakeRunner):
         return super().__call__(argv)
 
 
-def tag_runner(mappings: list[dict], instances: list[dict]) -> FakeRunner:
+def tag_runner(
+    mappings: list[dict], instances: list[dict], stale_volumes: Iterable[str] = ()
+) -> FakeRunner:
     runner = TagRunner(
         {
             STS_CALL: sts_response("027574771971"),
@@ -4538,6 +4631,7 @@ def tag_runner(mappings: list[dict], instances: list[dict]) -> FakeRunner:
         }
     )
     runner.mappings = mappings
+    runner.stale_volumes = frozenset(stale_volumes)
     return runner
 
 
@@ -4576,6 +4670,22 @@ class StatusAllTest(unittest.TestCase):
         self.assertIn("| amy | bob |", lines[2])
         self.assertTrue(lines[2].endswith("| past expiry |"))
         self.assertTrue(lines[3].endswith("| n/a |  |"), lines[3])
+
+    def test_a_finished_fleet_whose_volumes_only_the_tag_api_lists_is_not_shown(self):
+        mappings = [
+            tag_mapping("instance", "i-1", "done", "bob", EXPIRES_LATER),
+            tag_mapping("volume", "vol-1", "done", None, None),
+            tag_mapping("volume", "vol-2", "done", None, None),
+        ]
+        runner = tag_runner(
+            mappings, [instance("i-1", "terminated")], stale_volumes=["vol-1", "vol-2"]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = run_cmd(
+                awsb.cmd_status, ["status", "--all", "--out-root", tmp], runner, NOW
+            )
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertEqual(out, "no espresso-bench resources in eu-west-1\n")
 
     def test_wrong_account_is_refused_before_listing(self):
         runner = FakeRunner({STS_CALL: sts_response("999")})
@@ -4619,7 +4729,7 @@ class DestroyOrphansTest(unittest.TestCase):
         ec2 = [
             c[4]
             for c in runner.calls
-            if c[3:4] == ["ec2"] and c[4] != "describe-instances"
+            if c[3:4] == ["ec2"] and not c[4].startswith("describe-")
         ]
         self.assertEqual(
             ec2,
@@ -4825,7 +4935,7 @@ class KeptRunTest(unittest.TestCase):
             code = awsb.cmd_status(self.args(harness, "status"), runner, NOW)
         self.assertEqual(code, awsb.EXIT_OK)
         text = out.getvalue()
-        self.assertIn("- run run1: phase left-running", text)
+        self.assertIn("- fleet run1: phase left-running", text)
         self.assertIn("- 01-run: phase left-running", text)
         self.assertIn("- ctl: running, c8g.4xlarge, launched 2026-09-29T15:00", text)
         self.assertIn("- agent: done, load finished", text)
@@ -4962,6 +5072,22 @@ class KeptRunTest(unittest.TestCase):
         with unittest.mock.patch.object(awsb.Remote, "rsync_from", autospec=True):
             code = awsb.cmd_collect(self.args(harness, "collect"), runner)
         self.assertEqual(code, awsb.EXIT_FAILED)
+
+    def test_collect_of_an_older_run_is_refused(self):
+        harness, runner = self.kept()
+        (harness.fleet_dir / "runs" / "02-later").mkdir()
+        mark = len(runner.calls)
+        with self.assertRaisesRegex(awsb.Refused, "not the last run"):
+            awsb.cmd_collect(self.args(harness, "collect"), runner)
+        self.assertEqual(len(runner.calls), mark)
+
+    def test_collect_while_a_run_is_in_progress_is_refused(self):
+        harness, runner = self.kept()
+        fleet_json = harness.fleet_dir / "fleet.json"
+        manifest = json.loads(fleet_json.read_text())
+        netbench.write_json(fleet_json, {**manifest, "phase": "running"})
+        with self.assertRaisesRegex(awsb.Refused, "is running"):
+            awsb.cmd_collect(self.args(harness, "collect"), runner)
 
     def test_collect_of_an_unprovisioned_run_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
