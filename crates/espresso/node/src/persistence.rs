@@ -214,7 +214,8 @@ mod tests {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
+        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, Payload, PubKey, SeqTypes,
+        ValidatedState,
         traits::{
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
@@ -248,7 +249,10 @@ mod tests {
         simple_vote::{
             NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData, Vote2Data,
         },
-        traits::{EncodeBytes, block_contents::BlockHeader},
+        traits::{
+            EncodeBytes,
+            block_contents::{BlockHeader, BlockPayload},
+        },
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
         vote::HasViewNumber,
@@ -2056,6 +2060,150 @@ mod tests {
             received_views(&consumer).await,
             vec![0, 1, 2, 3, 4],
             "after the gap fills, every leaf is delivered in order, exactly once"
+        );
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum Delivered {
+        Decide(u64),
+        Reconstructed(u64, Payload),
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct DeliveryCollector {
+        delivered: Arc<RwLock<Vec<Delivered>>>,
+    }
+
+    impl DeliveryCollector {
+        async fn take(&self) -> Vec<Delivered> {
+            std::mem::take(&mut *self.delivered.write().await)
+        }
+    }
+
+    #[async_trait]
+    impl EventConsumer for DeliveryCollector {
+        async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
+            let mut delivered = self.delivered.write().await;
+            match event {
+                CoordinatorEvent::NewDecide { leaf_infos, .. } => delivered.extend(
+                    leaf_infos
+                        .iter()
+                        .rev()
+                        .map(|info| Delivered::Decide(info.leaf.view_number().u64())),
+                ),
+                CoordinatorEvent::BlockPayloadReconstructed { view, payload, .. } => {
+                    delivered.push(Delivered::Reconstructed(view.u64(), (**payload).clone()))
+                },
+                _ => {},
+            }
+            Ok(())
+        }
+    }
+
+    async fn persist_reconstructed<P: TestablePersistence>(storage: &P, leaf: &Leaf2) {
+        let event = CoordinatorEvent::BlockPayloadReconstructed {
+            view: leaf.view_number(),
+            header: leaf.block_header().clone(),
+            payload: Arc::new(Payload::empty().0),
+        };
+        assert_eq!(
+            storage.persist_event(&event, &NullEventConsumer).await,
+            None
+        );
+    }
+
+    /// A payload reconstructed before its view is decided reaches the consumer right after that
+    /// decide, exactly once. One for a view not yet decided waits for its own decide.
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_reconstructed_payload_replays_after_its_decide<P: TestablePersistence>(
+        #[case] _p: PhantomData<P>,
+    ) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+        let consumer = DeliveryCollector::default();
+        let chain = consecutive_height_chain(4).await;
+        let empty = Payload::empty().0;
+
+        persist_reconstructed(&storage, &chain[1].0).await;
+        persist_reconstructed(&storage, &chain[3].0).await;
+
+        decide_range(&storage, &chain, 0..2, &consumer).await;
+        assert_eq!(
+            consumer.take().await,
+            Vec::from([
+                Delivered::Decide(0),
+                Delivered::Decide(1),
+                Delivered::Reconstructed(1, empty.clone()),
+            ])
+        );
+
+        decide_range(&storage, &chain, 2..3, &consumer).await;
+        assert_eq!(consumer.take().await, Vec::from([Delivered::Decide(2)]));
+
+        decide_range(&storage, &chain, 3..4, &consumer).await;
+        assert_eq!(
+            consumer.take().await,
+            Vec::from([Delivered::Decide(3), Delivered::Reconstructed(3, empty)])
+        );
+    }
+
+    /// A payload stored for a view whose decide was already processed goes out with the next
+    /// decide instead of being lost.
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_late_reconstructed_payload_replays_on_next_decide<P: TestablePersistence>(
+        #[case] _p: PhantomData<P>,
+    ) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+        let consumer = DeliveryCollector::default();
+        let chain = consecutive_height_chain(3).await;
+
+        decide_range(&storage, &chain, 0..2, &consumer).await;
+        consumer.take().await;
+
+        persist_reconstructed(&storage, &chain[1].0).await;
+        decide_range(&storage, &chain, 2..3, &consumer).await;
+        assert_eq!(
+            consumer.take().await,
+            Vec::from([
+                Delivered::Decide(2),
+                Delivered::Reconstructed(1, Payload::empty().0),
+            ])
+        );
+
+        storage
+            .process_decided_events(ViewNumber::new(2), None, &consumer)
+            .await
+            .unwrap();
+        assert_eq!(consumer.take().await, Vec::new());
+    }
+
+    /// The payload of a block this node built arrives on the decided leaf and never as a
+    /// reconstruction event. It is replayed after the decide even with no DA proposal stored.
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_built_block_payload_replays_after_decide<P: TestablePersistence>(
+        #[case] _p: PhantomData<P>,
+    ) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+        let consumer = DeliveryCollector::default();
+        let mut chain = consecutive_height_chain(2).await;
+        chain[1].0.fill_block_payload_unchecked(Payload::empty().0);
+
+        decide_range(&storage, &chain, 0..2, &consumer).await;
+        assert_eq!(
+            consumer.take().await,
+            Vec::from([
+                Delivered::Decide(0),
+                Delivered::Decide(1),
+                Delivered::Reconstructed(1, Payload::empty().0),
+            ])
         );
     }
 

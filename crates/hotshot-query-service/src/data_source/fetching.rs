@@ -928,8 +928,8 @@ where
     /// Reconstruction runs on views that are not yet (and may never be)
     /// decided, so the block is only stored if it matches the decided leaf at
     /// the same height. If that leaf hasn't been ingested yet the payload is
-    /// dropped: when the decide arrives, [`append`](Self::append) spawns a
-    /// fetch that back-fills the payload from a peer.
+    /// dropped, and either the caller sends it again after the decide or
+    /// [`append`](Self::append) fetches it.
     async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         let height = block.height();
         let leaf = {
