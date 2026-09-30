@@ -1,14 +1,8 @@
-# offline=true skips every data source and real resource, so validate/plan work with fake
-# credentials; the driver never sets it for a real run.
 provider "aws" {
   region  = local.region
-  profile = var.offline ? null : "timeboost-dev"
+  profile = "timeboost-dev"
 
-  allowed_account_ids = var.offline ? null : [local.account_id]
-
-  skip_credentials_validation = var.offline
-  skip_requesting_account_id  = var.offline
-  skip_metadata_api_check     = var.offline
+  allowed_account_ids = [local.account_id]
 
   default_tags {
     tags = {
@@ -26,21 +20,16 @@ provider "aws" {
 locals {
   region     = "eu-west-1"
   account_id = "027574771971"
-  ami_id     = var.offline ? "ami-0offline00000000" : var.ami_id
-  pinned_az  = var.offline ? "eu-west-1a" : var.az
 }
 
 data "aws_vpc" "default" {
-  count   = var.offline ? 0 : 1
   default = true
 }
 
 data "aws_subnets" "default" {
-  count = var.offline ? 0 : 1
-
   filter {
     name   = "vpc-id"
-    values = [data.aws_vpc.default[0].id]
+    values = [data.aws_vpc.default.id]
   }
   filter {
     name   = "availability-zone"
@@ -53,9 +42,7 @@ data "aws_subnets" "default" {
 }
 
 locals {
-  pinned_subnet = var.offline ? "subnet-0offline0000000" : (
-    length(data.aws_subnets.default[0].ids) > 0 ? data.aws_subnets.default[0].ids[0] : ""
-  )
+  pinned_subnet = length(data.aws_subnets.default.ids) > 0 ? data.aws_subnets.default.ids[0] : ""
 }
 
 resource "aws_key_pair" "this" {
@@ -67,7 +54,7 @@ resource "aws_key_pair" "this" {
 resource "aws_security_group" "this" {
   name        = "espresso-bench-${var.name}"
   description = "espresso-bench fleet ${var.name}"
-  vpc_id      = var.offline ? null : data.aws_vpc.default[0].id
+  vpc_id      = data.aws_vpc.default.id
 
   ingress {
     description = "ssh from the operator"
@@ -96,7 +83,7 @@ resource "aws_security_group" "this" {
 resource "aws_instance" "host" {
   for_each = var.hosts
 
-  ami                    = local.ami_id
+  ami                    = var.ami_id
   instance_type          = each.value.instance_type
   key_name               = aws_key_pair.this.key_name
   vpc_security_group_ids = [aws_security_group.this.id]
@@ -159,7 +146,7 @@ resource "aws_instance" "host" {
 
   lifecycle {
     precondition {
-      condition     = var.offline || local.pinned_subnet != ""
+      condition     = local.pinned_subnet != ""
       error_message = "No default subnet for ${var.az} in ${local.region}."
     }
   }
@@ -169,7 +156,7 @@ resource "aws_instance" "host" {
 # The schedule is what bounds the cost of an rds fleet whose laptop is gone: hosts terminate
 # themselves, RDS does not.
 locals {
-  rds_enabled = !var.offline && var.rds != null
+  rds_enabled = var.rds != null
   rds_name    = "espresso-bench-${var.name}"
 }
 
@@ -179,7 +166,7 @@ data "aws_subnets" "vpc" {
 
   filter {
     name   = "vpc-id"
-    values = [data.aws_vpc.default[0].id]
+    values = [data.aws_vpc.default.id]
   }
 }
 

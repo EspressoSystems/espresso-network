@@ -210,7 +210,7 @@ per destroyed fleet (runs, bound, actual, exit).
 ### Commands
 
 ```
-just bench aws plan    --tag release-x [--nodes 5] [--offline]
+just bench aws plan    --tag release-x [--nodes 5]
 just bench aws run     --tag release-x [--nodes 5] [--steps 4,6,9,...] [--query-db MODE] [--max-usd 10] [--yes]
 just bench aws up      --tag release-x --db-modes colocated,volume,rds [--ttl-min 180] [--max-usd 60] [--yes]
 just bench aws run     --fleet FLEET_DIR --query-db MODE [--tag release-y] [--force] [--yes]
@@ -226,7 +226,6 @@ just bench aws destroy FLEET_DIR | --orphans
   `aws-bench` and `aws/terraform/main.tf`), `ssh-keygen`, rev pushed as `release-*` so CI publishes images.
 - Every fleet gets an ed25519 key in `<fleet>/ssh/`; the private half is deleted after destroy (kept after a failed
   destroy).
-- `plan --offline` needs fresh cached prices in `tmp/aws-bench/prices.json`: run `plan` online once first.
 
 ### 100 nodes
 

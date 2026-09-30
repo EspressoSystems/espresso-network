@@ -19,12 +19,12 @@ variable "git_rev" {
 
 variable "az" {
   type        = string
-  description = "Availability zone `aws-bench preflight` resolved; ignored when offline is true."
+  description = "Availability zone `aws-bench preflight` resolved."
 }
 
 variable "ami_id" {
   type        = string
-  description = "AMI id `aws-bench preflight` resolved; ignored when offline is true."
+  description = "AMI id `aws-bench preflight` resolved."
 }
 
 variable "ssh_public_key" {
@@ -43,12 +43,6 @@ variable "operator_cidr" {
 variable "expires_at" {
   type        = string
   description = "RFC 3339 timestamp; informational only, enforced by each host's own shutdown timer."
-}
-
-variable "offline" {
-  type        = bool
-  default     = false
-  description = "Skip every data source and resource that needs real AWS access, for validate/plan without credentials."
 }
 
 variable "hosts" {

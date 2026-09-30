@@ -26,7 +26,6 @@ from typing import ClassVar
 import netbench
 from fakes import (
     FLEET_ARNS,
-    SLOW,
     FakeClock,
     FakeRunner,
     FleetRunner,
@@ -1070,95 +1069,6 @@ class PgVolumeCostTest(unittest.TestCase):
         self.assertGreater(with_volume, without)
 
 
-@SLOW
-@unittest.skipUnless(shutil.which("tofu"), "tofu/opentofu not on PATH")
-class TofuPgVolumeTest(unittest.TestCase):
-    """TEST:tofu-validate-modes-ok for `pg_volume`: validates the module and plans it offline
-    with the volume set and null; skipped when the providers cannot be installed."""
-
-    def node0_after(self, pg_volume: dict | None) -> dict:
-        """The planned `aws_instance.host["node0"]`: its `after` values and `after_unknown`."""
-        tofu = shutil.which("tofu")
-        assert tofu is not None
-        with tempfile.TemporaryDirectory() as tmp:
-            module = Path(tmp) / "terraform"
-            shutil.copytree(Path(__file__).parent / "aws" / "terraform", module)
-            user_data = module / "user-data.sh"
-            user_data.write_text("#!/bin/sh\necho ok\n")
-            tfvars = {
-                "name": "test-run",
-                "owner": "tester",
-                "git_rev": "abc1234",
-                "az": "",
-                "ami_id": "",
-                "ssh_public_key": "ssh-ed25519 AAAAtest test@example.com",
-                "operator_cidr": "203.0.113.5/32",
-                "expires_at": "2026-01-01T00:00:00Z",
-                "offline": True,
-                "pg_volume": pg_volume,
-                "hosts": {
-                    name: {
-                        "role": role,
-                        "instance_type": "c8g.2xlarge",
-                        "root_gb": 40,
-                        "root_iops": 3000,
-                        "root_mbps": 125,
-                        "user_data_path": str(user_data),
-                    }
-                    for name, role in (("ctl", "ctl"), ("node0", "query"))
-                },
-            }
-            (module / "terraform.tfvars.json").write_text(json.dumps(tfvars))
-            env = {
-                **os.environ,
-                "AWS_ACCESS_KEY_ID": "test",
-                "AWS_SECRET_ACCESS_KEY": "test",
-                "AWS_REGION": "eu-west-1",
-            }
-
-            def tofu_run(*args: str) -> subprocess.CompletedProcess:
-                return subprocess.run(
-                    [tofu, f"-chdir={module}", *args],
-                    capture_output=True,
-                    text=True,
-                    env=env,
-                    check=False,
-                )
-
-            init = tofu_run("init", "-input=false")
-            if init.returncode != 0:
-                self.skipTest(f"providers unavailable: {init.stderr.strip()[-200:]}")
-            validate = tofu_run("validate")
-            self.assertEqual(validate.returncode, 0, validate.stderr)
-            plan = tofu_run("plan", "-input=false", "-refresh=false", "-out=plan.bin")
-            self.assertEqual(plan.returncode, 0, plan.stderr)
-            shown = tofu_run("show", "-json", "plan.bin")
-            self.assertEqual(shown.returncode, 0, shown.stderr)
-            changes = json.loads(shown.stdout)["resource_changes"]
-            return next(
-                c["change"]
-                for c in changes
-                if c["address"] == 'aws_instance.host["node0"]'
-            )
-
-    def test_the_volume_is_an_inline_block_on_the_query_host(self):
-        change = self.node0_after({"gb": 400, "iops": 12000, "mbps": 500})
-        (block,) = change["after"]["ebs_block_device"]
-        self.assertEqual(block["device_name"], "/dev/sdf")
-        self.assertEqual(block["volume_type"], "gp3")
-        self.assertEqual(
-            (block["volume_size"], block["iops"], block["throughput"]),
-            (400, 12000, 500),
-        )
-        self.assertTrue(block["delete_on_termination"])
-        self.assertEqual(block["tags"]["espresso-bench-run"], "test-run")
-        self.assertEqual(block["tags"]["espresso-bench-role"], "pg")
-
-    def test_without_the_volume_the_block_is_absent(self):
-        change = self.node0_after(None)
-        self.assertNotIn("ebs_block_device", change["after"])
-
-
 # REQ:fleet-cost
 class RunEstimateTest(unittest.TestCase):
     def test_run_phases_have_no_provision_or_destroy(self):
@@ -1775,9 +1685,10 @@ class RdsOrderableTest(unittest.TestCase):
             stack.enter_context(
                 unittest.mock.patch.object(awsb, "resolve_image", resolve)
             )
-            pre = awsb.preflight(
-                runner, cfg, awsb.plan_hosts(cfg), which=lambda name: "/usr/bin/x"
+            stack.enter_context(
+                unittest.mock.patch("shutil.which", return_value="/usr/bin/x")
             )
+            pre = awsb.preflight(runner, cfg, awsb.plan_hosts(cfg))
         self.assertEqual(pre["rds_engine_version"], "18.4")
         self.assertIn("docker.io/library/postgres:18.4", resolved)
         self.assertEqual(
@@ -1903,24 +1814,6 @@ class RdsCostTest(unittest.TestCase):
             awsb.resolve_prices(again, cfg, cache, 60.0)
             self.assertEqual(again.calls, [])
 
-    def test_offline_needs_the_class_price_too(self):
-        cfg = awsb.RunConfig(tag="x", db_modes=("rds",), offline=True)
-        with tempfile.TemporaryDirectory() as tmp:
-            cache = Path(tmp) / "prices.json"
-            cache.write_text(
-                json.dumps(
-                    {
-                        f"eu-west-1:{instance_type}": {
-                            "usd_hour": 1.0,
-                            "fetched_at": 0.0,
-                        }
-                        for instance_type in ("c8g.4xlarge", "c8g.2xlarge")
-                    }
-                )
-            )
-            with self.assertRaisesRegex(awsb.Refused, "db.m8g.4xlarge"):
-                awsb.resolve_prices(FakeRunner(), cfg, cache, 0.0)
-
     def test_the_bound_after_an_extend_bills_the_delete_window(self):
         harness = RdsHarness(self)
         harness.up_rds(self)
@@ -2039,11 +1932,10 @@ class RdsTfvarsTest(unittest.TestCase):
         self.assertNotIn("rds_password", tfvars)
         self.assertNotIn("rds_spec", harness.fleet())
 
-    def test_plan_offline_renders_the_rds_variables_and_prices_them(self):
+    def test_plan_renders_the_rds_variables_and_prices_them(self):
         out = isolated_env(self, temp_dir(self), "planned")
         argv = [
             "plan",
-            "--offline",
             "--nodes",
             "2",
             "--tag",
@@ -2053,8 +1945,9 @@ class RdsTfvarsTest(unittest.TestCase):
         ]
         args = awsb.parse_args(argv)
         args.argv = argv
-        runner = FakeRunner({("git",): completed("a" * 40)})
-        self.assertEqual(awsb.cmd_plan(args, run=runner), awsb.EXIT_OK)
+        pre = {**fake_preflight(), "rds_engine_version": "18"}
+        with unittest.mock.patch.object(awsb, "preflight", return_value=pre):
+            self.assertEqual(awsb.cmd_plan(args, run=FleetRunner([])), awsb.EXIT_OK)
         tfvars = json.loads(
             (out / "planned/terraform/terraform.tfvars.json").read_text()
         )
@@ -2064,31 +1957,6 @@ class RdsTfvarsTest(unittest.TestCase):
         items = [line["item"] for line in manifest["estimate"]["lines"]]
         self.assertIn("rds instance db.m8g.4xlarge", items)
         self.assertIn("rds gp3 storage", items)
-
-    def test_plan_offline_ttl_min_renders_a_fleet_with_the_up_limit(self):
-        out = isolated_env(self, temp_dir(self), "planned")
-        argv = [
-            "plan",
-            "--offline",
-            "--nodes",
-            "2",
-            "--tag",
-            "x",
-            "--ttl-min",
-            "150",
-        ]
-        args = awsb.parse_args(argv)
-        args.argv = argv
-        runner = FakeRunner({("git",): completed("a" * 40)})
-        self.assertEqual(awsb.cmd_plan(args, run=runner), awsb.EXIT_OK)
-        estimate = json.loads((out / "planned/fleet.json").read_text())["estimate"]
-        self.assertEqual(estimate["ttl_s"], 150 * 60)
-
-    def test_plan_ttl_min_without_offline_is_refused(self):
-        args = awsb.parse_args(["plan", "--tag", "x", "--ttl-min", "150"])
-        args.argv = []
-        with self.assertRaises(awsb.Refused):
-            awsb.cmd_plan(args)
 
     def test_terraform_access_denied_names_the_rds_actions(self):
         message = awsb.classify_tf_error(
@@ -2856,7 +2724,7 @@ def tf_resource(kind: str, name: str) -> str:
 
 # REQ:querydb-rds-wiring
 class TerraformSourceTest(unittest.TestCase):
-    """Properties `tofu plan` cannot show offline, where the rds resources have count 0."""
+    """Properties of main.tf checked on its source, without `tofu plan`."""
 
     def test_the_delete_schedule_does_not_wait_for_the_instance(self):
         for kind, name in (
@@ -2882,82 +2750,6 @@ class TerraformSourceTest(unittest.TestCase):
 
     def test_hosts_report_ec2_metrics_every_minute(self):
         self.assertIn("monitoring", tf_resource("aws_instance", "host"))
-
-
-# REQ:querydb-rds-wiring
-@SLOW
-class TofuRdsValidateTest(unittest.TestCase):
-    """TEST:tofu-validate-modes-ok: `tofu validate` and an offline plan with the rds variable
-    set and null. Skips without tofu or when the providers cannot be installed."""
-
-    def run_tofu(self, tfvars_extra: dict) -> None:
-        tofu = shutil.which("tofu")
-        if tofu is None:
-            self.skipTest("tofu/opentofu not on PATH")
-        with tempfile.TemporaryDirectory() as tmp:
-            terraform = Path(tmp) / "terraform"
-            shutil.copytree(awsb.TERRAFORM_SRC, terraform)
-            user_data = terraform / "ctl-user-data.sh"
-            user_data.write_text("#!/bin/sh\necho ok\n")
-            tfvars = {
-                "name": "test-run",
-                "owner": "tester",
-                "git_rev": "abc1234",
-                "az": "",
-                "ami_id": "",
-                "ssh_public_key": "ssh-ed25519 AAAAtest test@example.com",
-                "operator_cidr": "203.0.113.5/32",
-                "expires_at": "2026-01-01T00:00:00Z",
-                "offline": True,
-                "hosts": {
-                    "ctl": {
-                        "role": "ctl",
-                        "instance_type": "c8g.2xlarge",
-                        "root_gb": 40,
-                        "root_iops": 3000,
-                        "root_mbps": 125,
-                        "user_data_path": str(user_data),
-                    }
-                },
-                **tfvars_extra,
-            }
-            (terraform / "terraform.tfvars.json").write_text(json.dumps(tfvars))
-            env = {
-                **os.environ,
-                "AWS_ACCESS_KEY_ID": "test",
-                "AWS_SECRET_ACCESS_KEY": "test",
-                "AWS_REGION": "eu-west-1",
-            }
-
-            def tofu_run(*args: str) -> subprocess.CompletedProcess:
-                return subprocess.run(
-                    [tofu, f"-chdir={terraform}", *args],
-                    capture_output=True,
-                    text=True,
-                    env=env,
-                    check=False,
-                )
-
-            init = tofu_run("init", "-input=false")
-            if init.returncode != 0:
-                self.skipTest(f"tofu init cannot install the providers: {init.stderr}")
-            validate = tofu_run("validate")
-            self.assertEqual(validate.returncode, 0, validate.stderr)
-            plan = tofu_run("plan", "-input=false", "-refresh=false")
-            self.assertEqual(plan.returncode, 0, plan.stderr)
-
-    def test_rds_set(self):
-        expires = datetime(2026, 1, 1, tzinfo=UTC)
-        self.run_tofu(awsb.rds_tfvars(rds_spec(), "secret-pass", expires))
-
-    def test_rds_null(self):
-        self.run_tofu({"rds": None})
-
-    def test_a_volume_below_the_baseline_fails_validation(self):
-        expires = datetime(2026, 1, 1, tzinfo=UTC)
-        tfvars = awsb.rds_tfvars(rds_spec(gb=100), "secret-pass", expires)
-        with self.assertRaisesRegex(AssertionError, "400 GiB"):
-            self.run_tofu(tfvars)
 
 
 LIST_ROLES = ("aws", "--profile", "timeboost-dev", "iam", "list-roles")

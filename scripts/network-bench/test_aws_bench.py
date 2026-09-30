@@ -1,4 +1,4 @@
-"""Tests for `aws-bench`: cost estimate, budget refusal, `plan --offline` rendering, and the
+"""Tests for `aws-bench`: cost estimate, budget refusal, `plan` rendering, and the
 `run` orchestration (apply failure, interrupt, destroy fallback, validity, cost, index).
 
 Side effects go through a `FakeRunner` that maps an argv prefix to a canned
@@ -368,28 +368,20 @@ class FormatEstimateTest(unittest.TestCase):
 
 class ConfirmTest(unittest.TestCase):
     def test_yes_flag_always_confirms(self):
-        self.assertTrue(awsb.confirm("go?", yes=True, stdin_is_tty=False))
+        self.assertTrue(awsb.confirm("go?", yes=True))
 
     def test_non_tty_without_yes_refuses(self):
-        self.assertFalse(awsb.confirm("go?", yes=False, stdin_is_tty=False))
+        self.assertFalse(awsb.confirm("go?", yes=False))
 
     def test_tty_reads_input(self):
-        with unittest.mock.patch("builtins.input", return_value="y"):
-            self.assertTrue(awsb.confirm("go?", yes=False, stdin_is_tty=True))
-        with unittest.mock.patch("builtins.input", return_value="n"):
-            self.assertFalse(awsb.confirm("go?", yes=False, stdin_is_tty=True))
+        with unittest.mock.patch("sys.stdin.isatty", return_value=True):
+            with unittest.mock.patch("builtins.input", return_value="y"):
+                self.assertTrue(awsb.confirm("go?", yes=False))
+            with unittest.mock.patch("builtins.input", return_value="n"):
+                self.assertFalse(awsb.confirm("go?", yes=False))
 
 
 class FetchPricesTest(unittest.TestCase):
-    def test_offline_without_a_cached_price_refuses(self):
-        runner = FakeRunner({})
-        cfg = awsb.RunConfig(tag="x", offline=True)
-        with self.assertRaisesRegex(awsb.Refused, "--offline"):
-            awsb.fetch_prices(
-                runner, cfg, {"c8g.4xlarge"}, Path("unused.json"), now=0.0
-            )
-        self.assertEqual(runner.calls, [])
-
     def test_fresh_cache_skips_fetch(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp) / "prices.json"
@@ -467,20 +459,19 @@ def plan_args(*extra: str, nodes: str = "2") -> "awsb.argparse.Namespace":
     return parse_plan_args(["--tag", "x", "--nodes", nodes, *extra])
 
 
-# REQ:awsbench-render-offline / REQ:awsbench-budget-refusal / EDGE:awsbench-name-collision
+# REQ:awsbench-render / REQ:awsbench-budget-refusal / EDGE:awsbench-name-collision
 class CmdPlanTest(unittest.TestCase):
     def setUp(self):
         self.tmp = temp_dir(self)
         self.out = isolated_env(self, self.tmp)
         self.fleet_dir = self.out / "run1"
 
-    def test_offline_renders_manifest_and_peers(self):
-        args = plan_args("--offline")
-        git = ("git", "rev-parse", "--short", "HEAD")
-        runner = FakeRunner({git: completed(stdout="abc1234\n")})
-        code = awsb.cmd_plan(args, run=runner, which=lambda name: None)
+    def test_renders_manifest_and_peers(self):
+        with unittest.mock.patch.object(
+            awsb, "preflight", return_value=fake_preflight()
+        ):
+            code = awsb.cmd_plan(plan_args(), run=FleetRunner([]))
         self.assertEqual(code, awsb.EXIT_OK)
-        self.assertEqual(runner.calls, [list(git)])
         for name in (
             "runs/01-run/genesis.toml",
             "runs/01-run/config.json",
@@ -492,7 +483,7 @@ class CmdPlanTest(unittest.TestCase):
             self.assertTrue((self.fleet_dir / name).exists(), name)
         manifest = json.loads((self.fleet_dir / "fleet.json").read_text())
         self.assertEqual(manifest["phase"], "planned")
-        self.assertEqual(manifest["git_rev"], "abc1234")
+        self.assertEqual(manifest["git_rev"], "a" * 40)
         self.assertEqual(manifest["peers"], {"node0": ["node1"], "node1": []})
         self.assertEqual(len(manifest["hosts"]), 3)
         self.assertNotIn("expires_at", manifest)
@@ -546,27 +537,13 @@ class CmdPlanTest(unittest.TestCase):
         manifest = json.loads((self.fleet_dir / "fleet.json").read_text())
         self.assertEqual(manifest["ssh_public_key"], "ssh-ed25519 GENERATED run")
 
-    def test_offline_without_ssh_keygen_uses_the_placeholder(self):
-        args = plan_args("--offline")
-        runner = FakeRunner(
-            {("git", "rev-parse", "--short", "HEAD"): completed(stdout="abc1234")}
-        )
-        code = awsb.cmd_plan(args, run=runner, which=lambda name: None)
-        self.assertEqual(code, awsb.EXIT_OK)
-        self.assertFalse(runner.ran("ssh-keygen"))
-        tfvars = json.loads(
-            (self.fleet_dir / "terraform" / "terraform.tfvars.json").read_text()
-        )
-        self.assertEqual(tfvars["ssh_public_key"], awsb.OFFLINE_SSH_PUB)
-
     def test_preflight_requires_ssh_keygen(self):
-        with self.assertRaisesRegex(awsb.Refused, "ssh-keygen"):
-            awsb.preflight(
-                FakeRunner(),
-                awsb.RunConfig(tag="x"),
-                [],
-                lambda name: None if name == "ssh-keygen" else "/usr/bin/x",
-            )
+        which = unittest.mock.patch(
+            "shutil.which",
+            side_effect=lambda name: None if name == "ssh-keygen" else "/usr/bin/x",
+        )
+        with which, self.assertRaisesRegex(awsb.Refused, "ssh-keygen"):
+            awsb.preflight(FakeRunner(), awsb.RunConfig(tag="x"), [])
 
     def test_budget_refusal_makes_no_tofu_apply(self):
         args = plan_args("--max-usd", "0.01", nodes="5")
@@ -577,15 +554,6 @@ class CmdPlanTest(unittest.TestCase):
             code = cmd_plan_exit(args, run=runner)
         self.assertEqual(code, awsb.EXIT_REFUSED)
         self.assertFalse(runner.ran("tofu"))
-
-    # REQ:awsbench-render-offline
-    def test_offline_without_cached_prices_refuses(self):
-        unittest.mock.patch.stopall()
-        isolated_env(self, self.tmp, prices=False)
-        runner = FakeRunner({})
-        code = cmd_plan_exit(plan_args("--offline"), run=runner)
-        self.assertEqual(code, awsb.EXIT_REFUSED)
-        self.assertEqual(runner.calls, [])
 
     def test_name_collision_refuses(self):
         with unittest.mock.patch.object(
@@ -833,7 +801,7 @@ class VcpuHeadroomTest(unittest.TestCase):
 
 
 class PreflightTest(unittest.TestCase):
-    """Runs `preflight` with a fake `which` (no real tools needed) and a stubbed
+    """Runs `preflight` with a patched `shutil.which` (no real tools needed) and a stubbed
     `resolve_image`, and asserts `describe-instance-types` is called exactly once:
     `resolve_ami_arch` and `vcpu_headroom` used to each fetch it separately."""
 
@@ -906,8 +874,11 @@ class PreflightTest(unittest.TestCase):
             "revision": None,
             "platforms": ["linux/arm64"],
         }
-        with unittest.mock.patch.object(awsb, "resolve_image", return_value=fake_image):
-            result = awsb.preflight(runner, cfg, hosts, which=lambda name: "/usr/bin/x")
+        with (
+            unittest.mock.patch.object(awsb, "resolve_image", return_value=fake_image),
+            unittest.mock.patch("shutil.which", return_value="/usr/bin/x"),
+        ):
+            result = awsb.preflight(runner, cfg, hosts)
         describe_calls = [
             c
             for c in runner.calls
@@ -917,20 +888,6 @@ class PreflightTest(unittest.TestCase):
         self.assertEqual(len(describe_calls), 1)
         self.assertEqual(result["az"], "eu-west-1a")
         self.assertEqual(result["ami_id"], "ami-0abc")
-
-
-class ToolsOnPathTest(unittest.TestCase):
-    def test_missing_tool_refuses(self):
-        with self.assertRaises(awsb.Refused):
-            awsb.tools_on_path(("definitely-not-a-real-tool-xyz",))
-
-    def test_present_tools_ok(self):
-        awsb.tools_on_path(("python3",))
-
-    def test_injectable_which_needs_no_real_tools(self):
-        awsb.tools_on_path(("tofu", "aws"), which=lambda name: f"/usr/bin/{name}")
-        with self.assertRaises(awsb.Refused):
-            awsb.tools_on_path(("tofu",), which=lambda name: None)
 
 
 class RenderTfvarsTest(unittest.TestCase):
@@ -958,31 +915,11 @@ class RenderTfvarsTest(unittest.TestCase):
         self.assertEqual(tfvars["az"], "eu-west-1a")
         self.assertEqual(tfvars["ami_id"], "ami-0abc")
         self.assertEqual(tfvars["operator_cidr"], "203.0.113.5/32")
-        self.assertFalse(tfvars["offline"])
         self.assertEqual(len(tfvars["hosts"]), 3)
         self.assertEqual(
             tfvars["hosts"]["node0"]["user_data_path"],
             str(run_dir / "hosts" / "node0" / "user-data.sh"),
         )
-
-    def test_offline_flag_passes_through(self):
-        cfg = awsb.RunConfig(
-            tag="x", nodes=2, offline=True, load=netbench.BenchConfig(submit_nodes=1)
-        )
-        tfvars = awsb.render_tfvars(
-            cfg,
-            Path("/tmp/aws-bench/run1"),
-            "run1",
-            "alice",
-            awsb.plan_hosts(cfg),
-            ssh_pub="k",
-            operator_cidr="203.0.113.5/32",
-            expires_at="2026-01-01T00:00:00Z",
-            git_rev="abc1234",
-            az="",
-            ami_id="",
-        )
-        self.assertTrue(tfvars["offline"])
 
 
 class ClassifyTfErrorTest(unittest.TestCase):
@@ -1264,77 +1201,22 @@ TOFU = shutil.which("tofu")
 @SLOW
 @unittest.skipUnless(TOFU, "tofu/opentofu not on PATH")
 class TofuValidateTest(unittest.TestCase):
-    """TEST:awsbench-tofu-validate-ok: validates the module and plans it with offline=true, so
-    it needs no real AWS credentials; skips entirely when tofu is absent from the environment."""
+    """TEST:awsbench-tofu-validate-ok: `tofu validate` needs no AWS credentials; `init` needs
+    the network for the providers."""
 
-    def test_validate_and_offline_plan(self):
+    def test_validate(self):
         assert TOFU is not None  # narrows the type; the class is skipped otherwise
-        terraform_src = Path(__file__).parent / "aws" / "terraform"
         with tempfile.TemporaryDirectory() as tmp:
-            terraform_dir = Path(tmp) / "terraform"
-            shutil.copytree(terraform_src, terraform_dir)
-            # offline=true still evaluates for_each = var.hosts (main.tf), so the user-data
-            # file must exist for `file()` to succeed at plan time.
-            user_data_path = terraform_dir / "ctl-user-data.sh"
-            user_data_path.write_text("#!/bin/sh\necho ok\n")
-            tfvars = {
-                "name": "test-run",
-                "owner": "tester",
-                "git_rev": "abc1234",
-                "az": "",
-                "ami_id": "",
-                "ssh_public_key": "ssh-ed25519 AAAAtest test@example.com",
-                "operator_cidr": "203.0.113.5/32",
-                "expires_at": "2026-01-01T00:00:00Z",
-                "offline": True,
-                "hosts": {
-                    "ctl": {
-                        "role": "ctl",
-                        "instance_type": "c8g.2xlarge",
-                        "root_gb": 40,
-                        "root_iops": 3000,
-                        "root_mbps": 125,
-                        "user_data_path": str(user_data_path),
-                    }
-                },
-            }
-            (terraform_dir / "terraform.tfvars.json").write_text(json.dumps(tfvars))
-            env = {
-                **os.environ,
-                "AWS_ACCESS_KEY_ID": "test",
-                "AWS_SECRET_ACCESS_KEY": "test",
-                "AWS_REGION": "eu-west-1",
-            }
-            init = subprocess.run(
-                [TOFU, f"-chdir={terraform_dir}", "init", "-input=false"],
-                capture_output=True,
-                text=True,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(init.returncode, 0, init.stderr)
-            validate = subprocess.run(
-                [TOFU, f"-chdir={terraform_dir}", "validate"],
-                capture_output=True,
-                text=True,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(validate.returncode, 0, validate.stderr)
-            plan = subprocess.run(
-                [
-                    TOFU,
-                    f"-chdir={terraform_dir}",
-                    "plan",
-                    "-input=false",
-                    "-refresh=false",
-                ],
-                capture_output=True,
-                text=True,
-                env=env,
-                check=False,
-            )
-            self.assertEqual(plan.returncode, 0, plan.stderr)
+            module = Path(tmp) / "terraform"
+            shutil.copytree(Path(__file__).parent / "aws" / "terraform", module)
+            for args in (["init", "-input=false", "-backend=false"], ["validate"]):
+                result = subprocess.run(
+                    [TOFU, f"-chdir={module}", *args],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
 
 
 def fleet(n: int) -> dict:
@@ -1436,11 +1318,6 @@ class RenderNodeEnvTest(unittest.TestCase):
         repeated = awsb.parse_args([*argv, "--node-env", "A=1", "--node-env", "A=2"])
         with self.assertRaisesRegex(awsb.Refused, "repeats A"):
             awsb.config_from_args(repeated)
-        fleet_plan = parse_plan_args(
-            ["--tag", "x", "--ttl-min", "60", "--offline", "--node-env", "A=1"]
-        )
-        with self.assertRaisesRegex(awsb.Refused, "run --fleet"):
-            awsb.cmd_plan(fleet_plan)
         for bad in ("A", "=1", "1A=2", "A B=1"):
             with (
                 self.subTest(bad),

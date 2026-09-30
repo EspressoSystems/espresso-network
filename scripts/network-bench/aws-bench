@@ -424,9 +424,6 @@ DOCKER_START_LEAD_S = 15.0
 # Container log lines per node in the summary of a run without a result.
 FAILURE_LOG_LINES = 10
 CHECKIP_URL = "https://checkip.amazonaws.com"
-# `plan --offline` touches neither an ssh key nor the network.
-OFFLINE_SSH_PUB = "ssh-ed25519 OFFLINE-PLACEHOLDER"
-OFFLINE_CIDR = "192.0.2.1/32"
 AGENT_POLL_S = 5.0
 AGENT_LOG_S = 30.0
 OUT_RSYNC_S = 60.0
@@ -665,7 +662,7 @@ class FleetManifest(TypedDict):
     phase: str
     estimate: Estimate
     db_modes: list[DbMode]
-    # Filled in by preflight for `run` (absent for an offline `plan`): needed again at
+    # Filled in by preflight: needed again at
     # `wait_hosts` to check pulled digests, and at `render` for the deployment block.
     az: NotRequired[str]
     ami_id: NotRequired[str]
@@ -786,7 +783,6 @@ class RunConfig:
     pg_mbps: int = 500
     max_usd: float = 10.0
     yes: bool = False
-    offline: bool = False
     db_modes: tuple[DbMode, ...] = ("colocated",)
     query_db: DbMode = "colocated"
     # `KEY=VALUE` written last into every node's node.env, so it also overrides.
@@ -970,10 +966,6 @@ def fetch_prices(
                 "source": f"cache {cache}",
             }
             continue
-        if cfg.offline:
-            raise Refused(
-                f"--offline needs a fresh cached price for {instance_type}: run `plan` online first"
-            )
         usd_hour = _fetch_instance_price(run, instance_type)
         instances[instance_type] = {
             "usd_hour": usd_hour,
@@ -1352,17 +1344,16 @@ def format_estimate_lines(estimate: Estimate) -> list[str]:
     ]
 
 
-def confirm(prompt: str, yes: bool, stdin_is_tty: bool) -> bool:
+def confirm(prompt: str, yes: bool) -> bool:
     if yes:
         return True
-    if not stdin_is_tty:
+    if not sys.stdin.isatty():
         return False
     return input(f"{prompt} [y/N] ").strip().lower() == "y"
 
 
-def default_run_name(now: datetime | None = None) -> str:
-    now = now if now is not None else datetime.now(UTC)
-    return f"{getpass.getuser()}-{now.strftime('%Y%m%d-%H%M')}"
+def default_run_name() -> str:
+    return f"{getpass.getuser()}-{datetime.now(UTC).strftime('%Y%m%d-%H%M')}"
 
 
 def new_fleet_dir(out_root: Path) -> Path:
@@ -1494,10 +1485,8 @@ def update_manifest(path: Path, phase: str, **extra: Any) -> Manifest:
     return cast(Manifest, merged)
 
 
-def tools_on_path(
-    names: Iterable[str], which: Callable[[str], str | None] = shutil.which
-) -> None:
-    missing = [name for name in names if which(name) is None]
+def tools_on_path(names: Iterable[str]) -> None:
+    missing = [name for name in names if shutil.which(name) is None]
     if missing:
         raise Refused(f"missing tools on PATH: {', '.join(missing)}")
 
@@ -1926,13 +1915,8 @@ def resolve_image(ref: str, fetch: RegistryFetch = _registry_get) -> ImageInfo:
     return {"ref": ref, "digest": digest, "revision": revision, "platforms": platforms}
 
 
-def preflight(
-    run: Runner,
-    cfg: RunConfig,
-    hosts: list[HostSpec],
-    which: Callable[[str], str | None] = shutil.which,
-) -> Preflight:
-    tools_on_path(["tofu", "aws", "ssh", "scp", "rsync", "git", "ssh-keygen"], which)
+def preflight(run: Runner, cfg: RunConfig, hosts: list[HostSpec]) -> Preflight:
+    tools_on_path(["tofu", "aws", "ssh", "scp", "rsync", "git", "ssh-keygen"])
     account = caller_account(run)
     vpc_id = default_vpc(run)
     types = {h["instance_type"] for h in hosts}
@@ -2042,8 +2026,7 @@ def render_tfvars(
     az: str,
     ami_id: str,
 ) -> dict[str, Any]:
-    """`az` and `ami_id` come from `preflight`, or from an offline caller's own placeholders;
-    the terraform module no longer re-resolves either (it would risk picking a different AZ
+    """`az` and `ami_id` come from `preflight`; the terraform module no longer re-resolves either (it would risk picking a different AZ
     than the one preflight already checked every instance type against)."""
     return {
         "name": name,
@@ -2054,7 +2037,6 @@ def render_tfvars(
         "ssh_public_key": ssh_pub,
         "operator_cidr": operator_cidr,
         "expires_at": expires_at,
-        "offline": cfg.offline,
         "pg_volume": pg_volume_spec(cfg),
         "hosts": {
             h["name"]: {
@@ -2544,7 +2526,6 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         pg_mbps=args.pg_mbps,
         max_usd=args.max_usd,
         yes=args.yes,
-        offline=args.offline,
     )
 
 
@@ -2596,7 +2577,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_run_flags(plan_p)
     add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
-    plan_p.add_argument("--offline", action="store_true", help="use no AWS credentials")
     plan_p.set_defaults(func=cmd_plan, yes=False, max_usd=UP_MAX_USD)
 
     up_p = sub.add_parser(
@@ -2610,7 +2590,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     up_p.add_argument("--yes", action="store_true")
     up_p.set_defaults(
         func=cmd_up,
-        offline=False,
         fleet=None,
         force=False,
         query_db=defaults.query_db,
@@ -2635,7 +2614,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="with --fleet: reset a dirty or stale fleet",
     )
     run_p.add_argument("--yes", action="store_true")
-    run_p.set_defaults(func=cmd_run, offline=False, db_modes=defaults.db_modes)
+    run_p.set_defaults(func=cmd_run, db_modes=defaults.db_modes)
 
     extend_p = sub.add_parser(
         "extend", help="move a fleet's expiry to now plus --ttl-min minutes"
@@ -2698,78 +2677,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def cmd_plan(
-    args: argparse.Namespace,
-    run: Runner = _run,
-    which: Callable[[str], str | None] = shutil.which,
-    clock: nb.Clock = nb.SYSTEM_CLOCK,
+    args: argparse.Namespace, run: Runner = _run, clock: nb.Clock = nb.SYSTEM_CLOCK
 ) -> int:
     cfg = dataclasses.replace(
         config_from_args(args), db_modes=args.db_modes, ttl_min=args.ttl_min
     )
-    fleet = cfg.ttl_min != "auto"
-    if fleet and not cfg.offline:
-        raise Refused("plan --ttl-min renders a fleet and needs --offline")
-    if fleet:
-        refuse_fleet_node_env(cfg)
-    now = clock.time()
-    if cfg.offline:
-        fleet_dir = new_fleet_dir(OUT_ROOT)
-        setup_logging(fleet_dir)
-        log.debug("argv %s", args.argv)
-        hosts = plan_hosts(cfg)
-        pre = offline_preflight(cfg)
-        estimate = estimate_or_refuse(
-            run,
-            cfg,
-            hosts,
-            region_minor_prices(REGION),
-            fleet_dir,
-            now,
-            fleet=fleet,
-            rds=rds_spec(cfg, pre),
-        )
-        if fleet:
-            render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
-        else:
-            render_run_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv, which)
-    else:
-        fleet_dir, *_ = plan_fleet(args, cfg, run, now)
+    fleet_dir, *_ = plan_fleet(args, cfg, run, clock.time())
     log.info("rendered %s (phase=planned)", fleet_dir)
     return EXIT_OK
-
-
-def offline_preflight(cfg: RunConfig) -> Preflight:
-    """Placeholders for what `preflight` reads from AWS and the registry, so that `plan --offline`
-    renders every file."""
-    placeholder = "sha256:" + "0" * 64
-    images: dict[str, ImageInfo] = {
-        name: {
-            "ref": ref,
-            "digest": placeholder,
-            "revision": None,
-            "platforms": ["linux/arm64"],
-        }
-        for name, ref in image_refs(cfg, offline_rds_version(cfg)).items()
-    }
-    pre: Preflight = {
-        "account": ACCOUNT,
-        "vpc_id": "",
-        "az": "",
-        "ami_id": "",
-        "images": images,
-        "vcpu_needed": 0,
-        "vcpu_in_use": 0,
-        "vcpu_quota": 0.0,
-    }
-    version = offline_rds_version(cfg)
-    if version is not None:
-        pre["rds_engine_version"] = version
-    return pre
-
-
-def offline_rds_version(cfg: RunConfig) -> str | None:
-    """No orderable options offline: the requested version stands in for the resolved minor."""
-    return RDS_ENGINE_VERSION if "rds" in cfg.db_modes else None
 
 
 def estimate_or_refuse(
@@ -3037,7 +2952,7 @@ def confirm_create(cfg: RunConfig, fleet_dir: Path, count: int) -> None:
     prompt = (
         f"Create {count} instances{extras}, 1 security group, 1 key pair in {ACCOUNT}?"
     )
-    if not confirm(prompt, cfg.yes, sys.stdin.isatty()):
+    if not confirm(prompt, cfg.yes):
         append_event(fleet_dir, "planned", "refused", "not confirmed")
         raise Refused("not confirmed; nothing was created")
 
@@ -4233,12 +4148,11 @@ def render_run_dir(
     pre: Preflight,
     estimate: Estimate,
     argv: list[str],
-    which: Callable[[str], str | None] = shutil.which,
 ) -> Path:
     """The fleet dir and its first run dir, everything known before `tofu apply`. Files that
     need the hosts' addresses (env files, start.sh, topology) are written by `render_host_files`
     after it."""
-    fleet = render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, argv, which)
+    fleet = render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, argv)
     return render_run(fleet_dir, fleet, cfg, SINGLE_RUN)
 
 
@@ -4250,10 +4164,9 @@ def render_fleet_dir(
     pre: Preflight,
     estimate: Estimate,
     argv: list[str],
-    which: Callable[[str], str | None] = shutil.which,
 ) -> FleetManifest:
-    ssh_pub = resolve_ssh_pub(run, cfg, fleet_dir, which)
-    cidr = operator_cidr(cfg)
+    ssh_pub = generate_ssh_key(run, fleet_dir)
+    cidr = operator_cidr()
     git_rev = git_head(run)
     rds = rds_spec(cfg, pre)
     write_fleet_manifest(
@@ -4357,16 +4270,6 @@ def ssh_key_path(fleet_dir: Path) -> Path:
     return fleet_dir / "ssh" / "id_ed25519"
 
 
-def resolve_ssh_pub(
-    run: Runner, cfg: RunConfig, fleet_dir: Path, which: Callable[[str], str | None]
-) -> str:
-    """The public key for `var.ssh_public_key`. Offline runs use the placeholder unless
-    `ssh-keygen` is on PATH."""
-    if cfg.offline and which("ssh-keygen") is None:
-        return OFFLINE_SSH_PUB
-    return generate_ssh_key(run, fleet_dir)
-
-
 def generate_ssh_key(run: Runner, fleet_dir: Path) -> str:
     key = ssh_key_path(fleet_dir)
     key.parent.mkdir(exist_ok=True)
@@ -4398,9 +4301,7 @@ def remove_ssh_key(fleet_dir: Path) -> None:
     log.info("ssh key removed")
 
 
-def operator_cidr(cfg: RunConfig) -> str:
-    if cfg.offline:
-        return OFFLINE_CIDR
+def operator_cidr() -> str:
     try:
         with urllib.request.urlopen(CHECKIP_URL, timeout=10) as response:
             return f"{response.read().decode().strip()}/32"
@@ -5495,7 +5396,7 @@ def destroy_run(run: Runner, args: argparse.Namespace, clock: nb.Clock) -> int:
     if manifest["phase"] in TERMINAL_PHASES:
         raise Refused(f"{name} is already {manifest['phase']}")
     prompt = f"Destroy the fleet of {name} in {ACCOUNT}?"
-    if not confirm(prompt, args.yes, sys.stdin.isatty()):
+    if not confirm(prompt, args.yes):
         raise Refused("not confirmed; nothing was destroyed")
     setup_logging(fleet_dir)
     cfg = config_from_manifest(manifest["config"])
@@ -5569,7 +5470,7 @@ def destroy_orphans(
         f"Terminate {instances} instances and delete {others} other resources "
         f"of {len(orphans)} runs in {ACCOUNT}?"
     )
-    if not confirm(prompt, args.yes, sys.stdin.isatty()):
+    if not confirm(prompt, args.yes):
         raise Refused("not confirmed; nothing was destroyed")
     try:
         for orphan in orphans:

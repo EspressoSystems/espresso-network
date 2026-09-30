@@ -11,11 +11,11 @@ output "hosts" {
 }
 
 output "az" {
-  value = local.pinned_az
+  value = var.az
 }
 
 output "ami_id" {
-  value = local.ami_id
+  value = var.ami_id
 }
 
 output "security_group_id" {
