@@ -131,7 +131,7 @@ GHCR_ORG = "ghcr.io/espressosystems/espresso-network"
 IMAGE_COMPONENTS = ("espresso-node", "orchestrator", "state-relay-server", "deploy")
 # Fixed refs, independent of --tag.
 SUPPORT_IMAGES = {
-    "postgres": "docker.io/library/postgres:16",
+    "postgres": "docker.io/library/postgres:latest",
     "foundry": "ghcr.io/foundry-rs/foundry:latest",
 }
 # Images each role's user-data pulls ahead of time and start.sh runs.
