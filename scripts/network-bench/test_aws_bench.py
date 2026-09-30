@@ -3530,7 +3530,6 @@ def pg_settings(**overrides) -> dict:
     settings = {
         key: awsb.rds_parameter(key, value) for key, value in awsb.PG_TUNING.items()
     }
-    settings["wal_compression"] = "pglz"
     return {**settings, **overrides}
 
 
@@ -3625,11 +3624,6 @@ class PgTuningTest(unittest.TestCase):
 
     def test_matching_settings_report_nothing(self):
         self.assertEqual(awsb.check_pg_tuning(pg_settings()), [])
-
-    def test_wal_compression_reported_under_either_spelling(self):
-        for spelling in ("on", "pglz"):
-            settings = pg_settings(wal_compression=spelling)
-            self.assertEqual(awsb.check_pg_tuning(settings), [])
 
     def test_differing_setting_is_named(self):
         settings = pg_settings(shared_buffers="16384", max_wal_size="1024")

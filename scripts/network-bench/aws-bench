@@ -273,7 +273,10 @@ PG_TUNING = {
     "min_wal_size": "4GB",
     "checkpoint_timeout": "15min",
     "checkpoint_completion_target": "0.9",
-    "wal_compression": "on",
+    # VID shares and payloads do not compress: pglz on them was two thirds of the Postgres CPU
+    # in run lulu-20260930-1649 (perf). lz4 gives up on such input at once.
+    "wal_compression": "lz4",
+    "default_toast_compression": "lz4",
     "random_page_cost": "1.1",
     "effective_io_concurrency": "200",
     "autovacuum_vacuum_cost_limit": "2000",
@@ -312,7 +315,6 @@ _UNIT_BYTES = {"8kB": 8192, "kB": 1024, "MB": 1024**2}
 _TIME_MS = {"ms": 1, "s": 1000, "min": 60_000, "h": 3_600_000}
 _TIME_UNIT_MS = {"ms": 1, "s": 1000}
 # pg_settings reports the canonical spelling of an enum value that has aliases.
-PG_SETTING_ALIASES = {("wal_compression", "on"): "pglz"}
 PG_OBSERVABILITY = {
     "shared_preload_libraries": "pg_stat_statements",
     "pg_stat_statements.track": "all",
@@ -2410,8 +2412,7 @@ def check_pg_tuning(settings: dict[str, Any]) -> list[str]:
     """Keys of PG_TUNING whose collected pg_settings value differs from the configured one."""
     differing = []
     for key, value in PG_TUNING.items():
-        accepted = {rds_parameter(key, value), PG_SETTING_ALIASES.get((key, value))}
-        if settings[key] not in accepted:
+        if settings[key] != rds_parameter(key, value):
             differing.append(key)
     return differing
 
