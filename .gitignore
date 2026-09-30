@@ -83,3 +83,6 @@ mutants/
 
 # Personal project-specific preferences
 CLAUDE.local.md
+
+# scripts/network-bench output
+bench-out/
