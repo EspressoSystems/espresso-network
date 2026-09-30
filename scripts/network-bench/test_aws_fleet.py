@@ -54,6 +54,10 @@ GENESIS = Path(__file__).with_name("genesis.toml")
 
 
 def fake_report(run_dir: Path, baseline=None) -> dict:
+    # The real report reads these keys from the run manifest a driver command wrote.
+    awsb.deployment_meta(
+        netbench.read_json(run_dir / "manifest.json"), {"clock_offset_ms": {}}
+    )
     result = valid_result()
     netbench.write_json(run_dir / "result.json", result)
     return result
@@ -906,10 +910,6 @@ class VolumeWiringTest(unittest.TestCase):
         self.assertEqual(runner.count("mkfs.ext4"), 1)
         self.assertFalse(runner.ran("find /data/journal"))
         self.assertEqual(harness.fleet()["db_modes"], ["volume"])
-        # The report reads the volume id from the run manifest, rendered before the apply.
-        (run_dir,) = (harness.fleet_dir / "runs").iterdir()
-        manifest = json.loads((run_dir / "manifest.json").read_text())
-        self.assertEqual(manifest["pg_volume_id"], VOLUME_ID)
 
     def test_up_without_the_volume_mode_issues_no_mkfs(self):
         harness = FleetHarness(self)

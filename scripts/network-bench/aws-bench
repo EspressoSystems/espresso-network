@@ -3376,19 +3376,18 @@ def measure_run(run: Run) -> None:
     with recording(run):
         remote = fleet.remote
         assert remote is not None, "up_fleet must run first"
-        render_host_files(
-            run.run_dir,
-            run.cfg,
-            fleet.manifest,
-            remote.hosts,
-            run.dotenv_text,
-        )
+        manifest = fleet.manifest
+        render_host_files(run.run_dir, run.cfg, manifest, remote.hosts, run.dotenv_text)
         enter_phase(
             fleet, run.manifest_path, "shipping", "files, host monitors, containers"
         )
         git_rev = ship_agents(remote)
         # A single shot renders its run manifest before `connect` learns the volume id.
-        volume = {k: v for k, v in fleet.manifest.items() if k == "pg_volume_id"}
+        volume = (
+            {"pg_volume_id": manifest["pg_volume_id"]}
+            if run.cfg.query_db == "volume"
+            else {}
+        )
         update_manifest(run.manifest_path, "shipping", git_rev=git_rev, **volume)
         ship(remote, run.run_dir)
         start_hostmon(remote)
