@@ -87,7 +87,7 @@ pub struct BlockBuilderConfig {
 impl Default for BlockBuilderConfig {
     fn default() -> Self {
         Self {
-            max_retry_bytes: 100 * 1024 * 1024,
+            max_retry_bytes: 4 * 1024 * 1024 * 1024,
             block_sizes: BTreeMap::from([(versions::version(0, 0), 1024 * 1024 * 1024)]),
             ttl: 50,
             dedup_window_size: 10,
