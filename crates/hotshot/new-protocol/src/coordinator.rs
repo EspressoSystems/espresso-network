@@ -1520,7 +1520,14 @@ where
                             count = msg.transactions.len(),
                             "recv transactions"
                         );
-                        self.block_builder.on_transactions(msg)
+                        let started = Instant::now();
+                        self.block_builder.on_transactions(msg);
+                        if let Some(metrics) = &self.metrics {
+                            metrics
+                                .consensus
+                                .forwarded_transactions_duration
+                                .add_point(started.elapsed().as_secs_f64());
+                        }
                     },
                     BlockMessage::DedupManifest(manifest) => {
                         debug!(

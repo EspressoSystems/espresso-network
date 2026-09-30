@@ -905,6 +905,9 @@ pub struct ConsensusMetricsValue {
     pub update_leaf_duration: Box<dyn Histogram>,
     /// The time it took to calculate the disperse
     pub vid_disperse_duration: Box<dyn Histogram>,
+    /// Time the new-protocol coordinator spends taking in one batch of transactions forwarded
+    /// to it as the next leader
+    pub forwarded_transactions_duration: Box<dyn Histogram>,
 }
 
 impl ConsensusMetricsValue {
@@ -951,6 +954,10 @@ impl ConsensusMetricsValue {
             ),
             vid_disperse_duration: metrics.create_histogram(
                 String::from("vid_disperse_duration"),
+                Some("seconds".to_string()),
+            ),
+            forwarded_transactions_duration: metrics.create_histogram(
+                String::from("forwarded_transactions_duration"),
                 Some("seconds".to_string()),
             ),
         }
