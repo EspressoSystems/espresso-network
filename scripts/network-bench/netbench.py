@@ -677,6 +677,8 @@ class LoadState:
 
     def __init__(self) -> None:
         self.cap = 1
+        # What `pace` is asked to submit; 0 while nothing is submitted.
+        self.rate_mb_s = 0.0
         self.room = asyncio.Event()
         self.txs: list[Tx] = []
         self.pending: dict[int, Tx] = {}
@@ -962,6 +964,7 @@ async def drain(
     """Submits nothing until no transaction is pending (unless `wait_pending` is off), decided
     bytes stopped growing and the query node caught up with the validators. Seconds that took,
     or None after `timeout_s`."""
+    state.rate_mb_s = 0.0
     start, target = clock.time(), None
     while clock.time() - start < timeout_s:
         # Once nothing is pending, two equal samples (~1 s apart) mean consensus is idle.
@@ -1003,6 +1006,7 @@ async def pace(
     """Submits at `rate_mb_s` until `until`, independent of inclusion, but never more than
     the step's cap in flight."""
     state = load.state
+    state.rate_mb_s = rate_mb_s
     state.cap = step_cap(load.cfg, rate_mb_s)
     state.room.set()
     interval = tx_interval_s(load.cfg.tx_size, rate_mb_s)
@@ -1135,7 +1139,7 @@ async def track_inclusion(
     while True:
         now = clock.time()
         if now >= report:
-            log_progress(state, heights, counters, now)
+            log_progress(state, heights, counters, now, cfg.tx_size)
             report = now + PROGRESS_S
         if done.is_set():
             deadline = deadline or now + cfg.tx_timeout_s
@@ -1206,6 +1210,7 @@ class ProgressStats(TypedDict):
     seconds_behind: float
     block_s: float | None
     block_mb: float | None
+    decided_mb_s: float | None
 
 
 def progress_window(
@@ -1236,7 +1241,18 @@ def progress_window(
         / 1e6
         if blocks and len(inside) > 1
         else None,
+        "decided_mb_s": (inside[-1]["decided_bytes"] - inside[0]["decided_bytes"])
+        / (inside[-1]["ts"] - inside[0]["ts"])
+        / 1e6
+        if len(inside) > 1
+        else None,
     }
+
+
+def submit_mb_s(txs: Sequence[Tx], tx_size: int, now: float, window_s: float) -> float:
+    """MB/s of the requests that went out in the last `window_s`."""
+    sent = sum(1 for tx in txs if now - window_s < tx.t_submit <= now)
+    return sent * tx_size / window_s / 1e6
 
 
 def log_progress(
@@ -1244,18 +1260,22 @@ def log_progress(
     heights: Heights,
     counters: Sequence[Mapping[str, Any]],
     now: float,
+    tx_size: int,
 ) -> None:
     stats = progress_window(heights, counters, now, PROGRESS_S)
     included = sum(1 for tx in state.txs if tx.status == "included")
     timeouts = sum(1 for tx in state.txs if tx.status == "timeout")
     log.info(
-        "height v=%s q=%s (%s), block %s s, %s MB; %d submitted, %d included, %d pending, "
-        "%d timed out, %d waited for the cap",
+        "height v=%s q=%s (%s), block %s s, %s MB; submitting %s of %s MB/s, decided %s "
+        "MB/s; %d submitted, %d included, %d pending, %d timed out, %d waited for the cap",
         fmt_num(stats["validator"]) or "-",
         fmt_num(stats["query"]) or "-",
         fmt_lag(stats),
         fmt_num(stats["block_s"]) or "-",
         fmt_num(stats["block_mb"]) or "-",
+        fmt_num(submit_mb_s(state.txs, tx_size, now, PROGRESS_S)),
+        fmt_num(state.rate_mb_s),
+        fmt_num(stats["decided_mb_s"]) or "-",
         len(state.txs),
         included,
         len(state.pending),

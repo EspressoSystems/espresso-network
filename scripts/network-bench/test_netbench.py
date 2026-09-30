@@ -1804,6 +1804,7 @@ class ProgressWindowTest(unittest.TestCase):
         self.assertEqual(stats["lag_ms"], None)
         self.assertEqual(stats["block_s"], None)
         self.assertEqual(stats["block_mb"], None)
+        self.assertEqual(stats["decided_mb_s"], None)
 
     def test_one_block(self):
         h = self.heights([95.0], [95.5])
@@ -1822,7 +1823,28 @@ class ProgressWindowTest(unittest.TestCase):
         self.assertEqual(stats["validator"], 4)
         self.near(stats["block_s"], 6)
         self.near(stats["block_mb"], 2)
+        self.near(stats["decided_mb_s"], 0.4)
         self.near(stats["lag_ms"], 200)
+
+    def test_submit_rate_counts_sent_transactions_in_the_window(self):
+        txs = [
+            netbench.Tx(id=i, node=0, t_submit=t)
+            for i, t in enumerate((50.0, 80.0, 99.0, math.inf))
+        ]
+        self.near(netbench.submit_mb_s(txs, 1_500_000, 100.0, 30), 0.1)
+
+    def test_progress_line_shows_the_submitted_and_the_offered_rate(self):
+        state = netbench.LoadState()
+        state.rate_mb_s = 60.0
+        for i in range(90):
+            state.submitted(netbench.Tx(id=i, node=0, t_submit=99.0))
+        h = self.heights([95.0], [95.5])
+        counters = self.counters((80, 0), (100, 50e6))
+        with self.assertLogs(netbench.log, "INFO") as logs:
+            netbench.log_progress(state, h, counters, 100.0, 1_000_000)
+        self.assertIn(
+            "submitting 3 of 60 MB/s, decided 2.5 MB/s; 90 submitted", logs.output[0]
+        )
 
     def test_blocks_outside_window_are_ignored(self):
         h = self.heights([10, 20, 90], [10, 20, 90])
