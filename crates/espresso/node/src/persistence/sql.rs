@@ -3781,20 +3781,6 @@ mod test {
             _pd: Default::default(),
         };
 
-        let block_payload_signature = BLSPubKey::sign(&privkey, &leaf_payload_bytes_arc)
-            .expect("Failed to sign block payload");
-        let da_proposal = Proposal {
-            data: DaProposal2::<SeqTypes> {
-                encoded_transactions: leaf_payload_bytes_arc,
-                metadata: leaf_payload.ns_table().clone(),
-                view_number: ViewNumber::new(0),
-                epoch: None,
-                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
-            },
-            signature: block_payload_signature,
-            _pd: Default::default(),
-        };
-
         let mut next_quorum_proposal = quorum_proposal.clone();
         next_quorum_proposal.data.proposal.view_number += 1;
         next_quorum_proposal.data.proposal.justify_qc.view_number += 1;
@@ -3807,7 +3793,7 @@ mod test {
 
         // Add to database.
         storage
-            .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
+            .append_pending_payload(leaf.view_number(), leaf.block_header(), &leaf_payload)
             .await
             .unwrap();
         storage.append_vid(&vid_share).await.unwrap();
@@ -3832,7 +3818,7 @@ mod test {
         assert_eq!(
             leaf_payload,
             storage
-                .fetch(PayloadRequest(vid_share.data.payload_commitment()))
+                .fetch(PayloadRequest(leaf.block_header().payload_commitment()))
                 .await
                 .unwrap()
         );
