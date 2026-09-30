@@ -825,7 +825,7 @@ impl Persistence {
             let Some((header, payload)) = self.read_pending_payload(view).await? else {
                 continue;
             };
-            let event = CoordinatorEvent::BlockPayloadReconstructed {
+            let event = CoordinatorEvent::BlockPayload {
                 view,
                 header,
                 payload: Arc::new(payload),

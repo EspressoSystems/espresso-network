@@ -2299,7 +2299,7 @@ mod tests {
                             )
                         }),
                 ),
-                CoordinatorEvent::BlockPayloadReconstructed { view, payload, .. } => {
+                CoordinatorEvent::BlockPayload { view, payload, .. } => {
                     delivered.push(Delivered::Reconstructed(view.u64(), (**payload).clone()))
                 },
                 _ => {},
@@ -2313,7 +2313,7 @@ mod tests {
         view: u64,
         header: &Header,
     ) {
-        let event = CoordinatorEvent::BlockPayloadReconstructed {
+        let event = CoordinatorEvent::BlockPayload {
             view: ViewNumber::new(view),
             header: header.clone(),
             payload: Arc::new(Payload::empty().0),
