@@ -210,6 +210,7 @@ def make_result(steps=None, steal=0.0, config_hash="abc123") -> netbench.BenchRe
             "cap_s": 5.0,
             "latency_target_ms": 1000,
             "query_lag_target_ms": 1000,
+            "keep_going": False,
         },
         "config_hash": config_hash,
         "window": {"t0": 0.0, "t1": 180.0, "height_start": 100, "height_end": 500},
@@ -1066,6 +1067,27 @@ class LoadTest(unittest.TestCase):
             )
         self.assertEqual([s["rate_mb_s"] for s in self.steps], [0.02, 0.16])
         self.assertTrue(meta["refine_skipped"])
+
+    def test_keep_going_runs_every_step_then_waits_for_the_backlog(self):
+        # 0.08 MB/s of capacity: both steps fail and leave 60 txs behind.
+        with mock.patch.object(netbench, "COUNTER_POLL_S", 0.05):
+            _, _, _, meta = self.run_load(
+                True,
+                1.0,
+                block_txs=4,
+                steps=(0.1, 0.12),
+                tx_timeout_s=10,
+                keep_going=True,
+            )
+        self.assertEqual(
+            [
+                (s["rate_mb_s"], s["refine"], bool(s["consensus_fails"]))
+                for s in self.steps
+            ],
+            [(0.1, False, True), (0.12, False, True)],
+        )
+        self.assertGreater(meta["drain_s"], 0.2)
+        self.assertFalse(meta["refine_skipped"])
 
     def test_step_ends_on_time_while_waiting_for_room(self):
         # Nothing is included: the cap fills at once and frees only on timeouts after 3 s.

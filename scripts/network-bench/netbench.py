@@ -50,6 +50,7 @@ SCRAPE_OK_MIN = 0.9
 MIN_READY_HEIGHT = 5
 PROGRESS_S = 30
 DRAIN_SLACK_S = 10
+CATCHUP_TIMEOUT_S = 600
 # Payloads are read a block behind the query node's height: a payload requested as soon as its
 # header is stored can start a peer fetch that races the node's own insert.
 PAYLOAD_LAG_BLOCKS = 1
@@ -189,6 +190,7 @@ class LoadStats(TypedDict):
     # Per height: the bench finished scanning its payload after it could start.
     tracker_lag_ms: Quantiles | None
     # Before the refine step; skipped if the failed step's backlog did not drain in time.
+    # With keep_going: after the last step, None past CATCHUP_TIMEOUT_S.
     drain_s: float | None
     refine_skipped: bool
 
@@ -323,6 +325,9 @@ class BenchConfig:
     # A step fails above either target, see step_fails.
     latency_target_ms: int = 1000
     query_lag_target_ms: int = 1000
+    # Every step runs whatever its verdict, no refine step; then the backlog drains, see
+    # run_staircase. In flight and tx timeouts stay bound by `cap_s` and `tx_timeout_s`.
+    keep_going: bool = False
 
 
 def parse_rates(text: str) -> tuple[float, ...]:
@@ -779,7 +784,8 @@ async def run_staircase(
     """Warmup, then steps up the ramp until one fails, then one refine step once the failed
     step's backlog drained. Each step is judged on what is known at its end; the report keeps
     that verdict. Returns the steps, the drain time and whether the drain timed out, which
-    skips the refine step."""
+    skips the refine step. With `keep_going` every step of the ramp runs, without a refine
+    step, and the drain follows the last step."""
     cfg = load.cfg
     steps: list[dict[str, Any]] = []
     passed: list[bool] = []
@@ -811,8 +817,14 @@ async def run_staircase(
             )
             fails = judged["consensus_fails"] + judged["query_fails"]
             log_step(judged, fails)
-            passed.append(not fails)
+            passed.append(cfg.keep_going or not fails)
             steps.append(judged)
+        if cfg.keep_going:
+            drained = await drain(load.state, counters, heights, CATCHUP_TIMEOUT_S)
+            if drained is None:
+                log.warning("backlog did not drain in %d s", CATCHUP_TIMEOUT_S)
+            else:
+                log.info("backlog drained in %.1f s", drained)
     return steps, drained, skipped
 
 
@@ -2418,12 +2430,17 @@ def load_lines(result: BenchResult) -> list[str]:
             if load["refine_skipped"]
             else []
         ),
-        *(
-            [f"- backlog drained in {load['drain_s']:.1f} s before the refine step"]
-            if load["drain_s"] is not None
-            else []
-        ),
+        *drain_lines(load["drain_s"], cfg["keep_going"]),
     ]
+
+
+def drain_lines(drain_s: float | None, keep_going: bool) -> list[str]:
+    if drain_s is not None:
+        when = "after the last step" if keep_going else "before the refine step"
+        return [f"- backlog drained in {drain_s:.1f} s {when}"]
+    if keep_going:
+        return [f"- backlog did not drain in {CATCHUP_TIMEOUT_S} s after the last step"]
+    return []
 
 
 def spread(q: Quantiles | None) -> str:

@@ -264,6 +264,14 @@ class PhaseSecondsTest(unittest.TestCase):
             awsb.load_seconds(load), 60 + 3 * 30 + 2 * 30 + netbench.DRAIN_SLACK_S
         )
 
+    def test_load_seconds_keep_going(self):
+        load = netbench.BenchConfig(
+            steps=(4.0, 8.0), step_s=30, warmup_s=60, tx_timeout_s=30, keep_going=True
+        )
+        self.assertEqual(
+            awsb.load_seconds(load), 60 + 2 * 30 + netbench.CATCHUP_TIMEOUT_S + 30
+        )
+
     def test_worst_uses_ready_timeout_and_collect_max(self):
         cfg = awsb.RunConfig(tag="x", ready_timeout_s=900.0)
         phases = awsb.phase_seconds(cfg)

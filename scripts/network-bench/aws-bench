@@ -951,7 +951,14 @@ def plan_peers(hosts: list[HostSpec]) -> dict[str, list[str]]:
 
 def load_seconds(load: nb.BenchConfig) -> float:
     """warmup, every step, the refine step, and the two drains (before the refine step and at
-    the end)."""
+    the end). With keep_going: no refine step, the drain after the last step at its timeout."""
+    if load.keep_going:
+        return (
+            load.warmup_s
+            + len(load.steps) * load.step_s
+            + nb.CATCHUP_TIMEOUT_S
+            + load.tx_timeout_s
+        )
     return (
         load.warmup_s
         + (len(load.steps) + 1) * load.step_s
@@ -2605,6 +2612,11 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         "--query-lag-target-ms", type=int, default=load.query_lag_target_ms
     )
     parser.add_argument(
+        "--keep-going",
+        action="store_true",
+        help="run every step whatever its verdict, then wait for the query node to catch up",
+    )
+    parser.add_argument(
         "--ready-timeout-s", type=float, default=defaults.ready_timeout_s
     )
     parser.add_argument("--genesis", type=Path, default=Path(load.genesis))
@@ -2650,6 +2662,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         seed=args.seed,
         latency_target_ms=args.latency_target_ms,
         query_lag_target_ms=args.query_lag_target_ms,
+        keep_going=args.keep_going,
     )
     return RunConfig(
         tag=args.tag,

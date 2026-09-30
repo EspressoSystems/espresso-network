@@ -33,6 +33,10 @@ scripts/network-bench/
   inclusion found by scanning the query node's blocks.
 - Default ramp: CI linear 4..16 MB/s; AWS x1.5 per step from 4 to 200 MB/s (the target), stops at the first failing
   step, then one refine step halfway back.
+- `--keep-going`: every step runs whatever its verdict, no refine step; then the load stops until the query node caught
+  up (at most 600 s), reported as the backlog drain time. Set `--cap-s` and `--tx-timeout-s` above the expected lag
+  (e.g. 600): inclusion is read from the query node, so a lag above `--cap-s` throttles the load and one above
+  `--tx-timeout-s` times transactions out. Consensus latency of a lagging step is not reliable.
 - Query node: pg_stat_database/checkpointer/wal/activity every 5 s, pg_stat_statements and settings at collect, slow
   statements (>200 ms) in the postgres log.
 - Per step, second half judged:

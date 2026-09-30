@@ -17,7 +17,8 @@ half: it fails if decided falls behind the offered rate, a view times out,
 consensus latency (submit to the block on a validator) exceeds its target, or the query node's
 lag behind the validators exceeds its target or grows. At the first failing step the ramp stops
 and, once its backlog has drained (consensus settled, query node caught up), one refine step
-runs halfway back; the refine step is skipped if the backlog does not drain in time. Capacity
+runs halfway back; the refine step is skipped if the backlog does not drain in time. With
+`keep_going` every step runs whatever its verdict and the backlog drains after the last. Capacity
 is the highest passing rate, split into the consensus and query node limits. Each transaction
 carries a per-run marker and its id, so inclusion is found by scanning node0's block payloads,
 one fetch per block.
@@ -179,8 +180,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         if field.name in ("genesis", "namespaces"):
             continue
         default = getattr(defaults, field.name)
+        flag = f"--{field.name.replace('_', '-')}"
+        if isinstance(default, bool):
+            run.add_argument(flag, action="store_true")
+            continue
         run.add_argument(
-            f"--{field.name.replace('_', '-')}",
+            flag,
             type=nb.parse_rates if field.name == "steps" else type(default),
             default=default,
         )
