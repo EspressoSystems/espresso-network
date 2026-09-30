@@ -19,6 +19,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -254,11 +255,21 @@ class EstimateCostTest(unittest.TestCase):
         self.assertEqual(estimate["expected_s"], 1650.0)
         self.assertEqual(estimate["ttl_s"], 3270.0)
         self.assertAlmostEqual(estimate["expected_usd"], 0.8683328695776255, places=6)
-        self.assertAlmostEqual(estimate["bound_usd"], 1.7053451983447487, places=6)
+        expected_bound = sum(
+            line["usd"]
+            for line in awsb._cost_lines(
+                self.hosts,
+                self.prices,
+                self.minor,
+                estimate["ttl_s"] + awsb.BOOT_ALLOWANCE_S,
+            )
+        )
+        self.assertAlmostEqual(estimate["bound_usd"], expected_bound, places=6)
+        self.assertGreater(estimate["bound_usd"], 1.7053451983447487)
 
     def test_bound_is_cost_at_ttl(self):
         estimate = awsb.estimate_cost(self.hosts, self.cfg, self.prices, self.minor)
-        ratio = estimate["ttl_s"] / estimate["expected_s"]
+        ratio = (estimate["ttl_s"] + awsb.BOOT_ALLOWANCE_S) / estimate["expected_s"]
         # every line scales with duration except egress, which is flat per host
         egress_line = next(
             line for line in estimate["lines"] if line["item"] == "egress"
@@ -472,6 +483,11 @@ class CmdPlanTest(unittest.TestCase):
             self.assertEqual(manifest["phase"], "planned")
             self.assertEqual(manifest["peers"], {"node0": ["node1"], "node1": []})
             self.assertEqual(len(manifest["hosts"]), 3)
+            self.assertNotIn("expires_at", manifest)
+            tfvars = json.loads(
+                (run_dir / "terraform" / "terraform.tfvars.json").read_text()
+            )
+            self.assertEqual(tfvars["expires_at"], "")
             self.assertTrue((Path(out_root) / "run1" / "driver.log").exists())
             self.assertTrue((Path(out_root) / "run1" / "events.jsonl").exists())
 
@@ -2262,6 +2278,25 @@ class RunFlowTest(unittest.TestCase):
         self.assertIn("| valid | 0 |", row)
         self.assertTrue(row.endswith("| yes |"))
 
+    def test_expiry_is_stamped_after_confirm_and_matches_the_manifest(self):
+        harness = RunHarness(self, confirmed=True)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        before = datetime.now(UTC).replace(microsecond=0)
+        with unittest.mock.patch.object(
+            awsb, "write_report", return_value=valid_result()
+        ):
+            harness.run(runner, extra=("--yes",))
+        manifest = json.loads((harness.run_dir / "manifest.json").read_text())
+        tfvars = json.loads(
+            (harness.run_dir / "terraform" / "terraform.tfvars.json").read_text()
+        )
+        self.assertEqual(tfvars["expires_at"], manifest["expires_at"])
+        expires = datetime.fromisoformat(tfvars["expires_at"])
+        earliest = before.timestamp() + manifest["estimate"]["ttl_s"] + awsb.PROVISION_S
+        self.assertGreaterEqual(expires.timestamp(), earliest)
+        plans = [c for c in runner.calls if c[0] == "tofu" and c[2] == "plan"]
+        self.assertEqual(len(plans), 2)
+
     def test_invalid_result_exits_1(self):
         harness = RunHarness(self)
         runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
@@ -2279,9 +2314,12 @@ class RunFlowTest(unittest.TestCase):
             awsb, "write_report", return_value=valid_result()
         ):
             code = harness.run(runner, extra=("--keep",))
-        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertFalse(runner.ran("tofu", "destroy"))
         self.assertIn("| no |", harness.index())
+        self.assertTrue(
+            harness.last_log_line().endswith(f"aws-bench destroy {harness.run_dir}")
+        )
 
     def test_auto_key_is_removed_after_destroy(self):
         harness = RunHarness(self)
@@ -2388,6 +2426,39 @@ class RunInterruptTest(unittest.TestCase):
         )
         self.assertIn("still waiting for the current step (services)", logs.output[1])
 
+    def test_sighup_is_handled_like_sigint(self):
+        interrupts = awsb.Interrupts()
+        with unittest.mock.patch.object(awsb.signal, "signal") as register:
+            interrupts.install()
+        registered = {call.args[0] for call in register.call_args_list}
+        self.assertEqual(registered, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+
+    def test_third_signal_skips_the_collection_even_after_disarm(self):
+        interrupts = awsb.Interrupts()
+        interrupts.disarm()
+        interrupts._handle(1, None)
+        interrupts._handle(1, None)
+        self.assertFalse(interrupts.skip_collect.is_set())
+        interrupts._handle(1, None)
+        self.assertTrue(interrupts.skip_collect.is_set())
+
+    def test_skipped_collection_still_destroys(self):
+        harness = RunHarness(self)
+        interrupts = awsb.Interrupts()
+
+        def third_signal(polls: int) -> None:
+            if polls == 2:
+                interrupts.event.set()
+                interrupts.skip_collect.set()
+
+        runner = FleetRunner(
+            [{"phase": "loading", "detail": "x"}], on_poll=third_signal
+        )
+        code = awsb.cmd_run(harness.args(), run=runner, interrupts=interrupts)
+        self.assertEqual(code, awsb.EXIT_FAILED)
+        self.assertFalse(runner.ran("rsync", "/opt/bench/out/"))
+        self.assertTrue(runner.ran("tofu", "destroy"))
+
     def test_interrupts_are_ignored_after_disarm(self):
         interrupts = awsb.Interrupts()
         interrupts.disarm()
@@ -2451,6 +2522,58 @@ class RunTeardownGuaranteedTest(unittest.TestCase):
         self.assertEqual(code, awsb.EXIT_FAILED)
         self.assertTrue(runner.ran("tofu", "destroy"))
         self.assertIn("ZeroDivisionError", (harness.run_dir / "summary.md").read_text())
+
+    def test_exception_in_cost_after_destroy_follows_the_result(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        with (
+            unittest.mock.patch.object(
+                awsb, "write_report", return_value=valid_result()
+            ),
+            unittest.mock.patch.object(
+                awsb, "actual_cost", side_effect=TypeError("reason")
+            ),
+        ):
+            code = harness.run(runner)
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertTrue(runner.ran("tofu", "destroy"))
+        self.assertIn("TypeError: reason", harness.index_log())
+
+    def test_exception_in_bookkeeping_after_failed_destroy_exits_4(self):
+        harness = RunHarness(self)
+        runner = FleetRunner(
+            [DONE_STATE], destroys=[completed(returncode=1, stderr="locked")]
+        )
+        with (
+            unittest.mock.patch.object(
+                awsb, "write_report", return_value=valid_result()
+            ),
+            unittest.mock.patch.object(
+                awsb, "append_index", side_effect=KeyError("git_rev")
+            ),
+        ):
+            code = harness.run(runner)
+        self.assertEqual(code, awsb.EXIT_LEFTOVER)
+        self.assertTrue(
+            harness.last_log_line().endswith(f"aws-bench destroy {harness.run_dir}")
+        )
+
+    def test_exception_in_destroy_exits_4_with_command_last(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        with (
+            unittest.mock.patch.object(
+                awsb, "write_report", return_value=valid_result()
+            ),
+            unittest.mock.patch.object(
+                awsb, "destroy_fleet", side_effect=RuntimeError("boom")
+            ),
+        ):
+            code = harness.run(runner)
+        self.assertEqual(code, awsb.EXIT_LEFTOVER)
+        self.assertTrue(
+            harness.last_log_line().endswith(f"aws-bench destroy {harness.run_dir}")
+        )
 
     def test_truncated_node_log_does_not_break_the_failure_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3216,6 +3339,31 @@ class SweepAndCostTest(unittest.TestCase):
         )
         self.assertEqual(cost["bound"], estimate["bound_usd"])
 
+    def test_actual_cost_skips_rows_without_a_reason(self):
+        cfg = awsb.RunConfig(
+            tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
+        )
+        hosts = awsb.plan_hosts(cfg)
+        estimate = awsb.estimate_cost(
+            hosts, cfg, two_node_prices(), awsb.region_minor_prices("eu-west-1")
+        )
+        manifest = {
+            "name": "run1",
+            "config": {"profile": "p", "region": "eu-west-1"},
+            "hosts": hosts,
+            "estimate": estimate,
+        }
+        launch = "2026-09-29T15:00:00+00:00"
+        rows = [
+            {"launch": launch, "reason": None},
+            {"launch": launch, "reason": "User initiated (2026-09-29 15:30:00 GMT)"},
+        ]
+        runner = FleetRunner([DONE_STATE], describe=json.dumps(rows))
+        self.assertEqual(awsb.actual_cost(runner, manifest)["duration_s"], 1800.0)
+        only_none = json.dumps(rows[:1])
+        with self.assertRaises(ValueError):
+            awsb.actual_cost(FleetRunner([DONE_STATE], describe=only_none), manifest)
+
     def test_actual_cost_without_termination_time_raises(self):
         cfg = awsb.RunConfig(
             tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
@@ -3951,7 +4099,7 @@ class KeptRunTest(unittest.TestCase):
         with unittest.mock.patch.object(
             awsb, "write_report", return_value=valid_result()
         ):
-            self.assertEqual(harness.run(runner, extra=("--keep",)), awsb.EXIT_OK)
+            self.assertEqual(harness.run(runner, extra=("--keep",)), awsb.EXIT_LEFTOVER)
         (harness.run_dir / "terraform").mkdir(exist_ok=True)
         return harness, runner
 
@@ -3986,6 +4134,21 @@ class KeptRunTest(unittest.TestCase):
             awsb.cmd_status(self.args(harness, "status"), runner, NOW)
         self.assertRegex(out.getvalue(), r"- cost: \$\d+\.\d\d actual, bound")
         self.assertNotIn("agent", out.getvalue())
+
+    def test_status_of_a_finished_run_reads_cost_json_without_aws(self):
+        harness = RunHarness(self)
+        runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
+        with unittest.mock.patch.object(
+            awsb, "write_report", return_value=valid_result()
+        ):
+            self.assertEqual(harness.run(runner), awsb.EXIT_OK)
+        offline = FleetRunner([DONE_STATE])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = awsb.cmd_status(self.args(harness, "status"), offline, NOW)
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertEqual(offline.calls, [])
+        self.assertRegex(out.getvalue(), r"- cost: \$\d+\.\d\d actual, bound \$\d+")
 
     def test_status_of_a_planned_run(self):
         with tempfile.TemporaryDirectory() as tmp:

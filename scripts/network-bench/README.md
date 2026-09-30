@@ -107,7 +107,7 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> services -> nodes -> m
 | report      | `netbench.analyze` + AWS validity → `result.json`, `summary.md`                                                                                    |                                                        |
 | destroying  | `tofu destroy` x3, then tag sweep; `cost.json` from launch/terminate times; `INDEX.md` row                                                         | leftovers: exit 4                                      |
 
-Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 4 resources may remain.
+Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 4 resources may remain (also `--keep`).
 
 ### Failure paths
 

@@ -22,7 +22,8 @@ Prerequisites: opentofu and awscli2 (nix devShell), an AWS profile for the bench
 Recipes: `just bench aws plan|run|status|collect|render|destroy`.
 
 Exit codes of `run`: 0 valid, 1 invalid result, 2 refused before any AWS write, 3 failed after
-writes but destroyed, 4 resources may remain (the last log line is the destroy command).
+writes but destroyed, 4 resources may remain (the last log line is the destroy command; also the
+exit code with `--keep`).
 
 Examples:
     scripts/network-bench/aws-bench plan --tag release-x --offline \
@@ -70,6 +71,7 @@ EXIT_INVALID = 1
 EXIT_REFUSED = 2
 EXIT_FAILED = 3
 EXIT_LEFTOVER = 4
+LEFTOVER_MESSAGE = "resources may remain, run: aws-bench destroy %s"
 
 # Duration model. Phases not on the critical path of a laptop disconnect (provision, services,
 # destroy) use the same value for expected and worst case.
@@ -81,6 +83,10 @@ COLLECT_MAX_S = 600.0
 DESTROY_S = 180.0
 # Operator reaction time if the laptop is unattended, e.g. a 2am run.
 TTL_MARGIN_S = 900.0
+# Instance boot before cloud-init arms the shutdown timer; billing starts at launch.
+BOOT_ALLOWANCE_S = 180.0
+# Signal count that abandons the remaining collection and goes straight to destroy.
+SKIP_COLLECT_SIGNALS = 3
 # The load ramp: x1.5 per step from 4 MB/s up to the 200 MB/s target. The staircase stops at the
 # first failing step, so the tail costs nothing on a slower network.
 STEP_START_MB_S = 4.0
@@ -421,6 +427,7 @@ class Manifest(TypedDict):
     start_spread_s: NotRequired[float]
     cost_usd: NotRequired[dict[str, float]]
     git_rev: NotRequired[str]
+    expires_at: NotRequired[str]
     config_hash: NotRequired[str]
     ssh_public_key: NotRequired[str]
 
@@ -726,7 +733,7 @@ def estimate_cost(
     worst_s = sum(worst for _, worst in phases.values())
     ttl_s = worst_s + TTL_MARGIN_S
     lines = _cost_lines(hosts, prices, minor, expected_s)
-    bound_lines = _cost_lines(hosts, prices, minor, ttl_s)
+    bound_lines = _cost_lines(hosts, prices, minor, ttl_s + BOOT_ALLOWANCE_S)
     return {
         "expected_s": expected_s,
         "worst_s": worst_s,
@@ -2004,21 +2011,27 @@ def estimate_or_refuse(
 
 
 class Interrupts:
-    """The first SIGINT/SIGTERM sets `event`; `check` turns it into `Interrupted` at the next
-    phase boundary or wait, so a `tofu apply` or rsync in flight always finishes. After
-    `disarm` signals are logged and ignored."""
+    """The first SIGINT/SIGTERM/SIGHUP sets `event`; `check` turns it into `Interrupted` at the
+    next phase boundary or wait, so a `tofu apply` or rsync in flight always finishes. After
+    `disarm` signals are logged and ignored, except that the third one sets `skip_collect`."""
 
     def __init__(self) -> None:
         self.event = threading.Event()
+        self.skip_collect = threading.Event()
+        self.signals = 0
         self.armed = True
         self.phase = "starting"
 
     def install(self) -> None:
-        for sig in (signal.SIGINT, signal.SIGTERM):
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             signal.signal(sig, self._handle)
 
     def _handle(self, signum: int, frame: Any) -> None:
-        if not self.armed:
+        self.signals += 1
+        if self.signals >= SKIP_COLLECT_SIGNALS:
+            self.skip_collect.set()
+            log.warning("signal %d: skipping the rest of the collection", signum)
+        elif not self.armed:
             log.warning("signal %d ignored: teardown in progress", signum)
         elif self.event.is_set():
             log.warning("still waiting for the current step (%s)", self.phase)
@@ -2173,15 +2186,22 @@ def cmd_run(
     if interrupts is None:
         interrupts = Interrupts()
         interrupts.install()
-    fleet = Fleet(run, cfg, run_dir, tf, interrupts, started)
-    measure(fleet)
     try:
-        result = finish(fleet)
-    except Exception as exc:  # the fleet costs money until teardown, whatever failed
-        log.exception("finish failed")
-        fleet.error = fleet.error or f"finish failed: {type(exc).__name__}: {exc}"
-        result = None
-    return teardown(fleet, result, ask_destroy)
+        fleet = Fleet(run, cfg, run_dir, tf, interrupts, started)
+        measure(fleet)
+        try:
+            result = finish(fleet)
+        except (
+            Exception
+        ) as exc:  # the fleet costs money until teardown, whatever failed
+            log.exception("finish failed")
+            fleet.error = fleet.error or f"finish failed: {type(exc).__name__}: {exc}"
+            result = None
+        return teardown(fleet, result, ask_destroy)
+    except Exception:
+        log.exception("unexpected error")
+        log.error(LEFTOVER_MESSAGE, run_dir)
+        return EXIT_LEFTOVER
 
 
 def prepare_run(
@@ -2196,7 +2216,23 @@ def prepare_run(
     if not confirm(prompt, cfg.yes, sys.stdin.isatty()):
         append_event(run_dir, "planned", "refused", "not confirmed")
         raise Refused("not confirmed; nothing was created")
+    stamp_expiry(run_dir, tf, datetime.now(UTC))
     return run_dir, tf
+
+
+def stamp_expiry(run_dir: Path, tf: Terraform, confirmed_at: datetime) -> None:
+    """The `espresso-bench-expires` tag counts from the apply, not from the render: a run that
+    waited at the prompt must not look expired. Re-plans because a plan file fixes variables."""
+    manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+    expires = confirmed_at + timedelta(
+        seconds=manifest["estimate"]["ttl_s"] + PROVISION_S
+    )
+    stamp = expires.strftime("%Y-%m-%dT%H:%M:%SZ")
+    tfvars_path = run_dir / "terraform" / "terraform.tfvars.json"
+    tfvars = nb.read_json(tfvars_path)
+    nb.write_json(tfvars_path, {**tfvars, "expires_at": stamp})
+    update_manifest(run_dir, manifest["phase"], expires_at=stamp)
+    tf.plan()
 
 
 def plan_fleet(
@@ -2286,14 +2322,21 @@ def finish(fleet: Fleet) -> nb.BenchResult | None:
     if remote is not None:
         update_manifest(fleet.run_dir, "collecting")
         log.info("collecting: stop, freeze, logs, host samples, final rsync")
+
+        def step(what: str, action: Callable[[], object]) -> None:
+            if fleet.interrupts.skip_collect.is_set():
+                log.warning("%s skipped", what)
+            else:
+                best_effort(what, action)
+
         if fleet.error is not None:
-            best_effort("stop agent", lambda: stop_agent(remote))
-        best_effort("freeze", lambda: freeze(remote))
-        best_effort(
+            step("stop agent", lambda: stop_agent(remote))
+        step("freeze", lambda: freeze(remote))
+        step(
             "collect",
             lambda: collect_hosts(remote, list(remote.hosts.values()), fleet.run_dir),
         )
-        best_effort(
+        step(
             "final rsync",
             lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", fleet.run_dir),
         )
@@ -2334,33 +2377,51 @@ def log_result(result: nb.BenchResult) -> None:
 def teardown(
     fleet: Fleet, result: nb.BenchResult | None, ask_destroy: Callable[[float], bool]
 ) -> int:
-    cfg, run_dir = fleet.cfg, fleet.run_dir
-    update_manifest(run_dir, "destroying")
+    """Always attempts the destroy. An exception in the bookkeeping afterwards is logged and
+    leaves the exit code to the result if the destroy worked, else to `EXIT_LEFTOVER`."""
+    run_dir = fleet.run_dir
+    best_effort("mark destroying", lambda: update_manifest(run_dir, "destroying"))
     destroyed = False
-    if cfg.keep:
+    try:
+        destroyed = destroy_unless_kept(fleet, ask_destroy)
+        code = record_outcome(fleet, result, destroyed)
+    except Exception:
+        log.exception("teardown failed")
+        code = exit_code(fleet, result, destroyed)
+    if not destroyed:
+        log.error(LEFTOVER_MESSAGE, run_dir)
+    return code
+
+
+def destroy_unless_kept(fleet: Fleet, ask_destroy: Callable[[float], bool]) -> bool:
+    if fleet.cfg.keep:
         log.info(
             "--keep: fleet stays up until its TTL, ssh key kept; then run: aws-bench destroy %s",
-            run_dir,
+            fleet.run_dir,
         )
-    elif cfg.yes or not fleet.interrupted or ask_destroy(DESTROY_PROMPT_TIMEOUT_S):
+        return False
+    if fleet.cfg.yes or not fleet.interrupted or ask_destroy(DESTROY_PROMPT_TIMEOUT_S):
         log.info("destroying: tofu destroy")
-        destroyed = destroy_fleet(fleet)
+        return destroy_fleet(fleet)
+    return False
+
+
+def record_outcome(fleet: Fleet, result: nb.BenchResult | None, destroyed: bool) -> int:
+    cfg, run_dir = fleet.cfg, fleet.run_dir
     cost = None
     if destroyed:
-        cost = final_cost(fleet)
         remove_ssh_key(cfg.ssh_key, run_dir)
-    code = exit_code(fleet, result, cfg.keep or destroyed)
+        cost = final_cost(fleet)
+    code = exit_code(fleet, result, destroyed)
     update_manifest(run_dir, "done" if destroyed else "left-running")
     append_index(cfg.out_root, fleet.manifest, result, code, destroyed, cost)
-    if destroyed and cost is not None:
+    if cost is not None:
         log.info(
             "destroyed; actual cost $%.2f (bound $%.2f); run dir %s",
             cost["actual"],
             cost["bound"],
             run_dir,
         )
-    if not (destroyed or cfg.keep):
-        log.error("resources may remain, run: aws-bench destroy %s", run_dir)
     return code
 
 
@@ -2479,7 +2540,6 @@ def render_run_dir(
         (run_dir / "diff.patch").write_text(pre["git_diff"])
     tf_dir = run_dir / "terraform"
     shutil.copytree(TERRAFORM_SRC, tf_dir)
-    expires = datetime.now(UTC) + timedelta(seconds=estimate["ttl_s"])
     # Absolute: `tofu -chdir` changes the directory `file()` resolves user_data_path against.
     tfvars = render_tfvars(
         cfg,
@@ -2489,7 +2549,7 @@ def render_run_dir(
         hosts,
         ssh_pub,
         cidr,
-        expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "",
         git_rev,
         pre["az"],
         pre["ami_id"],
@@ -3130,6 +3190,11 @@ def status_run(run: Runner, run_dir: Path, now: datetime) -> int:
     )
     if manifest["phase"] == "planned":
         print("- no instances: planned only")
+        return EXIT_OK
+    cost_path = run_dir / "cost.json"
+    if manifest["phase"] in TERMINAL_PHASES and cost_path.exists():
+        cost = nb.read_json(cost_path)
+        print(f"- cost: ${cost['actual']:.2f} actual, bound ${cost['bound']:.2f}")
         return EXIT_OK
     config = manifest["config"]
     instances = describe_instances(
@@ -3863,10 +3928,14 @@ def actual_cost(run: Runner, manifest: Manifest) -> dict[str, float]:
     launches = [datetime.fromisoformat(row["launch"]) for row in rows]
     ends = []
     for row in rows:
+        if row.get("reason") is None:
+            continue
         match = TERMINATION_TIME.search(row["reason"])
         if match is None:
             raise ValueError(f"no termination time in {row['reason']!r}")
         ends.append(datetime.fromisoformat(match.group(1)).replace(tzinfo=UTC))
+    if not ends:
+        raise ValueError(f"no termination reason for {manifest['name']}")
     duration_s = (max(ends) - min(launches)).total_seconds()
     estimate = manifest["estimate"]
     return {
