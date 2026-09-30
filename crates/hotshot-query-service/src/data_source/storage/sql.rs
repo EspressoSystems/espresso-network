@@ -1267,7 +1267,7 @@ impl SqlStorage {
             .context("pruning config not found")?;
         let now = Utc::now().timestamp();
 
-        let (min_height, state_min_height) = {
+        let (min_height, state_min_height, state_head) = {
             let mut tx = self
                 .read()
                 .await
@@ -1279,6 +1279,7 @@ impl SqlStorage {
                 self.load_pruned_height(&mut tx, PruneCategory::State)
                     .await?
                     .map_or(0, |pruned| pruned + 1),
+                tx.get_last_state_height().await? as u64,
             )
         };
         Ok(Pruner {
@@ -1295,18 +1296,21 @@ impl SqlStorage {
                     .context("getting height for minimum retention")?
                     .map_or(min_height, |to_prune| to_prune + 1),
             },
+            // The state writer can trail the headers. Once the cursor passed it, the rows it writes
+            // later would sit below every future batch window, and their superseded versions would
+            // never be deleted.
             state: PruneState {
                 min_height: state_min_height,
                 target_height: self
                     .get_height_by_timestamp(now - (cfg.state_target_retention().as_secs()) as i64)
                     .await
                     .context("getting height for state target retention")?
-                    .map_or(state_min_height, |to_prune| to_prune + 1),
+                    .map_or(state_min_height, |to_prune| min(to_prune + 1, state_head)),
                 minimum_retention_height: self
                     .get_height_by_timestamp(now - (cfg.state_minimum_retention().as_secs()) as i64)
                     .await
                     .context("getting height for state minimum retention")?
-                    .map_or(state_min_height, |to_prune| to_prune + 1),
+                    .map_or(state_min_height, |to_prune| min(to_prune + 1, state_head)),
             },
             cfg,
             extra_pruning: false,
@@ -3111,11 +3115,18 @@ mod test {
             .await
             .unwrap();
 
-        // Recent headers for every height, so only state is eligible for pruning, and no state.
+        // Recent headers for every height, so only state is eligible for pruning, and a state writer
+        // that has processed every height without writing any rows.
         let num_blocks = 10_000u64;
         {
             let mut tx = storage.write().await.unwrap();
             insert_headers(&mut tx, 0..num_blocks, Utc::now().timestamp()).await;
+            UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(
+                &mut tx,
+                num_blocks as usize,
+            )
+            .await
+            .unwrap();
             tx.commit().await.unwrap();
         }
         storage.set_pruning_config(
@@ -3217,6 +3228,81 @@ mod test {
             .await
             .unwrap();
         assert_eq!(num_headers, num_blocks as i64);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_pruning_waits_for_lagging_state() {
+        async fn write_state(
+            storage: &SqlStorage,
+            tree: &mut MockMerkleTree,
+            heights: std::ops::RangeInclusive<u64>,
+        ) {
+            let mut tx = storage.write().await.unwrap();
+            for height in heights.clone() {
+                // Key 0 is rewritten at every height, so it leaves a superseded version behind.
+                for key in [0, height as usize] {
+                    tree.update(key, height as usize).unwrap();
+                    let (_, proof) = tree.lookup(key).expect_ok().unwrap();
+                    let path =
+                        <usize as ToTraversalPath<8>>::to_traversal_path(&key, tree.height());
+                    UpdateStateData::<_, MockMerkleTree, 8>::insert_merkle_nodes(
+                        &mut tx, proof, path, height,
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+            UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(
+                &mut tx,
+                *heights.end() as usize,
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        async fn prune_to_completion(storage: &SqlStorage) -> Option<u64> {
+            let mut pruner = Default::default();
+            while storage.prune(&mut pruner).await.unwrap().is_some() {}
+            let mut tx = storage.read().await.unwrap();
+            tx.load_state_pruned_height().await.unwrap()
+        }
+
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        storage.set_pruning_config(
+            PrunerCfg::default()
+                .with_state_target_retention(Duration::ZERO)
+                .with_state_tables(vec![MockMerkleTree::state_type().into()]),
+        );
+
+        // Headers are far ahead of the state writer, so the header-based target alone would let the
+        // state cursor pass heights the writer has yet to fill in.
+        {
+            let mut tx = storage.write().await.unwrap();
+            insert_headers(&mut tx, 0..=20, Utc::now().timestamp()).await;
+            tx.commit().await.unwrap();
+        }
+        let mut tree = MockMerkleTree::new(MockMerkleTree::tree_height());
+        write_state(&storage, &mut tree, 1..=5).await;
+        assert_eq!(prune_to_completion(&storage).await, Some(4));
+
+        write_state(&storage, &mut tree, 6..=10).await;
+        let pruned = prune_to_completion(&storage).await;
+        assert_eq!(pruned, Some(9));
+
+        let mut tx = storage.read().await.unwrap();
+        let (duplicates,) = query_as::<(i64,)>(
+            "SELECT count(*) FROM (SELECT count(*) FROM test_tree WHERE created <= $1 GROUP BY \
+             path HAVING count(*) > 1) AS s",
+        )
+        .bind(pruned.unwrap() as i64)
+        .fetch_one(tx.as_mut())
+        .await
+        .unwrap();
+        assert_eq!(duplicates, 0);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

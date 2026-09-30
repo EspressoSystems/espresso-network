@@ -623,8 +623,9 @@ impl Transaction<Prune> {
     ///
     /// A node only becomes deletable once a newer version of it is created, so the delete is
     /// driven by the versions created in `from..=to` and a table with none is skipped. This is
-    /// exact because consecutive batches tile the heights without gaps and state is never written
-    /// below the pruned height, so every superseding version falls in exactly one batch's window.
+    /// exact because consecutive batches tile the heights without gaps and the state cursor never
+    /// passes the last state height, so no state is written below it and every superseding version
+    /// falls in exactly one batch's window.
     /// Bounding the window below keeps each batch proportional to its own rows: tables with
     /// never-superseded nodes, like the append-only block Merkle tree, would otherwise rescan
     /// every row from genesis on each batch.
