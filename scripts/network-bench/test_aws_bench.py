@@ -33,6 +33,7 @@ from pathlib import Path
 
 import netbench
 import test_netbench
+from fakes import SLOW
 
 SCRIPT = Path(__file__).with_name("aws-bench")
 _spec = importlib.util.spec_from_loader(
@@ -1472,6 +1473,7 @@ class ParseRefTest(unittest.TestCase):
 TOFU = shutil.which("tofu")
 
 
+@SLOW
 @unittest.skipUnless(TOFU, "tofu/opentofu not on PATH")
 class TofuValidateTest(unittest.TestCase):
     """TEST:awsbench-tofu-validate-ok: validates the module and plans it with offline=true, so

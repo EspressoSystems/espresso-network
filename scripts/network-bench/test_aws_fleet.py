@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import netbench
+from fakes import SLOW
 from test_aws_bench import (
     DESCRIBE,
     DONE_STATE,
@@ -1092,6 +1093,7 @@ class PgVolumeCostTest(unittest.TestCase):
         self.assertGreater(with_volume, without)
 
 
+@SLOW
 @unittest.skipUnless(shutil.which("tofu"), "tofu/opentofu not on PATH")
 class TofuPgVolumeTest(unittest.TestCase):
     """TEST:tofu-validate-modes-ok for `pg_volume`: validates the module and plans it offline
@@ -2758,6 +2760,7 @@ class RdsDownTest(unittest.TestCase):
 
 
 # REQ:querydb-rds-wiring
+@SLOW
 class TofuRdsValidateTest(unittest.TestCase):
     """TEST:tofu-validate-modes-ok: `tofu validate` and an offline plan with the rds variable
     set and null. Skips without tofu or when the providers cannot be installed."""
