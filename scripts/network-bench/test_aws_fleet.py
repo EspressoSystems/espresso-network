@@ -75,7 +75,7 @@ class FleetHarness:
                 awsb, "preflight", return_value=fake_preflight()
             ),
             unittest.mock.patch.object(awsb, "write_report", fake_report),
-            unittest.mock.patch.object(awsb, "read_dotenv", return_value=DOTENV_TEXT),
+            unittest.mock.patch.object(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT)),
         ]
         for patch in patches:
             patch.start()
@@ -1332,7 +1332,7 @@ class RdsRunner(FleetRunner):
             return completed(stdout=json.dumps({"DescribeDBLogFiles": self.logs}))
         if "download-db-log-file-portion" in argv:
             name = argv[argv.index("--log-file-name") + 1]
-            return completed(stdout=f"log of {name}\n")
+            return completed(stdout=json.dumps({"LogFileData": f"log of {name}\n"}))
         if "reboot-db-instance" in argv:
             return completed()
         return super().aws(argv)
@@ -1432,29 +1432,12 @@ class RdsOrderableTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--db-instance-class") + 1], "db.m8g.4xlarge")
         self.assertEqual(argv[argv.index("--engine") + 1], "postgres")
 
-    def test_a_minor_matches_exactly(self):
-        runner = orderable_runner(
-            orderable(EngineVersion="18.1"), orderable(EngineVersion="18.10")
-        )
-        with unittest.mock.patch.object(awsb, "RDS_ENGINE_VERSION", "18.1"):
-            self.assertEqual(awsb.rds_orderable(runner, self.cfg, "eu-west-1a"), "18.1")
-
     def test_an_unorderable_class_is_refused(self):
         runner = orderable_runner(orderable(AvailabilityZones=[{"Name": "eu-west-1a"}]))
         with self.assertRaisesRegex(
             awsb.Refused, "db.m8g.4xlarge cannot run postgres 18"
         ):
             awsb.rds_orderable(runner, self.cfg, "eu-west-1b")
-
-    def test_storage_iops_and_throughput_ranges_must_cover_the_request(self):
-        for override in (
-            {"MinStorageSize": 500},
-            {"MaxIopsPerDbInstance": 3000},
-            {"MinStorageThroughputPerDbInstance": 1000},
-        ):
-            runner = orderable_runner(orderable(**override))
-            with self.assertRaises(awsb.Refused, msg=override):
-                awsb.rds_orderable(runner, self.cfg, "eu-west-1b")
 
     def test_a_failed_call_is_a_refusal(self):
         runner = FakeRunner(
@@ -1479,12 +1462,7 @@ class RdsOrderableTest(unittest.TestCase):
 
         stubs = {
             "caller_account": awsb.ACCOUNT,
-            "default_vpc": "vpc-1",
             "capable_az": "eu-west-1b",
-            "_running_instance_types": [],
-            "describe_instance_types": {},
-            "vcpu_headroom": (40, 0, 256.0),
-            "resolve_ami_arch": "arm64",
             "resolve_ami": "ami-1",
         }
         with contextlib.ExitStack() as stack:
@@ -1504,22 +1482,6 @@ class RdsOrderableTest(unittest.TestCase):
         self.assertEqual(
             pre["images"]["postgres"]["ref"], "docker.io/library/postgres:18.4"
         )
-
-    def test_a_missing_docker_tag_names_the_minor(self):
-        cfg = awsb.RunConfig(tag="x", db_modes=("rds",))
-
-        def resolve(ref: str) -> dict:
-            if ref.endswith("postgres:18.4"):
-                raise awsb.Refused(f"image not found: {ref}")
-            return image_info(ref)
-
-        with (
-            unittest.mock.patch.object(awsb, "resolve_image", resolve),
-            self.assertRaisesRegex(
-                awsb.Refused, "RDS_ENGINE_VERSION must name an older minor"
-            ),
-        ):
-            awsb.resolve_images(cfg, "18.4")
 
     def test_without_rds_the_container_keeps_its_fixed_tag(self):
         cfg = awsb.RunConfig(tag="x")
@@ -1691,14 +1653,6 @@ class RdsTfvarsTest(unittest.TestCase):
         self.assertIn("rds instance db.m8g.4xlarge", items)
         self.assertIn("rds gp3 storage", items)
 
-    def test_terraform_access_denied_names_the_rds_actions(self):
-        message = awsb.classify_tf_error(
-            "Error: creating IAM Role: AccessDenied: not authorized: iam:CreateRole"
-        )
-        self.assertIn("iam:PassRole", message)
-        self.assertIn("scheduler:CreateSchedule", message)
-        self.assertNotIn("iam:", awsb.classify_tf_error("AccessDenied: s3:GetObject"))
-
 
 # REQ:querydb-rds-wiring
 class RdsRenderTest(unittest.TestCase):
@@ -1728,9 +1682,7 @@ class RdsRenderTest(unittest.TestCase):
         cfg = awsb.dataclasses.replace(
             awsb.config_from_manifest(harness.fleet()["config"]), query_db="rds"
         )
-        awsb.render_host_files(
-            run_dir, cfg, harness.fleet(), two_node_hosts_info(), DOTENV_TEXT
-        )
+        awsb.render_host_files(run_dir, cfg, harness.fleet(), two_node_hosts_info())
         env = dict(
             line.split("=", 1)
             for line in (run_dir / "hosts/node0/node.env").read_text().splitlines()
@@ -1773,9 +1725,7 @@ class RdsRenderTest(unittest.TestCase):
             unittest.mock.patch.object(Path, "write_text", spy_text),
             unittest.mock.patch.object(netbench, "write_json", spy_json),
         ):
-            awsb.render_host_files(
-                run_dir, cfg, harness.fleet(), two_node_hosts_info(), DOTENV_TEXT
-            )
+            awsb.render_host_files(run_dir, cfg, harness.fleet(), two_node_hosts_info())
         self.assertEqual(modes["node0/node.env"], 0o600)
         self.assertEqual(modes["node0/pg.json"], 0o600)
 
@@ -2450,7 +2400,7 @@ def rds_tag_runner(
         (*prefix, "iam", "delete-role-policy"): completed(),
         (*prefix, "iam", "delete-role"): gone if role_missing else completed(),
         (*prefix, "rds", "describe-db-instances"): (
-            completed(stdout=f"{rds_status}\n")
+            completed(stdout=json.dumps(rds_status))
             if rds_status
             else completed(returncode=254, stderr="DBInstanceNotFound")
         ),
@@ -2496,7 +2446,7 @@ class SweepRdsTest(unittest.TestCase):
     def sweep(self, **kwargs) -> tuple[FakeRunner, list[str]]:
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
         runner = rds_tag_runner(mappings, [], roles=[ROLE_ARN], **kwargs)
-        return runner, awsb.sweep(runner, "eu-west-1", "fleet1")
+        return runner, awsb.sweep(runner, "fleet1")
 
     # TEST:sweep-rds-volume-ok
     def test_deletes_in_dependency_order_and_waits_for_the_instance(self):
@@ -2574,13 +2524,13 @@ class SweepRdsTest(unittest.TestCase):
             ): (completed(returncode=254, stderr="ResourceNotFoundException")),
             **runner.responses,
         }
-        awsb.sweep(runner, "eu-west-1", "fleet1")
+        awsb.sweep(runner, "fleet1")
 
     def test_another_fleets_role_is_left_alone(self):
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
         other = "arn:aws:iam::1:role/espresso-bench/espresso-bench-other"
         runner = rds_tag_runner(mappings, [], roles=[other])
-        awsb.sweep(runner, "eu-west-1", "fleet1")
+        awsb.sweep(runner, "fleet1")
         self.assertNotIn(("iam", "delete-role"), aws_verbs(runner))
 
     def test_a_fleet_without_rds_touches_no_iam(self):
@@ -2588,7 +2538,7 @@ class SweepRdsTest(unittest.TestCase):
             mapping(resource_arn("ec2", "security-group/sg-1"), "fleet1", None, None)
         ]
         runner = rds_tag_runner(mappings, [])
-        awsb.sweep(runner, "eu-west-1", "fleet1")
+        awsb.sweep(runner, "fleet1")
         self.assertFalse(any(service == "iam" for service, _ in aws_verbs(runner)))
 
     def test_no_iam_permission_lists_no_roles(self):
@@ -2596,13 +2546,13 @@ class SweepRdsTest(unittest.TestCase):
         runner.responses[LIST_ROLES] = completed(
             returncode=254, stderr="AccessDenied: iam:ListRoles"
         )
-        self.assertEqual(awsb.list_scheduler_roles(runner, "timeboost-dev"), [])
+        self.assertEqual(awsb.list_scheduler_roles(runner), [])
 
     def test_other_iam_errors_raise(self):
         runner = rds_tag_runner([], [])
         runner.responses[LIST_ROLES] = completed(returncode=254, stderr="Throttling")
-        with self.assertRaisesRegex(awsb.RemoteError, "Throttling"):
-            awsb.list_scheduler_roles(runner, "timeboost-dev")
+        with self.assertRaisesRegex(awsb.Refused, "Throttling"):
+            awsb.list_scheduler_roles(runner)
 
 
 # REQ:orphans-rds-expiry
@@ -2775,7 +2725,7 @@ class StatusStoresTest(unittest.TestCase):
 
         def volumes(argv: list[str]) -> subprocess.CompletedProcess:
             if "describe-volumes" in argv:
-                return completed(stdout="in-use\n")
+                return completed(stdout=json.dumps("in-use"))
             return aws(argv)
 
         with unittest.mock.patch.object(runner, "aws", side_effect=volumes):

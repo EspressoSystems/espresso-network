@@ -39,7 +39,6 @@ import argparse
 import dataclasses
 import getpass
 import gzip
-import hashlib
 import itertools
 import json
 import logging
@@ -159,7 +158,6 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
 
 # "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances", the quota c8g/c8in fall
 # under.
-VCPU_QUOTA_CODE = "L-1216C47A"
 UBUNTU_OWNER_ID = "099720109477"  # Canonical
 GHCR_ORG = "ghcr.io/espressosystems/espresso-network"
 # Rebuilt from --tag; these are the only components the tag under test controls.
@@ -193,9 +191,6 @@ NODE_TONIC_PORT = 8081
 CLIQUENET_PORT = 9000
 LIBP2P_PORT = 1769
 # From .env; render_ctl_env asserts these still match the parsed file.
-ORCHESTRATOR_PORT = 30001
-L1_PORT = 8545
-RELAY_PORT = 30011
 # The bench's own postgres container, independent of .env.
 POSTGRES_PORT = 5432
 # deploy's flags all default to false; this is process-compose.yaml:51's set, needed so the
@@ -474,16 +469,19 @@ RDS_RESET_SQL = (
 
 
 class Refused(Exception):
-    """A plan or run must be refused before any AWS write; caught once, in `main`."""
+    """A refused plan or run, or a failed `aws` call; caught once, in `main`."""
+
+
+TfStep = Literal["init", "plan", "apply", "output", "destroy"]
 
 
 class TfFailed(Exception):
-    """`tofu apply`, `output` or `destroy` failed after resources may already have been created
-    or changed, unlike `Refused`. `measure` and `destroy_fleet` catch it."""
+    """A `tofu` step failed; from `apply` on, resources may already have been created or
+    changed. `measure` and `destroy_fleet` catch it."""
 
-    def __init__(self, stage: Literal["apply", "output", "destroy"], message: str):
+    def __init__(self, stage: TfStep, message: str):
         self.stage = stage
-        super().__init__(message)
+        super().__init__(f"tofu {stage} failed: {message}")
 
 
 class RemoteError(Exception):
@@ -538,13 +536,9 @@ class HostInfo(TypedDict):
 
 class Preflight(TypedDict):
     account: str
-    vpc_id: str
     az: str
     ami_id: str
     images: dict[str, ImageInfo]
-    vcpu_needed: int
-    vcpu_in_use: int
-    vcpu_quota: float
     # The engine minor `rds_orderable` resolved; present when the fleet has an rds mode.
     rds_engine_version: NotRequired[str]
 
@@ -741,8 +735,8 @@ class RunConfig:
     force: bool = False
 
 
-# Callers need the return code and stderr, unlike scripts/release's Runner, to classify a
-# failed `tofu apply` and to add context to a failed `aws` call.
+# Callers need the return code and stderr, unlike scripts/release's Runner, to report a
+# failed `tofu` or `aws` call.
 class Runner(Protocol):
     def __call__(
         self, argv: list[str], env: dict[str, str] | None = None
@@ -767,16 +761,18 @@ def _run(
 
 
 def aws_argv(*args: str) -> list[str]:
-    return ["aws", "--profile", PROFILE, *args]
+    return ["aws", "--profile", PROFILE, *args, "--region", REGION, "--output", "json"]
 
 
-def aws_ok(run: Runner, profile: str, *args: str, tolerate: str | None = None) -> str:
-    """stdout of an `aws` call whose failure means the fleet state is unknown, except a stderr
-    containing `tolerate` (an already-deleted resource)."""
-    result = run(["aws", "--profile", profile, *args])
-    if result.returncode != 0 and not (tolerate and tolerate in result.stderr):
-        raise RemoteError(f"aws {' '.join(args[:3])} failed: {result.stderr.strip()}")
-    return result.stdout
+def aws_json(run: Runner, *args: str, tolerate: str | None = None) -> Any:
+    """The parsed stdout of an `aws` call, None for an empty one or a stderr containing
+    `tolerate` (an already-deleted resource)."""
+    result = run(aws_argv(*args))
+    if result.returncode != 0:
+        if tolerate and tolerate in result.stderr:
+            return None
+        raise Refused(f"aws {' '.join(args[:2])} failed: {result.stderr.strip()}")
+    return json.loads(result.stdout) if result.stdout.strip() else None
 
 
 def node_root_gb(cfg: RunConfig, query: bool) -> int:
@@ -1230,10 +1226,7 @@ def tools_on_path(names: Iterable[str]) -> None:
 def caller_account(run: Runner) -> str:
     """The account guard: the first AWS call preflight makes, so a mismatch is caught before
     any other `aws` call (a wrong profile must never touch the right account by accident)."""
-    result = run(aws_argv("sts", "get-caller-identity", "--output", "json"))
-    if result.returncode != 0:
-        raise Refused(f"aws sts get-caller-identity failed: {result.stderr.strip()}")
-    account = json.loads(result.stdout)["Account"]
+    account = aws_json(run, "sts", "get-caller-identity")["Account"]
     if account != ACCOUNT:
         raise Refused(
             f"caller account {account} is not {ACCOUNT}: is profile {PROFILE} the benchmark "
@@ -1242,133 +1235,35 @@ def caller_account(run: Runner) -> str:
     return account
 
 
-def default_vpc(run: Runner) -> str:
-    result = run(
-        aws_argv(
-            "ec2",
-            "describe-vpcs",
-            "--region",
-            REGION,
-            "--filters",
-            "Name=is-default,Values=true",
-            "--output",
-            "json",
-        )
+def resolve_ami(run: Runner) -> str:
+    ami_id = aws_json(
+        run,
+        "ec2",
+        "describe-images",
+        "--owners",
+        UBUNTU_OWNER_ID,
+        "--filters",
+        "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*",
+        "--query",
+        "sort_by(Images, &CreationDate)[-1].ImageId",
     )
-    if result.returncode != 0:
-        raise Refused(f"aws ec2 describe-vpcs failed: {result.stderr.strip()}")
-    vpcs = json.loads(result.stdout)["Vpcs"]
-    if not vpcs:
-        raise Refused(f"no default VPC in {REGION}; the terraform module needs one")
-    vpc_id = vpcs[0]["VpcId"]
-    attr = run(
-        aws_argv(
-            "ec2",
-            "describe-vpc-attribute",
-            "--region",
-            REGION,
-            "--vpc-id",
-            vpc_id,
-            "--attribute",
-            "enableDnsHostnames",
-            "--output",
-            "json",
-        )
-    )
-    if attr.returncode != 0:
-        raise Refused(f"aws ec2 describe-vpc-attribute failed: {attr.stderr.strip()}")
-    if not json.loads(attr.stdout)["EnableDnsHostnames"]["Value"]:
-        raise Refused(
-            f"default VPC {vpc_id} has DNS hostnames disabled: aws ec2 modify-vpc-attribute "
-            f"--vpc-id {vpc_id} --enable-dns-hostnames --region {REGION}"
-        )
-    return vpc_id
-
-
-def describe_instance_types(run: Runner, types: set[str]) -> dict[str, dict[str, Any]]:
-    result = run(
-        aws_argv(
-            "ec2",
-            "describe-instance-types",
-            "--region",
-            REGION,
-            "--instance-types",
-            *sorted(types),
-            "--query",
-            "InstanceTypes[].{Type:InstanceType,VCpus:VCpuInfo.DefaultVCpus,"
-            "Archs:ProcessorInfo.SupportedArchitectures}",
-            "--output",
-            "json",
-        )
-    )
-    if result.returncode != 0:
-        raise Refused(
-            f"aws ec2 describe-instance-types failed: {result.stderr.strip()}"
-        )
-    return {row["Type"]: row for row in json.loads(result.stdout)}
-
-
-def resolve_ami_arch(instance_types: dict[str, dict[str, Any]], types: set[str]) -> str:
-    """`resolve_image` always requires `linux/arm64`; refusing here catches an amd64-only
-    instance type before the AMI lookup instead of at the image digest check."""
-    arch_sets = [set(instance_types[t]["Archs"]) for t in types]
-    common = set.intersection(*arch_sets) if arch_sets else set()
-    if "arm64" not in common:
-        raise Refused(
-            f"instance types {', '.join(sorted(types))} are not all arm64: "
-            "only linux/arm64 images are resolved"
-        )
-    return "arm64"
-
-
-def resolve_ami(run: Runner, arch: str) -> str:
-    result = run(
-        aws_argv(
-            "ec2",
-            "describe-images",
-            "--region",
-            REGION,
-            "--owners",
-            UBUNTU_OWNER_ID,
-            "--filters",
-            f"Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-{arch}-server-*",
-            "--query",
-            "sort_by(Images, &CreationDate)[-1].ImageId",
-            "--output",
-            "text",
-        )
-    )
-    if result.returncode != 0:
-        raise Refused(f"aws ec2 describe-images failed: {result.stderr.strip()}")
-    ami_id = result.stdout.strip()
-    if not ami_id or ami_id == "None":
-        raise Refused(f"no Ubuntu 24.04 {arch} AMI found in {REGION}")
+    if ami_id is None:
+        raise Refused(f"no Ubuntu 24.04 arm64 AMI found in {REGION}")
     return ami_id
 
 
 def capable_az(run: Runner, types: set[str]) -> str:
     az_sets = []
     for instance_type in sorted(types):
-        result = run(
-            aws_argv(
-                "ec2",
-                "describe-instance-type-offerings",
-                "--region",
-                REGION,
-                "--location-type",
-                "availability-zone",
-                "--filters",
-                f"Name=instance-type,Values={instance_type}",
-                "--output",
-                "json",
-            )
-        )
-        if result.returncode != 0:
-            raise Refused(
-                f"aws ec2 describe-instance-type-offerings failed for {instance_type}: "
-                f"{result.stderr.strip()}"
-            )
-        offerings = json.loads(result.stdout)["InstanceTypeOfferings"]
+        offerings = aws_json(
+            run,
+            "ec2",
+            "describe-instance-type-offerings",
+            "--location-type",
+            "availability-zone",
+            "--filters",
+            f"Name=instance-type,Values={instance_type}",
+        )["InstanceTypeOfferings"]
         az_sets.append({o["Location"] for o in offerings})
     capable = set.intersection(*az_sets) if az_sets else set()
     if not capable:
@@ -1376,71 +1271,6 @@ def capable_az(run: Runner, types: set[str]) -> str:
             f"no AZ in {REGION} offers every instance type: {', '.join(sorted(types))}"
         )
     return min(capable)
-
-
-def _running_instance_types(run: Runner) -> list[str]:
-    """One entry per running instance, not deduplicated: `vcpu_headroom` sums per instance."""
-    result = run(
-        aws_argv(
-            "ec2",
-            "describe-instances",
-            "--region",
-            REGION,
-            "--filters",
-            "Name=instance-state-name,Values=pending,running",
-            "--query",
-            "Reservations[].Instances[].InstanceType",
-            "--output",
-            "json",
-        )
-    )
-    if result.returncode != 0:
-        raise Refused(f"aws ec2 describe-instances failed: {result.stderr.strip()}")
-    return list(json.loads(result.stdout))
-
-
-def _vcpu_quota(run: Runner) -> float:
-    result = run(
-        aws_argv(
-            "service-quotas",
-            "get-service-quota",
-            "--region",
-            REGION,
-            "--service-code",
-            "ec2",
-            "--quota-code",
-            VCPU_QUOTA_CODE,
-            "--output",
-            "json",
-        )
-    )
-    if result.returncode != 0:
-        raise Refused(
-            f"aws service-quotas get-service-quota failed: {result.stderr.strip()}"
-        )
-    return json.loads(result.stdout)["Quota"]["Value"]
-
-
-def vcpu_headroom(
-    run: Runner,
-    hosts: list[HostSpec],
-    running: list[str],
-    instance_types: dict[str, dict[str, Any]],
-) -> tuple[int, int, float]:
-    """`running` has one entry per running instance (not deduplicated), so `in_use` counts
-    each instance's vCPUs once, not once per distinct type."""
-    vcpus = {t: row["VCpus"] for t, row in instance_types.items()}
-    needed = sum(vcpus[h["instance_type"]] for h in hosts)
-    in_use = sum(vcpus[t] for t in running)
-    quota = _vcpu_quota(run)
-    if needed + in_use > quota:
-        raise Refused(
-            f"vCPU quota {VCPU_QUOTA_CODE} is {quota:.0f} in {REGION}; {in_use} in use + "
-            f"{needed} needed exceeds it: aws service-quotas request-service-quota-increase "
-            f"--service-code ec2 --quota-code {VCPU_QUOTA_CODE} "
-            f"--desired-value {int(needed + in_use)} --region {REGION}"
-        )
-    return needed, in_use, quota
 
 
 def image_refs(cfg: RunConfig, postgres_tag: str | None = None) -> dict[str, str]:
@@ -1455,46 +1285,25 @@ def image_refs(cfg: RunConfig, postgres_tag: str | None = None) -> dict[str, str
 
 
 def resolve_images(cfg: RunConfig, rds_minor: str | None) -> dict[str, ImageInfo]:
-    images: dict[str, ImageInfo] = {}
-    for name, ref in image_refs(cfg, rds_minor).items():
-        try:
-            images[name] = resolve_image(ref)
-        except Refused as exc:
-            if name == "postgres" and rds_minor is not None:
-                raise Refused(
-                    f"{exc}; the container must run the rds minor {rds_minor}: "
-                    "RDS_ENGINE_VERSION must name an older minor"
-                ) from exc
-            raise
-    return images
+    return {
+        name: resolve_image(ref) for name, ref in image_refs(cfg, rds_minor).items()
+    }
 
 
 def rds_orderable(run: Runner, cfg: RunConfig, az: str) -> str:
-    """The highest engine minor matching `RDS_ENGINE_VERSION` that `RDS_CLASS` can run on gp3
-    with the fleet's storage in `az`."""
-    result = run(
-        aws_argv(
-            "rds",
-            "describe-orderable-db-instance-options",
-            "--region",
-            REGION,
-            "--engine",
-            "postgres",
-            "--db-instance-class",
-            RDS_CLASS,
-            "--output",
-            "json",
-        )
-    )
-    if result.returncode != 0:
-        raise Refused(
-            "aws rds describe-orderable-db-instance-options failed: "
-            f"{result.stderr.strip()}"
-        )
+    """The highest engine minor of `RDS_ENGINE_VERSION` that `RDS_CLASS` can run on gp3 in
+    `az`."""
+    options = aws_json(
+        run,
+        "rds",
+        "describe-orderable-db-instance-options",
+        "--engine",
+        "postgres",
+        "--db-instance-class",
+        RDS_CLASS,
+    )["OrderableDBInstanceOptions"]
     versions = [
-        option["EngineVersion"]
-        for option in json.loads(result.stdout)["OrderableDBInstanceOptions"]
-        if _rds_option_fits(option, cfg, az)
+        option["EngineVersion"] for option in options if _rds_option_fits(option, az)
     ]
     if not versions:
         raise Refused(
@@ -1504,51 +1313,20 @@ def rds_orderable(run: Runner, cfg: RunConfig, az: str) -> str:
     return max(versions, key=lambda v: tuple(int(part) for part in v.split(".")))
 
 
-def _rds_option_fits(option: dict[str, Any], cfg: RunConfig, az: str) -> bool:
-    version, wanted = option["EngineVersion"], RDS_ENGINE_VERSION
+def _rds_option_fits(option: dict[str, Any], az: str) -> bool:
     return (
-        (version == wanted or version.startswith(f"{wanted}."))
+        option["EngineVersion"].startswith(f"{RDS_ENGINE_VERSION}.")
         and option["StorageType"] == "gp3"
         and az in {zone["Name"] for zone in option["AvailabilityZones"]}
-        and option["MinStorageSize"] <= PG_GB <= option["MaxStorageSize"]
-        and option["MinIopsPerDbInstance"]
-        <= cfg.pg_iops
-        <= option["MaxIopsPerDbInstance"]
-        and option["MinStorageThroughputPerDbInstance"]
-        <= cfg.pg_mbps
-        <= option["MaxStorageThroughputPerDbInstance"]
     )
 
 
-DOCKER_HUB_HOST = "registry-1.docker.io"
-# Both are docker.io aliases in image refs; the registry API itself is only ever reachable at
-# registry-1.docker.io (https://docker.io/v2/... 302s to www.docker.com).
-DOCKER_HUB_ALIASES = ("docker.io", "index.docker.io")
-
-
 def parse_ref(ref: str) -> tuple[str, str, str]:
-    """`[registry[:port]/]repository[:tag]` -> (registry host, repository, tag). No registry
-    segment means docker.io, and a single-word repository is implicitly under `library/`."""
-    name, sep, tag = ref.rpartition(":")
-    if not sep or "/" in tag:
-        name, tag = ref, "latest"
-    parts = name.split("/", 1)
-    if len(parts) == 1:
-        return DOCKER_HUB_HOST, f"library/{parts[0]}", tag
-    first, repository = parts
-    if first in DOCKER_HUB_ALIASES:
-        return DOCKER_HUB_HOST, repository, tag
-    if "." in first or ":" in first or first == "localhost":
-        return first, repository, tag
-    return DOCKER_HUB_HOST, name, tag
-
-
-def _registry_scheme(host: str) -> str:
-    # Loopback is only ever the test fixture; every real registry requires TLS.
-    return "http" if host.split(":")[0] in ("localhost", "127.0.0.1") else "https"
-
-
-RegistryFetch = Callable[[str, dict[str, str]], tuple[int, Any, bytes]]
+    """`registry/repository:tag` -> (registry API host, repository, tag)."""
+    host, _, rest = ref.partition("/")
+    repository, _, tag = rest.rpartition(":")
+    # The docker.io registry API is only served at registry-1.docker.io.
+    return "registry-1.docker.io" if host == "docker.io" else host, repository, tag
 
 
 def _registry_get(url: str, headers: dict[str, str]) -> tuple[int, Any, bytes]:
@@ -1561,33 +1339,32 @@ def _registry_get(url: str, headers: dict[str, str]) -> tuple[int, Any, bytes]:
             return exc.code, exc.headers, exc.read()
 
 
-def _bearer_token(www_authenticate: str, ref: str, fetch: RegistryFetch) -> str:
+def _bearer_token(www_authenticate: str, ref: str) -> str:
     params = dict(re.findall(r'(\w+)="([^"]*)"', www_authenticate))
     realm = params["realm"]
     query = urllib.parse.urlencode({k: v for k, v in params.items() if k != "realm"})
-    status, _, body = fetch(f"{realm}?{query}", {})
+    status, _, body = _registry_get(f"{realm}?{query}", {})
     if status != 200:
         raise Refused(f"token request for {ref} to {realm} failed with status {status}")
     token = json.loads(body)
     return token["token"] if "token" in token else token["access_token"]
 
 
-def resolve_image(ref: str, fetch: RegistryFetch = _registry_get) -> ImageInfo:
+def resolve_image(ref: str) -> ImageInfo:
     """Anonymous token challenge, then the manifest (an index for a multi-arch image, or a
     single manifest otherwise) and its config blob, for the digest, the `linux/arm64`
     platform and the `org.opencontainers.image.revision` label. Works against ghcr and docker
-    hub unmodified: both implement the same OCI distribution spec. `fetch(url, headers)`
-    returns `(status, response headers, body)` and never raises on an HTTP error status."""
+    hub unmodified: both implement the same OCI distribution spec."""
     host, repository, tag = parse_ref(ref)
-    scheme = _registry_scheme(host)
-    manifest_url = f"{scheme}://{host}/v2/{repository}/manifests/{tag}"
+    base = f"https://{host}/v2/{repository}"
+    manifest_url = f"{base}/manifests/{tag}"
     headers = {"Accept": ", ".join(MANIFEST_MEDIA_TYPES)}
-    status, resp_headers, body = fetch(manifest_url, headers)
+    status, resp_headers, body = _registry_get(manifest_url, headers)
     if status == 401:
         headers["Authorization"] = (
-            f"Bearer {_bearer_token(resp_headers['WWW-Authenticate'], ref, fetch)}"
+            f"Bearer {_bearer_token(resp_headers['WWW-Authenticate'], ref)}"
         )
-        status, resp_headers, body = fetch(manifest_url, headers)
+        status, resp_headers, body = _registry_get(manifest_url, headers)
     if status == 404:
         raise Refused(f"image not found: {ref}")
     if status in (401, 403):
@@ -1619,8 +1396,8 @@ def resolve_image(ref: str, fetch: RegistryFetch = _registry_get) -> ImageInfo:
                 f"no linux/arm64 platform for {ref}: has {', '.join(platforms)}"
             )
         digest = arm64["digest"]
-        child_status, _, child_body = fetch(
-            f"{scheme}://{host}/v2/{repository}/manifests/{digest}", headers
+        child_status, _, child_body = _registry_get(
+            f"{base}/manifests/{digest}", headers
         )
         if child_status != 200:
             raise Refused(
@@ -1628,14 +1405,10 @@ def resolve_image(ref: str, fetch: RegistryFetch = _registry_get) -> ImageInfo:
             )
         config_digest = json.loads(child_body)["config"]["digest"]
     else:
-        digest = resp_headers.get("Docker-Content-Digest") or (
-            f"sha256:{hashlib.sha256(body).hexdigest()}"
-        )
+        digest = resp_headers["Docker-Content-Digest"]
         config_digest = manifest["config"]["digest"]
         platforms = []
-    status, _, config_body = fetch(
-        f"{scheme}://{host}/v2/{repository}/blobs/{config_digest}", headers
-    )
+    status, _, config_body = _registry_get(f"{base}/blobs/{config_digest}", headers)
     if status != 200:
         raise Refused(f"failed to fetch the config blob for {ref}: status {status}")
     config = json.loads(config_body)
@@ -1653,51 +1426,19 @@ def resolve_image(ref: str, fetch: RegistryFetch = _registry_get) -> ImageInfo:
 def preflight(run: Runner, cfg: RunConfig, hosts: list[HostSpec]) -> Preflight:
     tools_on_path(["tofu", "aws", "ssh", "scp", "rsync", "git", "ssh-keygen"])
     account = caller_account(run)
-    vpc_id = default_vpc(run)
-    types = {h["instance_type"] for h in hosts}
-    az = capable_az(run, types)
-    running = _running_instance_types(run)
-    # Fetched once: resolve_ami_arch and vcpu_headroom both need every requested and running
-    # instance type's vCPU count and architecture.
-    instance_types = describe_instance_types(run, set(running) | types)
-    needed, in_use, quota = vcpu_headroom(run, hosts, running, instance_types)
-    ami_id = resolve_ami(run, resolve_ami_arch(instance_types, types))
+    az = capable_az(run, {h["instance_type"] for h in hosts})
+    ami_id = resolve_ami(run)
     rds_minor = rds_orderable(run, cfg, az) if "rds" in cfg.db_modes else None
     images = resolve_images(cfg, rds_minor)
     pre: Preflight = {
         "account": account,
-        "vpc_id": vpc_id,
         "az": az,
         "ami_id": ami_id,
         "images": images,
-        "vcpu_needed": needed,
-        "vcpu_in_use": in_use,
-        "vcpu_quota": quota,
     }
     if rds_minor is not None:
         pre["rds_engine_version"] = rds_minor
     return pre
-
-
-def classify_tf_error(stderr: str) -> str:
-    if "VcpuLimitExceeded" in stderr:
-        return (
-            "VcpuLimitExceeded: aws service-quotas request-service-quota-increase "
-            f"--service-code ec2 --quota-code {VCPU_QUOTA_CODE} --desired-value <n>"
-        )
-    if "InsufficientInstanceCapacity" in stderr:
-        return "InsufficientInstanceCapacity: retry later"
-    if "UnauthorizedOperation" in stderr:
-        return "UnauthorizedOperation: check IAM permissions for the AWS profile"
-    if "AccessDenied" in stderr and ("iam:" in stderr or "scheduler:" in stderr):
-        return (
-            "AccessDenied on iam: or scheduler:: the rds mode needs iam:CreateRole, "
-            "iam:PutRolePolicy, iam:PassRole and scheduler:CreateSchedule"
-        )
-    last_line = next(
-        (line for line in reversed(stderr.strip().splitlines()) if line), stderr
-    )
-    return f"unclassified terraform error: {last_line}"
 
 
 def terraform_env() -> dict[str, str]:
@@ -1717,35 +1458,30 @@ class Terraform:
         self.dir = terraform_dir
         self.env = env
 
-    def _tofu(self, *args: str) -> subprocess.CompletedProcess[str]:
-        return self.run(["tofu", f"-chdir={self.dir}", *args], self.env)
-
-    def init(self) -> None:
-        result = self._tofu("init", "-input=false")
+    def _tofu(self, step: TfStep, *args: str) -> str:
+        result = self.run(["tofu", f"-chdir={self.dir}", step, *args], self.env)
         if result.returncode != 0:
-            raise Refused(f"tofu init failed: {result.stderr.strip()}")
-
-    def plan(self, out: str = "plan.bin") -> str:
-        result = self._tofu("plan", "-input=false", f"-out={out}")
-        if result.returncode != 0:
-            raise Refused(f"tofu plan failed: {result.stderr.strip()}")
+            raise TfFailed(step, last_line(result.stderr))
         return result.stdout
 
-    def apply(self, plan_file: str = "plan.bin") -> None:
-        result = self._tofu("apply", "-input=false", "-auto-approve", plan_file)
-        if result.returncode != 0:
-            raise TfFailed("apply", classify_tf_error(result.stderr))
+    def init(self) -> None:
+        self._tofu("init", "-input=false")
+
+    def plan(self) -> str:
+        return self._tofu("plan", "-input=false", "-out=plan.bin")
+
+    def apply(self) -> None:
+        self._tofu("apply", "-input=false", "-auto-approve", "plan.bin")
 
     def output(self) -> dict[str, Any]:
-        result = self._tofu("output", "-json")
-        if result.returncode != 0:
-            raise TfFailed("output", f"tofu output failed: {result.stderr.strip()}")
-        return json.loads(result.stdout)
+        return json.loads(self._tofu("output", "-json"))
 
     def destroy(self) -> None:
-        result = self._tofu("destroy", "-input=false", "-auto-approve")
-        if result.returncode != 0:
-            raise TfFailed("destroy", f"tofu destroy failed: {result.stderr.strip()}")
+        self._tofu("destroy", "-input=false", "-auto-approve")
+
+
+def last_line(stderr: str) -> str:
+    return next(line for line in reversed(stderr.splitlines()) if line.strip())
 
 
 def render_tfvars(
@@ -1848,6 +1584,12 @@ def parse_dotenv(text: str) -> dict[str, str]:
     return env
 
 
+DOTENV = parse_dotenv((REPO_ROOT / ".env").read_text())
+ORCHESTRATOR_PORT = int(DOTENV["ESPRESSO_ORCHESTRATOR_PORT"])
+L1_PORT = int(DOTENV["ESPRESSO_L1_PORT"])
+RELAY_PORT = int(DOTENV["ESPRESSO_STATE_RELAY_SERVER_PORT"])
+
+
 def _node_names(hosts: dict[str, HostInfo]) -> list[str]:
     return sorted(
         (name for name in hosts if name != "ctl"),
@@ -1936,11 +1678,8 @@ def pg_endpoint() -> PgEndpoint:
     }
 
 
-def psql_argv(
-    pg: PgEndpoint, database: str | None = None
-) -> tuple[list[str], dict[str, str]]:
+def psql_argv(pg: PgEndpoint) -> tuple[list[str], dict[str, str]]:
     """psql argv and the environment carrying the password, which never goes on argv."""
-    name = pg["database"] if database is None else database
     argv = [
         "psql",
         "-h",
@@ -1950,7 +1689,7 @@ def psql_argv(
         "-U",
         pg["user"],
         "-d",
-        name,
+        pg["database"],
     ]
     return argv, {"PGPASSWORD": pg["password"]}
 
@@ -1971,29 +1710,9 @@ def pg_tls(backends: dict[str, int]) -> bool | None:
     return None if not backends else "false" not in backends
 
 
-def reset_pg_stats_sql() -> str:
-    return "CHECKPOINT; SELECT pg_stat_reset_shared(NULL); SELECT pg_stat_statements_reset()"
-
-
-def _assert_ports_match_dotenv(dotenv: dict[str, str]) -> None:
-    """Ports duplicated as module constants (used before ctl.env exists, e.g. in
-    render_node_env); catches drift against .env instead of a silent mismatch at runtime."""
-    expected = {
-        "ESPRESSO_ORCHESTRATOR_PORT": ORCHESTRATOR_PORT,
-        "ESPRESSO_L1_PORT": L1_PORT,
-        "ESPRESSO_STATE_RELAY_SERVER_PORT": RELAY_PORT,
-    }
-    for key, port in expected.items():
-        if int(dotenv[key]) != port:
-            raise ValueError(
-                f"{key}={dotenv[key]} in .env no longer matches aws-bench's {port}"
-            )
-
-
 def render_ctl_env(
     hosts: dict[str, HostInfo], cfg: RunConfig, dotenv: dict[str, str]
 ) -> str:
-    _assert_ports_match_dotenv(dotenv)
     node0 = hosts["node0"]
     env = {k: v for k, v in dotenv.items() if k not in PROXY_ADDRESS_KEYS}
     env["ESPRESSO_ORCHESTRATOR_NUM_NODES"] = str(cfg.nodes)
@@ -2580,7 +2299,6 @@ class Run:
     run_dir: Path
     cfg: RunConfig
     started: float
-    dotenv_text: str
     agent: AgentState | None = None
     agent_started: bool = False
     error: str | None = None
@@ -2605,7 +2323,6 @@ def cmd_run(
     if args.tag is None:
         raise Refused("run needs --tag, or --fleet DIR to measure on a fleet from `up`")
     cfg = dataclasses.replace(fleet_config_from_args(args), db_modes=(args.query_db,))
-    dotenv_text = read_dotenv(REPO_ROOT / ".env")
     install = interrupts is None
     interrupts = interrupts or Interrupts()
     started = interrupts.clock.time()
@@ -2617,7 +2334,7 @@ def cmd_run(
         interrupts.install()
     try:
         fleet = FleetState(run, cfg, fleet_dir, tf, interrupts)
-        bench_run = Run(fleet, run_dir, cfg, started, dotenv_text)
+        bench_run = Run(fleet, run_dir, cfg, started)
         with recording(bench_run):
             up_fleet(fleet)
         result = run_on_fleet(bench_run)
@@ -2778,7 +2495,7 @@ def measure_run(run: Run) -> None:
         remote = fleet.remote
         assert remote is not None, "up_fleet must run first"
         manifest = fleet.manifest
-        render_host_files(run.run_dir, run.cfg, manifest, remote.hosts, run.dotenv_text)
+        render_host_files(run.run_dir, run.cfg, manifest, remote.hosts)
         enter_phase(
             fleet, run.manifest_path, "shipping", "files, host monitors, containers"
         )
@@ -2944,7 +2661,7 @@ def best_effort(what: str, action: Callable[[], object]) -> None:
     must not stop the others. Missing files surface as `check_validity_aws` findings."""
     try:
         action()
-    except RemoteError as exc:
+    except (RemoteError, Refused) as exc:
         log.warning("%s failed: %s", what, exc)
     except Exception:
         log.exception("%s failed unexpectedly", what)
@@ -3038,7 +2755,7 @@ def exit_code(
 def final_cost(fleet: FleetState) -> dict[str, float] | None:
     try:
         cost = actual_cost(fleet.run, fleet.manifest)
-    except (RemoteError, ValueError) as exc:
+    except (RemoteError, Refused, ValueError) as exc:
         log.warning("actual cost unavailable: %s", exc)
         return None
     nb.write_json(fleet.fleet_dir / "cost.json", cost)
@@ -3069,14 +2786,8 @@ def destroy_fleet(fleet: FleetState) -> bool:
         "tofu destroy failed; sweeping resources tagged %s", fleet.fleet_dir.name
     )
     try:
-        swept = sweep(
-            fleet.run,
-            REGION,
-            fleet.fleet_dir.name,
-            PROFILE,
-            fleet.interrupts.clock,
-        )
-    except RemoteError as exc:
+        swept = sweep(fleet.run, fleet.fleet_dir.name, fleet.interrupts.clock)
+    except Refused as exc:
         log.error("sweep failed: %s", exc)
     else:
         log.warning("sweep terminated %d resources: %s", len(swept), ", ".join(swept))
@@ -3199,7 +2910,6 @@ def cmd_run_fleet(
     """One more measurement on a fleet `up` left idle. The fleet stays up in every outcome:
     idle again, or `dirty` and locked when the pull or reset failed."""
     reject_fleet_flags(args.argv)
-    dotenv_text = read_dotenv(REPO_ROOT / ".env")
     fleet_dir: Path = args.fleet
     manifest = read_fleet(fleet_dir)
     setup_logging(fleet_dir)
@@ -3210,7 +2920,7 @@ def cmd_run_fleet(
     fleet = open_fleet(run, fleet_dir, interrupts)
     cfg = fleet_run_config(args, manifest)
     run_dir, estimate = admit_run(fleet_dir, manifest, cfg)
-    bench_run = Run(fleet, run_dir, cfg, interrupts.clock.time(), dotenv_text)
+    bench_run = Run(fleet, run_dir, cfg, interrupts.clock.time())
     log.info(
         "run %s: incremental cost $%.2f (%.0f min worst), %.0f min left on the fleet",
         run_dir.name,
@@ -3706,12 +3416,6 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
             cfg.pg_iops,
             cfg.pg_mbps,
         )
-    log.info(
-        "vcpu: %d needed, %d in use, quota %.0f",
-        pre["vcpu_needed"],
-        pre["vcpu_in_use"],
-        pre["vcpu_quota"],
-    )
 
 
 def render_run_dir(
@@ -3914,19 +3618,13 @@ def parse_rds_output(output: dict[str, Any]) -> RdsInfo:
 
 
 def describe_rds(run: Runner, identifier: str) -> dict[str, Any]:
-    out = aws_ok(
+    return aws_json(
         run,
-        PROFILE,
         "rds",
         "describe-db-instances",
-        "--region",
-        REGION,
         "--db-instance-identifier",
         identifier,
-        "--output",
-        "json",
-    )
-    return json.loads(out)["DBInstances"][0]
+    )["DBInstances"][0]
 
 
 def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
@@ -3943,13 +3641,10 @@ def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
             return instance
         if state == "available" and applied == "pending-reboot" and not rebooted:
             log.info("rds %s: parameter group pending-reboot, rebooting", identifier)
-            aws_ok(
+            aws_json(
                 fleet.run,
-                PROFILE,
                 "rds",
                 "reboot-db-instance",
-                "--region",
-                REGION,
                 "--db-instance-identifier",
                 identifier,
             )
@@ -4016,10 +3711,6 @@ def topology(hosts: dict[str, HostInfo]) -> nb.Topology:
     }
 
 
-def read_dotenv(path: Path) -> str:
-    return path.read_text()
-
-
 def node_hosts(hosts: dict[str, HostInfo]) -> list[HostInfo]:
     return [hosts[name] for name in _node_names(hosts)]
 
@@ -4029,9 +3720,7 @@ def render_host_files(
     cfg: RunConfig,
     manifest: FleetManifest,
     hosts: dict[str, HostInfo],
-    dotenv_text: str,
 ) -> None:
-    dotenv = parse_dotenv(dotenv_text)
     for spec in manifest["hosts"]:
         host_dir = run_dir / "hosts" / spec["name"]
         host_dir.mkdir(parents=True, exist_ok=True)
@@ -4039,7 +3728,7 @@ def render_host_files(
             render_start_sh(spec, manifest["images"], query_db=cfg.query_db)
         )
         if spec["role"] == "ctl":
-            (host_dir / "ctl.env").write_text(render_ctl_env(hosts, cfg, dotenv))
+            (host_dir / "ctl.env").write_text(render_ctl_env(hosts, cfg, DOTENV))
         else:
             pg = query_endpoint(cfg, run_dir) if spec["role"] == "query" else None
             node_env = host_dir / "node.env"
@@ -4304,7 +3993,10 @@ def support_plan(query_db: DbMode, contracts: list[str]) -> list[SupportStart]:
     ]
     for what, sql in (
         ("pg_stat_statements", PG_EXTENSION_SQL),
-        ("pg stats reset", reset_pg_stats_sql()),
+        (
+            "pg stats reset",
+            "CHECKPOINT; SELECT pg_stat_reset_shared(NULL); SELECT pg_stat_statements_reset()",
+        ),
     ):
         plan.append(
             GateStart(
@@ -4783,9 +4475,7 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
         cost = nb.read_json(cost_path)
         print(f"- cost: ${cost['actual']:.2f} actual, bound ${cost['bound']:.2f}")
         return EXIT_OK
-    instances = describe_instances(
-        run, REGION, PROFILE, f"Name=tag:{TAG_RUN},Values={name}"
-    )
+    instances = describe_instances(run, f"Name=tag:{TAG_RUN},Values={name}")
     hosts = manifest.get("hosts_info", {})
     by_id = {info["instance_id"]: host for host, info in hosts.items()}
     for instance in instances:
@@ -4816,43 +4506,33 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
 
 
 def volume_state(run: Runner, volume: str) -> str:
-    out = aws_ok(
+    state = aws_json(
         run,
-        PROFILE,
         "ec2",
         "describe-volumes",
-        "--region",
-        REGION,
         "--volume-ids",
         volume,
         "--query",
         "Volumes[0].State",
-        "--output",
-        "text",
         tolerate="InvalidVolume.NotFound",
-    ).strip()
-    return out or "gone"
+    )
+    return state or "gone"
 
 
 def rds_state(run: Runner, rds: RdsInfo) -> str:
     """`available, parameters in-sync`; `gone` once the schedule or a destroy has deleted the
     instance."""
-    out = aws_ok(
+    out = aws_json(
         run,
-        PROFILE,
         "rds",
         "describe-db-instances",
-        "--region",
-        REGION,
         "--db-instance-identifier",
         rds["identifier"],
-        "--output",
-        "json",
         tolerate="DBInstanceNotFound",
     )
     if not out:
         return "gone"
-    instance = json.loads(out)["DBInstances"][0]
+    instance = out["DBInstances"][0]
     applied = instance["DBParameterGroups"][0]["ParameterApplyStatus"]
     return f"{instance['DBInstanceStatus']}, parameters {applied}"
 
@@ -4872,7 +4552,7 @@ def status_cost(
 
 def status_all(run: Runner, args: argparse.Namespace, now: datetime) -> int:
     caller_account(run)
-    runs = find_runs(run, REGION, PROFILE, OUT_ROOT, now)
+    runs = find_runs(run, OUT_ROOT, now)
     if not runs:
         print(f"no espresso-bench resources in {REGION}")
         return EXIT_OK
@@ -4946,7 +4626,7 @@ def destroy_orphans(
     run: Runner, args: argparse.Namespace, now: datetime, clock: nb.Clock
 ) -> int:
     caller_account(run)
-    runs = find_runs(run, REGION, PROFILE, OUT_ROOT, now)
+    runs = find_runs(run, OUT_ROOT, now)
     orphans = [r for r in runs if r["orphan"] is not None]
     if not orphans:
         print(f"no orphaned espresso-bench resources in {REGION}")
@@ -4963,14 +4643,14 @@ def destroy_orphans(
     try:
         for orphan in orphans:
             log.info("sweeping %s", orphan["name"])
-            sweep(run, REGION, orphan["name"], PROFILE, clock)
+            sweep(run, orphan["name"], clock)
             mark_swept(OUT_ROOT / orphan["name"])
         # `sweep` removes the role of a fleet that still has rds resources.
         swept_rds = rds_fleets(arn for o in orphans for arn in o["arns"])
         with_role = {o["name"] for o in orphans if has_role(o)} - swept_rds
         if with_role:
-            sweep_iam(run, PROFILE, with_role)
-    except RemoteError as exc:
+            sweep_iam(run, with_role)
+    except Refused as exc:
         log.error("sweep failed, resources may remain: %s", exc)
         return EXIT_LEFTOVER
     log.info("swept %d runs", len(orphans))
@@ -5017,32 +4697,21 @@ def next_collect_index(run_dir: Path) -> int:
     return max(indices, default=0) + 1
 
 
-def find_runs(
-    run: Runner, region: str, profile: str, out_root: Path, now: datetime
-) -> list[TaggedRun]:
-    """Every run with a resource tagged `espresso-bench-run` in `region`, with the reason
+def find_runs(run: Runner, out_root: Path, now: datetime) -> list[TaggedRun]:
+    """Every run with a resource tagged `espresso-bench-run`, with the reason
     it counts as an orphan (if it does)."""
-    out = aws_ok(
+    out = aws_json(
         run,
-        profile,
         "resourcegroupstaggingapi",
         "get-resources",
-        "--region",
-        region,
         "--tag-filters",
         f"Key={TAG_RUN}",
         "--query",
         "ResourceTagMappingList[].{arn:ResourceARN,tags:Tags}",
-        "--output",
-        "json",
     )
-    instances = describe_instances(
-        run, region, profile, f"Name=tag-key,Values={TAG_RUN}"
-    )
-    volumes = describe_volumes(run, region, profile, f"Name=tag-key,Values={TAG_RUN}")
-    runs = group_runs(
-        json.loads(out), instances, volumes, list_scheduler_roles(run, profile)
-    )
+    instances = describe_instances(run, f"Name=tag-key,Values={TAG_RUN}")
+    volumes = describe_volumes(run, f"Name=tag-key,Values={TAG_RUN}")
+    runs = group_runs(out, instances, volumes, list_scheduler_roles(run))
     user = getpass.getuser()
     for tagged in runs:
         phase = local_phase(out_root, tagged["name"])
@@ -5052,46 +4721,30 @@ def find_runs(
     return runs
 
 
-def describe_instances(
-    run: Runner, region: str, profile: str, *filters: str
-) -> list[Instance]:
-    out = aws_ok(
+def describe_instances(run: Runner, *filters: str) -> list[Instance]:
+    return aws_json(
         run,
-        profile,
         "ec2",
         "describe-instances",
-        "--region",
-        region,
         "--filters",
         *filters,
         "--query",
         "Reservations[].Instances[].{id:InstanceId,type:InstanceType,"
         "state:State.Name,launch:LaunchTime,reason:StateTransitionReason}",
-        "--output",
-        "json",
     )
-    return json.loads(out)
 
 
-def describe_volumes(
-    run: Runner, region: str, profile: str, *filters: str
-) -> list[str]:
+def describe_volumes(run: Runner, *filters: str) -> list[str]:
     """Ids of the volumes EC2 has; the tag API keeps listing a deleted volume for a while."""
-    out = aws_ok(
+    return aws_json(
         run,
-        profile,
         "ec2",
         "describe-volumes",
-        "--region",
-        region,
         "--filters",
         *filters,
         "--query",
         "Volumes[].VolumeId",
-        "--output",
-        "json",
     )
-    return json.loads(out)
 
 
 def arn_parts(arn: str) -> tuple[str, str]:
@@ -5435,21 +5088,16 @@ def collect_ebs_balance(
     container or volume placements, Postgres."""
     instance_id = manifest["hosts_info"]["node0"]["instance_id"]
     start, end = metric_window(t0, t1)
-    stdout = aws_ok(
+    stdout = aws_json(
         run,
-        PROFILE,
         "cloudwatch",
         "get-metric-data",
-        "--region",
-        REGION,
         "--start-time",
         datetime.fromtimestamp(start, UTC).isoformat(),
         "--end-time",
         datetime.fromtimestamp(end, UTC).isoformat(),
         "--metric-data-queries",
         json.dumps(ebs_balance_queries(instance_id)),
-        "--output",
-        "json",
     )
     balance: Ec2Balance = {
         "instance_id": instance_id,
@@ -5490,21 +5138,16 @@ def collect_rds_metrics(
         }
         for query_id, (metric, stat) in RDS_METRICS.items()
     ]
-    stdout = aws_ok(
+    stdout = aws_json(
         run,
-        PROFILE,
         "cloudwatch",
         "get-metric-data",
-        "--region",
-        REGION,
         "--start-time",
         datetime.fromtimestamp(start, UTC).isoformat(),
         "--end-time",
         datetime.fromtimestamp(end, UTC).isoformat(),
         "--metric-data-queries",
         json.dumps(queries),
-        "--output",
-        "json",
     )
     names = {query_id: metric for query_id, (metric, _) in RDS_METRICS.items()}
     path = out / RDS_CLOUDWATCH_FILE
@@ -5527,45 +5170,31 @@ def collect_rds_logs(
     """Every database log written since the load started. The upper bound is left open: the
     log of the current hour is still written after the window and holds most of it."""
     since_ms = int(t0 * 1000)
-    listing = aws_ok(
+    listing = aws_json(
         run,
-        PROFILE,
         "rds",
         "describe-db-log-files",
-        "--region",
-        REGION,
         "--db-instance-identifier",
         rds["identifier"],
         "--file-last-written",
         str(since_ms),
-        "--output",
-        "json",
     )
-    files = [
-        f
-        for f in json.loads(listing)["DescribeDBLogFiles"]
-        if f["LastWritten"] >= since_ms
-    ]
+    files = [f for f in listing["DescribeDBLogFiles"] if f["LastWritten"] >= since_ms]
     directory = out / RDS_LOGS_DIR
     directory.mkdir(exist_ok=True)
     for file in files:
-        text = aws_ok(
+        portion = aws_json(
             run,
-            PROFILE,
             "rds",
             "download-db-log-file-portion",
-            "--region",
-            REGION,
             "--db-instance-identifier",
             rds["identifier"],
             "--log-file-name",
             file["LogFileName"],
             "--starting-token",
             "0",
-            "--output",
-            "text",
         )
-        (directory / Path(file["LogFileName"]).name).write_text(text)
+        (directory / Path(file["LogFileName"]).name).write_text(portion["LogFileData"])
     log.info("rds logs: %d files in %s", len(files), directory)
 
 
@@ -5587,11 +5216,13 @@ def ebs_balance_queries(instance_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def parse_metric_results(stdout: str, names: dict[str, str]) -> dict[str, MetricSeries]:
+def parse_metric_results(
+    data: dict[str, Any], names: dict[str, str]
+) -> dict[str, MetricSeries]:
     """Series per metric name from `get-metric-data`, `names` mapping query Id to metric; a
     metric without datapoints gets empty lists, any other status than `Complete` (e.g.
     `Forbidden`) raises."""
-    results = {r["Id"]: r for r in json.loads(stdout)["MetricDataResults"]}
+    results = {r["Id"]: r for r in data["MetricDataResults"]}
     series: dict[str, MetricSeries] = {}
     for query_id, metric in names.items():
         result = results[query_id]
@@ -5885,31 +5516,23 @@ def write_failure_summary(run_dir: Path, manifest: Manifest, error: str | None) 
     (run_dir / "summary.md").write_text("\n".join(lines))
 
 
-def tagged_resources(
-    run: Runner, region: str, name: str | None = None, profile: str = PROFILE
-) -> list[str]:
+def tagged_resources(run: Runner, name: str | None = None) -> list[str]:
     """ARNs of resources tagged `espresso-bench-run`, of one run when `name` is given."""
     tag = f"Key={TAG_RUN}" + (f",Values={name}" if name is not None else "")
-    out = aws_ok(
+    return aws_json(
         run,
-        profile,
         "resourcegroupstaggingapi",
         "get-resources",
-        "--region",
-        region,
         "--tag-filters",
         tag,
         "--query",
         "ResourceTagMappingList[].ResourceARN",
-        "--output",
-        "json",
     )
-    return list(json.loads(out))
 
 
 class AwsStep(TypedDict):
     action: Literal["aws"]
-    # `aws_ok` arguments after the profile.
+    # `aws_json` arguments.
     args: list[str]
     tolerate: str | None
 
@@ -5922,7 +5545,7 @@ class ResourceStep(TypedDict):
 SweepStep = AwsStep | ResourceStep
 
 
-def sweep_plan(arns: list[str], region: str) -> list[SweepStep]:
+def sweep_plan(arns: list[str]) -> list[SweepStep]:
     """The deletions for `arns` in dependency order: the delete schedule group (so it cannot
     fire mid-sweep), instances, the rds instance (waiting for it) with its subnet and parameter
     groups, volumes, security group (the rds network interfaces hold it until the instance is
@@ -5935,7 +5558,7 @@ def sweep_plan(arns: list[str], region: str) -> list[SweepStep]:
     def delete(
         service: str, verb: str, id_flag: str, resource_id: str, tolerate: str | None
     ) -> AwsStep:
-        args = [service, verb, "--region", region, id_flag, resource_id]
+        args = [service, verb, id_flag, resource_id]
         return AwsStep(action="aws", args=args, tolerate=tolerate)
 
     plan: list[SweepStep] = [
@@ -5951,7 +5574,7 @@ def sweep_plan(arns: list[str], region: str) -> list[SweepStep]:
     if instances := by_kind["instance"]:
         ids = ["--instance-ids", *instances]
         for verb in (["terminate-instances"], ["wait", "instance-terminated"]):
-            args = ["ec2", *verb, "--region", region, *ids]
+            args = ["ec2", *verb, *ids]
             plan.append(AwsStep(action="aws", args=args, tolerate=None))
     plan += [
         ResourceStep(action="delete_rds", resource=identifier)
@@ -5994,24 +5617,20 @@ def sweep_plan(arns: list[str], region: str) -> list[SweepStep]:
 
 
 def sweep(
-    run: Runner,
-    region: str,
-    name: str | None,
-    profile: str = PROFILE,
-    clock: nb.Clock = nb.SYSTEM_CLOCK,
+    run: Runner, name: str | None, clock: nb.Clock = nb.SYSTEM_CLOCK
 ) -> list[str]:
     """Deletes what `tagged_resources` finds as `sweep_plan` orders it, then the scheduler role
     of an rds fleet. Returns every ARN found."""
-    arns = tagged_resources(run, region, name, profile)
-    for step in sweep_plan(arns, region):
+    arns = tagged_resources(run, name)
+    for step in sweep_plan(arns):
         if step["action"] == "aws":
-            aws_ok(run, profile, *step["args"], tolerate=step["tolerate"])
+            aws_json(run, *step["args"], tolerate=step["tolerate"])
         elif step["action"] == "delete_rds":
-            delete_rds(run, region, step["resource"], profile)
+            delete_rds(run, step["resource"])
         else:
-            delete_security_group(run, region, step["resource"], profile, clock)
+            delete_security_group(run, step["resource"], clock)
     if fleets := rds_fleets(arns):
-        sweep_iam(run, profile, fleets)
+        sweep_iam(run, fleets)
     return arns
 
 
@@ -6024,34 +5643,26 @@ def rds_fleets(arns: Iterable[str]) -> set[str]:
     }
 
 
-def delete_rds(run: Runner, region: str, identifier: str, profile: str) -> None:
+def delete_rds(run: Runner, identifier: str) -> None:
     """Deletes the instance and waits until it is gone. One the schedule or a destroy is
     already deleting is only waited for."""
-    status = aws_ok(
+    status = aws_json(
         run,
-        profile,
         "rds",
         "describe-db-instances",
-        "--region",
-        region,
         "--db-instance-identifier",
         identifier,
         "--query",
         "DBInstances[0].DBInstanceStatus",
-        "--output",
-        "text",
         tolerate="DBInstanceNotFound",
-    ).strip()
+    )
     if not status:
         return
     if status != "deleting":
-        aws_ok(
+        aws_json(
             run,
-            profile,
             "rds",
             "delete-db-instance",
-            "--region",
-            region,
             "--db-instance-identifier",
             identifier,
             "--skip-final-snapshot",
@@ -6059,65 +5670,55 @@ def delete_rds(run: Runner, region: str, identifier: str, profile: str) -> None:
             tolerate="DBInstanceNotFound",
         )
     log.info("waiting for rds %s to be deleted", identifier)
-    aws_ok(
+    aws_json(
         run,
-        profile,
         "rds",
         "wait",
         "db-instance-deleted",
-        "--region",
-        region,
         "--db-instance-identifier",
         identifier,
     )
 
 
-def list_scheduler_roles(run: Runner, profile: str) -> list[str]:
+def list_scheduler_roles(run: Runner) -> list[str]:
     """ARNs of the IAM roles under `IAM_ROLE_PATH`. A profile without `iam:ListRoles` sees
     none; only rds fleets create roles, and they need IAM rights anyway."""
-    out = aws_ok(
+    out = aws_json(
         run,
-        profile,
         "iam",
         "list-roles",
         "--path-prefix",
         IAM_ROLE_PATH,
         "--query",
         "Roles[].Arn",
-        "--output",
-        "json",
         tolerate="AccessDenied",
     )
-    if not out:
+    if out is None:
         log.warning("iam:ListRoles denied: scheduler roles are not listed")
         return []
-    return list(json.loads(out))
+    return out
 
 
-def sweep_iam(run: Runner, profile: str, fleets: set[str]) -> None:
+def sweep_iam(run: Runner, fleets: set[str]) -> None:
     """Deletes the scheduler role of each fleet in `fleets` that has one, inline policies
     first."""
-    for arn in list_scheduler_roles(run, profile):
+    for arn in list_scheduler_roles(run):
         if role_fleet(arn) not in fleets:
             continue
         role = arn_parts(arn)[1].rpartition("/")[2]
-        listed = aws_ok(
+        listed = aws_json(
             run,
-            profile,
             "iam",
             "list-role-policies",
             "--role-name",
             role,
             "--query",
             "PolicyNames",
-            "--output",
-            "json",
             tolerate="NoSuchEntity",
         )
-        for policy in json.loads(listed) if listed else []:
-            aws_ok(
+        for policy in listed or []:
+            aws_json(
                 run,
-                profile,
                 "iam",
                 "delete-role-policy",
                 "--role-name",
@@ -6126,9 +5727,8 @@ def sweep_iam(run: Runner, profile: str, fleets: set[str]) -> None:
                 policy,
                 tolerate="NoSuchEntity",
             )
-        aws_ok(
+        aws_json(
             run,
-            profile,
             "iam",
             "delete-role",
             "--role-name",
@@ -6137,23 +5737,18 @@ def sweep_iam(run: Runner, profile: str, fleets: set[str]) -> None:
         )
 
 
-def delete_security_group(
-    run: Runner, region: str, group: str, profile: str, clock: nb.Clock
-) -> None:
+def delete_security_group(run: Runner, group: str, clock: nb.Clock) -> None:
     for attempt in range(1, SG_DELETE_RETRIES + 1):
         try:
-            aws_ok(
+            aws_json(
                 run,
-                profile,
                 "ec2",
                 "delete-security-group",
-                "--region",
-                region,
                 "--group-id",
                 group,
             )
             return
-        except RemoteError as exc:
+        except Refused as exc:
             if "DependencyViolation" not in str(exc) or attempt == SG_DELETE_RETRIES:
                 raise
             log.debug("security group %s still in use, retrying", group)
@@ -6167,12 +5762,7 @@ def actual_cost(run: Runner, manifest: FleetManifest) -> dict[str, float]:
     """expected, bound and actual USD, with the run's wall time in `duration_s`. Actual is the
     estimate's price lines at the time between the first launch and the last termination,
     from `describe-instances` (terminated instances stay listed for about an hour)."""
-    rows = describe_instances(
-        run,
-        REGION,
-        PROFILE,
-        f"Name=tag:{TAG_RUN},Values={manifest['name']}",
-    )
+    rows = describe_instances(run, f"Name=tag:{TAG_RUN},Values={manifest['name']}")
     if not rows:
         raise RemoteError(f"no instances tagged {manifest['name']} to price")
     launches = [datetime.fromisoformat(row["launch"]) for row in rows]
@@ -6212,13 +5802,10 @@ def rds_billed_s(run: Runner, manifest: FleetManifest, first_launch: datetime) -
 def rds_delete_time(run: Runner, identifier: str, fallback: datetime) -> datetime:
     """When RDS logged the deletion, whether the schedule or `tofu destroy` did it; `fallback`
     (the driver's clock after the destroy) when it logged none."""
-    out = aws_ok(
+    out = aws_json(
         run,
-        PROFILE,
         "rds",
         "describe-events",
-        "--region",
-        REGION,
         "--source-type",
         "db-instance",
         "--source-identifier",
@@ -6227,12 +5814,10 @@ def rds_delete_time(run: Runner, identifier: str, fallback: datetime) -> datetim
         "deletion",
         "--duration",
         str(RDS_EVENTS_MINUTES),
-        "--output",
-        "json",
     )
     deleted = [
         datetime.fromisoformat(event["Date"])
-        for event in json.loads(out)["Events"]
+        for event in out["Events"]
         if "deleted" in event["Message"].lower()
     ]
     return max(deleted, default=fallback)
@@ -6596,7 +6181,7 @@ def main() -> int:
         logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         return args.func(args)
-    except Refused as exc:
+    except (Refused, TfFailed) as exc:
         log.error("error: %s", exc)
         return EXIT_REFUSED
     except RemoteError as exc:

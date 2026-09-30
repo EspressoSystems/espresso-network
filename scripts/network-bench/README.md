@@ -106,9 +106,9 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> services -> nodes -> m
 
 | Phase       | Does                                                                                                                                               | Gate                                                   |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| preflight   | tools, `sts` account, default VPC + DNS, type offered, vCPU quota, image digests + arm64                                                           | any miss: exit 2                                       |
+| preflight   | tools, `sts` account, type offered, image digests + arm64                                                                                          | any miss: exit 2                                       |
 | plan        | render run dir, `tofu init/plan`, estimate at the `PRICES` constants (eu-west-1 on-demand)                                                         | over `--max-usd`, declined, no tty w/o `--yes`: exit 2 |
-| apply       | `tofu apply`, local state in run dir; instances terminate on shutdown, cloud-init arms `shutdown -P +TTL` first                                    | tf error classified, destroy, exit 3                   |
+| apply       | `tofu apply`, local state in run dir; instances terminate on shutdown, cloud-init arms `shutdown -P +TTL` first                                    | last tf stderr line, destroy, exit 3                   |
 | provisioned | ssh + `cloud-init status --wait`, digests == manifest, render env/start.sh (need private IPs), rsync `/opt/bench`, start `agent-host`              |                                                        |
 | services    | anvil (`eth_chainId`), deploy (code at genesis addresses), orchestrator + relay (`/healthcheck`), postgres (`pg_isready`)                          |                                                        |
 | nodes       | `docker create` all, `docker start` at one wall-clock instant, record spread                                                                       | spread >= 2 s: noisy                                   |
@@ -121,16 +121,16 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
 
 ### Failure paths
 
-| Event                          | Handling                                                                                                                 |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `tofu apply` fails             | classify (`VcpuLimitExceeded` + quota command, `InsufficientInstanceCapacity`, `UnauthorizedOperation`), destroy, exit 3 |
-| node never ready / agent error | collect all, failure summary with last log lines, destroy, exit 3                                                        |
-| Ctrl-C                         | finish current phase, bounded collect, destroy, exit 3 or 4                                                              |
-| destroy fails x3               | sweep by tag `espresso-bench-run=<name>`; leftovers → exit 4, `status --all` lists them                                  |
-| laptop dies                    | agents keep running, TTL ends instances (and the pg volume), a schedule deletes the rds instance 5 min before the TTL;   |
-|                                | `status/down FLEET`, `collect/render RUN` recover; `run --fleet --force` replaces a stale lock                           |
-| reset fails on a fleet         | fleet phase `dirty`, lock kept; `run --fleet DIR --force` resets again, or `down DIR`                                    |
-| state lost                     | `destroy --orphans`: list by tag (owner, launch, expiry), confirm, sweep; never another owner's live run                 |
+| Event                          | Handling                                                                                                               |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `tofu apply` fails             | log the last stderr line (e.g. `VcpuLimitExceeded`), destroy, exit 3                                                   |
+| node never ready / agent error | collect all, failure summary with last log lines, destroy, exit 3                                                      |
+| Ctrl-C                         | finish current phase, bounded collect, destroy, exit 3 or 4                                                            |
+| destroy fails x3               | sweep by tag `espresso-bench-run=<name>`; leftovers → exit 4, `status --all` lists them                                |
+| laptop dies                    | agents keep running, TTL ends instances (and the pg volume), a schedule deletes the rds instance 5 min before the TTL; |
+|                                | `status/down FLEET`, `collect/render RUN` recover; `run --fleet --force` replaces a stale lock                         |
+| reset fails on a fleet         | fleet phase `dirty`, lock kept; `run --fleet DIR --force` resets again, or `down DIR`                                  |
+| state lost                     | `destroy --orphans`: list by tag (owner, launch, expiry), confirm, sweep; never another owner's live run               |
 
 ### Fleets and query databases
 

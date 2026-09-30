@@ -509,70 +509,6 @@ class CallerAccountTest(unittest.TestCase):
         self.assertEqual(awsb.caller_account(runner), awsb.ACCOUNT)
 
 
-class DefaultVpcTest(unittest.TestCase):
-    def test_no_default_vpc_refuses(self):
-        runner = FakeRunner(
-            {
-                (
-                    "aws",
-                    "--profile",
-                    "timeboost-dev",
-                    "ec2",
-                    "describe-vpcs",
-                ): completed(stdout=json.dumps({"Vpcs": []}))
-            }
-        )
-        with self.assertRaises(awsb.Refused):
-            awsb.default_vpc(runner)
-
-    def test_dns_hostnames_disabled_refuses(self):
-        runner = FakeRunner(
-            {
-                (
-                    "aws",
-                    "--profile",
-                    "timeboost-dev",
-                    "ec2",
-                    "describe-vpcs",
-                ): completed(stdout=json.dumps({"Vpcs": [{"VpcId": "vpc-1"}]})),
-                (
-                    "aws",
-                    "--profile",
-                    "timeboost-dev",
-                    "ec2",
-                    "describe-vpc-attribute",
-                ): completed(
-                    stdout=json.dumps({"EnableDnsHostnames": {"Value": False}})
-                ),
-            }
-        )
-        with self.assertRaises(awsb.Refused):
-            awsb.default_vpc(runner)
-
-    def test_ok_returns_vpc_id(self):
-        runner = FakeRunner(
-            {
-                (
-                    "aws",
-                    "--profile",
-                    "timeboost-dev",
-                    "ec2",
-                    "describe-vpcs",
-                ): completed(stdout=json.dumps({"Vpcs": [{"VpcId": "vpc-1"}]})),
-                (
-                    "aws",
-                    "--profile",
-                    "timeboost-dev",
-                    "ec2",
-                    "describe-vpc-attribute",
-                ): completed(
-                    stdout=json.dumps({"EnableDnsHostnames": {"Value": True}})
-                ),
-            }
-        )
-        self.assertEqual(awsb.default_vpc(runner), "vpc-1")
-
-
 class CapableAzTest(unittest.TestCase):
     def _offerings(self, azs: list[str]) -> subprocess.CompletedProcess:
         return completed(
@@ -612,144 +548,35 @@ class CapableAzTest(unittest.TestCase):
             awsb.capable_az(runner, {"c8g.4xlarge"})
 
 
-class VcpuHeadroomTest(unittest.TestCase):
-    def _quota_runner(self, quota):
-        return FakeRunner(
-            {
-                (
-                    "aws",
-                    "--profile",
-                    "timeboost-dev",
-                    "service-quotas",
-                    "get-service-quota",
-                ): completed(stdout=json.dumps({"Quota": {"Value": quota}}))
-            }
-        )
-
-    def _instance_types(self, vcpus_by_type):
-        return {t: {"Type": t, "VCpus": v} for t, v in vcpus_by_type.items()}
-
-    def test_within_quota_ok(self):
-        instance_types = self._instance_types({"c8g.4xlarge": 16, "c8g.2xlarge": 8})
-        needed, in_use, quota = awsb.vcpu_headroom(
-            self._quota_runner(256.0),
-            two_node_hosts(),
-            running=[],
-            instance_types=instance_types,
-        )
-        self.assertEqual((needed, in_use, quota), (16 + 8 + 16, 0, 256.0))
-
-    def test_over_quota_refuses(self):
-        instance_types = self._instance_types({"c8g.4xlarge": 16, "c8g.2xlarge": 8})
-        with self.assertRaises(awsb.Refused):
-            awsb.vcpu_headroom(
-                self._quota_runner(10.0),
-                two_node_hosts(),
-                running=[],
-                instance_types=instance_types,
-            )
-
-    def test_repeated_running_type_counted_per_instance(self):
-        # Three running c8g.4xlarge must count as 3x16 vCPUs, not once.
-        instance_types = self._instance_types({"c8g.4xlarge": 16, "c8g.2xlarge": 8})
-        running = ["c8g.4xlarge", "c8g.4xlarge", "c8g.4xlarge"]
-        _needed, in_use, _quota = awsb.vcpu_headroom(
-            self._quota_runner(256.0),
-            two_node_hosts(),
-            running=running,
-            instance_types=instance_types,
-        )
-        self.assertEqual(in_use, 48)
-
-
 class PreflightTest(unittest.TestCase):
-    """Runs `preflight` with a patched `shutil.which` (no real tools needed) and a stubbed
-    `resolve_image`, and asserts `describe-instance-types` is called exactly once:
-    `resolve_ami_arch` and `vcpu_headroom` used to each fetch it separately."""
-
-    def test_describe_instance_types_called_once(self):
+    def test_resolves_az_ami_and_images(self):
         cfg = awsb.RunConfig(
             tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
         )
-        hosts = awsb.plan_hosts(cfg)
-        responses = {
-            (
-                "aws",
-                "--profile",
-                "timeboost-dev",
-                "sts",
-                "get-caller-identity",
-            ): completed(stdout=json.dumps({"Account": awsb.ACCOUNT})),
-            ("aws", "--profile", "timeboost-dev", "ec2", "describe-vpcs"): completed(
-                stdout=json.dumps({"Vpcs": [{"VpcId": "vpc-1"}]})
-            ),
-            (
-                "aws",
-                "--profile",
-                "timeboost-dev",
-                "ec2",
-                "describe-vpc-attribute",
-            ): completed(stdout=json.dumps({"EnableDnsHostnames": {"Value": True}})),
-            (
-                "aws",
-                "--profile",
-                "timeboost-dev",
-                "ec2",
-                "describe-instance-type-offerings",
-            ): completed(
-                stdout=json.dumps(
-                    {"InstanceTypeOfferings": [{"Location": "eu-west-1a"}]}
-                )
-            ),
-            (
-                "aws",
-                "--profile",
-                "timeboost-dev",
-                "ec2",
-                "describe-instances",
-            ): completed(stdout=json.dumps([])),
-            (
-                "aws",
-                "--profile",
-                "timeboost-dev",
-                "ec2",
-                "describe-instance-types",
-            ): completed(
-                stdout=json.dumps(
-                    [
-                        {"Type": "c8g.4xlarge", "VCpus": 16, "Archs": ["arm64"]},
-                        {"Type": "c8g.2xlarge", "VCpus": 8, "Archs": ["arm64"]},
-                    ]
-                )
-            ),
-            ("aws", "--profile", "timeboost-dev", "service-quotas"): completed(
-                stdout=json.dumps({"Quota": {"Value": 256.0}})
-            ),
-            ("aws", "--profile", "timeboost-dev", "ec2", "describe-images"): completed(
-                stdout="ami-0abc\n"
-            ),
-        }
-        runner = FakeRunner(responses)
-        fake_image = {
-            "ref": "x",
-            "digest": "sha256:" + "a" * 64,
-            "revision": None,
-            "platforms": ["linux/arm64"],
-        }
+        prefix = ("aws", "--profile", "timeboost-dev")
+        runner = FakeRunner(
+            {
+                (*prefix, "sts", "get-caller-identity"): completed(
+                    stdout=json.dumps({"Account": awsb.ACCOUNT})
+                ),
+                (*prefix, "ec2", "describe-instance-type-offerings"): completed(
+                    stdout=json.dumps(
+                        {"InstanceTypeOfferings": [{"Location": "eu-west-1a"}]}
+                    )
+                ),
+                (*prefix, "ec2", "describe-images"): completed(
+                    stdout=json.dumps("ami-0abc")
+                ),
+            }
+        )
         with (
-            unittest.mock.patch.object(awsb, "resolve_image", return_value=fake_image),
+            unittest.mock.patch.object(awsb, "resolve_image", fake_image),
             unittest.mock.patch("shutil.which", return_value="/usr/bin/x"),
         ):
-            result = awsb.preflight(runner, cfg, hosts)
-        describe_calls = [
-            c
-            for c in runner.calls
-            if tuple(c[:5])
-            == ("aws", "--profile", "timeboost-dev", "ec2", "describe-instance-types")
-        ]
-        self.assertEqual(len(describe_calls), 1)
+            result = awsb.preflight(runner, cfg, awsb.plan_hosts(cfg))
         self.assertEqual(result["az"], "eu-west-1a")
         self.assertEqual(result["ami_id"], "ami-0abc")
+        self.assertEqual(set(result["images"]), set(awsb.image_refs(cfg)))
 
 
 class RenderTfvarsTest(unittest.TestCase):
@@ -782,29 +609,6 @@ class RenderTfvarsTest(unittest.TestCase):
             tfvars["hosts"]["node0"]["user_data_path"],
             str(run_dir / "hosts" / "node0" / "user-data.sh"),
         )
-
-
-class ClassifyTfErrorTest(unittest.TestCase):
-    def test_vcpu_limit(self):
-        self.assertIn(
-            "VcpuLimitExceeded", awsb.classify_tf_error("... VcpuLimitExceeded ...")
-        )
-        self.assertIn("quota-code", awsb.classify_tf_error("... VcpuLimitExceeded ..."))
-
-    def test_insufficient_capacity(self):
-        self.assertIn(
-            "InsufficientInstanceCapacity",
-            awsb.classify_tf_error("Error: InsufficientInstanceCapacity"),
-        )
-
-    def test_unauthorized(self):
-        self.assertIn(
-            "IAM", awsb.classify_tf_error("Error: UnauthorizedOperation: ...")
-        )
-
-    def test_unclassified_keeps_last_line(self):
-        result = awsb.classify_tf_error("line one\nline two\nsome other tofu error\n")
-        self.assertIn("some other tofu error", result)
 
 
 class TerraformClassTest(unittest.TestCase):
@@ -847,7 +651,7 @@ class TerraformClassTest(unittest.TestCase):
         tf.destroy()
         self.assertTrue(runner.ran("tofu", f"-chdir={tf_dir}", "apply"))
 
-    def test_apply_failure_is_classified(self):
+    def test_apply_failure_keeps_the_last_stderr_line(self):
         tf_dir = Path("/tmp/aws-bench/run1/terraform")
         runner = FakeRunner(
             {
@@ -855,14 +659,16 @@ class TerraformClassTest(unittest.TestCase):
                     "tofu",
                     f"-chdir={tf_dir}",
                     "apply",
-                ): completed(returncode=1, stderr="Error: VcpuLimitExceeded: ...")
+                ): completed(
+                    returncode=1, stderr="Error: creating\nVcpuLimitExceeded: x\n\n"
+                )
             }
         )
         tf = awsb.Terraform(runner, tf_dir, env={})
         with self.assertRaises(awsb.TfFailed) as ctx:
             tf.apply()
         self.assertEqual(ctx.exception.stage, "apply")
-        self.assertIn("VcpuLimitExceeded", str(ctx.exception))
+        self.assertEqual(str(ctx.exception), "tofu apply failed: VcpuLimitExceeded: x")
 
     def test_destroy_failure_raises_tf_failed(self):
         tf_dir = Path("/tmp/aws-bench/run1/terraform")
@@ -898,6 +704,11 @@ class TerraformClassTest(unittest.TestCase):
             self.assertTrue(cache.is_dir())
 
 
+def resolve_with(registry: FakeRegistry) -> "awsb.ImageInfo":
+    with unittest.mock.patch.object(awsb, "_registry_get", registry):
+        return awsb.resolve_image(registry.ref)
+
+
 # REQ:awsbench-image-check
 class ResolveImageTest(unittest.TestCase):
     def test_resolves_digest_platforms_and_revision(self):
@@ -907,7 +718,7 @@ class ResolveImageTest(unittest.TestCase):
             platforms=[("linux", "amd64"), ("linux", "arm64")],
             revision="abc1234",
         )
-        info = awsb.resolve_image(server.ref, server)
+        info = resolve_with(server)
         self.assertEqual(info["digest"], server.digests[("linux", "arm64")])
         self.assertCountEqual(info["platforms"], ["linux/amd64", "linux/arm64"])
         self.assertEqual(info["revision"], "abc1234")
@@ -915,16 +726,16 @@ class ResolveImageTest(unittest.TestCase):
 
     def test_no_revision_label_is_none(self):
         server = FakeRegistry(repository="x", tag="v1", platforms=[("linux", "arm64")])
-        info = awsb.resolve_image(server.ref, server)
+        info = resolve_with(server)
         self.assertIsNone(info["revision"])
 
     def test_single_manifest_without_index(self):
         server = FakeRegistry(
             repository="x", tag="v1", platforms=[("linux", "arm64")], index=False
         )
-        info = awsb.resolve_image(server.ref, server)
+        info = resolve_with(server)
         self.assertEqual(info["platforms"], ["linux/arm64"])
-        self.assertTrue(info["digest"].startswith("sha256:"))
+        self.assertEqual(info["digest"], server.single_digest)
 
     def test_attestation_platform_ignored(self):
         # buildx publishes an extra unknown/unknown manifest for SBOM/provenance attestations.
@@ -933,14 +744,14 @@ class ResolveImageTest(unittest.TestCase):
             tag="v1",
             platforms=[("unknown", "unknown"), ("linux", "arm64")],
         )
-        info = awsb.resolve_image(server.ref, server)
+        info = resolve_with(server)
         self.assertEqual(info["platforms"], ["linux/arm64"])
 
     # EDGE:awsbench-image-no-arm64
     def test_missing_arm64_refuses(self):
         server = FakeRegistry(repository="x", tag="v1", platforms=[("linux", "amd64")])
         with self.assertRaises(awsb.Refused) as ctx:
-            awsb.resolve_image(server.ref, server)
+            resolve_with(server)
         self.assertIn("no linux/arm64 platform", str(ctx.exception))
         self.assertIn(server.ref, str(ctx.exception))
 
@@ -949,7 +760,7 @@ class ResolveImageTest(unittest.TestCase):
             repository="x", tag="missing", platforms=[("linux", "arm64")]
         )
         with self.assertRaises(awsb.Refused) as ctx:
-            awsb.resolve_image(server.ref, server)
+            resolve_with(server)
         self.assertIn("image not found", str(ctx.exception))
         self.assertIn(server.ref, str(ctx.exception))
 
@@ -959,7 +770,7 @@ class ResolveImageTest(unittest.TestCase):
             repository="x", tag="v1", platforms=[("linux", "arm64")], deny_token=True
         )
         with self.assertRaises(awsb.Refused) as ctx:
-            awsb.resolve_image(server.ref, server)
+            resolve_with(server)
         self.assertIn("token request", str(ctx.exception))
         self.assertIn(server.ref, str(ctx.exception))
 
@@ -971,7 +782,7 @@ class ResolveImageTest(unittest.TestCase):
             deny_manifest_status=403,
         )
         with self.assertRaises(awsb.Refused) as ctx:
-            awsb.resolve_image(server.ref, server)
+            resolve_with(server)
         self.assertIn("private or inaccessible", str(ctx.exception))
         self.assertIn(server.ref, str(ctx.exception))
 
@@ -979,14 +790,14 @@ class ResolveImageTest(unittest.TestCase):
 class RegistryGetTest(unittest.TestCase):
     """`_registry_get` against a loopback server that relays to a `FakeRegistry`."""
 
-    def _serve(self, registry: FakeRegistry) -> None:
+    def _serve(self, registry: FakeRegistry) -> str:
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
                 pass
 
             def do_GET(self):
                 status, headers, body = registry(
-                    f"http://{registry.host}{self.path}", dict(self.headers)
+                    f"https://{registry.host}{self.path}", dict(self.headers)
                 )
                 self.send_response(status)
                 for name, value in headers.items():
@@ -996,7 +807,6 @@ class RegistryGetTest(unittest.TestCase):
                 self.wfile.write(body)
 
         server = HTTPServer(("127.0.0.1", 0), Handler)
-        registry.host = f"127.0.0.1:{server.server_address[1]}"
         thread = threading.Thread(
             target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
         )
@@ -1005,54 +815,36 @@ class RegistryGetTest(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(thread.join)
         self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}"
 
-    def test_token_challenge_and_authorized_retry(self):
-        registry = FakeRegistry(
-            "x", "v1", [("linux", "arm64")], revision="abc1234", host="placeholder"
+    def test_ok_status_headers_and_body(self):
+        registry = FakeRegistry("x", "v1", [("linux", "arm64")])
+        base = self._serve(registry)
+        status, _, body = awsb._registry_get(
+            f"{base}/v2/x/blobs/{registry.config_digest}", {}
         )
-        self._serve(registry)
-        info = awsb.resolve_image(registry.ref)
-        self.assertEqual(info["digest"], registry.digests[("linux", "arm64")])
-        self.assertEqual(info["revision"], "abc1234")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["architecture"], "arm64")
 
     def test_http_error_status_is_returned_not_raised(self):
-        registry = FakeRegistry(
-            "x", "missing", [("linux", "arm64")], host="placeholder"
-        )
-        self._serve(registry)
-        with self.assertRaises(awsb.Refused) as ctx:
-            awsb.resolve_image(registry.ref)
-        self.assertIn("image not found", str(ctx.exception))
+        registry = FakeRegistry("x", "v1", [("linux", "arm64")])
+        base = self._serve(registry)
+        status, headers, _ = awsb._registry_get(f"{base}/v2/x/manifests/v1", {})
+        self.assertEqual(status, 401)
+        self.assertIn("realm=", headers["WWW-Authenticate"])
 
 
 class ParseRefTest(unittest.TestCase):
-    def test_docker_hub_official_image(self):
-        self.assertEqual(
-            awsb.parse_ref("postgres:16"),
-            ("registry-1.docker.io", "library/postgres", "16"),
-        )
-
     def test_ghcr_multi_segment(self):
         self.assertEqual(
             awsb.parse_ref("ghcr.io/espressosystems/espresso-network/espresso-node:x"),
             ("ghcr.io", "espressosystems/espresso-network/espresso-node", "x"),
         )
 
-    def test_no_tag_defaults_to_latest(self):
-        self.assertEqual(
-            awsb.parse_ref("ghcr.io/foundry-rs/foundry"),
-            ("ghcr.io", "foundry-rs/foundry", "latest"),
-        )
-
-    def test_docker_io_alias_resolves_to_registry_host(self):
-        # SUPPORT_IMAGES["postgres"]; a literal docker.io host must not be sent to the
-        # registry as-is (https://docker.io/v2/... 302s to www.docker.com).
+    def test_docker_io_resolves_to_the_registry_api_host(self):
+        # https://docker.io/v2/... 302s to www.docker.com.
         self.assertEqual(
             awsb.parse_ref("docker.io/library/postgres:16"),
-            ("registry-1.docker.io", "library/postgres", "16"),
-        )
-        self.assertEqual(
-            awsb.parse_ref("index.docker.io/library/postgres:16"),
             ("registry-1.docker.io", "library/postgres", "16"),
         )
 
@@ -1128,15 +920,6 @@ class ParseDotenvTest(unittest.TestCase):
     def test_line_without_equals_raises(self):
         with self.assertRaises(ValueError):
             awsb.parse_dotenv("FOO=bar\nnot a line\n")
-
-    def test_read_dotenv_returns_the_file_text(self):
-        path = tmp_dir(self) / ".env"
-        path.write_text("A=1\n")
-        self.assertEqual(awsb.read_dotenv(path), "A=1\n")
-
-    def test_read_dotenv_missing_file_raises(self):
-        with self.assertRaises(FileNotFoundError):
-            awsb.read_dotenv(tmp_dir(self) / "absent.env")
 
     @SLOW
     def test_real_env_file_parses(self):
@@ -1307,11 +1090,6 @@ class RenderCtlEnvTest(unittest.TestCase):
         env = self.env()
         for value in env.values():
             self.assertNotIn("$", value)
-
-    def test_port_drift_from_dotenv_raises(self):
-        dotenv = dict(self.dotenv, ESPRESSO_L1_PORT="9999")
-        with self.assertRaises(ValueError):
-            awsb.render_ctl_env(self.hosts, self.cfg, dotenv)
 
 
 def fake_image(ref: str) -> dict:
@@ -1621,13 +1399,9 @@ class CgroupParsersTest(unittest.TestCase):
 def fake_preflight() -> dict:
     return {
         "account": "027574771971",
-        "vpc_id": "vpc-1",
         "az": "eu-west-1b",
         "ami_id": "ami-0abc",
         "images": fake_images(),
-        "vcpu_needed": 40,
-        "vcpu_in_use": 0,
-        "vcpu_quota": 256.0,
         "git_diff": None,
     }
 
@@ -1685,7 +1459,7 @@ class RunHarness:
             unittest.mock.patch.object(
                 awsb, "preflight", return_value=fake_preflight()
             ),
-            unittest.mock.patch.object(awsb, "read_dotenv", return_value=DOTENV_TEXT),
+            unittest.mock.patch.object(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT)),
         ]
         if confirmed:
             # An interactive run: `confirm` says yes, but --yes is absent, so an interrupt asks.
@@ -1729,7 +1503,7 @@ class RunHarness:
 
 # REQ:awsbench-apply-failure
 class RunApplyFailureTest(unittest.TestCase):
-    def test_classifies_destroys_and_exits_3(self):
+    def test_logs_the_error_destroys_and_exits_3(self):
         harness = RunHarness(self)
         runner = FleetRunner(
             [DONE_STATE],
@@ -2803,7 +2577,7 @@ class FinishRunSkipTest(unittest.TestCase):
             interrupts,
             scripted_remote(self, Scripted({}), tmp),
         )
-        run = awsb.Run(fleet, tmp, fleet.cfg, 0.0, "", agent_started=True)
+        run = awsb.Run(fleet, tmp, fleet.cfg, 0.0, agent_started=True)
         ran: list[str] = []
 
         def step(name: str, after=lambda: None):
@@ -2902,7 +2676,7 @@ SWEEP_ARNS = [
 
 class SweepPlanTest(unittest.TestCase):
     def verbs(self, arns: list[str]) -> list[str]:
-        plan = awsb.sweep_plan(arns, "eu-west-1")
+        plan = awsb.sweep_plan(arns)
         return [
             " ".join(step["args"][:2]) if step["action"] == "aws" else step["action"]
             for step in plan
@@ -2926,30 +2700,23 @@ class SweepPlanTest(unittest.TestCase):
         )
 
     def test_no_resources_no_steps(self):
-        self.assertEqual(awsb.sweep_plan([], "eu-west-1"), [])
+        self.assertEqual(awsb.sweep_plan([]), [])
 
-    def test_steps_carry_region_id_and_tolerated_error(self):
-        plan = awsb.sweep_plan(SWEEP_ARNS[2:3], "eu-west-1")
+    def test_steps_carry_id_and_tolerated_error(self):
+        plan = awsb.sweep_plan(SWEEP_ARNS[2:3])
         self.assertEqual(
             plan,
             [
                 {
                     "action": "aws",
-                    "args": [
-                        "ec2",
-                        "delete-volume",
-                        "--region",
-                        "eu-west-1",
-                        "--volume-id",
-                        "vol-1",
-                    ],
+                    "args": ["ec2", "delete-volume", "--volume-id", "vol-1"],
                     "tolerate": "InvalidVolume.NotFound",
                 }
             ],
         )
 
     def test_rds_and_security_group_steps_name_their_resource(self):
-        plan = awsb.sweep_plan(SWEEP_ARNS, "eu-west-1")
+        plan = awsb.sweep_plan(SWEEP_ARNS)
         resources = {
             step["action"]: step["resource"] for step in plan if step["action"] != "aws"
         }
@@ -2960,7 +2727,7 @@ class SweepPlanTest(unittest.TestCase):
 
     def test_instance_ids_are_terminated_and_waited_on_together(self):
         arns = [f"arn:aws:ec2:eu-west-1:1:instance/i-{n}" for n in (1, 2)]
-        terminate, wait = awsb.sweep_plan(arns, "eu-west-1")
+        terminate, wait = awsb.sweep_plan(arns)
         assert terminate["action"] == "aws" and wait["action"] == "aws"
         self.assertEqual(terminate["args"][-3:], ["--instance-ids", "i-1", "i-2"])
         self.assertEqual(wait["args"][:2], ["ec2", "wait"])
@@ -3205,15 +2972,6 @@ class PgTuningTest(unittest.TestCase):
         self.assertTrue(awsb.pg_tls({"true": 3}))
         self.assertFalse(awsb.pg_tls({"true": 2, "false": 1}))
 
-    def test_stats_reset_covers_checkpoint_shared_and_statements(self):
-        sql = awsb.reset_pg_stats_sql()
-        for part in (
-            "CHECKPOINT",
-            "pg_stat_reset_shared(NULL)",
-            "pg_stat_statements_reset()",
-        ):
-            self.assertIn(part, sql)
-
 
 # REQ:querydb-settings-parity
 class PgValidityTest(unittest.TestCase):
@@ -3286,10 +3044,6 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
         self.assertNotIn("password", argv)
         self.assertEqual(argv[argv.index("-d") + 1], "espresso")
 
-    def test_psql_database_override(self):
-        argv, _ = awsb.psql_argv(awsb.pg_endpoint(), "postgres")
-        self.assertEqual(argv[argv.index("-d") + 1], "postgres")
-
     def test_container_enables_ssl_with_the_mounted_cert(self):
         script = awsb.render_start_sh(query_spec(), self.images)
         self.assertIn(f"-v {awsb.PG_TLS_DIR}:/tls:ro", script)
@@ -3347,9 +3101,7 @@ class ColocatedPostgresWiringTest(unittest.TestCase):
         run_dir = tmp_dir(self)
         for host in hosts:
             (run_dir / "hosts" / host["name"]).mkdir(parents=True)
-        awsb.render_host_files(
-            run_dir, cfg, manifest, two_node_hosts_info(), DOTENV_TEXT
-        )
+        awsb.render_host_files(run_dir, cfg, manifest, two_node_hosts_info())
         pg_json = run_dir / "hosts/node0/pg.json"
         self.assertEqual(json.loads(pg_json.read_text()), awsb.pg_endpoint())
         self.assertEqual(pg_json.stat().st_mode & 0o777, 0o600)
@@ -3653,7 +3405,7 @@ class EvidenceParsersTest(unittest.TestCase):
 class SweepAndCostTest(unittest.TestCase):
     def test_sweep_terminates_then_deletes_group_and_key(self):
         runner = FleetRunner([DONE_STATE])
-        arns = awsb.sweep(runner, "eu-west-1", "run1")
+        arns = awsb.sweep(runner, "run1")
         self.assertEqual(len(arns), 3)
         names = [c[3:5] for c in runner.calls if c[0] == "aws"]
         self.assertEqual(
@@ -3680,7 +3432,7 @@ class SweepAndCostTest(unittest.TestCase):
             )
 
         clock = FakeClock()
-        awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p", clock)
+        awsb.delete_security_group(runner, "sg-1", clock)
         self.assertEqual(len(attempts), 3)
         self.assertEqual(clock.sleeps, [awsb.SG_DELETE_BACKOFF_S] * 2)
 
@@ -3688,26 +3440,26 @@ class SweepAndCostTest(unittest.TestCase):
         runner = FakeRunner(
             {("aws",): completed(returncode=254, stderr="DependencyViolation")}
         )
-        with self.assertRaisesRegex(awsb.RemoteError, "DependencyViolation"):
-            awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p", FakeClock())
+        with self.assertRaisesRegex(awsb.Refused, "DependencyViolation"):
+            awsb.delete_security_group(runner, "sg-1", FakeClock())
         self.assertEqual(len(runner.calls), awsb.SG_DELETE_RETRIES)
 
     def test_security_group_delete_does_not_retry_other_errors(self):
         runner = FakeRunner({("aws",): completed(returncode=254, stderr="denied")})
-        with self.assertRaisesRegex(awsb.RemoteError, "denied"):
-            awsb.delete_security_group(runner, "eu-west-1", "sg-1", "p", FakeClock())
+        with self.assertRaisesRegex(awsb.Refused, "denied"):
+            awsb.delete_security_group(runner, "sg-1", FakeClock())
         self.assertEqual(len(runner.calls), 1)
 
     def test_tagged_resources_without_name_matches_every_run(self):
         runner = FleetRunner([DONE_STATE])
-        awsb.tagged_resources(runner, "eu-west-1")
+        awsb.tagged_resources(runner)
         self.assertTrue(runner.ran("Key=espresso-bench-run"))
         self.assertFalse(runner.ran("Values="))
 
     def test_aws_failure_raises(self):
         runner = FakeRunner({("aws",): completed(returncode=1, stderr="denied")})
-        with self.assertRaisesRegex(awsb.RemoteError, "denied"):
-            awsb.tagged_resources(runner, "eu-west-1")
+        with self.assertRaisesRegex(awsb.Refused, "denied"):
+            awsb.tagged_resources(runner)
 
     def test_actual_cost_prices_the_observed_duration(self):
         cfg = awsb.RunConfig(
@@ -3908,9 +3660,7 @@ class RenderHostFilesTest(unittest.TestCase):
             run_dir = Path(tmp)
             for host in hosts:
                 (run_dir / "hosts" / host["name"]).mkdir(parents=True)
-            awsb.render_host_files(
-                run_dir, cfg, manifest, two_node_hosts_info(), DOTENV_TEXT
-            )
+            awsb.render_host_files(run_dir, cfg, manifest, two_node_hosts_info())
             self.assertTrue((run_dir / "hosts/ctl/ctl.env").exists())
             self.assertTrue((run_dir / "hosts/node0/node.env").exists())
             self.assertTrue((run_dir / "hosts/node1/start.sh").exists())
@@ -4084,7 +3834,7 @@ class CollectEbsBalanceTest(unittest.TestCase):
         runner = FleetRunner(
             [DONE_STATE], balance=completed(returncode=254, stderr="denied")
         )
-        with self.assertRaisesRegex(awsb.RemoteError, "denied"):
+        with self.assertRaisesRegex(awsb.Refused, "denied"):
             self.collect(runner)
 
     def test_min_counts_only_periods_overlapping_the_load(self):
@@ -4142,7 +3892,7 @@ class FinishCollectsEbsBalanceTest(unittest.TestCase):
             interrupts,
         )
         agent = DONE_STATE | {"t1": interrupts.clock.time()}
-        run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, "", agent=agent)
+        run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, agent=agent)
         awsb.collect_node0_ebs_balance(run)
         self.assertEqual(fleet.run.count("get-metric-data"), 0)
 
@@ -4157,7 +3907,7 @@ class FinishCollectsEbsBalanceTest(unittest.TestCase):
             awsb.Interrupts(clock),
         )
         agent = DONE_STATE | {"t1": clock.time()}
-        run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, "", agent=agent)
+        run = awsb.Run(fleet, harness.run_dir, fleet.cfg, 0.0, agent=agent)
         self.assertEqual(awsb.published_window(run, "x"), agent)
         self.assertEqual(clock.sleeps, [awsb.CLOUDWATCH_LAG_S])
 
@@ -4558,8 +4308,6 @@ class DestroyOrphansTest(unittest.TestCase):
                 "timeboost-dev",
                 "ec2",
                 "terminate-instances",
-                "--region",
-                "eu-west-1",
                 "--instance-ids",
                 "i-2",
             )
@@ -4617,7 +4365,7 @@ class SweepVolumeTest(unittest.TestCase):
             ],
             [],
         )
-        awsb.sweep(runner, "eu-west-1", "r")
+        awsb.sweep(runner, "r")
         ec2 = [c[4] for c in runner.calls if c[3:4] == ["ec2"]]
         self.assertEqual(
             ec2,
@@ -4638,7 +4386,7 @@ class SweepVolumeTest(unittest.TestCase):
             ),
             **runner.responses,
         }
-        awsb.sweep(runner, "eu-west-1", "r")
+        awsb.sweep(runner, "r")
 
     def test_other_volume_errors_raise(self):
         runner = tag_runner([tag_mapping("volume", "vol-1", "r", None, None)], [])
@@ -4648,8 +4396,8 @@ class SweepVolumeTest(unittest.TestCase):
             ),
             **runner.responses,
         }
-        with self.assertRaisesRegex(awsb.RemoteError, "VolumeInUse"):
-            awsb.sweep(runner, "eu-west-1", "r")
+        with self.assertRaisesRegex(awsb.Refused, "VolumeInUse"):
+            awsb.sweep(runner, "r")
 
 
 class ManifestCostTest(unittest.TestCase):

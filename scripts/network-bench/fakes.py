@@ -31,7 +31,7 @@ def _json_reply(obj: dict[str, Any], content_type: str = JSON_MEDIA_TYPE) -> Rep
 
 
 class FakeRegistry:
-    """A minimal OCI/Docker registry usable as the `fetch` argument of `resolve_image`: one
+    """A minimal OCI/Docker registry usable in place of `aws-bench`'s `_registry_get`: one
     repository and tag, anonymous token challenge. `platforms` is a list of `(os,
     architecture)` pairs for the index; a `tag` of `"missing"` makes the manifest request 404,
     `deny_token` makes the token endpoint 401 (a private image), `deny_manifest_status` makes
@@ -58,12 +58,18 @@ class FakeRegistry:
         self.host = host
         self.digests = {p: f"sha256:{i:064d}" for i, p in enumerate(platforms)}
         self.config_digest = "sha256:" + "c" * 64
+        self.single_digest = "sha256:" + "d" * 64
         manifest_prefix = f"/v2/{repository}/manifests/"
-        single = _json_reply(
+        status, headers, body = _json_reply(
             {
                 "mediaType": SINGLE_MANIFEST_MEDIA_TYPE,
                 "config": {"digest": self.config_digest},
             }
+        )
+        single = (
+            status,
+            {**headers, "Docker-Content-Digest": self.single_digest},
+            body,
         )
         index_reply = _json_reply(
             {
@@ -109,9 +115,8 @@ class FakeRegistry:
             if self.deny_manifest_status is not None:
                 return self.deny_manifest_status, {}, b""
             if headers.get("Authorization") != "Bearer faketoken":
-                scheme = "http" if self.host.startswith("127.0.0.1:") else "https"
                 challenge = (
-                    f'Bearer realm="{scheme}://{self.host}/token",service="fake",'
+                    f'Bearer realm="https://{self.host}/token",service="fake",'
                     f'scope="repository:{self.repository}:pull"'
                 )
                 return 401, {"WWW-Authenticate": challenge}, b""
