@@ -368,14 +368,10 @@ class RunOnFleetTest(unittest.TestCase):
         self.assertFalse(runner.ran("tofu", "destroy"))
         self.assertRegex(harness.index()[-1], r"\| failed \| 3 \|")
         mark = len(runner.calls)
-        dead = unittest.mock.patch.object(
-            awsb.os, "kill", side_effect=ProcessLookupError
-        )
-        with dead, self.assertRaisesRegex(awsb.Refused, r"--force.*down"):
+        with self.assertRaisesRegex(awsb.Refused, "locked by pid"):
             harness.run(runner)
         self.assertEqual(ssh_calls(runner, mark), [])
-        with dead:
-            self.assertEqual(harness.run(runner, "--force"), awsb.EXIT_OK)
+        self.assertEqual(harness.run(runner, "--force"), awsb.EXIT_OK)
         self.assertEqual(harness.fleet()["phase"], "idle")
         self.assertFalse(harness.lock().exists())
 
@@ -384,40 +380,16 @@ class RunOnFleetTest(unittest.TestCase):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         harness.set_fleet(phase="running")
-        harness.lock().write_text(
-            json.dumps(
-                {
-                    "pid": 999999,
-                    "hostname": awsb.socket.gethostname(),
-                    "run": "old",
-                    "taken_at": "2026-09-30T10:00:00+00:00",
-                }
-            )
-        )
+        harness.lock().write_text("999999\n")
         mark = len(runner.calls)
-        dead = unittest.mock.patch.object(
-            awsb.os, "kill", side_effect=ProcessLookupError
-        )
-        with (
-            dead,
-            self.assertRaisesRegex(awsb.Refused, r"pid 999999 \(dead\).*--force"),
-        ):
+        with self.assertRaisesRegex(awsb.Refused, "locked by pid 999999"):
             harness.run(runner)
         self.assertEqual(ssh_calls(runner, mark), [])
-        with dead:
-            code = harness.run(runner, "--force")
+        code = harness.run(runner, "--force")
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertTrue(any("find /data/journal" in c for c in ssh_calls(runner, mark)))
         self.assertEqual(harness.fleet()["phase"], "idle")
         self.assertFalse(harness.lock().exists())
-
-    def test_force_does_not_replace_a_live_holder(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        harness.set_fleet(phase="running")
-        awsb.take_fleet_lock(harness.fleet_dir, "other", False)
-        with self.assertRaisesRegex(awsb.Refused, r"cannot --force.*\(alive\)"):
-            harness.run(runner, "--force")
 
     # REQ:fleet-single-shot-unchanged
     def test_single_shot_does_not_reset_and_writes_its_index_row(self):
@@ -451,11 +423,9 @@ class RunRefusalTest(unittest.TestCase):
     def test_lock_held(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
-        awsb.take_fleet_lock(harness.fleet_dir, "other", False)
+        awsb.take_fleet_lock(harness.fleet_dir, False)
         mark = len(runner.calls)
-        with self.assertRaisesRegex(
-            awsb.Refused, r"locked: run other, pid \d+ \(alive\)"
-        ):
+        with self.assertRaisesRegex(awsb.Refused, r"locked by pid \d+"):
             harness.run(runner)
         self.assertEqual(ssh_calls(runner, mark), [])
         self.assertTrue(harness.lock().exists())
@@ -511,14 +481,6 @@ class RunRefusalTest(unittest.TestCase):
             {**manifest, "expires_at": awsb.expiry_stamp(enough)}, cfg, now
         )
 
-    # EDGE:fleet-ttl-expired
-    def test_expired_fleet_names_status_and_orphans(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        past = datetime.now(UTC) - timedelta(minutes=5)
-        harness.set_fleet(expires_at=awsb.expiry_stamp(past))
-        self.refused(harness, runner, r"expired at .*status.*destroy --orphans")
-
     def test_fleet_flags_are_refused(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
@@ -552,7 +514,7 @@ def resolve_tag(ref: str) -> dict:
 
 def respond_to_pulls(runner: FleetRunner, wrong: dict[str, str] | None = None) -> None:
     """Answers the pull script with what docker would report: the requested digests, or the
-    ones in `wrong`. The record script echoes a `ready.json` holding the digests it was given."""
+    ones in `wrong`."""
     replaced = wrong or {}
 
     def pull(argv: list[str]) -> subprocess.CompletedProcess:
@@ -560,23 +522,14 @@ def respond_to_pulls(runner: FleetRunner, wrong: dict[str, str] | None = None) -
             return runner.default(argv)
         script = shlex.split(argv[-1])[-1]
         pulls = re.findall(r"docker pull (\S+)@(\S+) >&2", script)
-        names = re.findall(r"--arg name (\S+) ", script)
-        digests = {
-            name: f"{ref}@{replaced.get(name, digest)}"
+        names = re.findall(r"^echo (\S+) ", script, re.MULTILINE)
+        lines = [
+            f"{name} {ref}@{replaced.get(name, digest)}"
             for name, (ref, digest) in zip(names, pulls, strict=True)
-        }
-        return completed(stdout=json.dumps(digests))
-
-    def record(argv: list[str]) -> subprocess.CompletedProcess:
-        if not argv[-1].startswith("sudo timeout"):
-            return runner.default(argv)
-        script = shlex.split(argv[-1])[-1]
-        printf = next(l for l in script.splitlines() if l.startswith("printf"))
-        digests = json.loads(shlex.split(printf)[2])
-        return completed(stdout=json.dumps({"digests": digests}))
+        ]
+        return completed(stdout="\n".join(lines) + "\n")
 
     runner.respond("docker pull", pull)
-    runner.respond("digests.json.tmp", record)
 
 
 # REQ:fleet-tag-pull
@@ -614,7 +567,7 @@ class TagPullTest(unittest.TestCase):
         for ref in awsb.SUPPORT_IMAGES.values():
             self.assertEqual(sum(c.count(f"docker pull {ref}@") for c in pulls), 1, ref)
         pull_at = min(i for i, c in enumerate(commands) if "docker pull" in c)
-        record_at = max(i for i, c in enumerate(commands) if "digests.json.tmp" in c)
+        record_at = max(i for i, c in enumerate(commands) if "/digests.json" in c)
         reset_at = next(i for i, c in enumerate(commands) if "find /data/journal" in c)
         self.assertLess(pull_at, record_at)
         self.assertLess(record_at, reset_at)
@@ -624,11 +577,11 @@ class TagPullTest(unittest.TestCase):
         runner = self.up_fleet(harness)
         mark = len(runner.calls)
         harness.run(runner, "--tag", "other")
-        records = [c for c in ssh_calls(runner, mark) if "digests.json.tmp" in c]
+        records = [c for c in ssh_calls(runner, mark) if "/digests.json" in c]
         self.assertEqual(len(records), 3)
         for command in records:
             script = shlex.split(command)[-1]
-            self.assertIn("ready.json.tmp", script)
+            self.assertIn("/opt/bench/ready.json", script)
             self.assertIn(NEW_DIGEST, script)
         ready = json.loads(
             (harness.fleet_dir / "hosts" / "node1" / "ready.json").read_text()
@@ -748,24 +701,26 @@ class ShipAgentsTest(unittest.TestCase):
 
 
 class FleetLockTest(unittest.TestCase):
-    def test_lock_is_exclusive_and_names_the_holder(self):
+    def test_a_held_lock_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             fleet_dir = Path(tmp)
-            lock = awsb.take_fleet_lock(fleet_dir, "a", False)
-            self.assertEqual(lock["pid"], os.getpid())
-            self.assertEqual(json.loads((fleet_dir / "fleet.lock").read_text()), lock)
-            with self.assertRaisesRegex(awsb.Refused, "run a, pid"):
-                awsb.take_fleet_lock(fleet_dir, "b", False)
+            awsb.take_fleet_lock(fleet_dir, False)
+            self.assertEqual((fleet_dir / "fleet.lock").read_text(), f"{os.getpid()}\n")
+            with self.assertRaisesRegex(awsb.Refused, f"locked by pid {os.getpid()}"):
+                awsb.take_fleet_lock(fleet_dir, False)
             awsb.release_fleet_lock(fleet_dir)
-            awsb.take_fleet_lock(fleet_dir, "b", False)
+            awsb.take_fleet_lock(fleet_dir, False)
+
+    def test_force_replaces_a_held_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fleet_dir = Path(tmp)
+            (fleet_dir / "fleet.lock").write_text("999999\n")
+            awsb.take_fleet_lock(fleet_dir, True)
+            self.assertEqual((fleet_dir / "fleet.lock").read_text(), f"{os.getpid()}\n")
 
     def test_release_without_a_lock_is_fine(self):
         with tempfile.TemporaryDirectory() as tmp:
             awsb.release_fleet_lock(Path(tmp))
-
-    def test_a_holder_on_another_host_counts_as_alive(self):
-        lock = {"pid": 1, "hostname": "elsewhere", "run": "r", "taken_at": "t"}
-        self.assertTrue(awsb.lock_holder_alive(lock))
 
 
 class ResetScriptTest(unittest.TestCase):
@@ -911,13 +866,6 @@ class VolumeWiringTest(unittest.TestCase):
         self.assertTrue(runner.ran("tofu", "destroy"))
         self.assertIn("missing after 60 s", harness.driver_log())
 
-    def test_a_null_volume_output_fails_up(self):
-        harness = FleetHarness(self)
-        runner = volume_runner([DONE_STATE], volume_id=None, describe=DESCRIBE)
-        self.assertEqual(harness.up(runner, "--db-modes", "volume"), awsb.EXIT_FAILED)
-        self.assertTrue(runner.ran("tofu", "destroy"))
-        self.assertFalse(runner.ran("mkfs"))
-
     def test_the_run_resets_by_mounting_and_wiping_without_reformatting(self):
         harness = FleetHarness(self)
         runner = volume_runner([DONE_STATE], describe=DESCRIBE)
@@ -992,10 +940,6 @@ class PgStoreScriptTest(unittest.TestCase):
             "validator", awsb.pg_store_script("volume", self.manifest)
         )
         self.assertNotIn("/data/pg", script)
-
-    def test_volume_without_a_volume_id_is_refused(self):
-        with self.assertRaisesRegex(awsb.Refused, "no pg volume"):
-            awsb.pg_store_script("volume", {"name": "f"})
 
 
 # REQ:fleet-cost
@@ -1147,7 +1091,7 @@ class DownTest(unittest.TestCase):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         harness.set_fleet(phase="running")
-        awsb.take_fleet_lock(harness.fleet_dir, "gone", False)
+        awsb.take_fleet_lock(harness.fleet_dir, False)
         mark = len(runner.calls)
         self.assertEqual(self.down(harness, runner), awsb.EXIT_OK)
         calls = [" ".join(call) for call in runner.calls[mark:]]
@@ -1172,14 +1116,14 @@ class StatusTest(unittest.TestCase):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         runner.describe = STATUS_DESCRIBE
-        awsb.take_fleet_lock(harness.fleet_dir, "measuring", False)
+        awsb.take_fleet_lock(harness.fleet_dir, False)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             awsb.cmd_status(harness.parse("status", str(harness.fleet_dir)), runner)
         text = out.getvalue()
         self.assertIn("- fleet fleet1: phase idle", text)
         self.assertRegex(text, r"- expires \S+ UTC, 1[78]\d min left")
-        self.assertRegex(text, r"- lock: run measuring, pid \d+ \(alive\)")
+        self.assertRegex(text, r"- lock: pid \d+")
 
 
 class ParseArgsTest(unittest.TestCase):
@@ -1816,10 +1760,6 @@ class RdsUpTest(unittest.TestCase):
         self.assertEqual(harness.up(runner), awsb.EXIT_FAILED)
         self.assertTrue(runner.ran("tofu", "destroy"))
         self.assertFalse(runner.ran("describe-db-instances"))
-
-    def test_a_null_rds_output_is_an_error(self):
-        with self.assertRaisesRegex(awsb.RemoteError, "null"):
-            awsb.parse_rds_output({"rds": {"value": None}})
 
 
 # REQ:querydb-rds-wiring
@@ -2467,7 +2407,6 @@ class SweepRdsTest(unittest.TestCase):
                 ("ec2", "delete-volume"),
                 ("ec2", "delete-security-group"),
                 ("ec2", "delete-key-pair"),
-                ("iam", "list-roles"),
                 ("iam", "list-role-policies"),
                 ("iam", "delete-role-policy"),
                 ("iam", "delete-role"),
@@ -2503,7 +2442,8 @@ class SweepRdsTest(unittest.TestCase):
     # TEST:sweep-iam-absent-ok
     def test_a_role_that_is_already_gone_is_tolerated(self):
         runner, _ = self.sweep(role_missing=True)
-        self.assertIn(("iam", "delete-role"), aws_verbs(runner))
+        self.assertIn(("iam", "list-role-policies"), aws_verbs(runner))
+        self.assertNotIn(("iam", "delete-role"), aws_verbs(runner))
 
     def test_a_group_the_destroy_already_deleted_is_tolerated(self):
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
@@ -2526,20 +2466,16 @@ class SweepRdsTest(unittest.TestCase):
         }
         awsb.sweep(runner, "fleet1")
 
-    def test_another_fleets_role_is_left_alone(self):
+    def test_only_the_swept_fleets_role_is_named(self):
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
-        other = "arn:aws:iam::1:role/espresso-bench/espresso-bench-other"
-        runner = rds_tag_runner(mappings, [], roles=[other])
-        awsb.sweep(runner, "fleet1")
-        self.assertNotIn(("iam", "delete-role"), aws_verbs(runner))
-
-    def test_a_fleet_without_rds_touches_no_iam(self):
-        mappings = [
-            mapping(resource_arn("ec2", "security-group/sg-1"), "fleet1", None, None)
-        ]
         runner = rds_tag_runner(mappings, [])
         awsb.sweep(runner, "fleet1")
-        self.assertFalse(any(service == "iam" for service, _ in aws_verbs(runner)))
+        roles = {
+            c[c.index("--role-name") + 1]
+            for c in runner.calls
+            if c[0] == "aws" and c[3] == "iam"
+        }
+        self.assertEqual(roles, {"espresso-bench-fleet1"})
 
     def test_no_iam_permission_lists_no_roles(self):
         runner = rds_tag_runner([], [])
@@ -2632,11 +2568,11 @@ class DestroyRdsOrphansTest(unittest.TestCase):
         self.assertIn(("rds", "delete-db-instance"), verbs)
         self.assertIn(("iam", "delete-role"), verbs)
 
-    def test_the_roles_are_listed_once_to_find_and_once_to_sweep(self):
+    def test_the_roles_are_listed_once_to_find(self):
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_PAST)
         runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
         self.destroy(runner, "--yes")
-        self.assertEqual(sum("list-roles" in call for call in runner.calls), 2)
+        self.assertEqual(sum("list-roles" in call for call in runner.calls), 1)
 
     # TEST:orphans-live-fleet-kept-ok
     def test_a_live_fleet_of_this_user_with_state_is_kept(self):

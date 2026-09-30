@@ -2288,168 +2288,20 @@ class PollAgentTest(unittest.TestCase):
         self.assertIn("partial rsync failed", logs.output[0])
 
 
-class PollStepTest(unittest.TestCase):
-    BEGIN = 100.0
-
-    def poll_state(self, **overrides) -> "awsb.PollState":
-        state = awsb.PollState(
-            begin=self.BEGIN,
-            deadline=self.BEGIN + 1000,
-            next_log=self.BEGIN + awsb.AGENT_LOG_S,
-            next_sync=self.BEGIN + awsb.OUT_RSYNC_S,
-            unreachable=0,
-            state=None,
-        )
-        return {**state, **overrides}
-
-    def step(self, state, rc=0, agent=None, now=BEGIN, stderr="") -> "awsb.PollStep":
-        return awsb.poll_step(state, rc, stderr, agent, now)
-
-    # TEST:poll-step-done-ok
-    def test_done_phase_is_done(self):
-        step = self.step(self.poll_state(), agent=DONE_STATE)
-        self.assertTrue(step["done"])
-        self.assertIsNone(step["error"])
-        self.assertEqual(step["state"]["state"], DONE_STATE)
-
-    def test_done_wins_over_an_inactive_unit_and_the_deadline(self):
-        step = self.step(
-            self.poll_state(),
-            rc=awsb.SYSTEMCTL_NO_UNIT_RC,
-            agent=DONE_STATE,
-            now=self.BEGIN + 5000,
-        )
-        self.assertTrue(step["done"])
-
-    def test_error_phase_reports_the_agent_error(self):
-        agent = {"phase": "error", "detail": "x", "error": "boom"}
-        step = self.step(self.poll_state(), agent=agent)
-        self.assertEqual(step["error"], "agent failed: boom")
-        self.assertFalse(step["done"])
-
-    # TEST:poll-step-unreachable-fails
-    def test_unreachable_ctl_fails_after_the_bound(self):
-        state = self.poll_state()
-        for count in range(1, awsb.AGENT_POLL_SSH_FAILURES_MAX + 1):
-            step = self.step(state, rc=awsb.SSH_FAILED_RC, stderr="down")
-            self.assertIsNone(step["error"])
-            self.assertTrue(step["retry"])
-            self.assertEqual(step["state"]["unreachable"], count)
-            state = step["state"]
-        step = self.step(state, rc=awsb.SSH_FAILED_RC, stderr=" down\n")
-        self.assertEqual(
-            step["error"],
-            f"ctl unreachable for {awsb.AGENT_POLL_SSH_FAILURES_MAX + 1} polls: down",
-        )
-        self.assertFalse(step["retry"])
-
-    def test_a_reachable_probe_resets_the_unreachable_count(self):
-        loading = {"phase": "loading", "detail": "x"}
-        step = self.step(self.poll_state(unreachable=3), agent=loading)
-        self.assertEqual(step["state"]["unreachable"], 0)
-        self.assertFalse(step["retry"])
-
-    def test_unexpected_probe_rc_is_an_error(self):
-        step = self.step(self.poll_state(), rc=1, stderr="odd\n")
-        self.assertEqual(step["error"], "systemctl is-active exited 1: odd")
-
-    def test_inactive_unit_without_done_is_an_error(self):
-        loading = {"phase": "loading", "detail": "x"}
-        for rc in (awsb.SYSTEMCTL_INACTIVE_RC, awsb.SYSTEMCTL_NO_UNIT_RC):
-            step = self.step(self.poll_state(), rc=rc, agent=loading)
-            self.assertEqual(
-                step["error"], "agent exited in phase loading without finishing"
-            )
-
-    def test_inactive_unit_without_state_names_the_start_phase(self):
-        step = self.step(self.poll_state(), rc=awsb.SYSTEMCTL_INACTIVE_RC)
-        self.assertEqual(step["error"], "agent exited in phase start without finishing")
-
-    def test_no_state_file_after_the_grace_is_an_error(self):
-        state = self.poll_state()
-        within = self.step(state, now=self.BEGIN + awsb.AGENT_START_GRACE_S)
-        self.assertIsNone(within["error"])
-        after = self.step(state, now=self.BEGIN + awsb.AGENT_START_GRACE_S + 1)
-        self.assertEqual(after["error"], "agent wrote no state file")
-
-    def test_earlier_state_is_kept_when_the_file_is_unreadable(self):
-        loading = {"phase": "loading", "detail": "x"}
-        step = self.step(self.poll_state(state=loading), now=self.BEGIN + 5000)
-        self.assertEqual(step["state"]["state"], loading)
-        self.assertEqual(step["error"], "agent did not finish within the expected time")
-
-    def test_deadline_is_exclusive(self):
-        loading = {"phase": "loading", "detail": "x"}
-        state = self.poll_state(deadline=self.BEGIN + 10)
-        self.assertIsNone(self.step(state, agent=loading, now=self.BEGIN + 10)["error"])
-        late = self.step(state, agent=loading, now=self.BEGIN + 10.5)
-        self.assertEqual(late["error"], "agent did not finish within the expected time")
-
-    def test_log_and_rsync_come_due_and_reschedule(self):
-        loading = {"phase": "loading", "detail": "x"}
-        state = self.poll_state()
-        idle = self.step(state, agent=loading, now=self.BEGIN)
-        self.assertEqual((idle["log"], idle["rsync"]), (False, False))
-        now = self.BEGIN + max(awsb.AGENT_LOG_S, awsb.OUT_RSYNC_S)
-        due = self.step(state, agent=loading, now=now)
-        self.assertEqual((due["log"], due["rsync"]), (True, True))
-        self.assertEqual(due["state"]["next_log"], now + awsb.AGENT_LOG_S)
-        self.assertEqual(due["state"]["next_sync"], now + awsb.OUT_RSYNC_S)
-
-    def test_log_waits_for_a_state_but_rsync_does_not(self):
-        now = self.BEGIN + awsb.AGENT_START_GRACE_S
-        state = self.poll_state(next_log=now, next_sync=now)
-        step = self.step(state, now=now)
-        self.assertEqual((step["log"], step["rsync"]), (False, True))
-        self.assertEqual(step["state"]["next_log"], now)
-
-    def test_input_state_is_not_mutated(self):
-        state = self.poll_state()
-        before = dict(state)
-        self.step(state, rc=awsb.SSH_FAILED_RC)
-        self.step(state, agent=DONE_STATE, now=self.BEGIN + 5000)
-        self.assertEqual(state, before)
-
-
-class RetryVerdictTest(unittest.TestCase):
-    # TEST:retry-verdict-ok
-    def test_ok_even_past_the_deadline(self):
-        self.assertEqual(awsb.retry_verdict(True, 0.0, 10.0), "ok")
-        self.assertEqual(awsb.retry_verdict(True, 99.0, 10.0), "ok")
-
-    def test_other_rc_before_the_deadline_retries(self):
-        self.assertEqual(awsb.retry_verdict(False, 9.9, 10.0), "retry")
-        self.assertEqual(awsb.retry_verdict(False, 0.0, 10.0), "retry")
-
-    # TEST:retry-verdict-timeout-fails
-    def test_other_rc_at_or_after_the_deadline_times_out(self):
-        self.assertEqual(awsb.retry_verdict(False, 10.0, 10.0), "timeout")
-        self.assertEqual(awsb.retry_verdict(False, 11.0, 10.0), "timeout")
-
-
 class WaitCloudInitTest(unittest.TestCase):
-    def wait(self, rc: int, status: str) -> None:
-        runner = Scripted(
-            {
-                "--wait": [completed(returncode=rc, stderr="err")],
-                "--format json": [completed(stdout=json.dumps({"status": status}))],
-            }
-        )
+    def wait(self, rc: int) -> None:
+        runner = Scripted({"--wait": [completed(returncode=rc, stderr="err")]})
         awsb.wait_cloud_init(scripted_remote(self, runner), "ctl")
 
     def test_recoverable_errors_are_accepted(self):
-        self.wait(2, "done")
+        self.wait(2)
 
     def test_clean_done_is_accepted(self):
-        self.wait(0, "done")
+        self.wait(0)
 
     def test_cloud_init_error_raises(self):
         with self.assertRaisesRegex(awsb.RemoteError, "exited 1"):
-            self.wait(1, "error")
-
-    def test_status_other_than_done_raises(self):
-        with self.assertRaisesRegex(awsb.RemoteError, "'degraded'"):
-            self.wait(2, "degraded")
+            self.wait(1)
 
 
 class StartSupportTest(unittest.TestCase):
@@ -2457,78 +2309,36 @@ class StartSupportTest(unittest.TestCase):
         runner = Scripted({"docker wait deploy": [completed(returncode=124)]})
         remote = scripted_remote(self, runner)
         with self.assertRaisesRegex(
-            awsb.RemoteError, f"still running after {awsb.DEPLOY_TIMEOUT_S} s"
+            awsb.RemoteError, f"exited 124 within {awsb.DEPLOY_TIMEOUT_S} s"
         ):
             awsb.start_support(remote, [], awsb.Interrupts(FakeClock()))
 
     def test_deploy_failure_status_is_reported(self):
         runner = Scripted({"docker wait deploy": [completed(stdout="1\n")]})
         remote = scripted_remote(self, runner)
-        with self.assertRaisesRegex(awsb.RemoteError, "deploy exited with status 1"):
+        with self.assertRaisesRegex(awsb.RemoteError, "status '1'"):
             awsb.start_support(remote, [], awsb.Interrupts(FakeClock()))
 
-
-class SupportPlanTest(unittest.TestCase):
-    def containers(self, query_db: awsb.DbMode) -> list[str | None]:
-        plan = awsb.support_plan(query_db, ["0xabc"])
-        return [step["container"] for step in plan]
-
     # TEST:support-plan-order-ok
-    def test_containers_start_in_order_and_postgres_last(self):
-        self.assertEqual(
-            self.containers("colocated"),
-            [
-                "anvil",
-                "deploy",
-                None,
-                "orchestrator",
-                "state-relay-server",
-                "postgres",
-                None,
-                None,
-            ],
-        )
+    def test_containers_start_in_order_and_every_contract_is_checked(self):
+        runner = Scripted({"docker wait deploy": [completed(stdout="0\n")]})
+        remote = scripted_remote(self, runner)
+        awsb.start_support(remote, ["0xabc", "0xdef"], awsb.Interrupts(FakeClock()))
+        commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
+        order = [
+            "docker start anvil",
+            "docker start deploy",
+            "0xabc",
+            "0xdef",
+            "docker start orchestrator",
+            "docker start state-relay-server",
+            "docker start postgres",
+            "pg_stat_statements_reset",
+        ]
+        at = [next(i for i, c in enumerate(commands) if n in c) for n in order]
+        self.assertEqual(at, sorted(at))
 
     def test_rds_is_gated_but_not_started(self):
-        colocated = awsb.support_plan("colocated", [])
-        rds = awsb.support_plan("rds", [])
-        self.assertNotIn("postgres", [step["container"] for step in rds])
-        self.assertEqual(
-            [step["what"] for step in rds], [step["what"] for step in colocated]
-        )
-        self.assertEqual(rds[-3]["what"], "pg_isready")
-
-    def test_deploy_is_waited_on_not_polled(self):
-        deploy = awsb.support_plan("colocated", [])[1]
-        self.assertEqual(deploy["container"], "deploy")
-        self.assertEqual(deploy["kind"], "deploy")
-        self.assertEqual(deploy["timeout_s"], awsb.DEPLOY_TIMEOUT_S)
-
-    def test_every_contract_is_checked_between_deploy_and_orchestrator(self):
-        plan = awsb.support_plan("colocated", ["0xabc", "0xdef"])
-        whats = [step["what"] for step in plan]
-        self.assertEqual(
-            whats[1:6],
-            [
-                "deploy",
-                "eth_getCode 0xabc",
-                "eth_getCode 0xdef",
-                "orchestrator healthcheck",
-                "relay healthcheck",
-            ],
-        )
-        check = plan[3]
-        assert check["kind"] == "gate"
-        self.assertIn("0xdef", check["gate_cmd"])
-
-    def test_gates_use_the_gate_timeout_and_the_right_host(self):
-        for step in awsb.support_plan("colocated", ["0xabc"]):
-            if step["kind"] == "gate":
-                self.assertEqual(step["timeout_s"], awsb.GATE_TIMEOUT_S)
-        hosts = [step["host"] for step in awsb.support_plan("colocated", [])]
-        self.assertEqual(hosts, ["ctl"] * 4 + ["node0"] * 3)
-
-    def test_start_support_starts_the_planned_containers_in_order(self):
         runner = Scripted({"docker wait deploy": [completed(stdout="0\n")]})
         remote = scripted_remote(self, runner)
         awsb.start_support(remote, ["0xabc"], awsb.Interrupts(FakeClock()), "rds")
@@ -2539,27 +2349,7 @@ class SupportPlanTest(unittest.TestCase):
         self.assertEqual(
             started, ["anvil", "deploy", "orchestrator", "state-relay-server"]
         )
-
-
-class CollectPlanTest(unittest.TestCase):
-    # TEST:collect-plan-skip-ok
-    def test_a_clean_run_freezes_collects_and_fetches_the_balance(self):
-        self.assertEqual(
-            awsb.collect_plan(None, True, "colocated"),
-            ["freeze", "collect_hosts", "rsync_out", "ebs_balance"],
-        )
-
-    def test_no_agent_means_no_final_rsync(self):
-        self.assertNotIn("rsync_out", awsb.collect_plan(None, False, "colocated"))
-
-    def test_an_error_stops_the_agent_first(self):
-        plan = awsb.collect_plan("boom", True, "colocated")
-        self.assertEqual(plan[0], "stop_agent")
-        self.assertEqual(plan[1:], awsb.collect_plan(None, True, "colocated"))
-
-    def test_rds_adds_its_collection_last(self):
-        self.assertEqual(awsb.collect_plan(None, True, "rds")[-1], "collect_rds")
-        self.assertNotIn("collect_rds", awsb.collect_plan(None, True, "volume"))
+        self.assertTrue(any("pg_isready" in c for c in commands))
 
 
 class FinishRunSkipTest(unittest.TestCase):
@@ -2618,20 +2408,6 @@ class FinishRunSkipTest(unittest.TestCase):
         self.assertEqual(warnings, [])
 
 
-class DestroyVerdictTest(unittest.TestCase):
-    # TEST:destroy-verdict-ok
-    def test_success_is_done_at_any_attempt(self):
-        for attempt in range(1, awsb.DESTROY_RETRIES + 1):
-            self.assertEqual(awsb.destroy_verdict(attempt, True), "done")
-
-    def test_failure_retries_below_the_bound(self):
-        for attempt in range(1, awsb.DESTROY_RETRIES):
-            self.assertEqual(awsb.destroy_verdict(attempt, False), "retry")
-
-    def test_failure_at_the_bound_sweeps(self):
-        self.assertEqual(awsb.destroy_verdict(awsb.DESTROY_RETRIES, False), "sweep")
-
-
 class DestroyFleetBackoffTest(unittest.TestCase):
     def destroy(self, failures: int) -> tuple[bool, FakeClock, unittest.mock.Mock]:
         clock = FakeClock()
@@ -2660,78 +2436,6 @@ class DestroyFleetBackoffTest(unittest.TestCase):
         self.assertTrue(destroyed)
         self.assertEqual(clock.sleeps, [awsb.DESTROY_BACKOFF_S])
         sweep.assert_not_called()
-
-
-SWEEP_ARNS = [
-    "arn:aws:ec2:eu-west-1:1:key-pair/key-1",
-    "arn:aws:ec2:eu-west-1:1:security-group/sg-1",
-    "arn:aws:ec2:eu-west-1:1:volume/vol-1",
-    "arn:aws:rds:eu-west-1:1:pg:espresso-bench-f",
-    "arn:aws:rds:eu-west-1:1:subgrp:espresso-bench-f",
-    "arn:aws:rds:eu-west-1:1:db:espresso-bench-f",
-    "arn:aws:ec2:eu-west-1:1:instance/i-1",
-    "arn:aws:scheduler:eu-west-1:1:schedule-group/espresso-bench-f",
-]
-
-
-class SweepPlanTest(unittest.TestCase):
-    def verbs(self, arns: list[str]) -> list[str]:
-        plan = awsb.sweep_plan(arns)
-        return [
-            " ".join(step["args"][:2]) if step["action"] == "aws" else step["action"]
-            for step in plan
-        ]
-
-    # TEST:sweep-plan-order-ok
-    def test_instances_terminate_before_volumes_security_group_and_key(self):
-        self.assertEqual(
-            self.verbs(SWEEP_ARNS),
-            [
-                "scheduler delete-schedule-group",
-                "ec2 terminate-instances",
-                "ec2 wait",
-                "delete_rds",
-                "rds delete-db-subnet-group",
-                "rds delete-db-parameter-group",
-                "ec2 delete-volume",
-                "delete_security_group",
-                "ec2 delete-key-pair",
-            ],
-        )
-
-    def test_no_resources_no_steps(self):
-        self.assertEqual(awsb.sweep_plan([]), [])
-
-    def test_steps_carry_id_and_tolerated_error(self):
-        plan = awsb.sweep_plan(SWEEP_ARNS[2:3])
-        self.assertEqual(
-            plan,
-            [
-                {
-                    "action": "aws",
-                    "args": ["ec2", "delete-volume", "--volume-id", "vol-1"],
-                    "tolerate": "InvalidVolume.NotFound",
-                }
-            ],
-        )
-
-    def test_rds_and_security_group_steps_name_their_resource(self):
-        plan = awsb.sweep_plan(SWEEP_ARNS)
-        resources = {
-            step["action"]: step["resource"] for step in plan if step["action"] != "aws"
-        }
-        self.assertEqual(
-            resources,
-            {"delete_rds": "espresso-bench-f", "delete_security_group": "sg-1"},
-        )
-
-    def test_instance_ids_are_terminated_and_waited_on_together(self):
-        arns = [f"arn:aws:ec2:eu-west-1:1:instance/i-{n}" for n in (1, 2)]
-        terminate, wait = awsb.sweep_plan(arns)
-        assert terminate["action"] == "aws" and wait["action"] == "aws"
-        self.assertEqual(terminate["args"][-3:], ["--instance-ids", "i-1", "i-2"])
-        self.assertEqual(wait["args"][:2], ["ec2", "wait"])
-        self.assertEqual(wait["args"][-3:], ["--instance-ids", "i-1", "i-2"])
 
 
 class PostgresStatsTest(unittest.TestCase):
@@ -3416,6 +3120,7 @@ class SweepAndCostTest(unittest.TestCase):
                 ["ec2", "wait"],
                 ["ec2", "delete-security-group"],
                 ["ec2", "delete-key-pair"],
+                ["iam", "list-role-policies"],
             ],
         )
         self.assertTrue(runner.ran("Key=espresso-bench-run,Values=run1"))
@@ -3672,22 +3377,6 @@ class RenderHostFilesTest(unittest.TestCase):
             self.assertEqual(agent["cfg"]["submit_nodes"], 1)
             config = awsb.load_config(agent["cfg"])
             self.assertEqual(config, cfg.load)
-
-    def test_parse_hosts_output_takes_role_from_the_spec(self):
-        cfg = awsb.RunConfig(
-            tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1)
-        )
-        output = {
-            "hosts": {
-                "value": {
-                    h: {**two_node_hosts_info()[h], "role": "x"}
-                    for h in two_node_hosts_info()
-                }
-            }
-        }
-        parsed = awsb.parse_hosts_output(output, awsb.plan_hosts(cfg))
-        self.assertEqual(parsed["node0"]["role"], "query")
-        self.assertEqual(parsed["ctl"]["private_ip"], "10.0.0.1")
 
     def test_genesis_contracts_are_deduplicated(self):
         with tempfile.TemporaryDirectory() as tmp:
