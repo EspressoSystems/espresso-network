@@ -1922,6 +1922,9 @@ def _registry_scheme(host: str) -> str:
     return "http" if host.split(":")[0] in ("localhost", "127.0.0.1") else "https"
 
 
+RegistryFetch = Callable[[str, dict[str, str]], tuple[int, Any, bytes]]
+
+
 def _registry_get(url: str, headers: dict[str, str]) -> tuple[int, Any, bytes]:
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
@@ -1932,32 +1935,33 @@ def _registry_get(url: str, headers: dict[str, str]) -> tuple[int, Any, bytes]:
             return exc.code, exc.headers, exc.read()
 
 
-def _bearer_token(www_authenticate: str, ref: str) -> str:
+def _bearer_token(www_authenticate: str, ref: str, fetch: RegistryFetch) -> str:
     params = dict(re.findall(r'(\w+)="([^"]*)"', www_authenticate))
     realm = params["realm"]
     query = urllib.parse.urlencode({k: v for k, v in params.items() if k != "realm"})
-    status, _, body = _registry_get(f"{realm}?{query}", {})
+    status, _, body = fetch(f"{realm}?{query}", {})
     if status != 200:
         raise Refused(f"token request for {ref} to {realm} failed with status {status}")
     token = json.loads(body)
     return token["token"] if "token" in token else token["access_token"]
 
 
-def resolve_image(ref: str) -> ImageInfo:
+def resolve_image(ref: str, fetch: RegistryFetch = _registry_get) -> ImageInfo:
     """Anonymous token challenge, then the manifest (an index for a multi-arch image, or a
     single manifest otherwise) and its config blob, for the digest, the `linux/arm64`
     platform and the `org.opencontainers.image.revision` label. Works against ghcr and docker
-    hub unmodified: both implement the same OCI distribution spec."""
+    hub unmodified: both implement the same OCI distribution spec. `fetch(url, headers)`
+    returns `(status, response headers, body)` and never raises on an HTTP error status."""
     host, repository, tag = parse_ref(ref)
     scheme = _registry_scheme(host)
     manifest_url = f"{scheme}://{host}/v2/{repository}/manifests/{tag}"
     headers = {"Accept": ", ".join(MANIFEST_MEDIA_TYPES)}
-    status, resp_headers, body = _registry_get(manifest_url, headers)
+    status, resp_headers, body = fetch(manifest_url, headers)
     if status == 401:
         headers["Authorization"] = (
-            f"Bearer {_bearer_token(resp_headers['WWW-Authenticate'], ref)}"
+            f"Bearer {_bearer_token(resp_headers['WWW-Authenticate'], ref, fetch)}"
         )
-        status, resp_headers, body = _registry_get(manifest_url, headers)
+        status, resp_headers, body = fetch(manifest_url, headers)
     if status == 404:
         raise Refused(f"image not found: {ref}")
     if status in (401, 403):
@@ -1989,7 +1993,7 @@ def resolve_image(ref: str) -> ImageInfo:
                 f"no linux/arm64 platform for {ref}: has {', '.join(platforms)}"
             )
         digest = arm64["digest"]
-        child_status, _, child_body = _registry_get(
+        child_status, _, child_body = fetch(
             f"{scheme}://{host}/v2/{repository}/manifests/{digest}", headers
         )
         if child_status != 200:
@@ -2003,7 +2007,7 @@ def resolve_image(ref: str) -> ImageInfo:
         )
         config_digest = manifest["config"]["digest"]
         platforms = []
-    status, _, config_body = _registry_get(
+    status, _, config_body = fetch(
         f"{scheme}://{host}/v2/{repository}/blobs/{config_digest}", headers
     )
     if status != 200:
