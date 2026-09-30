@@ -959,7 +959,7 @@ class VolumeWiringTest(unittest.TestCase):
         reset = next(c for c in node0_calls(runner, mark) if "find /data/journal" in c)
         self.assertIn(f'mount -t ext4 -o "$(findmnt -no OPTIONS /)" {BY_ID}', reset)
         self.assertLess(reset.index("docker rm -f"), reset.index("mount -t"))
-        self.assertLess(reset.index("mount -t"), reset.index("find /data/pg"))
+        self.assertLess(reset.index("mount -t"), reset.rindex("find /data/pg"))
         others = [c for c in ssh_calls(runner, mark) if "find /data/journal" in c]
         self.assertEqual(sum("mount -t" in c or "umount" in c for c in others), 1)
         run_dir = harness.fleet_dir / "runs" / "01-volume"
@@ -1007,11 +1007,21 @@ class PgStoreScriptTest(unittest.TestCase):
     def test_volume_mounts_only_when_not_mounted(self):
         script = self.reset("volume")
         self.assertIn(
-            f"if ! mountpoint -q /data/pg; then\n  mount -t ext4 -o "
-            f'"$(findmnt -no OPTIONS /)" {BY_ID} /data/pg\nfi\n',
+            f"if ! mountpoint -q /data/pg; then\n"
+            f"  find /data/pg -mindepth 1 -delete\n"
+            f'  mount -t ext4 -o "$(findmnt -no OPTIONS /)" {BY_ID} /data/pg\nfi\n',
             script,
         )
         self.assertNotIn("umount", script)
+
+    def test_volume_after_colocated_empties_the_root_copy_before_it_is_hidden(self):
+        script = awsb.pg_store_script("volume", self.manifest)
+        guard, _, mounted = script.partition("then\n")
+        self.assertIn("! mountpoint -q /data/pg", guard)
+        self.assertLess(
+            mounted.index("find /data/pg -mindepth 1 -delete"),
+            mounted.index("mount -t ext4"),
+        )
 
     def test_validators_never_touch_the_store(self):
         script = awsb.reset_script(
@@ -1291,20 +1301,37 @@ class ExtendTest(unittest.TestCase):
         stamp = awsb.expiry_stamp(now + timedelta(minutes=240))
         self.assertTrue(all(f"{awsb.TAG_EXPIRES}={stamp}" in c for c in tagged))
 
-    def test_failed_tagging_is_an_error(self):
+    def test_a_failed_arn_is_logged_and_does_not_undo_the_extension(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         failed = completed(stdout=json.dumps({"FailedResourcesMap": {"arn:x": {}}}))
+        now = datetime.now(UTC)
         with (
             unittest.mock.patch.object(
-                awsb,
-                "tagged_resources",
-                return_value=["arn:x"],
+                awsb, "tagged_resources", return_value=["arn:x", "arn:y"]
             ),
             unittest.mock.patch.object(runner, "aws", return_value=failed),
-            self.assertRaisesRegex(awsb.RemoteError, "arn:x"),
         ):
-            self.extend(harness, runner, 240)
+            self.assertEqual(self.extend(harness, runner, 240, now), awsb.EXIT_OK)
+        stamp = awsb.expiry_stamp(now + timedelta(minutes=240))
+        self.assertEqual(harness.fleet()["expires_at"], stamp)
+        self.assertRegex(harness.driver_log(), r"WARNING.*arn:x")
+
+    def test_a_tagging_error_leaves_the_recorded_expiry_with_the_hosts(self):
+        harness = FleetHarness(self)
+        runner = harness.up_fleet(self)
+        now = datetime.now(UTC)
+        throttled = completed(returncode=254, stderr="Throttling")
+        with (
+            unittest.mock.patch.object(
+                awsb, "tagged_resources", return_value=["arn:x"]
+            ),
+            unittest.mock.patch.object(runner, "aws", return_value=throttled),
+            self.assertRaisesRegex(awsb.RemoteError, "Throttling"),
+        ):
+            self.extend(harness, runner, 240, now)
+        stamp = awsb.expiry_stamp(now + timedelta(minutes=240))
+        self.assertEqual(harness.fleet()["expires_at"], stamp)
 
     def test_the_new_bound_is_recorded(self):
         harness = FleetHarness(self)
@@ -1441,7 +1468,7 @@ class StatusTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             awsb.cmd_status(harness.parse("status", str(harness.fleet_dir)), runner)
         text = out.getvalue()
-        self.assertIn("- run fleet1: phase idle", text)
+        self.assertIn("- fleet fleet1: phase idle", text)
         self.assertRegex(text, r"- expires \S+ UTC, 1[78]\d min left")
         self.assertRegex(text, r"- lock: run measuring, pid \d+ \(alive\)")
 
@@ -1911,6 +1938,8 @@ class RdsCostTest(unittest.TestCase):
                 "regionCode": "eu-west-1",
                 "databaseEngine": "PostgreSQL",
                 "deploymentOption": "Single-AZ",
+                "productFamily": "Database Instance",
+                "locationType": "AWS Region",
             },
         )
 
@@ -2012,7 +2041,7 @@ class RdsTfvarsTest(unittest.TestCase):
         parameters = harness.tfvars()["rds"]["parameters"]
         for key, value in awsb.PG_TUNING.items():
             self.assertEqual(parameters[key], awsb.rds_parameter(key, value), key)
-        self.assertEqual(parameters["shared_buffers"], "2097152")
+        self.assertEqual(parameters["shared_buffers"], "1048576")
         self.assertEqual(parameters["shared_preload_libraries"], "pg_stat_statements")
         self.assertEqual(parameters["log_min_duration_statement"], "200")
         self.assertEqual(parameters["pg_stat_statements.track"], "all")
@@ -2040,6 +2069,23 @@ class RdsTfvarsTest(unittest.TestCase):
         )
         expected = before + timedelta(minutes=180, seconds=-awsb.RDS_REAPER_LEAD_S)
         self.assertLess(abs((delete_at - expected).total_seconds()), 60)
+
+    def test_a_single_shot_deletes_the_rds_before_its_hosts_end(self):
+        """The tag expiry counts the provisioning time, the hosts' own timers do not."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        (tmp / "terraform").mkdir()
+        netbench.write_json(
+            tmp / "fleet.json", {"phase": "planned", "estimate": {"ttl_s": 3600.0}}
+        )
+        tfvars = {"expires_at": "x", "rds": {"delete_at": "x"}}
+        netbench.write_json(tmp / "terraform" / "terraform.tfvars.json", tfvars)
+        confirmed = datetime(2026, 9, 29, 16, 0, tzinfo=UTC)
+        tf = unittest.mock.Mock()
+        awsb.stamp_expiry(tmp, tf, confirmed)
+        written = json.loads((tmp / "terraform" / "terraform.tfvars.json").read_text())
+        self.assertEqual(written["expires_at"], "2026-09-29T17:08:00Z")
+        self.assertEqual(written["rds"]["delete_at"], "2026-09-29T16:55:00")
 
     def test_a_fleet_without_rds_has_no_rds_variables(self):
         harness = FleetHarness(self)
@@ -2144,6 +2190,37 @@ class RdsRenderTest(unittest.TestCase):
         script = (run_dir / "hosts/node0/start.sh").read_text()
         self.assertNotIn("--name postgres", script)
 
+    def test_the_password_files_are_private_before_they_are_written(self):
+        harness = RdsHarness(self)
+        harness.up_rds(self)
+        run_dir = harness.run_dir("01-rds")
+        run_dir.mkdir(parents=True)
+        cfg = awsb.dataclasses.replace(
+            awsb.config_from_manifest(harness.fleet()["config"]), query_db="rds"
+        )
+        modes: dict[str, int | None] = {}
+        write_text, write_json = Path.write_text, netbench.write_json
+
+        def spy_text(path, *args, **kwargs):
+            modes[f"{path.parent.name}/{path.name}"] = (
+                mode(path) if path.exists() else None
+            )
+            return write_text(path, *args, **kwargs)
+
+        def spy_json(path, data):
+            modes[f"{path.parent.name}/{path.name}"] = (
+                mode(path) if path.exists() else None
+            )
+            return write_json(path, data)
+
+        with (
+            unittest.mock.patch.object(Path, "write_text", spy_text),
+            unittest.mock.patch.object(netbench, "write_json", spy_json),
+        ):
+            awsb.render_host_files(run_dir, cfg, harness.fleet(), two_node_hosts_info())
+        self.assertEqual(modes["node0/node.env"], 0o600)
+        self.assertEqual(modes["node0/pg.json"], 0o600)
+
 
 # REQ:querydb-rds-wiring
 class RdsUpTest(unittest.TestCase):
@@ -2180,8 +2257,19 @@ class RdsUpTest(unittest.TestCase):
         with unittest.mock.patch.object(awsb, "confirm", return_value=True) as confirm:
             awsb.cmd_up(args, run=RdsRunner([DONE_STATE]), interrupts=awsb.Interrupts())
         self.assertIn(
-            "1 rds instance, 1 schedule, 1 iam role", confirm.call_args.args[0]
+            "1 rds instance, 1 subnet group, 1 parameter group, 1 schedule, 1 iam role",
+            confirm.call_args.args[0],
         )
+
+    def test_the_prompt_lists_the_extra_volume(self):
+        harness = FleetHarness(self)
+        args = harness.up_args("--db-modes", "colocated,volume")
+        args.yes = False
+        with unittest.mock.patch.object(awsb, "confirm", return_value=True) as confirm:
+            awsb.cmd_up(
+                args, run=VolumeRunner([DONE_STATE]), interrupts=awsb.Interrupts()
+            )
+        self.assertIn("1 extra volume", confirm.call_args.args[0])
 
     # TEST:querydb-rds-pending-reboot-ok
     def test_pending_reboot_reboots_once_and_waits(self):
@@ -2540,7 +2628,7 @@ class RdsValidityTest(unittest.TestCase):
 # REQ:querydb-result-block
 class QueryDbMetaTest(unittest.TestCase):
     def setUp(self):
-        self.evidence = {"pg_settings": {"pg_stat_ssl": {"true": 2}}}
+        self.evidence = {"ssl_backends": {"true": 2}}
 
     def test_rds_records_the_class_engine_store_tls_and_tuning(self):
         manifest = {**aws_manifest(), "query_db": "rds", "rds_spec": rds_spec()}
@@ -2569,10 +2657,48 @@ class QueryDbMetaTest(unittest.TestCase):
         self.assertEqual(meta["store"]["iops"], node0["root_iops"])
         self.assertNotIn("instance_class", meta)
 
+    def test_volume_records_the_ebs_volume(self):
+        manifest = {
+            **aws_manifest(),
+            "query_db": "volume",
+            "pg_volume": {"gb": 400, "iops": 12000, "mbps": 500},
+            "pg_volume_id": VOLUME_ID,
+        }
+        meta = awsb.query_db_meta(manifest, self.evidence)
+        self.assertEqual(meta["mode"], "volume")
+        self.assertEqual(
+            meta["store"],
+            {
+                "type": "ebs",
+                "volume_id": VOLUME_ID,
+                "gb": 400,
+                "iops": 12000,
+                "mbps": 500,
+            },
+        )
+        self.assertNotIn("instance_class", meta)
+
+    def test_write_report_succeeds_in_every_mode(self):
+        for query_db in netbench.DbMode.__args__:
+            with self.subTest(query_db):
+                tmp = Path(tempfile.mkdtemp())
+                self.addCleanup(shutil.rmtree, tmp)
+                manifest = write_collected_run(tmp)
+                manifest |= {
+                    "query_db": query_db,
+                    "pg_volume": {"gb": 400, "iops": 12000, "mbps": 500},
+                    "pg_volume_id": VOLUME_ID,
+                    "rds_spec": rds_spec(),
+                }
+                netbench.write_json(tmp / "manifest.json", manifest)
+                self.assertEqual(
+                    awsb.write_report(tmp)["deployment"]["query_db"]["mode"], query_db
+                )
+
     def test_tls_is_off_without_settings_or_with_a_plain_backend(self):
         manifest = aws_manifest()
         self.assertFalse(awsb.query_db_meta(manifest, {})["tls"])
-        plain = {"pg_settings": {"pg_stat_ssl": {"false": 1}}}
+        plain = {"ssl_backends": {"false": 1}}
         self.assertFalse(awsb.query_db_meta(manifest, plain)["tls"])
 
     def test_the_result_and_summary_carry_the_block(self):
@@ -2755,6 +2881,42 @@ class RdsDownTest(unittest.TestCase):
         ):
             self.assertEqual(harness.up(runner), awsb.EXIT_FAILED)
         self.assertGreater(self.cost(harness)["actual"], 0)
+
+
+def tf_resource(kind: str, name: str) -> str:
+    """The text of one resource block of main.tf, up to its closing brace at column 0."""
+    source = (awsb.TERRAFORM_SRC / "main.tf").read_text()
+    start = source.index(f'resource "{kind}" "{name}" {{')
+    return source[start : source.index("\n}\n", start)]
+
+
+# REQ:querydb-rds-wiring
+class TerraformSourceTest(unittest.TestCase):
+    """Properties `tofu plan` cannot show offline, where the rds resources have count 0."""
+
+    def test_the_delete_schedule_does_not_wait_for_the_instance(self):
+        for kind, name in (
+            ("aws_iam_role_policy", "scheduler"),
+            ("aws_scheduler_schedule", "rds_delete"),
+        ):
+            self.assertNotIn("aws_db_instance", tf_resource(kind, name), name)
+        self.assertIn(
+            "depends_on = [aws_scheduler_schedule.rds_delete]",
+            tf_resource("aws_db_instance", "this"),
+        )
+
+    def test_the_rds_arn_and_identifier_are_built_from_the_name(self):
+        policy = tf_resource("aws_iam_role_policy", "scheduler")
+        self.assertIn(
+            "arn:aws:rds:${var.region}:${var.account_id}:db:${local.rds_name}", policy
+        )
+        self.assertIn(
+            "DbInstanceIdentifier   = local.rds_name",
+            tf_resource("aws_scheduler_schedule", "rds_delete"),
+        )
+
+    def test_hosts_report_ec2_metrics_every_minute(self):
+        self.assertIn("monitoring", tf_resource("aws_instance", "host"))
 
 
 # REQ:querydb-rds-wiring
@@ -3069,7 +3231,7 @@ class GroupRdsRunsTest(unittest.TestCase):
             ),
             mapping(resource_arn("ec2", "key-pair/key-1"), "f", "bob", EXPIRES_PAST),
         ]
-        (tagged,) = awsb.group_runs(mappings, [])
+        (tagged,) = awsb.group_runs(mappings, [], [])
         self.assertEqual(tagged["expires"], EXPIRES_LATER)
 
     def test_expiries_compare_as_times_not_strings(self):
@@ -3083,14 +3245,18 @@ class GroupRdsRunsTest(unittest.TestCase):
     def test_a_role_joins_its_fleet_and_stands_alone_without_one(self):
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
         lone = "arn:aws:iam::1:role/espresso-bench/espresso-bench-lost"
-        runs = awsb.group_runs(mappings, [instance_row("i-1")], [ROLE_ARN, lone])
+        runs = awsb.group_runs(
+            mappings, [instance_row("i-1")], ["vol-1"], [ROLE_ARN, lone]
+        )
         self.assertEqual([r["name"] for r in runs], ["lost", "fleet1"])
         self.assertEqual(runs[0]["arns"], [lone])
         self.assertIn(ROLE_ARN, runs[1]["arns"])
 
     def test_summary_names_volumes_rds_and_iam(self):
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
-        (tagged,) = awsb.group_runs(mappings, [instance_row("i-1")], [ROLE_ARN])
+        (tagged,) = awsb.group_runs(
+            mappings, [instance_row("i-1")], ["vol-1"], [ROLE_ARN]
+        )
         self.assertEqual(
             awsb.resource_summary(tagged),
             "1 instances, 1 volumes, 1 rds, 1 iam, 5 other",
@@ -3125,6 +3291,13 @@ class DestroyRdsOrphansTest(unittest.TestCase):
         verbs = aws_verbs(runner)
         self.assertIn(("rds", "delete-db-instance"), verbs)
         self.assertIn(("iam", "delete-role"), verbs)
+
+    def test_the_roles_are_listed_once_to_find_and_once_to_sweep(self):
+        mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_PAST)
+        runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
+        with tempfile.TemporaryDirectory() as tmp:
+            self.destroy(runner, Path(tmp), "--yes")
+        self.assertEqual(sum("list-roles" in call for call in runner.calls), 2)
 
     # TEST:orphans-live-fleet-kept-ok
     def test_a_live_fleet_of_this_user_with_state_is_kept(self):

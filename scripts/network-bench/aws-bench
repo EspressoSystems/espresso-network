@@ -259,11 +259,13 @@ PG_TLS_DIR = "/data/pg-tls"
 VOLUME_BY_ID = "/dev/disk/by-id"
 # Seconds `up` waits for udev to publish the by-id link of the attached volume.
 PG_VOLUME_WAIT_S = 60
-# Values for 16 vCPU / 64 GiB. One map for every placement: rendered into the container's `-c`
-# flags by `render_postgres_args` and into the RDS parameter group by `rds_parameter`.
+# Sized for the 32 GiB of node0 (c8g.4xlarge), which also runs espresso-node and the journal's
+# page cache; the 64 GiB RDS class takes the same values. One map for every placement: rendered
+# into the container's `-c` flags by `render_postgres_args` and into the RDS parameter group by
+# `rds_parameter`. The last group pins what RDS defaults differently from postgres.
 PG_TUNING = {
-    "shared_buffers": "16GB",
-    "effective_cache_size": "48GB",
+    "shared_buffers": "8GB",
+    "effective_cache_size": "24GB",
     "huge_pages": "off",
     "work_mem": "64MB",
     "maintenance_work_mem": "2GB",
@@ -276,7 +278,17 @@ PG_TUNING = {
     "effective_io_concurrency": "200",
     "autovacuum_vacuum_cost_limit": "2000",
     "autovacuum_max_workers": "4",
+    "autovacuum_work_mem": "512MB",
+    "autovacuum_naptime": "1min",
+    "autovacuum_vacuum_scale_factor": "0.2",
+    "autovacuum_analyze_scale_factor": "0.1",
+    "track_io_timing": "off",
+    "wal_buffers": "16MB",
+    "max_connections": "100",
 }
+# Docker's default /dev/shm of 64 MB is the limit of parallel query's dynamic shared memory;
+# RDS has none.
+PG_SHM_SIZE = "8g"
 # Unit of the RDS parameter group (and of pg_settings.setting) for the PG_TUNING keys whose
 # value there is a bare number.
 RDS_PARAMETER_UNITS = {
@@ -287,6 +299,9 @@ RDS_PARAMETER_UNITS = {
     "max_wal_size": "MB",
     "min_wal_size": "MB",
     "checkpoint_timeout": "s",
+    "autovacuum_work_mem": "kB",
+    "autovacuum_naptime": "s",
+    "wal_buffers": "8kB",
 }
 # Same, for the PG_OBSERVABILITY keys that carry a time unit.
 RDS_OBSERVABILITY_UNITS = {"log_min_duration_statement": "ms"}
@@ -746,6 +761,9 @@ class Evidence(TypedDict):
     clock_offset_ms: dict[str, float]
     digest_mismatch: dict[str, list[str]]  # host -> images whose pulled digest differs
     pg_settings: NotRequired[dict[str, Any]]  # node0's pg-settings.json
+    # The espresso backends node0's Postgres sampler saw inside the load window, by TLS use
+    # (keys "true" and "false"); absent when `pg-stats.jsonl` was not collected.
+    ssl_backends: NotRequired[dict[str, int]]
     # node0 EBS metric -> minimum over the load window, None without a datapoint; empty when
     # `cloudwatch/ec2-node0.json` was not collected.
     ebs_balance_min: dict[str, float | None]
@@ -1045,6 +1063,8 @@ def fetch_rds_price(run: Runner, cfg: RunConfig, instance_class: str) -> float:
         {"Type": "TERM_MATCH", "Field": "regionCode", "Value": cfg.region},
         {"Type": "TERM_MATCH", "Field": "databaseEngine", "Value": "PostgreSQL"},
         {"Type": "TERM_MATCH", "Field": "deploymentOption", "Value": "Single-AZ"},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Database Instance"},
+        {"Type": "TERM_MATCH", "Field": "locationType", "Value": "AWS Region"},
     ]
     return _query_price(run, cfg, "AmazonRDS", filters, instance_class)
 
@@ -2375,10 +2395,8 @@ def check_pg_tuning(settings: dict[str, Any]) -> list[str]:
     return differing
 
 
-def pg_tls(settings: dict[str, Any]) -> bool | None:
-    """Whether every backend of the espresso database used TLS; None when none was connected
-    at collect time."""
-    backends = settings["pg_stat_ssl"]
+def pg_tls(backends: dict[str, int]) -> bool | None:
+    """Whether every backend of the espresso database used TLS; None when none was seen."""
     return None if not backends else "false" not in backends
 
 
@@ -2533,6 +2551,7 @@ def render_start_sh(
                 "/data/pg:/var/lib/postgresql",
                 "-v",
                 f"{PG_TLS_DIR}:/tls:ro",
+                f"--shm-size={PG_SHM_SIZE}",
                 "-e",
                 f"POSTGRES_USER={endpoint['user']}",
                 "-e",
@@ -3186,10 +3205,13 @@ def prepare_run(
 
 
 def confirm_create(cfg: RunConfig, fleet_dir: Path, count: int) -> None:
-    rds = ", 1 rds instance, 1 schedule, 1 iam role" if "rds" in cfg.db_modes else ""
-    prompt = (
-        f"Create {count} instances{rds}, 1 security group, 1 key pair in {cfg.account}?"
-    )
+    extras = ""
+    if "volume" in cfg.db_modes:
+        extras += ", 1 extra volume"
+    if "rds" in cfg.db_modes:
+        extras += ", 1 rds instance, 1 subnet group, 1 parameter group, 1 schedule"
+        extras += ", 1 iam role"
+    prompt = f"Create {count} instances{extras}, 1 security group, 1 key pair in {cfg.account}?"
     if not confirm(prompt, cfg.yes, sys.stdin.isatty()):
         append_event(fleet_dir, "planned", "refused", "not confirmed")
         raise Refused("not confirmed; nothing was created")
@@ -3208,7 +3230,8 @@ def stamp_expiry(
     """The `espresso-bench-expires` tag counts from the apply, not from the render: a run that
     waited at the prompt must not look expired. Re-plans because a plan file fixes variables.
     A single shot adds the provisioning time; a fleet passes 0, so that `run --fleet` never
-    counts on time after the earliest possible self-terminate."""
+    counts on time after the earliest possible self-terminate. The rds delete is scheduled
+    from the end of the hosts, without that margin."""
     manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
     expires = confirmed_at + timedelta(seconds=manifest["estimate"]["ttl_s"] + margin_s)
     stamp = expiry_stamp(expires)
@@ -3216,7 +3239,8 @@ def stamp_expiry(
     tfvars = nb.read_json(tfvars_path)
     updated = {**tfvars, "expires_at": stamp}
     if "rds" in tfvars:
-        updated["rds"] = {**tfvars["rds"], "delete_at": rds_schedule_at(expires)}
+        hosts_end = expires - timedelta(seconds=margin_s)
+        updated["rds"] = {**tfvars["rds"], "delete_at": rds_schedule_at(hosts_end)}
     nb.write_json(tfvars_path, updated)
     update_manifest(fleet_dir / FLEET_JSON, manifest["phase"], expires_at=stamp)
     tf.plan()
@@ -3740,7 +3764,6 @@ def cmd_run_fleet(
     )
     try:
         with recording(bench_run):
-            assert fleet.remote is not None
             if tag_changed(manifest, cfg):
                 pull_tag(bench_run)
             enter_phase(
@@ -4036,9 +4059,11 @@ def volume_device(volume_id: str) -> str:
 
 def mount_pg_volume_script(volume_id: str) -> str:
     """Mounts the volume on /data/pg with the root filesystem's options, so that the placement
-    differs from `colocated` by the device only."""
+    differs from `colocated` by the device only. The root copy that `colocated` left under the
+    mountpoint is emptied first: mounted over, it would keep using root space unseen."""
     return (
         "if ! mountpoint -q /data/pg; then\n"
+        "  find /data/pg -mindepth 1 -delete\n"
         f'  mount -t ext4 -o "$(findmnt -no OPTIONS /)" {volume_device(volume_id)} /data/pg\n'
         "fi\n"
     )
@@ -4206,8 +4231,10 @@ def cmd_extend(
 
 
 def extend_fleet(fleet: FleetState, ttl_min: int, now: datetime) -> None:
-    """Moves the expiry to `now` + `ttl_min`: the shutdown timer on every host, then the
-    `espresso-bench-expires` tag on every resource, then `fleet.json`."""
+    """Moves the expiry to `now` + `ttl_min`: the shutdown timer on every host, then
+    `fleet.json`, the rds schedule and the `espresso-bench-expires` tag on every resource.
+    `fleet.json` follows the hosts at once: it is what `destroy --orphans` on this machine
+    trusts, and the tags of a failed retag stay stale."""
     manifest = fleet.manifest
     if manifest["phase"] not in LIVE_PHASES:
         raise Refused(f"fleet {manifest['name']} is {manifest['phase']}, not live")
@@ -4235,10 +4262,7 @@ def extend_fleet(fleet: FleetState, ttl_min: int, now: datetime) -> None:
     remote.parallel(
         lambda host: remote.ssh(host, bounded(rearm_ttl_script(ttl_min))), remote.hosts
     )
-    if "rds" in manifest:
-        update_rds_schedule(fleet.run, fleet.cfg, manifest["rds"], new)
     stamp = expiry_stamp(new)
-    retag_expiry(fleet.run, fleet.cfg, manifest["name"], stamp)
     lifetime_s = (new - datetime.fromisoformat(manifest["created_at"])).total_seconds()
     update_manifest(
         fleet.manifest_path,
@@ -4246,6 +4270,9 @@ def extend_fleet(fleet: FleetState, ttl_min: int, now: datetime) -> None:
         expires_at=stamp,
         estimate={**manifest["estimate"], "ttl_s": lifetime_s, "bound_usd": bound},
     )
+    if "rds" in manifest:
+        update_rds_schedule(fleet.run, fleet.cfg, manifest["rds"], new)
+    retag_expiry(fleet.run, fleet.cfg, manifest["name"], stamp)
     log.info("expires %s UTC, bound $%.2f", f"{new:%H:%M}", bound)
 
 
@@ -4272,7 +4299,8 @@ def retag_expiry(run: Runner, cfg: RunConfig, name: str, expires_at: str) -> Non
         )
         failed = json.loads(out)["FailedResourcesMap"]
         if failed:
-            raise RemoteError(f"tag-resources failed for: {', '.join(failed)}")
+            # The tag API also lists resources EC2 has already deleted, and tagging those fails.
+            log.warning("tag-resources failed for: %s", ", ".join(failed))
 
 
 def update_rds_schedule(
@@ -4460,7 +4488,7 @@ def run_config_hash(
     cfg: RunConfig, hosts: list[HostSpec], images: dict[str, ImageInfo], genesis: bytes
 ) -> str:
     """Load config plus what else changes the measured system: image digests, the fleet's
-    shape and the rendered genesis."""
+    shape, the query database placement and the rendered genesis."""
     digests = {name: image["digest"] for name, image in sorted(images.items())}
     return nb.config_hash(
         cfg.load,
@@ -4468,6 +4496,7 @@ def run_config_hash(
             genesis,
             json.dumps(digests).encode(),
             json.dumps(hosts, sort_keys=True).encode(),
+            cfg.query_db.encode(),
         ],
     )
 
@@ -4732,13 +4761,12 @@ def render_host_files(
         else:
             pg = query_endpoint(cfg, run_dir) if spec["role"] == "query" else None
             node_env = host_dir / "node.env"
-            node_env.write_text(render_node_env(spec, hosts, pg))
             if cfg.query_db == "rds" and pg is not None:
+                node_env.touch(mode=0o600)
                 node_env.chmod(0o600)
+            node_env.write_text(render_node_env(spec, hosts, pg))
             if pg is not None:
-                pg_json = host_dir / "pg.json"
-                nb.write_json(pg_json, pg)
-                pg_json.chmod(0o600)
+                write_private_json(host_dir / "pg.json", pg)
     topo = topology(hosts)
     nb.write_json(run_dir / "topology.json", topo)
     nb.write_json(
@@ -5147,12 +5175,8 @@ PG_STATEMENTS_SQL = (
 _PG_SETTING_NAMES = sorted(
     {"synchronous_commit", "fsync", "full_page_writes", *PG_TUNING}
 )
-# pg_stat_ssl counts the espresso backends by TLS use, keyed "true" and "false".
 PG_SETTINGS_SQL = (
-    "select (jsonb_object_agg(name, setting) || jsonb_build_object('pg_stat_ssl', "
-    "(select coalesce(jsonb_object_agg(ssl::text, n), '{}'::jsonb) from "
-    "(select s.ssl, count(*) as n from pg_stat_ssl s join pg_stat_activity a using (pid) "
-    "where a.datname = 'espresso' group by s.ssl) g)))::text "
+    "select jsonb_object_agg(name, setting)::text "
     "from pg_settings where source <> 'default' or name in ("
     + ",".join(f"'{name}'" for name in _PG_SETTING_NAMES)
     + ")"
@@ -5218,11 +5242,22 @@ def cmd_status(
 
 def cmd_collect(args: argparse.Namespace, run: Runner = _run) -> int:
     """Collects again from the live hosts into `hosts/<name>/collect-<k>/`, leaving the files
-    of the run itself untouched."""
+    of the run itself untouched. Only the fleet's last run can be collected, while no run is
+    active: the hosts hold the files of the last run only, and `left-running` is where a
+    `run --keep` stays."""
     run_dir: Path = args.dir
     fleet_dir = fleet_of(run_dir)
     manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
     hosts = provisioned_hosts(manifest)
+    if run_dir.name != run_dirs(fleet_dir)[-1].name:
+        raise Refused(
+            f"{run_dir.name} is not the last run of {fleet_dir.name}: the hosts hold "
+            f"{run_dirs(fleet_dir)[-1].name}'s files"
+        )
+    if manifest["phase"] not in ("idle", "left-running"):
+        raise Refused(
+            f"fleet {fleet_dir.name} is {manifest['phase']}: collect needs it idle"
+        )
     setup_logging(fleet_dir)
     remote = Remote(
         run, fleet_dir, ssh_key_path(manifest["config"]["ssh_key"], fleet_dir), hosts
@@ -5276,7 +5311,7 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
     manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
     name = manifest["name"]
     print(
-        f"- run {name}: phase {manifest['phase']}, created {manifest['created_at'][:16]}"
+        f"- fleet {name}: phase {manifest['phase']}, created {manifest['created_at'][:16]}"
     )
     for path in sorted((fleet_dir / RUNS_DIR).glob("*/manifest.json")):
         print(f"- {path.parent.name}: phase {nb.read_json(path)['phase']}")
@@ -5523,7 +5558,9 @@ def destroy_orphans(run: Runner, args: argparse.Namespace, now: datetime) -> int
             log.info("sweeping %s", orphan["name"])
             sweep(run, cfg.region, orphan["name"], cfg.profile)
             mark_swept(args.out_root / orphan["name"])
-        with_role = {o["name"] for o in orphans if has_role(o)}
+        # `sweep` removes the role of a fleet that still has rds resources.
+        swept_rds = rds_fleets(arn for o in orphans for arn in o["arns"])
+        with_role = {o["name"] for o in orphans if has_role(o)} - swept_rds
         if with_role:
             sweep_iam(run, cfg.profile, with_role)
     except RemoteError as exc:
@@ -5600,7 +5637,10 @@ def find_runs(
     instances = describe_instances(
         run, region, profile, f"Name=tag-key,Values={TAG_RUN}"
     )
-    runs = group_runs(json.loads(out), instances, list_scheduler_roles(run, profile))
+    volumes = describe_volumes(run, region, profile, f"Name=tag-key,Values={TAG_RUN}")
+    runs = group_runs(
+        json.loads(out), instances, volumes, list_scheduler_roles(run, profile)
+    )
     user = getpass.getuser()
     for tagged in runs:
         phase = local_phase(out_root, tagged["name"])
@@ -5631,6 +5671,27 @@ def describe_instances(
     return json.loads(out)
 
 
+def describe_volumes(
+    run: Runner, region: str, profile: str, *filters: str
+) -> list[str]:
+    """Ids of the volumes EC2 has; the tag API keeps listing a deleted volume for a while."""
+    out = aws_ok(
+        run,
+        profile,
+        "ec2",
+        "describe-volumes",
+        "--region",
+        region,
+        "--filters",
+        *filters,
+        "--query",
+        "Volumes[].VolumeId",
+        "--output",
+        "json",
+    )
+    return json.loads(out)
+
+
 def arn_parts(arn: str) -> tuple[str, str]:
     """(`instance`, `i-0abc`) of `arn:aws:ec2:eu-west-1:1:instance/i-0abc`; rds ARNs separate
     kind and id with a colon: (`db`, `name`) of `arn:aws:rds:eu-west-1:1:db:name`."""
@@ -5642,17 +5703,22 @@ def arn_parts(arn: str) -> tuple[str, str]:
 def group_runs(
     mappings: list[dict[str, Any]],
     instances: list[Instance],
+    volumes: Iterable[str],
     roles: Iterable[str] = (),
 ) -> list[TaggedRun]:
     """Groups tag-API `{arn, tags}` mappings by run, sorted by owner then name. A terminated
-    instance still shows up in both APIs for about an hour and is dropped. `roles` are the ARNs
+    instance still shows up in both APIs for about an hour and is dropped, and so is a volume
+    that is not in `volumes`, the ids EC2 has. `roles` are the ARNs
     of scheduler IAM roles: the tag API does not list them, and a fleet whose other resources
     are gone still counts through its role."""
     live = {i["id"]: i for i in instances if i["state"] != "terminated"}
+    existing = set(volumes)
     runs: dict[str, TaggedRun] = {}
     for mapping in mappings:
         kind, resource_id = arn_parts(mapping["arn"])
         if kind == "instance" and resource_id not in live:
+            continue
+        if kind == "volume" and resource_id not in existing:
             continue
         tags = {tag["Key"]: tag["Value"] for tag in mapping["tags"]}
         tagged = runs.setdefault(
@@ -5993,7 +6059,7 @@ def collect_ebs_balance(
     `out/cloudwatch/ec2-node0.json`. Every mode: node0 carries the journal and, with the
     container or volume placements, Postgres."""
     instance_id = manifest["hosts_info"]["node0"]["instance_id"]
-    start, end = t0 - CLOUDWATCH_PERIOD_S, t1 + CLOUDWATCH_PERIOD_S
+    start, end = metric_window(t0, t1)
     stdout = aws_ok(
         run,
         cfg.profile,
@@ -6015,7 +6081,7 @@ def collect_ebs_balance(
         "period_s": CLOUDWATCH_PERIOD_S,
         "start": start,
         "end": end,
-        "metrics": parse_ebs_balance(stdout),
+        "metrics": parse_metric_results(stdout, EBS_BALANCE_METRICS),
     }
     path = out / EC2_NODE0_FILE
     path.parent.mkdir(exist_ok=True)
@@ -6181,10 +6247,6 @@ def ebs_balance_queries(instance_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def parse_ebs_balance(stdout: str) -> dict[str, MetricSeries]:
-    return parse_metric_results(stdout, EBS_BALANCE_METRICS)
-
-
 def parse_metric_results(stdout: str, names: dict[str, str]) -> dict[str, MetricSeries]:
     """Series per metric name from `get-metric-data`, `names` mapping query Id to metric; a
     metric without datapoints gets empty lists, any other status than `Complete` (e.g.
@@ -6204,8 +6266,9 @@ def parse_metric_results(stdout: str, names: dict[str, str]) -> dict[str, Metric
     return series
 
 
-def ebs_balance_min(path: Path, t0: float, t1: float) -> dict[str, float | None]:
-    """Minimum per metric over the periods that overlap the load `[t0, t1]`."""
+def metric_min(path: Path, t0: float, t1: float) -> dict[str, float | None]:
+    """Minimum per metric over the periods that overlap the load `[t0, t1]`, of a
+    `cloudwatch/*.json` file: `ec2-node0.json` or `rds.json`."""
     balance: Ec2Balance = nb.read_json(path)
     period = balance["period_s"]
     return {
@@ -6262,12 +6325,10 @@ def load_evidence(
     }
     balance = run_dir / EC2_NODE0_FILE
     if balance.exists():
-        evidence["ebs_balance_min"] = ebs_balance_min(balance, t0, t1)
+        evidence["ebs_balance_min"] = metric_min(balance, t0, t1)
     if manifest["query_db"] == "rds":
         metrics = run_dir / RDS_CLOUDWATCH_FILE
-        evidence["rds_min"] = (
-            ebs_balance_min(metrics, t0, t1) if metrics.exists() else {}
-        )
+        evidence["rds_min"] = metric_min(metrics, t0, t1) if metrics.exists() else {}
     for spec in manifest["hosts"]:
         name = spec["name"]
         host_dir = run_dir / "hosts" / name
@@ -6299,11 +6360,25 @@ def load_evidence(
         # Empty when psql failed at collect time; treated like a missing file.
         if settings.exists() and settings.read_text().strip():
             evidence["pg_settings"] = nb.read_json(settings)
+        samples = host_dir / "pg-stats.jsonl"
+        if samples.exists():
+            evidence["ssl_backends"] = sum_ssl_backends(nb.read_jsonl(samples), t0, t1)
         if ready.exists():
             evidence["digest_mismatch"][name] = digest_mismatches(
                 nb.read_json(ready)["digests"], manifest["images"]
             )
     return stats, evidence
+
+
+def sum_ssl_backends(
+    samples: Iterable[dict[str, Any]], t0: float, t1: float
+) -> Counter[str]:
+    """The backend counts of the samples taken inside `[t0, t1]`, summed."""
+    total: Counter[str] = Counter()
+    for sample in samples:
+        if t0 <= sample["ts"] <= t1:
+            total.update(sample["ssl_backends"])
+    return total
 
 
 def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta:
@@ -6333,10 +6408,10 @@ def rds_identifier(fleet_name: str) -> str:
 
 
 def query_db_meta(manifest: Manifest, evidence: Evidence) -> nb.QueryDbMeta:
-    """Where node0's Postgres ran. `tls` is whether every backend negotiated TLS at collect
-    time; no backend counts as off."""
+    """Where node0's Postgres ran. `tls` is whether every backend negotiated TLS during the
+    load; no backend counts as off."""
     mode = manifest["query_db"]
-    tls = "pg_settings" in evidence and pg_tls(evidence["pg_settings"]) is True
+    tls = "ssl_backends" in evidence and pg_tls(evidence["ssl_backends"]) is True
     tag = manifest["images"]["postgres"]["ref"].rpartition(":")[2]
     tuning = dict(PG_TUNING)
     match mode:
@@ -6352,6 +6427,18 @@ def query_db_meta(manifest: Manifest, evidence: Evidence) -> nb.QueryDbMeta:
                 "mode": mode,
                 "engine": f"postgres {tag}",
                 "store": store,
+                "tls": tls,
+                "tuning": tuning,
+            }
+        case "volume":
+            return {
+                "mode": mode,
+                "engine": f"postgres {tag}",
+                "store": {
+                    "type": "ebs",
+                    "volume_id": manifest["pg_volume_id"],
+                    **manifest["pg_volume"],
+                },
                 "tls": tls,
                 "tuning": tuning,
             }
@@ -6418,8 +6505,8 @@ def check_validity_aws(
             noisy.append(
                 f"node0 postgres {key}={settings[key]} differs from the tuned {PG_TUNING[key]}"
             )
-        if pg_tls(settings) is False:
-            noisy.append("node0 postgres backends connected without TLS")
+    if "ssl_backends" in evidence and pg_tls(evidence["ssl_backends"]) is False:
+        noisy.append("node0 postgres backends connected without TLS")
     specs = {h["name"]: h for h in manifest["hosts"]}
     for name, size in evidence["journal_bytes"].items():
         limit = _journal_max_bytes(specs[name])
@@ -6564,13 +6651,18 @@ def sweep(
             "--key-pair-id",
             key,
         )
-    rds_fleets = {
-        resource_id.removeprefix(RDS_PREFIX)
-        for resource_id in by_kind["db"] + by_kind["schedule-group"]
-    }
-    if rds_fleets:
-        sweep_iam(run, profile, rds_fleets)
+    if fleets := rds_fleets(arns):
+        sweep_iam(run, profile, fleets)
     return arns
+
+
+def rds_fleets(arns: Iterable[str]) -> set[str]:
+    """Names of the fleets that own an rds instance or delete schedule group among `arns`."""
+    return {
+        resource_id.removeprefix(RDS_PREFIX)
+        for kind, resource_id in map(arn_parts, arns)
+        if kind in ("db", "schedule-group")
+    }
 
 
 def delete_rds(run: Runner, region: str, identifier: str, profile: str) -> None:
@@ -7111,6 +7203,9 @@ def pg_sample_sql(has_checkpointer: bool) -> str:
         f"{checkpoints}, "
         "'buffers_clean', b.buffers_clean, 'maxwritten_clean', b.maxwritten_clean, "
         f"'active_backends', (select count(*) {backends} and state = 'active'), "
+        "'ssl_backends', (select coalesce(jsonb_object_agg(ssl::text, n), '{}'::jsonb) from "
+        "(select s.ssl, count(*) as n from pg_stat_ssl s "
+        f"where s.pid in (select pid {backends}) group by s.ssl) g), "
         "'wait_events', (select coalesce(jsonb_object_agg(wt, n), '{}'::jsonb) from "
         f"(select coalesce(wait_event_type, 'none') as wt, count(*) as n {backends} "
         "group by 1) g), "

@@ -214,7 +214,7 @@ just bench aws run     --fleet FLEET_DIR --query-db MODE [--tag release-y] [--na
 just bench aws extend  FLEET_DIR --ttl-min N
 just bench aws down    FLEET_DIR [--yes]
 just bench aws status  --all | FLEET_DIR
-just bench aws collect RUN_DIR
+just bench aws collect RUN_DIR                 # the fleet's last run, fleet idle or left-running
 just bench aws render  RUN_DIR [--baseline FILE]
 just bench aws destroy FLEET_DIR | --orphans
 ```
