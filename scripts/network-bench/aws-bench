@@ -10,12 +10,11 @@ and region, replacing manual `espresso-deploy` runs for this purpose. `plan` ren
 and prints a cost estimate without writing anything to AWS; `run` additionally provisions,
 measures, collects and destroys. `up` provisions a fleet that stays idle for several
 measurements: `run --fleet DIR` measures on it (`fleet.lock` admits one run at a time and a reset
-wipes the chain between runs), `extend DIR --ttl-min N` moves its expiry and `down DIR`
-destroys it. The query service's Postgres runs in a container on node0 (`--query-db
+wipes the chain between runs), and `down DIR` destroys it. The query service's Postgres runs in a container on node0 (`--query-db
 colocated`) or on an RDS instance (`rds`, provisioned by `up --db-modes`); a run picks one.
 
 `status` shows one run (phase, instances, agent progress, cost so far) or, with `--all`, every
-tagged resource in the region. `destroy DIR` tears one run down; `destroy --orphans` sweeps runs
+tagged resource in the region. `destroy --orphans` sweeps runs
 whose local state is lost or whose TTL passed. `collect` and `render` redo those steps on an
 existing run dir. `agent-drive` (on ctl) and `agent-host` (on every host) run under
 uv-managed python 3.14 from /opt/bench.
@@ -23,7 +22,7 @@ uv-managed python 3.14 from /opt/bench.
 Prerequisites: opentofu and awscli2 (nix devShell), the AWS profile `timeboost-dev` for account
 027574771971 in eu-west-1 (constants below), and `--tag` naming the ghcr tag CI pushed for a
 `release-*` branch. Each fleet gets a fresh ssh key, deleted after destroy.
-Recipes: `just bench aws plan|up|run|extend|down|status|collect|render|destroy`.
+Recipes: `just bench aws plan|up|run|down|status|collect|render|destroy`.
 
 Exit codes of `run`: 0 valid, 1 invalid result, 2 refused before any AWS write, 3 failed after
 writes but destroyed, 4 resources may remain (the last log line is the destroy command). `run --fleet` never destroys: 3 leaves the fleet up. `up` exits 0 with
@@ -79,7 +78,7 @@ EXIT_INVALID = 1
 EXIT_REFUSED = 2
 EXIT_FAILED = 3
 EXIT_LEFTOVER = 4
-LEFTOVER_MESSAGE = "resources may remain, run: aws-bench destroy %s"
+LEFTOVER_MESSAGE = "resources may remain, run: aws-bench down %s"
 
 # Duration model. Phases not on the critical path of a laptop disconnect (provision, services,
 # destroy) use the same value for expected and worst case.
@@ -396,8 +395,6 @@ LIVE_PHASES = ("idle", "running", "dirty")
 # `up` defaults: several measurements need a longer TTL and budget than a single shot.
 UP_TTL_MIN = "180"
 UP_MAX_USD = 60.0
-# resourcegroupstaggingapi tag-resources takes at most 20 ARNs per call.
-RETAG_BATCH = 20
 # What `reset_chain` leaves in BENCH_DIR: `up` wrote these and the shipped agents run from here.
 RESET_KEEP = (
     "netbench.py",
@@ -479,7 +476,6 @@ RDS_USER = "bench"
 RDS_DATABASE = "espresso"
 RDS_FILE = "rds.json"
 RDS_CLOUDWATCH_FILE = "cloudwatch/rds.json"
-PI_FILE = "cloudwatch/pi.json"
 RDS_LOGS_DIR = "rds-logs"
 # CloudWatch query Id -> (metric, statistic) recorded in cloudwatch/rds.json.
 RDS_METRICS = {
@@ -623,11 +619,7 @@ class RdsInfo(TypedDict):
     identifier: str
     endpoint: str
     port: int
-    resource_id: str
-    arn: str
     engine_version: str
-    schedule_group: str
-    schedule_name: str
     created_at: NotRequired[str]
 
 
@@ -743,9 +735,6 @@ class Evidence(TypedDict):
     journal_bytes: dict[str, int]
     clock_offset_ms: dict[str, float]
     digest_mismatch: dict[str, list[str]]  # host -> images whose pulled digest differs
-    collect_failed: list[
-        str
-    ]  # hosts whose collect script failed (see COLLECT_ERROR_FILE)
     pg_settings: NotRequired[dict[str, Any]]  # node0's pg-settings.json
     # The espresso backends node0's Postgres sampler saw inside the load window, by TLS use
     # (keys "true" and "false"); absent when `pg-stats.jsonl` was not collected.
@@ -1172,16 +1161,6 @@ def estimate_run(manifest: FleetManifest, cfg: RunConfig) -> RunEstimate:
         "expected_usd": rate * expected_s / 3600,
         "worst_usd": rate * worst_s / 3600,
     }
-
-
-def fleet_bound_usd(manifest: FleetManifest, expires: datetime) -> float:
-    """Spent plus remaining until `expires`, from the fleet's creation."""
-    lifetime_s = (
-        expires - datetime.fromisoformat(manifest["created_at"])
-    ).total_seconds()
-    return manifest_cost(
-        manifest, lifetime_s + BOOT_ALLOWANCE_S, lifetime_s + RDS_DELETE_S
-    )
 
 
 def _cost_lines(
@@ -1774,7 +1753,6 @@ def _rds_option_fits(option: dict[str, Any], cfg: RunConfig, az: str) -> bool:
         (version == wanted or version.startswith(f"{wanted}."))
         and option["StorageType"] == "gp3"
         and az in {zone["Name"] for zone in option["AvailabilityZones"]}
-        and option["SupportsPerformanceInsights"]
         and option["MinStorageSize"] <= PG_GB <= option["MaxStorageSize"]
         and option["MinIopsPerDbInstance"]
         <= cfg.pg_iops
@@ -2065,10 +2043,8 @@ def rds_tfvars(rds: RdsSpec, password: str, expires: datetime) -> dict[str, Any]
     return {
         "rds": {
             **rds,
-            "username": RDS_USER,
             "parameters": {k: rds_parameter(k, v) for k, v in parameters.items()},
             "delete_at": rds_schedule_at(expires),
-            "timeout": f"{int(RDS_CREATE_MAX_S // 60)}m",
         },
         "rds_password": password,
     }
@@ -2537,12 +2513,6 @@ def ttl_min_arg(text: str) -> str:
     return text
 
 
-def positive_int(text: str) -> int:
-    if not (text.isdigit() and int(text) > 0):
-        raise argparse.ArgumentTypeError(f"expected a positive number: {text}")
-    return int(text)
-
-
 def parse_db_modes(text: str) -> tuple[DbMode, ...]:
     modes = text.split(",")
     unknown = [mode for mode in modes if mode not in DB_MODES]
@@ -2616,13 +2586,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     run_p.add_argument("--yes", action="store_true")
     run_p.set_defaults(func=cmd_run, db_modes=defaults.db_modes)
 
-    extend_p = sub.add_parser(
-        "extend", help="move a fleet's expiry to now plus --ttl-min minutes"
-    )
-    extend_p.add_argument("dir", type=Path)
-    extend_p.add_argument("--ttl-min", type=positive_int, required=True)
-    extend_p.set_defaults(func=cmd_extend)
-
     down_p = sub.add_parser("down", help="destroy a fleet")
     down_p.add_argument("dir", type=Path)
     down_p.add_argument("--yes", action="store_true")
@@ -2648,11 +2611,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     render_p.add_argument("--baseline", type=Path)
     render_p.set_defaults(func=cmd_render)
 
-    destroy_p = sub.add_parser(
-        "destroy", help="tear down a run's fleet, or sweep orphans"
-    )
-    destroy_p.add_argument("dir", type=Path, nargs="?")
-    destroy_p.add_argument("--orphans", action="store_true")
+    destroy_p = sub.add_parser("destroy", help="sweep orphaned runs")
+    destroy_p.add_argument("--orphans", action="store_true", required=True)
     destroy_p.add_argument("--yes", action="store_true")
     destroy_p.set_defaults(func=cmd_destroy)
 
@@ -3185,7 +3145,7 @@ def finish_run(run: Run) -> nb.BenchResult | None:
                 lambda: collect_node0_ebs_balance(run),
             ),
             "collect_rds": (
-                "rds metrics, insights, logs",
+                "rds metrics, logs",
                 lambda: collect_rds(run),
             ),
         }
@@ -3230,8 +3190,8 @@ def published_window(run: Run, what: str) -> AgentState | None:
 
 
 def collect_rds(run: Run) -> None:
-    """The RDS side of the load window into the run dir: CloudWatch metrics, Performance
-    Insights and the database logs. Each part is best effort."""
+    """The RDS side of the load window into the run dir: CloudWatch metrics
+    and the database logs. Each part is best effort."""
     agent = published_window(run, "rds metrics")
     if agent is None:
         return
@@ -3240,7 +3200,6 @@ def collect_rds(run: Run) -> None:
     t0, t1 = agent["t0"], agent["t1"]
     for what, collect in (
         ("rds metrics", collect_rds_metrics),
-        ("rds insights", collect_rds_insights),
         ("rds logs", collect_rds_logs),
     ):
         best_effort(what, lambda c=collect: c(fleet.run, rds, t0, t1, run.run_dir))
@@ -3312,11 +3271,6 @@ def record_outcome(run: Run, result: nb.BenchResult | None, destroyed: bool) -> 
         fleet.fleet_dir.parent,
         index_row(run.manifest, run.run_dir.name, result, code, write_run_cost(run)),
     )
-    if destroyed:
-        append_index(
-            fleet.fleet_dir.parent,
-            fleet_index_row(fleet.manifest, len(run_dirs(fleet.fleet_dir)), cost, code),
-        )
     if cost is not None:
         log.info(
             "destroyed; actual cost $%.2f (bound $%.2f); run dir %s",
@@ -3473,8 +3427,7 @@ def abort_up(fleet: FleetState) -> int:
     fleet.interrupts.disarm()
     destroyed = down_fleet(fleet)
     code = EXIT_FAILED if destroyed else EXIT_LEFTOVER
-    cost = close_fleet(fleet, destroyed)
-    append_index(fleet.fleet_dir.parent, fleet_index_row(fleet.manifest, 0, cost, code))
+    close_fleet(fleet, destroyed)
     if not destroyed:
         log.error(LEFTOVER_MESSAGE, fleet.fleet_dir)
     return code
@@ -3702,8 +3655,7 @@ def check_run_allowed(
     if remaining_s < needed_s:
         raise Refused(
             f"{remaining_s / 60:.0f} min left on fleet {name}, this run needs up to "
-            f"{needed_s / 60:.0f}: run: aws-bench extend {cfg.fleet} "
-            f"--ttl-min {math.ceil(needed_s / 60)}"
+            f"{needed_s / 60:.0f}: up a new fleet with a longer --ttl-min"
         )
     return estimate
 
@@ -3989,113 +3941,6 @@ def settle_fleet(fleet: FleetState, dirty: bool) -> None:
     release_fleet_lock(fleet.fleet_dir)
 
 
-def cmd_extend(
-    args: argparse.Namespace, run: Runner = _run, now: datetime | None = None
-) -> int:
-    fleet_dir: Path = args.dir
-    read_fleet(fleet_dir)
-    setup_logging(fleet_dir)
-    fleet = open_fleet(run, fleet_dir, Interrupts())
-    extend_fleet(fleet, args.ttl_min, now or datetime.now(UTC))
-    return EXIT_OK
-
-
-def extend_fleet(fleet: FleetState, ttl_min: int, now: datetime) -> None:
-    """Moves the expiry to `now` + `ttl_min`: the shutdown timer on every host, then
-    `fleet.json`, the rds schedule and the `espresso-bench-expires` tag on every resource.
-    `fleet.json` follows the hosts at once: it is what `destroy --orphans` on this machine
-    trusts, and the tags of a failed retag stay stale."""
-    manifest = fleet.manifest
-    if manifest["phase"] not in LIVE_PHASES:
-        raise Refused(f"fleet {manifest['name']} is {manifest['phase']}, not live")
-    old = datetime.fromisoformat(manifest["expires_at"])
-    lockout = old - timedelta(seconds=NOLOGIN_LEAD_S)
-    if now >= lockout:
-        raise Refused(
-            f"ssh has been locked out since {lockout:%H:%M} UTC, the hosts end at "
-            f"{old:%H:%M} UTC: up a new fleet"
-        )
-    new = (now + timedelta(minutes=ttl_min)).replace(microsecond=0)
-    if new <= old:
-        raise Refused(f"{new:%H:%M} UTC is not after the expiry, {old:%H:%M} UTC")
-    bound = fleet_bound_usd(manifest, new)
-    max_usd = manifest["config"]["max_usd"]
-    if bound > max_usd:
-        raise Refused(
-            f"bound ${bound:.2f} at {new:%H:%M} UTC exceeds the fleet's --max-usd ${max_usd:.2f}"
-        )
-    remote = fleet.remote
-    assert remote is not None
-    if "rds" in manifest:
-        # Fails before any change once the schedule has deleted the instance.
-        describe_rds(fleet.run, manifest["rds"]["identifier"])
-    remote.parallel(
-        lambda host: remote.ssh(host, bounded(rearm_ttl_script(ttl_min))), remote.hosts
-    )
-    stamp = expiry_stamp(new)
-    lifetime_s = (new - datetime.fromisoformat(manifest["created_at"])).total_seconds()
-    update_manifest(
-        fleet.manifest_path,
-        manifest["phase"],
-        expires_at=stamp,
-        estimate={**manifest["estimate"], "ttl_s": lifetime_s, "bound_usd": bound},
-    )
-    if "rds" in manifest:
-        update_rds_schedule(fleet.run, manifest["rds"], new)
-    retag_expiry(fleet.run, manifest["name"], stamp)
-    log.info("expires %s UTC, bound $%.2f", f"{new:%H:%M}", bound)
-
-
-def rearm_ttl_script(ttl_min: int) -> str:
-    return f"shutdown -c; shutdown -P +{ttl_min}"
-
-
-def retag_expiry(run: Runner, name: str, expires_at: str) -> None:
-    arns = tagged_resources(run, REGION, name, PROFILE)
-    for start in range(0, len(arns), RETAG_BATCH):
-        out = aws_ok(
-            run,
-            PROFILE,
-            "resourcegroupstaggingapi",
-            "tag-resources",
-            "--region",
-            REGION,
-            "--resource-arn-list",
-            *arns[start : start + RETAG_BATCH],
-            "--tags",
-            f"{TAG_EXPIRES}={expires_at}",
-            "--output",
-            "json",
-        )
-        failed = json.loads(out)["FailedResourcesMap"]
-        if failed:
-            # The tag API also lists resources EC2 has already deleted, and tagging those fails.
-            log.warning("tag-resources failed for: %s", ", ".join(failed))
-
-
-def update_rds_schedule(run: Runner, rds: RdsInfo, expires: datetime) -> None:
-    """Moves the one-shot delete to `RDS_REAPER_LEAD_S` before `expires`, keeping the target
-    the schedule already has."""
-    name = ("--region", REGION, "--group-name", rds["schedule_group"])
-    name += ("--name", rds["schedule_name"])
-    current = json.loads(
-        aws_ok(run, PROFILE, "scheduler", "get-schedule", *name, "--output", "json")
-    )
-    aws_ok(
-        run,
-        PROFILE,
-        "scheduler",
-        "update-schedule",
-        *name,
-        "--schedule-expression",
-        f"at({rds_schedule_at(expires)})",
-        "--flexible-time-window",
-        json.dumps({"Mode": "OFF"}),
-        "--target",
-        json.dumps(current["Target"]),
-    )
-
-
 def cmd_down(
     args: argparse.Namespace, run: Runner = _run, clock: nb.Clock = nb.SYSTEM_CLOCK
 ) -> int:
@@ -4341,11 +4186,7 @@ def parse_rds_output(output: dict[str, Any]) -> RdsInfo:
         "identifier": value["identifier"],
         "endpoint": value["endpoint"],
         "port": value["port"],
-        "resource_id": value["resource_id"],
-        "arn": value["arn"],
         "engine_version": value["engine_version"],
-        "schedule_group": value["schedule_group"],
-        "schedule_name": value["schedule_name"],
     }
 
 
@@ -4398,37 +4239,13 @@ def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
         fleet.interrupts.sleep(RDS_POLL_S)
 
 
-def check_rds_schedule(run: Runner, rds: RdsInfo) -> None:
-    out = aws_ok(
-        run,
-        PROFILE,
-        "scheduler",
-        "get-schedule",
-        "--region",
-        REGION,
-        "--group-name",
-        rds["schedule_group"],
-        "--name",
-        rds["schedule_name"],
-        "--output",
-        "json",
-    )
-    state = json.loads(out)["State"]
-    if state != "ENABLED":
-        raise RemoteError(
-            f"the rds delete schedule {rds['schedule_group']}/{rds['schedule_name']} "
-            f"is {state}: the instance would outlive the fleet"
-        )
-
-
 def prepare_rds(fleet: FleetState) -> None:
-    """After `wait_hosts`: parameters applied, delete schedule armed, database reachable from
+    """After `wait_hosts`: parameters applied, database reachable from
     node0. Writes `rds.json` and the `pg.json` node0 keeps between runs."""
     remote = fleet.remote
     assert remote is not None, "connect must run first"
     rds = fleet.manifest["rds"]
     instance = wait_rds_in_sync(fleet, rds["identifier"])
-    check_rds_schedule(fleet.run, rds)
     rds = {**rds, "created_at": instance["InstanceCreateTime"]}
     update_manifest(fleet.manifest_path, fleet.manifest["phase"], rds=rds)
     tfvars = nb.read_json(fleet.fleet_dir / "terraform" / "terraform.tfvars.json")
@@ -5097,9 +4914,6 @@ def _pg_dump(sql: str, filename: str) -> str:
     return f"psql -At -c {shlex.quote(sql)} > {BENCH_DIR}/{filename}\n"
 
 
-# Written by `collect_hosts` into `hosts/<name>/` when the collect script failed. The copy
-# has no --delete, so it survives.
-COLLECT_ERROR_FILE = "collect-error.txt"
 PG_STATS_SCRIPT = (
     PG_SHELL_ENV
     + _pg_dump(PG_STATS_SQL, "pg-stats.json")
@@ -5133,10 +4947,6 @@ def collect_hosts(
             remote.ssh(name, bounded(script))
         except RemoteError as exc:
             log.warning("collect script %s failed: %s", name, exc)
-            if not subdir:  # a marker in collect-<k>/ would hide an empty collect
-                local = out / "hosts" / name
-                local.mkdir(parents=True, exist_ok=True)
-                (local / COLLECT_ERROR_FILE).write_text(f"{exc}\n")
         try:
             remote.rsync_from(
                 name,
@@ -5223,11 +5033,7 @@ def cmd_destroy(
     now: datetime | None = None,
     clock: nb.Clock = nb.SYSTEM_CLOCK,
 ) -> int:
-    if (args.dir is not None) == args.orphans:
-        raise Refused("destroy takes either DIR or --orphans")
-    if args.orphans:
-        return destroy_orphans(run, args, now or datetime.now(UTC), clock)
-    return destroy_run(run, args, clock)
+    return destroy_orphans(run, args, now or datetime.now(UTC), clock)
 
 
 def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
@@ -5239,7 +5045,13 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
     for path in sorted((fleet_dir / RUNS_DIR).glob("*/manifest.json")):
         print(f"- {path.parent.name}: phase {nb.read_json(path)['phase']}")
     if manifest["phase"] in LIVE_PHASES:
-        print_fleet_live(fleet_dir, manifest, now)
+        print(
+            f"- expires {manifest['expires_at'][:16]} UTC, "
+            f"{minutes_left(manifest, now):.0f} min left"
+        )
+        lock_path = fleet_dir / FLEET_LOCK
+        if lock_path.exists():
+            print(f"- lock: {describe_lock(nb.read_json(lock_path))}")
     if manifest["phase"] == "planned":
         print("- no instances: planned only")
         return EXIT_OK
@@ -5263,20 +5075,21 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
         i["id"] == ctl["instance_id"] and i["state"] == "running" for i in instances
     ):
         remote = Remote(run, fleet_dir, ssh_key_path(fleet_dir), hosts)
-        print(f"- agent: {format_agent(read_agent_state(remote))}")
-    print_stores(run, manifest)
-    print(f"- cost: {status_cost(run, manifest, instances, now)}")
-    return EXIT_OK
-
-
-def print_stores(run: Runner, manifest: FleetManifest) -> None:
-    """The Postgres volume and the rds instance of the fleet, if it has them."""
+        state = read_agent_state(remote)
+        agent = (
+            "no state file"
+            if state is None
+            else f"{state['phase']}, {state.get('progress', state['detail'])}"
+        )
+        print(f"- agent: {agent}")
     if "pg_volume_id" in manifest:
         volume = manifest["pg_volume_id"]
         print(f"- pg volume {volume}: {volume_state(run, volume)}")
     if "rds" in manifest:
         rds = manifest["rds"]
         print(f"- rds {rds['identifier']}: {rds_state(run, rds)}")
+    print(f"- cost: {status_cost(run, manifest, instances, now)}")
+    return EXIT_OK
 
 
 def volume_state(run: Runner, volume: str) -> str:
@@ -5299,8 +5112,8 @@ def volume_state(run: Runner, volume: str) -> str:
 
 
 def rds_state(run: Runner, rds: RdsInfo) -> str:
-    """`available, parameters in-sync, schedule armed`; `gone` once the schedule or a destroy
-    has deleted the instance."""
+    """`available, parameters in-sync`; `gone` once the schedule or a destroy has deleted the
+    instance."""
     out = aws_ok(
         run,
         PROFILE,
@@ -5318,49 +5131,7 @@ def rds_state(run: Runner, rds: RdsInfo) -> str:
         return "gone"
     instance = json.loads(out)["DBInstances"][0]
     applied = instance["DBParameterGroups"][0]["ParameterApplyStatus"]
-    return (
-        f"{instance['DBInstanceStatus']}, parameters {applied}, "
-        f"schedule {schedule_state(run, rds)}"
-    )
-
-
-def schedule_state(run: Runner, rds: RdsInfo) -> str:
-    """`armed` while the one-shot delete is enabled, `gone` after it fired or was deleted."""
-    out = aws_ok(
-        run,
-        PROFILE,
-        "scheduler",
-        "get-schedule",
-        "--region",
-        REGION,
-        "--group-name",
-        rds["schedule_group"],
-        "--name",
-        rds["schedule_name"],
-        "--output",
-        "json",
-        tolerate="ResourceNotFoundException",
-    )
-    if not out:
-        return "gone"
-    state = json.loads(out)["State"]
-    return "armed" if state == "ENABLED" else state.lower()
-
-
-def print_fleet_live(fleet_dir: Path, manifest: FleetManifest, now: datetime) -> None:
-    print(
-        f"- expires {manifest['expires_at'][:16]} UTC, "
-        f"{minutes_left(manifest, now):.0f} min left"
-    )
-    lock_path = fleet_dir / FLEET_LOCK
-    if lock_path.exists():
-        print(f"- lock: {describe_lock(nb.read_json(lock_path))}")
-
-
-def format_agent(state: AgentState | None) -> str:
-    if state is None:
-        return "no state file"
-    return f"{state['phase']}, {state.get('progress', state['detail'])}"
+    return f"{instance['DBInstanceStatus']}, parameters {applied}"
 
 
 def status_cost(
@@ -5413,14 +5184,10 @@ def destroy_run(run: Runner, args: argparse.Namespace, clock: nb.Clock) -> int:
     update_manifest(fleet.manifest_path, "destroying")
     if not destroy_fleet(fleet):
         update_manifest(fleet.manifest_path, "left-running")
-        log.error("resources may remain, run: aws-bench destroy %s", fleet_dir)
+        log.error(LEFTOVER_MESSAGE, fleet_dir)
         return EXIT_LEFTOVER
     cost = close_fleet(fleet, True)
     release_fleet_lock(fleet_dir)
-    append_index(
-        fleet_dir.parent,
-        fleet_index_row(manifest, len(run_dirs(fleet_dir)), cost, EXIT_OK),
-    )
     log_down(fleet_dir, cost)
     return EXIT_OK
 
@@ -5669,8 +5436,7 @@ def group_runs(
 
 
 def later(a: str | None, b: str | None) -> str | None:
-    """The later of two ISO timestamps. `extend` retags in batches, so a fleet can carry two
-    expiries for a while, and the later one is the one to judge by."""
+    """The later of two ISO timestamps."""
     if a is None or b is None:
         return a or b
     return max(a, b, key=datetime.fromisoformat)
@@ -5747,19 +5513,6 @@ def accrued_usd(
     return total
 
 
-RESOURCE_LABELS = {"volume": "volumes", "db": "rds", "role": "iam"}
-
-
-def resource_summary(tagged: TaggedRun) -> str:
-    """`5 instances, 6 volumes, 1 rds, 4 other`; kinds that are absent are left out."""
-    kinds = Counter(arn_parts(arn)[0] for arn in tagged["arns"])
-    parts = [f"{len(tagged['instances'])} instances"]
-    parts += [f"{kinds[k]} {label}" for k, label in RESOURCE_LABELS.items() if kinds[k]]
-    other = len(tagged["arns"]) - len(tagged["instances"])
-    other -= sum(kinds[k] for k in RESOURCE_LABELS)
-    return ", ".join([*parts, f"{other} other"])
-
-
 def format_runs(
     runs: list[TaggedRun], prices: dict[str, float], now: datetime
 ) -> list[str]:
@@ -5772,12 +5525,13 @@ def format_runs(
         launched = min((i["launch"] for i in instances), default="-")[:16]
         usd = accrued_usd(instances, prices, now)
         cost = "-" if not instances else "n/a" if usd is None else f"{usd:.2f}"
+        kinds = Counter(arn_parts(arn)[0] for arn in tagged["arns"])
         cells = [
             tagged["name"],
             tagged["owner"] or "-",
             launched,
             (tagged["expires"] or "-")[:16],
-            resource_summary(tagged),
+            ", ".join(f"{n} {kind}" for kind, n in sorted(kinds.items())),
             cost,
             tagged["orphan"] or "",
         ]
@@ -6065,41 +5819,6 @@ def collect_rds_metrics(
     )
 
 
-def collect_rds_insights(
-    run: Runner, rds: RdsInfo, t0: float, t1: float, out: Path
-) -> None:
-    """`cloudwatch/pi.json`: database load by wait event."""
-    start, end = metric_window(t0, t1)
-    queries = [
-        {"Metric": "db.load.avg", "GroupBy": {"Group": "db.wait_event", "Limit": 10}}
-    ]
-    stdout = aws_ok(
-        run,
-        PROFILE,
-        "pi",
-        "get-resource-metrics",
-        "--region",
-        REGION,
-        "--service-type",
-        "RDS",
-        "--identifier",
-        rds["resource_id"],
-        "--metric-queries",
-        json.dumps(queries),
-        "--start-time",
-        datetime.fromtimestamp(start, UTC).isoformat(),
-        "--end-time",
-        datetime.fromtimestamp(end, UTC).isoformat(),
-        "--period-in-seconds",
-        str(CLOUDWATCH_PERIOD_S),
-        "--output",
-        "json",
-    )
-    path = out / PI_FILE
-    path.parent.mkdir(exist_ok=True)
-    nb.write_json(path, json.loads(stdout))
-
-
 def collect_rds_logs(
     run: Runner, rds: RdsInfo, t0: float, t1: float, out: Path
 ) -> None:
@@ -6240,7 +5959,6 @@ def load_evidence(
         "journal_bytes": {},
         "clock_offset_ms": {},
         "digest_mismatch": {},
-        "collect_failed": [],
         "ebs_balance_min": {},
     }
     balance = run_dir / EC2_NODE0_FILE
@@ -6258,9 +5976,6 @@ def load_evidence(
             stats[name], evidence["coverage"][name] = host_sample_stats(
                 list(nb.read_jsonl(samples)), t0, t1
             )
-        marker = host_dir / COLLECT_ERROR_FILE
-        if marker.exists():
-            evidence["collect_failed"].append(name)
         journal = host_dir / "du-journal.txt"
         if spec["role"] != "ctl" and journal.exists():
             evidence["journal_bytes"][name] = parse_du_bytes(journal.read_text())
@@ -6393,7 +6108,7 @@ def check_validity_aws(
 ) -> nb.Validity:
     """`result["validity"]` (netbench's own rules) plus the fleet rules: invalid on missing host
     samples, a digest that differs from the manifest or a clock offset above
-    CLOCK_OFFSET_INVALID_MS; noisy on a failed collect script, start spread, clock offset, ctl
+    CLOCK_OFFSET_INVALID_MS; noisy on start spread, clock offset, ctl
     CPU, journal size, steal or node0's EBS balance below 100% (also when it has no datapoints
     or was not collected)."""
     invalid: list[str] = []
@@ -6401,10 +6116,6 @@ def check_validity_aws(
     for host, frac in evidence["coverage"].items():
         if frac < nb.SCRAPE_OK_MIN:
             invalid.append(f"{host} host samples cover only {frac:.0%} of the window")
-    # Files after the failing step are missing and their checks skipped: noisy, since the
-    # measurement itself stands.
-    for host in evidence["collect_failed"]:
-        noisy.append(f"{host} collect script failed (see {COLLECT_ERROR_FILE})")
     for host, names in evidence["digest_mismatch"].items():
         if names:
             invalid.append(
@@ -6463,16 +6174,13 @@ def write_failure_summary(run_dir: Path, manifest: Manifest, error: str | None) 
         path = run_dir / "hosts" / spec["name"] / "espresso-node.log.gz"
         if path.exists():
             try:
-                tail = [line[:300] for line in log_tail(path, FAILURE_LOG_LINES)]
+                with gzip.open(path, "rt", errors="replace") as log_file:
+                    tail_lines = log_file.read().splitlines()[-FAILURE_LOG_LINES:]
+                tail = [line[:300] for line in tail_lines]
             except (OSError, EOFError) as exc:  # a log cut off by a timed-out collect
                 tail = [f"log unreadable: {exc}"]
             lines += [f"Last log lines of {spec['name']}:", "", "```", *tail, "```", ""]
     (run_dir / "summary.md").write_text("\n".join(lines))
-
-
-def log_tail(path: Path, count: int) -> list[str]:
-    with gzip.open(path, "rt", errors="replace") as f:
-        return f.read().splitlines()[-count:]
 
 
 def tagged_resources(
@@ -6872,7 +6580,6 @@ def index_row(
     code: int,
     cost: dict[str, float] | None,
 ) -> str:
-    """One measurement. The fleet rows written by `fleet_index_row` share the file."""
     rate = decided = kept_up = lag = "-"
     status = "failed"
     if result is not None:
@@ -6904,22 +6611,6 @@ def index_row(
         status,
         str(code),
         f"{cost['usd']:.2f}" if cost else "-",
-    ]
-    return "| " + " | ".join(cells) + " |\n"
-
-
-def fleet_index_row(
-    manifest: FleetManifest, runs: int, cost: dict[str, float] | None, code: int
-) -> str:
-    """`fleet | utc | git | runs | bound | actual | exit`, written when the fleet is destroyed."""
-    cells = [
-        manifest["name"],
-        manifest["created_at"][:16],
-        manifest["git_rev"][:10],
-        str(runs),
-        f"{manifest['estimate']['bound_usd']:.2f}",
-        f"{cost['actual']:.2f}" if cost else "-",
-        str(code),
     ]
     return "| " + " | ".join(cells) + " |\n"
 
@@ -7117,9 +6808,6 @@ def host_sample(
     return {
         "ts": clock.time(),
         "cpu": nb.usable_cpu_jiffies(),
-        "load1": float(Path("/proc/loadavg").read_text().split()[0]),
-        "psi_cpu": nb.psi("cpu"),
-        "psi_io": nb.psi("io"),
         "mem_avail": nb.meminfo()["MemAvailable"],
         "procs": container_stats(containers, cgroup_root),
         "disk": diskstats(Path("/proc/diskstats").read_text()),
@@ -7127,17 +6815,8 @@ def host_sample(
     }
 
 
-def pg_sample_sql(has_checkpointer: bool) -> str:
-    """One json object of cumulative counters. PG17 moved checkpoint counters from
-    pg_stat_bgwriter to pg_stat_checkpointer; both are reported under the new names."""
-    checkpoints = (
-        "'num_timed', c.num_timed, 'num_requested', c.num_requested, "
-        "'buffers_written', c.buffers_written"
-        if has_checkpointer
-        else "'num_timed', b.checkpoints_timed, 'num_requested', b.checkpoints_req, "
-        "'buffers_written', b.buffers_checkpoint"
-    )
-    checkpointer = ", pg_stat_checkpointer c" if has_checkpointer else ""
+def pg_sample_sql() -> str:
+    """One json object of cumulative counters."""
     backends = (
         "from pg_stat_activity where datname = 'espresso' and pid <> pg_backend_pid()"
     )
@@ -7152,7 +6831,8 @@ def pg_sample_sql(has_checkpointer: bool) -> str:
         "'tup_deleted', d.tup_deleted, 'temp_bytes', d.temp_bytes, "
         "'deadlocks', d.deadlocks, 'active_time', d.active_time, "
         "'idle_in_transaction_time', d.idle_in_transaction_time, "
-        f"{checkpoints}, "
+        "'num_timed', c.num_timed, 'num_requested', c.num_requested, "
+        "'buffers_written', c.buffers_written, "
         "'buffers_clean', b.buffers_clean, 'maxwritten_clean', b.maxwritten_clean, "
         f"'active_backends', (select count(*) {backends} and state = 'active'), "
         "'ssl_backends', (select coalesce(jsonb_object_agg(ssl::text, n), '{}'::jsonb) from "
@@ -7164,31 +6844,20 @@ def pg_sample_sql(has_checkpointer: bool) -> str:
         "'database_bytes', pg_database_size('espresso')) "
         "|| (select jsonb_object_agg(key, value) from jsonb_each(to_jsonb(w)) "
         f"where key in ({wal_keys})))::text "
-        f"from pg_stat_database d, pg_stat_bgwriter b, pg_stat_wal w{checkpointer} "
+        "from pg_stat_database d, pg_stat_bgwriter b, pg_stat_wal w, "
+        "pg_stat_checkpointer c "
         "where d.datname = 'espresso'"
     )
 
 
-def pg_sample(
-    run: Runner, pg: PgEndpoint, has_checkpointer: bool, clock: nb.Clock
-) -> dict[str, Any] | None:
+def pg_sample(run: Runner, pg: PgEndpoint, clock: nb.Clock) -> dict[str, Any] | None:
     """None when psql fails (Postgres not up yet, or stopped at freeze)."""
     argv, env = psql_argv(pg)
-    result = run([*argv, "-At", "-c", pg_sample_sql(has_checkpointer)], env)
+    result = run([*argv, "-At", "-c", pg_sample_sql()], env)
     if result.returncode != 0:
         log.debug("pg sample failed: %s", result.stderr.strip())
         return None
     return {"ts": clock.time(), **json.loads(result.stdout)}
-
-
-def has_checkpointer_view(run: Runner, pg: PgEndpoint) -> bool | None:
-    probe = "select to_regclass('pg_stat_checkpointer') is not null"
-    argv, env = psql_argv(pg)
-    result = run([*argv, "-At", "-c", probe], env)
-    if result.returncode != 0:
-        log.debug("pg probe failed: %s", result.stderr.strip())
-        return None
-    return result.stdout.strip() == "t"
 
 
 def sample_pg(
@@ -7198,15 +6867,11 @@ def sample_pg(
     run: Runner = _run,
     clock: nb.Clock = nb.SYSTEM_CLOCK,
 ) -> None:
-    has_checkpointer = None
     with out.open("a", buffering=1) as f:
         while not stop.is_set():
-            if has_checkpointer is None:
-                has_checkpointer = has_checkpointer_view(run, pg)
-            if has_checkpointer is not None:
-                sample = pg_sample(run, pg, has_checkpointer, clock)
-                if sample is not None:
-                    f.write(json.dumps(sample) + "\n")
+            sample = pg_sample(run, pg, clock)
+            if sample is not None:
+                f.write(json.dumps(sample) + "\n")
             clock.wait(stop, PG_SAMPLE_S)
 
 
@@ -7241,7 +6906,7 @@ def main() -> int:
     argv = sys.argv[1:]
     args = parse_args(argv)
     args.argv = argv
-    if args.command in ("status", "destroy", "down", "extend"):
+    if args.command in ("status", "destroy", "down"):
         logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         return args.func(args)

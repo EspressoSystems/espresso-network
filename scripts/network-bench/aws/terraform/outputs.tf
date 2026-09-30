@@ -10,18 +10,6 @@ output "hosts" {
   }
 }
 
-output "az" {
-  value = var.az
-}
-
-output "ami_id" {
-  value = var.ami_id
-}
-
-output "security_group_id" {
-  value = aws_security_group.this.id
-}
-
 output "pg_volume_id" {
   description = "Volume id of the query host's Postgres volume; null without one."
   value = one(flatten([
@@ -35,10 +23,6 @@ output "rds" {
     identifier     = aws_db_instance.this[0].identifier
     endpoint       = aws_db_instance.this[0].address
     port           = aws_db_instance.this[0].port
-    resource_id    = aws_db_instance.this[0].resource_id
-    arn            = aws_db_instance.this[0].arn
     engine_version = aws_db_instance.this[0].engine_version_actual
-    schedule_group = aws_scheduler_schedule_group.this[0].name
-    schedule_name  = aws_scheduler_schedule.rds_delete[0].name
   }
 }

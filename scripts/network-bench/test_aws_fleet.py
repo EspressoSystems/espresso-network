@@ -25,7 +25,6 @@ from typing import ClassVar
 
 import netbench
 from fakes import (
-    FLEET_ARNS,
     FakeClock,
     FakeRunner,
     FleetRunner,
@@ -217,7 +216,6 @@ class UpTest(unittest.TestCase):
         self.assertEqual(harness.up(runner), awsb.EXIT_FAILED)
         self.assertTrue(runner.ran("tofu", "destroy"))
         self.assertIn("InsufficientInstanceCapacity", harness.driver_log())
-        self.assertRegex(harness.index()[-1], r"^\| fleet1 \| .* \| 0 \| .* \| 3 \|$")
 
     def test_apply_failure_with_a_failed_destroy_exits_4(self):
         harness = FleetHarness(self)
@@ -228,7 +226,7 @@ class UpTest(unittest.TestCase):
         )
         self.assertEqual(harness.up(runner), awsb.EXIT_LEFTOVER)
         last = harness.driver_log().splitlines()[-1]
-        self.assertTrue(last.endswith(f"aws-bench destroy {harness.fleet_dir}"))
+        self.assertTrue(last.endswith(f"aws-bench down {harness.fleet_dir}"))
 
     def test_declined_prompt_creates_nothing(self):
         harness = FleetHarness(self)
@@ -421,7 +419,7 @@ class RunOnFleetTest(unittest.TestCase):
             harness.run(runner, "--force")
 
     # REQ:fleet-single-shot-unchanged
-    def test_single_shot_does_not_reset_and_writes_both_index_rows(self):
+    def test_single_shot_does_not_reset_and_writes_its_index_row(self):
         harness = FleetHarness(self)
         runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
         args = harness.single_shot_args()
@@ -429,9 +427,8 @@ class RunOnFleetTest(unittest.TestCase):
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertFalse(runner.ran("find /data/journal"))
         self.assertEqual(harness.fleet()["db_modes"], ["colocated"])
-        run_row, fleet_row = harness.index()
+        (run_row,) = harness.index()
         self.assertIn("| colocated |", run_row)
-        self.assertTrue(fleet_row.startswith("| fleet1 |"))
         self.assertFalse(harness.lock().exists())
 
 
@@ -485,12 +482,14 @@ class RunRefusalTest(unittest.TestCase):
         with self.assertRaisesRegex(awsb.Refused, "was not provisioned"):
             awsb.check_run_allowed(manifest, cfg, datetime.now(UTC))
 
-    def test_ttl_too_short_names_extend_with_the_minutes(self):
+    def test_ttl_too_short_names_the_minutes(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         expires = datetime.now(UTC) + timedelta(minutes=10)
         harness.set_fleet(expires_at=awsb.expiry_stamp(expires))
-        self.refused(harness, runner, rf"extend {harness.fleet_dir} --ttl-min \d\d")
+        self.refused(
+            harness, runner, r"\d\d min left.*needs up to \d\d: up a new fleet"
+        )
 
     def test_the_lockout_window_counts_against_the_ttl(self):
         harness = FleetHarness(self)
@@ -500,7 +499,7 @@ class RunRefusalTest(unittest.TestCase):
         worst = awsb.estimate_run(manifest, cfg)["worst_s"]
         now = datetime.now(UTC)
         without_lockout = now + timedelta(seconds=worst + awsb.DESTROY_S + 60)
-        with self.assertRaisesRegex(awsb.Refused, "extend"):
+        with self.assertRaisesRegex(awsb.Refused, "up a new fleet"):
             awsb.check_run_allowed(
                 {**manifest, "expires_at": awsb.expiry_stamp(without_lockout)},
                 cfg,
@@ -713,7 +712,7 @@ class TagPullTest(unittest.TestCase):
         self.assertEqual(harness.run(runner), awsb.EXIT_OK)
         mark = len(runner.calls)
         harness.set_fleet(expires_at=awsb.expiry_stamp(expires))
-        with self.assertRaisesRegex(awsb.Refused, "extend"):
+        with self.assertRaisesRegex(awsb.Refused, "up a new fleet"):
             harness.run(runner, "--tag", "other")
         self.assertEqual(ssh_calls(runner, mark), [])
 
@@ -1130,141 +1129,6 @@ class RunEstimateTest(unittest.TestCase):
             3600.0 + awsb.TTL_MARGIN_S,
         )
 
-    def test_fleet_bound_grows_with_the_expiry(self):
-        harness = FleetHarness(self)
-        harness.up_fleet(self)
-        manifest = harness.fleet()
-        expires = datetime.fromisoformat(manifest["expires_at"])
-        base = awsb.fleet_bound_usd(manifest, expires)
-        later = awsb.fleet_bound_usd(manifest, expires + timedelta(hours=1))
-        self.assertAlmostEqual(
-            later - base, awsb.estimate_rate(manifest["estimate"]), places=6
-        )
-
-
-# REQ:fleet-extend-rearm
-class ExtendTest(unittest.TestCase):
-    def extend(self, harness, runner, minutes: int, now: datetime | None = None):
-        args = harness.parse(
-            "extend", str(harness.fleet_dir), "--ttl-min", str(minutes)
-        )
-        return awsb.cmd_extend(args, run=runner, now=now)
-
-    def test_rearms_every_host_and_moves_the_expiry(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        now = datetime.now(UTC)
-        mark = len(runner.calls)
-        self.assertEqual(self.extend(harness, runner, 240, now), awsb.EXIT_OK)
-        commands = ssh_calls(runner, mark)
-        rearm = [c for c in commands if "shutdown -c; shutdown -P +240" in c]
-        self.assertEqual(len(rearm), 3)
-        stamp = awsb.expiry_stamp(now + timedelta(minutes=240))
-        self.assertEqual(harness.fleet()["expires_at"], stamp)
-        self.assertEqual(harness.fleet()["phase"], "idle")
-
-    def test_retags_every_arn_of_the_fleet_in_batches(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        extra = [f"arn:aws:ec2:eu-west-1:1:volume/vol-{i:03d}" for i in range(42)]
-        runner.respond(
-            "get-resources",
-            lambda argv: completed(stdout=json.dumps(FLEET_ARNS + extra)),
-        )
-        now = datetime.now(UTC)
-        self.extend(harness, runner, 240, now)
-        tagged = [c for c in runner.calls if "tag-resources" in c]
-        self.assertEqual(len(tagged), 3)
-        per_call = [[a for a in c if a.startswith("arn:")] for c in tagged]
-        self.assertEqual(sum(map(len, per_call)), 45)
-        self.assertTrue(all(len(arns) <= 20 for arns in per_call))
-        stamp = awsb.expiry_stamp(now + timedelta(minutes=240))
-        self.assertTrue(all(f"{awsb.TAG_EXPIRES}={stamp}" in c for c in tagged))
-
-    def test_a_failed_arn_is_logged_and_does_not_undo_the_extension(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        failed = completed(stdout=json.dumps({"FailedResourcesMap": {"arn:x": {}}}))
-        now = datetime.now(UTC)
-        with (
-            unittest.mock.patch.object(
-                awsb, "tagged_resources", return_value=["arn:x", "arn:y"]
-            ),
-            unittest.mock.patch.object(runner, "aws", return_value=failed),
-        ):
-            self.assertEqual(self.extend(harness, runner, 240, now), awsb.EXIT_OK)
-        stamp = awsb.expiry_stamp(now + timedelta(minutes=240))
-        self.assertEqual(harness.fleet()["expires_at"], stamp)
-        self.assertRegex(harness.driver_log(), r"WARNING.*arn:x")
-
-    def test_a_tagging_error_leaves_the_recorded_expiry_with_the_hosts(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        now = datetime.now(UTC)
-        throttled = completed(returncode=254, stderr="Throttling")
-        with (
-            unittest.mock.patch.object(
-                awsb, "tagged_resources", return_value=["arn:x"]
-            ),
-            unittest.mock.patch.object(runner, "aws", return_value=throttled),
-            self.assertRaisesRegex(awsb.RemoteError, "Throttling"),
-        ):
-            self.extend(harness, runner, 240, now)
-        stamp = awsb.expiry_stamp(now + timedelta(minutes=240))
-        self.assertEqual(harness.fleet()["expires_at"], stamp)
-
-    def test_the_new_bound_is_recorded(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        before = harness.fleet()["estimate"]["bound_usd"]
-        self.extend(harness, runner, 240)
-        manifest = harness.fleet()
-        self.assertGreater(manifest["estimate"]["bound_usd"], before)
-        expires = datetime.fromisoformat(manifest["expires_at"])
-        self.assertAlmostEqual(
-            manifest["estimate"]["bound_usd"], awsb.fleet_bound_usd(manifest, expires)
-        )
-        self.assertRegex(
-            harness.driver_log(), r"expires \d\d:\d\d UTC, bound \$\d+\.\d\d"
-        )
-
-    def test_over_budget_is_refused_before_any_change(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        mark = len(runner.calls)
-        before = harness.fleet()
-        with self.assertRaisesRegex(awsb.Refused, r"exceeds the fleet's --max-usd"):
-            self.extend(harness, runner, 72 * 60)
-        self.assertEqual(ssh_calls(runner, mark), [])
-        self.assertEqual(harness.fleet(), before)
-
-    def test_inside_the_nologin_window_is_refused(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        expires = datetime.fromisoformat(harness.fleet()["expires_at"])
-        now = expires - timedelta(seconds=awsb.NOLOGIN_LEAD_S - 30)
-        mark = len(runner.calls)
-        with self.assertRaisesRegex(awsb.Refused, "locked out"):
-            self.extend(harness, runner, 240, now)
-        self.assertEqual(ssh_calls(runner, mark), [])
-
-    def test_an_earlier_expiry_is_refused(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        with self.assertRaisesRegex(awsb.Refused, "not after the expiry"):
-            self.extend(harness, runner, 30)
-
-    def test_a_destroyed_fleet_cannot_be_extended(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        harness.set_fleet(phase="done")
-        with self.assertRaisesRegex(awsb.Refused, "not live"):
-            self.extend(harness, runner, 240)
-
-    def test_minutes_must_be_positive(self):
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            awsb.parse_args(["extend", "x", "--ttl-min", "0"])
-
 
 # REQ:fleet-down
 class DownTest(unittest.TestCase):
@@ -1272,7 +1136,7 @@ class DownTest(unittest.TestCase):
         args = harness.parse("down", str(harness.fleet_dir), "--yes", *extra)
         return awsb.cmd_down(args, run=runner, clock=FakeClock())
 
-    def test_down_destroys_prices_and_appends_the_fleet_row(self):
+    def test_down_destroys_and_prices(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         harness.run(runner)
@@ -1282,12 +1146,6 @@ class DownTest(unittest.TestCase):
         cost = json.loads((harness.fleet_dir / "cost.json").read_text())
         self.assertGreater(cost["actual"], 0)
         self.assertEqual(harness.fleet()["phase"], "done")
-        rows = harness.index()
-        self.assertEqual(len(rows), 3)
-        self.assertRegex(
-            rows[2],
-            rf"^\| fleet1 \| \S+ \| a{{10}} \| 2 \| [\d.]+ \| {cost['actual']:.2f} \| 0 \|$",
-        )
         log = harness.driver_log()
         self.assertRegex(
             log, r"destroyed; actual cost \$\d+\.\d\d \(bound \$\d+\.\d\d\); 2 runs"
@@ -1296,7 +1154,7 @@ class DownTest(unittest.TestCase):
         self.assertIn("- 02-colocated: valid, $", log)
         self.assertFalse(harness.lock().exists())
 
-    def test_leftover_after_failed_destroys_exits_4_without_a_fleet_row(self):
+    def test_leftover_after_failed_destroys_exits_4(self):
         harness = FleetHarness(self)
         runner = harness.up_fleet(self)
         runner.destroys = [completed(returncode=1, stderr="locked")]
@@ -1329,15 +1187,6 @@ class DownTest(unittest.TestCase):
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
             awsb.cmd_down(args, run=runner, clock=FakeClock())
         self.assertFalse(runner.ran("tofu", "destroy"))
-
-    def test_destroy_dir_is_the_same_command(self):
-        harness = FleetHarness(self)
-        runner = harness.up_fleet(self)
-        args = harness.parse("destroy", str(harness.fleet_dir), "--yes")
-        self.assertEqual(
-            awsb.cmd_destroy(args, run=runner, clock=FakeClock()), awsb.EXIT_OK
-        )
-        self.assertEqual(harness.fleet()["phase"], "done")
 
 
 class StatusTest(unittest.TestCase):
@@ -1413,18 +1262,9 @@ RDS_OUTPUT = {
     "identifier": "espresso-bench-fleet1",
     "endpoint": "espresso-bench-fleet1.abc.eu-west-1.rds.amazonaws.com",
     "port": 5432,
-    "resource_id": "db-ABCDEF",
-    "arn": "arn:aws:rds:eu-west-1:1:db:espresso-bench-fleet1",
     "engine_version": "18.2",
-    "schedule_group": "espresso-bench-fleet1",
-    "schedule_name": "rds-delete",
 }
 RDS_CREATED = "2026-09-30T11:05:00+00:00"
-SCHEDULE_TARGET = {
-    "Arn": "arn:aws:scheduler:::aws-sdk:rds:deleteDBInstance",
-    "RoleArn": "arn:aws:iam::1:role/espresso-bench/espresso-bench-fleet1",
-    "Input": "{}",
-}
 
 
 def db_instance(state: str = "available", applied: str = "in-sync") -> dict:
@@ -1471,7 +1311,7 @@ def mode(path: Path) -> int:
 
 
 class RdsRunner(FleetRunner):
-    """`FleetRunner` with the rds output of `tofu`, and the `aws rds`, `scheduler`, `pi`
+    """`FleetRunner` with the rds output of `tofu`, and the `aws rds`
     and CloudWatch calls an rds fleet makes. `instances` are the successive
     describe-db-instances answers; the last one repeats."""
 
@@ -1479,14 +1319,12 @@ class RdsRunner(FleetRunner):
         self,
         *args,
         instances: list[dict] | None = None,
-        schedule: dict | None = None,
         events: list[dict] | None = None,
         logs: list[dict] | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.instances = instances or [db_instance()]
-        self.schedule = schedule or {"State": "ENABLED", "Target": SCHEDULE_TARGET}
         self.events = events or []
         self.logs = logs or []
         self.metrics = rds_metric_data()
@@ -1508,21 +1346,16 @@ class RdsRunner(FleetRunner):
                 else:
                     instance = self.instances[0]
             return completed(stdout=json.dumps({"DBInstances": [instance]}))
-        if "get-schedule" in argv:
-            return completed(stdout=json.dumps(self.schedule))
         if "describe-events" in argv:
             return completed(stdout=json.dumps({"Events": self.events}))
         if "get-metric-data" in argv and "AWS/RDS" in " ".join(argv):
             return completed(stdout=self.metrics)
-        if "get-resource-metrics" in argv:
-            body = {"MetricList": [{"Key": "db.load.avg"}]}
-            return completed(stdout=json.dumps(body))
         if "describe-db-log-files" in argv:
             return completed(stdout=json.dumps({"DescribeDBLogFiles": self.logs}))
         if "download-db-log-file-portion" in argv:
             name = argv[argv.index("--log-file-name") + 1]
             return completed(stdout=f"log of {name}\n")
-        if "reboot-db-instance" in argv or "update-schedule" in argv:
+        if "reboot-db-instance" in argv:
             return completed()
         return super().aws(argv)
 
@@ -1640,7 +1473,6 @@ class RdsOrderableTest(unittest.TestCase):
             {"MinStorageSize": 500},
             {"MaxIopsPerDbInstance": 3000},
             {"MinStorageThroughputPerDbInstance": 1000},
-            {"SupportsPerformanceInsights": False},
         ):
             runner = orderable_runner(orderable(**override))
             with self.assertRaises(awsb.Refused, msg=override):
@@ -1814,31 +1646,6 @@ class RdsCostTest(unittest.TestCase):
             awsb.resolve_prices(again, cfg, cache, 60.0)
             self.assertEqual(again.calls, [])
 
-    def test_the_bound_after_an_extend_bills_the_delete_window(self):
-        harness = RdsHarness(self)
-        harness.up_rds(self)
-        manifest = harness.fleet()
-        expires = datetime.fromisoformat(manifest["expires_at"])
-        created = datetime.fromisoformat(manifest["created_at"])
-        lifetime_s = (expires - created).total_seconds()
-        prices = {
-            "instances": {
-                "c8g.4xlarge": {"usd_hour": 0.71, "source": "t"},
-                "c8g.2xlarge": {"usd_hour": 0.355, "source": "t"},
-                "db.m8g.4xlarge": {"usd_hour": 1.82, "source": "t"},
-            }
-        }
-        rds = awsb.rds_cost_lines(
-            manifest["rds_spec"], prices, self.minor, lifetime_s + awsb.RDS_DELETE_S
-        )
-        hosts = awsb._cost_lines(
-            manifest["hosts"], prices, self.minor, lifetime_s + awsb.BOOT_ALLOWANCE_S
-        )
-        self.assertAlmostEqual(
-            awsb.fleet_bound_usd(manifest, expires),
-            sum(line["usd"] for line in [*rds, *hosts]),
-        )
-
     def test_a_run_needs_time_for_the_rds_delete(self):
         harness = RdsHarness(self)
         harness.up_rds(self)
@@ -1848,7 +1655,7 @@ class RdsCostTest(unittest.TestCase):
         floor = worst_s + awsb.NOLOGIN_LEAD_S + awsb.DESTROY_S
         expires = datetime.fromisoformat(manifest["expires_at"])
         short = expires - timedelta(seconds=floor + awsb.RDS_DELETE_S - 60)
-        with self.assertRaisesRegex(awsb.Refused, "extend"):
+        with self.assertRaisesRegex(awsb.Refused, "up a new fleet"):
             awsb.check_run_allowed(manifest, cfg, short)
         enough = expires - timedelta(seconds=floor + awsb.RDS_DELETE_S + 60)
         awsb.check_run_allowed(manifest, cfg, enough)
@@ -1863,8 +1670,6 @@ class RdsTfvarsTest(unittest.TestCase):
         self.assertEqual(rds["instance_class"], "db.m8g.4xlarge")
         self.assertEqual(rds["engine_version"], "18.2")
         self.assertEqual((rds["gb"], rds["iops"], rds["mbps"]), (400, 12000, 500))
-        self.assertEqual(rds["username"], awsb.RDS_USER)
-        self.assertEqual(rds["timeout"], "25m")
         expires = datetime.fromisoformat(harness.fleet()["expires_at"])
         reaper = expires - timedelta(seconds=awsb.RDS_REAPER_LEAD_S)
         self.assertEqual(rds["delete_at"], reaper.strftime("%Y-%m-%dT%H:%M:%S"))
@@ -2067,7 +1872,6 @@ class RdsUpTest(unittest.TestCase):
         self.assertTrue(any("pg_isready" in c for c in commands))
         self.assertFalse(any("docker start" in c for c in commands))
         self.assertFalse(runner.ran("reboot-db-instance"))
-        self.assertTrue(runner.ran("scheduler", "get-schedule", "rds-delete"))
 
     def test_the_password_never_reaches_a_command_line(self):
         harness = RdsHarness(self)
@@ -2134,29 +1938,6 @@ class RdsUpTest(unittest.TestCase):
         self.assertEqual(harness.up(runner), awsb.EXIT_FAILED)
         self.assertTrue(runner.ran("tofu", "destroy"))
         self.assertFalse(runner.ran("describe-db-instances"))
-
-    def test_a_disabled_schedule_destroys_the_fleet(self):
-        harness = RdsHarness(self)
-        runner = RdsRunner(
-            [DONE_STATE], schedule={"State": "DISABLED", "Target": SCHEDULE_TARGET}
-        )
-        self.assertEqual(harness.up(runner), awsb.EXIT_FAILED)
-        self.assertIn("would outlive the fleet", harness.driver_log())
-        self.assertTrue(runner.ran("tofu", "destroy"))
-
-    def test_a_missing_schedule_destroys_the_fleet(self):
-        harness = RdsHarness(self)
-        runner = RdsRunner([DONE_STATE])
-        original = runner.aws
-
-        def aws(argv):
-            if "get-schedule" in argv:
-                return completed(returncode=254, stderr="ResourceNotFoundException")
-            return original(argv)
-
-        with unittest.mock.patch.object(runner, "aws", side_effect=aws):
-            self.assertEqual(harness.up(runner), awsb.EXIT_FAILED)
-        self.assertTrue(runner.ran("tofu", "destroy"))
 
     def test_a_null_rds_output_is_an_error(self):
         with self.assertRaisesRegex(awsb.RemoteError, "null"):
@@ -2284,7 +2065,6 @@ class CollectRdsTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp)
         for collect in (
             awsb.collect_rds_metrics,
-            awsb.collect_rds_insights,
             awsb.collect_rds_logs,
         ):
             collect(runner, RDS_OUTPUT, t0, t1, tmp)
@@ -2317,18 +2097,6 @@ class CollectRdsTest(unittest.TestCase):
         self.assertEqual(saved["identifier"], RDS_OUTPUT["identifier"])
         self.assertEqual(saved["metrics"]["CPUUtilization"]["values"], [100.0] * 3)
 
-    def test_insights_ask_for_load_by_wait_event(self):
-        runner = RdsRunner([DONE_STATE])
-        out = self.collect(runner)
-        argv = next(c for c in runner.calls if "get-resource-metrics" in c)
-        self.assertEqual(argv[argv.index("--identifier") + 1], "db-ABCDEF")
-        self.assertEqual(argv[argv.index("--service-type") + 1], "RDS")
-        query = json.loads(argv[argv.index("--metric-queries") + 1])[0]
-        self.assertEqual(query["Metric"], "db.load.avg")
-        self.assertEqual(query["GroupBy"]["Group"], "db.wait_event")
-        saved = json.loads((out / awsb.PI_FILE).read_text())
-        self.assertEqual(saved["MetricList"][0]["Key"], "db.load.avg")
-
     def test_every_log_written_since_the_load_started_is_downloaded(self):
         logs = [
             {"LogFileName": "error/postgresql.log.10", "LastWritten": 50_000},
@@ -2352,7 +2120,7 @@ class CollectRdsTest(unittest.TestCase):
         runner = harness.up_rds(self, logs=logs)
         harness.run(runner, "--query-db", "rds")
         run_dir = harness.run_dir("01-rds")
-        for name in (awsb.RDS_CLOUDWATCH_FILE, awsb.PI_FILE, awsb.EC2_NODE0_FILE):
+        for name in (awsb.RDS_CLOUDWATCH_FILE, awsb.EC2_NODE0_FILE):
             self.assertTrue((run_dir / name).exists(), name)
         self.assertTrue((run_dir / awsb.RDS_LOGS_DIR / "postgresql.log.x").exists())
 
@@ -2363,7 +2131,7 @@ class CollectRdsTest(unittest.TestCase):
         run_dir = harness.run_dir("01-colocated")
         self.assertFalse((run_dir / awsb.RDS_CLOUDWATCH_FILE).exists())
         self.assertTrue((run_dir / awsb.EC2_NODE0_FILE).exists())
-        self.assertFalse(runner.ran("get-resource-metrics"))
+        self.assertFalse(runner.ran("describe-db-log-files"))
 
     def test_a_failed_rds_call_does_not_stop_the_other_collections(self):
         harness = RdsHarness(self)
@@ -2371,15 +2139,15 @@ class CollectRdsTest(unittest.TestCase):
         original = runner.aws
 
         def aws(argv):
-            if "get-resource-metrics" in argv:
-                return completed(returncode=254, stderr="pi denied")
+            if "describe-db-log-files" in argv:
+                return completed(returncode=254, stderr="logs denied")
             return original(argv)
 
         with unittest.mock.patch.object(runner, "aws", side_effect=aws):
             self.assertEqual(harness.run(runner, "--query-db", "rds"), awsb.EXIT_OK)
         run_dir = harness.run_dir("01-rds")
         self.assertTrue((run_dir / awsb.RDS_CLOUDWATCH_FILE).exists())
-        self.assertFalse((run_dir / awsb.PI_FILE).exists())
+        self.assertFalse((run_dir / awsb.RDS_LOGS_DIR).exists())
 
 
 # REQ:querydb-rds-wiring
@@ -2390,7 +2158,6 @@ class RdsValidityTest(unittest.TestCase):
             "journal_bytes": {},
             "clock_offset_ms": {},
             "digest_mismatch": {},
-            "collect_failed": [],
             "ebs_balance_min": {"EBSByteBalance%": 100.0, "EBSIOBalance%": 100.0},
             "rds_min": rds_min,
         }
@@ -2558,70 +2325,6 @@ class QueryDbMetaTest(unittest.TestCase):
         summary = (tmp / "summary.md").read_text()
         self.assertIn(
             "- Query DB: rds, postgres 18.2 on db.m8g.4xlarge, rds-gp3", summary
-        )
-
-
-# REQ:fleet-extend-rearm
-class RdsExtendTest(unittest.TestCase):
-    def extend(self, harness, runner, now=None) -> int:
-        args = harness.parse("extend", str(harness.fleet_dir), "--ttl-min", "240")
-        return awsb.cmd_extend(args, run=runner, now=now)
-
-    def test_the_schedule_moves_with_the_expiry_and_keeps_its_target(self):
-        harness = RdsHarness(self)
-        runner = harness.up_rds(self)
-        now = datetime.now(UTC)
-        mark = len(runner.calls)
-        self.assertEqual(self.extend(harness, runner, now), awsb.EXIT_OK)
-        update = next(c for c in runner.calls[mark:] if "update-schedule" in c)
-        new = (now + timedelta(minutes=240)).replace(microsecond=0)
-        reaper = new - timedelta(seconds=awsb.RDS_REAPER_LEAD_S)
-        self.assertEqual(
-            update[update.index("--schedule-expression") + 1],
-            f"at({reaper:%Y-%m-%dT%H:%M:%S})",
-        )
-        target = json.loads(update[update.index("--target") + 1])
-        self.assertEqual(target, SCHEDULE_TARGET)
-        group = update[update.index("--group-name") + 1]
-        self.assertEqual(group, RDS_OUTPUT["schedule_group"])
-        commands = [" ".join(c) for c in runner.calls[mark:]]
-        rearm = next(i for i, c in enumerate(commands) if "shutdown -c" in c)
-        moved = next(i for i, c in enumerate(commands) if "update-schedule" in c)
-        tagged = next(i for i, c in enumerate(commands) if "tag-resources" in c)
-        self.assertLess(rearm, moved)
-        self.assertLess(moved, tagged)
-
-    def test_an_instance_the_schedule_already_deleted_fails_the_extend_unchanged(self):
-        harness = RdsHarness(self)
-        runner = harness.up_rds(self)
-        original = runner.aws
-
-        def aws(argv):
-            if "describe-db-instances" in argv:
-                return completed(returncode=254, stderr="DBInstanceNotFound")
-            return original(argv)
-
-        mark = len(runner.calls)
-        before = harness.fleet()
-        with (
-            unittest.mock.patch.object(runner, "aws", side_effect=aws),
-            self.assertRaisesRegex(awsb.RemoteError, "DBInstanceNotFound"),
-        ):
-            self.extend(harness, runner)
-        self.assertEqual(ssh_calls(runner, mark), [])
-        self.assertFalse(runner.ran("update-schedule"))
-        self.assertEqual(harness.fleet(), before)
-
-    def test_the_bound_counts_the_rds_instance(self):
-        harness = RdsHarness(self)
-        runner = harness.up_rds(self)
-        before = harness.fleet()["estimate"]["bound_usd"]
-        self.extend(harness, runner)
-        manifest = harness.fleet()
-        expires = datetime.fromisoformat(manifest["expires_at"])
-        self.assertGreater(manifest["estimate"]["bound_usd"], before)
-        self.assertAlmostEqual(
-            manifest["estimate"]["bound_usd"], awsb.fleet_bound_usd(manifest, expires)
         )
 
 
@@ -3007,14 +2710,15 @@ class GroupRdsRunsTest(unittest.TestCase):
         self.assertEqual(runs[0]["arns"], [lone])
         self.assertIn(ROLE_ARN, runs[1]["arns"])
 
-    def test_summary_names_volumes_rds_and_iam(self):
+    def test_resource_counts_name_each_kind(self):
         mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
         (tagged,) = awsb.group_runs(
             mappings, [instance_row("i-1")], ["vol-1"], [ROLE_ARN]
         )
         self.assertEqual(
-            awsb.resource_summary(tagged),
-            "1 instances, 1 volumes, 1 rds, 1 iam, 5 other",
+            awsb.format_runs([tagged], {}, SWEEP_NOW)[2].split(" | ")[4],
+            "1 db, 1 instance, 1 key-pair, 1 pg, 1 role, 1 schedule-group, "
+            "1 security-group, 1 subgrp, 1 volume",
         )
 
 
@@ -3041,7 +2745,10 @@ class DestroyRdsOrphansTest(unittest.TestCase):
         code, text = self.destroy(runner, "--yes")
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertIn("| fleet1 | bob |", text)
-        self.assertIn("1 instances, 1 volumes, 1 rds, 1 iam, 5 other", text)
+        self.assertIn(
+            "1 db, 1 instance, 1 key-pair, 1 pg, 1 role, 1 schedule-group, 1 security-group, 1 subgrp, 1 volume",
+            text,
+        )
         self.assertTrue(text.splitlines()[2].endswith("| past expiry |"))
         verbs = aws_verbs(runner)
         self.assertIn(("rds", "delete-db-instance"), verbs)
@@ -3077,7 +2784,7 @@ class DestroyRdsOrphansTest(unittest.TestCase):
         code, text = self.destroy(runner, "--yes")
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertTrue(text.splitlines()[2].endswith("| role without resources |"))
-        self.assertIn("0 instances, 1 iam, 0 other", text)
+        self.assertIn("1 role", text)
         self.assertIn(("iam", "delete-role"), aws_verbs(runner))
 
     def test_a_role_of_a_fleet_being_provisioned_here_is_kept(self):
@@ -3110,19 +2817,13 @@ class StatusStoresTest(unittest.TestCase):
             awsb.cmd_status(harness.parse("status", str(harness.fleet_dir)), runner)
         return out.getvalue()
 
-    def test_an_rds_fleet_shows_the_instance_parameters_and_schedule(self):
+    def test_an_rds_fleet_shows_the_instance_and_parameters(self):
         harness = RdsHarness(self)
         runner = harness.up_rds(self)
         self.assertIn(
-            "- rds espresso-bench-fleet1: available, parameters in-sync, schedule armed",
+            "- rds espresso-bench-fleet1: available, parameters in-sync",
             self.status(harness, runner),
         )
-
-    def test_a_disabled_schedule_is_named(self):
-        harness = RdsHarness(self)
-        runner = harness.up_rds(self)
-        runner.schedule = {"State": "DISABLED", "Target": SCHEDULE_TARGET}
-        self.assertIn("schedule disabled", self.status(harness, runner))
 
     def test_an_instance_the_schedule_deleted_is_gone(self):
         harness = RdsHarness(self)

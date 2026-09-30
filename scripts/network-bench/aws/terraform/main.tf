@@ -216,19 +216,18 @@ resource "aws_db_instance" "this" {
   storage_throughput = var.rds.mbps
 
   db_name  = "espresso"
-  username = var.rds.username
+  username = "bench"
   password = var.rds_password
 
-  skip_final_snapshot          = true
-  deletion_protection          = false
-  backup_retention_period      = 0
-  performance_insights_enabled = true
-  apply_immediately            = true
-  auto_minor_version_upgrade   = false
+  skip_final_snapshot        = true
+  deletion_protection        = false
+  backup_retention_period    = 0
+  apply_immediately          = true
+  auto_minor_version_upgrade = false
 
   timeouts {
-    create = var.rds.timeout
-    delete = var.rds.timeout
+    create = "25m"
+    delete = "25m"
   }
 
   # The schedule is the dead-man switch: it must exist before the instance starts billing. If it

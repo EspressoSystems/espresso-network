@@ -1514,7 +1514,6 @@ class RenderUserDataTest(unittest.TestCase):
         self.assertLess(ttl, uv)
         self.assertLess(uv, python)
         self.assertIn("UV_PYTHON_INSTALL_DIR=/opt/uv/python", text)
-        self.assertIn("uv python list --only-installed", text)
 
     def test_every_image_pulled_by_digest(self):
         host = {
@@ -1929,13 +1928,10 @@ class RunFlowTest(unittest.TestCase):
         self.assertEqual(manifest["fleet"], "run1")
         self.assertEqual(manifest["cost_usd"]["actual"], cost["actual"])
         self.assertEqual(manifest["start_spread_s"], 0.0)
-        *_, run_row, fleet_row = harness.index().splitlines()
+        *_, run_row = harness.index().splitlines()
         self.assertTrue(run_row.startswith("| run1/01-run |"))
         self.assertIn("| colocated |", run_row)
         self.assertIn("| valid | 0 |", run_row)
-        self.assertRegex(
-            fleet_row, r"^\| run1 \| .* \| 1 \| \d+\.\d\d \| \d+\.\d\d \| 0 \|$"
-        )
         run_cost = json.loads((harness.run_dir / "cost.json").read_text())
         self.assertGreater(run_cost["usd"], 0)
 
@@ -2134,7 +2130,7 @@ class RunDestroyFallbackTest(unittest.TestCase):
         self.assertTrue(runner.ran("delete-security-group", "sg-1"))
         self.assertTrue(runner.ran("delete-key-pair", "key-1"))
         self.assertTrue(
-            harness.last_log_line().endswith(f"aws-bench destroy {harness.fleet_dir}")
+            harness.last_log_line().endswith(f"aws-bench down {harness.fleet_dir}")
         )
         self.assertIn("| 4 |", harness.index())
 
@@ -2209,7 +2205,7 @@ class RunTeardownGuaranteedTest(unittest.TestCase):
             code = harness.run(runner)
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertTrue(
-            harness.last_log_line().endswith(f"aws-bench destroy {harness.fleet_dir}")
+            harness.last_log_line().endswith(f"aws-bench down {harness.fleet_dir}")
         )
 
     def test_exception_in_destroy_exits_4_with_command_last(self):
@@ -2226,7 +2222,7 @@ class RunTeardownGuaranteedTest(unittest.TestCase):
             code = harness.run(runner)
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertTrue(
-            harness.last_log_line().endswith(f"aws-bench destroy {harness.fleet_dir}")
+            harness.last_log_line().endswith(f"aws-bench down {harness.fleet_dir}")
         )
 
     def test_truncated_node_log_does_not_break_the_failure_summary(self):
@@ -2532,8 +2528,7 @@ class CollectBoundTest(unittest.TestCase):
         rsyncs = [c for c in runner.calls if c[0] == "rsync"]
         self.assertEqual(len(rsyncs), 1)
         self.assertIn("collect script node0 failed", logs.output[0])
-        marker = tmp / "hosts" / "node0" / awsb.COLLECT_ERROR_FILE
-        self.assertIn("exited 124", marker.read_text())
+        self.assertIn("exited 124", logs.output[0])
 
     def test_a_failed_script_and_rsync_are_both_reported(self):
         runner = Scripted({"docker logs": [completed(returncode=124)]}, rsync_rc=23)
@@ -2544,14 +2539,6 @@ class CollectBoundTest(unittest.TestCase):
         self.assertEqual(len(logs.output), 2)
         self.assertIn("collect script node0 failed", logs.output[0])
         self.assertIn("collect node0 rsync failed", logs.output[1])
-        sub = tmp / "hosts" / "node0" / "sub"
-        self.assertFalse((sub / awsb.COLLECT_ERROR_FILE).exists())
-
-    def test_a_clean_collect_leaves_no_marker(self):
-        tmp = tmp_dir(self)
-        remote = scripted_remote(self, Scripted({}), tmp)
-        awsb.collect_hosts(remote, [remote.hosts["node0"]], tmp)
-        self.assertFalse((tmp / "hosts" / "node0" / awsb.COLLECT_ERROR_FILE).exists())
 
     def test_freeze_names_each_roles_containers(self):
         runner = Scripted({})
@@ -3125,11 +3112,10 @@ class SweepPlanTest(unittest.TestCase):
 
 class PostgresStatsTest(unittest.TestCase):
     def test_sql_is_one_shell_word_per_command(self):
-        for has_checkpointer in (True, False):
-            sql = awsb.pg_sample_sql(has_checkpointer)
-            self.assertEqual(sql.count("("), sql.count(")"))
-            self.assertEqual(sql.count("'") % 2, 0)
-            self.assertIn("pg_stat_checkpointer" in sql, [has_checkpointer])
+        sql = awsb.pg_sample_sql()
+        self.assertEqual(sql.count("("), sql.count(")"))
+        self.assertEqual(sql.count("'") % 2, 0)
+        self.assertIn("pg_stat_checkpointer", sql)
         script = awsb.PG_STATS_SCRIPT
         for name in ("pg-stats.json", "pg-statements.json", "pg-settings.json"):
             self.assertIn(f"> {awsb.BENCH_DIR}/{name}", script)
@@ -3162,7 +3148,6 @@ class PostgresStatsTest(unittest.TestCase):
         stop = threading.Event()
         replies = [
             completed(returncode=1, stderr="no such container"),
-            completed(stdout="t\n"),
             completed(returncode=1, stderr="not ready"),
             completed(stdout='{"xact_commit": 7, "wait_events": {"IO": 1}}\n'),
         ]
@@ -3184,7 +3169,7 @@ class PostgresStatsTest(unittest.TestCase):
         self.assertEqual(lines[0]["xact_commit"], 7)
         self.assertIn("ts", lines[0])
         self.assertIn("pg_stat_checkpointer", commands[-1][-1])
-        self.assertEqual(len(commands), 4)
+        self.assertEqual(len(commands), 3)
 
     def test_agent_host_role_query_starts_pg_sampler(self):
         tmp = tmp_dir(self)
@@ -3356,11 +3341,10 @@ class PgTuningTest(unittest.TestCase):
     def test_tls_is_counted_by_the_load_samples_not_the_collect_query(self):
         """Freeze stops espresso-node before the settings query, so only the sampler sees it."""
         self.assertNotIn("pg_stat_ssl", awsb.PG_SETTINGS_SQL)
-        for has_checkpointer in (True, False):
-            sql = awsb.pg_sample_sql(has_checkpointer)
-            ssl = sql[sql.index("'ssl_backends'") :]
-            self.assertIn("pg_stat_ssl", ssl)
-            self.assertIn("pid <> pg_backend_pid()", ssl)
+        sql = awsb.pg_sample_sql()
+        ssl = sql[sql.index("'ssl_backends'") :]
+        self.assertIn("pg_stat_ssl", ssl)
+        self.assertIn("pid <> pg_backend_pid()", ssl)
 
     def test_tls_is_none_without_backends(self):
         self.assertIsNone(awsb.pg_tls({}))
@@ -3434,14 +3418,6 @@ class PgValidityTest(unittest.TestCase):
         (node0 / "pg-settings.json").write_text("")
         _, evidence = awsb.load_evidence(tmp, manifest, 0.0, 1.0)
         self.assertNotIn("pg_settings", evidence)
-
-    def test_evidence_reads_the_collect_error_marker(self):
-        tmp = tmp_dir(self)
-        node0 = tmp / "hosts" / "node0"
-        node0.mkdir(parents=True)
-        (node0 / awsb.COLLECT_ERROR_FILE).write_text("boom\n")
-        _, evidence = awsb.load_evidence(tmp, aws_manifest(), 0.0, 1.0)
-        self.assertEqual(evidence["collect_failed"], ["node0"])
 
 
 # REQ:querydb-colocated-wiring
@@ -3647,7 +3623,6 @@ def clean_evidence() -> dict:
         "journal_bytes": {"node0": 1_000_000, "node1": 1_000_000},
         "clock_offset_ms": {"ctl": 0.2, "node0": 0.3, "node1": 0.4},
         "digest_mismatch": {"ctl": [], "node0": [], "node1": []},
-        "collect_failed": [],
         "ebs_balance_min": {"EBSByteBalance%": 100.0, "EBSIOBalance%": 100.0},
     }
 
@@ -3678,21 +3653,6 @@ class CheckValidityAwsTest(unittest.TestCase):
         self.assertFalse(verdict["valid"])
         self.assertTrue(verdict["noisy"])
         self.assertEqual(verdict["reasons"], ["base"])
-
-    def test_failed_collect_is_noisy_and_names_the_marker(self):
-        runner = Scripted({"docker logs": [completed(returncode=124)]})
-        tmp = tmp_dir(self)
-        remote = scripted_remote(self, runner, tmp)
-        with self.assertLogs("aws-bench", "WARNING"):
-            awsb.collect_hosts(remote, [remote.hosts["node0"]], tmp)
-        _, evidence = awsb.load_evidence(tmp, aws_manifest(), 0.0, 1.0)
-        verdict = self.check(collect_failed=evidence["collect_failed"])
-        self.assertTrue(verdict["valid"])
-        self.assertTrue(verdict["noisy"])
-        self.assertEqual(
-            verdict["reasons"],
-            [f"node0 collect script failed (see {awsb.COLLECT_ERROR_FILE})"],
-        )
 
     def test_low_sample_coverage_is_invalid(self):
         verdict = self.check(coverage={"ctl": 1.0, "node0": 0.5, "node1": 1.0})
@@ -3968,7 +3928,6 @@ class IndexTest(unittest.TestCase):
             "fleet": "run1",
             "query_db": "colocated",
             "images": {"espresso-node": {"revision": "bd2ad6e1dc7abc"}},
-            "estimate": {"bound_usd": 4.6},
         }
 
     def test_row_of_a_result(self):
@@ -3982,14 +3941,6 @@ class IndexTest(unittest.TestCase):
     def test_row_without_result_or_cost(self):
         row = awsb.index_row(self.manifest(), "01-run", None, 3, None)
         self.assertIn("| colocated | - | - | - | - | failed | 3 | - |", row)
-
-    def test_fleet_row(self):
-        manifest = self.manifest()
-        row = awsb.fleet_index_row(manifest, 6, {"actual": 9.1}, 0)
-        self.assertEqual(
-            row, "| run1 | 2026-09-29T15:00 | aaaaaaaaaa | 6 | 4.60 | 9.10 | 0 |\n"
-        )
-        self.assertIn("| - | 3 |", awsb.fleet_index_row(manifest, 0, None, 3))
 
     def test_append_writes_the_header_once(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4616,7 +4567,7 @@ class FormatRunsTest(unittest.TestCase):
         lines = awsb.format_runs(runs, {"c8g.4xlarge": 0.8}, NOW)
         self.assertEqual(
             lines[2],
-            "| amy | bob | 2026-09-29T15:30 | 2026-09-29T15:00 | 1 instances, 1 other "
+            "| amy | bob | 2026-09-29T15:30 | 2026-09-29T15:00 | 1 instance, 1 key-pair "
             "| 0.40 | past expiry |",
         )
 
@@ -4819,10 +4770,6 @@ class DestroyOrphansTest(unittest.TestCase):
         self.assertFalse(key.exists())
         self.assertEqual(manifest["phase"], "swept")
 
-    def test_needs_dir_or_orphans(self):
-        with self.assertRaises(awsb.Refused):
-            run_cmd(awsb.cmd_destroy, ["destroy"], FakeRunner(), NOW)
-
 
 class SweepVolumeTest(unittest.TestCase):
     def test_volume_between_instances_and_security_group(self):
@@ -4930,7 +4877,7 @@ STATUS_DESCRIBE = json.dumps(
 
 
 class KeptRunTest(unittest.TestCase):
-    """`status`, `collect` and `destroy DIR` on the dirs of a run whose destroy failed."""
+    """`status`, `collect` and `down DIR` on the dirs of a run whose destroy failed."""
 
     def kept(self, describe: str = STATUS_DESCRIBE, states=None):
         harness = RunHarness(self)
@@ -5015,10 +4962,10 @@ class KeptRunTest(unittest.TestCase):
         self.assertIn("planned only", out.getvalue())
         self.assertEqual(runner.calls, [])
 
-    def test_destroy_dir_destroys_prices_and_appends_index(self):
+    def test_down_destroys_and_prices(self):
         harness, runner = self.kept(describe=DESCRIBE)
-        code = awsb.cmd_destroy(
-            self.args(harness, "destroy", "--yes"), runner, clock=FakeClock()
+        code = awsb.cmd_down(
+            self.args(harness, "down", "--yes"), runner, clock=FakeClock()
         )
         self.assertEqual(code, awsb.EXIT_OK)
         self.assertTrue(runner.ran("tofu", "destroy"))
@@ -5028,13 +4975,10 @@ class KeptRunTest(unittest.TestCase):
         run_manifest = json.loads((harness.run_dir / "manifest.json").read_text())
         self.assertEqual(run_manifest["cost_usd"], manifest["cost_usd"])
         rows = harness.index().splitlines()
-        self.assertEqual(len(rows), 4)
+        self.assertEqual(len(rows), 3)
         self.assertIn("| valid | 4 |", rows[2])
-        self.assertRegex(
-            rows[3], r"^\| run1 \| \S+ \| a{10} \| 1 \| [\d.]+ \| [\d.]+ \| 0 \|$"
-        )
 
-    def test_destroy_dir_removes_the_key(self):
+    def test_down_removes_the_key(self):
         harness, runner = self.kept()
         key = harness.fleet_dir / "ssh" / "id_ed25519"
         self.assertTrue(key.exists())
@@ -5043,34 +4987,30 @@ class KeptRunTest(unittest.TestCase):
             awsb.cmd_status(self.args(harness, "status"), runner, NOW)
         self.assertTrue(runner.ran("-i", str(key)))
         runner.describe = DESCRIBE
-        awsb.cmd_destroy(
-            self.args(harness, "destroy", "--yes"), runner, clock=FakeClock()
-        )
+        awsb.cmd_down(self.args(harness, "down", "--yes"), runner, clock=FakeClock())
         self.assertFalse(key.exists())
         self.assertTrue(key.with_name("id_ed25519.pub").exists())
 
-    def test_destroy_dir_twice_is_refused(self):
+    def test_down_twice_is_refused(self):
         harness, runner = self.kept(describe=DESCRIBE)
-        awsb.cmd_destroy(
-            self.args(harness, "destroy", "--yes"), runner, clock=FakeClock()
-        )
+        awsb.cmd_down(self.args(harness, "down", "--yes"), runner, clock=FakeClock())
         with self.assertRaisesRegex(awsb.Refused, "already done"):
-            awsb.cmd_destroy(
-                self.args(harness, "destroy", "--yes"), runner, clock=FakeClock()
+            awsb.cmd_down(
+                self.args(harness, "down", "--yes"), runner, clock=FakeClock()
             )
 
-    def test_destroy_dir_declined(self):
+    def test_down_declined(self):
         harness, runner = self.kept()
         destroys = runner.count("tofu", "destroy")
         with self.assertRaisesRegex(awsb.Refused, "not confirmed"):
-            awsb.cmd_destroy(self.args(harness, "destroy"), runner, clock=FakeClock())
+            awsb.cmd_down(self.args(harness, "down"), runner, clock=FakeClock())
         self.assertEqual(runner.count("tofu", "destroy"), destroys)
 
     def test_failed_destroy_dir_sweeps_and_exits_4(self):
         harness, runner = self.kept()
         runner.destroys = [completed(returncode=1, stderr="locked")]
-        code = awsb.cmd_destroy(
-            self.args(harness, "destroy", "--yes"), runner, clock=FakeClock()
+        code = awsb.cmd_down(
+            self.args(harness, "down", "--yes"), runner, clock=FakeClock()
         )
         self.assertEqual(code, awsb.EXIT_LEFTOVER)
         self.assertTrue(runner.ran("terminate-instances", "i-1"))

@@ -18,7 +18,7 @@ scripts/network-bench/
   aws-bench             AWS driver (laptop) + host agents (agent-drive, agent-host)
   genesis.toml          0.6, 100 MB blocks, 1 wei base fee
   process-compose.yaml  local 3-node network
-  aws/justfile          just bench aws plan|up|run|extend|down|status|collect|render|destroy
+  aws/justfile          just bench aws plan|up|run|down|status|collect|render|destroy
   aws/user-data.sh      cloud-init template, every host
   aws/terraform/        key pair, security group, instances, pg volume, rds instance, delete schedule
   test_*.py             just py::test
@@ -137,12 +137,11 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
 `up` provisions a fleet that stays idle; `run --fleet` measures on it as often as the TTL allows. `run` without
 `--fleet` is `up`, one measurement, `down`.
 
-| Command                              | Does                                                                                                         |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `up --db-modes colocated,volume,rds` | preflight, cost bound at `--ttl-min` (default 180), confirm, apply, prepare stores, phase `idle`, exit 0     |
-| `run --fleet DIR --query-db MODE`    | lock, ship agents, reset chain and database, measure, collect into `runs/<nn>-<name>/`, back to `idle`       |
-| `extend DIR --ttl-min N`             | expiry = now + N min: re-arm `shutdown` on every host, move the rds delete, retag; refused in the last 5 min |
-| `down DIR`                           | `tofu destroy` x3, tag sweep, fleet `cost.json`, INDEX row; exit 0 or 4                                      |
+| Command                              | Does                                                                                                     |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `up --db-modes colocated,volume,rds` | preflight, cost bound at `--ttl-min` (default 180), confirm, apply, prepare stores, phase `idle`, exit 0 |
+| `run --fleet DIR --query-db MODE`    | lock, ship agents, reset chain and database, measure, collect into `runs/<nn>-<name>/`, back to `idle`   |
+| `down DIR`                           | `tofu destroy` x3, tag sweep, fleet `cost.json`; exit 0 or 4                                             |
 
 - `run --fleet` refuses: phase not `idle`, lock held, MODE not in `--db-modes`, TTL left below the run's worst case plus
   lock-out, fleet flags given. Exit 2, nothing sent to the hosts. `--tag` differing from the fleet's pulls by digest.
@@ -159,7 +158,7 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
 - Same `PG_TUNING` settings in every mode; `pg-settings.json` is checked against them (`noisy` on a difference).
 - rds needs IAM rights `iam:CreateRole`, `iam:PutRolePolicy`, `iam:PassRole`, `scheduler:CreateSchedule`; without them
   apply fails, the fleet is destroyed, exit 3.
-- Cost: the fleet bound is rate x (TTL + destroy + rds delete); `extend` refuses a bound above the fleet's `--max-usd`.
+- Cost: the fleet bound is rate x (TTL + destroy + rds delete).
 
 ### Cleanup
 
@@ -168,8 +167,8 @@ TTL. An EventBridge one-shot schedule deletes the rds instance 5 min earlier.
 
 | Command             | Covers                                                                                                        |
 | ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `status DIR`        | phase, time left, runs, lock holder (alive or dead), instances, pg volume, rds state, schedule, cost          |
-| `status --all`      | tagged resources per fleet (instances, volumes, rds, iam, other), latest expiry, orphan reason                |
+| `status DIR`        | phase, time left, runs, lock holder (alive or dead), instances, pg volume, rds state, cost                    |
+| `status --all`      | tagged resources per fleet (count per kind), latest expiry, orphan reason                                     |
 | `destroy --orphans` | fleets past expiry, in a terminal phase, or of this owner without `fleet.json`; never a live fleet with state |
 
 - Sweep order: delete schedule group, instances, rds instance (waits), its subnet and parameter groups, volumes,
@@ -197,15 +196,14 @@ runs/01-run/             one measurement
   hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz,
                          cloud-init-output.log, chrony.txt, host.jsonl, pg-stats.json (node0)
                          pg-stats.jsonl pg-statements.json pg-settings.json (node0)
-  cloudwatch/            ec2-node0.json (EBS balance, every run); rds.json, pi.json (rds runs)
+  cloudwatch/            ec2-node0.json (EBS balance, every run); rds.json (rds runs)
   rds-logs/              postgres logs of the run window (rds runs)
   metrics.jsonl heights.jsonl consensus.jsonl load.jsonl load-meta.json steps.json
   stake-table.json final-<node>.prom
   run.json agent-state.json agent.log result.json summary.md
 ```
 
-`tmp/aws-bench/INDEX.md`: one row per run (fleet/run, rev, tag, N, db, capacity, validity, exit, run cost) and one row
-per destroyed fleet (runs, bound, actual, exit).
+`tmp/aws-bench/INDEX.md`: one row per run (fleet/run, rev, tag, N, db, capacity, validity, exit, run cost).
 
 ### Commands
 
@@ -214,12 +212,11 @@ just bench aws plan    --tag release-x [--nodes 5]
 just bench aws run     --tag release-x [--nodes 5] [--steps 4,6,9,...] [--query-db MODE] [--max-usd 10] [--yes]
 just bench aws up      --tag release-x --db-modes colocated,volume,rds [--ttl-min 180] [--max-usd 60] [--yes]
 just bench aws run     --fleet FLEET_DIR --query-db MODE [--tag release-y] [--force] [--yes]
-just bench aws extend  FLEET_DIR --ttl-min N
 just bench aws down    FLEET_DIR [--yes]
 just bench aws status  --all | FLEET_DIR
 just bench aws collect RUN_DIR                 # the fleet's last run, fleet idle or left-running
 just bench aws render  RUN_DIR [--baseline FILE]
-just bench aws destroy FLEET_DIR | --orphans
+just bench aws destroy --orphans
 ```
 
 - Needs: nix devShell (opentofu, awscli2), AWS profile `timeboost-dev` (account 027574771971, eu-west-1; constants in

@@ -1519,15 +1519,6 @@ def usable_cpu_jiffies() -> list[int]:
     return [sum(column) for column in zip(*rows, strict=True)]
 
 
-def psi(resource: str) -> float | None:
-    """`some avg10` pressure, or None where the kernel has no PSI."""
-    try:
-        line = Path(f"/proc/pressure/{resource}").read_text().split("\n")[0]
-    except FileNotFoundError:
-        return None
-    return float(line.split()[1].split("=")[1])
-
-
 def meminfo() -> dict[str, int]:
     out = {}
     for line in Path("/proc/meminfo").read_text().splitlines():

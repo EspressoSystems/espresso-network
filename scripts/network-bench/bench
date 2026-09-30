@@ -581,9 +581,6 @@ def sample_host(out: Path, storage: Path, stop: threading.Event) -> None:
             rec = {
                 "ts": time.time(),
                 "cpu": nb.usable_cpu_jiffies(),
-                "load1": float(Path("/proc/loadavg").read_text().split()[0]),
-                "psi_cpu": nb.psi("cpu"),
-                "psi_io": nb.psi("io"),
                 "mem_avail": nb.meminfo()["MemAvailable"],
                 "procs": {k: {"cpu_s": cpu_s[k], "rss": rss.get(k, 0)} for k in cpu_s},
             }

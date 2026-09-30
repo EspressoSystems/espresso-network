@@ -75,10 +75,8 @@ variable "rds" {
     gb             = number
     iops           = number
     mbps           = number
-    username       = string
     parameters     = map(string)
     delete_at      = string
-    timeout        = string
   })
   default = null
 

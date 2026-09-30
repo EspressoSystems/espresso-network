@@ -538,6 +538,4 @@ class FleetRunner:
             return self.balance
         if "get-resources" in argv:
             return completed(stdout=json.dumps(FLEET_ARNS))
-        if "tag-resources" in argv:
-            return completed(stdout=json.dumps({"FailedResourcesMap": {}}))
         return completed()

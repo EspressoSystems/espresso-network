@@ -18,10 +18,6 @@ up *args:
 run *args:
     cd {{quote(repo_root)}} && {{quote(aws_bench)}} run "$@"
 
-# Move a fleet's expiry to now plus --ttl-min minutes.
-extend *args:
-    cd {{quote(repo_root)}} && {{quote(aws_bench)}} extend "$@"
-
 # Destroy a fleet from `up`.
 down *args:
     cd {{quote(repo_root)}} && {{quote(aws_bench)}} down "$@"
@@ -38,6 +34,6 @@ collect *args:
 render *args:
     cd {{quote(repo_root)}} && {{quote(aws_bench)}} render "$@"
 
-# Tear down a fleet, or sweep every tagged resource with --orphans.
+# Sweep orphaned resources by tag.
 destroy *args:
     cd {{quote(repo_root)}} && {{quote(aws_bench)}} destroy "$@"

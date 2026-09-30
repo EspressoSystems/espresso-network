@@ -31,5 +31,4 @@ $DOCKER_PULLS
 
 chronyc tracking > /opt/bench/chrony.txt
 jq -n --argjson digests "$$(cat /opt/bench/digests.json)" --rawfile chrony /opt/bench/chrony.txt \
-  --arg uv "$$(uv --version)" --arg pythons "$$(uv python list --only-installed)" \
-  '{digests: $$digests, chronyc_tracking: $$chrony, uv: $$uv, pythons: $$pythons}' > /opt/bench/ready.json
+  '{digests: $$digests, chronyc_tracking: $$chrony}' > /opt/bench/ready.json
