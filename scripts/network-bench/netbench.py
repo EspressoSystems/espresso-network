@@ -250,6 +250,21 @@ class CalibrationPair(TypedDict):
     drift_pct: float
 
 
+DbMode = Literal["colocated", "volume", "rds"]
+
+
+class QueryDbMeta(TypedDict):
+    """Where the query node's Postgres ran. `store` is the backing volume, `{type, gb, iops,
+    mbps}` plus `volume_id` (ebs) or `identifier` (rds-gp3); `tuning` is the applied settings."""
+
+    mode: DbMode
+    engine: str
+    store: dict[str, Any]
+    tls: bool
+    tuning: dict[str, str]
+    instance_class: NotRequired[str]
+
+
 class DeploymentMeta(TypedDict):
     """AWS fleet metadata; absent for the local bench."""
 
@@ -264,6 +279,9 @@ class DeploymentMeta(TypedDict):
     start_spread_s: float
     clock_offset_ms_max: float
     cost_usd: dict[str, float]  # expected, bound required; actual optional
+    fleet: NotRequired[str]
+    run_index: NotRequired[int]
+    query_db: NotRequired[QueryDbMeta]
 
 
 class BenchResult(TypedDict):
@@ -2127,7 +2145,19 @@ def deployment_lines(result: BenchResult) -> list[str]:
             f"{d['clock_offset_ms_max']:.0f} ms"
         ),
         f"- cost: {cost_line}",
+        *([query_db_line(d["query_db"])] if "query_db" in d else []),
     ]
+
+
+def query_db_line(q: QueryDbMeta) -> str:
+    store = q["store"]
+    ident = f" {store['identifier']}" if "identifier" in store else ""
+    cls = f" on {q['instance_class']}" if "instance_class" in q else ""
+    return (
+        f"- Query DB: {q['mode']}, {q['engine']}{cls}, {store['type']}{ident} "
+        f"{store['gb']} GB {store['iops']} IOPS {store['mbps']} MB/s, "
+        f"TLS {'on' if q['tls'] else 'off'}"
+    )
 
 
 def hosts_table(result: BenchResult) -> list[str]:

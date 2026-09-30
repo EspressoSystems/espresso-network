@@ -101,6 +101,32 @@ def deployment() -> netbench.DeploymentMeta:
     }
 
 
+def query_db(mode="colocated") -> netbench.QueryDbMeta:
+    tuning = {"shared_buffers": "16GB", "huge_pages": "off"}
+    if mode == "rds":
+        return {
+            "mode": "rds",
+            "engine": "postgres 18.1",
+            "store": {
+                "type": "rds-gp3",
+                "identifier": "espresso-bench-x",
+                "gb": 400,
+                "iops": 12000,
+                "mbps": 500,
+            },
+            "tls": True,
+            "tuning": tuning,
+            "instance_class": "db.m8g.4xlarge",
+        }
+    return {
+        "mode": mode,
+        "engine": "postgres 18.1",
+        "store": {"type": "root", "gb": 500, "iops": 12000, "mbps": 500},
+        "tls": True,
+        "tuning": tuning,
+    }
+
+
 def step(rate, decided=None, consensus=(), query=(), consensus_p50=900.0):
     """A step at `rate` MB/s that decides `decided` (default: all of it)."""
     return {
@@ -369,6 +395,32 @@ class RenderTest(unittest.TestCase):
         }
         summary = netbench.render(current, None)
         self.assertIn("- cost: expected $2.40, bound $4.60, actual $3.10", summary)
+
+    def test_deployment_query_db_line_per_mode(self):
+        current = make_result()
+        current["deployment"] = deployment()
+        current["deployment"]["fleet"] = "lulu-20260930-1102"
+        current["deployment"]["run_index"] = 3
+        current["deployment"]["query_db"] = query_db()
+        summary = netbench.render(current, None)
+        self.assertIn(
+            "- Query DB: colocated, postgres 18.1, root 500 GB 12000 IOPS 500 MB/s, "
+            "TLS on",
+            summary,
+        )
+        current["deployment"]["query_db"] = query_db("rds")
+        current["deployment"]["query_db"]["tls"] = False
+        summary = netbench.render(current, None)
+        self.assertIn(
+            "- Query DB: rds, postgres 18.1 on db.m8g.4xlarge, rds-gp3 "
+            "espresso-bench-x 400 GB 12000 IOPS 500 MB/s, TLS off",
+            summary,
+        )
+
+    def test_deployment_without_query_db_has_no_line(self):
+        current = make_result()
+        current["deployment"] = deployment()
+        self.assertNotIn("Query DB", netbench.render(current, None))
 
     def test_no_deployment_or_hosts_by_default(self):
         summary = netbench.render(make_result(), None)
