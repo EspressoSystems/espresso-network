@@ -63,7 +63,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -429,6 +429,10 @@ DESTROY_RETRIES = 3
 DESTROY_BACKOFF_S = 20.0
 # Ctrl-C during measure: default-yes destroy prompt, so an unattended run still tears down.
 DESTROY_PROMPT_TIMEOUT_S = 30.0
+# The rds instance, its subnet and parameter groups, delete schedule group and IAM role
+# (under `IAM_ROLE_PATH`) are all named `<RDS_PREFIX><fleet>`.
+RDS_PREFIX = "espresso-bench-"
+IAM_ROLE_PATH = "/espresso-bench/"
 # delete-security-group right after termination fails with DependencyViolation until the
 # network interfaces detach.
 SG_DELETE_RETRIES = 6
@@ -5292,8 +5296,88 @@ def status_run(run: Runner, fleet_dir: Path, now: datetime) -> int:
             run, fleet_dir, ssh_key_path(config["ssh_key"], fleet_dir), hosts
         )
         print(f"- agent: {format_agent(read_agent_state(remote))}")
+    print_stores(run, manifest)
     print(f"- cost: {status_cost(run, manifest, instances, now)}")
     return EXIT_OK
+
+
+def print_stores(run: Runner, manifest: FleetManifest) -> None:
+    """The Postgres volume and the rds instance of the fleet, if it has them."""
+    cfg = config_from_manifest(manifest["config"])
+    if "pg_volume_id" in manifest:
+        volume = manifest["pg_volume_id"]
+        print(f"- pg volume {volume}: {volume_state(run, cfg, volume)}")
+    if "rds" in manifest:
+        rds = manifest["rds"]
+        print(f"- rds {rds['identifier']}: {rds_state(run, cfg, rds)}")
+
+
+def volume_state(run: Runner, cfg: RunConfig, volume: str) -> str:
+    out = aws_ok(
+        run,
+        cfg.profile,
+        "ec2",
+        "describe-volumes",
+        "--region",
+        cfg.region,
+        "--volume-ids",
+        volume,
+        "--query",
+        "Volumes[0].State",
+        "--output",
+        "text",
+        tolerate="InvalidVolume.NotFound",
+    ).strip()
+    return out or "gone"
+
+
+def rds_state(run: Runner, cfg: RunConfig, rds: RdsInfo) -> str:
+    """`available, parameters in-sync, schedule armed`; `gone` once the schedule or a destroy
+    has deleted the instance."""
+    out = aws_ok(
+        run,
+        cfg.profile,
+        "rds",
+        "describe-db-instances",
+        "--region",
+        cfg.region,
+        "--db-instance-identifier",
+        rds["identifier"],
+        "--output",
+        "json",
+        tolerate="DBInstanceNotFound",
+    )
+    if not out:
+        return "gone"
+    instance = json.loads(out)["DBInstances"][0]
+    applied = instance["DBParameterGroups"][0]["ParameterApplyStatus"]
+    return (
+        f"{instance['DBInstanceStatus']}, parameters {applied}, "
+        f"schedule {schedule_state(run, cfg, rds)}"
+    )
+
+
+def schedule_state(run: Runner, cfg: RunConfig, rds: RdsInfo) -> str:
+    """`armed` while the one-shot delete is enabled, `gone` after it fired or was deleted."""
+    out = aws_ok(
+        run,
+        cfg.profile,
+        "scheduler",
+        "get-schedule",
+        "--region",
+        cfg.region,
+        "--group-name",
+        rds["schedule_group"],
+        "--name",
+        rds["schedule_name"],
+        "--output",
+        "json",
+        tolerate="ResourceNotFoundException",
+    )
+    if not out:
+        return "gone"
+    state = json.loads(out)["State"]
+    return "armed" if state == "ENABLED" else state.lower()
 
 
 def print_fleet_live(fleet_dir: Path, manifest: FleetManifest, now: datetime) -> None:
@@ -5426,11 +5510,18 @@ def destroy_orphans(run: Runner, args: argparse.Namespace, now: datetime) -> int
             log.info("sweeping %s", orphan["name"])
             sweep(run, cfg.region, orphan["name"], cfg.profile)
             mark_swept(args.out_root / orphan["name"])
+        with_role = {o["name"] for o in orphans if has_role(o)}
+        if with_role:
+            sweep_iam(run, cfg.profile, with_role)
     except RemoteError as exc:
         log.error("sweep failed, resources may remain: %s", exc)
         return EXIT_LEFTOVER
     log.info("swept %d runs", len(orphans))
     return EXIT_OK
+
+
+def has_role(tagged: TaggedRun) -> bool:
+    return any(arn_parts(arn)[0] == "role" for arn in tagged["arns"])
 
 
 def mark_swept(fleet_dir: Path) -> None:
@@ -5496,11 +5587,13 @@ def find_runs(
     instances = describe_instances(
         run, region, profile, f"Name=tag-key,Values={TAG_RUN}"
     )
-    runs = group_runs(json.loads(out), instances)
+    runs = group_runs(json.loads(out), instances, list_scheduler_roles(run, profile))
     user = getpass.getuser()
     for tagged in runs:
         phase = local_phase(out_root, tagged["name"])
-        tagged["orphan"] = classify_orphan(tagged, phase, now, user)
+        tagged["orphan"] = classify_orphan(tagged, phase, now, user) or role_orphan(
+            tagged, phase
+        )
     return runs
 
 
@@ -5526,16 +5619,22 @@ def describe_instances(
 
 
 def arn_parts(arn: str) -> tuple[str, str]:
-    """(`instance`, `i-0abc`) of `arn:aws:ec2:eu-west-1:1:instance/i-0abc`."""
-    kind, _, resource_id = arn.rpartition(":")[2].partition("/")
+    """(`instance`, `i-0abc`) of `arn:aws:ec2:eu-west-1:1:instance/i-0abc`; rds ARNs separate
+    kind and id with a colon: (`db`, `name`) of `arn:aws:rds:eu-west-1:1:db:name`."""
+    resource = arn.split(":", 5)[5]
+    kind, _, resource_id = resource.partition("/" if "/" in resource else ":")
     return kind, resource_id
 
 
 def group_runs(
-    mappings: list[dict[str, Any]], instances: list[Instance]
+    mappings: list[dict[str, Any]],
+    instances: list[Instance],
+    roles: Iterable[str] = (),
 ) -> list[TaggedRun]:
     """Groups tag-API `{arn, tags}` mappings by run, sorted by owner then name. A terminated
-    instance still shows up in both APIs for about an hour and is dropped."""
+    instance still shows up in both APIs for about an hour and is dropped. `roles` are the ARNs
+    of scheduler IAM roles: the tag API does not list them, and a fleet whose other resources
+    are gone still counts through its role."""
     live = {i["id"]: i for i in instances if i["state"] != "terminated"}
     runs: dict[str, TaggedRun] = {}
     for mapping in mappings:
@@ -5555,11 +5654,38 @@ def group_runs(
             },
         )
         tagged["owner"] = tags.get(TAG_OWNER, tagged["owner"])
-        tagged["expires"] = tags.get(TAG_EXPIRES, tagged["expires"])
+        tagged["expires"] = later(tags.get(TAG_EXPIRES), tagged["expires"])
         tagged["arns"].append(mapping["arn"])
         if kind == "instance":
             tagged["instances"].append(live[resource_id])
+    for arn in roles:
+        fleet = role_fleet(arn)
+        tagged = runs.setdefault(
+            fleet,
+            {
+                "name": fleet,
+                "owner": None,
+                "expires": None,
+                "arns": [],
+                "instances": [],
+                "orphan": None,
+            },
+        )
+        tagged["arns"].append(arn)
     return sorted(runs.values(), key=lambda r: (r["owner"] or "", r["name"]))
+
+
+def later(a: str | None, b: str | None) -> str | None:
+    """The later of two ISO timestamps. `extend` retags in batches, so a fleet can carry two
+    expiries for a while, and the later one is the one to judge by."""
+    if a is None or b is None:
+        return a or b
+    return max(a, b, key=datetime.fromisoformat)
+
+
+def role_fleet(role_arn: str) -> str:
+    """`fleet1` of `arn:aws:iam::1:role/espresso-bench/espresso-bench-fleet1`."""
+    return arn_parts(role_arn)[1].rpartition("/")[2].removeprefix(RDS_PREFIX)
 
 
 def local_phase(out_root: Path, name: str) -> str | None:
@@ -5594,6 +5720,14 @@ def classify_orphan(
     return None
 
 
+def role_orphan(tagged: TaggedRun, phase: str | None) -> str | None:
+    """A scheduler role left behind by a fleet with no other resource and no local state.
+    Another machine's `up` is exposed for the seconds between creating its role and its
+    first tagged resource."""
+    only_roles = all(arn_parts(arn)[0] == "role" for arn in tagged["arns"])
+    return "role without resources" if only_roles and phase is None else None
+
+
 def cached_prices(cache: Path, region: str) -> dict[str, float]:
     """USD per hour by instance type from the pricing cache `fetch_prices` writes."""
     if not cache.exists():
@@ -5620,6 +5754,19 @@ def accrued_usd(
     return total
 
 
+RESOURCE_LABELS = {"volume": "volumes", "db": "rds", "role": "iam"}
+
+
+def resource_summary(tagged: TaggedRun) -> str:
+    """`5 instances, 6 volumes, 1 rds, 4 other`; kinds that are absent are left out."""
+    kinds = Counter(arn_parts(arn)[0] for arn in tagged["arns"])
+    parts = [f"{len(tagged['instances'])} instances"]
+    parts += [f"{kinds[k]} {label}" for k, label in RESOURCE_LABELS.items() if kinds[k]]
+    other = len(tagged["arns"]) - len(tagged["instances"])
+    other -= sum(kinds[k] for k in RESOURCE_LABELS)
+    return ", ".join([*parts, f"{other} other"])
+
+
 def format_runs(
     runs: list[TaggedRun], prices: dict[str, float], now: datetime
 ) -> list[str]:
@@ -5637,7 +5784,7 @@ def format_runs(
             tagged["owner"] or "-",
             launched,
             (tagged["expires"] or "-")[:16],
-            f"{len(instances)} instances, {len(tagged['arns']) - len(instances)} other",
+            resource_summary(tagged),
             cost,
             tagged["orphan"] or "",
         ]
@@ -6169,7 +6316,7 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
 
 
 def rds_identifier(fleet_name: str) -> str:
-    return f"espresso-bench-{fleet_name}"
+    return f"{RDS_PREFIX}{fleet_name}"
 
 
 def query_db_meta(manifest: Manifest, evidence: Evidence) -> nb.QueryDbMeta:
@@ -6323,19 +6470,60 @@ def tagged_resources(
 def sweep(
     run: Runner, region: str, name: str | None, profile: str = RunConfig.profile
 ) -> list[str]:
-    """Terminates the instances found by `tagged_resources`, then deletes their volumes,
-    security group and key pair. Returns every ARN found."""
+    """Deletes what `tagged_resources` finds, in dependency order: the delete schedule group
+    (so it cannot fire mid-sweep), instances, the rds instance (waiting for it) with its subnet
+    and parameter groups, volumes, security group (the rds network interfaces hold it until
+    the instance is gone), key pair, and the scheduler role of an rds fleet. Returns every ARN
+    found."""
     arns = tagged_resources(run, region, name, profile)
     by_kind: defaultdict[str, list[str]] = defaultdict(list)
     for arn in arns:
         kind, resource_id = arn_parts(arn)
         by_kind[kind].append(resource_id)
+    for group in by_kind["schedule-group"]:
+        aws_ok(
+            run,
+            profile,
+            "scheduler",
+            "delete-schedule-group",
+            "--region",
+            region,
+            "--name",
+            group,
+            tolerate="ResourceNotFoundException",
+        )
     instances = by_kind["instance"]
     if instances:
         ids = ["--instance-ids", *instances]
         aws_ok(run, profile, "ec2", "terminate-instances", "--region", region, *ids)
         aws_ok(
             run, profile, "ec2", "wait", "instance-terminated", "--region", region, *ids
+        )
+    for identifier in by_kind["db"]:
+        delete_rds(run, region, identifier, profile)
+    for group in by_kind["subgrp"]:
+        aws_ok(
+            run,
+            profile,
+            "rds",
+            "delete-db-subnet-group",
+            "--region",
+            region,
+            "--db-subnet-group-name",
+            group,
+            tolerate="DBSubnetGroupNotFound",
+        )
+    for group in by_kind["pg"]:
+        aws_ok(
+            run,
+            profile,
+            "rds",
+            "delete-db-parameter-group",
+            "--region",
+            region,
+            "--db-parameter-group-name",
+            group,
+            tolerate="DBParameterGroupNotFound",
         )
     for volume in by_kind["volume"]:
         # Root volumes normally vanish with their instance.
@@ -6363,7 +6551,126 @@ def sweep(
             "--key-pair-id",
             key,
         )
+    rds_fleets = {
+        resource_id.removeprefix(RDS_PREFIX)
+        for resource_id in by_kind["db"] + by_kind["schedule-group"]
+    }
+    if rds_fleets:
+        sweep_iam(run, profile, rds_fleets)
     return arns
+
+
+def delete_rds(run: Runner, region: str, identifier: str, profile: str) -> None:
+    """Deletes the instance and waits until it is gone. One the schedule or a destroy is
+    already deleting is only waited for."""
+    status = aws_ok(
+        run,
+        profile,
+        "rds",
+        "describe-db-instances",
+        "--region",
+        region,
+        "--db-instance-identifier",
+        identifier,
+        "--query",
+        "DBInstances[0].DBInstanceStatus",
+        "--output",
+        "text",
+        tolerate="DBInstanceNotFound",
+    ).strip()
+    if not status:
+        return
+    if status != "deleting":
+        aws_ok(
+            run,
+            profile,
+            "rds",
+            "delete-db-instance",
+            "--region",
+            region,
+            "--db-instance-identifier",
+            identifier,
+            "--skip-final-snapshot",
+            "--delete-automated-backups",
+            tolerate="DBInstanceNotFound",
+        )
+    log.info("waiting for rds %s to be deleted", identifier)
+    aws_ok(
+        run,
+        profile,
+        "rds",
+        "wait",
+        "db-instance-deleted",
+        "--region",
+        region,
+        "--db-instance-identifier",
+        identifier,
+    )
+
+
+def list_scheduler_roles(run: Runner, profile: str) -> list[str]:
+    """ARNs of the IAM roles under `IAM_ROLE_PATH`. A profile without `iam:ListRoles` sees
+    none; only rds fleets create roles, and they need IAM rights anyway."""
+    out = aws_ok(
+        run,
+        profile,
+        "iam",
+        "list-roles",
+        "--path-prefix",
+        IAM_ROLE_PATH,
+        "--query",
+        "Roles[].Arn",
+        "--output",
+        "json",
+        tolerate="AccessDenied",
+    )
+    if not out:
+        log.warning("iam:ListRoles denied: scheduler roles are not listed")
+        return []
+    return list(json.loads(out))
+
+
+def sweep_iam(run: Runner, profile: str, fleets: set[str]) -> None:
+    """Deletes the scheduler role of each fleet in `fleets` that has one, inline policies
+    first."""
+    for arn in list_scheduler_roles(run, profile):
+        if role_fleet(arn) not in fleets:
+            continue
+        role = arn_parts(arn)[1].rpartition("/")[2]
+        listed = aws_ok(
+            run,
+            profile,
+            "iam",
+            "list-role-policies",
+            "--role-name",
+            role,
+            "--query",
+            "PolicyNames",
+            "--output",
+            "json",
+            tolerate="NoSuchEntity",
+        )
+        for policy in json.loads(listed) if listed else []:
+            aws_ok(
+                run,
+                profile,
+                "iam",
+                "delete-role-policy",
+                "--role-name",
+                role,
+                "--policy-name",
+                policy,
+                tolerate="NoSuchEntity",
+            )
+        aws_ok(
+            run,
+            profile,
+            "iam",
+            "delete-role",
+            "--role-name",
+            role,
+            tolerate="NoSuchEntity",
+        )
 
 
 def delete_security_group(run: Runner, region: str, group: str, profile: str) -> None:

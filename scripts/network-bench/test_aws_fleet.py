@@ -6,6 +6,7 @@ Reuses the fake runner and fixtures of `test_aws_bench`.
 """
 
 import contextlib
+import getpass
 import io
 import json
 import os
@@ -36,6 +37,7 @@ from test_aws_bench import (
     fake_images,
     fake_preflight,
     price_response,
+    tag_runner,
     two_node_hosts_info,
     valid_result,
     write_collected_run,
@@ -2831,3 +2833,409 @@ class TofuRdsValidateTest(unittest.TestCase):
         tfvars = awsb.rds_tfvars(rds_spec(gb=100), "secret-pass", expires)
         with self.assertRaisesRegex(AssertionError, "400 GiB"):
             self.run_tofu(tfvars)
+
+
+LIST_ROLES = ("aws", "--profile", "timeboost-dev", "iam", "list-roles")
+ROLE_ARN = "arn:aws:iam::1:role/espresso-bench/espresso-bench-fleet1"
+EXPIRES_LATER = "2026-09-29T17:00:00Z"
+EXPIRES_PAST = "2026-09-29T15:00:00Z"
+SWEEP_NOW = datetime(2026, 9, 29, 16, 0, tzinfo=UTC)
+
+
+def resource_arn(service: str, resource: str) -> str:
+    return f"arn:aws:{service}:eu-west-1:1:{resource}"
+
+
+def mapping(arn: str, run: str, owner: str | None, expires: str | None) -> dict:
+    tags = {awsb.TAG_RUN: run}
+    if owner:
+        tags[awsb.TAG_OWNER] = owner
+    if expires:
+        tags[awsb.TAG_EXPIRES] = expires
+    return {"arn": arn, "tags": [{"Key": k, "Value": v} for k, v in tags.items()]}
+
+
+def rds_fleet_mappings(
+    run: str, owner: str, expires: str, instance_id: str = "i-1"
+) -> list[dict]:
+    name = f"espresso-bench-{run}"
+    arns = [
+        resource_arn("ec2", f"instance/{instance_id}"),
+        resource_arn("ec2", "security-group/sg-1"),
+        resource_arn("ec2", "key-pair/key-1"),
+        resource_arn("ec2", "volume/vol-1"),
+        resource_arn("rds", f"db:{name}"),
+        resource_arn("rds", f"subgrp:{name}"),
+        resource_arn("rds", f"pg:{name}"),
+        resource_arn("scheduler", f"schedule-group/{name}"),
+    ]
+    return [mapping(arn, run, owner, expires) for arn in arns]
+
+
+def instance_row(instance_id: str) -> dict:
+    return {
+        "id": instance_id,
+        "type": "c8g.4xlarge",
+        "state": "running",
+        "launch": "2026-09-29T15:30:00+00:00",
+        "reason": "",
+    }
+
+
+def rds_tag_runner(
+    mappings: list[dict],
+    instances: list[dict],
+    roles: list[str] | None = None,
+    rds_status: str = "available",
+    role_missing: bool = False,
+) -> FakeRunner:
+    """The tag API, describe-instances, the rds and scheduler calls of a sweep, and the role
+    listing: `roles` are the ARNs under the scheduler path."""
+    runner = tag_runner(mappings, instances)
+    prefix = ("aws", "--profile", "timeboost-dev")
+    gone = completed(returncode=254, stderr="NoSuchEntity: gone")
+    runner.responses = {
+        LIST_ROLES: completed(stdout=json.dumps(roles or [])),
+        (*prefix, "iam", "list-role-policies"): (
+            gone if role_missing else completed(stdout='["delete-rds"]')
+        ),
+        (*prefix, "iam", "delete-role-policy"): completed(),
+        (*prefix, "iam", "delete-role"): gone if role_missing else completed(),
+        (*prefix, "rds", "describe-db-instances"): (
+            completed(stdout=f"{rds_status}\n")
+            if rds_status
+            else completed(returncode=254, stderr="DBInstanceNotFound")
+        ),
+        **runner.responses,
+    }
+    return runner
+
+
+def aws_verbs(runner: FakeRunner) -> list[tuple[str, str]]:
+    return [(c[3], c[4]) for c in runner.calls if c[0] == "aws"]
+
+
+# REQ:sweep-rds-volume
+class ArnPartsTest(unittest.TestCase):
+    def test_ec2_arns_split_on_the_slash(self):
+        self.assertEqual(
+            awsb.arn_parts(resource_arn("ec2", "instance/i-0abc")),
+            ("instance", "i-0abc"),
+        )
+
+    def test_rds_arns_split_on_the_colon(self):
+        for kind in ("db", "subgrp", "pg"):
+            self.assertEqual(
+                awsb.arn_parts(resource_arn("rds", f"{kind}:espresso-bench-f")),
+                (kind, "espresso-bench-f"),
+            )
+
+    def test_scheduler_and_iam_arns(self):
+        self.assertEqual(
+            awsb.arn_parts(
+                resource_arn("scheduler", "schedule-group/espresso-bench-f")
+            ),
+            ("schedule-group", "espresso-bench-f"),
+        )
+        self.assertEqual(
+            awsb.arn_parts(ROLE_ARN), ("role", "espresso-bench/espresso-bench-fleet1")
+        )
+        self.assertEqual(awsb.role_fleet(ROLE_ARN), "fleet1")
+
+
+# REQ:sweep-rds-volume
+class SweepRdsTest(unittest.TestCase):
+    def sweep(self, **kwargs) -> tuple[FakeRunner, list[str]]:
+        mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
+        runner = rds_tag_runner(mappings, [], roles=[ROLE_ARN], **kwargs)
+        return runner, awsb.sweep(runner, "eu-west-1", "fleet1")
+
+    # TEST:sweep-rds-volume-ok
+    def test_deletes_in_dependency_order_and_waits_for_the_instance(self):
+        runner, arns = self.sweep()
+        self.assertEqual(len(arns), 8)
+        self.assertEqual(
+            aws_verbs(runner),
+            [
+                ("resourcegroupstaggingapi", "get-resources"),
+                ("scheduler", "delete-schedule-group"),
+                ("ec2", "terminate-instances"),
+                ("ec2", "wait"),
+                ("rds", "describe-db-instances"),
+                ("rds", "delete-db-instance"),
+                ("rds", "wait"),
+                ("rds", "delete-db-subnet-group"),
+                ("rds", "delete-db-parameter-group"),
+                ("ec2", "delete-volume"),
+                ("ec2", "delete-security-group"),
+                ("ec2", "delete-key-pair"),
+                ("iam", "list-roles"),
+                ("iam", "list-role-policies"),
+                ("iam", "delete-role-policy"),
+                ("iam", "delete-role"),
+            ],
+        )
+        self.assertTrue(runner.ran("aws", "--profile", "timeboost-dev", "rds", "wait"))
+        wait = next(c for c in runner.calls if c[4:5] == ["wait"] and c[3] == "rds")
+        self.assertEqual(
+            wait[wait.index("--db-instance-identifier") + 1], "espresso-bench-fleet1"
+        )
+
+    def test_the_role_policy_goes_before_the_role(self):
+        runner, _ = self.sweep()
+        policy = next(c for c in runner.calls if "delete-role-policy" in c)
+        self.assertEqual(policy[policy.index("--policy-name") + 1], "delete-rds")
+        self.assertEqual(
+            policy[policy.index("--role-name") + 1], "espresso-bench-fleet1"
+        )
+
+    def test_an_instance_already_deleting_is_only_waited_for(self):
+        runner, _ = self.sweep(rds_status="deleting")
+        verbs = aws_verbs(runner)
+        self.assertNotIn(("rds", "delete-db-instance"), verbs)
+        self.assertIn(("rds", "wait"), verbs)
+
+    def test_an_instance_the_schedule_deleted_needs_no_wait(self):
+        runner, _ = self.sweep(rds_status="")
+        verbs = aws_verbs(runner)
+        self.assertNotIn(("rds", "delete-db-instance"), verbs)
+        self.assertNotIn(("rds", "wait"), verbs)
+        self.assertIn(("rds", "delete-db-subnet-group"), verbs)
+
+    # TEST:sweep-iam-absent-ok
+    def test_a_role_that_is_already_gone_is_tolerated(self):
+        runner, _ = self.sweep(role_missing=True)
+        self.assertIn(("iam", "delete-role"), aws_verbs(runner))
+
+    def test_a_group_the_destroy_already_deleted_is_tolerated(self):
+        mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
+        runner = rds_tag_runner(mappings, [], roles=[])
+        runner.responses = {
+            ("aws", "--profile", "timeboost-dev", "rds", "delete-db-subnet-group"): (
+                completed(returncode=254, stderr="DBSubnetGroupNotFoundFault")
+            ),
+            ("aws", "--profile", "timeboost-dev", "rds", "delete-db-parameter-group"): (
+                completed(returncode=254, stderr="DBParameterGroupNotFound")
+            ),
+            (
+                "aws",
+                "--profile",
+                "timeboost-dev",
+                "scheduler",
+                "delete-schedule-group",
+            ): (completed(returncode=254, stderr="ResourceNotFoundException")),
+            **runner.responses,
+        }
+        awsb.sweep(runner, "eu-west-1", "fleet1")
+
+    def test_another_fleets_role_is_left_alone(self):
+        mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
+        other = "arn:aws:iam::1:role/espresso-bench/espresso-bench-other"
+        runner = rds_tag_runner(mappings, [], roles=[other])
+        awsb.sweep(runner, "eu-west-1", "fleet1")
+        self.assertNotIn(("iam", "delete-role"), aws_verbs(runner))
+
+    def test_a_fleet_without_rds_touches_no_iam(self):
+        mappings = [
+            mapping(resource_arn("ec2", "security-group/sg-1"), "fleet1", None, None)
+        ]
+        runner = rds_tag_runner(mappings, [])
+        awsb.sweep(runner, "eu-west-1", "fleet1")
+        self.assertFalse(any(service == "iam" for service, _ in aws_verbs(runner)))
+
+    def test_no_iam_permission_lists_no_roles(self):
+        runner = rds_tag_runner([], [])
+        runner.responses[LIST_ROLES] = completed(
+            returncode=254, stderr="AccessDenied: iam:ListRoles"
+        )
+        self.assertEqual(awsb.list_scheduler_roles(runner, "timeboost-dev"), [])
+
+    def test_other_iam_errors_raise(self):
+        runner = rds_tag_runner([], [])
+        runner.responses[LIST_ROLES] = completed(returncode=254, stderr="Throttling")
+        with self.assertRaisesRegex(awsb.RemoteError, "Throttling"):
+            awsb.list_scheduler_roles(runner, "timeboost-dev")
+
+
+# REQ:orphans-rds-expiry
+class GroupRdsRunsTest(unittest.TestCase):
+    def test_the_latest_expiry_of_a_partly_retagged_fleet_counts(self):
+        mappings = [
+            mapping(
+                resource_arn("ec2", "security-group/sg-1"), "f", "bob", EXPIRES_PAST
+            ),
+            mapping(
+                resource_arn("rds", "db:espresso-bench-f"), "f", "bob", EXPIRES_LATER
+            ),
+            mapping(resource_arn("ec2", "key-pair/key-1"), "f", "bob", EXPIRES_PAST),
+        ]
+        (tagged,) = awsb.group_runs(mappings, [])
+        self.assertEqual(tagged["expires"], EXPIRES_LATER)
+
+    def test_expiries_compare_as_times_not_strings(self):
+        self.assertEqual(
+            awsb.later("2026-09-29T09:00:00+00:00", "2026-09-29T10:00:00+01:00"),
+            "2026-09-29T09:00:00+00:00",
+        )
+        self.assertIsNone(awsb.later(None, None))
+        self.assertEqual(awsb.later(None, EXPIRES_PAST), EXPIRES_PAST)
+
+    def test_a_role_joins_its_fleet_and_stands_alone_without_one(self):
+        mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
+        lone = "arn:aws:iam::1:role/espresso-bench/espresso-bench-lost"
+        runs = awsb.group_runs(mappings, [instance_row("i-1")], [ROLE_ARN, lone])
+        self.assertEqual([r["name"] for r in runs], ["lost", "fleet1"])
+        self.assertEqual(runs[0]["arns"], [lone])
+        self.assertIn(ROLE_ARN, runs[1]["arns"])
+
+    def test_summary_names_volumes_rds_and_iam(self):
+        mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
+        (tagged,) = awsb.group_runs(mappings, [instance_row("i-1")], [ROLE_ARN])
+        self.assertEqual(
+            awsb.resource_summary(tagged),
+            "1 instances, 1 volumes, 1 rds, 1 iam, 5 other",
+        )
+
+
+# REQ:orphans-rds-expiry
+class DestroyRdsOrphansTest(unittest.TestCase):
+    def destroy(self, runner, out: Path, *flags: str) -> tuple[int, str]:
+        parsed = awsb.parse_args(
+            ["destroy", "--orphans", "--out-root", str(out), *flags]
+        )
+        text = io.StringIO()
+        with contextlib.redirect_stdout(text):
+            code = awsb.cmd_destroy(parsed, runner, SWEEP_NOW)
+        return code, text.getvalue()
+
+    def write_fleet(self, out: Path, name: str, phase: str) -> None:
+        (out / name).mkdir()
+        netbench.write_json(out / name / "fleet.json", {"phase": phase})
+
+    # TEST:orphans-rds-expiry-ok
+    def test_an_rds_fleet_past_expiry_is_listed_and_swept(self):
+        mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_PAST)
+        runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
+        with tempfile.TemporaryDirectory() as tmp:
+            code, text = self.destroy(runner, Path(tmp), "--yes")
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertIn("| fleet1 | bob |", text)
+        self.assertIn("1 instances, 1 volumes, 1 rds, 1 iam, 5 other", text)
+        self.assertTrue(text.splitlines()[2].endswith("| past expiry |"))
+        verbs = aws_verbs(runner)
+        self.assertIn(("rds", "delete-db-instance"), verbs)
+        self.assertIn(("iam", "delete-role"), verbs)
+
+    # TEST:orphans-live-fleet-kept-ok
+    def test_a_live_fleet_of_this_user_with_state_is_kept(self):
+        user = getpass.getuser()
+        mappings = rds_fleet_mappings("fleet1", user, EXPIRES_LATER)
+        runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            self.write_fleet(out, "fleet1", "idle")
+            code, text = self.destroy(runner, out, "--yes")
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertIn("no orphaned", text)
+        self.assertNotIn(("ec2", "terminate-instances"), aws_verbs(runner))
+        self.assertNotIn(("iam", "delete-role"), aws_verbs(runner))
+
+    def test_a_fleet_that_lost_its_state_is_swept_for_its_owner(self):
+        mappings = rds_fleet_mappings("fleet1", getpass.getuser(), EXPIRES_LATER)
+        runner = rds_tag_runner(mappings, [instance_row("i-1")], roles=[ROLE_ARN])
+        with tempfile.TemporaryDirectory() as tmp:
+            code, text = self.destroy(runner, Path(tmp), "--yes")
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertTrue(text.splitlines()[2].endswith("| no local state |"))
+
+    def test_a_role_left_by_a_fleet_with_no_other_resources_is_swept(self):
+        runner = rds_tag_runner([], [], roles=[ROLE_ARN])
+        with tempfile.TemporaryDirectory() as tmp:
+            code, text = self.destroy(runner, Path(tmp), "--yes")
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertTrue(text.splitlines()[2].endswith("| role without resources |"))
+        self.assertIn("0 instances, 1 iam, 0 other", text)
+        self.assertIn(("iam", "delete-role"), aws_verbs(runner))
+
+    def test_a_role_of_a_fleet_being_provisioned_here_is_kept(self):
+        runner = rds_tag_runner([], [], roles=[ROLE_ARN])
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            self.write_fleet(out, "fleet1", "applying")
+            code, text = self.destroy(runner, out, "--yes")
+        self.assertEqual(code, awsb.EXIT_OK)
+        self.assertIn("no orphaned", text)
+        self.assertNotIn(("iam", "delete-role"), aws_verbs(runner))
+
+    def test_a_failed_rds_delete_exits_4(self):
+        mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_PAST)
+        runner = rds_tag_runner(mappings, [], roles=[ROLE_ARN])
+        runner.responses = {
+            ("aws", "--profile", "timeboost-dev", "rds", "delete-db-instance"): (
+                completed(returncode=254, stderr="InvalidDBInstanceState")
+            ),
+            **runner.responses,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _ = self.destroy(runner, Path(tmp), "--yes")
+        self.assertEqual(code, awsb.EXIT_LEFTOVER)
+
+
+# REQ:sweep-rds-volume
+class StatusStoresTest(unittest.TestCase):
+    def status(self, harness, runner) -> str:
+        runner.describe = STATUS_DESCRIBE
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            awsb.cmd_status(harness.parse("status", str(harness.fleet_dir)), runner)
+        return out.getvalue()
+
+    def test_an_rds_fleet_shows_the_instance_parameters_and_schedule(self):
+        harness = RdsHarness(self)
+        runner = harness.up_rds(self)
+        self.assertIn(
+            "- rds espresso-bench-fleet1: available, parameters in-sync, schedule armed",
+            self.status(harness, runner),
+        )
+
+    def test_a_disabled_schedule_is_named(self):
+        harness = RdsHarness(self)
+        runner = harness.up_rds(self)
+        runner.schedule = {"State": "DISABLED", "Target": SCHEDULE_TARGET}
+        self.assertIn("schedule disabled", self.status(harness, runner))
+
+    def test_an_instance_the_schedule_deleted_is_gone(self):
+        harness = RdsHarness(self)
+        runner = harness.up_rds(self)
+        aws = runner.aws
+
+        def deleted(argv: list[str]) -> subprocess.CompletedProcess:
+            if "describe-db-instances" in argv:
+                return completed(returncode=254, stderr="DBInstanceNotFound")
+            return aws(argv)
+
+        with unittest.mock.patch.object(runner, "aws", side_effect=deleted):
+            text = self.status(harness, runner)
+        self.assertIn("- rds espresso-bench-fleet1: gone", text)
+
+    def test_a_pg_volume_shows_its_state(self):
+        harness = FleetHarness(self)
+        runner = VolumeRunner([DONE_STATE], describe=DESCRIBE)
+        self.assertEqual(harness.up(runner, "--db-modes", "volume"), awsb.EXIT_OK)
+        aws = runner.aws
+
+        def volumes(argv: list[str]) -> subprocess.CompletedProcess:
+            if "describe-volumes" in argv:
+                return completed(stdout="in-use\n")
+            return aws(argv)
+
+        with unittest.mock.patch.object(runner, "aws", side_effect=volumes):
+            text = self.status(harness, runner)
+        self.assertIn(f"- pg volume {VOLUME_ID}: in-use", text)
+
+    def test_a_fleet_without_stores_prints_neither(self):
+        harness = FleetHarness(self)
+        runner = harness.up_fleet(self)
+        text = self.status(harness, runner)
+        self.assertNotIn("- rds", text)
+        self.assertNotIn("- pg volume", text)
