@@ -3364,7 +3364,13 @@ def measure_run(run: Run) -> None:
     with recording(run):
         remote = fleet.remote
         assert remote is not None, "up_fleet must run first"
-        render_host_files(run.run_dir, run.cfg, fleet.manifest, remote.hosts)
+        render_host_files(
+            run.run_dir,
+            run.cfg,
+            fleet.manifest,
+            remote.hosts,
+            read_dotenv(REPO_ROOT / ".env"),
+        )
         enter_phase(
             fleet, run.manifest_path, "shipping", "files, host monitors, containers"
         )
@@ -4769,6 +4775,10 @@ def topology(hosts: dict[str, HostInfo]) -> nb.Topology:
     }
 
 
+def read_dotenv(path: Path) -> str:
+    return path.read_text()
+
+
 def node_hosts(hosts: dict[str, HostInfo]) -> list[HostInfo]:
     return [hosts[name] for name in _node_names(hosts)]
 
@@ -4778,8 +4788,9 @@ def render_host_files(
     cfg: RunConfig,
     manifest: FleetManifest,
     hosts: dict[str, HostInfo],
+    dotenv_text: str,
 ) -> None:
-    dotenv = parse_dotenv((REPO_ROOT / ".env").read_text())
+    dotenv = parse_dotenv(dotenv_text)
     for spec in manifest["hosts"]:
         host_dir = run_dir / "hosts" / spec["name"]
         host_dir.mkdir(parents=True, exist_ok=True)

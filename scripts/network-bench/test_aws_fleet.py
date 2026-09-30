@@ -28,6 +28,7 @@ from fakes import SLOW, FakeClock
 from test_aws_bench import (
     DESCRIBE,
     DONE_STATE,
+    DOTENV_TEXT,
     STATUS_DESCRIBE,
     FakeRunner,
     FleetRunner,
@@ -90,6 +91,7 @@ class FleetHarness:
                 awsb, "preflight", return_value=fake_preflight()
             ),
             unittest.mock.patch.object(awsb, "write_report", fake_report),
+            unittest.mock.patch.object(awsb, "read_dotenv", return_value=DOTENV_TEXT),
         ]
         for patch in patches:
             patch.start()
@@ -2209,7 +2211,9 @@ class RdsRenderTest(unittest.TestCase):
         cfg = awsb.dataclasses.replace(
             awsb.config_from_manifest(harness.fleet()["config"]), query_db="rds"
         )
-        awsb.render_host_files(run_dir, cfg, harness.fleet(), two_node_hosts_info())
+        awsb.render_host_files(
+            run_dir, cfg, harness.fleet(), two_node_hosts_info(), DOTENV_TEXT
+        )
         env = dict(
             line.split("=", 1)
             for line in (run_dir / "hosts/node0/node.env").read_text().splitlines()
@@ -2252,7 +2256,9 @@ class RdsRenderTest(unittest.TestCase):
             unittest.mock.patch.object(Path, "write_text", spy_text),
             unittest.mock.patch.object(netbench, "write_json", spy_json),
         ):
-            awsb.render_host_files(run_dir, cfg, harness.fleet(), two_node_hosts_info())
+            awsb.render_host_files(
+                run_dir, cfg, harness.fleet(), two_node_hosts_info(), DOTENV_TEXT
+            )
         self.assertEqual(modes["node0/node.env"], 0o600)
         self.assertEqual(modes["node0/pg.json"], 0o600)
 
