@@ -280,9 +280,9 @@ class EstimateCostTest(unittest.TestCase):
         # Literal dollar values for this 2-node config, hand-computed independently of
         # estimate_cost's formula, so a formula regression trips this test.
         estimate = awsb.estimate_cost(self.hosts, self.cfg, self.prices, self.minor)
-        self.assertEqual(estimate["expected_s"], 1690.0)
-        self.assertEqual(estimate["ttl_s"], 3310.0)
-        self.assertAlmostEqual(estimate["expected_usd"], 0.8889998406582952, places=6)
+        self.assertEqual(estimate["expected_s"], 1695.0)
+        self.assertEqual(estimate["ttl_s"], 3315.0)
+        self.assertAlmostEqual(estimate["expected_usd"], 0.891583212043379, places=6)
         expected_bound = sum(
             line["usd"]
             for line in awsb._cost_lines(

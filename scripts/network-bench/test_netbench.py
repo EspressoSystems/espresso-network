@@ -1434,7 +1434,7 @@ class StaircaseTest(unittest.TestCase):
     def test_drain_without_pending_ignores_stuck_transactions(self):
         state = netbench.LoadState()
         state.submitted(netbench.Tx(id=0, node=0))
-        counters = [{"decided_bytes": 1}, {"decided_bytes": 1}]
+        counters = idle_counters()
         heights = netbench.Heights(0)
         heights.saw("validator", 5, 0.0)
         heights.saw("query", 5, 0.0)
@@ -1477,9 +1477,19 @@ class StaircaseTest(unittest.TestCase):
             ["- backlog did not drain in 600 s after the last step"],
         )
 
+    def test_idle_needs_decided_bytes_flat_for_longer_than_a_slow_block(self):
+        # Blocks of 2.5 s under a backlog leave two equal samples 1 s apart while consensus is
+        # busy (run lulu-20260930-1758 reported "drained in 0.0 s").
+        self.assertTrue(netbench.is_idle(idle_counters(), 0.0))
+        short = [c for c in idle_counters() if c["ts"] >= -2.0]
+        self.assertFalse(netbench.is_idle(short, 0.0))
+        busy = [{**c, "decided_bytes": 1 + (c["ts"] > -3.0)} for c in idle_counters()]
+        self.assertFalse(netbench.is_idle(busy, 0.0))
+        self.assertFalse(netbench.is_idle([], 0.0))
+
     def test_drain_waits_for_the_query_node(self):
         state = netbench.LoadState()
-        counters = [{"decided_bytes": 1}, {"decided_bytes": 1}]
+        counters = idle_counters()
         heights = netbench.Heights(0)
         heights.saw("validator", 5, 0.0)
         heights.saw("query", 3, 0.0)
@@ -1494,7 +1504,7 @@ class StaircaseTest(unittest.TestCase):
 
     def test_drain_does_not_chase_new_validator_heights(self):
         state = netbench.LoadState()
-        counters = [{"decided_bytes": 1}, {"decided_bytes": 1}]
+        counters = idle_counters()
         heights = netbench.Heights(0)
         heights.saw("validator", 5, 0.0)
 
@@ -1629,6 +1639,14 @@ class StepMeasuresTest(unittest.TestCase):
         self.assertGreater(m["query_lag_ms"]["p50"], 1000.0)
         _, query = netbench.step_fails(m, netbench.BenchConfig())
         self.assertIn("query lag p50", query[0])
+
+
+def idle_counters() -> list[dict[str, Any]]:
+    """Decided bytes flat over the last DRAIN_IDLE_S, sampled every second up to t=0."""
+    return [
+        {"ts": -netbench.DRAIN_IDLE_S + i, "decided_bytes": 1}
+        for i in range(int(netbench.DRAIN_IDLE_S) + 1)
+    ]
 
 
 def verdict(rate, consensus=(), query=()):

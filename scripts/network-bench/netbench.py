@@ -49,7 +49,10 @@ TRACKER_LAG_NOISY_MS = 1000.0
 SCRAPE_OK_MIN = 0.9
 MIN_READY_HEIGHT = 5
 PROGRESS_S = 30
-DRAIN_SLACK_S = 10
+# Decided bytes flat this long mean consensus is idle: a block under a backlog can take 2.5 s.
+DRAIN_IDLE_S = 5.0
+# Over the tx timeout: settling, the idle window, and the query node's catch-up.
+DRAIN_SLACK_S = 10 + DRAIN_IDLE_S
 CATCHUP_TIMEOUT_S = 600
 # Payloads are read a block behind the query node's height: a payload requested as soon as its
 # header is stored can start a peer fetch that races the node's own insert.
@@ -969,19 +972,22 @@ async def drain(
     state.rate_mb_s = 0.0
     start, target = clock.time(), None
     while clock.time() - start < timeout_s:
-        # Once nothing is pending, two equal samples (~1 s apart) mean consensus is idle.
-        flat = (
-            len(counters) >= 2
-            and counters[-1]["decided_bytes"] == counters[-2]["decided_bytes"]
-        )
         pending = len(state.pending) if wait_pending else 0
-        if target is None and is_drained(pending, flat):
+        if target is None and is_drained(pending, is_idle(counters, clock.time())):
             # Fixed once settled: empty blocks keep the validator height moving.
             target = heights.top("validator")
         if target is not None and heights.top("query") >= target:
             return clock.time() - start
         await clock.asleep(0.1)
     return None
+
+
+def is_idle(counters: Sequence[Mapping[str, Any]], now: float) -> bool:
+    """Decided bytes unchanged over the whole of the last DRAIN_IDLE_S."""
+    recent = [c for c in counters if c["ts"] >= now - DRAIN_IDLE_S]
+    if not recent or now - recent[0]["ts"] < DRAIN_IDLE_S - COUNTER_POLL_S:
+        return False
+    return len({c["decided_bytes"] for c in recent}) == 1
 
 
 def is_drained(pending: int, flat: bool) -> bool:
