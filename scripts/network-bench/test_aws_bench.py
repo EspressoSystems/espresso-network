@@ -1726,6 +1726,27 @@ class RenderUserDataTest(unittest.TestCase):
         self.assertTrue(lines[0].startswith("shutdown -P +"))
         self.assertEqual(lines[0], "shutdown -P +16")
 
+    def test_uv_and_python_installed_after_ttl(self):
+        host = {
+            "name": "ctl",
+            "role": "ctl",
+            "instance_type": "x",
+            "root_gb": 40,
+            "root_iops": 3000,
+            "root_mbps": 125,
+        }
+        text = awsb.render_user_data(host, self.images, ttl_s=60)
+        ttl = text.index("shutdown -P +")
+        uv = text.index(
+            "curl -LsSf https://astral.sh/uv/install.sh"
+            " | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh"
+        )
+        python = text.index("uv python install 3.14")
+        self.assertLess(ttl, uv)
+        self.assertLess(uv, python)
+        self.assertIn("UV_PYTHON_INSTALL_DIR=/opt/uv/python", text)
+        self.assertIn("uv python list --only-installed", text)
+
     def test_every_image_pulled_by_digest(self):
         host = {
             "name": "node0",
@@ -1755,7 +1776,8 @@ class RenderUserDataTest(unittest.TestCase):
         # records what was actually pulled. $pulled: the bash variable holding it. None are
         # leftover Template placeholders.
         self.assertLessEqual(
-            found, {"$digests", "$chrony", "$name", "$digest", "$pulled"}
+            found,
+            {"$digests", "$chrony", "$uv", "$pythons", "$name", "$digest", "$pulled"},
         )
 
     def test_digest_recorded_from_docker_inspect_not_requested_digest(self):

@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run --script
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.14"
 # dependencies = []
 # ///
 r"""AWS benchmark harness for espresso-node: fleet lifecycle, load, and query-service lag.
@@ -13,8 +13,8 @@ measures, collects and destroys.
 `status` shows one run (phase, instances, agent progress, cost so far) or, with `--all`, every
 tagged resource in the region. `destroy DIR` tears one run down; `destroy --orphans` sweeps runs
 whose local state is lost or whose TTL passed. `collect` and `render` redo those steps on an
-existing run dir. `agent-drive` (on ctl) and `agent-host` (on every host) run under system
-python3 from /opt/bench.
+existing run dir. `agent-drive` (on ctl) and `agent-host` (on every host) run under
+uv-managed python 3.14 from /opt/bench.
 
 Prerequisites: opentofu and awscli2 (nix devShell), an AWS profile for the benchmark account
 (`--profile`, default `timeboost-dev`), an ssh key (`--ssh-key`, default `auto`: a fresh key per run, deleted after destroy), and
@@ -202,6 +202,10 @@ RESERVED_GB = 20
 QUERY_JOURNAL_FRACTION = 0.5
 
 BENCH_DIR = "/opt/bench"
+AGENT_PYTHON = (
+    "--setenv=UV_PYTHON_INSTALL_DIR=/opt/uv/python "
+    "/usr/local/bin/uv run --offline --no-project --script"
+)
 SCRIPT_DIR = Path(__file__).resolve().parent
 # On a host the script lives in /opt/bench, whose parents[1] is "/"; only the laptop reads it.
 REPO_ROOT = SCRIPT_DIR.parents[1]
@@ -2740,7 +2744,7 @@ def start_hostmon(remote: Remote) -> None:
         role = remote.hosts[host]["role"]
         remote.ssh(
             host,
-            f"sudo systemd-run --unit bench-host --collect python3 {BENCH_DIR}/aws-bench "
+            f"sudo systemd-run --unit bench-host --collect {AGENT_PYTHON} {BENCH_DIR}/aws-bench "
             f"agent-host {BENCH_DIR}/host.jsonl --role {role}",
         )
 
@@ -2883,7 +2887,7 @@ def parse_docker_time(text: str) -> float:
 def start_agent(remote: Remote) -> None:
     remote.ssh(
         "ctl",
-        f"sudo systemd-run --unit bench-agent --collect python3 {BENCH_DIR}/aws-bench "
+        f"sudo systemd-run --unit bench-agent --collect {AGENT_PYTHON} {BENCH_DIR}/aws-bench "
         f"agent-drive {BENCH_DIR}/agent.json {BENCH_DIR}/out",
     )
 
