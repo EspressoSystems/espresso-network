@@ -2560,7 +2560,9 @@ class RunTeardownGuaranteedTest(unittest.TestCase):
     def test_exception_in_finish_still_destroys(self):
         harness = RunHarness(self)
         runner = FleetRunner([DONE_STATE], describe=DESCRIBE)
-        with unittest.mock.patch.object(awsb, "finish", side_effect=IndexError("x")):
+        with unittest.mock.patch.object(
+            awsb, "finish_run", side_effect=IndexError("x")
+        ):
             code = harness.run(runner)
         self.assertEqual(code, awsb.EXIT_FAILED)
         self.assertTrue(runner.ran("tofu", "destroy"))

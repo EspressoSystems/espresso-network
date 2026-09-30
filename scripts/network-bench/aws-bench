@@ -54,8 +54,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -418,7 +419,9 @@ class Estimate(TypedDict):
     bound_usd: float
 
 
-class Manifest(TypedDict):
+class FleetManifest(TypedDict):
+    """What describes the provisioned fleet, whatever is measured on it."""
+
     name: str
     created_at: str
     argv: list[str]
@@ -426,7 +429,6 @@ class Manifest(TypedDict):
     hosts: list[HostSpec]
     peers: dict[str, list[str]]
     phase: str
-    phase_seconds: dict[str, list[float]]
     estimate: Estimate
     # Filled in by preflight for `run` (absent for an offline `plan`): needed again at
     # `wait_hosts` to check pulled digests, and at `render` for the deployment block.
@@ -434,12 +436,18 @@ class Manifest(TypedDict):
     ami_id: NotRequired[str]
     images: NotRequired[dict[str, ImageInfo]]
     hosts_info: NotRequired[dict[str, "HostInfo"]]
-    start_spread_s: NotRequired[float]
     cost_usd: NotRequired[dict[str, float]]
-    git_rev: NotRequired[str]
     expires_at: NotRequired[str]
-    config_hash: NotRequired[str]
     ssh_public_key: NotRequired[str]
+
+
+class Manifest(FleetManifest):
+    """`manifest.json`: the fleet plus what is specific to one measurement."""
+
+    phase_seconds: dict[str, list[float]]
+    start_spread_s: NotRequired[float]
+    git_rev: NotRequired[str]
+    config_hash: NotRequired[str]
 
 
 class AgentState(TypedDict):
@@ -2167,17 +2175,30 @@ class Remote:
 
 
 @dataclass
-class Fleet:
-    """One run's mutable state after `tofu apply` was reached. `error` is set by whichever phase
-    failed first; `interrupted` marks a Ctrl-C, which also asks before destroying."""
+class FleetState:
+    """The fleet from `tofu apply` on. `remote` is set once `tofu output` gave the hosts."""
 
     run: Runner
     cfg: RunConfig
-    run_dir: Path
+    fleet_dir: Path
     tf: Terraform
     interrupts: Interrupts
-    started: float
     remote: Remote | None = None
+
+    @property
+    def manifest(self) -> FleetManifest:
+        return nb.read_json(self.fleet_dir / "manifest.json")
+
+
+@dataclass
+class Run:
+    """One measurement on a fleet. `error` is set by whichever phase failed first;
+    `interrupted` marks a Ctrl-C, which also asks before destroying."""
+
+    fleet: FleetState
+    run_dir: Path
+    cfg: RunConfig
+    started: float
     agent: AgentState | None = None
     agent_started: bool = False
     error: str | None = None
@@ -2215,17 +2236,12 @@ def cmd_run(
         interrupts = Interrupts()
         interrupts.install()
     try:
-        fleet = Fleet(run, cfg, run_dir, tf, interrupts, started)
-        measure(fleet)
-        try:
-            result = finish(fleet)
-        except (
-            Exception
-        ) as exc:  # the fleet costs money until teardown, whatever failed
-            log.exception("finish failed")
-            fleet.error = fleet.error or f"finish failed: {type(exc).__name__}: {exc}"
-            result = None
-        return teardown(fleet, result, ask_destroy)
+        fleet = FleetState(run, cfg, run_dir, tf, interrupts)
+        bench_run = Run(fleet, run_dir, cfg, started)
+        with recording(bench_run):
+            up_fleet(fleet)
+        result = run_on_fleet(bench_run)
+        return teardown(bench_run, result, ask_destroy)
     except Exception:
         log.exception("unexpected error")
         log.error(LEFTOVER_MESSAGE, run_dir)
@@ -2283,94 +2299,123 @@ def plan_fleet(
     return run_dir, tf, hosts, pre
 
 
-def enter_phase(fleet: Fleet, name: str, message: str) -> None:
+def enter_phase(fleet: FleetState, name: str, message: str) -> None:
     fleet.interrupts.check()
     fleet.interrupts.phase = name
-    update_manifest(fleet.run_dir, name)
+    update_manifest(fleet.fleet_dir, name)
     log.info("%s: %s", name, message)
 
 
-def measure(fleet: Fleet) -> None:
-    """Everything from `tofu apply` to the end of the load. Never raises: a failure is recorded
-    in `fleet.error` so that `finish` and `teardown` always run against the live fleet."""
+@contextmanager
+def recording(run: Run) -> Iterator[None]:
+    """Records a failure in `run.error` instead of raising: the fleet costs money until
+    teardown, whatever failed."""
     try:
-        enter_phase(fleet, "applying", "tofu apply")
-        fleet.tf.apply()
-        remote = connect(fleet)
-        manifest = fleet.manifest
-        enter_phase(
-            fleet, "waiting-hosts", f"ssh and cloud-init on {len(remote.hosts)} hosts"
-        )
-        wait_hosts(remote, manifest, fleet.run_dir, fleet.interrupts)
+        yield
+    except Interrupted:
+        run.interrupted = True
+        run.error = "interrupted"
+        log.error("interrupted")
+    except (TfFailed, RemoteError, nb.NetworkError) as exc:
+        run.error = str(exc)
+        log.error("error: %s", exc)
+    except Exception as exc:
+        log.exception("unexpected error")
+        run.error = f"{type(exc).__name__}: {exc}"
+
+
+def up_fleet(fleet: FleetState) -> None:
+    """`tofu apply` until every host is reachable and cloud-init is done. Raises; `remote` is
+    set as soon as the hosts are known, so a failed wait can still be collected."""
+    enter_phase(fleet, "applying", "tofu apply")
+    fleet.tf.apply()
+    remote = connect(fleet)
+    enter_phase(
+        fleet, "waiting-hosts", f"ssh and cloud-init on {len(remote.hosts)} hosts"
+    )
+    wait_hosts(remote, fleet.manifest, fleet.fleet_dir, fleet.interrupts)
+
+
+def run_on_fleet(run: Run) -> nb.BenchResult | None:
+    """One measurement, then collect and report. Never raises. A `run.error` from `up_fleet`
+    skips the load; the collect still runs against whatever hosts are known."""
+    if run.error is None:
+        measure_run(run)
+    try:
+        return finish_run(run)
+    except Exception as exc:  # the fleet costs money until teardown, whatever failed
+        log.exception("finish failed")
+        run.error = run.error or f"finish failed: {type(exc).__name__}: {exc}"
+        return None
+
+
+def measure_run(run: Run) -> None:
+    """Everything from `shipping` to the end of the load. Never raises: a failure is recorded
+    in `run.error` so that `finish_run` and `teardown` always run against the live fleet."""
+    fleet = run.fleet
+    with recording(run):
+        remote = fleet.remote
+        assert remote is not None, "up_fleet must run first"
         enter_phase(fleet, "shipping", "files, host monitors, containers")
-        ship(remote, fleet.run_dir)
+        ship(remote, run.run_dir)
         start_hostmon(remote)
         create_containers(remote)
         enter_phase(fleet, "services", "anvil, deploy, orchestrator, relay, postgres")
-        start_support(remote, genesis_contracts(fleet.run_dir), fleet.interrupts)
+        start_support(remote, genesis_contracts(run.run_dir), fleet.interrupts)
         enter_phase(fleet, "nodes", "synchronized docker start")
         at = fleet_time(remote) + DOCKER_START_LEAD_S
         spread = start_nodes(remote, node_hosts(remote.hosts), at)
-        update_manifest(fleet.run_dir, "measuring", start_spread_s=spread)
+        update_manifest(run.run_dir, "measuring", start_spread_s=spread)
         log.info("measuring: nodes started within %.2f s of each other", spread)
         start_agent(remote)
-        fleet.agent_started = True
-        fleet.agent = poll_agent(remote, fleet.run_dir, fleet.cfg, fleet.interrupts)
-    except Interrupted:
-        fleet.interrupted = True
-        fleet.error = "interrupted"
-        log.error("interrupted")
-    except (TfFailed, RemoteError, nb.NetworkError) as exc:
-        fleet.error = str(exc)
-        log.error("error: %s", exc)
-    except Exception as exc:  # the fleet costs money until teardown, whatever failed
-        log.exception("unexpected error")
-        fleet.error = f"{type(exc).__name__}: {exc}"
+        run.agent_started = True
+        run.agent = poll_agent(remote, run.run_dir, run.cfg, fleet.interrupts)
 
 
-def connect(fleet: Fleet) -> Remote:
+def connect(fleet: FleetState) -> Remote:
     manifest = fleet.manifest
     hosts_info = parse_hosts_output(fleet.tf.output(), manifest["hosts"])
-    nb.write_json(fleet.run_dir / "hosts.json", hosts_info)
-    update_manifest(fleet.run_dir, "provisioned", hosts_info=hosts_info)
-    render_host_files(fleet.run_dir, fleet.cfg, manifest, hosts_info)
+    nb.write_json(fleet.fleet_dir / "hosts.json", hosts_info)
+    update_manifest(fleet.fleet_dir, "provisioned", hosts_info=hosts_info)
+    render_host_files(fleet.fleet_dir, fleet.cfg, manifest, hosts_info)
     fleet.remote = Remote(
         fleet.run,
-        fleet.run_dir,
-        ssh_key_path(fleet.cfg.ssh_key, fleet.run_dir),
+        fleet.fleet_dir,
+        ssh_key_path(fleet.cfg.ssh_key, fleet.fleet_dir),
         hosts_info,
     )
     return fleet.remote
 
 
-def finish(fleet: Fleet) -> nb.BenchResult | None:
+def finish_run(run: Run) -> nb.BenchResult | None:
     """Stops the load if it still runs, freezes and collects every host, then reports. Signals
     are ignored from here on: teardown must not be cut short."""
-    fleet.interrupts.disarm()
-    remote = fleet.remote
+    interrupts = run.fleet.interrupts
+    interrupts.disarm()
+    remote = run.fleet.remote
     if remote is not None:
-        update_manifest(fleet.run_dir, "collecting")
+        update_manifest(run.run_dir, "collecting")
         log.info("collecting: stop, freeze, logs, host samples, final rsync")
 
         def step(what: str, action: Callable[[], object]) -> None:
-            if fleet.interrupts.skip_collect.is_set():
+            if interrupts.skip_collect.is_set():
                 log.warning("%s skipped", what)
             else:
                 best_effort(what, action)
 
-        if fleet.error is not None:
+        if run.error is not None:
             step("stop agent", lambda: stop_agent(remote))
         step("freeze", lambda: freeze(remote))
         step(
             "collect",
-            lambda: collect_hosts(remote, list(remote.hosts.values()), fleet.run_dir),
+            lambda: collect_hosts(remote, list(remote.hosts.values()), run.run_dir),
         )
-        if fleet.agent_started:
+        if run.agent_started:
             step(
                 "final rsync",
-                lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", fleet.run_dir),
+                lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", run.run_dir),
             )
-    return report(fleet)
+    return report(run)
 
 
 def best_effort(what: str, action: Callable[[], object]) -> None:
@@ -2384,20 +2429,20 @@ def best_effort(what: str, action: Callable[[], object]) -> None:
         log.exception("%s failed unexpectedly", what)
 
 
-def report(fleet: Fleet) -> nb.BenchResult | None:
+def report(run: Run) -> nb.BenchResult | None:
     # A driver-side error after the load finished still leaves a complete run to analyze.
-    fleet.agent = fleet.agent or finished_agent_state(fleet.run_dir)
-    if fleet.agent is not None:
+    run.agent = run.agent or finished_agent_state(run.run_dir)
+    if run.agent is not None:
         try:
-            write_run_json(fleet)
-            result = write_report(fleet.run_dir)
+            write_run_json(run)
+            result = write_report(run.run_dir)
         except Exception as exc:
             log.exception("report failed")
-            fleet.error = f"report failed: {type(exc).__name__}: {exc}"
+            run.error = f"report failed: {type(exc).__name__}: {exc}"
         else:
             log_result(result)
             return result
-    write_failure_summary(fleet.run_dir, fleet.manifest, fleet.error)
+    write_failure_summary(run.run_dir, run.manifest, run.error)
     return None
 
 
@@ -2407,46 +2452,54 @@ def log_result(result: nb.BenchResult) -> None:
 
 
 def teardown(
-    fleet: Fleet, result: nb.BenchResult | None, ask_destroy: Callable[[float], bool]
+    run: Run, result: nb.BenchResult | None, ask_destroy: Callable[[float], bool]
 ) -> int:
     """Always attempts the destroy. An exception in the bookkeeping afterwards is logged and
     leaves the exit code to the result if the destroy worked, else to `EXIT_LEFTOVER`."""
-    run_dir = fleet.run_dir
-    best_effort("mark destroying", lambda: update_manifest(run_dir, "destroying"))
     destroyed = False
     try:
-        destroyed = destroy_unless_kept(fleet, ask_destroy)
-        code = record_outcome(fleet, result, destroyed)
+        destroyed = down_fleet(
+            run.fleet,
+            lambda: (
+                run.cfg.yes
+                or not run.interrupted
+                or ask_destroy(DESTROY_PROMPT_TIMEOUT_S)
+            ),
+        )
+        code = record_outcome(run, result, destroyed)
     except Exception:
         log.exception("teardown failed")
-        code = exit_code(fleet, result, destroyed)
+        code = exit_code(run.error, result, destroyed)
     if not destroyed:
-        log.error(LEFTOVER_MESSAGE, run_dir)
+        log.error(LEFTOVER_MESSAGE, run.run_dir)
     return code
 
 
-def destroy_unless_kept(fleet: Fleet, ask_destroy: Callable[[float], bool]) -> bool:
+def down_fleet(fleet: FleetState, confirm_destroy: Callable[[], bool]) -> bool:
+    """Destroys the fleet unless `--keep` or `confirm_destroy` says no. True when destroyed."""
+    fleet_dir = fleet.fleet_dir
+    best_effort("mark destroying", lambda: update_manifest(fleet_dir, "destroying"))
     if fleet.cfg.keep:
         log.info(
             "--keep: fleet stays up until its TTL, ssh key kept; then run: aws-bench destroy %s",
-            fleet.run_dir,
+            fleet_dir,
         )
         return False
-    if fleet.cfg.yes or not fleet.interrupted or ask_destroy(DESTROY_PROMPT_TIMEOUT_S):
+    if confirm_destroy():
         log.info("destroying: tofu destroy")
         return destroy_fleet(fleet)
     return False
 
 
-def record_outcome(fleet: Fleet, result: nb.BenchResult | None, destroyed: bool) -> int:
-    cfg, run_dir = fleet.cfg, fleet.run_dir
+def record_outcome(run: Run, result: nb.BenchResult | None, destroyed: bool) -> int:
+    cfg, run_dir = run.cfg, run.run_dir
     cost = None
     if destroyed:
         remove_ssh_key(cfg.ssh_key, run_dir)
-        cost = final_cost(fleet)
-    code = exit_code(fleet, result, destroyed)
+        cost = final_cost(run.fleet)
+    code = exit_code(run.error, result, destroyed)
     update_manifest(run_dir, "done" if destroyed else "left-running")
-    append_index(cfg.out_root, fleet.manifest, result, code, destroyed, cost)
+    append_index(cfg.out_root, run.manifest, result, code, destroyed, cost)
     if cost is not None:
         log.info(
             "destroyed; actual cost $%.2f (bound $%.2f); run dir %s",
@@ -2457,26 +2510,28 @@ def record_outcome(fleet: Fleet, result: nb.BenchResult | None, destroyed: bool)
     return code
 
 
-def exit_code(fleet: Fleet, result: nb.BenchResult | None, fleet_gone: bool) -> int:
+def exit_code(
+    error: str | None, result: nb.BenchResult | None, fleet_gone: bool
+) -> int:
     if not fleet_gone:
         return EXIT_LEFTOVER
-    if fleet.error is not None or result is None:
+    if error is not None or result is None:
         return EXIT_FAILED
     return EXIT_OK if result["validity"]["valid"] else EXIT_INVALID
 
 
-def final_cost(fleet: Fleet) -> dict[str, float] | None:
+def final_cost(fleet: FleetState) -> dict[str, float] | None:
     try:
         cost = actual_cost(fleet.run, fleet.manifest)
     except (RemoteError, ValueError) as exc:
         log.warning("actual cost unavailable: %s", exc)
         return None
-    nb.write_json(fleet.run_dir / "cost.json", cost)
-    update_manifest(fleet.run_dir, "destroyed", cost_usd=cost)
+    nb.write_json(fleet.fleet_dir / "cost.json", cost)
+    update_manifest(fleet.fleet_dir, "destroyed", cost_usd=cost)
     return cost
 
 
-def destroy_fleet(fleet: Fleet) -> bool:
+def destroy_fleet(fleet: FleetState) -> bool:
     """`tofu destroy` with retries, then a tag sweep. False when `tofu destroy` never worked,
     even if the sweep found and terminated everything: the state file is then out of date."""
     for attempt in range(1, DESTROY_RETRIES + 1):
@@ -2489,10 +2544,12 @@ def destroy_fleet(fleet: Fleet) -> bool:
             )
             if attempt < DESTROY_RETRIES:
                 time.sleep(DESTROY_BACKOFF_S)
-    log.warning("tofu destroy failed; sweeping resources tagged %s", fleet.run_dir.name)
+    log.warning(
+        "tofu destroy failed; sweeping resources tagged %s", fleet.fleet_dir.name
+    )
     try:
         swept = sweep(
-            fleet.run, fleet.cfg.region, fleet.run_dir.name, fleet.cfg.profile
+            fleet.run, fleet.cfg.region, fleet.fleet_dir.name, fleet.cfg.profile
         )
     except RemoteError as exc:
         log.error("sweep failed: %s", exc)
@@ -2719,7 +2776,10 @@ def node_hosts(hosts: dict[str, HostInfo]) -> list[HostInfo]:
 
 
 def render_host_files(
-    run_dir: Path, cfg: RunConfig, manifest: Manifest, hosts: dict[str, HostInfo]
+    run_dir: Path,
+    cfg: RunConfig,
+    manifest: FleetManifest,
+    hosts: dict[str, HostInfo],
 ) -> None:
     dotenv = parse_dotenv((REPO_ROOT / ".env").read_text())
     for spec in manifest["hosts"]:
@@ -2768,7 +2828,7 @@ def wait_ssh(remote: Remote, host: str, interrupts: Interrupts) -> None:
 
 
 def wait_hosts(
-    remote: Remote, manifest: Manifest, run_dir: Path, interrupts: Interrupts
+    remote: Remote, manifest: FleetManifest, run_dir: Path, interrupts: Interrupts
 ) -> None:
     """Per host: ssh reachable, `cloud-init status --wait`, then `ready.json` saved. Pulled
     digests that differ from the manifest are only logged here; `check_validity_aws` marks the
@@ -3302,7 +3362,7 @@ def destroy_run(run: Runner, args: argparse.Namespace) -> int:
     setup_logging(run_dir)
     cfg = config_from_manifest(manifest["config"])
     tf = Terraform(run, cfg.tf, run_dir / "terraform", terraform_env())
-    fleet = Fleet(run, cfg, run_dir, tf, Interrupts(), time.time())
+    fleet = FleetState(run, cfg, run_dir, tf, Interrupts())
     update_manifest(run_dir, "destroying")
     if not destroy_fleet(fleet):
         update_manifest(run_dir, "left-running")
@@ -3315,8 +3375,8 @@ def destroy_run(run: Runner, args: argparse.Namespace) -> int:
         if (run_dir / "result.json").exists()
         else None
     )
-    code = exit_code(fleet, result, True)
-    append_index(run_dir.parent, fleet.manifest, result, code, True, cost)
+    code = exit_code(None, result, True)
+    append_index(run_dir.parent, manifest, result, code, True, cost)
     remove_ssh_key(cfg.ssh_key, run_dir)
     log.info("destroyed %s", name)
     return EXIT_OK
@@ -3561,13 +3621,13 @@ def format_runs(
     return lines
 
 
-def write_run_json(fleet: Fleet) -> None:
+def write_run_json(run: Run) -> None:
     """`run.json` as `netbench.analyze` reads it, from the agent's final state."""
-    agent = fleet.agent
+    agent = run.agent
     assert agent is not None
     nb.write_json(
-        fleet.run_dir / "run.json",
-        run_json(fleet.manifest, fleet.cfg.tag, agent, fleet.started, time.time()),
+        run.run_dir / "run.json",
+        run_json(run.manifest, run.cfg.tag, agent, run.started, time.time()),
     )
 
 
@@ -3966,7 +4026,7 @@ def delete_security_group(run: Runner, region: str, group: str, profile: str) ->
 TERMINATION_TIME = re.compile(r"\((\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) GMT\)")
 
 
-def actual_cost(run: Runner, manifest: Manifest) -> dict[str, float]:
+def actual_cost(run: Runner, manifest: FleetManifest) -> dict[str, float]:
     """expected, bound and actual USD, with the run's wall time in `duration_s`. Actual is the
     estimate's price lines at the time between the first launch and the last termination,
     from `describe-instances` (terminated instances stay listed for about an hour)."""
@@ -4000,7 +4060,7 @@ def actual_cost(run: Runner, manifest: Manifest) -> dict[str, float]:
     }
 
 
-def manifest_cost(manifest: Manifest, duration_s: float) -> float:
+def manifest_cost(manifest: FleetManifest, duration_s: float) -> float:
     """USD of the whole fleet running `duration_s`, at the prices the estimate recorded."""
     estimate = manifest["estimate"]
     prices: Prices = {
