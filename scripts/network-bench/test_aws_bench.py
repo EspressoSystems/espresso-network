@@ -123,6 +123,22 @@ def two_node_prices() -> "awsb.Prices":
 
 
 # REQ:awsbench-topology
+class GeometricStepsTest(unittest.TestCase):
+    def test_default_ramp_ends_at_the_target(self):
+        steps = awsb.geometric_steps(4.0, 1.5, 200.0)
+        self.assertEqual(steps[0], 4.0)
+        self.assertEqual(steps[-1], 200.0)
+        self.assertEqual(list(steps), sorted(set(steps)))
+        self.assertEqual(steps[:4], (4.0, 6.0, 9.0, 13.5))
+        self.assertLess(steps[-2], 200.0)
+
+    def test_run_config_uses_the_ramp(self):
+        load = awsb.RunConfig(tag="x").load
+        self.assertEqual(load.steps, awsb.geometric_steps(4.0, 1.5, 200.0))
+        self.assertEqual(load.workers, awsb.SUBMIT_WORKERS)
+        self.assertEqual(netbench.BenchConfig().workers, 6)
+
+
 class PeersTest(unittest.TestCase):
     def test_excludes_self_and_node0(self):
         for n in range(3, 9):

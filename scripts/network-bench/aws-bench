@@ -81,6 +81,13 @@ COLLECT_MAX_S = 600.0
 DESTROY_S = 180.0
 # Operator reaction time if the laptop is unattended, e.g. a 2am run.
 TTL_MARGIN_S = 900.0
+# The load ramp: x1.5 per step from 4 MB/s up to the 200 MB/s target. The staircase stops at the
+# first failing step, so the tail costs nothing on a slower network.
+STEP_START_MB_S = 4.0
+STEP_FACTOR = 1.5
+STEP_TOP_MB_S = 200.0
+# Submit threads: a 1 MB POST takes tens of ms on the private network; 200 tx/s needs this many.
+SUBMIT_WORKERS = 32
 
 # gp3 includes this many IOPS and this much throughput at no extra charge.
 GP3_BASELINE_IOPS = 3000
@@ -457,7 +464,7 @@ class RunConfig:
     region: str = "eu-west-1"
     profile: str = "timeboost-dev"
     account: str = "027574771971"
-    load: nb.BenchConfig = field(default_factory=nb.BenchConfig)
+    load: nb.BenchConfig = field(default_factory=lambda: aws_load())
     ready_timeout_s: float = 600.0
     max_block_size: str = "100mb"
     root_gb: str = "auto"
@@ -1702,6 +1709,23 @@ def render_start_sh(host: HostSpec, images: dict[str, ImageInfo]) -> str:
     return script
 
 
+def geometric_steps(start: float, factor: float, top: float) -> tuple[float, ...]:
+    """`start`, `start*factor`, ... below `top`, then `top` itself."""
+    steps = []
+    rate = start
+    while rate < top:
+        steps.append(round(rate, 1))
+        rate *= factor
+    return (*steps, top)
+
+
+def aws_load() -> nb.BenchConfig:
+    return nb.BenchConfig(
+        steps=geometric_steps(STEP_START_MB_S, STEP_FACTOR, STEP_TOP_MB_S),
+        workers=SUBMIT_WORKERS,
+    )
+
+
 def add_run_flags(parser: argparse.ArgumentParser) -> None:
     defaults = RunConfig(tag="")
     load = defaults.load
@@ -1715,7 +1739,12 @@ def add_run_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--region", default=defaults.region)
     parser.add_argument("--profile", default=defaults.profile)
     parser.add_argument("--account", default=defaults.account)
-    parser.add_argument("--steps", type=nb.parse_rates, default=load.steps)
+    parser.add_argument(
+        "--steps",
+        type=nb.parse_rates,
+        default=load.steps,
+        help="MB/s per step, increasing; CI uses a linear ramp, AWS x1.5 up to 200",
+    )
     parser.add_argument("--step-s", type=int, default=load.step_s)
     parser.add_argument("--cap-s", type=float, default=load.cap_s)
     parser.add_argument("--tx-size", type=int, default=load.tx_size)
