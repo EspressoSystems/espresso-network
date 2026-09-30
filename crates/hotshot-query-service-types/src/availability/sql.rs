@@ -1,15 +1,31 @@
 #![cfg(feature = "sqlx")]
 //! Mappings between availability types and SQL types.
 
-use std::fmt::Display;
+use std::{
+    fmt::Display,
+    path::{Path, PathBuf},
+    sync::LazyLock,
+};
 
 use anyhow::Context;
-use hotshot_types::traits::BlockPayload;
+use hotshot_types::traits::{BlockPayload, block_contents::BlockHeader as _};
 use serde_json::Value;
 use sqlx::{ColumnIndex, prelude::*, types::Json};
 
 use super::*;
 use crate::QueryError;
+
+static PAYLOAD_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+    let dir = PathBuf::from(std::env::var_os("ESPRESSO_QUERY_PAYLOAD_DIR")?);
+    std::fs::create_dir_all(&dir).expect("creating ESPRESSO_QUERY_PAYLOAD_DIR");
+    tracing::info!(dir = %dir.display(), "storing query payloads in files");
+    Some(dir)
+});
+
+/// Directory holding payload bytes as files named by payload hash, if configured.
+pub fn payload_dir() -> Option<&'static Path> {
+    PAYLOAD_DIR.as_deref()
+}
 
 /// Columns which must be selected for `LeafQueryData::from_row` to work.
 pub const LEAF_COLUMNS: &str = "leaf, qc";
@@ -52,12 +68,18 @@ where
     fn from_row(row: &'r R) -> sqlx::Result<Self> {
         // First, check if we have the payload for this block yet.
         let size = row.try_get::<i32, _>("payload_size")? as u64;
-        let payload_data = row.try_get::<Vec<u8>, _>("payload_data")?;
+        let mut payload_data = row.try_get::<Vec<u8>, _>("payload_data")?;
 
         // Reconstruct the full header.
         let header_data = row.try_get("header_data")?;
         let header: Header<Types> =
             serde_json::from_value(header_data).decode_error("malformed header")?;
+
+        if let Some(dir) = payload_dir().filter(|_| payload_data.is_empty()) {
+            let path = dir.join(header.payload_commitment().to_string());
+            payload_data = std::fs::read(&path)
+                .decode_error(format!("reading payload file {}", path.display()))?;
+        }
 
         // Reconstruct the full block payload.
         let payload = Payload::<Types>::from_bytes(&payload_data, header.metadata());

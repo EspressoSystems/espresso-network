@@ -6316,6 +6316,7 @@ dependencies = [
  "sqlx",
  "tagged-base64",
  "time 0.3.51",
+ "tracing",
  "vbs",
  "versions",
 ]
