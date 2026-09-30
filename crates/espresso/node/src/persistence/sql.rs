@@ -67,6 +67,7 @@ use hotshot_types::{
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
+        EncodeBytes as _,
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
     },
@@ -987,6 +988,12 @@ struct DecidedLeaf {
     cert: CertificatePair<SeqTypes>,
 }
 
+struct ReconstructedPayload {
+    view: ViewNumber,
+    header: Header,
+    payload: Payload,
+}
+
 fn decide_events_from_chain(
     mut chain: Vec<DecidedLeaf>,
     cert2: Option<Certificate2<SeqTypes>>,
@@ -1168,6 +1175,7 @@ impl Persistence {
                 mut da_proposals,
                 state_certs,
                 cert2,
+                reconstructed,
             )) = serializable_retry!(self, || async {
                 let mut tx = self.db.read().await?;
 
@@ -1341,6 +1349,33 @@ impl Persistence {
                             .context("deserializing decided cert2")
                     })
                     .transpose()?;
+
+                // No lower bound: a payload stored for a view an earlier decide already passed
+                // still has to reach the consumer.
+                let reconstructed = tx
+                    .fetch_all(
+                        query(
+                            "SELECT view, header, payload FROM reconstructed_payload WHERE view \
+                             <= $1 ORDER BY view",
+                        )
+                        .bind(to_view.u64() as i64),
+                    )
+                    .await?
+                    .into_iter()
+                    .map(|row| {
+                        let view: i64 = row.get("view");
+                        let header_bytes: Vec<u8> = row.get("header");
+                        let payload_bytes: Vec<u8> = row.get("payload");
+                        let header = bincode::deserialize::<Header>(&header_bytes)
+                            .context("deserializing reconstructed payload header")?;
+                        let payload = Payload::from_bytes(&payload_bytes, header.metadata());
+                        Ok(ReconstructedPayload {
+                            view: ViewNumber::new(view as u64),
+                            header,
+                            payload,
+                        })
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
                 drop(tx);
                 Ok(Some((
                     from_view,
@@ -1351,6 +1386,7 @@ impl Persistence {
                     da_proposals,
                     state_certs,
                     cert2,
+                    reconstructed,
                 )))
             })
             .await?
@@ -1414,6 +1450,24 @@ impl Persistence {
             );
 
             for event in decide_events_from_chain(chain, cert2, deciding_qc.clone()) {
+                consumer.handle_event(&event).await?;
+            }
+
+            let replayed = reconstructed
+                .iter()
+                .map(|reconstructed| reconstructed.view.u64() as i64)
+                .collect::<Vec<_>>();
+            for ReconstructedPayload {
+                view,
+                header,
+                payload,
+            } in reconstructed
+            {
+                let event = CoordinatorEvent::BlockPayloadReconstructed {
+                    view,
+                    header,
+                    payload: Arc::new(payload),
+                };
                 consumer.handle_event(&event).await?;
             }
 
@@ -1487,6 +1541,14 @@ impl Persistence {
                         .bind(to_view_i64),
                 )
                 .await?;
+                // Not `view <= to_view`: a payload for an older view stored after the read above
+                // was never replayed, and has to survive for the next decide.
+                for view in &replayed {
+                    tx.execute(
+                        query("DELETE FROM reconstructed_payload WHERE view = $1").bind(*view),
+                    )
+                    .await?;
+                }
 
                 // Clean up leaves, but do not delete the most recent one (all leaves with a view
                 // number less than the given value). This is necessary to ensure that, in case of
@@ -1661,6 +1723,7 @@ const PRUNE_TABLES: &[&str] = &[
     "quorum_certificate2",
     "state_cert",
     "decided_cert2",
+    "reconstructed_payload",
 ];
 
 async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
@@ -1738,26 +1801,34 @@ impl SequencerPersistence for Persistence {
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
-        let values = leaf_chain
-            .into_iter()
-            .map(|(info, cert)| {
-                // The leaf may come with a large payload attached. We don't care about this payload
-                // because we already store it separately, as part of the DA proposal. Storing it
-                // here contributes to load on the DB for no reason, so we remove it before
-                // serializing the leaf.
-                let mut leaf = info.leaf.clone();
-                leaf.unfill_block_payload();
+        let mut values = Vec::new();
+        let mut payloads = Vec::new();
+        for (info, cert) in leaf_chain {
+            let mut leaf = info.leaf.clone();
+            let view = cert.view_number().u64() as i64;
+            // Storing the payload inside the leaf would only add DB load: the query service gets
+            // it from the DA proposal. At 0.6 the only leaf that arrives with a payload is a block
+            // this node built, and its DA write is not ordered with the decide processor, so it
+            // is also queued for replay.
+            if let Some(payload) = leaf.unfill_block_payload()
+                && !self.consensus_only
+                && leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
+            {
+                payloads.push((
+                    view,
+                    bincode::serialize(leaf.block_header())?,
+                    payload.encode().to_vec(),
+                ));
+            }
 
-                let view = cert.view_number().u64() as i64;
-                let leaf_bytes = bincode::serialize(&leaf)?;
-                let qc_bytes = bincode::serialize(cert.qc())?;
-                let next_epoch_qc_bytes = match cert.next_epoch_qc() {
-                    Some(qc) => Some(bincode::serialize(qc)?),
-                    None => None,
-                };
-                Ok((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            let leaf_bytes = bincode::serialize(&leaf)?;
+            let qc_bytes = bincode::serialize(cert.qc())?;
+            let next_epoch_qc_bytes = match cert.next_epoch_qc() {
+                Some(qc) => Some(bincode::serialize(qc)?),
+                None => None,
+            };
+            values.push((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes));
+        }
 
         // Append the new leaves. We do this in its own transaction because even if GC or the
         // event consumer later fails, there is no need to abort the storage of the leaves.
@@ -1770,6 +1841,15 @@ impl SequencerPersistence for Persistence {
                 values.clone(),
             )
             .await?;
+            if !payloads.is_empty() {
+                tx.upsert(
+                    "reconstructed_payload",
+                    ["view", "header", "payload"],
+                    ["view"],
+                    payloads.clone(),
+                )
+                .await?;
+            }
             tx.commit().await
         })
         .await?;
@@ -2048,6 +2128,34 @@ impl SequencerPersistence for Persistence {
             .internal_append_da_duration
             .add_point(now.elapsed().as_secs_f64());
         res
+    }
+
+    async fn append_reconstructed_payload(
+        &self,
+        view: ViewNumber,
+        header: &Header,
+        payload: &Payload,
+    ) -> anyhow::Result<()> {
+        if self.consensus_only {
+            return Ok(());
+        }
+        let row = (
+            view.u64() as i64,
+            bincode::serialize(header).context("serializing header")?,
+            payload.encode().to_vec(),
+        );
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "reconstructed_payload",
+                ["view", "header", "payload"],
+                ["view"],
+                [row.clone()],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn record_action(
