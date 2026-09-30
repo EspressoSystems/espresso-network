@@ -2385,7 +2385,9 @@ def best_effort(what: str, action: Callable[[], object]) -> None:
 
 
 def report(fleet: Fleet) -> nb.BenchResult | None:
-    if fleet.error is None and fleet.agent is not None:
+    # A driver-side error after the load finished still leaves a complete run to analyze.
+    fleet.agent = fleet.agent or finished_agent_state(fleet.run_dir)
+    if fleet.agent is not None:
         try:
             write_run_json(fleet)
             result = write_report(fleet.run_dir)
@@ -3190,6 +3192,14 @@ def cmd_collect(args: argparse.Namespace, run: Runner = _run) -> int:
 def cmd_render(args: argparse.Namespace) -> int:
     """Analyzes the collected files again, offline; `--baseline` adds the comparison."""
     run_dir: Path = args.dir
+    agent = finished_agent_state(run_dir)
+    if not (run_dir / "run.json").exists() and agent is not None:
+        manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+        started = datetime.fromisoformat(manifest["created_at"]).timestamp()
+        nb.write_json(
+            run_dir / "run.json",
+            run_json(manifest, manifest["config"]["tag"], agent, started, agent["t1"]),
+        )
     if not (run_dir / "run.json").exists():
         raise Refused(
             f"{run_dir} has no run.json: the run produced no result, see summary.md"
@@ -3555,29 +3565,43 @@ def write_run_json(fleet: Fleet) -> None:
     """`run.json` as `netbench.analyze` reads it, from the agent's final state."""
     agent = fleet.agent
     assert agent is not None
-    manifest = fleet.manifest
     nb.write_json(
         fleet.run_dir / "run.json",
-        {
-            "meta": {
-                "sha": manifest["git_rev"],
-                "ref": fleet.cfg.tag,
-                "event": "aws",
-                "run_id": None,
-                "run_url": None,
-                "pr": None,
-                "local": False,
-            },
-            "config_hash": manifest["config_hash"],
-            "started": fleet.started,
-            "wall_s": time.time() - fleet.started,
-            "ready_s": agent["ready_s"],
-            "t0": agent["t0"],
-            "t1": agent["t1"],
-            "teardown": [],
-            "error": None,
-        },
+        run_json(fleet.manifest, fleet.cfg.tag, agent, fleet.started, time.time()),
     )
+
+
+def run_json(
+    manifest: Manifest, tag: str, agent: AgentState, started: float, now: float
+) -> dict[str, Any]:
+    return {
+        "meta": {
+            "sha": manifest["git_rev"],
+            "ref": tag,
+            "event": "aws",
+            "run_id": None,
+            "run_url": None,
+            "pr": None,
+            "local": False,
+        },
+        "config_hash": manifest["config_hash"],
+        "started": started,
+        "wall_s": now - started,
+        "ready_s": agent["ready_s"],
+        "t0": agent["t0"],
+        "t1": agent["t1"],
+        "teardown": [],
+        "error": None,
+    }
+
+
+def finished_agent_state(run_dir: Path) -> AgentState | None:
+    """The collected `agent-state.json` when the load finished, whatever the driver did after."""
+    path = run_dir / "agent-state.json"
+    if not path.exists():
+        return None
+    state: AgentState = nb.read_json(path)
+    return state if state["phase"] == "done" else None
 
 
 def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.BenchResult:
