@@ -1513,6 +1513,31 @@ class RenderNodeEnvTest(unittest.TestCase):
         text = awsb.render_node_env(host, self.hosts, awsb.pg_endpoint())
         return dict(line.split("=", 1) for line in text.splitlines())
 
+    def test_node_env_goes_to_every_node_and_overrides(self):
+        extra = ("ESPRESSO_QUERY_PAYLOAD_DIR=/payload", "RUST_LOG=debug,a=b")
+        for host in awsb.plan_hosts(self.cfg):
+            if host["role"] == "ctl":
+                continue
+            pg = awsb.pg_endpoint() if host["role"] == "query" else None
+            text = awsb.render_node_env(host, self.hosts, pg, extra)
+            env = dict(line.split("=", 1) for line in text.splitlines())
+            self.assertEqual(env["ESPRESSO_QUERY_PAYLOAD_DIR"], "/payload")
+            self.assertEqual(env["RUST_LOG"], "debug,a=b")
+            self.assertEqual(text.count("RUST_LOG="), 1)
+
+    def test_node_env_flag(self):
+        argv = ["run", "--tag", "x"]
+        self.assertEqual(awsb.config_from_args(awsb.parse_args(argv)).node_env, ())
+        args = awsb.parse_args([*argv, "--node-env", "A=1", "--node-env", "B="])
+        self.assertEqual(awsb.config_from_args(args).node_env, ("A=1", "B="))
+        for bad in ("A", "=1", "1A=2", "A B=1"):
+            with (
+                self.subTest(bad),
+                unittest.mock.patch("sys.stderr"),
+                self.assertRaises(SystemExit),
+            ):
+                awsb.parse_args([*argv, "--node-env", bad])
+
     def test_key_index_offset_by_twenty(self):
         self.assertEqual(self.env("node0")["ESPRESSO_NODE_KEY_INDEX"], "20")
         self.assertEqual(self.env("node3")["ESPRESSO_NODE_KEY_INDEX"], "23")
@@ -2589,6 +2614,10 @@ class ManifestReproTest(unittest.TestCase):
         )
         self.assertNotEqual(
             base, awsb.run_config_hash(other_load, hosts, images, genesis)
+        )
+        node_env = dataclasses.replace(cfg, node_env=("A=1",))
+        self.assertNotEqual(
+            base, awsb.run_config_hash(node_env, hosts, images, genesis)
         )
         other_db = dataclasses.replace(cfg, query_db="rds")
         self.assertNotEqual(

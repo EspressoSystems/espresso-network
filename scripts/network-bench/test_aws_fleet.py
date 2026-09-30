@@ -478,6 +478,16 @@ class RunRefusalTest(unittest.TestCase):
         self.assertEqual(ssh_calls(runner, mark), [])
         self.assertTrue(harness.lock().exists())
 
+    def test_node_env_belongs_to_one_run(self):
+        harness = FleetHarness(self)
+        harness.up_fleet(self)
+        manifest = harness.fleet()
+        self.assertEqual(
+            awsb.fleet_run_config(harness.run_args(), manifest).node_env, ()
+        )
+        cfg = awsb.fleet_run_config(harness.run_args("--node-env", "A=1"), manifest)
+        self.assertEqual(cfg.node_env, ("A=1",))
+
     def test_mode_missing(self):
         harness = FleetHarness(self)
         harness.up_fleet(self)
@@ -2733,6 +2743,15 @@ class QueryDbMetaTest(unittest.TestCase):
                 self.assertEqual(
                     awsb.write_report(tmp)["deployment"]["query_db"]["mode"], query_db
                 )
+
+    def test_node_env_is_in_the_deployment_block(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        manifest = write_collected_run(tmp)
+        self.assertNotIn("node_env", awsb.write_report(tmp)["deployment"])
+        manifest["config"]["node_env"] = ["A=1"]
+        netbench.write_json(tmp / "manifest.json", manifest)
+        self.assertEqual(awsb.write_report(tmp)["deployment"]["node_env"], ["A=1"])
 
     def test_tls_is_off_without_settings_or_with_a_plain_backend(self):
         manifest = aws_manifest()

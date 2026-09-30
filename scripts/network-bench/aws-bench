@@ -828,6 +828,8 @@ class RunConfig:
     offline: bool = False
     db_modes: tuple[DbMode, ...] = ("colocated",)
     query_db: DbMode = "colocated"
+    # `KEY=VALUE` written last into every node's node.env, so it also overrides.
+    node_env: tuple[str, ...] = ()
     ttl_min: str = "auto"
     fleet: Path | None = None
     force: bool = False
@@ -2295,7 +2297,10 @@ def _journal_max_bytes(host: HostSpec) -> int:
 
 
 def render_node_env(
-    host: HostSpec, hosts: dict[str, HostInfo], pg: PgEndpoint | None
+    host: HostSpec,
+    hosts: dict[str, HostInfo],
+    pg: PgEndpoint | None,
+    node_env: Iterable[str] = (),
 ) -> str:
     self_info = hosts[host["name"]]
     ctl_info = hosts["ctl"]
@@ -2341,6 +2346,9 @@ def render_node_env(
                 "ESPRESSO_NODE_POSTGRES_DATABASE": pg["database"],
             }
         )
+    for pair in node_env:
+        key, _, value = pair.partition("=")
+        env[key] = value
     return "".join(f"{key}={value}\n" for key, value in env.items())
 
 
@@ -2649,6 +2657,15 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         help="run every step whatever its verdict, then wait for the query node to catch up",
     )
     parser.add_argument(
+        "--node-env",
+        action="append",
+        default=[],
+        type=env_pair,
+        metavar="KEY=VALUE",
+        help="added to every node's environment, overriding the harness's own value; "
+        "repeatable",
+    )
+    parser.add_argument(
         "--ready-timeout-s", type=float, default=defaults.ready_timeout_s
     )
     parser.add_argument("--genesis", type=Path, default=Path(load.genesis))
@@ -2677,6 +2694,12 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     parser.add_argument("--tf", default=defaults.tf)
 
 
+def env_pair(text: str) -> str:
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", text) is None:
+        raise argparse.ArgumentTypeError(f"not KEY=VALUE: {text}")
+    return text
+
+
 def config_from_args(args: argparse.Namespace) -> RunConfig:
     submit_nodes = (
         args.submit_nodes if args.submit_nodes is not None else args.nodes - 1
@@ -2698,6 +2721,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     )
     return RunConfig(
         tag=args.tag,
+        node_env=tuple(args.node_env),
         nodes=args.nodes,
         node_type=args.node_type,
         ctl_type=args.ctl_type,
@@ -3896,6 +3920,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         name=cli.name,
         yes=cli.yes,
         query_db=cli.query_db,
+        node_env=cli.node_env,
         fleet=cli.fleet,
         force=cli.force,
     )
@@ -4583,6 +4608,7 @@ def run_config_hash(
             json.dumps(digests).encode(),
             json.dumps(hosts, sort_keys=True).encode(),
             cfg.query_db.encode(),
+            *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
         ],
     )
 
@@ -4856,7 +4882,7 @@ def render_host_files(
             if cfg.query_db == "rds" and pg is not None:
                 node_env.touch(mode=0o600)
                 node_env.chmod(0o600)
-            node_env.write_text(render_node_env(spec, hosts, pg))
+            node_env.write_text(render_node_env(spec, hosts, pg, cfg.node_env))
             if pg is not None:
                 write_private_json(host_dir / "pg.json", pg)
     topo = topology(hosts)
@@ -5873,6 +5899,9 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
         "db_modes": tuple(saved["db_modes"]),
         "fleet": None if saved["fleet"] is None else Path(saved["fleet"]),
     }
+    # Fleet dirs from before the flag have no such key.
+    if "node_env" in saved:
+        fields["node_env"] = tuple(saved["node_env"])
     return RunConfig(**fields)
 
 
@@ -6687,6 +6716,8 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
         "clock_offset_ms_max": max(evidence["clock_offset_ms"].values(), default=0.0),
         "cost_usd": manifest["cost_usd"],
         "query_db": query_db_meta(manifest, evidence),
+        # Manifests from before the flag have no such key.
+        **({"node_env": config["node_env"]} if config.get("node_env") else {}),
     }
 
 

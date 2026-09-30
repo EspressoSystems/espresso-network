@@ -361,6 +361,13 @@ class RenderTest(unittest.TestCase):
         )
         self.assertNotIn("no main runs", summary)
 
+    def test_deployment_lists_the_node_env(self):
+        current = make_result()
+        current["deployment"] = deployment()
+        self.assertNotIn("node env", netbench.render(current, None))
+        current["deployment"]["node_env"] = ["A=1", "B=2"]
+        self.assertIn("- node env: A=1, B=2\n", netbench.render(current, None))
+
     def test_deployment_and_hosts_sections(self):
         current = make_result()
         current["deployment"] = deployment()
