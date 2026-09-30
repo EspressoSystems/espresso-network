@@ -83,13 +83,6 @@ class Topology(TypedDict):
     query_node: str
 
 
-class LoadOutcome(TypedDict):
-    """Returned by `drive_load`: when the load steps ran. Call `wait_ready` first."""
-
-    t0: float
-    t1: float
-
-
 class Calibration(TypedDict):
     sha256_1t_mb_s: float
     sha256_mt_mb_s: float
@@ -513,9 +506,9 @@ def drive_load(
     alive: Callable[[], bool],
     clock: Clock = SYSTEM_CLOCK,
     http: HttpFactory = HttpPool,
-) -> LoadOutcome:
+) -> tuple[float, float]:
     """Saves the stake table, runs the load staircase, then writes every node's final metrics
-    snapshot. The caller must have already waited for readiness with `wait_ready`. Raises
+    snapshot. Returns when the steps started and ended. The caller must have already waited for readiness with `wait_ready`. Raises
     NetworkError if the network died since or the load generator hits an unrecoverable error."""
     if not alive():
         raise NetworkError("network process exited before load")
@@ -542,7 +535,7 @@ def drive_load(
             (out / f"final-{node}.prom").write_bytes(prom)
     finally:
         pool.close()
-    return {"t0": t0, "t1": t1}
+    return t0, t1
 
 
 def wait_ready(
@@ -557,33 +550,15 @@ def wait_ready(
     while True:
         heights = {node: block_height(pool, url) for node, url in urls.items()}
         elapsed = clock.time() - start
-        match ready_status(heights, min_height, elapsed, timeout_s, alive()):
-            case "ready":
-                return elapsed
-            case "dead":
-                raise NetworkError("network process exited during startup")
-            case "timeout":
-                raise NetworkError(
-                    f"network not ready after {timeout_s:.0f} s: heights {heights}"
-                )
+        if all(h is not None and h >= min_height for h in heights.values()):
+            return elapsed
+        if not alive():
+            raise NetworkError("network process exited during startup")
+        if elapsed > timeout_s:
+            raise NetworkError(
+                f"network not ready after {timeout_s:.0f} s: heights {heights}"
+            )
         clock.sleep(2)
-
-
-def ready_status(
-    heights: dict[str, int | None],
-    min_height: int,
-    elapsed: float,
-    timeout_s: float,
-    alive: bool,
-) -> Literal["ready", "wait", "dead", "timeout"]:
-    """Verdict of one `wait_ready` poll; a node whose API does not answer has height None."""
-    if all(h is not None and h >= min_height for h in heights.values()):
-        return "ready"
-    if not alive:
-        return "dead"
-    if elapsed > timeout_s:
-        return "timeout"
-    return "wait"
 
 
 def block_height(pool: Http, url: str) -> int | None:
@@ -623,19 +598,11 @@ def read(pool: Http, url: str) -> tuple[int, bytes]:
     raise AssertionError("unreachable")
 
 
-def query_height(pool: Http, query_url: str) -> int:
-    status, body = read(pool, query_url + "/v1/node/block-height")
-    if status != 200:
-        raise NetworkError(f"block height from query node: HTTP {status}")
-    return int(body)
-
-
-def validator_height(pool: Http, url: str) -> int:
-    """Blocks decided on a validator: its status API reports the newest decided height."""
-    status, body = read(pool, url + "/v1/status/block-height")
-    if status != 200:
-        raise NetworkError(f"block height from {url}: HTTP {status}")
-    return int(body) + 1
+def block_count(pool: Http, url: str, source: "HeightSource") -> int:
+    """Blocks decided as `source` sees them. A validator's status API reports the newest
+    decided height, one less than the count."""
+    path, extra = HEIGHT_API[source]
+    return int(get_ok(pool, url + path)) + extra
 
 
 def block_payload(pool: Http, query_url: str, height: int) -> bytes | None:
@@ -759,19 +726,15 @@ async def generate_load(
     drained: float | None = None
     skipped = False
     try:
-        heights = Heights(await tracking.call(query_height, query_url))
+        heights = Heights(await tracking.call(block_count, query_url, "query"))
         async with asyncio.TaskGroup() as group:
             pollers = [
                 group.create_task(
-                    poll_heights(
-                        polling, query_url, query_height, heights, "query", clock
-                    )
+                    poll_heights(polling, query_url, heights, "query", clock)
                 ),
                 *(
                     group.create_task(
-                        poll_heights(
-                            polling, url, validator_height, heights, "validator", clock
-                        )
+                        poll_heights(polling, url, heights, "validator", clock)
                     )
                     for url in validator_urls
                 ),
@@ -873,12 +836,6 @@ def step_cap(cfg: BenchConfig, rate_mb_s: float) -> int:
     return max(1, round(cfg.cap_s / tx_interval_s(cfg.tx_size, rate_mb_s)))
 
 
-def next_due(due: float, interval: float, now: float) -> float:
-    """Evenly spaced submit times. A pacer more than an interval late restarts from `now`
-    instead of bursting to catch up."""
-    return max(due + interval, now)
-
-
 @dataclass
 class Load:
     cfg: BenchConfig
@@ -973,7 +930,7 @@ async def drain(
     start, target = clock.time(), None
     while clock.time() - start < timeout_s:
         pending = len(state.pending) if wait_pending else 0
-        if target is None and is_drained(pending, is_idle(counters, clock.time())):
+        if target is None and pending == 0 and is_idle(counters, clock.time()):
             # Fixed once settled: empty blocks keep the validator height moving.
             target = heights.top("validator")
         if target is not None and heights.top("query") >= target:
@@ -988,12 +945,6 @@ def is_idle(counters: Sequence[Mapping[str, Any]], now: float) -> bool:
     if not recent or now - recent[0]["ts"] < DRAIN_IDLE_S - COUNTER_POLL_S:
         return False
     return len({c["decided_bytes"] for c in recent}) == 1
-
-
-def is_drained(pending: int, flat: bool) -> bool:
-    """True when no transaction is pending and decided bytes stopped growing. `drain` checks
-    separately that the query node reached the validators' height."""
-    return pending == 0 and flat
 
 
 def log_step(m: dict[str, Any], fails: list[str]) -> None:
@@ -1030,7 +981,8 @@ async def pace(
         tx = Tx(id=tx_id, node=tx_id % len(load.urls))
         state.submitted(tx)
         submits.create_task(submit_tx(load, tx))
-        due = next_due(due, interval, clock.time())
+        # A pacer more than an interval late restarts from now instead of bursting.
+        due = max(due + interval, clock.time())
 
 
 async def submit_tx(load: Load, tx: Tx) -> None:
@@ -1062,6 +1014,10 @@ def post_tx(pool: Http, tx: Tx, url: str, body: bytes) -> int:
 
 
 HeightSource = Literal["query", "validator"]
+HEIGHT_API: dict[HeightSource, tuple[str, int]] = {
+    "query": ("/v1/node/block-height", 0),
+    "validator": ("/v1/status/block-height", 1),
+}
 
 
 class Heights:
@@ -1097,14 +1053,13 @@ class Heights:
 async def poll_heights(
     client: Client,
     url: str,
-    count: Callable[[Http, str], int],
     heights: Heights,
     source: HeightSource,
     clock: Clock,
 ) -> None:
     """On its own thread, so block times never wait for payload scans."""
     while True:
-        heights.saw(source, await client.call(count, url), clock.time())
+        heights.saw(source, await client.call(block_count, url, source), clock.time())
         await clock.asleep(HEIGHT_POLL_S)
 
 
@@ -1210,55 +1165,6 @@ def record_inclusions(
     heights.scanned[height] = clock.time()
 
 
-class ProgressStats(TypedDict):
-    """`None` where the window or the heights hold no data yet."""
-
-    validator: int | None
-    query: int | None
-    lag_ms: float | None
-    blocks_behind: int
-    seconds_behind: float
-    block_s: float | None
-    block_mb: float | None
-    decided_mb_s: float | None
-
-
-def progress_window(
-    heights: Heights, counters: Sequence[Mapping[str, Any]], now: float, window_s: float
-) -> ProgressStats:
-    """Network state over the last `window_s`: last height on each source, query lag, and mean
-    block time and size from the blocks the validators showed in the window."""
-    validator, query = heights.top("validator"), heights.top("query")
-    lag_ms = None
-    behind = max(validator - query, 0)
-    seconds_behind = 0.0
-    if behind:
-        seconds_behind = now - heights.seen["validator"][query]
-    elif validator > heights.start:
-        last = validator - 1
-        lag_ms = (heights.seen["query"][last] - heights.seen["validator"][last]) * 1000
-    blocks = sum(1 for t in heights.seen["validator"].values() if t >= now - window_s)
-    inside = [c for c in counters if c["ts"] >= now - window_s]
-    return {
-        "validator": validator - 1 if validator > heights.start else None,
-        "query": query - 1 if query > heights.start else None,
-        "lag_ms": lag_ms,
-        "blocks_behind": behind,
-        "seconds_behind": seconds_behind,
-        "block_s": window_s / blocks if blocks else None,
-        "block_mb": (inside[-1]["decided_bytes"] - inside[0]["decided_bytes"])
-        / blocks
-        / 1e6
-        if blocks and len(inside) > 1
-        else None,
-        "decided_mb_s": (inside[-1]["decided_bytes"] - inside[0]["decided_bytes"])
-        / (inside[-1]["ts"] - inside[0]["ts"])
-        / 1e6
-        if len(inside) > 1
-        else None,
-    }
-
-
 def submit_mb_s(
     t_submits: Iterable[float], tx_size: int, t0: float, t1: float
 ) -> float:
@@ -1274,41 +1180,49 @@ def log_progress(
     now: float,
     tx_size: int,
 ) -> None:
-    stats = progress_window(heights, counters, now, PROGRESS_S)
+    """Last height on each source, query lag, and mean block time and size over the last
+    PROGRESS_S."""
+    validator, query = heights.top("validator"), heights.top("query")
+    behind = max(validator - query, 0)
+    if behind:
+        seen = heights.seen["validator"][query]
+        lag = f"{behind} blk / {fmt_num(now - seen)} s behind"
+    elif validator > heights.start:
+        last = validator - 1
+        lag_ms = (heights.seen["query"][last] - heights.seen["validator"][last]) * 1000
+        lag = f"lag {fmt_num(lag_ms)} ms"
+    else:
+        lag = "no lag yet"
+    blocks = sum(1 for t in heights.seen["validator"].values() if t >= now - PROGRESS_S)
+    inside = [c for c in counters if c["ts"] >= now - PROGRESS_S]
+    block_mb = decided_mb_s = None
+    if len(inside) > 1:
+        decided = inside[-1]["decided_bytes"] - inside[0]["decided_bytes"]
+        decided_mb_s = decided / (inside[-1]["ts"] - inside[0]["ts"]) / 1e6
+        block_mb = decided / blocks / 1e6 if blocks else None
     included = sum(1 for tx in state.txs if tx.status == "included")
     timeouts = sum(1 for tx in state.txs if tx.status == "timeout")
     log.info(
         "height v=%s q=%s (%s), block %s s, %s MB; submitting %s of %s MB/s, decided %s "
         "MB/s; %d submitted, %d included, %d pending, %d timed out, %d waited for the cap",
-        fmt_num(stats["validator"]) or "-",
-        fmt_num(stats["query"]) or "-",
-        fmt_lag(stats),
-        fmt_num(stats["block_s"]) or "-",
-        fmt_num(stats["block_mb"]) or "-",
+        fmt_num(validator - 1 if validator > heights.start else None) or "-",
+        fmt_num(query - 1 if query > heights.start else None) or "-",
+        lag,
+        fmt_num(PROGRESS_S / blocks if blocks else None) or "-",
+        fmt_num(block_mb) or "-",
         fmt_num(
             submit_mb_s(
                 (tx.t_submit for tx in state.txs), tx_size, now - PROGRESS_S, now
             )
         ),
         fmt_num(state.rate_mb_s),
-        fmt_num(stats["decided_mb_s"]) or "-",
+        fmt_num(decided_mb_s) or "-",
         len(state.txs),
         included,
         len(state.pending),
         timeouts,
         state.cap_waits,
     )
-
-
-def fmt_lag(stats: ProgressStats) -> str:
-    if stats["blocks_behind"]:
-        return (
-            f"{stats['blocks_behind']} blk / "
-            f"{fmt_num(stats['seconds_behind'])} s behind"
-        )
-    if stats["lag_ms"] is None:
-        return "no lag yet"
-    return f"lag {fmt_num(stats['lag_ms'])} ms"
 
 
 def next_rate(
@@ -1476,13 +1390,12 @@ def capacity_line(cap: Capacity) -> str:
 
 def sample_metrics(
     urls: dict[str, str],
-    prefixes: tuple[str, ...],
     out: Path,
     stop: threading.Event,
     clock: Clock = SYSTEM_CLOCK,
 ) -> None:
     """Every METRICS_EVERY_S, one JSON line per node: {ts, node, ok, m}; `m` keeps the
-    families in `prefixes`. Often enough for rates over a step's measured half."""
+    families in METRIC_PREFIXES. Often enough for rates over a step's measured half."""
     pool = HttpPool(clock)
     with open(out, "a", buffering=1) as f:
         while not stop.is_set():
@@ -1498,7 +1411,7 @@ def sample_metrics(
                         rec["m"] = {
                             k: v
                             for k, v in parse_prom(body.decode()).items()
-                            if k.startswith(prefixes)
+                            if k.startswith(METRIC_PREFIXES)
                         }
                 except OSError:
                     pass
@@ -1543,8 +1456,7 @@ def analyze(out: Path, cfg: BenchConfig, topo: Topology) -> BenchResult:
     calib = read_json(out / "calibration.json")
     before, after = calib["before"], calib["after"]
     steps = [
-        step_result(step, txs, series, host, cfg.tx_size)
-        for step in read_json(out / "steps.json")
+        step_result(step, txs, series, host) for step in read_json(out / "steps.json")
     ]
     result: BenchResult = {
         "schema_version": SCHEMA_VERSION,
@@ -1571,7 +1483,7 @@ def analyze(out: Path, cfg: BenchConfig, topo: Topology) -> BenchResult:
         "validity": {"valid": True, "noisy": False, "reasons": []},
     }
     result["validity"] = check_validity(
-        result, scrape_coverage(out / "metrics.jsonl", nodes, t0, t1), len(nodes)
+        result, scrape_coverage(out / "metrics.jsonl", nodes, t0, t1)
     )
     return result
 
@@ -1581,7 +1493,6 @@ def step_result(
     txs: list[dict[str, Any]],
     series: dict[str, list[Sample]],
     host: list[dict[str, Any]],
-    tx_size: int,
 ) -> StepResult:
     """The ramp's verdict on a step (see judge_step) plus metrics that decide nothing."""
     t0, t1 = judged["t_mid"], judged["t_end"]
@@ -1603,8 +1514,7 @@ def step_result(
         "t_start": judged["t_start"],
         "t_mid": t0,
         "t_end": t1,
-        # Not from steps.json: runs from before the field have none there.
-        "submitted_mb_s": submit_mb_s((tx["t_submit"] for tx in txs), tx_size, t0, t1),
+        "submitted_mb_s": judged["submitted_mb_s"],
         "decided_mb_s": decided,
         "timeouts": judged["timeouts"],
         "consensus_latency_ms": judged["consensus_latency_ms"],
@@ -1629,9 +1539,8 @@ def step_result(
     }
 
 
-def check_validity(
-    result: BenchResult, coverage: dict[str, float], n_nodes: int
-) -> Validity:
+def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
+    n_nodes = len(result["nodes"])
     invalid: list[str] = []
     noisy: list[str] = []
     for node, frac in coverage.items():
@@ -1690,11 +1599,9 @@ def run_meta(run: dict[str, Any]) -> RunMeta:
 
 
 def config_hash(cfg: BenchConfig, extra: list[bytes]) -> str:
-    data = dataclasses.asdict(cfg)
-    # Runs from before `keep_going` existed hashed without it and stay comparable.
-    if not cfg.keep_going:
-        del data["keep_going"]
-    digest = hashlib.sha256(json.dumps(data, sort_keys=True).encode())
+    digest = hashlib.sha256(
+        json.dumps(dataclasses.asdict(cfg), sort_keys=True).encode()
+    )
     for chunk in extra:
         digest.update(chunk)
     return digest.hexdigest()[:12]
@@ -1790,7 +1697,7 @@ def op_stats(
         if count <= 0 or dt <= 0:
             continue
         total = m1[base + "_sum"] - m0.get(base + "_sum", 0.0)
-        quantiles = histogram_quantiles([(m0, m1)], base)
+        quantiles = histogram_quantiles(m0, m1, base)
         ops[base] = {
             "per_s": count / dt,
             "mean_ms": total / count * 1000,
@@ -1806,20 +1713,18 @@ def is_duration(base: str) -> bool:
 
 
 def histogram_quantiles(
-    pairs: list[tuple[dict[str, float], dict[str, float]]], base: str
+    m0: dict[str, float], m1: dict[str, float], base: str
 ) -> Quantiles | None:
-    """Quantiles in ms of a seconds histogram over window deltas, summed across `pairs`, with
-    linear interpolation inside a bucket as Prometheus' histogram_quantile does."""
+    """Quantiles in ms of a seconds histogram over the window delta, with linear
+    interpolation inside a bucket as Prometheus' histogram_quantile does."""
     buckets: dict[float, float] = {}
-    count = total = 0.0
-    for m0, m1 in pairs:
-        for key, value in m1.items():
-            if key.startswith(base + "_bucket{") and 'le="' in key:
-                le = key.split('le="')[1].split('"')[0]
-                bound = math.inf if le == "+Inf" else float(le)
-                buckets[bound] = buckets.get(bound, 0.0) + value - m0.get(key, 0.0)
-        count += m1.get(base + "_count", 0.0) - m0.get(base + "_count", 0.0)
-        total += m1.get(base + "_sum", 0.0) - m0.get(base + "_sum", 0.0)
+    for key, value in m1.items():
+        if key.startswith(base + "_bucket{") and 'le="' in key:
+            le = key.split('le="')[1].split('"')[0]
+            bound = math.inf if le == "+Inf" else float(le)
+            buckets[bound] = value - m0.get(key, 0.0)
+    count = m1.get(base + "_count", 0.0) - m0.get(base + "_count", 0.0)
+    total = m1.get(base + "_sum", 0.0) - m0.get(base + "_sum", 0.0)
     if count <= 0 or not buckets:
         return None
     bounds = sorted(buckets)
@@ -2357,8 +2262,8 @@ def query_db_line(q: QueryDbMeta) -> str:
 
 
 def hosts_table(result: BenchResult) -> list[str]:
-    """Per-host CPU, steal and I/O; empty when no per-host samples were collected."""
-    if "hosts" not in result or not result["hosts"]:
+    """Per-host CPU, steal and I/O; empty for the local bench."""
+    if "hosts" not in result:
         return []
     lines = [
         "| host | CPU busy mean | steal | disk MB/s | net MB/s |",
@@ -2653,20 +2558,10 @@ def footer(result: BenchResult) -> list[str]:
     return lines
 
 
-def render_failure(error: str, runner: RunnerInfo) -> str:
-    return (
-        f"## Network benchmark\n\n**invalid**: {error}\n\nRunner: {runner['cpu_model']}, "
-        f"{runner['nproc']} CPUs. Logs are in the artifact.\n"
-    )
-
-
 def fmt_value(value: float | None, unit: str) -> str:
     if value is None:
         return ""
-    if unit == "bytes":
-        return fmt_bytes(value)
-    sep = "" if unit.startswith("/") else " "
-    return f"{fmt_num(value)}{sep}{unit}".strip()
+    return f"{fmt_num(value)} {unit}"
 
 
 def fmt_num(value: float | None) -> str:

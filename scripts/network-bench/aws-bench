@@ -5523,7 +5523,6 @@ def cmd_agent_drive(args: argparse.Namespace, clock: nb.Clock = nb.SYSTEM_CLOCK)
         target=nb.sample_metrics,
         args=(
             topo["nodes"],
-            nb.METRIC_PREFIXES,
             args.out / "metrics.jsonl",
             stop,
             clock,
@@ -5542,8 +5541,9 @@ def cmd_agent_drive(args: argparse.Namespace, clock: nb.Clock = nb.SYSTEM_CLOCK)
         )
         reporter.state["ready_s"] = ready_s
         reporter.set_phase("loading", f"ready after {ready_s:.0f} s")
-        outcome = nb.drive_load(cfg, topo, args.out, lambda: True, clock)
-        reporter.state["t0"], reporter.state["t1"] = outcome["t0"], outcome["t1"]
+        reporter.state["t0"], reporter.state["t1"] = nb.drive_load(
+            cfg, topo, args.out, lambda: True, clock
+        )
         reporter.set_phase("done", "load finished")
         return EXIT_OK
     except (Exception, KeyboardInterrupt) as exc:

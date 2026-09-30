@@ -274,11 +274,18 @@ def cmd_run(args: argparse.Namespace) -> int:
         out / "calibration.json", {"before": calib_before, "after": calib_after}
     )
     if run["error"]:
-        summary = nb.render_failure(run["error"], runner)
+        summary = render_failure(run["error"], runner)
         (out / "summary.md").write_text(summary)
         print(summary)
         return 1
     return write_report(out, baseline)
+
+
+def render_failure(error: str, runner: nb.RunnerInfo) -> str:
+    return (
+        f"## Network benchmark\n\n**invalid**: {error}\n\nRunner: {runner['cpu_model']}, "
+        f"{runner['nproc']} CPUs. Logs are in the artifact.\n"
+    )
 
 
 def cmd_render(args: argparse.Namespace) -> int:
@@ -346,7 +353,6 @@ def drive_network(
             target=nb.sample_metrics,
             args=(
                 LOCAL_TOPOLOGY["nodes"],
-                nb.METRIC_PREFIXES,
                 out / "metrics.jsonl",
                 stop,
             ),
@@ -370,8 +376,7 @@ def drive_network(
             alive,
         )
         log.info("network ready after %.0f s", run["ready_s"])
-        outcome = nb.drive_load(cfg, LOCAL_TOPOLOGY, out, alive)
-        run["t0"], run["t1"] = outcome["t0"], outcome["t1"]
+        run["t0"], run["t1"] = nb.drive_load(cfg, LOCAL_TOPOLOGY, out, alive)
     except nb.NetworkError as err:
         run["error"] = str(err)
         if net is not None and net.proc.poll() is not None:

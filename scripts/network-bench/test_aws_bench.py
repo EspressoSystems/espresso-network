@@ -3312,14 +3312,14 @@ class AgentDriveTest(unittest.TestCase):
         clocks = []
         self.run_agent(
             lambda *a: clocks.append(a[-1]) or 1.0,
-            lambda *a: clocks.append(a[-1]) or {"t0": 1.0, "t1": 2.0},
+            lambda *a: clocks.append(a[-1]) or (1.0, 2.0),
             lambda *a, **k: clocks.append(a[-1]),
             clock,
         )
         self.assertEqual(clocks, [clock, clock, clock])
 
     def test_done_state_carries_ready_and_window(self):
-        code = self.run_agent(lambda *a: 12.0, lambda *a: {"t0": 100.0, "t1": 200.0})
+        code = self.run_agent(lambda *a: 12.0, lambda *a: (100.0, 200.0))
         self.assertEqual(code, awsb.EXIT_OK)
         state = self.state()
         self.assertEqual(state["phase"], "done")
@@ -3330,7 +3330,7 @@ class AgentDriveTest(unittest.TestCase):
     def test_progress_follows_netbench_log(self):
         def load(*args):
             netbench.log.info("height 7: 3 submitted")
-            return {"t0": 1.0, "t1": 2.0}
+            return (1.0, 2.0)
 
         self.run_agent(lambda *a: 1.0, load)
         self.assertEqual(self.state()["progress"], "height 7: 3 submitted")
@@ -3339,7 +3339,7 @@ class AgentDriveTest(unittest.TestCase):
         def not_ready(*args):
             raise netbench.NetworkError("network not ready after 5 s: heights {}")
 
-        code = self.run_agent(not_ready, lambda *a: {"t0": 1.0, "t1": 2.0})
+        code = self.run_agent(not_ready, lambda *a: (1.0, 2.0))
         self.assertEqual(code, awsb.EXIT_INVALID)
         state = self.state()
         self.assertEqual(state["phase"], "error")

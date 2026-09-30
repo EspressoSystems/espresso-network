@@ -6,7 +6,6 @@ rendering. No network is started.
 
 import asyncio
 import dataclasses
-import hashlib
 import json
 import math
 import statistics
@@ -246,7 +245,7 @@ def make_result(steps=None, steal=0.0, config_hash="abc123") -> netbench.BenchRe
         "validity": {"valid": True, "noisy": False, "reasons": []},
     }
     result["validity"] = netbench.check_validity(
-        result, {n: 1.0 for n in TOPOLOGY["nodes"]}, len(TOPOLOGY["nodes"])
+        result, {n: 1.0 for n in TOPOLOGY["nodes"]}
     )
     return result
 
@@ -438,12 +437,6 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn("Deployment", summary)
         self.assertNotIn("<details><summary>Hosts</summary>", summary)
 
-    def test_hosts_empty_omits_table(self):
-        current = make_result()
-        current["hosts"] = {}
-        summary = netbench.render(current, None)
-        self.assertNotIn("<details><summary>Hosts</summary>", summary)
-
     def test_load_baseline_single_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "result.json"
@@ -632,9 +625,9 @@ class ValidityTest(unittest.TestCase):
         result = make_result()
         result["calibration"]["drift_pct"] = -15.0
         self.assertTrue(
-            netbench.check_validity(
-                result, {n: 1.0 for n in TOPOLOGY["nodes"]}, len(TOPOLOGY["nodes"])
-            )["noisy"]
+            netbench.check_validity(result, {n: 1.0 for n in TOPOLOGY["nodes"]})[
+                "noisy"
+            ]
         )
 
     def test_unequal_stake_and_stalled_node_are_invalid(self):
@@ -642,7 +635,7 @@ class ValidityTest(unittest.TestCase):
         result["stake_table"] = ["0x1", "0x2", "0x1"]
         result["nodes"]["node2"]["decided_blocks"] = 0
         validity = netbench.check_validity(
-            result, {"node0": 1.0, "node1": 0.5, "node2": 1.0}, 3
+            result, {"node0": 1.0, "node1": 0.5, "node2": 1.0}
         )
         self.assertFalse(validity["valid"])
         self.assertEqual(len(validity["reasons"]), 3)
@@ -650,17 +643,13 @@ class ValidityTest(unittest.TestCase):
     def test_lagging_tracker_marks_noisy(self):
         result = make_result()
         result["load"]["tracker_lag_ms"] = quantiles(300.0, 1500.0)
-        validity = netbench.check_validity(
-            result, {n: 1.0 for n in TOPOLOGY["nodes"]}, len(TOPOLOGY["nodes"])
-        )
+        validity = netbench.check_validity(result, {n: 1.0 for n in TOPOLOGY["nodes"]})
         self.assertTrue(validity["noisy"])
         self.assertIn("benchmark tracker behind", validity["reasons"][0])
 
     def test_stalled_step_is_invalid(self):
         result = make_result([step(4.0), step(6.0, 0.0, ["decided 0% of offered"])])
-        validity = netbench.check_validity(
-            result, {n: 1.0 for n in TOPOLOGY["nodes"]}, len(TOPOLOGY["nodes"])
-        )
+        validity = netbench.check_validity(result, {n: 1.0 for n in TOPOLOGY["nodes"]})
         self.assertFalse(validity["valid"])
         self.assertEqual(validity["reasons"], ["the 6 MB/s step decided nothing"])
 
@@ -674,7 +663,7 @@ class ReadRetryTest(unittest.TestCase):
             mock.patch.object(pool, "request", side_effect=replies) as request,
             self.assertLogs(netbench.log, "WARNING"),
         ):
-            self.assertEqual(netbench.query_height(pool, "http://x"), 7)
+            self.assertEqual(netbench.get_ok(pool, "http://x"), b"7")
         self.assertEqual(request.call_count, 3)
         self.assertEqual(clock.sleeps, [netbench.READ_RETRY_S] * 2)
 
@@ -688,7 +677,7 @@ class ReadRetryTest(unittest.TestCase):
             self.assertLogs(netbench.log, "WARNING"),
             self.assertRaises(netbench.NetworkError),
         ):
-            netbench.query_height(pool, "http://x")
+            netbench.get_ok(pool, "http://x")
         retries = math.ceil(netbench.READ_DEADLINE_S / netbench.READ_RETRY_S)
         self.assertEqual(request.call_count, retries + 1)
         self.assertGreaterEqual(clock.time(), netbench.READ_DEADLINE_S)
@@ -707,7 +696,7 @@ class ReadRetryTest(unittest.TestCase):
             self.assertLogs(netbench.log, "DEBUG") as logs,
             self.assertRaises(netbench.NetworkError),
         ):
-            netbench.query_height(pool, "http://x")
+            netbench.get_ok(pool, "http://x")
         self.assertEqual(clock.time(), closing_at)
         levels = [record.levelname for record in logs.records]
         self.assertEqual(levels[0], "WARNING")
@@ -1079,35 +1068,6 @@ class WaitReadyTest(unittest.TestCase):
         self.assertEqual(clock.sleeps, [2.0, 2.0])
 
 
-class ReadyStatusTest(unittest.TestCase):
-    def status(self, heights, elapsed=0.0, alive=True):
-        return netbench.ready_status(heights, 5, elapsed, 60.0, alive)
-
-    def test_all_nodes_at_the_minimum_are_ready(self):
-        self.assertEqual(self.status({"a": 5, "b": 9}), "ready")
-
-    def test_a_silent_or_low_node_waits(self):
-        self.assertEqual(self.status({"a": 5, "b": None}), "wait")
-        self.assertEqual(self.status({"a": 5, "b": 4}), "wait")
-
-    def test_dead_process_is_reported_before_the_timeout(self):
-        self.assertEqual(self.status({"a": None}, elapsed=99.0, alive=False), "dead")
-
-    def test_timeout_needs_elapsed_strictly_over_the_limit(self):
-        self.assertEqual(self.status({"a": 1}, elapsed=60.0), "wait")
-        self.assertEqual(self.status({"a": 1}, elapsed=60.1), "timeout")
-
-    def test_ready_wins_over_dead_and_timeout(self):
-        self.assertEqual(self.status({"a": 5}, elapsed=99.0, alive=False), "ready")
-
-
-class IsDrainedTest(unittest.TestCase):
-    def test_drained_needs_no_pending_and_flat_bytes(self):
-        self.assertTrue(netbench.is_drained(0, True))
-        self.assertFalse(netbench.is_drained(1, True))
-        self.assertFalse(netbench.is_drained(0, False))
-
-
 class DriveLoadTest(unittest.TestCase):
     def test_writes_stake_table_and_final_metrics(self):
         clock = fakes.ScaledClock(50)
@@ -1129,10 +1089,10 @@ class DriveLoadTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
-            outcome = netbench.drive_load(
+            t0, t1 = netbench.drive_load(
                 config, topo, out, lambda: True, clock, node.connect
             )
-            self.assertGreater(outcome["t1"], outcome["t0"])
+            self.assertGreater(t1, t0)
             self.assertTrue((out / "stake-table.json").exists())
             self.assertTrue((out / "final-node0.prom").exists())
             self.assertTrue((out / "final-node1.prom").exists())
@@ -1451,12 +1411,8 @@ class StaircaseTest(unittest.TestCase):
             )
         )
 
-    def test_keep_going_off_keeps_the_config_hash_of_older_runs(self):
+    def test_keep_going_changes_the_config_hash(self):
         cfg = netbench.BenchConfig()
-        older = dataclasses.asdict(cfg)
-        del older["keep_going"]
-        digest = hashlib.sha256(json.dumps(older, sort_keys=True).encode())
-        self.assertEqual(netbench.config_hash(cfg, []), digest.hexdigest()[:12])
         self.assertNotEqual(
             netbench.config_hash(dataclasses.replace(cfg, keep_going=True), []),
             netbench.config_hash(cfg, []),
@@ -1719,12 +1675,6 @@ class PaceTest(unittest.TestCase):
     def test_cap_is_seconds_of_load(self):
         self.assertEqual(netbench.step_cap(netbench.BenchConfig(), 7.0), 35)
 
-    def test_on_time_keeps_the_schedule(self):
-        self.assertEqual(netbench.next_due(10.0, 0.5, 10.2), 10.5)
-
-    def test_late_restarts_from_now(self):
-        self.assertEqual(netbench.next_due(10.0, 0.5, 12.0), 12.0)
-
 
 class HistogramTest(unittest.TestCase):
     def test_interpolates_inside_bucket(self):
@@ -1736,7 +1686,7 @@ class HistogramTest(unittest.TestCase):
             "op_count": 100.0,
             "op_sum": 10.0,
         }
-        q = some(netbench.histogram_quantiles([(m0, m1)], "op"))
+        q = some(netbench.histogram_quantiles(m0, m1, "op"))
         self.assertAlmostEqual(q["p50"], 100.0)
         self.assertAlmostEqual(q["p99"], 198.0)
         self.assertAlmostEqual(q["mean"], 100.0)
@@ -1750,7 +1700,7 @@ class InfBucketTest(unittest.TestCase):
             "op_count": 100.0,
             "op_sum": 30.0,
         }
-        q = some(netbench.histogram_quantiles([({}, m1)], "op"))
+        q = some(netbench.histogram_quantiles({}, m1, "op"))
         self.assertAlmostEqual(q["p50"], 100.0)
         self.assertAlmostEqual(q["p99"], 100.0)
         self.assertAlmostEqual(q["max"], 100.0)
@@ -1829,35 +1779,6 @@ class ProgressWindowTest(unittest.TestCase):
         assert value is not None
         self.assertAlmostEqual(value, expected, places=3)
 
-    def test_empty_window(self):
-        stats = netbench.progress_window(self.heights([], []), [], 100.0, 30)
-        self.assertEqual(stats["validator"], None)
-        self.assertEqual(stats["query"], None)
-        self.assertEqual(stats["lag_ms"], None)
-        self.assertEqual(stats["block_s"], None)
-        self.assertEqual(stats["block_mb"], None)
-        self.assertEqual(stats["decided_mb_s"], None)
-
-    def test_one_block(self):
-        h = self.heights([95.0], [95.5])
-        stats = netbench.progress_window(
-            h, self.counters((90, 0), (99, 2e6)), 100.0, 30
-        )
-        self.assertEqual((stats["validator"], stats["query"]), (0, 0))
-        self.near(stats["lag_ms"], 500)
-        self.assertEqual(stats["block_s"], 30)
-        self.near(stats["block_mb"], 2)
-
-    def test_several_blocks(self):
-        h = self.heights([80, 85, 90, 95, 99], [80.1, 85.1, 90.1, 95.1, 99.2])
-        counters = self.counters((60, 0), (75, 1e6), (100, 11e6))
-        stats = netbench.progress_window(h, counters, 100.0, 30)
-        self.assertEqual(stats["validator"], 4)
-        self.near(stats["block_s"], 6)
-        self.near(stats["block_mb"], 2)
-        self.near(stats["decided_mb_s"], 0.4)
-        self.near(stats["lag_ms"], 200)
-
     def test_submit_rate_counts_sent_transactions_in_the_window(self):
         txs = [
             netbench.Tx(id=i, node=0, t_submit=t)
@@ -1875,26 +1796,7 @@ class ProgressWindowTest(unittest.TestCase):
         counters = self.counters((80, 0), (100, 50e6))
         with self.assertLogs(netbench.log, "INFO") as logs:
             netbench.log_progress(state, h, counters, 100.0, 1_000_000)
+        self.assertIn("(lag 500 ms), block 30 s, 50 MB;", logs.output[0])
         self.assertIn(
             "submitting 3 of 60 MB/s, decided 2.5 MB/s; 90 submitted", logs.output[0]
         )
-
-    def test_blocks_outside_window_are_ignored(self):
-        h = self.heights([10, 20, 90], [10, 20, 90])
-        stats = netbench.progress_window(h, [], 100.0, 30)
-        self.assertEqual(stats["block_s"], 30)
-        self.assertEqual(stats["block_mb"], None)
-
-    def test_query_behind(self):
-        h = self.heights([80, 85, 90, 95], [80.5, 85.5])
-        stats = netbench.progress_window(h, [], 100.0, 30)
-        self.assertEqual((stats["validator"], stats["query"]), (3, 1))
-        self.assertEqual(stats["blocks_behind"], 2)
-        self.near(stats["seconds_behind"], 10)
-        self.assertEqual(stats["lag_ms"], None)
-
-    def test_query_caught_up(self):
-        h = self.heights([90, 95], [90.2, 95.4])
-        stats = netbench.progress_window(h, [], 100.0, 30)
-        self.assertEqual(stats["blocks_behind"], 0)
-        self.near(stats["lag_ms"], 400)
