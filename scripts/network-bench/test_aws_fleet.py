@@ -2139,6 +2139,44 @@ class RdsTfvarsTest(unittest.TestCase):
         self.assertIn("rds instance db.m8g.4xlarge", items)
         self.assertIn("rds gp3 storage", items)
 
+    def test_plan_offline_ttl_min_renders_a_fleet_with_the_up_limit(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        argv = [
+            "plan",
+            "--offline",
+            "--nodes",
+            "2",
+            "--tag",
+            "x",
+            "--genesis",
+            str(GENESIS),
+            "--ttl-min",
+            "150",
+            "--out-root",
+            str(tmp),
+            "--name",
+            "planned",
+            "--price",
+            "c8g.4xlarge=0.78",
+            "--price",
+            "c8g.2xlarge=0.39",
+            "--operator-cidr",
+            "203.0.113.5/32",
+        ]
+        args = awsb.parse_args(argv)
+        args.argv = argv
+        runner = FakeRunner({("git",): completed("a" * 40)})
+        self.assertEqual(awsb.cmd_plan(args, run=runner), awsb.EXIT_OK)
+        estimate = json.loads((tmp / "planned/fleet.json").read_text())["estimate"]
+        self.assertEqual(estimate["ttl_s"], 150 * 60)
+
+    def test_plan_ttl_min_without_offline_is_refused(self):
+        args = awsb.parse_args(["plan", "--tag", "x", "--ttl-min", "150"])
+        args.argv = []
+        with self.assertRaises(awsb.Refused):
+            awsb.cmd_plan(args)
+
     def test_terraform_access_denied_names_the_rds_actions(self):
         message = awsb.classify_tf_error(
             "Error: creating IAM Role: AccessDenied: not authorized: iam:CreateRole"

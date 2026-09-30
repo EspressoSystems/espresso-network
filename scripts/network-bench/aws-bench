@@ -2774,9 +2774,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     add_run_flags(plan_p)
+    add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
     plan_p.add_argument("--offline", action="store_true", help="use no AWS credentials")
-    plan_p.set_defaults(func=cmd_plan, yes=False, keep=False, allow_dirty=False)
+    plan_p.set_defaults(
+        func=cmd_plan, yes=False, keep=False, allow_dirty=False, max_usd=UP_MAX_USD
+    )
 
     up_p = sub.add_parser(
         "up",
@@ -2889,7 +2892,12 @@ def cmd_plan(
     run: Runner = _run,
     which: Callable[[str], str | None] = shutil.which,
 ) -> int:
-    cfg = dataclasses.replace(config_from_args(args), db_modes=args.db_modes)
+    cfg = dataclasses.replace(
+        config_from_args(args), db_modes=args.db_modes, ttl_min=args.ttl_min
+    )
+    fleet = cfg.ttl_min != "auto"
+    if fleet and not cfg.offline:
+        raise Refused("plan --ttl-min renders a fleet and needs --offline")
     now = time.time()
     if cfg.offline:
         fleet_dir = new_fleet_dir(cfg.out_root, cfg.name)
@@ -2904,9 +2912,13 @@ def cmd_plan(
             region_minor_prices(cfg.region),
             fleet_dir,
             now,
+            fleet=fleet,
             rds=rds_spec(cfg, pre),
         )
-        render_run_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv, which)
+        if fleet:
+            render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
+        else:
+            render_run_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv, which)
     else:
         fleet_dir, *_ = plan_fleet(args, cfg, run, now)
     log.info("rendered %s (phase=planned)", fleet_dir)
