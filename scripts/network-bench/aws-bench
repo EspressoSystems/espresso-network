@@ -1907,25 +1907,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def cmd_plan(args: argparse.Namespace, run: Runner = _run) -> int:
     cfg = config_from_args(args)
     now = time.time()
-    minor = region_minor_prices(cfg.region)
-    run_dir = new_run_dir(cfg.out_root, cfg.name)
-    setup_logging(run_dir)
-    log.debug("argv %s", args.argv)
-    hosts = plan_hosts(cfg)
-    host_peers = plan_peers(hosts)
-    if not cfg.offline:
-        # Caught here, not inside resolve_prices: a wrong --profile must never reach the
-        # Pricing API (or any other AWS call) against the wrong account.
-        caller_account(run, cfg)
-    estimate = estimate_or_refuse(run, cfg, hosts, minor, run_dir, now)
     if cfg.offline:
+        run_dir = new_run_dir(cfg.out_root, cfg.name)
+        setup_logging(run_dir)
+        log.debug("argv %s", args.argv)
+        hosts = plan_hosts(cfg)
+        estimate = estimate_or_refuse(
+            run, cfg, hosts, region_minor_prices(cfg.region), run_dir, now
+        )
         render_run_dir(
             run, cfg, run_dir, hosts, offline_preflight(cfg), estimate, args.argv
         )
     else:
-        write_manifest(
-            run_dir, cfg, hosts, host_peers, estimate, phase="planned", argv=args.argv
-        )
+        run_dir, _, _, _ = plan_fleet(args, cfg, run, now)
     log.info("rendered %s (phase=planned)", run_dir)
     return EXIT_OK
 
@@ -2167,20 +2161,9 @@ def cmd_run(
 def prepare_run(
     args: argparse.Namespace, cfg: RunConfig, run: Runner, started: float
 ) -> tuple[Path, Terraform]:
-    """Everything before the first AWS write: preflight, render, `tofu init` and `plan`, and
-    the prompt. Any failure or Ctrl-C leaves nothing to destroy."""
-    minor = region_minor_prices(cfg.region)
-    hosts = plan_hosts(cfg)
-    run_dir = new_run_dir(cfg.out_root, cfg.name)
-    setup_logging(run_dir)
-    log.debug("argv %s", args.argv)
-    pre = preflight(run, cfg, hosts)
-    estimate = estimate_or_refuse(run, cfg, hosts, minor, run_dir, started)
-    render_run_dir(run, cfg, run_dir, hosts, pre, estimate, args.argv)
-    tf = Terraform(run, cfg.tf, run_dir / "terraform", terraform_env())
-    tf.init()
-    (run_dir / "terraform" / "plan.txt").write_text(tf.plan())
-    log_preflight(cfg, pre, hosts)
+    """Everything before the first AWS write: `plan_fleet` and the prompt. Any failure or
+    Ctrl-C leaves nothing to destroy."""
+    run_dir, tf, hosts, _ = plan_fleet(args, cfg, run, started)
     prompt = (
         f"Create {len(hosts)} instances, 1 security group, 1 key pair in {cfg.account}?"
     )
@@ -2188,6 +2171,26 @@ def prepare_run(
         append_event(run_dir, "planned", "refused", "not confirmed")
         raise Refused("not confirmed; nothing was created")
     return run_dir, tf
+
+
+def plan_fleet(
+    args: argparse.Namespace, cfg: RunConfig, run: Runner, now: float
+) -> tuple[Path, Terraform, list[HostSpec], Preflight]:
+    """Preflight, cost check, render, `tofu init` and `plan`. Shared by `plan` and `run`; makes
+    no AWS write. The preflight summary is logged before the cost line."""
+    minor = region_minor_prices(cfg.region)
+    hosts = plan_hosts(cfg)
+    run_dir = new_run_dir(cfg.out_root, cfg.name)
+    setup_logging(run_dir)
+    log.debug("argv %s", args.argv)
+    pre = preflight(run, cfg, hosts)
+    log_preflight(cfg, pre, hosts)
+    estimate = estimate_or_refuse(run, cfg, hosts, minor, run_dir, now)
+    render_run_dir(run, cfg, run_dir, hosts, pre, estimate, args.argv)
+    tf = Terraform(run, cfg.tf, run_dir / "terraform", terraform_env())
+    tf.init()
+    (run_dir / "terraform" / "plan.txt").write_text(tf.plan())
+    return run_dir, tf, hosts, pre
 
 
 def enter_phase(fleet: Fleet, name: str, message: str) -> None:

@@ -388,6 +388,35 @@ class FetchPricesTest(unittest.TestCase):
                 )
 
 
+def online_plan_args(
+    tmp: Path, *extra: str, nodes: str = "2", name: str | None = None
+) -> "awsb.argparse.Namespace":
+    (tmp / "key").write_text("private")
+    (tmp / "key.pub").write_text("ssh-ed25519 AAAA test")
+    return parse_plan_args(
+        [
+            "--tag",
+            "x",
+            "--nodes",
+            nodes,
+            *(["--name", name] if name else []),
+            "--out-root",
+            str(tmp / "out"),
+            "--ssh-key",
+            str(tmp / "key"),
+            "--operator-cidr",
+            "203.0.113.5/32",
+            "--genesis",
+            str(Path(__file__).with_name("genesis.toml")),
+            "--price",
+            "c8g.4xlarge=0.71",
+            "--price",
+            "c8g.2xlarge=0.355",
+            *extra,
+        ]
+    )
+
+
 # REQ:awsbench-render-offline / REQ:awsbench-budget-refusal / EDGE:awsbench-name-collision
 class CmdPlanTest(unittest.TestCase):
     def test_offline_renders_manifest_and_peers(self):
@@ -436,25 +465,13 @@ class CmdPlanTest(unittest.TestCase):
             self.assertTrue((Path(out_root) / "run1" / "events.jsonl").exists())
 
     def test_budget_refusal_makes_no_tofu_apply(self):
-        with tempfile.TemporaryDirectory() as out_root:
-            args = parse_plan_args(
-                [
-                    "--tag",
-                    "x",
-                    "--nodes",
-                    "5",
-                    "--max-usd",
-                    "0.01",
-                    "--out-root",
-                    out_root,
-                    "--price",
-                    "c8g.4xlarge=0.71",
-                    "--price",
-                    "c8g.2xlarge=0.355",
-                ]
-            )
-            runner = FakeRunner({STS_CALL: sts_response("027574771971")})
-            code = cmd_plan_exit(args, run=runner)
+        with tempfile.TemporaryDirectory() as tmp:
+            args = online_plan_args(Path(tmp), "--max-usd", "0.01", nodes="5")
+            runner = FleetRunner([])
+            with unittest.mock.patch.object(
+                awsb, "preflight", return_value=fake_preflight()
+            ):
+                code = cmd_plan_exit(args, run=runner)
             self.assertEqual(code, awsb.EXIT_REFUSED)
             self.assertFalse(runner.ran("tofu"))
 
@@ -470,26 +487,15 @@ class CmdPlanTest(unittest.TestCase):
             self.assertEqual(runner.calls, [])
 
     def test_name_collision_refuses(self):
-        with tempfile.TemporaryDirectory() as out_root:
-            common = [
-                "--tag",
-                "x",
-                "--name",
-                "dup",
-                "--out-root",
-                out_root,
-                "--price",
-                "c8g.4xlarge=0.71",
-                "--price",
-                "c8g.2xlarge=0.355",
-            ]
-            first = awsb.cmd_plan(
-                parse_plan_args(common),
-                run=FakeRunner({STS_CALL: sts_response("027574771971")}),
-            )
+        with tempfile.TemporaryDirectory() as tmp:
+            args = online_plan_args(Path(tmp), name="dup")
+            with unittest.mock.patch.object(
+                awsb, "preflight", return_value=fake_preflight()
+            ):
+                first = awsb.cmd_plan(args, run=FleetRunner([]))
             self.assertEqual(first, awsb.EXIT_OK)
             second_runner = FakeRunner({})
-            second = cmd_plan_exit(parse_plan_args(common), run=second_runner)
+            second = cmd_plan_exit(args, run=second_runner)
             self.assertEqual(second, awsb.EXIT_REFUSED)
             # the name collision is caught before any AWS call, including the account guard
             self.assertEqual(second_runner.calls, [])
@@ -524,25 +530,46 @@ class CmdPlanTest(unittest.TestCase):
 
     # REQ:awsbench-account-guard
     def test_online_account_mismatch_makes_exactly_one_call(self):
-        with tempfile.TemporaryDirectory() as out_root:
-            args = parse_plan_args(
-                [
-                    "--tag",
-                    "x",
-                    "--nodes",
-                    "2",
-                    "--out-root",
-                    out_root,
-                    "--price",
-                    "c8g.4xlarge=0.71",
-                    "--price",
-                    "c8g.2xlarge=0.355",
-                ]
-            )
+        with tempfile.TemporaryDirectory() as tmp:
+            args = online_plan_args(Path(tmp))
             runner = FakeRunner({STS_CALL: sts_response("999999999999")})
-            code = cmd_plan_exit(args, run=runner)
+            with unittest.mock.patch.object(awsb, "tools_on_path"):
+                code = cmd_plan_exit(args, run=runner)
             self.assertEqual(code, awsb.EXIT_REFUSED)
             self.assertEqual(len(runner.calls), 1)
+
+    def test_online_runs_preflight_and_tofu_plan_without_apply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            args = online_plan_args(Path(tmp), name="run1")
+            runner = FleetRunner([])
+            with unittest.mock.patch.object(
+                awsb, "preflight", return_value=fake_preflight()
+            ) as preflight:
+                code = awsb.cmd_plan(args, run=runner)
+            self.assertEqual(code, awsb.EXIT_OK)
+            preflight.assert_called_once()
+            manifest = json.loads((out / "run1" / "manifest.json").read_text())
+            self.assertEqual(manifest["phase"], "planned")
+            self.assertEqual(manifest["az"], "eu-west-1b")
+            self.assertEqual(manifest["ami_id"], "ami-0abc")
+            self.assertEqual(set(manifest["images"]), set(fake_images()))
+            self.assertEqual((out / "run1/terraform/plan.txt").read_text(), "plan")
+            self.assertTrue(runner.ran("tofu", "init"))
+            self.assertTrue(runner.ran("tofu", "plan"))
+            self.assertFalse(runner.ran("tofu", "apply"))
+
+    def test_online_logs_preflight_before_cost(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = online_plan_args(Path(tmp), name="run1")
+            with unittest.mock.patch.object(
+                awsb, "preflight", return_value=fake_preflight()
+            ):
+                awsb.cmd_plan(args, run=FleetRunner([]))
+            lines = (Path(tmp) / "out/run1/driver.log").read_text().splitlines()
+            account = next(i for i, line in enumerate(lines) if "account 0275" in line)
+            cost = next(i for i, line in enumerate(lines) if "expected $" in line)
+            self.assertLess(account, cost)
 
 
 def two_node_hosts() -> list["awsb.HostSpec"]:
