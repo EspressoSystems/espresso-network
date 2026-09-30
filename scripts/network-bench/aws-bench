@@ -279,6 +279,8 @@ SSH_FAILED_RC = 255
 # `timeout` exits 124 when it killed the command.
 TIMEOUT_RC = 124
 SYSTEMCTL_INACTIVE_RC = 3
+# `systemd-run --collect` removes the unit once it exits, so `is-active` then exits 4.
+SYSTEMCTL_NO_UNIT_RC = 4
 # Consecutive polls that may fail to reach ctl (about a minute) before the run fails.
 AGENT_POLL_SSH_FAILURES_MAX = 6
 # The tag every terraform resource carries (default_tags), and the key `sweep` filters on.
@@ -3018,7 +3020,7 @@ def poll_agent(
             interrupts.sleep(AGENT_POLL_S)
             continue
         unreachable = 0
-        if probe.returncode not in (0, SYSTEMCTL_INACTIVE_RC):
+        if probe.returncode not in (0, SYSTEMCTL_INACTIVE_RC, SYSTEMCTL_NO_UNIT_RC):
             raise RemoteError(
                 f"systemctl is-active exited {probe.returncode}: {probe.stderr.strip()}"
             )

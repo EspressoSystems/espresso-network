@@ -2947,6 +2947,28 @@ class PollAgentTest(unittest.TestCase):
         with self.assertRaisesRegex(awsb.RemoteError, "agent exited in phase loading"):
             self.poll(runner)
 
+    def test_collected_agent_unit_with_done_state_returns(self):
+        runner = Scripted(
+            {
+                "is-active": [completed(returncode=awsb.SYSTEMCTL_NO_UNIT_RC)],
+                "agent-state.json": [self.state(DONE_STATE)],
+            }
+        )
+        self.assertEqual(self.poll(runner)["phase"], "done")
+
+    def test_collected_agent_unit_without_done_raises(self):
+        loading = self.state({"phase": "loading", "detail": "x"})
+        runner = Scripted(
+            {
+                "is-active": [completed(returncode=awsb.SYSTEMCTL_NO_UNIT_RC)],
+                "agent-state.json": [loading],
+            }
+        )
+        with self.assertRaisesRegex(
+            awsb.RemoteError, "agent exited .* without finishing"
+        ):
+            self.poll(runner)
+
     def test_unexpected_is_active_status_raises(self):
         runner = Scripted({"is-active": [completed(returncode=1)]})
         with self.assertRaisesRegex(awsb.RemoteError, "is-active exited 1"):

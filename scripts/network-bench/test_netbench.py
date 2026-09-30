@@ -1659,3 +1659,69 @@ class WindowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProgressWindowTest(unittest.TestCase):
+    @staticmethod
+    def heights(validator: list[float], query: list[float]) -> netbench.Heights:
+        h = netbench.Heights(0)
+        for t in validator:
+            h.saw("validator", h.top("validator") + 1, t)
+        for t in query:
+            h.saw("query", h.top("query") + 1, t)
+        return h
+
+    @staticmethod
+    def counters(*points: tuple[float, float]) -> list[dict[str, Any]]:
+        return [{"ts": ts, "decided_bytes": b} for ts, b in points]
+
+    def near(self, value: float | None, expected: float) -> None:
+        assert value is not None
+        self.assertAlmostEqual(value, expected, places=3)
+
+    def test_empty_window(self):
+        stats = netbench.progress_window(self.heights([], []), [], 100.0, 30)
+        self.assertEqual(stats["validator"], None)
+        self.assertEqual(stats["query"], None)
+        self.assertEqual(stats["lag_ms"], None)
+        self.assertEqual(stats["block_s"], None)
+        self.assertEqual(stats["block_mb"], None)
+
+    def test_one_block(self):
+        h = self.heights([95.0], [95.5])
+        stats = netbench.progress_window(
+            h, self.counters((90, 0), (99, 2e6)), 100.0, 30
+        )
+        self.assertEqual((stats["validator"], stats["query"]), (0, 0))
+        self.near(stats["lag_ms"], 500)
+        self.assertEqual(stats["block_s"], 30)
+        self.near(stats["block_mb"], 2)
+
+    def test_several_blocks(self):
+        h = self.heights([80, 85, 90, 95, 99], [80.1, 85.1, 90.1, 95.1, 99.2])
+        counters = self.counters((60, 0), (75, 1e6), (100, 11e6))
+        stats = netbench.progress_window(h, counters, 100.0, 30)
+        self.assertEqual(stats["validator"], 4)
+        self.near(stats["block_s"], 6)
+        self.near(stats["block_mb"], 2)
+        self.near(stats["lag_ms"], 200)
+
+    def test_blocks_outside_window_are_ignored(self):
+        h = self.heights([10, 20, 90], [10, 20, 90])
+        stats = netbench.progress_window(h, [], 100.0, 30)
+        self.assertEqual(stats["block_s"], 30)
+        self.assertEqual(stats["block_mb"], None)
+
+    def test_query_behind(self):
+        h = self.heights([80, 85, 90, 95], [80.5, 85.5])
+        stats = netbench.progress_window(h, [], 100.0, 30)
+        self.assertEqual((stats["validator"], stats["query"]), (3, 1))
+        self.assertEqual(stats["blocks_behind"], 2)
+        self.near(stats["seconds_behind"], 10)
+        self.assertEqual(stats["lag_ms"], None)
+
+    def test_query_caught_up(self):
+        h = self.heights([90, 95], [90.2, 95.4])
+        stats = netbench.progress_window(h, [], 100.0, 30)
+        self.assertEqual(stats["blocks_behind"], 0)
+        self.near(stats["lag_ms"], 400)

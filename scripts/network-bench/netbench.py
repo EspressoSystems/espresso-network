@@ -661,7 +661,9 @@ async def generate_load(
                 group.create_task(poll_counters(polling, validator_urls[0], counters)),
             ]
             tracker = group.create_task(
-                track_inclusion(cfg, state, tracking, query_url, marker, heights, done)
+                track_inclusion(
+                    cfg, state, tracking, query_url, marker, heights, counters, done
+                )
             )
             load = Load(
                 cfg, state, submitter, submit_urls[: cfg.submit_nodes], marker, bodies
@@ -953,6 +955,7 @@ async def track_inclusion(
     query_url: str,
     marker: bytes,
     heights: Heights,
+    counters: list[dict[str, Any]],
     done: asyncio.Event,
 ) -> None:
     """Scan every new block's payload for our marker; time out transactions that never show.
@@ -966,7 +969,7 @@ async def track_inclusion(
     while True:
         now = time.time()
         if now >= report:
-            log_progress(state, height)
+            log_progress(state, heights, counters, now)
             report = now + PROGRESS_S
         if done.is_set():
             deadline = deadline or now + cfg.tx_timeout_s
@@ -1025,18 +1028,83 @@ def record_inclusions(
     heights.scanned[height] = time.time()
 
 
-def log_progress(state: LoadState, height: int) -> None:
+class ProgressStats(TypedDict):
+    """`None` where the window or the heights hold no data yet."""
+
+    validator: int | None
+    query: int | None
+    lag_ms: float | None
+    blocks_behind: int
+    seconds_behind: float
+    block_s: float | None
+    block_mb: float | None
+
+
+def progress_window(
+    heights: Heights, counters: Sequence[Mapping[str, Any]], now: float, window_s: float
+) -> ProgressStats:
+    """Network state over the last `window_s`: last height on each source, query lag, and mean
+    block time and size from the blocks the validators showed in the window."""
+    validator, query = heights.top("validator"), heights.top("query")
+    lag_ms = None
+    behind = max(validator - query, 0)
+    seconds_behind = 0.0
+    if behind:
+        seconds_behind = now - heights.seen["validator"][query]
+    elif validator > heights.start:
+        last = validator - 1
+        lag_ms = (heights.seen["query"][last] - heights.seen["validator"][last]) * 1000
+    blocks = sum(1 for t in heights.seen["validator"].values() if t >= now - window_s)
+    inside = [c for c in counters if c["ts"] >= now - window_s]
+    return {
+        "validator": validator - 1 if validator > heights.start else None,
+        "query": query - 1 if query > heights.start else None,
+        "lag_ms": lag_ms,
+        "blocks_behind": behind,
+        "seconds_behind": seconds_behind,
+        "block_s": window_s / blocks if blocks else None,
+        "block_mb": (inside[-1]["decided_bytes"] - inside[0]["decided_bytes"])
+        / blocks
+        / 1e6
+        if blocks and len(inside) > 1
+        else None,
+    }
+
+
+def log_progress(
+    state: LoadState,
+    heights: Heights,
+    counters: Sequence[Mapping[str, Any]],
+    now: float,
+) -> None:
+    stats = progress_window(heights, counters, now, PROGRESS_S)
     included = sum(1 for tx in state.txs if tx.status == "included")
     timeouts = sum(1 for tx in state.txs if tx.status == "timeout")
     log.info(
-        "height %d: %d submitted, %d included, %d pending, %d timed out, %d waited for the cap",
-        height,
+        "height v=%s q=%s (%s), block %s s, %s MB; %d submitted, %d included, %d pending, "
+        "%d timed out, %d waited for the cap",
+        fmt_num(stats["validator"]) or "-",
+        fmt_num(stats["query"]) or "-",
+        fmt_lag(stats),
+        fmt_num(stats["block_s"]) or "-",
+        fmt_num(stats["block_mb"]) or "-",
         len(state.txs),
         included,
         len(state.pending),
         timeouts,
         state.cap_waits,
     )
+
+
+def fmt_lag(stats: ProgressStats) -> str:
+    if stats["blocks_behind"]:
+        return (
+            f"{stats['blocks_behind']} blk / "
+            f"{fmt_num(stats['seconds_behind'])} s behind"
+        )
+    if stats["lag_ms"] is None:
+        return "no lag yet"
+    return f"lag {fmt_num(stats['lag_ms'])} ms"
 
 
 def next_rate(ramp: Sequence[float], passed: list[bool]) -> float | None:
