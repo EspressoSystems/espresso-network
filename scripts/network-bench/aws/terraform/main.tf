@@ -158,3 +158,157 @@ resource "aws_instance" "host" {
     }
   }
 }
+
+# The RDS instance, its parameter group and the schedule that deletes it before the hosts end.
+# The schedule is what bounds the cost of an rds fleet whose laptop is gone: hosts terminate
+# themselves, RDS does not.
+locals {
+  rds_enabled = !var.offline && var.rds != null
+  rds_name    = "espresso-bench-${var.name}"
+}
+
+# A DB subnet group needs subnets in two AZs, unlike the hosts, which sit in one.
+data "aws_subnets" "vpc" {
+  count = local.rds_enabled ? 1 : 0
+
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default[0].id]
+  }
+}
+
+resource "aws_db_subnet_group" "this" {
+  count = local.rds_enabled ? 1 : 0
+
+  name       = local.rds_name
+  subnet_ids = data.aws_subnets.vpc[0].ids
+}
+
+# Every parameter is pending-reboot: the instance boots with the group attached, so all of
+# them are in effect from the start, and static ones (shared_buffers, huge_pages) cannot use
+# any other apply method.
+resource "aws_db_parameter_group" "this" {
+  count = local.rds_enabled ? 1 : 0
+
+  name   = local.rds_name
+  family = "postgres${split(".", var.rds.engine_version)[0]}"
+
+  dynamic "parameter" {
+    for_each = var.rds.parameters
+    content {
+      name         = parameter.key
+      value        = parameter.value
+      apply_method = "pending-reboot"
+    }
+  }
+}
+
+resource "aws_db_instance" "this" {
+  count = local.rds_enabled ? 1 : 0
+
+  identifier     = local.rds_name
+  engine         = "postgres"
+  engine_version = var.rds.engine_version
+  instance_class = var.rds.instance_class
+
+  availability_zone      = var.az
+  db_subnet_group_name   = aws_db_subnet_group.this[0].name
+  parameter_group_name   = aws_db_parameter_group.this[0].name
+  vpc_security_group_ids = [aws_security_group.this.id]
+  publicly_accessible    = false
+
+  storage_type       = "gp3"
+  allocated_storage  = var.rds.gb
+  iops               = var.rds.iops
+  storage_throughput = var.rds.mbps
+
+  db_name  = "espresso"
+  username = var.rds.username
+  password = var.rds_password
+
+  skip_final_snapshot          = true
+  deletion_protection          = false
+  backup_retention_period      = 0
+  performance_insights_enabled = true
+  apply_immediately            = true
+  auto_minor_version_upgrade   = false
+
+  timeouts {
+    create = var.rds.timeout
+    delete = var.rds.timeout
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.rds_password != null
+      error_message = "rds needs rds_password."
+    }
+  }
+}
+
+# The role can delete this one instance and nothing else.
+resource "aws_iam_role" "scheduler" {
+  count = local.rds_enabled ? 1 : 0
+
+  name = local.rds_name
+  path = "/espresso-bench/"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "scheduler.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = { StringEquals = { "aws:SourceAccount" = var.account_id } }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "scheduler" {
+  count = local.rds_enabled ? 1 : 0
+
+  name = "delete-rds"
+  role = aws_iam_role.scheduler[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "rds:DeleteDBInstance"
+      Resource = aws_db_instance.this[0].arn
+    }]
+  })
+}
+
+resource "aws_scheduler_schedule_group" "this" {
+  count = local.rds_enabled ? 1 : 0
+
+  name = local.rds_name
+}
+
+# `delete_at` is in UTC, the schedule's default time zone. The provider has no
+# action_after_completion, so a fired schedule stays until `tofu destroy` removes it.
+resource "aws_scheduler_schedule" "rds_delete" {
+  count = local.rds_enabled ? 1 : 0
+
+  name       = "rds-delete"
+  group_name = aws_scheduler_schedule_group.this[0].name
+
+  schedule_expression = "at(${var.rds.delete_at})"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:rds:deleteDBInstance"
+    role_arn = aws_iam_role.scheduler[0].arn
+    input = jsonencode({
+      DbInstanceIdentifier   = aws_db_instance.this[0].identifier
+      SkipFinalSnapshot      = true
+      DeleteAutomatedBackups = true
+    })
+  }
+
+  depends_on = [aws_iam_role_policy.scheduler]
+}

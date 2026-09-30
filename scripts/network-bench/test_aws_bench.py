@@ -3555,6 +3555,8 @@ def aws_manifest(steal_hosts: bool = True) -> dict:
     cfg = awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
     return {
         "name": "run1",
+        "fleet": "run1",
+        "query_db": "colocated",
         "hosts": awsb.plan_hosts(cfg),
         "images": fake_images(),
         "start_spread_s": 0.5,
@@ -4079,6 +4081,8 @@ def write_collected_run(run_dir: Path) -> dict:
     hosts = awsb.plan_hosts(cfg)
     manifest = {
         "name": "run1",
+        "fleet": "run1",
+        "query_db": "colocated",
         "config": awsb.config_to_json(cfg),
         "hosts": hosts,
         "images": fake_images(),

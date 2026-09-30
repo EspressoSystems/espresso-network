@@ -86,3 +86,31 @@ variable "pg_volume" {
   })
   default = null
 }
+
+variable "rds" {
+  description = "RDS PostgreSQL query database and the one-shot schedule that deletes it, or null for none."
+  type = object({
+    instance_class = string
+    engine_version = string
+    gb             = number
+    iops           = number
+    mbps           = number
+    username       = string
+    parameters     = map(string)
+    delete_at      = string
+    timeout        = string
+  })
+  default = null
+
+  validation {
+    condition     = var.rds == null || var.rds.gb >= 400
+    error_message = "rds gp3 storage below 400 GiB is fixed at 3000 IOPS and 125 MiB/s."
+  }
+}
+
+variable "rds_password" {
+  type        = string
+  sensitive   = true
+  default     = null
+  description = "Master password of the rds instance; kept out of `rds` so the count expressions stay plannable."
+}
