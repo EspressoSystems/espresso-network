@@ -11,7 +11,8 @@ and prints a cost estimate without writing anything to AWS; `run` additionally p
 measures, collects and destroys. `up` provisions a fleet that stays idle for several
 measurements: `run --fleet DIR` measures on it (`fleet.lock` admits one run at a time and a reset
 wipes the chain between runs), `extend DIR --ttl-min N` moves its expiry and `down DIR`
-destroys it.
+destroys it. The query service's Postgres runs in a container on node0 (`--query-db
+colocated`) or on an RDS instance (`rds`, provisioned by `up --db-modes`); a run picks one.
 
 `status` shows one run (phase, instances, agent progress, cost so far) or, with `--all`, every
 tagged resource in the region. `destroy DIR` tears one run down; `destroy --orphans` sweeps runs
@@ -48,6 +49,7 @@ import logging
 import math
 import os
 import re
+import secrets
 import select
 import shlex
 import shutil
@@ -132,18 +134,22 @@ PRICE_CACHE_TTL_S = 7 * 24 * 3600
 PRICING_API_REGION = "us-east-1"
 
 # Minor EC2/EBS items, priced per region: gp3 GB-month, gp3 IOPS above the 3000 baseline
-# (per IOPS-month), gp3 throughput above the 125 MB/s baseline (per MB/s-month), a public
-# IPv4 address (per hour, charged since 2024-02-01), and internet egress (per GB, first tier).
-# Source: https://aws.amazon.com/ebs/pricing/ and https://aws.amazon.com/vpc/pricing/;
-# not yet checked against a live pricing call, re-check before trusting a stale estimate.
+# (per IOPS-month), gp3 throughput above the 125 MB/s baseline (per MB/s-month), RDS PostgreSQL
+# Single-AZ gp3 storage (per GB-month; the IOPS and MB/s of a 400 GiB volume are included), a
+# public IPv4 address (per hour, charged since 2024-02-01), and internet egress (per GB, first
+# tier). Source: https://aws.amazon.com/ebs/pricing/, https://aws.amazon.com/vpc/pricing/ and
+# https://aws.amazon.com/rds/postgresql/pricing/; not yet checked against a live pricing call,
+# re-check before trusting a stale estimate.
 MINOR_PRICE_SOURCE = (
-    "https://aws.amazon.com/ebs/pricing/ https://aws.amazon.com/vpc/pricing/"
+    "https://aws.amazon.com/ebs/pricing/ https://aws.amazon.com/vpc/pricing/ "
+    "https://aws.amazon.com/rds/postgresql/pricing/"
 )
 MINOR_PRICES: dict[str, dict[str, float]] = {
     "eu-west-1": {
         "gp3_gb_month_usd": 0.088,
         "gp3_iops_month_usd": 0.005,
         "gp3_mbps_month_usd": 0.04,
+        "rds_gp3_gb_month_usd": 0.127,
         "public_ipv4_hour_usd": 0.005,
         "egress_gb_usd": 0.09,
     },
@@ -276,9 +282,12 @@ RDS_PARAMETER_UNITS = {
     "min_wal_size": "MB",
     "checkpoint_timeout": "s",
 }
+# Same, for the PG_OBSERVABILITY keys that carry a time unit.
+RDS_OBSERVABILITY_UNITS = {"log_min_duration_statement": "ms"}
 _SIZE_BYTES = {"kB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
 _UNIT_BYTES = {"8kB": 8192, "kB": 1024, "MB": 1024**2}
-_TIME_SECONDS = {"s": 1, "min": 60, "h": 3600}
+_TIME_MS = {"ms": 1, "s": 1000, "min": 60_000, "h": 3_600_000}
+_TIME_UNIT_MS = {"ms": 1, "s": 1000}
 # pg_settings reports the canonical spelling of an enum value that has aliases.
 PG_SETTING_ALIASES = {("wal_compression", "on"): "pglz"}
 PG_OBSERVABILITY = {
@@ -375,6 +384,9 @@ FLEET_ONLY_FLAGS = (
     "--root-gb",
     "--pg-iops",
     "--pg-mbps",
+    "--pg-gb",
+    "--rds-class",
+    "--rds-engine-version",
     "--operator-cidr",
     "--ssh-key",
     "--ttl-min",
@@ -434,6 +446,56 @@ CLOUDWATCH_PERIOD_S = 60
 # Delay before CloudWatch has published the datapoints of the last minute of the load.
 CLOUDWATCH_LAG_S = 120.0
 
+# RDS query database. `tofu apply` returns once the instance is `available` (RDS_CREATE_S
+# typical, RDS_CREATE_MAX_S is the timeout); a delete takes about RDS_DELETE_S. The EventBridge
+# schedule deletes the instance RDS_REAPER_LEAD_S before the hosts terminate.
+RDS_CREATE_S = 600.0
+RDS_CREATE_MAX_S = 1500.0
+RDS_DELETE_S = 600.0
+RDS_REAPER_LEAD_S = 300.0
+RDS_POLL_S = 10.0
+# RDS identifiers, subnet groups and parameter groups reject `--` and a trailing `-`.
+RDS_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+# gp3 volumes of 400 GiB and above are the smallest RDS PostgreSQL storage that includes 12000
+# IOPS and 500 MiB/s; larger provisioned tiers are not priced here.
+RDS_GB_MIN = 400
+RDS_IOPS = 12000
+RDS_MBPS = 500
+# Below 4xlarge the EBS baseline is under 500 MB/s and the class would be measured, not the
+# placement.
+RDS_CLASS_RE = re.compile(r"^db\.[a-z0-9]+\.(\d+)xlarge$")
+RDS_CLASS_MIN_XLARGE = 4
+RDS_CLASS_FALLBACK = "db.m7g.4xlarge"
+RDS_USER = "bench"
+RDS_DATABASE = "espresso"
+RDS_FILE = "rds.json"
+RDS_CLOUDWATCH_FILE = "cloudwatch/rds.json"
+PI_FILE = "cloudwatch/pi.json"
+RDS_LOGS_DIR = "rds-logs"
+# CloudWatch query Id -> (metric, statistic) recorded in cloudwatch/rds.json.
+RDS_METRICS = {
+    "cpu": ("CPUUtilization", "Average"),
+    "connections": ("DatabaseConnections", "Average"),
+    "read_iops": ("ReadIOPS", "Average"),
+    "write_iops": ("WriteIOPS", "Average"),
+    "read_bytes": ("ReadThroughput", "Average"),
+    "write_bytes": ("WriteThroughput", "Average"),
+    "read_latency": ("ReadLatency", "Average"),
+    "write_latency": ("WriteLatency", "Average"),
+    "queue_depth": ("DiskQueueDepth", "Average"),
+    "free_memory": ("FreeableMemory", "Minimum"),
+    "io_balance": ("EBSIOBalance%", "Minimum"),
+    "byte_balance": ("EBSByteBalance%", "Minimum"),
+}
+# Seconds a parameter group may take to report `in-sync` after the reboot.
+RDS_SYNC_TIMEOUT_S = 900.0
+# describe-events keeps 14 days; a fleet lives hours.
+RDS_EVENTS_MINUTES = 1440
+RDS_RESET_SQL = (
+    f"DROP DATABASE IF EXISTS {RDS_DATABASE} WITH (FORCE)",
+    f"CREATE DATABASE {RDS_DATABASE}",
+)
+
 
 class Refused(Exception):
     """A plan or run must be refused before any AWS write; caught once, in `main`."""
@@ -458,8 +520,8 @@ class Interrupted(Exception):
     runs a bounded collection and a destroy prompt instead of an abrupt exit."""
 
 
-DbMode = Literal["colocated"]
-DB_MODES: tuple[DbMode, ...] = ("colocated",)
+DbMode = Literal["colocated", "rds"]
+DB_MODES: tuple[DbMode, ...] = ("colocated", "rds")
 
 
 class HostSpec(TypedDict):
@@ -500,6 +562,8 @@ class Preflight(TypedDict):
     vcpu_in_use: int
     vcpu_quota: float
     git_diff: str | None
+    # The engine minor `rds_orderable` resolved; present when the fleet has an rds mode.
+    rds_engine_version: NotRequired[str]
 
 
 class InstancePrice(TypedDict):
@@ -527,6 +591,28 @@ class Estimate(TypedDict):
     lines: list[CostLine]
     expected_usd: float
     bound_usd: float
+
+
+class RdsSpec(TypedDict):
+    instance_class: str
+    engine_version: str
+    gb: int
+    iops: int
+    mbps: int
+
+
+class RdsInfo(TypedDict):
+    """`tofu output rds`; `created_at` is added once `prepare_rds` has seen the instance."""
+
+    identifier: str
+    endpoint: str
+    port: int
+    resource_id: str
+    arn: str
+    engine_version: str
+    schedule_group: str
+    schedule_name: str
+    created_at: NotRequired[str]
 
 
 class FleetLock(TypedDict):
@@ -570,6 +656,8 @@ class FleetManifest(TypedDict):
     expires_at: NotRequired[str]
     ssh_public_key: NotRequired[str]
     git_rev: NotRequired[str]
+    rds_spec: NotRequired[RdsSpec]
+    rds: NotRequired[RdsInfo]
 
 
 class Manifest(FleetManifest):
@@ -640,6 +728,9 @@ class Evidence(TypedDict):
     # node0 EBS metric -> minimum over the load window, None without a datapoint; empty when
     # `cloudwatch/ec2-node0.json` was not collected.
     ebs_balance_min: dict[str, float | None]
+    # rds runs: each `cloudwatch/rds.json` metric's minimum over the load window, None without
+    # a datapoint; empty when the file was not collected.
+    rds_min: NotRequired[dict[str, float | None]]
 
 
 class MetricSeries(TypedDict):
@@ -673,6 +764,9 @@ class RunConfig:
     root_gb: str = "auto"
     pg_iops: int = 12000
     pg_mbps: int = 500
+    pg_gb: int = 400
+    rds_class: str = "db.m8g.4xlarge"
+    rds_engine_version: str = "18"
     operator_cidr: str = "auto"
     ssh_key: str = SSH_KEY_AUTO
     max_usd: float = 10.0
@@ -739,7 +833,48 @@ def node_root_gb(cfg: RunConfig, query: bool) -> int:
     return max(NODE_ROOT_GB_MIN, math.ceil(RESERVED_GB + factor * payload_gb))
 
 
+def check_rds_config(cfg: RunConfig) -> None:
+    """Refuses, before any AWS call, an rds fleet whose volume or class would be measured
+    instead of the placement."""
+    if "rds" not in cfg.db_modes:
+        return
+    if cfg.pg_gb < RDS_GB_MIN:
+        raise Refused(
+            f"--pg-gb {cfg.pg_gb}: rds gp3 storage below {RDS_GB_MIN} GiB is fixed at "
+            f"3000 IOPS and 125 MiB/s"
+        )
+    if (cfg.pg_iops, cfg.pg_mbps) != (RDS_IOPS, RDS_MBPS):
+        raise Refused(
+            f"rds needs --pg-iops {RDS_IOPS} and --pg-mbps {RDS_MBPS}, got "
+            f"{cfg.pg_iops} and {cfg.pg_mbps}: larger provisioned tiers are not priced"
+        )
+    size = RDS_CLASS_RE.match(cfg.rds_class)
+    if size is None or int(size[1]) < RDS_CLASS_MIN_XLARGE:
+        raise Refused(
+            f"--rds-class {cfg.rds_class}: needs db.<family>.{RDS_CLASS_MIN_XLARGE}xlarge or "
+            f"larger, smaller classes have an EBS baseline below {RDS_MBPS} MB/s"
+        )
+    name = cfg.name if cfg.name is not None else default_run_name()
+    if not RDS_NAME_RE.match(name):
+        raise Refused(
+            f"--name {name!r}: rds identifiers and groups reject '--' and a trailing '-'"
+        )
+
+
+def rds_spec(cfg: RunConfig, pre: Preflight) -> RdsSpec | None:
+    if "rds" not in cfg.db_modes:
+        return None
+    return {
+        "instance_class": cfg.rds_class,
+        "engine_version": pre["rds_engine_version"],
+        "gb": cfg.pg_gb,
+        "iops": cfg.pg_iops,
+        "mbps": cfg.pg_mbps,
+    }
+
+
 def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
+    check_rds_config(cfg)
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
     if not 1 <= cfg.load.submit_nodes <= cfg.nodes - 1:
@@ -808,8 +943,11 @@ def phase_seconds(cfg: RunConfig) -> dict[str, tuple[float, float]]:
     """phase -> (expected_s, worst_s). `worst_s` swaps in the timeouts that bound a laptop
     disconnect: the ready timeout and the collection cap."""
     load_s = load_seconds(cfg.load)
+    provision = (PROVISION_S, PROVISION_S)
+    if "rds" in cfg.db_modes:
+        provision = (PROVISION_S + RDS_CREATE_S, PROVISION_S + RDS_CREATE_MAX_S)
     return {
-        "provision": (PROVISION_S, PROVISION_S),
+        "provision": provision,
         "services": (SERVICES_S, SERVICES_S),
         "ready": (READY_EXPECTED_S, cfg.ready_timeout_s),
         "load": (load_s, load_s),
@@ -859,6 +997,8 @@ def fetch_prices(
 
 
 def _fetch_instance_price(run: Runner, cfg: RunConfig, instance_type: str) -> float:
+    if instance_type.startswith("db."):
+        return fetch_rds_price(run, cfg, instance_type)
     filters = [
         {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_type},
         {"Type": "TERM_MATCH", "Field": "regionCode", "Value": cfg.region},
@@ -867,6 +1007,27 @@ def _fetch_instance_price(run: Runner, cfg: RunConfig, instance_type: str) -> fl
         {"Type": "TERM_MATCH", "Field": "preInstalledSw", "Value": "NA"},
         {"Type": "TERM_MATCH", "Field": "capacitystatus", "Value": "Used"},
     ]
+    return _query_price(run, cfg, "AmazonEC2", filters, instance_type)
+
+
+def fetch_rds_price(run: Runner, cfg: RunConfig, instance_class: str) -> float:
+    """Hourly on-demand price of a Single-AZ PostgreSQL instance class."""
+    filters = [
+        {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_class},
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": cfg.region},
+        {"Type": "TERM_MATCH", "Field": "databaseEngine", "Value": "PostgreSQL"},
+        {"Type": "TERM_MATCH", "Field": "deploymentOption", "Value": "Single-AZ"},
+    ]
+    return _query_price(run, cfg, "AmazonRDS", filters, instance_class)
+
+
+def _query_price(
+    run: Runner,
+    cfg: RunConfig,
+    service_code: str,
+    filters: list[dict[str, str]],
+    instance_type: str,
+) -> float:
     result = run(
         aws_argv(
             cfg,
@@ -875,7 +1036,7 @@ def _fetch_instance_price(run: Runner, cfg: RunConfig, instance_type: str) -> fl
             "--region",
             PRICING_API_REGION,
             "--service-code",
-            "AmazonEC2",
+            service_code,
             "--filters",
             json.dumps(filters),
             "--output",
@@ -916,6 +1077,8 @@ def _parse_price_response(stdout: str, instance_type: str, region: str) -> float
 
 def resolve_prices(run: Runner, cfg: RunConfig, cache: Path, now: float) -> Prices:
     types = {cfg.node_type, cfg.ctl_type}
+    if "rds" in cfg.db_modes:
+        types.add(cfg.rds_class)
     overrides = dict(parse_price(p) for p in cfg.price)
     missing = types - overrides.keys()
     if missing and cfg.offline:
@@ -937,7 +1100,11 @@ def region_minor_prices(region: str) -> dict[str, float]:
 
 
 def estimate_cost(
-    hosts: list[HostSpec], cfg: RunConfig, prices: Prices, minor: dict[str, float]
+    hosts: list[HostSpec],
+    cfg: RunConfig,
+    prices: Prices,
+    minor: dict[str, float],
+    rds: RdsSpec | None = None,
 ) -> Estimate:
     phases = phase_seconds(cfg)
     expected_s = sum(expected for expected, _ in phases.values())
@@ -945,6 +1112,9 @@ def estimate_cost(
     ttl_s = single_shot_ttl_s(cfg, worst_s)
     lines = _cost_lines(hosts, prices, minor, expected_s)
     bound_lines = _cost_lines(hosts, prices, minor, ttl_s + BOOT_ALLOWANCE_S)
+    if rds is not None:
+        lines += rds_cost_lines(rds, prices, minor, expected_s)
+        bound_lines += rds_cost_lines(rds, prices, minor, ttl_s + RDS_DELETE_S)
     return {
         "expected_s": expected_s,
         "worst_s": worst_s,
@@ -967,7 +1137,11 @@ def single_shot_ttl_s(cfg: RunConfig, worst_s: float) -> float:
 
 
 def estimate_fleet(
-    hosts: list[HostSpec], cfg: RunConfig, prices: Prices, minor: dict[str, float]
+    hosts: list[HostSpec],
+    cfg: RunConfig,
+    prices: Prices,
+    minor: dict[str, float],
+    rds: RdsSpec | None = None,
 ) -> Estimate:
     """A fleet lives until its TTL whatever is measured on it, so expected and worst case are
     both the TTL; the bound adds the boot before the shutdown timer is armed."""
@@ -978,6 +1152,9 @@ def estimate_fleet(
     ttl_s = int(cfg.ttl_min) * 60.0
     lines = _cost_lines(hosts, prices, minor, ttl_s)
     bound_lines = _cost_lines(hosts, prices, minor, ttl_s + BOOT_ALLOWANCE_S)
+    if rds is not None:
+        lines += rds_cost_lines(rds, prices, minor, ttl_s)
+        bound_lines += rds_cost_lines(rds, prices, minor, ttl_s + RDS_DELETE_S)
     return {
         "expected_s": ttl_s,
         "worst_s": ttl_s,
@@ -1022,7 +1199,9 @@ def fleet_bound_usd(manifest: FleetManifest, expires: datetime) -> float:
     lifetime_s = (
         expires - datetime.fromisoformat(manifest["created_at"])
     ).total_seconds()
-    return manifest_cost(manifest, lifetime_s + BOOT_ALLOWANCE_S)
+    return manifest_cost(
+        manifest, lifetime_s + BOOT_ALLOWANCE_S, lifetime_s + RDS_DELETE_S
+    )
 
 
 def _cost_lines(
@@ -1084,6 +1263,29 @@ def _cost_lines(
     egress_gb = len(hosts) * EGRESS_MB_PER_HOST / 1024
     lines.append(_minor_line("egress", egress_gb, "gb", minor["egress_gb_usd"]))
     return lines
+
+
+def rds_cost_lines(
+    rds: RdsSpec, prices: Prices, minor: dict[str, float], duration_s: float
+) -> list[CostLine]:
+    """RDS bills from create to delete, so the caller passes its own duration."""
+    hours = duration_s / 3600
+    price = prices["instances"][rds["instance_class"]]
+    instance: CostLine = {
+        "item": f"rds instance {rds['instance_class']}",
+        "qty": hours,
+        "unit": "hour",
+        "usd_per_unit": price["usd_hour"],
+        "usd": hours * price["usd_hour"],
+        "source": price["source"],
+    }
+    storage = _minor_line(
+        "rds gp3 storage",
+        rds["gb"] * hours,
+        "gb-hour",
+        minor["rds_gp3_gb_month_usd"] / HOURS_PER_MONTH,
+    )
+    return [instance, storage]
 
 
 def _minor_line(item: str, qty: float, unit: str, usd_per_unit: float) -> CostLine:
@@ -1510,10 +1712,84 @@ def vcpu_headroom(
     return needed, in_use, quota
 
 
-def image_refs(cfg: RunConfig) -> dict[str, str]:
+def image_refs(cfg: RunConfig, postgres_tag: str | None = None) -> dict[str, str]:
+    """`postgres_tag` pins the container to the minor RDS runs, so both placements run the
+    same one."""
     images = {c: f"{GHCR_ORG}/{c}:{cfg.tag}" for c in IMAGE_COMPONENTS}
     images.update(SUPPORT_IMAGES)
+    if postgres_tag is not None:
+        repository = SUPPORT_IMAGES["postgres"].rpartition(":")[0]
+        images["postgres"] = f"{repository}:{postgres_tag}"
     return images
+
+
+def resolve_images(cfg: RunConfig, rds_minor: str | None) -> dict[str, ImageInfo]:
+    images: dict[str, ImageInfo] = {}
+    for name, ref in image_refs(cfg, rds_minor).items():
+        try:
+            images[name] = resolve_image(ref)
+        except Refused as exc:
+            if name == "postgres" and rds_minor is not None:
+                raise Refused(
+                    f"{exc}; the container must run the rds minor {rds_minor}: "
+                    "pass --rds-engine-version <older minor>"
+                ) from exc
+            raise
+    return images
+
+
+def rds_orderable(run: Runner, cfg: RunConfig, az: str) -> str:
+    """The highest engine minor matching `--rds-engine-version` that `--rds-class` can run on
+    gp3 with the fleet's storage in `az`. No fallback class or version: the operator picks."""
+    result = run(
+        aws_argv(
+            cfg,
+            "rds",
+            "describe-orderable-db-instance-options",
+            "--region",
+            cfg.region,
+            "--engine",
+            "postgres",
+            "--db-instance-class",
+            cfg.rds_class,
+            "--output",
+            "json",
+        )
+    )
+    if result.returncode != 0:
+        raise Refused(
+            "aws rds describe-orderable-db-instance-options failed: "
+            f"{result.stderr.strip()}"
+        )
+    versions = [
+        option["EngineVersion"]
+        for option in json.loads(result.stdout)["OrderableDBInstanceOptions"]
+        if _rds_option_fits(option, cfg, az)
+    ]
+    if not versions:
+        raise Refused(
+            f"{cfg.rds_class} cannot run postgres {cfg.rds_engine_version} on {cfg.pg_gb} GiB "
+            f"gp3 with {cfg.pg_iops} IOPS and {cfg.pg_mbps} MiB/s in {az}: pass --rds-class "
+            f"{RDS_CLASS_FALLBACK}, another --rds-engine-version or --az"
+        )
+    return max(versions, key=lambda v: tuple(int(part) for part in v.split(".")))
+
+
+def _rds_option_fits(option: dict[str, Any], cfg: RunConfig, az: str) -> bool:
+    version, wanted = option["EngineVersion"], cfg.rds_engine_version
+    return (
+        (version == wanted or version.startswith(f"{wanted}."))
+        and option["StorageType"] == "gp3"
+        and az in {zone["Name"] for zone in option["AvailabilityZones"]}
+        and option["SupportsPerformanceInsights"]
+        and option["MinStorageSize"] <= cfg.pg_gb <= option["MaxStorageSize"]
+        and option["MinIopsPerDbInstance"]
+        <= cfg.pg_iops
+        <= option["MaxIopsPerDbInstance"]
+        and option["MinStorageThroughputPerDbInstance"]
+        <= cfg.pg_mbps
+        <= option["MaxStorageThroughputPerDbInstance"]
+    )
 
 
 DOCKER_HUB_HOST = "registry-1.docker.io"
@@ -1679,9 +1955,10 @@ def preflight(
     instance_types = describe_instance_types(run, cfg, set(running) | types)
     needed, in_use, quota = vcpu_headroom(run, cfg, hosts, running, instance_types)
     ami_id = resolve_ami(run, cfg, resolve_ami_arch(instance_types, types))
-    images = {name: resolve_image(ref) for name, ref in image_refs(cfg).items()}
+    rds_minor = rds_orderable(run, cfg, az) if "rds" in cfg.db_modes else None
+    images = resolve_images(cfg, rds_minor)
     git_diff = check_git_clean(run, cfg.allow_dirty)
-    return {
+    pre: Preflight = {
         "account": account,
         "vpc_id": vpc_id,
         "az": az,
@@ -1692,6 +1969,9 @@ def preflight(
         "vcpu_quota": quota,
         "git_diff": git_diff,
     }
+    if rds_minor is not None:
+        pre["rds_engine_version"] = rds_minor
+    return pre
 
 
 def classify_tf_error(stderr: str) -> str:
@@ -1704,6 +1984,11 @@ def classify_tf_error(stderr: str) -> str:
         return "InsufficientInstanceCapacity: retry with --az <other> or a different instance type"
     if "UnauthorizedOperation" in stderr:
         return "UnauthorizedOperation: check IAM permissions for the AWS profile"
+    if "AccessDenied" in stderr and ("iam:" in stderr or "scheduler:" in stderr):
+        return (
+            "AccessDenied on iam: or scheduler:: the rds mode needs iam:CreateRole, "
+            "iam:PutRolePolicy, iam:PassRole and scheduler:CreateSchedule"
+        )
     last_line = next(
         (line for line in reversed(stderr.strip().splitlines()) if line), stderr
     )
@@ -1800,6 +2085,35 @@ def render_tfvars(
             for h in hosts
         },
     }
+
+
+def rds_schedule_at(expires: datetime) -> str:
+    """The `at()` timestamp of the delete schedule: `RDS_REAPER_LEAD_S` before the hosts end."""
+    reaper = expires - timedelta(seconds=RDS_REAPER_LEAD_S)
+    return reaper.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def rds_tfvars(rds: RdsSpec, password: str, expires: datetime) -> dict[str, Any]:
+    """The `rds` and `rds_password` variables: the container's tuning and observability
+    settings in the units of the parameter group."""
+    parameters = {**PG_TUNING, **PG_OBSERVABILITY}
+    return {
+        "rds": {
+            **rds,
+            "username": RDS_USER,
+            "parameters": {k: rds_parameter(k, v) for k, v in parameters.items()},
+            "delete_at": rds_schedule_at(expires),
+            "timeout": f"{int(RDS_CREATE_MAX_S // 60)}m",
+        },
+        "rds_password": password,
+    }
+
+
+def write_private_json(path: Path, data: Any) -> None:
+    """Creates the file 0600 before it holds a secret."""
+    path.touch(mode=0o600)
+    path.chmod(0o600)
+    nb.write_json(path, data)
 
 
 def render_genesis(template: bytes, n: int, max_block_size: str) -> bytes:
@@ -1952,15 +2266,15 @@ def render_postgres_args() -> list[str]:
 def rds_parameter(name: str, value: str) -> str:
     """A PG_TUNING value in the unit of the RDS parameter group; unchanged when the parameter
     takes the same text as postgres.conf."""
-    unit = RDS_PARAMETER_UNITS.get(name)
+    unit = RDS_PARAMETER_UNITS.get(name, RDS_OBSERVABILITY_UNITS.get(name))
     if unit is None:
         return value
     match = re.fullmatch(r"(\d+)([A-Za-z]+)", value)
     if match is None:
         raise ValueError(f"{name}={value!r} is not a number with a unit")
     number, suffix = int(match[1]), match[2]
-    if unit == "s":
-        total, per = number * _TIME_SECONDS[suffix], 1
+    if unit in _TIME_UNIT_MS:
+        total, per = number * _TIME_MS[suffix], _TIME_UNIT_MS[unit]
     else:
         total, per = number * _SIZE_BYTES[suffix], _UNIT_BYTES[unit]
     if total % per:
@@ -2077,9 +2391,12 @@ def _docker_create(name: str, argv: list[str], entrypoint: str | None = None) ->
     )
 
 
-def render_start_sh(host: HostSpec, images: dict[str, ImageInfo]) -> str:
+def render_start_sh(
+    host: HostSpec, images: dict[str, ImageInfo], query_db: DbMode = "colocated"
+) -> str:
     """Deviates from the plan signature (drops unused `hosts`, `cfg`): every value start.sh
-    needs is already in `host` and `images`, or in ctl.env/node.env rendered separately."""
+    needs is already in `host` and `images`, or in ctl.env/node.env rendered separately. With
+    `query_db` rds there is no postgres container."""
     script = (
         "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n"
         f"echo '{{}}' > {BENCH_DIR}/containers.json\n\n"
@@ -2123,7 +2440,7 @@ def render_start_sh(host: HostSpec, images: dict[str, ImageInfo]) -> str:
                 argv += list(DEPLOY_FLAGS)
             script += _docker_create(name, argv)
         return script
-    if host["role"] == "query":
+    if host["role"] == "query" and query_db != "rds":
         pg = images["postgres"]
         endpoint = pg_endpoint()
         script += _docker_create(
@@ -2219,6 +2536,15 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     parser.add_argument("--root-gb", default=defaults.root_gb)
     parser.add_argument("--pg-iops", type=int, default=defaults.pg_iops)
     parser.add_argument("--pg-mbps", type=int, default=defaults.pg_mbps)
+    parser.add_argument(
+        "--pg-gb", type=int, default=defaults.pg_gb, help="rds: gp3 GiB, at least 400"
+    )
+    parser.add_argument("--rds-class", default=defaults.rds_class)
+    parser.add_argument(
+        "--rds-engine-version",
+        default=defaults.rds_engine_version,
+        help="rds: a major or a major.minor; a major resolves to the highest orderable minor",
+    )
     parser.add_argument("--operator-cidr", default=defaults.operator_cidr)
     parser.add_argument("--ssh-key", default=defaults.ssh_key)
     parser.add_argument("--max-usd", type=float, default=defaults.max_usd)
@@ -2261,6 +2587,9 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
+        pg_gb=args.pg_gb,
+        rds_class=args.rds_class,
+        rds_engine_version=args.rds_engine_version,
         operator_cidr=args.operator_cidr,
         ssh_key=args.ssh_key,
         max_usd=args.max_usd,
@@ -2330,6 +2659,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     add_run_flags(plan_p)
+    plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
     plan_p.add_argument("--offline", action="store_true", help="use no AWS credentials")
     plan_p.set_defaults(func=cmd_plan, yes=False, keep=False, allow_dirty=False)
 
@@ -2444,26 +2774,24 @@ def cmd_plan(
     run: Runner = _run,
     which: Callable[[str], str | None] = shutil.which,
 ) -> int:
-    cfg = config_from_args(args)
+    cfg = dataclasses.replace(config_from_args(args), db_modes=args.db_modes)
     now = time.time()
     if cfg.offline:
         fleet_dir = new_fleet_dir(cfg.out_root, cfg.name)
         setup_logging(fleet_dir)
         log.debug("argv %s", args.argv)
         hosts = plan_hosts(cfg)
+        pre = offline_preflight(cfg)
         estimate = estimate_or_refuse(
-            run, cfg, hosts, region_minor_prices(cfg.region), fleet_dir, now
-        )
-        render_run_dir(
             run,
             cfg,
-            fleet_dir,
             hosts,
-            offline_preflight(cfg),
-            estimate,
-            args.argv,
-            which,
+            region_minor_prices(cfg.region),
+            fleet_dir,
+            now,
+            rds=rds_spec(cfg, pre),
         )
+        render_run_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv, which)
     else:
         fleet_dir, *_ = plan_fleet(args, cfg, run, now)
     log.info("rendered %s (phase=planned)", fleet_dir)
@@ -2481,9 +2809,9 @@ def offline_preflight(cfg: RunConfig) -> Preflight:
             "revision": None,
             "platforms": ["linux/arm64"],
         }
-        for name, ref in image_refs(cfg).items()
+        for name, ref in image_refs(cfg, offline_rds_version(cfg)).items()
     }
-    return {
+    pre: Preflight = {
         "account": cfg.account,
         "vpc_id": "",
         "az": "",
@@ -2494,6 +2822,15 @@ def offline_preflight(cfg: RunConfig) -> Preflight:
         "vcpu_quota": 0.0,
         "git_diff": None,
     }
+    version = offline_rds_version(cfg)
+    if version is not None:
+        pre["rds_engine_version"] = version
+    return pre
+
+
+def offline_rds_version(cfg: RunConfig) -> str | None:
+    """No orderable options offline: the requested version stands in for the resolved minor."""
+    return cfg.rds_engine_version if "rds" in cfg.db_modes else None
 
 
 def estimate_or_refuse(
@@ -2504,14 +2841,15 @@ def estimate_or_refuse(
     fleet_dir: Path,
     now: float,
     fleet: bool = False,
+    rds: RdsSpec | None = None,
 ) -> Estimate:
     prices = resolve_prices(run, cfg, cfg.out_root / "prices.json", now)
     if fleet:
-        estimate = estimate_fleet(hosts, cfg, prices, minor)
+        estimate = estimate_fleet(hosts, cfg, prices, minor, rds)
         expires = datetime.fromtimestamp(now + estimate["ttl_s"], UTC)
         log.info(format_fleet_summary(estimate, cfg.max_usd, expires))
     else:
-        estimate = estimate_cost(hosts, cfg, prices, minor)
+        estimate = estimate_cost(hosts, cfg, prices, minor, rds)
         log.info(format_estimate_summary(estimate, cfg.max_usd))
     for line in format_estimate_lines(estimate):
         log.debug(line)
@@ -2756,7 +3094,10 @@ def prepare_run(
 
 
 def confirm_create(cfg: RunConfig, fleet_dir: Path, count: int) -> None:
-    prompt = f"Create {count} instances, 1 security group, 1 key pair in {cfg.account}?"
+    rds = ", 1 rds instance, 1 schedule, 1 iam role" if "rds" in cfg.db_modes else ""
+    prompt = (
+        f"Create {count} instances{rds}, 1 security group, 1 key pair in {cfg.account}?"
+    )
     if not confirm(prompt, cfg.yes, sys.stdin.isatty()):
         append_event(fleet_dir, "planned", "refused", "not confirmed")
         raise Refused("not confirmed; nothing was created")
@@ -2781,7 +3122,10 @@ def stamp_expiry(
     stamp = expiry_stamp(expires)
     tfvars_path = fleet_dir / "terraform" / "terraform.tfvars.json"
     tfvars = nb.read_json(tfvars_path)
-    nb.write_json(tfvars_path, {**tfvars, "expires_at": stamp})
+    updated = {**tfvars, "expires_at": stamp}
+    if "rds" in tfvars:
+        updated["rds"] = {**tfvars["rds"], "delete_at": rds_schedule_at(expires)}
+    nb.write_json(tfvars_path, updated)
     update_manifest(fleet_dir / FLEET_JSON, manifest["phase"], expires_at=stamp)
     tf.plan()
 
@@ -2798,7 +3142,9 @@ def plan_fleet(
     log.debug("argv %s", args.argv)
     pre = preflight(run, cfg, hosts)
     log_preflight(cfg, pre, hosts)
-    estimate = estimate_or_refuse(run, cfg, hosts, minor, fleet_dir, now)
+    estimate = estimate_or_refuse(
+        run, cfg, hosts, minor, fleet_dir, now, rds=rds_spec(cfg, pre)
+    )
     run_dir = render_run_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
     return fleet_dir, run_dir, init_terraform(run, cfg, fleet_dir), hosts, pre
 
@@ -2848,6 +3194,14 @@ def up_fleet(fleet: FleetState) -> None:
         f"ssh and cloud-init on {len(remote.hosts)} hosts",
     )
     wait_hosts(remote, fleet.manifest, fleet.fleet_dir, fleet.interrupts)
+    if "rds_spec" in fleet.manifest:
+        enter_phase(
+            fleet,
+            fleet.manifest_path,
+            "preparing-rds",
+            "parameter group, delete schedule, pg_isready",
+        )
+        prepare_rds(fleet)
     update_manifest(fleet.manifest_path, "idle")
 
 
@@ -2885,7 +3239,9 @@ def measure_run(run: Run) -> None:
             "services",
             "anvil, deploy, orchestrator, relay, postgres",
         )
-        start_support(remote, genesis_contracts(run.run_dir), fleet.interrupts)
+        start_support(
+            remote, genesis_contracts(run.run_dir), fleet.interrupts, run.cfg.query_db
+        )
         enter_phase(fleet, run.manifest_path, "nodes", "synchronized docker start")
         at = fleet_time(remote) + DOCKER_START_LEAD_S
         spread = start_nodes(remote, node_hosts(remote.hosts), at)
@@ -2898,9 +3254,11 @@ def measure_run(run: Run) -> None:
 
 def connect(fleet: FleetState) -> Remote:
     manifest = fleet.manifest
-    hosts_info = parse_hosts_output(fleet.tf.output(), manifest["hosts"])
+    output = fleet.tf.output()
+    hosts_info = parse_hosts_output(output, manifest["hosts"])
     nb.write_json(fleet.fleet_dir / "hosts.json", hosts_info)
-    update_manifest(fleet.manifest_path, "provisioned", hosts_info=hosts_info)
+    rds = {"rds": parse_rds_output(output)} if "rds_spec" in manifest else {}
+    update_manifest(fleet.manifest_path, "provisioned", hosts_info=hosts_info, **rds)
     fleet.remote = Remote(
         fleet.run,
         fleet.fleet_dir,
@@ -2939,21 +3297,17 @@ def finish_run(run: Run) -> nb.BenchResult | None:
                 lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", run.run_dir),
             )
         step("node0 EBS balance", lambda: collect_node0_ebs_balance(run))
+        if run.cfg.query_db == "rds":
+            step("rds metrics, insights, logs", lambda: collect_rds(run))
     return report(run)
 
 
 def collect_node0_ebs_balance(run: Run) -> None:
     """Waits until CloudWatch has the end of the load window, then fetches node0's EBS balance.
     Runs after the host collection, which usually takes longer than the lag."""
-    agent = run.agent or finished_agent_state(run.run_dir)
+    agent = published_window(run, "node0 EBS balance")
     if agent is None:
-        log.warning("no load window: node0 EBS balance not collected")
         return
-    wait_s = agent["t1"] + CLOUDWATCH_LAG_S - time.time()
-    if wait_s > 0:
-        log.info("waiting %.0f s for CloudWatch to publish the load window", wait_s)
-        if run.fleet.interrupts.skip_collect.wait(wait_s):
-            return
     collect_ebs_balance(
         run.fleet.run,
         run.cfg,
@@ -2962,6 +3316,40 @@ def collect_node0_ebs_balance(run: Run) -> None:
         agent["t1"],
         run.run_dir,
     )
+
+
+def published_window(run: Run, what: str) -> AgentState | None:
+    """The agent state once CloudWatch has published the load window; None without a window
+    or when the collection was skipped meanwhile."""
+    agent = run.agent or finished_agent_state(run.run_dir)
+    if agent is None:
+        log.warning("no load window: %s not collected", what)
+        return None
+    wait_s = agent["t1"] + CLOUDWATCH_LAG_S - time.time()
+    if wait_s > 0:
+        log.info("waiting %.0f s for CloudWatch to publish the load window", wait_s)
+        if run.fleet.interrupts.skip_collect.wait(wait_s):
+            return None
+    return agent
+
+
+def collect_rds(run: Run) -> None:
+    """The RDS side of the load window into the run dir: CloudWatch metrics, Performance
+    Insights and the database logs. Each part is best effort."""
+    agent = published_window(run, "rds metrics")
+    if agent is None:
+        return
+    fleet = run.fleet
+    rds = fleet.manifest["rds"]
+    t0, t1 = agent["t0"], agent["t1"]
+    for what, collect in (
+        ("rds metrics", collect_rds_metrics),
+        ("rds insights", collect_rds_insights),
+        ("rds logs", collect_rds_logs),
+    ):
+        best_effort(
+            what, lambda c=collect: c(fleet.run, run.cfg, rds, t0, t1, run.run_dir)
+        )
 
 
 def best_effort(what: str, action: Callable[[], object]) -> None:
@@ -3166,7 +3554,7 @@ def prepare_up(
     pre = preflight(run, cfg, hosts)
     log_preflight(cfg, pre, hosts)
     estimate = estimate_or_refuse(
-        run, cfg, hosts, minor, fleet_dir, started, fleet=True
+        run, cfg, hosts, minor, fleet_dir, started, fleet=True, rds=rds_spec(cfg, pre)
     )
     render_fleet_dir(run, cfg, fleet_dir, hosts, pre, estimate, args.argv)
     tf = init_terraform(run, cfg, fleet_dir)
@@ -3259,6 +3647,8 @@ def cmd_run_fleet(
             )
             assert fleet.remote is not None
             reset_chain(fleet.remote, interrupts)
+            if cfg.query_db == "rds":
+                reset_rds_store(fleet.remote, fleet_dir, interrupts)
         reset_failed = bench_run.error is not None
         result = run_on_fleet(bench_run)
         return end_fleet_run(bench_run, result, reset_failed)
@@ -3404,6 +3794,8 @@ def check_run_allowed(
         )
     estimate = estimate_run(manifest, cfg)
     needed_s = estimate["worst_s"] + NOLOGIN_LEAD_S + DESTROY_S
+    if "rds" in manifest["db_modes"]:
+        needed_s += RDS_DELETE_S
     if remaining_s < needed_s:
         raise Refused(
             f"{remaining_s / 60:.0f} min left on fleet {name}, this run needs up to "
@@ -3442,6 +3834,22 @@ def reset_chain(remote: Remote, interrupts: Interrupts) -> None:
         remote.ssh(host, bounded(reset_script(remote.hosts[host]["role"])))
 
     remote.parallel(reset, remote.hosts)
+
+
+def reset_rds_store(remote: Remote, fleet_dir: Path, interrupts: Interrupts) -> None:
+    """Drops and recreates the database the query service fills, so the run starts on an empty
+    one. `pg.json` goes first because a colocated run leaves another endpoint on node0;
+    `WITH (FORCE)` ends the backends of a run that did not shut down cleanly."""
+    interrupts.check()
+    ship_rds_endpoint(remote, fleet_dir)
+    commands = " ".join(f"-c {shlex.quote(sql)}" for sql in RDS_RESET_SQL)
+    remote.ssh(
+        "node0",
+        pg_shell(
+            f"export PGDATABASE=postgres\n"
+            f"timeout {GATE_TIMEOUT_S:.0f} psql -v ON_ERROR_STOP=1 {commands}\n"
+        ),
+    )
 
 
 def write_run_cost(run: Run) -> dict[str, float]:
@@ -3529,9 +3937,14 @@ def extend_fleet(fleet: FleetState, ttl_min: int, now: datetime) -> None:
         )
     remote = fleet.remote
     assert remote is not None
+    if "rds" in manifest:
+        # Fails before any change once the schedule has deleted the instance.
+        describe_rds(fleet.run, fleet.cfg, manifest["rds"]["identifier"])
     remote.parallel(
         lambda host: remote.ssh(host, bounded(rearm_ttl_script(ttl_min))), remote.hosts
     )
+    if "rds" in manifest:
+        update_rds_schedule(fleet.run, fleet.cfg, manifest["rds"], new)
     stamp = expiry_stamp(new)
     retag_expiry(fleet.run, fleet.cfg, manifest["name"], stamp)
     lifetime_s = (new - datetime.fromisoformat(manifest["created_at"])).total_seconds()
@@ -3570,6 +3983,31 @@ def retag_expiry(run: Runner, cfg: RunConfig, name: str, expires_at: str) -> Non
             raise RemoteError(f"tag-resources failed for: {', '.join(failed)}")
 
 
+def update_rds_schedule(
+    run: Runner, cfg: RunConfig, rds: RdsInfo, expires: datetime
+) -> None:
+    """Moves the one-shot delete to `RDS_REAPER_LEAD_S` before `expires`, keeping the target
+    the schedule already has."""
+    name = ("--region", cfg.region, "--group-name", rds["schedule_group"])
+    name += ("--name", rds["schedule_name"])
+    current = json.loads(
+        aws_ok(run, cfg.profile, "scheduler", "get-schedule", *name, "--output", "json")
+    )
+    aws_ok(
+        run,
+        cfg.profile,
+        "scheduler",
+        "update-schedule",
+        *name,
+        "--schedule-expression",
+        f"at({rds_schedule_at(expires)})",
+        "--flexible-time-window",
+        json.dumps({"Mode": "OFF"}),
+        "--target",
+        json.dumps(current["Target"]),
+    )
+
+
 def cmd_down(args: argparse.Namespace, run: Runner = _run) -> int:
     return destroy_run(run, args)
 
@@ -3591,6 +4029,15 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
         cfg.nodes,
         cfg.node_type,
     )
+    if "rds" in cfg.db_modes:
+        log.info(
+            "query db rds: %s postgres %s gp3 %d GB %d IOPS %d MB/s",
+            cfg.rds_class,
+            pre["rds_engine_version"],
+            cfg.pg_gb,
+            cfg.pg_iops,
+            cfg.pg_mbps,
+        )
     log.info(
         "vcpu: %d needed, %d in use, quota %.0f",
         pre["vcpu_needed"],
@@ -3633,6 +4080,7 @@ def render_fleet_dir(
     ssh_pub = resolve_ssh_pub(run, cfg, fleet_dir, which)
     cidr = operator_cidr(cfg)
     git_rev = git_head(run)
+    rds = rds_spec(cfg, pre)
     write_fleet_manifest(
         fleet_dir, cfg, hosts, plan_peers(hosts), estimate, "planned", argv
     )
@@ -3648,6 +4096,7 @@ def render_fleet_dir(
             "expected": estimate["expected_usd"],
             "bound": estimate["bound_usd"],
         },
+        **({} if rds is None else {"rds_spec": rds}),
     )
     for host in hosts:
         host_dir = fleet_dir / "hosts" / host["name"]
@@ -3673,7 +4122,12 @@ def render_fleet_dir(
         pre["az"],
         pre["ami_id"],
     )
-    nb.write_json(tf_dir / "terraform.tfvars.json", tfvars)
+    if rds is not None:
+        expires = datetime.now(UTC) + timedelta(seconds=estimate["ttl_s"])
+        tfvars.update(rds_tfvars(rds, secrets.token_urlsafe(24), expires))
+    # The tfvars and state carry the rds password.
+    tf_dir.chmod(0o700)
+    write_private_json(tf_dir / "terraform.tfvars.json", tfvars)
     return fleet
 
 
@@ -3818,6 +4272,135 @@ def parse_hosts_output(
     }
 
 
+def parse_rds_output(output: dict[str, Any]) -> RdsInfo:
+    value = output["rds"]["value"]
+    if value is None:
+        raise RemoteError("tofu output rds is null, but the fleet has an rds instance")
+    return {
+        "identifier": value["identifier"],
+        "endpoint": value["endpoint"],
+        "port": value["port"],
+        "resource_id": value["resource_id"],
+        "arn": value["arn"],
+        "engine_version": value["engine_version"],
+        "schedule_group": value["schedule_group"],
+        "schedule_name": value["schedule_name"],
+    }
+
+
+def describe_rds(run: Runner, cfg: RunConfig, identifier: str) -> dict[str, Any]:
+    out = aws_ok(
+        run,
+        cfg.profile,
+        "rds",
+        "describe-db-instances",
+        "--region",
+        cfg.region,
+        "--db-instance-identifier",
+        identifier,
+        "--output",
+        "json",
+    )
+    return json.loads(out)["DBInstances"][0]
+
+
+def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
+    """The description of the instance once it is `available` with an `in-sync` parameter
+    group. A group that reports `pending-reboot` gets one reboot."""
+    rebooted = False
+    deadline = time.monotonic() + RDS_SYNC_TIMEOUT_S
+    while True:
+        instance = describe_rds(fleet.run, fleet.cfg, identifier)
+        state = instance["DBInstanceStatus"]
+        applied = instance["DBParameterGroups"][0]["ParameterApplyStatus"]
+        if state == "available" and applied == "in-sync":
+            return instance
+        if state == "available" and applied == "pending-reboot" and not rebooted:
+            log.info("rds %s: parameter group pending-reboot, rebooting", identifier)
+            aws_ok(
+                fleet.run,
+                fleet.cfg.profile,
+                "rds",
+                "reboot-db-instance",
+                "--region",
+                fleet.cfg.region,
+                "--db-instance-identifier",
+                identifier,
+            )
+            rebooted = True
+        if time.monotonic() >= deadline:
+            raise RemoteError(
+                f"rds {identifier} is {state} with parameters {applied} "
+                f"{RDS_SYNC_TIMEOUT_S:.0f} s after apply"
+            )
+        fleet.interrupts.sleep(RDS_POLL_S)
+
+
+def check_rds_schedule(run: Runner, cfg: RunConfig, rds: RdsInfo) -> None:
+    out = aws_ok(
+        run,
+        cfg.profile,
+        "scheduler",
+        "get-schedule",
+        "--region",
+        cfg.region,
+        "--group-name",
+        rds["schedule_group"],
+        "--name",
+        rds["schedule_name"],
+        "--output",
+        "json",
+    )
+    state = json.loads(out)["State"]
+    if state != "ENABLED":
+        raise RemoteError(
+            f"the rds delete schedule {rds['schedule_group']}/{rds['schedule_name']} "
+            f"is {state}: the instance would outlive the fleet"
+        )
+
+
+def prepare_rds(fleet: FleetState) -> None:
+    """After `wait_hosts`: parameters applied, delete schedule armed, database reachable from
+    node0. Writes `rds.json` and the `pg.json` node0 keeps between runs."""
+    remote = fleet.remote
+    assert remote is not None, "connect must run first"
+    rds = fleet.manifest["rds"]
+    instance = wait_rds_in_sync(fleet, rds["identifier"])
+    check_rds_schedule(fleet.run, fleet.cfg, rds)
+    rds = {**rds, "created_at": instance["InstanceCreateTime"]}
+    update_manifest(fleet.manifest_path, fleet.manifest["phase"], rds=rds)
+    tfvars = nb.read_json(fleet.fleet_dir / "terraform" / "terraform.tfvars.json")
+    write_private_json(
+        fleet.fleet_dir / RDS_FILE,
+        {**rds, "username": RDS_USER, "password": tfvars["rds_password"]},
+    )
+    ship_rds_endpoint(remote, fleet.fleet_dir)
+    gate(remote, "node0", "pg_isready", pg_shell("pg_isready"), fleet.interrupts)
+
+
+def ship_rds_endpoint(remote: Remote, fleet_dir: Path) -> None:
+    """The rds endpoint as node0's `pg.json`, which `pg_shell` and the samplers read."""
+    path = fleet_dir / "hosts" / "node0" / "pg.json"
+    write_private_json(path, rds_endpoint(fleet_dir))
+    remote.rsync_to("node0", [path], PG_JSON)
+
+
+def rds_endpoint(fleet_dir: Path) -> PgEndpoint:
+    rds = nb.read_json(fleet_dir / RDS_FILE)
+    return {
+        "host": rds["endpoint"],
+        "port": rds["port"],
+        "user": rds["username"],
+        "password": rds["password"],
+        "database": RDS_DATABASE,
+    }
+
+
+def query_endpoint(cfg: RunConfig, run_dir: Path) -> PgEndpoint:
+    """Where node0's query service finds Postgres for this run."""
+    return rds_endpoint(fleet_of(run_dir)) if cfg.query_db == "rds" else pg_endpoint()
+
+
 def topology(hosts: dict[str, HostInfo]) -> nb.Topology:
     """Private URLs: the load runs on ctl, inside the VPC."""
     names = _node_names(hosts)
@@ -3845,12 +4428,17 @@ def render_host_files(
     for spec in manifest["hosts"]:
         host_dir = run_dir / "hosts" / spec["name"]
         host_dir.mkdir(parents=True, exist_ok=True)
-        (host_dir / "start.sh").write_text(render_start_sh(spec, manifest["images"]))
+        (host_dir / "start.sh").write_text(
+            render_start_sh(spec, manifest["images"], query_db=cfg.query_db)
+        )
         if spec["role"] == "ctl":
             (host_dir / "ctl.env").write_text(render_ctl_env(hosts, cfg, dotenv))
         else:
-            pg = pg_endpoint() if spec["role"] == "query" else None
-            (host_dir / "node.env").write_text(render_node_env(spec, hosts, pg))
+            pg = query_endpoint(cfg, run_dir) if spec["role"] == "query" else None
+            node_env = host_dir / "node.env"
+            node_env.write_text(render_node_env(spec, hosts, pg))
+            if cfg.query_db == "rds" and pg is not None:
+                node_env.chmod(0o600)
             if pg is not None:
                 pg_json = host_dir / "pg.json"
                 nb.write_json(pg_json, pg)
@@ -4002,9 +4590,14 @@ def rpc_check(method: str, params: list[str], jq_filter: str) -> str:
     )
 
 
-def start_support(remote: Remote, contracts: list[str], interrupts: Interrupts) -> None:
+def start_support(
+    remote: Remote,
+    contracts: list[str],
+    interrupts: Interrupts,
+    query_db: DbMode = "colocated",
+) -> None:
     """On ctl, in order and each gated on a check: anvil, contract deployment, orchestrator,
-    relay; then Postgres on node0."""
+    relay; then Postgres on node0 (the rds instance is only gated, it is already running)."""
 
     def start(host: str, container: str) -> None:
         remote.ssh(host, f"sudo docker start {container}")
@@ -4050,7 +4643,8 @@ def start_support(remote: Remote, contracts: list[str], interrupts: Interrupts) 
         f"curl -sf http://localhost:{RELAY_PORT}/healthcheck",
         interrupts,
     )
-    start("node0", "postgres")
+    if query_db != "rds":
+        start("node0", "postgres")
     gate(remote, "node0", "pg_isready", pg_shell("pg_isready"), interrupts)
     for what, sql in (
         ("pg_stat_statements", PG_EXTENSION_SQL),
@@ -4981,6 +5575,146 @@ def collect_ebs_balance(
     log.info("node0 EBS balance: %s", path)
 
 
+def metric_window(t0: float, t1: float) -> tuple[float, float]:
+    return t0 - CLOUDWATCH_PERIOD_S, t1 + CLOUDWATCH_PERIOD_S
+
+
+def collect_rds_metrics(
+    run: Runner, cfg: RunConfig, rds: RdsInfo, t0: float, t1: float, out: Path
+) -> None:
+    """`cloudwatch/rds.json`, in the format of `cloudwatch/ec2-node0.json`."""
+    start, end = metric_window(t0, t1)
+    queries = [
+        {
+            "Id": query_id,
+            "MetricStat": {
+                "Metric": {
+                    "Namespace": "AWS/RDS",
+                    "MetricName": metric,
+                    "Dimensions": [
+                        {"Name": "DBInstanceIdentifier", "Value": rds["identifier"]}
+                    ],
+                },
+                "Period": CLOUDWATCH_PERIOD_S,
+                "Stat": stat,
+            },
+        }
+        for query_id, (metric, stat) in RDS_METRICS.items()
+    ]
+    stdout = aws_ok(
+        run,
+        cfg.profile,
+        "cloudwatch",
+        "get-metric-data",
+        "--region",
+        cfg.region,
+        "--start-time",
+        datetime.fromtimestamp(start, UTC).isoformat(),
+        "--end-time",
+        datetime.fromtimestamp(end, UTC).isoformat(),
+        "--metric-data-queries",
+        json.dumps(queries),
+        "--output",
+        "json",
+    )
+    names = {query_id: metric for query_id, (metric, _) in RDS_METRICS.items()}
+    path = out / RDS_CLOUDWATCH_FILE
+    path.parent.mkdir(exist_ok=True)
+    nb.write_json(
+        path,
+        {
+            "identifier": rds["identifier"],
+            "period_s": CLOUDWATCH_PERIOD_S,
+            "start": start,
+            "end": end,
+            "metrics": parse_metric_results(stdout, names),
+        },
+    )
+
+
+def collect_rds_insights(
+    run: Runner, cfg: RunConfig, rds: RdsInfo, t0: float, t1: float, out: Path
+) -> None:
+    """`cloudwatch/pi.json`: database load by wait event."""
+    start, end = metric_window(t0, t1)
+    queries = [
+        {"Metric": "db.load.avg", "GroupBy": {"Group": "db.wait_event", "Limit": 10}}
+    ]
+    stdout = aws_ok(
+        run,
+        cfg.profile,
+        "pi",
+        "get-resource-metrics",
+        "--region",
+        cfg.region,
+        "--service-type",
+        "RDS",
+        "--identifier",
+        rds["resource_id"],
+        "--metric-queries",
+        json.dumps(queries),
+        "--start-time",
+        datetime.fromtimestamp(start, UTC).isoformat(),
+        "--end-time",
+        datetime.fromtimestamp(end, UTC).isoformat(),
+        "--period-in-seconds",
+        str(CLOUDWATCH_PERIOD_S),
+        "--output",
+        "json",
+    )
+    path = out / PI_FILE
+    path.parent.mkdir(exist_ok=True)
+    nb.write_json(path, json.loads(stdout))
+
+
+def collect_rds_logs(
+    run: Runner, cfg: RunConfig, rds: RdsInfo, t0: float, t1: float, out: Path
+) -> None:
+    """Every database log written since the load started. The upper bound is left open: the
+    log of the current hour is still written after the window and holds most of it."""
+    since_ms = int(t0 * 1000)
+    listing = aws_ok(
+        run,
+        cfg.profile,
+        "rds",
+        "describe-db-log-files",
+        "--region",
+        cfg.region,
+        "--db-instance-identifier",
+        rds["identifier"],
+        "--file-last-written",
+        str(since_ms),
+        "--output",
+        "json",
+    )
+    files = [
+        f
+        for f in json.loads(listing)["DescribeDBLogFiles"]
+        if f["LastWritten"] >= since_ms
+    ]
+    directory = out / RDS_LOGS_DIR
+    directory.mkdir(exist_ok=True)
+    for file in files:
+        text = aws_ok(
+            run,
+            cfg.profile,
+            "rds",
+            "download-db-log-file-portion",
+            "--region",
+            cfg.region,
+            "--db-instance-identifier",
+            rds["identifier"],
+            "--log-file-name",
+            file["LogFileName"],
+            "--starting-token",
+            "0",
+            "--output",
+            "text",
+        )
+        (directory / Path(file["LogFileName"]).name).write_text(text)
+    log.info("rds logs: %d files in %s", len(files), directory)
+
+
 def ebs_balance_queries(instance_id: str) -> list[dict[str, Any]]:
     return [
         {
@@ -5000,11 +5734,16 @@ def ebs_balance_queries(instance_id: str) -> list[dict[str, Any]]:
 
 
 def parse_ebs_balance(stdout: str) -> dict[str, MetricSeries]:
-    """Series per metric name from `get-metric-data`; a metric without datapoints gets empty
-    lists, any other status than `Complete` (e.g. `Forbidden`) raises."""
+    return parse_metric_results(stdout, EBS_BALANCE_METRICS)
+
+
+def parse_metric_results(stdout: str, names: dict[str, str]) -> dict[str, MetricSeries]:
+    """Series per metric name from `get-metric-data`, `names` mapping query Id to metric; a
+    metric without datapoints gets empty lists, any other status than `Complete` (e.g.
+    `Forbidden`) raises."""
     results = {r["Id"]: r for r in json.loads(stdout)["MetricDataResults"]}
     series: dict[str, MetricSeries] = {}
-    for query_id, metric in EBS_BALANCE_METRICS.items():
+    for query_id, metric in names.items():
         result = results[query_id]
         if result["StatusCode"] != "Complete":
             raise RemoteError(f"get-metric-data {metric}: {result['StatusCode']}")
@@ -5046,6 +5785,20 @@ def ebs_balance_reasons(balance_min: dict[str, float | None]) -> list[str]:
     return reasons
 
 
+def rds_reasons(rds_min: dict[str, float | None]) -> list[str]:
+    """A missing datapoint is noisy, not invalid: CloudWatch can lag or omit a minute."""
+    if not rds_min:
+        return ["rds metrics not collected"]
+    reasons: list[str] = []
+    balance = set(EBS_BALANCE_METRICS.values())
+    for metric, low in rds_min.items():
+        if low is None:
+            reasons.append(f"rds {metric} has no datapoint in the load window")
+        elif metric in balance and low < EBS_BALANCE_FULL_PCT:
+            reasons.append(f"rds {metric} fell to {low:.0f}% during the load")
+    return reasons
+
+
 def load_evidence(
     run_dir: Path, manifest: Manifest, t0: float, t1: float
 ) -> tuple[dict[str, nb.HostSample], Evidence]:
@@ -5062,6 +5815,11 @@ def load_evidence(
     balance = run_dir / EC2_NODE0_FILE
     if balance.exists():
         evidence["ebs_balance_min"] = ebs_balance_min(balance, t0, t1)
+    if manifest["query_db"] == "rds":
+        metrics = run_dir / RDS_CLOUDWATCH_FILE
+        evidence["rds_min"] = (
+            ebs_balance_min(metrics, t0, t1) if metrics.exists() else {}
+        )
     for spec in manifest["hosts"]:
         name = spec["name"]
         host_dir = run_dir / "hosts" / name
@@ -5118,7 +5876,56 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
         "start_spread_s": manifest["start_spread_s"],
         "clock_offset_ms_max": max(evidence["clock_offset_ms"].values(), default=0.0),
         "cost_usd": manifest["cost_usd"],
+        "query_db": query_db_meta(manifest, evidence),
     }
+
+
+def rds_identifier(fleet_name: str) -> str:
+    return f"espresso-bench-{fleet_name}"
+
+
+def query_db_meta(manifest: Manifest, evidence: Evidence) -> nb.QueryDbMeta:
+    """Where node0's Postgres ran. `tls` is whether every backend negotiated TLS at collect
+    time; no backend counts as off."""
+    mode = manifest["query_db"]
+    tls = "pg_settings" in evidence and pg_tls(evidence["pg_settings"]) is True
+    tag = manifest["images"]["postgres"]["ref"].rpartition(":")[2]
+    tuning = dict(PG_TUNING)
+    match mode:
+        case "colocated":
+            node0 = next(h for h in manifest["hosts"] if h["name"] == "node0")
+            store = {
+                "type": "root",
+                "gb": node0["root_gb"],
+                "iops": node0["root_iops"],
+                "mbps": node0["root_mbps"],
+            }
+            return {
+                "mode": mode,
+                "engine": f"postgres {tag}",
+                "store": store,
+                "tls": tls,
+                "tuning": tuning,
+            }
+        case "rds":
+            rds = manifest["rds_spec"]
+            store = {
+                "type": "rds-gp3",
+                "identifier": rds_identifier(manifest["fleet"]),
+                "gb": rds["gb"],
+                "iops": rds["iops"],
+                "mbps": rds["mbps"],
+            }
+            return {
+                "mode": mode,
+                "engine": f"postgres {rds['engine_version']}",
+                "store": store,
+                "tls": tls,
+                "tuning": tuning,
+                "instance_class": rds["instance_class"],
+            }
+        case _:
+            raise ValueError(f"no query db metadata for {mode}")
 
 
 def check_validity_aws(
@@ -5173,6 +5980,8 @@ def check_validity_aws(
                 f"{name} journal {size / 1e9:.1f} GB near its {limit / 1e9:.1f} GB limit"
             )
     noisy += ebs_balance_reasons(evidence["ebs_balance_min"])
+    if "rds_min" in evidence:
+        noisy += rds_reasons(evidence["rds_min"])
     base = result["validity"]
     return {
         "valid": base["valid"] and not invalid,
@@ -5319,33 +6128,86 @@ def actual_cost(run: Runner, manifest: FleetManifest) -> dict[str, float]:
         raise ValueError(f"no termination reason for {manifest['name']}")
     duration_s = (max(ends) - min(launches)).total_seconds()
     estimate = manifest["estimate"]
+    rds_s = (
+        rds_billed_s(run, manifest, min(launches)) if "rds_spec" in manifest else None
+    )
     return {
         "expected": estimate["expected_usd"],
         "bound": estimate["bound_usd"],
-        "actual": manifest_cost(manifest, duration_s),
+        "actual": manifest_cost(manifest, duration_s, rds_s),
         "duration_s": duration_s,
     }
 
 
-def manifest_cost(manifest: FleetManifest, duration_s: float) -> float:
-    """USD of the whole fleet running `duration_s`, at the prices the estimate recorded."""
+def rds_billed_s(run: Runner, manifest: FleetManifest, first_launch: datetime) -> float:
+    """Create to delete. The instance is created alongside the hosts, so a fleet that failed
+    before `prepare_rds` recorded its creation time counts from the first launch."""
+    created = first_launch
+    if "rds" in manifest and "created_at" in manifest["rds"]:
+        created = datetime.fromisoformat(manifest["rds"]["created_at"])
+    cfg = config_from_manifest(manifest["config"])
+    deleted = rds_delete_time(
+        run, cfg, rds_identifier(manifest["name"]), datetime.now(UTC)
+    )
+    return (deleted - created).total_seconds()
+
+
+def rds_delete_time(
+    run: Runner, cfg: RunConfig, identifier: str, fallback: datetime
+) -> datetime:
+    """When RDS logged the deletion, whether the schedule or `tofu destroy` did it; `fallback`
+    (the driver's clock after the destroy) when it logged none."""
+    out = aws_ok(
+        run,
+        cfg.profile,
+        "rds",
+        "describe-events",
+        "--region",
+        cfg.region,
+        "--source-type",
+        "db-instance",
+        "--source-identifier",
+        identifier,
+        "--event-categories",
+        "deletion",
+        "--duration",
+        str(RDS_EVENTS_MINUTES),
+        "--output",
+        "json",
+    )
+    deleted = [
+        datetime.fromisoformat(event["Date"])
+        for event in json.loads(out)["Events"]
+        if "deleted" in event["Message"].lower()
+    ]
+    return max(deleted, default=fallback)
+
+
+def manifest_cost(
+    manifest: FleetManifest, duration_s: float, rds_duration_s: float | None = None
+) -> float:
+    """USD of the whole fleet running `duration_s`, at the prices the estimate recorded. The
+    rds instance, if any, runs `rds_duration_s` (default `duration_s`)."""
     estimate = manifest["estimate"]
     prices: Prices = {
         "instances": {
-            line["item"].removeprefix("instance "): {
+            line["item"].removeprefix("rds ").removeprefix("instance "): {
                 "usd_hour": line["usd_per_unit"],
                 "source": line["source"],
             }
             for line in estimate["lines"]
-            if line["item"].startswith("instance ")
+            if line["item"].startswith(("instance ", "rds instance "))
         }
     }
-    lines = _cost_lines(
-        manifest["hosts"],
-        prices,
-        region_minor_prices(manifest["config"]["region"]),
-        duration_s,
-    )
+    minor = region_minor_prices(manifest["config"]["region"])
+    lines = _cost_lines(manifest["hosts"], prices, minor, duration_s)
+    if "rds_spec" in manifest:
+        lines += rds_cost_lines(
+            manifest["rds_spec"],
+            prices,
+            minor,
+            duration_s if rds_duration_s is None else rds_duration_s,
+        )
     return sum(line["usd"] for line in lines)
 
 
