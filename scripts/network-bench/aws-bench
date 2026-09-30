@@ -331,6 +331,17 @@ CLOCK_OFFSET_INVALID_MS = 1000.0
 CLOCK_OFFSET_NOISY_MS = 50.0
 CTL_CPU_NOISY_FRAC = 0.85
 JOURNAL_NOISY_FRACTION = 0.9
+# Burst balance of node0's EBS bandwidth and IOPS in percent; below 100 during the load means
+# root and Postgres I/O together exceeded the instance's EBS baseline.
+EBS_BALANCE_FULL_PCT = 100.0
+EBS_BALANCE_METRICS = {
+    "byte": "EBSByteBalance%",
+    "io": "EBSIOBalance%",
+}  # query Id -> metric
+EC2_NODE0_FILE = "cloudwatch/ec2-node0.json"
+CLOUDWATCH_PERIOD_S = 60
+# Delay before CloudWatch has published the datapoints of the last minute of the load.
+CLOUDWATCH_LAG_S = 120.0
 
 
 class Refused(Exception):
@@ -499,6 +510,24 @@ class Evidence(TypedDict):
     journal_bytes: dict[str, int]
     clock_offset_ms: dict[str, float]
     digest_mismatch: dict[str, list[str]]  # host -> images whose pulled digest differs
+    # node0 EBS metric -> minimum over the load window, None without a datapoint; empty when
+    # `cloudwatch/ec2-node0.json` was not collected.
+    ebs_balance_min: dict[str, float | None]
+
+
+class MetricSeries(TypedDict):
+    timestamps: list[float]  # epoch seconds of each period start
+    values: list[float]
+
+
+class Ec2Balance(TypedDict):
+    """`cloudwatch/ec2-node0.json`: node0's EBS balance metrics over `[start, end]`."""
+
+    instance_id: str
+    period_s: int
+    start: float
+    end: float
+    metrics: dict[str, MetricSeries]
 
 
 @dataclass(frozen=True)
@@ -2473,7 +2502,30 @@ def finish_run(run: Run) -> nb.BenchResult | None:
                 "final rsync",
                 lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", run.run_dir),
             )
+        step("node0 EBS balance", lambda: collect_node0_ebs_balance(run))
     return report(run)
+
+
+def collect_node0_ebs_balance(run: Run) -> None:
+    """Waits until CloudWatch has the end of the load window, then fetches node0's EBS balance.
+    Runs after the host collection, which usually takes longer than the lag."""
+    agent = run.agent or finished_agent_state(run.run_dir)
+    if agent is None:
+        log.warning("no load window: node0 EBS balance not collected")
+        return
+    wait_s = agent["t1"] + CLOUDWATCH_LAG_S - time.time()
+    if wait_s > 0:
+        log.info("waiting %.0f s for CloudWatch to publish the load window", wait_s)
+        if run.fleet.interrupts.skip_collect.wait(wait_s):
+            return
+    collect_ebs_balance(
+        run.fleet.run,
+        run.cfg,
+        run.fleet.manifest,
+        agent["t0"],
+        agent["t1"],
+        run.run_dir,
+    )
 
 
 def best_effort(what: str, action: Callable[[], object]) -> None:
@@ -3876,6 +3928,113 @@ def parse_clock_offset_ms(tracking: str) -> float:
     return float(match.group(1)) * 1000
 
 
+def collect_ebs_balance(
+    run: Runner,
+    cfg: RunConfig,
+    manifest: FleetManifest,
+    t0: float,
+    t1: float,
+    out: Path,
+) -> None:
+    """`get-metric-data` for node0's EBS balance over `[t0 - period, t1 + period]` into
+    `out/cloudwatch/ec2-node0.json`. Every mode: node0 carries the journal and, with the
+    container or volume placements, Postgres."""
+    instance_id = manifest["hosts_info"]["node0"]["instance_id"]
+    start, end = t0 - CLOUDWATCH_PERIOD_S, t1 + CLOUDWATCH_PERIOD_S
+    stdout = aws_ok(
+        run,
+        cfg.profile,
+        "cloudwatch",
+        "get-metric-data",
+        "--region",
+        cfg.region,
+        "--start-time",
+        datetime.fromtimestamp(start, UTC).isoformat(),
+        "--end-time",
+        datetime.fromtimestamp(end, UTC).isoformat(),
+        "--metric-data-queries",
+        json.dumps(ebs_balance_queries(instance_id)),
+        "--output",
+        "json",
+    )
+    balance: Ec2Balance = {
+        "instance_id": instance_id,
+        "period_s": CLOUDWATCH_PERIOD_S,
+        "start": start,
+        "end": end,
+        "metrics": parse_ebs_balance(stdout),
+    }
+    path = out / EC2_NODE0_FILE
+    path.parent.mkdir(exist_ok=True)
+    nb.write_json(path, balance)
+    log.info("node0 EBS balance: %s", path)
+
+
+def ebs_balance_queries(instance_id: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "Id": query_id,
+            "MetricStat": {
+                "Metric": {
+                    "Namespace": "AWS/EC2",
+                    "MetricName": metric,
+                    "Dimensions": [{"Name": "InstanceId", "Value": instance_id}],
+                },
+                "Period": CLOUDWATCH_PERIOD_S,
+                "Stat": "Minimum",
+            },
+        }
+        for query_id, metric in EBS_BALANCE_METRICS.items()
+    ]
+
+
+def parse_ebs_balance(stdout: str) -> dict[str, MetricSeries]:
+    """Series per metric name from `get-metric-data`; a metric without datapoints gets empty
+    lists, any other status than `Complete` (e.g. `Forbidden`) raises."""
+    results = {r["Id"]: r for r in json.loads(stdout)["MetricDataResults"]}
+    series: dict[str, MetricSeries] = {}
+    for query_id, metric in EBS_BALANCE_METRICS.items():
+        result = results[query_id]
+        if result["StatusCode"] != "Complete":
+            raise RemoteError(f"get-metric-data {metric}: {result['StatusCode']}")
+        series[metric] = {
+            "timestamps": [
+                datetime.fromisoformat(ts).timestamp() for ts in result["Timestamps"]
+            ],
+            "values": result["Values"],
+        }
+    return series
+
+
+def ebs_balance_min(path: Path, t0: float, t1: float) -> dict[str, float | None]:
+    """Minimum per metric over the periods that overlap the load `[t0, t1]`."""
+    balance: Ec2Balance = nb.read_json(path)
+    period = balance["period_s"]
+    return {
+        metric: min(
+            (
+                value
+                for ts, value in zip(series["timestamps"], series["values"])
+                if ts + period > t0 and ts < t1
+            ),
+            default=None,
+        )
+        for metric, series in balance["metrics"].items()
+    }
+
+
+def ebs_balance_reasons(balance_min: dict[str, float | None]) -> list[str]:
+    if not balance_min:
+        return ["node0 EBS balance not collected"]
+    reasons: list[str] = []
+    for metric, low in balance_min.items():
+        if low is None:
+            reasons.append(f"node0 {metric} has no datapoint in the load window")
+        elif low < EBS_BALANCE_FULL_PCT:
+            reasons.append(f"node0 {metric} fell to {low:.0f}% during the load")
+    return reasons
+
+
 def load_evidence(
     run_dir: Path, manifest: Manifest, t0: float, t1: float
 ) -> tuple[dict[str, nb.HostSample], Evidence]:
@@ -3887,7 +4046,11 @@ def load_evidence(
         "journal_bytes": {},
         "clock_offset_ms": {},
         "digest_mismatch": {},
+        "ebs_balance_min": {},
     }
+    balance = run_dir / EC2_NODE0_FILE
+    if balance.exists():
+        evidence["ebs_balance_min"] = ebs_balance_min(balance, t0, t1)
     for spec in manifest["hosts"]:
         name = spec["name"]
         host_dir = run_dir / "hosts" / name
@@ -3948,7 +4111,8 @@ def check_validity_aws(
 ) -> nb.Validity:
     """`result["validity"]` (netbench's own rules) plus the fleet rules: invalid on missing host
     samples, a digest that differs from the manifest or a clock offset above
-    CLOCK_OFFSET_INVALID_MS; noisy on start spread, clock offset, ctl CPU, journal size or steal."""
+    CLOCK_OFFSET_INVALID_MS; noisy on start spread, clock offset, ctl CPU, journal size, steal
+    or node0's EBS balance below 100% (also when it has no datapoints or was not collected)."""
     invalid: list[str] = []
     noisy: list[str] = []
     for host, frac in evidence["coverage"].items():
@@ -3985,6 +4149,7 @@ def check_validity_aws(
             noisy.append(
                 f"{name} journal {size / 1e9:.1f} GB near its {limit / 1e9:.1f} GB limit"
             )
+    noisy += ebs_balance_reasons(evidence["ebs_balance_min"])
     base = result["validity"]
     return {
         "valid": base["valid"] and not invalid,
