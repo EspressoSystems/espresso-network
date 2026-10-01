@@ -376,6 +376,18 @@ def test_fleet_name_collision_refuses():
         awsb.new_fleet_dir(FakeSystem(), awsb.OUT_ROOT)
 
 
+# TEST:run-name-seconds-ok
+@pytest.mark.usefixtures("isolated")
+def test_fleets_started_a_second_apart_get_distinct_names():
+    first = awsb.new_fleet_dir(FakeSystem(), awsb.OUT_ROOT)
+    later = FakeSystem(clock=FakeClock(start=FAKE_EPOCH + 1))
+    second = awsb.new_fleet_dir(later, awsb.OUT_ROOT)
+    assert (first.name, second.name) == (
+        "tester-20260929-160000",
+        "tester-20260929-160001",
+    )
+
+
 CFG = awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
 HOSTS = awsb.plan_hosts(CFG)
 IMAGES = fake_images()

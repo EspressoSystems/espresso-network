@@ -1154,7 +1154,7 @@ def format_estimate_lines(estimate: Estimate) -> list[str]:
 
 
 def default_run_name(user: str, now: datetime) -> str:
-    return f"{user}-{now.strftime('%Y%m%d-%H%M')}"
+    return f"{user}-{now.strftime('%Y%m%d-%H%M%S')}"
 
 
 def new_fleet_dir(system: System, out_root: Path) -> Path:
