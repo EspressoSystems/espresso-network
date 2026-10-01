@@ -9,11 +9,12 @@ Runs the shared `netbench` load driver against a Terraform-provisioned fleet in 
 and region, replacing manual `espresso-deploy` runs for this purpose. `plan` renders every file
 and prints a cost estimate without writing anything to AWS; `run` additionally provisions,
 measures, collects and destroys. `up` provisions a fleet that stays idle for several
-measurements: `run --fleet DIR` measures on it (`fleet.lock` admits one run at a time and a reset
-wipes the chain between runs), and `down DIR` destroys it. The query service's Postgres runs in a container on node0 (`--query-db
-colocated`) or on an RDS instance (`rds`, provisioned by `up --db-modes`); a run picks one.
+measurements: `run --fleet FLEET` measures on it (`fleet.lock` admits one run at a time and a
+reset wipes the chain between runs), and `down FLEET` destroys it. The query service's Postgres
+runs in a container on node0, on the root volume (`--query-db colocated`) or an extra volume
+(`volume`), or on an RDS instance (`rds`); `up --db-modes` provisions the stores, a run picks one.
 
-`status` shows one run (phase, instances, agent progress, cost so far) or, with `--all`, every
+`status` shows one fleet (phase, instances, agent progress, cost so far) or, with `--all`, every
 tagged resource in the region. `destroy --orphans` sweeps runs
 whose local state is lost or whose TTL passed. `list` shows the local fleet dirs without AWS
 calls; `prune` deletes old ones that hold no AWS resources. `collect` and `render` redo those steps on an
@@ -2144,14 +2145,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     run_p.set_defaults(func=cmd_run, db_modes=defaults.db_modes)
 
     down_p = sub.add_parser("down", help="destroy a fleet")
-    down_p.add_argument("dir", nargs="?")
+    down_p.add_argument("dir", nargs="?", metavar="FLEET")
     down_p.add_argument("--yes", action="store_true")
     down_p.set_defaults(func=cmd_down)
 
     status_p = sub.add_parser(
-        "status", help="list tagged resources or one run's progress"
+        "status", help="list tagged resources or one fleet's progress"
     )
-    status_p.add_argument("dir", nargs="?")
+    status_p.add_argument("dir", nargs="?", metavar="FLEET")
     status_p.add_argument("--all", action="store_true")
     status_p.set_defaults(func=cmd_status)
 
@@ -2161,13 +2162,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     collect_p = sub.add_parser(
         "collect", help="re-collect logs and samples from live hosts"
     )
-    collect_p.add_argument("dir", type=Path, nargs="?")
+    collect_p.add_argument("dir", type=Path, nargs="?", metavar="RUN_DIR")
     collect_p.set_defaults(func=cmd_collect)
 
     render_p = sub.add_parser(
         "render", help="re-analyze a run dir and rewrite its summary"
     )
-    render_p.add_argument("dir", type=Path)
+    render_p.add_argument("dir", type=Path, metavar="RUN_DIR")
     render_p.add_argument("--baseline", type=Path)
     render_p.set_defaults(func=cmd_render)
 
@@ -2440,7 +2441,9 @@ def cmd_run(args: argparse.Namespace, system: System) -> int:
         args.fleet = fleet_arg(None if args.fleet is PICK else args.fleet, OUT_ROOT)
         return cmd_run_fleet(args, system)
     if args.tag is None:
-        raise Refused("run needs --tag, or --fleet DIR to measure on a fleet from `up`")
+        raise Refused(
+            "run needs --tag, or --fleet [FLEET] to measure on a fleet from `up`"
+        )
     cfg = dataclasses.replace(fleet_config_from_args(args), db_modes=(args.query_db,))
     interrupts = Interrupts(system.clock)
     started = system.clock.time()

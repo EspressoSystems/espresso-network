@@ -128,8 +128,8 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
 | Ctrl-C                         | finish current phase, bounded collect, destroy, exit 3 or 4                                                            |
 | destroy fails x3               | sweep by tag `espresso-bench-run=<name>`; leftovers → exit 4, `status --all` lists them                                |
 | laptop dies                    | agents keep running, TTL ends instances (and the pg volume), a schedule deletes the rds instance 5 min before the TTL; |
-|                                | `status/down FLEET`, `collect/render RUN` recover; `run --fleet --force` replaces a stale lock                         |
-| reset fails on a fleet         | fleet phase `dirty`, lock kept; `run --fleet DIR --force` resets again, or `down DIR`                                  |
+|                                | `status/down FLEET`, `collect/render RUN_DIR` recover; `run --fleet --force` replaces a stale lock                     |
+| reset fails on a fleet         | fleet phase `dirty`, lock kept; `run --fleet [FLEET] --force` resets again, or `down [FLEET]`                          |
 | state lost                     | `destroy --orphans`: list by tag (owner, launch, expiry), confirm, sweep; never another owner's live run               |
 
 ### Fleets and query databases
@@ -137,24 +137,26 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
 `up` provisions a fleet that stays idle; `run --fleet` measures on it as often as the TTL allows. `run` without
 `--fleet` is `up`, one measurement, `down`.
 
-| Command                              | Does                                                                                                     |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `up --db-modes colocated,volume,rds` | preflight, cost bound at `--ttl-min` (default 180), confirm, apply, prepare stores, phase `idle`, exit 0 |
-| `run --fleet DIR --query-db MODE`    | lock, ship agents, reset chain and database, measure, collect into `runs/<nn>-<name>/`, back to `idle`   |
-| `down DIR`                           | `tofu destroy` x3, tag sweep, fleet `cost.json`; exit 0 or 4                                             |
+| Command                               | Does                                                                                                     |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `up --db-modes colocated,volume,rds`  | preflight, cost bound at `--ttl-min` (default 180), confirm, apply, prepare stores, phase `idle`, exit 0 |
+| `run --fleet [FLEET] --query-db MODE` | lock, ship agents, reset chain and database, measure, collect into `runs/<nn>-<name>/`, back to `idle`   |
+| `down [FLEET]`                        | `tofu destroy` x3, tag sweep, fleet `cost.json`; exit 0 or 4                                             |
 
 - `run --fleet` refuses: phase not `idle`, lock held, MODE not in `--db-modes`, TTL left below the run's worst case plus
   lock-out, fleet flags given. Exit 2, nothing sent to the hosts. `--tag` differing from the fleet's pulls by digest.
 - Each run wipes journals, containers and the database; every run starts at height 0.
-- `fleet.lock` holds pid and hostname; `status DIR` shows whether the holder is alive. Phases: `idle`, `running`,
+- `fleet.lock` holds pid and hostname; `status [FLEET]` shows whether the holder is alive. Phases: `idle`, `running`,
   `dirty` (reset failed), then `done`; `planned` after `plan`, `left-running` after a failed destroy.
 
-| `--query-db` | Postgres                            | Store of `/data/pg`                                  |
-| ------------ | ----------------------------------- | ---------------------------------------------------- |
-| `colocated`  | container on node0                  | root gp3 (`--pg-iops`, `--pg-mbps`)                  |
-| `volume`     | container on node0                  | extra gp3 400 GiB, ext4 by-id mount, dies with node0 |
-| `rds`        | RDS PostgreSQL db.m8g.4xlarge, 18.x | gp3 400 GiB or more, 12000 IOPS, 500 MB/s            |
+| `--query-db` | Postgres                            | Store of `/data/pg`                                                             |
+| ------------ | ----------------------------------- | ------------------------------------------------------------------------------- |
+| `colocated`  | container on node0                  | root gp3 (`--pg-iops`, `--pg-mbps`)                                             |
+| `volume`     | container on node0                  | extra gp3 400 GiB (`--pg-iops`, `--pg-mbps`), ext4 by-id mount, dies with node0 |
+| `rds`        | RDS PostgreSQL db.m8g.4xlarge, 18.x | gp3 400 GiB or more, 12000 IOPS, 500 MB/s                                       |
 
+- `--pg-iops`/`--pg-mbps` apply to node0's root volume and the `volume` store; a fleet with `rds` refuses values other
+  than the defaults (12000, 500).
 - Same `PG_TUNING` settings in every mode; `pg-settings.json` is checked against them (`noisy` on a difference).
 - rds needs IAM rights `iam:CreateRole`, `iam:PutRolePolicy`, `iam:PassRole`, `scheduler:CreateSchedule`; without them
   apply fails, the fleet is destroyed, exit 3.
@@ -167,7 +169,7 @@ TTL. An EventBridge one-shot schedule deletes the rds instance 5 min earlier.
 
 | Command             | Covers                                                                                                        |
 | ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `status DIR`        | phase, time left, runs, lock holder (alive or dead), instances, pg volume, rds state, cost                    |
+| `status [FLEET]`    | phase, time left, runs, lock holder (alive or dead), instances, pg volume, rds state, cost                    |
 | `status --all`      | tagged resources per fleet (count per kind), latest expiry, orphan reason                                     |
 | `destroy --orphans` | fleets past expiry, in a terminal phase, or of this owner without `fleet.json`; never a live fleet with state |
 | `list`              | local fleet dirs, newest first: phase, created, expires, time left, cost, runs, last run; no AWS calls        |
@@ -222,18 +224,64 @@ runs/01-run/             one measurement
 
 ### Commands
 
+AWS (`scripts/network-bench/aws-bench`, flags per `just bench aws <cmd> -h`):
+
 ```
-just bench aws plan    --tag release-x [--nodes 5]
-just bench aws run     --tag release-x [--nodes 5] [--steps 4,6,9,...] [--query-db MODE] [--max-usd 10] [--yes]
-just bench aws up      --tag release-x --db-modes colocated,volume,rds [--ttl-min 180] [--max-usd 60] [--yes]
-just bench aws run     --fleet [FLEET] --query-db MODE [--tag release-y] [--node-env KEY=VALUE] [--force] [--yes]
-just bench aws down    [FLEET] [--yes]              # --yes needs FLEET
-just bench aws status  --all | [FLEET]
-just bench aws collect [RUN_DIR]               # the fleet's last run, fleet idle or left-running
-just bench aws render  RUN_DIR [--baseline FILE]
-just bench aws destroy --orphans
+# render the fleet dir (terraform, host files) and print the cost estimate; no AWS writes
+just bench aws plan --tag release-x --nodes 4 --db-modes colocated,volume
+# single shot: provision, measure on the volume store, collect, destroy; no prompt
+just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --max-usd 10 --yes
+# single shot, fixed load steps, every step run, query node lag up to 600 s tolerated
+just bench aws run --tag release-x --steps 50,60,80 --keep-going --cap-s 600 --tx-timeout-s 600
+# provision an idle fleet with all three stores for 4 h
+just bench aws up --tag release-x --nodes 4 --db-modes colocated,volume,rds --ttl-min 240 --max-usd 60
+# measure on the only selectable fleet, with an extra node environment variable
+just bench aws run --fleet --query-db volume --node-env ESPRESSO_QUERY_PAYLOAD_DIR=/payload
+# measure on a named fleet with another image tag and a fixed staircase
+just bench aws run --fleet lulu-20261001-074612 --query-db rds --tag release-y --steps 50,60,80 --keep-going
+# reset a dirty fleet, or replace a stale lock, then measure
+just bench aws run --fleet lulu-20261001-074612 --query-db colocated --force
+# destroy the only selectable fleet, after a prompt
+just bench aws down
+# destroy a named fleet without a prompt (--yes needs FLEET)
+just bench aws down lulu-20261001-074612 --yes
+# phase, time left, runs, lock holder, instances, cost of one fleet
+just bench aws status lulu-20261001-074612
+# every tagged resource in the region, per fleet, with orphan reasons
+just bench aws status --all
+# local fleet dirs, newest first; no AWS calls
 just bench aws list
-just bench aws prune   --older-than DAYS [--yes]
+# collect again from the hosts into the last run of the only selectable fleet
+just bench aws collect
+# collect again into a named run (the fleet's last, fleet idle or left-running)
+just bench aws collect bench-state/aws/lulu-20261001-074612/runs/02-volume
+# re-analyze a run dir and rewrite result.json and summary.md
+just bench aws render bench-state/aws/lulu-20261001-074612/runs/01-volume
+# same, compared against another run's result.json
+just bench aws render bench-state/aws/lulu-20261001-074612/runs/02-volume --baseline bench-state/aws/lulu-20261001-074612/runs/01-volume/result.json
+# list orphaned fleets by tag, confirm, sweep
+just bench aws destroy --orphans
+# delete local fleet dirs older than 14 days that hold no AWS resources, after a prompt
+just bench aws prune --older-than 14
+```
+
+Local (`scripts/network-bench/bench`, output in `bench-out/`):
+
+```
+# release binaries for the local network
+just bench build
+# 3-node network on this machine, default staircase, result in bench-out/
+just bench run
+# custom staircase, every step run
+just bench run --steps 4,8,12,16 --step-s 30 --keep-going
+# re-analyze bench-out/ against a baseline
+just bench render bench-out --baseline main-network-bench.json
+# compare a result.json with a baseline (result.json or `nextest-ci stats-fetch` output)
+just bench compare bench-out/result.json main-network-bench.json
+# runner info and CPU calibration only
+just bench sysinfo
+# remove bench-out/ and storage left by an interrupted run
+just bench clean
 ```
 
 - `FLEET`: a name under `bench-state/aws/`, or a path when it contains `/`. Omitted: the only fleet in phase `idle`,
