@@ -12,7 +12,10 @@
 
 //! Node storage implementation for a database query engine.
 
-use std::ops::{Bound, RangeBounds};
+use std::{
+    io::ErrorKind,
+    ops::{Bound, RangeBounds},
+};
 
 use alloy::primitives::map::HashMap;
 use anyhow::anyhow;
@@ -23,7 +26,6 @@ use hotshot_types::{
     simple_certificate::CertificatePair,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
-use snafu::OptionExt;
 use tracing::instrument;
 
 use super::{
@@ -32,7 +34,7 @@ use super::{
 };
 use crate::{
     Header, MissingSnafu, QueryError, QueryResult,
-    availability::{Certificate2, NamespaceId, QueryableHeader},
+    availability::{Certificate2, NamespaceId, QueryableHeader, sql::payload_dir},
     data_source::storage::{
         Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
     },
@@ -140,16 +142,30 @@ where
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
-            "SELECT vid_share FROM header AS h
+            "SELECT h.height, vid_share FROM header AS h
               WHERE {where_clause}
               ORDER BY h.height
               LIMIT 1"
         );
-        let (share_data,) = query
-            .query_as::<(Option<Vec<u8>>,)>(&sql)
+        let (height, share_data) = query
+            .query_as::<(i64, Option<Vec<u8>>)>(&sql)
             .fetch_one(self.as_mut())
             .await?;
-        let share_data = share_data.context(MissingSnafu)?;
+        let share_data = match (share_data, payload_dir()) {
+            (Some(data), _) => data,
+            (None, Some(dir)) => {
+                let path = dir.join(format!("{height}.share"));
+                match tokio::fs::read(&path).await {
+                    Err(err) if err.kind() == ErrorKind::NotFound => {
+                        return MissingSnafu.fail();
+                    },
+                    res => {
+                        res.decode_error(format!("reading VID share file {}", path.display()))?
+                    },
+                }
+            },
+            (None, None) => return MissingSnafu.fail(),
+        };
         let share = bincode::deserialize(&share_data).decode_error("malformed VID share")?;
         Ok(share)
     }
