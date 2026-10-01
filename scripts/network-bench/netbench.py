@@ -318,7 +318,9 @@ class BenchResult(TypedDict):
 class BenchConfig:
     genesis: str = "scripts/network-bench/genesis.toml"
     tx_size: int = 1_000_000
-    namespaces: tuple[int, int] = (10000, 10001)
+    # The leader disperses a block's namespaces in parallel, one unit each. With two, a 100 MB
+    # block dispersed on at most two cores and the rest sat idle.
+    namespaces: tuple[int, int] = (10000, 10015)
     # MB/s of each load step; each is held `step_s`, and its second half is measured.
     steps: tuple[float, ...] = (4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0)
     step_s: int = 30
