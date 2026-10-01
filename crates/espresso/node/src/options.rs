@@ -367,6 +367,14 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_EMPTY_BLOCK_DELAY", default_value = "500ms", value_parser = parse_duration)]
     pub empty_block_delay: Duration,
 
+    /// Directory to write the leader-event trace (`leader_trace_node{N}.csv`) into.
+    ///
+    /// Tracing is disabled when unset. Events are only recorded by the new consensus protocol,
+    /// but the file is created even when the legacy protocol is running. The directory should be
+    /// on local disk because each event is written synchronously.
+    #[clap(long, env = "ESPRESSO_NODE_LEADER_TRACE_DIR")]
+    pub leader_trace_dir: Option<PathBuf>,
+
     #[clap(flatten)]
     pub logging: logging::Config,
 

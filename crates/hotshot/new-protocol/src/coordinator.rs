@@ -46,6 +46,7 @@ use crate::{
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
     helpers::{proposal_commitment, validated_state_cert},
+    leader_trace::LeaderTracerHandle,
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, ConsensusMessage, Message, MessageType,
@@ -191,6 +192,7 @@ where
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
         upgrade_config: UpgradeConfig,
+        leader_tracer: Option<LeaderTracerHandle>,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -202,6 +204,7 @@ where
             initializer.anchor_leaf().clone(),
             initializer.epoch_height(),
         );
+        consensus.set_tracer(leader_tracer.clone());
 
         let anchor_leaf = initializer.anchor_leaf();
         let anchor_view = anchor_leaf.view_number();
@@ -298,7 +301,7 @@ where
 
         let participation = ParticipationTracker::new(&membership_coordinator, anchor_epoch);
 
-        let vid_disperser = VidDisperser::new(
+        let mut vid_disperser = VidDisperser::new(
             membership_coordinator.clone(),
             network.sender().clone(),
             public_key.clone(),
@@ -309,6 +312,9 @@ where
                 .as_ref()
                 .map(|m| m.consensus.vid_disperse_duration.clone().into()),
         );
+        vid_disperser.set_tracer(leader_tracer.clone());
+        let mut vid_reconstructor = VidReconstructor::new();
+        vid_reconstructor.set_tracer(leader_tracer);
 
         let lock = upgrade_lock.clone();
         let genesis_qc = consensus.cert1_at(ViewNumber::genesis()).cloned();
@@ -334,7 +340,7 @@ where
             .network(network)
             .state_manager(state_manager)
             .vid_disperser(vid_disperser)
-            .vid_reconstructor(VidReconstructor::new())
+            .vid_reconstructor(vid_reconstructor)
             .vote1_collector(VoteCollector::new(
                 membership_coordinator.clone(),
                 lock.clone(),

@@ -1,15 +1,27 @@
 //! Optional fine-grained tracing of the leader's per-view duty.
 //!
-//! Production builds register `None` and pay one branch (~ns) per event site.
-//! The bench binary registers a real tracer and writes the captured stream to
-//! disk for offline timeline reconstruction.
+//! Builds register `None` by default and pay one branch (~ns) per event site.
+//! The bench binary and `espresso-node` (when `ESPRESSO_NODE_LEADER_TRACE_DIR`
+//! is set) register a [`CsvLeaderTracer`] that appends each event to a CSV file
+//! as it happens, durable against process kill, for offline timeline
+//! reconstruction. The file must be on local disk: writes block the caller.
 //!
 //! Events are wall-clock unix-epoch ns, matching `MetricsCollector::now_ns()`
 //! in the bench so a downstream tool can join the streams on `view + ts_ns`.
 
-use std::sync::Arc;
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{self, Write},
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
+use parking_lot::Mutex;
 use time::OffsetDateTime;
+use tracing::warn;
 
 pub type LeaderTracerHandle = Arc<dyn LeaderTracer>;
 
@@ -139,6 +151,52 @@ pub fn now_ns() -> i128 {
     OffsetDateTime::now_utc().unix_timestamp_nanos()
 }
 
+/// `LeaderTracer` appending `view,node_id,event,ts_ns` rows to a CSV file.
+///
+/// Each row is a single unbuffered `write_all`, so it is on disk (in the OS page
+/// cache) when `record` returns and survives SIGKILL. Writes block the caller,
+/// so the file must be on local disk. An existing file is appended to; the
+/// header is written only into an empty file. After the first write error the
+/// tracer logs once and drops all further rows.
+pub struct CsvLeaderTracer {
+    node_id: u64,
+    file: Mutex<File>,
+    failed: AtomicBool,
+}
+
+impl CsvLeaderTracer {
+    /// Open `path` for append, creating it and missing parent directories.
+    pub fn new(node_id: u64, path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        if file.metadata()?.len() == 0 {
+            file.write_all(b"view,node_id,event,ts_ns\n")?;
+        }
+        Ok(Self {
+            node_id,
+            file: Mutex::new(file),
+            failed: AtomicBool::new(false),
+        })
+    }
+}
+
+impl LeaderTracer for CsvLeaderTracer {
+    fn record(&self, view: u64, event: LeaderEvent, ts_ns: i128) {
+        if self.failed.load(Ordering::Relaxed) {
+            return;
+        }
+        let row = format!("{view},{},{},{ts_ns}\n", self.node_id, event.name());
+        if let Err(err) = self.file.lock().write_all(row.as_bytes())
+            && !self.failed.swap(true, Ordering::Relaxed)
+        {
+            warn!(%err, "leader trace write failed, disabling leader trace");
+        }
+    }
+}
+
 /// Emit an event through an optional tracer with a single `is_some` check.
 /// Internal helper: convert anything ViewNumber-shaped (`ViewNumber`, `&ViewNumber`, `u64`) into u64.
 pub trait AsViewU64 {
@@ -165,4 +223,43 @@ macro_rules! trace_leader_event {
             t.record(v, $event, $crate::leader_trace::now_ns());
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HEADER: &str = "view,node_id,event,ts_ns\n";
+
+    #[test]
+    fn row_is_on_disk_without_flush_or_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sub/trace.csv");
+        let tracer = CsvLeaderTracer::new(7, &path).unwrap();
+        tracer.record(1, LeaderEvent::NsDisperseStart, 100);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            format!("{HEADER}1,7,ns_disperse_start,100\n")
+        );
+        tracer.record(2, LeaderEvent::LeafDecided, 200);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            format!("{HEADER}1,7,ns_disperse_start,100\n2,7,leaf_decided,200\n")
+        );
+    }
+
+    #[test]
+    fn reopen_appends_without_second_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trace.csv");
+        let first = CsvLeaderTracer::new(0, &path).unwrap();
+        first.record(1, LeaderEvent::NsDisperseStart, 1);
+        drop(first);
+        let second = CsvLeaderTracer::new(0, &path).unwrap();
+        second.record(2, LeaderEvent::NsDisperseEnd, 2);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            format!("{HEADER}1,0,ns_disperse_start,1\n2,0,ns_disperse_end,2\n")
+        );
+    }
 }

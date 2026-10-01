@@ -16,7 +16,7 @@ use hotshot_new_protocol::{
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::proposal_commitment,
-    leader_trace::LeaderTracerHandle,
+    leader_trace::{CsvLeaderTracer, LeaderTracerHandle},
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
@@ -39,8 +39,8 @@ use tracing::{error, info, warn};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
-    config::NodeConfig, cpu_sampler::CpuSampler, leader_trace::CsvLeaderTracer,
-    membership::make_membership, metrics::MetricsCollector,
+    config::NodeConfig, cpu_sampler::CpuSampler, membership::make_membership,
+    metrics::MetricsCollector,
 };
 
 type BenchCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;
@@ -53,11 +53,10 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     let (membership, client) = make_membership(cfg.total_nodes, public_key).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
-    // Per-node leader-event tracer. Production binaries leave this `None`; the
-    // bench wires it through `Consensus::set_tracer` (and the VID disperser and
-    // reconstructor) so every leader-duty call site emits a wall-clock-ns stamp
-    // to disk for offline timeline reconstruction.
-    let tracer = Arc::new(CsvLeaderTracer::new(cfg.node_id, leader_trace_path(&cfg)));
+    // Per-node leader-event tracer, wired through `Consensus::set_tracer` (and
+    // the VID disperser and reconstructor) so every leader-duty call site
+    // appends a wall-clock-ns stamp to disk for offline timeline reconstruction.
+    let tracer = Arc::new(CsvLeaderTracer::new(cfg.node_id, leader_trace_path(&cfg))?);
 
     // Start the CPU sampler (no-op on non-Linux). Outputs land in the same
     // directory as the leader-trace CSV so analysis scripts can pick them up.
@@ -83,9 +82,6 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     .await;
 
     let result = run_instrumented(coordinator, &cfg).await;
-    if let Err(err) = tracer.flush() {
-        warn!(%err, "failed to flush leader trace");
-    }
     cpu_sampler.stop().await;
     result
 }
