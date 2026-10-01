@@ -17,6 +17,7 @@ use data_source::{
     StateCertDataSource, StateCertFetchingDataSource, SubmitDataSource,
 };
 use derivative::Derivative;
+use espresso_api::error::SubmitError;
 use espresso_types::{
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
     FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
@@ -34,6 +35,7 @@ use espresso_types::{
 };
 use futures::future::{BoxFuture, Future, FutureExt};
 use hotshot_contract_adapter::sol_types::EspToken;
+use hotshot_new_protocol::{block, client};
 use hotshot_query_service::{
     availability::VidCommonQueryData,
     data_source::ExtensibleDataSource,
@@ -718,10 +720,24 @@ impl<C: ApiContext> SubmitDataSource for ApiState<C> {
 
         // reject transaction bigger than block size
         if txn_size > max_block_size {
-            bail!("transaction size ({txn_size}) is greater than max_block_size ({max_block_size})")
+            return Err(SubmitError::TooLarge(format!(
+                "transaction size ({txn_size}) is greater than max_block_size ({max_block_size})"
+            ))
+            .into());
         }
 
-        handle.submit_transaction(tx).await
+        handle
+            .submit_transaction(tx)
+            .await
+            .map_err(|err| match err.downcast_ref() {
+                Some(client::QueryError::Rejected(
+                    rejection @ block::SubmitError::TooLarge { .. },
+                )) => SubmitError::TooLarge(rejection.to_string()).into(),
+                Some(client::QueryError::Rejected(
+                    rejection @ block::SubmitError::RetryBufferFull,
+                )) => SubmitError::Overloaded(rejection.to_string()).into(),
+                _ => err,
+            })
     }
 }
 

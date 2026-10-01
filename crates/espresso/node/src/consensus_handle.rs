@@ -405,7 +405,7 @@ where
             return client_api
                 .submit_transaction(tx)
                 .await
-                .map_err(|e| anyhow::anyhow!("{e}"));
+                .map_err(anyhow::Error::new);
         }
         self.legacy_handle
             .read()
