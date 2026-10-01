@@ -165,7 +165,7 @@ def test_a_run_needs_time_for_the_rds_delete(harness):
 def test_the_parameter_group_renders_from_the_container_settings(harness):
     harness.up_rds()
     parameters = harness.tfvars()["rds"]["parameters"]
-    for key, (_, setting) in awsb.PG_TUNING.items():
+    for key, (_, setting) in awsb.pg_tuning(awsb.PG_REFERENCE_MIB).items():
         assert parameters[key] == setting, key
     assert parameters["shared_buffers"] == "1048576"
     assert parameters["shared_preload_libraries"] == "pg_stat_statements"
@@ -173,6 +173,13 @@ def test_the_parameter_group_renders_from_the_container_settings(harness):
     assert parameters["pg_stat_statements.track"] == "all"
     assert "ssl" not in parameters
     assert "rds.force_ssl" not in parameters
+
+
+def test_the_parameter_group_ignores_the_node_type(harness):
+    runner = RdsRunner([DONE_STATE], describe=DESCRIBE)
+    assert harness.up(runner, "--node-type", "c8g.2xlarge") == awsb.EXIT_OK
+    parameters = harness.tfvars()["rds"]["parameters"]
+    assert parameters["shared_buffers"] == "1048576"
 
 
 def test_the_password_is_generated_private_and_rds_safe(harness):

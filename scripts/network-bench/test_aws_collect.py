@@ -16,6 +16,7 @@ from fakes import (
     DESCRIBE,
     DONE_STATE,
     FULL_BALANCE,
+    MEMORY_MIB,
     NOW,
     FakeClock,
     FakeNode,
@@ -63,12 +64,12 @@ def render_run_dir(run_dir: Path, cfg: Any) -> None:
     hosts = awsb.plan_hosts(cfg)
     for host in hosts:
         (run_dir / "hosts" / host["name"]).mkdir(parents=True)
-    manifest = {"hosts": hosts, "images": fake_images()}
+    manifest = {"hosts": hosts, "images": fake_images(), "memory_mib": MEMORY_MIB}
     awsb.render_host_files(run_dir, cfg, manifest, two_node_hosts_info())
 
 
-def container_settings() -> dict[str, str]:
-    args = awsb.render_postgres_args()
+def container_settings(memory_mib: int = 32768) -> dict[str, str]:
+    args = awsb.render_postgres_args(memory_mib)
     assert set(args[0::2]) == {"-c"}
     return dict(setting.split("=", 1) for setting in args[1::2])
 
@@ -128,12 +129,82 @@ def test_agent_host_role_query_starts_pg_sampler(
 
 
 # REQ:querydb-settings-parity
-def test_container_args_render_every_tuning_key() -> None:
-    settings = container_settings()
-    assert {k: settings[k] for k in awsb.PG_TUNING} == {
-        k: conf for k, (conf, _) in awsb.PG_TUNING.items()
+@pytest.mark.parametrize("memory_mib", [16384, 32768, 65536])
+def test_container_args_render_every_tuning_key(memory_mib: int) -> None:
+    settings = container_settings(memory_mib)
+    tuning = awsb.pg_tuning(memory_mib)
+    assert {k: settings[k] for k in tuning} == {
+        k: conf for k, (conf, _) in tuning.items()
     }
     assert settings["ssl"] == "on"
+
+
+# The map every run before memory scaling rendered, sized for a 32 GiB c8g.4xlarge node0.
+C8G_4XLARGE_TUNING = {
+    "shared_buffers": ("8GB", "1048576"),
+    "effective_cache_size": ("24GB", "3145728"),
+    "huge_pages": ("off", "off"),
+    "work_mem": ("64MB", "65536"),
+    "maintenance_work_mem": ("2GB", "2097152"),
+    "max_wal_size": ("16GB", "16384"),
+    "min_wal_size": ("4GB", "4096"),
+    "checkpoint_timeout": ("15min", "900"),
+    "checkpoint_completion_target": ("0.9", "0.9"),
+    "wal_compression": ("lz4", "lz4"),
+    "default_toast_compression": ("lz4", "lz4"),
+    "random_page_cost": ("1.1", "1.1"),
+    "effective_io_concurrency": ("200", "200"),
+    "autovacuum_vacuum_cost_limit": ("2000", "2000"),
+    "autovacuum_max_workers": ("4", "4"),
+    "autovacuum_work_mem": ("512MB", "524288"),
+    "autovacuum_naptime": ("1min", "60"),
+    "autovacuum_vacuum_scale_factor": ("0.2", "0.2"),
+    "autovacuum_analyze_scale_factor": ("0.1", "0.1"),
+    "track_io_timing": ("off", "off"),
+    "wal_buffers": ("256MB", "32768"),
+    "max_connections": ("100", "100"),
+}
+
+
+def test_pg_tuning_of_a_c8g_4xlarge_is_unchanged() -> None:
+    assert awsb.pg_tuning(MEMORY_MIB["c8g.4xlarge"]) == C8G_4XLARGE_TUNING
+    assert list(awsb.pg_tuning(32768)) == list(C8G_4XLARGE_TUNING)
+
+
+@pytest.mark.parametrize(
+    ("memory_mib", "scaled"),
+    [
+        (
+            16384,
+            {
+                "shared_buffers": ("4GB", "524288"),
+                "effective_cache_size": ("12GB", "1572864"),
+                "maintenance_work_mem": ("1GB", "1048576"),
+                "autovacuum_work_mem": ("256MB", "262144"),
+            },
+        ),
+        (
+            65536,
+            {
+                "shared_buffers": ("16GB", "2097152"),
+                "effective_cache_size": ("48GB", "6291456"),
+                "maintenance_work_mem": ("4GB", "4194304"),
+                "autovacuum_work_mem": ("1GB", "1048576"),
+            },
+        ),
+        (
+            15000,
+            {
+                "shared_buffers": ("3750MB", "480000"),
+                "effective_cache_size": ("11250MB", "1440000"),
+                "maintenance_work_mem": ("937MB", "959488"),
+                "autovacuum_work_mem": ("234MB", "239616"),
+            },
+        ),
+    ],
+)
+def test_pg_tuning_scales_the_memory_settings(memory_mib: int, scaled: dict) -> None:
+    assert awsb.pg_tuning(memory_mib) == C8G_4XLARGE_TUNING | scaled
 
 
 def test_bind_parameters_are_not_logged() -> None:
@@ -143,14 +214,23 @@ def test_bind_parameters_are_not_logged() -> None:
     assert rds["parameters"]["log_parameter_max_length"] == "0"
 
 
-def test_memory_budget_fits_the_query_host() -> None:
-    """node0 is a c8g.4xlarge with 32 GiB; the same map runs on the 64 GiB RDS class."""
-    assert awsb.NODE_TYPE == "c8g.4xlarge"
-    ram = 32 * 1024**3
+def test_rds_parameters_keep_the_reference_tuning() -> None:
+    rds = awsb.rds_tfvars({}, "pw", datetime(2026, 1, 1, tzinfo=UTC))["rds"]
+    for key, (_, setting) in C8G_4XLARGE_TUNING.items():
+        assert rds["parameters"][key] == setting, key
+
+
+@pytest.mark.parametrize("node_type", sorted(awsb.INSTANCE_PRICES))
+def test_memory_budget_fits_the_query_host(node_type: str) -> None:
+    """node0 also runs espresso-node and the journal's page cache: Postgres's peak shared and
+    autovacuum memory stays within a third of the host."""
+    memory_mib = MEMORY_MIB[node_type]
+    ram = memory_mib * 1024**2
+    tuning = awsb.pg_tuning(memory_mib)
     pages, kib = 8192, 1024
 
     def size(key: str, unit: int) -> int:
-        return int(awsb.PG_TUNING[key][1]) * unit
+        return int(tuning[key][1]) * unit
 
     peak = (
         size("shared_buffers", pages)
@@ -161,7 +241,8 @@ def test_memory_budget_fits_the_query_host() -> None:
     assert size("effective_cache_size", pages) <= ram
 
 
-def test_rds_values_are_the_conf_values_in_setting_units() -> None:
+@pytest.mark.parametrize("memory_mib", [15000, 16384, 32768, 65536])
+def test_rds_values_are_the_conf_values_in_setting_units(memory_mib: int) -> None:
     sizes = {"kB": 1024, "MB": 1024**2, "GB": 1024**3}
     times = {"s": 1, "min": 60}
     units = {
@@ -174,7 +255,7 @@ def test_rds_values_are_the_conf_values_in_setting_units() -> None:
         "max_wal_size": 1024**2,
         "min_wal_size": 1024**2,
     }
-    for key, (conf, setting) in awsb.PG_TUNING.items():
+    for key, (conf, setting) in awsb.pg_tuning(memory_mib).items():
         match = re.fullmatch(r"(\d+)([A-Za-z]+)", conf)
         if match is None:
             assert setting == conf, key
@@ -197,7 +278,20 @@ def test_rds_values_are_the_conf_values_in_setting_units() -> None:
     ],
 )
 def test_check_pg_tuning(overrides: dict, differing: list[str]) -> None:
-    assert awsb.check_pg_tuning(pg_settings(**overrides)) == differing
+    tuning = awsb.pg_tuning(MEMORY_MIB["c8g.4xlarge"])
+    assert awsb.check_pg_tuning(pg_settings(**overrides), tuning) == differing
+
+
+def test_check_pg_tuning_compares_against_the_scaled_values() -> None:
+    small = awsb.pg_tuning(16384)
+    assert awsb.check_pg_tuning(pg_settings(), small) == [
+        "shared_buffers",
+        "effective_cache_size",
+        "maintenance_work_mem",
+        "autovacuum_work_mem",
+    ]
+    scaled = {key: setting for key, (_, setting) in small.items()}
+    assert awsb.check_pg_tuning(pg_settings(**scaled), small) == []
 
 
 def test_tls_is_counted_by_the_load_samples_not_the_collect_query() -> None:
@@ -380,6 +474,42 @@ def test_check_validity_aws(
     assert (got["valid"], got["noisy"]) == verdict
     assert len(got["reasons"]) == (verdict != QUIET)
     assert all(reason in r for r in got["reasons"])
+
+
+def small_node0_manifest(query_db: str = "colocated") -> dict:
+    manifest = aws_manifest()
+    for host in manifest["hosts"]:
+        if host["name"] == "node0":
+            host["instance_type"] = "c8g.2xlarge"
+    return manifest | {"query_db": query_db}
+
+
+def test_pg_settings_gate_uses_node0_memory() -> None:
+    small = awsb.pg_tuning(16384)
+    scaled = {key: setting for key, (_, setting) in small.items()}
+    manifest = small_node0_manifest()
+    got = check_aws(manifest=manifest, pg_settings=pg_settings(**scaled))
+    assert not got["noisy"], got["reasons"]
+    got = check_aws(manifest=manifest, pg_settings=pg_settings())
+    assert got["noisy"]
+    assert any("shared_buffers=1048576" in r and "4GB" in r for r in got["reasons"])
+
+
+def test_pg_settings_gate_of_rds_uses_the_reference_tuning() -> None:
+    got = check_aws(manifest=small_node0_manifest("rds"), pg_settings=pg_settings())
+    assert not got["noisy"], got["reasons"]
+
+
+def test_pg_settings_gate_refuses_a_manifest_without_memory() -> None:
+    manifest = small_node0_manifest()
+    del manifest["memory_mib"]
+    with pytest.raises(KeyError, match="memory_mib"):
+        check_aws(manifest=manifest, pg_settings=pg_settings())
+
+
+def test_query_db_meta_reports_the_rendered_tuning() -> None:
+    meta = awsb.query_db_meta(small_node0_manifest(), clean_evidence())
+    assert meta["tuning"]["shared_buffers"] == "4GB"
 
 
 def test_parse_clock_offset_ms() -> None:

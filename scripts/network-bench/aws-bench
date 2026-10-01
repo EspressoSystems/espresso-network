@@ -272,40 +272,64 @@ PAYLOAD_CONTAINER_DIR = "/payload"
 VOLUME_BY_ID = "/dev/disk/by-id"
 # Seconds `up` waits for udev to publish the by-id link of the attached volume.
 PG_VOLUME_WAIT_S = 60
-# Sized for the 32 GiB of node0 (a C-family 4xlarge), which also runs espresso-node and the
-# journal's page cache; the 64 GiB RDS class takes the same values. One map for every
-# placement: key -> (postgresql.conf text for the container's `-c` flags, the same value as
-# pg_settings.setting reports it and the RDS parameter group takes it). The last group pins
-# what RDS defaults
-# differently from postgres.
-PG_TUNING: dict[str, tuple[str, str]] = {
-    "shared_buffers": ("8GB", "1048576"),
-    "effective_cache_size": ("24GB", "3145728"),
-    "huge_pages": ("off", "off"),
-    "work_mem": ("64MB", "65536"),
-    "maintenance_work_mem": ("2GB", "2097152"),
-    "max_wal_size": ("16GB", "16384"),
-    "min_wal_size": ("4GB", "4096"),
-    "checkpoint_timeout": ("15min", "900"),
-    "checkpoint_completion_target": ("0.9", "0.9"),
-    # VID shares and payloads do not compress: pglz on them was two thirds of the Postgres CPU
-    # in run lulu-20260930-1649 (perf). lz4 gives up on such input at once.
-    "wal_compression": ("lz4", "lz4"),
-    "default_toast_compression": ("lz4", "lz4"),
-    "random_page_cost": ("1.1", "1.1"),
-    "effective_io_concurrency": ("200", "200"),
-    "autovacuum_vacuum_cost_limit": ("2000", "2000"),
-    "autovacuum_max_workers": ("4", "4"),
-    "autovacuum_work_mem": ("512MB", "524288"),
-    "autovacuum_naptime": ("1min", "60"),
-    "autovacuum_vacuum_scale_factor": ("0.2", "0.2"),
-    "autovacuum_analyze_scale_factor": ("0.1", "0.1"),
-    "track_io_timing": ("off", "off"),
-    # Serial ~6 MB block transactions overflow 16MB: wal_buffers_full 821466 in run
-    # lulu-20260930-1207, a backend WAL write every ~32 kB on average.
-    "wal_buffers": ("256MB", "32768"),
-    "max_connections": ("100", "100"),
-}
+# Memory of the host the tuning was first sized for, a 32 GiB c8g.4xlarge node0.
+PG_REFERENCE_MIB = 32 * 1024
+PgTuning = dict[str, tuple[str, str]]
+
+
+def pg_tuning(memory_mib: int) -> PgTuning:
+    """Settings for a Postgres on a host of `memory_mib`: key -> (postgresql.conf text for the
+    container's `-c` flags, the same value as pg_settings.setting reports it and the RDS
+    parameter group takes it). node0 also runs espresso-node and the journal's page cache, so
+    shared_buffers is a quarter of the host, effective_cache_size three quarters,
+    maintenance_work_mem 1/16 and autovacuum_work_mem 1/64, each floored to whole MB. No caps:
+    the priced types span 16 to 64 GiB, where these stay below a third of the host (Postgres 18
+    has no 1 GB vacuum limit). work_mem and wal_buffers stay fixed: per-query and WAL sizing
+    does not grow with the host. The last group pins what RDS defaults differently from
+    postgres."""
+    return {
+        "shared_buffers": _pg_pages(memory_mib // 4),
+        "effective_cache_size": _pg_pages(memory_mib * 3 // 4),
+        "huge_pages": ("off", "off"),
+        "work_mem": ("64MB", "65536"),
+        "maintenance_work_mem": _pg_kib(memory_mib // 16),
+        "max_wal_size": ("16GB", "16384"),
+        "min_wal_size": ("4GB", "4096"),
+        "checkpoint_timeout": ("15min", "900"),
+        "checkpoint_completion_target": ("0.9", "0.9"),
+        # VID shares and payloads do not compress: pglz on them was two thirds of the Postgres CPU
+        # in run lulu-20260930-1649 (perf). lz4 gives up on such input at once.
+        "wal_compression": ("lz4", "lz4"),
+        "default_toast_compression": ("lz4", "lz4"),
+        "random_page_cost": ("1.1", "1.1"),
+        "effective_io_concurrency": ("200", "200"),
+        "autovacuum_vacuum_cost_limit": ("2000", "2000"),
+        "autovacuum_max_workers": ("4", "4"),
+        "autovacuum_work_mem": _pg_kib(memory_mib // 64),
+        "autovacuum_naptime": ("1min", "60"),
+        "autovacuum_vacuum_scale_factor": ("0.2", "0.2"),
+        "autovacuum_analyze_scale_factor": ("0.1", "0.1"),
+        "track_io_timing": ("off", "off"),
+        # Serial ~6 MB block transactions overflow 16MB: wal_buffers_full 821466 in run
+        # lulu-20260930-1207, a backend WAL write every ~32 kB on average.
+        "wal_buffers": ("256MB", "32768"),
+        "max_connections": ("100", "100"),
+    }
+
+
+def _pg_size(mb: int) -> str:
+    return f"{mb // 1024}GB" if mb % 1024 == 0 else f"{mb}MB"
+
+
+def _pg_pages(mb: int) -> tuple[str, str]:
+    """A size in 8 kB pages, the unit of shared_buffers and effective_cache_size."""
+    return _pg_size(mb), str(mb * 128)
+
+
+def _pg_kib(mb: int) -> tuple[str, str]:
+    return _pg_size(mb), str(mb * 1024)
+
+
 # Docker's default /dev/shm of 64 MB is the limit of parallel query's dynamic shared memory;
 # RDS has none.
 PG_SHM_SIZE = "8g"
@@ -576,6 +600,8 @@ class Preflight(TypedDict):
     account: str
     az: str
     arch: Arch
+    # `MemoryInfo.SizeInMiB` per instance type of the fleet.
+    memory_mib: dict[str, int]
     ami_id: str
     images: dict[str, ImageInfo]
     # The engine minor `rds_orderable` resolved; present when the fleet has an rds mode.
@@ -652,6 +678,7 @@ class FleetManifest(TypedDict):
     # `wait_hosts` to check pulled digests, and at `render` for the deployment block.
     az: NotRequired[str]
     arch: NotRequired[Arch]
+    memory_mib: NotRequired[dict[str, int]]
     ami_id: NotRequired[str]
     images: NotRequired[dict[str, ImageInfo]]
     hosts_info: NotRequired[dict[str, "HostInfo"]]
@@ -1370,11 +1397,13 @@ def resolve_ami(run: Runner, arch: Arch) -> str:
     return ami_id
 
 
-def instance_arch(run: Runner, types: set[str]) -> Arch:
-    """The one architecture every type runs, as Ubuntu and OCI name it."""
+def instance_specs(run: Runner, types: set[str]) -> tuple[Arch, dict[str, int]]:
+    """The one architecture every type runs, as Ubuntu and OCI name it, and the memory in MiB
+    of each type."""
     described = aws_json(
         run, "ec2", "describe-instance-types", "--instance-types", *sorted(types)
     )["InstanceTypes"]
+    memory = {t["InstanceType"]: t["MemoryInfo"]["SizeInMiB"] for t in described}
     archs = {
         t["InstanceType"]: {
             EC2_ARCHS[a]
@@ -1389,7 +1418,7 @@ def instance_arch(run: Runner, types: set[str]) -> Arch:
             f"{t} {'/'.join(sorted(a))}" for t, a in sorted(archs.items())
         )
         raise Refused(f"instance types must share one architecture: {listed}")
-    return distinct.pop()
+    return distinct.pop(), memory
 
 
 def capable_az(run: Runner, types: set[str]) -> str:
@@ -1563,7 +1592,7 @@ def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Prefligh
     )
     account = caller_account(run)
     types = {h["instance_type"] for h in hosts}
-    arch = instance_arch(run, types)
+    arch, memory_mib = instance_specs(run, types)
     az = capable_az(run, types)
     ami_id = resolve_ami(run, arch)
     rds_minor = rds_orderable(run, cfg, az) if "rds" in cfg.db_modes else None
@@ -1572,6 +1601,7 @@ def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Prefligh
         "account": account,
         "az": az,
         "arch": arch,
+        "memory_mib": memory_mib,
         "ami_id": ami_id,
         "images": images,
     }
@@ -1671,7 +1701,8 @@ def rds_schedule_at(expires: datetime) -> str:
 def rds_tfvars(rds: RdsSpec, password: str, expires: datetime) -> dict[str, Any]:
     """The `rds` and `rds_password` variables: the container's tuning and observability
     settings in the units of the parameter group."""
-    tuning = {key: setting for key, (_, setting) in PG_TUNING.items()}
+    # The RDS class is fixed whatever `--node-type`, and was sized against the reference values.
+    tuning = {key: setting for key, (_, setting) in pg_tuning(PG_REFERENCE_MIB).items()}
     return {
         "rds": {
             **rds,
@@ -1844,15 +1875,24 @@ def psql_argv(pg: PgEndpoint) -> tuple[list[str], dict[str, str]]:
     return argv, {"PGPASSWORD": pg["password"]}
 
 
-def render_postgres_args() -> list[str]:
-    tuning = {key: conf for key, (conf, _) in PG_TUNING.items()}
+def render_postgres_args(memory_mib: int) -> list[str]:
+    tuning = {key: conf for key, (conf, _) in pg_tuning(memory_mib).items()}
     settings = {**tuning, **PG_OBSERVABILITY, **PG_SSL}
     return [arg for key, value in settings.items() for arg in ("-c", f"{key}={value}")]
 
 
-def check_pg_tuning(settings: dict[str, Any]) -> list[str]:
-    """Keys of PG_TUNING whose collected pg_settings value differs from the configured one."""
-    return [key for key, (_, setting) in PG_TUNING.items() if settings[key] != setting]
+def check_pg_tuning(settings: dict[str, Any], tuning: PgTuning) -> list[str]:
+    """Keys of `tuning` whose collected pg_settings value differs from the configured one."""
+    return [key for key, (_, setting) in tuning.items() if settings[key] != setting]
+
+
+def run_pg_tuning(manifest: Manifest) -> PgTuning:
+    """The tuning the run's Postgres was given: scaled to node0's memory in the container,
+    the reference values on the separately sized RDS class."""
+    if manifest["query_db"] == "rds":
+        return pg_tuning(PG_REFERENCE_MIB)
+    node0 = next(h for h in manifest["hosts"] if h["role"] == "query")
+    return pg_tuning(manifest["memory_mib"][node0["instance_type"]])
 
 
 def pg_tls(backends: dict[str, int]) -> bool | None:
@@ -1933,11 +1973,14 @@ def _docker_create(name: str, argv: list[str], entrypoint: str | None = None) ->
 
 
 def render_start_sh(
-    host: HostSpec, images: dict[str, ImageInfo], query_db: DbMode = "colocated"
+    host: HostSpec,
+    images: dict[str, ImageInfo],
+    memory_mib: int,
+    query_db: DbMode = "colocated",
 ) -> str:
     """Deviates from the plan signature (drops unused `hosts`, `cfg`): every value start.sh
-    needs is already in `host` and `images`, or in ctl.env/node.env rendered separately. With
-    `query_db` rds there is no postgres container."""
+    needs is already in `host`, `images` and the host's `memory_mib`, or in ctl.env/node.env
+    rendered separately. With `query_db` rds there is no postgres container."""
     script = (
         "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n"
         f"echo '{{}}' > {BENCH_DIR}/containers.json\n\n"
@@ -1999,7 +2042,7 @@ def render_start_sh(
                 "-e",
                 f"POSTGRES_DB={endpoint['database']}",
                 f"{pg['ref']}@{pg['digest']}",
-                *render_postgres_args(),
+                *render_postgres_args(memory_mib),
             ],
         )
     node = images["espresso-node"]
@@ -3713,6 +3756,7 @@ def render_fleet_dir(
         "planned",
         az=pre["az"],
         arch=pre["arch"],
+        memory_mib=pre["memory_mib"],
         ami_id=pre["ami_id"],
         images=pre["images"],
         git_rev=git_rev,
@@ -3988,7 +4032,12 @@ def render_host_files(
         host_dir = run_dir / "hosts" / spec["name"]
         host_dir.mkdir(parents=True, exist_ok=True)
         (host_dir / "start.sh").write_text(
-            render_start_sh(spec, manifest["images"], query_db=cfg.query_db)
+            render_start_sh(
+                spec,
+                manifest["images"],
+                manifest["memory_mib"][spec["instance_type"]],
+                query_db=cfg.query_db,
+            )
         )
         if spec["role"] == "ctl":
             (host_dir / "ctl.env").write_text(render_ctl_env(hosts, cfg, dotenv()))
@@ -4579,7 +4628,7 @@ PG_STATEMENTS_SQL = (
     "order by total_exec_time desc limit 50) s"
 )
 _PG_SETTING_NAMES = sorted(
-    {"synchronous_commit", "fsync", "full_page_writes", *PG_TUNING}
+    {"synchronous_commit", "fsync", "full_page_writes", *pg_tuning(PG_REFERENCE_MIB)}
 )
 PG_SETTINGS_SQL = (
     "select jsonb_object_agg(name, setting)::text "
@@ -5828,7 +5877,7 @@ def query_db_meta(manifest: Manifest, evidence: Evidence) -> nb.QueryDbMeta:
     load; no backend counts as off."""
     mode = manifest["query_db"]
     tls = "ssl_backends" in evidence and pg_tls(evidence["ssl_backends"]) is True
-    tuning = {key: conf for key, (conf, _) in PG_TUNING.items()}
+    tuning = {key: conf for key, (conf, _) in run_pg_tuning(manifest).items()}
     engine, store = db_store(manifest)
     meta: nb.QueryDbMeta = {
         "mode": mode,
@@ -5913,9 +5962,10 @@ def check_validity_aws(
             )
     if "pg_settings" in evidence:
         settings = evidence["pg_settings"]
-        for key in check_pg_tuning(settings):
+        tuning = run_pg_tuning(manifest)
+        for key in check_pg_tuning(settings, tuning):
             noisy.append(
-                f"node0 postgres {key}={settings[key]} differs from the tuned {PG_TUNING[key][0]}"
+                f"node0 postgres {key}={settings[key]} differs from the tuned {tuning[key][0]}"
             )
     if "ssl_backends" in evidence and pg_tls(evidence["ssl_backends"]) is False:
         noisy.append("node0 postgres backends connected without TLS")

@@ -1207,11 +1207,26 @@ def fake_images() -> dict:
     } | {name: fake_image(ref) for name, ref in awsb.SUPPORT_IMAGES.items()}
 
 
+# `MemoryInfo.SizeInMiB` of `describe-instance-types` for every priced type.
+MEMORY_MIB = {
+    "c8g.2xlarge": 16384,
+    "c8g.4xlarge": 32768,
+    "c8g.8xlarge": 65536,
+    "c8i.2xlarge": 16384,
+    "c8i.4xlarge": 32768,
+    "c8i.8xlarge": 65536,
+    "c7i.2xlarge": 16384,
+    "c7i.4xlarge": 32768,
+    "c7i.8xlarge": 65536,
+}
+
+
 def fake_preflight(arch: str = "arm64") -> dict:
     return {
         "account": "027574771971",
         "az": "eu-west-1b",
         "arch": arch,
+        "memory_mib": MEMORY_MIB,
         "ami_id": "ami-0abc",
         "images": fake_images(),
         "git_diff": None,
@@ -1327,8 +1342,9 @@ def raiser(error: BaseException) -> Callable[..., Any]:
 
 
 def pg_settings(**overrides) -> dict:
-    """pg-settings.json of a node0 whose container took every PG_TUNING value."""
-    settings = {key: setting for key, (_, setting) in awsb.PG_TUNING.items()}
+    """pg-settings.json of a c8g.4xlarge node0 whose container took every tuned value."""
+    tuning = awsb.pg_tuning(MEMORY_MIB["c8g.4xlarge"])
+    settings = {key: setting for key, (_, setting) in tuning.items()}
     return {**settings, **overrides}
 
 
@@ -1340,6 +1356,7 @@ def aws_manifest() -> dict:
         "query_db": "colocated",
         "hosts": awsb.plan_hosts(cfg),
         "images": fake_images(),
+        "memory_mib": MEMORY_MIB,
         "start_spread_s": 0.5,
     }
 
@@ -1401,6 +1418,7 @@ def write_collected_run(run_dir: Path) -> dict:
         "config": awsb.config_to_json(cfg),
         "hosts": hosts,
         "images": fake_images(),
+        "memory_mib": MEMORY_MIB,
         "az": "eu-west-1b",
         "ami_id": "ami-0abc",
         "start_spread_s": 0.3,

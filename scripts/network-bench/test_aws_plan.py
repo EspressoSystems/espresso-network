@@ -13,6 +13,7 @@ import netbench
 import pytest
 from fakes import (
     DOTENV_TEXT,
+    MEMORY_MIB,
     STS_CALL,
     FakeRegistry,
     FakeRunner,
@@ -394,6 +395,7 @@ def test_preflight_resolves_az_ami_and_images(monkeypatch: pytest.MonkeyPatch):
     )
     result = awsb.preflight(FakeSystem(run=runner), cfg, awsb.plan_hosts(cfg))
     assert result["arch"] == "arm64"
+    assert result["memory_mib"] == {"c8g.2xlarge": 16384, "c8g.4xlarge": 32768}
     assert result["az"] == "eu-west-1a"
     assert result["ami_id"] == "ami-0abc"
     assert set(result["images"]) == set(awsb.image_refs(cfg))
@@ -506,7 +508,8 @@ def test_resolve_image_refusal_names_the_wanted_platform():
 
 
 def instance_types(archs: dict[str, str | list[str]]) -> subprocess.CompletedProcess:
-    """`describe-instance-types` for type -> EC2 architecture name(s)."""
+    """`describe-instance-types` for type -> EC2 architecture name(s), with the type's real
+    memory."""
     body = {
         "InstanceTypes": [
             {
@@ -514,6 +517,7 @@ def instance_types(archs: dict[str, str | list[str]]) -> subprocess.CompletedPro
                 "ProcessorInfo": {
                     "SupportedArchitectures": [a] if isinstance(a, str) else a
                 },
+                "MemoryInfo": {"SizeInMiB": MEMORY_MIB[t]},
             }
             for t, a in archs.items()
         ]
@@ -525,13 +529,34 @@ def instance_types(archs: dict[str, str | list[str]]) -> subprocess.CompletedPro
     ("supported", "arch"),
     [(["arm64"], "arm64"), (["x86_64"], "amd64"), (["i386", "x86_64"], "amd64")],
 )
-def test_instance_arch_maps_ec2_architectures(supported: list[str], arch: str):
+def test_instance_specs_maps_ec2_architectures(supported: list[str], arch: str):
+    types = {"c8i.2xlarge", "c8i.8xlarge"}
     runner = FakeRunner()
     runner.respond(
         "describe-instance-types",
-        lambda _: instance_types({"a.large": supported, "b.large": supported}),
+        lambda _: instance_types(dict.fromkeys(types, supported)),
     )
-    assert awsb.instance_arch(runner, {"a.large", "b.large"}) == arch
+    assert awsb.instance_specs(runner, types) == (
+        arch,
+        {"c8i.2xlarge": 16384, "c8i.8xlarge": 65536},
+    )
+
+
+def test_instance_specs_refuses_a_type_without_memory():
+    body = {
+        "InstanceTypes": [
+            {
+                "InstanceType": "c8g.4xlarge",
+                "ProcessorInfo": {"SupportedArchitectures": ["arm64"]},
+            }
+        ]
+    }
+    runner = FakeRunner()
+    runner.respond(
+        "describe-instance-types", lambda _: completed(stdout=json.dumps(body))
+    )
+    with pytest.raises(KeyError, match="MemoryInfo"):
+        awsb.instance_specs(runner, {"c8g.4xlarge"})
 
 
 def intel_preflight_runner(ctl_arch: str = "x86_64") -> FakeRunner:
@@ -604,6 +629,7 @@ def test_node_and_ctl_type_flags_reach_the_hosts_and_manifest(
     }
     assert manifest["config"] | INTEL == manifest["config"]
     assert manifest["arch"] == "amd64"
+    assert manifest["memory_mib"] == MEMORY_MIB
     assert {line["item"] for line in manifest["estimate"]["lines"]} >= {
         "instance c8i.2xlarge",
         "instance c8i.4xlarge",
@@ -956,13 +982,13 @@ def test_user_data_has_no_unsubstituted_placeholder():
 
 
 def test_anvil_uses_entrypoint_and_binds_every_interface():
-    script = awsb.render_start_sh(host("ctl", "ctl"), fake_images())
+    script = awsb.render_start_sh(host("ctl", "ctl"), fake_images(), 32768)
     assert "--entrypoint anvil" in script
     assert "--host 0.0.0.0" in script
 
 
 def test_validator_start_sh_uses_storage_journal_only():
-    script = awsb.render_start_sh(host("node1", "validator"), fake_images())
+    script = awsb.render_start_sh(host("node1", "validator"), fake_images(), 32768)
     assert "-- storage-journal -- http" in script
     assert "storage-sql" not in script
     assert "--name postgres" not in script
@@ -972,7 +998,9 @@ def test_validator_start_sh_uses_storage_journal_only():
 
 def test_query_start_sh_mounts_payload_dir_from_pg_volume():
     for mode in ("colocated", "volume", "rds"):
-        script = awsb.render_start_sh(host("node0", "query"), fake_images(), mode)
+        script = awsb.render_start_sh(
+            host("node0", "query"), fake_images(), 32768, mode
+        )
         assert script.index("mkdir -p /data/pg/payload") < script.index(
             "--name espresso-node"
         )
@@ -987,10 +1015,17 @@ def test_validators_get_provisioned_root_disks():
 
 
 def test_query_start_sh_adds_storage_sql_and_postgres():
-    script = awsb.render_start_sh(host("node0", "query"), fake_images())
+    script = awsb.render_start_sh(host("node0", "query"), fake_images(), 32768)
     assert "-- storage-journal -- storage-sql" in script
     assert "--name postgres" in script
     assert script.index("shared_preload_libraries") > script.index("@sha256")
+    assert "-c shared_buffers=8GB" in script
+
+
+def test_query_start_sh_scales_postgres_with_the_host_memory():
+    script = awsb.render_start_sh(host("node0", "query"), fake_images(), 16384)
+    assert "-c shared_buffers=4GB" in script
+    assert "-c effective_cache_size=12GB" in script
 
 
 # REQ:awsbench-hostmon-parsers

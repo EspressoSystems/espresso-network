@@ -191,7 +191,9 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
   store as below.
 - `--pg-iops`/`--pg-mbps` apply to node0's root volume and the `volume` store; a fleet with `rds` refuses values other
   than the defaults (12000, 500).
-- Same `PG_TUNING` settings in every mode; `pg-settings.json` is checked against them (`noisy` on a difference).
+- Postgres settings come from `pg_tuning`; `pg-settings.json` is checked against them (`noisy` on a difference).
+- Memory settings (`shared_buffers`, `effective_cache_size`, `maintenance_work_mem`, `autovacuum_work_mem`) scale with
+  node0's memory, read by preflight; rds keeps the fixed 32 GiB values.
 - rds needs IAM rights `iam:CreateRole`, `iam:PutRolePolicy`, `iam:PassRole`, `scheduler:CreateSchedule`; without them
   apply fails, the fleet is destroyed, exit 3.
 - Cost: the fleet bound is rate x (TTL + destroy + rds delete).
