@@ -22,7 +22,8 @@ static PAYLOAD_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
     Some(dir)
 });
 
-/// Directory holding payload bytes as files named by payload hash, if configured.
+/// Directory holding payload bytes (named by payload hash) and VID shares (`<height>.share`), if
+/// configured.
 pub fn payload_dir() -> Option<&'static Path> {
     PAYLOAD_DIR.as_deref()
 }
