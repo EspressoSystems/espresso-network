@@ -442,6 +442,12 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    /// Restore the anchor's cert2 persisted on a prior run. When the anchor is an epoch's last
+    /// block, the next epoch's first proposal needs it as its `next_epoch_justify_qc`.
+    pub fn seed_cert2(&mut self, cert2: Certificate2<T>) {
+        self.certs2.insert(cert2.view_number(), cert2);
+    }
+
     /// Advance the locked-QC persistence watermark to `view` if it is newer.
     fn bump_stored_high_qc(&mut self, view: ViewNumber) {
         if self.stored_high_qc.is_none_or(|cur| cur < view) {
