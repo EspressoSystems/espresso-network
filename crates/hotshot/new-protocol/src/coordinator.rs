@@ -191,7 +191,7 @@ where
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
         /// The anchor's cert2 persisted on a prior run.
-        anchor_cert2: Option<Certificate2<T>>,
+        anchor_cert2: Option<message::Certificate2<T>>,
         upgrade_config: UpgradeConfig,
     ) -> Self {
         let mut consensus = Consensus::new(
