@@ -416,44 +416,63 @@ def test_config_hash_changes_with_the_config(cfg, hosts, images, genesis):
     assert base != awsb.run_config_hash(cfg, hosts, images, genesis)
 
 
+# TEST:remote-control-path-h-ok, at the longest name `NAME_RE` allows
+def test_control_path_is_keyed_by_host_and_fits_the_socket_limit(isolated: Path):
+    fleet_dir = awsb.OUT_ROOT / ("a" * 40)
+    fleet_dir.mkdir(parents=True)
+    ssh = awsb.Remote(Scripted({}), fleet_dir, Path("id"), two_node_hosts_info())
+    assert f"ControlPath={fleet_dir}/ssh/%h" in ssh.ssh_opts
+    assert awsb.control_path_peak(fleet_dir) <= awsb.SOCKET_PATH_MAX
+
+
+# TEST:remote-absolute-dir-fails
+def test_an_absolute_fleet_dir_that_overflows_the_socket_path_is_refused(
+    isolated: Path,
+):
+    fleet_dir = isolated.resolve() / ("d" * 64) / awsb.OUT_ROOT / ("a" * 40)
+    with pytest.raises(awsb.Refused, match="relative"):
+        awsb.Remote(Scripted({}), fleet_dir, Path("id"), two_node_hosts_info())
+    assert not fleet_dir.exists()
+
+
 # EDGE:awsbench-ssh-not-ready
-def test_wait_ssh_retries_until_reachable(tmp_path: Path, clock: FakeClock):
+def test_wait_ssh_retries_until_reachable(isolated: Path, clock: FakeClock):
     results = iter([completed(returncode=255, stderr="refused")] * 2 + [completed()])
-    ssh = remote(lambda argv, env=None: next(results), tmp_path)
+    ssh = remote(lambda argv, env=None: next(results), isolated)
     awsb.wait_ssh(ssh, "ctl", awsb.Interrupts(clock))
     assert clock.sleeps == [awsb.SSH_RETRY_S, awsb.SSH_RETRY_S * 1.5]
 
 
-def test_wait_ssh_gives_up_after_the_timeout(tmp_path: Path):
+def test_wait_ssh_gives_up_after_the_timeout(isolated: Path):
     runner = FakeRunner({("ssh",): completed(returncode=255, stderr="refused")})
     clock = FakeClock()
     with pytest.raises(awsb.RemoteError, match="not reachable"):
-        awsb.wait_ssh(remote(runner, tmp_path), "ctl", awsb.Interrupts(clock))
+        awsb.wait_ssh(remote(runner, isolated), "ctl", awsb.Interrupts(clock))
     assert clock.time() >= awsb.SSH_READY_TIMEOUT_S
 
 
 # TEST:fakeclock-limit-fails
-def test_a_gate_that_never_passes_hits_the_clock_limit(tmp_path: Path):
+def test_a_gate_that_never_passes_hits_the_clock_limit(isolated: Path):
     runner = FakeRunner({("ssh",): completed(returncode=1, stderr="no")})
     clock = FakeClock(limit_s=awsb.GATE_TIMEOUT_S / 2)
     with pytest.raises(RuntimeError, match="FakeClock: advanced past"):
         awsb.gate(
-            remote(runner, tmp_path), "ctl", "anvil", "curl x", awsb.Interrupts(clock)
+            remote(runner, isolated), "ctl", "anvil", "curl x", awsb.Interrupts(clock)
         )
 
 
 # TEST:gate-timeout-fails
-def test_gate_retries_until_its_timeout_on_the_clock(tmp_path: Path):
+def test_gate_retries_until_its_timeout_on_the_clock(isolated: Path):
     runner = FakeRunner({("ssh",): completed(returncode=1, stderr="no")})
     clock = FakeClock(limit_s=10 * awsb.GATE_TIMEOUT_S)
     with pytest.raises(awsb.RemoteError, match="gate `anvil`"):
         awsb.gate(
-            remote(runner, tmp_path), "ctl", "anvil", "curl x", awsb.Interrupts(clock)
+            remote(runner, isolated), "ctl", "anvil", "curl x", awsb.Interrupts(clock)
         )
     assert clock.time() >= awsb.GATE_TIMEOUT_S
 
 
-def test_start_nodes_spread_from_started_at(tmp_path: Path):
+def test_start_nodes_spread_from_started_at(isolated: Path):
     stamps = {
         "203.0.113.2": "2026-09-29T15:00:00.100000000Z",
         "203.0.113.3": "2026-09-29T15:00:00.350000000Z",
@@ -466,18 +485,18 @@ def test_start_nodes_spread_from_started_at(tmp_path: Path):
 
     info = two_node_hosts_info()
     spread = awsb.start_nodes(
-        remote(runner, tmp_path), [info["node0"], info["node1"]], 1234.5
+        remote(runner, isolated), [info["node0"], info["node1"]], 1234.5
     )
     assert spread == pytest.approx(0.25, abs=1e-3)
 
 
 # REQ:awsbench-collect-bounded
-def test_stop_freeze_and_collect_run_under_timeout(tmp_path: Path):
+def test_stop_freeze_and_collect_run_under_timeout(isolated: Path):
     runner = Scripted({})
-    hosts = remote(runner, tmp_path)
+    hosts = remote(runner, isolated)
     awsb.stop_agent(hosts)
     awsb.freeze(hosts)
-    awsb.collect_hosts(hosts, list(hosts.hosts.values()), tmp_path)
+    awsb.collect_hosts(hosts, list(hosts.hosts.values()), isolated)
     commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
     assert len(commands) == 1 + 3 + 3
     prefix = f"sudo timeout -k 10 {awsb.COLLECT_HOST_TIMEOUT_S:.0f} bash -c "
@@ -488,11 +507,11 @@ def test_stop_freeze_and_collect_run_under_timeout(tmp_path: Path):
 
 
 def test_a_timed_out_collect_script_still_copies_back_what_is_on_the_host(
-    tmp_path: Path,
+    isolated: Path,
 ):
     runner = Scripted({"docker logs": [completed(returncode=124)]})
-    hosts = remote(runner, tmp_path)
-    awsb.collect_hosts(hosts, [hosts.hosts["node0"]], tmp_path)
+    hosts = remote(runner, isolated)
+    awsb.collect_hosts(hosts, [hosts.hosts["node0"]], isolated)
     assert len([c for c in runner.calls if c[0] == "rsync"]) == 1
 
 
@@ -523,7 +542,7 @@ def agent_state(state: dict) -> subprocess.CompletedProcess:
 
 
 # REQ:awsbench-poll-tolerant
-def test_ssh_blips_are_retried(tmp_path: Path, clock: FakeClock):
+def test_ssh_blips_are_retried(isolated: Path, clock: FakeClock):
     blip = completed(returncode=255, stderr="timed out")
     runner = Scripted(
         {
@@ -531,29 +550,29 @@ def test_ssh_blips_are_retried(tmp_path: Path, clock: FakeClock):
             "agent-state.json": [agent_state(DONE_STATE)],
         }
     )
-    assert poll(runner, tmp_path, clock)["phase"] == "done"
+    assert poll(runner, isolated, clock)["phase"] == "done"
     assert clock.sleeps == [awsb.AGENT_POLL_S] * 2
 
 
 # TEST:poll-agent-deadline-fails
-def test_an_agent_that_never_finishes_hits_the_deadline(tmp_path: Path):
+def test_an_agent_that_never_finishes_hits_the_deadline(isolated: Path):
     runner = Scripted({"agent-state.json": [agent_state(LOADING)]})
     with pytest.raises(awsb.RemoteError, match="did not finish within"):
-        poll(runner, tmp_path, FakeClock(limit_s=1e6))
+        poll(runner, isolated, FakeClock(limit_s=1e6))
 
 
 # TEST:poll-step-unreachable-fails
 def test_persistent_ssh_failure_raises(
-    tmp_path: Path, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+    isolated: Path, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(awsb, "AGENT_POLL_SSH_FAILURES_MAX", 2)
     runner = Scripted({"is-active": [completed(returncode=255, stderr="down")]})
     with pytest.raises(awsb.RemoteError, match="unreachable for 3 polls"):
-        poll(runner, tmp_path, clock)
+        poll(runner, isolated, clock)
 
 
 @pytest.mark.parametrize("rc", [awsb.SYSTEMCTL_INACTIVE_RC, awsb.SYSTEMCTL_NO_UNIT_RC])
-def test_an_agent_exit_without_done_raises(tmp_path: Path, clock: FakeClock, rc: int):
+def test_an_agent_exit_without_done_raises(isolated: Path, clock: FakeClock, rc: int):
     runner = Scripted(
         {
             "is-active": [completed(returncode=rc)],
@@ -561,26 +580,26 @@ def test_an_agent_exit_without_done_raises(tmp_path: Path, clock: FakeClock, rc:
         }
     )
     with pytest.raises(awsb.RemoteError, match="exited in phase loading without"):
-        poll(runner, tmp_path, clock)
+        poll(runner, isolated, clock)
 
 
-def test_collected_agent_unit_with_done_state_returns(tmp_path: Path, clock: FakeClock):
+def test_collected_agent_unit_with_done_state_returns(isolated: Path, clock: FakeClock):
     runner = Scripted(
         {
             "is-active": [completed(returncode=awsb.SYSTEMCTL_NO_UNIT_RC)],
             "agent-state.json": [agent_state(DONE_STATE)],
         }
     )
-    assert poll(runner, tmp_path, clock)["phase"] == "done"
+    assert poll(runner, isolated, clock)["phase"] == "done"
 
 
 def test_a_failed_partial_rsync_does_not_fail_the_poll(
-    tmp_path: Path, clock: FakeClock
+    isolated: Path, clock: FakeClock
 ):
     polls = int(awsb.OUT_RSYNC_S / awsb.AGENT_POLL_S) + 1
     states = [agent_state(LOADING)] * polls + [agent_state(DONE_STATE)]
     runner = Scripted({"agent-state.json": states}, rsync_rc=23)
-    assert poll(runner, tmp_path, clock)["phase"] == "done"
+    assert poll(runner, isolated, clock)["phase"] == "done"
     assert any(c[0] == "rsync" for c in runner.calls)
 
 
@@ -653,16 +672,16 @@ def wait_cloud_init(tmp: Path, rc: int, status: str) -> None:
 
 
 @pytest.mark.parametrize("rc", [0, 2], ids=["clean", "recoverable"])
-def test_cloud_init_done_is_accepted(tmp_path: Path, rc: int):
-    wait_cloud_init(tmp_path, rc, "done")
+def test_cloud_init_done_is_accepted(isolated: Path, rc: int):
+    wait_cloud_init(isolated, rc, "done")
 
 
 @pytest.mark.parametrize(
     ("rc", "status", "match"), [(1, "error", "exited 1"), (2, "degraded", "'degraded'")]
 )
-def test_cloud_init_failure_raises(tmp_path: Path, rc: int, status: str, match: str):
+def test_cloud_init_failure_raises(isolated: Path, rc: int, status: str, match: str):
     with pytest.raises(awsb.RemoteError, match=match):
-        wait_cloud_init(tmp_path, rc, status)
+        wait_cloud_init(isolated, rc, status)
 
 
 @pytest.mark.parametrize(
@@ -674,11 +693,11 @@ def test_cloud_init_failure_raises(tmp_path: Path, rc: int, status: str, match: 
     ids=["timeout", "status"],
 )
 def test_a_failed_deploy_raises(
-    tmp_path: Path, clock: FakeClock, result: subprocess.CompletedProcess, match: str
+    isolated: Path, clock: FakeClock, result: subprocess.CompletedProcess, match: str
 ):
     runner = Scripted({"docker wait deploy": [result]})
     with pytest.raises(awsb.RemoteError, match=match):
-        awsb.start_support(remote(runner, tmp_path), [], awsb.Interrupts(clock))
+        awsb.start_support(remote(runner, isolated), [], awsb.Interrupts(clock))
 
 
 # TEST:support-plan-order-ok
@@ -729,10 +748,10 @@ def test_every_contract_is_checked_between_deploy_and_orchestrator():
 
 
 def test_start_support_starts_the_planned_containers_in_order(
-    tmp_path: Path, clock: FakeClock
+    isolated: Path, clock: FakeClock
 ):
     runner = Scripted({"docker wait deploy": [completed(stdout="0\n")]})
-    hosts = remote(runner, tmp_path)
+    hosts = remote(runner, isolated)
     awsb.start_support(hosts, ["0xabc"], awsb.Interrupts(clock), "rds")
     commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
     started = [
@@ -797,7 +816,7 @@ def no_signal(interrupts: Any) -> None:
     ids=["signal", "no-signal"],
 )
 def test_skip_collect_is_checked_before_every_collect_step(
-    tmp_path: Path,
+    isolated: Path,
     clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -809,10 +828,10 @@ def test_skip_collect_is_checked_before_every_collect_step(
     fleet = awsb.FleetState(
         FakeSystem(),
         awsb.RunConfig(tag="x"),
-        tmp_path,
+        isolated,
         None,
         interrupts,
-        remote(Scripted({}), tmp_path),
+        remote(Scripted({}), isolated),
     )
     steps: list[str] = []
 
@@ -830,7 +849,7 @@ def test_skip_collect_is_checked_before_every_collect_step(
     monkeypatch.setattr(awsb.Remote, "rsync_from", step("final rsync"))
     monkeypatch.setattr(awsb, "collect_node0_ebs_balance", step("ebs balance"))
     with caplog.at_level(logging.WARNING, awsb.log.name):
-        awsb.finish_run(awsb.Run(fleet, tmp_path, fleet.cfg, 0.0, agent_started=True))
+        awsb.finish_run(awsb.Run(fleet, isolated, fleet.cfg, 0.0, agent_started=True))
     assert steps == ["manifest", *ran, "report"]
     assert caplog.messages == [f"{what} skipped" for what in skipped]
 

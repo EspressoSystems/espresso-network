@@ -1303,7 +1303,11 @@ class Scripted:
 
 
 def remote(runner: Callable[..., Any], tmp: Path) -> Any:
-    return awsb.Remote(runner, tmp, Path("~/.ssh/id"), two_node_hosts_info())
+    """`tmp` must be the cwd (the `isolated` fixture): an absolute `tmp_path` can overflow the
+    ssh ControlPath socket limit, which `Remote` refuses."""
+    return awsb.Remote(
+        runner, tmp.relative_to(Path.cwd()), Path("~/.ssh/id"), two_node_hosts_info()
+    )
 
 
 def raiser(error: BaseException) -> Callable[..., Any]:

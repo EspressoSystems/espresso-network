@@ -294,7 +294,7 @@ def test_agent_host_query_role_without_endpoint_is_refused(
 
 @pytest.mark.slow
 def test_every_node_waits_concurrently_whatever_the_pool_size(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Boundary test: real threads meet at a `Barrier`; a pool of 1 would time out."""
     barrier = threading.Barrier(2, timeout=0.5)
@@ -306,7 +306,7 @@ def test_every_node_waits_concurrently_whatever_the_pool_size(
             return completed(stdout="2026-09-29T15:00:00.1Z\n")
         return completed()
 
-    ssh = remote(runner, tmp_path)
+    ssh = remote(runner, isolated)
     monkeypatch.setattr(awsb, "REMOTE_POOL_SIZE", 1)
     hosts = [ssh.hosts["node0"], ssh.hosts["node1"]]
     assert awsb.start_nodes(ssh, hosts, 0.0) == 0.0

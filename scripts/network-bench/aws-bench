@@ -318,6 +318,8 @@ TF_PLUGIN_CACHE_DIR = Path(
 ).expanduser()
 
 SSH_USER = "ubuntu"
+# macOS `sun_path` is 104 bytes including the NUL; Linux allows 107.
+SOCKET_PATH_MAX = 103
 # The plan's "ssh reachable with backoff up to 5 min".
 SSH_READY_TIMEOUT_S = 300.0
 SSH_RETRY_S = 5.0
@@ -2265,12 +2267,18 @@ class Interrupts:
 
 class Remote:
     """ssh and rsync to the fleet through the injectable Runner. ControlMaster sockets live in
-    `<fleet>/ssh/` and host keys in `<fleet>/known_hosts`. Pass `fleet_dir` relative (as
-    `OUT_ROOT` is): an absolute path can exceed the 104 byte unix socket limit."""
+    `<fleet>/ssh/<public ip>` and host keys in `<fleet>/known_hosts`. The socket path budget is
+    `SOCKET_PATH_MAX`: a relative `OUT_ROOT/<name>` peaks at 53 + len(name) bytes, 93 for the
+    longest valid name, while an absolute path usually overflows."""
 
     def __init__(
         self, run: Runner, fleet_dir: Path, ssh_key: Path, hosts: dict[str, HostInfo]
     ):
+        if (peak := control_path_peak(fleet_dir)) > SOCKET_PATH_MAX:
+            raise Refused(
+                f"ssh ControlPath under {fleet_dir} reaches {peak} bytes, over the "
+                f"{SOCKET_PATH_MAX} byte unix socket limit: pass a relative path"
+            )
         self.run = run
         self.hosts = hosts
         (fleet_dir / "ssh").mkdir(exist_ok=True)
@@ -2282,7 +2290,7 @@ class Remote:
             "-o",
             "ControlPersist=10m",
             "-o",
-            f"ControlPath={fleet_dir / 'ssh' / '%C'}",
+            f"ControlPath={fleet_dir / 'ssh' / '%h'}",
             "-o",
             f"UserKnownHostsFile={fleet_dir / 'known_hosts'}",
             "-o",
@@ -2344,6 +2352,12 @@ class Remote:
         with ThreadPoolExecutor(min(size, max(1, len(names)))) as pool:
             futures = {name: pool.submit(fn, name) for name in names}
         return {name: future.result() for name, future in futures.items()}
+
+
+def control_path_peak(fleet_dir: Path) -> int:
+    """Longest socket path ssh binds for `ControlPath=<fleet_dir>/ssh/%h`. Hosts are IPv4
+    addresses (at most 15 bytes), and OpenSSH first binds `<path>.<16 random chars>`."""
+    return len(os.fsencode(fleet_dir / "ssh" / "255.255.255.255")) + 17
 
 
 @dataclass
@@ -4621,13 +4635,18 @@ def cmd_down(args: argparse.Namespace, system: System) -> int:
     tf = Terraform(system.run, fleet_dir / "terraform", terraform_env())
     fleet = FleetState(system, cfg, fleet_dir, tf, Interrupts(system.clock))
     if manifest["phase"] == "running":
-        remote = Remote(
-            system.run,
-            fleet_dir,
-            ssh_key_path(fleet_dir),
-            provisioned_hosts(manifest),
+        # `Remote` inside `best_effort`: a refused ControlPath must not block the destroy.
+        best_effort(
+            "stop agent",
+            lambda: stop_agent(
+                Remote(
+                    system.run,
+                    fleet_dir,
+                    ssh_key_path(fleet_dir),
+                    provisioned_hosts(manifest),
+                )
+            ),
         )
-        best_effort("stop agent", lambda: stop_agent(remote))
     update_manifest(fleet.manifest_path, "destroying")
     if not destroy_fleet(fleet):
         update_manifest(fleet.manifest_path, "left-running")

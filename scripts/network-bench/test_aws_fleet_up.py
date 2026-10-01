@@ -686,6 +686,19 @@ def test_down_while_running_stops_the_agent_first(harness, runner):
     assert not harness.lock().exists()
 
 
+def test_down_while_running_destroys_even_when_ssh_is_refused(
+    harness, runner, monkeypatch
+):
+    harness.set_fleet(phase="running")
+    monkeypatch.setattr(awsb, "SOCKET_PATH_MAX", 0)
+    mark = len(runner.calls)
+    assert harness.down(runner, "--yes") == awsb.EXIT_OK
+    calls = [" ".join(call) for call in runner.calls[mark:]]
+    assert not any("systemctl stop bench-agent" in c for c in calls)
+    assert runner.ran("tofu", "destroy")
+    assert "stop agent failed" in harness.driver_log()
+
+
 def test_declined_down_destroys_nothing(harness, runner):
     with pytest.raises(awsb.Refused, match="not confirmed"):
         harness.down(runner)
