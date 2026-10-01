@@ -596,6 +596,9 @@ impl ModuleArgs {
                 SequencerModule::StorageSql(m) => {
                     curr = m.add(&mut modules.storage_sql, &mut provided)?
                 },
+                SequencerModule::StorageJournal(m) => {
+                    curr = m.add(&mut modules.storage_journal, &mut provided)?
+                },
                 SequencerModule::Http(m) => curr = m.add(&mut modules.http, &mut provided)?,
                 SequencerModule::Query(m) => curr = m.add(&mut modules.query, &mut provided)?,
                 SequencerModule::Submit(m) => curr = m.add(&mut modules.submit, &mut provided)?,
@@ -658,6 +661,7 @@ macro_rules! module {
 
 module!("storage-fs", persistence::fs::Options);
 module!("storage-sql", persistence::sql::Options);
+module!("storage-journal", persistence::journal::Options);
 module!("http", api::options::Http);
 module!("query", api::options::Query, requires: "http");
 module!("submit", api::options::Submit, requires: "http");
@@ -721,6 +725,10 @@ enum SequencerModule {
     StorageFs(Module<persistence::fs::Options>),
     /// Use a Postgres database for persistent storage.
     StorageSql(Module<persistence::sql::Options>),
+    /// Use an append-only journal for persistent storage.
+    ///
+    /// Does not support the query module: query nodes must use storage-sql.
+    StorageJournal(Module<persistence::journal::Options>),
     /// Run the query API module.
     ///
     /// This module requires the http module to be started.
@@ -770,6 +778,7 @@ enum SequencerModule {
 pub struct Modules {
     pub storage_fs: Option<persistence::fs::Options>,
     pub storage_sql: Option<persistence::sql::Options>,
+    pub storage_journal: Option<persistence::journal::Options>,
     pub http: Option<api::options::Http>,
     pub query: Option<api::options::Query>,
     pub submit: Option<api::options::Submit>,
@@ -844,6 +853,7 @@ pub enum StorageBackend {
     Sql,
     Fs,
     FsDefault,
+    Journal,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -852,12 +862,20 @@ pub struct StorageConfig {
     pub backend: StorageBackend,
     pub fs: Option<FsStorageConfig>,
     pub sql: Option<SqlStorageConfig>,
+    pub journal: Option<JournalStorageConfig>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FsStorageConfig {
     pub path: PathBuf,
     pub consensus_view_retention: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct JournalStorageConfig {
+    pub path: PathBuf,
+    pub view_retention: u64,
+    pub max_bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1016,6 +1034,16 @@ impl From<&persistence::fs::Options> for FsStorageConfig {
     }
 }
 
+impl From<&persistence::journal::Options> for JournalStorageConfig {
+    fn from(o: &persistence::journal::Options) -> Self {
+        Self {
+            path: o.path.clone(),
+            view_retention: o.view_retention,
+            max_bytes: o.max_bytes,
+        }
+    }
+}
+
 impl From<&api::options::Http> for HttpConfig {
     fn from(o: &api::options::Http) -> Self {
         Self {
@@ -1155,12 +1183,21 @@ impl PublicNodeConfig {
                 backend: StorageBackend::Sql,
                 fs: None,
                 sql: Some(SqlStorageConfig::from(sql)),
+                journal: None,
             }
         } else if let Some(fs) = modules.storage_fs.as_ref() {
             StorageConfig {
                 backend: StorageBackend::Fs,
                 fs: Some(FsStorageConfig::from(fs)),
                 sql: None,
+                journal: None,
+            }
+        } else if let Some(journal) = modules.storage_journal.as_ref() {
+            StorageConfig {
+                backend: StorageBackend::Journal,
+                fs: None,
+                sql: None,
+                journal: Some(JournalStorageConfig::from(journal)),
             }
         } else {
             let fs = persistence::fs::Options::try_parse_from(std::iter::empty::<String>()).ok();
@@ -1168,6 +1205,7 @@ impl PublicNodeConfig {
                 backend: StorageBackend::FsDefault,
                 fs: fs.as_ref().map(FsStorageConfig::from),
                 sql: None,
+                journal: None,
             }
         };
 

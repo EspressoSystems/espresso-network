@@ -19,6 +19,7 @@ use espresso_types::{
 };
 
 pub mod fs;
+pub mod journal;
 pub mod no_storage;
 mod persistence_metrics;
 pub mod sql;
@@ -288,8 +289,20 @@ mod tests {
     #[rstest::rstest]
     #[case(PhantomData::<crate::persistence::sql::Persistence>)]
     #[case(PhantomData::<crate::persistence::fs::Persistence>)]
+    #[case(PhantomData::<crate::persistence::journal::Persistence>)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
+
+    /// Backends whose decide path replays leaves into an event consumer and deletes decided data
+    /// immediately: fs and sql. `journal` keeps decided VID/DA for the retention window and never
+    /// calls the consumer from `persist_decided_leaves` (see the design doc's GC section), so the
+    /// tests applied to this template don't hold for it.
+    #[rstest_reuse::template]
+    #[rstest::rstest]
+    #[case(PhantomData::<crate::persistence::sql::Persistence>)]
+    #[case(PhantomData::<crate::persistence::fs::Persistence>)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub fn replaying_persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
 
     #[derive(Clone, Debug, Default)]
     struct EventCollector {
@@ -636,7 +649,7 @@ mod tests {
         }
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[rstest_reuse::apply(replaying_persistence_types)]
     pub async fn test_append_and_decide<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
@@ -1408,7 +1421,7 @@ mod tests {
         );
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[rstest_reuse::apply(replaying_persistence_types)]
     pub async fn test_decide_with_failing_event_consumer<P: TestablePersistence>(
         _p: PhantomData<P>,
     ) {
@@ -1638,7 +1651,7 @@ mod tests {
     /// Splitting a decide into `persist_decided_leaves` (persist only, no events/GC) and a later
     /// `process_decided_events` loses no data: multiple persists can accumulate, and one process
     /// pass at the latest view drains the whole backlog and runs GC.
-    #[rstest_reuse::apply(persistence_types)]
+    #[rstest_reuse::apply(replaying_persistence_types)]
     pub async fn test_deferred_decide_processing<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
@@ -2059,7 +2072,7 @@ mod tests {
         );
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[rstest_reuse::apply(replaying_persistence_types)]
     pub async fn test_pruning<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
 
@@ -2282,7 +2295,9 @@ mod tests {
 
     // test for validating stake table event fetching from persistence,
     // ensuring that persisted data matches the on-chain events and that event fetcher work correctly.
-    #[rstest_reuse::apply(persistence_types)]
+    //
+    // Opens the same path twice (directly, then via `TestNetwork`); journal's LOCK can't do that.
+    #[rstest_reuse::apply(replaying_persistence_types)]
     pub async fn test_stake_table_fetching_from_persistence<P: TestablePersistence>(
         #[values(
             StakeTableContractVersion::V1,
@@ -3022,7 +3037,7 @@ mod tests {
         Ok(())
     }
 
-    #[rstest_reuse::apply(persistence_types)]
+    #[rstest_reuse::apply(replaying_persistence_types)]
     pub async fn test_non_consecutive_decide<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
