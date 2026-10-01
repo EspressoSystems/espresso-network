@@ -54,6 +54,17 @@ pub enum BlockError {
     Cancelled,
 }
 
+/// Why [`BlockBuilder::on_submit_transaction`] refused a transaction.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum SubmitError {
+    /// Bigger than a block or a forwarded message.
+    #[error("transaction of {size} bytes exceeds the {limit} byte limit")]
+    TooLarge { size: u64, limit: u64 },
+    /// The retry buffer is full, retrying later can succeed.
+    #[error("transaction retry buffer is full")]
+    RetryBufferFull,
+}
+
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BlockAndHeaderRequest<T: NodeType> {
     pub view: ViewNumber,
@@ -309,23 +320,35 @@ impl<T: NodeType> BlockBuilder<T> {
         (self.retry_pending.len(), self.retry_total_bytes as usize)
     }
 
-    pub fn on_submit_transaction(&mut self, tx: T::Transaction) {
+    /// Resubmitting a queued transaction succeeds without queueing it twice.
+    pub fn on_submit_transaction(&mut self, tx: T::Transaction) -> Result<(), SubmitError> {
         let hash = tx.commit();
 
         if self.retry_pending.contains_key(&hash) {
-            return;
+            return Ok(());
         }
 
         let size = tx.minimum_block_size();
         let encoded_size = bincode::serialized_size(&tx).expect("transactions serialize");
         let max_bytes = self.block_size(self.current_view);
-        if size > max_bytes || encoded_size > forward_budget(message_limit(max_bytes)) {
+        let budget = forward_budget(message_limit(max_bytes));
+        if size > max_bytes {
             warn!(%hash, %size, "transaction can never be included, rejecting");
-            return;
+            return Err(SubmitError::TooLarge {
+                size,
+                limit: max_bytes,
+            });
+        }
+        if encoded_size > budget {
+            warn!(%hash, %encoded_size, "transaction can never be forwarded, rejecting");
+            return Err(SubmitError::TooLarge {
+                size: encoded_size,
+                limit: budget,
+            });
         }
         if self.retry_total_bytes + size > self.config.max_retry_bytes {
             warn!("retry buffer full, rejecting {hash}");
-            return;
+            return Err(SubmitError::RetryBufferFull);
         }
 
         let valid_until = self.current_view + self.config.ttl;
@@ -341,6 +364,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 encoded_size,
             },
         );
+        Ok(())
     }
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
