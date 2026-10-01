@@ -129,6 +129,8 @@ test-log = { workspace = true }
 test-server = { workspace = true }
 test-utils = { workspace = true }
 toml = { workspace = true }
+# Builds non-codeword dispersals for the incorrect-encoding proof tests.
+vid = { workspace = true, features = ["testing"] }
 warp = { workspace = true }
 
 [[bench]]

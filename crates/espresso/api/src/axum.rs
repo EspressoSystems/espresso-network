@@ -1032,7 +1032,9 @@ pub(crate) fn router_availability(state: AvailabilityState) -> ApiRouter {
             routes::v1::INCORRECT_ENCODING_PROOF_ROUTE,
             get_with(get_incorrect_encoding_proof, |op| {
                 op.summary("Get incorrect-encoding proof").description(
-                    "Generate a proof of incorrect namespace encoding for the given block number.",
+                    "Generate a proof of incorrect namespace encoding for the given block number: \
+                     a namespace proof whose incorrect-encoding variant shows the namespace empty \
+                     in that block.",
                 )
             }),
         )

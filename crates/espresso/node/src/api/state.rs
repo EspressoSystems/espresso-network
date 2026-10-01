@@ -52,9 +52,8 @@ use hotshot_query_service::{
     types::HeightIndexed,
 };
 use hotshot_types::{
-    data::{EpochNumber, VidShare},
+    data::{EpochNumber, VidCommon},
     utils::{epoch_from_block_number, root_block_in_epoch},
-    vid::avidm::AvidMShare,
 };
 use jf_merkle_tree_compat::{
     MerkleTreeScheme,
@@ -466,7 +465,7 @@ where
         + Sync,
 {
     type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
-    type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
+    type IncorrectEncodingProof = NsProof;
     type StateCertQueryDataV1 = espresso_types::StateCertQueryDataV1<SeqTypes>;
     type StateCertQueryDataV2 = espresso_types::StateCertQueryDataV2<SeqTypes>;
 
@@ -681,62 +680,58 @@ where
             },
         };
 
+        // The header carries the namespace table, so a block whose payload never decoded can
+        // still be resolved.
         let ds = &*self.data_source;
         let timeout = FETCH_TIMEOUT;
-        let (block_fetch, vid_fetch) =
-            join!(ds.get_block(hs_block_id), ds.get_vid_common(hs_block_id));
-        let (block, vid_common) = join!(
-            block_fetch.with_timeout(timeout),
+        let (header_fetch, vid_fetch) =
+            join!(ds.get_header(hs_block_id), ds.get_vid_common(hs_block_id));
+        let (header, vid_common) = join!(
+            header_fetch.with_timeout(timeout),
             vid_fetch.with_timeout(timeout)
         );
 
-        let block = block.ok_or_else(|| anyhow::anyhow!("block not found"))?;
+        let header = header.ok_or_else(|| anyhow::anyhow!("block not found"))?;
         let vid_common = vid_common.ok_or_else(|| anyhow::anyhow!("VID common data not found"))?;
 
-        let ns_table = block.payload().ns_table();
+        let ns_table = header.ns_table();
         let ns_index = ns_table
             .find_ns_id(&ns_id)
             .ok_or_else(|| anyhow::anyhow!("namespace {} not present in block", namespace))?;
+        let commit = vid_common.payload_hash();
+        let common = vid_common.common();
 
-        if NsProof::new(block.payload(), &ns_index, vid_common.common()).is_some() {
+        // A payload in hand that proves the namespace against the block's commitment settles
+        // it. An undecodable block has no payload anywhere, so that fetch times out.
+        let payload = ds
+            .get_payload(hs_block_id)
+            .await
+            .with_timeout(timeout)
+            .await;
+        if payload.is_some_and(|payload| {
+            NsProof::new(payload.data(), &ns_index, common)
+                .is_some_and(|proof| proof.verify(ns_table, &commit, common).is_some())
+        }) {
             return Err(anyhow::anyhow!("block was correctly encoded"));
         }
 
-        // Block has incorrect encoding: fetch VID shares to construct the proof.
-        let vid_shares_future = ds
-            .request_vid_shares(block.height(), vid_common.clone(), Duration::from_secs(40))
-            .await;
-        let mut vid_shares = vid_shares_future
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to fetch VID shares: {e:#}"))?;
-
-        if let Ok(local_share) = ds.vid_share(block.height() as usize).await {
-            vid_shares.push(local_share);
+        let mut shares = match common {
+            // The legacy request-response network serves AvidM shares on demand.
+            VidCommon::V1(_) => ds
+                .request_vid_shares(header.height(), vid_common.clone(), Duration::from_secs(40))
+                .await
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to fetch VID shares: {e:#}"))?,
+            // AvidmGf2 shares reach every validator by broadcast and nothing serves them on
+            // request, so the proof is built from the shares this node holds.
+            _ => vec![],
+        };
+        if let Ok(local_share) = ds.vid_share(header.height() as usize).await {
+            shares.push(local_share);
         }
 
-        let avidm_shares: Vec<AvidMShare> = vid_shares
-            .into_iter()
-            .filter_map(|s| {
-                if let VidShare::V1(s) = s {
-                    Some(s)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        match NsProof::v1_1_new_with_incorrect_encoding(
-            &avidm_shares,
-            ns_table,
-            &ns_index,
-            &vid_common.payload_hash(),
-            vid_common.common(),
-        ) {
-            Some(NsProof::V1IncorrectEncoding(proof)) => Ok(proof),
-            _ => Err(anyhow::anyhow!(
-                "failed to generate incorrect encoding proof"
-            )),
-        }
+        NsProof::new_with_incorrect_encoding(&shares, ns_table, &ns_index, &commit, common)
+            .ok_or_else(|| anyhow::anyhow!("failed to generate incorrect encoding proof"))
     }
 
     async fn get_state_cert(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV1> {
@@ -4173,6 +4168,7 @@ mod tests {
     use hotshot_query_service::node::{ResourceSyncStatus, SyncStatus, SyncStatusRange};
     use hotshot_types::{
         addr::NetAddr,
+        data::VidShare,
         vid::{
             advz::advz_scheme,
             avidm::{AvidMScheme, init_avidm_param},
@@ -4938,6 +4934,49 @@ mod tests {
         let inner = converted.ns_proof.unwrap();
         assert_eq!(inner.recovered_poly, empty);
         assert_eq!(inner.raw_shares, empty);
+    }
+
+    /// The AvidmGf2 proof has a reference vector, built from a non-codeword dispersal the vid
+    /// crate's testing feature exposes, so its rendering is checked field by field.
+    #[test]
+    fn bad_encoding_namespace_proof_v2_mirrors_the_reference_vector() {
+        use proto::ns_proof::Proof;
+
+        let (reference, json): (NamespaceProofQueryData, _) =
+            load_vector("../../../data/v6/ns_proof_V2IncorrectEncoding.json");
+        let expected = &json["proof"]["V2IncorrectEncoding"];
+        assert_same_fields("AvidmGf2BadEncodingNsProof", expected);
+        assert_same_fields("AvidmGf2BadEncodingProof", &expected["ns_proof"]);
+
+        let converted = proto::NamespaceProofResponse::try_from(&reference).unwrap();
+        assert!(converted.transactions.is_empty());
+        let Some(Proof::V2IncorrectEncoding(bad)) = converted.proof.unwrap().proof else {
+            panic!("the vector must select the v2_incorrect_encoding arm");
+        };
+        assert_eq!(bad.ns_index, expected["ns_index"].as_u64().unwrap());
+        assert_eq!(bad.ns_commit, expected["ns_commit"]);
+        assert_eq!(bad.ns_mt_proof, expected["ns_mt_proof"]);
+
+        let expected_shares = expected["ns_proof"]["shares"].as_array().unwrap();
+        let shares = bad.ns_proof.unwrap().shares;
+        assert_eq!(shares.len(), expected_shares.len());
+        for (share, expected) in shares.iter().zip(expected_shares) {
+            assert_same_fields("AvidmGf2Namespace", expected);
+            let range = share.range.as_ref().unwrap();
+            assert_eq!(range.start, expected["range"]["start"].as_u64().unwrap());
+            assert_eq!(range.end, expected["range"]["end"].as_u64().unwrap());
+            let expected_payload: Vec<Vec<u8>> = expected["payload"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(json_bytes)
+                .collect();
+            assert_eq!(share.payload, expected_payload);
+            assert_eq!(
+                serde_json::to_value(&share.mt_proofs).unwrap(),
+                expected["mt_proofs"]
+            );
+        }
     }
 
     /// Neither vector carries signatures, so the signature mapping is pinned only by its types.

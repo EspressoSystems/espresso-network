@@ -2,12 +2,13 @@
 
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
-    vid::avidm_gf2::AvidmGf2Common,
+    vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Share},
 };
 use vid::avidm_gf2::namespaced::NsAvidmGf2Scheme;
 
 use crate::{
-    NamespaceId, NsIndex, NsPayload, NsTable, Payload, Transaction, v0_6::AvidmGf2NsProof,
+    NamespaceId, NsIndex, NsPayload, NsTable, Payload, PayloadByteLen, Transaction,
+    v0_6::{AvidmGf2IncorrectEncodingNsProof, AvidmGf2NsProof},
 };
 
 impl AvidmGf2NsProof {
@@ -70,18 +71,92 @@ impl AvidmGf2NsProof {
     }
 }
 
+impl AvidmGf2IncorrectEncodingNsProof {
+    /// Prove the namespace at `ns_index` a non-codeword from `shares` that verify against `commit`.
+    ///
+    /// An empty namespace needs no proof, since the namespace table already shows it holds
+    /// nothing, so `None` there as for [`AvidmGf2NsProof::new`].
+    pub fn new(
+        shares: &[AvidmGf2Share],
+        ns_table: &NsTable,
+        ns_index: &NsIndex,
+        commit: &VidCommitment,
+        common: &AvidmGf2Common,
+    ) -> Option<Self> {
+        let VidCommitment::V2(commit) = commit else {
+            tracing::error!("Error generating incorrect encoding proof: invalid vid commitment");
+            return None;
+        };
+        let payload_byte_len = PayloadByteLen(common.payload_byte_len());
+        let ns_index = ns_index.0;
+        let ns_table = ns_table
+            .iter()
+            .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
+            .collect::<Vec<_>>();
+
+        if ns_index >= ns_table.len() {
+            tracing::warn!("ns_index {:?} out of bounds", ns_index);
+            return None; // error: index out of bounds
+        }
+
+        if ns_table[ns_index].is_empty() {
+            None
+        } else {
+            match NsAvidmGf2Scheme::proof_of_incorrect_encoding_for_namespace(
+                commit, common, ns_index, shares,
+            ) {
+                Ok(proof) => Some(Self(proof)),
+                Err(e) => {
+                    tracing::error!(
+                        "error generating incorrect encoding proof for namespace index \
+                         {ns_index}: {:?}",
+                        e
+                    );
+                    None
+                },
+            }
+        }
+    }
+
+    /// A verifying proof yields no transactions: the namespace is empty for this block.
+    /// `ns_table` only supplies the namespace id.
+    pub fn verify(
+        &self,
+        ns_table: &NsTable,
+        commit: &VidCommitment,
+        common: &AvidmGf2Common,
+    ) -> Option<(Vec<Transaction>, NamespaceId)> {
+        let VidCommitment::V2(commit) = commit else {
+            return None;
+        };
+        match self.0.verify(commit, common) {
+            Ok(Ok(_)) => {
+                let ns_id = ns_table.read_ns_id(&NsIndex(self.0.ns_index))?;
+                Some((vec![], ns_id))
+            },
+            Ok(Err(_)) => None,
+            Err(e) => {
+                tracing::warn!("error verifying namespace proof: {:?}", e);
+                None
+            },
+        }
+    }
+}
+
 /// Copied from ADVZNsProof tests.
 #[cfg(test)]
 mod tests {
     use futures::future;
     use hotshot::traits::BlockPayload;
     use hotshot_types::{
-        data::{VidCommitment, VidCommon},
+        data::{VidCommitment, VidCommon, VidShare},
         traits::EncodeBytes,
         vid::avidm_gf2::{AvidmGf2Param, AvidmGf2Scheme},
     };
 
-    use crate::{NsIndex, Payload, v0::impls::block::test::ValidTest, v0_6::AvidmGf2NsProof};
+    use crate::{
+        NsIndex, NsProof, Payload, v0::impls::block::test::ValidTest, v0_6::AvidmGf2NsProof,
+    };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn ns_proof() {
@@ -190,6 +265,80 @@ mod tests {
             assert!(
                 ns_proof_0_0
                     .verify(ns_table_1, vid_commit_1, vid_common_1)
+                    .is_none()
+            );
+        }
+    }
+
+    /// Every namespace of a block dispersed as a non-codeword proves empty, and an honest
+    /// dispersal proves nothing.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn incorrect_encoding_ns_proof() {
+        let mut rng = jf_utils::test_rng();
+        let test = ValidTest::many_from_tx_lengths(
+            vec![vec![vec![5, 8, 8], vec![7, 9, 11], vec![10, 5, 8]]],
+            &mut rng,
+        )
+        .remove(0);
+        let block =
+            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+                .await
+                .unwrap()
+                .0;
+        let payload_byte_len = block.byte_len();
+        let ns_table = block.ns_table();
+        let ns_ranges = ns_table
+            .iter()
+            .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
+            .collect::<Vec<_>>();
+        let param = AvidmGf2Param::new(4usize, 10usize).unwrap();
+        let distribution = [1u32; 10];
+
+        let (commit, common, shares) = AvidmGf2Scheme::ns_disperse_non_codeword(
+            &param,
+            &distribution,
+            &block.encode(),
+            ns_ranges.clone(),
+        )
+        .unwrap();
+        let commit = VidCommitment::V2(commit);
+        let common = VidCommon::V2(common);
+        let shares: Vec<VidShare> = shares.into_iter().map(VidShare::V2).collect();
+        let (honest_commit, honest_common, honest_shares) =
+            AvidmGf2Scheme::ns_disperse(&param, &distribution, &block.encode(), ns_ranges.clone())
+                .unwrap();
+        let honest_commit = VidCommitment::V2(honest_commit);
+        let honest_common = VidCommon::V2(honest_common);
+        let honest_shares: Vec<VidShare> = honest_shares.into_iter().map(VidShare::V2).collect();
+
+        for ns_index in ns_table.iter() {
+            let ns_id = ns_table.read_ns_id(&ns_index).unwrap();
+            let proof = NsProof::new_with_incorrect_encoding(
+                &shares, ns_table, &ns_index, &commit, &common,
+            )
+            .expect("a non-codeword namespace proves empty");
+            assert!(matches!(proof, NsProof::V2IncorrectEncoding(_)));
+            assert_eq!(
+                proof.verify(ns_table, &commit, &common),
+                Some((vec![], ns_id))
+            );
+            assert!(proof.export_all_txs(&ns_id).is_empty());
+            // The proof is pinned to its block's commitment.
+            assert!(proof.verify(ns_table, &honest_commit, &common).is_none());
+
+            assert!(
+                NsProof::new_with_incorrect_encoding(
+                    &honest_shares,
+                    ns_table,
+                    &ns_index,
+                    &honest_commit,
+                    &honest_common
+                )
+                .is_none()
+            );
+            // The shares of another scheme are ignored, leaving none to prove with.
+            assert!(
+                NsProof::new_with_incorrect_encoding(&[], ns_table, &ns_index, &commit, &common)
                     .is_none()
             );
         }

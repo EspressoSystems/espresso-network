@@ -35,6 +35,7 @@ tower = { workspace = true, features = ["limit", "load-shed", "util"] }
 tracing = { workspace = true }
 url = { workspace = true }
 vbs = { workspace = true }
+vid = { workspace = true }
 
 [build-dependencies]
 pbjson-build = { workspace = true }

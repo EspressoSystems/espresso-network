@@ -214,13 +214,85 @@ impl AvidmGf2Scheme {
             reed_solomon_simd::encode(original_count, recovery_count, &original)?
         };
 
-        let shares = [original, recovery].concat();
-        let share_digests: Vec<Blake3Node> = shares
+        let shards = [original, recovery].concat();
+        let mt = Self::commit_shards(&shards)?;
+        Ok((mt, shards))
+    }
+
+    /// The Merkle tree over the BLAKE3 digests of `shards`, one leaf per
+    /// position of the encoded payload.
+    fn commit_shards(shards: &[Vec<u8>]) -> VidResult<MerkleTree> {
+        let digests: Vec<Blake3Node> = shards
             .par_iter()
-            .map(|share| Blake3Node::from(blake3::hash(share)))
+            .map(|shard| Blake3Node::from(blake3::hash(shard)))
             .collect();
-        let mt = MerkleTree::from_elems(None, &share_digests)?;
-        Ok((mt, shares))
+        Ok(MerkleTree::from_elems(None, &digests)?)
+    }
+
+    /// Reject a `distribution` that does not sum to `param.total_weights` or
+    /// gives some node no shard at all.
+    fn check_distribution(param: &AvidmGf2Param, distribution: &[u32]) -> VidResult<()> {
+        let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
+        if total_weights != param.total_weights {
+            return Err(VidError::Argument(
+                "Weight distribution is inconsistent with the given param".to_string(),
+            ));
+        }
+        if distribution.contains(&0u32) {
+            return Err(VidError::Argument("Weight cannot be zero".to_string()));
+        }
+        Ok(())
+    }
+
+    /// Hand `shards` and their Merkle proofs out as one share per node, in
+    /// `distribution` order.
+    fn assemble_shares(
+        distribution: &[u32],
+        mt: &MerkleTree,
+        shards: Vec<Vec<u8>>,
+    ) -> Vec<AvidmGf2Share> {
+        let ranges: Vec<_> = distribution
+            .iter()
+            .scan(0usize, |sum, w| {
+                let prefix_sum = *sum;
+                *sum += *w as usize;
+                Some(prefix_sum..*sum)
+            })
+            .collect();
+        // Ranges partition `shards` and `proofs` in order. Consume both via
+        // owning iterators instead of `shards[range].to_vec()` /
+        // `proofs[range].to_vec()`, which would heap-clone every Vec<u8>
+        // payload and every per-leaf proof at high num_ns × total_weights.
+        //
+        // `mt.collect_leaves_with_proofs()` returns leaves in ascending
+        // position order (DFS over children 0..ARITY), so we can drain the
+        // iterator directly without an indexed placeholder Vec.
+        let mut shards_iter = shards.into_iter();
+        let payloads: Vec<Vec<Vec<u8>>> = ranges
+            .iter()
+            .map(|range| shards_iter.by_ref().take(range.len()).collect())
+            .collect();
+        let mut proofs_iter = mt
+            .collect_leaves_with_proofs()
+            .into_iter()
+            .map(|(_, _, proof)| proof);
+        let proof_groups: Vec<Vec<MerkleProof>> = ranges
+            .iter()
+            .map(|range| proofs_iter.by_ref().take(range.len()).collect())
+            .collect();
+        // The map body is just a struct construction over already-prepared
+        // owned components — sub-µs per item, smaller than rayon's
+        // per-item scheduling overhead. Stay sequential.
+        ranges
+            .into_iter()
+            .zip(payloads)
+            .zip(proof_groups)
+            .map(|((range, payload), mt_proofs)| AvidmGf2Share {
+                range,
+                payload,
+                mt_proofs,
+            })
+            .collect()
     }
 
     /// Test-only: disperse `payload` but corrupt the erasure-coded (recovery)
@@ -239,15 +311,6 @@ impl AvidmGf2Scheme {
         distribution: &[u32],
         payload: &[u8],
     ) -> VidResult<(AvidmGf2Commit, Vec<AvidmGf2Share>)> {
-        let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
-        if total_weights != param.total_weights {
-            return Err(VidError::Argument(
-                "Weight distribution is inconsistent with the given param".to_string(),
-            ));
-        }
-        if distribution.contains(&0u32) {
-            return Err(VidError::Argument("Weight cannot be zero".to_string()));
-        }
         let original_count = param.recovery_threshold;
         let (_, mut shards) = Self::raw_disperse(param, payload)?;
         if shards.len() <= original_count {
@@ -262,46 +325,30 @@ impl AvidmGf2Scheme {
         for shard in &mut shards[original_count..] {
             shard[0] ^= 0xff;
         }
-        let share_digests: Vec<Blake3Node> = shards
-            .iter()
-            .map(|shard| Blake3Node::from(blake3::hash(shard)))
-            .collect();
-        let mt = MerkleTree::from_elems(None, &share_digests)?;
+        Self::disperse_shards(param, distribution, shards)
+    }
+
+    /// Test-only: commit to `shards` exactly as given, one per position of the
+    /// encoded payload, and hand them out by `distribution`. Nothing checks
+    /// that they form a codeword, so a test can commit to any shard set a
+    /// Byzantine disperser could.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn disperse_shards(
+        param: &AvidmGf2Param,
+        distribution: &[u32],
+        shards: Vec<Vec<u8>>,
+    ) -> VidResult<(AvidmGf2Commit, Vec<AvidmGf2Share>)> {
+        Self::check_distribution(param, distribution)?;
+        if shards.len() != param.total_weights {
+            return Err(VidError::Argument(
+                "Shard count is inconsistent with the given param".to_string(),
+            ));
+        }
+        let mt = Self::commit_shards(&shards)?;
         let commit = AvidmGf2Commit {
             commit: mt.commitment(),
         };
-        let ranges: Vec<_> = distribution
-            .iter()
-            .scan(0usize, |sum, w| {
-                let prefix_sum = *sum;
-                *sum += *w as usize;
-                Some(prefix_sum..*sum)
-            })
-            .collect();
-        let mut shards_iter = shards.into_iter();
-        let payloads: Vec<Vec<Vec<u8>>> = ranges
-            .iter()
-            .map(|range| shards_iter.by_ref().take(range.len()).collect())
-            .collect();
-        let mut proofs_iter = mt
-            .collect_leaves_with_proofs()
-            .into_iter()
-            .map(|(_, _, proof)| proof);
-        let proof_groups: Vec<Vec<MerkleProof>> = ranges
-            .iter()
-            .map(|range| proofs_iter.by_ref().take(range.len()).collect())
-            .collect();
-        let shares: Vec<_> = ranges
-            .into_iter()
-            .zip(payloads)
-            .zip(proof_groups)
-            .map(|((range, payload), mt_proofs)| AvidmGf2Share {
-                range,
-                payload,
-                mt_proofs,
-            })
-            .collect();
-        Ok((commit, shares))
+        Ok((commit, Self::assemble_shares(distribution, &mt, shards)))
     }
 }
 
@@ -322,63 +369,12 @@ impl VidScheme for AvidmGf2Scheme {
         distribution: &[u32],
         payload: &[u8],
     ) -> VidResult<(Self::Commit, Vec<Self::Share>)> {
-        let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
-        if total_weights != param.total_weights {
-            return Err(VidError::Argument(
-                "Weight distribution is inconsistent with the given param".to_string(),
-            ));
-        }
-        if distribution.contains(&0u32) {
-            return Err(VidError::Argument("Weight cannot be zero".to_string()));
-        }
-        let (mt, shares) = Self::raw_disperse(param, payload)?;
+        Self::check_distribution(param, distribution)?;
+        let (mt, shards) = Self::raw_disperse(param, payload)?;
         let commit = AvidmGf2Commit {
             commit: mt.commitment(),
         };
-
-        let ranges: Vec<_> = distribution
-            .iter()
-            .scan(0usize, |sum, w| {
-                let prefix_sum = *sum;
-                *sum += *w as usize;
-                Some(prefix_sum..*sum)
-            })
-            .collect();
-        // Ranges partition `shares` and `proofs` in order. Consume both via
-        // owning iterators instead of `shares[range].to_vec()` /
-        // `proofs[range].to_vec()`, which would heap-clone every Vec<u8>
-        // payload and every per-leaf proof at high num_ns × total_weights.
-        //
-        // `mt.collect_leaves_with_proofs()` returns leaves in ascending
-        // position order (DFS over children 0..ARITY), so we can drain the
-        // iterator directly without an indexed placeholder Vec.
-        let mut shares_iter = shares.into_iter();
-        let payloads: Vec<Vec<Vec<u8>>> = ranges
-            .iter()
-            .map(|range| shares_iter.by_ref().take(range.len()).collect())
-            .collect();
-        let mut proofs_iter = mt
-            .collect_leaves_with_proofs()
-            .into_iter()
-            .map(|(_, _, proof)| proof);
-        let proof_groups: Vec<Vec<MerkleProof>> = ranges
-            .iter()
-            .map(|range| proofs_iter.by_ref().take(range.len()).collect())
-            .collect();
-        // The map body is just a struct construction over already-prepared
-        // owned components — sub-µs per item, smaller than rayon's
-        // per-item scheduling overhead. Stay sequential.
-        let shares: Vec<_> = ranges
-            .into_iter()
-            .zip(payloads)
-            .zip(proof_groups)
-            .map(|((range, payload), mt_proofs)| AvidmGf2Share {
-                range,
-                payload,
-                mt_proofs,
-            })
-            .collect();
-        Ok((commit, shares))
+        Ok((commit, Self::assemble_shares(distribution, &mt, shards)))
     }
 
     fn verify_share(
