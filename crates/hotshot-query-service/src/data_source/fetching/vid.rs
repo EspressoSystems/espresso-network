@@ -263,6 +263,10 @@ where
         let common = VidCommonQueryData::new(self.header, common);
         self.fetcher.store_and_notify(&common).await;
     }
+
+    fn height(&self) -> Option<u64> {
+        Some(self.header.block_number())
+    }
 }
 
 #[async_trait]

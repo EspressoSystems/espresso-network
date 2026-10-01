@@ -306,6 +306,10 @@ where
         let block = BlockQueryData::new(self.header, payload);
         self.fetcher.store_and_notify(&block).await;
     }
+
+    fn height(&self) -> Option<u64> {
+        Some(self.header.block_number())
+    }
 }
 
 #[async_trait]

@@ -17,8 +17,8 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
-        QuorumCertificate2, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
-        UpgradeCertificate2,
+        OneHonestThreshold, SuccessThreshold, TimeoutCertificate2, TimeoutCertificate3,
+        TimeoutEvidence, UpgradeCertificate2,
     },
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2, TimeoutVote3},
     traits::{
@@ -48,10 +48,9 @@ use crate::{
     helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
-        MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage,
-        TimeoutOneHonest, TimeoutOneHonest3, TimeoutVote, TransactionMessage, Unchecked, Validated,
-        Vote2, payload::PayloadFetchMessage,
+        self, BlockMessage, CatchupEvidence, Certificate1, ConsensusMessage, Message, MessageType,
+        OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
+        TransactionMessage, Unchecked, Validated, Vote2, payload::PayloadFetchMessage,
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -111,14 +110,14 @@ pub struct Coordinator<T: NodeType, S> {
     vid_reconstructor: VidReconstructor<T>,
     #[builder(default)]
     vid_fragment_accumulator: VidFragmentAccumulator<T>,
-    vote1_collector: VoteCollector<T, SimpleTally<T, QuorumVote2<T>, QuorumCertificate2<T>>>,
-    vote2_collector: VoteCollector<T, SimpleTally<T, Vote2<T>, Certificate2<T>>>,
-    timeout_collector: VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutCertificate2<T>>>,
+    vote1_collector: VoteCollector<T, SimpleTally<T, QuorumVote2<T>, SuccessThreshold>>,
+    vote2_collector: VoteCollector<T, SimpleTally<T, Vote2<T>, SuccessThreshold>>,
+    timeout_collector: VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, SuccessThreshold>>,
     timeout_one_honest_collector:
-        VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutOneHonest<T>>>,
-    timeout3_collector: VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, TimeoutCertificate3<T>>>,
+        VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, OneHonestThreshold>>,
+    timeout3_collector: VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, SuccessThreshold>>,
     timeout_one_honest3_collector:
-        VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, TimeoutOneHonest3<T>>>,
+        VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, OneHonestThreshold>>,
     epoch_root_collector: VoteCollector<T, EpochRootTally<T>>,
     upgrade_vote_collector: VoteCollector<T, UpgradeTally<T>>,
     upgrade_protocol: UpgradeProtocol<T>,
@@ -312,6 +311,7 @@ where
         );
 
         let lock = upgrade_lock.clone();
+        let genesis_qc = consensus.cert1_at(ViewNumber::genesis()).cloned();
 
         // Covers a crash between deciding an upgrade and persisting its
         // certificate. A certificate for another target would make
@@ -395,6 +395,7 @@ where
                 membership_coordinator.clone(),
                 initializer.epoch_height(),
                 upgrade_lock.clone(),
+                genesis_qc.as_ref(),
             ))
             .share_validator(VidShareValidator::new(
                 membership_coordinator.clone(),
@@ -1194,6 +1195,11 @@ where
         &mut self.consensus
     }
 
+    #[cfg(test)]
+    pub(crate) fn network(&self) -> &Cliquenet<T> {
+        &self.network
+    }
+
     /// Refresh the network's peer window for `epoch`.
     ///
     /// The coordinator does this itself whenever a proposal validates, but
@@ -1317,6 +1323,10 @@ where
                         warn!(%node, %sender, %view, "vote1 signing key != sender");
                         return None;
                     }
+                    if !vote1.vote.data.is_well_formed(*self.consensus.epoch_height) {
+                        warn!(%node, %sender, %view, "vote1 is not well formed");
+                        return None;
+                    }
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
@@ -1370,6 +1380,10 @@ where
                         warn!(%node, %sender, %view, "vote2 signing key != sender");
                         return None;
                     }
+                    if !vote2.data.is_well_formed(*self.consensus.epoch_height) {
+                        warn!(%node, %sender, %view, "vote2 is not well formed");
+                        return None;
+                    }
                     debug!(%node, %sender, %view, "recv vote2");
                     self.vote2_collector.accumulate_vote(vote2);
                     None
@@ -1387,6 +1401,10 @@ where
                     }
                     if self.is_epoch_too_far_ahead(certificate1.epoch()) {
                         warn!(%node, %sender, %view, "certificate1 epoch is too far ahead");
+                        return None;
+                    }
+                    if view == ViewNumber::genesis() {
+                        warn!(%node, %sender, "certificate1 at the genesis view");
                         return None;
                     }
                     if let Some(epoch) = self
@@ -1469,11 +1487,7 @@ where
                         epoch = ?qc.epoch().map(|e| *e),
                         "recv high qc"
                     );
-                    if let Some(epoch) = self
-                        .cert_verifiers
-                        .advance
-                        .verify(message.sender.clone(), qc)
-                    {
+                    if let Some(epoch) = self.verify_advance(&message.sender, qc) {
                         self.epoch_manager.request_drb_result(epoch);
                     }
                     None
@@ -1773,8 +1787,7 @@ where
                 });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
-                self.block_builder.on_submit_transaction(tx);
-                let _ = respond.send(());
+                let _ = respond.send(self.block_builder.on_submit_transaction(tx));
             },
             ClientRequest::UpdateLeaf { update, respond } => {
                 self.state_manager.update_state(update);
@@ -2084,12 +2097,13 @@ where
             warn!(%node, %sender, %view, "timeout vote signing key != sender");
             return;
         }
+
         let current_view = self.consensus.current_view();
         let has_evidence = evidence.is_some();
 
         if let Some(e) = evidence.filter(|e| e.view_number() >= current_view) {
             let epoch = match e {
-                CatchupEvidence::Qc(qc) => self.cert_verifiers.advance.verify(sender.clone(), qc),
+                CatchupEvidence::Qc(qc) => self.verify_advance(sender, qc),
                 CatchupEvidence::Tc(tc) => self.verify_timeout_cert(sender, tc),
                 CatchupEvidence::Tc3(tc) => self.verify_timeout_cert3(sender, tc),
             };
@@ -2100,6 +2114,11 @@ where
 
         if self.is_view_too_far_ahead(view) {
             warn!(%node, %sender, %view, "timeout vote is too far ahead");
+            return;
+        }
+
+        if !vote.is_well_formed() {
+            warn!(%node, %sender, %view, "timeout vote not well formed");
             return;
         }
 
@@ -2156,6 +2175,31 @@ where
                 self.timeout_one_honest3_collector.accumulate_vote(vote);
             },
         }
+    }
+
+    /// Submit a `Cert1` that would advance our view for verification.
+    ///
+    /// A certificate at the genesis view passes the verifier unsigned, which is
+    /// right only for the genesis QC, so any other one claiming that view is
+    /// dropped here. Dropping it before verification rather than in consensus
+    /// also keeps it out of the verifier's completed keys, where a forgery
+    /// naming the genesis epoch would shadow the genesis QC itself.
+    fn verify_advance(
+        &mut self,
+        sender: &T::SignatureKey,
+        qc: Certificate1<T>,
+    ) -> Option<EpochNumber> {
+        let genesis = ViewNumber::genesis();
+        if qc.view_number() == genesis
+            && self
+                .consensus
+                .cert1_at(genesis)
+                .is_none_or(|seeded| seeded.data != qc.data)
+        {
+            warn!(node = %self.node_id, %sender, "cert1 at the genesis view is not the genesis QC");
+            return None;
+        }
+        self.cert_verifiers.advance.verify(sender.clone(), qc)
     }
 
     fn verify_timeout_cert(
