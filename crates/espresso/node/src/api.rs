@@ -7362,6 +7362,10 @@ mod test {
             .await?;
             tx.commit().await?;
         }
+        ensure!(
+            state_heights(&db).await.0 == Some(stale_cursor),
+            "the stale cursor was not stamped"
+        );
 
         // The loop has to resume from its head, get past the stale cursor and reach the tip, and
         // every pruner run from then on has to stamp below the head.
@@ -7411,8 +7415,9 @@ mod test {
         Ok(())
     }
 
-    /// The state pruned height, then the state head. Read in that order: the cursor only ever
-    /// moves to below the head, so reading the head afterwards cannot make the pair inconsistent.
+    /// The state pruned height, then the state head. Read in that order: every move of the
+    /// cursor, up by a batch or down by the startup repair, lands below the head, and the head
+    /// only grows, so a head read after the cursor is always above it.
     async fn state_heights(db: &SqlStorage) -> (Option<u64>, u64) {
         let mut tx = db.read().await.unwrap();
         let pruned = tx.load_state_pruned_height().await.unwrap();
