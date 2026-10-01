@@ -1,14 +1,18 @@
+import asyncio
+import base64
+import collections
 import dataclasses
 import functools
 import inspect
 import itertools
+import json
 import logging
 import math
 import statistics
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, TypeVar, cast
 
 import fakes
 import netbench
@@ -447,7 +451,7 @@ def test_post_tx_stamps_t_done_when_the_request_fails():
     clock = fakes.FakeClock()
     pool = Failing(fakes.FakeNode(clock, include=False), clock)
     tx = netbench.Tx(id=0, node=0, t_queued=0.0)
-    assert netbench.post_tx(pool, tx, "http://x", b"") == 0
+    assert netbench.post_tx(pool, tx, "http://x", lambda: b"") == 0
     assert tx.t_done is not None
     assert tx.t_done >= tx.t_submit
 
@@ -811,6 +815,115 @@ def test_theil_sen_ignores_an_outlier():
 def test_pace_follows_the_rate():
     assert netbench.tx_interval_s(1_000_000, 20.0) == pytest.approx(0.05)
     assert netbench.step_cap(netbench.BenchConfig(), 7.0) == 35
+
+
+class LateClock(fakes.FakeClock):
+    """Wakes come `late_s` after their time, the first `late_wakes` of them, as from an overloaded
+    event loop."""
+
+    def __init__(self, late_s: float, late_wakes: int) -> None:
+        super().__init__()
+        self.late_s = late_s
+        self.late_wakes = late_wakes
+
+    async def asleep(self, s: float) -> None:
+        if s > 0 and self.late_wakes:
+            self.late_wakes -= 1
+            s += self.late_s
+        await super().asleep(s)
+
+
+def pace_for(
+    monkeypatch: pytest.MonkeyPatch, clock: fakes.FakeClock, seconds: float
+) -> list[netbench.Tx]:
+    """4 MB/s of 1 MB txs, one every 0.25 s, with submits that do nothing."""
+
+    async def submit(load: Any, tx: Any) -> None:
+        pass
+
+    monkeypatch.setattr(netbench, "submit_tx", submit)
+    cfg = netbench.BenchConfig(tx_size=1_000_000, cap_s=1000.0)
+    state = netbench.LoadState()
+    load = netbench.Load(cfg, state, cast("Any", None), ["u"], cast("Any", None), clock)
+
+    async def main() -> None:
+        async with asyncio.TaskGroup() as submits:
+            await netbench.pace(load, submits, 4.0, clock.time() + seconds)
+
+    clock.run(main())
+    return state.txs
+
+
+def test_a_late_pacer_catches_up_instead_of_losing_rate(monkeypatch):
+    on_time = pace_for(monkeypatch, LateClock(0.0, 0), 10.0)
+    late = pace_for(monkeypatch, LateClock(0.5, 1000), 10.0)
+    assert len(on_time) == pytest.approx(40, abs=1)
+    assert len(late) == pytest.approx(40, abs=1)
+
+
+def test_catching_up_is_bounded_to_a_second_of_load(monkeypatch):
+    """A 5 s stall costs the schedule beyond CATCHUP_S, and the rest goes out at once."""
+    txs = pace_for(monkeypatch, LateClock(5.0, 1), 10.0)
+    burst = max(collections.Counter(tx.t_queued for tx in txs).values())
+    assert burst == pytest.approx(netbench.CATCHUP_S * 4 + 1, abs=1)
+    assert len(txs) < 40
+
+
+@pytest.mark.parametrize("tx_size", [1000, 1001, 1002, 1_000_000])
+def test_tx_bodies_are_exact_distinct_slices_of_the_pool(tx_size):
+    cfg = netbench.BenchConfig(tx_size=tx_size)
+    marker = bytes(range(16))
+    bodies = netbench.TxBodies(cfg, marker)
+    pool = base64.b64decode(bodies.encoded)
+    seen = set()
+    for tx_id in range(20):
+        request = json.loads(bodies.request(tx_id, 10003))
+        assert request["namespace"] == 10003
+        payload = base64.b64decode(request["payload"], validate=True)
+        assert len(payload) == tx_size
+        assert payload[:24] == marker + tx_id.to_bytes(8, "big")
+        content = payload[24 : 24 + bodies.groups * 3]
+        assert content in pool
+        seen.add(content)
+    assert len(seen) == 20
+
+
+def test_tx_bodies_reject_a_tx_smaller_than_its_header():
+    with pytest.raises(ValueError, match="below the 24 B header"):
+        netbench.TxBodies(netbench.BenchConfig(tx_size=23), bytes(16))
+    with pytest.raises(ValueError, match="not a multiple of 3"):
+        netbench.TxBodies(netbench.BenchConfig(), bytes(15))
+
+
+def test_a_missing_payload_in_a_scan_batch_is_retried_and_included_later():
+    clock = fakes.FakeClock()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    heights.saw("query", 6, 0.0)
+    for i in range(5):
+        state.submitted(netbench.Tx(id=i, node=0, t_queued=0.0, t_submit=0.0))
+    calls: collections.Counter[int] = collections.Counter()
+
+    async def scan(height: int) -> list[int] | None:
+        calls[height] += 1
+        return None if height == 1 and calls[1] == 1 else [height]
+
+    done = asyncio.Event()
+
+    async def main() -> None:
+        tracker = asyncio.create_task(
+            netbench.track_inclusion(
+                netbench.BenchConfig(), state, scan, heights, [], done, clock
+            )
+        )
+        await clock.asleep(1.0)
+        done.set()
+        await tracker
+
+    clock.run(main())
+    assert calls[1] == 2
+    assert [tx.status for tx in state.txs] == ["included"] * 5
+    assert sorted(heights.scanned) == [0, 1, 2, 3, 4]
+    assert not state.missing_payloads
 
 
 def test_window_without_samples_has_zero_heights():

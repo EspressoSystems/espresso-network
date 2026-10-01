@@ -24,6 +24,10 @@ aws *args:
 run *args:
     cd {{quote(repo_root)}} && {{quote(bench)}} run --bin-dir {{quote(bin_dir)}} --out {{quote(out)}} --storage-root {{quote(storage_root)}} "$@"
 
+# The load driver's own ceiling against a local null server, no network; `--rate`, `--step-s`.
+selftest *args:
+    cd {{quote(repo_root)}} && {{quote(bench)}} selftest "$@"
+
 # Re-analyse a run directory, optionally against a baseline, without rerunning.
 render dir=out *args:
     cd {{quote(repo_root)}} && {{quote(bench)}} render "$@"

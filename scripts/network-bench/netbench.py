@@ -8,12 +8,14 @@ import argparse
 import asyncio
 import base64
 import dataclasses
+import functools
 import hashlib
 import http.client
 import itertools
 import json
 import logging
 import math
+import multiprocessing
 import os
 import random
 import re
@@ -29,7 +31,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,7 +42,9 @@ log = logging.getLogger("netbench")
 T = TypeVar("T")
 
 # Bump when a metric's meaning changes: config_hash covers the inputs, not the analysis code.
-SCHEMA_VERSION = 3
+# 4: a late pacer catches up instead of losing rate, and every tx has its own content, so the
+# load and the submitted rate of a step differ from version 3 runs.
+SCHEMA_VERSION = 4
 METRIC_PREFIXES = (
     "consensus_",
     "process_",
@@ -69,8 +73,16 @@ MISSING_PAYLOAD_S = 10
 # One slow or failed answer from the query node must not end the run.
 READ_DEADLINE_S = 30.0
 READ_RETRY_S = 1.0
-# The payload scan's requests are sequential.
-TRACKER_THREADS = 1
+# Payload scans run in this many processes when the caller asks for them (a block of 100 MB
+# costs about a core-second of JSON, base64 and search, which in the load process would
+# compete with the pacer for the GIL); this many blocks are scanned at once.
+SCAN_PROCESSES = 2
+SCAN_BATCH = 4
+# Request bodies are slices of one random pool of this many txs' size.
+BODY_POOL_TXS = 256
+# A pacer woken late sends the txs it missed, but never more than this many seconds of load at
+# once; schedule lost beyond that stays lost, so a long stall does not become a burst.
+CATCHUP_S = 1.0
 HEIGHT_POLL_S = 0.1
 COUNTER_POLL_S = 1.0
 METRICS_EVERY_S = 1.0
@@ -536,6 +548,7 @@ def drive_load(
     alive: Callable[[], bool],
     clock: Clock = SYSTEM_CLOCK,
     http: HttpFactory = HttpPool,
+    scan_processes: int = 0,
 ) -> tuple[float, float]:
     """Saves the stake table, runs the load staircase, then writes every node's final metrics
     snapshot. Returns when the steps started and ended. The caller must have already waited for readiness with `wait_ready`. Raises
@@ -558,7 +571,16 @@ def drive_load(
         ]
         submit_urls = [*validators, query_url]
         t0, t1 = clock.run(
-            generate_load(cfg, submit_urls, query_url, validators, out, clock, http)
+            generate_load(
+                cfg,
+                submit_urls,
+                query_url,
+                validators,
+                out,
+                clock,
+                http,
+                scan_processes,
+            )
         )
         for node, url in topo["nodes"].items():
             prom = get_ok(pool, url + "/v1/status/metrics")
@@ -644,6 +666,50 @@ def block_payload(pool: Http, query_url: str, height: int) -> bytes | None:
     if status != 200:
         raise NetworkError(f"payload {height} from query node: HTTP {status}")
     return base64.b64decode(json.loads(body)["data"]["raw_payload"])
+
+
+def find_tx_ids(raw: bytes, marker: bytes) -> list[int]:
+    pattern = re.compile(re.escape(marker) + b"(.{8})", re.DOTALL)
+    return [int.from_bytes(m.group(1), "big") for m in pattern.finditer(raw)]
+
+
+def scan_block(
+    pool: Http, query_url: str, marker: bytes, height: int
+) -> list[int] | None:
+    """Ids of our transactions in block `height`, None if the query node does not have it
+    yet. Pure of the load's state, so it can run in another process."""
+    raw = block_payload(pool, query_url, height)
+    return None if raw is None else find_tx_ids(raw, marker)
+
+
+@functools.cache
+def scan_http() -> HttpPool:
+    """The connections of a scan process, made on first use there."""
+    return HttpPool()
+
+
+def configure_scan_logging(level: int) -> None:
+    """A scan process starts without the parent's logging, which would drop the retry
+    warnings of `read`."""
+    logging.basicConfig(
+        level=level, format="%(asctime)s %(levelname)s scan: %(message)s"
+    )
+
+
+def scan_block_remote(query_url: str, marker: bytes, height: int) -> list[int] | None:
+    return scan_block(scan_http(), query_url, marker, height)
+
+
+# Fetches and scans one block: `Scan(height)`.
+Scan = Callable[[int], Awaitable[list[int] | None]]
+
+
+async def scan_in_processes(
+    procs: ProcessPoolExecutor, query_url: str, marker: bytes, height: int
+) -> list[int] | None:
+    return await asyncio.get_running_loop().run_in_executor(
+        procs, scan_block_remote, query_url, marker, height
+    )
 
 
 @dataclass
@@ -742,16 +808,33 @@ async def generate_load(
     out: Path,
     clock: Clock,
     http: HttpFactory,
+    scan_processes: int = 0,
 ) -> tuple[float, float]:
     """The load staircase, then up to `tx_timeout_s` for the stragglers. Returns when the
     steps started and ended. Writes one line per transaction to load.jsonl, per block height
     to heights.jsonl, per consensus counter sample of the first validator to
-    consensus.jsonl, per step to steps.json, and the counters to load-meta.json."""
+    consensus.jsonl, per step to steps.json, and the counters to load-meta.json. Payload scans
+    run in `scan_processes` processes, or on a thread of this one if 0."""
     state = LoadState()
     marker = hashlib.sha256(f"network-bench:{cfg.seed}".encode()).digest()[:16]
-    bodies = tx_bodies(cfg, len(marker) + 8)
+    bodies = TxBodies(cfg, marker)
     submitter = Client(http(clock), ThreadPoolExecutor(cfg.workers))
-    tracking = Client(http(clock), ThreadPoolExecutor(TRACKER_THREADS))
+    tracking = Client(http(clock), ThreadPoolExecutor(1))
+    scan_procs = (
+        ProcessPoolExecutor(
+            scan_processes,
+            mp_context=multiprocessing.get_context("spawn"),
+            initializer=configure_scan_logging,
+            initargs=(logging.getLogger().getEffectiveLevel(),),
+        )
+        if scan_processes
+        else None
+    )
+    scan: Scan = (
+        functools.partial(tracking.call, scan_block, query_url, marker)
+        if scan_procs is None
+        else functools.partial(scan_in_processes, scan_procs, query_url, marker)
+    )
     polling = Client(http(clock), ThreadPoolExecutor(2 + len(validator_urls)))
     done = asyncio.Event()
     counters: list[dict[str, Any]] = []
@@ -780,9 +863,7 @@ async def generate_load(
                 track_inclusion(
                     cfg,
                     state,
-                    tracking,
-                    query_url,
-                    marker,
+                    scan,
                     heights,
                     counters,
                     done,
@@ -794,7 +875,6 @@ async def generate_load(
                 state,
                 submitter,
                 submit_urls[: cfg.submit_nodes],
-                marker,
                 bodies,
                 clock,
             )
@@ -808,6 +888,8 @@ async def generate_load(
     finally:
         submitter.close()
         tracking.close()
+        if scan_procs is not None:
+            scan_procs.terminate_workers()
         polling.close()
         # In `finally` so a load cut short (SIGTERM of the AWS agent) keeps its raw data.
         if heights is not None:
@@ -857,9 +939,44 @@ def innermost(err: BaseException) -> BaseException:
     return err
 
 
-def tx_bodies(cfg: BenchConfig, header_len: int) -> list[bytes]:
-    rng = random.Random(cfg.seed)
-    return [rng.randbytes(cfg.tx_size - header_len) for _ in range(16)]
+class TxBodies:
+    """Submit request bodies of exact `tx_size` payloads: 16 B marker, 8 B id, then random
+    bytes cut from one pool of BODY_POOL_TXS txs' size at a random offset, so no two txs
+    share their content beyond a rare overlap of the pool. The pool is base64-encoded once:
+    a slice of whole 3-byte groups encodes to the matching slice of the encoded pool, so a
+    request costs a few copies, no encoding. The 0 to 2 bytes left over come fresh from the
+    generator and carry the only padding, at the end."""
+
+    def __init__(self, cfg: BenchConfig, marker: bytes) -> None:
+        self.marker = marker
+        self.rng = random.Random(cfg.seed)
+        header_len = len(marker) + 8
+        if header_len % 3:
+            raise ValueError(f"marker and id are {header_len} B, not a multiple of 3")
+        body_len = cfg.tx_size - header_len
+        if body_len < 0:
+            raise ValueError(
+                f"tx_size {cfg.tx_size} is below the {header_len} B header"
+            )
+        self.groups = body_len // 3
+        self.tail_len = body_len % 3
+        pool_len = BODY_POOL_TXS * cfg.tx_size
+        self.encoded = memoryview(base64.b64encode(self.rng.randbytes(pool_len)))
+        self.slots = pool_len // 3 - self.groups + 1
+
+    def request(self, tx_id: int, namespace: int) -> bytes:
+        start = self.rng.randrange(self.slots) * 4
+        head = base64.b64encode(self.marker + tx_id.to_bytes(8, "big"))
+        tail = base64.b64encode(self.rng.randbytes(self.tail_len))
+        return b"".join(
+            (
+                b'{"namespace":%d,"payload":"' % namespace,
+                head,
+                self.encoded[start : start + self.groups * 4],
+                tail,
+                b'"}',
+            )
+        )
 
 
 def tx_interval_s(tx_size: int, rate_mb_s: float) -> float:
@@ -876,8 +993,7 @@ class Load:
     state: LoadState
     client: Client
     urls: list[str]
-    marker: bytes
-    bodies: list[bytes]
+    bodies: TxBodies
     clock: Clock
     ids: Iterator[int] = dataclasses.field(default_factory=itertools.count)
 
@@ -1001,7 +1117,8 @@ async def pace(
     load: Load, submits: asyncio.TaskGroup, rate_mb_s: float, until: float
 ) -> None:
     """Submits at `rate_mb_s` until `until`, independent of inclusion, but never more than
-    the step's cap in flight."""
+    the step's cap in flight. A pacer woken late sends every tx that came due meanwhile, up
+    to CATCHUP_S of load, so a slow wake does not lower the rate."""
     state = load.state
     state.rate_mb_s = rate_mb_s
     state.cap = step_cap(load.cfg, rate_mb_s)
@@ -1011,36 +1128,37 @@ async def pace(
     due = clock.time()
     while True:
         await clock.asleep(max(0.0, due - clock.time()))
-        if clock.time() >= until or not await state.wait_for_room(until, clock):
-            return
-        tx_id = next(load.ids)
-        tx = Tx(id=tx_id, node=tx_id % len(load.urls), t_queued=clock.time())
-        state.submitted(tx)
-        submits.create_task(submit_tx(load, tx))
-        # A pacer more than an interval late restarts from now instead of bursting.
-        due = max(due + interval, clock.time())
+        while True:
+            now = clock.time()
+            if now >= until:
+                return
+            due = max(due, now - CATCHUP_S)
+            if due > now:
+                break
+            if not await state.wait_for_room(until, clock):
+                return
+            tx_id = next(load.ids)
+            tx = Tx(id=tx_id, node=tx_id % len(load.urls), t_queued=clock.time())
+            state.submitted(tx)
+            submits.create_task(submit_tx(load, tx))
+            due += interval
 
 
 async def submit_tx(load: Load, tx: Tx) -> None:
     """Pending before the request goes out: its block may be scanned before the response
     arrives."""
     lo, hi = load.cfg.namespaces
-    body = load.bodies[tx.id % len(load.bodies)]
-    payload = load.marker + tx.id.to_bytes(8, "big") + body
-    request = json.dumps(
-        {
-            "namespace": lo + tx.id % (hi - lo + 1),
-            "payload": base64.b64encode(payload).decode(),
-        }
-    ).encode()
+    request = functools.partial(load.bodies.request, tx.id, lo + tx.id % (hi - lo + 1))
     url = load.urls[tx.node] + "/v1/submit/submit"
     if await load.client.call(post_tx, tx, url, request) != 200:
         load.state.failed(tx)
 
 
-def post_tx(pool: Http, tx: Tx, url: str, body: bytes) -> int:
-    """HTTP status, 0 if the request failed. Stamps `t_submit` as the request goes out, not
+def post_tx(pool: Http, tx: Tx, url: str, build: Callable[[], bytes]) -> int:
+    """HTTP status, 0 if the request failed. Builds the body on this thread, so only as many
+    bodies are alive as there are threads. Stamps `t_submit` as the request goes out, not
     when it was queued for a thread."""
+    body = build()
     tx.t_submit = pool.clock.time()
     try:
         status, _ = pool.request("POST", url, body)
@@ -1123,9 +1241,7 @@ def consensus_counters(pool: Http, url: str) -> dict[str, float]:
 async def track_inclusion(
     cfg: BenchConfig,
     state: LoadState,
-    client: Client,
-    query_url: str,
-    marker: bytes,
+    scan: Scan,
     heights: Heights,
     counters: list[dict[str, Any]],
     done: asyncio.Event,
@@ -1134,7 +1250,6 @@ async def track_inclusion(
     """Scan every new block's payload for our marker; time out transactions that never show.
     A transaction counts as included when its block's header appeared on the query node. A
     payload the query node lacks is retried after each scan until MISSING_PAYLOAD_S."""
-    pattern = re.compile(re.escape(marker) + b"(.{8})", re.DOTALL)
     deadline = None
     report = clock.time() + PROGRESS_S
     height = heights.start
@@ -1156,21 +1271,21 @@ async def track_inclusion(
             state.resolve(tx.id, "timeout", now)
         top = heights.top("query")
         while height < top - PAYLOAD_LAG_BLOCKS:
-            raw = await client.call(block_payload, query_url, height)
-            if raw is None:
-                missing[height] = heights.seen["query"][height]
-            else:
-                record_inclusions(state, pattern, raw, heights, height, clock)
-            height += 1
-        await retry_missing(state, client, query_url, pattern, heights, missing, clock)
+            batch = range(height, min(top - PAYLOAD_LAG_BLOCKS, height + SCAN_BATCH))
+            scans = await asyncio.gather(*(scan_stamped(scan, h, clock) for h in batch))
+            for h, (ids, at) in zip(batch, scans):
+                if ids is None:
+                    missing[h] = heights.seen["query"][h]
+                else:
+                    record_inclusions(state, ids, heights, h, at)
+            height = batch.stop
+        await retry_missing(state, scan, heights, missing, clock)
         await clock.asleep(0.1)
 
 
 async def retry_missing(
     state: LoadState,
-    client: Client,
-    query_url: str,
-    pattern: re.Pattern[bytes],
+    scan: Scan,
     heights: Heights,
     missing: dict[int, float],
     clock: Clock,
@@ -1178,29 +1293,36 @@ async def retry_missing(
     """One fetch per missing payload. Past MISSING_PAYLOAD_S after its block appeared a
     payload counts as lost; its transactions, which cannot be told apart, time out."""
     for height, at_height in list(missing.items()):
-        raw = await client.call(block_payload, query_url, height)
-        if raw is None and clock.time() - at_height < MISSING_PAYLOAD_S:
+        ids, at = await scan_stamped(scan, height, clock)
+        if ids is None and at - at_height < MISSING_PAYLOAD_S:
             continue
         del missing[height]
-        if raw is None:
+        if ids is None:
             log.warning("payload %d missing on the query node, skipping", height)
             state.missing_payloads.append(height)
         else:
-            record_inclusions(state, pattern, raw, heights, height, clock)
+            record_inclusions(state, ids, heights, height, at)
+
+
+async def scan_stamped(
+    scan: Scan, height: int, clock: Clock
+) -> tuple[list[int] | None, float]:
+    """The scan and when it finished, so blocks scanned together are not stamped alike."""
+    ids = await scan(height)
+    return ids, clock.time()
 
 
 def record_inclusions(
     state: LoadState,
-    pattern: re.Pattern[bytes],
-    raw: bytes,
+    ids: list[int],
     heights: Heights,
     height: int,
-    clock: Clock,
+    scanned_at: float,
 ) -> None:
     at = heights.seen["query"][height]
-    for match in pattern.finditer(raw):
-        state.include(int.from_bytes(match.group(1), "big"), height, at)
-    heights.scanned[height] = clock.time()
+    for tx_id in ids:
+        state.include(tx_id, height, at)
+    heights.scanned[height] = scanned_at
 
 
 def window_mb_s(times: Iterable[float], tx_size: int, t0: float, t1: float) -> float:

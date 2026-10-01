@@ -39,6 +39,7 @@ Examples:
     scripts/network-bench/bench render bench-out --baseline main-network-bench.json
     scripts/network-bench/bench compare bench-out/result.json --baseline other/result.json
     scripts/network-bench/bench sysinfo --out bench-out
+    scripts/network-bench/bench selftest --rate 250
 """
 
 import argparse
@@ -64,6 +65,7 @@ from pathlib import Path
 from typing import Any
 
 import netbench as nb
+import nullserver
 
 log = logging.getLogger("network-bench")
 BENCH_DIR = Path(__file__).resolve().parent
@@ -212,6 +214,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     sysinfo_p.add_argument("--out", type=Path, default=Path("bench-out"))
     sysinfo_p.set_defaults(func=cmd_sysinfo)
+
+    selftest_p = sub.add_parser(
+        "selftest",
+        help="load a null local server to find the load driver's own ceiling",
+    )
+    selftest_p.add_argument("--rate", type=float, default=250.0, help="MB/s")
+    selftest_p.add_argument("--step-s", type=int, default=20)
+    selftest_p.add_argument("--submit-workers", type=int, default=32)
+    selftest_p.add_argument("--out", type=Path, help="keep load.jsonl and steps.json")
+    selftest_p.set_defaults(func=cmd_selftest)
     return parser.parse_args(argv)
 
 
@@ -286,6 +298,16 @@ def render_failure(error: str, runner: nb.RunnerInfo) -> str:
         f"## Network benchmark\n\n**invalid**: {error}\n\nRunner: {runner['cpu_model']}, "
         f"{runner['nproc']} CPUs. Logs are in the artifact.\n"
     )
+
+
+def cmd_selftest(args: argparse.Namespace) -> int:
+    # The null node decides nothing, so a step's consensus and query verdicts mean nothing.
+    logging.getLogger("netbench").setLevel(logging.WARNING)
+    result = nullserver.run_selftest(
+        args.rate, args.step_s, args.submit_workers, args.out
+    )
+    print(nullserver.report(result, nullserver.cpu_model(), args.submit_workers))
+    return 0
 
 
 def cmd_render(args: argparse.Namespace) -> int:
@@ -376,7 +398,9 @@ def drive_network(
             alive,
         )
         log.info("network ready after %.0f s", run["ready_s"])
-        run["t0"], run["t1"] = nb.drive_load(cfg, LOCAL_TOPOLOGY, out, alive)
+        run["t0"], run["t1"] = nb.drive_load(
+            cfg, LOCAL_TOPOLOGY, out, alive, scan_processes=nb.SCAN_PROCESSES
+        )
     except nb.NetworkError as err:
         run["error"] = str(err)
         if net is not None and net.proc.poll() is not None:

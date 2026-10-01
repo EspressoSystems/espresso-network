@@ -1,4 +1,4 @@
-scripts := "nextest-ci compile-metrics release test_compile_metrics.py test_nextest_ci.py test_release.py network-bench/bench network-bench/netbench.py network-bench/test_bench.py network-bench/test_netbench.py network-bench/fakes.py network-bench/conftest.py network-bench/aws-bench network-bench/test_aws_plan.py network-bench/test_aws_run.py network-bench/test_aws_collect.py network-bench/test_aws_status.py network-bench/test_aws_fleet_up.py network-bench/test_aws_rds.py"
+scripts := "nextest-ci compile-metrics release test_compile_metrics.py test_nextest_ci.py test_release.py network-bench/bench network-bench/netbench.py network-bench/nullserver.py network-bench/test_nullserver.py network-bench/test_bench.py network-bench/test_netbench.py network-bench/fakes.py network-bench/conftest.py network-bench/aws-bench network-bench/test_aws_plan.py network-bench/test_aws_run.py network-bench/test_aws_collect.py network-bench/test_aws_status.py network-bench/test_aws_fleet_up.py network-bench/test_aws_rds.py"
 pytest := "uv run --with pytest --with pytest-xdist --with pytest-timeout pytest"
 
 fmt *args:

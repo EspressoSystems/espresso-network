@@ -6315,7 +6315,13 @@ def cmd_agent_drive(args: argparse.Namespace, system: System) -> int:
         reporter.state["ready_s"] = ready_s
         reporter.set_phase("loading", f"ready after {ready_s:.0f} s")
         reporter.state["t0"], reporter.state["t1"] = nb.drive_load(
-            cfg, topo, args.out, lambda: True, system.clock, system.http_pool
+            cfg,
+            topo,
+            args.out,
+            lambda: True,
+            system.clock,
+            system.http_pool,
+            nb.SCAN_PROCESSES,
         )
         reporter.set_phase("done", "load finished")
         return EXIT_OK
