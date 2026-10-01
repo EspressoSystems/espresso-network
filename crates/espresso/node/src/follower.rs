@@ -22,6 +22,7 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
+use espresso_api::error::SubmitError;
 use espresso_types::{
     ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
     traits::MembershipPersistence,
@@ -51,7 +52,7 @@ use hotshot_types::{
         root_block_in_epoch,
     },
 };
-use http_client::{Client, error::ClientErr};
+use http_client::{Client, StatusCode, error::ClientErr};
 use parking_lot::Mutex;
 use tokio::{sync::watch, time::sleep};
 use url::Url;
@@ -459,8 +460,19 @@ impl ConsensusSource for FollowerConsensus {
                 Ok(commitment) => return Ok(commitment),
                 Err(err) => {
                     tracing::warn!(%upstream, %err, "forwarding transaction failed");
-                    last_err =
-                        anyhow::Error::from(err).context(format!("forwarding to {upstream}"));
+                    match err.status {
+                        // Every upstream would refuse it.
+                        StatusCode::BAD_REQUEST => {
+                            return Err(SubmitError::TooLarge(err.message).into());
+                        },
+                        StatusCode::SERVICE_UNAVAILABLE => {
+                            last_err = SubmitError::Overloaded(err.message).into();
+                        },
+                        _ => {
+                            last_err = anyhow::Error::from(err)
+                                .context(format!("forwarding to {upstream}"));
+                        },
+                    }
                 },
             }
         }
