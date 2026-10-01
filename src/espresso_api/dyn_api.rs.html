@@ -821,8 +821,8 @@
 <a href=#821 id=821 data-nosnippet>821</a>
 <a href=#822 id=822 data-nosnippet>822</a><span class="attr">#[async_trait]
 <a href=#823 id=823 data-nosnippet>823</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>DynSubmitApi: Send + Sync {
-<a href=#824 id=824 data-nosnippet>824</a>    <span class="doccomment">/// The transaction type is erased, so the body is decoded behind the trait object; a bad
-<a href=#825 id=825 data-nosnippet>825</a>    /// body is the 400 [`decode_body`] returns and a submit failure a 500, as on the typed path.
+<a href=#824 id=824 data-nosnippet>824</a>    <span class="doccomment">/// The transaction type is erased, so the body is decoded behind the trait object. A bad
+<a href=#825 id=825 data-nosnippet>825</a>    /// body is a 400, and a submit failure goes through [`classify`].
 <a href=#826 id=826 data-nosnippet>826</a>    </span><span class="kw">async fn </span>submit(<span class="kw-2">&amp;</span><span class="self">self</span>, headers: <span class="kw-2">&amp;</span>HeaderMap, body: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="prelude-ty">Result</span>&lt;Erased, ApiError&gt;;
 <a href=#827 id=827 data-nosnippet>827</a>}
 <a href=#828 id=828 data-nosnippet>828</a>
@@ -833,7 +833,7 @@
 <a href=#833 id=833 data-nosnippet>833</a>        v1::SubmitApi::submit(<span class="self">self</span>, tx)
 <a href=#834 id=834 data-nosnippet>834</a>            .<span class="kw">await
 <a href=#835 id=835 data-nosnippet>835</a>            </span>.map(erase)
-<a href=#836 id=836 data-nosnippet>836</a>            .map_err(ApiError::Internal)
+<a href=#836 id=836 data-nosnippet>836</a>            .map_err(classify)
 <a href=#837 id=837 data-nosnippet>837</a>    }
 <a href=#838 id=838 data-nosnippet>838</a>}
 <a href=#839 id=839 data-nosnippet>839</a>
