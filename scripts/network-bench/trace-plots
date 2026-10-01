@@ -1,0 +1,170 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.14"
+# dependencies = ["matplotlib", "numpy"]
+# ///
+"""Plots the leader traces collected under `<run_dir>/hosts/*/trace/` (see `--leader-trace` of
+aws-bench) into `<run_dir>/trace/`: `phases.png` (per-view phase durations and their medians),
+`finality.png` (cluster finality histogram and CDF) and `stats.json`.
+
+    trace-plots RUN_DIR [--warmup N]
+"""
+
+import argparse
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+
+import leadertrace
+import matplotlib
+import numpy as np
+from matplotlib.transforms import Bbox
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+PHASES = leadertrace.PHASES
+COLORS = ("#9ca3af", "#3b82f6", "#dc2626", "#8b5cf6", "#10b981")
+FONT = 13
+TRACE_GLOB = "hosts/*/trace/leader_trace_node*.csv"
+
+
+def main(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("run_dir", type=Path)
+    parser.add_argument("--warmup", type=int, default=leadertrace.DEFAULT_WARMUP)
+    args = parser.parse_args(argv)
+
+    paths = sorted(args.run_dir.glob(TRACE_GLOB))
+    if not paths:
+        sys.exit(f"no leader_trace_node*.csv under {args.run_dir}/{TRACE_GLOB}")
+    trace = leadertrace.read_traces(paths)
+    phases, skipped = leadertrace.view_phases(trace, args.warmup)
+    if not phases:
+        sys.exit(
+            f"no views to plot after warmup {args.warmup}; skipped: {dict(skipped)}"
+        )
+    finality, finality_skipped = leadertrace.cluster_finality_ms(trace, args.warmup)
+    if not finality:
+        sys.exit(f"no views with a quorum decision; skipped: {dict(finality_skipped)}")
+
+    columns = np.array(list(phases.values())).T
+    stats = build_stats(columns, list(finality.values()), skipped, finality_skipped)
+    out = args.run_dir / "trace"
+    out.mkdir(exist_ok=True)
+    plt.rcParams.update({"font.size": FONT})
+    plot_phases(list(phases), columns, stats, len(trace), out / "phases.png")
+    plot_finality(list(finality.values()), stats["finality"], out / "finality.png")
+    (out / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
+
+
+def build_stats(
+    columns: np.ndarray,
+    finality: list[float],
+    skipped: Counter[str],
+    finality_skipped: Counter[str],
+) -> dict:
+    return {
+        "phases": {
+            name: {"median": float(np.median(c)), "p95": float(np.percentile(c, 95))}
+            for name, c in zip(PHASES, columns)
+        },
+        "finality": {
+            "p50": float(np.percentile(finality, 50)),
+            "p95": float(np.percentile(finality, 95)),
+            "views": len(finality),
+            "skipped": dict(finality_skipped),
+        },
+        "views": {"plotted": columns.shape[1], "skipped": dict(skipped)},
+    }
+
+
+def plot_phases(
+    views: list[int], columns: np.ndarray, stats: dict, nodes: int, path: Path
+) -> None:
+    fig, (top, bottom) = plt.subplots(
+        2,
+        1,
+        figsize=(18, 11),
+        facecolor="white",
+        gridspec_kw={"height_ratios": [3, 1.4]},
+    )
+    base = np.zeros(len(views))
+    for name, color, column in zip(PHASES, COLORS, columns):
+        top.bar(views, column, bottom=base, width=1.0, color=color, label=name)
+        base += column
+    top.set(xlabel="view", ylabel="ms since previous proposal")
+    top.set_title(
+        f"{nodes} nodes, views {views[0]}..{views[-1]} ({len(views)} plotted): "
+        "phase durations per view"
+    )
+    top.legend(
+        ncol=len(PHASES), loc="lower center", bbox_to_anchor=(0.5, 1.07), frameon=False
+    )
+    top.margins(x=0)
+
+    medians = [stats["phases"][name]["median"] for name in PHASES]
+    left = 0.0
+    for color, median in zip(COLORS, medians):
+        bottom.barh(0, median, left=left, color=color, height=0.6)
+        if median > 0.04 * sum(medians):
+            bottom.text(
+                left + median / 2,
+                0,
+                f"{median:.1f}",
+                ha="center",
+                va="center",
+                color="white",
+                fontweight="bold",
+            )
+        left += median
+    bottom.set(xlabel="ms (median per phase)", yticks=[])
+    bottom.set_title("Median phase durations")
+
+    table_ax = fig.add_axes((0.64, 0.06, 0.35, 0.32))
+    table_ax.axis("off")
+    table = table_ax.table(
+        cellText=[
+            [name, f"{s['median']:.1f}", f"{s['p95']:.1f}"]
+            for name, s in stats["phases"].items()
+        ],
+        colLabels=["phase", "median ms", "p95 ms"],
+        colWidths=[0.6, 0.2, 0.2],
+        cellLoc="left",
+        bbox=Bbox.from_bounds(0, 0, 1, 1),
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(FONT)
+    fig.subplots_adjust(left=0.06, right=0.62, top=0.88, bottom=0.08, hspace=0.45)
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+
+
+def plot_finality(finality: list[float], stats: dict, path: Path) -> None:
+    fig, (hist, cdf) = plt.subplots(1, 2, figsize=(16, 6), facecolor="white")
+    hist.hist(finality, bins=60, color=COLORS[1])
+    hist.set(xlabel="ms from proposal to quorum (2f+1) decided", ylabel="views")
+    hist.set_title("Cluster finality")
+    ordered = np.sort(finality)
+    cdf.plot(ordered, np.linspace(1 / len(ordered), 1, len(ordered)), color=COLORS[1])
+    cdf.set(
+        xlabel="ms from proposal to quorum (2f+1) decided", ylabel="fraction of views"
+    )
+    cdf.set_title("Cluster finality CDF")
+    for ax in (hist, cdf):
+        for key, color in (("p50", "#16a34a"), ("p95", "#dc2626")):
+            ax.axvline(
+                stats[key],
+                color=color,
+                linestyle="--",
+                label=f"{key} {stats[key]:.1f} ms",
+            )
+        ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
