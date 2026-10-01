@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+
+// The first v2 request that travels as a body rather than as query parameters. Both fields are
+// `optional` for the same reason a query parameter is: an omitted one is refused with a 400
+// rather than read as a zero namespace or an empty payload
+message SubmitTransactionRequest {
+  // Namespace the transaction is sequenced in. Required
+  optional uint64 namespace = 1;
+
+  // Transaction payload, base64 in JSON. Required, and may be empty
+  optional bytes payload = 2;
+}
+
+message SubmitTransactionResponse {
+  // Commitment to the accepted transaction, TaggedBase64 `TX~`
+  string hash = 1;
+}
+
+service SubmitService {
+  // Submit a transaction for sequencing
+  rpc SubmitTransaction(SubmitTransactionRequest) returns (SubmitTransactionResponse) {
+    option (google.api.http) = {
+      post: "/v2/submit/transaction"
+      body: "*"
+    };
+  }
+}
