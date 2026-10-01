@@ -2635,11 +2635,8 @@ where
         &self,
         request: tonic::Request<proto::GetStateSignatureRequest>,
     ) -> Result<tonic::Response<proto::StateSignatureResponse>, tonic::Status> {
-        let height = request
-            .into_inner()
-            .height
-            .ok_or_else(|| tonic::Status::invalid_argument("height is required"))?;
-        let body = <Self as v1::StateSignatureApi>::get_state_signature(self, height)
+        let height = required(request.into_inner().height, "height")?;
+        let body = v1::StateSignatureApi::get_state_signature(self, height)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::StateSignatureResponse {

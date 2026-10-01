@@ -8596,21 +8596,25 @@ mod test {
             .unwrap_err();
         assert_eq!(v2_err.status, v1_err.status);
 
-        // A node signs only recent blocks and drops the rest, so search for a height v1 answers
-        // rather than naming one.
+        // The signer covers only the newest leaf of each decide and runs behind the query
+        // storage, so search back from the tip for a height v1 answers rather than naming one.
         let block_height: u64 = client.get("status/block-height").send().await.unwrap();
         let (height, v1_signature) = {
             let mut found = None;
             for height in (1..block_height).rev().take(10) {
                 // As raw JSON, so the v2 strings are compared against the bytes v1 serves rather
                 // than against a `Display` impl that could disagree with its own serde.
-                if let Ok(body) = client
+                match client
                     .get::<serde_json::Value>(&format!("state-signature/block/{height}"))
                     .send()
                     .await
                 {
-                    found = Some((height, body));
-                    break;
+                    Ok(body) => {
+                        found = Some((height, body));
+                        break;
+                    },
+                    Err(err) if err.status == StatusCode::NOT_FOUND => {},
+                    Err(err) => panic!("v1 state-signature/block/{height}: {err:?}"),
                 }
             }
             found.expect("no recent block carries a state signature")
@@ -8666,6 +8670,21 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        // A height the node never signed is a 404 on both versions.
+        let unsigned = block_height + 1000;
+        let v1_err = client
+            .get::<serde_json::Value>(&format!("state-signature/block/{unsigned}"))
+            .send()
+            .await
+            .unwrap_err();
+        let v2_err = client
+            .get::<serde_json::Value>(&format!("v2/state-signature/block?height={unsigned}"))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(v1_err.status, StatusCode::NOT_FOUND);
+        assert_eq!(v2_err.status, StatusCode::NOT_FOUND);
 
         // Every decided view moves these, so retry until a pair straddles no view.
         let (v1_votes, v2_votes) = {
