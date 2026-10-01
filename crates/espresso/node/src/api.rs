@@ -7254,9 +7254,15 @@ mod test {
         let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let mut db_opt = tmp_options(&storage[1]);
         db_opt.prune = true;
-        db_opt.pruning.target_retention = Some(Duration::from_secs(u32::MAX.into()));
-        db_opt.pruning.state_target_retention = Some(Duration::ZERO);
-        db_opt.pruning.interval = Some(Duration::from_secs(1));
+        db_opt.pruning = <persistence::sql::PruningOptions as clap::Parser>::parse_from([
+            "pruning",
+            "--target-retention",
+            "4294967295s",
+            "--state-target-retention",
+            "0s",
+            "--interval",
+            "1s",
+        ]);
         let start_query_node = {
             let cfg = network.cfg.clone();
             let node_persistence = persistence[1].clone();
