@@ -2278,6 +2278,7 @@ impl From<crate::options::StorageConfig> for proto::NodeStorage {
                 crate::options::StorageBackend::Sql => proto::StorageBackend::Sql,
                 crate::options::StorageBackend::Fs => proto::StorageBackend::Fs,
                 crate::options::StorageBackend::FsDefault => proto::StorageBackend::FsDefault,
+                crate::options::StorageBackend::Journal => proto::StorageBackend::Journal,
             }
             .into(),
             fs: storage.fs.map(|fs| proto::FsStorage {
@@ -2285,6 +2286,11 @@ impl From<crate::options::StorageConfig> for proto::NodeStorage {
                 consensus_view_retention: fs.consensus_view_retention,
             }),
             sql: storage.sql.map(Into::into),
+            journal: storage.journal.map(|journal| proto::JournalStorage {
+                path: journal.path.display().to_string(),
+                view_retention: journal.view_retention,
+                max_bytes: journal.max_bytes,
+            }),
         }
     }
 }
@@ -5577,14 +5583,20 @@ mod tests {
                     icon_24x24_3x: Some("https://icons.test/24/3".into()),
                 }),
                 storage: Some(proto::NodeStorage {
-                    backend: proto::StorageBackend::FsDefault as i32,
-                    // Not pinned to `None`: the default backend parses an empty argv, which
-                    // still reads ESPRESSO_NODE_STORAGE_PATH.
-                    fs: cfg.storage.fs.as_ref().map(|fs| proto::FsStorage {
-                        path: fs.path.display().to_string(),
-                        consensus_view_retention: fs.consensus_view_retention,
-                    }),
+                    backend: proto::StorageBackend::Journal as i32,
+                    fs: None,
                     sql: None,
+                    // Not pinned to `None`: without the storage-journal module the journal is
+                    // configured from the environment, which may set ESPRESSO_NODE_STORAGE_PATH.
+                    journal: cfg
+                        .storage
+                        .journal
+                        .as_ref()
+                        .map(|journal| proto::JournalStorage {
+                            path: journal.path.display().to_string(),
+                            view_retention: journal.view_retention,
+                            max_bytes: journal.max_bytes,
+                        }),
                 }),
                 genesis_file: cfg.genesis_file.to_string(),
                 public_api_url: cfg.public_api_url.as_ref().map(ToString::to_string),
@@ -5752,6 +5764,8 @@ mod tests {
             "--prune",
             "--pruning-threshold",
             "1000000000000",
+            "--",
+            "query",
         ]);
         let cfg = PublicNodeConfig::new(&opt, &opt.modules(), &test_genesis());
         let sql = cfg.storage.sql.clone().expect("storage-sql was configured");
@@ -5766,7 +5780,7 @@ mod tests {
             .storage
             .expect("the runtime config always reports a backend");
 
-        assert_eq!(storage.backend, proto::StorageBackend::Sql as i32);
+        assert_eq!(storage.backend, proto::StorageBackend::Journal as i32);
         assert_eq!(storage.fs, None);
         // Compared against the source, not against `sql.clone().into()`, which would assert the
         // mapping against itself. v1 serves the durations as `{secs, nanos}`.

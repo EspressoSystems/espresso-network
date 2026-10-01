@@ -1,4 +1,4 @@
-//! One-shot startup probe of the SQLite and file-system storage backends.
+//! One-shot startup probe of the SQLite, file-system and journal storage backends.
 //!
 //! Consensus writes to disk on every view, taking the database's (or data directory's) single
 //! writer lock. A validator on a network filesystem, a volatile filesystem, or a disk with slow
@@ -16,6 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Context;
 use hotshot_types::traits::metrics::Metrics;
 use rand::Rng;
 use tempfile::Builder;
@@ -88,8 +89,10 @@ pub struct StorageProbe {
     pub fsync: Option<FsyncStats>,
     /// Set alongside `fsync: None`, to carry the `io::Error` into the WARN log line.
     fsync_error: Option<String>,
-    /// `None` for the fs backend, which has no pragmas to read.
+    /// `None` for the fs and journal backends, which have no pragmas to read.
     pub pragmas: Option<SqlitePragmas>,
+    /// "sqlite", "fs" or "journal"; derived from `pragmas` and the probed directory.
+    backend: &'static str,
 }
 
 // FsInfo and FsClass are only ever constructed on Linux (`unknown_fs_info`, `parse_mountinfo`);
@@ -147,6 +150,18 @@ pub struct SqlitePragmas {
 /// Logs the filesystem classification as soon as it is known, so a mount whose `fdatasync` hangs
 /// still says which filesystem it was.
 pub async fn probe(dir: &Path, pragmas: Option<SqlitePragmas>) -> anyhow::Result<StorageProbe> {
+    // The journal wal directory may not exist yet on first startup; fs and sql already create
+    // their directory before probing, so this is a no-op for them.
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("creating storage probe directory {}", dir.display()))?;
+
+    let backend = if pragmas.is_some() {
+        "sqlite"
+    } else if is_journal_wal_dir(dir) {
+        "journal"
+    } else {
+        "fs"
+    };
     let page_size = pragmas.as_ref().map(|p| p.page_size);
     let owned = dir.to_path_buf();
 
@@ -184,9 +199,17 @@ pub async fn probe(dir: &Path, pragmas: Option<SqlitePragmas>) -> anyhow::Result
         fsync,
         fsync_error,
         pragmas,
+        backend,
     };
     probe.log_fsync_and_pragmas();
     Ok(probe)
+}
+
+/// True for the journal backend's own wal directory, `<path>/journal/wal`.
+fn is_journal_wal_dir(dir: &Path) -> bool {
+    let mut components = dir.components().rev();
+    matches!(components.next(), Some(c) if c.as_os_str() == "wal")
+        && matches!(components.next(), Some(c) if c.as_os_str() == "journal")
 }
 
 fn log_fs_info(path: &Path, fs: Option<&FsInfo>) {
@@ -278,11 +301,7 @@ impl StorageProbe {
     }
 
     fn backend_label(&self) -> &'static str {
-        if self.pragmas.is_some() {
-            "sqlite"
-        } else {
-            "fs"
-        }
+        self.backend
     }
 
     /// Callers pass a subgroup, so the exported names carry that prefix, e.g.
@@ -500,6 +519,7 @@ mod test {
             fsync: None,
             fsync_error: None,
             pragmas: None,
+            backend: "fs",
         };
         let metrics = PrometheusMetrics::default();
 

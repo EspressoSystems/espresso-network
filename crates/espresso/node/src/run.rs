@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{Context, ensure};
 use clap::Parser;
 use espresso_telemetry as telemetry;
 use espresso_types::{traits::NullEventConsumer, v0::traits::SequencerPersistence};
@@ -6,10 +6,11 @@ use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 use process_metrics::log_cpu_probe;
 use url::Url;
+use versions::NEW_PROTOCOL_VERSION;
 
 use super::{
     CatchupParams, Genesis, L1Params, NetworkParams,
-    api::{self, data_source::DataSourceOptions},
+    api::{self, data_source::QueryModuleOptions},
     context::SequencerContext,
     init_node, network,
     options::{Modules, Options, PublicNodeConfig},
@@ -124,38 +125,44 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     tracing::warn!(?genesis, "genesis");
 
-    let result = if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
-    } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
-    } else {
-        // Persistence is required. If none is provided, just use the local file system.
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            persistence::fs::Options::default(),
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
+    // Consensus always runs on the journal. storage-sql and storage-fs only back the query service.
+    let mut storage = match modules.storage_journal.take() {
+        Some(storage) => storage,
+        None => persistence::journal::Options::from_env()?,
     };
+    ensure!(
+        genesis.base_version >= NEW_PROTOCOL_VERSION,
+        "the journal consensus storage requires a genesis base_version of at least \
+         {NEW_PROTOCOL_VERSION}"
+    );
+    // Chain configs change only through genesis upgrades, so the largest covers every version.
+    storage.max_block_size = genesis.block_sizes().into_values().max();
+    // storage-fs wins over storage-sql, as it did as consensus storage: an embedded-db node can
+    // get storage-sql from its environment next to an explicit storage-fs.
+    let query_storage = match (modules.storage_fs.take(), modules.storage_sql.take()) {
+        (Some(fs), _) => Some(persistence::journal::QueryStorage::Fs(fs)),
+        (None, Some(sql)) => Some(persistence::journal::QueryStorage::Sql(Box::new(sql))),
+        (None, None) => None,
+    };
+    match query_storage {
+        Some(query_storage) if modules.query.is_some() => {
+            storage = storage.with_query_storage(query_storage);
+        },
+        Some(_) => tracing::warn!(
+            "storage-sql and storage-fs only back the query module, which is not enabled, so they \
+             are ignored. Consensus data is stored in the journal"
+        ),
+        None => {},
+    }
+    let result = run_with_storage(
+        genesis,
+        modules,
+        opt,
+        storage,
+        public_node_config,
+        telemetry_handle.as_mut(),
+    )
+    .await;
 
     if let Some(h) = telemetry_handle {
         h.shutdown();
@@ -172,7 +179,7 @@ async fn run_with_storage<S>(
     telemetry_handle: Option<&mut telemetry::TelemetryHandle>,
 ) -> anyhow::Result<()>
 where
-    S: DataSourceOptions,
+    S: QueryModuleOptions,
 {
     let mut ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
 
@@ -201,7 +208,7 @@ pub async fn init_with_storage<S>(
     public_node_config: PublicNodeConfig,
 ) -> anyhow::Result<NodeContext<S::Persistence>>
 where
-    S: DataSourceOptions,
+    S: QueryModuleOptions,
 {
     let follower_params = match (&modules.follower, &modules.query) {
         (Some(follower), Some(query)) => Some(opt.follower_params(follower, query)?),
@@ -290,7 +297,7 @@ where
     // the handle directly, with no metrics.
     let ctx = match modules.http.take() {
         Some(http_opt) => {
-            let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
+            let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config)?;
             http_opt
                 .serve(move |metrics, consumer, storage| {
                     async move {
@@ -344,13 +351,13 @@ async fn init_follower_with_storage<S>(
     public_node_config: PublicNodeConfig,
 ) -> anyhow::Result<FollowerContext<S::Persistence>>
 where
-    S: DataSourceOptions,
+    S: QueryModuleOptions,
 {
     let http_opt = modules
         .http
         .take()
         .context("a follower needs the http module")?;
-    let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config);
+    let http_opt = api_options(http_opt, modules, &storage_opt, public_node_config)?;
     let persistence = storage_opt.create().await?;
     http_opt
         .serve(move |metrics, sink, _storage| {
@@ -363,15 +370,15 @@ where
         .map(FollowerContext::new)
 }
 
-fn api_options<S: DataSourceOptions>(
+fn api_options<S: QueryModuleOptions>(
     http_opt: api::options::Http,
     modules: Modules,
     storage_opt: &S,
     public_node_config: PublicNodeConfig,
-) -> api::Options {
+) -> anyhow::Result<api::Options> {
     let mut http_opt = api::Options::from(http_opt);
     if let Some(query) = modules.query {
-        http_opt = storage_opt.enable_query_module(http_opt, query);
+        http_opt = storage_opt.enable_query_module(http_opt, query)?;
     }
     if let Some(submit) = modules.submit {
         http_opt = http_opt.submit(submit);
@@ -399,7 +406,7 @@ fn api_options<S: DataSourceOptions>(
             .config(config)
             .public_node_config(public_node_config);
     }
-    http_opt
+    Ok(http_opt)
 }
 
 #[cfg(test)]
