@@ -2276,6 +2276,89 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_windowed_state_pruning_matches_unbounded_delete() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let table = MockMerkleTree::state_type();
+
+        // Mix appends, which are never superseded, with rewrites of a few hot keys, and leave some
+        // heights without state so windows get skipped.
+        let heights = 300u64;
+        let mut tree: UniversalMerkleTree<_, _, _, 8, _> =
+            MockMerkleTree::new(MockMerkleTree::tree_height());
+        let mut tx = storage.write().await.unwrap();
+        for height in (0..=heights).filter(|height| height % 13 != 0) {
+            let key = if height % 3 == 0 {
+                (height % 4) as usize
+            } else {
+                height as usize
+            };
+            tree.update(key, height as usize).unwrap();
+            let (_, proof) = tree.lookup(key).expect_ok().unwrap();
+            let path = <usize as ToTraversalPath<8>>::to_traversal_path(&key, tree.height());
+            UpdateStateData::<_, MockMerkleTree, 8>::insert_merkle_nodes(
+                &mut tx, proof, path, height,
+            )
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        let prune_height = 250u64;
+        let mut tx = storage.write().await.unwrap();
+        query(&format!(
+            "CREATE TABLE expected AS SELECT path, created FROM {table} AS t
+             WHERE NOT (
+               t.created <= $1
+               AND EXISTS (
+                 SELECT 1 FROM {table} AS t2
+                 WHERE t2.path = t.path AND t2.created > t.created AND t2.created <= $1
+               )
+             )"
+        ))
+        .bind(prune_height as i64)
+        .execute(tx.as_mut())
+        .await
+        .unwrap();
+        let (expected,) = query_as::<(i64,)>("SELECT count(*) FROM expected")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        let (total,) = query_as::<(i64,)>(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        assert!(
+            total > expected,
+            "the unbounded delete would remove nothing"
+        );
+        tx.commit().await.unwrap();
+
+        let batch_size = 7;
+        for from in (0..=prune_height).step_by(batch_size) {
+            let to = min(from + batch_size as u64 - 1, prune_height);
+            let mut tx = storage.prune_write().await.unwrap();
+            tx.delete_state_batch([table], from, to).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let mut tx = storage.read().await.unwrap();
+        for (lhs, rhs) in [(table, "expected"), ("expected", table)] {
+            let (diff,) = query_as::<(i64,)>(&format!(
+                "SELECT count(*) FROM (
+                   SELECT path, created FROM {lhs} EXCEPT SELECT path, created FROM {rhs}
+                 ) AS d"
+            ))
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+            assert_eq!(diff, 0, "{diff} rows in {lhs} missing from {rhs}");
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_minimum_retention_pruning() {
         let db = TmpDb::init().await;
 

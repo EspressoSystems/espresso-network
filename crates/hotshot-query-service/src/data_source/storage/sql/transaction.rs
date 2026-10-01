@@ -624,8 +624,8 @@ impl Transaction<Prune> {
     /// A table with no rows created in `from..=to` is skipped. This is exact because a node only
     /// becomes deletable once a newer version of it is created, and consecutive batches tile the
     /// heights without gaps, so every version is seen by exactly one batch's probe. The delete
-    /// itself has no lower bound, so any superseded version below `from` is still collected by
-    /// the first batch whose window has a row for that table.
+    /// only looks up versions superseded by a row created in `from..=to`, so it relies on no state
+    /// being written below the pruned height.
     #[instrument(skip(self))]
     pub(super) async fn delete_state_batch(
         &mut self,
@@ -648,21 +648,34 @@ impl Transaction<Prune> {
                 continue;
             }
 
-            self.execute(
-                query(&format!(
-                    "
-                DELETE FROM {state_table}
-                WHERE {state_table}.created <= $1
-                  AND EXISTS (
-                    SELECT 1 FROM {state_table} AS t2
-                    WHERE t2.path = {state_table}.path
-                      AND t2.created > {state_table}.created
-                      AND t2.created <= $1
-                  )"
-                ))
-                .bind(to as i64),
-            )
-            .await?;
+            // Postgres underestimates how many distinct paths a state table has, so it would
+            // hash-join the window against a full scan of the table. `OFFSET 0` stops it from
+            // flattening the lateral lookup into that join, keeping one primary key range scan per
+            // path. Dropping it makes the batch cost grow with the table again.
+            #[cfg(not(feature = "embedded-db"))]
+            let delete = format!(
+                "DELETE FROM {state_table} WHERE ctid = ANY (ARRAY(
+                   SELECT old.ctid
+                   FROM (SELECT path, max(created) AS latest FROM {state_table}
+                         WHERE created >= $1 AND created <= $2 GROUP BY path) AS n
+                   CROSS JOIN LATERAL (
+                     SELECT o.ctid FROM {state_table} AS o
+                     WHERE o.path = n.path AND o.created < n.latest
+                     OFFSET 0
+                   ) AS old
+                 ))"
+            );
+            #[cfg(feature = "embedded-db")]
+            let delete = format!(
+                "DELETE FROM {state_table} WHERE (path, created) IN (
+                   SELECT old.path, old.created
+                   FROM (SELECT path, max(created) AS latest FROM {state_table}
+                         WHERE created >= $1 AND created <= $2 GROUP BY path) AS n
+                   JOIN {state_table} AS old ON old.path = n.path AND old.created < n.latest
+                 )"
+            );
+            self.execute(query(&delete).bind(from as i64).bind(to as i64))
+                .await?;
         }
 
         Ok(())
