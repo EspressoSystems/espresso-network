@@ -15,11 +15,11 @@ use hotshot_types::{
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig, forward_budget},
+    block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig, forward_budget},
     helpers::test_upgrade_lock,
     message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
     network::{MIN_MESSAGE_LIMIT, message_limit},
-    tests::common::utils::mock_membership,
+    tests::common::utils::{TestData, mock_membership},
 };
 
 fn tx(n: u8) -> TestTransaction {
@@ -555,4 +555,151 @@ async fn reconstructed_block_drops_later_copies_of_its_transactions() {
     b.on_transactions(tx_msg(view(2), Vec::from([tx(1)])));
     let (txns, _) = b.drain(view(2), epoch());
     assert!(txns.is_empty());
+}
+
+fn waiting_builder(empty_block_delay: Duration) -> BlockBuilder<TestTypes> {
+    builder_with(BlockBuilderConfig {
+        empty_block_delay,
+        ..small_config()
+    })
+}
+
+fn request_from(
+    test_data: &TestData,
+    target_view: ViewNumber,
+    parent: usize,
+) -> BlockAndHeaderRequest<TestTypes> {
+    BlockAndHeaderRequest {
+        view: target_view,
+        epoch: EpochNumber::genesis(),
+        parent_proposal: test_data.views[parent].proposal.data.clone(),
+    }
+}
+
+#[tokio::test]
+async fn empty_pool_builds_as_soon_as_a_transaction_arrives() {
+    let test_data = TestData::new(2).await;
+    let mut b = waiting_builder(Duration::from_secs(3600));
+    b.request_block(request_from(&test_data, view(5), 0));
+    b.on_transactions(tx_msg(view(5), Vec::from([tx(1)])));
+
+    let output = tokio::time::timeout(Duration::from_secs(30), b.next())
+        .await
+        .expect("the build must not wait for the empty block delay")
+        .expect("a build is running")
+        .expect("the build succeeds");
+    assert_eq!(output.manifest.hashes, Vec::from([tx(1).commit()]));
+}
+
+#[tokio::test]
+async fn idle_pool_builds_an_empty_block_after_the_delay() {
+    let test_data = TestData::new(2).await;
+    let delay = Duration::from_millis(50);
+    let mut b = waiting_builder(delay);
+    let start = tokio::time::Instant::now();
+    b.request_block(request_from(&test_data, view(5), 0));
+
+    let Some(Ok(output)) = b.next().await else {
+        panic!("expected an Ok block builder output");
+    };
+    assert!(output.manifest.hashes.is_empty());
+    assert!(start.elapsed() >= delay);
+    assert!(b.next().await.is_none());
+}
+
+#[tokio::test]
+async fn requests_waiting_on_one_view_share_its_transactions() {
+    let test_data = TestData::new(2).await;
+    let mut b = waiting_builder(Duration::from_secs(3600));
+    b.request_block(request_from(&test_data, view(5), 0));
+    b.request_block(request_from(&test_data, view(5), 1));
+    b.on_transactions(tx_msg(view(5), Vec::from([tx(1)])));
+
+    let mut outputs = Vec::new();
+    for _ in 0..2 {
+        let Some(Ok(output)) = b.next().await else {
+            panic!("expected an Ok block builder output");
+        };
+        outputs.push(output);
+    }
+    assert_eq!(outputs[0].payload_commitment, outputs[1].payload_commitment);
+    assert_eq!(outputs[1].manifest.hashes, Vec::from([tx(1).commit()]));
+}
+
+#[tokio::test]
+async fn gc_drops_requests_still_waiting_for_transactions() {
+    let test_data = TestData::new(2).await;
+    let mut b = waiting_builder(Duration::from_secs(3600));
+    b.request_block(request_from(&test_data, view(5), 0));
+    b.gc(view(6));
+    b.on_transactions(tx_msg(view(6), Vec::from([tx(1)])));
+
+    assert!(b.next().await.is_none());
+    let (txns, _) = b.drain(view(6), epoch());
+    assert_eq!(txns, Vec::from([tx(1)]));
+}
+
+/// A view requested later than a higher one expires later, and must not hold the higher one
+/// back past its own deadline.
+#[tokio::test]
+async fn expired_view_builds_while_a_lower_view_still_waits() {
+    let test_data = TestData::new(2).await;
+    let delay = Duration::from_millis(300);
+    let mut b = waiting_builder(delay);
+    let start = tokio::time::Instant::now();
+    b.request_block(request_from(&test_data, view(7), 0));
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    b.request_block(request_from(&test_data, view(5), 0));
+
+    let Some(Ok(output)) = b.next().await else {
+        panic!("expected an Ok block builder output");
+    };
+    assert_eq!(output.view, view(7));
+    assert!(
+        start.elapsed() < delay + Duration::from_millis(200),
+        "view 7 was built {:?} after its request",
+        start.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn request_for_a_passed_view_is_dropped() {
+    let test_data = TestData::new(2).await;
+    let mut b = waiting_builder(Duration::from_secs(3600));
+    b.on_transactions(tx_msg(view(5), Vec::from([tx(1)])));
+    b.on_view_changed(view(6));
+    b.request_block(request_from(&test_data, view(5), 0));
+
+    assert!(b.next().await.is_none());
+    let (txns, _) = b.drain(view(6), epoch());
+    assert_eq!(txns, Vec::from([tx(1)]));
+}
+
+#[tokio::test]
+async fn arriving_transactions_fill_waiting_views_oldest_first() {
+    let test_data = TestData::new(2).await;
+    let mut b = builder_with(BlockBuilderConfig {
+        block_sizes: sizes(1),
+        empty_block_delay: Duration::from_secs(3600),
+        ..small_config()
+    });
+    b.request_block(request_from(&test_data, view(5), 0));
+    b.request_block(request_from(&test_data, view(6), 0));
+    b.on_transactions(tx_msg(view(5), Vec::from([tx(1), tx(2)])));
+
+    let mut built = Vec::new();
+    for _ in 0..2 {
+        let Some(Ok(output)) = b.next().await else {
+            panic!("expected an Ok block builder output");
+        };
+        built.push((output.view, output.manifest.hashes));
+    }
+    built.sort_by_key(|(view, _)| *view);
+    assert_eq!(
+        built,
+        Vec::from([
+            (view(5), Vec::from([tx(1).commit()])),
+            (view(6), Vec::from([tx(2).commit()])),
+        ])
+    );
 }
