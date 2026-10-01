@@ -17,6 +17,7 @@ use data_source::{
     StateCertDataSource, StateCertFetchingDataSource, SubmitDataSource,
 };
 use derivative::Derivative;
+use espresso_api::error::SubmitError;
 use espresso_types::{
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
     FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
@@ -718,7 +719,10 @@ impl<C: ApiContext> SubmitDataSource for ApiState<C> {
 
         // reject transaction bigger than block size
         if txn_size > max_block_size {
-            bail!("transaction size ({txn_size}) is greater than max_block_size ({max_block_size})")
+            return Err(SubmitError::Invalid(format!(
+                "transaction size ({txn_size}) is greater than max_block_size ({max_block_size})"
+            ))
+            .into());
         }
 
         handle.submit_transaction(tx).await
