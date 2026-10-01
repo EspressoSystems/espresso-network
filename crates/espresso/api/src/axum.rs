@@ -86,6 +86,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
         };
         (status, Json(ErrorResponse::new(status, self.to_string()))).into_response()
     }
