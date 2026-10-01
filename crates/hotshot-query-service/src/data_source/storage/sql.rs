@@ -1460,6 +1460,7 @@ impl SqlStorage {
                 }
             }
             from = to + 1;
+            sleep(Duration::from_secs(1)).await;
 
             batches += 1;
             if batches.is_multiple_of(100) {
