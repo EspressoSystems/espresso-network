@@ -25,6 +25,7 @@ from fakes import (
     completed,
     fake_image,
     fake_images,
+    fake_preflight,
     raiser,
     remote,
     two_node_hosts_info,
@@ -48,6 +49,23 @@ def test_apply_failure_logs_the_error_destroys_and_exits_3(run_harness: RunHarne
     assert not ran_ssh(runner)
     assert "InsufficientInstanceCapacity" in run_harness.log()
     assert "| 3 |" in run_harness.index()
+
+
+def test_single_shot_takes_the_node_and_ctl_types(
+    run_harness: RunHarness, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight("amd64"))
+    runner = FakeRunner(states=[DONE_STATE])
+    flags = ("--node-type", "c7i.4xlarge", "--ctl-type", "c7i.2xlarge")
+    run_harness.run(runner, *flags)
+    manifest = netbench.read_json(run_harness.run_dir / "manifest.json")
+    types = {h["name"]: h["instance_type"] for h in manifest["hosts"]}
+    assert types == {
+        "ctl": "c7i.2xlarge",
+        "node0": "c7i.4xlarge",
+        "node1": "c7i.4xlarge",
+    }
+    assert manifest["arch"] == "amd64"
 
 
 def test_declined_prompt_refuses_before_apply(run_harness: RunHarness):

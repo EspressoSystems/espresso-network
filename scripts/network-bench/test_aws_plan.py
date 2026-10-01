@@ -385,8 +385,15 @@ def test_preflight_resolves_az_ami_and_images(monkeypatch: pytest.MonkeyPatch):
             ),
         }
     )
-    monkeypatch.setattr(awsb, "resolve_image", lambda _http_get, ref: fake_image(ref))
+    runner.respond(
+        "describe-instance-types",
+        lambda _: instance_types({"c8g.2xlarge": "arm64", "c8g.4xlarge": "arm64"}),
+    )
+    monkeypatch.setattr(
+        awsb, "resolve_image", lambda _http_get, ref, _platform: fake_image(ref)
+    )
     result = awsb.preflight(FakeSystem(run=runner), cfg, awsb.plan_hosts(cfg))
+    assert result["arch"] == "arm64"
     assert result["az"] == "eu-west-1a"
     assert result["ami_id"] == "ami-0abc"
     assert set(result["images"]) == set(awsb.image_refs(cfg))
@@ -414,8 +421,10 @@ def test_tofu_failure_raises_with_stage_and_last_line(stage, stderr, message):
     assert str(err.value) == message
 
 
-def resolve_with(registry: FakeRegistry) -> dict:
-    return awsb.resolve_image(FakeSystem(http=registry).http_get, registry.ref)
+def resolve_with(registry: FakeRegistry, platform: str = "linux/arm64") -> dict:
+    return awsb.resolve_image(
+        FakeSystem(http=registry).http_get, registry.ref, platform
+    )
 
 
 # REQ:awsbench-image-check
@@ -482,6 +491,141 @@ def test_resolve_image_refuses(make, message):
         resolve_with(server)
     assert message in str(err.value)
     assert server.ref in str(err.value)
+
+
+def test_resolve_image_picks_the_wanted_platform():
+    server = FakeRegistry("x", "v1", [("linux", "arm64"), ("linux", "amd64")])
+    info = resolve_with(server, "linux/amd64")
+    assert info["digest"] == server.digests[("linux", "amd64")]
+
+
+def test_resolve_image_refusal_names_the_wanted_platform():
+    server = FakeRegistry("x", "v1", [("linux", "arm64")])
+    with pytest.raises(awsb.Refused, match="no linux/amd64 platform .* linux/arm64"):
+        resolve_with(server, "linux/amd64")
+
+
+def instance_types(archs: dict[str, str | list[str]]) -> subprocess.CompletedProcess:
+    """`describe-instance-types` for type -> EC2 architecture name(s)."""
+    body = {
+        "InstanceTypes": [
+            {
+                "InstanceType": t,
+                "ProcessorInfo": {
+                    "SupportedArchitectures": [a] if isinstance(a, str) else a
+                },
+            }
+            for t, a in archs.items()
+        ]
+    }
+    return completed(stdout=json.dumps(body))
+
+
+@pytest.mark.parametrize(
+    ("supported", "arch"),
+    [(["arm64"], "arm64"), (["x86_64"], "amd64"), (["i386", "x86_64"], "amd64")],
+)
+def test_instance_arch_maps_ec2_architectures(supported: list[str], arch: str):
+    runner = FakeRunner()
+    runner.respond(
+        "describe-instance-types",
+        lambda _: instance_types({"a.large": supported, "b.large": supported}),
+    )
+    assert awsb.instance_arch(runner, {"a.large", "b.large"}) == arch
+
+
+def intel_preflight_runner(ctl_arch: str = "x86_64") -> FakeRunner:
+    runner = FakeRunner(
+        {
+            STS_CALL: sts_response(awsb.ACCOUNT),
+            ("aws", "--profile", "timeboost-dev", "ec2", "describe-images"): completed(
+                stdout=json.dumps("ami-0amd")
+            ),
+        }
+    )
+    runner.respond(
+        "describe-instance-types",
+        lambda _: instance_types({"c8i.2xlarge": ctl_arch, "c8i.4xlarge": "x86_64"}),
+    )
+    runner.respond(
+        "describe-instance-type-offerings", lambda _: offerings("eu-west-1a")
+    )
+    return runner
+
+
+INTEL = {"node_type": "c8i.4xlarge", "ctl_type": "c8i.2xlarge"}
+
+
+def intel_cfg() -> Any:
+    return small_cfg(node_type=INTEL["node_type"], ctl_type=INTEL["ctl_type"])
+
+
+def test_preflight_on_intel_resolves_the_amd64_ami_and_images(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cfg = intel_cfg()
+    runner = intel_preflight_runner()
+    platforms: list[str] = []
+
+    def resolve(_http_get, ref: str, platform: str) -> dict:
+        platforms.append(platform)
+        return fake_image(ref)
+
+    monkeypatch.setattr(awsb, "resolve_image", resolve)
+    result = awsb.preflight(FakeSystem(run=runner), cfg, awsb.plan_hosts(cfg))
+    assert result["arch"] == "amd64"
+    assert result["ami_id"] == "ami-0amd"
+    assert runner.ran("describe-instance-types", "c8i.2xlarge", "c8i.4xlarge")
+    assert runner.ran("describe-images", "ubuntu-noble-24.04-amd64-server-*")
+    assert set(platforms) == {"linux/amd64"}
+
+
+def test_preflight_refuses_node_and_ctl_types_of_different_architectures():
+    cfg = intel_cfg()
+    runner = intel_preflight_runner(ctl_arch="arm64")
+    with pytest.raises(awsb.Refused, match="c8i.2xlarge arm64, c8i.4xlarge amd64"):
+        awsb.preflight(FakeSystem(run=runner), cfg, awsb.plan_hosts(cfg))
+    assert not runner.ran("describe-images")
+
+
+@pytest.mark.usefixtures("preflighted")
+def test_node_and_ctl_type_flags_reach_the_hosts_and_manifest(
+    fleet_dir, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight("amd64"))
+    args = plan_args("--node-type", "c8i.4xlarge", "--ctl-type", "c8i.2xlarge")
+    assert awsb.cmd_plan(args, FakeSystem(run=FakeRunner(states=[]))) == awsb.EXIT_OK
+    manifest = netbench.read_json(fleet_dir / "runs/01-run/manifest.json")
+    types = {h["name"]: h["instance_type"] for h in manifest["hosts"]}
+    assert types == {
+        "ctl": "c8i.2xlarge",
+        "node0": "c8i.4xlarge",
+        "node1": "c8i.4xlarge",
+    }
+    assert manifest["config"] | INTEL == manifest["config"]
+    assert manifest["arch"] == "amd64"
+    assert {line["item"] for line in manifest["estimate"]["lines"]} >= {
+        "instance c8i.2xlarge",
+        "instance c8i.4xlarge",
+    }
+
+
+@pytest.mark.parametrize("key", ["node_type", "ctl_type"])
+def test_config_from_a_manifest_without_an_instance_type_raises(key: str):
+    saved = awsb.config_to_json(small_cfg())
+    del saved[key]
+    with pytest.raises(KeyError, match=key):
+        awsb.config_from_manifest(saved)
+
+
+@pytest.mark.usefixtures("fleet_dir")
+def test_an_unpriced_instance_type_is_refused_before_any_aws_call():
+    runner = FakeRunner({})
+    with pytest.raises(
+        awsb.Refused, match=r"m7a\.large has no price; known: .*c8i\.4xlarge"
+    ):
+        awsb.cmd_plan(plan_args("--node-type", "m7a.large"), FakeSystem(run=runner))
+    assert runner.calls == []
 
 
 @pytest.fixture

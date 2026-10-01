@@ -15,8 +15,8 @@ provider "aws" {
 }
 
 # az and ami_id come from `aws-bench preflight`, which already picked an AZ offering every
-# requested instance type and resolved the arm64 AMI; this module only looks up that AZ's
-# default subnet.
+# requested instance type and resolved the AMI of their architecture; this module only looks
+# up that AZ's default subnet.
 locals {
   region     = "eu-west-1"
   account_id = "027574771971"

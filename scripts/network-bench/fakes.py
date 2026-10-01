@@ -1207,10 +1207,11 @@ def fake_images() -> dict:
     } | {name: fake_image(ref) for name, ref in awsb.SUPPORT_IMAGES.items()}
 
 
-def fake_preflight() -> dict:
+def fake_preflight(arch: str = "arm64") -> dict:
     return {
         "account": "027574771971",
         "az": "eu-west-1b",
+        "arch": arch,
         "ami_id": "ami-0abc",
         "images": fake_images(),
         "git_diff": None,

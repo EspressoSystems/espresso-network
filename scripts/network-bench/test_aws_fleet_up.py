@@ -23,6 +23,7 @@ from fakes import (
     awsb,
     completed,
     fake_image,
+    fake_preflight,
     ssh_calls,
     valid_result,
     volume_runner,
@@ -87,6 +88,20 @@ def test_up_logs_the_cost_and_the_run_command(harness):
     )
     assert f"idle: fleet {harness.fleet_dir}; " in log
     assert f"run: aws-bench run --fleet {harness.fleet_dir} --query-db colocated" in log
+
+
+def test_up_takes_the_node_and_ctl_types(harness, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight("amd64"))
+    runner = FakeRunner(states=[DONE_STATE])
+    flags = ("--node-type", "c8i.4xlarge", "--ctl-type", "c8i.2xlarge")
+    assert harness.up(runner, *flags) == awsb.EXIT_OK
+    fleet = harness.fleet()
+    assert {h["instance_type"] for h in fleet["hosts"]} == {
+        "c8i.2xlarge",
+        "c8i.4xlarge",
+    }
+    assert (fleet["config"]["node_type"], fleet["config"]["ctl_type"]) == flags[1::2]
+    assert fleet["arch"] == "amd64"
 
 
 def test_fleet_bound_is_the_rate_over_the_ttl_plus_boot(harness):
@@ -295,6 +310,8 @@ def expires_in(minutes: int) -> dict:
         ({}, ("--nodes", "3"), "shape the fleet"),
         ({}, ("--max-usd=5",), "shape the fleet"),
         ({}, ("--ttl-min", "10"), "shape the fleet"),
+        ({}, ("--node-type", "c8i.4xlarge"), "shape the fleet"),
+        ({}, ("--ctl-type=c8i.2xlarge",), "shape the fleet"),
         ({}, ("--query-db", "volume"), "--query-db volume was not"),
     ],
 )
@@ -396,7 +413,8 @@ def resolved(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Refs looked up in a registry that has `:other` at `NEW_DIGEST`."""
     refs: list[str] = []
 
-    def resolve(_http_get, ref: str) -> dict:
+    def resolve(_http_get, ref: str, platform: str) -> dict:
+        assert platform == "linux/arm64"
         refs.append(ref)
         image = fake_image(ref)
         return {**image, "digest": NEW_DIGEST} if ref.endswith(":other") else image

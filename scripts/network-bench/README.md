@@ -108,6 +108,13 @@ laptop                       EC2, one AZ, private IPs
 | `node0`   | `c8g.4xlarge` | espresso-node `-- storage-journal -- storage-sql -- http -- query ...`, postgres container, `agent-host` |
 | `node1..` | `c8g.4xlarge` | espresso-node `-- storage-journal -- http -- status -- submit -- catchup -- config`, `agent-host`        |
 
+- Types: the table's are the defaults; `--node-type` (node0..) and `--ctl-type` (`ctl`) on `plan`, `up` and single-shot
+  `run`; `run --fleet` refuses them. A type outside the `INSTANCE_PRICES` table (c8g, c8i, c7i at 2xlarge, 4xlarge,
+  8xlarge) is refused before any AWS call. Both types must share one architecture; preflight reads it from
+  `describe-instance-types` and picks the Ubuntu AMI and image platform (`linux/arm64` or `linux/amd64`) to match.
+  Recorded as `arch` in the manifest.
+- vCPUs: an Intel vCPU is a hyperthread (c8i.4xlarge: 16 vCPU = 8 cores); a Graviton vCPU is a physical core
+  (c8g.4xlarge: 16 cores).
 - Stake: equal, orchestrator self-registration; 5 nodes → quorum 4, lagging `node0` never stalls consensus.
 - Peers: `node0` has state peers like every node and no API peers.
 - Keys: test mnemonic, index 20 + i. No `keygen`, no `stake-for-demo`.
@@ -128,7 +135,7 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> services -> nodes -> m
 
 | Phase       | Does                                                                                                                                               | Gate                                                   |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| preflight   | tools, `sts` account, type offered, image digests + arm64                                                                                          | any miss: exit 2                                       |
+| preflight   | tools, `sts` account, type arch + offered, image digests + arch                                                                                    | any miss: exit 2                                       |
 | plan        | render run dir, `tofu init/plan`, estimate at the `PRICES` constants (eu-west-1 on-demand)                                                         | over `--max-usd`, declined, no tty w/o `--yes`: exit 2 |
 | apply       | `tofu apply`, local state in run dir; instances terminate on shutdown, cloud-init arms `shutdown -P +TTL` first                                    | last tf stderr line, destroy, exit 3                   |
 | provisioned | ssh + `cloud-init status --wait`, digests == manifest, render env/start.sh (need private IPs), rsync `/opt/bench`, start `agent-host`              |                                                        |
@@ -217,7 +224,7 @@ TTL. An EventBridge one-shot schedule deletes the rds instance 5 min earlier.
 `bench-state/aws/<owner>-<yyyymmdd-hhmmss>/` (the fleet dir), deleted only by `prune`:
 
 ```
-fleet.json               argv, config, git rev, account, AZ, AMI, digests, estimate, phase, hosts_info
+fleet.json               argv, config, git rev, account, AZ, arch, AMI, digests, estimate, phase, hosts_info
 events.jsonl driver.log  phase transitions, DEBUG log
 terraform/               module copy, tfvars, plan.txt, terraform.tfstate
 hosts.json               role, public/private IP, private DNS per host
@@ -260,6 +267,8 @@ just bench aws plan --tag release-x --nodes 4 --db-modes colocated,volume
 just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --max-usd 10 --yes
 # single shot, fixed load steps, every step run, query node lag up to 600 s tolerated
 just bench aws run --tag release-x --steps 50,60,80 --keep-going --cap-s 600 --tx-timeout-s 600
+# single shot on Intel hosts (amd64 AMI and images)
+just bench aws run --tag release-x --node-type c8i.4xlarge --ctl-type c8i.2xlarge
 # provision an idle fleet with all three stores for 4 h
 just bench aws up --tag release-x --nodes 4 --db-modes colocated,volume,rds --ttl-min 240 --max-usd 60
 # measure on the only selectable fleet, payload and VID share files on the query DB store

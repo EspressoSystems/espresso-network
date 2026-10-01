@@ -144,14 +144,25 @@ NODE_ROOT_GB_MIN = 100
 VALIDATOR_DISK_FACTOR = 2
 QUERY_DISK_FACTOR = 3
 
-# On-demand USD, eu-west-1, as of 2026-09-30 (`aws pricing get-products`, EBS/VPC/RDS pages).
-# Instances per hour; gp3 GB-month, gp3 IOPS above the 3000 baseline (per IOPS-month), gp3
+# On-demand USD, eu-west-1, as of 2026-09-30 (`aws pricing get-products`, EC2/EBS/VPC/RDS
+# pages). Linux instances per hour; the types `--node-type` and `--ctl-type` accept.
+INSTANCE_PRICES = {
+    "c8g.2xlarge": 0.34112,
+    "c8g.4xlarge": 0.68224,
+    "c8g.8xlarge": 1.36448,
+    "c8i.2xlarge": 0.4022,
+    "c8i.4xlarge": 0.8044,
+    "c8i.8xlarge": 1.6088,
+    "c7i.2xlarge": 0.38304,
+    "c7i.4xlarge": 0.76608,
+    "c7i.8xlarge": 1.53216,
+}
+# RDS instances per hour; gp3 GB-month, gp3 IOPS above the 3000 baseline (per IOPS-month), gp3
 # throughput above the 125 MB/s baseline (per MB/s-month), RDS PostgreSQL Single-AZ gp3 storage
 # (per GB-month; the IOPS and MB/s of a 400 GiB volume are included), a public IPv4 address (per
 # hour), internet egress (per GB, first tier).
 PRICES = {
-    "c8g.4xlarge": 0.68224,
-    "c8g.2xlarge": 0.34112,
+    **INSTANCE_PRICES,
     "db.m8g.4xlarge": 1.488,
     "gp3_gb_month_usd": 0.088,
     "gp3_iops_month_usd": 0.005,
@@ -261,10 +272,11 @@ PAYLOAD_CONTAINER_DIR = "/payload"
 VOLUME_BY_ID = "/dev/disk/by-id"
 # Seconds `up` waits for udev to publish the by-id link of the attached volume.
 PG_VOLUME_WAIT_S = 60
-# Sized for the 32 GiB of node0 (c8g.4xlarge), which also runs espresso-node and the journal's
-# page cache; the 64 GiB RDS class takes the same values. One map for every placement: key ->
-# (postgresql.conf text for the container's `-c` flags, the same value as pg_settings.setting
-# reports it and the RDS parameter group takes it). The last group pins what RDS defaults
+# Sized for the 32 GiB of node0 (a C-family 4xlarge), which also runs espresso-node and the
+# journal's page cache; the 64 GiB RDS class takes the same values. One map for every
+# placement: key -> (postgresql.conf text for the container's `-c` flags, the same value as
+# pg_settings.setting reports it and the RDS parameter group takes it). The last group pins
+# what RDS defaults
 # differently from postgres.
 PG_TUNING: dict[str, tuple[str, str]] = {
     "shared_buffers": ("8GB", "1048576"),
@@ -393,6 +405,8 @@ RESET_KEEP = (
 # Flags that shape the fleet, refused by `run --fleet` (the values are in fleet.json).
 FLEET_ONLY_FLAGS = (
     "--nodes",
+    "--node-type",
+    "--ctl-type",
     "--root-gb",
     "--pg-iops",
     "--pg-mbps",
@@ -516,6 +530,10 @@ class Interrupted(Exception):
 
 DbMode = Literal["colocated", "volume", "rds"]
 DB_MODES: tuple[DbMode, ...] = ("colocated", "volume", "rds")
+# Ubuntu AMI names and OCI platforms share these names.
+Arch = Literal["amd64", "arm64"]
+# `ProcessorInfo.SupportedArchitectures` of `describe-instance-types` -> Arch.
+EC2_ARCHS: dict[str, Arch] = {"x86_64": "amd64", "arm64": "arm64"}
 
 
 class HostSpec(TypedDict):
@@ -557,6 +575,7 @@ class HostInfo(TypedDict):
 class Preflight(TypedDict):
     account: str
     az: str
+    arch: Arch
     ami_id: str
     images: dict[str, ImageInfo]
     # The engine minor `rds_orderable` resolved; present when the fleet has an rds mode.
@@ -632,6 +651,7 @@ class FleetManifest(TypedDict):
     # Filled in by preflight: needed again at
     # `wait_hosts` to check pulled digests, and at `render` for the deployment block.
     az: NotRequired[str]
+    arch: NotRequired[Arch]
     ami_id: NotRequired[str]
     images: NotRequired[dict[str, ImageInfo]]
     hosts_info: NotRequired[dict[str, "HostInfo"]]
@@ -740,6 +760,8 @@ class Ec2Balance(TypedDict):
 class RunConfig:
     tag: str
     nodes: int = 5
+    node_type: str = NODE_TYPE
+    ctl_type: str = CTL_TYPE
     load: nb.BenchConfig = field(default_factory=lambda: aws_load())
     root_gb: str = "auto"
     pg_iops: int = 12000
@@ -905,13 +927,14 @@ def rds_spec(cfg: RunConfig, pre: Preflight) -> RdsSpec | None:
 
 def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     check_rds_config(cfg)
+    check_priced(cfg.ctl_type, cfg.node_type)
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
     hosts: list[HostSpec] = [
         {
             "name": "ctl",
             "role": "ctl",
-            "instance_type": CTL_TYPE,
+            "instance_type": cfg.ctl_type,
             "root_gb": CTL_ROOT_GB,
             "root_iops": GP3_BASELINE_IOPS,
             "root_mbps": GP3_BASELINE_MBPS,
@@ -923,13 +946,22 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
             {
                 "name": f"node{i}",
                 "role": "query" if query else "validator",
-                "instance_type": NODE_TYPE,
+                "instance_type": cfg.node_type,
                 "root_gb": node_root_gb(cfg, query),
                 "root_iops": cfg.pg_iops if query else VALIDATOR_ROOT_IOPS,
                 "root_mbps": cfg.pg_mbps if query else VALIDATOR_ROOT_MBPS,
             }
         )
     return hosts
+
+
+def check_priced(*types: str) -> None:
+    """Refuses, before any AWS call, a type the cost estimate has no price for."""
+    for instance_type in types:
+        if instance_type not in INSTANCE_PRICES:
+            raise Refused(
+                f"{instance_type} has no price; known: {', '.join(sorted(INSTANCE_PRICES))}"
+            )
 
 
 def peers(i: int, n: int) -> list[int]:
@@ -1321,7 +1353,7 @@ def caller_account(run: Runner) -> str:
     return account
 
 
-def resolve_ami(run: Runner) -> str:
+def resolve_ami(run: Runner, arch: Arch) -> str:
     ami_id = aws_json(
         run,
         "ec2",
@@ -1329,13 +1361,35 @@ def resolve_ami(run: Runner) -> str:
         "--owners",
         UBUNTU_OWNER_ID,
         "--filters",
-        "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*",
+        f"Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-{arch}-server-*",
         "--query",
         "sort_by(Images, &CreationDate)[-1].ImageId",
     )
     if ami_id is None:
-        raise Refused(f"no Ubuntu 24.04 arm64 AMI found in {REGION}")
+        raise Refused(f"no Ubuntu 24.04 {arch} AMI found in {REGION}")
     return ami_id
+
+
+def instance_arch(run: Runner, types: set[str]) -> Arch:
+    """The one architecture every type runs, as Ubuntu and OCI name it."""
+    described = aws_json(
+        run, "ec2", "describe-instance-types", "--instance-types", *sorted(types)
+    )["InstanceTypes"]
+    archs = {
+        t["InstanceType"]: {
+            EC2_ARCHS[a]
+            for a in t["ProcessorInfo"]["SupportedArchitectures"]
+            if a in EC2_ARCHS
+        }
+        for t in described
+    }
+    distinct = {arch for found in archs.values() for arch in found}
+    if len(distinct) != 1 or any(len(a) != 1 for a in archs.values()):
+        listed = ", ".join(
+            f"{t} {'/'.join(sorted(a))}" for t, a in sorted(archs.items())
+        )
+        raise Refused(f"instance types must share one architecture: {listed}")
+    return distinct.pop()
 
 
 def capable_az(run: Runner, types: set[str]) -> str:
@@ -1371,10 +1425,10 @@ def image_refs(cfg: RunConfig, postgres_tag: str | None = None) -> dict[str, str
 
 
 def resolve_images(
-    http_get: HttpGet, cfg: RunConfig, rds_minor: str | None
+    http_get: HttpGet, cfg: RunConfig, rds_minor: str | None, arch: Arch
 ) -> dict[str, ImageInfo]:
     return {
-        name: resolve_image(http_get, ref)
+        name: resolve_image(http_get, ref, f"linux/{arch}")
         for name, ref in image_refs(cfg, rds_minor).items()
     }
 
@@ -1440,11 +1494,11 @@ def _bearer_token(http_get: HttpGet, www_authenticate: str, ref: str) -> str:
     return token["token"] if "token" in token else token["access_token"]
 
 
-def resolve_image(http_get: HttpGet, ref: str) -> ImageInfo:
+def resolve_image(http_get: HttpGet, ref: str, platform: str) -> ImageInfo:
     """Anonymous token challenge, then the manifest (an index for a multi-arch image, or a
-    single manifest otherwise) and its config blob, for the digest, the `linux/arm64`
-    platform and the `org.opencontainers.image.revision` label. Works against ghcr and docker
-    hub unmodified: both implement the same OCI distribution spec."""
+    single manifest otherwise) and its config blob, for the digest of `platform` (e.g.
+    `linux/arm64`) and the `org.opencontainers.image.revision` label. Works against ghcr and
+    docker hub unmodified: both implement the same OCI distribution spec."""
     host, repository, tag = parse_ref(ref)
     base = f"https://{host}/v2/{repository}"
     manifest_url = f"{base}/manifests/{tag}"
@@ -1472,24 +1526,15 @@ def resolve_image(http_get: HttpGet, ref: str) -> ImageInfo:
         platforms = [
             f"{m['platform']['os']}/{m['platform']['architecture']}" for m in entries
         ]
-        arm64 = next(
-            (
-                m
-                for m in entries
-                if m["platform"]["os"] == "linux"
-                and m["platform"]["architecture"] == "arm64"
-            ),
-            None,
-        )
-        if arm64 is None:
+        if platform not in platforms:
             raise Refused(
-                f"no linux/arm64 platform for {ref}: has {', '.join(platforms)}"
+                f"no {platform} platform for {ref}: has {', '.join(platforms)}"
             )
-        digest = arm64["digest"]
+        digest = entries[platforms.index(platform)]["digest"]
         child_status, _, child_body = http_get(f"{base}/manifests/{digest}", headers)
         if child_status != 200:
             raise Refused(
-                f"failed to fetch the arm64 manifest for {ref}: status {child_status}"
+                f"failed to fetch the {platform} manifest for {ref}: status {child_status}"
             )
         config_digest = json.loads(child_body)["config"]["digest"]
     else:
@@ -1501,10 +1546,10 @@ def resolve_image(http_get: HttpGet, ref: str) -> ImageInfo:
         raise Refused(f"failed to fetch the config blob for {ref}: status {status}")
     config = json.loads(config_body)
     if not platforms:
-        platform = f"{config['os']}/{config['architecture']}"
-        if platform != "linux/arm64":
-            raise Refused(f"no linux/arm64 platform for {ref}: has {platform}")
-        platforms = [platform]
+        single = f"{config['os']}/{config['architecture']}"
+        if single != platform:
+            raise Refused(f"no {platform} platform for {ref}: has {single}")
+        platforms = [single]
     revision = (config.get("config", {}).get("Labels") or {}).get(
         "org.opencontainers.image.revision"
     )
@@ -1517,13 +1562,16 @@ def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Prefligh
         system.which, ["tofu", "aws", "ssh", "scp", "rsync", "git", "ssh-keygen"]
     )
     account = caller_account(run)
-    az = capable_az(run, {h["instance_type"] for h in hosts})
-    ami_id = resolve_ami(run)
+    types = {h["instance_type"] for h in hosts}
+    arch = instance_arch(run, types)
+    az = capable_az(run, types)
+    ami_id = resolve_ami(run, arch)
     rds_minor = rds_orderable(run, cfg, az) if "rds" in cfg.db_modes else None
-    images = resolve_images(system.http_get, cfg, rds_minor)
+    images = resolve_images(system.http_get, cfg, rds_minor, arch)
     pre: Preflight = {
         "account": account,
         "az": az,
+        "arch": arch,
         "ami_id": ami_id,
         "images": images,
     }
@@ -2000,6 +2048,8 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         "--tag", required=tag_required, help="ghcr tag pushed by CI, no default"
     )
     parser.add_argument("--nodes", type=int, default=defaults.nodes)
+    parser.add_argument("--node-type", default=defaults.node_type)
+    parser.add_argument("--ctl-type", default=defaults.ctl_type)
     parser.add_argument(
         "--steps",
         type=nb.parse_rates,
@@ -2074,6 +2124,8 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     return RunConfig(
         tag=args.tag,
         nodes=args.nodes,
+        node_type=args.node_type,
+        ctl_type=args.ctl_type,
         load=load,
         node_env=tuple(args.node_env),
         max_block_size=args.max_block_size,
@@ -3238,7 +3290,8 @@ def retagged(
     tag is the fleet's, which needs no registry access."""
     if not tag_changed(manifest, cfg):
         return manifest
-    return {**manifest, "images": resolve_images(http_get, cfg, None)}
+    images = resolve_images(http_get, cfg, None, manifest["arch"])
+    return {**manifest, "images": images}
 
 
 def take_fleet_lock(
@@ -3609,20 +3662,22 @@ def settle_fleet(fleet: FleetState, dirty: bool) -> None:
 
 def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None:
     log.info(
-        "account %s (%s) %s, az %s, ami %s",
+        "account %s (%s) %s, az %s, ami %s (%s)",
         pre["account"],
         PROFILE,
         REGION,
         pre["az"],
         pre["ami_id"],
+        pre["arch"],
     )
     images = ", ".join(f"{n}@{i['digest'][:15]}" for n, i in pre["images"].items())
     log.info("images %s: %s", cfg.tag, images)
+    types = {h["role"]: h["instance_type"] for h in hosts}
     log.info(
         "hosts: ctl %s; %d x %s (node0 validator+query, postgres)",
-        CTL_TYPE,
-        cfg.nodes,
-        NODE_TYPE,
+        types["ctl"],
+        len(hosts) - 1,
+        types["query"],
     )
     if "rds" in cfg.db_modes:
         log.info(
@@ -3657,6 +3712,7 @@ def render_fleet_dir(
         fleet_dir / FLEET_JSON,
         "planned",
         az=pre["az"],
+        arch=pre["arch"],
         ami_id=pre["ami_id"],
         images=pre["images"],
         git_rev=git_rev,
@@ -5075,6 +5131,8 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
         "load": load_config(dict(saved["load"])),
         "db_modes": tuple(saved["db_modes"]),
         "fleet": None if saved["fleet"] is None else Path(saved["fleet"]),
+        "node_type": saved["node_type"],
+        "ctl_type": saved["ctl_type"],
     }
     # Dirs from before the flag have no such key.
     if "node_env" in saved:
