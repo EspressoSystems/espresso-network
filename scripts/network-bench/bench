@@ -11,8 +11,11 @@ drives it with a paced load generator, samples node metrics and host CPU, tears 
 down, and writes `result.json` plus a markdown `summary.md` into the output directory.
 
 Load is a staircase: after a warmup, `tx_size` transactions go out evenly spaced at each rate
-of `steps` for `step_s`, round-robin over the first `submit_nodes` nodes, independent of
-inclusion; `cap_s` of load caps the transactions in flight. Each step is judged on its second
+of `steps` for `step_s`, independent of inclusion; `cap_s` of load caps the transactions in
+flight. Each goes round-robin to one of the first `submit_nodes` nodes or, with `submit_to
+leader`, to the node leading `leader_ahead` views after the one node1 reports, so a network
+that does not forward transactions (`fanout` 0) still fills every block from the submits of
+one view. Each step is judged on its second
 half: it fails if decided falls behind the offered rate, a view times out,
 consensus latency (submit to the block on a validator) exceeds its target, or the query node's
 lag behind the validators exceeds its target or grows. At the first failing step the ramp stops
@@ -41,6 +44,7 @@ Examples:
 import argparse
 import asyncio
 import base64
+import collections
 import dataclasses
 import hashlib
 import http.client
@@ -161,6 +165,11 @@ READ_RETRY_S = 1.0
 TRACKER_THREADS = 1
 HEIGHT_POLL_S = 0.1
 COUNTER_POLL_S = 1.0
+# Leader-targeted submits read node1's view and its next LEADER_WINDOW leaders every
+# LEADER_POLL_S; a view lasts 100-200 ms under load, and a read must not go stale by one.
+LEADER_POLL_S = 0.02
+LEADER_WINDOW = 8
+SUBMIT_MODES = ("round-robin", "leader")
 METRICS_EVERY_S = 1.0
 KEEP_UP_RATIO = 0.95
 # Step rules, see step_fails.
@@ -271,6 +280,10 @@ class LoadStats(TypedDict):
     # Before the refine step; skipped if the failed step's backlog did not drain in time.
     drain_s: float | None
     refine_skipped: bool
+    # Leader-targeted submits: reads of node1's upcoming leaders, and submits that went
+    # round-robin because no submit node led the targeted view.
+    leader_polls: int
+    leader_fallbacks: int
 
 
 class StepWindow(TypedDict):
@@ -296,6 +309,10 @@ class StepResult(StepWindow, StepMeasures):
     # Submit to the block showing on node0's query API: what a client of the query node sees.
     latency_ms: Quantiles | None
     mean_view_ms: float | None
+    # Per block decided in the window: the bench's transactions it carries, empty blocks as
+    # zero, and the time since the block before it, at the height poll's resolution.
+    block_txs: Quantiles | None
+    block_gap_ms: Quantiles | None
     cpu_s_per_mb: float | None
     node_cpu: dict[str, float]
     postgres_cpu: float | None
@@ -357,6 +374,13 @@ class BenchConfig:
     steps: tuple[float, ...] = (4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0)
     step_s: int = 30
     submit_nodes: int = 3
+    # "round-robin" over the submit nodes, or "leader": the submit node leading `leader_ahead`
+    # views after the one node1 reports. A leader builds its block on seeing the previous
+    # view's proposal, so 2 is the first build a submit can land in. A view further only
+    # tolerates a stale read: a node that also leads the view in between takes the submits
+    # into that block and proposes nothing in the targeted one.
+    submit_to: str = "round-robin"
+    leader_ahead: int = 2
     workers: int = 6
     # Safety cap on transactions in flight: this many seconds of the current step's load.
     cap_s: float = 5.0
@@ -367,6 +391,11 @@ class BenchConfig:
     # A step fails above either target, see step_fails.
     latency_target_ms: int = 1000
     query_lag_target_ms: int = 1000
+    # Node settings the network starts with: how many upcoming leaders a node forwards each
+    # submitted transaction to (0: none, it proposes them itself), and how long a leader with
+    # nothing to propose waits before proposing an empty block.
+    fanout: int = 2
+    empty_block_delay_ms: int = 500
 
 
 @dataclass
@@ -511,6 +540,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             f"--{field.name.replace('_', '-')}",
             type=parse_rates if field.name == "steps" else type(default),
             default=default,
+            choices=SUBMIT_MODES if field.name == "submit_to" else None,
         )
     run.set_defaults(func=cmd_run)
 
@@ -533,7 +563,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     sysinfo_p.add_argument("--out", type=Path, default=Path("bench-out"))
     sysinfo_p.set_defaults(func=cmd_sysinfo)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.func is cmd_run and not 1 <= args.leader_ahead <= LEADER_WINDOW:
+        parser.error(f"--leader-ahead must be between 1 and {LEADER_WINDOW}")
+    return args
 
 
 def parse_rates(text: str) -> tuple[float, ...]:
@@ -642,6 +675,8 @@ def write_report(out: Path, baseline: Baseline | None) -> int:
     saved["steps"] = tuple(saved["steps"])
     cfg = BenchConfig(**saved)
     result = analyze(out, cfg)
+    # As recorded: a run from before a setting existed does not report its default.
+    result["config"] = saved
     write_json(out / "result.json", result)
     comparison = compare(result, baseline) if baseline else None
     summary = render(result, comparison)
@@ -798,6 +833,8 @@ def start_network(cfg: BenchConfig, out: Path, storage: Path, bin_dir: Path) -> 
         "PATH": f"{bin_dir.resolve()}:{os.environ['PATH']}",
         "BENCH_OUT": str(out),
         "ESPRESSO_BASE_STORAGE_PATH": str(storage),
+        "ESPRESSO_NODE_TRANSACTION_FANOUT": str(cfg.fanout),
+        "ESPRESSO_NODE_EMPTY_BLOCK_DELAY": f"{cfg.empty_block_delay_ms}ms",
     }
     cmd = [
         "process-compose",
@@ -927,6 +964,8 @@ def proc_cwd(pid: int) -> Path | None:
 class Tx:
     id: int
     node: int
+    # The view whose leader `node` was chosen as; None for a round-robin submit.
+    target_view: int | None = None
     # inf while the request waits for a submit thread, so the timeout clock starts at send.
     t_submit: float = math.inf
     t_included: float | None = None
@@ -1005,6 +1044,33 @@ class LoadState:
             self.resolve(tx_id, "included", at)
 
 
+class LeaderSchedule:
+    """Which submit node leads each upcoming view, as last read from node1."""
+
+    def __init__(self, nodes: dict[str, int]) -> None:
+        # Consensus key -> index into the submit urls.
+        self.nodes = nodes
+        self.view = 0
+        self.leaders: dict[int, int | None] = {}
+        self.polls = 0
+        self.fallbacks = 0
+
+    def update(self, view: int, leaders: list[tuple[int, str]]) -> None:
+        self.polls += 1
+        self.view = view
+        self.leaders = {v: self.nodes.get(key) for v, key in leaders}
+
+    def target(self, ahead: int) -> tuple[int, int] | None:
+        """The view `ahead` past the last one read and the submit node leading it; None, and
+        counted as a fallback, when no submit node leads it or nothing was read yet."""
+        view = self.view + ahead
+        node = self.leaders.get(view)
+        if node is None:
+            self.fallbacks += 1
+            return None
+        return view, node
+
+
 async def generate_load(
     cfg: BenchConfig,
     submit_urls: list[str],
@@ -1021,12 +1087,17 @@ async def generate_load(
     bodies = tx_bodies(cfg, len(marker) + 8)
     submitter = Client(HttpPool(), ThreadPoolExecutor(cfg.workers))
     tracking = Client(HttpPool(), ThreadPoolExecutor(TRACKER_THREADS))
-    polling = Client(HttpPool(), ThreadPoolExecutor(2 + len(validator_urls)))
+    polling = Client(HttpPool(), ThreadPoolExecutor(3 + len(validator_urls)))
     done = asyncio.Event()
     counters: list[dict[str, Any]] = []
+    schedule = None
     try:
         start_height = await tracking.call(query_height, query_url)
         heights = Heights(start_height)
+        if cfg.submit_to == "leader":
+            schedule = await leader_schedule(
+                polling, submit_urls[: cfg.submit_nodes], validator_urls[0]
+            )
         async with asyncio.TaskGroup() as group:
             pollers = [
                 group.create_task(
@@ -1042,11 +1113,23 @@ async def generate_load(
                 ),
                 group.create_task(poll_counters(polling, validator_urls[0], counters)),
             ]
+            if schedule is not None:
+                pollers.append(
+                    group.create_task(
+                        poll_leaders(polling, validator_urls[0], schedule)
+                    )
+                )
             tracker = group.create_task(
                 track_inclusion(cfg, state, tracking, query_url, marker, heights, done)
             )
             load = Load(
-                cfg, state, submitter, submit_urls[: cfg.submit_nodes], marker, bodies
+                cfg,
+                state,
+                submitter,
+                submit_urls[: cfg.submit_nodes],
+                marker,
+                bodies,
+                schedule,
             )
             steps, drained, skipped = await run_staircase(load, heights, counters)
             done.set()
@@ -1074,9 +1157,52 @@ async def generate_load(
             "drain_s": drained,
             "refine_skipped": skipped,
             "marker": marker.hex(),
+            "leader_polls": schedule.polls if schedule else 0,
+            "leader_fallbacks": schedule.fallbacks if schedule else 0,
         },
     )
     return steps[0]["t_start"], steps[-1]["t_end"]
+
+
+async def leader_schedule(
+    client: Client, submit_urls: list[str], validator_url: str
+) -> LeaderSchedule:
+    """The submit nodes by consensus key, with the leaders read once so the first submit
+    already has a target."""
+    keys = {}
+    for index, url in enumerate(submit_urls):
+        keys[await client.call(node_key, url)] = index
+    schedule = LeaderSchedule(keys)
+    view, leaders = await client.call(upcoming_leaders, validator_url, LEADER_WINDOW)
+    schedule.update(view, leaders)
+    return schedule
+
+
+def node_key(pool: HttpPool, url: str) -> str:
+    """The node's consensus key, as the leader schedule names leaders."""
+    status, body = read(pool, url + "/v1/status/keys")
+    if status != 200:
+        raise NetworkError(f"keys from {url}: HTTP {status}")
+    return json.loads(body)["consensus_key"]
+
+
+def upcoming_leaders(
+    pool: HttpPool, url: str, count: int
+) -> tuple[int, list[tuple[int, str]]]:
+    """The validator's view and the consensus keys leading the `count` views after it."""
+    status, body = read(pool, f"{url}/v1/status/upcoming-leaders/{count}")
+    if status != 200:
+        raise NetworkError(f"upcoming leaders from {url}: HTTP {status}")
+    data = json.loads(body)
+    return int(data["view"]), [(int(l["view"]), l["key"]) for l in data["leaders"]]
+
+
+async def poll_leaders(client: Client, url: str, schedule: LeaderSchedule) -> None:
+    """Keeps `schedule` current from the validator at `url`, every LEADER_POLL_S."""
+    while True:
+        view, leaders = await client.call(upcoming_leaders, url, LEADER_WINDOW)
+        schedule.update(view, leaders)
+        await asyncio.sleep(LEADER_POLL_S)
 
 
 def tx_bodies(cfg: BenchConfig, header_len: int) -> list[bytes]:
@@ -1106,7 +1232,18 @@ class Load:
     urls: list[str]
     marker: bytes
     bodies: list[bytes]
+    schedule: LeaderSchedule | None = None
     ids: Iterator[int] = dataclasses.field(default_factory=itertools.count)
+
+    def target(self, tx_id: int) -> tuple[int, int | None]:
+        """The submit node for a transaction and the view it is aimed at: the leader of the
+        view `leader_ahead` past the last read, else round-robin and no view."""
+        if self.schedule is not None:
+            hit = self.schedule.target(self.cfg.leader_ahead)
+            if hit is not None:
+                view, node = hit
+                return node, view
+        return tx_id % len(self.urls), None
 
 
 async def run_staircase(
@@ -1203,7 +1340,8 @@ async def pace(
         if time.time() >= until or not await state.wait_for_room(until):
             return
         tx_id = next(load.ids)
-        tx = Tx(id=tx_id, node=tx_id % len(load.urls))
+        node, target_view = load.target(tx_id)
+        tx = Tx(id=tx_id, node=node, target_view=target_view)
         state.submitted(tx)
         submits.create_task(submit_tx(load, tx))
         due = next_due(due, interval, time.time())
@@ -1857,7 +1995,8 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
     calib = read_json(out / "calibration.json")
     before, after = calib["before"], calib["after"]
     steps = [
-        step_result(step, txs, series, host) for step in read_json(out / "steps.json")
+        step_result(step, txs, heights, series, host)
+        for step in read_json(out / "steps.json")
     ]
     result: BenchResult = {
         "schema_version": SCHEMA_VERSION,
@@ -1889,11 +2028,13 @@ def analyze(out: Path, cfg: BenchConfig) -> BenchResult:
 def step_result(
     judged: dict[str, Any],
     txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
     series: dict[str, list[Sample]],
     host: list[dict[str, Any]],
 ) -> StepResult:
     """The ramp's verdict on a step (see judge_step) plus metrics that decide nothing."""
     t0, t1 = judged["t_mid"], judged["t_end"]
+    block_txs, block_gap_ms = block_measures(txs, heights, t0, t1)
     views = [
         rate(s, t0, t1, "consensus_last_decided_view") for s in series.values() if s
     ]
@@ -1925,6 +2066,8 @@ def step_result(
             ]
         ),
         "mean_view_ms": 1000 / view if view else None,
+        "block_txs": block_txs,
+        "block_gap_ms": block_gap_ms,
         "cpu_s_per_mb": sum(node_cpu.values()) / decided if decided else None,
         "node_cpu": node_cpu,
         "postgres_cpu": (
@@ -1934,6 +2077,29 @@ def step_result(
         "query_fails": judged["query_fails"],
         "passed": not fails,
     }
+
+
+def block_measures(
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    t0: float,
+    t1: float,
+) -> tuple[Quantiles | None, Quantiles | None]:
+    """Per block that reached a validator in the window: how many of the bench's transactions
+    it carries, empty blocks as zero, and the ms since the block before it. Blocks are seen
+    every HEIGHT_POLL_S, so gaps come in multiples of it and several blocks from one poll gap
+    by zero."""
+    decided = sorted(
+        (h["validator"], h["height"])
+        for h in heights
+        if h["validator"] is not None and t0 <= h["validator"] <= t1
+    )
+    if not decided:
+        return None, None
+    carried = collections.Counter(tx["height"] for tx in txs if tx["height"] is not None)
+    block_txs = [float(carried.get(height, 0)) for _, height in decided]
+    gaps = [(b - a) * 1000 for (a, _), (b, _) in zip(decided, decided[1:])]
+    return quantiles(block_txs), quantiles(gaps)
 
 
 def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
@@ -2257,6 +2423,8 @@ def load_stats(
         "tracker_lag_ms": quantiles(scan_lags(heights, t0, t1)),
         "drain_s": meta["drain_s"],
         "refine_skipped": meta["refine_skipped"],
+        "leader_polls": meta.get("leader_polls", 0),
+        "leader_fallbacks": meta.get("leader_fallbacks", 0),
     }
 
 
@@ -2758,9 +2926,10 @@ def step_details(result: BenchResult) -> list[str]:
         (
             "| MB/s | decided | view timeouts | consensus p50/p99 ms "
             "| query lag p50/p99 ms | query lag slope ms/s | e2e p50/p99 ms | view ms "
+            "| block txs p50/p99 | block gap p50/p99 ms "
             "| CPU-s/MB | node0/1/2 CPU | postgres CPU | failed rules |"
         ),
-        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"]):
         cpu = "/".join(fmt_num(s["node_cpu"].get(node)) for node in NODES)
@@ -2769,7 +2938,9 @@ def step_details(result: BenchResult) -> list[str]:
             f"| {s['timeouts']} "
             f"| {pair(s['consensus_latency_ms'])} | {pair(s['query_lag_ms'])} "
             f"| {fmt_num(s['query_lag_slope_ms_s'])} | {pair(s['latency_ms'])} "
-            f"| {fmt_num(s['mean_view_ms'])} | {fmt_num(s['cpu_s_per_mb'])} | {cpu} "
+            f"| {fmt_num(s['mean_view_ms'])} "
+            f"| {pair(s.get('block_txs'))} | {pair(s.get('block_gap_ms'))} "
+            f"| {fmt_num(s['cpu_s_per_mb'])} | {cpu} "
             f"| {fmt_num(s['postgres_cpu'])} "
             f"| {'; '.join(s['consensus_fails'] + s['query_fails'])} |"
         )
@@ -2778,6 +2949,15 @@ def step_details(result: BenchResult) -> list[str]:
 
 def pair(q: Quantiles | None) -> str:
     return f"{q['p50']:.0f}/{q['p99']:.0f}" if q else ""
+
+
+def submit_phrase(cfg: Mapping[str, Any]) -> str:
+    if cfg.get("submit_to") == "leader":
+        return (
+            f"to the leader {cfg['leader_ahead']} views ahead of node1's view, among "
+            f"{cfg['submit_nodes']} nodes"
+        )
+    return f"to {cfg['submit_nodes']} nodes"
 
 
 def excluded_note(comparison: Comparison) -> str:
@@ -2860,9 +3040,17 @@ def load_lines(result: BenchResult) -> list[str]:
         (
             f"- steps: {', '.join(map(fmt_num, cfg['steps']))} MB/s, {cfg['step_s']} s each, "
             f"second half measured, after {cfg['warmup_s']} s warmup; "
-            f"{fmt_bytes(cfg['tx_size'])} txs to {cfg['submit_nodes']} nodes, "
+            f"{fmt_bytes(cfg['tx_size'])} txs {submit_phrase(cfg)}, "
             f"{cfg['workers']} submit threads, in flight capped at {fmt_num(cfg['cap_s'])} s "
             "of load"
+        ),
+        *(
+            [
+                f"- nodes: transaction fanout {cfg['fanout']}, empty block delay "
+                f"{cfg['empty_block_delay_ms']} ms"
+            ]
+            if "fanout" in cfg
+            else []
         ),
         (
             f"- step rules: decided >= {KEEP_UP_RATIO:.0%} of offered, no view timeouts, consensus latency p50 "
@@ -2873,6 +3061,12 @@ def load_lines(result: BenchResult) -> list[str]:
             f"- {load['submitted']} submitted, {load['included']} included, "
             f"{load['timeouts']} timed out, {load['submit_errors']} submit errors, "
             f"peak in flight {load['max_in_flight']}, {load['cap_waits']} submits waited"
+            + (
+                f", {load['leader_polls']} leader reads, {load['leader_fallbacks']} submits "
+                "fell back to round-robin"
+                if cfg.get("submit_to") == "leader"
+                else ""
+            )
         ),
         f"- benchmark tracker lag: {spread(load['tracker_lag_ms'])}",
         *(

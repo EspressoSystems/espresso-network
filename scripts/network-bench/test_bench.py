@@ -11,6 +11,7 @@ import base64
 import contextlib
 import dataclasses
 import importlib.util
+import io
 import json
 import math
 import socket
@@ -757,7 +758,11 @@ class FakeNode(ThreadingHTTPServer):
     and `reply_delay` s after. Payloads in `lost` are never served, those in `late` only
     `late[height]` s after their block was made; every payload answer takes `payload_delay` s.
     The query API shows a block `query_lag` s after the validator status API. A block takes at
-    most `block_txs` transactions."""
+    most `block_txs` transactions.
+
+    A node made with `chain=other` is another node of `other`'s network: it shares the chain
+    and the pending transactions but takes its own submits. Each node has a key, the chain
+    a view per block, and the node at index `view % nodes` leads the view."""
 
     def __init__(
         self,
@@ -769,6 +774,7 @@ class FakeNode(ThreadingHTTPServer):
         payload_delay=0.0,
         query_lag=0.0,
         block_txs=None,
+        chain=None,
     ):
         super().__init__(("127.0.0.1", 0), FakeHandler)
         self.query_lag = query_lag
@@ -779,24 +785,41 @@ class FakeNode(ThreadingHTTPServer):
         self.accept_delay = accept_delay
         self.reply_delay = reply_delay
         self.payload_delay = payload_delay
-        self.lock = threading.Lock()
-        self.pending = []
-        self.blocks = [b""]
-        self.made = [time.time()]
         self.submits = []
         self.max_outstanding = 0
-        self.stop = threading.Event()
+        if chain is None:
+            self.lock = threading.Lock()
+            self.pending = []
+            self.blocks = [b""]
+            self.made = [time.time()]
+            self.keys = []
+            self.stop = threading.Event()
+        else:
+            self.lock = chain.lock
+            self.pending = chain.pending
+            self.blocks = chain.blocks
+            self.made = chain.made
+            self.keys = chain.keys
+            self.stop = chain.stop
+        self.key = f"BLS_VER_KEY~fake{len(self.keys)}"
+        self.keys.append(self.key)
 
     @property
     def url(self):
         return f"http://127.0.0.1:{self.server_address[1]}"
+
+    def view(self):
+        return len(self.blocks) - 1
+
+    def leader(self, view):
+        return self.keys[view % len(self.keys)]
 
     def produce(self):
         while not self.stop.wait(0.05):
             with self.lock:
                 taken = self.pending[: self.block_txs] if self.include else []
                 if self.include:
-                    self.pending = self.pending[len(taken) :]
+                    del self.pending[: len(taken)]
                 self.blocks.append(b"".join(taken))
                 self.made.append(time.time())
 
@@ -839,6 +862,21 @@ class FakeHandler(BaseHTTPRequestHandler):
                 return self.reply(200, sum(1 for t in node.made if t <= shown))
             if self.path == "/v1/status/block-height":
                 return self.reply(200, len(node.blocks) - 1)
+            if self.path == "/v1/status/keys":
+                return self.reply(200, {"consensus_key": node.key})
+            if self.path.startswith("/v1/status/upcoming-leaders/"):
+                count = int(self.path.rsplit("/", 1)[1])
+                view = node.view()
+                return self.reply(
+                    200,
+                    {
+                        "view": view,
+                        "leaders": [
+                            {"view": v, "key": node.leader(v)}
+                            for v in range(view + 1, view + 1 + count)
+                        ],
+                    },
+                )
             if self.path == "/v1/status/metrics":
                 decided = sum(len(block) for block in node.blocks)
                 return self.reply(
@@ -870,10 +908,12 @@ class LoadTest(unittest.TestCase):
         block_txs=None,
         rate=0.02,
         cap_txs=1000,
+        peers=0,
         **cfg,
     ):
         """One step of `duration` s at `rate` MB/s with at most `cap_txs` in flight, no
-        warmup, unless `cfg` sets `steps`."""
+        warmup, unless `cfg` sets `steps`. The `nodes` urls all name one node, plus `peers`
+        more nodes of its network; the peers end up in `self.peers`."""
         node = FakeNode(
             include,
             lost=lost,
@@ -884,9 +924,11 @@ class LoadTest(unittest.TestCase):
             query_lag=query_lag,
             block_txs=block_txs,
         )
+        self.peers = [FakeNode(include, chain=node) for _ in range(peers)]
         threads = [
             threading.Thread(target=node.serve_forever),
             threading.Thread(target=node.produce),
+            *(threading.Thread(target=peer.serve_forever) for peer in self.peers),
         ]
         for thread in threads:
             thread.start()
@@ -907,7 +949,7 @@ class LoadTest(unittest.TestCase):
                 asyncio.run(
                     bench.generate_load(
                         config,
-                        [node.url] * nodes,
+                        [node.url] * nodes + [peer.url for peer in self.peers],
                         node.url,
                         [node.url, node.url],
                         Path(tmp),
@@ -924,9 +966,13 @@ class LoadTest(unittest.TestCase):
         finally:
             node.stop.set()
             node.shutdown()
+            for peer in self.peers:
+                peer.shutdown()
             for thread in threads:
                 thread.join()
             node.server_close()
+            for peer in self.peers:
+                peer.server_close()
         return start, node, txs, meta
 
     def test_submits_at_the_offered_rate(self):
@@ -945,6 +991,53 @@ class LoadTest(unittest.TestCase):
             True, 0.5, nodes=3, submit_nodes=2, rate=0.02, tx_timeout_s=5
         )
         self.assertEqual([tx["node"] for tx in txs[:4]], [0, 1, 0, 1])
+        self.assertTrue(all(tx["target_view"] is None for tx in txs))
+
+    def test_leader_mode_submits_to_the_upcoming_leader(self):
+        # Three nodes, a view per 50 ms block, node `view % 3` leading: every submit goes to
+        # the node leading two views past the one read, and lands on that node.
+        _, node, txs, meta = self.run_load(
+            True,
+            1.0,
+            peers=2,
+            submit_nodes=3,
+            submit_to="leader",
+            leader_ahead=2,
+            rate=0.1,
+            tx_timeout_s=5,
+        )
+        self.assertGreater(len(txs), 50)
+        self.assertEqual(meta["leader_fallbacks"], 0)
+        self.assertGreater(meta["leader_polls"], 10)
+        for tx in txs:
+            self.assertIsNotNone(tx["target_view"])
+            self.assertEqual(tx["node"], tx["target_view"] % 3)
+        by_node = [node, *self.peers]
+        for index, server in enumerate(by_node):
+            self.assertEqual(
+                len(server.submits), sum(1 for tx in txs if tx["node"] == index)
+            )
+        self.assertTrue(all(tx["status"] == "included" for tx in txs))
+
+    def test_leader_mode_falls_back_when_no_submit_node_leads(self):
+        # Only the first of three nodes takes submits: views the others lead go to it
+        # round-robin, with no target view.
+        _, _, txs, meta = self.run_load(
+            True,
+            1.0,
+            peers=2,
+            submit_nodes=1,
+            submit_to="leader",
+            leader_ahead=2,
+            rate=0.1,
+            tx_timeout_s=5,
+        )
+        self.assertGreater(meta["leader_fallbacks"], 0)
+        self.assertTrue(all(tx["node"] == 0 for tx in txs))
+        targeted = [tx for tx in txs if tx["target_view"] is not None]
+        self.assertGreater(len(targeted), 0)
+        self.assertLess(len(targeted), len(txs))
+        self.assertTrue(all(tx["target_view"] % 3 == 0 for tx in targeted))
 
     def test_cap_blocks_until_timeout(self):
         _, node, txs, meta = self.run_load(
@@ -1648,6 +1741,85 @@ class WindowTest(unittest.TestCase):
             {"t0": 1.0, "t1": 2.0, "height_start": 0, "height_end": 0},
         )
 
+
+
+class BlockMeasuresTest(unittest.TestCase):
+    def test_transactions_per_block_and_gaps_in_the_window(self):
+        heights = [
+            {"height": 10, "validator": 9.0, "query": None, "scanned": None},
+            {"height": 11, "validator": 10.0, "query": None, "scanned": None},
+            {"height": 12, "validator": 10.1, "query": None, "scanned": None},
+            # Seen in the same poll as 12: a zero gap.
+            {"height": 13, "validator": 10.1, "query": None, "scanned": None},
+            {"height": 14, "validator": 10.6, "query": None, "scanned": None},
+            {"height": 15, "validator": None, "query": None, "scanned": None},
+        ]
+        txs = [{"height": h} for h in (11, 11, 11, 12, 14, 14, 10, None)]
+        block_txs, gaps = bench.block_measures(txs, heights, 10.0, 20.0)
+        # Heights 11..14 carry 3, 1, 0 and 2 of the bench's transactions.
+        self.assertEqual(block_txs["n"], 4)
+        self.assertEqual(block_txs["mean"], 1.5)
+        self.assertEqual(block_txs["max"], 3.0)
+        self.assertEqual(gaps["n"], 3)
+        self.assertAlmostEqual(gaps["p50"], 100.0)
+        self.assertAlmostEqual(gaps["max"], 500.0)
+
+    def test_none_without_blocks_in_the_window(self):
+        self.assertEqual(bench.block_measures([], [], 0.0, 1.0), (None, None))
+
+
+class LoadLinesTest(unittest.TestCase):
+    def test_round_robin_config_reads_as_before(self):
+        text = "\n".join(bench.load_lines(make_result()))
+        self.assertIn("txs to 3 nodes", text)
+        self.assertNotIn("fanout", text)
+        self.assertNotIn("leader reads", text)
+
+    def test_leader_config_names_the_target_and_node_settings(self):
+        result = make_result()
+        result["config"] |= {
+            "submit_to": "leader",
+            "leader_ahead": 3,
+            "fanout": 0,
+            "empty_block_delay_ms": 100,
+        }
+        result["load"] |= {"leader_polls": 1200, "leader_fallbacks": 2}
+        text = "\n".join(bench.load_lines(result))
+        self.assertIn(
+            "to the leader 3 views ahead of node1's view, among 3 nodes", text
+        )
+        self.assertIn("transaction fanout 0, empty block delay 100 ms", text)
+        self.assertIn("1200 leader reads, 2 submits fell back to round-robin", text)
+
+
+class RunArgsTest(unittest.TestCase):
+    def test_submit_mode_and_node_settings(self):
+        args = bench.parse_args(
+            [
+                "run",
+                "--bin-dir",
+                "x",
+                "--submit-to",
+                "leader",
+                "--fanout",
+                "0",
+                "--empty-block-delay-ms",
+                "100",
+            ]
+        )
+        cfg = bench.config_from_args(args)
+        self.assertEqual(
+            (cfg.submit_to, cfg.leader_ahead, cfg.fanout, cfg.empty_block_delay_ms),
+            ("leader", 2, 0, 100),
+        )
+
+    def test_leader_ahead_beyond_the_window_is_refused(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            bench.parse_args(["run", "--bin-dir", "x", "--leader-ahead", "9"])
+
+    def test_unknown_submit_mode_is_refused(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            bench.parse_args(["run", "--bin-dir", "x", "--submit-to", "random"])
 
 if __name__ == "__main__":
     unittest.main()
