@@ -1786,7 +1786,8 @@ class LoadLinesTest(unittest.TestCase):
         result["load"] |= {"leader_polls": 1200, "leader_fallbacks": 2}
         text = "\n".join(bench.load_lines(result))
         self.assertIn(
-            "to the leader 3 views ahead of node1's view, among 3 nodes", text
+            "to the leader 3 views ahead of node1's view, read every 20 ms, among 3 nodes",
+            text,
         )
         self.assertIn("transaction fanout 0, empty block delay 100 ms", text)
         self.assertIn("1200 leader reads, 2 submits fell back to round-robin", text)
@@ -1812,6 +1813,10 @@ class RunArgsTest(unittest.TestCase):
             (cfg.submit_to, cfg.leader_ahead, cfg.fanout, cfg.empty_block_delay_ms),
             ("leader", 2, 0, 100),
         )
+
+    def test_leader_poll_below_a_millisecond_is_refused(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            bench.parse_args(["run", "--bin-dir", "x", "--leader-poll-ms", "0"])
 
     def test_leader_ahead_beyond_the_window_is_refused(self):
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):

@@ -165,9 +165,7 @@ READ_RETRY_S = 1.0
 TRACKER_THREADS = 1
 HEIGHT_POLL_S = 0.1
 COUNTER_POLL_S = 1.0
-# Leader-targeted submits read node1's view and its next LEADER_WINDOW leaders every
-# LEADER_POLL_S; a view lasts 100-200 ms under load, and a read must not go stale by one.
-LEADER_POLL_S = 0.02
+# Leader-targeted submits read node1's view and its next LEADER_WINDOW leaders.
 LEADER_WINDOW = 8
 SUBMIT_MODES = ("round-robin", "leader")
 METRICS_EVERY_S = 1.0
@@ -381,6 +379,9 @@ class BenchConfig:
     # into that block and proposes nothing in the targeted one.
     submit_to: str = "round-robin"
     leader_ahead: int = 2
+    # How often node1's view and upcoming leaders are read. A view lasts 50-200 ms under
+    # load, and a submit made on a stale read goes to a node that has already built.
+    leader_poll_ms: int = 20
     workers: int = 6
     # Safety cap on transactions in flight: this many seconds of the current step's load.
     cap_s: float = 5.0
@@ -566,6 +567,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.func is cmd_run and not 1 <= args.leader_ahead <= LEADER_WINDOW:
         parser.error(f"--leader-ahead must be between 1 and {LEADER_WINDOW}")
+    if args.func is cmd_run and args.leader_poll_ms < 1:
+        parser.error("--leader-poll-ms must be at least 1")
     return args
 
 
@@ -1116,7 +1119,12 @@ async def generate_load(
             if schedule is not None:
                 pollers.append(
                     group.create_task(
-                        poll_leaders(polling, validator_urls[0], schedule)
+                        poll_leaders(
+                            polling,
+                            validator_urls[0],
+                            schedule,
+                            cfg.leader_poll_ms / 1000,
+                        )
                     )
                 )
             tracker = group.create_task(
@@ -1197,12 +1205,14 @@ def upcoming_leaders(
     return int(data["view"]), [(int(l["view"]), l["key"]) for l in data["leaders"]]
 
 
-async def poll_leaders(client: Client, url: str, schedule: LeaderSchedule) -> None:
-    """Keeps `schedule` current from the validator at `url`, every LEADER_POLL_S."""
+async def poll_leaders(
+    client: Client, url: str, schedule: LeaderSchedule, interval_s: float
+) -> None:
+    """Keeps `schedule` current from the validator at `url`, every `interval_s`."""
     while True:
         view, leaders = await client.call(upcoming_leaders, url, LEADER_WINDOW)
         schedule.update(view, leaders)
-        await asyncio.sleep(LEADER_POLL_S)
+        await asyncio.sleep(interval_s)
 
 
 def tx_bodies(cfg: BenchConfig, header_len: int) -> list[bytes]:
@@ -2954,8 +2964,8 @@ def pair(q: Quantiles | None) -> str:
 def submit_phrase(cfg: Mapping[str, Any]) -> str:
     if cfg.get("submit_to") == "leader":
         return (
-            f"to the leader {cfg['leader_ahead']} views ahead of node1's view, among "
-            f"{cfg['submit_nodes']} nodes"
+            f"to the leader {cfg['leader_ahead']} views ahead of node1's view, read every "
+            f"{cfg.get('leader_poll_ms', 20)} ms, among {cfg['submit_nodes']} nodes"
         )
     return f"to {cfg['submit_nodes']} nodes"
 
