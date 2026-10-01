@@ -54,6 +54,17 @@ pub enum BlockError {
     Cancelled,
 }
 
+/// Why [`BlockBuilder::on_submit_transaction`] refused a transaction.
+#[derive(Debug, thiserror::Error)]
+pub enum SubmitError {
+    /// Bigger than a block or a forwarded message.
+    #[error("transaction of {size} bytes exceeds the {limit} byte limit")]
+    TooLarge { size: u64, limit: u64 },
+    /// The retry buffer is full, retrying later can succeed.
+    #[error("transaction retry buffer is full")]
+    RetryBufferFull,
+}
+
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BlockAndHeaderRequest<T: NodeType> {
     pub view: ViewNumber,
@@ -358,25 +369,40 @@ impl<T: NodeType> BlockBuilder<T> {
         (self.retry_pending.len(), self.retry_total_bytes as usize)
     }
 
-    /// Returns one message per upcoming leader to send `tx` to, none if `tx` is rejected or
-    /// already pending.
-    pub fn on_submit_transaction(&mut self, tx: T::Transaction) -> Vec<TransactionMessage<T>> {
+    /// Returns one message per upcoming leader to send `tx` to, none if `tx` is already
+    /// pending: resubmitting a queued transaction succeeds without queueing it twice.
+    pub fn on_submit_transaction(
+        &mut self,
+        tx: T::Transaction,
+    ) -> Result<Vec<TransactionMessage<T>>, SubmitError> {
         let hash = tx.commit();
 
         if self.retry_pending.contains_key(&hash) {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let size = tx.minimum_block_size();
         let encoded_size = bincode::serialized_size(&tx).expect("transactions serialize");
-        let max_bytes = self.block_size(self.current_view);
-        if size > max_bytes || encoded_size > forward_budget(message_limit(max_bytes)) {
-            warn!(%hash, %size, "transaction can never be included, rejecting");
-            return Vec::new();
+        // Forwarding uses the next view's block size, which an upgrade can raise.
+        let max_bytes = self
+            .block_size(self.current_view)
+            .max(self.block_size(self.current_view + 1));
+        let budget = forward_budget(message_limit(max_bytes));
+        if size > max_bytes {
+            return Err(SubmitError::TooLarge {
+                size,
+                limit: max_bytes,
+            });
+        }
+        if encoded_size > budget {
+            return Err(SubmitError::TooLarge {
+                size: encoded_size,
+                limit: budget,
+            });
         }
         if self.retry_total_bytes + size > self.config.max_retry_bytes {
             warn!("retry buffer full, rejecting {hash}");
-            return Vec::new();
+            return Err(SubmitError::RetryBufferFull);
         }
 
         let valid_until = self.current_view + self.config.ttl;
@@ -395,7 +421,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 sent_until,
             },
         );
-        messages
+        Ok(messages)
     }
 
     /// One message with `transactions` for the leader of each of the `fanout` views after

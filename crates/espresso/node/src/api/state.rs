@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use chrono::SecondsFormat;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{
-    error::{AvailabilityError, to_status},
+    error::{AvailabilityError, SubmitError, to_status},
     proto,
     v1::{self, HotShotAvailabilityApi},
 };
@@ -2563,9 +2563,14 @@ where
 
     async fn submit(&self, tx: Self::Transaction) -> anyhow::Result<Self::TxHash> {
         let ds = &*self.data_source;
-        ds.submit_erased(tx)
-            .await
-            .map_err(|err| anyhow::anyhow!("{err:#}"))
+        ds.submit_erased(tx).await.map_err(|err| {
+            // Keep rejections typed for `classify`.
+            if err.is::<SubmitError>() {
+                err
+            } else {
+                anyhow::anyhow!("{err:#}")
+            }
+        })
     }
 }
 
