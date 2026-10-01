@@ -124,7 +124,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
 dependencies = [
  "cfg-if",
- "getrandom 0.3.4",
  "once_cell",
  "version_check",
  "zerocopy",
@@ -1636,48 +1635,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f02882884d3e1bc524fb12c79f107f6ad0e1cfd498c536ffb494301740995dfe"
 
 [[package]]
-name = "askama"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f75363874b771be265f4ffe307ca705ef6f3baa19011c149da8674a87f1b75c4"
-dependencies = [
- "askama_derive",
- "itoa",
- "percent-encoding",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "askama_derive"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "129397200fe83088e8a68407a8e2b1f826cf0086b21ccdb866a722c8bcd3a94f"
-dependencies = [
- "askama_parser",
- "basic-toml",
- "memchr",
- "proc-macro2",
- "quote",
- "rustc-hash",
- "serde",
- "serde_derive",
- "syn 2.0.118",
-]
-
-[[package]]
-name = "askama_parser"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6ab5630b3d5eaf232620167977f95eb51f3432fc76852328774afbd242d4358"
-dependencies = [
- "memchr",
- "serde",
- "serde_derive",
- "winnow 0.7.15",
-]
-
-[[package]]
 name = "asn1-rs"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2095,15 +2052,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atomic"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a89cbf775b137e9b968e67227ef7f775587cde3fd31b0d8599dbd0f598a48340"
-dependencies = [
- "bytemuck",
-]
-
-[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2152,21 +2100,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
-name = "automod"
-version = "1.0.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a273e731a7fb8c2268fd2932c9e9a3469f4fd171d85d070d2687190229653bd3"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "aws-lc-rs"
-version = "1.17.0"
+version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ec2f1fc3ec205783a5da9a7e6c1509cc69dedf09a1949e412c1e18469326d00"
+checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
 dependencies = [
  "aws-lc-sys",
  "zeroize",
@@ -2174,14 +2111,15 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.41.0"
+version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a2f9779ce85b93ab6170dd940ad0169b5766ff848247aff13bb788b832fe3f4"
+checksum = "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27"
 dependencies = [
  "cc",
  "cmake",
  "dunce",
  "fs_extra",
+ "pkg-config",
 ]
 
 [[package]]
@@ -2380,33 +2318,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "basic-toml"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba62675e8242a4c4e806d12f11d136e626e6c8361d6b829310732241652a178a"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "bech32"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d86b93f97252c47b41663388e6d155714a9d0c398b99f1005cbc5f978b29f445"
-
-[[package]]
-name = "benchmark-stats"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap 4.6.1",
- "csv",
- "espresso-types",
- "hotshot-task-impls",
- "hotshot-types",
- "plotly",
- "serde",
-]
 
 [[package]]
 name = "bigdecimal"
@@ -2678,50 +2593,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "builder"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.2",
- "axum 0.8.9",
- "clap 4.6.1",
- "committable",
- "disco-types",
- "espresso-node",
- "espresso-types",
- "espresso-utils",
- "futures",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-builder-legacy",
- "hotshot-builder-shared",
- "hotshot-events-service",
- "hotshot-example-types",
- "hotshot-state-prover",
- "hotshot-types",
- "http-client 0.1.0",
- "http-wire",
- "jf-signature 0.4.2",
- "rand 0.8.6",
- "serde",
- "serde_json",
- "tagged-base64",
- "tempfile",
- "test-log",
- "test-utils",
- "tide-disco",
- "tokio",
- "tower 0.4.13",
- "tracing",
- "url",
- "vbs",
- "vec1",
- "versions",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2753,26 +2624,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "bytemuck"
-version = "1.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
-dependencies = [
- "bytemuck_derive",
-]
-
-[[package]]
-name = "bytemuck_derive"
-version = "1.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9abbd1bc6865053c427f7198e6af43bfdedc55ab791faed4fbd361d789575ff"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
 ]
 
 [[package]]
@@ -3272,17 +3123,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
-name = "coarsetime"
-version = "0.1.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e58eb270476aa4fc7843849f8a35063e8743b4dbcdf6dd0f8ea0886980c204c2"
-dependencies = [
- "libc",
- "wasix",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "coins-bip32"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3368,7 +3208,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.52.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -3967,16 +3807,6 @@ dependencies = [
 
 [[package]]
 name = "darling"
-version = "0.21.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cdf337090841a411e2a7f3deb9187445851f91b309c0c0a29e05f74a00a48c0"
-dependencies = [
- "darling_core 0.21.3",
- "darling_macro 0.21.3",
-]
-
-[[package]]
-name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
@@ -3990,20 +3820,6 @@ name = "darling_core"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
-dependencies = [
- "fnv",
- "ident_case",
- "proc-macro2",
- "quote",
- "strsim",
- "syn 2.0.118",
-]
-
-[[package]]
-name = "darling_core"
-version = "0.21.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1247195ecd7e3c85f83c8d2a366e4210d588e802133e1e355180a9870b517ea4"
 dependencies = [
  "fnv",
  "ident_case",
@@ -4034,17 +3850,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
 dependencies = [
  "darling_core 0.20.11",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
-name = "darling_macro"
-version = "0.21.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d38308df82d1080de0afee5d069fa14b0326a88c14f15c5ccda35b4a6c414c81"
-dependencies = [
- "darling_core 0.21.3",
  "quote",
  "syn 2.0.118",
 ]
@@ -4097,7 +3902,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.118",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -4707,7 +4512,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4727,6 +4532,7 @@ version = "0.1.0"
 dependencies = [
  "aide",
  "anyhow",
+ "ark-serialize 0.5.0",
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
@@ -4738,6 +4544,7 @@ dependencies = [
  "hotshot-query-service-types",
  "hotshot-types",
  "http-wire",
+ "jf-merkle-tree-compat",
  "pbjson",
  "pbjson-build",
  "prost 0.14.4",
@@ -4746,6 +4553,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
+ "tagged-base64",
  "thiserror 2.0.18",
  "tokio",
  "tonic 0.14.6",
@@ -4920,16 +4728,13 @@ dependencies = [
  "futures",
  "generic-tests",
  "hotshot",
- "hotshot-builder-refactored",
  "hotshot-contract-adapter",
- "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-libp2p-networking",
  "hotshot-new-protocol",
  "hotshot-orchestrator",
  "hotshot-query-service",
  "hotshot-state-prover",
- "hotshot-task-impls",
  "hotshot-testing",
  "hotshot-types",
  "http-client 0.1.0",
@@ -5103,6 +4908,7 @@ dependencies = [
  "lru 0.18.2",
  "moka",
  "num-traits",
+ "p3-maybe-rayon",
  "parking_lot",
  "paste",
  "pretty_assertions",
@@ -5132,6 +4938,7 @@ dependencies = [
  "vec1",
  "versions",
  "vid",
+ "warp 0.4.3",
 ]
 
 [[package]]
@@ -6232,126 +6039,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-builder-legacy"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.2",
- "async-trait",
- "atomic",
- "bincode",
- "bytemuck",
- "coarsetime",
- "committable",
- "derive_more 2.1.1",
- "futures",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-builder-shared",
- "hotshot-example-types",
- "hotshot-macros",
- "hotshot-task-impls",
- "hotshot-testing",
- "hotshot-types",
- "lru 0.18.2",
- "num_cpus",
- "serde",
- "sha2 0.10.9",
- "tagged-base64",
- "test-utils",
- "tide-disco",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.23",
- "tracing-test",
- "url",
- "vbs",
-]
-
-[[package]]
-name = "hotshot-builder-refactored"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.2",
- "async-trait",
- "atomic",
- "bincode",
- "bytemuck",
- "coarsetime",
- "committable",
- "derive_more 2.1.1",
- "futures",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-builder-shared",
- "hotshot-example-types",
- "hotshot-macros",
- "hotshot-task-impls",
- "hotshot-testing",
- "hotshot-types",
- "jf-advz",
- "lru 0.18.2",
- "num_cpus",
- "serde",
- "sha2 0.10.9",
- "tagged-base64",
- "test-log",
- "test-utils",
- "tide-disco",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.23",
- "tracing-test",
- "url",
- "vbs",
-]
-
-[[package]]
-name = "hotshot-builder-shared"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-broadcast",
- "async-lock 3.4.2",
- "async-trait",
- "bincode",
- "chrono",
- "committable",
- "derive_more 2.1.1",
- "either",
- "futures",
- "hex",
- "hotshot",
- "hotshot-builder-api",
- "hotshot-events-service",
- "hotshot-example-types",
- "hotshot-task-impls",
- "hotshot-testing",
- "hotshot-types",
- "http-client 0.1.0",
- "jf-advz",
- "nonempty-collections",
- "quick_cache",
- "rand 0.8.6",
- "serde",
- "serde_bytes",
- "sha2 0.10.9",
- "test-utils",
- "thiserror 2.0.18",
- "tide-disco",
- "tokio",
- "tracing",
- "tracing-subscriber 0.3.23",
- "tracing-test",
- "url",
- "vbs",
- "vec1",
-]
-
-[[package]]
 name = "hotshot-contract-adapter"
 version = "0.1.0"
 dependencies = [
@@ -6385,34 +6072,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-events-service"
-version = "0.1.57"
-dependencies = [
- "alloy",
- "async-broadcast",
- "async-lock 3.4.2",
- "async-trait",
- "clap 4.6.1",
- "derive_more 2.1.1",
- "disco-types",
- "futures",
- "hotshot-example-types",
- "hotshot-types",
- "http-client 0.1.0",
- "rand 0.8.6",
- "semver 1.0.28",
- "serde",
- "snafu 0.8.9",
- "test-utils",
- "tide-disco",
- "tokio",
- "toml",
- "tracing",
- "tracing-test",
- "vbs",
-]
-
-[[package]]
 name = "hotshot-example-types"
 version = "0.1.0"
 dependencies = [
@@ -6425,7 +6084,6 @@ dependencies = [
  "committable",
  "derive_more 2.1.1",
  "hotshot",
- "hotshot-task-impls",
  "hotshot-types",
  "hotshot-utils",
  "jf-advz",
@@ -6433,6 +6091,7 @@ dependencies = [
  "rand 0.8.6",
  "reqwest 0.12.28",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "sha3 0.10.9",
  "thiserror 2.0.18",
@@ -6441,41 +6100,6 @@ dependencies = [
  "tracing",
  "url",
  "vbs",
- "versions",
-]
-
-[[package]]
-name = "hotshot-examples"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-lock 3.4.2",
- "async-trait",
- "cdn-broker",
- "cdn-marshal",
- "chrono",
- "clap 4.6.1",
- "espresso-node",
- "espresso-types",
- "futures",
- "hotshot",
- "hotshot-example-types",
- "hotshot-libp2p-networking",
- "hotshot-orchestrator",
- "hotshot-testing",
- "hotshot-types",
- "local-ip-address",
- "rand 0.8.6",
- "reqwest 0.12.28",
- "serde",
- "sha2 0.10.9",
- "test-utils",
- "time 0.3.51",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber 0.3.23",
- "url",
  "versions",
 ]
 
@@ -6514,24 +6138,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "hotshot-macros"
-version = "0.1.0"
-dependencies = [
- "derive_builder",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "hotshot-new-protocol"
 version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
  "async-broadcast",
- "async-lock 3.4.2",
  "async-trait",
+ "bincode",
  "bitvec 1.1.0",
  "bon",
  "cliquenet",
@@ -6556,9 +6170,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber 0.3.23",
- "url",
  "vbs",
- "vec1",
  "versions",
  "vid",
 ]
@@ -6641,7 +6253,6 @@ dependencies = [
  "futures",
  "generic-array 0.14.7",
  "hotshot",
- "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-new-protocol",
  "hotshot-query-service",
@@ -6692,7 +6303,6 @@ dependencies = [
  "derive_more 2.1.1",
  "disco-types",
  "either",
- "hotshot-events-service",
  "hotshot-example-types",
  "hotshot-types",
  "http-client 0.1.0",
@@ -6731,7 +6341,6 @@ dependencies = [
  "futures",
  "hotshot-contract-adapter",
  "hotshot-query-service",
- "hotshot-task-impls",
  "hotshot-types",
  "http-client 0.1.0",
  "http-wire",
@@ -6776,16 +6385,12 @@ dependencies = [
 name = "hotshot-task-impls"
 version = "0.1.0"
 dependencies = [
- "alloy",
- "anyhow",
- "ark-ff 0.5.0",
  "async-broadcast",
  "async-lock 3.4.2",
  "async-trait",
  "bincode",
  "chrono",
  "committable",
- "csv",
  "either",
  "futures",
  "hotshot-builder-api",
@@ -6795,8 +6400,6 @@ dependencies = [
  "hotshot-types",
  "hotshot-utils",
  "http-client 0.1.0",
- "jf-advz",
- "lru 0.18.2",
  "rand 0.8.6",
  "serde",
  "sha2 0.10.9",
@@ -6805,7 +6408,6 @@ dependencies = [
  "time 0.3.51",
  "tokio",
  "tracing",
- "url",
  "vbs",
  "vec1",
  "versions",
@@ -6820,36 +6422,20 @@ dependencies = [
  "async-broadcast",
  "async-lock 3.4.2",
  "async-trait",
- "automod",
- "bincode",
  "bitvec 1.1.0",
  "committable",
- "either",
  "futures",
  "hotshot",
  "hotshot-builder-api",
  "hotshot-example-types",
- "hotshot-macros",
- "hotshot-task",
- "hotshot-task-impls",
  "hotshot-types",
  "hotshot-utils",
- "itertools 0.14.0",
- "jf-advz",
  "lru 0.18.2",
  "rand 0.8.6",
- "reqwest 0.12.28",
- "serde",
  "sha2 0.10.9",
- "tagged-base64",
- "test-log",
- "test-utils",
- "thiserror 2.0.18",
  "tide-disco",
  "tokio",
- "tokio-util",
  "tracing",
- "url",
  "vbs",
  "vec1",
  "versions",
@@ -7600,7 +7186,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi 0.5.2",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9277,12 +8863,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nonempty-collections"
-version = "0.2.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c07626f57b1cb0ee81e5193d331209751d2e18ffa3ceaa0fd6fab63db31fafd9"
-
-[[package]]
 name = "normalize-line-endings"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10034,40 +9614,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
-name = "plotly"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05411c8f90fef914076e5a1a879ba8dbd40fa088f83924f1c1a6d8c5df5b98fb"
-dependencies = [
- "askama",
- "dyn-clone",
- "erased-serde",
- "once_cell",
- "plotly_derive",
- "rand 0.9.4",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "serde_repr",
- "serde_with",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "plotly_derive"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35f11c16698ff961f06499508442ddc83fd29aa8661fe5558334b7f9676e7c80"
-dependencies = [
- "darling 0.21.3",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "plotters"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10387,7 +9933,9 @@ name = "process-metrics"
 version = "0.1.0"
 dependencies = [
  "hotshot-types",
+ "humantime",
  "procfs",
+ "sha2 0.10.9",
  "sysinfo",
  "tokio",
  "tracing",
@@ -10636,18 +10184,6 @@ dependencies = [
  "quick-protobuf",
  "thiserror 1.0.69",
  "unsigned-varint 0.8.0",
-]
-
-[[package]]
-name = "quick_cache"
-version = "0.6.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a3db184a8b66cfe87f0263a1de147a6b554c864d1767c6f7fa4eb0e5497b565"
-dependencies = [
- "ahash 0.8.12",
- "equivalent",
- "hashbrown 0.16.1",
- "parking_lot",
 ]
 
 [[package]]
@@ -11001,8 +10537,7 @@ dependencies = [
 [[package]]
 name = "reed-solomon-simd"
 version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cffef0520d30fbd4151fb20e262947ae47fb0ab276a744a19b6398438105a072"
+source = "git+https://github.com/EspressoSystems/reed-solomon-simd?rev=1c3020e8484915028306aa28a9b6fc2b1e789d96#1c3020e8484915028306aa28a9b6fc2b1e789d96"
 dependencies = [
  "cpufeatures 0.2.17",
  "fixedbitset",
@@ -11572,14 +11107,14 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "rustls"
-version = "0.23.41"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b92b125634d9b795e7beca796cc790df15a7fb38323bf3196fda83292d06b1f"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -11631,7 +11166,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11642,9 +11177,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -11935,17 +11470,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde-wasm-bindgen"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
-dependencies = [
- "js-sys",
- "serde",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "serde_bytes"
 version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12041,17 +11565,6 @@ dependencies = [
  "percent-encoding",
  "serde",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "serde_repr"
-version = "0.1.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "175ee3e80ae9982737ca543e96133087cbd9a485eecc3bc4de9c1a37b47ea59c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
 ]
 
 [[package]]
@@ -12340,8 +11853,6 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-lock 3.4.2",
- "cdn-broker",
- "cdn-marshal",
  "clap 4.6.1",
  "committable",
  "derivative",
@@ -12353,7 +11864,6 @@ dependencies = [
  "hotshot-contract-adapter",
  "hotshot-orchestrator",
  "hotshot-query-service",
- "hotshot-testing",
  "hotshot-types",
  "http-client 0.1.0",
  "itertools 0.14.0",
@@ -13149,7 +12659,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14614,15 +14124,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasix"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae86f02046da16a333a9129d31451423e1657737ecdafed4193838a5f54c5cfe"
-dependencies = [
- "wasi 0.11.1+wasi-snapshot-preview1",
-]
-
-[[package]]
 name = "wasm-bindgen"
 version = "0.2.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14791,7 +14292,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

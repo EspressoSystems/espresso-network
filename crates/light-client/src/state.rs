@@ -307,25 +307,42 @@ where
         let Some(cert2) = self.server.cert2(height).await? else {
             return Ok(None);
         };
-
-        ensure!(
-            cert2.data.block_number == height,
-            "cert2 block number {} does not match requested height {height}",
-            cert2.data.block_number,
-        );
-
         let header = self
             .fetch_header(BlockId::Number(height as usize))
             .await
             .context("fetching header to determine cert2 version")?;
+        self.verify_certificate2(cert2, &header).await.map(Some)
+    }
 
+    /// [`fetch_certificate2`](Self::fetch_certificate2) for a caller that already holds the
+    /// verified header of the block, which saves fetching it again.
+    pub async fn fetch_certificate2_for_header(
+        &self,
+        header: &Header,
+    ) -> Result<Option<Certificate2<SeqTypes>>> {
+        let Some(cert2) = self.server.cert2(header.height()).await? else {
+            return Ok(None);
+        };
+        self.verify_certificate2(cert2, header).await.map(Some)
+    }
+
+    async fn verify_certificate2(
+        &self,
+        cert2: Certificate2<SeqTypes>,
+        header: &Header,
+    ) -> Result<Certificate2<SeqTypes>> {
+        ensure!(
+            cert2.data.block_number == header.height(),
+            "cert2 block number {} does not match requested height {}",
+            cert2.data.block_number,
+            header.height(),
+        );
         let quorum = StakeTableQuorum::new((cert2.data.epoch, self), self.epoch_height);
         quorum
             .verify_cert2(&cert2, header.version())
             .await
             .context("verifying cert2 signature")?;
-
-        Ok(Some(cert2))
+        Ok(cert2)
     }
 
     /// Fetches leaves from the server in range [start_height, end_height) and verifies them by

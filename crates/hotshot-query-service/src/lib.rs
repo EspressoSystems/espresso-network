@@ -139,8 +139,8 @@
 //! # use async_trait::async_trait;
 //! # use hotshot_query_service::{Header, QueryResult, VidShare};
 //! # use hotshot_query_service::availability::{
-//! #   AvailabilityDataSource, BlockId, BlockQueryData, Fetch, FetchStream, LeafId, LeafQueryData,
-//! #   PayloadMetadata, PayloadQueryData, TransactionFromBlock, TransactionHash,
+//! #   AvailabilityDataSource, BlockId, BlockQueryData, Certificate2, Fetch, FetchStream, LeafId,
+//! #   LeafQueryData, PayloadMetadata, PayloadQueryData, TransactionFromBlock, TransactionHash,
 //! #   VidCommonMetadata, VidCommonQueryData,
 //! # };
 //! # use hotshot_query_service::metrics::PrometheusMetrics;
@@ -211,6 +211,7 @@
 //! #   async fn get_payload_metadata_range_rev(&self, start: Bound<usize>, end: usize) -> FetchStream<PayloadMetadata<AppTypes>> { todo!() }
 //! #   async fn get_vid_common_range_rev(&self, start: Bound<usize>, end: usize) -> FetchStream<VidCommonQueryData<AppTypes>> { todo!() }
 //! #   async fn get_vid_common_metadata_range_rev(&self, start: Bound<usize>, end: usize) -> FetchStream<VidCommonMetadata<AppTypes>> { todo!() }
+//! #   async fn get_cert2(&self, height: u64) -> Fetch<Certificate2<AppTypes>> { todo!() }
 //! }
 //!
 //! // Implement data source trait for node API by delegating to the underlying data source.

@@ -144,6 +144,7 @@ theorem candidate_isSome {u : State} {p : Proposal}
     by_cases hg : p.parentCert.view = ViewNumber.genesis
     · exact Or.inl (by simp [hg])
     · exact Or.inr (by simp [(hbh hg).symm])
+  unfold ParentCertJustified at hjust
   cases hte : p.timeoutEvidence with
   | some tc =>
     rw [hte] at hjust
@@ -180,6 +181,7 @@ theorem tryPropose_fires {a u : State} {p : Proposal} (hfr : Frame a u)
         show u.headers.get? (p.viewNumber, blockHash parent) = some p.blockHeader by
           rw [hfr.headers]; exact hhdr⟩
       revert hjust
+      unfold ParentCertJustified
       cases p.timeoutEvidence with
       | some tc =>
         exact fun h => ⟨show u.timeoutCerts.get? p.viewNumber = some tc by

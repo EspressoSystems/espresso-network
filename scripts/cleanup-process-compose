@@ -48,7 +48,6 @@ NATIVE_PROCESSES=(
 	state-relay-server
 	cdn-marshal
 	cdn-broker
-	permissionless-builder
 	submit-transactions
 	nasty-client
 	node-metrics

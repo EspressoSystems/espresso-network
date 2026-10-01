@@ -137,7 +137,6 @@ else
   else
     images=(
       bridge
-      builder
       cdn-broker
       cdn-marshal
       cdn-whitelist
@@ -180,9 +179,6 @@ else
         --bin pub-key \
         $cargo_extra_args \
       && cargo build -p espresso-node-sqlite $cargo_extra_args"
-      ;;
-    "builder")
-      cargo_cmd_line="cargo build --bin permissionless-builder $cargo_extra_args"
       ;;
     "bridge")
       cargo_cmd_line="cargo build --bin espresso-bridge $cargo_extra_args"

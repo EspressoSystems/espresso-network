@@ -33,11 +33,14 @@ use hotshot_types::{
     },
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
-    message::Proposal as SignedProposal,
-    simple_certificate::{TimeoutCertificate2, UpgradeCertificate},
+    message::{Proposal as SignedProposal, UpgradeLock},
+    simple_certificate::{
+        TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
+        UpgradeCertificate2,
+    },
     simple_vote::{
-        LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutVote2, UpgradeProposalData,
-        UpgradeVote, Vote2Data,
+        LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutData3, TimeoutVote2,
+        TimeoutVote3, UpgradeProposalData, UpgradeVote, Vote2Data,
     },
     stake_table::HSStakeTable,
     traits::{
@@ -57,10 +60,11 @@ use crate::{
     cert_verifier::ValidCert,
     client::{ClientLeafFetcherNetwork, CoordinatorClient},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    helpers::{proposal_commitment, test_upgrade_lock},
+    helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
     message::{
         CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
-        Proposal, ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
+        Proposal, ProposalMessage, TimeoutVoteMessage, TimeoutVoteMessage3, Validated, Vote1,
+        Vote2,
     },
     outbox::Outbox,
     state::StateResponse,
@@ -83,7 +87,7 @@ pub struct TestView {
     pub vid_shares: Vec<VidDisperseShare2<TestTypes>>,
     pub cert1: Certificate1<TestTypes>,
     pub cert2: Certificate2<TestTypes>,
-    pub timeout_cert: TimeoutCertificate2<TestTypes>,
+    pub timeout_cert: TimeoutEvidence<TestTypes>,
     pub epoch_height: u64,
     pub stake_table_state: hotshot_types::light_client::StakeTableState,
 }
@@ -265,10 +269,21 @@ impl TestView {
         node_index: u64,
         evidence: Option<CatchupEvidence<TestTypes>>,
     ) -> Message<TestTypes, Validated> {
+        self.timeout_vote_input_for_epoch(node_index, self.epoch_number, evidence)
+    }
+
+    /// A timeout vote naming `epoch` rather than the view's own, for the
+    /// checks that bound which epochs a vote may name.
+    pub fn timeout_vote_input_for_epoch(
+        &self,
+        node_index: u64,
+        epoch: EpochNumber,
+        evidence: Option<CatchupEvidence<TestTypes>>,
+    ) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = TimeoutData2 {
             view: self.view_number,
-            epoch: Some(self.epoch_number),
+            epoch: Some(epoch),
         };
         let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
             data,
@@ -282,6 +297,44 @@ impl TestView {
             sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
                 TimeoutVoteMessage { vote, evidence },
+            )),
+        }
+    }
+
+    /// Build an epoch binding timeout vote from a specific validator, for a
+    /// node running under [`test_timeout_epoch_lock`].
+    pub fn timeout_vote3_input(
+        &self,
+        node_index: u64,
+        evidence: Option<CatchupEvidence<TestTypes>>,
+    ) -> Message<TestTypes, Validated> {
+        self.timeout_vote3_input_for_epoch(node_index, self.epoch_number, evidence)
+    }
+
+    /// An epoch binding timeout vote naming `epoch` rather than the view's own.
+    pub fn timeout_vote3_input_for_epoch(
+        &self,
+        node_index: u64,
+        epoch: EpochNumber,
+        evidence: Option<CatchupEvidence<TestTypes>>,
+    ) -> Message<TestTypes, Validated> {
+        let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let data = TimeoutData3 {
+            view: self.view_number,
+            epoch,
+        };
+        let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
+            data,
+            self.view_number,
+            &pub_key,
+            &priv_key,
+            &test_timeout_epoch_lock(),
+        )
+        .expect("Failed to sign TimeoutVote3");
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote3(
+                TimeoutVoteMessage3 { vote, evidence },
             )),
         }
     }
@@ -449,7 +502,8 @@ impl TestData {
 
             let upgrade_attached = upgrade_cert.as_ref().is_some_and(|(target_view, cert)| {
                 if *target_view == view_number {
-                    proposal.upgrade_certificate = Some(cert.clone());
+                    proposal.upgrade_certificate =
+                        Some(UpgradeCertificate2::restore_epoch(cert.clone(), epoch));
                     true
                 } else {
                     false
@@ -1049,6 +1103,16 @@ impl ConsensusHarness {
     }
 
     pub async fn new_with_epoch_height(node_index: u64, epoch_height: u64) -> Self {
+        Self::new_with_upgrade_lock(node_index, epoch_height, test_upgrade_lock()).await
+    }
+
+    /// A harness whose consensus runs under `lock` rather than the fixed
+    /// version of [`test_upgrade_lock`].
+    pub async fn new_with_upgrade_lock(
+        node_index: u64,
+        epoch_height: u64,
+        lock: UpgradeLock<TestTypes>,
+    ) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let state_key_pair = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed(
             [0u8; 32], node_index,
@@ -1068,7 +1132,7 @@ impl ConsensusHarness {
             private_key,
             state_private_key,
             10,
-            test_upgrade_lock(),
+            lock,
             genesis_leaf,
             epoch_height,
         );
@@ -1462,7 +1526,7 @@ pub(crate) fn build_timeout_cert_signed_by(
     epoch: EpochNumber,
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
     signers: &[u64],
-) -> TimeoutCertificate2<TestTypes> {
+) -> TimeoutEvidence<TestTypes> {
     let data = TimeoutData2 {
         view: view_number,
         epoch: Some(epoch),
@@ -1471,7 +1535,7 @@ pub(crate) fn build_timeout_cert_signed_by(
         .iter()
         .map(|node| sign_vote_as(*node, data.clone(), view_number))
         .collect();
-    assemble_cert(data, view_number, epoch_membership, &shares)
+    TimeoutEvidence::V2(assemble_cert(data, view_number, epoch_membership, &shares))
 }
 
 pub(crate) fn build_timeout_cert(
@@ -1480,19 +1544,54 @@ pub(crate) fn build_timeout_cert(
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
     public_key: &BLSPubKey,
     private_key: &BLSPrivKey,
-) -> TimeoutCertificate2<TestTypes> {
+) -> TimeoutEvidence<TestTypes> {
+    // The tests run at `test_upgrade_lock`, i.e. before the epoch binding
+    // upgrade, so the form that does not bind the epoch is the admissible one.
     let data = TimeoutData2 {
         view: view_number,
         epoch: Some(epoch),
     };
-    build_cert::<TestTypes, TimeoutData2, TimeoutVote2<TestTypes>, TimeoutCertificate2<TestTypes>>(
+    TimeoutEvidence::V2(build_cert::<
+        TestTypes,
+        TimeoutData2,
+        TimeoutVote2<TestTypes>,
+        TimeoutCertificate2<TestTypes>,
+    >(
         data,
         epoch_membership,
         view_number,
         public_key,
         private_key,
         &test_upgrade_lock::<TestTypes>(),
-    )
+    ))
+}
+
+/// Build an epoch binding timeout certificate, for the tests that run under
+/// [`test_timeout_epoch_lock`].
+pub(crate) fn build_timeout_cert3(
+    view_number: ViewNumber,
+    epoch: EpochNumber,
+    epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
+    public_key: &BLSPubKey,
+    private_key: &BLSPrivKey,
+) -> TimeoutEvidence<TestTypes> {
+    let data = TimeoutData3 {
+        view: view_number,
+        epoch,
+    };
+    TimeoutEvidence::V3(build_cert::<
+        TestTypes,
+        TimeoutData3,
+        TimeoutVote3<TestTypes>,
+        TimeoutCertificate3<TestTypes>,
+    >(
+        data,
+        epoch_membership,
+        view_number,
+        public_key,
+        private_key,
+        &test_timeout_epoch_lock::<TestTypes>(),
+    ))
 }
 
 /// Name the leader of the view a step is about, for the replay.

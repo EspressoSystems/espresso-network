@@ -21,8 +21,8 @@ on:
       - main
       - release-*
     tags:
-      # YYYYMMDD
-      - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
+      # MAJOR.MINOR.PHASE.PATCH
+      - "[0-9]*.[0-9]*.[0-9]*.[0-9]*"
   schedule:
     - cron: "0 0 * * 1"
   pull_request:
@@ -207,6 +207,43 @@ jobs:
         with:
           artifact: compile-metrics-build
 
+  # Other pull requests run it on demand with `/benchmark` (network-bench-command.yml).
+  network-bench-changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      bench: ${{ steps.filter.outputs.bench }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[].filename' | grep -qE '^(scripts/network-bench/|\.github/workflows/network-bench)'; then
+            echo "bench=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bench=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  network-bench:
+    name: Network benchmark
+    needs: [build-amd, network-bench-changes]
+    if: >-
+      ${{ !cancelled() && needs.build-amd.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      needs.network-bench-changes.outputs.bench == 'true') }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/network-bench.yml
+    with:
+      build_run_id: ${{ github.run_id }}
+      sha: ${{ github.sha }}
+      pr: ${{ github.event.pull_request.number || '' }}
+
   build-dockers-amd:
     needs: build-amd
     runs-on: ubuntu-latest
@@ -215,7 +252,6 @@ jobs:
       matrix:
         service:
           - bridge
-          - builder
           - cdn-broker
           - cdn-marshal
           - cdn-whitelist
@@ -267,6 +303,8 @@ jobs:
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{matrix.service}}
+          # latest would otherwise follow whichever tag was built last; operators pin tags
+          flavor: latest=false
 
       # There is no straightforward way to import a multiplatform image from a tar file with
       # docker.
@@ -345,7 +383,6 @@ jobs:
       matrix:
         service:
           - bridge
-          - builder
           - cdn-broker
           - cdn-marshal
           - cdn-whitelist
@@ -396,6 +433,8 @@ jobs:
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
+          # latest would otherwise follow whichever tag was built last; operators pin tags
+          flavor: latest=false
 
       - name: Build and push docker
         uses: nick-fields/retry@v4
@@ -444,7 +483,6 @@ jobs:
       matrix:
         service:
           - bridge
-          - builder
           - cdn-broker
           - cdn-marshal
           - cdn-whitelist
@@ -495,6 +533,8 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
+          # latest would otherwise follow whichever tag was built last; operators pin tags
+          flavor: latest=false
 
       - name: Create manifest list and push
         working-directory: "${{ runner.temp }}/digests"

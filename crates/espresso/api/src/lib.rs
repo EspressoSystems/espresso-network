@@ -13,9 +13,14 @@ pub mod v1;
 pub mod proto {
     // Every pbjson `Deserialize` impl formats its field list as `{:?}` through a reference.
     #![allow(clippy::useless_borrows_in_formatting)]
+    #![expect(
+        clippy::large_enum_variant,
+        reason = "prost lays every oneof arm out inline, so the ADVZ transaction proof dwarfs its \
+                  siblings, and boxing it (`Builder::boxed`) breaks pbjson-build's serde"
+    )]
 
-    include!("generated/espresso.api.v2.rs");
-    include!("generated/espresso.api.v2.serde.rs");
+    include!(concat!(env!("OUT_DIR"), "/espresso.api.v2.rs"));
+    include!(concat!(env!("OUT_DIR"), "/espresso.api.v2.serde.rs"));
 }
 
 /// Axum REST handlers derived from the `google.api.http` annotations, transcoding
@@ -23,8 +28,13 @@ pub mod proto {
 pub mod rest {
     // The generator emits `#[expect]` attributes that not every handler fulfills.
     #![allow(unfulfilled_lint_expectations)]
+    #![expect(
+        clippy::too_many_arguments,
+        reason = "`all_rest_routes` takes one service per proto file, so its arity grows with the \
+                  API"
+    )]
 
-    include!("generated/espresso.api.v2.rest.rs");
+    include!(concat!(env!("OUT_DIR"), "/espresso.api.v2.rest.rs"));
 }
 
 /// The compiled proto descriptor set, for gRPC reflection.
@@ -35,7 +45,12 @@ use tower::Layer;
 // Re-exports
 pub use self::axum::{create_router_v1, routes};
 use self::proto::{
+    availability_service_server::{AvailabilityService, AvailabilityServiceServer},
+    config_service_server::{ConfigService, ConfigServiceServer},
+    database_service_server::{DatabaseService, DatabaseServiceServer},
+    merklized_state_service_server::{MerklizedStateService, MerklizedStateServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
+    reward_state_service_server::{RewardStateService, RewardStateServiceServer},
     status_service_server::{StatusService, StatusServiceServer},
     token_service_server::{TokenService, TokenServiceServer},
 };
@@ -57,8 +72,9 @@ pub fn url(base: &::url::Url, path: impl AsRef<str>) -> ::url::Url {
 ///
 /// `catchup`, like the query-service modules (`status`, `availability`, `node`, `token`,
 /// `block-state`, `fee-state`, `reward-state`, `database`) and `v2`, is always on: tide-disco's
-/// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, `light-client`, and
-/// `hotshot-events` follow `Options`, matching `Options::init_with_query_module_sql`.
+/// SQL mode registered it unconditionally. `submit`, `config`, `explorer`, and `light-client`
+/// follow `Options`, matching `Options::init_with_query_module_sql`; v2's `ConfigService` follows
+/// the same `config` flag as the v1 module.
 pub async fn serve_axum<S>(
     port: u16,
     state: S,
@@ -77,7 +93,6 @@ where
         + v1::CatchupApi
         + v1::SubmitApi
         + v1::StateSignatureApi
-        + v1::HotShotEventsApi
         + v1::LightClientApi
         + v1::ExplorerApi
         + v1::TokenApi
@@ -85,6 +100,11 @@ where
         + StatusService
         + TokenService
         + NodeService
+        + ConfigService
+        + DatabaseService
+        + AvailabilityService
+        + MerklizedStateService
+        + RewardStateService
         + Send
         + Sync
         + 'static,
@@ -113,43 +133,60 @@ where
     if modules.light_client {
         router = router.merge(axum::router_light_client(state.clone()));
     }
-    if modules.hotshot_events {
-        router = router.merge(axum::router_hotshot_events(state.clone()));
-    }
+
     let router = axum::finish_v1_docs(router)
-        .merge(router_v2(state))
+        .merge(router_v2(state, modules))
         .merge(axum::router_v2_docs());
     serve_router(listener, "v1 and v2", router, max_connections).await
 }
 
 /// The v2 REST routes exactly as [`serve_axum`] mounts them. Extracted so the test asserting
 /// every documented route is mounted exercises the same construction; don't inline it back.
-pub(crate) fn router_v2<S>(state: std::sync::Arc<S>) -> ::axum::Router
+pub(crate) fn router_v2<S>(state: std::sync::Arc<S>, modules: OptionalModules) -> ::axum::Router
 where
-    S: StatusService + TokenService + NodeService + Send + Sync + 'static,
+    S: StatusService
+        + TokenService
+        + NodeService
+        + ConfigService
+        + DatabaseService
+        + AvailabilityService
+        + MerklizedStateService
+        + RewardStateService
+        + Send
+        + Sync
+        + 'static,
 {
-    rest::status_service_rest_router(state.clone())
+    let router = rest::status_service_rest_router(state.clone())
         .merge(rest::token_service_rest_router(state.clone()))
-        .merge(rest::node_service_rest_router(state))
+        .merge(rest::node_service_rest_router(state.clone()))
+        .merge(rest::database_service_rest_router(state.clone()))
+        .merge(rest::availability_service_rest_router(state.clone()))
+        .merge(rest::merklized_state_service_rest_router(state.clone()))
+        .merge(rest::reward_state_service_rest_router(state.clone()));
+    let router = if modules.config {
+        router.merge(rest::config_service_rest_router(state))
+    } else {
+        router.merge(axum::router_config_disabled())
+    };
+    router
+        .layer(::axum::middleware::from_fn(axum::v2_refuse_post_query))
         .layer(::axum::middleware::from_fn(axum::v2_error_envelope))
 }
 
 /// Which of the optional API modules to serve, for modes that make them conditional
-/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`/`Options::light_client`/
-/// `Options::hotshot_events`).
+/// (mirroring `Options::submit`/`Options::config`/`Options::explorer`/`Options::light_client`).
 #[derive(Default, Clone, Copy, Debug)]
 pub struct OptionalModules {
     pub submit: bool,
     pub catchup: bool,
     pub config: bool,
-    pub hotshot_events: bool,
     pub explorer: bool,
     pub light_client: bool,
 }
 
 /// Serve the query API used by the filesystem-backed storage mode: status, availability, node,
 /// token, catchup, and state-signature are always on (tide registered them unconditionally);
-/// submit, config, and hotshot-events follow `Options`. Filesystem storage doesn't implement the
+/// submit and config follow `Options`. Filesystem storage doesn't implement the
 /// reward/merklized-state/explorer/database traits, so those modules aren't served (a request to
 /// one of their routes 404s, matching tide).
 pub async fn serve_axum_fs<S>(
@@ -168,7 +205,6 @@ where
         + v1::SubmitApi
         + v1::StateSignatureApi
         + v1::ConfigApi
-        + v1::HotShotEventsApi
         + Send
         + Sync
         + 'static,
@@ -187,9 +223,7 @@ where
     if modules.config {
         router = router.merge(axum::router_config(state.clone()));
     }
-    if modules.hotshot_events {
-        router = router.merge(axum::router_hotshot_events(state.clone()));
-    }
+
     serve_router(
         listener,
         "fs",
@@ -200,7 +234,7 @@ where
 }
 
 /// Serve the status-only API: no availability/node/token data source is available, so only
-/// status and the HotShot modules (submit, catchup, state-signature, config, hotshot-events) can
+/// status and the HotShot modules (submit, catchup, state-signature, config) can
 /// be served. State-signature is always on; the rest follow `Options`.
 pub async fn serve_axum_status<S>(
     port: u16,
@@ -214,7 +248,6 @@ where
         + v1::CatchupApi
         + v1::StateSignatureApi
         + v1::ConfigApi
-        + v1::HotShotEventsApi
         + Send
         + Sync
         + 'static,
@@ -247,7 +280,6 @@ where
         + v1::CatchupApi
         + v1::StateSignatureApi
         + v1::ConfigApi
-        + v1::HotShotEventsApi
         + Send
         + Sync
         + 'static,
@@ -271,13 +303,7 @@ fn merge_hotshot_modules<S>(
     modules: OptionalModules,
 ) -> aide::axum::ApiRouter
 where
-    S: v1::SubmitApi
-        + v1::CatchupApi
-        + v1::ConfigApi
-        + v1::HotShotEventsApi
-        + Send
-        + Sync
-        + 'static,
+    S: v1::SubmitApi + v1::CatchupApi + v1::ConfigApi + Send + Sync + 'static,
 {
     if modules.submit {
         router = router.merge(axum::router_submit(state.clone()));
@@ -288,9 +314,7 @@ where
     if modules.config {
         router = router.merge(axum::router_config(state.clone()));
     }
-    if modules.hotshot_events {
-        router = router.merge(axum::router_hotshot_events(state.clone()));
-    }
+
     router
 }
 
@@ -333,8 +357,9 @@ async fn serve_router(
     Ok(())
 }
 
-/// Shared budget: plain requests hold a slot while in flight, streaming sockets for their
-/// lifetime; excess gets 429.
+/// Shared budget: a request holds a slot until its handler returns, excess gets 429. A stream
+/// (websocket or SSE) releases its slot once the response starts, so open streams are not capped
+/// here, see [`axum::limit_requests`].
 fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Router {
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(limit));
     router
@@ -342,32 +367,42 @@ fn apply_connection_limit(router: ::axum::Router, limit: usize) -> ::axum::Route
         .layer(::axum::Extension(axum::RequestLimit(semaphore)))
 }
 
-/// Start Tonic gRPC server
-pub async fn serve_tonic<S>(port: u16, state: S) -> anyhow::Result<()>
+/// Start Tonic gRPC server. `ConfigService` follows `modules.config` like the REST side; the
+/// reflection service still lists it, so a disabled deployment answers it with `Unimplemented`.
+pub async fn serve_tonic<S>(port: u16, state: S, modules: OptionalModules) -> anyhow::Result<()>
 where
-    S: StatusService + TokenService + NodeService + Clone,
+    S: StatusService
+        + TokenService
+        + NodeService
+        + ConfigService
+        + DatabaseService
+        + AvailabilityService
+        + MerklizedStateService
+        + RewardStateService
+        + Clone,
 {
     use ::tonic::transport::Server;
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-
-    let status_service = StatusServiceServer::new(state.clone());
-    let token_service = TokenServiceServer::new(state.clone());
-    let node_service = NodeServiceServer::new(state);
 
     // Enable gRPC reflection for tools like grpcurl
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
-    tracing::info!("gRPC server listening on {}", addr);
-    Server::builder()
-        .add_service(status_service)
-        .add_service(token_service)
-        .add_service(node_service)
+    let router = Server::builder()
+        .add_service(StatusServiceServer::new(state.clone()))
+        .add_service(TokenServiceServer::new(state.clone()))
+        .add_service(NodeServiceServer::new(state.clone()))
+        .add_service(DatabaseServiceServer::new(state.clone()))
+        .add_service(AvailabilityServiceServer::new(state.clone()))
+        .add_service(MerklizedStateServiceServer::new(state.clone()))
+        .add_service(RewardStateServiceServer::new(state.clone()))
         .add_service(reflection_service)
-        .serve(addr)
-        .await?;
+        .add_optional_service(modules.config.then(|| ConfigServiceServer::new(state)));
+
+    tracing::info!("gRPC server listening on {}", addr);
+    router.serve(addr).await?;
 
     Ok(())
 }

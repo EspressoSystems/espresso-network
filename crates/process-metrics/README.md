@@ -2,7 +2,7 @@
 
 ## What it does
 
-- Registers process- and host-level Prometheus metrics on any binary that has a
+- Registers process-, runtime- and host-level Prometheus metrics on any binary that has a
   `hotshot_types::traits::metrics::Metrics` registry.
 - Samples them every 5s via a long-running async task.
 - Ships a CI soak harness (`scripts/`) that captures the gauges + `docker stats` for the whole docker demo and
@@ -39,6 +39,43 @@ detected once at startup and logged at `info`.
 
 `node_load*_milli` reports the loadavg multiplied by 1000 because the HotShot `Gauge` trait stores `usize`. Divide by
 1000 when graphing.
+
+### Tokio runtime
+
+Sampled from the runtime the sampling task itself runs on, via `tokio::runtime::Handle::current().metrics()`. The
+handle is resolved once at startup; if `run()` is somehow polled outside a runtime, a warning is logged and these stay
+at zero.
+
+`tokio_worker_busy_seconds_total` sums every worker, so the fraction of worker time spent polling is
+`rate(tokio_worker_busy_seconds_total) / tokio_workers`, where 1.0 means every worker was polling the whole time.
+
+| Name                              | Type    | Unit    | Source                                                   |
+| --------------------------------- | ------- | ------- | -------------------------------------------------------- |
+| `tokio_workers`                   | gauge   | -       | `num_workers()` (set once at startup)                    |
+| `tokio_alive_tasks`               | gauge   | -       | `num_alive_tasks()`                                      |
+| `tokio_global_queue_depth`        | gauge   | -       | `global_queue_depth()`                                   |
+| `tokio_worker_busy_seconds_total` | counter | seconds | `worker_total_busy_duration(w)` summed over every worker |
+| `tokio_blocking_threads`          | gauge   | -       | `num_blocking_threads()`                                 |
+| `tokio_idle_blocking_threads`     | gauge   | -       | `num_idle_blocking_threads()`                            |
+| `tokio_blocking_queue_depth`      | gauge   | -       | `blocking_queue_depth()`                                 |
+
+The blocking pool is where `spawn_blocking` work runs, and where a synchronous call that should have been
+`spawn_blocking`'d shows up as a queue that never drains.
+
+#### The `tokio_unstable` build flag
+
+The three blocking-pool gauges are behind tokio's `--cfg tokio_unstable`, which the workspace sets in
+`.cargo/config.toml`. The crate compiles either way: without the flag the worker metrics are still collected, the
+blocking-pool ones are absent, and `init` logs a warning saying so.
+
+A `RUSTFLAGS` or `CARGO_TARGET_<TRIPLE>_RUSTFLAGS` in the environment _replaces_ `build.rustflags` from
+`.cargo/config.toml` rather than adding to it, so every build path that sets one has to repeat the flag
+(`.github/workflows/coverage.yml` and the `coverage` dev shell in `flake.nix` do). The
+`tokio_runtime::tests::built_with_tokio_unstable` test fails when a build path has lost it. The exception is
+`just check-sp1-target`, which sets its own target flags and has no runtime to measure.
+
+Unstable tokio APIs carry no semver guarantee, so a tokio bump can break these three calls. The remaining unstable
+metrics (per-worker poll/steal counts, `spawned_tasks_count`) are not collected.
 
 ### Pressure stall information (PSI)
 

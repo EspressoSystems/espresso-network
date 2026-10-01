@@ -165,8 +165,7 @@ where
         let Some(cert2) = cert2 else {
             return;
         };
-        let height = cert2.data.block_number;
-        tracing::info!(height, "fetched cert2");
-        self.fetcher.store_and_notify(&(height, cert2)).await;
+        tracing::info!(height = cert2.data.block_number, "fetched cert2");
+        self.fetcher.store_and_notify(&cert2).await;
     }
 }
