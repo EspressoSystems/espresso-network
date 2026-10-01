@@ -1072,3 +1072,43 @@ def test_container_stats_reads_scope_files(tmp_path):
 
 def test_container_stats_skips_missing_scope(tmp_path):
     assert awsb.container_stats({"gone": "deadbeef"}, tmp_path) == {}
+
+
+def test_leader_trace_flag_is_off_by_default():
+    assert node_env_config().leader_trace is False
+    assert node_env_config("--leader-trace").leader_trace is True
+    assert node_env_config("--leader-trace", "--no-leader-trace").leader_trace is False
+
+
+def test_leader_trace_differs_in_the_config_hash_only_when_on():
+    hosts = awsb.plan_hosts(small_cfg())
+
+    def digest(**kw) -> str:
+        return awsb.run_config_hash(small_cfg(**kw), hosts, {}, b"genesis")
+
+    assert digest() == digest(leader_trace=False)
+    assert digest() != digest(leader_trace=True)
+
+
+def test_manifest_config_without_leader_trace_loads_as_off():
+    saved = awsb.config_to_json(small_cfg())
+    del saved["leader_trace"]
+    assert awsb.config_from_manifest(saved).leader_trace is False
+
+
+@pytest.mark.parametrize("role", ["query", "validator"])
+def test_leader_trace_start_sh_mounts_a_host_dir_for_node_roles(role: str):
+    spec = host("node0", role)
+    on = awsb.render_start_sh(spec, fake_images(), 32768, leader_trace=True)
+    assert "mkdir -p /opt/bench/trace\n" in on
+    assert "-v /opt/bench/trace:/trace" in on
+    assert on.index("mkdir -p /opt/bench/trace") < on.rindex("docker create")
+    off = awsb.render_start_sh(spec, fake_images(), 32768)
+    assert "trace" not in off
+
+
+def test_leader_trace_start_sh_leaves_ctl_alone():
+    script = awsb.render_start_sh(
+        host("ctl", "ctl"), fake_images(), 32768, leader_trace=True
+    )
+    assert "trace" not in script

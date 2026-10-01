@@ -911,3 +911,54 @@ def test_instances_terminate_before_volumes_security_group_and_key():
         "delete_security_group",
         "ec2 delete-key-pair",
     ]
+
+
+def trace_plots_argv(run_harness: RunHarness) -> list[str]:
+    return [
+        "timeout",
+        str(awsb.TRACE_PLOTS_TIMEOUT_S),
+        str(awsb.SCRIPT_DIR / "trace-plots"),
+        str(run_harness.run_dir),
+    ]
+
+
+@pytest.mark.usefixtures("valid")
+def test_a_leader_trace_run_plots_the_traces_after_the_report(run_harness: RunHarness):
+    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
+    assert run_harness.run(runner, "--leader-trace") == awsb.EXIT_OK
+    assert trace_plots_argv(run_harness) in runner.calls
+
+
+@pytest.mark.usefixtures("valid")
+def test_a_run_without_leader_trace_does_not_plot(run_harness: RunHarness):
+    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
+    run_harness.run(runner)
+    assert not runner.ran("trace-plots")
+
+
+@pytest.mark.usefixtures("valid")
+def test_a_failed_plot_warns_and_keeps_the_exit_code(run_harness: RunHarness):
+    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
+    runner.respond("trace-plots", lambda _: completed(returncode=1, stderr="boom"))
+    assert run_harness.run(runner, "--leader-trace") == awsb.EXIT_OK
+    warnings = [
+        line for line in run_harness.log().splitlines() if "trace-plots" in line
+    ]
+    assert len(warnings) == 1
+    assert "WARNING" in warnings[0]
+    assert "boom" in warnings[0]
+
+
+def test_a_raising_plot_step_keeps_the_result_and_the_summary(
+    run_harness: RunHarness, monkeypatch: pytest.MonkeyPatch
+):
+    def write_report(run_dir: Path, baseline=None) -> dict:
+        (run_dir / "summary.md").write_text("report")
+        return valid_result()
+
+    monkeypatch.setattr(awsb, "write_report", write_report)
+    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
+    runner.respond("trace-plots", raiser(RuntimeError("plot broke")))
+    assert run_harness.run(runner, "--leader-trace") == awsb.EXIT_OK
+    assert (run_harness.run_dir / "summary.md").read_text() == "report"
+    assert "WARNING trace-plots failed: RuntimeError: plot broke" in run_harness.log()

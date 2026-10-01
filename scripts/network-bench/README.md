@@ -64,6 +64,10 @@ scripts/network-bench/
 - `--node-env KEY=VALUE` (repeatable; not an `up` flag, pass it to `run --fleet`): added to every node's environment,
   overriding the harness's own value; taken verbatim, not for secrets; listed in the summary's deployment block and part
   of the config hash.
+- `--leader-trace` (`plan` and `run`, also `run --fleet`; not an `up` flag; default off): nodes get
+  `ESPRESSO_NODE_LEADER_TRACE_DIR=/trace` (host `/opt/bench/trace`); part of the config hash when on.
+- Output of `--leader-trace`, also by `render`: `hosts/<name>/trace/leader_trace_node*.csv`, and from
+  `trace-plots RUN_DIR` (uv script, needs matplotlib) `trace/phases.png`, `trace/finality.png`, `trace/stats.json`.
 - Query node: pg_stat_database/checkpointer/wal/activity every 5 s, pg_stat_statements and settings at collect, slow
   statements (>200 ms) in the postgres log.
 - Per step, second half judged:

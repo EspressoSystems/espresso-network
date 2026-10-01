@@ -268,6 +268,9 @@ PG_TLS_DIR = "/data/pg-tls"
 # same volume; node image reads ESPRESSO_QUERY_PAYLOAD_DIR, which `--node-env` sets to
 # PAYLOAD_CONTAINER_DIR (experimental, so not a default).
 PAYLOAD_HOST_DIR = "/data/pg/payload"
+TRACE_HOST_DIR = f"{BENCH_DIR}/trace"
+TRACE_CONTAINER_DIR = "/trace"
+TRACE_PLOTS_TIMEOUT_S = 600
 PAYLOAD_CONTAINER_DIR = "/payload"
 VOLUME_BY_ID = "/dev/disk/by-id"
 # Seconds `up` waits for udev to publish the by-id link of the attached volume.
@@ -801,6 +804,8 @@ class RunConfig:
     node_env: tuple[str, ...] = ()
     # Genesis `max_block_size`, verbatim.
     max_block_size: str = "50mb"
+    # espresso-node writes leader_trace_node{N}.csv to /opt/bench/trace; `trace-plots` renders it.
+    leader_trace: bool = False
     ttl_min: str = "auto"
     fleet: Path | None = None
     force: bool = False
@@ -1977,6 +1982,7 @@ def render_start_sh(
     images: dict[str, ImageInfo],
     memory_mib: int,
     query_db: DbMode = "colocated",
+    leader_trace: bool = False,
 ) -> str:
     """Deviates from the plan signature (drops unused `hosts`, `cfg`): every value start.sh
     needs is already in `host`, `images` and the host's `memory_mib`, or in ctl.env/node.env
@@ -2059,6 +2065,9 @@ def render_start_sh(
         # After reset_script wiped /data/pg and pg_store_script mounted the run's placement.
         script += f"mkdir -p {PAYLOAD_HOST_DIR}\n\n"
         argv += ["-v", f"{PAYLOAD_HOST_DIR}:{PAYLOAD_CONTAINER_DIR}"]
+    if leader_trace:
+        script += f"mkdir -p {TRACE_HOST_DIR}\n\n"
+        argv += ["-v", f"{TRACE_HOST_DIR}:{TRACE_CONTAINER_DIR}"]
     argv.append(f"{node['ref']}@{node['digest']}")
     argv.append("/bin/espresso-node")
     for module in modules:
@@ -2137,6 +2146,16 @@ def add_block_size_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_leader_trace_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--leader-trace",
+        action=argparse.BooleanOptionalAction,
+        default=RunConfig(tag="").leader_trace,
+        help="nodes write leader_trace_node{N}.csv; collected into hosts/<name>/trace/ and "
+        "plotted by `trace-plots` into <run>/trace/",
+    )
+
+
 def block_size(text: str) -> str:
     if re.fullmatch(r"[1-9]\d*(kb|mb|gb)", text, re.IGNORECASE) is None:
         raise argparse.ArgumentTypeError(f"not a size like 50mb: {text}")
@@ -2172,6 +2191,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         load=load,
         node_env=tuple(args.node_env),
         max_block_size=args.max_block_size,
+        leader_trace=args.leader_trace,
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
@@ -2235,6 +2255,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_run_flags(plan_p)
     add_node_env_flag(plan_p)
     add_block_size_flag(plan_p)
+    add_leader_trace_flag(plan_p)
     add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
     plan_p.set_defaults(func=cmd_plan, yes=False, max_usd=UP_MAX_USD)
@@ -2252,6 +2273,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         func=cmd_up,
         node_env=[],
         max_block_size=defaults.max_block_size,
+        leader_trace=defaults.leader_trace,
         fleet=None,
         force=False,
         query_db=defaults.query_db,
@@ -2269,6 +2291,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_run_flags(run_p, tag_required=False)
     add_node_env_flag(run_p)
     add_block_size_flag(run_p)
+    add_leader_trace_flag(run_p)
     add_ttl_flag(run_p)
     run_p.add_argument(
         "--fleet",
@@ -2970,9 +2993,32 @@ def report(run: Run) -> nb.BenchResult | None:
             run.error = f"report failed: {type(exc).__name__}: {exc}"
         else:
             log_result(result)
+            plot_traces(run.fleet.system.run, run.run_dir)
             return result
     write_failure_summary(run.run_dir, run.manifest, run.error)
     return None
+
+
+def plot_traces(runner: Runner, run_dir: Path) -> None:
+    """Renders the leader traces of a `--leader-trace` run. Any failure only warns: the report
+    is already written."""
+    try:
+        manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+        if not config_from_manifest(manifest["config"]).leader_trace:
+            return
+        done = runner(
+            [
+                "timeout",
+                str(TRACE_PLOTS_TIMEOUT_S),
+                str(SCRIPT_DIR / "trace-plots"),
+                str(run_dir),
+            ]
+        )
+        if done.returncode != 0:
+            last = (done.stderr.strip().splitlines() or [""])[-1]
+            log.warning("trace-plots exited %d: %s", done.returncode, last)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace-plots failed: %s: %s", type(exc).__name__, exc)
 
 
 def log_result(result: nb.BenchResult) -> None:
@@ -3298,6 +3344,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         query_db=cli.query_db,
         node_env=cli.node_env,
         max_block_size=cli.max_block_size,
+        leader_trace=cli.leader_trace,
         fleet=cli.fleet,
         force=cli.force,
     )
@@ -3839,6 +3886,7 @@ def run_config_hash(
             json.dumps(hosts, sort_keys=True).encode(),
             cfg.query_db.encode(),
             *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
+            *([b"leader-trace"] if cfg.leader_trace else []),
         ],
     )
 
@@ -4018,6 +4066,12 @@ def topology(hosts: dict[str, HostInfo]) -> nb.Topology:
     }
 
 
+def trace_env(cfg: RunConfig) -> tuple[str, ...]:
+    if not cfg.leader_trace:
+        return ()
+    return (f"ESPRESSO_NODE_LEADER_TRACE_DIR={TRACE_CONTAINER_DIR}",)
+
+
 def node_hosts(hosts: dict[str, HostInfo]) -> list[HostInfo]:
     return [hosts[name] for name in _node_names(hosts)]
 
@@ -4037,6 +4091,7 @@ def render_host_files(
                 manifest["images"],
                 manifest["memory_mib"][spec["instance_type"]],
                 query_db=cfg.query_db,
+                leader_trace=cfg.leader_trace,
             )
         )
         if spec["role"] == "ctl":
@@ -4047,7 +4102,9 @@ def render_host_files(
             if cfg.query_db == "rds" and pg is not None:
                 node_env.touch(mode=0o600)
                 node_env.chmod(0o600)
-            node_env.write_text(render_node_env(spec, hosts, pg, cfg.node_env))
+            node_env.write_text(
+                render_node_env(spec, hosts, pg, (*trace_env(cfg), *cfg.node_env))
+            )
             if pg is not None:
                 write_private_json(host_dir / "pg.json", pg)
     topo = topology(hosts)
@@ -4855,6 +4912,7 @@ def cmd_render(args: argparse.Namespace, system: System) -> int:
     baseline = nb.load_baseline(args.baseline) if args.baseline else None
     result = write_report(run_dir, baseline)
     log_result(result)
+    plot_traces(system.run, run_dir)
     log.info("wrote %s", run_dir / "summary.md")
     return EXIT_OK if result["validity"]["valid"] else EXIT_INVALID
 

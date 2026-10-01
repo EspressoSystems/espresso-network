@@ -785,3 +785,12 @@ def test_config_round_trips_through_the_fleet_manifest():
     cfg = awsb.RunConfig(tag="x", ttl_min="90", fleet=Path("a/b"))
     saved = json.loads(json.dumps(awsb.config_to_json(cfg)))
     assert awsb.config_from_manifest(saved) == cfg
+
+
+def test_leader_trace_belongs_to_one_run(harness, runner):
+    manifest = harness.fleet()
+    assert awsb.fleet_run_config(harness.run_args(), manifest).leader_trace is False
+    cfg = awsb.fleet_run_config(harness.run_args("--leader-trace"), manifest)
+    assert cfg.leader_trace is True
+    with pytest.raises(SystemExit):
+        harness.up_args("--leader-trace")

@@ -24,6 +24,7 @@ from fakes import (
     FakeRunner,
     FakeSystem,
     RunHarness,
+    Scripted,
     aws_manifest,
     awsb,
     balance_file,
@@ -955,3 +956,47 @@ def test_ebs_balance_validity(
     assert validity["valid"]
     assert validity["reasons"] == ([] if reason is None else [reason])
     assert validity["noisy"] == (reason is not None)
+
+
+def read_host_file(run_dir: Path, node: str, name: str) -> str:
+    return (run_dir / "hosts" / node / name).read_text()
+
+
+def test_leader_trace_on_sets_the_env_and_mounts_the_dir_on_node_hosts(
+    tmp_path: Path,
+) -> None:
+    render_run_dir(tmp_path, two_node_cfg(leader_trace=True))
+    for node in ("node0", "node1"):
+        assert "\nESPRESSO_NODE_LEADER_TRACE_DIR=/trace\n" in read_host_file(
+            tmp_path, node, "node.env"
+        )
+        assert "-v /opt/bench/trace:/trace" in read_host_file(
+            tmp_path, node, "start.sh"
+        )
+    assert "TRACE" not in read_host_file(tmp_path, "ctl", "ctl.env")
+
+
+def test_node_env_overrides_the_leader_trace_dir(tmp_path: Path) -> None:
+    cfg = two_node_cfg(
+        leader_trace=True, node_env=("ESPRESSO_NODE_LEADER_TRACE_DIR=/x",)
+    )
+    render_run_dir(tmp_path, cfg)
+    text = read_host_file(tmp_path, "node1", "node.env")
+    assert text.count("ESPRESSO_NODE_LEADER_TRACE_DIR=") == 1
+    assert "\nESPRESSO_NODE_LEADER_TRACE_DIR=/x\n" in text
+
+
+def test_leader_trace_off_writes_no_env_or_mount(tmp_path: Path) -> None:
+    render_run_dir(tmp_path, two_node_cfg())
+    for node in ("node0", "node1"):
+        assert "TRACE" not in read_host_file(tmp_path, node, "node.env")
+        assert "trace" not in read_host_file(tmp_path, node, "start.sh")
+
+
+def test_the_trace_dir_is_collected_and_wiped_by_a_reset(isolated: Path) -> None:
+    assert "trace" not in awsb.RESET_KEEP
+    runner = Scripted({})
+    hosts = remote(runner, isolated)
+    awsb.collect_hosts(hosts, [hosts.hosts["node0"]], isolated)
+    (rsync,) = [c for c in runner.calls if c[0] == "rsync"]
+    assert not [a for a in rsync if a.startswith("--exclude") and "trace" in a]

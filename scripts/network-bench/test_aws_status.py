@@ -550,3 +550,52 @@ def test_side_effects_only_in_boundary_helpers():
 def test_scan_flags_a_stray_call():
     tree = ast.parse("def f():\n    return time.time() + len(input())\n")
     assert side_effect_uses(tree) == [("f", "time.time"), ("f", "input")]
+
+
+def enable_leader_trace(run_dir: Path) -> None:
+    manifest = netbench.read_json(run_dir / "manifest.json")
+    manifest["config"]["leader_trace"] = True
+    netbench.write_json(run_dir / "manifest.json", manifest)
+
+
+def test_render_plots_the_traces_of_a_leader_trace_run(tmp_path: Path):
+    write_collected_run(tmp_path)
+    enable_leader_trace(tmp_path)
+    runner = FakeRunner()
+    runner.respond("trace-plots", lambda _: completed())
+    code = awsb.cmd_render(
+        awsb.parse_args(["render", str(tmp_path)]), FakeSystem(run=runner)
+    )
+    assert code == awsb.EXIT_OK
+    assert runner.calls == [
+        [
+            "timeout",
+            str(awsb.TRACE_PLOTS_TIMEOUT_S),
+            str(awsb.SCRIPT_DIR / "trace-plots"),
+            str(tmp_path),
+        ]
+    ]
+    assert (tmp_path / "summary.md").exists()
+
+
+def test_render_of_an_old_manifest_without_the_field_does_not_plot(tmp_path: Path):
+    write_collected_run(tmp_path)
+    manifest = netbench.read_json(tmp_path / "manifest.json")
+    del manifest["config"]["leader_trace"]
+    netbench.write_json(tmp_path / "manifest.json", manifest)
+    assert render(tmp_path) == awsb.EXIT_OK
+
+
+def test_render_survives_a_failing_plot(tmp_path: Path):
+    write_collected_run(tmp_path)
+    enable_leader_trace(tmp_path)
+    runner = FakeRunner()
+    runner.respond("trace-plots", lambda _: completed(returncode=2, stderr="no traces"))
+    code = awsb.cmd_render(
+        awsb.parse_args(["render", str(tmp_path)]), FakeSystem(run=runner)
+    )
+    assert code == awsb.EXIT_OK
+    assert (
+        "WARNING trace-plots exited 2: no traces"
+        in (tmp_path / "driver.log").read_text()
+    )
