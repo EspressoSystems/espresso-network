@@ -160,7 +160,7 @@ async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
         "view 3 runs the new version"
     );
 
-    b.on_transactions(tx_msg(view(3), (5..=8).map(tx).collect()));
+    b.pool_transactions(tx_msg(view(3), (5..=8).map(tx).collect()));
     let (txns, _) = b.drain(view(3), epoch());
     assert_eq!(txns.len(), 4, "a leader collects the new block size");
 }
@@ -275,7 +275,7 @@ async fn test_full_forward_fits_in_a_message() {
 #[tokio::test]
 async fn test_leader_buffer_drain() {
     let mut b = builder();
-    b.on_transactions(tx_msg(view(1), vec![tx(1), tx(2)]));
+    b.pool_transactions(tx_msg(view(1), vec![tx(1), tx(2)]));
     let (mut txns, manifest) = b.drain(view(1), epoch());
     txns.sort_by_key(|t| t.bytes().clone());
     assert_eq!(txns.len(), 2, "both transactions should be drained");
@@ -363,9 +363,9 @@ async fn test_request_block_same_view_reuses_transactions() {
         parent_proposal: test_data.views[parent_index].proposal.data.clone(),
     };
 
-    b.on_transactions(tx_msg(view(4), vec![tx(1), tx(2)]));
+    b.pool_transactions(tx_msg(view(4), vec![tx(1), tx(2)]));
     b.request_block(request(0));
-    b.on_transactions(tx_msg(view(4), vec![tx(3)]));
+    b.pool_transactions(tx_msg(view(4), vec![tx(3)]));
     b.request_block(request(1));
 
     let mut outputs = Vec::new();
@@ -426,7 +426,7 @@ async fn test_dedup_window() {
         epoch: epoch(),
         hashes: vec![t.commit()],
     });
-    b.on_transactions(tx_msg(view(1), vec![t.clone()]));
+    b.pool_transactions(tx_msg(view(1), vec![t.clone()]));
     let (txns, _) = b.drain(view(1), epoch());
     assert!(
         txns.is_empty(),
@@ -441,7 +441,7 @@ async fn test_dedup_window() {
         hashes: vec![],
     });
 
-    b.on_transactions(tx_msg(view(4), vec![t.clone()]));
+    b.pool_transactions(tx_msg(view(4), vec![t.clone()]));
     let (txns, _) = b.drain(view(4), epoch());
     assert_eq!(
         txns.len(),
@@ -453,7 +453,7 @@ async fn test_dedup_window() {
 #[tokio::test]
 async fn reconstructed_block_drops_its_transactions_from_leader_buffer() {
     let mut b = builder();
-    b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
+    b.pool_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
     b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
     let (txns, _) = b.drain(view(2), epoch());
     assert_eq!(txns, Vec::from([tx(2)]));
@@ -463,7 +463,42 @@ async fn reconstructed_block_drops_its_transactions_from_leader_buffer() {
 async fn reconstructed_block_drops_later_copies_of_its_transactions() {
     let mut b = builder();
     b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
-    b.on_transactions(tx_msg(view(2), Vec::from([tx(1)])));
+    b.pool_transactions(tx_msg(view(2), Vec::from([tx(1)])));
     let (txns, _) = b.drain(view(2), epoch());
     assert!(txns.is_empty());
+}
+
+#[tokio::test]
+async fn forwarded_transactions_are_hashed_off_the_loop() {
+    let mut b = builder();
+    b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
+
+    let (pooled, _) = b.drain(view(1), epoch());
+    assert!(
+        pooled.is_empty(),
+        "nothing is pooled until the batch is hashed"
+    );
+
+    assert!(
+        b.next().await.is_none(),
+        "no block in flight, but polling pools the batch"
+    );
+    let (mut pooled, _) = b.drain(view(1), epoch());
+    pooled.sort_by_key(|t| t.bytes().clone());
+    assert_eq!(pooled, Vec::from([tx(1), tx(2)]));
+}
+
+#[tokio::test]
+async fn manifest_arriving_during_hashing_drops_its_transactions() {
+    let mut b = builder();
+    b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
+    b.on_dedup_manifest(DedupManifest {
+        view: view(1),
+        epoch: epoch(),
+        hashes: Vec::from([tx(1).commit()]),
+    });
+
+    assert!(b.next().await.is_none());
+    let (pooled, _) = b.drain(view(2), epoch());
+    assert_eq!(pooled, Vec::from([tx(2)]));
 }
