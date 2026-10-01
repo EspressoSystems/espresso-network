@@ -1879,6 +1879,7 @@ def write_fleet(
             "phase": phase,
             "created_at": created_at,
             "expires_at": expires_at,
+            "estimate": {"bound_usd": 2.5},
         },
     )
     return fleet_dir

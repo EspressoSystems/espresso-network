@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,8 @@ from fakes import (
     FakeSystem,
     FleetHarness,
     awsb,
+    netbench,
+    valid_result,
     write_fleet,
 )
 
@@ -171,3 +174,93 @@ def test_down_without_a_dir_takes_a_left_running_fleet(harness, runner):
     harness.set_fleet(phase="left-running")
     down(harness, runner)
     assert harness.fleet()["phase"] == "done"
+
+
+LIST_NOW = datetime(2026, 9, 29, 16, 0, tzinfo=UTC)
+
+
+def write_run(fleet_dir: Path, name: str, phase: str, result: dict | None = None):
+    run_dir = fleet_dir / "runs" / name
+    run_dir.mkdir(parents=True)
+    netbench.write_json(run_dir / "manifest.json", {"phase": phase})
+    if result is not None:
+        netbench.write_json(run_dir / "result.json", result)
+
+
+def list_lines(out_root: Path) -> list[str]:
+    return awsb.format_fleets(awsb.fleet_rows(out_root), LIST_NOW)
+
+
+# TEST:format-fleets-columns-ok
+def test_list_shows_local_fleets_newest_first(tmp_path: Path):
+    live = write_fleet(tmp_path, "live", "idle", created_at="2026-09-29T14:00:00Z")
+    write_run(live, "01-colocated", "done", valid_result())
+    write_run(live, "02-colocated", "done", valid_result(valid=False))
+    done = write_fleet(tmp_path, "gone", "done", created_at="2026-09-29T13:00:00Z")
+    fleet = netbench.read_json(done / "fleet.json")
+    netbench.write_json(done / "fleet.json", {**fleet, "cost_usd": {"actual": 1.234}})
+    write_fleet(
+        tmp_path,
+        "stale",
+        "left-running",
+        expires_at=EXPIRES_PAST,
+        created_at="2026-09-29T15:00:00Z",
+    )
+    assert list_lines(tmp_path) == [
+        "| fleet | phase | created | expires | left | cost | runs | last |",
+        "|---|---|---|---|---|---|---|---|",
+        (
+            "| stale | left-running | 2026-09-29T15:00 | 2026-09-29T15:00 | expired "
+            "| <=$2.50 | 0 | - |"
+        ),
+        (
+            "| live | idle | 2026-09-29T14:00 | 2026-09-29T17:00 | 60m | <=$2.50 | 2 "
+            "| invalid 8 MB/s |"
+        ),
+        "| gone | done | 2026-09-29T13:00 | 2026-09-29T17:00 | - | $1.23 | 0 | - |",
+        "AWS view: aws-bench status --all",
+    ]
+
+
+# TEST:list-empty-ok
+def test_list_without_a_state_dir(tmp_path: Path):
+    assert list_lines(tmp_path / "missing") == [
+        "no local fleets",
+        "AWS view: aws-bench status --all",
+    ]
+
+
+# TEST:list-no-fleet-json-ok
+def test_list_shows_dirs_without_fleet_json_last(tmp_path: Path):
+    (tmp_path / "broken").mkdir()
+    write_fleet(tmp_path, "a", "done")
+    lines = list_lines(tmp_path)
+    assert lines[2].startswith("| a | done |")
+    assert lines[3] == "| broken | ? | ? | ? | ? | ? | ? | ? |"
+
+
+# TEST:list-skips-index-ok
+def test_list_skips_index_md(tmp_path: Path):
+    write_fleet(tmp_path, "a", "done")
+    (tmp_path / "INDEX.md").write_text("")
+    assert len(list_lines(tmp_path)) == 4
+
+
+# TEST:list-last-run-phase-ok
+def test_list_shows_the_last_run_phase_without_a_result(tmp_path: Path):
+    fleet_dir = write_fleet(tmp_path, "a", "running")
+    write_run(fleet_dir, "01-colocated", "done", valid_result())
+    write_run(fleet_dir, "02-colocated", "running")
+    assert list_lines(tmp_path)[2].endswith("| 2 | running |")
+
+
+def test_list_command_reads_the_state_dir(harness, runner, capsys):
+    harness.run(runner)
+    capsys.readouterr()
+    mark = len(runner.calls)
+    code = awsb.cmd_list(harness.parse("list"), FakeSystem(run=runner))
+    assert code == awsb.EXIT_OK
+    assert len(runner.calls) == mark
+    out = capsys.readouterr().out
+    assert "| fleet1 | idle |" in out
+    assert "| 1 | valid 8 MB/s |" in out

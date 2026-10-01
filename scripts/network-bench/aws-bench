@@ -2147,6 +2147,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     status_p.add_argument("--all", action="store_true")
     status_p.set_defaults(func=cmd_status)
 
+    list_p = sub.add_parser("list", help="local fleets, newest first; no AWS calls")
+    list_p.set_defaults(func=cmd_list)
+
     collect_p = sub.add_parser(
         "collect", help="re-collect logs and samples from live hosts"
     )
@@ -4522,6 +4525,101 @@ def cmd_status(args: argparse.Namespace, system: System) -> int:
     return status_run(system, fleet_arg(args.dir, OUT_ROOT), now)
 
 
+def cmd_list(args: argparse.Namespace, system: System) -> int:
+    print("\n".join(format_fleets(fleet_rows(OUT_ROOT), utc_now(system.clock))))
+    return EXIT_OK
+
+
+class FleetRow(TypedDict):
+    """One fleet dir for `list`. `fleet` is None without `fleet.json`; `last` and `result`
+    belong to the run with the highest `run_index`."""
+
+    name: str
+    fleet: FleetManifest | None
+    runs: int
+    last: Manifest | None
+    result: nb.BenchResult | None
+
+
+def fleet_rows(out_root: Path) -> list[FleetRow]:
+    """Newest first by `created_at`, dirs without `fleet.json` last."""
+    rows = [fleet_row(path) for path in fleet_dirs(out_root)]
+    known = sorted(
+        ((row["fleet"]["created_at"], row) for row in rows if row["fleet"] is not None),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
+    return [row for _, row in known] + [row for row in rows if row["fleet"] is None]
+
+
+def fleet_row(fleet_dir: Path) -> FleetRow:
+    path = fleet_dir / FLEET_JSON
+    runs = run_dirs(fleet_dir)
+    last = max(runs, key=run_index) if runs else None
+    result_path = last / "result.json" if last else None
+    return {
+        "name": fleet_dir.name,
+        "fleet": nb.read_json(path) if path.exists() else None,
+        "runs": len(runs),
+        "last": nb.read_json(last / "manifest.json") if last else None,
+        "result": (
+            nb.read_json(result_path) if result_path and result_path.exists() else None
+        ),
+    }
+
+
+def format_fleets(rows: list[FleetRow], now: datetime) -> list[str]:
+    footer = "AWS view: aws-bench status --all"
+    if not rows:
+        return ["no local fleets", footer]
+    lines = [
+        "| fleet | phase | created | expires | left | cost | runs | last |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for row in rows:
+        fleet = row["fleet"]
+        cells = [row["name"], *(fleet_cells(row, fleet, now) if fleet else ["?"] * 7)]
+        lines.append("| " + " | ".join(cells) + " |")
+    return [*lines, footer]
+
+
+def fleet_cells(row: FleetRow, fleet: FleetManifest, now: datetime) -> list[str]:
+    return [
+        fleet["phase"],
+        fleet["created_at"][:16],
+        expires(fleet),
+        time_left(fleet, now),
+        fleet_cost(fleet),
+        str(row["runs"]),
+        last_run(row),
+    ]
+
+
+def fleet_cost(fleet: FleetManifest) -> str:
+    """`cost_usd` holds `actual` only once `down` has priced the fleet."""
+    if "cost_usd" in fleet and "actual" in fleet["cost_usd"]:
+        return f"${fleet['cost_usd']['actual']:.2f}"
+    return f"<=${fleet['estimate']['bound_usd']:.2f}"
+
+
+def time_left(fleet: FleetManifest, now: datetime) -> str:
+    if fleet["phase"] not in SELECTABLE_PHASES or "expires_at" not in fleet:
+        return "-"
+    left = datetime.fromisoformat(fleet["expires_at"]) - now
+    if left.total_seconds() <= 0:
+        return "expired"
+    return f"{int(left.total_seconds() // 60)}m"
+
+
+def last_run(row: FleetRow) -> str:
+    """The same verdict and rate as the run's INDEX.md row, else the run's phase."""
+    result, last = row["result"], row["last"]
+    if result is not None:
+        mb_s = nb.fmt_num(result["capacity"]["overall"]["mb_s"])
+        return f"{nb.verdict_word(result['validity'])} {mb_s} MB/s"
+    return last["phase"] if last is not None else "-"
+
+
 def cmd_collect(args: argparse.Namespace, system: System) -> int:
     """Collects again from the live hosts into `hosts/<name>/collect-<k>/`, leaving the files
     of the run itself untouched. Only the fleet's last run can be collected, while no run is
@@ -6291,7 +6389,7 @@ def main() -> int:
     args = parse_args(argv)
     args.argv = argv
     system = host_system()
-    if args.command in ("status", "destroy", "down"):
+    if args.command in ("status", "list", "destroy", "down"):
         logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         command: Command = args.func
