@@ -71,6 +71,12 @@ def test_up_ends_idle_without_starting_anything(harness):
     assert_idle(harness)
 
 
+# REQ:state-dir-path
+def test_up_keeps_fleet_state_in_bench_state(harness, isolated):
+    assert harness.up(FakeRunner(states=[DONE_STATE])) == awsb.EXIT_OK
+    assert (isolated / "bench-state" / "aws" / "fleet1" / "fleet.json").is_file()
+
+
 def test_up_logs_the_cost_and_the_run_command(harness):
     harness.up(FakeRunner(states=[DONE_STATE]))
     log = harness.driver_log()

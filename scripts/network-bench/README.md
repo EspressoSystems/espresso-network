@@ -179,7 +179,7 @@ TTL. An EventBridge one-shot schedule deletes the rds instance 5 min earlier.
 
 ### Artifacts
 
-`tmp/aws-bench/<owner>-<yyyymmdd-hhmm>/` (the fleet dir), never deleted:
+`bench-state/aws/<owner>-<yyyymmdd-hhmm>/` (the fleet dir), never deleted:
 
 ```
 fleet.json               argv, config, git rev, account, AZ, AMI, digests, estimate, phase, hosts_info
@@ -203,7 +203,16 @@ runs/01-run/             one measurement
   run.json agent-state.json agent.log result.json summary.md
 ```
 
-`tmp/aws-bench/INDEX.md`: one row per run (fleet/run, rev, tag, N, db, capacity, validity, exit, run cost).
+`bench-state/aws/INDEX.md`: one row per run (fleet/run, rev, tag, N, db, capacity, validity, exit, run cost).
+
+- `bench-state/` is git-ignored and per worktree: tfstate and the ssh key of a fleet exist only in the worktree that ran
+  `up`. `status --all` and `destroy --orphans` see every fleet through AWS tags.
+- `destroy --orphans` in another worktree offers a live fleet as `no local state`.
+- `git worktree remove` and `git clean -x` delete `bench-state/`. Run `down` first; if the state is already lost,
+  `destroy --orphans` sweeps the fleet.
+- Migration from `tmp/aws-bench/`: run `status --all`, then `down` each live fleet from its old `tmp/aws-bench/<fleet>`
+  path. Move only terminal fleet dirs (`mv tmp/aws-bench/<fleet> bench-state/aws/`); a live fleet dir cannot move
+  because its user-data paths are absolute.
 
 ### Commands
 

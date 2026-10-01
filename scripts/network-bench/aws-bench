@@ -31,8 +31,8 @@ the fleet idle, 3 or 4 after a failed provision.
 Examples:
     scripts/network-bench/aws-bench plan --tag release-x --nodes 5
     scripts/network-bench/aws-bench up --tag release-x --ttl-min 180
-    scripts/network-bench/aws-bench run --fleet tmp/aws-bench/<fleet> --query-db colocated
-    scripts/network-bench/aws-bench down tmp/aws-bench/<fleet>
+    scripts/network-bench/aws-bench run --fleet bench-state/aws/<fleet> --query-db colocated
+    scripts/network-bench/aws-bench down bench-state/aws/<fleet>
 """
 
 import argparse
@@ -114,7 +114,7 @@ CTL_TYPE = "c8g.2xlarge"
 REGION = "eu-west-1"
 PROFILE = "timeboost-dev"
 ACCOUNT = "027574771971"
-OUT_ROOT = Path("tmp/aws-bench")
+OUT_ROOT = Path("bench-state/aws")
 PG_GB = 400
 RDS_CLASS = "db.m8g.4xlarge"
 RDS_ENGINE_VERSION = "18"

@@ -30,7 +30,7 @@ from fakes import (
 )
 
 HERE = Path(__file__).parent
-TF_DIR = Path("/tmp/aws-bench/run1/terraform")
+TF_DIR = Path("/bench-state/aws/run1/terraform")
 
 
 def cmd_plan_exit(args: argparse.Namespace, run: FakeRunner) -> int:
