@@ -331,6 +331,13 @@ def test_node_env_belongs_to_one_run(harness, runner):
         harness.up_args("--node-env", "A=1")
 
 
+def test_max_block_size_belongs_to_one_run(harness, runner):
+    manifest = harness.fleet()
+    assert awsb.fleet_run_config(harness.run_args(), manifest).max_block_size == "50mb"
+    cfg = awsb.fleet_run_config(harness.run_args("--max-block-size", "30mb"), manifest)
+    assert cfg.max_block_size == "30mb"
+
+
 def test_lock_held(harness, runner):
     awsb.take_fleet_lock(FakeSystem(), harness.fleet_dir, "other", False)
     mark = len(runner.calls)

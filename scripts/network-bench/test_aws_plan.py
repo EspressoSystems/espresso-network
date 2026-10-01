@@ -572,14 +572,57 @@ def test_tofu_validate(tmp_path):
 
 @pytest.mark.parametrize(("n", "capacity"), [(3, 10), (50, 50)])
 def test_genesis_capacity_at_least_ten(n, capacity):
-    rendered = awsb.render_genesis((HERE / "genesis.toml").read_bytes(), n=n).decode()
+    rendered = awsb.render_genesis(
+        (HERE / "genesis.toml").read_bytes(), n=n, max_block_size="50mb"
+    ).decode()
     assert f"stake_table_capacity = {capacity}" in rendered
     assert re.search(rf"^capacity = {capacity}$", rendered, re.MULTILINE)
 
 
+def test_genesis_max_block_size_replaces_both_chain_configs():
+    template = (HERE / "genesis.toml").read_bytes()
+    rendered = awsb.render_genesis(template, n=5, max_block_size="30mb").decode()
+    assert (
+        re.findall(r"^max_block_size = (.*)$", rendered, re.MULTILINE) == ['"30mb"'] * 2
+    )
+    assert "100mb" not in rendered
+    with pytest.raises(ValueError, match="2 max_block_size"):
+        awsb.render_genesis(b"capacity = 1\nstake_table_capacity = 1\n", 5, "30mb")
+
+
+@pytest.mark.parametrize("bad", ["50", "mb", "50 mb", "5.5mb", "50tb", "", "0kb"])
+def test_max_block_size_flag_rejects_bad_formats(bad):
+    with pytest.raises(SystemExit):
+        node_env_config("--max-block-size", bad)
+
+
+def test_max_block_size_flag_defaults_and_differs_in_the_config_hash():
+    assert node_env_config().max_block_size == "50mb"
+    assert node_env_config("--max-block-size", "100MB").max_block_size == "100MB"
+    template = (HERE / "genesis.toml").read_bytes()
+    cfg = small_cfg()
+    hosts = awsb.plan_hosts(cfg)
+    hashes = {
+        awsb.run_config_hash(
+            cfg, hosts, {}, awsb.render_genesis(template, cfg.nodes, size)
+        )
+        for size in ("30mb", "50mb")
+    }
+    assert len(hashes) == 2
+
+
+@pytest.mark.usefixtures("preflighted")
+def test_plan_writes_the_max_block_size_into_the_run_genesis(fleet_dir):
+    args = plan_args()
+    args.max_block_size = "30mb"
+    awsb.cmd_plan(args, FakeSystem(run=FakeRunner(states=[])))
+    genesis = (fleet_dir / "runs/01-run/genesis.toml").read_text()
+    assert genesis.count('max_block_size = "30mb"') == 2
+
+
 def test_genesis_raises_if_template_shape_changes():
     with pytest.raises(ValueError):
-        awsb.render_genesis(b"no capacity fields here", n=5)
+        awsb.render_genesis(b"no capacity fields here", n=5, max_block_size="50mb")
 
 
 @pytest.mark.parametrize(

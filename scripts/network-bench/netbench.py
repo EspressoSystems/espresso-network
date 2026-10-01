@@ -319,6 +319,8 @@ class DeploymentMeta(TypedDict):
     query_db: NotRequired[QueryDbMeta]
     # `KEY=VALUE` overrides of every node's environment.
     node_env: NotRequired[list[str]]
+    # Genesis `max_block_size`; absent in manifests from before the flag.
+    max_block_size: NotRequired[str]
 
 
 class BenchResult(TypedDict):
@@ -2438,6 +2440,11 @@ def deployment_lines(result: BenchResult) -> list[str]:
         ),
         f"- cost: {cost_line}",
         *([query_db_line(d["query_db"])] if "query_db" in d else []),
+        *(
+            [f"- max block size: {d['max_block_size']}"]
+            if "max_block_size" in d
+            else []
+        ),
         *(
             ["- node env: " + ", ".join(f"`{pair}`" for pair in d["node_env"])]
             if "node_env" in d

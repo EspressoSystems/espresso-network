@@ -50,6 +50,11 @@ scripts/network-bench/
   `--tx-timeout-s` times transactions out. Consensus latency of a lagging step is not reliable. Transactions of a lost
   payload stay pending until `--tx-timeout-s`, which the end of the run waits for. Not for the CI job: its step timeout
   is 15 min.
+- `--max-block-size SIZE` (`plan` and `run`, also `run --fleet`; not an `up` flag; default `50mb`): genesis
+  `max_block_size` of both chain configs, e.g. `30mb`, `100mb`; part of the config hash through the genesis and shown in
+  the summary's deployment block. On 5 x c8g.4xlarge the block interval grows superlinearly above about 60 MB blocks,
+  and blocks at the 100 MB cap decide at about 93 MB/s against about 160 MB/s for 45 to 60 MB blocks. Mainnet uses
+  `10mb`. `genesis.toml` stays at `100mb` for the local `bench`.
 - `--submit-workers N` (AWS `run`, default 32): submit threads of the load generator; part of the config hash.
 - Step details report `queued` (pacer output, MB/s), `queue wait` (queued until a thread sends) and `submit rtt` (send
   until response). A step submitting < 95% of its rate gets a cause line: with queued < 95%, `in-flight cap reached` if

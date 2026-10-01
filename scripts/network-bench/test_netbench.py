@@ -142,6 +142,14 @@ def test_deployment_and_hosts_sections():
         assert line in summary
 
 
+def test_deployment_shows_the_max_block_size_when_recorded():
+    current = make_result()
+    current["deployment"] = deployment()
+    assert "max block size" not in netbench.render(current, None)
+    current["deployment"]["max_block_size"] = "30mb"
+    assert "- max block size: 30mb" in netbench.render(current, None)
+
+
 def test_load_baseline_single_result(tmp_path: Path):
     path = tmp_path / "result.json"
     netbench.write_json(path, make_result())

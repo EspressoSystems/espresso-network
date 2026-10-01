@@ -752,6 +752,8 @@ class RunConfig:
     query_db: DbMode = "colocated"
     # `KEY=VALUE` written last into every node's node.env, so it also overrides.
     node_env: tuple[str, ...] = ()
+    # Genesis `max_block_size`, verbatim.
+    max_block_size: str = "50mb"
     ttl_min: str = "auto"
     fleet: Path | None = None
     force: bool = False
@@ -1641,11 +1643,19 @@ def write_private_json(path: Path, data: Any) -> None:
     nb.write_json(path, data)
 
 
-def render_genesis(template: bytes, n: int) -> bytes:
+def render_genesis(template: bytes, n: int, max_block_size: str) -> bytes:
     """`n` validators need a stake table at least as large; contract addresses stay as the
-    template's, since they are deterministic from the deployer nonce."""
+    template's, since they are deterministic from the deployer nonce. `max_block_size` goes
+    into both chain configs."""
     capacity = max(10, n)
     text = template.decode()
+    text, size_n = re.subn(
+        r'(?m)^max_block_size = ".*"$', f'max_block_size = "{max_block_size}"', text
+    )
+    if size_n != 2:
+        raise ValueError(
+            f"expected 2 max_block_size fields in genesis template, replaced {size_n}"
+        )
     text, stake_n = re.subn(
         r"(?m)^stake_table_capacity = \d+$", f"stake_table_capacity = {capacity}", text
     )
@@ -2027,6 +2037,21 @@ def add_node_env_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_block_size_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--max-block-size",
+        type=block_size,
+        default=RunConfig(tag="").max_block_size,
+        help="genesis max_block_size of both chain configs, e.g. 30mb",
+    )
+
+
+def block_size(text: str) -> str:
+    if re.fullmatch(r"[1-9]\d*(kb|mb|gb)", text, re.IGNORECASE) is None:
+        raise argparse.ArgumentTypeError(f"not a size like 50mb: {text}")
+    return text
+
+
 def env_pair(text: str) -> str:
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", text) is None:
         raise argparse.ArgumentTypeError(f"not KEY=VALUE: {text}")
@@ -2053,6 +2078,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         nodes=args.nodes,
         load=load,
         node_env=tuple(args.node_env),
+        max_block_size=args.max_block_size,
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
@@ -2115,6 +2141,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     add_run_flags(plan_p)
     add_node_env_flag(plan_p)
+    add_block_size_flag(plan_p)
     add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
     plan_p.set_defaults(func=cmd_plan, yes=False, max_usd=UP_MAX_USD)
@@ -2131,6 +2158,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     up_p.set_defaults(
         func=cmd_up,
         node_env=[],
+        max_block_size=defaults.max_block_size,
         fleet=None,
         force=False,
         query_db=defaults.query_db,
@@ -2147,6 +2175,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     add_run_flags(run_p, tag_required=False)
     add_node_env_flag(run_p)
+    add_block_size_flag(run_p)
     add_ttl_flag(run_p)
     run_p.add_argument(
         "--fleet",
@@ -3175,6 +3204,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         yes=cli.yes,
         query_db=cli.query_db,
         node_env=cli.node_env,
+        max_block_size=cli.max_block_size,
         fleet=cli.fleet,
         force=cli.force,
     )
@@ -3679,7 +3709,9 @@ def render_run(
 ) -> Path:
     """`runs/<nn>-<name>/` with its manifest, genesis and load config. Without a
     `run_estimate` this is the run of a single shot, which also provisions."""
-    genesis = render_genesis((SCRIPT_DIR / "genesis.toml").read_bytes(), cfg.nodes)
+    genesis = render_genesis(
+        (SCRIPT_DIR / "genesis.toml").read_bytes(), cfg.nodes, cfg.max_block_size
+    )
     run_dir = new_run_dir(fleet_dir, name)
     manifest = build_run_manifest(
         fleet,
@@ -5723,6 +5755,11 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
         "query_db": query_db_meta(manifest, evidence),
         # Manifests from before the flag have no such key.
         **({"node_env": config["node_env"]} if config.get("node_env") else {}),
+        **(
+            {"max_block_size": config["max_block_size"]}
+            if "max_block_size" in config
+            else {}
+        ),
     }
 
 
