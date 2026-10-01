@@ -857,11 +857,15 @@ def step(
     """A step at `rate` MB/s that decides `decided` (default: all of it)."""
     return {
         "rate_mb_s": rate,
+        "cap_waits": 0,
         "refine": False,
         "t_start": 0.0,
         "t_mid": 15.0,
         "t_end": 30.0,
         "submitted_mb_s": rate,
+        "queued_mb_s": rate,
+        "queue_wait_ms": quantiles(1.0, 5.0),
+        "submit_rtt_ms": quantiles(20.0, 50.0),
         "decided_mb_s": rate if decided is None else decided,
         "timeouts": 0,
         "consensus_latency_ms": quantiles(consensus_p50, 2000.0),
@@ -1025,7 +1029,9 @@ def write_run_dir(out):
         {
             "id": i,
             "node": 0,
+            "t_queued": t - 0.01,
             "t_submit": t,
+            "t_done": t + 0.05,
             "t_included": t + 0.8,
             "height": 1000 + i,
             "status": "included",
@@ -1036,7 +1042,9 @@ def write_run_dir(out):
         {
             "id": 99,
             "node": 0,
+            "t_queued": 120.4,
             "t_submit": 120.5,
+            "t_done": 120.6,
             "t_included": None,
             "height": None,
             "status": "timeout",

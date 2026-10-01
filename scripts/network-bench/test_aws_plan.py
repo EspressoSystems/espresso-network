@@ -160,8 +160,8 @@ def test_estimate_matches_hand_computed_totals():
     estimate = shot_estimate(awsb.plan_hosts(cfg), cfg)
     assert estimate["expected_s"] == 1695.0
     assert estimate["ttl_s"] == 3315.0
-    assert estimate["expected_usd"] == pytest.approx(0.858907, abs=1e-5)
-    assert estimate["bound_usd"] == pytest.approx(1.754221, abs=1e-5)
+    assert estimate["expected_usd"] == pytest.approx(0.878257, abs=1e-5)
+    assert estimate["bound_usd"] == pytest.approx(1.794118, abs=1e-5)
 
 
 def test_bound_is_cost_at_ttl():
@@ -645,6 +645,17 @@ def test_node_env_flag():
         node_env_config("--node-env", "A=1", "--node-env", "A=2")
 
 
+def test_submit_workers_flag_reaches_the_load_config():
+    assert node_env_config().load.workers == awsb.SUBMIT_WORKERS
+    assert node_env_config("--submit-workers", "64").load.workers == 64
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "x"])
+def test_submit_workers_flag_rejects_non_positive(bad):
+    with pytest.raises(SystemExit):
+        node_env_config("--submit-workers", bad)
+
+
 @pytest.mark.parametrize("bad", ["A", "=1", "1A=2", "A B=1"])
 def test_node_env_flag_rejects_malformed(bad):
     with pytest.raises(SystemExit):
@@ -662,6 +673,17 @@ def test_storage_vars_by_role():
     assert validator["ESPRESSO_NODE_STORAGE_PATH"] == "/store/espresso"
     assert query["ESPRESSO_NODE_POSTGRES_HOST"] == "127.0.0.1"
     assert query["ESPRESSO_NODE_POSTGRES_DATABASE"] == "espresso"
+
+
+def test_payload_dir_is_opt_in_through_node_env():
+    assert "ESPRESSO_QUERY_PAYLOAD_DIR" not in node_env("node0")
+    text = awsb.render_node_env(
+        host("node0", "query"),
+        fleet(5),
+        awsb.pg_endpoint(),
+        (f"ESPRESSO_QUERY_PAYLOAD_DIR={awsb.PAYLOAD_CONTAINER_DIR}",),
+    )
+    assert parse_env(text)["ESPRESSO_QUERY_PAYLOAD_DIR"] == "/payload"
 
 
 @pytest.mark.parametrize("index", [0, 1])
@@ -758,6 +780,23 @@ def test_validator_start_sh_uses_storage_journal_only():
     assert "storage-sql" not in script
     assert "--name postgres" not in script
     assert "/opt/bench/genesis.toml:/opt/bench/genesis.toml:ro" in script
+    assert "payload" not in script
+
+
+def test_query_start_sh_mounts_payload_dir_from_pg_volume():
+    for mode in ("colocated", "volume", "rds"):
+        script = awsb.render_start_sh(host("node0", "query"), fake_images(), mode)
+        assert script.index("mkdir -p /data/pg/payload") < script.index(
+            "--name espresso-node"
+        )
+        assert "-v /data/pg/payload:/payload" in script
+
+
+def test_validators_get_provisioned_root_disks():
+    for spec in awsb.plan_hosts(small_cfg(nodes=3, submit=2)):
+        if spec["role"] == "validator":
+            assert spec["root_iops"] == awsb.VALIDATOR_ROOT_IOPS
+            assert spec["root_mbps"] == awsb.VALIDATOR_ROOT_MBPS
 
 
 def test_query_start_sh_adds_storage_sql_and_postgres():

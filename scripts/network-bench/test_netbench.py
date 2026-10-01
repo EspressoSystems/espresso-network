@@ -430,12 +430,35 @@ def test_round_robin_over_submit_nodes(load):
     assert [tx["node"] for tx in run.txs[:4]] == [0, 1, 0, 1]
 
 
+def test_txs_carry_queue_and_response_times(load):
+    run = load(1.0, include=True, accept_delay=0.2, workers=1, tx_timeout_s=5)
+    assert run.txs
+    for tx in run.txs:
+        assert tx["t_queued"] <= tx["t_submit"] <= tx["t_done"]
+    assert run.txs[-1]["t_submit"] - run.txs[-1]["t_queued"] > 0.1
+    assert all(step["cap_waits"] == 0 for step in run.steps)
+
+
+def test_post_tx_stamps_t_done_when_the_request_fails():
+    class Failing(fakes.FakePool):
+        def request(self, *args: Any, **kwargs: Any) -> Any:
+            raise OSError("refused")
+
+    clock = fakes.FakeClock()
+    pool = Failing(fakes.FakeNode(clock, include=False), clock)
+    tx = netbench.Tx(id=0, node=0, t_queued=0.0)
+    assert netbench.post_tx(pool, tx, "http://x", b"") == 0
+    assert tx.t_done is not None
+    assert tx.t_done >= tx.t_submit
+
+
 def test_cap_blocks_until_timeout(load):
     """Room under the cap frees only on timeout, the first 1 s after the first submit."""
     run = load(2.5, include=False, rate=1.0, cap_txs=4, tx_timeout_s=1)
     assert run.node.submits[4] - run.node.submits[0] > 0.9
     assert run.meta["max_in_flight"] == 4
     assert run.meta["cap_waits"] > 0
+    assert some(run.steps[0]["cap_waits"]) > 0
     assert {tx["status"] for tx in run.txs} == {"timeout"}
 
 
@@ -643,7 +666,10 @@ def test_cut_short_load_keeps_raw_files_without_steps(tmp_path: Path):
 
 def test_txs_never_sent_are_left_out(tmp_path: Path):
     state = netbench.LoadState()
-    state.txs = [netbench.Tx(id=0, node=0, t_submit=1.0), netbench.Tx(id=1, node=0)]
+    state.txs = [
+        netbench.Tx(id=0, node=0, t_queued=0.0, t_submit=1.0),
+        netbench.Tx(id=1, node=0, t_queued=0.0),
+    ]
     write_load_files(tmp_path, state)
     assert [tx["id"] for tx in netbench.read_jsonl(tmp_path / "load.jsonl")] == [0]
 
@@ -757,7 +783,7 @@ def drain(state, heights, timeout_s, clock, **kwargs) -> float | None:
 
 def test_drain_without_pending_ignores_stuck_transactions():
     state = netbench.LoadState()
-    state.submitted(netbench.Tx(id=0, node=0))
+    state.submitted(netbench.Tx(id=0, node=0, t_queued=0.0))
     heights = heights_at(5, 5)
     assert drain(state, heights, 0.3, fakes.FakeClock()) is None
     assert drain(state, heights, 0.3, fakes.FakeClock(), wait_pending=False) is not None
@@ -924,6 +950,89 @@ def test_pending_transactions_count_once_over_target():
     assert latency["p50"] > 1000.0
 
 
+NEW_STEP_KEYS = ("queued_mb_s", "queue_wait_ms", "submit_rtt_ms", "cap_waits")
+
+
+def test_submit_measures_split_queue_wait_from_round_trip():
+    """10 MB/s queued, each tx waiting 50 ms for a thread and 200 ms for the response."""
+    txs = [
+        {
+            "t_queued": i / 10,
+            "t_submit": i / 10 + 0.05,
+            "t_done": i / 10 + 0.25,
+            "height": None,
+            "status": "pending",
+        }
+        for i in range(300)
+    ]
+    m = netbench.step_measures(step_window(), netbench.BenchConfig(), txs, [], [], 30.0)
+    assert some(m["queued_mb_s"]) == pytest.approx(10.0, abs=0.1)
+    assert some(m["queue_wait_ms"])["p50"] == pytest.approx(50.0)
+    assert some(m["submit_rtt_ms"])["p50"] == pytest.approx(200.0)
+
+
+def test_submit_measures_are_none_without_queue_timestamps():
+    m = measures()
+    assert (m["queued_mb_s"], m["queue_wait_ms"], m["submit_rtt_ms"]) == (
+        None,
+        None,
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("queued", "cap_waits", "wait_p50", "cause"),
+    [
+        (7.0, 3, 1.0, "in-flight cap reached (--cap-s)"),
+        (7.0, 0, 1.0, "pacer late (controller CPU)"),
+        (
+            10.0,
+            0,
+            300.0,
+            "submit workers busy (queue wait p50/p99 300/900 ms, 3 workers)",
+        ),
+        (10.0, 0, 1.0, "slow submit responses (rtt p50/p99 20/50 ms)"),
+        (None, None, None, "cause not available"),
+    ],
+)
+def test_summary_names_the_submission_shortfall(queued, cap_waits, wait_p50, cause):
+    short = step(10.0) | {
+        "submitted_mb_s": 9.0,
+        "queued_mb_s": queued,
+        "cap_waits": cap_waits,
+        "queue_wait_ms": None if wait_p50 is None else quantiles(wait_p50, 900.0),
+        "submit_rtt_ms": None if wait_p50 is None else quantiles(20.0, 50.0),
+    }
+    result = make_result([short])
+    result["config"]["workers"] = 3
+    summary = netbench.render(result, None)
+    assert f"- submission short at 10 MB/s: {cause}" in summary
+
+
+def test_unsent_and_unanswered_txs_count_with_their_time_so_far():
+    """Queued at 20, still waiting at now 25; sent at 21, unanswered at now 25."""
+    txs = [
+        {"t_queued": 20.0, "t_submit": math.inf, "t_done": None},
+        {"t_queued": 20.0, "t_submit": 21.0, "t_done": None},
+    ]
+    m = netbench.submit_measures(txs, 1_000_000, 15.0, 30.0, 25.0)
+    assert some(m["queue_wait_ms"])["max"] == pytest.approx(5000.0)
+    assert some(m["submit_rtt_ms"])["n"] == 1
+    assert some(m["submit_rtt_ms"])["p50"] == pytest.approx(4000.0)
+
+
+def test_old_steps_json_renders_without_queue_metrics(tmp_path):
+    old = {k: v for k, v in step(10.0).items() if k not in NEW_STEP_KEYS}
+    judged = old | {"consensus_fails": [], "query_fails": []}
+    result = netbench.step_result(judged, [], {}, [])
+    assert [result[k] for k in NEW_STEP_KEYS] == [None] * len(NEW_STEP_KEYS)
+    assert "10" in netbench.render(make_result([result]), None)
+
+
+def test_summary_has_no_shortfall_line_when_submission_keeps_up():
+    assert "submission short" not in netbench.render(make_result(), None)
+
+
 def test_decided_rate_is_not_quantized_by_blocks():
     """A 20 MB block every 2 s at t 1, 3, 5, ...: 10 MB/s, but the counter samples at 15 and
     30 see 7 blocks in 15 s."""
@@ -1040,7 +1149,7 @@ def test_progress_line_shows_the_submitted_offered_and_query_rates(
     state = netbench.LoadState()
     state.rate_mb_s = 60.0
     for i in range(90):
-        state.submitted(netbench.Tx(id=i, node=0, t_submit=99.0))
+        state.submitted(netbench.Tx(id=i, node=0, t_queued=0.0, t_submit=99.0))
     for i in range(30):
         state.include(i, height=0, at=99.5)
     heights = netbench.Heights(0)

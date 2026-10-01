@@ -75,6 +75,10 @@ HEIGHT_POLL_S = 0.1
 COUNTER_POLL_S = 1.0
 METRICS_EVERY_S = 1.0
 KEEP_UP_RATIO = 0.8
+# A step submitting less than this fraction of its rate gets a cause line in the summary.
+SUBMIT_SHORT_RATIO = 0.95
+# Median wait for a submit thread above which the threads, not the pacer, held submission back.
+QUEUE_WAIT_BUSY_MS = 100
 # Step rules, see step_fails.
 QUERY_LAG_GROWTH_MS_S = 50.0
 BASELINE_RUNS = 10
@@ -209,7 +213,16 @@ class StepWindow(TypedDict):
     t_end: float
 
 
-class StepMeasures(TypedDict):
+class SubmitMeasures(TypedDict):
+    # What the pacer created, and the wait for a submit thread and the HTTP round trip of the
+    # submitted txs. None for runs recorded before `t_queued` and `t_done` existed. A pacer that
+    # runs late shows as `queued_mb_s` below the step's rate, busy submit threads as queue wait.
+    queued_mb_s: float | None
+    queue_wait_ms: Quantiles | None
+    submit_rtt_ms: Quantiles | None
+
+
+class StepMeasures(SubmitMeasures):
     # What the load generator sent, which falls short of the step's rate when it is late.
     submitted_mb_s: float
     # Theil-Sen slope of the decided payload bytes.
@@ -221,6 +234,8 @@ class StepMeasures(TypedDict):
 
 
 class StepResult(StepWindow, StepMeasures):
+    # Txs the pacer found the in-flight cap full for during the step; None for older runs.
+    cap_waits: int | None
     # Submit to the block showing on the query node's API: what its client sees.
     latency_ms: Quantiles | None
     mean_view_ms: float | None
@@ -635,8 +650,12 @@ def block_payload(pool: Http, query_url: str, height: int) -> bytes | None:
 class Tx:
     id: int
     node: int
+    # When the pacer created the tx; `t_submit - t_queued` is the wait for a submit thread.
+    t_queued: float
     # inf while the request waits for a submit thread, so the timeout clock starts at send.
     t_submit: float = math.inf
+    # When the response or error arrived; None while the request is out.
+    t_done: float | None = None
     t_included: float | None = None
     height: int | None = None
     status: str = "pending"
@@ -896,6 +915,7 @@ async def run_staircase(
                     break
                 log.info("backlog drained in %.1f s", drained)
             start = load.clock.time()
+            cap_waits = load.state.cap_waits
             await pace(load, submits, rate, start + cfg.step_s)
             step: StepWindow = {
                 "rate_mb_s": rate,
@@ -908,6 +928,7 @@ async def run_staircase(
             judged = judge_step(
                 step, cfg, txs, list(heights.records()), counters, load.clock.time()
             )
+            judged["cap_waits"] = load.state.cap_waits - cap_waits
             fails = judged["consensus_fails"] + judged["query_fails"]
             log_step(judged, fails)
             passed.append(not fails)
@@ -993,7 +1014,7 @@ async def pace(
         if clock.time() >= until or not await state.wait_for_room(until, clock):
             return
         tx_id = next(load.ids)
-        tx = Tx(id=tx_id, node=tx_id % len(load.urls))
+        tx = Tx(id=tx_id, node=tx_id % len(load.urls), t_queued=clock.time())
         state.submitted(tx)
         submits.create_task(submit_tx(load, tx))
         # A pacer more than an interval late restarts from now instead of bursting.
@@ -1025,6 +1046,8 @@ def post_tx(pool: Http, tx: Tx, url: str, body: bytes) -> int:
         status, _ = pool.request("POST", url, body)
     except OSError:
         return 0
+    finally:
+        tx.t_done = pool.clock.time()
     return status
 
 
@@ -1312,6 +1335,7 @@ def step_measures(
         "submitted_mb_s": window_mb_s(
             (tx["t_submit"] for tx in txs), cfg.tx_size, t0, t1
         ),
+        **submit_measures(txs, cfg.tx_size, t0, t1, now),
         "decided_mb_s": decided,
         "timeouts": int(last["timeouts"] - first["timeouts"])
         if first and last
@@ -1319,6 +1343,31 @@ def step_measures(
         "consensus_latency_ms": quantiles(consensus),
         "query_lag_ms": quantiles([lag for _, lag in lags]),
         "query_lag_slope_ms_s": theil_sen(lags),
+    }
+
+
+def submit_measures(
+    txs: list[dict[str, Any]], tx_size: int, t0: float, t1: float, now: float
+) -> SubmitMeasures:
+    """Pacer output rate, queue wait and submit round trip over `[t0, t1]`; all None when
+    the load.jsonl predates `t_queued`. A tx not yet sent, and a request not yet answered,
+    count with their time so far at `now`."""
+    if not all("t_queued" in tx for tx in txs):
+        return {"queued_mb_s": None, "queue_wait_ms": None, "submit_rtt_ms": None}
+    queued = [tx for tx in txs if t0 <= tx["t_queued"] <= t1]
+    sent = [tx for tx in txs if t0 <= tx["t_submit"] <= t1]
+    return {
+        "queued_mb_s": window_mb_s((tx["t_queued"] for tx in txs), tx_size, t0, t1),
+        "queue_wait_ms": quantiles(
+            [(min(tx["t_submit"], now) - tx["t_queued"]) * 1000 for tx in queued]
+        ),
+        "submit_rtt_ms": quantiles(
+            [
+                ((now if tx["t_done"] is None else tx["t_done"]) - tx["t_submit"])
+                * 1000
+                for tx in sent
+            ]
+        ),
     }
 
 
@@ -1535,6 +1584,11 @@ def step_result(
         "t_mid": t0,
         "t_end": t1,
         "submitted_mb_s": judged["submitted_mb_s"],
+        # steps.json of runs before `t_queued` lacks these.
+        "queued_mb_s": judged.get("queued_mb_s"),
+        "queue_wait_ms": judged.get("queue_wait_ms"),
+        "submit_rtt_ms": judged.get("submit_rtt_ms"),
+        "cap_waits": judged.get("cap_waits"),
         "decided_mb_s": decided,
         "timeouts": judged["timeouts"],
         "consensus_latency_ms": judged["consensus_latency_ms"],
@@ -2415,17 +2469,19 @@ def fail_code(rule: str) -> str:
 def step_details(result: BenchResult) -> list[str]:
     lines = [
         (
-            "| MB/s | submitted | decided | view timeouts | consensus p50/p99 ms "
+            "| MB/s | submitted | queued | queue wait p50/p99 ms | submit rtt p50/p99 ms "
+            "| decided | view timeouts | consensus p50/p99 ms "
             "| query lag p50/p99 ms | query lag slope ms/s | e2e p50/p99 ms | view ms "
             "| CPU-s/MB | node0/1/2 CPU | postgres CPU | failed rules |"
         ),
-        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"]):
         cpu = "/".join(fmt_num(s["node_cpu"].get(node)) for node in result["nodes"])
         lines.append(
             f"| {fmt_num(s['rate_mb_s'])} | {fmt_num(s['submitted_mb_s'])} "
-            f"| {fmt_num(s['decided_mb_s'])} "
+            f"| {fmt_num(s['queued_mb_s'])} | {pair(s['queue_wait_ms'])} "
+            f"| {pair(s['submit_rtt_ms'])} | {fmt_num(s['decided_mb_s'])} "
             f"| {s['timeouts']} "
             f"| {pair(s['consensus_latency_ms'])} | {pair(s['query_lag_ms'])} "
             f"| {fmt_num(s['query_lag_slope_ms_s'])} | {pair(s['latency_ms'])} "
@@ -2433,7 +2489,27 @@ def step_details(result: BenchResult) -> list[str]:
             f"| {fmt_num(s['postgres_cpu'])} "
             f"| {'; '.join(s['consensus_fails'] + s['query_fails'])} |"
         )
-    return lines
+    short = [
+        f"- submission short at {fmt_num(s['rate_mb_s'])} MB/s: "
+        f"{submit_shortfall(s, result['config']['workers'])}"
+        for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"])
+        if s["submitted_mb_s"] < SUBMIT_SHORT_RATIO * s["rate_mb_s"]
+    ]
+    return [*lines, "", *short] if short else lines
+
+
+def submit_shortfall(s: StepResult, workers: int) -> str:
+    """Why a step submitted less than its rate; diagnostic text only, no verdict depends on it."""
+    queued, wait, rtt = s["queued_mb_s"], s["queue_wait_ms"], s["submit_rtt_ms"]
+    if queued is None or wait is None or rtt is None:
+        return "cause not available (run recorded without queue timestamps)"
+    if queued < SUBMIT_SHORT_RATIO * s["rate_mb_s"]:
+        if s["cap_waits"]:
+            return "in-flight cap reached (--cap-s)"
+        return "pacer late (controller CPU)"
+    if wait["p50"] > QUEUE_WAIT_BUSY_MS:
+        return f"submit workers busy (queue wait p50/p99 {pair(wait)} ms, {workers} workers)"
+    return f"slow submit responses (rtt p50/p99 {pair(rtt)} ms)"
 
 
 def pair(q: Quantiles | None) -> str:

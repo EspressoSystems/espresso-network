@@ -39,6 +39,12 @@ scripts/network-bench/
   `--tx-timeout-s` times transactions out. Consensus latency of a lagging step is not reliable. Transactions of a lost
   payload stay pending until `--tx-timeout-s`, which the end of the run waits for. Not for the CI job: its step timeout
   is 15 min.
+- `--submit-workers N` (AWS `run`, default 32): submit threads of the load generator; part of the config hash.
+- Step details report `queued` (pacer output, MB/s), `queue wait` (queued until a thread sends) and `submit rtt` (send
+  until response). A step submitting < 95% of its rate gets a cause line: with queued < 95%, `in-flight cap reached` if
+  the pacer found the cap full, else `pacer late (controller CPU)`; `submit workers busy` (queue wait p50 > 100 ms),
+  else `slow submit responses`. Diagnostic only, no verdict uses it; runs recorded before these timestamps show them
+  empty.
 - `--node-env KEY=VALUE` (repeatable; not an `up` flag, pass it to `run --fleet`): added to every node's environment,
   overriding the harness's own value; taken verbatim, not for secrets; listed in the summary's deployment block and part
   of the config hash.
@@ -155,6 +161,11 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
 | `volume`     | container on node0                  | extra gp3 400 GiB (`--pg-iops`, `--pg-mbps`), ext4 by-id mount, dies with node0 |
 | `rds`        | RDS PostgreSQL db.m8g.4xlarge, 18.x | gp3 400 GiB or more, 12000 IOPS, 500 MB/s                                       |
 
+- The query node mounts `/data/pg/payload` as `/payload`. `--node-env ESPRESSO_QUERY_PAYLOAD_DIR=/payload` (experimental
+  image feature, off by default) puts payload and VID share files there: on the `volume` store in `volume` mode, on
+  node0's root disk otherwise. Size collected as `du-payload.txt`.
+- Validator root volumes: gp3 6000 IOPS, 500 MB/s (validators write about 1 byte per decided byte); node0 and `volume`
+  store as below.
 - `--pg-iops`/`--pg-mbps` apply to node0's root volume and the `volume` store; a fleet with `rds` refuses values other
   than the defaults (12000, 500).
 - Same `PG_TUNING` settings in every mode; `pg-settings.json` is checked against them (`noisy` on a difference).
@@ -235,7 +246,7 @@ just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --
 just bench aws run --tag release-x --steps 50,60,80 --keep-going --cap-s 600 --tx-timeout-s 600
 # provision an idle fleet with all three stores for 4 h
 just bench aws up --tag release-x --nodes 4 --db-modes colocated,volume,rds --ttl-min 240 --max-usd 60
-# measure on the only selectable fleet, with an extra node environment variable
+# measure on the only selectable fleet, payload and VID share files on the query DB store
 just bench aws run --fleet --query-db volume --node-env ESPRESSO_QUERY_PAYLOAD_DIR=/payload
 # measure on a named fleet with another image tag and a fixed staircase
 just bench aws run --fleet lulu-20261001-074612 --query-db rds --tag release-y --steps 50,60,80 --keep-going

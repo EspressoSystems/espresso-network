@@ -128,6 +128,9 @@ READY_TIMEOUT_S = 600.0
 # gp3 includes this many IOPS and this much throughput at no extra charge.
 GP3_BASELINE_IOPS = 3000
 GP3_BASELINE_MBPS = 125
+# Validators write about one byte per decided byte, which saturates the 125 MB/s baseline.
+VALIDATOR_ROOT_IOPS = 6000
+VALIDATOR_ROOT_MBPS = 500
 # AWS's own prorating denominator for monthly EBS prices.
 HOURS_PER_MONTH = 730.0
 # Gzipped container logs and the final rsync, from local bench runs.
@@ -252,6 +255,11 @@ PG_SAMPLE_S = 5.0
 PG_JSON = f"{BENCH_DIR}/pg.json"
 # Self-signed cert made by user-data on the query role, mounted read-only into the container.
 PG_TLS_DIR = "/data/pg-tls"
+# Query payloads and VID shares of the query node live next to the Postgres data so they use the
+# same volume; node image reads ESPRESSO_QUERY_PAYLOAD_DIR, which `--node-env` sets to
+# PAYLOAD_CONTAINER_DIR (experimental, so not a default).
+PAYLOAD_HOST_DIR = "/data/pg/payload"
+PAYLOAD_CONTAINER_DIR = "/payload"
 VOLUME_BY_ID = "/dev/disk/by-id"
 # Seconds `up` waits for udev to publish the by-id link of the attached volume.
 PG_VOLUME_WAIT_S = 60
@@ -917,8 +925,8 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
                 "role": "query" if query else "validator",
                 "instance_type": NODE_TYPE,
                 "root_gb": node_root_gb(cfg, query),
-                "root_iops": cfg.pg_iops if query else GP3_BASELINE_IOPS,
-                "root_mbps": cfg.pg_mbps if query else GP3_BASELINE_MBPS,
+                "root_iops": cfg.pg_iops if query else VALIDATOR_ROOT_IOPS,
+                "root_mbps": cfg.pg_mbps if query else VALIDATOR_ROOT_MBPS,
             }
         )
     return hosts
@@ -1948,6 +1956,10 @@ def render_start_sh(
         "-v",
         f"{BENCH_DIR}/genesis.toml:{BENCH_DIR}/genesis.toml:ro",
     ]
+    if host["role"] == "query":
+        # After reset_script wiped /data/pg and pg_store_script mounted the run's placement.
+        script += f"mkdir -p {PAYLOAD_HOST_DIR}\n\n"
+        argv += ["-v", f"{PAYLOAD_HOST_DIR}:{PAYLOAD_CONTAINER_DIR}"]
     argv.append(f"{node['ref']}@{node['digest']}")
     argv.append("/bin/espresso-node")
     for module in modules:
@@ -1989,6 +2001,7 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     parser.add_argument("--step-s", type=int, default=load.step_s)
     parser.add_argument("--cap-s", type=float, default=load.cap_s)
     parser.add_argument("--tx-timeout-s", type=int, default=load.tx_timeout_s)
+    parser.add_argument("--submit-workers", type=positive_int, default=load.workers)
     parser.add_argument("--warmup-s", type=int, default=load.warmup_s)
     parser.add_argument(
         "--keep-going",
@@ -2029,7 +2042,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         steps=args.steps,
         step_s=args.step_s,
         submit_nodes=args.nodes - 1,
-        workers=SUBMIT_WORKERS,
+        workers=args.submit_workers,
         cap_s=args.cap_s,
         tx_timeout_s=args.tx_timeout_s,
         warmup_s=args.warmup_s,
@@ -2046,6 +2059,12 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         max_usd=args.max_usd,
         yes=args.yes,
     )
+
+
+def positive_int(text: str) -> int:
+    if not (text.isdigit() and int(text) > 0):
+        raise argparse.ArgumentTypeError(f"expected a positive integer: {text}")
+    return int(text)
 
 
 def ttl_min_arg(text: str) -> str:
@@ -4436,6 +4455,7 @@ COLLECT_SCRIPT = (
     "chronyc tracking > chrony.txt\n"
     "df -B1 / /data > df.txt\n"
     "du -sb /data/journal > du-journal.txt\n"
+    f"if [ -d {PAYLOAD_HOST_DIR} ]; then du -sb {PAYLOAD_HOST_DIR} > du-payload.txt; fi\n"
     "lscpu > lscpu.txt\n"
     "uname -r > uname.txt\n"
     "grep MemTotal /proc/meminfo > meminfo.txt\n"
