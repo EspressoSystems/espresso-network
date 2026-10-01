@@ -7,6 +7,7 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
+use futures::FutureExt as _;
 use hotshot::traits::{BlockPayload, ValidatedState as _};
 use hotshot_types::{
     consensus::PayloadWithMetadata,
@@ -83,6 +84,20 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub manifest: DedupManifest<T>,
 }
 
+struct HashedBatch<T: NodeType> {
+    view: ViewNumber,
+    transactions: Vec<(Commitment<T::Transaction>, T::Transaction)>,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "produced once and matched once, never stored"
+)]
+enum Finished<T: NodeType> {
+    Built(Result<BlockBuilderOutput<T>, BlockError>),
+    Hashed(HashedBatch<T>),
+}
+
 /// Room in a forwarded message for everything but the transactions.
 const FORWARD_ENVELOPE_BYTES: u64 = 4096;
 
@@ -146,7 +161,7 @@ pub struct BlockBuilder<T: NodeType> {
     /// change how the payload is built.
     #[allow(clippy::type_complexity)]
     view_transactions: BTreeMap<ViewNumber, Vec<(Commitment<T::Transaction>, T::Transaction)>>,
-    tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
+    tasks: JoinSet<Finished<T>>,
 }
 
 impl<T: NodeType> BlockBuilder<T> {
@@ -191,7 +206,7 @@ impl<T: NodeType> BlockBuilder<T> {
 
         let empty_block_delay = self.config.empty_block_delay;
 
-        let handle = self.tasks.spawn(async move {
+        let build = async move {
             // Without this an idle network produces empty blocks as fast as consensus can run
             // them, flooding the coordinator's event queue.
             if buffer.is_empty() {
@@ -271,7 +286,8 @@ impl<T: NodeType> BlockBuilder<T> {
                 payload_commitment,
                 manifest,
             })
-        });
+        };
+        let handle = self.tasks.spawn(build.map(Finished::Built));
         self.calculations.insert((view, parent_commitment), handle);
     }
 
@@ -290,16 +306,22 @@ impl<T: NodeType> BlockBuilder<T> {
         txs
     }
 
+    /// The next built block, `None` while nothing is in flight. Forwarded batches whose hashing
+    /// finished are pooled on the way.
+    ///
+    /// # Cancel safety
+    ///
+    /// Cancel safe: `join_next` is, and nothing is awaited after it yields.
     pub async fn next(&mut self) -> Option<Result<BlockBuilderOutput<T>, BlockError>> {
         loop {
-            match self.tasks.join_next().await {
-                Some(Ok(result)) => return Some(result),
-                Some(Err(err)) => {
+            match self.tasks.join_next().await? {
+                Ok(Finished::Built(result)) => return Some(result),
+                Ok(Finished::Hashed(batch)) => self.pool(batch),
+                Err(err) => {
                     if err.is_panic() {
                         error!(%err, "block builder task panicked");
                     }
                 },
-                None => return None,
             }
         }
     }
@@ -368,11 +390,27 @@ impl<T: NodeType> BlockBuilder<T> {
         Ok(())
     }
 
+    /// Hashes a forwarded batch off the event loop. It is pooled by a later
+    /// [`next`](BlockBuilder::next), not here.
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
-        let max_bytes = self.block_size(msg.view);
-        for tx in msg.transactions {
-            let hash = tx.commit();
+        let TransactionMessage { view, transactions } = msg;
+        // A whole-block batch is tens of milliseconds of SHA3, which would stall consensus if
+        // hashed here.
+        self.tasks.spawn_blocking(move || {
+            Finished::Hashed(HashedBatch {
+                view,
+                transactions: transactions
+                    .into_iter()
+                    .map(|tx| (tx.commit(), tx))
+                    .collect(),
+            })
+        });
+    }
 
+    fn pool(&mut self, batch: HashedBatch<T>) {
+        let HashedBatch { view, transactions } = batch;
+        let max_bytes = self.block_size(view);
+        for (hash, tx) in transactions {
             if self.dedups.values().any(|hs| hs.contains(&hash)) {
                 continue;
             }
@@ -480,6 +518,18 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         self.dedups = self.dedups.split_off(&lower_bound);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pool_transactions(&mut self, msg: TransactionMessage<T>) {
+        let TransactionMessage { view, transactions } = msg;
+        self.pool(HashedBatch {
+            view,
+            transactions: transactions
+                .into_iter()
+                .map(|tx| (tx.commit(), tx))
+                .collect(),
+        });
     }
 
     #[cfg(test)]
