@@ -1029,18 +1029,20 @@ def test_stale_connection_is_retried_on_a_fresh_one(monkeypatch: pytest.MonkeyPa
     assert (stale.closed, stale.requests, fresh.requests) == (True, 2, 1)
 
 
-def test_submit_rate_counts_sent_transactions_in_the_window():
+def test_window_rate_counts_transactions_in_the_window():
     times = [50.0, 80.0, 99.0, math.inf]
-    assert netbench.submit_mb_s(times, 1_500_000, 70.0, 100.0) == pytest.approx(0.1)
+    assert netbench.window_mb_s(times, 1_500_000, 70.0, 100.0) == pytest.approx(0.1)
 
 
-def test_progress_line_shows_the_submitted_and_the_offered_rate(
+def test_progress_line_shows_the_submitted_offered_and_query_rates(
     caplog: pytest.LogCaptureFixture,
 ):
     state = netbench.LoadState()
     state.rate_mb_s = 60.0
     for i in range(90):
         state.submitted(netbench.Tx(id=i, node=0, t_submit=99.0))
+    for i in range(30):
+        state.include(i, height=0, at=99.5)
     heights = netbench.Heights(0)
     heights.saw("validator", 1, 95.0)
     heights.saw("query", 1, 95.5)
@@ -1049,4 +1051,6 @@ def test_progress_line_shows_the_submitted_and_the_offered_rate(
         netbench.log_progress(state, heights, counters, 100.0, 1_000_000)
     (line,) = caplog.messages
     assert "(lag 500 ms), block 30 s, 50 MB;" in line
-    assert "submitting 3 of 60 MB/s, decided 2.5 MB/s; 90 submitted" in line
+    assert (
+        "submitting 3 of 60 MB/s, decided 2.5 MB/s, query 1 MB/s; 90 submitted" in line
+    )

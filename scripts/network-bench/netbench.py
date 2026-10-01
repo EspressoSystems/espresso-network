@@ -318,7 +318,9 @@ class BenchResult(TypedDict):
 class BenchConfig:
     genesis: str = "scripts/network-bench/genesis.toml"
     tx_size: int = 1_000_000
-    namespaces: tuple[int, int] = (10000, 10001)
+    # The leader disperses a block's namespaces in parallel, one unit each. With two, a 100 MB
+    # block dispersed on at most two cores and the rest sat idle.
+    namespaces: tuple[int, int] = (10000, 10015)
     # MB/s of each load step; each is held `step_s`, and its second half is measured.
     steps: tuple[float, ...] = (4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0)
     step_s: int = 30
@@ -1178,12 +1180,10 @@ def record_inclusions(
     heights.scanned[height] = clock.time()
 
 
-def submit_mb_s(
-    t_submits: Iterable[float], tx_size: int, t0: float, t1: float
-) -> float:
-    """MB/s of the requests that went out in `[t0, t1]`."""
-    sent = sum(1 for t in t_submits if t0 <= t <= t1)
-    return sent * tx_size / (t1 - t0) / 1e6
+def window_mb_s(times: Iterable[float], tx_size: int, t0: float, t1: float) -> float:
+    """MB/s of the transactions whose time falls in `[t0, t1]`."""
+    count = sum(1 for t in times if t0 <= t <= t1)
+    return count * tx_size / (t1 - t0) / 1e6
 
 
 def log_progress(
@@ -1215,21 +1215,28 @@ def log_progress(
         block_mb = decided / blocks / 1e6 if blocks else None
     included = sum(1 for tx in state.txs if tx.status == "included")
     timeouts = sum(1 for tx in state.txs if tx.status == "timeout")
+    t0 = now - PROGRESS_S
+    # `t_included` is when the block appeared on the query node, so this is the rate the query
+    # node makes transactions available, which falls behind `decided` once it lags.
+    query_mb_s = window_mb_s(
+        (tx.t_included for tx in state.txs if tx.t_included is not None),
+        tx_size,
+        t0,
+        now,
+    )
     log.info(
         "height v=%s q=%s (%s), block %s s, %s MB; submitting %s of %s MB/s, decided %s "
-        "MB/s; %d submitted, %d included, %d pending, %d timed out, %d waited for the cap",
+        "MB/s, query %s MB/s; %d submitted, %d included, %d pending, %d timed out, "
+        "%d waited for the cap",
         fmt_num(validator - 1 if validator > heights.start else None) or "-",
         fmt_num(query - 1 if query > heights.start else None) or "-",
         lag,
         fmt_num(PROGRESS_S / blocks if blocks else None) or "-",
         fmt_num(block_mb) or "-",
-        fmt_num(
-            submit_mb_s(
-                (tx.t_submit for tx in state.txs), tx_size, now - PROGRESS_S, now
-            )
-        ),
+        fmt_num(window_mb_s((tx.t_submit for tx in state.txs), tx_size, t0, now)),
         fmt_num(state.rate_mb_s),
         fmt_num(decided_mb_s) or "-",
+        fmt_num(query_mb_s),
         len(state.txs),
         included,
         len(state.pending),
@@ -1302,7 +1309,7 @@ def step_measures(
     # A slope over all samples: two samples see whole blocks, off by up to one block.
     decided = theil_sen([(c["ts"], c["decided_bytes"] / 1e6) for c in inside])
     return {
-        "submitted_mb_s": submit_mb_s(
+        "submitted_mb_s": window_mb_s(
             (tx["t_submit"] for tx in txs), cfg.tx_size, t0, t1
         ),
         "decided_mb_s": decided,
