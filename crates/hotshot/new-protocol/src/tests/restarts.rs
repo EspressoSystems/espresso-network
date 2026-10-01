@@ -8,6 +8,7 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::signature_key::SignatureKey,
 };
+use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
 use crate::tests::common::{
     runner::{NodeAction, NodeChange, TestRunner},
@@ -261,6 +262,39 @@ async fn late_start_one_node_with_epochs() {
                 action: NodeAction::Start,
             }],
         )])
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
+
+/// 10 nodes, 1 starts late at view 39, epoch_height=15, at the version whose
+/// timeout votes and certificates bind their epoch.
+///
+/// The 0.7 twin of `late_start_one_node_with_epochs`. The views node 9 would
+/// have led while offline time out, so the nine live nodes leave them on epoch
+/// binding certificates, across two epoch boundaries.
+///
+/// Node 9 itself catches up on a high QC rather than on one of those
+/// certificates: it joins once view 39 has decided, and `catchup_evidence`
+/// offers whichever of the locked QC and the newest timeout certificate has
+/// the higher view, which by then is the QC.
+#[tokio::test(flavor = "multi_thread")]
+async fn late_start_one_node_with_epochs_bound() {
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(50)
+        .max_runtime(Duration::from_secs(500))
+        .epoch_height(15)
+        .expected_failed_views(views([9, 19, 29, 39]))
+        .node_changes(vec![(
+            39,
+            vec![NodeChange {
+                idx: 9,
+                action: NodeAction::Start,
+            }],
+        )])
+        .upgrade(Upgrade::trivial(TIMEOUT_EPOCH_VERSION))
         .build()
         .run()
         .await

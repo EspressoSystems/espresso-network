@@ -40,6 +40,9 @@ message NodeKeysResponse {
 
   // X25519 public key for cliquenet, TaggedBase64
   optional string x25519_key = 4;
+
+  // Cliquenet address peers dial, host:port: the configured advertise address, unset when none is configured
+  optional string p2p_addr = 5;
 }
 
 service StatusService {

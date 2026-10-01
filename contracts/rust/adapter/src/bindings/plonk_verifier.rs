@@ -63,7 +63,7 @@ pub mod BN254 {
         }
         impl BaseField {
             /// The Solidity type name.
-            pub const NAME: &'static str = stringify!(@ name);
+            pub const NAME: &'static str = stringify!(BaseField);
             /// Convert from the underlying value type.
             #[inline]
             pub const fn from_underlying(
@@ -207,7 +207,7 @@ pub mod BN254 {
         }
         impl ScalarField {
             /// The Solidity type name.
-            pub const NAME: &'static str = stringify!(@ name);
+            pub const NAME: &'static str = stringify!(ScalarField);
             /// Convert from the underlying value type.
             #[inline]
             pub const fn from_underlying(
@@ -647,7 +647,7 @@ pub mod IPlonkVerifier {
     use super::*;
     use alloy::sol_types as alloy_sol_types;
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
 struct PlonkProof { BN254.G1Point wire0; BN254.G1Point wire1; BN254.G1Point wire2; BN254.G1Point wire3; BN254.G1Point wire4; BN254.G1Point prodPerm; BN254.G1Point split0; BN254.G1Point split1; BN254.G1Point split2; BN254.G1Point split3; BN254.G1Point split4; BN254.G1Point zeta; BN254.G1Point zetaOmega; BN254.ScalarField wireEval0; BN254.ScalarField wireEval1; BN254.ScalarField wireEval2; BN254.ScalarField wireEval3; BN254.ScalarField wireEval4; BN254.ScalarField sigmaEval0; BN254.ScalarField sigmaEval1; BN254.ScalarField sigmaEval2; BN254.ScalarField sigmaEval3; BN254.ScalarField prodPermZetaOmegaEval; }
 ```*/
@@ -1370,7 +1370,7 @@ struct PlonkProof { BN254.G1Point wire0; BN254.G1Point wire1; BN254.G1Point wire
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**```solidity
 struct VerifyingKey { uint256 domainSize; uint256 numInputs; BN254.G1Point sigma0; BN254.G1Point sigma1; BN254.G1Point sigma2; BN254.G1Point sigma3; BN254.G1Point sigma4; BN254.G1Point q1; BN254.G1Point q2; BN254.G1Point q3; BN254.G1Point q4; BN254.G1Point qM12; BN254.G1Point qM34; BN254.G1Point qO; BN254.G1Point qC; BN254.G1Point qH1; BN254.G1Point qH2; BN254.G1Point qH3; BN254.G1Point qH4; BN254.G1Point qEcc; bytes32 g2LSB; bytes32 g2MSB; }
 ```*/
@@ -3094,10 +3094,10 @@ error BN254G1AddFailed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3168,10 +3168,10 @@ error BN254PairingProdFailed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3242,10 +3242,10 @@ error BN254ScalarInvZero();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3316,10 +3316,10 @@ error BN254ScalarMulFailed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3390,10 +3390,10 @@ error InvalidG1();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3464,10 +3464,10 @@ error InvalidPlonkArgs();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3538,10 +3538,10 @@ error InvalidScalar();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3612,10 +3612,10 @@ error PowPrecompileFailed();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3686,10 +3686,10 @@ error UnsupportedDegree();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
@@ -3760,15 +3760,15 @@ error WrongPlonkVK();
             }
             #[inline]
             fn abi_decode_raw_validate(data: &[u8]) -> alloy_sol_types::Result<Self> {
-                <Self::Parameters<
-                    '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
-                    .map(Self::new)
+                Self::abi_decode_raw_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Default, Debug, PartialEq, Eq, Hash)]
     /**Function with signature `verify((uint256,uint256,(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),bytes32,bytes32),uint256[7],((uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),(uint256,uint256),uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256))` and selector `0x77ae3f07`.
 ```solidity
 function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memory publicInput, IPlonkVerifier.PlonkProof memory proof) external view returns (bool);
@@ -3939,23 +3939,36 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                     })
             }
             #[inline]
-            fn abi_decode_returns_validate(
+            fn abi_decode_returns_with_config(
                 data: &[u8],
+                config: alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<Self::Return> {
                 <Self::ReturnTuple<
                     '_,
-                > as alloy_sol_types::SolType>::abi_decode_sequence_validate(data)
+                > as alloy_sol_types::SolType>::abi_decode_sequence_with_config(
+                        data,
+                        config,
+                    )
                     .map(|r| {
                         let r: verifyReturn = r.into();
                         r._0
                     })
+            }
+            #[inline]
+            fn abi_decode_returns_validate(
+                data: &[u8],
+            ) -> alloy_sol_types::Result<Self::Return> {
+                Self::abi_decode_returns_with_config(
+                    data,
+                    alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+                )
             }
         }
     };
     ///Container for all the [`PlonkVerifier`](self) function calls.
     #[derive(Clone)]
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive()]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub enum PlonkVerifierCalls {
         #[allow(missing_docs)]
         verify(verifyCall),
@@ -4020,44 +4033,31 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<PlonkVerifierCalls>] = &[
-                {
-                    fn verify(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<PlonkVerifierCalls> {
-                        <verifyCall as alloy_sol_types::SolCall>::abi_decode_raw(data)
-                            .map(PlonkVerifierCalls::verify)
-                    }
-                    verify
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
         }
         #[inline]
         #[allow(non_snake_case)]
-        fn abi_decode_raw_validate(
+        fn abi_decode_raw_with_config(
             selector: [u8; 4],
             data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
+            static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<PlonkVerifierCalls>] = &[
                 {
                     fn verify(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<PlonkVerifierCalls> {
-                        <verifyCall as alloy_sol_types::SolCall>::abi_decode_raw_validate(
+                        <verifyCall as alloy_sol_types::SolCall>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(PlonkVerifierCalls::verify)
                     }
@@ -4072,7 +4072,19 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                     ),
                 );
             };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_validate(
+            selector: [u8; 4],
+            data: &[u8],
+        ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -4235,15 +4247,31 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::default(),
+            )
+        }
+        #[inline]
+        #[allow(non_snake_case)]
+        fn abi_decode_raw_with_config(
+            selector: [u8; 4],
+            data: &[u8],
+            config: alloy_sol_types::abi::AbiDecoderConfig,
+        ) -> alloy_sol_types::Result<Self> {
             static DECODE_SHIMS: &[fn(
                 &[u8],
+                alloy_sol_types::abi::AbiDecoderConfig,
             ) -> alloy_sol_types::Result<PlonkVerifierErrors>] = &[
                 {
                     fn InvalidScalar(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <InvalidScalar as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidScalar as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(PlonkVerifierErrors::InvalidScalar)
                     }
@@ -4252,9 +4280,11 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                 {
                     fn BN254ScalarMulFailed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <BN254ScalarMulFailed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <BN254ScalarMulFailed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(PlonkVerifierErrors::BN254ScalarMulFailed)
                     }
@@ -4263,9 +4293,11 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                 {
                     fn PowPrecompileFailed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <PowPrecompileFailed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <PowPrecompileFailed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(PlonkVerifierErrors::PowPrecompileFailed)
                     }
@@ -4274,8 +4306,12 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                 {
                     fn WrongPlonkVK(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <WrongPlonkVK as alloy_sol_types::SolError>::abi_decode_raw(data)
+                        <WrongPlonkVK as alloy_sol_types::SolError>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(PlonkVerifierErrors::WrongPlonkVK)
                     }
                     WrongPlonkVK
@@ -4283,9 +4319,11 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                 {
                     fn BN254G1AddFailed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <BN254G1AddFailed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <BN254G1AddFailed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(PlonkVerifierErrors::BN254G1AddFailed)
                     }
@@ -4294,8 +4332,12 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                 {
                     fn InvalidG1(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <InvalidG1 as alloy_sol_types::SolError>::abi_decode_raw(data)
+                        <InvalidG1 as alloy_sol_types::SolError>::abi_decode_raw_with_config(
+                                data,
+                                config,
+                            )
                             .map(PlonkVerifierErrors::InvalidG1)
                     }
                     InvalidG1
@@ -4303,9 +4345,11 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                 {
                     fn BN254PairingProdFailed(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <BN254PairingProdFailed as alloy_sol_types::SolError>::abi_decode_raw(
+                        <BN254PairingProdFailed as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(PlonkVerifierErrors::BN254PairingProdFailed)
                     }
@@ -4314,9 +4358,11 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                 {
                     fn BN254ScalarInvZero(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <BN254ScalarInvZero as alloy_sol_types::SolError>::abi_decode_raw(
+                        <BN254ScalarInvZero as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(PlonkVerifierErrors::BN254ScalarInvZero)
                     }
@@ -4325,9 +4371,11 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                 {
                     fn UnsupportedDegree(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <UnsupportedDegree as alloy_sol_types::SolError>::abi_decode_raw(
+                        <UnsupportedDegree as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(PlonkVerifierErrors::UnsupportedDegree)
                     }
@@ -4336,9 +4384,11 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                 {
                     fn InvalidPlonkArgs(
                         data: &[u8],
+                        config: alloy_sol_types::abi::AbiDecoderConfig,
                     ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <InvalidPlonkArgs as alloy_sol_types::SolError>::abi_decode_raw(
+                        <InvalidPlonkArgs as alloy_sol_types::SolError>::abi_decode_raw_with_config(
                                 data,
+                                config,
                             )
                             .map(PlonkVerifierErrors::InvalidPlonkArgs)
                     }
@@ -4353,7 +4403,7 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                     ),
                 );
             };
-            DECODE_SHIMS[idx](data)
+            DECODE_SHIMS[idx](data, config)
         }
         #[inline]
         #[allow(non_snake_case)]
@@ -4361,129 +4411,11 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
             selector: [u8; 4],
             data: &[u8],
         ) -> alloy_sol_types::Result<Self> {
-            static DECODE_VALIDATE_SHIMS: &[fn(
-                &[u8],
-            ) -> alloy_sol_types::Result<PlonkVerifierErrors>] = &[
-                {
-                    fn InvalidScalar(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <InvalidScalar as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(PlonkVerifierErrors::InvalidScalar)
-                    }
-                    InvalidScalar
-                },
-                {
-                    fn BN254ScalarMulFailed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <BN254ScalarMulFailed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(PlonkVerifierErrors::BN254ScalarMulFailed)
-                    }
-                    BN254ScalarMulFailed
-                },
-                {
-                    fn PowPrecompileFailed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <PowPrecompileFailed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(PlonkVerifierErrors::PowPrecompileFailed)
-                    }
-                    PowPrecompileFailed
-                },
-                {
-                    fn WrongPlonkVK(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <WrongPlonkVK as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(PlonkVerifierErrors::WrongPlonkVK)
-                    }
-                    WrongPlonkVK
-                },
-                {
-                    fn BN254G1AddFailed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <BN254G1AddFailed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(PlonkVerifierErrors::BN254G1AddFailed)
-                    }
-                    BN254G1AddFailed
-                },
-                {
-                    fn InvalidG1(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <InvalidG1 as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(PlonkVerifierErrors::InvalidG1)
-                    }
-                    InvalidG1
-                },
-                {
-                    fn BN254PairingProdFailed(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <BN254PairingProdFailed as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(PlonkVerifierErrors::BN254PairingProdFailed)
-                    }
-                    BN254PairingProdFailed
-                },
-                {
-                    fn BN254ScalarInvZero(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <BN254ScalarInvZero as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(PlonkVerifierErrors::BN254ScalarInvZero)
-                    }
-                    BN254ScalarInvZero
-                },
-                {
-                    fn UnsupportedDegree(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <UnsupportedDegree as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(PlonkVerifierErrors::UnsupportedDegree)
-                    }
-                    UnsupportedDegree
-                },
-                {
-                    fn InvalidPlonkArgs(
-                        data: &[u8],
-                    ) -> alloy_sol_types::Result<PlonkVerifierErrors> {
-                        <InvalidPlonkArgs as alloy_sol_types::SolError>::abi_decode_raw_validate(
-                                data,
-                            )
-                            .map(PlonkVerifierErrors::InvalidPlonkArgs)
-                    }
-                    InvalidPlonkArgs
-                },
-            ];
-            let Ok(idx) = Self::SELECTORS.binary_search(&selector) else {
-                return Err(
-                    alloy_sol_types::Error::unknown_selector(
-                        <Self as alloy_sol_types::SolInterface>::NAME,
-                        selector,
-                    ),
-                );
-            };
-            DECODE_VALIDATE_SHIMS[idx](data)
+            Self::abi_decode_raw_with_config(
+                selector,
+                data,
+                alloy_sol_types::abi::AbiDecoderConfig::new().validate(true),
+            )
         }
         #[inline]
         fn abi_encoded_size(&self) -> usize {
@@ -4595,6 +4527,99 @@ function verify(IPlonkVerifier.VerifyingKey memory verifyingKey, uint256[7] memo
                     )
                 }
             }
+        }
+    }
+    #[automatically_derived]
+    impl PlonkVerifierErrors {
+        /**Creates a [`BN254G1AddFailed`] error.
+
+```solidity
+error BN254G1AddFailed()
+```*/
+        #[inline]
+        pub fn bn_254g_1_add_failed() -> Self {
+            Self::BN254G1AddFailed(BN254G1AddFailed)
+        }
+        /**Creates a [`BN254PairingProdFailed`] error.
+
+```solidity
+error BN254PairingProdFailed()
+```*/
+        #[inline]
+        pub fn bn_254_pairing_prod_failed() -> Self {
+            Self::BN254PairingProdFailed(BN254PairingProdFailed)
+        }
+        /**Creates a [`BN254ScalarInvZero`] error.
+
+```solidity
+error BN254ScalarInvZero()
+```*/
+        #[inline]
+        pub fn bn_254_scalar_inv_zero() -> Self {
+            Self::BN254ScalarInvZero(BN254ScalarInvZero)
+        }
+        /**Creates a [`BN254ScalarMulFailed`] error.
+
+```solidity
+error BN254ScalarMulFailed()
+```*/
+        #[inline]
+        pub fn bn_254_scalar_mul_failed() -> Self {
+            Self::BN254ScalarMulFailed(BN254ScalarMulFailed)
+        }
+        /**Creates a [`InvalidG1`] error.
+
+```solidity
+error InvalidG1()
+```*/
+        #[inline]
+        pub fn invalid_g_1() -> Self {
+            Self::InvalidG1(InvalidG1)
+        }
+        /**Creates a [`InvalidPlonkArgs`] error.
+
+```solidity
+error InvalidPlonkArgs()
+```*/
+        #[inline]
+        pub fn invalid_plonk_args() -> Self {
+            Self::InvalidPlonkArgs(InvalidPlonkArgs)
+        }
+        /**Creates a [`InvalidScalar`] error.
+
+```solidity
+error InvalidScalar()
+```*/
+        #[inline]
+        pub fn invalid_scalar() -> Self {
+            Self::InvalidScalar(InvalidScalar)
+        }
+        /**Creates a [`PowPrecompileFailed`] error.
+
+```solidity
+error PowPrecompileFailed()
+```*/
+        #[inline]
+        pub fn pow_precompile_failed() -> Self {
+            Self::PowPrecompileFailed(PowPrecompileFailed)
+        }
+        /**Creates a [`UnsupportedDegree`] error.
+
+```solidity
+error UnsupportedDegree()
+```*/
+        #[inline]
+        pub fn unsupported_degree() -> Self {
+            Self::UnsupportedDegree(UnsupportedDegree)
+        }
+        /**Creates a [`WrongPlonkVK`] error.
+
+```solidity
+error WrongPlonkVK()
+```*/
+        #[inline]
+        pub fn wrong_plonk_vk() -> Self {
+            Self::WrongPlonkVK(WrongPlonkVK)
         }
     }
     use alloy::contract as alloy_contract;

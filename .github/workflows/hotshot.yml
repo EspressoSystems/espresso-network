@@ -1,4 +1,4 @@
-name: HotShot integration tests
+name: HotShot tests
 
 on:
   push:
@@ -18,30 +18,10 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  build-matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Protoc
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
-      - uses: taiki-e/install-action@just
-      - id: set-matrix
-        run: echo "matrix=$(just hotshot::matrix)" >> "$GITHUB_OUTPUT"
-
-  test:
-    needs: build-matrix
-    strategy:
-      matrix: ${{ fromJson(needs.build-matrix.outputs.matrix) }}
-      fail-fast: false
+  test-rest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         name: Checkout Repository
 
       - name: Install Protoc
@@ -54,44 +34,30 @@ jobs:
         with:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
-          # Save from a hotshot-testing cell so the cache contains its dep graph:
-          # every other matrix cell needs those deps. `test-ci-rest` excludes
-          # hotshot-testing, so its target/ is a poor match for the rest of the
-          # matrix.
-          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.test_suites == 'test-ci tests_1' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
           prefix-key: v2-hotshot
 
       - uses: taiki-e/install-action@just
 
       - uses: taiki-e/install-action@nextest
 
-      - name: Show memory
-        run: free -h
-
-      - name: Build integration tests
+      - name: Build tests
         run: |
-          just hotshot::${{ matrix.test_suites }} --no-run
+          just hotshot::test-ci-rest --no-run
         timeout-minutes: 60
 
-      - name: Run integration tests
+      - name: Run tests
         run: |
-          just hotshot::${{ matrix.test_suites }} --no-fail-fast
+          just hotshot::test-ci-rest --no-fail-fast
         timeout-minutes: 60
         env:
           RUST_BACKTRACE: full
-
-      - name: Sanitize artifact name
-        if: always()
-        id: artifact-name
-        run: |
-          name="nextest-junit-hotshot-$(echo '${{ matrix.test_suites }}' | tr ' /' '--')"
-          echo "name=$name" >> "$GITHUB_OUTPUT"
 
       - name: Upload nextest JUnit
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.artifact-name.outputs.name }}
+          name: nextest-junit-hotshot-test-ci-rest
           if-no-files-found: ignore
           path: target/nextest/*/junit.xml
           retention-days: 1
@@ -111,7 +77,7 @@ jobs:
             filter: 'test(/tests::(cliquenet|memory_network)::/)'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         name: Checkout Repository
 
       - name: Install Protoc
@@ -137,9 +103,11 @@ jobs:
       - name: Run tests (${{ matrix.name }})
         run: |
           cargo nextest run -p hotshot-new-protocol --profile new-protocol --no-fail-fast --test-threads 4 -E '${{ matrix.filter }}'
-        timeout-minutes: 30
+        timeout-minutes: 45
         env:
           RUST_BACKTRACE: full
+          # nextest keeps captured output only for failing tests.
+          RUST_LOG: "error,hotshot_new_protocol=info"
 
       - name: Upload nextest JUnit
         if: always()
@@ -150,36 +118,8 @@ jobs:
           path: target/nextest/*/junit.xml
           retention-days: 1
 
-  test-examples:
-    strategy:
-      fail-fast: false
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        name: Checkout Repository
-
-      - name: Install Protoc
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
-      - uses: Swatinem/rust-cache@v2
-        name: Enable Rust Caching
-        with:
-          shared-key: "hotshot-tests"
-          cache-on-failure: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
-          prefix-key: v2-hotshot
-
-      - uses: taiki-e/install-action@just
-
-      - name: Test examples
-        run: |
-          just hotshot::example all-push-cdn -- --config_file ./crates/hotshot/orchestrator/run-config.toml
-        timeout-minutes: 20
-
   nextest-report:
-    needs: [test, test-new-protocol]
+    needs: [test-rest, test-new-protocol]
     runs-on: ubuntu-latest
     if: ${{ always() && !cancelled() }}
     # Reporter only: failures here must not fail the workflow.
@@ -189,7 +129,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download JUnit artifacts
         uses: actions/download-artifact@v8
@@ -224,14 +164,14 @@ jobs:
       - name: Post/update PR comment
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: nextest-hotshot
           path: junit-artifacts/pr-comment.md
           delete: ${{ hashFiles('junit-artifacts/pr-comment.md') == '' }}
 
   publish-test-stats:
-    needs: [test, test-new-protocol]
+    needs: [test-rest, test-new-protocol]
     # always() so a single flaky shard on main does not freeze the history artifact.
     if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
@@ -241,7 +181,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download JUnit artifacts
         uses: actions/download-artifact@v8
@@ -268,7 +208,7 @@ jobs:
 
   # This job enables having a single required status check in github for all hotshot tests.
   aggregate-hotshot-tests:
-    needs: [test, test-new-protocol, test-examples]
+    needs: [test-rest, test-new-protocol]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}

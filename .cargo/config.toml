@@ -1,2 +1,16 @@
 [net]
 git-fetch-with-cli = true
+
+# `process-metrics` reads the tokio runtime's blocking-pool metrics
+# (`num_blocking_threads` and friends), which tokio keeps behind its own
+# `--cfg tokio_unstable`.
+#
+# A `RUSTFLAGS` or `CARGO_TARGET_<TRIPLE>_RUSTFLAGS` in the environment
+# replaces this list instead of adding to it, so every build path that sets
+# one has to repeat the flag, or those metrics silently go missing. The
+# `built_with_tokio_unstable` test in `process-metrics` is the tripwire for
+# that. The SP1 target check (`just check-sp1-target`) is the one exception:
+# it sets its own flags and has no runtime to measure.
+[build]
+rustflags = ["--cfg", "tokio_unstable"]
+rustdocflags = ["--cfg", "tokio_unstable"]

@@ -139,6 +139,7 @@ SECTION_FIELDS = tuple(f"{name.removeprefix('.')}_bytes" for name in SECTIONS)
 FAMILIES = ("cpu-s", "bytes", *SECTIONS, "symbols", "crate bytes", "instantiations")
 FAMILY_ROWS = 6
 FAMILY_IMPROVEMENTS = 3
+NO_BASELINE = "No main-branch baseline available yet."
 WORKFLOW_BOT = "github-actions[bot]"
 RED = " 🔴"
 GREEN = " 🟢"
@@ -1315,6 +1316,7 @@ def render(
     current: dict[str, Any],
     changes: list[Change],
     title: str,
+    note: str,
 ) -> str:
     # Which run the numbers came from. `local` picks the newest run on the branch that still has
     # artifacts, which is regularly not the newest push, so the commit has to be on the report.
@@ -1329,7 +1331,7 @@ def render(
     lines += state_tables(current)
     lines += ["", "### Against main", ""]
     if main is None:
-        lines.append("No main-branch baseline available yet.")
+        lines.append(note)
     else:
         lines += [f"Baseline: main {run_label(main)}.", ""]
         lines += comparison_tables(changes)
@@ -1342,21 +1344,39 @@ def newest_main_run(stats: dict[str, Any]) -> dict[str, Any] | None:
     return next(iter(stats.get("runs", [])), None)
 
 
+def baseline_note(stats: dict[str, Any] | None) -> str:
+    """Why the comparison is missing. A lookup that failed reads like one that found nothing,
+    and the difference is between waiting for the next merge and fixing something."""
+    if stats is None:
+        return NO_BASELINE
+    error = stats.get("error")
+    if error:
+        # gh writes multi-line stderr, and this lands in a comment above the tables.
+        return (
+            "Baseline lookup failed, so this run stands alone: "
+            f"`{' '.join(str(error).split())}`"
+        )
+    scanned = stats.get("scanned")
+    if scanned:
+        return (
+            f"No main-branch baseline: none of the {scanned} most recent main runs of this "
+            "workflow published one."
+        )
+    return NO_BASELINE
+
+
 def report_markdown(
-    current: dict[str, Any], main: dict[str, Any] | None, title: str
+    current: dict[str, Any], main_stats: dict[str, Any] | None, title: str
 ) -> str:
+    main = newest_main_run(main_stats) if main_stats else None
     changes = compare(main, current) if main else []
-    return render(main, current, changes, title)
+    return render(main, current, changes, title, baseline_note(main_stats))
 
 
 def cmd_report(args: argparse.Namespace) -> int:
     current = json.loads(args.metrics.read_text())
-    main = (
-        newest_main_run(json.loads(args.main_stats.read_text()))
-        if args.main_stats
-        else None
-    )
-    print(report_markdown(current, main, args.title))
+    main_stats = json.loads(args.main_stats.read_text()) if args.main_stats else None
+    print(report_markdown(current, main_stats, args.title))
     return 0
 
 
@@ -1396,8 +1416,10 @@ def cmd_local(args: argparse.Namespace) -> int:
                 # so a failed download is not the ordinary "not built yet" case.
                 raise RuntimeError(f"run {target.run_id}: metrics artifacts vanished")
             current = merged_metrics(artifacts, target.sha, target.url)
-            main = fetch_baseline(target.workflow, target.baseline, work / "main.json")
-        summary = report_markdown(current, main, target.title)
+            main_stats = fetch_baseline(
+                target.workflow, target.baseline, work / "main.json"
+            )
+        summary = report_markdown(current, main_stats, target.title)
         reported += 1
         if pr:
             post_sticky(pr, target.baseline, summary)
@@ -1557,8 +1579,8 @@ def newest_with_metrics(
     """The newest matching run whose artifacts are still there.
 
     The newest run is often not reportable: a push starts one whose build has not uploaded yet,
-    and a run old enough has lost its artifacts to retention. Listing the names is one cheap call
-    against a download of every artifact in the run.
+    and a run old enough has lost its artifacts to retention. Listing the names is a page or
+    three against a download of every artifact in the run.
     """
     runs = json.loads(
         capture(
@@ -1586,15 +1608,19 @@ def newest_with_metrics(
 
 
 def has_metrics(run_id: int) -> bool:
-    names = json.loads(
-        capture(
-            "gh",
-            "api",
-            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts",
-            "--jq",
-            "[.artifacts[].name]",
-        )
-    )
+    """Paginated, because a page is 30 and the metrics artifacts are rarely on the first one.
+
+    A test run uploads a junit artifact per shard and a log bundle per integration test, all of
+    them newer than the metrics uploaded when the build finished.
+    """
+    names = capture(
+        "gh",
+        "api",
+        "--paginate",
+        f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts?per_page=100",
+        "--jq",
+        ".artifacts[].name",
+    ).splitlines()
     return any(name.startswith("compile-metrics-") for name in names)
 
 
@@ -1625,24 +1651,33 @@ def download_metrics(run_id: int, into: Path) -> bool:
     return code == 0
 
 
-def fetch_baseline(workflow: str, artifact: str, out: Path) -> dict[str, Any] | None:
-    """The newest main run that published a baseline; None until the workflow has run on main."""
-    code = run_quiet(
-        sys.executable,
-        str(NEXTEST_CI),
-        "stats-fetch",
-        "--workflow",
-        workflow,
-        "--artifact-name",
-        artifact,
-        "--max-runs",
-        "5",
-        "--out",
-        str(out),
+def fetch_baseline(workflow: str, artifact: str, out: Path) -> dict[str, Any]:
+    """What the main runs of `workflow` published, as `stats-fetch` writes it.
+
+    Not quiet: a lookup that comes back empty is the one thing the report cannot tell apart on
+    its own, so stats-fetch's own log is what says whether it found nothing or failed.
+    """
+    done = subprocess.run(
+        [
+            sys.executable,
+            str(NEXTEST_CI),
+            "stats-fetch",
+            "--workflow",
+            workflow,
+            "--artifact-name",
+            artifact,
+            "--max-runs",
+            "5",
+            "--out",
+            str(out),
+        ],
+        check=False,
     )
-    if code != 0 or not out.is_file():
-        return None
-    return newest_main_run(json.loads(out.read_text()))
+    if done.returncode != 0:
+        return {"runs": [], "error": f"stats-fetch exited {done.returncode}"}
+    if not out.is_file():
+        return {"runs": [], "error": f"stats-fetch wrote no {out.name}"}
+    return json.loads(out.read_text())
 
 
 def align(markdown: str) -> str:
