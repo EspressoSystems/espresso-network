@@ -24,11 +24,15 @@ hotshot-example-types = { workspace = true }
 hotshot-new-protocol = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
+parking_lot = { workspace = true }
 serde = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 versions = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
