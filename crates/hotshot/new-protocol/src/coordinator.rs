@@ -48,8 +48,8 @@ use crate::{
     helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, CatchupEvidence, Certificate1, ConsensusMessage, Message, MessageType,
-        OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
+        self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
+        MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
         TransactionMessage, Unchecked, Validated, Vote2, payload::PayloadFetchMessage,
     },
     network::Cliquenet,
@@ -190,6 +190,8 @@ where
         consensus_metrics: ConsensusMetricsValue,
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
+        /// The anchor's cert2 persisted on a prior run.
+        anchor_cert2: Option<Certificate2<T>>,
         upgrade_config: UpgradeConfig,
     ) -> Self {
         let mut consensus = Consensus::new(
@@ -286,6 +288,9 @@ where
         // this must run after `seed_parent`.
         if let Some(locked_qc) = locked_qc {
             consensus.seed_locked_cert(locked_qc);
+        }
+        if let Some(cert2) = anchor_cert2 {
+            consensus.seed_cert2(cert2);
         }
         consensus.resume_from_restart(
             anchor_view,
