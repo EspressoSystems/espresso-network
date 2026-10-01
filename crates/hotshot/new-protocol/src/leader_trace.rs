@@ -3,20 +3,22 @@
 //! Builds register `None` by default and pay one branch (~ns) per event site.
 //! The bench binary and `espresso-node` (when `ESPRESSO_NODE_LEADER_TRACE_DIR`
 //! is set) register a [`CsvLeaderTracer`] that appends each event to a CSV file
-//! as it happens, durable against process kill, for offline timeline
-//! reconstruction. The file must be on local disk: writes block the caller.
+//! through a buffer flushed every second, for offline timeline reconstruction.
+//! A SIGKILL loses at most about 1s of rows. The file should be on local disk.
 //!
 //! Events are wall-clock unix-epoch ns, matching `MetricsCollector::now_ns()`
 //! in the bench so a downstream tool can join the streams on `view + ts_ns`.
 
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Write},
+    io::{self, BufWriter, Write},
     path::Path,
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Weak,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    thread,
+    time::Duration,
 };
 
 use parking_lot::Mutex;
@@ -151,17 +153,51 @@ pub fn now_ns() -> i128 {
     OffsetDateTime::now_utc().unix_timestamp_nanos()
 }
 
+const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+
 /// `LeaderTracer` appending `view,node_id,event,ts_ns` rows to a CSV file.
 ///
-/// Each row is a single unbuffered `write_all`, so it is on disk (in the OS page
-/// cache) when `record` returns and survives SIGKILL. Writes block the caller,
-/// so the file must be on local disk. An existing file is appended to; the
-/// header is written only into an empty file. After the first write error the
-/// tracer logs once and drops all further rows.
+/// Rows go through a `BufWriter` that a background thread flushes every second
+/// and that is flushed on drop, so a SIGKILL loses at most about 1s of rows.
+/// An existing file is appended to; the header is written only into an empty
+/// file. After the first write or flush error the tracer logs once and drops
+/// all further rows. `MaybeProposeEntered` fires many times per view and is
+/// recorded once per view, tracked by a high-water mark: a lower view revisited
+/// after a higher one is skipped.
 pub struct CsvLeaderTracer {
     node_id: u64,
-    file: Mutex<File>,
+    /// One past the highest view recorded for `MaybeProposeEntered`.
+    propose_high_water: AtomicU64,
+    shared: Arc<Shared>,
+}
+
+struct Shared {
+    writer: Mutex<BufWriter<File>>,
     failed: AtomicBool,
+}
+
+impl Shared {
+    fn fail(&self, err: io::Error) {
+        if !self.failed.swap(true, Ordering::Relaxed) {
+            warn!(%err, "leader trace write failed, disabling leader trace");
+        }
+    }
+
+    fn flush(&self) {
+        if self.failed.load(Ordering::Relaxed) {
+            return;
+        }
+        let result = self.writer.lock().flush();
+        if let Err(err) = result {
+            self.fail(err);
+        }
+    }
+}
+
+impl Drop for CsvLeaderTracer {
+    fn drop(&mut self) {
+        self.shared.flush();
+    }
 }
 
 impl CsvLeaderTracer {
@@ -175,24 +211,53 @@ impl CsvLeaderTracer {
         if file.metadata()?.len() == 0 {
             file.write_all(b"view,node_id,event,ts_ns\n")?;
         }
+        let shared = Arc::new(Shared {
+            writer: Mutex::new(BufWriter::new(file)),
+            failed: AtomicBool::new(false),
+        });
+        spawn_flusher(Arc::downgrade(&shared))?;
         Ok(Self {
             node_id,
-            file: Mutex::new(file),
-            failed: AtomicBool::new(false),
+            propose_high_water: AtomicU64::new(0),
+            shared,
         })
     }
 }
 
+/// Flushes until the tracer is dropped. Holds only a `Weak` so it never keeps
+/// the file open.
+fn spawn_flusher(shared: Weak<Shared>) -> io::Result<()> {
+    thread::Builder::new()
+        .name("leader-trace-flush".into())
+        .spawn(move || {
+            loop {
+                thread::sleep(FLUSH_INTERVAL);
+                let Some(shared) = shared.upgrade() else {
+                    return;
+                };
+                shared.flush();
+            }
+        })?;
+    Ok(())
+}
+
 impl LeaderTracer for CsvLeaderTracer {
     fn record(&self, view: u64, event: LeaderEvent, ts_ns: i128) {
-        if self.failed.load(Ordering::Relaxed) {
+        if self.shared.failed.load(Ordering::Relaxed) {
+            return;
+        }
+        if event == LeaderEvent::MaybeProposeEntered
+            && self
+                .propose_high_water
+                .fetch_max(view + 1, Ordering::Relaxed)
+                > view
+        {
             return;
         }
         let row = format!("{view},{},{},{ts_ns}\n", self.node_id, event.name());
-        if let Err(err) = self.file.lock().write_all(row.as_bytes())
-            && !self.failed.swap(true, Ordering::Relaxed)
-        {
-            warn!(%err, "leader trace write failed, disabling leader trace");
+        let result = self.shared.writer.lock().write_all(row.as_bytes());
+        if let Err(err) = result {
+            self.shared.fail(err);
         }
     }
 }
@@ -227,24 +292,41 @@ macro_rules! trace_leader_event {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
 
     const HEADER: &str = "view,node_id,event,ts_ns\n";
 
     #[test]
-    fn row_is_on_disk_without_flush_or_drop() {
+    fn row_reaches_disk_without_flush_or_drop() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sub/trace.csv");
         let tracer = CsvLeaderTracer::new(7, &path).unwrap();
         tracer.record(1, LeaderEvent::NsDisperseStart, 100);
+        let expected = format!("{HEADER}1,7,ns_disperse_start,100\n");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while fs::read_to_string(&path).unwrap() != expected {
+            assert!(Instant::now() < deadline, "row not flushed within 10s");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn maybe_propose_entered_recorded_once_per_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trace.csv");
+        let tracer = CsvLeaderTracer::new(0, &path).unwrap();
+        for (ts, view) in [5, 6, 5, 6, 6, 7].into_iter().enumerate() {
+            tracer.record(view, LeaderEvent::MaybeProposeEntered, ts as i128);
+        }
+        drop(tracer);
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            format!("{HEADER}1,7,ns_disperse_start,100\n")
-        );
-        tracer.record(2, LeaderEvent::LeafDecided, 200);
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            format!("{HEADER}1,7,ns_disperse_start,100\n2,7,leaf_decided,200\n")
+            format!(
+                "{HEADER}5,0,maybe_propose_entered,0\n6,0,maybe_propose_entered,1\n7,0,\
+                 maybe_propose_entered,5\n"
+            )
         );
     }
 
@@ -257,6 +339,7 @@ mod tests {
         drop(first);
         let second = CsvLeaderTracer::new(0, &path).unwrap();
         second.record(2, LeaderEvent::NsDisperseEnd, 2);
+        drop(second);
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             format!("{HEADER}1,0,ns_disperse_start,1\n2,0,ns_disperse_end,2\n")
