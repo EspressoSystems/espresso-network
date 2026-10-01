@@ -330,7 +330,10 @@ impl<T: NodeType> BlockBuilder<T> {
 
         let size = tx.minimum_block_size();
         let encoded_size = bincode::serialized_size(&tx).expect("transactions serialize");
-        let max_bytes = self.block_size(self.current_view);
+        // Forwarding uses the next view's block size, which an upgrade can raise.
+        let max_bytes = self
+            .block_size(self.current_view)
+            .max(self.block_size(self.current_view + 1));
         let budget = forward_budget(message_limit(max_bytes));
         if size > max_bytes {
             warn!(%hash, %size, "transaction can never be included, rejecting");
