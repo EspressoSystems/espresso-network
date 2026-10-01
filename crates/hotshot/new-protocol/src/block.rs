@@ -24,7 +24,6 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use rayon::prelude::{IntoParallelRefIterator as _, ParallelIterator as _};
 use tokio::{
     task::{AbortHandle, JoinSet, spawn_blocking},
     time::sleep,
@@ -433,15 +432,9 @@ impl<T: NodeType> BlockBuilder<T> {
         let max_bytes = self
             .block_size(msg.view)
             .saturating_mul(self.config.fanout + 1);
-        // A forward carries up to a block of transactions, each hashed in full, and this runs
-        // on the coordinator before the leader can build. Hashing them one after another
-        // stalls all of consensus for the whole batch.
-        let hashes = msg
-            .transactions
-            .par_iter()
-            .map(Committable::commit)
-            .collect::<Vec<_>>();
-        for (hash, tx) in hashes.into_iter().zip(msg.transactions) {
+        for tx in msg.transactions {
+            let hash = tx.commit();
+
             if self.dedups.values().any(|hs| hs.contains(&hash)) {
                 continue;
             }
