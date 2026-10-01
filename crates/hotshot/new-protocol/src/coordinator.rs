@@ -1787,7 +1787,7 @@ where
                 });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
-                _ = respond.send(self.block_builder.on_submit_transaction(tx));
+                let _ = respond.send(self.block_builder.on_submit_transaction(tx));
             },
             ClientRequest::UpdateLeaf { update, respond } => {
                 self.state_manager.update_state(update);

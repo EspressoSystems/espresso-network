@@ -55,7 +55,7 @@ pub enum BlockError {
 }
 
 /// Why [`BlockBuilder::on_submit_transaction`] refused a transaction.
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum SubmitError {
     /// Bigger than a block or a forwarded message.
     #[error("transaction of {size} bytes exceeds the {limit} byte limit")]
@@ -336,14 +336,12 @@ impl<T: NodeType> BlockBuilder<T> {
             .max(self.block_size(self.current_view + 1));
         let budget = forward_budget(message_limit(max_bytes));
         if size > max_bytes {
-            warn!(%hash, %size, "transaction can never be included, rejecting");
             return Err(SubmitError::TooLarge {
                 size,
                 limit: max_bytes,
             });
         }
         if encoded_size > budget {
-            warn!(%hash, %encoded_size, "transaction can never be forwarded, rejecting");
             return Err(SubmitError::TooLarge {
                 size: encoded_size,
                 limit: budget,

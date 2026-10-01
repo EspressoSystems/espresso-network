@@ -463,7 +463,7 @@ impl ConsensusSource for FollowerConsensus {
                     match err.status {
                         // Every upstream would refuse it.
                         StatusCode::BAD_REQUEST => {
-                            return Err(SubmitError::TooLarge(err.message).into());
+                            return Err(SubmitError::Invalid(err.message).into());
                         },
                         StatusCode::SERVICE_UNAVAILABLE => {
                             last_err = SubmitError::Overloaded(err.message).into();

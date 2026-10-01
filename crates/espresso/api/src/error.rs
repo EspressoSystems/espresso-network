@@ -17,11 +17,11 @@ pub enum AvailabilityError {
 }
 
 /// Why a node refused a transaction. Downcast by [`classify`] to pick the status code.
-#[derive(Clone, Debug, Error)]
+#[derive(Debug, Error)]
 pub enum SubmitError {
-    /// Exceeds the node's size limits (400).
+    /// No node would ever accept it (400).
     #[error("{0}")]
-    TooLarge(String),
+    Invalid(String),
     /// The node cannot queue it right now, retrying later can succeed (503).
     #[error("{0}")]
     Overloaded(String),
@@ -72,7 +72,7 @@ impl std::error::Error for ApiError {
 /// through here, so v1 and v2 cannot drift on what counts as a 404.
 pub fn classify(err: anyhow::Error) -> ApiError {
     match err.downcast_ref::<SubmitError>() {
-        Some(SubmitError::TooLarge(_)) => return ApiError::BadRequest(err),
+        Some(SubmitError::Invalid(_)) => return ApiError::BadRequest(err),
         Some(SubmitError::Overloaded(_)) => return ApiError::Unavailable(err),
         None => {},
     }
