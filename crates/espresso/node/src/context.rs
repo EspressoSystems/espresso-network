@@ -9,7 +9,6 @@ use std::{
 
 use anyhow::Context;
 use async_lock::RwLock;
-use committable::Commitment;
 use derivative::Derivative;
 use espresso_types::{
     NodeState, PubKey, Transaction, ValidatedState,
@@ -460,11 +459,7 @@ where
         self.consensus_handle.event_stream()
     }
 
-    /// Returns the commitment of `tx`.
-    pub async fn submit_transaction(
-        &self,
-        tx: Transaction,
-    ) -> anyhow::Result<Commitment<Transaction>> {
+    pub async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<()> {
         self.consensus_handle.submit_transaction(tx).await
     }
 

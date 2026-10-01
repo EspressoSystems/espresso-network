@@ -34,7 +34,7 @@ fn submit(
     b: &mut BlockBuilder<TestTypes>,
     tx: TestTransaction,
 ) -> Vec<TransactionMessage<TestTypes>> {
-    b.on_submit_transaction(tx.commit(), tx)
+    b.on_submit_transaction(tx)
 }
 
 fn tx_msg(v: ViewNumber, transactions: Vec<TestTransaction>) -> TransactionMessage<TestTypes> {
@@ -130,8 +130,8 @@ async fn test_retry_buffer() {
     let mut b = builder();
     let t1 = tx(1);
     let t2 = tx(2);
-    submit(&mut b, t1.clone());
-    submit(&mut b, t2.clone());
+    b.on_submit_transaction(t1.clone());
+    b.on_submit_transaction(t2.clone());
 
     b.on_block_reconstructed(view(1), vec![t1.commit()]);
 
@@ -151,10 +151,10 @@ async fn test_forward_batch_stops_at_one_block() {
         block_sizes: sizes(2),
         ..small_config()
     });
-    submit(&mut b, tx(1));
+    b.on_submit_transaction(tx(1));
     b.on_view_changed(view(1));
-    submit(&mut b, tx(2));
-    submit(&mut b, tx(3));
+    b.on_submit_transaction(tx(2));
+    b.on_submit_transaction(tx(3));
 
     let resent = b.on_view_changed(view(4));
     assert_eq!(resent.len(), 1, "one message per upcoming leader");
@@ -208,7 +208,7 @@ fn builder_upgrading(old_size: u64, new_size: u64) -> BlockBuilder<TestTypes> {
 async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
     let mut b = builder_upgrading(2, 4);
     for n in 1..=4 {
-        submit(&mut b, tx(n));
+        b.on_submit_transaction(tx(n));
     }
 
     assert_eq!(
@@ -229,8 +229,8 @@ async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
 #[tokio::test]
 async fn test_smaller_blocks_drop_what_no_longer_fits() {
     let mut b = builder_upgrading(4, 2);
-    submit(&mut b, TestTransaction::new(vec![0; 3]));
-    submit(&mut b, tx(1));
+    b.on_submit_transaction(TestTransaction::new(vec![0; 3]));
+    b.on_submit_transaction(tx(1));
 
     assert_eq!(
         b.on_view_changed(view(3)),
@@ -258,10 +258,10 @@ async fn test_forward_batch_fills_the_block_with_later_transactions() {
         block_sizes: sizes(5),
         ..small_config()
     });
-    submit(&mut b, TestTransaction::new(vec![1; 3]));
+    b.on_submit_transaction(TestTransaction::new(vec![1; 3]));
     b.on_view_changed(view(1));
-    submit(&mut b, TestTransaction::new(vec![2; 3]));
-    submit(&mut b, TestTransaction::new(vec![3; 2]));
+    b.on_submit_transaction(TestTransaction::new(vec![2; 3]));
+    b.on_submit_transaction(TestTransaction::new(vec![3; 2]));
 
     let resent = b.on_view_changed(view(4));
     assert_eq!(
@@ -301,7 +301,7 @@ async fn test_full_forward_fits_in_a_message() {
     for n in 0..limit.get() / tx_len + 1 {
         let mut payload = vec![0; tx_len];
         payload[..8].copy_from_slice(&n.to_le_bytes());
-        submit(&mut b, TestTransaction::new(payload));
+        b.on_submit_transaction(TestTransaction::new(payload));
     }
 
     let resent = b.on_view_changed(view(3)).remove(0);

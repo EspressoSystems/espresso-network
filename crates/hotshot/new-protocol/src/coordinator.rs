@@ -629,7 +629,6 @@ where
                                 PendingDa {
                                     payload: block.payload.payload.clone(),
                                     metadata: block.payload.metadata.clone(),
-                                    tx_commitments: manifest.hashes.clone(),
                                 },
                             );
                         } else {
@@ -865,8 +864,10 @@ where
                         // A leader never reconstructs its own block, and a block it built
                         // but did not propose puts nothing on the chain, so this is where
                         // its transactions count as included.
-                        self.block_builder
-                            .on_block_reconstructed(view, da.tx_commitments);
+                        self.block_builder.on_block_reconstructed(
+                            view,
+                            da.payload.transaction_commitments(&da.metadata),
+                        );
                     } else {
                         warn!(%node, %view, "no payload for proposed block");
                     }
@@ -1758,8 +1759,8 @@ where
                     None => self.participation.current_vote_participation(),
                 });
             },
-            ClientRequest::SubmitTransaction { tx, hash, respond } => {
-                let messages = self.block_builder.on_submit_transaction(hash, tx);
+            ClientRequest::SubmitTransaction { tx, respond } => {
+                let messages = self.block_builder.on_submit_transaction(tx);
                 // Before the first epoch there is no leader to send to. The retry buffer
                 // resends the transaction once its first targets have passed.
                 if let Some(epoch) = self.consensus.current_epoch() {
@@ -2217,7 +2218,6 @@ pub(crate) fn is_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> b
 struct PendingDa<T: NodeType> {
     payload: T::BlockPayload,
     metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-    tx_commitments: Vec<Commitment<T::Transaction>>,
 }
 
 type ProposalFetchResponseSender<T> =

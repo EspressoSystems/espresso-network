@@ -222,13 +222,6 @@ impl<T: NodeType> BlockBuilder<T> {
                 vid_total_weight(target_mem.stake_table(), Some(epoch))
             };
             let commitments = spawn_blocking(move || {
-                let mut manifest = manifest;
-                // Building drops transactions that do not fit the block, but every hash in the
-                // manifest is treated as included: peers dedup it and the proposer stops
-                // retrying it. A hash for a dropped transaction would lose that transaction.
-                if payload.payload.num_transactions(&payload.metadata) != manifest.hashes.len() {
-                    manifest.hashes = payload.payload.transaction_commitments(&payload.metadata);
-                }
                 let payload_bytes = payload.payload.encode();
                 let metadata_bytes = payload.metadata.encode();
                 // The two commitments are independent, and neither can be split:
@@ -250,15 +243,9 @@ impl<T: NodeType> BlockBuilder<T> {
                     || payload.payload.builder_commitment(&payload.metadata),
                 );
                 let block_size = payload_bytes.len() as u64;
-                (
-                    payload,
-                    manifest,
-                    block_size,
-                    payload_commitment,
-                    builder_commitment,
-                )
+                (payload, block_size, payload_commitment, builder_commitment)
             });
-            let (payload, manifest, block_size, payload_commitment, builder_commitment) =
+            let (payload, block_size, payload_commitment, builder_commitment) =
                 match commitments.await {
                     Ok(out) => out,
                     Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
@@ -372,12 +359,10 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     /// Returns one message per upcoming leader to send `tx` to, none if `tx` is rejected or
-    /// already pending. `hash` must be the commitment of `tx`.
-    pub fn on_submit_transaction(
-        &mut self,
-        hash: Commitment<T::Transaction>,
-        tx: T::Transaction,
-    ) -> Vec<TransactionMessage<T>> {
+    /// already pending.
+    pub fn on_submit_transaction(&mut self, tx: T::Transaction) -> Vec<TransactionMessage<T>> {
+        let hash = tx.commit();
+
         if self.retry_pending.contains_key(&hash) {
             return Vec::new();
         }

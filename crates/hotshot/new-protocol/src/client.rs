@@ -1,7 +1,7 @@
 use std::{collections::HashMap, num::NonZeroUsize, sync::Arc};
 
 use async_trait::async_trait;
-use committable::{Commitment, Committable as _};
+use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
@@ -73,18 +73,10 @@ impl<T: NodeType> ClientApi<T> {
         .await
     }
 
-    /// Returns the commitment of `tx`.
-    pub async fn submit_transaction(
-        &self,
-        tx: T::Transaction,
-    ) -> Result<Commitment<T::Transaction>, QueryError> {
-        // Hashed on the caller's task: the coordinator is one task for all of consensus, and
-        // a large transaction takes milliseconds to hash.
-        let hash = tx.commit();
+    pub async fn submit_transaction(&self, tx: T::Transaction) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
-        self.call(ClientRequest::SubmitTransaction { tx, hash, respond }, rx)
-            .await?;
-        Ok(hash)
+        self.call(ClientRequest::SubmitTransaction { tx, respond }, rx)
+            .await
     }
 
     pub async fn request_proposal(
@@ -218,7 +210,6 @@ pub(crate) enum ClientRequest<T: NodeType> {
     },
     SubmitTransaction {
         tx: T::Transaction,
-        hash: Commitment<T::Transaction>,
         respond: oneshot::Sender<()>,
     },
     RequestProposal {

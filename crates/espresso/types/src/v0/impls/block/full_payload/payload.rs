@@ -255,10 +255,6 @@ impl BlockPayload<SeqTypes> for Payload {
         indices.par_iter().map(commit).collect()
     }
 
-    fn num_transactions(&self, metadata: &Self::Metadata) -> usize {
-        QueryablePayload::len(self, metadata)
-    }
-
     fn txn_bytes(&self) -> usize {
         self.raw_payload.len()
     }
