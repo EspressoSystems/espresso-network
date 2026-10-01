@@ -1115,9 +1115,9 @@ def write_run_dir(out):
         (out / name).write_text(json.dumps(data))
 
 
-def load_script(name: str) -> ModuleType:
-    """Imports the extensionless script `name` next to this file as a module."""
-    path = Path(__file__).with_name(name)
+def load_script(name: str, directory: Path = Path(__file__).parent) -> ModuleType:
+    """Imports the extensionless script `name` from `directory` as a module."""
+    path = directory / name
     loader = SourceFileLoader(name.replace("-", "_"), str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     assert spec is not None
@@ -1172,9 +1172,9 @@ def fleet(n: int) -> dict:
 
 DOTENV_TEXT = f"""# fixture in the syntax of the repo's .env
 ESPRESSO_ETH_MNEMONIC="{awsb.BENCH_MNEMONIC}"
-ESPRESSO_ORCHESTRATOR_PORT={awsb.ORCHESTRATOR_PORT}
-ESPRESSO_L1_PORT={awsb.L1_PORT}
-ESPRESSO_STATE_RELAY_SERVER_PORT={awsb.RELAY_PORT}
+ESPRESSO_ORCHESTRATOR_PORT={awsb.env_port("ESPRESSO_ORCHESTRATOR_PORT")}
+ESPRESSO_L1_PORT={awsb.env_port("ESPRESSO_L1_PORT")}
+ESPRESSO_STATE_RELAY_SERVER_PORT={awsb.env_port("ESPRESSO_STATE_RELAY_SERVER_PORT")}
 ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS=0x0000000000000000000000000000000000000001
 ESP_TOKEN_PROXY_ADDRESS=0x0000000000000000000000000000000000000002
 ESPRESSO_STAKE_TABLE_PROXY_ADDRESS=0x0000000000000000000000000000000000000003
@@ -1256,7 +1256,7 @@ class RunHarness:
         self.fleet_dir = awsb.OUT_ROOT / "run1"
         self.run_dir = self.fleet_dir / "runs" / "01-run"
         monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight())
-        monkeypatch.setattr(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT))
+        monkeypatch.setattr(awsb, "dotenv", lambda: awsb.parse_dotenv(DOTENV_TEXT))
 
     def args(self, *extra: str) -> argparse.Namespace:
         argv = ["run", "--tag", "t", "--nodes", "2", "--yes", *extra]
@@ -1567,7 +1567,7 @@ class FleetHarness:
         self.fleet_dir = self.out / "fleet1"
         monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight())
         monkeypatch.setattr(awsb, "write_report", fake_report)
-        monkeypatch.setattr(awsb, "DOTENV", awsb.parse_dotenv(DOTENV_TEXT))
+        monkeypatch.setattr(awsb, "dotenv", lambda: awsb.parse_dotenv(DOTENV_TEXT))
 
     def parse(self, *argv: str) -> argparse.Namespace:
         args = awsb.parse_args(list(argv))

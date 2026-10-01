@@ -63,6 +63,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import cache
 from pathlib import Path
 from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar, cast
 
@@ -1653,10 +1654,13 @@ def parse_dotenv(text: str) -> dict[str, str]:
     return env
 
 
-DOTENV = parse_dotenv((REPO_ROOT / ".env").read_text())
-ORCHESTRATOR_PORT = int(DOTENV["ESPRESSO_ORCHESTRATOR_PORT"])
-L1_PORT = int(DOTENV["ESPRESSO_L1_PORT"])
-RELAY_PORT = int(DOTENV["ESPRESSO_STATE_RELAY_SERVER_PORT"])
+@cache
+def dotenv() -> dict[str, str]:
+    return parse_dotenv((REPO_ROOT / ".env").read_text())
+
+
+def env_port(key: str) -> int:
+    return int(dotenv()[key])
 
 
 def _node_names(hosts: dict[str, HostInfo]) -> list[str]:
@@ -1700,9 +1704,9 @@ def render_node_env(
         "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS": f"{self_info['private_dns']}:{LIBP2P_PORT}",
         "ESPRESSO_NODE_API_PORT": str(NODE_API_PORT),
         "ESPRESSO_NODE_TONIC_PORT": str(NODE_TONIC_PORT),
-        "ESPRESSO_NODE_ORCHESTRATOR_URL": f"http://{ctl_info['private_ip']}:{ORCHESTRATOR_PORT}",
-        "ESPRESSO_L1_PROVIDER": f"http://{ctl_info['private_ip']}:{L1_PORT}",
-        "ESPRESSO_STATE_RELAY_SERVER_URL": f"http://{ctl_info['private_ip']}:{RELAY_PORT}",
+        "ESPRESSO_NODE_ORCHESTRATOR_URL": f"http://{ctl_info['private_ip']}:{env_port('ESPRESSO_ORCHESTRATOR_PORT')}",
+        "ESPRESSO_L1_PROVIDER": f"http://{ctl_info['private_ip']}:{env_port('ESPRESSO_L1_PORT')}",
+        "ESPRESSO_STATE_RELAY_SERVER_URL": f"http://{ctl_info['private_ip']}:{env_port('ESPRESSO_STATE_RELAY_SERVER_PORT')}",
         "ESPRESSO_NODE_GENESIS_FILE": f"{BENCH_DIR}/genesis.toml",
         "ESPRESSO_NODE_IS_DA": "true",
         "ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE": "false",
@@ -1872,7 +1876,7 @@ def render_start_sh(
                 "--host",
                 "0.0.0.0",
                 "--port",
-                str(L1_PORT),
+                str(env_port("ESPRESSO_L1_PORT")),
                 "--chain-id",
                 "31337",
                 "--accounts",
@@ -3778,7 +3782,7 @@ def render_host_files(
             render_start_sh(spec, manifest["images"], query_db=cfg.query_db)
         )
         if spec["role"] == "ctl":
-            (host_dir / "ctl.env").write_text(render_ctl_env(hosts, cfg, DOTENV))
+            (host_dir / "ctl.env").write_text(render_ctl_env(hosts, cfg, dotenv()))
         else:
             pg = query_endpoint(cfg, run_dir) if spec["role"] == "query" else None
             node_env = host_dir / "node.env"
@@ -3956,7 +3960,7 @@ def rpc_check(method: str, params: list[str], jq_filter: str) -> str:
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
     return (
         f"curl -sf -X POST -H 'Content-Type: application/json' --data {shlex.quote(body)} "
-        f"http://localhost:{L1_PORT} | jq -e {shlex.quote(jq_filter)}"
+        f"http://localhost:{env_port('ESPRESSO_L1_PORT')} | jq -e {shlex.quote(jq_filter)}"
     )
 
 
@@ -4021,7 +4025,7 @@ def support_plan(query_db: DbMode, contracts: list[str]) -> list[SupportStart]:
             host="ctl",
             container="orchestrator",
             what="orchestrator healthcheck",
-            gate_cmd=f"curl -sf http://localhost:{ORCHESTRATOR_PORT}/healthcheck",
+            gate_cmd=f"curl -sf http://localhost:{env_port('ESPRESSO_ORCHESTRATOR_PORT')}/healthcheck",
             timeout_s=GATE_TIMEOUT_S,
         ),
         GateStart(
@@ -4029,7 +4033,7 @@ def support_plan(query_db: DbMode, contracts: list[str]) -> list[SupportStart]:
             host="ctl",
             container="state-relay-server",
             what="relay healthcheck",
-            gate_cmd=f"curl -sf http://localhost:{RELAY_PORT}/healthcheck",
+            gate_cmd=f"curl -sf http://localhost:{env_port('ESPRESSO_STATE_RELAY_SERVER_PORT')}/healthcheck",
             timeout_s=GATE_TIMEOUT_S,
         ),
         GateStart(
