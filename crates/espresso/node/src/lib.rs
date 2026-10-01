@@ -264,6 +264,7 @@ pub async fn init_node<P>(
     identity: Identity,
     proposal_fetcher_config: ProposalFetcherConfig,
     empty_block_delay: Duration,
+    transaction_fanout: u64,
 ) -> anyhow::Result<SequencerContext<network::Production, P>>
 where
     P: SequencerPersistence + MembershipPersistence + DhtPersistentStorage,
@@ -744,6 +745,7 @@ where
         network_params.bootstrap_epoch_catchup_timeout,
         empty_block_delay,
         block_sizes,
+        transaction_fanout,
     )
     .await?;
 
@@ -1989,6 +1991,7 @@ pub mod testing {
                 Duration::from_secs(2),
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
+                2,
             )
             .await
             .unwrap()

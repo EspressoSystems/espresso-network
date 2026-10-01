@@ -185,6 +185,7 @@ where
         timeout_duration: Duration,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
+        transaction_fanout: u64,
         storage: S,
         metrics: &dyn Metrics,
         consensus_metrics: ConsensusMetricsValue,
@@ -387,6 +388,7 @@ where
                 BlockBuilderConfig {
                     empty_block_delay,
                     block_sizes,
+                    fanout: transaction_fanout,
                     ..BlockBuilderConfig::default()
                 },
                 upgrade_lock.clone(),

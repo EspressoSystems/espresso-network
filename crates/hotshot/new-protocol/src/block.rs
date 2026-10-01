@@ -96,6 +96,9 @@ pub struct BlockBuilderConfig {
     pub empty_block_delay: Duration,
     /// How many upcoming leaders each transaction is sent to. A leader holds up to
     /// `fanout + 1` blocks of transactions for its later views.
+    ///
+    /// With 0 nothing is forwarded or retried: a node pools the transactions submitted to
+    /// it and proposes them when it is the leader.
     pub fanout: u64,
 }
 
@@ -336,6 +339,21 @@ impl<T: NodeType> BlockBuilder<T> {
         Some(entry.tx)
     }
 
+    fn insert_pooled(
+        &mut self,
+        hash: Commitment<T::Transaction>,
+        tx: T::Transaction,
+        view: ViewNumber,
+    ) {
+        self.leader_total_bytes += tx.minimum_block_size();
+        self.leader_order.insert((view, hash));
+        self.leader_buffer.insert(hash, PoolEntry { tx, view });
+    }
+
+    fn recently_included(&self, hash: &Commitment<T::Transaction>) -> bool {
+        self.dedups.values().any(|hs| hs.contains(hash))
+    }
+
     pub async fn next(&mut self) -> Option<Result<BlockBuilderOutput<T>, BlockError>> {
         loop {
             match self.tasks.join_next().await {
@@ -366,8 +384,13 @@ impl<T: NodeType> BlockBuilder<T> {
         self.config.fanout
     }
 
+    /// Transactions submitted to this node and not yet seen in a block, with their bytes.
     pub fn outstanding_transactions(&self) -> (usize, usize) {
-        (self.retry_pending.len(), self.retry_total_bytes as usize)
+        if self.config.fanout == 0 {
+            (self.leader_buffer.len(), self.leader_total_bytes as usize)
+        } else {
+            (self.retry_pending.len(), self.retry_total_bytes as usize)
+        }
     }
 
     /// Returns one message per upcoming leader to send `tx` to, none if `tx` is already
@@ -400,6 +423,9 @@ impl<T: NodeType> BlockBuilder<T> {
                 size: encoded_size,
                 limit: budget,
             });
+        }
+        if self.config.fanout == 0 {
+            return self.pool_submitted(hash, tx, size).map(|()| Vec::new());
         }
         if self.retry_total_bytes + size > self.config.max_retry_bytes {
             warn!("retry buffer full, rejecting {hash}");
@@ -440,6 +466,26 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect()
     }
 
+    /// Without forwarding a submitted transaction waits in this node's own pool for its turn
+    /// as leader. No other node holds it, so the pool takes the whole `max_retry_bytes`
+    /// budget instead of a few blocks.
+    fn pool_submitted(
+        &mut self,
+        hash: Commitment<T::Transaction>,
+        tx: T::Transaction,
+        size: u64,
+    ) -> Result<(), SubmitError> {
+        if self.leader_buffer.contains_key(&hash) || self.recently_included(&hash) {
+            return Ok(());
+        }
+        if self.leader_total_bytes + size > self.config.max_retry_bytes {
+            warn!("transaction pool full, rejecting {hash}");
+            return Err(SubmitError::RetryBufferFull);
+        }
+        self.insert_pooled(hash, tx, self.current_view);
+        Ok(())
+    }
+
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
         let max_bytes = self
             .block_size(msg.view)
@@ -453,7 +499,7 @@ impl<T: NodeType> BlockBuilder<T> {
             .map(Committable::commit)
             .collect::<Vec<_>>();
         for (hash, tx) in hashes.into_iter().zip(msg.transactions) {
-            if self.dedups.values().any(|hs| hs.contains(&hash)) {
+            if self.recently_included(&hash) {
                 continue;
             }
 
@@ -466,10 +512,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 continue;
             }
 
-            self.leader_total_bytes += size;
-            self.leader_order.insert((msg.view, hash));
-            self.leader_buffer
-                .insert(hash, PoolEntry { tx, view: msg.view });
+            self.insert_pooled(hash, tx, msg.view);
         }
     }
 

@@ -367,6 +367,13 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_EMPTY_BLOCK_DELAY", default_value = "500ms", value_parser = parse_duration)]
     pub empty_block_delay: Duration,
 
+    /// How many upcoming leaders each submitted transaction is forwarded to.
+    ///
+    /// With 0 transactions are neither forwarded nor retried: a node proposes the transactions
+    /// submitted to it when it is the leader.
+    #[clap(long, env = "ESPRESSO_NODE_TRANSACTION_FANOUT", default_value = "2")]
+    pub transaction_fanout: u64,
+
     #[clap(flatten)]
     pub logging: logging::Config,
 

@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    marker::PhantomData,
+    sync::Arc,
+    time::Duration,
+};
 
 use committable::Committable;
 use hotshot::types::BLSPubKey;
@@ -15,7 +20,7 @@ use hotshot_types::{
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig, forward_budget},
+    block::{BlockBuilder, BlockBuilderConfig, SubmitError, forward_budget},
     helpers::test_upgrade_lock,
     message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
     network::{MIN_MESSAGE_LIMIT, message_limit},
@@ -123,6 +128,73 @@ async fn pending_transaction_is_resent_only_after_its_leaders_had_their_turn() {
         b.on_view_changed(view(5)).is_empty(),
         "a resent transaction waits for its new leaders"
     );
+}
+
+#[tokio::test]
+async fn without_fanout_a_submitted_transaction_waits_for_this_nodes_turn() {
+    let mut b = builder_with(BlockBuilderConfig {
+        fanout: 0,
+        ..small_config()
+    });
+    b.on_view_changed(view(4));
+
+    assert!(submit(&mut b, tx(1)).is_empty(), "nothing is forwarded");
+    assert!(
+        submit(&mut b, tx(1)).is_empty(),
+        "resubmitting a pooled transaction is accepted"
+    );
+    for v in 5..=8 {
+        assert!(b.on_view_changed(view(v)).is_empty(), "nothing is retried");
+    }
+    assert_eq!(b.outstanding_transactions(), (1, 1));
+
+    let (txns, _) = b.drain(view(8), epoch());
+    assert_eq!(txns, Vec::from([tx(1)]), "pooled once, proposed as leader");
+    assert_eq!(b.outstanding_transactions(), (0, 0));
+}
+
+#[tokio::test]
+async fn without_fanout_the_pool_holds_the_retry_budget_not_one_block() {
+    let mut b = builder_with(BlockBuilderConfig {
+        fanout: 0,
+        block_sizes: sizes(2),
+        max_retry_bytes: 4,
+        ..small_config()
+    });
+    for n in 1..=4 {
+        submit(&mut b, tx(n));
+    }
+    assert!(matches!(
+        b.on_submit_transaction(tx(5)),
+        Err(SubmitError::RetryBufferFull)
+    ));
+
+    let (first, _) = b.drain(view(1), epoch());
+    let (second, _) = b.drain(view(2), epoch());
+    let (third, _) = b.drain(view(3), epoch());
+    assert_eq!(first.len(), 2, "one block per build");
+    assert_eq!(second.len(), 2, "the pool held two blocks");
+    assert!(third.is_empty());
+    let all: HashSet<_> = [first, second].concat().into_iter().collect();
+    assert_eq!(all, (1..=4).map(tx).collect::<HashSet<_>>());
+}
+
+#[tokio::test]
+async fn without_fanout_an_included_transaction_leaves_the_pool() {
+    let mut b = builder_with(BlockBuilderConfig {
+        fanout: 0,
+        ..small_config()
+    });
+    submit(&mut b, tx(1));
+    submit(&mut b, tx(2));
+    b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
+    assert!(
+        submit(&mut b, tx(1)).is_empty(),
+        "an included transaction is not pooled again"
+    );
+
+    let (txns, _) = b.drain(view(2), epoch());
+    assert_eq!(txns, Vec::from([tx(2)]));
 }
 
 #[tokio::test]
