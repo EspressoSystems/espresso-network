@@ -813,14 +813,18 @@ impl SqlStorage {
 
         conn.close().await?;
 
-        Ok(Self {
+        let storage = Self {
             pool,
             pool_metrics,
             pruned_heights,
             metrics,
             pruner_cfg,
             serializable_retry_config,
-        })
+        };
+        // Before the state writer can start: it resumes from the head, and the heights it rewrites
+        // have to come under a pruning batch again. The pruner's first run is an interval away.
+        storage.state_prune_start().await?;
+        Ok(storage)
     }
 }
 
@@ -1328,6 +1332,7 @@ impl SqlStorage {
     /// the writer was behind. The writer then rewrites every height from the head on, and a batch
     /// only collects the versions its own window supersedes, so pruning has to see those heights
     /// again: the cursor is lowered to just below the head, and pruning resumes from there.
+    /// `connect` does this before the writer can start; each run repeats it as a backstop.
     async fn state_prune_start(&self) -> anyhow::Result<(u64, u64)> {
         let (pruned, head) = {
             let mut tx = self
@@ -3557,6 +3562,43 @@ mod test {
         while storage.prune(&mut pruner).await.unwrap().is_some() {}
         assert_state_pruned_below_head(&storage, new_head, new_head - 1).await;
         assert_eq!(superseded_versions_below(&storage, new_head - 1).await, 0);
+    }
+
+    /// The pruner's first run comes a whole interval after startup, and by then the writer has
+    /// rewritten heights above the head it resumed from; a repair at that point starts pruning
+    /// above those heights and never collects what they supersede. So the cursor is lowered when
+    /// the storage connects, before the writer can start. Reconnecting stands in for the restart.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_stale_state_cursor_is_lowered_on_connect() {
+        let db = TmpDb::init().await;
+        let head = 20u64;
+        let mut tree = {
+            let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+                .await
+                .unwrap();
+            state_with_stale_cursor(&storage, head, 30).await
+        };
+
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        assert_state_pruned_below_head(&storage, head, head - 1).await;
+        storage.set_pruning_config(
+            PrunerCfg::default()
+                .with_state_target_retention(Duration::ZERO)
+                .with_state_tables(vec![MockMerkleTree::state_type().into()]),
+        );
+
+        // The writer is past the old head when the pruner first runs, and moves on afterwards.
+        write_state_to(&storage, &mut tree, head + 1, 25).await;
+        let mut pruner = Default::default();
+        while storage.prune(&mut pruner).await.unwrap().is_some() {}
+        assert_state_pruned_below_head(&storage, 25, 24).await;
+        write_state_to(&storage, &mut tree, 26, 40).await;
+        let mut pruner = Default::default();
+        while storage.prune(&mut pruner).await.unwrap().is_some() {}
+        assert_state_pruned_below_head(&storage, 40, 39).await;
+        assert_eq!(superseded_versions_below(&storage, 39).await, 0);
     }
 
     /// Archive nodes prune state through `prune_state_below`, which lowers a stale cursor the same
