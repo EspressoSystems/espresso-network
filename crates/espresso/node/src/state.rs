@@ -268,6 +268,9 @@ where
         .await
         .context("failed to persist reward proofs")?;
 
+    // The nodes and the new head commit together, so no node version ever exists above the head:
+    // the head snapshot is the newest version of everything it touches, which is what keeps it
+    // intact under pruning and lets the loop resume from it after a crash.
     tracing::debug!("storing state update");
     let mut tx = storage
         .write()
@@ -275,13 +278,6 @@ where
         .context("opening transaction for state update")?;
 
     store_state_update(&mut tx, block_number, version, &state, &delta).await?;
-
-    tx.commit().await?;
-
-    let mut tx = storage
-        .write()
-        .await
-        .context("opening transaction for state update")?;
 
     if parent_chain_config != state.chain_config {
         let cf = state
