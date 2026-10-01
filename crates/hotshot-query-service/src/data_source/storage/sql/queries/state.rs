@@ -347,8 +347,11 @@ impl<Mode: TransactionMode> Transaction<Mode> {
 
         // Pruning deletes a node version once a newer one exists at or below the pruned height,
         // which leaves every pruned snapshot but the newest incomplete. The newest one is intact,
-        // since nothing supersedes it, and the state writer resumes from it, so it stays readable
-        // whatever the pruned height.
+        // since the state writer commits a block's nodes together with the new head, so no version
+        // above the head exists to supersede it. The writer resumes from it, so it stays readable
+        // whatever the pruned height; the next pruner run lowers a cursor at or above the head to
+        // just below it. A database that an earlier, unbounded run pruned past the head while a
+        // crash had left nodes above it may still be missing some here.
         if (created as usize) == height {
             return Ok((created, commit));
         }
