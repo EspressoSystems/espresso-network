@@ -170,6 +170,7 @@ TTL. An EventBridge one-shot schedule deletes the rds instance 5 min earlier.
 | `status DIR`        | phase, time left, runs, lock holder (alive or dead), instances, pg volume, rds state, cost                    |
 | `status --all`      | tagged resources per fleet (count per kind), latest expiry, orphan reason                                     |
 | `destroy --orphans` | fleets past expiry, in a terminal phase, or of this owner without `fleet.json`; never a live fleet with state |
+| `list`              | local fleet dirs, newest first: phase, created, expires, time left, cost, runs, last run; no AWS calls        |
 
 - Sweep order: delete schedule group, instances, rds instance (waits), its subnet and parameter groups, volumes,
   security group, key pair, scheduler IAM role (path `/espresso-bench/`).
@@ -179,7 +180,7 @@ TTL. An EventBridge one-shot schedule deletes the rds instance 5 min earlier.
 
 ### Artifacts
 
-`bench-state/aws/<owner>-<yyyymmdd-hhmm>/` (the fleet dir), never deleted:
+`bench-state/aws/<owner>-<yyyymmdd-hhmmss>/` (the fleet dir), never deleted:
 
 ```
 fleet.json               argv, config, git rev, account, AZ, AMI, digests, estimate, phase, hosts_info
@@ -226,6 +227,7 @@ just bench aws status  --all | [FLEET]
 just bench aws collect [RUN_DIR]               # the fleet's last run, fleet idle or left-running
 just bench aws render  RUN_DIR [--baseline FILE]
 just bench aws destroy --orphans
+just bench aws list
 ```
 
 - `FLEET`: a name under `bench-state/aws/`, or a path when it contains `/`. Omitted: the only fleet in phase `idle`,
