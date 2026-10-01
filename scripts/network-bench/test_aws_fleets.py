@@ -6,12 +6,17 @@ from fakes import (
     EXPIRES_LATER,
     EXPIRES_PAST,
     STATUS_DESCRIBE,
+    STS_CALL,
     FakeClock,
     FakeRunner,
     FakeSystem,
     FleetHarness,
     awsb,
+    completed,
     netbench,
+    run_cmd,
+    tag_mapping,
+    tag_runner,
     valid_result,
     write_fleet,
 )
@@ -264,3 +269,135 @@ def test_list_command_reads_the_state_dir(harness, runner, capsys):
     out = capsys.readouterr().out
     assert "| fleet1 | idle |" in out
     assert "| 1 | valid 8 MB/s |" in out
+
+
+OLD = "2026-09-01T00:00:00+00:00"
+CUTOFF = datetime(2026, 9, 28, 16, 0, tzinfo=UTC)
+
+
+YOUNG = "2026-09-29T14:00:00+00:00"
+DIR = Path("a")
+
+
+def manifest(phase: str, created_at: str = OLD) -> dict[str, str]:
+    return {"phase": phase, "created_at": created_at}
+
+
+def prune_plan(fleet, tagged: tuple[str, ...] = (), locked: tuple[str, ...] = ()):
+    return awsb.prune_plan([(DIR, fleet)], set(tagged), set(locked), CUTOFF)
+
+
+@pytest.mark.parametrize("phase", ["planned", "done", "swept"])
+def test_prune_plan_deletes_old_dirs_in_a_safe_phase(phase: str):
+    old = manifest(phase)
+    assert prune_plan(old) == ([(DIR, old)], [])
+    assert prune_plan(manifest(phase, YOUNG)) == ([], [])
+
+
+# TEST:prune-live-kept-ok
+@pytest.mark.parametrize(
+    "phase", ["applying", "idle", "running", "dirty", "left-running", "destroyed"]
+)
+def test_prune_plan_keeps_an_old_fleet_in_another_phase(phase: str):
+    assert prune_plan(manifest(phase)) == ([], [(DIR, f"phase {phase}")])
+
+
+# TEST:prune-locked-kept-ok
+def test_prune_plan_keeps_a_locked_fleet():
+    assert prune_plan(manifest("done"), locked=("a",)) == ([], [(DIR, "locked")])
+
+
+# TEST:prune-tagged-kept-ok
+def test_prune_plan_keeps_a_fleet_with_tagged_resources():
+    assert prune_plan(manifest("done"), tagged=("a",)) == (
+        [],
+        [(DIR, "tagged resources remain")],
+    )
+
+
+# TEST:prune-no-fleet-json-kept-ok
+def test_prune_plan_keeps_a_dir_without_fleet_json():
+    assert prune_plan(None) == ([], [(DIR, "no fleet.json")])
+
+
+def prune(capsys, runner: FakeRunner, *flags: str, answer: bool = False):
+    system = FakeSystem(run=runner, answer=answer)
+    code, out = run_cmd(capsys, awsb.cmd_prune, ["prune", *flags], system)
+    return code, out, system
+
+
+def tagged_runner(*names: str) -> FakeRunner:
+    return tag_runner(
+        [tag_mapping("security-group", f"sg-{n}", n, "me", None) for n in names], []
+    )
+
+
+# TEST:prune-done-deleted-ok
+# TEST:prune-index-kept-ok
+def test_prune_deletes_safe_fleet_dirs_after_confirmation(isolated: Path, capsys):
+    out_root = isolated / awsb.OUT_ROOT
+    gone = write_fleet(out_root, "gone", "done", created_at=OLD)
+    write_run(gone, "01-colocated", "done", valid_result())
+    write_run(gone, "02-colocated", "done", valid_result())
+    swept = write_fleet(out_root, "swept", "swept", created_at=OLD)
+    live = write_fleet(out_root, "live", "idle", created_at=OLD)
+    tagged = write_fleet(out_root, "tagged", "done", created_at=OLD)
+    young = write_fleet(out_root, "young", "done")
+    locked = write_fleet(out_root, "locked", "done", created_at=OLD)
+    (locked / "fleet.lock").write_text("{}")
+    (out_root / "INDEX.md").write_text("history")
+    code, out, system = prune(
+        capsys, tagged_runner("tagged"), "--older-than", "1", answer=True
+    )
+    assert code == awsb.EXIT_OK
+    assert system.prompts == ["Delete 2 fleet dirs (2 runs, results included)?"]
+    assert "| gone | done | 2026-09-01T00:00 | 2 | <=$2.50 |" in out
+    assert "| live | phase idle |" in out
+    assert "| tagged | tagged resources remain |" in out
+    assert "| locked | locked |" in out
+    assert not gone.exists() and not swept.exists()
+    assert all(p.exists() for p in (live, tagged, young, locked))
+    assert (out_root / "INDEX.md").read_text() == "history"
+
+
+# TEST:prune-unconfirmed-fails
+def test_prune_unconfirmed_deletes_nothing(isolated: Path, capsys):
+    gone = write_fleet(isolated / awsb.OUT_ROOT, "gone", "done", created_at=OLD)
+    with pytest.raises(awsb.Refused, match="not confirmed"):
+        prune(capsys, tagged_runner(), "--older-than", "1")
+    assert gone.exists()
+
+
+def test_prune_yes_skips_the_prompt(isolated: Path, capsys):
+    gone = write_fleet(isolated / awsb.OUT_ROOT, "gone", "done", created_at=OLD)
+    _, _, system = prune(capsys, tagged_runner(), "--older-than", "1", "--yes")
+    assert system.prompts == []
+    assert not gone.exists()
+
+
+def test_prune_with_nothing_to_delete_does_not_ask(isolated: Path, capsys):
+    write_fleet(isolated / awsb.OUT_ROOT, "young", "done")
+    code, out, system = prune(capsys, tagged_runner(), "--older-than", "1")
+    assert code == awsb.EXIT_OK
+    assert system.prompts == []
+    assert "nothing to prune" in out
+
+
+# TEST:prune-no-creds-fails
+def test_prune_without_credentials_deletes_nothing(isolated: Path, capsys):
+    gone = write_fleet(isolated / awsb.OUT_ROOT, "gone", "done", created_at=OLD)
+    runner = FakeRunner({STS_CALL: completed(returncode=255, stderr="no creds")})
+    with pytest.raises(awsb.Refused, match="no creds"):
+        prune(capsys, runner, "--older-than", "1", "--yes")
+    assert len(runner.calls) == 1
+    assert gone.exists()
+
+
+# TEST:prune-days-zero-fails
+@pytest.mark.parametrize("days", ["0", "-1", "x"])
+def test_prune_needs_at_least_one_day(days: str):
+    assert awsb.parse_args(["prune", "--older-than", "1"]).older_than == 1
+    with pytest.raises(SystemExit):
+        awsb.parse_args(["prune", "--older-than", days])
+    with pytest.raises(SystemExit):
+        awsb.parse_args(["prune"])

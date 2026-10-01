@@ -16,14 +16,14 @@ colocated`) or on an RDS instance (`rds`, provisioned by `up --db-modes`); a run
 `status` shows one run (phase, instances, agent progress, cost so far) or, with `--all`, every
 tagged resource in the region. `destroy --orphans` sweeps runs
 whose local state is lost or whose TTL passed. `list` shows the local fleet dirs without AWS
-calls. `collect` and `render` redo those steps on an
+calls; `prune` deletes old ones that hold no AWS resources. `collect` and `render` redo those steps on an
 existing run dir. `agent-drive` (on ctl) and `agent-host` (on every host) run under
 uv-managed python 3.14 from /opt/bench.
 
 Prerequisites: opentofu and awscli2 (nix devShell), the AWS profile `timeboost-dev` for account
 027574771971 in eu-west-1 (constants below), and `--tag` naming the ghcr tag CI pushed for a
 `release-*` branch. Each fleet gets a fresh ssh key, deleted after destroy.
-Recipes: `just bench aws plan|up|run|down|status|list|collect|render|destroy`.
+Recipes: `just bench aws plan|up|run|down|status|list|collect|render|destroy|prune`.
 
 Exit codes of `run`: 0 valid, 1 invalid result, 2 refused before any AWS write, 3 failed after
 writes but destroyed, 4 resources may remain (the last log line is the destroy command). `run --fleet` never destroys: 3 leaves the fleet up. `up` exits 0 with
@@ -2055,6 +2055,13 @@ def ttl_min_arg(text: str) -> str:
     return text
 
 
+def days_arg(text: str) -> int:
+    # At least a day, so a fleet whose `up` waits at its prompt in `planned` is never deleted.
+    if not (text.isdigit() and int(text) >= 1):
+        raise argparse.ArgumentTypeError(f"expected a number of days >= 1: {text}")
+    return int(text)
+
+
 def parse_db_modes(text: str) -> tuple[DbMode, ...]:
     modes = text.split(",")
     unknown = [mode for mode in modes if mode not in DB_MODES]
@@ -2168,6 +2175,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     destroy_p.add_argument("--orphans", action="store_true", required=True)
     destroy_p.add_argument("--yes", action="store_true")
     destroy_p.set_defaults(func=cmd_destroy)
+
+    prune_p = sub.add_parser(
+        "prune", help="delete old local fleet dirs that hold no AWS resources"
+    )
+    prune_p.add_argument("--older-than", type=days_arg, required=True, metavar="DAYS")
+    prune_p.add_argument("--yes", action="store_true")
+    prune_p.set_defaults(func=cmd_prune)
 
     agent_drive_p = sub.add_parser("agent-drive", help="ctl only: run the load driver")
     agent_drive_p.add_argument("config", type=Path)
@@ -4554,19 +4568,23 @@ def fleet_rows(out_root: Path) -> list[FleetRow]:
 
 
 def fleet_row(fleet_dir: Path) -> FleetRow:
-    path = fleet_dir / FLEET_JSON
     runs = run_dirs(fleet_dir)
     last = max(runs, key=run_index) if runs else None
     result_path = last / "result.json" if last else None
     return {
         "name": fleet_dir.name,
-        "fleet": nb.read_json(path) if path.exists() else None,
+        "fleet": read_fleet_or_none(fleet_dir),
         "runs": len(runs),
         "last": nb.read_json(last / "manifest.json") if last else None,
         "result": (
             nb.read_json(result_path) if result_path and result_path.exists() else None
         ),
     }
+
+
+def read_fleet_or_none(fleet_dir: Path) -> FleetManifest | None:
+    path = fleet_dir / FLEET_JSON
+    return nb.read_json(path) if path.exists() else None
 
 
 def format_fleets(rows: list[FleetRow], now: datetime) -> list[str]:
@@ -4900,6 +4918,91 @@ def cmd_destroy(args: argparse.Namespace, system: System) -> int:
         return EXIT_LEFTOVER
     log.info("swept %d runs", len(orphans))
     return EXIT_OK
+
+
+def cmd_prune(args: argparse.Namespace, system: System) -> int:
+    """Deletes whole fleet dirs, results included; `INDEX.md` keeps their rows."""
+    now = utc_now(system.clock)
+    caller_account(system.run)
+    tagged = {r["name"] for r in find_runs(system.run, OUT_ROOT, now, system.user())}
+    dirs = fleet_dirs(OUT_ROOT)
+    locked = {path.name for path in dirs if (path / FLEET_LOCK).exists()}
+    rows = [(path, read_fleet_or_none(path)) for path in dirs]
+    cutoff = now - timedelta(days=args.older_than)
+    delete, kept = prune_plan(rows, tagged, locked, cutoff)
+    runs = {path: len(run_dirs(path)) for path, _ in delete}
+    print("\n".join(format_prune(delete, runs, kept)))
+    if not delete:
+        print("nothing to prune")
+        return EXIT_OK
+    prompt = f"Delete {len(delete)} fleet dirs ({sum(runs.values())} runs, results included)?"
+    if not (args.yes or system.ask(prompt)):
+        raise Refused("not confirmed; nothing was deleted")
+    for path, _ in delete:
+        shutil.rmtree(path)
+        log.info("deleted %s", path)
+    return EXIT_OK
+
+
+def prune_plan(
+    rows: list[tuple[Path, FleetManifest | None]],
+    tagged: set[str],
+    locked: set[str],
+    cutoff: datetime,
+) -> tuple[list[tuple[Path, FleetManifest]], list[tuple[Path, str]]]:
+    """The dirs created before `cutoff` to delete, and the ones kept with the reason. A dir
+    without `fleet.json` has no age and is always kept. `tagged` and `locked` hold dir names."""
+    delete: list[tuple[Path, FleetManifest]] = []
+    kept: list[tuple[Path, str]] = []
+    for path, fleet in rows:
+        if fleet is None:
+            kept.append((path, f"no {FLEET_JSON}"))
+        elif datetime.fromisoformat(fleet["created_at"]) < cutoff:
+            reason = prune_blocker(path.name, fleet, tagged, locked)
+            if reason is None:
+                delete.append((path, fleet))
+            else:
+                kept.append((path, reason))
+    return delete, kept
+
+
+def prune_blocker(
+    name: str, fleet: FleetManifest, tagged: set[str], locked: set[str]
+) -> str | None:
+    # `applying` is written before `tofu apply`, so a `planned` fleet never created anything.
+    if fleet["phase"] not in ("planned", "done", "swept"):
+        return f"phase {fleet['phase']}"
+    if name in locked:
+        return "locked"
+    if name in tagged:
+        return "tagged resources remain"
+    return None
+
+
+def format_prune(
+    delete: list[tuple[Path, FleetManifest]],
+    runs: dict[Path, int],
+    kept: list[tuple[Path, str]],
+) -> list[str]:
+    lines = []
+    if delete:
+        lines += [
+            "| delete | phase | created | runs | cost |",
+            "|---|---|---|---|---|",
+        ]
+        for path, fleet in delete:
+            cells = [
+                path.name,
+                fleet["phase"],
+                fleet["created_at"][:16],
+                str(runs[path]),
+                fleet_cost(fleet),
+            ]
+            lines.append("| " + " | ".join(cells) + " |")
+    if kept:
+        lines += ["| keep | reason |", "|---|---|"]
+        lines += [f"| {path.name} | {reason} |" for path, reason in kept]
+    return lines
 
 
 def has_role(tagged: TaggedRun) -> bool:
@@ -6390,7 +6493,7 @@ def main() -> int:
     args = parse_args(argv)
     args.argv = argv
     system = host_system()
-    if args.command in ("status", "list", "destroy", "down"):
+    if args.command in ("status", "list", "destroy", "down", "prune"):
         logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         command: Command = args.func

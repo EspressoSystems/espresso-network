@@ -171,16 +171,21 @@ TTL. An EventBridge one-shot schedule deletes the rds instance 5 min earlier.
 | `status --all`      | tagged resources per fleet (count per kind), latest expiry, orphan reason                                     |
 | `destroy --orphans` | fleets past expiry, in a terminal phase, or of this owner without `fleet.json`; never a live fleet with state |
 | `list`              | local fleet dirs, newest first: phase, created, expires, time left, cost, runs, last run; no AWS calls        |
+| `prune`             | deletes local fleet dirs older than `--older-than DAYS`; see below                                            |
 
 - Sweep order: delete schedule group, instances, rds instance (waits), its subnet and parameter groups, volumes,
   security group, key pair, scheduler IAM role (path `/espresso-bench/`).
 - The IAM role is not in the tag API: `status --all` lists roles by path and shows one whose fleet has no other resource
   as `role without resources`. Without `iam:ListRoles` roles are not listed (warning).
 - A fleet whose `fleet.json` was renamed or deleted is `no local state` for its owner; `destroy --orphans` sweeps it.
+- `prune` deletes a whole fleet dir, results included, only when it is older than `DAYS` (>= 1), in phase `planned`,
+  `done` or `swept`, has no `fleet.lock`, and AWS lists no resource or scheduler role tagged with its name. It needs AWS
+  credentials. Every other old dir is kept and listed with the reason. The prompt states the dir and run count;
+  `INDEX.md` keeps the rows.
 
 ### Artifacts
 
-`bench-state/aws/<owner>-<yyyymmdd-hhmmss>/` (the fleet dir), never deleted:
+`bench-state/aws/<owner>-<yyyymmdd-hhmmss>/` (the fleet dir), deleted only by `prune`:
 
 ```
 fleet.json               argv, config, git rev, account, AZ, AMI, digests, estimate, phase, hosts_info
@@ -228,6 +233,7 @@ just bench aws collect [RUN_DIR]               # the fleet's last run, fleet idl
 just bench aws render  RUN_DIR [--baseline FILE]
 just bench aws destroy --orphans
 just bench aws list
+just bench aws prune   --older-than DAYS [--yes]
 ```
 
 - `FLEET`: a name under `bench-state/aws/`, or a path when it contains `/`. Omitted: the only fleet in phase `idle`,

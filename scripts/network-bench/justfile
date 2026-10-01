@@ -16,7 +16,7 @@ build:
     cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node --bin espresso-node --bin orchestrator --bin state-relay-server --bin deploy
     cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node-sqlite
 
-# AWS harness: plan|up|run|down|status|list|collect|render|destroy; `just bench aws --help`, README.md.
+# AWS harness: plan|up|run|down|status|list|collect|render|destroy|prune; `just bench aws --help`, README.md.
 aws *args:
     cd {{quote(repo_root)}} && {{quote(aws_bench)}} "$@"
 
