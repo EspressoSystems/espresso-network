@@ -747,7 +747,8 @@ def test_up_needs_a_tag_but_run_fleet_does_not():
         awsb.parse_args(["up"])
     args = awsb.parse_args(["run", "--fleet", "some/dir"])
     assert args.tag is None
-    assert args.fleet == Path("some/dir")
+    assert args.fleet == "some/dir"
+    assert awsb.parse_args(["run", "--fleet"]).fleet == awsb.PICK
 
 
 def test_run_does_not_abbreviate_flags():

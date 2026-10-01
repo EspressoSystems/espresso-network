@@ -126,11 +126,11 @@ def test_status_all_refuses_a_wrong_account_before_listing(capsys):
     assert len(runner.calls) == 1
 
 
-@pytest.mark.parametrize("argv", [["status"], ["status", "d", "--all"]])
-def test_status_takes_a_dir_or_all(argv: list[str]):
+def test_status_takes_a_dir_or_all():
     runner = FakeRunner()
-    with pytest.raises(awsb.Refused, match="either DIR or --all"):
-        awsb.cmd_status(awsb.parse_args(argv), FakeSystem(run=runner))
+    args = awsb.parse_args(["status", "d", "--all"])
+    with pytest.raises(awsb.Refused, match="FLEET or --all, not both"):
+        awsb.cmd_status(args, FakeSystem(run=runner))
     assert runner.calls == []
 
 

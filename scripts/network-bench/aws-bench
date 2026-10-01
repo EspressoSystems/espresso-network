@@ -31,8 +31,11 @@ the fleet idle, 3 or 4 after a failed provision.
 Examples:
     scripts/network-bench/aws-bench plan --tag release-x --nodes 5
     scripts/network-bench/aws-bench up --tag release-x --ttl-min 180
-    scripts/network-bench/aws-bench run --fleet bench-state/aws/<fleet> --query-db colocated
-    scripts/network-bench/aws-bench down bench-state/aws/<fleet>
+    scripts/network-bench/aws-bench run --fleet --query-db colocated
+    scripts/network-bench/aws-bench down <fleet>
+
+FLEET is a name under bench-state/aws, or a path when it contains `/`. `run --fleet`, `down`,
+`status` and `collect` without one take the only fleet that may still hold AWS resources.
 """
 
 import argparse
@@ -361,6 +364,12 @@ SINGLE_RUN = "run"
 # Fleet phases with hosts that may still be up: `idle` admits a run, `running` holds the lock,
 # `dirty` is a failed reset that needs `run --force` or `down`.
 LIVE_PHASES = ("idle", "running", "dirty")
+# What a command without FLEET may pick: fleets that may still hold AWS resources. An expired
+# fleet still holds its SG, key pair and IAM role. `applying`..`preparing-rds` are left out so
+# a bare command cannot race an `up` that is still running.
+SELECTABLE_PHASES = (*LIVE_PHASES, "left-running", "destroying", "destroyed")
+# `run --fleet` without a value: pick the fleet. An object, so `--fleet ""` cannot match it.
+PICK = object()
 # `up` defaults: several measurements need a longer TTL and budget than a single shot.
 UP_TTL_MIN = "180"
 UP_MAX_USD = 60.0
@@ -2111,7 +2120,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_run_flags(run_p, tag_required=False)
     add_node_env_flag(run_p)
     add_ttl_flag(run_p)
-    run_p.add_argument("--fleet", type=Path, help="fleet dir from `up`")
+    run_p.add_argument(
+        "--fleet",
+        nargs="?",
+        const=PICK,
+        help="fleet from `up`, by name or dir; without a value the only selectable one",
+    )
     run_p.add_argument("--query-db", choices=DB_MODES, default=defaults.query_db)
     run_p.add_argument(
         "--force",
@@ -2122,21 +2136,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     run_p.set_defaults(func=cmd_run, db_modes=defaults.db_modes)
 
     down_p = sub.add_parser("down", help="destroy a fleet")
-    down_p.add_argument("dir", type=Path)
+    down_p.add_argument("dir", nargs="?")
     down_p.add_argument("--yes", action="store_true")
     down_p.set_defaults(func=cmd_down)
 
     status_p = sub.add_parser(
         "status", help="list tagged resources or one run's progress"
     )
-    status_p.add_argument("dir", type=Path, nargs="?")
+    status_p.add_argument("dir", nargs="?")
     status_p.add_argument("--all", action="store_true")
     status_p.set_defaults(func=cmd_status)
 
     collect_p = sub.add_parser(
         "collect", help="re-collect logs and samples from live hosts"
     )
-    collect_p.add_argument("dir", type=Path)
+    collect_p.add_argument("dir", type=Path, nargs="?")
     collect_p.set_defaults(func=cmd_collect)
 
     render_p = sub.add_parser(
@@ -2405,6 +2419,7 @@ class Run:
 
 def cmd_run(args: argparse.Namespace, system: System) -> int:
     if args.fleet is not None:
+        args.fleet = fleet_arg(None if args.fleet is PICK else args.fleet, OUT_ROOT)
         return cmd_run_fleet(args, system)
     if args.tag is None:
         raise Refused("run needs --tag, or --fleet DIR to measure on a fleet from `up`")
@@ -2979,6 +2994,59 @@ def read_fleet(fleet_dir: Path) -> FleetManifest:
     return nb.read_json(path)
 
 
+def fleet_dirs(out_root: Path) -> list[Path]:
+    if not out_root.exists():
+        return []
+    return sorted(path for path in out_root.iterdir() if path.is_dir())
+
+
+def pick_fleet(out_root: Path) -> Path:
+    """The only fleet under `out_root` in a `SELECTABLE_PHASES` phase."""
+    fleets = [
+        (path, read_fleet(path))
+        for path in fleet_dirs(out_root)
+        if (path / FLEET_JSON).exists()
+    ]
+    selectable = [f for f in fleets if f[1]["phase"] in SELECTABLE_PHASES]
+    if len(selectable) == 1:
+        return selectable[0][0]
+    if not selectable:
+        raise Refused(
+            f"no selectable fleet in {out_root}, name one: {describe_fleets(fleets)}"
+        )
+    raise Refused(
+        f"{len(selectable)} selectable fleets in {out_root}, name one: "
+        f"{describe_fleets(selectable)}"
+    )
+
+
+def describe_fleets(fleets: list[tuple[Path, FleetManifest]]) -> str:
+    if not fleets:
+        return "none"
+    return ", ".join(
+        f"{path.name} ({manifest['phase']}, expires {expires(manifest)})"
+        for path, manifest in fleets
+    )
+
+
+def expires(manifest: FleetManifest) -> str:
+    return manifest["expires_at"][:16] if "expires_at" in manifest else "-"
+
+
+def fleet_arg(arg: str | None, out_root: Path) -> Path:
+    """The fleet dir `arg` names: a path when it contains `/`, else a name under `out_root`.
+    `None` picks the only selectable fleet."""
+    if arg is None:
+        return pick_fleet(out_root)
+    if not arg:
+        raise Refused(
+            "empty fleet name; omit the value to pick the only selectable fleet"
+        )
+    fleet_dir = Path(arg) if "/" in arg else out_root / arg
+    read_fleet(fleet_dir)
+    return fleet_dir
+
+
 def open_fleet(system: System, fleet_dir: Path, interrupts: Interrupts) -> FleetState:
     """The `FleetState` of a fleet `up` provisioned, with ssh to its hosts."""
     manifest = read_fleet(fleet_dir)
@@ -3007,6 +3075,7 @@ def cmd_run_fleet(args: argparse.Namespace, system: System) -> int:
     manifest = read_fleet(fleet_dir)
     setup_logging(fleet_dir)
     log.debug("argv %s", args.argv)
+    log.info("fleet %s (%s)", manifest["name"], manifest["phase"])
     interrupts = Interrupts(system.clock)
     interrupts.install(system.trap)
     fleet = open_fleet(system, fleet_dir, interrupts)
@@ -4445,19 +4514,26 @@ def collect_hosts(
 
 
 def cmd_status(args: argparse.Namespace, system: System) -> int:
-    if (args.dir is not None) == args.all:
-        raise Refused("status takes either DIR or --all")
+    if args.dir is not None and args.all:
+        raise Refused("status takes FLEET or --all, not both")
     now = utc_now(system.clock)
     if args.all:
         return status_all(system, args, now)
-    return status_run(system, args.dir, now)
+    return status_run(system, fleet_arg(args.dir, OUT_ROOT), now)
 
 
 def cmd_collect(args: argparse.Namespace, system: System) -> int:
     """Collects again from the live hosts into `hosts/<name>/collect-<k>/`, leaving the files
     of the run itself untouched. Only the fleet's last run can be collected, while no run is
     active: the hosts hold the files of the last run only, and `left-running` is where a fleet
-    stays after a failed destroy."""
+    stays after a failed destroy. Without RUN_DIR, the last run of the only selectable
+    fleet."""
+    if args.dir is None:
+        picked = pick_fleet(OUT_ROOT)
+        runs = run_dirs(picked)
+        if not runs:
+            raise Refused(f"{picked.name} has no runs to collect")
+        args.dir = runs[-1]
     run_dir: Path = args.dir
     fleet_dir = fleet_of(run_dir)
     manifest: FleetManifest = nb.read_json(fleet_dir / FLEET_JSON)
@@ -4620,14 +4696,21 @@ def status_all(system: System, args: argparse.Namespace, now: datetime) -> int:
 
 
 def cmd_down(args: argparse.Namespace, system: System) -> int:
-    fleet_dir: Path = args.dir
+    if args.yes and args.dir is None:
+        raise Refused(
+            "down --yes needs FLEET: a destroy without a prompt names its target"
+        )
+    fleet_dir = fleet_arg(args.dir, OUT_ROOT)
     manifest = read_fleet(fleet_dir)
     name = manifest["name"]
     if manifest["phase"] == "planned":
         raise Refused(f"{name} was only planned: nothing was created")
     if manifest["phase"] in TERMINAL_PHASES:
         raise Refused(f"{name} is already {manifest['phase']}")
-    prompt = f"Destroy the fleet of {name} in {ACCOUNT}?"
+    prompt = (
+        f"Destroy the fleet of {name} ({manifest['phase']}, expires "
+        f"{expires(manifest)} UTC) in {ACCOUNT}?"
+    )
     if not (args.yes or system.ask(prompt)):
         raise Refused("not confirmed; nothing was destroyed")
     setup_logging(fleet_dir)

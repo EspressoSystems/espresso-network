@@ -220,13 +220,17 @@ runs/01-run/             one measurement
 just bench aws plan    --tag release-x [--nodes 5]
 just bench aws run     --tag release-x [--nodes 5] [--steps 4,6,9,...] [--query-db MODE] [--max-usd 10] [--yes]
 just bench aws up      --tag release-x --db-modes colocated,volume,rds [--ttl-min 180] [--max-usd 60] [--yes]
-just bench aws run     --fleet FLEET_DIR --query-db MODE [--tag release-y] [--node-env KEY=VALUE] [--force] [--yes]
-just bench aws down    FLEET_DIR [--yes]
-just bench aws status  --all | FLEET_DIR
-just bench aws collect RUN_DIR                 # the fleet's last run, fleet idle or left-running
+just bench aws run     --fleet [FLEET] --query-db MODE [--tag release-y] [--node-env KEY=VALUE] [--force] [--yes]
+just bench aws down    [FLEET] [--yes]              # --yes needs FLEET
+just bench aws status  --all | [FLEET]
+just bench aws collect [RUN_DIR]               # the fleet's last run, fleet idle or left-running
 just bench aws render  RUN_DIR [--baseline FILE]
 just bench aws destroy --orphans
 ```
+
+- `FLEET`: a name under `bench-state/aws/`, or a path when it contains `/`. Omitted: the only fleet in phase `idle`,
+  `running`, `dirty`, `left-running`, `destroying` or `destroyed`, expired or not; several or none is refused with the
+  list. `collect` without `RUN_DIR` takes that fleet's last run.
 
 - Needs: nix devShell (opentofu, awscli2), AWS profile `timeboost-dev` (account 027574771971, eu-west-1; constants in
   `aws-bench` and `aws/terraform/main.tf`), `ssh-keygen`, rev pushed as `release-*` so CI publishes images.

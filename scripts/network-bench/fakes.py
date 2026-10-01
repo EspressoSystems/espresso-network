@@ -1860,3 +1860,25 @@ def index_manifest() -> dict:
         "query_db": "colocated",
         "images": {"espresso-node": {"revision": "bd2ad6e1dc7abc"}},
     }
+
+
+def write_fleet(
+    out_root: Path,
+    name: str,
+    phase: str,
+    expires_at: str = EXPIRES_LATER,
+    created_at: str = "2026-09-29T14:00:00+00:00",
+) -> Path:
+    """A fleet dir holding only `fleet.json`: enough for selection, `list` and `prune`."""
+    fleet_dir = out_root / name
+    fleet_dir.mkdir(parents=True)
+    netbench.write_json(
+        fleet_dir / "fleet.json",
+        {
+            "name": name,
+            "phase": phase,
+            "created_at": created_at,
+            "expires_at": expires_at,
+        },
+    )
+    return fleet_dir
