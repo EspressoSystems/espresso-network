@@ -27,7 +27,7 @@ use hotshot_types::{
 use rayon::prelude::{IntoParallelRefIterator as _, ParallelIterator as _};
 use tokio::{
     task::{AbortHandle, JoinSet, spawn_blocking},
-    time::{Instant, sleep_until},
+    time::sleep,
 };
 use tracing::{error, warn};
 use versions::Version;
@@ -133,18 +133,6 @@ struct PoolEntry<T: NodeType> {
     view: ViewNumber,
 }
 
-/// Block requests for a view whose pool was empty when they arrived.
-struct WaitingView<T: NodeType> {
-    /// When to stop waiting for transactions and build an empty block.
-    deadline: Instant,
-    requests: Vec<WaitingRequest<T>>,
-}
-
-struct WaitingRequest<T: NodeType> {
-    request: BlockAndHeaderRequest<T>,
-    parent_commitment: Commitment<Leaf2<T>>,
-}
-
 pub struct BlockBuilder<T: NodeType> {
     instance: Arc<T::InstanceState>,
     membership: EpochMembershipCoordinator<T>,
@@ -172,9 +160,6 @@ pub struct BlockBuilder<T: NodeType> {
     /// change how the payload is built.
     #[allow(clippy::type_complexity)]
     view_transactions: BTreeMap<ViewNumber, Vec<(Commitment<T::Transaction>, T::Transaction)>>,
-    /// Views whose pool was empty when first requested, built on the first transaction or at
-    /// their deadline. A view is never both here and in `view_transactions`.
-    waiting: BTreeMap<ViewNumber, WaitingView<T>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -200,144 +185,33 @@ impl<T: NodeType> BlockBuilder<T> {
             current_view: ViewNumber::genesis(),
             calculations: BTreeMap::new(),
             view_transactions: BTreeMap::new(),
-            waiting: BTreeMap::new(),
             tasks: JoinSet::new(),
         }
     }
 
-    /// Builds a block for `request.view`, yielded later by [`BlockBuilder::next`].
-    ///
-    /// With no transactions pooled for a new view, the build waits for the first one to arrive,
-    /// or for `empty_block_delay` to pass and then builds an empty block.
     pub fn request_block(&mut self, request: BlockAndHeaderRequest<T>) {
         let view = request.view;
-        // A view already passed is never proposed, and building it would take transactions from
-        // the live views.
-        if view < self.current_view {
-            return;
-        }
         let parent_commitment = proposal_commitment(&request.parent_proposal);
-        if self.calculations.contains_key(&(view, parent_commitment))
-            || self.is_waiting(view, parent_commitment)
-        {
+        if self.calculations.contains_key(&(view, parent_commitment)) {
             return;
         }
-        if self.upgrade_lock.version(view).is_err() {
+        let Ok(version) = self.upgrade_lock.version(view) else {
             warn!(%view, "unsupported version");
             return;
-        }
-        if let Some(txs) = self.view_transactions.get(&view) {
-            let txs = txs.clone();
-            self.spawn_build(request, txs);
-            return;
-        }
-        let waiting_request = WaitingRequest {
-            request,
-            parent_commitment,
         };
-        if let Some(waiting) = self.waiting.get_mut(&view) {
-            waiting.requests.push(waiting_request);
-            return;
-        }
-        let txs = self.take_block(view);
-        if txs.is_empty() {
-            let deadline = Instant::now() + self.config.empty_block_delay;
-            self.waiting.insert(
-                view,
-                WaitingView {
-                    deadline,
-                    requests: Vec::from([waiting_request]),
-                },
-            );
-            return;
-        }
-        self.start_view(view, Vec::from([waiting_request]), txs);
-    }
-
-    fn is_waiting(&self, view: ViewNumber, parent_commitment: Commitment<Leaf2<T>>) -> bool {
-        self.waiting.get(&view).is_some_and(|waiting| {
-            waiting
-                .requests
-                .iter()
-                .any(|r| r.parent_commitment == parent_commitment)
-        })
-    }
-
-    /// Builds every waiting view, oldest first, that the pool can now fill.
-    fn release_filled(&mut self) {
-        let views = Vec::from_iter(self.waiting.keys().copied());
-        for view in views {
-            if self.leader_buffer.is_empty() {
-                return;
-            }
-            // Can come back empty for a view whose version has a smaller block size, while a
-            // later view can still be filled.
-            let txs = self.take_block(view);
-            if !txs.is_empty() {
-                self.release(view, txs);
-            }
-        }
-    }
-
-    /// Builds every view whose deadline has passed. Deadlines follow request order, not view
-    /// order, so an expired view can sit above one still waiting.
-    fn release_expired(&mut self, now: Instant) {
-        let expired = Vec::from_iter(
-            self.waiting
-                .iter()
-                .filter(|(_, waiting)| waiting.deadline <= now)
-                .map(|(view, _)| *view),
-        );
-        for view in expired {
-            let txs = self.take_block(view);
-            self.release(view, txs);
-        }
-    }
-
-    fn release(
-        &mut self,
-        view: ViewNumber,
-        txs: Vec<(Commitment<T::Transaction>, T::Transaction)>,
-    ) {
-        let WaitingView {
-            deadline: _,
-            requests,
-        } = self
-            .waiting
-            .remove(&view)
-            .expect("released views come from the waiting map");
-        self.start_view(view, requests, txs);
-    }
-
-    fn start_view(
-        &mut self,
-        view: ViewNumber,
-        requests: Vec<WaitingRequest<T>>,
-        txs: Vec<(Commitment<T::Transaction>, T::Transaction)>,
-    ) {
-        self.view_transactions.insert(view, txs.clone());
-        for WaitingRequest {
-            request,
-            parent_commitment: _,
-        } in requests
-        {
-            self.spawn_build(request, txs.clone());
-        }
-    }
-
-    fn spawn_build(
-        &mut self,
-        request: BlockAndHeaderRequest<T>,
-        buffer: Vec<(Commitment<T::Transaction>, T::Transaction)>,
-    ) {
-        let view = request.view;
-        let parent_commitment = proposal_commitment(&request.parent_proposal);
-        let version = self.upgrade_lock.version_infallible(view);
         let epoch = request.epoch;
+        let buffer = self.transactions_for(view);
         let instance = self.instance.clone();
         let membership = self.membership.clone();
 
+        let empty_block_delay = self.config.empty_block_delay;
+
         let handle = self.tasks.spawn(async move {
+            // Without this an idle network produces empty blocks as fast as consensus can run
+            // them, flooding the coordinator's event queue.
+            if buffer.is_empty() {
+                sleep(empty_block_delay).await;
+            }
             let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
             let manifest = DedupManifest {
                 view,
@@ -416,6 +290,18 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert((view, parent_commitment), handle);
     }
 
+    fn transactions_for(
+        &mut self,
+        view: ViewNumber,
+    ) -> Vec<(Commitment<T::Transaction>, T::Transaction)> {
+        if let Some(txs) = self.view_transactions.get(&view) {
+            return txs.clone();
+        }
+        let txs = self.take_block(view);
+        self.view_transactions.insert(view, txs.clone());
+        txs
+    }
+
     /// Removes up to one block of pooled transactions, those sent for the earliest views first.
     fn take_block(
         &mut self,
@@ -450,25 +336,9 @@ impl<T: NodeType> BlockBuilder<T> {
         Some(entry.tx)
     }
 
-    /// The next built block, `None` once no build is running or waiting.
-    ///
-    /// # Cancel safety
-    ///
-    /// Cancel safe: a dropped call loses no block and no waiting request.
     pub async fn next(&mut self) -> Option<Result<BlockBuilderOutput<T>, BlockError>> {
         loop {
-            let deadline = self.waiting.values().map(|w| w.deadline).min();
-            let joined = match deadline {
-                Some(deadline) => tokio::select! {
-                    joined = self.tasks.join_next(), if !self.tasks.is_empty() => joined,
-                    () = sleep_until(deadline) => {
-                        self.release_expired(Instant::now());
-                        continue;
-                    },
-                },
-                None => self.tasks.join_next().await,
-            };
-            match joined {
+            match self.tasks.join_next().await {
                 Some(Ok(result)) => return Some(result),
                 Some(Err(err)) => {
                     if err.is_panic() {
@@ -490,7 +360,6 @@ impl<T: NodeType> BlockBuilder<T> {
             }
         });
         self.view_transactions = self.view_transactions.split_off(&view_number);
-        self.waiting = self.waiting.split_off(&view_number);
     }
 
     pub fn fanout(&self) -> u64 {
@@ -602,7 +471,6 @@ impl<T: NodeType> BlockBuilder<T> {
             self.leader_buffer
                 .insert(hash, PoolEntry { tx, view: msg.view });
         }
-        self.release_filled();
     }
 
     pub fn on_dedup_manifest(&mut self, manifest: DedupManifest<T>) {
