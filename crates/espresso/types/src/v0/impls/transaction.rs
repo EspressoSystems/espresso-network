@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use committable::{Commitment, Committable};
 use hotshot_query_service_types::explorer::traits::ExplorerTransaction;
 use hotshot_types::traits::block_contents::Transaction as HotShotTransaction;
@@ -119,12 +121,20 @@ impl HotShotTransaction for Transaction {
     }
 }
 
+/// Benchmark only: incompatible with nodes that run without it.
+static BLAKE3_TX_HASH: LazyLock<bool> =
+    LazyLock::new(|| std::env::var_os("ESPRESSO_BENCH_BLAKE3_TX_HASH").is_some());
+
 impl Committable for Transaction {
     fn commit(&self) -> Commitment<Self> {
-        committable::RawCommitmentBuilder::new("Transaction")
-            .u64_field("namespace", self.namespace.0)
-            .var_size_bytes(&self.payload)
-            .finalize()
+        let builder = committable::RawCommitmentBuilder::new("Transaction")
+            .u64_field("namespace", self.namespace.0);
+        if *BLAKE3_TX_HASH {
+            builder.fixed_size_bytes(blake3::hash(&self.payload).as_bytes())
+        } else {
+            builder.var_size_bytes(&self.payload)
+        }
+        .finalize()
     }
 
     fn tag() -> String {
