@@ -67,11 +67,11 @@ use tagged_base64::TaggedBase64;
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
     data_source::{
-        CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, MigrationStatus,
-        NodeKeysDataSource, NodePublicKeys, NodeStateDataSource, PruningDataSource,
-        RequestResponseDataSource, StakeTableDataSource, StakeTableWithEpochNumber,
-        StateCertDataSource, StateCertFetchingDataSource, StateSignatureDataSource,
-        SubmitDataSource, TableSize, TokenDataSource,
+        CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource,
+        LeaderScheduleDataSource, MigrationStatus, NodeKeysDataSource, NodePublicKeys,
+        NodeStateDataSource, PruningDataSource, RequestResponseDataSource, StakeTableDataSource,
+        StakeTableWithEpochNumber, StateCertDataSource, StateCertFetchingDataSource,
+        StateSignatureDataSource, SubmitDataSource, TableSize, TokenDataSource, UpcomingLeaders,
     },
 };
 
@@ -88,6 +88,11 @@ const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
 ///
 /// This struct implements the v1 API traits (internal types) and the v2 tonic service traits
 /// (proto types).
+/// Upcoming leaders listed by `/v2/status/upcoming-leaders` when the request names no count.
+const DEFAULT_UPCOMING_LEADERS: u32 = 8;
+/// The most upcoming leaders one request lists, on v1 and v2.
+const MAX_UPCOMING_LEADERS: u32 = 64;
+
 #[derive(Clone)]
 pub struct NodeApiStateImpl<D> {
     data_source: D,
@@ -1547,9 +1552,14 @@ where
 impl<D> v1::StatusApi for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
+    D::Target: hotshot_query_service::status::StatusDataSource
+        + NodeKeysDataSource
+        + LeaderScheduleDataSource
+        + Send
+        + Sync,
 {
     type Keys = NodePublicKeys;
+    type UpcomingLeaders = UpcomingLeaders;
 
     async fn block_height(&self) -> anyhow::Result<u64> {
         let ds = &*self.data_source;
@@ -1587,13 +1597,23 @@ where
             .await
             .ok_or_else(|| not_found("this node has no validator keys"))
     }
+
+    async fn upcoming_leaders(&self, count: u32) -> anyhow::Result<UpcomingLeaders> {
+        self.data_source
+            .upcoming_leaders(count.min(MAX_UPCOMING_LEADERS).into())
+            .await
+    }
 }
 
 #[tonic::async_trait]
 impl<D> proto::status_service_server::StatusService for NodeApiStateImpl<D>
 where
     D: Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::status::StatusDataSource + NodeKeysDataSource + Send + Sync,
+    D::Target: hotshot_query_service::status::StatusDataSource
+        + NodeKeysDataSource
+        + LeaderScheduleDataSource
+        + Send
+        + Sync,
 {
     async fn get_block_height(
         &self,
@@ -1648,6 +1668,32 @@ where
             }),
             x25519_key: keys.x25519_key.as_ref().map(ToString::to_string),
             p2p_addr: keys.p2p_addr.as_ref().map(ToString::to_string),
+        }))
+    }
+
+    async fn get_upcoming_leaders(
+        &self,
+        request: tonic::Request<proto::GetUpcomingLeadersRequest>,
+    ) -> Result<tonic::Response<proto::UpcomingLeadersResponse>, tonic::Status> {
+        let count = request
+            .into_inner()
+            .count
+            .unwrap_or(DEFAULT_UPCOMING_LEADERS);
+        let schedule = <Self as v1::StatusApi>::upcoming_leaders(self, count)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::UpcomingLeadersResponse {
+            view: *schedule.view,
+            leaders: schedule
+                .leaders
+                .into_iter()
+                .map(|leader| proto::ViewLeader {
+                    view: *leader.view,
+                    key: Some(proto::BlsPublicKey {
+                        key: leader.key.to_string(),
+                    }),
+                })
+                .collect(),
         }))
     }
 }

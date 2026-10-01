@@ -9,6 +9,7 @@ use serde::Serialize;
 #[async_trait]
 pub trait StatusApi {
     type Keys: Serialize + Send + Sync + 'static;
+    type UpcomingLeaders: Serialize + Send + Sync + 'static;
 
     async fn block_height(&self) -> anyhow::Result<u64>;
     async fn success_rate(&self) -> anyhow::Result<f64>;
@@ -17,4 +18,7 @@ pub trait StatusApi {
     async fn metrics(&self) -> anyhow::Result<String>;
 
     async fn keys(&self) -> anyhow::Result<Self::Keys>;
+
+    /// The view this node is in and the leaders of the `count` views after it.
+    async fn upcoming_leaders(&self, count: u32) -> anyhow::Result<Self::UpcomingLeaders>;
 }

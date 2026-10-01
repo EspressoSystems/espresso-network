@@ -189,6 +189,28 @@ pub(crate) trait NodeKeysDataSource {
     fn node_public_keys(&self) -> impl Send + Future<Output = Option<NodePublicKeys>>;
 }
 
+/// The leaders of the views after the one the node is in.
+#[derive(Clone, Debug, Serialize)]
+pub struct UpcomingLeaders {
+    pub view: ViewNumber,
+    pub leaders: Vec<ViewLeader>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ViewLeader {
+    pub view: ViewNumber,
+    pub key: BLSPubKey,
+}
+
+pub(crate) trait LeaderScheduleDataSource {
+    /// The leaders of the `count` views after the current one, by the stake table of the epoch
+    /// the node is in.
+    fn upcoming_leaders(
+        &self,
+        count: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<UpcomingLeaders>>;
+}
+
 pub(crate) trait TokenDataSource<T: NodeType> {
     fn get_initial_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;
     fn get_total_supply_l1(&self) -> impl Send + Future<Output = anyhow::Result<U256>>;

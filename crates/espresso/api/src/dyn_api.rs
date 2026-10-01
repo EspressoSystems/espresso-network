@@ -519,6 +519,7 @@ pub(crate) trait DynStatusApi: Send + Sync {
     async fn time_since_last_decide(&self) -> anyhow::Result<u64>;
     async fn metrics(&self) -> anyhow::Result<String>;
     async fn keys(&self) -> anyhow::Result<Erased>;
+    async fn upcoming_leaders(&self, count: u32) -> anyhow::Result<Erased>;
 }
 
 #[async_trait]
@@ -537,6 +538,11 @@ impl<T: v1::StatusApi + Send + Sync> DynStatusApi for T {
     }
     async fn keys(&self) -> anyhow::Result<Erased> {
         v1::StatusApi::keys(self).await.map(erase)
+    }
+    async fn upcoming_leaders(&self, count: u32) -> anyhow::Result<Erased> {
+        v1::StatusApi::upcoming_leaders(self, count)
+            .await
+            .map(erase)
     }
 }
 

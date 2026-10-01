@@ -45,6 +45,27 @@ message NodeKeysResponse {
   optional string p2p_addr = 5;
 }
 
+message GetUpcomingLeadersRequest {
+  // Views past the current one to list: 8 when absent, at most 64
+  optional uint32 count = 1;
+}
+
+message ViewLeader {
+  uint64 view = 1;
+
+  // Consensus key of the view's leader
+  BLSPublicKey key = 2;
+}
+
+message UpcomingLeadersResponse {
+  // The view this node is in
+  uint64 view = 1;
+
+  // The leaders of the views after `view`, in view order, by the stake table of the epoch the
+  // node is in: a view in the next epoch is listed with this epoch's leader for it
+  repeated ViewLeader leaders = 2;
+}
+
 service StatusService {
   // Get the height of the latest decided block
   rpc GetBlockHeight(GetBlockHeightRequest) returns (BlockHeightResponse) {
@@ -64,5 +85,12 @@ service StatusService {
   // Get the node's public keys
   rpc GetNodeKeys(GetNodeKeysRequest) returns (NodeKeysResponse) {
     option (google.api.http) = {get: "/v2/status/keys"};
+  }
+
+  // Get the leaders of the views after the current one, for a client choosing which node to
+  // submit to. The leader of a view builds its block when it sees the previous view's proposal,
+  // so a transaction for it has to reach that node two views ahead.
+  rpc GetUpcomingLeaders(GetUpcomingLeadersRequest) returns (UpcomingLeadersResponse) {
+    option (google.api.http) = {get: "/v2/status/upcoming-leaders"};
   }
 }

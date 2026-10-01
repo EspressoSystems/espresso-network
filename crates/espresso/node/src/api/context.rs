@@ -46,6 +46,7 @@ pub trait ConsensusSource: Send + Sync + 'static {
     async fn state(&self, view: ViewNumber) -> Option<Arc<ValidatedState>>;
     async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<SeqTypes>;
     async fn undecided_leaves(&self) -> Vec<Leaf2>;
+    async fn current_view(&self) -> ViewNumber;
     async fn current_epoch(&self) -> Option<EpochNumber>;
     async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes>;
     async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes>;
@@ -114,6 +115,10 @@ where
 
     async fn undecided_leaves(&self) -> Vec<Leaf2> {
         ConsensusHandle::undecided_leaves(self).await
+    }
+
+    async fn current_view(&self) -> ViewNumber {
+        ConsensusHandle::current_view(self).await
     }
 
     async fn current_epoch(&self) -> Option<EpochNumber> {

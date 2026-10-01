@@ -1601,6 +1601,14 @@ pub(crate) fn router_status(state: StatusState) -> ApiRouter {
         state.keys().await.map(ApiJson).map_err(ApiError::Internal)
     };
 
+    let status_upcoming_leaders = |State(state): State<StatusState>, Path(count): Path<u32>| async move {
+        state
+            .upcoming_leaders(count)
+            .await
+            .map(ApiJson)
+            .map_err(ApiError::Internal)
+    };
+
     ApiRouter::new()
         .api_route(
             routes::v1::STATUS_BLOCK_HEIGHT_ROUTE,
@@ -1638,6 +1646,19 @@ pub(crate) fn router_status(state: StatusState) -> ApiRouter {
                      BLS and Schnorr keys are formatted as in stake-table responses; the x25519 \
                      key is tagged base64. The Ethereum account is taken from the node's \
                      stake-table registration and is null if the node is not registered.",
+                )
+            }),
+        )
+        .api_route(
+            routes::v1::STATUS_UPCOMING_LEADERS_ROUTE,
+            get_with(status_upcoming_leaders, |op| {
+                op.summary("Get the leaders of upcoming views").description(
+                    "Get the view this node is in and the leaders of the `count` views after it, \
+                     at most 64, as the consensus (BLS) keys of stake-table responses. Leaders \
+                     come from the stake table of the epoch the node is in, so a view in the next \
+                     epoch is listed with this epoch's leader for it. The leader of a view builds \
+                     its block when it sees the previous view's proposal, so a transaction for it \
+                     has to reach that node two views ahead.",
                 )
             }),
         )
@@ -4164,6 +4185,7 @@ mod tests {
     #[async_trait::async_trait]
     impl v1::StatusApi for MockState {
         type Keys = ();
+        type UpcomingLeaders = ();
 
         async fn block_height(&self) -> anyhow::Result<u64> {
             unimplemented!()
@@ -4178,6 +4200,9 @@ mod tests {
             unimplemented!()
         }
         async fn keys(&self) -> anyhow::Result<Self::Keys> {
+            unimplemented!()
+        }
+        async fn upcoming_leaders(&self, _count: u32) -> anyhow::Result<Self::UpcomingLeaders> {
             unimplemented!()
         }
     }
@@ -4844,6 +4869,7 @@ mod tests {
             "/v2/status/keys",
             "/v2/status/success-rate",
             "/v2/status/time-since-last-decide",
+            "/v2/status/upcoming-leaders",
             "/v2/token/circulating-supply",
             "/v2/token/circulating-supply-ethereum",
             "/v2/token/total-issued-supply",
@@ -4929,6 +4955,13 @@ mod tests {
             &self,
             _request: tonic::Request<crate::proto::GetNodeKeysRequest>,
         ) -> Result<tonic::Response<crate::proto::NodeKeysResponse>, tonic::Status> {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_upcoming_leaders(
+            &self,
+            _request: tonic::Request<crate::proto::GetUpcomingLeadersRequest>,
+        ) -> Result<tonic::Response<crate::proto::UpcomingLeadersResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }

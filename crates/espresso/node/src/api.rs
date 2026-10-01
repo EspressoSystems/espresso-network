@@ -65,8 +65,8 @@ use url::Url;
 use vbs::version::Version;
 
 use self::data_source::{
-    HotShotConfigDataSource, NodeKeysDataSource, NodePublicKeys, NodeStateDataSource,
-    StateSignatureDataSource,
+    HotShotConfigDataSource, LeaderScheduleDataSource, NodeKeysDataSource, NodePublicKeys,
+    NodeStateDataSource, StateSignatureDataSource, UpcomingLeaders, ViewLeader,
 };
 #[cfg(any(test, feature = "testing"))]
 use crate::SequencerContext;
@@ -1151,6 +1151,32 @@ impl<C: ApiContext> NodeKeysDataSource for ApiState<C> {
             x25519_key: config.x25519_keypair.as_ref().map(|kp| kp.public_key()),
             p2p_addr: config.p2p_addr.clone(),
         })
+    }
+}
+
+impl<C: ApiContext, D: Sync> LeaderScheduleDataSource for StorageState<C, D> {
+    async fn upcoming_leaders(&self, count: u64) -> anyhow::Result<UpcomingLeaders> {
+        self.as_ref().upcoming_leaders(count).await
+    }
+}
+
+impl<C: ApiContext> LeaderScheduleDataSource for ApiState<C> {
+    async fn upcoming_leaders(&self, count: u64) -> anyhow::Result<UpcomingLeaders> {
+        let consensus = self.consensus().await;
+        let view = consensus.current_view().await;
+        let epoch = consensus.current_epoch().await;
+        let membership = consensus
+            .membership_coordinator()
+            .await
+            .stake_table_for_epoch(epoch)?;
+        let leaders = (1..=count)
+            .map(|ahead| {
+                let view = view + ahead;
+                let key = membership.leader(view)?;
+                Ok(ViewLeader { view, key })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(UpcomingLeaders { view, leaders })
     }
 }
 

@@ -432,6 +432,15 @@ impl ConsensusSource for FollowerConsensus {
         Vec::new()
     }
 
+    /// A follower runs no views: the newest it knows is the decided leaf's.
+    async fn current_view(&self) -> ViewNumber {
+        let decided = self.decided.borrow();
+        decided
+            .as_ref()
+            .map(|leaf| leaf.leaf().view_number())
+            .unwrap_or_else(ViewNumber::genesis)
+    }
+
     async fn current_epoch(&self) -> Option<EpochNumber> {
         let decided = self.decided.borrow();
         decided
