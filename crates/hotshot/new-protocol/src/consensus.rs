@@ -205,6 +205,9 @@ pub struct Consensus<T: NodeType> {
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
     unpaired_proposals: UnpairedProposals<T>,
     unpaired_vid_shares: UnpairedVidShares<T>,
+    /// The parents each view's block was already requested for, so a proposal parked for its
+    /// share and its later pairing ask the block builder once.
+    requested_blocks: BTreeMap<ViewNumber, Vec<Commitment<Leaf2<T>>>>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeSet<(ViewNumber, VidCommitment2)>,
     blocks: BTreeMap<(ViewNumber, VidCommitment2), T::BlockPayload>,
@@ -375,6 +378,7 @@ impl<T: NodeType> Consensus<T> {
             vid_shares: BTreeMap::new(),
             unpaired_proposals: BTreeMap::new(),
             unpaired_vid_shares: BTreeMap::new(),
+            requested_blocks: BTreeMap::new(),
             epoch_height: epoch_height.into(),
             tracer: None,
         }
@@ -914,6 +918,7 @@ impl<T: NodeType> Consensus<T> {
                 self.unpaired_proposals = self.unpaired_proposals.split_off(&(keep_from, None, vc));
                 self.unpaired_vid_shares =
                     self.unpaired_vid_shares.split_off(&(keep_from, None, vc));
+                self.requested_blocks = self.requested_blocks.split_off(&keep_from);
                 self.vote1_parent = self.vote1_parent.split_off(&keep_from);
                 self.leaves = self.leaves.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
@@ -993,6 +998,12 @@ impl<T: NodeType> Consensus<T> {
         };
         let key = (view, Some(proposal.proposal.data.epoch), commit);
         let Some(vid_share) = self.unpaired_vid_shares.remove(&key) else {
+            // The next leader's payload needs this proposal's chain config, not its share.
+            // Building now keeps the share's transfer off the view's critical path. The
+            // header still waits for the parent state, which needs the share.
+            if self.may_build_on_parked(&proposal.proposal.data) {
+                self.request_block_and_header_if_next_leader(&proposal.proposal.data, outbox);
+            }
             self.unpaired_proposals.insert(key, (sender, proposal));
             return Protocol::Abort;
         };
@@ -1303,8 +1314,29 @@ impl<T: NodeType> Consensus<T> {
             .map(|share| share.payload_byte_len())
     }
 
+    /// Whether a proposal parked for its share may already drive the next leader's block
+    /// build: the first seen for its view, and one the paired path would not reject outright.
+    /// One speculative build per view bounds what a leader's proposals alone can cost the next.
+    fn may_build_on_parked(&self, proposal: &Proposal<T>) -> bool {
+        let view = proposal.view_number();
+        let first_for_view = !self.proposals.contains_key(&view)
+            && !self.unpaired_proposals.keys().any(|(v, ..)| *v == view);
+        let transition = proposal.epoch > EpochNumber::genesis()
+            && is_epoch_transition(proposal.block_header.block_number(), *self.epoch_height);
+        let drb_matches = !transition
+            || self
+                .drb_results
+                .get(&(proposal.epoch + 1))
+                .is_none_or(|drb| proposal.next_drb_result == Some(*drb));
+        first_for_view
+            && self.wants_proposal_for_view(&view)
+            && proposal.justify_qc.epoch().is_some()
+            && self.is_safe(proposal).is_ok()
+            && drb_matches
+    }
+
     fn request_block_and_header_if_next_leader(
-        &self,
+        &mut self,
         proposal: &Proposal<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
@@ -1315,6 +1347,12 @@ impl<T: NodeType> Consensus<T> {
             proposal.epoch
         };
         if self.is_leader(view + 1, epoch) {
+            let requested = self.requested_blocks.entry(view + 1).or_default();
+            let parent = proposal_commitment(proposal);
+            if requested.contains(&parent) {
+                return;
+            }
+            requested.push(parent);
             outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
                 BlockAndHeaderRequest {
                     view: view + 1,
