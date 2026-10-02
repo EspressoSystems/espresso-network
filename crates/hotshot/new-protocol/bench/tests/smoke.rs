@@ -139,6 +139,27 @@ async fn run_benchmark(
             "node {i}: {decided_count} decided views in {} total rows",
             lines.len() - 1
         );
+
+        let trace_path = output_dir.join(format!("leader_trace_node{i}.csv"));
+        assert!(
+            trace_path.exists(),
+            "node {i} did not produce a leader trace at {trace_path:?}"
+        );
+        let trace = std::fs::read_to_string(&trace_path)
+            .unwrap_or_else(|e| panic!("failed to read leader trace for node {i}: {e}"));
+        let trace_lines: Vec<&str> = trace.lines().collect();
+        assert!(
+            trace_lines.len() >= 2,
+            "node {i} leader trace has only {} lines (expected header + events)",
+            trace_lines.len()
+        );
+        // Every node votes and decides, so these fire regardless of leadership.
+        for event in ["vote2_v_minus_1_signed", "leaf_decided"] {
+            assert!(
+                trace.contains(event),
+                "node {i} leader trace has no `{event}` rows"
+            );
+        }
     }
 
     Ok(())

@@ -4931,6 +4931,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_bytes",
+ "tempfile",
  "test-utils",
  "thiserror 2.0.18",
  "time",

@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     fmt::{Debug, Display},
     future::Future,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -19,6 +20,7 @@ use futures::{
 };
 use hotshot_new_protocol::{
     coordinator::Coordinator,
+    leader_trace::{CsvLeaderTracer, LeaderTracerHandle},
     network::{Cliquenet, NetworkError},
 };
 use hotshot_orchestrator::client::OrchestratorClient;
@@ -141,6 +143,7 @@ where
         bootstrap_epoch_catchup_timeout: Duration,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
+        leader_trace_dir: Option<PathBuf>,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -205,6 +208,16 @@ where
             .await
             .context("loading the anchor's cert2")?;
 
+        let leader_tracer = leader_trace_dir
+            .map(|dir| {
+                let node_id = instance_state.node_id;
+                let path = dir.join(format!("leader_trace_node{node_id}.csv"));
+                CsvLeaderTracer::new(node_id, &path)
+                    .map(|tracer| Arc::new(tracer) as LeaderTracerHandle)
+                    .with_context(|| format!("creating leader trace {}", path.display()))
+            })
+            .transpose()?;
+
         let (external_tx, external_rx) = unbounded_channel();
         let coordinator = Coordinator::maker()
             .membership_coordinator(membership_coordinator.clone())
@@ -223,6 +236,7 @@ where
             .consensus_metrics(ConsensusMetricsValue::new(metrics))
             .maybe_locked_qc(locked_qc)
             .maybe_anchor_cert2(anchor_cert2)
+            .maybe_leader_tracer(leader_tracer)
             .upgrade_config(UpgradeConfig {
                 start_proposing_view: config.start_proposing_view,
                 stop_proposing_view: config.stop_proposing_view,
