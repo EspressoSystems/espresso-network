@@ -639,6 +639,7 @@ where
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
                         self.state_manager.request_header(HeaderRequest::from(&block));
+                        let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
                         // Retain the payload and persist it when consensus proposes this
@@ -656,15 +657,11 @@ where
                         }
                         // We built this block; skip reconstructing it from our own loopback share.
                         self.vid_reconstructor.retire_view(block.view);
-                        // Every leader a transaction was sent to holds a copy of it, not
-                        // only the next one, and each must drop what this block includes.
-                        for ahead in 1..=self.block_builder.fanout() {
-                            self.unicast_to_leader(
-                                block.view + ahead,
-                                epoch,
-                                BlockMessage::DedupManifest(manifest.clone()),
-                            )?;
-                        }
+                        self.unicast_to_leader(
+                            next_view,
+                            epoch,
+                            BlockMessage::DedupManifest(manifest),
+                        )?;
                         return Ok(block.into())
                     }
                     Err(err) => {
@@ -1139,10 +1136,21 @@ where
                 info!(%node, %view, %epoch, "view changed");
                 self.timer.reset_with(view);
                 self.gc(epoch, GcScope::Local(view))?;
-                let resends = self.block_builder.on_view_changed(view);
+                let txns = self.block_builder.on_view_changed(view);
                 self.participation.on_view_changed(epoch);
                 self.on_view_changed_metrics(view, epoch);
-                self.send_transactions(resends, epoch)?;
+                if !txns.is_empty() {
+                    let next_view = view + 1;
+                    self.unicast_to_leader(
+                        next_view,
+                        epoch,
+                        BlockMessage::Transactions(TransactionMessage {
+                            view: next_view,
+                            transactions: txns,
+                        }),
+                    )
+                    .map_err(|e| e.context("unicast transactions"))?;
+                }
 
                 // Proactively fetch the DRB for the next epoch so
                 // late-starting nodes have it before they need it
@@ -1782,18 +1790,6 @@ where
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
     }
 
-    fn send_transactions(
-        &mut self,
-        messages: Vec<TransactionMessage<T>>,
-        epoch: EpochNumber,
-    ) -> Result<(), CoordinatorError> {
-        for message in messages {
-            self.unicast_to_leader(message.view, epoch, BlockMessage::Transactions(message))
-                .map_err(|e| e.context("unicast transactions"))?;
-        }
-        Ok(())
-    }
-
     fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
         let membership = self
             .membership_coordinator
@@ -1842,19 +1838,7 @@ where
                 });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
-                match self.block_builder.on_submit_transaction(tx) {
-                    Ok(messages) => {
-                        // Before the first epoch there is no leader to send to. The retry
-                        // buffer resends the transaction once its first targets have passed.
-                        if let Some(epoch) = self.consensus.current_epoch() {
-                            self.send_transactions(messages, epoch)?;
-                        }
-                        let _ = respond.send(Ok(()));
-                    },
-                    Err(err) => {
-                        let _ = respond.send(Err(err));
-                    },
-                }
+                let _ = respond.send(self.block_builder.on_submit_transaction(tx));
             },
             ClientRequest::UpdateLeaf { update, respond } => {
                 self.state_manager.update_state(update);
