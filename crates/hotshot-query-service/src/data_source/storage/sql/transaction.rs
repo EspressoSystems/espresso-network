@@ -539,7 +539,7 @@ pub enum UpsertError {
     #[error("{SERIALIZATION_CONFLICT} upserting into {table}")]
     SerializationConflict { table: String },
     #[error("upserting into {table}")]
-    Database {
+    Other {
         table: String,
         #[source]
         source: sqlx::Error,
@@ -552,7 +552,7 @@ impl UpsertError {
         let code = source.as_database_error().and_then(|err| err.code());
         match code.as_deref() {
             Some(SERIALIZATION_FAILURE_CODE) => UpsertError::SerializationConflict { table },
-            _ => UpsertError::Database { table, source },
+            _ => UpsertError::Other { table, source },
         }
     }
 }
