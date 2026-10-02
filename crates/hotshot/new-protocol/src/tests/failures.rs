@@ -1,8 +1,12 @@
-use std::{collections::BTreeSet, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
+use hotshot_types::data::ViewNumber;
 use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
-use crate::tests::common::runner::TestRunner;
+use crate::{
+    message::{ConsensusMessage, MessageType},
+    tests::common::runner::TestRunner,
+};
 
 /// 10 nodes, 1 down.
 #[tokio::test(flavor = "multi_thread")]
@@ -97,6 +101,39 @@ async fn ten_nodes_f_down_with_epochs_bound() {
         .epoch_height(10)
         .down_nodes(BTreeSet::from([7, 8, 9]))
         .upgrade(Upgrade::trivial(TIMEOUT_EPOCH_VERSION))
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
+
+/// A view that fails after its proposal reached the next leader fails only itself.
+///
+/// The leader of view 5 is node 0, and its proposal reaches node 1 alone, the
+/// leader of view 6. No certificate can form, so view 5 times out. Node 1 has
+/// already built a block on that proposal and dispersed its VID shares. After
+/// the timeout it proposes a block on its lock instead. Transactions keep
+/// arriving in between. Peers keep one share per leader and view, so the block
+/// on the lock is votable only if it carries the payload already dispersed.
+#[tokio::test(flavor = "multi_thread")]
+async fn proposal_withheld_from_all_but_next_leader() {
+    const WITHHELD: u64 = 5;
+    const NEXT_LEADER: usize = 1;
+
+    TestRunner::builder()
+        .num_nodes(5)
+        .target_decisions(15)
+        .view_timeout(Duration::from_secs(2))
+        .transactions(2000)
+        .expected_failed_views(BTreeSet::from([ViewNumber::new(WITHHELD)]))
+        .drop_inbound(Arc::new(|node, message| {
+            node != NEXT_LEADER
+                && matches!(
+                    &message.message_type,
+                    MessageType::Consensus(ConsensusMessage::Proposal(p))
+                        if *p.proposal.data.view_number == WITHHELD
+                )
+        }))
         .build()
         .run()
         .await

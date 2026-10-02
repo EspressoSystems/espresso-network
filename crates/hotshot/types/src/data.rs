@@ -1619,18 +1619,18 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         self.block_header.block_number()
     }
     /// The QC linking this leaf to its parent in the chain.
-    pub fn justify_qc(&self) -> QuorumCertificate2<TYPES> {
-        self.justify_qc.clone()
+    pub fn justify_qc(&self) -> &QuorumCertificate2<TYPES> {
+        &self.justify_qc
     }
     /// The QC linking this leaf to its parent in the chain, signed by the next epoch's quorum.
     ///
     /// Only available for QCs that are part of an epoch transition.
-    pub fn next_epoch_justify_qc(&self) -> Option<NextEpochQuorumCertificate2<TYPES>> {
-        self.next_epoch_justify_qc.clone()
+    pub fn next_epoch_justify_qc(&self) -> Option<&NextEpochQuorumCertificate2<TYPES>> {
+        self.next_epoch_justify_qc.as_ref()
     }
     /// The QC linking this leaf to its parent in the chain.
-    pub fn upgrade_certificate(&self) -> Option<UpgradeCertificate<TYPES>> {
-        self.upgrade_certificate.clone()
+    pub fn upgrade_certificate(&self) -> Option<&UpgradeCertificate<TYPES>> {
+        self.upgrade_certificate.as_ref()
     }
     /// Commitment to this leaf's parent.
     pub fn parent_commitment(&self) -> Commitment<Self> {

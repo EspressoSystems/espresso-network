@@ -493,6 +493,7 @@ pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
 
     fn set_view_retention(&mut self, view_retention: u64);
+    fn set_consensus_only(&mut self);
     async fn create(&mut self) -> anyhow::Result<Self::Persistence>;
     async fn reset(self) -> anyhow::Result<()>;
 }
@@ -891,7 +892,7 @@ pub trait SequencerPersistence:
                 // `cert1` certifies the newest leaf; each newer leaf's justify_qc certifies the
                 // next older leaf.
                 let certifying_qcs = std::iter::once(cert1.clone())
-                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()))
+                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc().clone()))
                     .take(leaf_infos.len())
                     .map(CertificatePair::non_epoch_change);
 

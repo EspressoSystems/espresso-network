@@ -22,7 +22,6 @@ cargo nextest run -p <package> -- <test_name>
 
 just check                            # postgres + embedded-db variants (pre-commit only)
 just lint                             # clippy with -D warnings
-just hotshot::test <test_name>        # HotShot consensus tests
 just test-demo base                   # basic E2E
 just test-demo pos-base               # PoS E2E
 just test-slow                        # long-running tests
@@ -97,7 +96,8 @@ Test layers:
 - Unit (`cargo nextest -p <crate>`): individual functions/modules
 - Reference (`cargo nextest -p espresso-types reference`): serialization compatibility, in
   `crates/espresso/types/src/reference_tests.rs`
-- HotShot (`just hotshot::test <test_name>`): consensus tasks, network sims, in `crates/hotshot/testing/tests/`
+- New protocol (`cargo nextest run -p hotshot-new-protocol`): consensus, cutover, network sims, in
+  `crates/hotshot/new-protocol/src/tests/`
 - Integration (`cargo nextest run -p tests`): full system E2E in `tests/`
 - Slow (`just test-slow`): in `slow-tests/`
 

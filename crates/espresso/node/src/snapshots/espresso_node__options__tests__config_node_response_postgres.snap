@@ -114,6 +114,7 @@ catchup_backoff:
     numerator: 1
     denominator: 10
   disable: false
+follower: ~
 proposal_fetcher:
   num_workers: 2
   fetch_timeout:
@@ -159,6 +160,15 @@ l1:
     nanos: 0
   polling_interval:
     secs: 7
+    nanos: 0
+  wait_refresh_interval:
+    secs: 0
+    nanos: 500000000
+  wait_refresh_timeout:
+    secs: 1
+    nanos: 500000000
+  request_timeout:
+    secs: 10
     nanos: 0
   blocks_cache_size: 100
   events_channel_capacity: 100

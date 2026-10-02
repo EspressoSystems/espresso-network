@@ -419,6 +419,9 @@ pub struct Options {
     // creates a new reference-counted handle to the underlying pool state.
     #[clap(skip)]
     pub(crate) pool: Option<sqlx::Pool<Db>>,
+
+    #[clap(skip)]
+    pub(crate) consensus_only: bool,
 }
 
 impl Default for Options {
@@ -531,6 +534,7 @@ impl From<SqliteOptions> for Options {
             lightweight: false,
             min_connections: 0,
             pool: None,
+            consensus_only: false,
             serializable_retry: SerializableRetryOptions::default(),
         }
     }
@@ -893,6 +897,10 @@ impl PersistenceOptions for Options {
         self.consensus_pruning.minimum_retention = view_retention;
     }
 
+    fn set_consensus_only(&mut self) {
+        self.consensus_only = true;
+    }
+
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let config = (&*self).try_into()?;
         let db = SqlStorage::connect(config, StorageConnectionType::Sequencer).await?;
@@ -906,6 +914,7 @@ impl PersistenceOptions for Options {
         let persistence = Persistence {
             db,
             gc_opt: self.consensus_pruning,
+            consensus_only: self.consensus_only,
             internal_metrics: PersistenceMetricsValue::default(),
             #[cfg(feature = "embedded-db")]
             probe,
@@ -931,6 +940,7 @@ impl PersistenceOptions for Options {
 pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
+    consensus_only: bool,
     /// A reference to the internal metrics
     internal_metrics: PersistenceMetricsValue,
     /// Startup findings about the filesystem and SQLite pragmas backing `db`.
@@ -1480,6 +1490,44 @@ impl Persistence {
         }
     }
 
+    async fn skip_decide_events(&self, view: ViewNumber) -> anyhow::Result<()> {
+        let processed = self.load_processed_view().await?;
+        // A gap-fill decide reports the older view it filled. Writing that as the cursor would
+        // rewind it, and a later restart with the query module would resume from pruned views.
+        if processed.is_some_and(|processed| processed >= view) {
+            return Ok(());
+        }
+        let from_view = processed.map_or(ViewNumber::genesis(), |processed| processed + 1);
+        let state_certs = serializable_retry!(self, || async {
+            let mut tx = self.db.read().await?;
+            Self::load_state_certs(&mut tx, from_view, view).await
+        })
+        .await?;
+
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "event_stream",
+                ["id", "last_processed_view"],
+                ["id"],
+                [(1i32, view.u64() as i64)],
+            )
+            .await?;
+            for (epoch, cert) in &state_certs {
+                tx.upsert(
+                    "finalized_state_cert",
+                    ["epoch", "state_cert"],
+                    ["epoch"],
+                    [(*epoch as i64, bincode::serialize(cert)?)],
+                )
+                .await?;
+            }
+            prune_to_view(&mut tx, view.u64()).await?;
+            tx.commit().await
+        })
+        .await
+    }
+
     async fn load_state_certs(
         tx: &mut Transaction<Read>,
         from_view: ViewNumber,
@@ -1515,7 +1563,7 @@ impl Persistence {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn prune(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
+    async fn prune_to_retention(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
 
@@ -1703,13 +1751,18 @@ impl SequencerPersistence for Persistence {
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
         let now = Instant::now();
-        // Generate events for the new leaves, then GC. On error `last_processed_view` is not
-        // advanced past the failure point, so no data is lost and the range is retried.
-        self.generate_decide_events(deciding_qc, consumer).await?;
+        if self.consensus_only {
+            self.skip_decide_events(view).await?;
+        } else {
+            // Generate events for the new leaves, then GC. On error `last_processed_view` is not
+            // advanced past the failure point, so no data is lost and the range is retried.
+            self.generate_decide_events(deciding_qc, consumer).await?;
 
-        // Best-effort GC of data not included in any decide event; runs again at the next decide.
-        if let Err(err) = self.prune(view).await {
-            tracing::warn!(?view, "pruning failed: {err:#}");
+            // Best-effort GC of data not included in any decide event; runs again at the next
+            // decide.
+            if let Err(err) = self.prune_to_retention(view).await {
+                tracing::warn!(?view, "pruning failed: {err:#}");
+            }
         }
         self.internal_metrics
             .internal_process_decided_events_duration
@@ -2271,6 +2324,9 @@ impl SequencerPersistence for Persistence {
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
+        if self.consensus_only {
+            return Ok(());
+        }
         let data = &proposal.data;
         let view = data.view_number().u64();
         let data_bytes = bincode::serialize(proposal).unwrap();
@@ -3582,7 +3638,7 @@ mod test {
             proposal: QuorumProposal2::<SeqTypes> {
                 block_header: leaf.block_header().clone(),
                 view_number: leaf.view_number(),
-                justify_qc: leaf.justify_qc(),
+                justify_qc: leaf.justify_qc().clone(),
                 upgrade_certificate: None,
                 view_change_evidence: None,
                 next_drb_result: None,
@@ -3901,6 +3957,27 @@ mod test {
                 (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
             );
         }
+    }
+
+    /// A gap-fill decide reports the older view it filled, after a newer decide already moved
+    /// the cursor past it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_consensus_only_decide_never_rewinds_cursor() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        opt.set_consensus_only();
+        let storage = opt.create().await.unwrap();
+
+        for view in [10, 5] {
+            storage
+                .append_decided_leaves(ViewNumber::new(view), [], None, &NullEventConsumer)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            storage.load_processed_view().await.unwrap(),
+            Some(ViewNumber::new(10))
+        );
     }
 
     /// The probe is taken in `create()` and only reaches the exported registry through
