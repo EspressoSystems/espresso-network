@@ -270,6 +270,23 @@ runs/01-run/             one measurement
   path. Move only terminal fleet dirs (`mv tmp/aws-bench/<fleet> bench-state/aws/`); a live fleet dir cannot move
   because its user-data paths are absolute.
 
+### Publishing results
+
+- `run` (single-shot and `--fleet`) pushes the run's `summary.md`, `result.json`, `cost.json`, `trace/*.png`,
+  `trace/leader_path.md`, `trace/stats.json`, `index-row.json` and a reduced `manifest.json` to `runs/<fleet>/<run>/` of
+  the shared results repo (`EspressoSystems/espresso-network-bench-results`); a workflow there rebuilds its `INDEX.md`
+  and `README.md` (leaderboard, recent runs, totals). Other files stay local; symlinks are refused.
+- The published `manifest.json` keeps `fleet`, `created_at`, `git_rev`, `query_db`, `images`, `config` without
+  `node_env`, and each host's name, role and instance type. `summary.md` is published as written, so it still lists
+  `--node-env` values.
+- `--no-publish` skips it. `--results-remote URL` or env `BENCH_RESULTS_REMOTE` replaces the remote.
+- A failed publish logs a warning with the retry command; the exit code is the run's.
+- `just bench aws publish RUN_DIR...`: retry or backfill; a run dir without `index-row.json` takes its row from
+  `bench-state/aws/INDEX.md`, none there is an error. Publishing unchanged content commits nothing; every dir is tried,
+  exit non-zero if any failed.
+- Auth: plain `git` over https with the ambient credential helper, never prompting. Commit signing and `user.name` /
+  `user.email` come from the user's git config.
+
 ### Commands
 
 AWS (`scripts/network-bench/aws-bench`, flags per `just bench aws <cmd> -h`):
@@ -311,6 +328,8 @@ just bench aws collect bench-state/aws/lulu-20261001-074612/runs/02-volume
 just bench aws render bench-state/aws/lulu-20261001-074612/runs/01-volume
 # same, compared against another run's result.json
 just bench aws render bench-state/aws/lulu-20261001-074612/runs/02-volume --baseline bench-state/aws/lulu-20261001-074612/runs/01-volume/result.json
+# push run dirs to the results repo again, or backfill older ones
+just bench aws publish bench-state/aws/lulu-20261001-074612/runs/01-run
 # list orphaned fleets by tag, confirm, sweep
 just bench aws destroy --orphans
 # delete local fleet dirs older than 14 days that hold no AWS resources, after a prompt

@@ -24,7 +24,9 @@ uv-managed python 3.14 from /opt/bench.
 Prerequisites: opentofu and awscli2 (nix devShell), the AWS profile `timeboost-dev` for account
 027574771971 in eu-west-1 (constants below), and `--tag` naming the ghcr tag CI pushed for a
 `release-*` branch. Each fleet gets a fresh ssh key, deleted after destroy.
-Recipes: `just bench aws plan|up|run|down|status|list|collect|render|destroy|prune`.
+`run` pushes its results to the shared results repo unless `--no-publish`; `publish RUN_DIR...` retries or
+backfills.
+Recipes: `just bench aws plan|up|run|down|status|list|collect|render|destroy|prune|publish`.
 
 Exit codes of `run`: 0 valid, 1 invalid result, 2 refused before any AWS write, 3 failed after
 writes but destroyed, 4 resources may remain (the last log line is the destroy command). `run --fleet` never destroys: 3 leaves the fleet up. `up` exits 0 with
@@ -58,6 +60,7 @@ import socket
 import string
 import subprocess
 import sys
+import tempfile
 import threading
 import urllib.error
 import urllib.parse
@@ -120,6 +123,19 @@ REGION = "eu-west-1"
 PROFILE = "timeboost-dev"
 ACCOUNT = "027574771971"
 OUT_ROOT = Path("bench-state/aws")
+RESULTS_REMOTE = "https://github.com/EspressoSystems/espresso-network-bench-results.git"
+RESULTS_BRANCH = "main"
+PUSH_ATTEMPTS = 3
+INDEX_ROW_JSON = "index-row.json"
+MANIFEST_JSON = "manifest.json"
+PUBLISH_REQUIRED = ("summary.md",)
+PUBLISH_MANIFEST_KEYS = ("fleet", "created_at", "git_rev", "query_db", "images")
+PUBLISH_OPTIONAL = (
+    "result.json",
+    "cost.json",
+    "trace/leader_path.md",
+    "trace/stats.json",
+)
 PG_GB = 400
 RDS_CLASS = "db.m8g.4xlarge"
 RDS_ENGINE_VERSION = "18"
@@ -2262,6 +2278,14 @@ def add_ttl_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_results_remote_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--results-remote",
+        default=os.environ.get("BENCH_RESULTS_REMOTE", RESULTS_REMOTE),
+        help="git remote of the results repo; env BENCH_RESULTS_REMOTE",
+    )
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -2331,6 +2355,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="with --fleet: reset a dirty or stale fleet",
     )
     run_p.add_argument("--yes", action="store_true")
+    run_p.add_argument(
+        "--no-publish",
+        action="store_true",
+        help="do not push the run's results to --results-remote",
+    )
+    add_results_remote_flag(run_p)
     run_p.set_defaults(func=cmd_run, db_modes=defaults.db_modes)
 
     down_p = sub.add_parser("down", help="destroy a fleet")
@@ -2360,6 +2390,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     render_p.add_argument("dir", type=Path, metavar="RUN_DIR")
     render_p.add_argument("--baseline", type=Path)
     render_p.set_defaults(func=cmd_render)
+
+    publish_p = sub.add_parser(
+        "publish",
+        help="push run dirs to the shared results repo (retry, backfill)",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    publish_p.add_argument("dirs", type=Path, nargs="+", metavar="RUN_DIR")
+    add_results_remote_flag(publish_p)
+    publish_p.set_defaults(func=cmd_publish)
 
     destroy_p = sub.add_parser("destroy", help="sweep orphaned runs")
     destroy_p.add_argument("--orphans", action="store_true", required=True)
@@ -2615,6 +2654,7 @@ class Run:
     agent_started: bool = False
     error: str | None = None
     interrupted: bool = False
+    publish_remote: str | None = None
 
     @property
     def manifest_path(self) -> Path:
@@ -2643,7 +2683,13 @@ def cmd_run(args: argparse.Namespace, system: System) -> int:
     interrupts.install(system.trap)
     try:
         fleet = FleetState(system, cfg, fleet_dir, tf, interrupts)
-        bench_run = Run(fleet, run_dir, cfg, started)
+        bench_run = Run(
+            fleet,
+            run_dir,
+            cfg,
+            started,
+            publish_remote=None if args.no_publish else args.results_remote,
+        )
         with recording(bench_run):
             up_fleet(fleet)
         result = run_on_fleet(bench_run)
@@ -3080,10 +3126,7 @@ def record_outcome(run: Run, result: nb.BenchResult | None, destroyed: bool) -> 
     cost = close_fleet(fleet, destroyed)
     code = exit_code(run.error, result, destroyed)
     update_manifest(run.manifest_path, "done" if destroyed else "left-running")
-    append_index(
-        fleet.fleet_dir.parent,
-        index_row(run.manifest, run.run_dir.name, result, code, write_run_cost(run)),
-    )
+    record_index(run, result, code, write_run_cost(run))
     if cost is not None:
         log.info(
             "destroyed; actual cost $%.2f (bound $%.2f); run dir %s",
@@ -3091,6 +3134,7 @@ def record_outcome(run: Run, result: nb.BenchResult | None, destroyed: bool) -> 
             cost["bound"],
             run.run_dir,
         )
+    auto_publish(run)
     return code
 
 
@@ -3314,7 +3358,13 @@ def cmd_run_fleet(args: argparse.Namespace, system: System) -> int:
     fleet = open_fleet(system, fleet_dir, interrupts)
     cfg = fleet_run_config(args, manifest)
     run_dir, estimate = admit_run(system, fleet_dir, manifest, cfg)
-    bench_run = Run(fleet, run_dir, cfg, system.clock.time())
+    bench_run = Run(
+        fleet,
+        run_dir,
+        cfg,
+        system.clock.time(),
+        publish_remote=None if args.no_publish else args.results_remote,
+    )
     log.info(
         "run %s: incremental cost $%.2f (%.0f min worst), %.0f min left on the fleet",
         run_dir.name,
@@ -3745,12 +3795,10 @@ def end_fleet_run(run: Run, result: nb.BenchResult | None, reset_failed: bool) -
     try:
         cost = write_run_cost(run)
         update_manifest(run.manifest_path, "done")
-        append_index(
-            fleet.fleet_dir.parent,
-            index_row(run.manifest, run.run_dir.name, result, code, cost),
-        )
+        record_index(run, result, code, cost)
     finally:
         settle_fleet(fleet, reset_failed)
+    auto_publish(run)
     log.info(
         "run dir %s; fleet %s, %.0f min left",
         run.run_dir,
@@ -6413,20 +6461,33 @@ def manifest_cost(
     return sum(line["usd"] for line in lines)
 
 
+INDEX_COLUMNS = {
+    "run": "fleet/run",
+    "utc": "utc",
+    "git": "git",
+    "tag": "tag@rev",
+    "nodes": "N",
+    "db": "db",
+    "rate": "rate MB/s",
+    "decided": "decided MB/s",
+    "kept_up": "kept up",
+    "lag_p99": "lag p99 ms",
+    "status": "status",
+    "exit": "exit",
+    "cost": "cost run",
+}
 INDEX_HEADER = (
-    "| fleet/run | utc | git | tag@rev | N | db | rate MB/s | decided MB/s | kept up "
-    "| lag p99 ms | status | exit | cost run |\n"
-    "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+    f"| {' | '.join(INDEX_COLUMNS.values())} |\n{'|---' * len(INDEX_COLUMNS)}|\n"
 )
 
 
-def index_row(
+def index_cells(
     manifest: Manifest,
     run_name: str,
     result: nb.BenchResult | None,
     code: int,
     cost: dict[str, float] | None,
-) -> str:
+) -> dict[str, str]:
     rate = decided = kept_up = lag = "-"
     status = "failed"
     if result is not None:
@@ -6444,22 +6505,25 @@ def index_row(
             quantiles = passing[-1]["query_lag_ms"]
             lag = f"{quantiles['p99']:.0f}" if quantiles else "-"
     revision = (manifest["images"]["espresso-node"]["revision"] or "-")[:10]
-    cells = [
-        f"{manifest['fleet']}/{run_name}",
-        manifest["created_at"][:16],
-        manifest["git_rev"][:10],
-        f"{manifest['config']['tag']}@{revision}",
-        str(manifest["config"]["nodes"]),
-        manifest["query_db"],
-        rate,
-        decided,
-        kept_up,
-        lag,
-        status,
-        str(code),
-        f"{cost['usd']:.2f}" if cost else "-",
-    ]
-    return "| " + " | ".join(cells) + " |\n"
+    return {
+        "run": f"{manifest['fleet']}/{run_name}",
+        "utc": manifest["created_at"][:16],
+        "git": manifest["git_rev"][:10],
+        "tag": f"{manifest['config']['tag']}@{revision}",
+        "nodes": str(manifest["config"]["nodes"]),
+        "db": manifest["query_db"],
+        "rate": rate,
+        "decided": decided,
+        "kept_up": kept_up,
+        "lag_p99": lag,
+        "status": status,
+        "exit": str(code),
+        "cost": f"{cost['usd']:.2f}" if cost else "-",
+    }
+
+
+def format_index_row(cells: dict[str, str]) -> str:
+    return "| " + " | ".join(cells.values()) + " |\n"
 
 
 def append_index(out_root: Path, row: str) -> None:
@@ -6468,6 +6532,154 @@ def append_index(out_root: Path, row: str) -> None:
         if f.tell() == 0:
             f.write(INDEX_HEADER)
         f.write(row)
+
+
+def record_index(
+    run: Run, result: nb.BenchResult | None, code: int, cost: dict[str, float] | None
+) -> None:
+    """Appends the run's row to INDEX.md and writes the same cells plus `user` to
+    `index-row.json`."""
+    cells = index_cells(run.manifest, run.run_dir.name, result, code, cost)
+    append_index(run.fleet.fleet_dir.parent, format_index_row(cells))
+    nb.write_json(
+        run.run_dir / INDEX_ROW_JSON, {**cells, "user": run.fleet.system.user()}
+    )
+
+
+def auto_publish(run: Run) -> None:
+    """The run is over: a failure only warns and the exit code stands."""
+    if run.publish_remote is None:
+        return
+    try:
+        publish_run(run.fleet.system, run.run_dir, run.publish_remote)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "publish failed: %s: %s; retry: just bench aws publish %s",
+            type(exc).__name__,
+            exc,
+            run.run_dir,
+        )
+
+
+def cmd_publish(args: argparse.Namespace, system: System) -> int:
+    failed = 0
+    for run_dir in args.dirs:
+        try:
+            publish_run(system, run_dir, args.results_remote)
+        except Exception as exc:  # noqa: BLE001
+            log.error("%s: %s: %s", run_dir, type(exc).__name__, exc)
+            failed += 1
+    return EXIT_FAILED if failed else EXIT_OK
+
+
+def publish_run(system: System, run_dir: Path, remote: str) -> None:
+    """Commits the run's published files to `runs/<fleet>/<run>/` of a shallow, sparse clone of
+    `remote` and pushes. Nothing is committed when the content is already there."""
+    run_dir = run_dir.resolve()
+    if run_dir.parent.name != "runs":
+        raise Refused(f"{run_dir} is not a run dir (<fleet>/runs/<run>)")
+    name = f"{run_dir.parents[1].name}/{run_dir.name}"
+    files = publish_files(run_dir)
+    row = read_index_row(run_dir)
+    with tempfile.TemporaryDirectory(prefix="bench-results-") as tmp:
+        repo = Path(tmp)
+        dest = repo / "runs" / name
+        clone = ("clone", "--depth", "1", "--filter=blob:none", "--sparse", remote, ".")
+        git(system, repo, *clone)
+        git(system, repo, "sparse-checkout", "set", f"runs/{name}")
+        if dest.exists():
+            shutil.rmtree(dest)
+        for rel in files:
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(run_dir / rel, dest / rel)
+        nb.write_json(dest / MANIFEST_JSON, published_manifest(run_dir))
+        nb.write_json(dest / INDEX_ROW_JSON, row)
+        git(system, repo, "add", "--all", "runs")
+        if not git(system, repo, "status", "--porcelain").stdout.strip():
+            log.info("%s already published", name)
+            return
+        git(system, repo, "commit", "-m", commit_message(name, row))
+        push_with_rebase(system, repo)
+    log.info("published %s to %s", name, remote)
+
+
+def publish_files(run_dir: Path) -> list[Path]:
+    """Allowlist: the rest of a run dir holds secrets (pg.json, ssh/) or is large (logs).
+    `manifest.json` and `index-row.json` are written separately. A symlink is refused: it could
+    point at any file of this machine."""
+    optional = [Path(n) for n in PUBLISH_OPTIONAL if (run_dir / n).is_file()]
+    pngs = sorted(p.relative_to(run_dir) for p in run_dir.glob("trace/*.png"))
+    files = [*map(Path, PUBLISH_REQUIRED), *optional, *pngs]
+    for rel in [*files, Path("trace"), Path(MANIFEST_JSON), Path(INDEX_ROW_JSON)]:
+        if (run_dir / rel).is_symlink():
+            raise Refused(f"{run_dir / rel} is a symlink")
+    return files
+
+
+def published_manifest(run_dir: Path) -> dict[str, Any]:
+    """Explicit field allowlist: `argv`, `node_env` (verbatim, may hold anything), `hosts_info`,
+    `rds_*` and `ssh_public_key` stay local."""
+    manifest = nb.read_json(run_dir / MANIFEST_JSON)
+    reduced = {key: manifest[key] for key in PUBLISH_MANIFEST_KEYS}
+    reduced["config"] = {k: v for k, v in manifest["config"].items() if k != "node_env"}
+    if "hosts" in manifest:
+        reduced["hosts"] = [
+            {key: host[key] for key in ("name", "role", "instance_type")}
+            for host in manifest["hosts"]
+        ]
+    return reduced
+
+
+def commit_message(name: str, row: dict[str, str]) -> str:
+    outcome = "failed"
+    if row["status"] != "failed":
+        kept_up = "kept-up" if row["kept_up"] == "yes" else "lagging"
+        outcome = f"{row['decided']} MB/s {kept_up}"
+    return f"run {name}: N={row['nodes']} {row['db']} {outcome}"
+
+
+def read_index_row(run_dir: Path) -> dict[str, str]:
+    """`index-row.json`, or for a run that predates it the row of the local INDEX.md."""
+    path = run_dir / INDEX_ROW_JSON
+    return nb.read_json(path) if path.exists() else legacy_index_row(run_dir)
+
+
+def legacy_index_row(run_dir: Path) -> dict[str, str]:
+    fleet, name = run_dir.parents[1].name, run_dir.name
+    index = run_dir.parents[2] / "INDEX.md"
+    for line in reversed(index.read_text().splitlines()):
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if cells[0] == f"{fleet}/{name}":
+            row = dict(zip(INDEX_COLUMNS, cells, strict=True))
+            # Fleet names are `{user}-{%Y%m%d-%H%M%S}`.
+            return {**row, "user": fleet.rsplit("-", 2)[0]}
+    raise Refused(f"no row for {fleet}/{name} in {index}")
+
+
+def git_run(system: System, repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Aborts a stalled transfer after 30 s and never prompts for credentials."""
+    argv = ["git", "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30"]
+    return system.run([*argv, "-C", str(repo), *args], {"GIT_TERMINAL_PROMPT": "0"})
+
+
+def git(system: System, repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    done = git_run(system, repo, *args)
+    if done.returncode != 0:
+        raise Refused(f"git {args[0]} failed: {done.stderr.strip()}")
+    return done
+
+
+def push_with_rebase(system: System, repo: Path) -> None:
+    """Another publisher can push first. Runs are separate dirs, so the rebase is clean."""
+    for attempt in range(1, PUSH_ATTEMPTS + 1):
+        done = git_run(system, repo, "push", "origin", f"HEAD:{RESULTS_BRANCH}")
+        if done.returncode == 0:
+            return
+        stale = any(m in done.stderr for m in ("(fetch first)", "(non-fast-forward)"))
+        if not stale or attempt == PUSH_ATTEMPTS:
+            raise Refused(f"git push failed: {done.stderr.strip()}")
+        log.info("push rejected, rebasing (attempt %d)", attempt)
+        git(system, repo, "pull", "--rebase", "origin", RESULTS_BRANCH)
 
 
 class AgentReporter(logging.Handler):
@@ -6749,7 +6961,7 @@ def main() -> int:
     args = parse_args(argv)
     args.argv = argv
     system = host_system()
-    if args.command in ("status", "list", "destroy", "down", "prune"):
+    if args.command in ("status", "list", "destroy", "down", "prune", "publish"):
         logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
         command: Command = args.func

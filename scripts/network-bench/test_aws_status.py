@@ -236,7 +236,9 @@ def test_manifest_cost_is_linear_and_covers_instance_hours():
 
 
 def test_append_index_writes_the_header_once(tmp_path: Path):
-    row = awsb.index_row(index_manifest(), "01-run", None, 3, None)
+    row = awsb.format_index_row(
+        awsb.index_cells(index_manifest(), "01-run", None, 3, None)
+    )
     for _ in range(2):
         awsb.append_index(tmp_path, row)
     lines = (tmp_path / "INDEX.md").read_text().splitlines()
@@ -248,9 +250,15 @@ def test_append_index_keeps_existing_rows(tmp_path: Path):
     manifest = index_manifest()
     path = tmp_path / "INDEX.md"
     path.write_text(awsb.INDEX_HEADER + "| older | row |\n")
-    awsb.append_index(tmp_path, awsb.index_row(manifest, "01-run", None, 4, None))
     awsb.append_index(
-        tmp_path, awsb.index_row(manifest, "02-run", None, 0, {"usd": 1.0})
+        tmp_path,
+        awsb.format_index_row(awsb.index_cells(manifest, "01-run", None, 4, None)),
+    )
+    awsb.append_index(
+        tmp_path,
+        awsb.format_index_row(
+            awsb.index_cells(manifest, "02-run", None, 0, {"usd": 1.0})
+        ),
     )
     lines = path.read_text().splitlines()
     assert len(lines) == 5
