@@ -154,11 +154,12 @@ pub enum ConsensusOutput<T: NodeType> {
         view: ViewNumber,
         payload_commitment: VidCommitment2,
     },
-    /// Emitted when a node has reconstructed a block payload from VID shares.
-    /// Notifies downstream consumers (e.g. the query service) so they can store
-    /// the payload even if the corresponding view has already been decided
-    /// without a payload in the decide event.
-    BlockPayloadReconstructed {
+    /// A block payload this node obtained for `view`: reconstructed from VID
+    /// shares, fetched from a peer, or built and proposed by this node. The view
+    /// may never be decided. Notifies downstream consumers (e.g. the query
+    /// service) so they can store the payload even if the view has already been
+    /// decided without one.
+    BlockPayload {
         view: ViewNumber,
         header: T::BlockHeader,
         payload: Arc<T::BlockPayload>,
@@ -439,6 +440,12 @@ impl<T: NodeType> Consensus<T> {
         {
             self.locked_cert = Some(cert1);
         }
+    }
+
+    /// Restore the anchor's cert2 persisted on a prior run. When the anchor is an epoch's last
+    /// block, the next epoch's first proposal needs it as its `next_epoch_justify_qc`.
+    pub fn seed_cert2(&mut self, cert2: Certificate2<T>) {
+        self.certs2.insert(cert2.view_number(), cert2);
     }
 
     /// Advance the locked-QC persistence watermark to `view` if it is newer.

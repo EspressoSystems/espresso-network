@@ -77,7 +77,7 @@ use crate::{
 /// cheaper than fetching the payload through catchup.
 ///
 /// Proposals are retained with the same margin: when a reconstruction
-/// finishes, `BlockPayloadReconstructed` is only emitted if the proposal
+/// finishes, `BlockPayload` is only emitted if the proposal
 /// (the block header) for that view is still available.
 pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 
@@ -190,6 +190,8 @@ where
         consensus_metrics: ConsensusMetricsValue,
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
+        /// The anchor's cert2 persisted on a prior run.
+        anchor_cert2: Option<message::Certificate2<T>>,
         upgrade_config: UpgradeConfig,
     ) -> Self {
         let mut consensus = Consensus::new(
@@ -286,6 +288,9 @@ where
         // this must run after `seed_parent`.
         if let Some(locked_qc) = locked_qc {
             consensus.seed_locked_cert(locked_qc);
+        }
+        if let Some(cert2) = anchor_cert2 {
+            consensus.seed_cert2(cert2);
         }
         consensus.resume_from_restart(
             anchor_view,
@@ -422,16 +427,7 @@ where
             .unwrap_or(EpochNumber::genesis());
 
         if self.consensus.last_decided_leaf().view_number() == ViewNumber::genesis() {
-            // Genesis DA never flows through the normal block-builder path.
             let genesis_leaf = self.consensus.last_decided_leaf().clone();
-            let (payload, metadata) = T::BlockPayload::empty();
-            self.storage.append_da(
-                ViewNumber::genesis(),
-                EpochNumber::genesis(),
-                payload,
-                metadata,
-                genesis_leaf.payload_commitment(),
-            );
 
             // Emit `LeafDecided` for genesis so persistence sees the header.
             self.outbox.push_back(ConsensusOutput::LeafDecided {
@@ -632,13 +628,12 @@ where
                         let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
-                        // Retain the payload and persist it when consensus proposes this
-                        // exact block (cf. SendProposal):
+                        // Retain the payload until consensus proposes this exact block
+                        // (cf. PersistProposal):
                         if let VidCommitment::V2(commit) = block.payload_commitment {
                             self.da_payloads.insert(
                                 (block.view, commit),
                                 PendingDa {
-                                    epoch: block.epoch,
                                     payload: block.payload.payload.clone(),
                                     metadata: block.payload.metadata.clone(),
                                 },
@@ -721,24 +716,16 @@ where
             .insert(out.view, out.payload.txn_bytes());
         self.block_builder
             .on_block_reconstructed(out.view, out.tx_commitments);
-        self.storage.append_da(
-            out.view,
-            out.epoch,
-            out.payload.clone(),
-            out.metadata.clone(),
-            VidCommitment::V2(out.payload_commitment),
-        );
         if let Some(proposal) = self.consensus.proposal_at(out.view) {
             // Only pair the payload with the header if the proposal commits to it
             if proposal.block_header.payload_commitment()
                 == VidCommitment::V2(out.payload_commitment)
             {
-                self.outbox
-                    .push_back(ConsensusOutput::BlockPayloadReconstructed {
-                        view: out.view,
-                        header: proposal.block_header.clone(),
-                        payload: Arc::new(out.payload),
-                    });
+                self.outbox.push_back(ConsensusOutput::BlockPayload {
+                    view: out.view,
+                    header: proposal.block_header.clone(),
+                    payload: Arc::new(out.payload),
+                });
             } else {
                 warn!(
                     view = %out.view,
@@ -867,7 +854,7 @@ where
                 debug!(%node, %view, "persist proposal");
                 self.storage.append_proposal(proposal.data.clone());
                 // Two blocks can be built for one view. Here we know which one
-                // wins and we persist just that one:
+                // wins and we hand out just that one:
                 if let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() {
                     if let Some(da) = self.da_payloads.remove(&(view, commit)) {
                         self.payload_txn_bytes.insert(view, da.payload.txn_bytes());
@@ -883,13 +870,13 @@ where
                             view,
                             da.payload.transaction_commitments(&da.metadata),
                         );
-                        self.storage.append_da(
+                        // Consensus drops the built block below each decided view, before a
+                        // late decide of this view may arrive, so it has to be handed out now.
+                        self.outbox.push_back(ConsensusOutput::BlockPayload {
                             view,
-                            da.epoch,
-                            da.payload,
-                            da.metadata,
-                            VidCommitment::V2(commit),
-                        );
+                            header: proposal.data.block_header.clone(),
+                            payload: Arc::new(da.payload),
+                        });
                     } else {
                         warn!(%node, %view, "no payload for proposed block");
                     }
@@ -1138,7 +1125,7 @@ where
                     .unwrap_or_else(EpochNumber::genesis);
                 self.gc(epoch, GcScope::Timeout(view))?;
             },
-            ConsensusOutput::BlockPayloadReconstructed { .. } => {},
+            ConsensusOutput::BlockPayload { .. } => {},
             ConsensusOutput::UpgradeDecided(cert) => {
                 info!(
                     %node,
@@ -2276,9 +2263,8 @@ pub(crate) fn is_epoch_admissible(epoch: EpochNumber, current: EpochNumber) -> b
         && *epoch <= current.saturating_add(EPOCH_CHANGE_LOOKAHEAD)
 }
 
-/// A payload built locally and awaiting DA persistence.
+/// A payload built locally, held until consensus proposes it.
 struct PendingDa<T: NodeType> {
-    epoch: EpochNumber,
     payload: T::BlockPayload,
     metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
 }

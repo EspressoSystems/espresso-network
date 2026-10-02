@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, btree_map},
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     ops::RangeInclusive,
@@ -42,6 +42,7 @@ use hotshot_types::{
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
+        EncodeBytes as _,
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
         node_implementation::NodeType,
@@ -265,6 +266,10 @@ impl Inner {
         self.path.join("da2")
     }
 
+    fn pending_payload_dir_path(&self) -> PathBuf {
+        self.path.join("pending_payload")
+    }
+
     fn quorum_proposals2_dir_path(&self) -> PathBuf {
         self.path.join("quorum_proposals2")
     }
@@ -382,6 +387,9 @@ impl Inner {
         let prune_view = ViewNumber::new(decided_view.saturating_sub(self.view_retention));
 
         self.prune_files(self.da2_dir_path(), prune_view, None, prune_intervals)?;
+        // Retention only: a payload for a processed view may land after the decide that covered
+        // it, and has to wait for the next one.
+        self.prune_files(self.pending_payload_dir_path(), prune_view, None, &[])?;
         self.prune_files(self.vid2_dir_path(), prune_view, None, prune_intervals)?;
         self.prune_files(
             self.quorum_proposals2_dir_path(),
@@ -474,6 +482,9 @@ impl Inner {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
+        let pending_files = self.pending_payload_files(view)?;
+        let mut pending = load_pending_payloads(&pending_files)?;
+
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
         // separate event for each leaf because it is possible we have non-consecutive leaves in our
         // storage, which would not be valid as a single decide with a single leaf chain.
@@ -534,7 +545,14 @@ impl Inner {
 
         let mut intervals = vec![];
         let mut current_interval = None;
-        for (view, (leaf, cert)) in leaves {
+        for (view, (mut leaf, cert)) in leaves {
+            // Attached here rather than in the loop above, which also reads the leaf that the
+            // previous decide already delivered and then drops it.
+            if let btree_map::Entry::Occupied(entry) = pending.entry(view)
+                && entry.get().0 == *leaf.leaf.block_header()
+            {
+                leaf.leaf.fill_block_payload_unchecked(entry.remove().1);
+            }
             let height = leaf.leaf.block_header().block_number();
 
             let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
@@ -585,7 +603,35 @@ impl Inner {
             intervals.push(start..=end);
         }
 
+        for (pending_view, (header, payload)) in pending {
+            let event = CoordinatorEvent::BlockPayload {
+                view: pending_view,
+                header,
+                payload: Arc::new(payload),
+            };
+            consumer.handle_event(&event).await?;
+        }
+        for (_, path) in pending_files {
+            fs::remove_file(&path)
+                .with_context(|| format!("removing pending payload {}", path.display()))?;
+        }
+
         Ok(intervals)
+    }
+
+    /// Pending payload files at or below `view`, including ones for views an earlier decide
+    /// already passed.
+    fn pending_payload_files(
+        &self,
+        view: ViewNumber,
+    ) -> anyhow::Result<Vec<(ViewNumber, PathBuf)>> {
+        let dir = self.pending_payload_dir_path();
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        Ok(view_files(dir)?
+            .filter(|(file_view, _)| *file_view <= view)
+            .collect())
     }
 
     fn skip_decide_events(
@@ -1357,6 +1403,31 @@ impl SequencerPersistence for Persistence {
         self.append_quorum_proposal2(proposal).await
     }
 
+    async fn append_pending_payload(
+        &self,
+        view: ViewNumber,
+        header: &Header,
+        payload: &Payload,
+    ) -> anyhow::Result<()> {
+        if self.consensus_only {
+            return Ok(());
+        }
+        let bytes = bincode::serialize(&(header, payload.encode().as_ref()))
+            .context("serializing pending payload")?;
+        let mut inner = self.inner.write().await;
+        let dir_path = inner.pending_payload_dir_path();
+        fs::create_dir_all(&dir_path).context("creating pending payload dir")?;
+        let file_path = dir_path.join(view.u64().to_string()).with_extension("txt");
+        inner.replace(
+            &file_path,
+            |_| Ok(false),
+            |mut file| {
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+    }
+
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
             if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
@@ -2115,6 +2186,30 @@ impl DhtPersistentStorage for Persistence {
 
         Ok(records)
     }
+}
+
+/// A file that fails to decode is logged and left out, and is still deleted with the others:
+/// failing the decide instead would retry it forever, holding up GC behind one file.
+fn load_pending_payloads(
+    files: &[(ViewNumber, PathBuf)],
+) -> anyhow::Result<BTreeMap<ViewNumber, (Header, Payload)>> {
+    let mut payloads = BTreeMap::new();
+    for (view, path) in files {
+        let bytes = fs::read(path)
+            .with_context(|| format!("reading pending payload {}", path.display()))?;
+        match bincode::deserialize::<(Header, Vec<u8>)>(&bytes) {
+            Ok((header, payload)) => {
+                let payload = Payload::from_bytes(&payload, header.metadata());
+                payloads.insert(*view, (header, payload));
+            },
+            Err(err) => tracing::warn!(
+                %view,
+                err = %format_args!("{err:#}"),
+                "dropping undecodable pending payload"
+            ),
+        }
+    }
+    Ok(payloads)
 }
 
 /// Get all paths under `dir` whose name is of the form <view number>.txt.

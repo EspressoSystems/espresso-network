@@ -312,8 +312,12 @@ pub trait UpdateAvailabilityData<Types: NodeType> {
     /// blocks (e.g. metrics-only) may leave the default no-op.
     ///
     /// The block comes from a reconstruction event for a view that may never be decided, so
-    /// implementations must verify that it matches the decided leaf at the same height before
-    /// storing it.
+    /// implementations must verify that its header matches the decided leaf at the same height
+    /// before storing it. The payload itself is not checked: callers must only pass a payload
+    /// already verified against `header.payload_commitment()`.
+    ///
+    /// A block whose leaf is not stored yet may be dropped, so callers should send it again once
+    /// the leaf is appended. Implementations must accept the same block more than once.
     fn append_payload(
         &self,
         _block: BlockQueryData<Types>,

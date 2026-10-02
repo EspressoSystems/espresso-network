@@ -219,6 +219,10 @@ where
             .load_high_qc2()
             .await
             .context("loading persisted locked QC")?;
+        let anchor_cert2 = persistence
+            .load_cert2(initializer_for_coordinator.anchor_leaf().view_number())
+            .await
+            .context("loading the anchor's cert2")?;
 
         let coordinator = Coordinator::maker()
             .membership_coordinator(membership_coordinator.clone())
@@ -236,6 +240,7 @@ where
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
             .maybe_locked_qc(locked_qc)
+            .maybe_anchor_cert2(anchor_cert2)
             .upgrade_config(UpgradeConfig {
                 start_proposing_view: config.start_proposing_view,
                 stop_proposing_view: config.stop_proposing_view,
@@ -660,12 +665,11 @@ async fn handle_events<N, P, C>(
                     tracing::warn!("Failed to handle external message: {:?}", err);
                 }
             },
-            CoordinatorEvent::BlockPayloadReconstructed { .. } => {
-                // Forward straight to the consumer: reconstructed payloads might not yet
-                // have been stored by consensus storage,
-                // Query service verifies the block against a decided leaf before storing it.
+            CoordinatorEvent::BlockPayload { .. } => {
+                // Lands only if the leaf is already stored. Otherwise the copy that
+                // `persist_event` saves goes out with the decide.
                 if let Err(err) = event_consumer.handle_event(&event).await {
-                    tracing::warn!("failed to handle reconstructed payload: {err:#}");
+                    tracing::warn!("failed to handle block payload: {err:#}");
                 }
             },
             _ => {},

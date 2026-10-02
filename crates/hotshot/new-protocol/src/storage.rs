@@ -2,23 +2,20 @@ use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration}
 
 use async_trait::async_trait;
 use committable::Commitment;
-use hotshot::{traits::BlockPayload, types::SignatureKey};
+use hotshot::types::SignatureKey;
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     data::{
-        DaProposal2, EpochNumber, Leaf2, QuorumProposalWrapper, VidCommitment, VidDisperseShare,
-        VidDisperseShare2, ViewNumber,
+        EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, VidDisperseShare2, ViewNumber,
     },
     event::HotShotAction,
     message::Proposal as SignedProposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
     traits::{
-        EncodeBytes,
         metrics::{Histogram, Metrics},
         node_implementation::NodeType,
         storage::Storage as StorageTrait,
     },
-    utils::EpochTransitionIndicator,
     vote::HasViewNumber,
 };
 use tokio::{
@@ -93,7 +90,6 @@ impl<T: NodeType> StorageOutput<T> {
 /// records its elapsed time up to the abort.
 pub struct StorageMetrics {
     append_vid: Arc<dyn Histogram>,
-    append_da: Arc<dyn Histogram>,
     append_cert2: Arc<dyn Histogram>,
     append_high_qc: Arc<dyn Histogram>,
     append_state_cert: Arc<dyn Histogram>,
@@ -109,7 +105,6 @@ impl StorageMetrics {
         };
         Self {
             append_vid: histogram("append_vid"),
-            append_da: histogram("append_da"),
             append_cert2: histogram("append_cert2"),
             append_high_qc: histogram("append_high_qc"),
             append_state_cert: histogram("append_state_cert"),
@@ -173,53 +168,6 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             }
         });
         self.handles.entry(view).or_default().push(handle);
-    }
-
-    pub fn append_da(
-        &mut self,
-        view_number: ViewNumber,
-        epoch: EpochNumber,
-        block_payload: T::BlockPayload,
-        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-        vid_commit: VidCommitment,
-    ) {
-        let storage = self.storage.clone();
-        let private_key = self.private_key.clone();
-        let timer = self
-            .metrics
-            .as_ref()
-            .map(|m| Measurement::start(m.append_da.clone()));
-        let handle = self.tasks.spawn(async move {
-            let data = DaProposal2 {
-                encoded_transactions: block_payload.encode(),
-                metadata,
-                view_number,
-                epoch: Some(epoch),
-                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
-            };
-            let Ok(signature) = T::SignatureKey::sign(&private_key, &[]) else {
-                error!("failed to sign DA proposal for storage");
-                return None;
-            };
-            let proposal = SignedProposal {
-                data,
-                signature,
-                _pd: PhantomData,
-            };
-            loop {
-                match storage.append_da2(&proposal, vid_commit).await {
-                    Ok(()) => {
-                        finish_measurement(timer);
-                        return None;
-                    },
-                    Err(err) => {
-                        warn!(%err, "failed to append DA proposal, retrying");
-                        sleep(RETRY_DELAY).await;
-                    },
-                }
-            }
-        });
-        self.handles.entry(view_number).or_default().push(handle);
     }
 
     pub fn append_cert2(&mut self, view: ViewNumber, cert2: Certificate2<T>) {
@@ -426,7 +374,8 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 
 #[async_trait]
 impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
-    async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
+    async fn append_cert2(&self, view: ViewNumber, cert: Certificate2<T>) -> anyhow::Result<()> {
+        self.insert_cert2(view, cert).await;
         Ok(())
     }
 

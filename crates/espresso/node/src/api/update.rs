@@ -77,7 +77,7 @@ where
 {
     async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
         if let Err(height) = self.inner.update(event).await {
-            bail!("failed to update API state after {height}: {event:?}",);
+            bail!("failed to update API state after {height}: {event}");
         }
         Ok(())
     }
