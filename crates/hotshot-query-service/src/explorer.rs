@@ -152,13 +152,28 @@ mod test {
     use std::{cmp::min, num::NonZeroUsize};
 
     use futures::StreamExt;
+    use hotshot::traits::BlockPayload;
+    use hotshot_example_types::{
+        block_types::{TestBlockHeader, TestMetadata},
+        node_types::TEST_VERSIONS,
+        state_types::{TestInstanceState, TestValidatedState},
+    };
+    use hotshot_types::{
+        data::vid_commitment, traits::block_contents::EncodeBytes, utils::BuilderCommitment,
+    };
 
     use super::*;
     use crate::{
-        availability::AvailabilityDataSource,
+        availability::{AvailabilityDataSource, BlockQueryData, LeafQueryData},
+        data_source::{
+            Transaction as _, VersionedDataSource,
+            sql::testing::TmpDb,
+            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
+        },
+        fetching::provider::NoFetching,
         testing::{
             consensus::{MockNetwork, MockSqlDataSource},
-            mocks::{MockTypes, mock_transaction},
+            mocks::{MockPayload, MockTypes, mock_transaction},
         },
     };
 
@@ -574,5 +589,252 @@ mod test {
 
         validate(&ds).await;
         network.shut_down().await;
+    }
+
+    /// Number of transactions in each block of the chain used by the
+    /// `transactions_since` tests, by height: a first block, a single
+    /// transaction block, an empty block, a large block, and the newest block.
+    const SINCE_TX_COUNTS: [usize; 5] = [3, 1, 0, 4, 2];
+
+    /// Stores a chain whose block at height `i` holds `tx_counts[i]`
+    /// transactions.  The returned [TmpDb] must outlive the data source.
+    async fn chain_with_tx_counts(tx_counts: &[usize]) -> (TmpDb, MockSqlDataSource) {
+        let tmp_db = TmpDb::init().await;
+        let db = SqlStorage::connect(tmp_db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let mut leaf = LeafQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let mut tx = db.write().await.unwrap();
+        for (height, &num_txns) in tx_counts.iter().enumerate() {
+            let txs = (0..num_txns).map(|i| mock_transaction(vec![height as u8, i as u8]));
+            let (payload, metadata) = <MockPayload as BlockPayload<MockTypes>>::from_transactions(
+                txs,
+                &TestValidatedState::default(),
+                &TestInstanceState::default(),
+            )
+            .await
+            .unwrap();
+            let payload_commitment = vid_commitment(
+                &payload.encode(),
+                &metadata.encode(),
+                1,
+                TEST_VERSIONS.test.base,
+            );
+            let header = TestBlockHeader {
+                block_number: height as u64,
+                payload_commitment,
+                builder_commitment: BuilderCommitment::from_bytes([]),
+                metadata: TestMetadata {
+                    num_transactions: metadata.num_transactions,
+                },
+                timestamp: height as u64,
+                timestamp_millis: height as u64 * 1_000,
+                random: 1,
+                version: TEST_VERSIONS.test.base,
+            };
+            *leaf.leaf.block_header_mut() = header.clone();
+            tx.insert_leaf(&leaf).await.unwrap();
+            tx.insert_block(&BlockQueryData::<MockTypes>::new(header, payload))
+                .await
+                .unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        let ds = MockSqlDataSource::builder(db, NoFetching)
+            .build()
+            .await
+            .unwrap();
+        (tmp_db, ds)
+    }
+
+    /// `(height, offset)` of every transaction in the chain, newest first.
+    fn newest_first(tx_counts: &[usize]) -> Vec<(u64, u64)> {
+        tx_counts
+            .iter()
+            .enumerate()
+            .rev()
+            .flat_map(|(height, &n)| {
+                (0..n)
+                    .rev()
+                    .map(move |offset| (height as u64, offset as u64))
+            })
+            .collect()
+    }
+
+    /// The `{offset}` path parameter that targets `summary`: it counts from
+    /// the newest transaction of the block.
+    fn cursor(summary: &TransactionSummary<MockTypes>) -> usize {
+        (summary.num_transactions - 1 - summary.offset) as usize
+    }
+
+    async fn since(
+        ds: &MockSqlDataSource,
+        height: usize,
+        offset: usize,
+        limit: usize,
+        filter: TransactionSummaryFilter<MockTypes>,
+    ) -> Vec<(u64, u64)> {
+        ds.get_transaction_summaries_since(transaction_summaries(
+            TransactionIdentifier::HeightAndOffset(height, offset),
+            limit,
+            filter,
+        ))
+        .await
+        .unwrap()
+        .iter()
+        .map(|summary| (summary.height, summary.offset))
+        .collect()
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_transactions_since_returns_rows_above_every_cursor() {
+        let (_tmp_db, ds) = chain_with_tx_counts(&SINCE_TX_COUNTS).await;
+        let expected = newest_first(&SINCE_TX_COUNTS);
+
+        // Every transaction as the cursor, with pages that are full, partial,
+        // and larger than the whole chain.
+        for (i, &(height, offset)) in expected.iter().enumerate() {
+            let num_txns = SINCE_TX_COUNTS[height as usize] as u64;
+            let cursor = (num_txns - 1 - offset) as usize;
+            for limit in 1..=expected.len() + 1 {
+                assert_eq!(
+                    since(
+                        &ds,
+                        height as usize,
+                        cursor,
+                        limit,
+                        TransactionSummaryFilter::None
+                    )
+                    .await,
+                    expected[i.saturating_sub(limit)..i],
+                    "cursor {height}-{offset}, limit {limit}",
+                );
+            }
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_transactions_since_edge_cases() {
+        let (_tmp_db, ds) = chain_with_tx_counts(&SINCE_TX_COUNTS).await;
+        let none = || TransactionSummaryFilter::None;
+
+        // The newest transaction of the chain has nothing above it.
+        assert_eq!(since(&ds, 4, 0, 5, none()).await, []);
+
+        // Near the head, the page is partial.
+        assert_eq!(since(&ds, 3, 0, 5, none()).await, [(4, 1), (4, 0)]);
+
+        // Oldest transaction of the newest block.
+        assert_eq!(since(&ds, 4, 1, 5, none()).await, [(4, 1)]);
+
+        // Newest transaction of a block: the page starts in the next block.
+        assert_eq!(since(&ds, 3, 0, 1, none()).await, [(4, 0)]);
+
+        // Oldest transaction of a block: the page stays within that block.
+        assert_eq!(since(&ds, 3, 3, 3, none()).await, [(3, 3), (3, 2), (3, 1)]);
+
+        // Oldest transaction of the first block.
+        assert_eq!(since(&ds, 0, 2, 3, none()).await, [(1, 0), (0, 2), (0, 1)]);
+
+        // Pages skip empty blocks.
+        assert_eq!(since(&ds, 1, 0, 2, none()).await, [(3, 1), (3, 0)]);
+
+        // A cursor in an empty block returns the rows above it.
+        assert_eq!(since(&ds, 2, 0, 2, none()).await, [(3, 1), (3, 0)]);
+
+        // An offset past the block's size reaches into older blocks, as in `from`.
+        assert_eq!(since(&ds, 4, 3, 2, none()).await, [(4, 0), (3, 3)]);
+
+        // A cursor above the head has nothing newer.
+        assert_eq!(since(&ds, 5, 0, 5, none()).await, []);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_transactions_since_filters_and_targets() {
+        let (_tmp_db, ds) = chain_with_tx_counts(&SINCE_TX_COUNTS).await;
+
+        // The block filter never leaves its block.
+        assert_eq!(
+            since(&ds, 3, 2, 5, TransactionSummaryFilter::Block(3)).await,
+            [(3, 3), (3, 2)]
+        );
+        assert_eq!(
+            since(&ds, 3, 0, 5, TransactionSummaryFilter::Block(3)).await,
+            []
+        );
+
+        // Mock transactions are all in namespace 0.
+        assert_eq!(
+            since(&ds, 0, 2, 20, TransactionSummaryFilter::RollUp(0)).await,
+            since(&ds, 0, 2, 20, TransactionSummaryFilter::None).await,
+        );
+        assert_eq!(
+            since(&ds, 0, 2, 20, TransactionSummaryFilter::RollUp(1)).await,
+            []
+        );
+
+        // Nothing is newer than the latest transaction.
+        let latest = ds
+            .get_transaction_summaries_since(transaction_summaries(
+                TransactionIdentifier::Latest,
+                5,
+                TransactionSummaryFilter::None,
+            ))
+            .await
+            .unwrap();
+        assert!(latest.is_empty());
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_transactions_since_pages_back_up_through_from() {
+        let (_tmp_db, ds) = chain_with_tx_counts(&SINCE_TX_COUNTS).await;
+        let page_size = 3;
+
+        // Page down from the latest transaction, as the explorer's Older link does.
+        let mut pages = vec![
+            ds.get_transaction_summaries(transaction_summaries(
+                TransactionIdentifier::Latest,
+                page_size,
+                TransactionSummaryFilter::None,
+            ))
+            .await
+            .unwrap(),
+        ];
+        while let Some(last) = pages.last().unwrap().last() {
+            let next = ds
+                .get_transaction_summaries(transaction_summaries(
+                    TransactionIdentifier::HeightAndOffset(last.height as usize, cursor(last) + 1),
+                    page_size,
+                    TransactionSummaryFilter::None,
+                ))
+                .await
+                .unwrap();
+            pages.push(next);
+        }
+        pages.pop();
+        assert_eq!(
+            pages.iter().map(Vec::len).sum::<usize>(),
+            newest_first(&SINCE_TX_COUNTS).len()
+        );
+
+        // Paging back up from each page's first row returns the previous page.
+        for window in pages.windows(2) {
+            let first = &window[1][0];
+            let above = ds
+                .get_transaction_summaries_since(transaction_summaries(
+                    TransactionIdentifier::HeightAndOffset(first.height as usize, cursor(first)),
+                    page_size,
+                    TransactionSummaryFilter::None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(above, window[0]);
+        }
     }
 }
