@@ -51,6 +51,7 @@ pub struct VidDisperser<T: NodeType> {
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     tasks: JoinSet<Result<VidDisperseOutput, VidDisperseError>>,
     duration_metric: Option<Arc<dyn Histogram>>,
+    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 }
 
 impl<T: NodeType> VidDisperser<T> {
@@ -68,7 +69,12 @@ impl<T: NodeType> VidDisperser<T> {
             private_key,
             tasks: JoinSet::new(),
             duration_metric: None,
+            tracer: None,
         }
+    }
+
+    pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
+        self.tracer = tracer;
     }
 
     pub fn with_metrics(mut self, hist: Option<Arc<dyn Histogram>>) -> Self {
@@ -90,6 +96,7 @@ impl<T: NodeType> VidDisperser<T> {
         let public_key = self.public_key.clone();
         let private_key = self.private_key.clone();
         let duration_metric = self.duration_metric.clone();
+        let tracer = self.tracer.clone();
         let handle = self.tasks.spawn_blocking(move || {
             let measurement = duration_metric.map(Measurement::start);
             let result = handle_vid_disperse_request(
@@ -98,6 +105,7 @@ impl<T: NodeType> VidDisperser<T> {
                 public_key,
                 private_key,
                 vid_disperse_request,
+                tracer,
             );
             finish_measurement(measurement);
             result
@@ -139,10 +147,19 @@ fn handle_vid_disperse_request<T: NodeType>(
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     vid_disperse_request: VidDisperseRequest<T>,
+    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 ) -> Result<VidDisperseOutput, VidDisperseError> {
     let view = vid_disperse_request.view;
     let epoch = vid_disperse_request.epoch;
     let payload_commitment = vid_disperse_request.payload_commitment;
+
+    // Encoding and unicast are interleaved per bucket, so `NsDisperseStart` to
+    // `VidSharesUnicastEnd` brackets the whole dispersal.
+    crate::trace_leader_event!(
+        tracer,
+        view,
+        crate::leader_trace::LeaderEvent::NsDisperseStart
+    );
 
     let params = VidDisperse2::<T>::disperse_params(
         &vid_disperse_request.block,
@@ -224,6 +241,12 @@ fn handle_vid_disperse_request<T: NodeType>(
             Ok(())
         },
     )?;
+
+    crate::trace_leader_event!(
+        tracer,
+        view,
+        crate::leader_trace::LeaderEvent::VidSharesUnicastEnd
+    );
 
     Ok(VidDisperseOutput {
         view,

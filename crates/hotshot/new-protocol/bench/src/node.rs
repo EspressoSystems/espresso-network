@@ -16,6 +16,7 @@ use hotshot_new_protocol::{
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::proposal_commitment,
+    leader_trace::{CsvLeaderTracer, LeaderTracerHandle},
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
@@ -49,10 +50,26 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     let (membership, client) = make_membership(cfg.total_nodes, public_key).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
-    let coordinator =
-        build_coordinator(public_key, private_key, membership, network, client, &cfg).await;
+    let tracer = Arc::new(CsvLeaderTracer::new(cfg.node_id, leader_trace_path(&cfg))?);
+
+    let coordinator = build_coordinator(
+        public_key,
+        private_key,
+        membership,
+        network,
+        client,
+        &cfg,
+        tracer.clone() as LeaderTracerHandle,
+    )
+    .await;
 
     run_instrumented(coordinator, &cfg).await
+}
+
+fn leader_trace_path(cfg: &NodeConfig) -> PathBuf {
+    let out = PathBuf::from(&cfg.output_file);
+    let dir = out.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    dir.join(format!("leader_trace_node{}.csv", cfg.node_id))
 }
 
 async fn create_network(
@@ -110,6 +127,7 @@ async fn build_coordinator(
     network: Cliquenet<TestTypes>,
     client: CoordinatorClient<TestTypes>,
     cfg: &NodeConfig,
+    tracer: LeaderTracerHandle,
 ) -> BenchCoordinator {
     let instance = Arc::new(TestInstanceState::default());
     let epoch_height = u64::MAX;
@@ -135,6 +153,7 @@ async fn build_coordinator(
         genesis_leaf.clone(),
         epoch_height,
     );
+    consensus.set_tracer(Some(tracer.clone()));
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
@@ -147,14 +166,16 @@ async fn build_coordinator(
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
-    let vid_disperser = VidDisperser::new(
+    let mut vid_disperser = VidDisperser::new(
         membership.clone(),
         network.sender().clone(),
         public_key,
         private_key.clone(),
     );
+    vid_disperser.set_tracer(Some(tracer.clone()));
 
-    let vid_reconstructor = VidReconstructor::new();
+    let mut vid_reconstructor = VidReconstructor::new();
+    vid_reconstructor.set_tracer(Some(tracer));
 
     let block_config = BlockBuilderConfig::default();
     let block_builder = BlockBuilder::new(

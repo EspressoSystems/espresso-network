@@ -367,6 +367,11 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_EMPTY_BLOCK_DELAY", default_value = "500ms", value_parser = parse_duration)]
     pub empty_block_delay: Duration,
 
+    /// Directory for the leader-event trace `leader_trace_node{N}.csv`. Disabled when unset.
+    /// Use local disk: a slow flush blocks consensus.
+    #[clap(long, env = "ESPRESSO_NODE_LEADER_TRACE_DIR")]
+    pub leader_trace_dir: Option<PathBuf>,
+
     #[clap(flatten)]
     pub logging: logging::Config,
 

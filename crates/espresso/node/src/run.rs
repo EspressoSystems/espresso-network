@@ -286,6 +286,7 @@ where
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;
     let empty_block_delay = opt.empty_block_delay;
+    let leader_trace_dir = opt.leader_trace_dir.clone();
 
     if modules.query.is_none() {
         storage_opt.set_consensus_only();
@@ -313,6 +314,7 @@ where
                             opt.identity,
                             proposal_fetcher_config,
                             empty_block_delay,
+                            leader_trace_dir,
                         )
                         .await
                     }
@@ -333,6 +335,7 @@ where
                 opt.identity,
                 proposal_fetcher_config,
                 empty_block_delay,
+                leader_trace_dir,
             )
             .await?
         },

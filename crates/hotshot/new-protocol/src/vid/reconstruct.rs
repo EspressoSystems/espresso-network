@@ -70,6 +70,7 @@ pub struct VidReconstructor<T: NodeType> {
     reconstructed: BTreeSet<ViewNumber>,
     tasks: JoinSet<ReconstructResult<T>>,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
+    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 }
 
 pub(crate) struct VidShareAccumulator<T: NodeType> {
@@ -105,7 +106,12 @@ impl<T: NodeType> VidReconstructor<T> {
             reconstructed: BTreeSet::new(),
             tasks: JoinSet::new(),
             calculations: BTreeMap::new(),
+            tracer: None,
         }
+    }
+
+    pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
+        self.tracer = tracer;
     }
 
     /// Pin `view` to its validated proposal's payload commitment and
@@ -243,8 +249,33 @@ impl<T: NodeType> VidReconstructor<T> {
             .map(|(key, share)| (key.clone(), share.clone()))
             .collect();
         let epoch = accumulator.epoch;
+        crate::trace_leader_event!(
+            self.tracer,
+            view,
+            crate::leader_trace::LeaderEvent::ThresholdShareReachedVMinus1
+        );
+        let tracer = self.tracer.clone();
         let task = self.tasks.spawn_blocking(move || {
-            reconstruct::<T>(view, epoch, payload_commitment, common, shares, metadata)
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::RecoverVMinus1Start
+            );
+            let result = reconstruct::<T>(
+                view,
+                epoch,
+                payload_commitment,
+                common,
+                shares,
+                metadata,
+                tracer.clone(),
+            );
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::RecoverVMinus1End
+            );
+            result
         });
         self.calculations.insert(view, task);
     }
@@ -438,11 +469,17 @@ fn reconstruct<T: NodeType>(
     common: AvidmGf2Common,
     shares: Vec<(T::SignatureKey, AvidmGf2Share)>,
     metadata: Metadata<T>,
+    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 ) -> ReconstructResult<T> {
     let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
     if let Some(bytes) =
         decode_and_recommit::<T>(view, &common, &shares, &payload_commitment, &metadata)
     {
+        crate::trace_leader_event!(
+            tracer,
+            view,
+            crate::leader_trace::LeaderEvent::RecoverVMinus1DecodeEnd
+        );
         let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
         let tx_commitments = payload.transaction_commitments(&metadata);
         let output = ObtainedPayload {
