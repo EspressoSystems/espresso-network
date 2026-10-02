@@ -53,6 +53,7 @@ fn small_config() -> BlockBuilderConfig {
         ttl: 5,
         dedup_window_size: 3,
         empty_block_delay: Duration::from_millis(500),
+        fanout: 1,
     }
 }
 
@@ -70,6 +71,54 @@ fn builder_with(config: BlockBuilderConfig) -> BlockBuilder<TestTypes> {
 }
 
 #[tokio::test]
+async fn submit_sends_to_each_upcoming_leader() {
+    let mut b = builder_with(BlockBuilderConfig {
+        fanout: 2,
+        ..small_config()
+    });
+    b.on_view_changed(view(4));
+
+    assert_eq!(
+        b.on_submit_transaction(tx(1)).unwrap(),
+        Vec::from([
+            tx_msg(view(5), Vec::from([tx(1)])),
+            tx_msg(view(6), Vec::from([tx(1)])),
+        ])
+    );
+    assert!(
+        b.on_submit_transaction(tx(1)).unwrap().is_empty(),
+        "a pending transaction is not sent again when resubmitted"
+    );
+}
+
+#[tokio::test]
+async fn pending_transaction_is_resent_only_after_its_leaders_had_their_turn() {
+    let mut b = builder_with(BlockBuilderConfig {
+        fanout: 2,
+        ..small_config()
+    });
+    b.on_submit_transaction(tx(1)).unwrap();
+
+    for v in 1..=3 {
+        assert!(
+            b.on_view_changed(view(v)).is_empty(),
+            "view {v} is too early to resend"
+        );
+    }
+    assert_eq!(
+        b.on_view_changed(view(4)),
+        Vec::from([
+            tx_msg(view(5), Vec::from([tx(1)])),
+            tx_msg(view(6), Vec::from([tx(1)])),
+        ])
+    );
+    assert!(
+        b.on_view_changed(view(5)).is_empty(),
+        "a resent transaction waits for its new leaders"
+    );
+}
+
+#[tokio::test]
 async fn test_retry_buffer() {
     let mut b = builder();
     let t1 = tx(1);
@@ -77,19 +126,16 @@ async fn test_retry_buffer() {
     b.on_submit_transaction(t1.clone()).unwrap();
     b.on_submit_transaction(t2.clone()).unwrap();
 
-    // t1 reconstructed and should be removed from retry
     b.on_block_reconstructed(view(1), vec![t1.commit()]);
 
-    let forwarded = b.on_view_changed(view(1));
     assert_eq!(
-        forwarded,
-        vec![t2],
-        "only unconfirmed tx should be forwarded"
+        b.on_view_changed(view(3)),
+        Vec::from([tx_msg(view(4), Vec::from([t2]))]),
+        "only unconfirmed tx should be resent"
     );
 
-    // past ttl
-    let forwarded = b.on_view_changed(view(6));
-    assert!(forwarded.is_empty(), "tx past ttl should expire");
+    let resent = b.on_view_changed(view(6));
+    assert!(resent.is_empty(), "tx past ttl should expire");
 }
 
 #[tokio::test]
@@ -103,9 +149,18 @@ async fn test_forward_batch_stops_at_one_block() {
     b.on_submit_transaction(tx(2)).unwrap();
     b.on_submit_transaction(tx(3)).unwrap();
 
-    let forwarded = b.on_view_changed(view(2));
-    assert_eq!(forwarded.len(), 2, "batch should stop at one block");
-    assert_eq!(forwarded[0], tx(1), "the oldest transaction goes first");
+    let resent = b.on_view_changed(view(4));
+    assert_eq!(resent.len(), 1, "one message per upcoming leader");
+    assert_eq!(
+        resent[0].transactions.len(),
+        2,
+        "batch should stop at one block"
+    );
+    assert_eq!(
+        resent[0].transactions[0],
+        tx(1),
+        "the oldest transaction goes first"
+    );
 }
 
 /// An upgrade from `NEW_PROTOCOL_VERSION` to `TIMEOUT_EPOCH_VERSION` taking effect at `first_view`.
@@ -150,19 +205,18 @@ async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
     }
 
     assert_eq!(
-        b.on_view_changed(view(1)).len(),
-        2,
-        "view 2 runs the old version"
-    );
-    assert_eq!(
-        b.on_view_changed(view(2)).len(),
+        b.on_view_changed(view(3))[0].transactions.len(),
         4,
-        "view 3 runs the new version"
+        "a resend for view 4 uses the new block size"
     );
 
-    b.on_transactions(tx_msg(view(3), (5..=8).map(tx).collect()));
+    b.on_transactions(tx_msg(view(2), (5..=7).map(tx).collect()));
+    let (txns, _) = b.drain(view(2), epoch());
+    assert_eq!(txns.len(), 2, "a block for view 2 uses the old size");
+
+    b.on_transactions(tx_msg(view(3), (8..=11).map(tx).collect()));
     let (txns, _) = b.drain(view(3), epoch());
-    assert_eq!(txns.len(), 4, "a leader collects the new block size");
+    assert_eq!(txns.len(), 4, "a block for view 3 uses the new size");
 }
 
 #[tokio::test]
@@ -172,10 +226,9 @@ async fn test_smaller_blocks_drop_what_no_longer_fits() {
         .unwrap();
     b.on_submit_transaction(tx(1)).unwrap();
 
-    assert_eq!(b.on_view_changed(view(1)).len(), 2);
     assert_eq!(
-        b.on_view_changed(view(2)),
-        vec![tx(1)],
+        b.on_view_changed(view(3)),
+        Vec::from([tx_msg(view(4), Vec::from([tx(1)]))]),
         "a transaction over the new size is dropped instead of blocking the batch"
     );
 }
@@ -208,13 +261,16 @@ async fn test_forward_batch_fills_the_block_with_later_transactions() {
     b.on_submit_transaction(TestTransaction::new(vec![3; 2]))
         .unwrap();
 
-    let forwarded = b.on_view_changed(view(2));
+    let resent = b.on_view_changed(view(4));
     assert_eq!(
-        forwarded,
-        vec![
-            TestTransaction::new(vec![1; 3]),
-            TestTransaction::new(vec![3; 2])
-        ]
+        resent,
+        Vec::from([tx_msg(
+            view(5),
+            Vec::from([
+                TestTransaction::new(vec![1; 3]),
+                TestTransaction::new(vec![3; 2])
+            ])
+        )])
     );
 }
 
@@ -248,14 +304,11 @@ async fn test_full_forward_fits_in_a_message() {
             .unwrap();
     }
 
-    let transactions = b.on_view_changed(view(1));
-    let forwarded = transactions.len();
+    let resent = b.on_view_changed(view(3)).remove(0);
+    let forwarded = resent.transactions.len();
     let message = Message::<TestTypes, Validated> {
         sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
-        message_type: MessageType::Block(BlockMessage::Transactions(TransactionMessage {
-            view: view(2),
-            transactions,
-        })),
+        message_type: MessageType::Block(BlockMessage::Transactions(resent)),
     };
     let len = test_upgrade_lock::<TestTypes>()
         .serialize(&message)
@@ -456,6 +509,37 @@ async fn reconstructed_block_drops_its_transactions_from_leader_buffer() {
     b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
     b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
     let (txns, _) = b.drain(view(2), epoch());
+    assert_eq!(txns, Vec::from([tx(2)]));
+}
+
+#[tokio::test]
+async fn leader_holds_transactions_for_later_views_and_builds_a_block_at_a_time() {
+    let mut b = builder_with(BlockBuilderConfig {
+        block_sizes: sizes(2),
+        ..small_config()
+    });
+    b.on_transactions(tx_msg(view(1), (1..=5).map(tx).collect()));
+
+    let (first, _) = b.drain(view(1), epoch());
+    let (second, _) = b.drain(view(2), epoch());
+    let (third, _) = b.drain(view(3), epoch());
+    assert_eq!(first.len(), 2, "one block per build");
+    assert_eq!(second.len(), 2, "the rest waits for the next build");
+    assert!(
+        third.is_empty(),
+        "the pool holds fanout + 1 blocks, so the fifth transaction was refused"
+    );
+}
+
+#[tokio::test]
+async fn pooled_transactions_expire_after_ttl() {
+    let mut b = builder();
+    b.on_transactions(tx_msg(view(1), Vec::from([tx(1)])));
+    b.on_view_changed(view(6));
+    b.on_transactions(tx_msg(view(2), Vec::from([tx(2)])));
+    b.on_view_changed(view(7));
+
+    let (txns, _) = b.drain(view(7), epoch());
     assert_eq!(txns, Vec::from([tx(2)]));
 }
 
