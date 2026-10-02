@@ -82,6 +82,58 @@ impl PayloadProof {
             commit == header.payload_commitment(),
             "commitment of payload does not match commitment in header"
         );
+        ensure!(
+            self.payload.ns_table() == header.ns_table(),
+            "namespace table of payload does not match namespace table in header"
+        );
         Ok((self.payload, self.vid_common))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use espresso_types::{NamespaceId, NodeState, Transaction};
+    use hotshot_types::traits::block_contents::BlockPayload;
+
+    use super::*;
+    use crate::testing::TestClient;
+
+    /// The commitment is checked against the header's namespace table, so the payload that comes
+    /// back must carry that table too. A provider can pair genuine payload bytes with a different
+    /// table of its own, which would reclassify the transactions into other namespaces.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_verify_rejects_payload_with_forged_ns_table() {
+        let client = TestClient::default();
+        let tx = vec![1, 2, 3];
+        client
+            .add_block(
+                1,
+                vec![Transaction::new(NamespaceId::from(1u32), tx.clone())],
+            )
+            .await;
+        let header = client.leaf(1).await.header().clone();
+        let payload = client.payload(1).await;
+        let vid_common = client.vid_common(1).await;
+
+        let verified = PayloadProof::new(payload.clone(), vid_common.clone())
+            .verify(&header)
+            .unwrap();
+        assert_eq!(verified.ns_table(), header.ns_table());
+
+        // The same transaction bytes under a different namespace ID.
+        let other = Payload::from_transactions_sync(
+            [Transaction::new(NamespaceId::from(2u32), tx)],
+            NodeState::mock_v3().chain_config,
+        )
+        .unwrap()
+        .0;
+        assert_ne!(other.ns_table(), payload.ns_table());
+        let forged = Payload::from_bytes(payload.raw_payload(), other.ns_table());
+
+        let err = PayloadProof::new(forged, vid_common)
+            .verify(&header)
+            .unwrap_err();
+        assert!(err.to_string().contains("namespace table"), "{err:#}");
     }
 }
