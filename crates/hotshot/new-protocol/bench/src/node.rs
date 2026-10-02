@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use hotshot::{traits::BlockPayload, types::BLSPubKey};
@@ -38,10 +38,7 @@ use hotshot_types::{
 use tracing::{error, info, warn};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
-use crate::{
-    config::NodeConfig, cpu_sampler::CpuSampler, membership::make_membership,
-    metrics::MetricsCollector,
-};
+use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
 type BenchCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;
 
@@ -58,18 +55,6 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     // appends a wall-clock-ns stamp to disk for offline timeline reconstruction.
     let tracer = Arc::new(CsvLeaderTracer::new(cfg.node_id, leader_trace_path(&cfg))?);
 
-    // Start the CPU sampler (no-op on non-Linux). Outputs land in the same
-    // directory as the leader-trace CSV so analysis scripts can pick them up.
-    let cpu_out_dir = PathBuf::from(&cfg.output_file)
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_default();
-    let cpu_sampler = CpuSampler::start(
-        cfg.node_id,
-        cpu_out_dir,
-        Duration::from_millis(cfg.sampler_tick_ms),
-    );
-
     let coordinator = build_coordinator(
         public_key,
         private_key,
@@ -81,9 +66,7 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     )
     .await;
 
-    let result = run_instrumented(coordinator, &cfg).await;
-    cpu_sampler.stop().await;
-    result
+    run_instrumented(coordinator, &cfg).await
 }
 
 fn leader_trace_path(cfg: &NodeConfig) -> PathBuf {
