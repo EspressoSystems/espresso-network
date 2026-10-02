@@ -15,32 +15,34 @@ def write_trace(path: Path, node: int, rows: list[tuple[int, str, int]]) -> Path
     return path
 
 
-def cycle(view: int, t0_ms: int) -> list[tuple[int, str, int]]:
-    """Leader rows of one view: idle 2, build 3, send 5 ms after `t0_ms`."""
-    return [
-        (view, "request_block_header_queued", (t0_ms + 2) * MS),
-        (view, "header_created_applied", (t0_ms + 5) * MS),
-        (view, "proposal_queued", (t0_ms + 10) * MS),
-    ]
+# (event, ms after t0) of a leader's view; t0 is the previous view's proposal_queued
+PATH_EVENTS = (
+    ("request_block_header_queued", 2),
+    ("block_built_applied", 4),
+    ("header_created_applied", 5),
+    ("proposal_queued", 10),
+    ("proposal_broadcast_start", 11),
+    ("proposal_broadcast_end", 13),
+    ("proposal_validated_v_minus_1", 15),
+    ("vote1_broadcast_start", 16),
+    ("cert1_v_minus_1_input_dispatched", 20),
+    ("vote2_v_minus_1_broadcast_end", 22),
+    ("cert2_v_minus_1_input_dispatched", 27),
+    ("leaf_decided", 40),
+)
+PATH_DURATIONS = [2, 2, 1, 5, 1, 2, 2, 1, 4, 2, 5, 13]
+
+
+def leader_rows(view: int) -> list[tuple[int, str, int]]:
+    return [(view, event, (10 * view + off) * MS) for event, off in PATH_EVENTS]
 
 
 def three_nodes() -> leadertrace.Trace:
     """Views 0..3, leader of view v is node v % 3; views 1..3 have a t0 anchor."""
     trace: leadertrace.Trace = {0: {}, 1: {}, 2: {}}
     for view in range(4):
-        leader = view % 3
-        t0 = 10 * view
-        events = {
-            "request_block_header_queued": (t0 + 2) * MS,
-            "header_created_applied": (t0 + 5) * MS,
-            "proposal_queued": (t0 + 10) * MS,
-            "leaf_decided": (t0 + 10 + 30) * MS,
-        }
-        trace[leader][view] = events
-        for node, delay in zip(range(3), (12, 14, 16)):
-            trace[node].setdefault(view, {})["cert1_v_minus_1_input_dispatched"] = (
-                t0 + 10 + delay
-            ) * MS
+        for _, event, ts in leader_rows(view):
+            trace[view % 3].setdefault(view, {})[event] = ts
     return trace
 
 
@@ -104,47 +106,55 @@ def test_leaders_rejects_two_proposers_for_one_view():
         leadertrace.leaders(trace)
 
 
-def test_view_phases_splits_a_cycle_at_each_stamp():
-    phases, skipped = leadertrace.view_phases(three_nodes(), warmup=1)
+def test_leader_path_splits_a_view_at_each_event():
+    path, skipped = leadertrace.leader_path(three_nodes(), warmup=1)
     assert skipped == Counter()
-    assert list(phases) == [1, 2, 3]
-    assert phases[2] == pytest.approx([2, 3, 5, 14, 16])
+    assert list(path) == [1, 2, 3]
+    assert path[2] == pytest.approx(PATH_DURATIONS)
 
 
-def test_view_phases_sum_to_decision_time_after_t0():
-    phases, _ = leadertrace.view_phases(three_nodes(), warmup=1)
-    for row in phases.values():
-        assert sum(row) == pytest.approx(10 + 30)
+def test_leader_path_sums_to_decision_time_after_t0():
+    path, _ = leadertrace.leader_path(three_nodes(), warmup=1)
+    for row in path.values():
+        assert sum(row) == pytest.approx(40)
 
 
-def test_view_phases_drops_the_warmup_views():
-    phases, _ = leadertrace.view_phases(three_nodes(), warmup=3)
-    assert list(phases) == [3]
+def test_leader_path_drops_the_warmup_views():
+    path, _ = leadertrace.leader_path(three_nodes(), warmup=3)
+    assert list(path) == [3]
 
 
-def test_view_phases_counts_skips_by_reason():
+def test_leader_path_keeps_negative_durations():
+    trace = three_nodes()
+    view, t0_ms, skew_ms = 2, 10, 2
+    cert1_ms = t0_ms * view + dict(PATH_EVENTS)["cert1_v_minus_1_input_dispatched"]
+    trace[view % 3][view]["vote2_v_minus_1_broadcast_end"] = (cert1_ms - skew_ms) * MS
+    path, skipped = leadertrace.leader_path(trace, warmup=view)
+    segment = [name for name, _ in leadertrace.LEADER_PATH].index("Cert1 -> vote2 sent")
+    assert skipped == Counter()
+    assert path[view][segment] == pytest.approx(-skew_ms)
+
+
+def test_leader_path_counts_skips_by_reason():
     trace = three_nodes()
     del trace[1][1]["header_created_applied"]
-    trace[2][2]["leaf_decided"] = 0
+    del trace[2][2]["cert2_v_minus_1_input_dispatched"]
     del trace[0][3]["leaf_decided"]
-    phases, skipped = leadertrace.view_phases(trace, warmup=0)
-    assert list(phases) == []
+    path, skipped = leadertrace.leader_path(trace, warmup=0)
+    assert list(path) == []
     assert skipped == Counter(
         {
             "no t0 anchor": 1,
             "missing header_created_applied": 1,
-            "negative cert1->decided": 1,
+            "missing cert2_v_minus_1_input_dispatched": 1,
             "missing leaf_decided": 1,
         }
     )
 
 
-def test_view_phases_skips_a_view_without_cert1_stamps():
-    trace = three_nodes()
-    for views in trace.values():
-        views[2].pop("cert1_v_minus_1_input_dispatched")
-    _, skipped = leadertrace.view_phases(trace, warmup=2)
-    assert skipped == Counter({"missing cert1_v_minus_1_input_dispatched": 1})
+def test_view_times_gives_proposal_queued_in_unix_seconds():
+    trace = {0: {7: {"proposal_queued": 1_500_000_000}}}
+    assert leadertrace.view_times(trace) == {7: pytest.approx(1.5)}
 
 
 def test_cluster_finality_takes_the_quorum_decision():

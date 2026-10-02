@@ -1,14 +1,12 @@
-"""Phase breakdown of consensus views from the per-node `leader_trace_node{N}.csv` files that
+"""Leader critical-path breakdown of consensus views from the per-node `leader_trace_node{N}.csv` files that
 espresso-node writes under `ESPRESSO_NODE_LEADER_TRACE_DIR`. Pure functions, stdlib only.
 
 Every row is keyed by the subject view the event is about. The leader of view V is the node
-whose trace has `proposal_queued` for V. Phases of V are measured from t0 = the previous leader's
-`proposal_queued`. Phases that span hosts (idle, vote1->cert1, finality) assume chrony-synced
-clocks; a negative idle indicates skew."""
+whose trace has `proposal_queued` for V. Values that span hosts (wait to propose, finality, and
+binning views into load steps by controller time) assume chrony-synced clocks."""
 
 import csv
 import itertools
-import statistics
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
@@ -17,13 +15,21 @@ from pathlib import Path
 Trace = dict[int, dict[int, dict[str, int]]]
 
 HEADER = ["view", "node_id", "event", "ts_ns"]
-PHASES = ("idle", "block build", "disperse+send", "vote1->cert1", "cert1->decided")
-LEADER_STAMPS = (
-    "request_block_header_queued",
-    "header_created_applied",
-    "proposal_queued",
+# (segment, end event on the leader of V); each segment starts where the previous one ends
+LEADER_PATH = (
+    ("wait to propose", "request_block_header_queued"),
+    ("block build", "block_built_applied"),
+    ("header", "header_created_applied"),
+    ("commit + sign", "proposal_queued"),
+    ("outbox wait", "proposal_broadcast_start"),
+    ("proposal broadcast", "proposal_broadcast_end"),
+    ("validate own proposal", "proposal_validated_v_minus_1"),
+    ("validated -> vote1 sent", "vote1_broadcast_start"),
+    ("collect vote1 -> Cert1", "cert1_v_minus_1_input_dispatched"),
+    ("Cert1 -> vote2 sent", "vote2_v_minus_1_broadcast_end"),
+    ("collect vote2 -> Cert2", "cert2_v_minus_1_input_dispatched"),
+    ("Cert2 -> decided", "leaf_decided"),
 )
-CERT1 = "cert1_v_minus_1_input_dispatched"
 DECIDED = "leaf_decided"
 DEFAULT_WARMUP = 10
 NS_PER_MS = 1_000_000
@@ -61,48 +67,36 @@ def leaders(trace: Trace) -> dict[int, tuple[int, int]]:
     return found
 
 
-def view_phases(
+def view_times(trace: Trace) -> dict[int, float]:
+    """View to the leader's `proposal_queued` in unix seconds."""
+    return {view: ts / 1e9 for view, (_, ts) in leaders(trace).items()}
+
+
+def leader_path(
     trace: Trace, warmup: int = DEFAULT_WARMUP
 ) -> tuple[dict[int, list[float]], Counter[str]]:
-    """View to the durations in ms of `PHASES`, and the reasons views were skipped."""
+    """View to the durations in ms of the `LEADER_PATH` segments, and the counts of views left
+    out by reason.
+
+    t0 is the previous leader's `proposal_queued`, so "wait to propose" is measured across hosts
+    and includes clock skew. All other segments use the clock of the leader of V. Durations are
+    kept as measured: events are not strictly ordered, so some segments can be negative (seen:
+    Cert1 -> vote2 sent, Cert2 -> decided)."""
     lead = leaders(trace)
-    phases: dict[int, list[float]] = {}
+    path: dict[int, list[float]] = {}
     skipped: Counter[str] = Counter()
     for view in sorted(v for v in lead if v >= warmup):
-        stamps = _stamps(trace, lead, view)
-        if isinstance(stamps, str):
-            skipped[stamps] += 1
+        if view - 1 not in lead:
+            skipped["no t0 anchor"] += 1
             continue
-        durations = [(b - a) / NS_PER_MS for a, b in itertools.pairwise(stamps)]
-        negative = [name for name, d in zip(PHASES, durations) if d < 0]
-        if negative:
-            skipped[f"negative {negative[0]}"] += 1
+        events = trace[lead[view][0]][view]
+        absent = [event for _, event in LEADER_PATH if event not in events]
+        if absent:
+            skipped[f"missing {absent[0]}"] += 1
             continue
-        phases[view] = durations
-    return phases, skipped
-
-
-def _stamps(
-    trace: Trace, lead: dict[int, tuple[int, int]], view: int
-) -> list[float] | str:
-    """[t0, queued, built, proposal, cert1, decided] in ns, or why the view has none."""
-    if view - 1 not in lead:
-        return "no t0 anchor"
-    leader = trace[lead[view][0]][view]
-    cert1 = [v[view][CERT1] for v in trace.values() if CERT1 in v.get(view, {})]
-    absent = [name for name in LEADER_STAMPS if name not in leader]
-    if not cert1:
-        absent.append(CERT1)
-    if DECIDED not in leader:
-        absent.append(DECIDED)
-    if absent:
-        return f"missing {absent[0]}"
-    return [
-        lead[view - 1][1],
-        *(leader[name] for name in LEADER_STAMPS),
-        statistics.median(cert1),
-        leader[DECIDED],
-    ]
+        stamps = [lead[view - 1][1], *(events[event] for _, event in LEADER_PATH)]
+        path[view] = [(b - a) / NS_PER_MS for a, b in itertools.pairwise(stamps)]
+    return path, skipped
 
 
 def cluster_finality_ms(

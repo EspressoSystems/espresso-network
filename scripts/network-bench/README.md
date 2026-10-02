@@ -73,7 +73,9 @@ scripts/network-bench/
 - With `--submit-nodes` = nodes, `node0` also serves submit HTTP: query lag, the query-node limit rule and `node0` CPU
   are not comparable across different `--submit-nodes` values.
 - Output of `--leader-trace`, also by `render`: `hosts/<name>/trace/leader_trace_node*.csv`, and from
-  `trace-plots RUN_DIR` (uv script, needs matplotlib) `trace/phases.png`, `trace/finality.png`, `trace/stats.json`.
+  `trace-plots RUN_DIR` (uv script, needs matplotlib) `trace/leader_path.png`, `trace/leader_path_typical.png`,
+  `trace/leader_path_worst.png`, `trace/leader_path.md` (segment medians per load step, over the views whose t0 lies in
+  the measured half `t_mid`..`t_end` of the step in `steps.json`), `trace/finality.png`, `trace/stats.json`.
 - Query node: pg_stat_database/checkpointer/wal/activity every 5 s, pg_stat_statements and settings at collect, slow
   statements (>200 ms) in the postgres log.
 - Per step, second half judged:

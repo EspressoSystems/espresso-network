@@ -4,7 +4,10 @@
 # dependencies = ["matplotlib", "numpy"]
 # ///
 """Plots the leader traces collected under `<run_dir>/hosts/*/trace/` (see `--leader-trace` of
-aws-bench) into `<run_dir>/trace/`: `phases.png` (per-view phase durations and their medians),
+aws-bench) into `<run_dir>/trace/`: `leader_path.png` (median waterfall and per-view stacked
+segments), `leader_path_typical.png` and `leader_path_worst.png` (single-view waterfalls),
+`leader_path.md` (segment medians per load step of `<run_dir>/steps.json`, if present, over
+the views whose t0 lies in the step's measured half),
 `finality.png` (cluster finality histogram and CDF) and `stats.json`.
 
     trace-plots RUN_DIR [--warmup N]
@@ -19,13 +22,26 @@ from pathlib import Path
 import leadertrace
 import matplotlib
 import numpy as np
-from matplotlib.transforms import Bbox
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-PHASES = leadertrace.PHASES
-COLORS = ("#9ca3af", "#3b82f6", "#dc2626", "#8b5cf6", "#10b981")
+NAMES = [name for name, _ in leadertrace.LEADER_PATH]
+QUEUED = [event for _, event in leadertrace.LEADER_PATH].index("proposal_queued")
+COLORS = (
+    "#9e9e9e",
+    "#6baed6",
+    "#2171b5",
+    "#08306b",
+    "#fdae6b",
+    "#d62728",
+    "#9467bd",
+    "#c5b0d5",
+    "#2ca02c",
+    "#98df8a",
+    "#17becf",
+    "#7f7f7f",
+)
 FONT = 13
 TRACE_GLOB = "hosts/*/trace/leader_trace_node*.csv"
 
@@ -40,8 +56,8 @@ def main(argv: list[str]) -> None:
     if not paths:
         sys.exit(f"no leader_trace_node*.csv under {args.run_dir}/{TRACE_GLOB}")
     trace = leadertrace.read_traces(paths)
-    phases, skipped = leadertrace.view_phases(trace, args.warmup)
-    if not phases:
+    path, skipped = leadertrace.leader_path(trace, args.warmup)
+    if not path:
         sys.exit(
             f"no views to plot after warmup {args.warmup}; skipped: {dict(skipped)}"
         )
@@ -49,95 +65,226 @@ def main(argv: list[str]) -> None:
     if not finality:
         sys.exit(f"no views with a quorum decision; skipped: {dict(finality_skipped)}")
 
-    columns = np.array(list(phases.values())).T
-    stats = build_stats(columns, list(finality.values()), skipped, finality_skipped)
+    steps_file = args.run_dir / "steps.json"
+    steps = None
+    if steps_file.exists():
+        steps = step_stats(
+            path, leadertrace.view_times(trace), json.loads(steps_file.read_text())
+        )
+    stats = build_stats(path, list(finality.values()), skipped, finality_skipped, steps)
     out = args.run_dir / "trace"
     out.mkdir(exist_ok=True)
     plt.rcParams.update({"font.size": FONT})
-    plot_phases(list(phases), columns, stats, len(trace), out / "phases.png")
+    views = np.array(list(path))
+    data = np.array(list(path.values()))
+    plot_aggregate(views, data, stats, len(trace), skipped, out / "leader_path.png")
+    leaders = leadertrace.leaders(trace)
+    rows = dict(zip(path, data, strict=True))
+    picked = pick_views({view: float(row.sum()) for view, row in rows.items()})
+    for name, view in picked.items():
+        plot_view(view, leaders[view][0], rows[view], out / f"leader_path_{name}.png")
     plot_finality(list(finality.values()), stats["finality"], out / "finality.png")
     (out / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
+    (out / "leader_path.md").write_text(leader_path_table(stats))
 
 
 def build_stats(
-    columns: np.ndarray,
+    path: dict[int, list[float]],
     finality: list[float],
     skipped: Counter[str],
     finality_skipped: Counter[str],
+    steps: list[dict] | None,
 ) -> dict:
-    return {
-        "phases": {
-            name: {"median": float(np.median(c)), "p95": float(np.percentile(c, 95))}
-            for name, c in zip(PHASES, columns)
+    data = np.array(list(path.values()))
+    totals = data.sum(axis=1)
+    stats = {
+        "leader_path": {
+            "views": len(path),
+            "skipped": dict(skipped),
+            "segments": {
+                name: {
+                    "median": float(np.median(c)),
+                    "p95": float(np.percentile(c, 95)),
+                    "negative": int((c < 0).sum()),
+                }
+                for name, c in zip(NAMES, data.T, strict=True)
+            },
+            "total": {
+                "median": float(np.median(totals)),
+                "p95": float(np.percentile(totals, 95)),
+            },
         },
         "finality": {
-            "p50": float(np.percentile(finality, 50)),
-            "p95": float(np.percentile(finality, 95)),
             "views": len(finality),
             "skipped": dict(finality_skipped),
+            "median": float(np.median(finality)),
+            "p95": float(np.percentile(finality, 95)),
         },
-        "views": {"plotted": columns.shape[1], "skipped": dict(skipped)},
+    }
+    if steps is not None:
+        stats["steps"] = steps
+    return stats
+
+
+def pick_views(totals: dict[int, float]) -> dict[str, int]:
+    """The view whose total is closest to the median total and the view with the largest total;
+    the first view wins ties."""
+    median = float(np.median(list(totals.values())))
+    return {
+        "typical": min(totals, key=lambda view: abs(totals[view] - median)),
+        "worst": max(totals, key=totals.__getitem__),
     }
 
 
-def plot_phases(
-    views: list[int], columns: np.ndarray, stats: dict, nodes: int, path: Path
+def step_stats(
+    path: dict[int, list[float]], times: dict[int, float], steps: list[dict]
+) -> list[dict]:
+    """Per load step, the view count and median of each segment and of the total over the views
+    whose t0 (the previous leader's `proposal_queued`) lies in the measured half of the step,
+    `t_mid` to `t_end`. Medians are null for a step without views."""
+    result = []
+    for step in steps:
+        rows = [
+            durations
+            for view, durations in path.items()
+            if step["t_mid"] <= times[view - 1] <= step["t_end"]
+        ]
+        medians = np.median(rows, axis=0) if rows else None
+        result.append(
+            {
+                "rate_mb_s": step["rate_mb_s"],
+                "refine": step["refine"],
+                "views": len(rows),
+                "segments": None
+                if medians is None
+                else {name: float(m) for name, m in zip(NAMES, medians, strict=True)},
+                "total": None
+                if medians is None
+                else float(np.median(np.sum(rows, axis=1))),
+            }
+        )
+    return result
+
+
+def leader_path_table(stats: dict) -> str:
+    """Markdown table of segment medians: a row per load step, or one row for all views."""
+    if "steps" in stats:
+        rows = [
+            (
+                f"{s['rate_mb_s']:g} MB/s" + (" (refine)" if s["refine"] else ""),
+                s["views"],
+                s["segments"],
+                s["total"],
+            )
+            for s in stats["steps"]
+        ]
+    else:
+        rows = [
+            (
+                "all views",
+                stats["leader_path"]["views"],
+                {n: v["median"] for n, v in stats["leader_path"]["segments"].items()},
+                stats["leader_path"]["total"]["median"],
+            )
+        ]
+    lines = [
+        "| load | views | " + " | ".join(NAMES) + " | total |",
+        "|" + "---|" * (len(NAMES) + 3),
+    ]
+    for label, views, segments, total in rows:
+        cells = (
+            ["-"] * (len(NAMES) + 1)
+            if segments is None
+            else [f"{segments[n]:.1f}" for n in NAMES] + [f"{total:.1f}"]
+        )
+        lines.append(f"| {label} | {views} | " + " | ".join(cells) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def waterfall(ax, durations, labels: list[str], total_text: str) -> None:
+    starts = np.concatenate([[0], np.cumsum(durations)[:-1]])
+    ends = np.cumsum(durations)
+    rows = list(range(len(NAMES)))
+    ax.barh(rows, durations, left=starts, color=COLORS, height=0.7)
+    span = max(ends.max(), 1)
+    for row, (start, duration, label) in enumerate(
+        zip(starts, durations, labels, strict=True)
+    ):
+        ax.text(
+            max(start, start + duration) + span * 0.01,
+            row,
+            label,
+            va="center",
+            bbox={"facecolor": "white", "edgecolor": "none", "pad": 1},
+        )
+    ax.axvline(ends[QUEUED], color="k", linestyle="--", linewidth=1.2)
+    ax.text(ends[QUEUED] + span * 0.01, len(NAMES), "proposal queued", va="center")
+    ax.set_yticks([*rows, len(NAMES)], [*NAMES, total_text])
+    ax.set_ylim(len(NAMES) + 0.6, -0.6)
+    ax.set_xlim(min(0, starts.min(), ends.min()), span * 1.18)
+    ax.set_xlabel("ms since t0 (previous leader's proposal_queued)")
+    ax.grid(axis="x", alpha=0.3)
+
+
+def plot_aggregate(
+    views: np.ndarray,
+    data: np.ndarray,
+    stats: dict,
+    nodes: int,
+    skipped: Counter[str],
+    path: Path,
 ) -> None:
     fig, (top, bottom) = plt.subplots(
         2,
         1,
-        figsize=(18, 11),
+        figsize=(20, 17),
         facecolor="white",
-        gridspec_kw={"height_ratios": [3, 1.4]},
+        gridspec_kw={"height_ratios": [3, 2]},
     )
-    base = np.zeros(len(views))
-    for name, color, column in zip(PHASES, COLORS, columns):
-        top.bar(views, column, bottom=base, width=1.0, color=color, label=name)
-        base += column
-    top.set(xlabel="view", ylabel="ms since previous proposal")
-    top.set_title(
-        f"{nodes} nodes, views {views[0]}..{views[-1]} ({len(views)} plotted): "
-        "phase durations per view"
-    )
-    top.legend(
-        ncol=len(PHASES), loc="lower center", bbox_to_anchor=(0.5, 1.07), frameon=False
-    )
-    top.margins(x=0)
-
-    medians = [stats["phases"][name]["median"] for name in PHASES]
-    left = 0.0
-    for color, median in zip(COLORS, medians):
-        bottom.barh(0, median, left=left, color=color, height=0.6)
-        if median > 0.04 * sum(medians):
-            bottom.text(
-                left + median / 2,
-                0,
-                f"{median:.1f}",
-                ha="center",
-                va="center",
-                color="white",
-                fontweight="bold",
-            )
-        left += median
-    bottom.set(xlabel="ms (median per phase)", yticks=[])
-    bottom.set_title("Median phase durations")
-
-    table_ax = fig.add_axes((0.64, 0.06, 0.35, 0.32))
-    table_ax.axis("off")
-    table = table_ax.table(
-        cellText=[
-            [name, f"{s['median']:.1f}", f"{s['p95']:.1f}"]
-            for name, s in stats["phases"].items()
+    segments = stats["leader_path"]["segments"]
+    medians = [segments[name]["median"] for name in NAMES]
+    waterfall(
+        top,
+        medians,
+        [
+            f"{segments[name]['median']:.1f} / {segments[name]['p95']:.1f} ms"
+            for name in NAMES
         ],
-        colLabels=["phase", "median ms", "p95 ms"],
-        colWidths=[0.6, 0.2, 0.2],
-        cellLoc="left",
-        bbox=Bbox.from_bounds(0, 0, 1, 1),
+        f"sum of medians {sum(medians):.1f} ms, "
+        f"median total {stats['leader_path']['total']['median']:.1f} ms",
     )
-    table.auto_set_font_size(False)
-    table.set_fontsize(FONT)
-    fig.subplots_adjust(left=0.06, right=0.62, top=0.88, bottom=0.08, hspace=0.45)
-    fig.savefig(path, dpi=120)
+    positive = np.clip(data, 0, None)
+    base = np.zeros(len(views))
+    for name, color, column in zip(NAMES, COLORS, positive.T, strict=True):
+        bottom.bar(views, column, bottom=base, width=1.0, color=color, label=name)
+        base += column
+    bottom.set(xlabel="view", ylabel="ms (negative segments clipped to 0)")
+    bottom.legend(loc="center left", bbox_to_anchor=(1.005, 0.5))
+    fig.suptitle(
+        f"Leader critical path: {nodes} nodes, views {views.min()}-{views.max()}, "
+        f"{len(views)} used, {sum(skipped.values())} skipped (median / p95)",
+        fontsize=16,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    fig.savefig(path, dpi=100)
+    plt.close(fig)
+
+
+def plot_view(view: int, node: int, durations: np.ndarray, path: Path) -> None:
+    fig, ax = plt.subplots(figsize=(18, 8), facecolor="white")
+    total = durations.sum()
+    waterfall(
+        ax,
+        durations,
+        [f"{d:.1f} ms" for d in durations],
+        f"t0 -> decided: {total:.1f} ms",
+    )
+    ax.set_title(
+        f"Leader critical path, view {view}, leader node {node}, total {total:.1f} ms",
+        fontsize=16,
+    )
+    fig.tight_layout()
+    fig.savefig(path, dpi=100)
     plt.close(fig)
 
 
@@ -153,7 +300,7 @@ def plot_finality(finality: list[float], stats: dict, path: Path) -> None:
     )
     cdf.set_title("Cluster finality CDF")
     for ax in (hist, cdf):
-        for key, color in (("p50", "#16a34a"), ("p95", "#dc2626")):
+        for key, color in (("median", "#16a34a"), ("p95", "#dc2626")):
             ax.axvline(
                 stats[key],
                 color=color,
