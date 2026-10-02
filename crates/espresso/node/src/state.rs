@@ -3,18 +3,20 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, bail, ensure};
 use async_lock::Mutex;
+use committable::{Commitment, Committable};
 use either::Either;
 use espresso_types::{
-    BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
+    BackoffParams, BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2,
+    ValidatedState,
     traits::StateCatchup,
     v0_3::{ChainConfig, RewardMerkleTreeV1},
     v0_4::Delta,
 };
-use futures::{StreamExt, future::Future};
+use futures::{FutureExt, StreamExt, future::Future};
 use hotshot::traits::ValidatedState as HotShotState;
 use hotshot_query_service::{
-    availability::{AvailabilityDataSource, LeafQueryData},
-    data_source::{Transaction, VersionedDataSource},
+    availability::AvailabilityDataSource,
+    data_source::{Transaction, VersionedDataSource, storage::pruning::PrunedHeightDataSource},
     merklized_state::{MerklizedStateHeightPersistence, UpdateStateData},
     status::StatusDataSource,
     types::HeightIndexed,
@@ -23,7 +25,7 @@ use hotshot_types::utils::is_last_block;
 use jf_merkle_tree_compat::{
     LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
 };
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
 
@@ -198,7 +200,7 @@ async fn store_state_update(
     skip_all,
     fields(
         node_id = instance.node_id,
-        view = ?parent_leaf.leaf().view_number(),
+        view = ?parent_leaf.view_number(),
         height = parent_leaf.height(),
     ),
 )]
@@ -207,8 +209,8 @@ async fn update_state_storage<T>(
     storage: &Arc<T>,
     instance: &NodeState,
     peers: &impl StateCatchup,
-    parent_leaf: &LeafQueryData<SeqTypes>,
-    proposed_leaf: &LeafQueryData<SeqTypes>,
+    parent_leaf: &Leaf2,
+    proposed_leaf: &Leaf2,
 ) -> anyhow::Result<ValidatedState>
 where
     T: SequencerStateDataSource,
@@ -216,17 +218,12 @@ where
 {
     let parent_chain_config = parent_state.chain_config;
     let block_number = proposed_leaf.height();
-    let version = proposed_leaf.header().version();
+    let version = proposed_leaf.block_header().version();
 
-    let (state, delta) = compute_state_update(
-        parent_state,
-        instance,
-        peers,
-        &parent_leaf.leaf().clone(),
-        &proposed_leaf.leaf().clone(),
-    )
-    .await
-    .context("computing state update")?;
+    let (state, delta) =
+        compute_state_update(parent_state, instance, peers, parent_leaf, proposed_leaf)
+            .await
+            .context("computing state update")?;
 
     let has_changed_accounts = version > EPOCH_VERSION && !delta.rewards_delta.is_empty();
     // For EPOCH_REWARD_VERSION+ we must persist the reward tree at every epoch
@@ -357,6 +354,23 @@ where
     Ok(())
 }
 
+/// How long the loop waits on the local leaf stream before checking whether the data pruner has
+/// passed the height it is waiting for.
+const PRUNED_LEAF_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How many leaves fetched from peers go by between progress log lines.
+const PRUNED_LEAF_PROGRESS_EVERY: u64 = 1000;
+
+/// Where the loop reads the parent snapshot from. Snapshot reads need the header at the parent's
+/// height for the state commitment. This database has it, as it always had, until the data
+/// pruner deletes it; from then on only peers can answer, and the node's catchup asks them. Both
+/// have retries off, so a failed read comes back to [`apply_leaf`], which decides again where the
+/// next attempt goes.
+struct LoopCatchup {
+    local: Arc<dyn StateCatchup>,
+    node: Arc<dyn StateCatchup>,
+}
+
 #[tracing::instrument(skip_all)]
 pub(crate) async fn update_state_storage_loop<T>(
     storage: Arc<T>,
@@ -370,58 +384,57 @@ where
     // Use a separate rewards calculator for the state loop so it doesn't
     // interfere with consensus, which may be on a very different epoch.
     instance.epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
-    let peers = SqlStateCatchup::new(storage.clone(), Default::default());
+    let catchup = LoopCatchup {
+        local: Arc::new(SqlStateCatchup::new(
+            storage.clone(),
+            BackoffParams::disabled(),
+        )),
+        node: instance.state_catchup.clone(),
+    };
 
     // Resume from the newest snapshot in storage. The loop cannot start anywhere else:
     // `from_header` gives it a bare state, and its catchup fills in the block frontier and any fee
-    // account it has not seen from the parent's snapshot in this database, which exists only up to
-    // the head. The state pruner in turn never advances to the head, so that snapshot stays
-    // readable however far behind the chain the loop has fallen.
-    let (last_height, parent_leaf, mut leaves) = {
-        let last_height = storage.get_last_state_height().await?;
+    // account it has not seen from the parent's snapshot, which exists only up to the head. The
+    // state pruner in turn never advances to the head, so that snapshot stays readable however
+    // far behind the chain the loop has fallen.
+    let last_height = storage.get_last_state_height().await?;
 
-        // Check for environment variable override
-        let height =
-            if let Ok(env_height) = std::env::var("ESPRESSO_NODE_STATE_STORAGE_INITIAL_HEIGHT") {
-                match env_height.parse::<usize>() {
-                    Ok(override_height) => {
-                        tracing::error!(
-                            node_id = instance.node_id,
-                            last_height,
-                            override_height,
-                            "overriding initial state storage height from environment variable"
-                        );
-                        override_height
-                    },
-                    Err(e) => {
-                        tracing::error!(
-                            "failed to parse ESPRESSO_NODE_STATE_STORAGE_INITIAL_HEIGHT: {e}, \
-                             using last height {last_height}"
-                        );
-                        last_height
-                    },
-                }
-            } else {
+    // Check for environment variable override
+    let height = if let Ok(env_height) = std::env::var("ESPRESSO_NODE_STATE_STORAGE_INITIAL_HEIGHT")
+    {
+        match env_height.parse::<usize>() {
+            Ok(override_height) => {
+                tracing::error!(
+                    node_id = instance.node_id,
+                    last_height,
+                    override_height,
+                    "overriding initial state storage height from environment variable"
+                );
+                override_height
+            },
+            Err(e) => {
+                tracing::error!(
+                    "failed to parse ESPRESSO_NODE_STATE_STORAGE_INITIAL_HEIGHT: {e}, using last \
+                     height {last_height}"
+                );
                 last_height
-            };
-
-        let current_height = storage.block_height().await?;
-        tracing::info!(
-            node_id = instance.node_id,
-            last_height,
-            height,
-            current_height,
-            "updating state storage"
-        );
-
-        let parent_leaf = AvailabilityDataSource::get_leaf(&*storage, height).await;
-        let leaves = storage.subscribe_leaves(height + 1).await;
-        (last_height, parent_leaf, leaves)
+            },
+        }
+    } else {
+        last_height
     };
-    // resolve the parent leaf future _after_ dropping our lock on the state, in case it is not
-    // ready yet and another task needs a mutable lock on the state to produce the parent leaf.
-    let mut parent_leaf = parent_leaf.await;
-    let mut parent_state = ValidatedState::from_header(parent_leaf.header());
+
+    let current_height = storage.block_height().await?;
+    tracing::info!(
+        node_id = instance.node_id,
+        last_height,
+        height,
+        current_height,
+        "updating state storage"
+    );
+
+    let parent_leaf = leaf_at(&storage, &instance, height as u64).await;
+    let mut parent_state = ValidatedState::from_header(parent_leaf.block_header());
 
     // Seed the parent's reward tree from storage.
     //
@@ -436,7 +449,7 @@ where
     //
     // Load the parent's tree from storage to avoid this. Doing it once is enough
     // every later iteration carries the tree forward in `parent_state`.
-    if parent_leaf.header().version() > EPOCH_VERSION && parent_leaf.height() > 0 {
+    if parent_leaf.block_header().version() > EPOCH_VERSION && parent_leaf.height() > 0 {
         // The tree is only written at epoch boundaries, so the parent height
         // usually has no row; fall back to the most recent tree at or below it.
         let reward_merkle_tree_v2 = match storage
@@ -457,7 +470,7 @@ where
         // which is the parent's tree only if their roots match (they do within an
         // epoch). Verify against the root the parent header commits to.
         let parent_reward_root = parent_leaf
-            .header()
+            .block_header()
             .reward_merkle_tree_root()
             .right()
             .context("V5+ parent header must have a v2 reward root")?;
@@ -479,39 +492,244 @@ where
             .context("storing genesis state")?;
     }
 
-    while let Some(leaf) = leaves.next().await {
-        loop {
-            tracing::debug!(
-                height = leaf.height(),
-                node_id = instance.node_id,
-                ?leaf,
-                "updating persistent merklized state"
-            );
-            match update_state_storage(
-                &parent_state,
-                &storage,
-                &instance,
-                &peers,
-                &parent_leaf,
-                &leaf,
+    follow_leaves(&storage, &instance, &catchup, parent_leaf, parent_state).await
+}
+
+/// Apply every leaf above `parent_leaf` as it arrives. Leaves come from the local stream, except
+/// those the data pruner has already deleted: the availability layer never fetches a leaf at or
+/// below the data pruned height, so the stream would wait for one forever. Those come from peers,
+/// one at a time.
+async fn follow_leaves<T>(
+    storage: &Arc<T>,
+    instance: &NodeState,
+    catchup: &LoopCatchup,
+    mut parent_leaf: Leaf2,
+    mut parent_state: ValidatedState,
+) -> anyhow::Result<()>
+where
+    T: SequencerStateDataSource,
+    for<'a> T::Transaction<'a>: SequencerStateUpdate,
+{
+    let mut next_height = parent_leaf.height() + 1;
+    loop {
+        let mut fetched = 0u64;
+        while let Some(pruned) = pruned_past(&**storage, next_height).await {
+            if fetched == 0 {
+                tracing::warn!(
+                    next_height,
+                    pruned,
+                    "leaves are at or below the data pruned height; fetching them from peers"
+                );
+            }
+            let leaf =
+                fetch_pruned_leaf(storage, instance, next_height, Some(parent_leaf.commit())).await;
+            apply_leaf(
+                storage,
+                instance,
+                catchup,
+                &mut parent_leaf,
+                &mut parent_state,
+                leaf,
             )
-            .await
-            {
-                Ok(state) => {
-                    parent_leaf = leaf;
-                    parent_state = state;
-                    break;
+            .await;
+            next_height += 1;
+            fetched += 1;
+            if fetched.is_multiple_of(PRUNED_LEAF_PROGRESS_EVERY) {
+                tracing::info!(
+                    next_height,
+                    pruned,
+                    fetched,
+                    "still fetching leaves from peers"
+                );
+            }
+        }
+        if fetched > 0 {
+            tracing::info!(
+                next_height,
+                fetched,
+                "past the data pruned height; back on the local leaf stream"
+            );
+        }
+
+        let mut leaves = storage.subscribe_leaves(next_height as usize).await;
+        loop {
+            match timeout(PRUNED_LEAF_CHECK_INTERVAL, leaves.next()).await {
+                Ok(Some(leaf)) => {
+                    next_height = leaf.height() + 1;
+                    apply_leaf(
+                        storage,
+                        instance,
+                        catchup,
+                        &mut parent_leaf,
+                        &mut parent_state,
+                        leaf.leaf().clone(),
+                    )
+                    .await;
                 },
-                Err(err) => {
-                    tracing::error!(height = leaf.height(), "failed to update state: {err:#}");
-                    // If we fail, delay for a second and retry.
-                    sleep(Duration::from_secs(1)).await;
+                Ok(None) => return Ok(()),
+                // Still waiting. If the data pruner has passed this height in the meantime, the
+                // stream will never deliver it.
+                Err(_) => {
+                    if pruned_past(&**storage, next_height).await.is_some() {
+                        break;
+                    }
                 },
             }
         }
     }
+}
 
-    Ok(())
+/// The data pruned height when it is at or above `height`. The leaf and header there are out of
+/// local reach: the pruner deleted them, and the availability layer never fetches below its
+/// marker. A failed read counts as not pruned; every caller asks again before long, and the loop
+/// must not end over a transient database error.
+async fn pruned_past<T>(storage: &T, height: u64) -> Option<u64>
+where
+    T: SequencerStateDataSource,
+{
+    match storage.load_pruned_height().await {
+        Ok(pruned) => pruned.filter(|pruned| height <= *pruned),
+        Err(err) => {
+            tracing::warn!(height, "failed to load the data pruned height: {err:#}");
+            None
+        },
+    }
+}
+
+/// The leaf at `height`, from local storage, or from peers once the data pruner has deleted it.
+async fn leaf_at<T>(storage: &Arc<T>, instance: &NodeState, height: u64) -> Leaf2
+where
+    T: SequencerStateDataSource,
+{
+    loop {
+        if let Some(pruned) = pruned_past(&**storage, height).await {
+            tracing::warn!(
+                height,
+                pruned,
+                "leaf is at or below the data pruned height; fetching it from peers"
+            );
+            return fetch_pruned_leaf(storage, instance, height, None).await;
+        }
+        let local = async {
+            AvailabilityDataSource::get_leaf(&**storage, height as usize)
+                .await
+                .await
+        };
+        // On a timeout the data pruner may have passed this height in the meantime, so check
+        // again before waiting further.
+        if let Ok(leaf) = timeout(PRUNED_LEAF_CHECK_INTERVAL, local).await {
+            return leaf.leaf().clone();
+        }
+    }
+}
+
+/// Fetch the leaf at `height`, which the data pruned height says is gone, retrying until it
+/// arrives. The marker only stops the availability layer from fetching: a leaf the pruner has
+/// stamped but not yet deleted, or failed to delete, is still here and is taken from this database
+/// without a round trip. Otherwise peers serve it. They keep leaves for their own retention, and
+/// the node already depends on them for the epoch roots of the same stretch of chain. A leaf from
+/// peers is not stored, since the loop needs it once and the pruner would only delete it again,
+/// and when `parent` is given its parent link has to match; a leaf that fails that check is
+/// retried like a failed fetch rather than applied.
+async fn fetch_pruned_leaf<T>(
+    storage: &Arc<T>,
+    instance: &NodeState,
+    height: u64,
+    parent: Option<Commitment<Leaf2>>,
+) -> Leaf2
+where
+    T: SequencerStateDataSource,
+{
+    tracing::debug!(height, "fetching leaf below the data pruned height");
+    let catchup = instance.state_catchup.clone();
+    let coordinator = instance.coordinator.clone();
+    loop {
+        let fetched = BackoffParams::default()
+            .retry((), |_, retry| {
+                let storage = storage.clone();
+                let catchup = catchup.clone();
+                let coordinator = coordinator.clone();
+                async move {
+                    // `try_resolve` takes what is here without waiting for a fetch that the
+                    // marker rules out anyway.
+                    if let Ok(local) = AvailabilityDataSource::get_leaf(&*storage, height as usize)
+                        .await
+                        .try_resolve()
+                    {
+                        return Ok(local.leaf().clone());
+                    }
+                    let leaf = catchup.try_fetch_leaf(retry, coordinator, height).await?;
+                    if let Some(parent) = parent {
+                        ensure!(
+                            leaf.parent_commitment() == parent,
+                            "leaf {height} from peers has parent {} but the loop's parent is \
+                             {parent}",
+                            leaf.parent_commitment()
+                        );
+                    }
+                    Ok(leaf)
+                }
+                .boxed()
+            })
+            .await;
+        match fetched {
+            Ok(leaf) => return leaf,
+            // Not reached while retries are enabled; stay alive if it ever is.
+            Err(err) => {
+                tracing::error!(height, "fetching leaf gave up: {err:#}");
+                sleep(Duration::from_secs(1)).await;
+            },
+        }
+    }
+}
+
+/// Apply `leaf` to the merklized state, retrying until it is stored, then make it the parent.
+async fn apply_leaf<T>(
+    storage: &Arc<T>,
+    instance: &NodeState,
+    catchup: &LoopCatchup,
+    parent_leaf: &mut Leaf2,
+    parent_state: &mut ValidatedState,
+    leaf: Leaf2,
+) where
+    T: SequencerStateDataSource,
+    for<'a> T::Transaction<'a>: SequencerStateUpdate,
+{
+    loop {
+        tracing::debug!(
+            height = leaf.height(),
+            node_id = instance.node_id,
+            ?leaf,
+            "updating persistent merklized state"
+        );
+        // The pruner may have deleted the parent's header since the last attempt, so decide per
+        // attempt.
+        let peers = if pruned_past(&**storage, parent_leaf.height())
+            .await
+            .is_some()
+        {
+            tracing::debug!(
+                parent = parent_leaf.height(),
+                "parent header is pruned; reading its snapshot through peers"
+            );
+            &catchup.node
+        } else {
+            &catchup.local
+        };
+        match update_state_storage(parent_state, storage, instance, peers, parent_leaf, &leaf).await
+        {
+            Ok(state) => {
+                *parent_leaf = leaf;
+                *parent_state = state;
+                return;
+            },
+            Err(err) => {
+                tracing::error!(height = leaf.height(), "failed to update state: {err:#}");
+                // If we fail, delay for a second and retry.
+                sleep(Duration::from_secs(1)).await;
+            },
+        }
+    }
 }
 
 pub(crate) trait SequencerStateDataSource:
@@ -522,6 +740,7 @@ pub(crate) trait SequencerStateDataSource:
     + VersionedDataSource
     + CatchupStorage
     + RewardMerkleTreeDataSource
+    + PrunedHeightDataSource
     + MerklizedStateHeightPersistence
 {
 }
@@ -534,6 +753,7 @@ impl<T> SequencerStateDataSource for T where
         + VersionedDataSource
         + CatchupStorage
         + RewardMerkleTreeDataSource
+        + PrunedHeightDataSource
         + MerklizedStateHeightPersistence
 {
 }

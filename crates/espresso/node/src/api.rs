@@ -3492,11 +3492,12 @@ mod test {
             Transaction as _, VersionedDataSource,
             sql::Config,
             storage::{
-                MerklizedStateHeightStorage, SqlStorage, StorageConnectionType,
+                MerklizedStateHeightStorage, NodeStorage, SqlStorage, StorageConnectionType,
                 UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
             },
         },
         explorer::TransactionSummariesResponse,
+        merklized_state::UpdateStateData,
         node::{NodeDataSource as _, SyncStatus, SyncStatusQueryData},
         types::HeightIndexed,
     };
@@ -7417,6 +7418,304 @@ mod test {
             }
         }
         Ok(())
+    }
+
+    /// When the state loop meets the data pruned height, as on a node that was down for longer
+    /// than its data retention.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum DataPruned {
+        /// The marker was stamped past the state head while the node was down: the loop finds
+        /// its head leaf gone and starts on peers.
+        BeforeRestart,
+        /// The marker is stamped while the loop waits on the local stream for a leaf that never
+        /// comes: the loop has to notice and switch to peers. The loop is put well behind first,
+        /// as a long outage would, since a gap above the consensus anchor is re-decided on
+        /// restart and cannot be kept open.
+        WhileWaiting,
+    }
+
+    /// The availability layer never fetches a leaf at or below the data pruned height, so the
+    /// state loop has to get the leaves it still needs from peers, without storing them, and
+    /// carry on from the local stream once it is past the pruned height. Peers' leaf chains are
+    /// verified against per-epoch stake tables, so the network runs with epochs.
+    #[rstest]
+    #[case::before_restart(DataPruned::BeforeRestart)]
+    #[case::while_waiting(DataPruned::WhileWaiting)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_loop_fetches_pruned_leaves_from_peers(
+        #[case] pruned_when: DataPruned,
+    ) -> anyhow::Result<()> {
+        const NUM_NODES: usize = 5;
+        const EPOCH_HEIGHT: u64 = 10;
+        // Leaves the node holds beyond the state head when it goes down, the margin by which the
+        // loop has to get past the pruned height before the check ends, and the head the loop is
+        // put back to when it has to be left waiting.
+        const SYNCED: u64 = 5;
+        const GAP: u64 = 10;
+        const BEHIND: u64 = 2;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
+        // The API node is the peer the query node fetches leaves from.
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default()),
+            ))
+            .network_config(
+                TestConfigBuilder::default()
+                    .epoch_height(EPOCH_HEIGHT)
+                    .build(),
+            )
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<StaticVersion<0, 1>>::from_urls(
+                    vec![api_url.clone()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                POS_V4,
+            )
+            .await?
+            .build();
+        let genesis_state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, POS_V4).await;
+
+        // Replace peer 0 with a query node. Its availability fetcher gets the given peers: the
+        // API node, except when the loop has to be left waiting for a leaf that never arrives.
+        network.peers[0].shut_down().await;
+        network.peers.remove(0);
+        let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let db_opt = tmp_options(&storage[1]);
+        let start_query_node = {
+            let cfg = network.cfg.clone();
+            let node_persistence = persistence[1].clone();
+            let db_opt = db_opt.clone();
+            let api_url = api_url.clone();
+            move |availability_peers: Vec<Url>| {
+                let cfg = cfg.clone();
+                let genesis_state = genesis_state.clone();
+                let node_persistence = node_persistence.clone();
+                let db_opt = db_opt.clone();
+                let api_url = api_url.clone();
+                async move {
+                    let opt = Options::with_port(query_port).query_sql(
+                        Query {
+                            peers: availability_peers,
+                            ..Default::default()
+                        },
+                        db_opt,
+                    );
+                    let ctx = opt
+                        .serve(move |metrics, consumer, storage| {
+                            async move {
+                                Ok(cfg
+                                    .init_node(
+                                        1,
+                                        genesis_state,
+                                        node_persistence,
+                                        Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                                            vec![api_url],
+                                            Default::default(),
+                                            Duration::from_secs(2),
+                                            &NoMetrics,
+                                        )),
+                                        storage,
+                                        &*metrics,
+                                        STAKE_TABLE_CAPACITY_FOR_TEST,
+                                        consumer,
+                                        POS_V4,
+                                        Default::default(),
+                                    )
+                                    .await)
+                            }
+                            .boxed()
+                        })
+                        .await
+                        .expect("query node should start");
+                    ctx.start_consensus().await;
+                    ctx
+                }
+            }
+        };
+
+        let mut query_node = start_query_node(vec![api_url.clone()]).await;
+        let query_client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{query_port}").parse().unwrap());
+        assert!(query_client.connect(Some(Duration::from_secs(60))).await);
+        let api_client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(api_url.clone());
+        assert!(api_client.connect(Some(Duration::from_secs(60))).await);
+
+        // Let the loop build some state, then take the node down while the chain moves on.
+        wait_until_block_height(&query_client, "block-state/block-height", 5).await;
+        query_node.shut_down().await;
+        drop(query_node);
+        // `shut_down` aborts the server task without waiting for it, so wait for the port before
+        // rebinding it.
+        timeout(Duration::from_secs(30), async {
+            while std::net::TcpListener::bind(("127.0.0.1", query_port)).is_err() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("shut-down query node did not release its port")?;
+        let db =
+            SqlStorage::connect(Config::try_from(&db_opt)?, StorageConnectionType::Query).await?;
+        let (_, head_at_shutdown) = state_heights(&db).await;
+        let local_tip = local_block_height(&db).await? - 1;
+
+        let _restarted;
+        let pruned = match pruned_when {
+            DataPruned::BeforeRestart => {
+                // Prune consensus data past the state head, as a pruner run during the downtime
+                // would have once the retention passed. A run never stamps past the node's own
+                // tip, so first give the node a leaf beyond the marker, as its fetcher would have
+                // before the outage outran the loop.
+                let synced_tip = local_tip + SYNCED;
+                let pruned = synced_tip - 1;
+                wait_until_block_height(&api_client, "status/block-height", synced_tip + 1).await;
+                let synced_leaf = api_client
+                    .get::<LeafQueryData<SeqTypes>>(&format!("availability/leaf/{synced_tip}"))
+                    .send()
+                    .await?;
+                let mut tx = db.write().await?;
+                tx.insert_leaf(&synced_leaf).await?;
+                tx.commit().await?;
+                prune_data_to(&db, pruned).await?;
+                _restarted = start_query_node(vec![api_url.clone()]).await;
+                pruned
+            },
+            DataPruned::WhileWaiting => {
+                // Put the loop behind its own storage and take the leaves above its new head out
+                // of local reach: below the consensus anchor they are never re-decided, and
+                // without availability peers they are never fetched. The loop then waits on the
+                // stream for the leaf above its head while consensus moves the tip on.
+                {
+                    let mut tx = db.write().await?;
+                    UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::set_last_state_height(
+                        &mut tx,
+                        BEHIND as usize,
+                    )
+                    .await?;
+                    tx.commit().await?;
+                }
+                delete_data_between(&db, BEHIND, head_at_shutdown).await?;
+                _restarted = start_query_node(vec![]).await;
+                let deadline = Instant::now() + Duration::from_secs(120);
+                loop {
+                    if local_block_height(&db).await? > local_tip + GAP {
+                        break;
+                    }
+                    ensure!(
+                        Instant::now() < deadline,
+                        "consensus did not move the local tip past {}",
+                        local_tip + GAP
+                    );
+                    sleep(Duration::from_millis(200)).await;
+                }
+                let (_, head) = state_heights(&db).await;
+                ensure!(
+                    head == BEHIND,
+                    "the loop moved to {head} without the leaf above {BEHIND}"
+                );
+                // Now stamp past the height the loop is waiting for. The old head is well below
+                // the tip, as a real run leaves it.
+                let pruned = head_at_shutdown;
+                prune_data_to(&db, pruned).await?;
+                pruned
+            },
+        };
+
+        // The loop has to get past the pruned height on leaves from the API node, and then follow
+        // the local stream.
+        let deadline = Instant::now() + Duration::from_secs(180);
+        loop {
+            let (_, head) = state_heights(&db).await;
+            if head > pruned + GAP {
+                break;
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "state loop did not get past the data pruned height {pruned}: head {head}, \
+                 started from {head_at_shutdown}"
+            );
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        // The leaves the loop fetched from peers were not stored: the pruner would only delete
+        // them again.
+        let mut tx = db.read().await?;
+        let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM leaf2 WHERE height <= $1")
+            .bind(pruned as i64)
+            .fetch_one(tx.as_mut())
+            .await?;
+        ensure!(
+            stored == 0,
+            "{stored} leaves at or below the data pruned height {pruned} were stored"
+        );
+        Ok(())
+    }
+
+    /// The number of blocks in the node's own availability storage.
+    async fn local_block_height(db: &SqlStorage) -> anyhow::Result<u64> {
+        let mut tx = db.read().await?;
+        Ok(NodeStorage::<SeqTypes>::block_height(&mut tx).await? as u64)
+    }
+
+    /// Prune consensus data to `pruned` as a pruner batch would: stamp the data cursor, id 1,
+    /// then delete what `delete_batch` deletes.
+    async fn prune_data_to(db: &SqlStorage, pruned: u64) -> anyhow::Result<()> {
+        let mut tx = db.write().await?;
+        tx.upsert(
+            "pruned_height",
+            ["id", "last_height"],
+            ["id"],
+            [(1i32, pruned as i64)],
+        )
+        .await?;
+        for statement in [
+            "DELETE FROM transactions WHERE block_height <= $1",
+            "DELETE FROM leaf2 WHERE height <= $1",
+            "DELETE FROM header WHERE height <= $1",
+        ] {
+            sqlx::query(statement)
+                .bind(pruned as i64)
+                .execute(tx.as_mut())
+                .await?;
+        }
+        tx.commit().await
+    }
+
+    /// Delete consensus data above `from` up to and including `to` without moving the data
+    /// cursor, as if the node had never had it.
+    async fn delete_data_between(db: &SqlStorage, from: u64, to: u64) -> anyhow::Result<()> {
+        let mut tx = db.write().await?;
+        for statement in [
+            "DELETE FROM transactions WHERE block_height > $1 AND block_height <= $2",
+            "DELETE FROM leaf2 WHERE height > $1 AND height <= $2",
+            "DELETE FROM header WHERE height > $1 AND height <= $2",
+        ] {
+            sqlx::query(statement)
+                .bind(from as i64)
+                .bind(to as i64)
+                .execute(tx.as_mut())
+                .await?;
+        }
+        tx.commit().await
     }
 
     /// The state pruned height, then the state head. Read in that order: every move of the
