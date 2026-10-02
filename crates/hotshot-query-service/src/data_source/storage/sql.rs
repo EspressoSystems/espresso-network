@@ -1489,7 +1489,7 @@ impl SqlStorage {
         let mut from = min_height;
         let mut batches = 0u64;
         while let Some(to) = next_batch(from, cfg.batch_size(), target) {
-            let mut backoff = ExponentialBuilder::default().build();
+            let mut backoff = ExponentialBuilder::default().with_max_times(10).build();
             loop {
                 match self.prune_state_batch(cfg, from, to).await {
                     Ok(()) => break,
@@ -1503,6 +1503,7 @@ impl SqlStorage {
                 }
             }
             from = to + 1;
+            sleep(Duration::from_secs(1)).await;
 
             batches += 1;
             if batches.is_multiple_of(100) {
