@@ -3491,7 +3491,10 @@ mod test {
         data_source::{
             Transaction as _, VersionedDataSource,
             sql::Config,
-            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
+            storage::{
+                MerklizedStateHeightStorage, SqlStorage, StorageConnectionType,
+                UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
+            },
         },
         explorer::TransactionSummariesResponse,
         node::{NodeDataSource as _, SyncStatus, SyncStatusQueryData},
@@ -7207,6 +7210,223 @@ mod test {
             });
 
         Ok(())
+    }
+
+    /// A node that was down for longer than its state retention comes back with its merklized
+    /// state well behind the chain. The state loop can only continue from its newest snapshot, so
+    /// the state pruner must not get ahead of it. Restart a query node behind a pruned height that
+    /// an unbounded pruner run has already stamped past its state head, and check that the loop
+    /// still resumes and reaches the tip, and that every pruner run from then on stamps below the
+    /// state head.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_pruner_stays_below_state_head() -> anyhow::Result<()> {
+        const NUM_NODES: usize = 5;
+        // Blocks the chain moves on by while the query node is down, and the margin by which the
+        // loop has to get past the stale pruned height before the check ends.
+        const GAP: u64 = 10;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
+        // The query node fetches what it missed from the API node, so the API node serves catchup
+        // and light client proofs.
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default()),
+            ))
+            .network_config(TestConfigBuilder::default().build())
+            .persistences(persistence.clone())
+            .build();
+        let genesis_state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+
+        // Replace peer 0 with a query node whose state pruner runs every second with zero
+        // retention: left to itself, every run would prune right up to the chain tip. Consensus
+        // data stays out of it: the test genesis has timestamp 0, so any data retention would
+        // delete the genesis leaf the loop's first catchup reads.
+        network.peers[0].shut_down().await;
+        network.peers.remove(0);
+        let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let mut db_opt = tmp_options(&storage[1]);
+        db_opt.prune = true;
+        db_opt.pruning = <persistence::sql::PruningOptions as clap::Parser>::parse_from([
+            "pruning",
+            "--target-retention",
+            "4294967295s",
+            "--state-target-retention",
+            "0s",
+            "--interval",
+            "1s",
+        ]);
+        let start_query_node = {
+            let cfg = network.cfg.clone();
+            let node_persistence = persistence[1].clone();
+            let db_opt = db_opt.clone();
+            let api_url = api_url.clone();
+            move || {
+                let cfg = cfg.clone();
+                let genesis_state = genesis_state.clone();
+                let node_persistence = node_persistence.clone();
+                let db_opt = db_opt.clone();
+                let api_url = api_url.clone();
+                async move {
+                    let opt = Options::with_port(query_port).query_sql(
+                        Query {
+                            peers: vec![api_url.clone()],
+                            ..Default::default()
+                        },
+                        db_opt,
+                    );
+                    let ctx = opt
+                        .serve(move |metrics, consumer, storage| {
+                            async move {
+                                Ok(cfg
+                                    .init_node(
+                                        1,
+                                        genesis_state,
+                                        node_persistence,
+                                        Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                                            vec![api_url],
+                                            Default::default(),
+                                            Duration::from_secs(2),
+                                            &NoMetrics,
+                                        )),
+                                        storage,
+                                        &*metrics,
+                                        STAKE_TABLE_CAPACITY_FOR_TEST,
+                                        consumer,
+                                        MOCK_SEQUENCER_VERSIONS,
+                                        Default::default(),
+                                    )
+                                    .await)
+                            }
+                            .boxed()
+                        })
+                        .await
+                        .expect("query node should start");
+                    ctx.start_consensus().await;
+                    ctx
+                }
+            }
+        };
+
+        let mut query_node = start_query_node().await;
+        let query_client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{query_port}").parse().unwrap());
+        assert!(query_client.connect(Some(Duration::from_secs(60))).await);
+        let api_client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(api_url.clone());
+        assert!(api_client.connect(Some(Duration::from_secs(60))).await);
+
+        // Let the loop build some state, then take the node down while the chain moves on.
+        wait_until_block_height(&query_client, "block-state/block-height", 5).await;
+        tracing::info!("query node has state; shutting it down");
+        query_node.shut_down().await;
+        drop(query_node);
+        // `shut_down` aborts the server task without waiting for it, so wait for the port before
+        // rebinding it.
+        timeout(Duration::from_secs(30), async {
+            while std::net::TcpListener::bind(("127.0.0.1", query_port)).is_err() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("shut-down query node did not release its port")?;
+        let db =
+            SqlStorage::connect(Config::try_from(&db_opt)?, StorageConnectionType::Query).await?;
+        let (_, head_at_shutdown) = state_heights(&db).await;
+        wait_until_block_height(&api_client, "status/block-height", head_at_shutdown + GAP).await;
+        // `status/block-height` counts blocks, so the tip is one below it.
+        let stale_cursor = api_client.get::<u64>("status/block-height").send().await? - 1;
+        tracing::info!(
+            head_at_shutdown,
+            stale_cursor,
+            "chain moved on; restarting query node"
+        );
+
+        // A pruner from before the state pruner was bounded by the state head could have stamped
+        // past the loop while it was behind. Stamp the tip as such a run would have; id 2 is the
+        // state cursor.
+        {
+            let mut tx = db.write().await?;
+            tx.upsert(
+                "pruned_height",
+                ["id", "last_height"],
+                ["id"],
+                [(2i32, stale_cursor as i64)],
+            )
+            .await?;
+            tx.commit().await?;
+        }
+        ensure!(
+            state_heights(&db).await.0 == Some(stale_cursor),
+            "the stale cursor was not stamped"
+        );
+
+        // The loop has to resume from its head, get past the stale cursor and reach the tip, and
+        // every pruner run from then on has to stamp below the head.
+        let _query_node = start_query_node().await;
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let (pruned, head) = state_heights(&db).await;
+            let pruned = pruned.context("state pruned height is stamped")?;
+            tracing::info!(pruned, head, stale_cursor, "state loop progress");
+            if pruned > stale_cursor {
+                ensure!(
+                    pruned < head,
+                    "state pruner passed the state head: pruned {pruned}, head {head}"
+                );
+                if head > stale_cursor + GAP {
+                    break;
+                }
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "state loop did not get past the stale pruned height {stale_cursor}: pruned \
+                 {pruned}, head {head}"
+            );
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        // The head snapshot is served. The loop and the pruner keep moving, so a head read just
+        // before a pruner run can be below the cursor by the time the query runs; read it again.
+        for attempt in 1.. {
+            let (_, head) = state_heights(&db).await;
+            let frontier = query_client
+                .get::<MerkleProof<Commitment<Header>, u64, Sha3Node, 3>>(&format!(
+                    "block-state/{head}/{}",
+                    head - 1
+                ))
+                .send()
+                .await;
+            match frontier {
+                Ok(_) => break,
+                Err(err) if attempt < 10 => {
+                    tracing::info!(head, %err, "retrying the head frontier query");
+                    sleep(Duration::from_millis(200)).await;
+                },
+                Err(err) => bail!("block frontier at the state head {head} is not served: {err}"),
+            }
+        }
+        Ok(())
+    }
+
+    /// The state pruned height, then the state head. Read in that order: every move of the
+    /// cursor, up by a batch or down by the startup repair, lands below the head, and the head
+    /// only grows, so a head read after the cursor is always above it.
+    async fn state_heights(db: &SqlStorage) -> (Option<u64>, u64) {
+        let mut tx = db.read().await.unwrap();
+        let pruned = tx.load_state_pruned_height().await.unwrap();
+        let head = tx.get_last_state_height().await.unwrap() as u64;
+        (pruned, head)
     }
 
     #[rstest]
