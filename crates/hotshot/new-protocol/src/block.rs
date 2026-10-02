@@ -104,8 +104,8 @@ impl Default for BlockBuilderConfig {
         Self {
             max_retry_bytes: 4 * 1024 * 1024 * 1024,
             block_sizes: BTreeMap::from([(versions::version(0, 0), 1024 * 1024 * 1024)]),
-            ttl: 50,
-            dedup_window_size: 10,
+            ttl: 5,
+            dedup_window_size: 5,
             empty_block_delay: Duration::from_millis(500),
             forward_transactions: true,
         }
