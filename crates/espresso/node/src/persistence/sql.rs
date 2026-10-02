@@ -1664,10 +1664,6 @@ const PRUNE_TABLES: &[&str] = &[
 ];
 
 async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
-    if view == 0 {
-        // Nothing to prune, the entire chain is younger than the retention period.
-        return Ok(());
-    }
     tracing::debug!(view, "pruning consensus storage");
 
     for table in PRUNE_TABLES {
