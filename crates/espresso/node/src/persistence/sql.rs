@@ -919,13 +919,7 @@ impl PersistenceOptions for Options {
         let persistence = Persistence {
             db,
             gc_opt: self.consensus_pruning,
-<<<<<<< HEAD
-||||||| parent of f9c40950374 (Consensus pruning: check consensus storage usage every 5m off the write lock (#5096))
-            consensus_only: self.consensus_only,
-=======
             last_usage_check: Arc::default(),
-            consensus_only: self.consensus_only,
->>>>>>> f9c40950374 (Consensus pruning: check consensus storage usage every 5m off the write lock (#5096))
             internal_metrics: PersistenceMetricsValue::default(),
             #[cfg(feature = "embedded-db")]
             probe,
@@ -951,14 +945,8 @@ impl PersistenceOptions for Options {
 pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
-<<<<<<< HEAD
-||||||| parent of f9c40950374 (Consensus pruning: check consensus storage usage every 5m off the write lock (#5096))
-    consensus_only: bool,
-=======
     /// When consensus storage usage was last measured, shared by clones.
     last_usage_check: Arc<parking_lot::Mutex<Option<Instant>>>,
-    consensus_only: bool,
->>>>>>> f9c40950374 (Consensus pruning: check consensus storage usage every 5m off the write lock (#5096))
     /// A reference to the internal metrics
     internal_metrics: PersistenceMetricsValue,
     /// Startup findings about the filesystem and SQLite pragmas backing `db`.
@@ -1545,30 +1533,8 @@ impl Persistence {
     /// Prune everything older than the target retention, then, at most once per usage check
     /// interval, prune toward the minimum retention if storage is over the target usage.
     #[tracing::instrument(skip(self))]
-<<<<<<< HEAD
     async fn prune(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-
-            // Prune everything older than the target retention period.
-            prune_to_view(
-                &mut tx,
-                cur_view.u64().saturating_sub(self.gc_opt.target_retention),
-            )
-||||||| parent of f9c40950374 (Consensus pruning: check consensus storage usage every 5m off the write lock (#5096))
-    async fn prune_to_retention(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-
-            // Prune everything older than the target retention period.
-            prune_to_view(
-                &mut tx,
-                cur_view.u64().saturating_sub(self.gc_opt.target_retention),
-            )
-=======
-    async fn prune_to_retention(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
         self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.target_retention))
->>>>>>> f9c40950374 (Consensus pruning: check consensus storage usage every 5m off the write lock (#5096))
             .await?;
 
         if !self.usage_check_due() {
