@@ -53,7 +53,7 @@ use super::queries::state::batch_insert_hashes;
 #[cfg(feature = "embedded-db")]
 use super::queries::state::build_hash_batch_insert;
 use super::{
-    Database, Db,
+    Database, Db, SERIALIZATION_CONFLICT,
     queries::{
         self,
         state::{Node, collect_nodes_from_proofs},
@@ -513,9 +513,10 @@ impl Transaction<Write> {
             let query = query_builder.build();
             let statement = query.sql();
 
-            let res = self.execute(query).await.inspect_err(|err| {
-                tracing::error!(statement, "error in statement execution: {err:#}");
-            })?;
+            let res = self
+                .execute(query)
+                .await
+                .map_err(|source| UpsertError::new(table, source))?;
             let rows_modified = res.rows_affected() as usize;
             if rows_modified != num_rows {
                 let error = format!(
@@ -529,6 +530,35 @@ impl Transaction<Write> {
         Ok(())
     }
 }
+
+/// A failed [`upsert`](Transaction::upsert).
+#[derive(Debug, thiserror::Error)]
+pub enum UpsertError {
+    /// Postgres aborted the statement to keep transactions serializable. Retrying the whole
+    /// transaction can succeed.
+    #[error("{SERIALIZATION_CONFLICT} upserting into {table}")]
+    SerializationConflict { table: String },
+    #[error("upserting into {table}")]
+    Database {
+        table: String,
+        #[source]
+        source: sqlx::Error,
+    },
+}
+
+impl UpsertError {
+    fn new(table: &str, source: sqlx::Error) -> UpsertError {
+        let table = table.to_owned();
+        let code = source.as_database_error().and_then(|err| err.code());
+        match code.as_deref() {
+            Some(SERIALIZATION_FAILURE_CODE) => UpsertError::SerializationConflict { table },
+            _ => UpsertError::Database { table, source },
+        }
+    }
+}
+
+/// SQLSTATE of a PostgreSQL serialization failure.
+const SERIALIZATION_FAILURE_CODE: &str = "40001";
 
 /// Pruning mutations, run under READ COMMITTED isolation on Postgres.
 impl Transaction<Prune> {

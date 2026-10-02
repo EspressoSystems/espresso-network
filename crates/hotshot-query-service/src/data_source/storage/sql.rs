@@ -895,7 +895,7 @@ impl SerializableRetryConfig {
             match f().await {
                 Ok(res) => return Ok(res),
                 Err(err) if i < self.retry_max && should_retry(&err) => {
-                    tracing::warn!(
+                    tracing::debug!(
                         op,
                         attempt = i + 1,
                         max_retries = self.retry_max,
@@ -931,10 +931,15 @@ impl SerializableRetryConfig {
     }
 }
 
+/// How PostgreSQL words a serialization conflict (SQLSTATE 40001), and how
+/// [`UpsertError::SerializationConflict`](transaction::UpsertError::SerializationConflict) words
+/// its own.
+pub(crate) const SERIALIZATION_CONFLICT: &str = "could not serialize access";
+
 /// Returns `true` if `err`'s [`Display`](std::fmt::Display) output identifies it as a PostgreSQL
-/// serialization conflict (SQLSTATE 40001, message "could not serialize access").
+/// serialization conflict (SQLSTATE 40001).
 fn is_serialization_conflict_err<E: std::fmt::Display>(err: &E) -> bool {
-    format!("{err:#}").contains("could not serialize access")
+    format!("{err:#}").contains(SERIALIZATION_CONFLICT)
 }
 
 /// Like [`is_serialization_conflict_err`] but also logs concurrent DB sessions for diagnostics.
@@ -1062,7 +1067,9 @@ mod serializable_retry_tests {
         atomic::{AtomicU32, Ordering},
     };
 
-    use super::{Duration, SerializableRetryConfig, is_serialization_conflict_err};
+    use super::{
+        Duration, SerializableRetryConfig, is_serialization_conflict_err, transaction::UpsertError,
+    };
 
     /// A retry policy with small delays and a low retry cap, so the exhaustion test runs quickly.
     const TEST_RETRY: SerializableRetryConfig = SerializableRetryConfig::new(
@@ -1079,6 +1086,18 @@ mod serializable_retry_tests {
         anyhow::anyhow!(
             "could not serialize access due to read/write dependencies among transactions"
         )
+    }
+
+    #[test]
+    fn upsert_serialization_conflict_is_retried() {
+        let err = anyhow::Error::from(UpsertError::SerializationConflict {
+            table: "payload".to_owned(),
+        });
+        assert!(is_serialization_conflict_err(&err));
+        assert_eq!(
+            format!("{err:#}"),
+            "could not serialize access upserting into payload"
+        );
     }
 
     #[test]

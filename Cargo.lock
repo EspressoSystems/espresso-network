@@ -6280,6 +6280,7 @@ dependencies = [
  "tempfile",
  "test-log",
  "test-utils",
+ "thiserror 2.0.18",
  "time 0.3.51",
  "tokio",
  "tracing",
