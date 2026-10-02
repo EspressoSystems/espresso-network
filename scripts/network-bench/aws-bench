@@ -962,6 +962,7 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     check_priced(cfg.ctl_type, cfg.node_type)
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
+    check_submit_nodes(cfg)
     hosts: list[HostSpec] = [
         {
             "name": "ctl",
@@ -1000,7 +1001,7 @@ def peers(i: int, n: int) -> list[int]:
     """Up to 3 other validators for node i's `STATE_PEERS`, never itself. node0 gets the first
     `min(3, n - 1)` validators, so it can catch up on state it lacks instead of skewing query
     lag; other nodes get the next `min(3, n - 2)` validators after i in the fixed cycle
-    `1, .., n-1`, wrapping around, excluding node0 (which carries no submit load).
+    `1, .., n-1`, wrapping around, excluding node0 (query load).
     """
     if i == 0:
         return list(range(1, min(3, n - 1) + 1))
@@ -2156,6 +2157,27 @@ def add_leader_trace_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_submit_nodes_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--submit-nodes",
+        type=positive_int,
+        help="nodes receiving txs, validators first, then the query node (1..nodes); "
+        "default nodes - 1; all nodes for NP_NO_TX_FORWARDING=1",
+    )
+
+
+def submit_nodes(args: argparse.Namespace, nodes: int) -> int:
+    return nodes - 1 if args.submit_nodes is None else args.submit_nodes
+
+
+def check_submit_nodes(cfg: RunConfig) -> None:
+    if cfg.load.submit_nodes > cfg.nodes:
+        raise Refused(
+            f"--submit-nodes must be at most --nodes ({cfg.nodes}): "
+            f"{cfg.load.submit_nodes}"
+        )
+
+
 def block_size(text: str) -> str:
     if re.fullmatch(r"[1-9]\d*(kb|mb|gb)", text, re.IGNORECASE) is None:
         raise argparse.ArgumentTypeError(f"not a size like 50mb: {text}")
@@ -2176,7 +2198,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     load = nb.BenchConfig(
         steps=args.steps,
         step_s=args.step_s,
-        submit_nodes=args.nodes - 1,
+        submit_nodes=submit_nodes(args, args.nodes),
         workers=args.submit_workers,
         cap_s=args.cap_s,
         tx_timeout_s=args.tx_timeout_s,
@@ -2256,6 +2278,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_node_env_flag(plan_p)
     add_block_size_flag(plan_p)
     add_leader_trace_flag(plan_p)
+    add_submit_nodes_flag(plan_p)
     add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
     plan_p.set_defaults(func=cmd_plan, yes=False, max_usd=UP_MAX_USD)
@@ -2274,6 +2297,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         node_env=[],
         max_block_size=defaults.max_block_size,
         leader_trace=defaults.leader_trace,
+        submit_nodes=None,
         fleet=None,
         force=False,
         query_db=defaults.query_db,
@@ -2292,6 +2316,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_node_env_flag(run_p)
     add_block_size_flag(run_p)
     add_leader_trace_flag(run_p)
+    add_submit_nodes_flag(run_p)
     add_ttl_flag(run_p)
     run_p.add_argument(
         "--fleet",
@@ -3334,9 +3359,8 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
     """The fleet's own config with the flags that belong to one run: image tag, load, database mode, node env."""
     base = config_from_manifest(saved["config"])
     cli = fleet_config_from_args(args)
-    load = cli.load
-    load = dataclasses.replace(load, submit_nodes=base.nodes - 1)
-    return dataclasses.replace(
+    load = dataclasses.replace(cli.load, submit_nodes=submit_nodes(args, base.nodes))
+    cfg = dataclasses.replace(
         base,
         tag=base.tag if cli.tag is None else cli.tag,
         load=load,
@@ -3348,6 +3372,8 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         fleet=cli.fleet,
         force=cli.force,
     )
+    check_submit_nodes(cfg)
+    return cfg
 
 
 def reject_fleet_flags(argv: list[str]) -> None:

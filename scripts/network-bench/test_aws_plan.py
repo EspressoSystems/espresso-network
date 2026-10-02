@@ -1112,3 +1112,29 @@ def test_leader_trace_start_sh_leaves_ctl_alone():
         host("ctl", "ctl"), fake_images(), 32768, leader_trace=True
     )
     assert "trace" not in script
+
+
+def test_submit_nodes_defaults_to_the_validators():
+    assert node_env_config().load.submit_nodes == 4
+    assert node_env_config("--nodes", "7").load.submit_nodes == 6
+
+
+def test_submit_nodes_flag_reaches_the_load_config():
+    assert node_env_config("--submit-nodes", "5").load.submit_nodes == 5
+    assert node_env_config("--nodes", "3", "--submit-nodes", "1").load.submit_nodes == 1
+
+
+def test_submit_nodes_above_nodes_is_refused():
+    with pytest.raises(awsb.Refused, match="--submit-nodes"):
+        awsb.plan_hosts(node_env_config("--submit-nodes", "6"))
+
+
+def test_submit_nodes_zero_is_an_argument_error():
+    with pytest.raises(SystemExit):
+        node_env_config("--submit-nodes", "0")
+
+
+def test_manifest_config_round_trips_submit_nodes():
+    cfg = small_cfg(nodes=3, submit=3)
+    saved = json.loads(json.dumps(awsb.config_to_json(cfg)))
+    assert awsb.config_from_manifest(saved).load.submit_nodes == 3

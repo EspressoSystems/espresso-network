@@ -66,6 +66,12 @@ scripts/network-bench/
   of the config hash.
 - `--leader-trace` (`plan` and `run`, also `run --fleet`; not an `up` flag; default off): nodes get
   `ESPRESSO_NODE_LEADER_TRACE_DIR=/trace` (host `/opt/bench/trace`); part of the config hash when on.
+- `--submit-nodes N` (`plan` and `run`, also `run --fleet`; not an `up` flag; default `nodes - 1`, range 1..nodes):
+  nodes receiving txs, validators first, then `node0`; `N = nodes` includes `node0`. Use `--submit-nodes <nodes>` with
+  `--node-env NP_NO_TX_FORWARDING=1`, which keeps a tx on the node that received it; read only by espresso-node images
+  built from `release-test-journal-query-replay` (commit 9dac6e29f87, new protocol only). Part of the config hash.
+- With `--submit-nodes` = nodes, `node0` also serves submit HTTP: query lag, the query-node limit rule and `node0` CPU
+  are not comparable across different `--submit-nodes` values.
 - Output of `--leader-trace`, also by `render`: `hosts/<name>/trace/leader_trace_node*.csv`, and from
   `trace-plots RUN_DIR` (uv script, needs matplotlib) `trace/phases.png`, `trace/finality.png`, `trace/stats.json`.
 - Query node: pg_stat_database/checkpointer/wal/activity every 5 s, pg_stat_statements and settings at collect, slow
@@ -275,6 +281,8 @@ just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --
 just bench aws run --tag release-x --steps 50,60,80 --keep-going --cap-s 600 --tx-timeout-s 600
 # single shot on Intel hosts (amd64 AMI and images)
 just bench aws run --tag release-x --node-type c8i.4xlarge --ctl-type c8i.2xlarge
+# single shot, txs to every node including node0, no tx forwarding
+just bench aws run --tag release-x --nodes 4 --submit-nodes 4 --node-env NP_NO_TX_FORWARDING=1
 # provision an idle fleet with all three stores for 4 h
 just bench aws up --tag release-x --nodes 4 --db-modes colocated,volume,rds --ttl-min 240 --max-usd 60
 # measure on the only selectable fleet, payload and VID share files on the query DB store

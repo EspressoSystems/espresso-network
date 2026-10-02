@@ -794,3 +794,33 @@ def test_leader_trace_belongs_to_one_run(harness, runner):
     assert cfg.leader_trace is True
     with pytest.raises(SystemExit):
         harness.up_args("--leader-trace")
+
+
+def test_submit_nodes_on_a_fleet_run_defaults_to_the_validators(harness, runner):
+    manifest = harness.fleet()
+    nodes = awsb.config_from_manifest(manifest["config"]).nodes
+    cfg = awsb.fleet_run_config(harness.run_args(), manifest)
+    assert cfg.load.submit_nodes == nodes - 1
+
+
+def test_submit_nodes_on_a_fleet_run_may_include_the_query_node(harness, runner):
+    manifest = harness.fleet()
+    nodes = awsb.config_from_manifest(manifest["config"]).nodes
+    cfg = awsb.fleet_run_config(
+        harness.run_args("--submit-nodes", str(nodes)), manifest
+    )
+    assert cfg.load.submit_nodes == nodes
+
+
+def test_submit_nodes_above_the_fleet_size_is_refused(harness, runner):
+    manifest = harness.fleet()
+    nodes = awsb.config_from_manifest(manifest["config"]).nodes
+    with pytest.raises(awsb.Refused, match="--submit-nodes"):
+        awsb.fleet_run_config(
+            harness.run_args("--submit-nodes", str(nodes + 1)), manifest
+        )
+
+
+def test_submit_nodes_is_not_an_up_flag(harness):
+    with pytest.raises(SystemExit):
+        harness.up_args("--submit-nodes", "2")
