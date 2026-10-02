@@ -94,6 +94,8 @@ jobs:
       # alerts on, and no workflow ran their tests. `py::lint` and `py::check` still do not run
       # here: both need a tool installed, and nextest-ci has lint violations that belong in
       # their own change.
+      - uses: astral-sh/setup-uv@v6
+
       - name: Run the script tests
         run: just py::test
 

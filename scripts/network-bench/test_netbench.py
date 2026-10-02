@@ -1,0 +1,1286 @@
+import asyncio
+import base64
+import collections
+import dataclasses
+import functools
+import inspect
+import itertools
+import json
+import logging
+import math
+import statistics
+import threading
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, Literal, TypeVar, cast
+
+import fakes
+import netbench
+import pytest
+from fakes import TOPOLOGY, make_result, quantiles, step, write_run_dir
+
+_T = TypeVar("_T")
+
+# The measured half of a step holds STEP_S / 2 counter samples, COUNTER_POLL_S apart; fewer
+# make the decided rate too noisy for the ramp verdicts.
+STEP_S = 8.0
+
+ALL_ANSWERED = {n: 1.0 for n in TOPOLOGY["nodes"]}
+
+
+def some(x: _T | None) -> _T:
+    assert x is not None
+    return x
+
+
+def deployment() -> netbench.DeploymentMeta:
+    return {
+        "provider": "aws",
+        "account": "027574771971",
+        "region": "eu-west-1",
+        "az": "eu-west-1b",
+        "ami": "ami-0abc",
+        "hosts": {
+            "ctl": {"instance_type": "c8g.2xlarge"},
+            "node0": {"instance_type": "c8g.4xlarge"},
+        },
+        "images": {"espresso-node": "release-x@sha256:1a2b"},
+        "image_revision": "bd2ad6e1dc7",
+        "start_spread_s": 0.8,
+        "clock_offset_ms_max": 12.0,
+        "cost_usd": {"expected": 2.4, "bound": 4.6},
+    }
+
+
+def compare(
+    current: netbench.BenchResult,
+    runs: list[netbench.BenchResult],
+    error: str | None = None,
+    source: Literal["main", "reference"] = "main",
+) -> netbench.Comparison:
+    return netbench.compare(current, {"runs": runs, "error": error, "source": source})
+
+
+def row(comparison, label):
+    return next(r for r in comparison["capacity"] if r["label"] == label)
+
+
+def step_row(comparison, rate, label):
+    by_rate = next(c for c in comparison["steps"] if c["rate_mb_s"] == rate)
+    return next(r for r in by_rate["rows"] if r["label"] == label)
+
+
+def test_step_table_with_deltas():
+    baseline = [make_result() for _ in range(5)]
+    current = make_result(
+        [step(4.0), step(6.0, consensus_p50=1200.0), step(8.0, 7.0, consensus=["x"])]
+    )
+    summary = netbench.render(current, compare(current, baseline))
+    assert "| main median (n=5) |" in summary
+    assert (
+        "| 6 | 6 MB/s | **1200 ms (+33%)** | 2000 ms | 200 ms | 1200 ms | 0.5 s/MB "
+        "| pass | 5 |"
+    ) in summary
+    assert "Test CPU" in summary
+
+
+def test_rates_not_reached():
+    current = make_result([step(4.0), step(6.0, 5.0, consensus=["x"]), step(5.0)])
+    comparison = compare(current, [make_result()] * 3)
+    eight = next(c for c in comparison["steps"] if c["rate_mb_s"] == 8.0)
+    assert eight["n"] == 3
+    summary = netbench.render(current, comparison)
+    assert "| 8 | | | | | | | **not reached** | 3 |" in summary
+    assert "| 5 | 5 MB/s | 900 ms |" in summary
+
+
+def test_baseline_only_refine_rates_are_left_out():
+    refine = step(7.0)
+    refine["refine"] = True
+    baseline = make_result([step(4.0), step(6.0), step(8.0, 6.0, ["x"]), refine])
+    summary = netbench.render(make_result(), compare(make_result(), [baseline] * 3))
+    assert not any(line.startswith("| 7 ") for line in summary.splitlines())
+
+
+@pytest.mark.parametrize(
+    ("baseline", "line", "absent"),
+    [
+        (([], None), "Baseline: no main runs to compare against.", None),
+        (None, "Baseline: none given, no main runs to compare against.", None),
+        (
+            ([], "OSError: timed out"),
+            "Baseline: fetching main runs failed: OSError: timed out",
+            "no main runs",
+        ),
+    ],
+)
+def test_baseline_line(baseline, line, absent):
+    current = make_result()
+    comparison = None if baseline is None else compare(current, *baseline)
+    summary = netbench.render(current, comparison)
+    assert line in summary
+    assert absent is None or absent not in summary
+
+
+def test_deployment_and_hosts_sections():
+    current = make_result()
+    current["deployment"] = deployment()
+    host: Any = fakes.host_sample(util=0.4, steal=0.5)
+    hosts: Any = {"ctl": host, "node0": host | {"net_mb_s": 20.0}}
+    current["hosts"] = hosts
+    summary = netbench.render(current, None)
+    for line in (
+        "<details><summary>Deployment</summary>",
+        "- account 027574771971 (eu-west-1), az eu-west-1b, ami ami-0abc",
+        "- images @ bd2ad6e1dc7: espresso-node release-x@sha256:1a2b",
+        "- instance types: ctl c8g.2xlarge, node0 c8g.4xlarge",
+        "- cost: expected $2.40, bound $4.60",
+        "<details><summary>Hosts</summary>",
+        "| ctl | 40% | 0.5% | 1 | 1 |",
+        "| node0 | 40% | 0.5% | 1 | 20 |",
+    ):
+        assert line in summary
+
+
+def test_deployment_shows_the_max_block_size_when_recorded():
+    current = make_result()
+    current["deployment"] = deployment()
+    assert "max block size" not in netbench.render(current, None)
+    current["deployment"]["max_block_size"] = "30mb"
+    assert "- max block size: 30mb" in netbench.render(current, None)
+
+
+def test_load_baseline_single_result(tmp_path: Path):
+    path = tmp_path / "result.json"
+    netbench.write_json(path, make_result())
+    baseline = netbench.load_baseline(path)
+    assert (len(baseline["runs"]), baseline["source"]) == (1, "reference")
+    netbench.write_json(path, {"runs": []})
+    assert netbench.load_baseline(path)["source"] == "main"
+    path.write_text("[]")
+    with pytest.raises(ValueError):
+        netbench.load_baseline(path)
+
+
+FAIL = ["x"]
+HIGHER = [step(4.0), step(6.0), step(8.0), step(10.0, 5.0, FAIL)]
+BELOW = [step(4.0, 1.0, FAIL)]
+
+
+@pytest.mark.parametrize(
+    ("current", "steal", "runs", "expected"),
+    [
+        ([step(4.0), step(6.0, 5.8), step(8.0, 7.0, FAIL)], 0.0, [None], "same"),
+        ([step(4.0), step(6.0, 5.0, FAIL), step(5.0)], 0.0, [None] * 3, "worse"),
+        (BELOW, 0.0, [None] * 3, "worse"),
+        ([step(4.0), step(6.0)], 0.0, [HIGHER] * 3, "inconclusive"),
+        (None, 0.0, [BELOW, BELOW, None], "better"),
+        (
+            [step(4.0), step(6.0), step(8.0, 6.0, FAIL), step(7.0)],
+            0.0,
+            [None],
+            "better",
+        ),
+        (None, 0.0, [None] * 3, "same"),
+        ([step(4.0), step(6.0, 1.0, FAIL)], 8.0, [None], "inconclusive"),
+    ],
+)
+def test_capacity_verdict(current, steal, runs, expected):
+    comparison = compare(make_result(current, steal), [make_result(r) for r in runs])
+    assert row(comparison, "capacity")["verdict"] == expected
+
+
+def test_one_refine_step_shift_is_not_lost_to_float_error():
+    resolution = netbench.ramp_resolution((0.1, 0.3))
+    current: netbench.Limit = {"mb_s": 0.2, "bounded": True}
+    baseline: netbench.Limit = {"mb_s": 0.3, "bounded": True}
+    verdict = netbench.compare_capacity("x", current, [baseline], resolution, False)
+    assert verdict["verdict"] == "worse"
+
+
+def test_steps_compare_only_against_runs_at_that_rate():
+    short = make_result([step(4.0, consensus_p50=500.0), step(6.0, 3.0, FAIL)])
+    comparison = compare(make_result(), [short, make_result()])
+    assert step_row(comparison, 4.0, "consensus p50")["baseline"] == 700.0
+    eight = next(c for c in comparison["steps"] if c["rate_mb_s"] == 8.0)
+    assert eight["n"] == 1
+
+
+def test_spread_widens_threshold():
+    history = [
+        make_result([step(4.0, consensus_p50=v)]) for v in (600, 900, 1200, 750, 1050)
+    ]
+    current = make_result([step(4.0, consensus_p50=1200.0)])
+    verdict = step_row(compare(current, history), 4.0, "consensus p50")
+    assert verdict["threshold_pct"] > 15
+    assert verdict["verdict"] == "same"
+
+
+def edited(edits: dict[str, Any]) -> netbench.BenchResult:
+    """`make_result()` with each dotted path in `edits` set to its value."""
+    result = make_result()
+    for path, value in edits.items():
+        *parents, leaf = path.split(".")
+        target: Any = result
+        for key in parents:
+            target = target[key]
+        target[leaf] = value
+    return result
+
+
+CALIBRATION = "calibration.before.sha256_1t_mb_s"
+INVALID = {"valid": False, "noisy": False, "reasons": ["x"]}
+STALLED = {"stake_table": ["0x1", "0x2", "0x1"], "nodes.node2.decided_blocks": 0}
+TRACKER_LAG = {"load.tracker_lag_ms": quantiles(300.0, 1500.0)}
+
+
+@pytest.mark.parametrize(
+    ("runs", "excluded"),
+    [
+        (
+            [make_result(steal=8.0), edited({"validity": INVALID}), edited({})],
+            {"noisy": 1, "invalid": 1},
+        ),
+        ([make_result(config_hash="other")], {"other config": 1}),
+        (
+            [edited({"runner.cpu_model": "x"}), edited({CALIBRATION: 1700.0})],
+            {"other runner": 1, "other calibration": 1},
+        ),
+        ([edited({CALIBRATION: 1900.0})], {}),
+        ([edited({"schema_version": 1})], {"other schema": 1}),
+    ],
+)
+def test_baseline_exclusion(runs, excluded):
+    comparison = compare(make_result(), [*runs, make_result()])
+    assert comparison["excluded"] == excluded
+    assert comparison["n"] == len(runs) + 1 - sum(excluded.values())
+
+
+@pytest.mark.parametrize(
+    ("result", "answered", "valid", "noisy", "reason"),
+    [
+        (make_result(steal=8.0), {}, True, True, "steal 8.0%"),
+        (edited({"calibration.drift_pct": -15.0}), {}, True, True, "drift"),
+        (edited(STALLED), {"node1": 0.5}, False, False, "stake table is not 3"),
+        (edited(TRACKER_LAG), {}, True, True, "benchmark tracker behind"),
+        (
+            make_result([step(4.0), step(6.0, 0.0, FAIL)]),
+            {},
+            False,
+            False,
+            "the 6 MB/s step decided nothing",
+        ),
+    ],
+)
+def test_validity(result, answered, valid, noisy, reason):
+    validity = netbench.check_validity(result, ALL_ANSWERED | answered)
+    assert (validity["valid"], validity["noisy"]) == (valid, noisy)
+    assert any(reason in r for r in validity["reasons"])
+
+
+def test_a_stalled_node_and_a_partial_answer_add_their_own_reasons():
+    validity = netbench.check_validity(edited(STALLED), ALL_ANSWERED | {"node1": 0.5})
+    assert not validity["valid"]
+    assert len(validity["reasons"]) == 3
+    assert "node1 metrics answered for only 50% of the window" in validity["reasons"]
+    assert "node2 decided no blocks in the window" in validity["reasons"]
+
+
+class ScriptedPool:
+    """An `Http` whose request answers come from `replies` in order, the last one repeating."""
+
+    def __init__(self, clock: netbench.Clock, *replies: Any) -> None:
+        self.clock = clock
+        self.closed = threading.Event()
+        self.replies = list(replies)
+        self.calls = 0
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+    ) -> tuple[int, bytes]:
+        reply = self.replies[min(self.calls, len(self.replies) - 1)]
+        self.calls += 1
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    def close(self) -> None:
+        self.closed.set()
+
+
+def test_retries_failed_reads():
+    clock = fakes.FakeClock()
+    pool = ScriptedPool(clock, OSError("timed out"), (503, b""), (200, b"7"))
+    assert netbench.get_ok(pool, "http://x") == b"7"
+    assert clock.sleeps == [netbench.READ_RETRY_S] * 2
+
+
+def test_gives_up_after_the_deadline():
+    clock = fakes.FakeClock()
+    pool = ScriptedPool(clock, OSError("timed out"))
+    with pytest.raises(netbench.NetworkError):
+        netbench.get_ok(pool, "http://x")
+    assert pool.calls == math.ceil(netbench.READ_DEADLINE_S / netbench.READ_RETRY_S) + 1
+    assert clock.time() >= netbench.READ_DEADLINE_S
+
+
+def test_closing_the_pool_stops_retries(caplog: pytest.LogCaptureFixture):
+    closing_at = 4 * netbench.READ_RETRY_S
+
+    def close_late(now: float) -> None:
+        if now >= closing_at:
+            pool.close()
+
+    clock = fakes.FakeClock(on_advance=close_late)
+    pool = ScriptedPool(clock, OSError("timed out"))
+    with (
+        caplog.at_level(logging.DEBUG, netbench.log.name),
+        pytest.raises(netbench.NetworkError),
+    ):
+        netbench.get_ok(pool, "http://x")
+    assert clock.time() == closing_at
+    levels = [record.levelname for record in caplog.records]
+    assert levels[0] == "WARNING"
+    assert set(levels[1:]) == {"DEBUG"}
+
+
+def test_not_found_is_not_retried():
+    clock = fakes.FakeClock()
+    pool = ScriptedPool(clock, (404, b""), (500, b""))
+    assert netbench.block_payload(pool, "http://x", 3) is None
+    assert pool.calls == 1
+
+
+@dataclasses.dataclass
+class Load:
+    node: fakes.FakeNode
+    txs: list[dict[str, Any]]
+    meta: dict[str, Any]
+    steps: list[dict[str, Any]]
+    heights: list[dict[str, Any]]
+
+
+NODE_KEYS = frozenset(inspect.signature(fakes.FakeNode).parameters) - {"clock"}
+
+
+def run_load(
+    out: Path,
+    duration: float,
+    rate=0.02,
+    cap_txs=1000,
+    nodes=1,
+    tx_size=1000,
+    **kwargs: Any,
+) -> Load:
+    """One step of `duration` clock seconds at `rate` MB/s with at most `cap_txs` in flight,
+    no warmup, unless `kwargs` sets `steps`. `FakeNode` arguments in `kwargs` go to the node."""
+    fake = {k: kwargs.pop(k) for k in NODE_KEYS & kwargs.keys()}
+    clock = fakes.FakeClock(threaded=any(k.endswith("_delay") for k in fake))
+    node = fakes.FakeNode(clock, **fake)
+    defaults: dict[str, Any] = {
+        "tx_size": tx_size,
+        "workers": 3,
+        "steps": (rate,),
+        "step_s": duration,
+        "warmup_s": 0,
+        "cap_s": cap_txs * tx_size / (rate * 1e6),
+    }
+    config = netbench.BenchConfig(**defaults | kwargs)
+    urls = [node.url] * nodes
+    load = netbench.generate_load(
+        config, urls, node.url, [node.url] * 2, out, clock, node.connect
+    )
+    clock.run(load)
+    return Load(
+        node,
+        list(netbench.read_jsonl(out / "load.jsonl")),
+        netbench.read_json(out / "load-meta.json"),
+        netbench.read_json(out / "steps.json"),
+        list(netbench.read_jsonl(out / "heights.jsonl")),
+    )
+
+
+@pytest.fixture
+def load(tmp_path: Path) -> Callable[..., Load]:
+    return functools.partial(run_load, tmp_path)
+
+
+@pytest.fixture
+def staircase(load: Callable[..., Load]) -> Callable[..., Load]:
+    """1 tx of 4000 bytes per 50 ms block: 0.08 MB/s of capacity."""
+    return functools.partial(load, STEP_S, include=True, block_txs=1, tx_size=4000)
+
+
+def verdicts(steps: list[dict[str, Any]]) -> list[tuple[float, bool, bool]]:
+    return [
+        (s["rate_mb_s"], s["refine"], not s["consensus_fails"] + s["query_fails"])
+        for s in steps
+    ]
+
+
+def included(txs: list[dict[str, Any]]) -> bool:
+    return {tx["status"] for tx in txs} == {"included"}
+
+
+def max_latency(txs: list[dict[str, Any]]) -> float:
+    return max(tx["t_included"] - tx["t_submit"] for tx in txs)
+
+
+def test_submits_at_the_offered_rate(load):
+    """1000 byte txs at 0.02 MB/s: one every 50 ms, independent of inclusion."""
+    run = load(1.0, include=True, cap_txs=100, tx_timeout_s=5)
+    submits = run.node.submits
+    assert len(submits) in range(19, 22)
+    gaps = sorted(b - a for a, b in itertools.pairwise(submits))
+    assert gaps[len(gaps) // 2] == pytest.approx(0.05, abs=0.01)
+    assert included(run.txs)
+    assert run.meta["cap_waits"] == 0
+
+
+def test_round_robin_over_submit_nodes(load):
+    run = load(0.5, include=True, nodes=3, submit_nodes=2, tx_timeout_s=5)
+    assert [tx["node"] for tx in run.txs[:4]] == [0, 1, 0, 1]
+
+
+def test_txs_carry_queue_and_response_times(load):
+    run = load(1.0, include=True, accept_delay=0.2, workers=1, tx_timeout_s=5)
+    assert run.txs
+    for tx in run.txs:
+        assert tx["t_queued"] <= tx["t_submit"] <= tx["t_done"]
+    assert run.txs[-1]["t_submit"] - run.txs[-1]["t_queued"] > 0.1
+    assert all(step["cap_waits"] == 0 for step in run.steps)
+
+
+def test_post_tx_stamps_t_done_when_the_request_fails():
+    class Failing(fakes.FakePool):
+        def request(self, *args: Any, **kwargs: Any) -> Any:
+            raise OSError("refused")
+
+    clock = fakes.FakeClock()
+    pool = Failing(fakes.FakeNode(clock, include=False), clock)
+    tx = netbench.Tx(id=0, node=0, t_queued=0.0)
+    assert netbench.post_tx(pool, tx, "http://x", lambda: b"") == 0
+    assert tx.t_done is not None
+    assert tx.t_done >= tx.t_submit
+
+
+def test_cap_blocks_until_timeout(load):
+    """Room under the cap frees only on timeout, the first 1 s after the first submit."""
+    run = load(2.5, include=False, rate=1.0, cap_txs=4, tx_timeout_s=1)
+    assert run.node.submits[4] - run.node.submits[0] > 0.9
+    assert run.meta["max_in_flight"] == 4
+    assert run.meta["cap_waits"] > 0
+    assert some(run.steps[0]["cap_waits"]) > 0
+    assert {tx["status"] for tx in run.txs} == {"timeout"}
+
+
+@pytest.mark.parametrize(
+    ("duration", "accept_delay", "cap_txs", "tx_timeout_s", "latency_s"),
+    [
+        pytest.param(1.0, 0.2, 100, 5, 1.0, id="latency-excludes-queue"),
+        pytest.param(2.0, 0.3, 5, 1, 1.5, id="queued-submit-does-not-time-out"),
+    ],
+)
+def test_queued_submits(load, duration, accept_delay, cap_txs, tx_timeout_s, latency_s):
+    """One submit thread: submits queue behind each other for longer than `tx_timeout_s`;
+    neither the queue nor the tracker behind it counts as latency or times out."""
+    run = load(
+        duration,
+        include=True,
+        accept_delay=accept_delay,
+        workers=1,
+        cap_txs=cap_txs,
+        tx_timeout_s=tx_timeout_s,
+    )
+    assert len(run.txs) > 5
+    assert included(run.txs)
+    assert max_latency(run.txs) < latency_s
+    assert run.meta["max_in_flight"] <= cap_txs
+
+
+def test_slow_payloads_do_not_delay_block_times(load):
+    run = load(0.5, include=True, payload_delay=0.1, cap_txs=100, tx_timeout_s=10)
+    assert len(run.txs) > 5
+    assert included(run.txs)
+    assert max_latency(run.txs) < 0.4
+
+
+def test_heights_on_validators_and_query_node(load):
+    run = load(0.5, include=True, query_lag=0.3, cap_txs=100, tx_timeout_s=5)
+    assert included(run.txs)
+    by_height = {h["height"]: h for h in run.heights}
+    for tx in run.txs:
+        h = by_height[tx["height"]]
+        assert tx["t_included"] == h["query"]
+        assert h["scanned"] >= h["query"]
+    lags = [h["query"] - h["validator"] for h in run.heights if h["query"]]
+    assert statistics.median(lags) == pytest.approx(0.3, abs=0.12)
+
+
+def test_included_before_the_submit_returns(load):
+    run = load(0.6, include=True, reply_delay=0.4, rate=0.005, tx_timeout_s=2)
+    assert len(run.txs) > 2
+    assert included(run.txs)
+
+
+def test_lost_payload_does_not_stall_later_blocks(load):
+    """Steady state is 6 in flight, 8 on a jittery run; a stall gains 20 per second."""
+    duration = netbench.MISSING_PAYLOAD_S + 2 * fakes.BLOCK_S + 1.0
+    run = load(
+        duration, include=True, lost=frozenset({10}), cap_txs=12, tx_timeout_s=1.5
+    )
+    assert run.meta["missing_payloads"] == [10]
+    assert run.meta["cap_waits"] == 0
+    done = [tx for tx in run.txs if tx["status"] == "included"]
+    assert len(run.txs) - len(done) <= 2
+    assert max_latency(done) < 0.5
+
+
+def test_late_payload_counts_from_its_block(load):
+    run = load(1.5, include=True, late={10: 1.0}, cap_txs=8, tx_timeout_s=3)
+    assert run.meta["missing_payloads"] == []
+    assert run.meta["cap_waits"] == 0
+    assert included(run.txs)
+    assert max_latency(run.txs) < 0.7
+
+
+def test_staircase_stops_at_the_first_failing_step_and_refines(staircase):
+    run = staircase(steps=(0.02, 0.04, 0.16), tx_timeout_s=1)
+    assert verdicts(run.steps) == [
+        (0.02, False, True),
+        (0.04, False, True),
+        (0.16, False, False),
+        (0.1, True, False),
+    ]
+
+
+def test_refine_starts_after_the_backlog_drained(staircase):
+    """0.1 MB/s leaves 40 txs behind; 0.07 MB/s alone keeps up but drains that backlog only
+    at 2.5 tx/s, adding latency over the 300 ms target."""
+    run = staircase(steps=(0.04, 0.1), latency_target_ms=300, tx_timeout_s=10)
+    assert verdicts(run.steps) == [
+        (0.04, False, True),
+        (0.1, False, False),
+        (0.07000000000000001, True, True),
+    ]
+    assert run.meta["drain_s"] > 0.2
+    assert not run.meta["refine_skipped"]
+
+
+def test_keep_going_runs_every_step_then_waits_for_the_backlog(staircase):
+    """Both steps fail and leave 15 txs behind."""
+    run = staircase(steps=(0.1, 0.12), tx_timeout_s=10, keep_going=True)
+    assert [
+        (s["rate_mb_s"], s["refine"], bool(s["consensus_fails"])) for s in run.steps
+    ] == [(0.1, False, True), (0.12, False, True)]
+    assert run.meta["drain_s"] > 0.2
+    assert not run.meta["refine_skipped"]
+
+
+@pytest.mark.parametrize(
+    ("steps", "keep_going", "refine_skipped"),
+    [((0.02, 0.16), False, True), ((0.1, 0.12), True, False)],
+)
+def test_backlog_not_drained(
+    staircase, monkeypatch: pytest.MonkeyPatch, steps, keep_going, refine_skipped
+):
+    async def undrained(*_: Any, **__: Any) -> None:
+        return None
+
+    monkeypatch.setattr(netbench, "drain", undrained)
+    run = staircase(steps=steps, tx_timeout_s=1, keep_going=keep_going)
+    assert [s["rate_mb_s"] for s in run.steps] == list(steps)
+    assert run.meta["drain_s"] is None
+    assert run.meta["refine_skipped"] == refine_skipped
+
+
+def test_steps_survive_a_failure_in_the_last_drain(
+    staircase, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    async def gone(*_: Any, **__: Any) -> None:
+        raise OSError("gone")
+
+    monkeypatch.setattr(netbench, "drain", gone)
+    with pytest.raises(netbench.NetworkError):
+        staircase(steps=(0.1, 0.12), tx_timeout_s=1, keep_going=True)
+    steps = netbench.read_json(tmp_path / "steps.json")
+    assert [s["rate_mb_s"] for s in steps] == [0.1, 0.12]
+
+
+def test_step_ends_on_time_while_waiting_for_room(load):
+    """Nothing is included: the cap fills at once and frees only on timeouts after 3 s."""
+    (only,) = load(1.0, include=False, cap_txs=2, tx_timeout_s=3).steps
+    assert only["t_end"] - only["t_start"] < 1.3
+
+
+def test_dead_process_raises_immediately():
+    clock = fakes.FakeClock()
+    pool = ScriptedPool(clock, OSError("refused"))
+    with pytest.raises(netbench.NetworkError):
+        netbench.wait_ready(pool, {"node0": "http://x"}, 1, 5.0, lambda: False, clock)
+    assert clock.sleeps == []
+
+
+def test_writes_stake_table_and_final_metrics(tmp_path: Path):
+    clock = fakes.FakeClock()
+    node = fakes.FakeNode(clock, True)
+    topo: netbench.Topology = {
+        "nodes": {"node0": node.url, "node1": node.url},
+        "roles": {"node0": "validator, sqlite", "node1": "validator, sqlite"},
+        "query_node": "node0",
+    }
+    fast: dict[str, Any] = {
+        "tx_size": 1000,
+        "workers": 1,
+        "steps": (0.02,),
+        "step_s": 1,
+        "warmup_s": 0,
+    }
+    config = netbench.BenchConfig(**fast, cap_s=1.0, submit_nodes=1, tx_timeout_s=5)
+    t0, t1 = netbench.drive_load(
+        config, topo, tmp_path, lambda: True, clock, node.connect
+    )
+    assert t1 > t0
+    for name in ("stake-table.json", "final-node0.prom", "final-node1.prom"):
+        assert (tmp_path / name).exists()
+
+
+def test_dead_network_raises_without_starting_load(tmp_path: Path):
+    with pytest.raises(netbench.NetworkError, match="before load"):
+        netbench.drive_load(
+            netbench.BenchConfig(),
+            TOPOLOGY,
+            tmp_path,
+            lambda: False,
+            fakes.FakeClock(),
+            fakes.no_http_pool,
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+def write_load_files(out: Path, state: netbench.LoadState) -> dict[str, str]:
+    netbench.write_load_files(
+        out, state, netbench.Heights(7), [], [], b"\x01", None, False
+    )
+    return {p.name: p.read_text() for p in out.iterdir()}
+
+
+def test_cut_short_load_keeps_raw_files_without_steps(tmp_path: Path):
+    files = write_load_files(tmp_path, netbench.LoadState())
+    assert sorted(files) == [
+        "consensus.jsonl",
+        "heights.jsonl",
+        "load-meta.json",
+        "load.jsonl",
+    ]
+    assert netbench.read_json(tmp_path / "load-meta.json")["start_height"] == 7
+
+
+def test_txs_never_sent_are_left_out(tmp_path: Path):
+    state = netbench.LoadState()
+    state.txs = [
+        netbench.Tx(id=0, node=0, t_queued=0.0, t_submit=1.0),
+        netbench.Tx(id=1, node=0, t_queued=0.0),
+    ]
+    write_load_files(tmp_path, state)
+    assert [tx["id"] for tx in netbench.read_jsonl(tmp_path / "load.jsonl")] == [0]
+
+
+def analyze(out: Path) -> netbench.BenchResult:
+    return netbench.analyze(out, netbench.BenchConfig(), TOPOLOGY)
+
+
+def test_steps_and_capacity(tmp_path: Path):
+    write_run_dir(tmp_path)
+    result = analyze(tmp_path)
+    one, two = result["steps"]
+    assert some(one["decided_mb_s"]) == pytest.approx(1.0)
+    assert one["timeouts"] == 0
+    assert some(one["consensus_latency_ms"])["p50"] == pytest.approx(500.0)
+    assert some(one["query_lag_ms"])["p50"] == pytest.approx(300.0)
+    assert some(one["latency_ms"])["p50"] == pytest.approx(800.0)
+    assert some(one["mean_view_ms"]) == pytest.approx(250.0)
+    assert some(one["cpu_s_per_mb"]) == pytest.approx(1.5)
+    assert one["node_cpu"] == {"node0": 0.5, "node1": 0.5, "node2": 0.5}
+    assert one["postgres_cpu"] is None
+    assert one["passed"]
+    # 16 included and one timed out, of 1 MB each, in the 15 s measured half.
+    assert one["submitted_mb_s"] == pytest.approx(17 / 15)
+    assert two["consensus_fails"] == ["decided 50% of submitted"]
+    assert result["capacity"]["overall"] == {"mb_s": 1.0, "bounded": True}
+    node0, load = result["nodes"]["node0"], result["load"]
+    assert (node0["decided_blocks"], node0["cpu_cores"]) == (120, 0.5)
+    window = result["window"]
+    assert (window["height_start"], window["height_end"]) == (200, 320)
+    assert result["host"]["util_mean"] == pytest.approx(0.5)
+    assert result["processes"]["node0"]["cpu_cores_mean"] == pytest.approx(0.5)
+    assert (load["submitted"], load["included"], load["timeouts"]) == (42, 41, 1)
+    assert some(load["tracker_lag_ms"])["p99"] == pytest.approx(100.0)
+    assert result["validity"] == {"valid": True, "noisy": False, "reasons": []}
+
+
+def test_result_json_is_finite(tmp_path: Path):
+    write_run_dir(tmp_path)
+    netbench.write_json(tmp_path / "result.json", analyze(tmp_path))
+    with pytest.raises(ValueError):
+        netbench.write_json(tmp_path / "bad.json", {"x": math.inf})
+
+
+def test_report_keeps_the_ramp_verdict(tmp_path: Path):
+    write_run_dir(tmp_path)
+    path = tmp_path / "steps.json"
+    steps = netbench.read_json(path)
+    steps[0]["consensus_fails"] = ["decided 10% of offered"]
+    netbench.write_json(path, steps)
+    result = analyze(tmp_path)
+    assert not result["steps"][0]["passed"]
+    assert result["capacity"]["overall"] == {"mb_s": None, "bounded": True}
+
+
+def test_no_scrapes_is_invalid_not_a_crash(tmp_path: Path):
+    write_run_dir(tmp_path)
+    netbench.write_jsonl(
+        tmp_path / "metrics.jsonl",
+        (
+            {"ts": ts, "node": node, "ok": False}
+            for ts in range(90, 175, 5)
+            for node in TOPOLOGY["nodes"]
+        ),
+    )
+    result = analyze(tmp_path)
+    assert not result["validity"]["valid"]
+    assert result["steps"][0]["mean_view_ms"] is None
+    assert "node0 metrics answered for only 0%" in result["validity"]["reasons"][0]
+    assert "run **invalid**" in netbench.render(result, None)
+
+
+@pytest.mark.parametrize(
+    ("ramp", "passed", "keep_going", "expected"),
+    [
+        ((4.0, 6.0, 8.0), [], False, 4.0),
+        ((4.0, 6.0, 8.0), [True], False, 6.0),
+        ((4.0, 6.0, 8.0), [True, False], False, 5.0),
+        ((4.0, 6.0, 8.0), [True, False, True], False, None),
+        ((4.0, 6.0, 8.0), [True, True, True], False, None),
+        ((4.0, 6.0), [False], False, None),
+        ((4.0, 6.0), [False], True, 6.0),
+        ((4.0, 6.0), [False, True], True, None),
+    ],
+)
+def test_next_rate(ramp, passed, keep_going, expected):
+    assert netbench.next_rate(ramp, passed, keep_going=keep_going) == expected
+
+
+def idle_counters() -> list[dict[str, Any]]:
+    """Decided bytes flat over the last DRAIN_IDLE_S, sampled every second up to t=0."""
+    return [
+        {"ts": -netbench.DRAIN_IDLE_S + i, "decided_bytes": 1}
+        for i in range(int(netbench.DRAIN_IDLE_S) + 1)
+    ]
+
+
+def heights_at(validator: int, query: int | None) -> netbench.Heights:
+    heights = netbench.Heights(0)
+    heights.saw("validator", validator, 0.0)
+    if query is not None:
+        heights.saw("query", query, 0.0)
+    return heights
+
+
+def drain(state, heights, timeout_s, clock, **kwargs) -> float | None:
+    return clock.run(
+        netbench.drain(state, idle_counters(), heights, timeout_s, clock, **kwargs)
+    )
+
+
+def test_drain_without_pending_ignores_stuck_transactions():
+    state = netbench.LoadState()
+    state.submitted(netbench.Tx(id=0, node=0, t_queued=0.0))
+    heights = heights_at(5, 5)
+    assert drain(state, heights, 0.3, fakes.FakeClock()) is None
+    assert drain(state, heights, 0.3, fakes.FakeClock(), wait_pending=False) is not None
+
+
+@pytest.mark.parametrize(
+    ("drain_s", "keep_going", "lines"),
+    [
+        (None, False, []),
+        (3.0, False, ["- backlog drained in 3.0 s before the refine step"]),
+        (3.0, True, ["- backlog drained in 3.0 s after the last step"]),
+        (None, True, ["- backlog did not drain in 600 s after the last step"]),
+    ],
+)
+def test_drain_lines(drain_s, keep_going, lines):
+    assert netbench.drain_lines(drain_s, keep_going) == lines
+
+
+def test_theil_sen_ignores_an_outlier():
+    points = [(float(x), 2.0 * x) for x in range(10)] + [(10.0, 100.0)]
+    assert netbench.theil_sen(points) == pytest.approx(2.0)
+    assert netbench.theil_sen([(1.0, 1.0)]) is None
+
+
+def test_pace_follows_the_rate():
+    assert netbench.tx_interval_s(1_000_000, 20.0) == pytest.approx(0.05)
+    assert netbench.step_cap(netbench.BenchConfig(), 7.0) == 35
+
+
+class LateClock(fakes.FakeClock):
+    """Wakes come `late_s` after their time, the first `late_wakes` of them, as from an overloaded
+    event loop."""
+
+    def __init__(self, late_s: float, late_wakes: int) -> None:
+        super().__init__()
+        self.late_s = late_s
+        self.late_wakes = late_wakes
+
+    async def asleep(self, s: float) -> None:
+        if s > 0 and self.late_wakes:
+            self.late_wakes -= 1
+            s += self.late_s
+        await super().asleep(s)
+
+
+def pace_for(
+    monkeypatch: pytest.MonkeyPatch, clock: fakes.FakeClock, seconds: float
+) -> list[netbench.Tx]:
+    """4 MB/s of 1 MB txs, one every 0.25 s, with submits that do nothing."""
+
+    async def submit(load: Any, tx: Any) -> None:
+        pass
+
+    monkeypatch.setattr(netbench, "submit_tx", submit)
+    cfg = netbench.BenchConfig(tx_size=1_000_000, cap_s=1000.0)
+    state = netbench.LoadState()
+    load = netbench.Load(cfg, state, cast("Any", None), ["u"], cast("Any", None), clock)
+
+    async def main() -> None:
+        async with asyncio.TaskGroup() as submits:
+            await netbench.pace(load, submits, 4.0, clock.time() + seconds)
+
+    clock.run(main())
+    return state.txs
+
+
+def test_a_late_pacer_catches_up_instead_of_losing_rate(monkeypatch):
+    on_time = pace_for(monkeypatch, LateClock(0.0, 0), 10.0)
+    late = pace_for(monkeypatch, LateClock(0.5, 1000), 10.0)
+    assert len(on_time) == pytest.approx(40, abs=1)
+    assert len(late) == pytest.approx(40, abs=1)
+
+
+def test_catching_up_is_bounded_to_a_second_of_load(monkeypatch):
+    """A 5 s stall costs the schedule beyond CATCHUP_S, and the rest goes out at once."""
+    txs = pace_for(monkeypatch, LateClock(5.0, 1), 10.0)
+    burst = max(collections.Counter(tx.t_queued for tx in txs).values())
+    assert burst == pytest.approx(netbench.CATCHUP_S * 4 + 1, abs=1)
+    assert len(txs) < 40
+
+
+@pytest.mark.parametrize("tx_size", [1000, 1001, 1002, 1_000_000])
+def test_tx_bodies_are_exact_distinct_slices_of_the_pool(tx_size):
+    cfg = netbench.BenchConfig(tx_size=tx_size)
+    marker = bytes(range(16))
+    bodies = netbench.TxBodies(cfg, marker)
+    pool = base64.b64decode(bodies.encoded)
+    seen = set()
+    for tx_id in range(20):
+        request = json.loads(bodies.request(tx_id, 10003))
+        assert request["namespace"] == 10003
+        payload = base64.b64decode(request["payload"], validate=True)
+        assert len(payload) == tx_size
+        assert payload[:24] == marker + tx_id.to_bytes(8, "big")
+        content = payload[24 : 24 + bodies.groups * 3]
+        assert content in pool
+        seen.add(content)
+    assert len(seen) == 20
+
+
+def test_tx_bodies_reject_a_tx_smaller_than_its_header():
+    with pytest.raises(ValueError, match="below the 24 B header"):
+        netbench.TxBodies(netbench.BenchConfig(tx_size=23), bytes(16))
+    with pytest.raises(ValueError, match="not a multiple of 3"):
+        netbench.TxBodies(netbench.BenchConfig(), bytes(15))
+
+
+def test_a_missing_payload_in_a_scan_batch_is_retried_and_included_later():
+    clock = fakes.FakeClock()
+    state, heights = netbench.LoadState(), netbench.Heights(0)
+    heights.saw("query", 6, 0.0)
+    for i in range(5):
+        state.submitted(netbench.Tx(id=i, node=0, t_queued=0.0, t_submit=0.0))
+    calls: collections.Counter[int] = collections.Counter()
+
+    async def scan(height: int) -> list[int] | None:
+        calls[height] += 1
+        return None if height == 1 and calls[1] == 1 else [height]
+
+    done = asyncio.Event()
+
+    async def main() -> None:
+        tracker = asyncio.create_task(
+            netbench.track_inclusion(
+                netbench.BenchConfig(), state, scan, heights, [], done, clock
+            )
+        )
+        await clock.asleep(1.0)
+        done.set()
+        await tracker
+
+    clock.run(main())
+    assert calls[1] == 2
+    assert [tx.status for tx in state.txs] == ["included"] * 5
+    assert sorted(heights.scanned) == [0, 1, 2, 3, 4]
+    assert not state.missing_payloads
+
+
+def test_window_without_samples_has_zero_heights():
+    series: dict[str, list[Any]] = {node: [] for node in TOPOLOGY["nodes"]}
+    assert netbench.window(series, TOPOLOGY["query_node"], 1.0, 2.0) == {
+        "t0": 1.0,
+        "t1": 2.0,
+        "height_start": 0,
+        "height_end": 0,
+    }
+
+
+def test_keep_going_changes_the_config_hash():
+    cfg = netbench.BenchConfig()
+    assert netbench.config_hash(
+        dataclasses.replace(cfg, keep_going=True), []
+    ) != netbench.config_hash(cfg, [])
+
+
+def test_idle_needs_decided_bytes_flat_for_longer_than_a_slow_block():
+    """Blocks of 2.5 s under a backlog leave two equal samples 1 s apart while consensus is
+    busy (run lulu-20260930-1758 reported "drained in 0.0 s")."""
+    assert netbench.is_idle(idle_counters(), 0.0)
+    short = [c for c in idle_counters() if c["ts"] >= -2.0]
+    assert not netbench.is_idle(short, 0.0)
+    busy = [{**c, "decided_bytes": 1 + (c["ts"] > -3.0)} for c in idle_counters()]
+    assert not netbench.is_idle(busy, 0.0)
+    assert not netbench.is_idle([], 0.0)
+
+
+def test_drain_waits_for_the_query_node():
+    state = netbench.LoadState()
+    heights = heights_at(5, 3)
+    assert drain(state, heights, 0.3, fakes.FakeClock()) is None
+    heights.saw("query", 5, 0.0)
+    assert drain(state, heights, 0.3, fakes.FakeClock()) is not None
+
+
+def test_drain_does_not_chase_new_validator_heights():
+    heights = heights_at(5, None)
+
+    def grow(now: float) -> None:
+        if now >= 0.05:
+            heights.saw("validator", 6, now)
+            heights.saw("query", 5, now)
+
+    clock = fakes.FakeClock(on_advance=grow)
+    assert drain(netbench.LoadState(), heights, 1.0, clock) is not None
+
+
+def step_window() -> netbench.StepWindow:
+    return {
+        "rate_mb_s": 10.0,
+        "refine": False,
+        "t_start": 0.0,
+        "t_mid": 15.0,
+        "t_end": 30.0,
+    }
+
+
+def measures(
+    decided_mb_s: float = 10.0,
+    timeouts: int = 0,
+    consensus_s: float = 0.5,
+    query_s: float = 0.2,
+    query_growth: float = 0.0,
+    now: float = math.inf,
+) -> Any:
+    """A 10 MB/s step, t 0 to 30, measured from 15: one 1 MB tx every 0.1 s."""
+    txs = [{"t_submit": i / 10, "height": i, "status": "included"} for i in range(300)]
+    heights = [
+        {
+            "height": i,
+            "validator": i / 10 + consensus_s,
+            "query": i / 10 + consensus_s + query_s + query_growth * i / 10,
+            "scanned": None,
+        }
+        for i in range(300)
+    ]
+    counters = [
+        {
+            "ts": float(t),
+            "decided_bytes": decided_mb_s * 1e6 * t,
+            "timeouts": timeouts * (t > 20),
+        }
+        for t in range(31)
+    ]
+    return netbench.step_measures(
+        step_window(), netbench.BenchConfig(), txs, heights, counters, now
+    )
+
+
+def fails(m: Any) -> tuple[list[str], list[str]]:
+    return netbench.step_fails(m, netbench.BenchConfig())
+
+
+def test_keeping_up():
+    m = measures()
+    assert m["decided_mb_s"] == pytest.approx(10.0)
+    assert m["submitted_mb_s"] == pytest.approx(10.0, abs=0.1)
+    assert m["timeouts"] == 0
+    assert m["consensus_latency_ms"]["p50"] == pytest.approx(500.0)
+    assert m["query_lag_ms"]["p50"] == pytest.approx(200.0)
+    assert m["query_lag_slope_ms_s"] == pytest.approx(0.0)
+    assert fails(m) == ([], [])
+
+
+def test_consensus_rules():
+    assert fails(measures(decided_mb_s=7.0, timeouts=1, consensus_s=1.5)) == (
+        [
+            "decided 70% of submitted",
+            "1 view timeouts",
+            "consensus latency p50 1500 ms > 1000 ms",
+        ],
+        [],
+    )
+
+
+def test_decided_is_judged_against_the_submitted_rate():
+    """10 MB/s go out: 8.5 MB/s decided keeps up, whatever the step's nominal rate."""
+    assert fails(measures(decided_mb_s=8.5)) == ([], [])
+    assert fails(measures(decided_mb_s=7.9)) == (["decided 79% of submitted"], [])
+
+
+def test_pending_transactions_count_once_over_target():
+    """By t 20 all 20 are over the 1000 ms target; by t 18 the 10 submitted before 17."""
+    cfg = netbench.BenchConfig()
+    txs = [
+        {"t_submit": 16.0 + i / 10, "height": None, "status": "pending"}
+        for i in range(20)
+    ]
+    m = netbench.step_measures(step_window(), cfg, txs, [], [], 20.0)
+    assert some(m["consensus_latency_ms"])["n"] == 20
+    m = netbench.step_measures(step_window(), cfg, txs, [], [], 18.0)
+    latency = some(m["consensus_latency_ms"])
+    assert latency["n"] == 10
+    assert latency["p50"] > 1000.0
+
+
+NEW_STEP_KEYS = ("queued_mb_s", "queue_wait_ms", "submit_rtt_ms", "cap_waits")
+
+
+def test_submit_measures_split_queue_wait_from_round_trip():
+    """10 MB/s queued, each tx waiting 50 ms for a thread and 200 ms for the response."""
+    txs = [
+        {
+            "t_queued": i / 10,
+            "t_submit": i / 10 + 0.05,
+            "t_done": i / 10 + 0.25,
+            "height": None,
+            "status": "pending",
+        }
+        for i in range(300)
+    ]
+    m = netbench.step_measures(step_window(), netbench.BenchConfig(), txs, [], [], 30.0)
+    assert some(m["queued_mb_s"]) == pytest.approx(10.0, abs=0.1)
+    assert some(m["queue_wait_ms"])["p50"] == pytest.approx(50.0)
+    assert some(m["submit_rtt_ms"])["p50"] == pytest.approx(200.0)
+
+
+def test_submit_measures_are_none_without_queue_timestamps():
+    m = measures()
+    assert (m["queued_mb_s"], m["queue_wait_ms"], m["submit_rtt_ms"]) == (
+        None,
+        None,
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("queued", "cap_waits", "wait_p50", "cause"),
+    [
+        (7.0, 3, 1.0, "in-flight cap reached (--cap-s)"),
+        (7.0, 0, 1.0, "pacer late (controller CPU)"),
+        (
+            10.0,
+            0,
+            300.0,
+            "submit workers busy (queue wait p50/p99 300/900 ms, 3 workers)",
+        ),
+        (10.0, 0, 1.0, "slow submit responses (rtt p50/p99 20/50 ms)"),
+        (None, None, None, "cause not available"),
+    ],
+)
+def test_summary_names_the_submission_shortfall(queued, cap_waits, wait_p50, cause):
+    short = step(10.0) | {
+        "submitted_mb_s": 9.0,
+        "queued_mb_s": queued,
+        "cap_waits": cap_waits,
+        "queue_wait_ms": None if wait_p50 is None else quantiles(wait_p50, 900.0),
+        "submit_rtt_ms": None if wait_p50 is None else quantiles(20.0, 50.0),
+    }
+    result = make_result([short])
+    result["config"]["workers"] = 3
+    summary = netbench.render(result, None)
+    assert f"- submission short at 10 MB/s: {cause}" in summary
+
+
+def test_unsent_and_unanswered_txs_count_with_their_time_so_far():
+    """Queued at 20, still waiting at now 25; sent at 21, unanswered at now 25."""
+    txs = [
+        {"t_queued": 20.0, "t_submit": math.inf, "t_done": None},
+        {"t_queued": 20.0, "t_submit": 21.0, "t_done": None},
+    ]
+    m = netbench.submit_measures(txs, 1_000_000, 15.0, 30.0, 25.0)
+    assert some(m["queue_wait_ms"])["max"] == pytest.approx(5000.0)
+    assert some(m["submit_rtt_ms"])["n"] == 1
+    assert some(m["submit_rtt_ms"])["p50"] == pytest.approx(4000.0)
+
+
+def test_old_steps_json_renders_without_queue_metrics(tmp_path):
+    old = {k: v for k, v in step(10.0).items() if k not in NEW_STEP_KEYS}
+    judged = old | {"consensus_fails": [], "query_fails": []}
+    result = netbench.step_result(judged, [], {}, [])
+    assert [result[k] for k in NEW_STEP_KEYS] == [None] * len(NEW_STEP_KEYS)
+    assert "10" in netbench.render(make_result([result]), None)
+
+
+def test_summary_has_no_shortfall_line_when_submission_keeps_up():
+    assert "submission short" not in netbench.render(make_result(), None)
+
+
+def test_decided_rate_is_not_quantized_by_blocks():
+    """A 20 MB block every 2 s at t 1, 3, 5, ...: 10 MB/s, but the counter samples at 15 and
+    30 see 7 blocks in 15 s."""
+    counters = [
+        {"ts": float(t), "decided_bytes": 20e6 * ((t + 1) // 2), "timeouts": 0}
+        for t in range(31)
+    ]
+    m = netbench.step_measures(
+        step_window(), netbench.BenchConfig(), [], [], counters, 30.0
+    )
+    assert some(m["decided_mb_s"]) == pytest.approx(10.0, abs=0.3)
+    assert fails(m) == ([], [])
+
+
+def test_growing_query_lag():
+    m = measures(query_growth=0.2)
+    assert m["query_lag_slope_ms_s"] == pytest.approx(200.0, abs=1)
+    consensus, query = fails(m)
+    assert consensus == []
+    assert query[0] == "query lag grows 200 ms/s"
+
+
+def test_heights_not_yet_on_the_query_node_count_as_lagging():
+    """At t 22 nothing is on the query node yet: heights older than the target lag."""
+    m = measures(query_s=100.0, now=22.0)
+    assert m["query_lag_ms"]["p50"] > 1000.0
+    assert "query lag p50" in fails(m)[1][0]
+
+
+def verdict(rate, consensus=(), query=()):
+    return {"rate_mb_s": rate, "consensus_fails": [*consensus], "query_fails": [*query]}
+
+
+DECIDED_90 = ["decided 90% of offered"]
+QUERY_LAG = ["query lag p50 1500 ms > 1000 ms"]
+
+
+@pytest.mark.parametrize(
+    ("verdicts", "overall", "line"),
+    [
+        (
+            [verdict(4.0), verdict(6.0)],
+            {"mb_s": 6.0, "bounded": False},
+            "Capacity **>= 6 MB/s**: no step failed.",
+        ),
+        (
+            [verdict(4.0), verdict(6.0), verdict(8.0, DECIDED_90), verdict(7.0)],
+            {"mb_s": 7.0, "bounded": True},
+            "Capacity **7 MB/s**: consensus limits (decided 90% of offered at 8 MB/s).",
+        ),
+        (
+            [verdict(4.0), verdict(6.0, query=QUERY_LAG), verdict(5.0)],
+            {"mb_s": 5.0, "bounded": True},
+            (
+                "Capacity **5 MB/s**: query node limits at 5 MB/s, consensus >= 6 MB/s "
+                "(query lag p50 1500 ms > 1000 ms at 6 MB/s)."
+            ),
+        ),
+        (
+            [verdict(4.0, ["1 view timeouts"])],
+            {"mb_s": None, "bounded": True},
+            "Capacity **< 4 MB/s**: consensus limits (1 view timeouts at 4 MB/s).",
+        ),
+    ],
+)
+def test_capacity(verdicts, overall, line):
+    cap = netbench.capacity(verdicts)
+    assert cap["overall"] == overall
+    assert netbench.capacity_line(cap) == line
+
+
+@pytest.mark.parametrize(
+    ("buckets", "total_s", "expected"),
+    [
+        (
+            {"0.1": 50.0, "0.2": 100.0, "+Inf": 100.0},
+            10.0,
+            {"p50": 100.0, "p99": 198.0, "mean": 100.0},
+        ),
+        (
+            {"0.1": 50.0, "+Inf": 100.0},
+            30.0,
+            {"p50": 100.0, "p99": 100.0, "max": 100.0},
+        ),
+    ],
+)
+def test_histogram_quantiles(buckets, total_s, expected):
+    m1 = {f'op_bucket{{le="{le}"}}': n for le, n in buckets.items()} | {
+        "op_count": 100.0,
+        "op_sum": total_s,
+    }
+    q = some(netbench.histogram_quantiles({}, m1, "op"))
+    assert {k: q[k] for k in expected} == pytest.approx(expected)
+
+
+def test_stale_connection_is_retried_on_a_fresh_one(monkeypatch: pytest.MonkeyPatch):
+    connections = fakes.FakeConnections(b"42")
+    monkeypatch.setattr(netbench.http.client, "HTTPConnection", connections)
+    pool = netbench.HttpPool(fakes.FakeClock())
+    assert pool.request("GET", "http://x/y") == (200, b"42")
+    assert pool.request("GET", "http://x/y") == (200, b"42")
+    stale, fresh = connections.made
+    assert (stale.closed, stale.requests, fresh.requests) == (True, 2, 1)
+
+
+def test_window_rate_counts_transactions_in_the_window():
+    times = [50.0, 80.0, 99.0, math.inf]
+    assert netbench.window_mb_s(times, 1_500_000, 70.0, 100.0) == pytest.approx(0.1)
+
+
+def test_progress_line_shows_the_submitted_offered_and_query_rates(
+    caplog: pytest.LogCaptureFixture,
+):
+    state = netbench.LoadState()
+    state.rate_mb_s = 60.0
+    for i in range(90):
+        state.submitted(netbench.Tx(id=i, node=0, t_queued=0.0, t_submit=99.0))
+    for i in range(30):
+        state.include(i, height=0, at=99.5)
+    heights = netbench.Heights(0)
+    heights.saw("validator", 1, 95.0)
+    heights.saw("query", 1, 95.5)
+    counters = [{"ts": 80.0, "decided_bytes": 0}, {"ts": 100.0, "decided_bytes": 50e6}]
+    with caplog.at_level(logging.INFO, netbench.log.name):
+        netbench.log_progress(state, heights, counters, 100.0, 1_000_000)
+    (line,) = caplog.messages
+    assert "(lag 500 ms), block 30 s, 50 MB;" in line
+    assert (
+        "submitting 3 of 60 MB/s, decided 2.5 MB/s, query 1 MB/s; 90 submitted" in line
+    )
