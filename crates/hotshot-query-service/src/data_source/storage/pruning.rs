@@ -177,6 +177,9 @@ impl PrunerCfg {
     ///
     /// This is the ideal period for which state should be retained
     /// state younger than this and older than `STATE_MINIMUM_RETENTION` may be pruned if disk usage exceeds the `pruning_threshold`.
+    ///
+    /// Whatever the retention, state is never pruned to or past the newest merklized state
+    /// height, which the state writer resumes from.
     pub fn state_target_retention(&self) -> Duration {
         self.state_target_retention
     }
