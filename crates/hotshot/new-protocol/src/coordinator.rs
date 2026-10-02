@@ -393,6 +393,7 @@ where
                 BlockBuilderConfig {
                     empty_block_delay,
                     block_sizes,
+                    forward_transactions: std::env::var_os("NP_NO_TX_FORWARDING").is_none(),
                     ..BlockBuilderConfig::default()
                 },
                 upgrade_lock.clone(),

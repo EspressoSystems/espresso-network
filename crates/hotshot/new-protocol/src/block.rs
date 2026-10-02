@@ -97,6 +97,9 @@ pub struct BlockBuilderConfig {
     /// How many upcoming leaders each transaction is sent to. A leader holds up to
     /// `fanout + 1` blocks of transactions for its later views.
     pub fanout: u64,
+    /// Off, a node never sends submitted transactions to other leaders and includes them only
+    /// in the blocks it proposes itself.
+    pub forward_transactions: bool,
 }
 
 impl Default for BlockBuilderConfig {
@@ -108,6 +111,7 @@ impl Default for BlockBuilderConfig {
             dedup_window_size: 10,
             empty_block_delay: Duration::from_millis(500),
             fanout: 2,
+            forward_transactions: true,
         }
     }
 }
@@ -372,6 +376,9 @@ impl<T: NodeType> BlockBuilder<T> {
 
     /// Returns one message per upcoming leader to send `tx` to, none if `tx` is already
     /// pending: resubmitting a queued transaction succeeds without queueing it twice.
+    ///
+    /// With forwarding off, `tx` instead waits in this node's own pool for a view it leads,
+    /// and no messages are returned.
     pub fn on_submit_transaction(
         &mut self,
         tx: T::Transaction,
@@ -401,6 +408,10 @@ impl<T: NodeType> BlockBuilder<T> {
                 limit: budget,
             });
         }
+        if !self.config.forward_transactions {
+            self.pool_submitted(hash, tx)?;
+            return Ok(Vec::new());
+        }
         if self.retry_total_bytes + size > self.config.max_retry_bytes {
             warn!("retry buffer full, rejecting {hash}");
             return Err(SubmitError::RetryBufferFull);
@@ -423,6 +434,33 @@ impl<T: NodeType> BlockBuilder<T> {
             },
         );
         Ok(messages)
+    }
+
+    fn pool_submitted(
+        &mut self,
+        hash: Commitment<T::Transaction>,
+        tx: T::Transaction,
+    ) -> Result<(), SubmitError> {
+        if self.leader_buffer.contains_key(&hash)
+            || self.dedups.values().any(|hs| hs.contains(&hash))
+        {
+            return Ok(());
+        }
+        let size = tx.minimum_block_size();
+        if self.leader_total_bytes + size > self.config.max_retry_bytes {
+            warn!("leader pool full, rejecting {hash}");
+            return Err(SubmitError::RetryBufferFull);
+        }
+        self.leader_total_bytes += size;
+        self.leader_order.insert((self.current_view, hash));
+        self.leader_buffer.insert(
+            hash,
+            PoolEntry {
+                tx,
+                view: self.current_view,
+            },
+        );
+        Ok(())
     }
 
     /// One message with `transactions` for the leader of each of the `fanout` views after

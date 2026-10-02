@@ -61,6 +61,7 @@ fn small_config() -> BlockBuilderConfig {
         dedup_window_size: 3,
         empty_block_delay: Duration::from_millis(500),
         fanout: 1,
+        forward_transactions: true,
     }
 }
 
