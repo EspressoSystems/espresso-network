@@ -126,10 +126,6 @@ pub(crate) fn is_timeout_cert(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::TimeoutCertificate(_))
 }
 
-pub(crate) fn is_upgrade_cert_formed(input: &ConsensusInput<TestTypes>) -> bool {
-    matches!(input, ConsensusInput::UpgradeCertificateFormed(_))
-}
-
 pub(crate) fn is_drb_result(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::DrbResult(..))
 }
