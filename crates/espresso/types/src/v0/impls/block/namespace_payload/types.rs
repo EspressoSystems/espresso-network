@@ -336,11 +336,16 @@ impl NsPayloadBuilder {
         let mut result = Vec::with_capacity(
             NUM_TXS_BYTE_LEN + self.tx_table_entries.len() + self.tx_bodies.len(),
         );
-        let num_txs = NumTxsUnchecked(self.tx_table_entries.len() / TX_OFFSET_BYTE_LEN);
-        result.extend(num_txs.to_payload_bytes());
-        result.extend(self.tx_table_entries);
-        result.extend(self.tx_bodies);
+        self.write_into(&mut result);
         result
+    }
+
+    /// Append the serialized namespace to `out` and consume self.
+    pub fn write_into(self, out: &mut Vec<u8>) {
+        let num_txs = NumTxsUnchecked(self.tx_table_entries.len() / TX_OFFSET_BYTE_LEN);
+        out.extend(num_txs.to_payload_bytes());
+        out.extend(self.tx_table_entries);
+        out.extend(self.tx_bodies);
     }
 
     /// Byte length of a tx table header.

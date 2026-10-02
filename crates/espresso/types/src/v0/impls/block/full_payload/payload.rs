@@ -115,10 +115,10 @@ impl Payload {
         }
 
         // build block payload and namespace table
-        let mut payload = Vec::new();
+        let mut payload = Vec::with_capacity(block_byte_len as usize);
         let mut ns_table_builder = NsTableBuilder::new();
         for (ns_id, ns_builder) in ns_builders {
-            payload.extend(ns_builder.into_bytes());
+            ns_builder.write_into(&mut payload);
             ns_table_builder.append_entry(ns_id, payload.len());
         }
         let ns_table = ns_table_builder.into_ns_table();
