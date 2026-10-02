@@ -3,6 +3,7 @@ use std::{collections::HashMap, mem, sync::Arc};
 use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use async_lock::RwLock as AsyncRwLock;
 use committable::Commitment;
+use espresso_api::error::SubmitError;
 use futures::{
     FutureExt, StreamExt,
     future::BoxFuture,
@@ -10,7 +11,8 @@ use futures::{
 };
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_new_protocol::{
-    client::ClientApi,
+    block,
+    client::{ClientApi, QueryError},
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{
         Coordinator,
@@ -405,7 +407,15 @@ where
             return client_api
                 .submit_transaction(tx)
                 .await
-                .map_err(|e| anyhow::anyhow!("{e}"));
+                .map_err(|err| match err {
+                    QueryError::Rejected(rejection @ block::SubmitError::TooLarge { .. }) => {
+                        SubmitError::Invalid(rejection.to_string()).into()
+                    },
+                    QueryError::Rejected(rejection @ block::SubmitError::RetryBufferFull) => {
+                        SubmitError::Overloaded(rejection.to_string()).into()
+                    },
+                    err => anyhow::Error::new(err),
+                });
         }
         self.legacy_handle
             .read()
