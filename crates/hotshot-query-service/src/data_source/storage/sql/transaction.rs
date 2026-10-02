@@ -513,10 +513,18 @@ impl Transaction<Write> {
             let query = query_builder.build();
             let statement = query.sql();
 
-            let res = self
-                .execute(query)
-                .await
-                .map_err(|source| UpsertError::new(table, source))?;
+            let res = self.execute(query).await.map_err(|source| {
+                let err = UpsertError::new(table, source);
+                if let UpsertError::Other { source, .. } = &err {
+                    tracing::error!(
+                        table,
+                        statement,
+                        error = %format_args!("{source:#}"),
+                        "upsert failed"
+                    );
+                }
+                err
+            })?;
             let rows_modified = res.rows_affected() as usize;
             if rows_modified != num_rows {
                 let error = format!(
