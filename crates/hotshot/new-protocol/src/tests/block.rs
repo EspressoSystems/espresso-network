@@ -458,6 +458,38 @@ async fn reconstructed_block_drops_its_transactions_from_leader_buffer() {
     assert_eq!(txns, Vec::from([tx(2)]));
 }
 
+/// Without forwarding a leader builds from its own retry buffer, one block at a time, and a
+/// transaction stays there until a block includes it.
+#[tokio::test]
+async fn leader_builds_from_its_retry_buffer_without_forwarding() {
+    let mut b = builder_with(BlockBuilderConfig {
+        block_sizes: sizes(2),
+        forward_transactions: false,
+        ..small_config()
+    });
+    b.on_submit_transaction(tx(1)).unwrap();
+    assert!(
+        b.on_view_changed(view(1)).is_empty(),
+        "nothing is forwarded"
+    );
+    b.on_submit_transaction(tx(2)).unwrap();
+    b.on_submit_transaction(tx(3)).unwrap();
+
+    let (txns, manifest) = b.drain(view(2), epoch());
+    assert_eq!(txns.len(), 2, "one block");
+    assert_eq!(txns[0], tx(1), "the oldest transaction goes first");
+    assert_eq!(
+        b.drain(view(3), epoch()).0,
+        txns,
+        "a built block keeps its transactions pending until it is included"
+    );
+
+    b.on_block_reconstructed(view(2), manifest.hashes);
+    let (rest, _) = b.drain(view(4), epoch());
+    assert_eq!(rest.len(), 1);
+    assert!(!txns.contains(&rest[0]));
+}
+
 #[tokio::test]
 async fn reconstructed_block_drops_later_copies_of_its_transactions() {
     let mut b = builder();

@@ -287,10 +287,24 @@ impl<T: NodeType> BlockBuilder<T> {
         if let Some(txs) = self.view_transactions.get(&view) {
             return txs.clone();
         }
-        let txs: Vec<_> = std::mem::take(&mut self.leader_buffer)
+        let mut txs: Vec<_> = std::mem::take(&mut self.leader_buffer)
             .into_iter()
             .collect();
-        self.leader_total_bytes = 0;
+        let mut bytes = std::mem::take(&mut self.leader_total_bytes);
+        if !self.config.forward_transactions {
+            // Without forwarding a leader includes its own pending transactions. They stay in
+            // the retry buffer until a block includes them, so a block built but never
+            // proposed loses nothing.
+            let max_bytes = self.block_size(view);
+            for (_, hash) in &self.retry_order {
+                let entry = &self.retry_pending[hash];
+                if bytes + entry.size > max_bytes {
+                    continue;
+                }
+                bytes += entry.size;
+                txs.push((*hash, entry.tx.clone()));
+            }
+        }
         self.view_transactions.insert(view, txs.clone());
         txs
     }
@@ -326,8 +340,6 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     /// Resubmitting a queued transaction succeeds without queueing it twice.
-    ///
-    /// With forwarding off, `tx` instead waits in this node's own pool for a view it leads.
     pub fn on_submit_transaction(&mut self, tx: T::Transaction) -> Result<(), SubmitError> {
         let hash = tx.commit();
 
@@ -354,9 +366,6 @@ impl<T: NodeType> BlockBuilder<T> {
                 limit: budget,
             });
         }
-        if !self.config.forward_transactions {
-            return self.pool_submitted(hash, tx);
-        }
         if self.retry_total_bytes + size > self.config.max_retry_bytes {
             warn!("retry buffer full, rejecting {hash}");
             return Err(SubmitError::RetryBufferFull);
@@ -375,26 +384,6 @@ impl<T: NodeType> BlockBuilder<T> {
                 encoded_size,
             },
         );
-        Ok(())
-    }
-
-    fn pool_submitted(
-        &mut self,
-        hash: Commitment<T::Transaction>,
-        tx: T::Transaction,
-    ) -> Result<(), SubmitError> {
-        if self.leader_buffer.contains_key(&hash)
-            || self.dedups.values().any(|hs| hs.contains(&hash))
-        {
-            return Ok(());
-        }
-        let size = tx.minimum_block_size();
-        if self.leader_total_bytes + size > self.config.max_retry_bytes {
-            warn!("leader pool full, rejecting {hash}");
-            return Err(SubmitError::RetryBufferFull);
-        }
-        self.leader_total_bytes += size;
-        self.leader_buffer.insert(hash, tx);
         Ok(())
     }
 
@@ -432,7 +421,8 @@ impl<T: NodeType> BlockBuilder<T> {
         self.mark_included(view, hashes);
     }
 
-    /// Returns pending transactions for the next leader, within one block and one message.
+    /// Returns pending transactions for the next leader, within one block and one message,
+    /// none without forwarding.
     pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         self.current_view = view;
         while let Some(&(valid_until, hash)) = self.retry_order.first() {
@@ -440,6 +430,9 @@ impl<T: NodeType> BlockBuilder<T> {
                 break;
             }
             self.remove_pending(&hash);
+        }
+        if !self.config.forward_transactions {
+            return Vec::new();
         }
 
         let max_bytes = self.block_size(view + 1);
@@ -524,8 +517,7 @@ impl<T: NodeType> BlockBuilder<T> {
         view: ViewNumber,
         epoch: EpochNumber,
     ) -> (Vec<T::Transaction>, DedupManifest<T>) {
-        let (hashes, txs) = self.leader_buffer.drain().unzip();
-        self.leader_total_bytes = 0;
+        let (hashes, txs) = self.transactions_for(view).into_iter().unzip();
 
         let manifest = DedupManifest {
             view,
