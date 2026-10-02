@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+import "v2/common.proto";
+
+message GetStateSignatureRequest {
+  // Block height the signature covers. Required
+  optional uint64 height = 1;
+}
+
+// This node's signature over the light client state at one block, in the form the state relay
+// server receives it. A node keeps these only for recent blocks, so an older height is a 404
+message StateSignatureResponse {
+  SchnorrPublicKey key = 1;
+
+  // TaggedBase64 `LIGHT_CLIENT_STATE~`
+  string state = 2;
+
+  // Stake table backing the next block, TaggedBase64 `STAKE_TABLE_STATE~`
+  string next_stake = 3;
+
+  // 32 bytes, 0x-prefixed hex
+  string auth_root = 4;
+
+  // TaggedBase64 `SCHNORR_SIG~`
+  string signature = 5;
+
+  // The same state signed for light client V2, TaggedBase64 `SCHNORR_SIG~`
+  string v2_signature = 6;
+}
+
+service StateSignatureService {
+  // Get this node's light client state signature for a block
+  rpc GetStateSignature(GetStateSignatureRequest) returns (StateSignatureResponse) {
+    option (google.api.http) = {get: "/v2/state-signature/block"};
+  }
+}
