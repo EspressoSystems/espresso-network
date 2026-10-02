@@ -15,45 +15,56 @@ Docker images are tagged with the git tag: git tag `0.6.0.7` produces
 
 ## Branches
 
-- Release branches are named `release-MAJOR.MINOR.PHASE`, e.g. `release-0.6.0`, cut from `main` with the
-  [Release Branch](../.github/workflows/release-branch.yml) workflow. All changes land via reviewed PR.
+- Release branches are named `release-MAJOR.MINOR.PHASE`, e.g. `release-0.6.0`, cut from `main` with `just release-cut`.
+  All changes land via reviewed PR.
 - Experimental branches `release-MAJOR.MINOR.PHASE--<topic>` (double dash) branch off a release branch for devnet
   validation. CI builds docker images for them. Release automation ignores them.
 - Backports: add the label `backport release-MAJOR.MINOR.PHASE` to a PR on `main`. On merge, `backport.yml` opens a
   backport PR against the release branch and tries to resolve conflicts (PRs it touched carry the label
-  `claude-resolved`). Manual backports use `git cherry-pick -x`.
+  `claude-resolved`). After the merge, comment `/backport 123` on the tracker instead. Manual backports use
+  `git cherry-pick -x`.
 
 ## Tracker issue
 
 Every release branch has one issue titled `Release MAJOR.MINOR.PHASE` with label `release-tracker`. The bot regenerates
-its body on every push to `main` or `release-*`, after every `/tag` or cut, and on tracker commands. Sections:
+its body on every push to `main` or `release-*`, when a PR against a release branch opens or closes, after every `/tag`
+or cut, and on tracker commands. Sections:
 
-- Tag log: tags on the branch with date and commit.
-- Commits on `main` not yet on the branch: checklist since the `.0` cut point. A box ticks when the commit is on the
-  branch: its backport PR (head `backport-<PR>-to-<branch>`) merged, `git cherry` finds the same patch, or a branch
-  commit has the same PR number or title. Backport PR status is appended when one exists.
-- Commits on the branch: checklist of what landed on the release branch since the cut.
+- Tag log: tags on the branch with date, commit, GitHub release state (pre-release or release) and build runs.
+- Backports from `main` to the branch: commits on `main` since the `.0` tag. A row shows ✅ when the commit is on the
+  branch: its backport PR (head `backport-<PR>-to-<branch>`) merged, `git cherry` finds the same patch, a branch commit
+  has the same PR number, or a `[Backport ...]` commit has the same title. Backport PR status is appended when one
+  exists.
+- Forward-ports from the branch to `main`: commits on the release branch since the cut, ✅ when also on `main`.
+- Row status: ✅ landed, ☑️ marked `/done`, 🟨 backport PR open, ⬜ not ported, ⏭️ marked `/skip`. Emoji instead of
+  task-list checkboxes, which anyone with edit access could tick by accident.
 - Experimental branches: open `release-X.Y.Z--*` branches with their tip.
 - Human notes: free text below `<!-- HUMAN NOTES BELOW -->`, preserved verbatim.
 
-Commands are comments on the tracker issue by an org member or repo collaborator (GitHub `author_association` `OWNER`,
-`MEMBER` or `COLLABORATOR`); comments by others are ignored. `<sha>` is a commit sha prefix of at least 7 characters.
+Commands are comments on the tracker issue by a user with write access to the repository; comments by others are
+ignored. `<sha>` is a commit sha prefix of at least 7 characters.
 
-| Command         | Effect                                                                      |
-| --------------- | --------------------------------------------------------------------------- |
-| `/tag`          | Tag the branch tip with the next patch, create a GitHub pre-release, build. |
-| `/tag X.Y.Z.N`  | Same with an explicit tag. Must match the branch version and be new.        |
-| `/done <sha>`   | Tick a commit that was ported outside the backport workflow.                |
-| `/skip <sha>`   | Strike through a commit that is deliberately not ported.                    |
-| `/unmark <sha>` | Undo `/done` or `/skip`.                                                    |
+| Command         | Effect                                                                               |
+| --------------- | ------------------------------------------------------------------------------------ |
+| `/tag`          | Tag the branch tip with the next patch, create a GitHub pre-release, build.          |
+| `/tag X.Y.Z.N`  | Same with an explicit tag. Must match the branch version and be new.                 |
+| `/done <sha>`   | Mark a commit ☑️ that was ported outside the backport workflow.                      |
+| `/skip <sha>`   | Mark a commit ⏭️ and strike it through: deliberately not ported.                     |
+| `/unmark <sha>` | Undo `/done` or `/skip`.                                                             |
+| `/backport 123` | Open a backport PR for merged PR 123 against this release branch (`#123` works too). |
 
 Marks are replayed from the issue's comment history, so the body can always be regenerated.
 
 ## Process
 
-1. Cut the branch: run the Release Branch workflow with `version` (e.g. `0.6.0`) and `source_ref` (default `main`), or
-   `just release-cut 0.6.0`. This pushes `release-0.6.0`, tags `0.6.0.0`, creates the backport label and the tracker
-   issue, and builds images.
+1. Cut the branch: `just release-cut` bumps `PHASE` from the highest existing `release-X.Y.Z`; `just release-cut 0.7.0`
+   is for the branch that first activates a new protocol version on any network, decaf in practice. Only a bump of one
+   part is accepted: a `PHASE` bump is allowed on any existing `MAJOR.MINOR` line, so an older protocol line can still
+   get a new cut after a newer one exists, while a `MINOR` or `MAJOR` bump only applies to the highest version overall.
+   An optional second argument is the source ref, default `main`. The recipe pushes the branch from your machine, since
+   repository rules stop the workflow token from creating `release-*` branches, then runs the Release Branch workflow,
+   which tags `X.Y.Z.0` as a pre-release, creates the backport label and the tracker issue, and builds images. Running
+   the workflow from the Actions UI works once the branch exists, with `source_ref` set to the branch tip sha.
 2. Land backport PRs and fixes on the release branch. Watch the tracker checklist.
 3. Comment `/tag` on the tracker after each batch worth testing. The bot replies with the tag, the GitHub pre-release
    and a link to the `build.yml` run.
@@ -68,12 +79,17 @@ Marks are replayed from the issue's comment history, so the body can always be r
 | Workflow                     | Trigger                                             | Runs                              |
 | ---------------------------- | --------------------------------------------------- | --------------------------------- |
 | `release-branch.yml`         | `workflow_dispatch`, branch `delete`                | `scripts/release cut`, `teardown` |
-| `tag-release.yml`            | `/tag` comment, `workflow_dispatch`                 | `scripts/release tag`             |
+| `tag-release.yml`            | `/tag` or `/backport` comment, `workflow_dispatch`  | `scripts/release tag`, `backport` |
 | `update-release-tracker.yml` | push to `main`/`release-*`, mark comments, dispatch | `scripts/release refresh`         |
 | `build.yml`                  | dispatched by `cut` and `tag` for the new tag       | docker images                     |
 
 Tags pushed by workflows do not fire `push` events, so `cut` and `tag` dispatch `build.yml` and the tracker refresh
 explicitly.
+
+Tracker refreshes run only on `main`. A run on a release branch (push, backport PR, dispatch) re-dispatches
+`update-release-tracker.yml` on `main` with the original ref, so the refresh always uses `main`'s workflow and
+`scripts/release` and still targets that branch's tracker. Dispatching from a feature branch also runs `main`'s copy;
+test changes to `scripts/release` with the local commands below.
 
 ## Local use
 
@@ -107,9 +123,21 @@ gh release create X.Y.Z.N --target <sha> --title X.Y.Z.N --generate-notes --prer
 gh workflow run build.yml --ref X.Y.Z.N
 ```
 
+If `just release-cut` pushed the branch but the dispatch failed, rerunning it is rejected because the branch exists.
+Dispatch the workflow directly with the branch tip; `cut` skips whatever already exists:
+
+```sh
+gh workflow run release-branch.yml -f version=X.Y.Z -f source_ref=$(git rev-parse origin/release-X.Y.Z)
+```
+
 ## Protection
 
-- `/tag` and the mark commands require org membership or collaborator status; `workflow_dispatch` requires write access.
-  Tag protection rules cannot exempt the workflow token, so tags are not protected yet.
+- Tracker commands and `workflow_dispatch` require write access (`admin`, `maintain` or `write`). The workflow `if:`
+  filters on `author_association` to skip runs cheaply; `scripts/release` checks the commenter's permission via the
+  collaborators API, and mark replay ignores commands by users without write access.
+- Trackers are only recognized when opened by `github-actions[bot]`. They are not locked: the workflow token cannot
+  comment on locked issues.
+- Concurrency groups are job-level, so skipped runs from outside comments or fork PRs never cancel a pending run.
+- Tag protection rules cannot exempt the workflow token, so tags are not protected yet.
 - Floating docker tags per network (`decaf`, `mainnet`) and automated promotion are not part of this process. Operators
   pin release tags.

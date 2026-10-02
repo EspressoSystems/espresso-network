@@ -624,8 +624,10 @@ impl Transaction<Prune> {
     /// A table with no rows created in `from..=to` is skipped. This is exact because a node only
     /// becomes deletable once a newer version of it is created, and consecutive batches tile the
     /// heights without gaps, so every version is seen by exactly one batch's probe. The delete
-    /// itself has no lower bound, so any superseded version below `from` is still collected by
-    /// the first batch whose window has a row for that table.
+    /// only looks up versions superseded by a row created in `from..=to`, so it relies on no state
+    /// being written below the pruned height. On Postgres it also relies on the batches below
+    /// `from` having run, so each path has at most one version below `from`. Any older version
+    /// left below it is never deleted.
     #[instrument(skip(self))]
     pub(super) async fn delete_state_batch(
         &mut self,
@@ -648,21 +650,46 @@ impl Transaction<Prune> {
                 continue;
             }
 
-            self.execute(
-                query(&format!(
-                    "
-                DELETE FROM {state_table}
-                WHERE {state_table}.created <= $1
-                  AND EXISTS (
-                    SELECT 1 FROM {state_table} AS t2
-                    WHERE t2.path = {state_table}.path
-                      AND t2.created > {state_table}.created
-                      AND t2.created <= $1
-                  )"
-                ))
-                .bind(to as i64),
-            )
-            .await?;
+            // Postgres underestimates how many distinct paths a state table has, so it would
+            // hash-join the window against a full scan of the table. `OFFSET 0` stops it from
+            // flattening the lateral lookup into that join, keeping one primary key range scan per
+            // path. Dropping it makes the batch cost grow with the table again.
+            //
+            // The lookup stops at `from` instead of reading every older version of the path. A
+            // deleted row stays in the index until vacuum, so a range from the start of a path
+            // rewritten every block walks every version earlier batches deleted, and each batch is
+            // slower than the last. Below `from` only the newest version is left, and a backward
+            // scan reaches it first.
+            #[cfg(not(feature = "embedded-db"))]
+            let delete = format!(
+                "DELETE FROM {state_table} WHERE ctid = ANY (ARRAY(
+                   SELECT old.ctid
+                   FROM (SELECT path, max(created) AS latest FROM {state_table}
+                         WHERE created >= $1 AND created <= $2 GROUP BY path) AS n
+                   CROSS JOIN LATERAL (
+                     (SELECT o.ctid FROM {state_table} AS o
+                      WHERE o.path = n.path AND o.created >= $1 AND o.created < n.latest
+                      OFFSET 0)
+                     UNION ALL
+                     (SELECT o.ctid FROM {state_table} AS o
+                      WHERE o.path = n.path AND o.created < $1
+                      ORDER BY o.created DESC LIMIT 1)
+                   ) AS old
+                 ))"
+            );
+            // SQLite removes a deleted row's index entries in the same statement, so its unbounded
+            // range only ever reads live versions.
+            #[cfg(feature = "embedded-db")]
+            let delete = format!(
+                "DELETE FROM {state_table} WHERE (path, created) IN (
+                   SELECT old.path, old.created
+                   FROM (SELECT path, max(created) AS latest FROM {state_table}
+                         WHERE created >= $1 AND created <= $2 GROUP BY path) AS n
+                   JOIN {state_table} AS old ON old.path = n.path AND old.created < n.latest
+                 )"
+            );
+            self.execute(query(&delete).bind(from as i64).bind(to as i64))
+                .await?;
         }
 
         Ok(())
