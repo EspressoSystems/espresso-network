@@ -1,13 +1,7 @@
-//! Optional fine-grained tracing of the leader's per-view duty.
+//! Optional per-view tracing of the leader's duty.
 //!
-//! Builds register `None` by default and pay one branch (~ns) per event site.
-//! The bench binary and `espresso-node` (when `ESPRESSO_NODE_LEADER_TRACE_DIR`
-//! is set) register a [`CsvLeaderTracer`] that appends each event to a CSV file
-//! through a buffer flushed every second, for offline timeline reconstruction.
-//! A SIGKILL loses at most about 1s of rows. The file should be on local disk.
-//!
-//! Events are wall-clock unix-epoch ns, matching `MetricsCollector::now_ns()`
-//! in the bench so a downstream tool can join the streams on `view + ts_ns`.
+//! With no tracer registered each event site costs one `Option` check. Timestamps are
+//! wall-clock unix-epoch ns, the same clock as the bench's `MetricsCollector`, so the streams join on `view + ts_ns`.
 
 use std::{
     fs::{self, File, OpenOptions},
@@ -28,85 +22,58 @@ use tracing::warn;
 pub type LeaderTracerHandle = Arc<dyn LeaderTracer>;
 
 pub trait LeaderTracer: Send + Sync + 'static {
-    /// `view` is the raw u64 view number (matches `MetricsCollector`'s key type).
-    /// Call sites pass `*ViewNumber` so the macro stays one-liner.
     fn record(&self, view: u64, event: LeaderEvent, ts_ns: i128);
 }
 
-/// Closed event enum spanning the leader's V-1→V duty.
-///
-/// Variants are grouped by phase but assigned to a single flat enum so call
-/// sites stay short and a downstream tool can match on a string name.
+/// Events of the leader's V-1 to V duty, in rough order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LeaderEvent {
-    // Phase 0 - V-1 events that trigger V duty.
+    // V-1 events that trigger V duty.
     ProposalValidatedVMinus1,
     RequestBlockHeaderQueued,
     HeaderCreatedApplied,
     BlockBuiltApplied,
 
-    // Phase 2 - erasure-code the block (ns_disperse) on the background build task.
+    // Erasure-code the block and unicast the shares.
     NsDisperseStart,
-    NsDisperseEnd,
-
-    // Phase 4 - fan the per-recipient share fragments out (network I/O), on the
-    // background fanout task.
-    VidSharesUnicastStart,
     VidSharesUnicastEnd,
 
-    // Phase 5 - replica-of-V-1 work running in parallel.
+    // Replica work for V-1, in parallel.
     Vote1VMinus1Arrived,
     ThresholdShareReachedVMinus1,
     RecoverVMinus1Start,
-    /// Emitted right after `AvidmGf2Scheme::recover` returns the decoded
-    /// payload bytes, BEFORE `from_bytes` and `transaction_commitments`.
-    /// The decode→end interval is the (single-threaded) `transaction_commitments`
-    /// Keccak256 of the payload — split out so the parallel AvidM work and the
-    /// serial post-processing can be measured separately.
+    /// Erasure decoding done; the rest until `RecoverVMinus1End` is the
+    /// single-threaded `from_bytes` and transaction commitments.
     RecoverVMinus1DecodeEnd,
     RecoverVMinus1End,
-    /// Reconstruction was ready to start but held back because this node is
-    /// dispersing a block it built; it starts when the dispersal finishes.
-    RecoverDeferred,
-    /// Reconstruction was already running when a dispersal began, so deferring
-    /// could not protect that dispersal. Measures the ceiling on the deferral.
-    RecoverAlreadyRunning,
-    /// Erasure decoding was skipped for this view (`--skip-reconstruction`):
-    /// the view was reported reconstructed without decoding. Counting these
-    /// is how a run is confirmed to have engaged the flag.
-    RecoverSkipped,
 
-    // Phase 6 - cert1[V-1] formation gates Phase 7.
+    // cert1[V-1] formation; gates V's proposal.
     Cert1VMinus1InputDispatched,
     Vote2VMinus1Signed,
     Vote2VMinus1Queued,
-    // Phase 6b - cert2 formation (the QC2 round) and finality.
+    // cert2 formation and finality.
     Cert2VMinus1InputDispatched,
     LeafDecided,
 
-    // Phase 7 - build + sign V's proposal.
+    // Build and sign V's proposal.
     MaybeProposeEntered,
     Leaf2CommitComputed,
     ProposalSigned,
     ProposalQueued,
 
-    // Phase 8 - outbox drain II.
+    // Network sends of V's proposal and V-1 votes and certs.
     ProposalBroadcastStart,
     ProposalBroadcastEnd,
     Vote2VMinus1BroadcastStart,
     Vote2VMinus1BroadcastEnd,
     Cert1VMinus1BroadcastStart,
     Cert1VMinus1BroadcastEnd,
-    /// This node's own Vote1 broadcast for the current view.  Vote1 carries
-    /// the per-recipient VID share, so this broadcast contributes meaningful
-    /// network bytes per recipient — comparable in size to one
-    /// `vid_shares_unicast` per share but reaching every peer at once.
     Vote1BroadcastStart,
     Vote1BroadcastEnd,
 }
 
 impl LeaderEvent {
-    /// Stable string name for CSV emission.
+    /// CSV event name. Downstream tools match on it; do not rename.
     pub fn name(self) -> &'static str {
         use LeaderEvent::*;
         match self {
@@ -115,17 +82,12 @@ impl LeaderEvent {
             HeaderCreatedApplied => "header_created_applied",
             BlockBuiltApplied => "block_built_applied",
             NsDisperseStart => "ns_disperse_start",
-            NsDisperseEnd => "ns_disperse_end",
-            VidSharesUnicastStart => "vid_shares_unicast_start",
             VidSharesUnicastEnd => "vid_shares_unicast_end",
             Vote1VMinus1Arrived => "vote1_v_minus_1_arrived",
             ThresholdShareReachedVMinus1 => "threshold_share_reached_v_minus_1",
             RecoverVMinus1Start => "recover_v_minus_1_start",
             RecoverVMinus1DecodeEnd => "recover_v_minus_1_decode_end",
             RecoverVMinus1End => "recover_v_minus_1_end",
-            RecoverDeferred => "recover_deferred",
-            RecoverAlreadyRunning => "recover_already_running",
-            RecoverSkipped => "recover_skipped",
             Cert1VMinus1InputDispatched => "cert1_v_minus_1_input_dispatched",
             Vote2VMinus1Signed => "vote2_v_minus_1_signed",
             Vote2VMinus1Queued => "vote2_v_minus_1_queued",
@@ -147,7 +109,6 @@ impl LeaderEvent {
     }
 }
 
-/// Wall-clock unix-epoch ns. Same source as the bench's `MetricsCollector`.
 #[inline(always)]
 pub fn now_ns() -> i128 {
     OffsetDateTime::now_utc().unix_timestamp_nanos()
@@ -157,13 +118,10 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 /// `LeaderTracer` appending `view,node_id,event,ts_ns` rows to a CSV file.
 ///
-/// Rows go through a `BufWriter` that a background thread flushes every second
-/// and that is flushed on drop, so a SIGKILL loses at most about 1s of rows.
-/// An existing file is appended to; the header is written only into an empty
-/// file. After the first write or flush error the tracer logs once and drops
-/// all further rows. `MaybeProposeEntered` fires many times per view and is
-/// recorded once per view, tracked by a high-water mark: a lower view revisited
-/// after a higher one is skipped.
+/// A background thread flushes every second, so a SIGKILL loses at most about 1s
+/// of rows. Appends to an existing file. The first I/O error disables the tracer.
+/// `MaybeProposeEntered` fires many times per view; only the first entry of each
+/// new highest view is recorded.
 pub struct CsvLeaderTracer {
     node_id: u64,
     /// One past the highest view recorded for `MaybeProposeEntered`.
@@ -201,7 +159,6 @@ impl Drop for CsvLeaderTracer {
 }
 
 impl CsvLeaderTracer {
-    /// Open `path` for append, creating it and missing parent directories.
     pub fn new(node_id: u64, path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
@@ -224,8 +181,6 @@ impl CsvLeaderTracer {
     }
 }
 
-/// Flushes until the tracer is dropped. Holds only a `Weak` so it never keeps
-/// the file open.
 fn spawn_flusher(shared: Weak<Shared>) -> io::Result<()> {
     thread::Builder::new()
         .name("leader-trace-flush".into())
@@ -262,8 +217,6 @@ impl LeaderTracer for CsvLeaderTracer {
     }
 }
 
-/// Emit an event through an optional tracer with a single `is_some` check.
-/// Internal helper: convert anything ViewNumber-shaped (`ViewNumber`, `&ViewNumber`, `u64`) into u64.
 pub trait AsViewU64 {
     fn as_view_u64(&self) -> u64;
 }
@@ -280,6 +233,7 @@ impl AsViewU64 for u64 {
     }
 }
 
+/// Records `$event` for `$view` when `$tracer` is `Some`.
 #[macro_export]
 macro_rules! trace_leader_event {
     ($tracer:expr, $view:expr, $event:expr) => {
@@ -338,11 +292,11 @@ mod tests {
         first.record(1, LeaderEvent::NsDisperseStart, 1);
         drop(first);
         let second = CsvLeaderTracer::new(0, &path).unwrap();
-        second.record(2, LeaderEvent::NsDisperseEnd, 2);
+        second.record(2, LeaderEvent::VidSharesUnicastEnd, 2);
         drop(second);
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            format!("{HEADER}1,0,ns_disperse_start,1\n2,0,ns_disperse_end,2\n")
+            format!("{HEADER}1,0,ns_disperse_start,1\n2,0,vid_shares_unicast_end,2\n")
         );
     }
 }

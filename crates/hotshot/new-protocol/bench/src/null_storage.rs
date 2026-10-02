@@ -1,16 +1,9 @@
-//! No-op DA storage for the benchmark.
+//! Storage that drops DA payloads and delegates everything else to `TestStorage`.
 //!
-//! `TestStorage` retains every DA proposal — including the multi-megabyte block
-//! payload — for the whole run: the `Storage` wrapper's `gc` only aborts
-//! in-flight write tasks, it never prunes the inner store, so memory grows
-//! without bound (~payload_size × views).
-//!
-//! The persistence *confirmations* consensus waits on (`Action`, `HighQc`,
-//! `Proposal`) are emitted by the `Storage` wrapper itself, independent of the
-//! inner store, so dropping the DA payloads is safe. `NullStorage` delegates
-//! everything to a real `TestStorage` — so all small state and reads stay
-//! correct (the bench never restarts, but reads still behave) — and drops only
-//! `append_da`/`append_da2`.
+//! `TestStorage` keeps every DA payload for the whole run, so memory grows with
+//! payload size times views. Dropping them is safe: the persistence confirmations
+//! consensus waits on come from the `Storage` wrapper, not the inner store, and the
+//! bench never restarts, so nothing reads DA proposals back.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -34,8 +27,6 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, storage::Storage},
 };
 
-/// Storage that drops DA payloads but delegates all other state to a real
-/// `TestStorage`. See the module docs.
 pub struct NullStorage<T: NodeType>(TestStorage<T>);
 
 impl<T: NodeType> Clone for NullStorage<T> {
@@ -52,7 +43,6 @@ impl<T: NodeType> Default for NullStorage<T> {
 
 #[async_trait]
 impl<T: NodeType> Storage<T> for NullStorage<T> {
-    // --- DA: dropped. This is the whole point. ---
     async fn append_da(&self, _: &Proposal<T, DaProposal<T>>, _: VidCommitment) -> Result<()> {
         Ok(())
     }
@@ -60,7 +50,6 @@ impl<T: NodeType> Storage<T> for NullStorage<T> {
         Ok(())
     }
 
-    // --- everything else: delegate to the real store (small data). ---
     async fn append_vid(&self, proposal: &Proposal<T, VidDisperseShare<T>>) -> Result<()> {
         self.0.append_vid(proposal).await
     }

@@ -51,8 +51,6 @@ pub struct VidDisperser<T: NodeType> {
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     tasks: JoinSet<Result<VidDisperseOutput, VidDisperseError>>,
     duration_metric: Option<Arc<dyn Histogram>>,
-    /// Optional leader-event tracer (wired by the bench). Production builds
-    /// leave this `None`, which short-circuits every `trace_leader_event!` site.
     tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 }
 
@@ -75,7 +73,6 @@ impl<T: NodeType> VidDisperser<T> {
         }
     }
 
-    /// Register a leader-event tracer. Production builds leave this `None`.
     pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
         self.tracer = tracer;
     }
@@ -156,11 +153,8 @@ fn handle_vid_disperse_request<T: NodeType>(
     let epoch = vid_disperse_request.epoch;
     let payload_commitment = vid_disperse_request.payload_commitment;
 
-    // This protocol version interleaves erasure coding and unicast: each bucket
-    // is encoded and sent inside the same parallel unit, so there is no
-    // observable boundary between "encoded" and "sending". `NsDisperseStart` to
-    // `VidSharesUnicastEnd` therefore brackets the whole dispersal, and the
-    // intermediate `NsDisperseEnd`/`VidSharesUnicastStart` pair is not emitted.
+    // Encoding and unicast are interleaved per bucket, so `NsDisperseStart` to
+    // `VidSharesUnicastEnd` brackets the whole dispersal.
     crate::trace_leader_event!(
         tracer,
         view,

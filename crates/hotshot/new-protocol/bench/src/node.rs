@@ -50,9 +50,6 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     let (membership, client) = make_membership(cfg.total_nodes, public_key).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
-    // Per-node leader-event tracer, wired through `Consensus::set_tracer` (and
-    // the VID disperser and reconstructor) so every leader-duty call site
-    // appends a wall-clock-ns stamp to disk for offline timeline reconstruction.
     let tracer = Arc::new(CsvLeaderTracer::new(cfg.node_id, leader_trace_path(&cfg))?);
 
     let coordinator = build_coordinator(

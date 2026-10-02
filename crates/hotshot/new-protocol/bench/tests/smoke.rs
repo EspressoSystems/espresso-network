@@ -140,9 +140,6 @@ async fn run_benchmark(
             lines.len() - 1
         );
 
-        // The leader-event tracer must have produced a trace alongside the
-        // metrics CSV: a run whose trace is empty looks identical to a healthy
-        // run in every other assertion here, and silently yields no timeline.
         let trace_path = output_dir.join(format!("leader_trace_node{i}.csv"));
         assert!(
             trace_path.exists(),
@@ -156,8 +153,7 @@ async fn run_benchmark(
             "node {i} leader trace has only {} lines (expected header + events)",
             trace_lines.len()
         );
-        // Every node votes and decides, so these fire regardless of which node
-        // led which view; a tracer wired only into one component would miss one.
+        // Every node votes and decides, so these fire regardless of leadership.
         for event in ["vote2_v_minus_1_signed", "leaf_decided"] {
             assert!(
                 trace.contains(event),

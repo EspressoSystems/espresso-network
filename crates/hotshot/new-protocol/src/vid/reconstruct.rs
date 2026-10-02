@@ -70,8 +70,6 @@ pub struct VidReconstructor<T: NodeType> {
     reconstructed: BTreeSet<ViewNumber>,
     tasks: JoinSet<ReconstructResult<T>>,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
-    /// Optional leader-event tracer (wired by the bench). Production builds
-    /// leave this `None`, which short-circuits every `trace_leader_event!` site.
     tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 }
 
@@ -112,7 +110,6 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
-    /// Register a leader-event tracer. Production builds leave this `None`.
     pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
         self.tracer = tracer;
     }
@@ -478,9 +475,6 @@ fn reconstruct<T: NodeType>(
     if let Some(bytes) =
         decode_and_recommit::<T>(view, &common, &shares, &payload_commitment, &metadata)
     {
-        // Split the trace span: everything before this is the parallel AvidM
-        // decode over namespaces; the tail below does the single-threaded
-        // `from_bytes` + Keccak256-of-every-transaction work.
         crate::trace_leader_event!(
             tracer,
             view,

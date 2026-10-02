@@ -276,9 +276,6 @@ pub struct Consensus<T: NodeType> {
 
     pub(crate) epoch_height: BlockNumber,
 
-    /// Optional fine-grained leader-duty tracer. Production builds leave this
-    /// `None`, which short-circuits every `trace_leader_event!` site; the bench
-    /// registers a tracer via [`Consensus::set_tracer`].
     pub(crate) tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 }
 
@@ -386,8 +383,6 @@ impl<T: NodeType> Consensus<T> {
     pub fn public_key(&self) -> &T::SignatureKey {
         &self.public_key
     }
-    /// Register a leader-event tracer. The bench wires one; production leaves
-    /// this `None`, which short-circuits every `trace_leader_event!` site.
     pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
         self.tracer = tracer;
     }
