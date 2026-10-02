@@ -1184,6 +1184,83 @@ async fn test_leader_sends_proposal() {
     );
 }
 
+/// The next leader requests its block when the proposal arrives, before its own VID share
+/// for that block does, so the share's transfer stays off the view's critical path. Pairing
+/// later does not ask again.
+#[tokio::test]
+async fn test_next_leader_requests_block_before_its_share_arrives() {
+    let test_data = TestData::new(4).await;
+    let next_view = test_data.views[0].view_number + 1;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let mut harness = ConsensusHarness::new(node_index_for_key(&leader_for_view_2)).await;
+    let requests_for_next_view = |harness: &ConsensusHarness| {
+        count_matching(
+            harness.outputs(),
+            |output| matches!(output, ConsensusOutput::RequestBlockAndHeader(r) if r.view == next_view),
+        )
+    };
+
+    let (proposal, vid_share) = test_data.views[0].proposal_input_consensus(&leader_for_view_2);
+    harness.apply(proposal).await;
+    assert_eq!(
+        requests_for_next_view(&harness),
+        1,
+        "the next leader requests its block as soon as the proposal arrives"
+    );
+
+    harness.apply(vid_share).await;
+    assert_eq!(
+        requests_for_next_view(&harness),
+        1,
+        "pairing does not request the same block again"
+    );
+    assert!(
+        any(harness.outputs(), is_vote1),
+        "the share pairs with the parked proposal"
+    );
+}
+
+/// A node that does not lead the next view builds nothing on a parked proposal.
+#[tokio::test]
+async fn test_only_the_next_leader_builds_on_a_parked_proposal() {
+    let test_data = TestData::new(4).await;
+    let bystander = test_data.views[0].leader_public_key;
+    assert_ne!(
+        bystander, test_data.views[1].leader_public_key,
+        "test setup"
+    );
+    let mut harness = ConsensusHarness::new(node_index_for_key(&bystander)).await;
+
+    let (proposal, _) = test_data.views[0].proposal_input_consensus(&bystander);
+    harness.apply(proposal).await;
+    assert!(!any(harness.outputs(), is_request_block_and_header));
+}
+
+/// Only the first proposal parked for a view drives a speculative build: an equivocating
+/// leader cannot make the next leader build once per proposal it sends.
+#[tokio::test]
+async fn test_parked_equivocation_builds_once() {
+    let test_data = TestData::new(4).await;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let mut harness = ConsensusHarness::new(node_index_for_key(&leader_for_view_2)).await;
+
+    let (proposal, _) = test_data.views[0].proposal_input_consensus(&leader_for_view_2);
+    harness.apply(proposal).await;
+    let mut equivocation = test_data.views[1].proposal.clone();
+    equivocation.data.view_number = test_data.views[0].view_number;
+    harness
+        .apply(ConsensusInput::Proposal(
+            test_data.views[0].leader_public_key,
+            ProposalMessage::validated(equivocation),
+        ))
+        .await;
+
+    assert_eq!(
+        count_matching(harness.outputs(), is_request_block_and_header),
+        1
+    );
+}
+
 /// A fetched proposal gets its state validated like a gossiped one.
 #[tokio::test]
 async fn test_fetched_proposal_requests_state() {
