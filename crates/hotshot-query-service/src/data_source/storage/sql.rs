@@ -931,15 +931,10 @@ impl SerializableRetryConfig {
     }
 }
 
-/// How PostgreSQL words a serialization conflict (SQLSTATE 40001), and how
-/// [`UpsertError::SerializationConflict`](transaction::UpsertError::SerializationConflict) words
-/// its own.
-pub(crate) const SERIALIZATION_CONFLICT: &str = "could not serialize access";
-
 /// Returns `true` if `err`'s [`Display`](std::fmt::Display) output identifies it as a PostgreSQL
-/// serialization conflict (SQLSTATE 40001).
+/// serialization conflict (SQLSTATE 40001, message "could not serialize access").
 fn is_serialization_conflict_err<E: std::fmt::Display>(err: &E) -> bool {
-    format!("{err:#}").contains(SERIALIZATION_CONFLICT)
+    format!("{err:#}").contains("could not serialize access")
 }
 
 /// Like [`is_serialization_conflict_err`] but also logs concurrent DB sessions for diagnostics.

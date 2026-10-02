@@ -53,7 +53,7 @@ use super::queries::state::batch_insert_hashes;
 #[cfg(feature = "embedded-db")]
 use super::queries::state::build_hash_batch_insert;
 use super::{
-    Database, Db, SERIALIZATION_CONFLICT,
+    Database, Db,
     queries::{
         self,
         state::{Node, collect_nodes_from_proofs},
@@ -536,7 +536,7 @@ impl Transaction<Write> {
 pub enum UpsertError {
     /// Postgres aborted the statement to keep transactions serializable. Retrying the whole
     /// transaction can succeed.
-    #[error("{SERIALIZATION_CONFLICT} upserting into {table}")]
+    #[error("could not serialize access upserting into {table}")]
     SerializationConflict { table: String },
     #[error("upserting into {table}")]
     Other {
