@@ -804,6 +804,19 @@ pub struct ConsensusPruningOptions {
         default_value = "1000000000"
     )]
     pub(crate) target_usage: u64,
+
+    /// How often to measure consensus storage against TARGET_USAGE.
+    ///
+    /// On SQLite a measurement scans every page of the consensus tables. Between measurements,
+    /// each decide prunes only to TARGET_RETENTION.
+    #[clap(
+        name = "USAGE_CHECK_INTERVAL",
+        long = "consensus-storage-usage-check-interval",
+        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_USAGE_CHECK_INTERVAL",
+        default_value = "5m",
+        value_parser = parse_duration
+    )]
+    pub(crate) usage_check_interval: Duration,
 }
 
 impl Default for ConsensusPruningOptions {
@@ -914,6 +927,7 @@ impl PersistenceOptions for Options {
         let persistence = Persistence {
             db,
             gc_opt: self.consensus_pruning,
+            last_usage_check: Arc::default(),
             consensus_only: self.consensus_only,
             internal_metrics: PersistenceMetricsValue::default(),
             #[cfg(feature = "embedded-db")]
@@ -940,6 +954,8 @@ impl PersistenceOptions for Options {
 pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
+    /// When consensus storage usage was last measured, shared by clones.
+    last_usage_check: Arc<parking_lot::Mutex<Option<Instant>>>,
     consensus_only: bool,
     /// A reference to the internal metrics
     internal_metrics: PersistenceMetricsValue,
@@ -1562,57 +1578,77 @@ impl Persistence {
         Ok(result)
     }
 
+    /// Prune everything older than the target retention, then, at most once per usage check
+    /// interval, prune toward the minimum retention if storage is over the target usage.
     #[tracing::instrument(skip(self))]
     async fn prune_to_retention(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-
-            // Prune everything older than the target retention period.
-            prune_to_view(
-                &mut tx,
-                cur_view.u64().saturating_sub(self.gc_opt.target_retention),
-            )
+        self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.target_retention))
             .await?;
 
-            // Check our storage usage; if necessary we will prune more aggressively (up to the
-            // minimum retention) to get below the target usage.
-            #[cfg(feature = "embedded-db")]
-            let usage_query = format!(
-                "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
-                PRUNE_TABLES
-                    .iter()
-                    .map(|table| format!("'{table}'"))
-                    .join(",")
+        if !self.usage_check_due() {
+            return Ok(());
+        }
+        let usage = self.consensus_storage_usage().await?;
+        tracing::debug!(usage, "consensus storage usage after pruning");
+        if usage > self.gc_opt.target_usage {
+            tracing::warn!(
+                usage,
+                gc_opt = ?self.gc_opt,
+                "consensus storage is running out of space, pruning to minimum retention"
             );
-
-            #[cfg(not(feature = "embedded-db"))]
-            let usage_query = {
-                let table_sizes = PRUNE_TABLES
-                    .iter()
-                    .map(|table| format!("pg_table_size('{table}')"))
-                    .join(" + ");
-                format!("SELECT {table_sizes}")
-            };
-
-            let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
-            tracing::debug!(usage, "consensus storage usage after pruning");
-
-            if (usage as u64) > self.gc_opt.target_usage {
-                tracing::warn!(
-                    usage,
-                    gc_opt = ?self.gc_opt,
-                    "consensus storage is running out of space, pruning to minimum retention"
-                );
-                prune_to_view(
-                    &mut tx,
-                    cur_view.u64().saturating_sub(self.gc_opt.minimum_retention),
-                )
+            self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.minimum_retention))
                 .await?;
-            }
+        }
+        Ok(())
+    }
 
+    async fn prune_below(&self, view: u64) -> anyhow::Result<()> {
+        // An empty write transaction still takes SQLite's write lock.
+        if view == 0 {
+            return Ok(());
+        }
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            prune_to_view(&mut tx, view).await?;
             tx.commit().await
         })
         .await
+    }
+
+    /// Measured in a read transaction: on SQLite it scans every page of the pruned tables, and
+    /// holding the write lock that long stalls the vote and proposal writes consensus waits on.
+    async fn consensus_storage_usage(&self) -> anyhow::Result<u64> {
+        #[cfg(feature = "embedded-db")]
+        let usage_query = format!(
+            "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
+            PRUNE_TABLES
+                .iter()
+                .map(|table| format!("'{table}'"))
+                .join(",")
+        );
+
+        #[cfg(not(feature = "embedded-db"))]
+        let usage_query = {
+            let table_sizes = PRUNE_TABLES
+                .iter()
+                .map(|table| format!("pg_table_size('{table}')"))
+                .join(" + ");
+            format!("SELECT {table_sizes}")
+        };
+
+        let mut tx = self.db.read().await?;
+        let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
+        Ok(usage as u64)
+    }
+
+    fn usage_check_due(&self) -> bool {
+        let now = Instant::now();
+        let mut last = self.last_usage_check.lock();
+        if last.is_some_and(|last| now.duration_since(last) < self.gc_opt.usage_check_interval) {
+            return false;
+        }
+        *last = Some(now);
+        true
     }
 }
 
@@ -3900,6 +3936,7 @@ mod test {
             // Use a very high target retention, so that pruning is only triggered by the minimum
             // retention.
             target_retention: u64::MAX,
+            usage_check_interval: Duration::ZERO,
         })
         .await
     }
@@ -3914,6 +3951,7 @@ mod test {
             // Use a very high target usage, so that pruning is only triggered by the target
             // retention.
             target_usage: u64::MAX,
+            usage_check_interval: Duration::ZERO,
         })
         .await
     }
