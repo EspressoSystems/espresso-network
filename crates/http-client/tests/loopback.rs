@@ -249,6 +249,63 @@ async fn socket_connect_follows_redirects() {
 }
 
 #[tokio::test]
+async fn socket_connect_resolves_relative_redirect_location() {
+    async fn ws_redirect_relative() -> impl IntoResponse {
+        (
+            axum::http::StatusCode::TEMPORARY_REDIRECT,
+            [(axum::http::header::LOCATION, "target")],
+        )
+    }
+    // `Location: target` from `/ws/a/redirect` resolves to `/ws/a/target`, not `/target`.
+    let app = Router::new()
+        .route("/ws/a/redirect", get(ws_redirect_relative))
+        .route("/ws/a/target", get(ws_naturals));
+    let base_url = spawn_server(app).await;
+
+    let client = Client::<ClientErr, Ver01>::new(base_url);
+    let naturals: Vec<_> = client
+        .socket("ws/a/redirect")
+        .subscribe::<u64>()
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert_eq!(naturals, (0u64..3).map(Ok).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn socket_connect_follows_redirect_to_another_host() {
+    // Server B is the only one serving `ws_naturals`, so the assertion can only hold if the
+    // absolute `Location` moved the connection off server A.
+    let server_b = spawn_server(Router::new().route("/ws_naturals", get(ws_naturals))).await;
+    let location = format!("http://{}/ws_naturals", server_b.authority());
+
+    let app_a = Router::new().route(
+        "/ws_redirect_away",
+        get(move || {
+            let location = location.clone();
+            async move {
+                (
+                    axum::http::StatusCode::TEMPORARY_REDIRECT,
+                    [(axum::http::header::LOCATION, location)],
+                )
+            }
+        }),
+    );
+    let base_url = spawn_server(app_a).await;
+
+    let client = Client::<ClientErr, Ver01>::new(base_url);
+    let naturals: Vec<_> = client
+        .socket("ws_redirect_away")
+        .subscribe::<u64>()
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert_eq!(naturals, (0u64..3).map(Ok).collect::<Vec<_>>());
+}
+
+#[tokio::test]
 async fn socket_connect_gives_up_after_redirect_loop() {
     async fn ws_redirect_self() -> impl IntoResponse {
         (
