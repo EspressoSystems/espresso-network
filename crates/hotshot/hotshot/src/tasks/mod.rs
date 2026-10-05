@@ -254,7 +254,7 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
 ///
 /// # Usage
 /// Use in `select!` macros or similar constructs for graceful shutdowns:
-#[must_use]
+#[must_use = "the monitor does nothing unless awaited"]
 pub fn create_shutdown_event_monitor<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     handle: &SystemContextHandle<TYPES, I>,
 ) -> BoxFuture<'static, ()> {

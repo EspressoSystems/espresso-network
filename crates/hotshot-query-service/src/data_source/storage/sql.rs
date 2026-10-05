@@ -3233,6 +3233,7 @@ mod test {
         }
         storage.set_pruning_config(
             PrunerCfg::default()
+                .with_batch_size(1000)
                 .with_state_target_retention(Duration::ZERO)
                 .with_state_tables(vec![MockMerkleTree::state_type().into()]),
         );
