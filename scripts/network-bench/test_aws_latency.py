@@ -347,44 +347,6 @@ def test_fleet_run_refuses_no_intra_latency_without_a_profile(harness: FleetHarn
         harness.run(runner, "--no-intra-latency")
 
 
-def test_read_index_row_backfills_latency_from_the_manifest(tmp_path: Path):
-    row = {key: "-" for key in awsb.INDEX_COLUMNS if key != "latency"}
-    netbench.write_json(tmp_path / awsb.INDEX_ROW_JSON, {**row, "user": "lulu"})
-    netbench.write_json(
-        tmp_path / awsb.MANIFEST_JSON,
-        {"config": {"latency": "decaf-2025", "intra_latency": True}},
-    )
-    filled = awsb.read_index_row(tmp_path)
-    assert filled["latency"] == "decaf-2025"
-    assert list(filled) == [*awsb.INDEX_COLUMNS, "user"]
-
-
-def limits(query: float | None, consensus: float | None, query_bounded: bool = True):
-    return {
-        "overall": {"mb_s": consensus, "bounded": True},
-        "consensus": {"mb_s": consensus, "bounded": True},
-        "query_node": {"mb_s": query, "bounded": query_bounded},
-        "failed_at_mb_s": None,
-        "fail_rule": None,
-    }
-
-
-@pytest.mark.parametrize(
-    ("limits_", "kept_up"),
-    [
-        (limits(150, 120, query_bounded=False), True),
-        (limits(150, 120), True),
-        (limits(120, 120), True),
-        (limits(100, 120), False),
-        (limits(None, 120), False),
-        (limits(None, None), False),
-        (limits(50, None), True),
-    ],
-)
-def test_query_kept_up(limits_: dict, kept_up: bool):
-    assert awsb.query_kept_up(limits_) is kept_up
-
-
 def capacity(query: tuple[float | None, bool], consensus: tuple[float | None, bool]):
     return {
         "overall": {"mb_s": None, "bounded": True},
@@ -411,15 +373,6 @@ def capacity(query: tuple[float | None, bool], consensus: tuple[float | None, bo
 )
 def test_capacity_bound(limits_: dict, bound: str):
     assert awsb.capacity_bound(limits_) == bound
-
-
-def test_node_type_is_the_validator_instance_type():
-    hosts = [
-        {"name": "ctl", "role": "ctl", "instance_type": "c8g.2xlarge"},
-        {"name": "node0", "role": "query", "instance_type": "c8in.8xlarge"},
-        {"name": "node1", "role": "node", "instance_type": "c8in.8xlarge"},
-    ]
-    assert awsb.node_type({"hosts": hosts}) == "c8in.8xlarge"
 
 
 def test_render_refreshes_the_index_row(tmp_path: Path):

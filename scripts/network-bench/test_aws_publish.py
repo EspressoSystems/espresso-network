@@ -25,19 +25,45 @@ MANIFEST = {
     **index_manifest(),
     "argv": ["run", "--node-env", f"TOKEN={SECRET}"],
     "ssh_public_key": "ssh-ed25519 AAAA",
-    "config": {"tag": "t", "nodes": 3, "node_env": [f"TOKEN={SECRET}"]},
+    "config": {
+        "tag": "t",
+        "nodes": 3,
+        "node_type": "c8g.4xlarge",
+        "node_env": [f"TOKEN={SECRET}"],
+    },
     "hosts": [
         {"name": "ctl", "role": "ctl", "instance_type": "c8g.2xlarge", "root_gb": 40}
     ],
     "rds_spec": {"password": SECRET},
 }
-ROW = {
+OLD_ROW = {
     "run": f"{FLEET}/01-run",
+    "utc": "2026-10-02T13:15",
+    "git": "813abe8dc8",
+    "tag": "t@63b57619f4",
     "nodes": "3",
     "db": "volume",
+    "rate": "170",
     "decided": "170",
     "kept_up": "yes",
+    "lag_p99": "319",
     "status": "noisy",
+    "exit": "0",
+    "cost": "0.53",
+    "user": "lulu",
+}
+CAPACITY = {
+    "overall": {"mb_s": 140.0, "bounded": True},
+    "consensus": {"mb_s": 140.0, "bounded": True},
+    "query_node": {"mb_s": 120.0, "bounded": True},
+}
+
+
+ROW = {
+    **{k: v for k, v in OLD_ROW.items() if k != "kept_up"},
+    "latency": "off",
+    "node_type": "c8g.4xlarge",
+    "bound": "consensus",
 }
 
 
@@ -48,7 +74,7 @@ def make_run_dir(root: Path, with_row: bool = True, run: str = "01-run") -> Path
     (run_dir / "ssh").mkdir()
     files = {
         "summary.md": "s",
-        "result.json": "{}",
+        "result.json": json.dumps({"capacity": CAPACITY}),
         "manifest.json": json.dumps(MANIFEST),
         "cost.json": "{}",
         "trace/leader_path.md": "m",
@@ -143,7 +169,7 @@ def test_published_manifest_is_an_allowlist(tmp_path: Path):
         "git_rev": MANIFEST["git_rev"],
         "query_db": "colocated",
         "images": MANIFEST["images"],
-        "config": {"tag": "t", "nodes": 3},
+        "config": {"tag": "t", "nodes": 3, "node_type": "c8g.4xlarge"},
         "hosts": [{"name": "ctl", "role": "ctl", "instance_type": "c8g.2xlarge"}],
     }
 
@@ -175,6 +201,54 @@ def test_index_cells_of_a_failed_run():
     assert cells["nodes"] == "5"
 
 
+def test_published_row_without_new_cells_derives_them(tmp_path: Path):
+    run_dir = make_run_dir(tmp_path, with_row=False)
+    netbench.write_json(run_dir / "result.json", {"capacity": CAPACITY})
+    netbench.write_json(
+        run_dir / "index-row.json", {**OLD_ROW, "latency": "decaf-2025"}
+    )
+    row = awsb.read_index_row(run_dir)
+    assert list(row) == [*awsb.INDEX_COLUMNS, "user"]
+    assert (row["latency"], row["node_type"], row["bound"]) == (
+        "decaf-2025",
+        "c8g.4xlarge",
+        "query",
+    )
+
+
+def test_published_row_keeps_cells_it_has(tmp_path: Path):
+    run_dir = make_run_dir(tmp_path, with_row=False)
+    row = {**OLD_ROW, "latency": "off", "node_type": "x", "bound": "both"}
+    netbench.write_json(run_dir / "index-row.json", row)
+    filled = awsb.read_index_row(run_dir)
+    assert (filled["node_type"], filled["bound"]) == ("x", "both")
+
+
+def test_row_of_a_run_without_result_has_no_bound(tmp_path: Path):
+    run_dir = make_run_dir(tmp_path, with_row=False)
+    (run_dir / "result.json").unlink()
+    netbench.write_json(run_dir / "index-row.json", OLD_ROW)
+    row = awsb.read_index_row(run_dir)
+    assert (row["latency"], row["bound"]) == ("off", "-")
+
+
+def test_legacy_row_with_latency_column_derives_new_cells(tmp_path: Path):
+    run_dir = make_run_dir(tmp_path, with_row=False)
+    netbench.write_json(run_dir / "result.json", {"capacity": CAPACITY})
+    (tmp_path / "bench-state/aws/INDEX.md").write_text(
+        awsb.INDEX_HEADER
+        + f"| {FLEET}/01-run | 2026-10-02T13:15 | 813abe8dc8 | t@63b57619f4 | 3 | volume"
+        " | off | 170 | 170 | yes | 319 | noisy | 0 | 0.53 |\n"
+    )
+    row = awsb.read_index_row(run_dir)
+    assert list(row) == [*awsb.INDEX_COLUMNS, "user"]
+    assert (row["latency"], row["node_type"], row["bound"]) == (
+        "off",
+        "c8g.4xlarge",
+        "query",
+    )
+
+
 def test_legacy_row_comes_from_index_md(tmp_path: Path):
     run_dir = make_run_dir(tmp_path, with_row=False)
     other = awsb.index_cells(index_manifest(), "01-run", None, 3, None)
@@ -186,6 +260,7 @@ def test_legacy_row_comes_from_index_md(tmp_path: Path):
     )
     row = awsb.read_index_row(run_dir)
     assert row["user"] == "lulu"
+    assert list(row) == [*awsb.INDEX_COLUMNS, "user"]
     assert (row["run"], row["decided"], row["lag_p99"], row["cost"]) == (
         f"{FLEET}/01-run",
         "170",

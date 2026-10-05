@@ -6702,14 +6702,17 @@ INDEX_COLUMNS = {
     "node_type": "node",
     "rate": "rate MB/s",
     "decided": "decided MB/s",
-    "kept_up": "kept up",
     "bound": "bound",
     "lag_p99": "lag p99 ms",
     "status": "status",
     "exit": "exit",
     "cost": "cost run",
 }
-LEGACY_MISSING = ("node_type", "bound")
+# Columns of INDEX.md rows written before `index-row.json`.
+LEGACY_COLUMNS = [
+    *("run", "utc", "git", "tag", "nodes", "db", "latency", "rate", "decided"),
+    *("kept_up", "lag_p99", "status", "exit", "cost"),
+]
 INDEX_HEADER = (
     f"| {' | '.join(INDEX_COLUMNS.values())} |\n{'|---' * len(INDEX_COLUMNS)}|\n"
 )
@@ -6723,20 +6726,9 @@ def latency_cell(config: dict) -> str:
     return profile if config["intra_latency"] else f"{profile} no-intra"
 
 
-def query_kept_up(limits: nb.Capacity) -> bool:
-    """The query node never bound the capacity: it failed no step, or only above the rate
-    where consensus failed."""
-    query, consensus = limits["query_node"], limits["consensus"]
-    if not query["bounded"]:
-        return True
-    if query["mb_s"] is None:
-        return False
-    return consensus["mb_s"] is None or query["mb_s"] >= consensus["mb_s"]
-
-
 def capacity_bound(limits: nb.Capacity) -> str:
     """What limited the capacity: `query`, `consensus`, `both` (same rate), or `-` when the
-    ramp top was reached."""
+    ramp top was reached or there is no result."""
     query, consensus = limits["query_node"], limits["consensus"]
     if not (query["bounded"] or consensus["bounded"]):
         return "-"
@@ -6745,19 +6737,11 @@ def capacity_bound(limits: nb.Capacity) -> str:
     if not consensus["bounded"]:
         return "query"
     # A bounded limit without a rate failed the first step, the lowest possible.
-    rates = {
-        k: -1.0 if v["mb_s"] is None else v["mb_s"]
-        for k, v in (("query", query), ("consensus", consensus))
-    }
-    if rates["query"] == rates["consensus"]:
+    query_mb_s = -1.0 if query["mb_s"] is None else query["mb_s"]
+    consensus_mb_s = -1.0 if consensus["mb_s"] is None else consensus["mb_s"]
+    if query_mb_s == consensus_mb_s:
         return "both"
-    return min(rates, key=rates.__getitem__)
-
-
-def node_type(manifest: Manifest) -> str:
-    """Validator hosts share `--node-type`, so node0 stands for all of them."""
-    (node0,) = (h for h in manifest["hosts"] if h["name"] == "node0")
-    return node0["instance_type"]
+    return "query" if query_mb_s < consensus_mb_s else "consensus"
 
 
 def index_cells(
@@ -6767,13 +6751,12 @@ def index_cells(
     code: int,
     cost: dict[str, float] | None,
 ) -> dict[str, str]:
-    rate = decided = kept_up = bound = lag = "-"
+    rate = decided = bound = lag = "-"
     status = "failed"
     if result is not None:
         status = nb.verdict_word(result["validity"])
         limits = result["capacity"]
         rate = nb.fmt_num(limits["overall"]["mb_s"])
-        kept_up = "yes" if query_kept_up(limits) else "no"
         bound = capacity_bound(limits)
         passing = [s for s in result["steps"] if s["passed"]]
         if passing:
@@ -6789,10 +6772,9 @@ def index_cells(
         "nodes": str(manifest["config"]["nodes"]),
         "db": manifest["query_db"],
         "latency": latency_cell(manifest["config"]),
-        "node_type": node_type(manifest),
+        "node_type": manifest["config"]["node_type"],
         "rate": rate,
         "decided": decided,
-        "kept_up": kept_up,
         "bound": bound,
         "lag_p99": lag,
         "status": status,
@@ -6912,27 +6894,35 @@ def published_manifest(run_dir: Path) -> dict[str, Any]:
 def commit_message(name: str, row: dict[str, str]) -> str:
     outcome = "failed"
     if row["status"] != "failed":
-        kept_up = "kept-up" if row["kept_up"] == "yes" else "lagging"
-        outcome = f"{row['decided']} MB/s {kept_up}"
+        state = "lagging" if row["bound"] == "query" else "kept-up"
+        outcome = f"{row['decided']} MB/s {state}"
     return f"run {name}: N={row['nodes']} {row['db']} {outcome}"
 
 
 def read_index_row(run_dir: Path) -> dict[str, str]:
-    """`index-row.json`, or for a run that predates it the row of the local INDEX.md. A row
-    from before the latency column gets that cell from the manifest."""
+    """`index-row.json`, or for a run that predates it the row of the local INDEX.md. Cells a
+    row lacks are derived from the run dir, and the row is ordered as `INDEX_COLUMNS`."""
     path = run_dir / INDEX_ROW_JSON
-    if not path.exists():
-        return legacy_index_row(run_dir)
-    row = nb.read_json(path)
-    if "latency" in row:
-        return row
+    row = nb.read_json(path) if path.exists() else legacy_index_row(run_dir)
+    return complete_index_row(run_dir, row)
+
+
+def complete_index_row(run_dir: Path, row: dict[str, str]) -> dict[str, str]:
+    """Rows from before the latency, node type and bound columns get them from the manifest
+    and result; a run without result has no bound. `kept_up` is dropped."""
     config = nb.read_json(run_dir / MANIFEST_JSON)["config"]
-    filled = {}
-    for key, value in row.items():
-        filled[key] = value
-        if key == "db":
-            filled["latency"] = latency_cell(config)
-    return filled
+    result_path = run_dir / "result.json"
+    derived = {
+        "latency": lambda: latency_cell(config),
+        "node_type": lambda: config["node_type"],
+        "bound": lambda: (
+            capacity_bound(nb.read_json(result_path)["capacity"])
+            if result_path.exists()
+            else "-"
+        ),
+    }
+    filled = {k: row[k] if k in row else derived[k]() for k in INDEX_COLUMNS}
+    return {**filled, "user": row["user"]}
 
 
 def legacy_index_row(run_dir: Path) -> dict[str, str]:
@@ -6941,15 +6931,11 @@ def legacy_index_row(run_dir: Path) -> dict[str, str]:
     for line in reversed(index.read_text().splitlines()):
         cells = [cell.strip() for cell in line.strip("|").split("|")]
         if cells[0] == f"{fleet}/{name}":
-            # Older rows lack the latency column, then also node type and bound.
-            columns = list(INDEX_COLUMNS)
-            if len(cells) < len(columns):
-                columns = [c for c in columns if c not in LEGACY_MISSING]
+            columns = LEGACY_COLUMNS
+            # Rows from before the latency column have one cell fewer.
             if len(cells) == len(columns) - 1:
-                cells.insert(columns.index("latency"), "off")
-            row = {c: "-" for c in INDEX_COLUMNS} | dict(
-                zip(columns, cells, strict=True)
-            )
+                columns = [c for c in columns if c != "latency"]
+            row = dict(zip(columns, cells, strict=True))
             # Fleet names are `{user}-{%Y%m%d-%H%M%S}`.
             return {**row, "user": fleet.rsplit("-", 2)[0]}
     raise Refused(f"no row for {fleet}/{name} in {index}")

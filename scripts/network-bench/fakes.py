@@ -1978,11 +1978,10 @@ def index_manifest() -> dict:
         "name": "run1",
         "created_at": "2026-09-29T15:00:00+00:00",
         "git_rev": "a" * 40,
-        "config": {"tag": "release-x", "nodes": 5},
+        "config": {"tag": "release-x", "nodes": 5, "node_type": "c8g.4xlarge"},
         "fleet": "run1",
         "query_db": "colocated",
         "images": {"espresso-node": {"revision": "bd2ad6e1dc7abc"}},
-        "hosts": [{"name": "node0", "role": "query", "instance_type": "c8g.4xlarge"}],
     }
 
 
