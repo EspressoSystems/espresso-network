@@ -447,10 +447,7 @@ impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
             .filter_map(|(level_idx, node)| match node {
                 MerkleNode::Branch { children, .. } => {
                     // Use the path to determine which sibling we need
-                    let path_direction = path
-                        .get(level_idx - 1)
-                        .copied()
-                        .expect("exists");
+                    let path_direction = path.get(level_idx - 1).copied().expect("exists");
                     let sibling_idx = if path_direction == 0 { 1 } else { 0 };
                     if sibling_idx >= children.len() {
                         panic!(
@@ -464,21 +461,26 @@ impl TryInto<RewardProofSiblings> for RewardAccountProofV2 {
                         MerkleNode::Leaf { value, .. } => {
                             let bytes = value.as_ref();
                             Some(B256::from_slice(bytes))
-                        }
+                        },
                         MerkleNode::Branch { value, .. } => {
                             let bytes = value.as_ref();
                             Some(B256::from_slice(bytes))
-                        }
+                        },
                         MerkleNode::ForgettenSubtree { value } => {
                             let bytes = value.as_ref();
                             Some(B256::from_slice(bytes))
-                        }
+                        },
                     }
-                }
+                },
                 _ => None,
             })
-            .collect::<Vec<B256>>().try_into().map_err(|err: Vec<_>| {
-                panic!("Invalid proof length: {:?}, this should never happen", err.len())
+            .collect::<Vec<B256>>()
+            .try_into()
+            .map_err(|err: Vec<_>| {
+                panic!(
+                    "Invalid proof length: {:?}, this should never happen",
+                    err.len()
+                )
             })
             .unwrap();
 
