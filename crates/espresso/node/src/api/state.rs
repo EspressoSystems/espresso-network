@@ -2581,7 +2581,10 @@ pub(crate) trait SubmitDataSourceErased {
 
 #[async_trait]
 impl<C, D> SubmitDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
+    for hotshot_query_service::data_source::ExtensibleDataSource<
+        D,
+        crate::api::ContextDataSource<C>,
+    >
 where
     C: crate::api::context::ApiContext,
     D: Send + Sync,
@@ -2595,9 +2598,9 @@ where
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<C>` directly, so it needs its own erased forwarding impl.
+// `ContextDataSource<C>` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<C> SubmitDataSourceErased for crate::api::ApiState<C>
+impl<C> SubmitDataSourceErased for crate::api::ContextDataSource<C>
 where
     C: crate::api::context::ApiContext,
 {
@@ -2635,7 +2638,10 @@ pub(crate) trait StateSignatureDataSourceErased {
 
 #[async_trait]
 impl<C, D> StateSignatureDataSourceErased
-    for hotshot_query_service::data_source::ExtensibleDataSource<D, crate::api::ApiState<C>>
+    for hotshot_query_service::data_source::ExtensibleDataSource<
+        D,
+        crate::api::ContextDataSource<C>,
+    >
 where
     C: crate::api::context::ApiContext,
     D: Send + Sync,
@@ -2649,9 +2655,9 @@ where
 }
 
 // Bare mode (no query/status API) has no `ExtensibleDataSource` wrapper: the app state is
-// `ApiState<C>` directly, so it needs its own erased forwarding impl.
+// `ContextDataSource<C>` directly, so it needs its own erased forwarding impl.
 #[async_trait]
-impl<C> StateSignatureDataSourceErased for crate::api::ApiState<C>
+impl<C> StateSignatureDataSourceErased for crate::api::ContextDataSource<C>
 where
     C: crate::api::context::ApiContext,
 {

@@ -17,7 +17,7 @@ use process_metrics::ProcessMetrics;
 use url::Url;
 
 use super::{
-    ApiState, StorageState,
+    ContextDataSource, StorageState,
     context::ApiContext,
     data_source::{
         NodeStateDataSource, Provider, PruningDataSource, SequencerDataSource, provider,
@@ -154,7 +154,7 @@ impl Options {
         // allows the web server to start before initialization can complete, since initialization
         // can take a long time (and is dependent on other nodes).
         let (send_ctx, recv_ctx) = oneshot::channel();
-        let state = ApiState::new(async move {
+        let state = ContextDataSource::new(async move {
             recv_ctx
                 .await
                 .expect("context initialized and sent over channel")
@@ -260,7 +260,7 @@ impl Options {
         &self,
         query_opt: Query,
         mod_opt: persistence::fs::Options,
-        state: ApiState<C>,
+        state: ContextDataSource<C>,
         tasks: &mut TaskList,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
@@ -323,7 +323,7 @@ impl Options {
         self,
         query_opt: Query,
         mod_opt: persistence::sql::Options,
-        state: ApiState<C>,
+        state: ContextDataSource<C>,
         tasks: &mut TaskList,
     ) -> anyhow::Result<(
         Box<dyn Metrics>,
@@ -516,7 +516,7 @@ pub struct LightClient;
 #[allow(clippy::type_complexity)]
 fn init_query_data_source<C: ApiContext, D>(
     ds: D,
-    state: ApiState<C>,
+    state: ContextDataSource<C>,
 ) -> (Box<dyn Metrics>, Arc<StorageState<C, D>>)
 where
     D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,

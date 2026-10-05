@@ -1,6 +1,6 @@
-//! [`ApiState`](super::ApiState) reaches consensus and node-wide state only through
-//! [`ApiContext`], so the same API modules can be served by a validator ([`SequencerContext`])
-//! or by a node that follows the chain without taking part in consensus.
+//! [`ContextDataSource`](super::ContextDataSource) reaches consensus and node-wide state only
+//! through [`ApiContext`], so the same API modules can be served by a validator
+//! ([`SequencerContext`]) or by a node that follows the chain without taking part in consensus.
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
