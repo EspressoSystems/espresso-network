@@ -2,15 +2,19 @@ name: Claude PR Review
 
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
-  cancel-in-progress: true
+    types: [opened, ready_for_review, reopened, edited]
 
 jobs:
   review:
-    if: github.event.pull_request.draft == false
+    # `edited` also fires on title and body edits, only a base change (a stacked
+    # PR retargeted after its parent merges) changes the diff under review.
+    if: |
+      github.event.pull_request.draft == false &&
+      (github.event.action != 'edited' || github.event.changes.base != null)
+    # Job-level so skipped runs (drafts, title edits) don't cancel a review in progress.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
