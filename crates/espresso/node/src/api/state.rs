@@ -2625,6 +2625,24 @@ where
     }
 }
 
+#[tonic::async_trait]
+impl<D> proto::state_signature_service_server::StateSignatureService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: StateSignatureDataSourceErased + Send + Sync,
+{
+    async fn get_state_signature(
+        &self,
+        request: tonic::Request<proto::GetStateSignatureRequest>,
+    ) -> Result<tonic::Response<proto::StateSignatureResponse>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let body = v1::StateSignatureApi::get_state_signature(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&body).into()))
+    }
+}
+
 #[async_trait]
 pub(crate) trait StateSignatureDataSourceErased {
     async fn get_state_signature_erased(
