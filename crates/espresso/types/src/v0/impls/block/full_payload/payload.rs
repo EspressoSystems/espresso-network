@@ -41,7 +41,7 @@ impl Payload {
         &self.ns_table
     }
 
-    /// The bytes [`BlockPayload::encode`] returns, without its copy into a fresh `Arc`.
+    /// The bytes [`BlockPayload::encode`] returns, without the `Arc` handle.
     pub fn raw_payload(&self) -> &[u8] {
         &self.raw_payload
     }
@@ -125,7 +125,7 @@ impl Payload {
         let metadata = ns_table.clone();
         Ok((
             Self {
-                raw_payload: payload,
+                raw_payload: payload.into(),
                 ns_table,
             },
             metadata,
@@ -178,10 +178,9 @@ impl BlockPayload<SeqTypes> for Payload {
         Self::from_transactions_sync(transactions, chain_config)
     }
 
-    // TODO avoid cloning the entire payload here?
     fn from_bytes(block_payload_bytes: &[u8], ns_table: &Self::Metadata) -> Self {
         Self {
-            raw_payload: block_payload_bytes.to_vec(),
+            raw_payload: block_payload_bytes.into(),
             ns_table: ns_table.clone(),
         }
     }
@@ -202,7 +201,11 @@ impl BlockPayload<SeqTypes> for Payload {
         // double-hashing the ns_table. Why? To maintain serialization
         // compatibility.
         // https://github.com/EspressoSystems/espresso-network/issues/1576
-        let metadata_bytes = metadata.encode();
+        let metadata_bytes = if metadata == &self.ns_table {
+            ns_table_bytes.clone()
+        } else {
+            metadata.encode()
+        };
 
         let mut digest = sha2::Sha256::new();
         digest.update((self.raw_payload.len() as u64).to_le_bytes());
@@ -300,7 +303,7 @@ impl std::fmt::Display for Payload {
 
 impl EncodeBytes for Payload {
     fn encode(&self) -> Arc<[u8]> {
-        Arc::from(self.raw_payload.as_ref())
+        Arc::clone(&self.raw_payload)
     }
 }
 
