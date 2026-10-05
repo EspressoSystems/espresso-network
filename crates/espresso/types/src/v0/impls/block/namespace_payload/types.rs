@@ -338,7 +338,7 @@ impl NsPayloadBuilder {
     }
 
     /// Byte length of the serialized namespace.
-    pub fn byte_len(&self) -> usize {
+    pub(crate) fn byte_len(&self) -> usize {
         Self::tx_table_header_byte_len() + self.txs.len() * TX_OFFSET_BYTE_LEN + self.bodies_len
     }
 
@@ -347,7 +347,7 @@ impl NsPayloadBuilder {
     /// # Panics
     ///
     /// If `out` is shorter than [`Self::byte_len`].
-    pub fn write_into(&self, out: &mut [u8]) -> usize {
+    pub(crate) fn write_into(&self, out: &mut [u8]) -> usize {
         let num_txs = NumTxsUnchecked(self.txs.len());
         let (header, rest) = out.split_at_mut(NUM_TXS_BYTE_LEN);
         header.copy_from_slice(&num_txs.to_payload_bytes());
