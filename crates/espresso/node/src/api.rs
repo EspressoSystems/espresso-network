@@ -4859,6 +4859,26 @@ mod test {
         addresses
     }
 
+    /// The node stores reward proofs only for the accounts in the tree, so an account without
+    /// rewards at `height` is a 404 rather than a zero balance.
+    async fn reward_balance(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        height: u64,
+        address: Address,
+    ) -> U256 {
+        match client
+            .get::<RewardAmount>(&format!(
+                "reward-state-v2/reward-balance/{height}/{address}"
+            ))
+            .send()
+            .await
+        {
+            Ok(amount) => amount.0,
+            Err(err) if err.status == StatusCode::NOT_FOUND => U256::ZERO,
+            Err(err) => panic!("reward balance of {address} at {height}: {err}"),
+        }
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_pos_rewards_basic() -> anyhow::Result<()> {
         // A single validator that is also its only delegator leads every block, so the rewards
@@ -4901,23 +4921,13 @@ mod test {
             .epoch_block_reward(3.into())
             .expect("block reward is not None");
 
-        let before = client
-            .get::<Option<RewardAmount>>(&format!(
-                "reward-state-v2/reward-balance/{}/{address}",
-                first_boundary - EPOCH_HEIGHT
-            ))
-            .send()
-            .await?;
-        assert_eq!(before, None, "rewards before the first boundary");
-        let amount = client
-            .get::<Option<RewardAmount>>(&format!(
-                "reward-state-v2/reward-balance/{first_boundary}/{address}"
-            ))
-            .send()
-            .await?
-            .expect("no reward at the first boundary");
         assert_eq!(
-            amount.0,
+            reward_balance(&client, first_boundary - EPOCH_HEIGHT, address).await,
+            U256::ZERO,
+            "rewards before the first boundary"
+        );
+        assert_eq!(
+            reward_balance(&client, first_boundary, address).await,
             U256::from(EPOCH_HEIGHT) * block_reward.0,
             "reward amount don't match"
         );
@@ -4965,15 +4975,7 @@ mod test {
         for height in [3 * EPOCH_HEIGHT].into_iter().chain(boundaries) {
             let mut total = U256::ZERO;
             for address in &addresses {
-                if let Some(amount) = client
-                    .get::<Option<RewardAmount>>(&format!(
-                        "reward-state-v2/reward-balance/{height}/{address}"
-                    ))
-                    .send()
-                    .await?
-                {
-                    total += amount.0;
-                }
+                total += reward_balance(&client, height, *address).await;
             }
             let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
             let expected = if epoch <= 3 {
