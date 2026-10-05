@@ -118,7 +118,7 @@ pub fn forward_budget(max_message_size: NonZeroUsize) -> u64 {
 }
 
 struct RetryEntry<T: NodeType> {
-    tx: T::Transaction,
+    tx: Arc<T::Transaction>,
     valid_until: ViewNumber,
     size: u64,
     /// Bytes on the wire, which can exceed `size`.
@@ -150,7 +150,7 @@ pub struct BlockBuilder<T: NodeType> {
     /// payload is the same. It is the same whenever the new parent does not
     /// change how the payload is built.
     #[allow(clippy::type_complexity)]
-    view_transactions: BTreeMap<ViewNumber, Vec<(Commitment<T::Transaction>, T::Transaction)>>,
+    view_transactions: BTreeMap<ViewNumber, Vec<(Commitment<T::Transaction>, Arc<T::Transaction>)>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -202,7 +202,10 @@ impl<T: NodeType> BlockBuilder<T> {
             if buffer.is_empty() {
                 sleep(empty_block_delay).await;
             }
-            let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
+            let (hashes, txs): (Vec<_>, Vec<_>) = buffer
+                .into_iter()
+                .map(|(hash, tx)| (hash, Arc::unwrap_or_clone(tx)))
+                .unzip();
             let manifest = DedupManifest {
                 view,
                 epoch,
@@ -280,15 +283,17 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert((view, parent_commitment), handle);
     }
 
+    #[allow(clippy::type_complexity)]
     fn transactions_for(
         &mut self,
         view: ViewNumber,
-    ) -> Vec<(Commitment<T::Transaction>, T::Transaction)> {
+    ) -> Vec<(Commitment<T::Transaction>, Arc<T::Transaction>)> {
         if let Some(txs) = self.view_transactions.get(&view) {
             return txs.clone();
         }
         let mut txs: Vec<_> = std::mem::take(&mut self.leader_buffer)
             .into_iter()
+            .map(|(hash, tx)| (hash, Arc::new(tx)))
             .collect();
         let mut bytes = std::mem::take(&mut self.leader_total_bytes);
         if !self.config.forward_transactions {
@@ -302,7 +307,7 @@ impl<T: NodeType> BlockBuilder<T> {
                     continue;
                 }
                 bytes += entry.size;
-                txs.push((*hash, entry.tx.clone()));
+                txs.push((*hash, Arc::clone(&entry.tx)));
             }
         }
         self.view_transactions.insert(view, txs.clone());
@@ -378,7 +383,7 @@ impl<T: NodeType> BlockBuilder<T> {
         self.retry_pending.insert(
             hash,
             RetryEntry {
-                tx,
+                tx: Arc::new(tx),
                 valid_until,
                 size,
                 encoded_size,
@@ -451,7 +456,7 @@ impl<T: NodeType> BlockBuilder<T> {
             }
             bytes += entry.size;
             encoded += entry.encoded_size;
-            batch.push(entry.tx.clone());
+            batch.push(T::Transaction::clone(&entry.tx));
         }
         for hash in &unfit {
             warn!(%hash, "pending transaction no longer fits a block, dropping");
@@ -517,7 +522,11 @@ impl<T: NodeType> BlockBuilder<T> {
         view: ViewNumber,
         epoch: EpochNumber,
     ) -> (Vec<T::Transaction>, DedupManifest<T>) {
-        let (hashes, txs) = self.transactions_for(view).into_iter().unzip();
+        let (hashes, txs) = self
+            .transactions_for(view)
+            .into_iter()
+            .map(|(hash, tx)| (hash, Arc::unwrap_or_clone(tx)))
+            .unzip();
 
         let manifest = DedupManifest {
             view,
