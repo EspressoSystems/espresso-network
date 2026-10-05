@@ -12,6 +12,7 @@ from typing import Any
 import netbench
 import pytest
 from fakes import (
+    C8IN_8XLARGE_PRICE_ITEM,
     DOTENV_TEXT,
     MEMORY_MIB,
     STS_CALL,
@@ -26,6 +27,9 @@ from fakes import (
     fleet,
     isolated_env,
     plan_args,
+    price_item,
+    price_list,
+    pricing,
     shot_estimate,
     sts_response,
 )
@@ -390,11 +394,16 @@ def test_preflight_resolves_az_ami_and_images(monkeypatch: pytest.MonkeyPatch):
         "describe-instance-types",
         lambda _: instance_types({"c8g.2xlarge": "arm64", "c8g.4xlarge": "arm64"}),
     )
+    runner.respond("get-products", pricing)
     monkeypatch.setattr(
         awsb, "resolve_image", lambda _http_get, ref, _platform: fake_image(ref)
     )
     result = awsb.preflight(FakeSystem(run=runner), cfg, awsb.plan_hosts(cfg))
     assert result["arch"] == "arm64"
+    assert result["instance_prices"] == {
+        "c8g.2xlarge": 0.34112,
+        "c8g.4xlarge": 0.68224,
+    }
     assert result["memory_mib"] == {"c8g.2xlarge": 16384, "c8g.4xlarge": 32768}
     assert result["az"] == "eu-west-1a"
     assert result["ami_id"] == "ami-0abc"
@@ -575,6 +584,7 @@ def intel_preflight_runner(ctl_arch: str = "x86_64") -> FakeRunner:
     runner.respond(
         "describe-instance-type-offerings", lambda _: offerings("eu-west-1a")
     )
+    runner.respond("get-products", pricing)
     return runner
 
 
@@ -644,14 +654,50 @@ def test_config_from_a_manifest_without_an_instance_type_raises(key: str):
         awsb.config_from_manifest(saved)
 
 
+def pricing_runner() -> FakeRunner:
+    runner = FakeRunner()
+    runner.respond("get-products", pricing)
+    return runner
+
+
+def test_instance_price_reads_the_real_price_list_shape():
+    runner = FakeRunner()
+    runner.respond("get-products", lambda _: price_list(C8IN_8XLARGE_PRICE_ITEM))
+    assert awsb.instance_price(runner, "c8in.8xlarge") == 2.45952
+    (call,) = runner.calls
+    assert call[call.index("--region") + 1] == "us-east-1"
+    assert call[call.index("--service-code") + 1] == "AmazonEC2"
+    for field, value in {
+        "instanceType": "c8in.8xlarge",
+        "regionCode": "eu-west-1",
+        "operatingSystem": "Linux",
+        "tenancy": "Shared",
+        "preInstalledSw": "NA",
+        "capacitystatus": "Used",
+    }.items():
+        assert f"Type=TERM_MATCH,Field={field},Value={value}" in call
+
+
+def test_instance_price_of_an_unknown_type_raises():
+    with pytest.raises(awsb.Refused, match=r"m7a\.large in eu-west-1: 0 on-demand"):
+        awsb.instance_price(pricing_runner(), "m7a.large")
+
+
+def test_instance_price_of_several_products_raises():
+    item = price_item("c8g.4xlarge", 0.68224)
+    runner = FakeRunner()
+    runner.respond("get-products", lambda _: price_list(item, item))
+    with pytest.raises(awsb.Refused, match=r"c8g\.4xlarge in eu-west-1: 2 on-demand"):
+        awsb.instance_price(runner, "c8g.4xlarge")
+
+
 @pytest.mark.usefixtures("fleet_dir")
-def test_an_unpriced_instance_type_is_refused_before_any_aws_call():
-    runner = FakeRunner({})
-    with pytest.raises(
-        awsb.Refused, match=r"m7a\.large has no price; known: .*c8i\.4xlarge"
-    ):
-        awsb.cmd_plan(plan_args("--node-type", "m7a.large"), FakeSystem(run=runner))
-    assert runner.calls == []
+def test_plan_of_an_unpriced_type_fails_in_preflight(monkeypatch: pytest.MonkeyPatch):
+    runner = intel_preflight_runner()
+    args = plan_args("--node-type", "m7a.large", "--ctl-type", "m7a.large")
+    with pytest.raises(awsb.Refused, match=r"m7a\.large in eu-west-1: 0 on-demand"):
+        awsb.cmd_plan(args, FakeSystem(run=runner))
+    assert not runner.ran("describe-images")
 
 
 @pytest.fixture

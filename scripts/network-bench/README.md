@@ -137,10 +137,10 @@ laptop                       EC2, one AZ, private IPs
 | `node1..` | `c8g.4xlarge` | espresso-node `-- storage-journal -- http -- status -- submit -- catchup -- config`, `agent-host`        |
 
 - Types: the table's are the defaults; `--node-type` (node0..) and `--ctl-type` (`ctl`) on `plan`, `up` and single-shot
-  `run`; `run --fleet` refuses them. A type outside the `INSTANCE_PRICES` table (c8g, c8i, c7i at 2xlarge, 4xlarge,
-  8xlarge) is refused before any AWS call. Both types must share one architecture; preflight reads it from
-  `describe-instance-types` and picks the Ubuntu AMI and image platform (`linux/arm64` or `linux/amd64`) to match.
-  Recorded as `arch` in the manifest.
+  `run`; `run --fleet` refuses them. Preflight reads each type's on-demand Linux price in eu-west-1 from the AWS Pricing
+  API (`pricing get-products`, endpoint us-east-1); a type with no single matching price is refused. Both types must
+  share one architecture; preflight reads it from `describe-instance-types` and picks the Ubuntu AMI and image platform
+  (`linux/arm64` or `linux/amd64`) to match. Recorded as `arch` in the manifest.
 - vCPUs: an Intel vCPU is a hyperthread (c8i.4xlarge: 16 vCPU = 8 cores); a Graviton vCPU is a physical core
   (c8g.4xlarge: 16 cores).
 - Stake: equal, orchestrator self-registration; 5 nodes → quorum 4, lagging `node0` never stalls consensus.
@@ -163,8 +163,8 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> [shaping] -> services 
 
 | Phase       | Does                                                                                                                                               | Gate                                                   |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| preflight   | tools, `sts` account, type arch + offered, image digests + arch                                                                                    | any miss: exit 2                                       |
-| plan        | render run dir, `tofu init/plan`, estimate at the `PRICES` constants (eu-west-1 on-demand)                                                         | over `--max-usd`, declined, no tty w/o `--yes`: exit 2 |
+| preflight   | tools, `sts` account, type arch + price + offered, image digests + arch                                                                            | any miss: exit 2                                       |
+| plan        | render run dir, `tofu init/plan`, estimate at the Pricing API instance prices and the `PRICES` constants (eu-west-1 on-demand)                     | over `--max-usd`, declined, no tty w/o `--yes`: exit 2 |
 | apply       | `tofu apply`, local state in run dir; instances terminate on shutdown, cloud-init arms `shutdown -P +TTL` first                                    | last tf stderr line, destroy, exit 3                   |
 | provisioned | ssh + `cloud-init status --wait`, digests == manifest, render env/start.sh (need private IPs), rsync `/opt/bench`, start `agent-host`              |                                                        |
 | shaping     | `--latency` only: one tc netem leaf per peer on every node, then ping probes against the expected RTT                                              | probe off by > max(2 ms, 10 %): collect, exit 3        |

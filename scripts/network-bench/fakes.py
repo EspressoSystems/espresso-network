@@ -6,6 +6,7 @@ import asyncio
 import base64
 import bisect
 import collections
+import copy
 import dataclasses
 import heapq
 import http.client
@@ -1162,7 +1163,9 @@ STS_CALL = ("aws", "--profile", "timeboost-dev", "sts", "get-caller-identity")
 
 
 def shot_estimate(hosts: list, cfg: Any) -> Any:
-    return awsb.cost_estimate(hosts, cfg, None, *awsb.shot_seconds(cfg))
+    return awsb.cost_estimate(
+        hosts, cfg, None, *awsb.shot_seconds(cfg), instance_prices=INSTANCE_PRICES
+    )
 
 
 def isolated_env(monkeypatch: pytest.MonkeyPatch, root: Path, name: str) -> Path:
@@ -1216,7 +1219,7 @@ def fake_images() -> dict:
     } | {name: fake_image(ref) for name, ref in awsb.SUPPORT_IMAGES.items()}
 
 
-# `MemoryInfo.SizeInMiB` of `describe-instance-types` for every priced type.
+# `MemoryInfo.SizeInMiB` of `describe-instance-types` for every type of the fake price table.
 MEMORY_MIB = {
     "c8g.2xlarge": 16384,
     "c8g.4xlarge": 32768,
@@ -1230,12 +1233,95 @@ MEMORY_MIB = {
 }
 
 
+# On-demand Linux USD per hour in eu-west-1, as the Pricing API listed them.
+INSTANCE_PRICES = {
+    "c8g.2xlarge": 0.34112,
+    "c8g.4xlarge": 0.68224,
+    "c8g.8xlarge": 1.36448,
+    "c8i.2xlarge": 0.4022,
+    "c8i.4xlarge": 0.8044,
+    "c8i.8xlarge": 1.6088,
+    "c7i.2xlarge": 0.38304,
+    "c7i.4xlarge": 0.76608,
+    "c7i.8xlarge": 1.53216,
+}
+
+# One `PriceList` element of `pricing get-products` for c8in.8xlarge (a JSON string in the real
+# response), product attributes cut to the filtered ones.
+C8IN_8XLARGE_PRICE_ITEM: dict[str, Any] = {
+    "product": {
+        "productFamily": "Compute Instance",
+        "attributes": {
+            "instanceType": "c8in.8xlarge",
+            "regionCode": "eu-west-1",
+            "operatingSystem": "Linux",
+            "tenancy": "Shared",
+            "preInstalledSw": "NA",
+            "capacitystatus": "Used",
+            "usagetype": "EU-BoxUsage:c8in.8xlarge",
+        },
+        "sku": "8N4NCVY3ANNP9DZ7",
+    },
+    "serviceCode": "AmazonEC2",
+    "terms": {
+        "OnDemand": {
+            "8N4NCVY3ANNP9DZ7.JRTCKXETXF": {
+                "priceDimensions": {
+                    "8N4NCVY3ANNP9DZ7.JRTCKXETXF.6YS6EN2CT7": {
+                        "unit": "Hrs",
+                        "endRange": "Inf",
+                        "description": "$2.45952 per On Demand Linux c8in.8xlarge Instance Hour",
+                        "appliesTo": [],
+                        "rateCode": "8N4NCVY3ANNP9DZ7.JRTCKXETXF.6YS6EN2CT7",
+                        "beginRange": "0",
+                        "pricePerUnit": {"USD": "2.4595200000"},
+                    }
+                },
+                "sku": "8N4NCVY3ANNP9DZ7",
+                "effectiveDate": "2026-09-01T00:00:00Z",
+                "offerTermCode": "JRTCKXETXF",
+                "termAttributes": {},
+            }
+        }
+    },
+    "version": "20260925174521",
+    "publicationDate": "2026-09-25T17:45:21Z",
+}
+
+
+def price_list(*items: dict) -> subprocess.CompletedProcess:
+    body = {"FormatVersion": "aws_v1", "PriceList": [json.dumps(i) for i in items]}
+    return completed(stdout=json.dumps(body))
+
+
+def price_item(instance_type: str, usd: float) -> dict[str, Any]:
+    item: dict[str, Any] = copy.deepcopy(C8IN_8XLARGE_PRICE_ITEM)
+    item["product"]["attributes"]["instanceType"] = instance_type
+    (term,) = item["terms"]["OnDemand"].values()
+    (dimension,) = term["priceDimensions"].values()
+    dimension["pricePerUnit"]["USD"] = f"{usd:.10f}"
+    return item
+
+
+def pricing(argv: list[str]) -> subprocess.CompletedProcess:
+    """`pricing get-products` for the type in the instanceType filter: its INSTANCE_PRICES entry,
+    an empty `PriceList` for any other."""
+    assert argv[argv.index("--region") + 1] == "us-east-1", argv
+    (instance_type,) = (
+        a.split("Value=")[1] for a in argv if "Field=instanceType," in a
+    )
+    if instance_type not in INSTANCE_PRICES:
+        return price_list()
+    return price_list(price_item(instance_type, INSTANCE_PRICES[instance_type]))
+
+
 def fake_preflight(arch: str = "arm64") -> dict:
     return {
         "account": "027574771971",
         "az": "eu-west-1b",
         "arch": arch,
         "memory_mib": MEMORY_MIB,
+        "instance_prices": INSTANCE_PRICES,
         "ami_id": "ami-0abc",
         "images": fake_images(),
         "git_diff": None,
@@ -1557,6 +1643,7 @@ def tag_runner(
     )
     runner.mappings = mappings
     runner.stale_volumes = frozenset(stale_volumes)
+    runner.respond("get-products", pricing)
     return runner
 
 

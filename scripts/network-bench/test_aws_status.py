@@ -16,6 +16,7 @@ from fakes import (
     DONE_STATE,
     EXPIRES_LATER,
     EXPIRES_PAST,
+    INSTANCE_PRICES,
     NOW,
     SCRIPT,
     STATUS_DESCRIBE,
@@ -72,13 +73,15 @@ def test_terminal_phase_needs_terraform_state(tmp_path: Path):
 
 def test_accrued_usd_is_instance_hours_at_the_price():
     two = [instance("i-1"), instance("i-2", launch="2026-09-29T15:00:00+00:00")]
-    expected = 1.5 * awsb.PRICES["c8g.4xlarge"]
-    assert awsb.accrued_usd(two, NOW) == pytest.approx(expected)
+    expected = 1.5 * INSTANCE_PRICES["c8g.4xlarge"]
+    assert awsb.accrued_usd(two, NOW, INSTANCE_PRICES) == pytest.approx(expected)
 
 
 def test_accrued_usd_of_an_unpriced_type_raises():
     with pytest.raises(KeyError):
-        awsb.accrued_usd([{**instance("i-1"), "type": "t4g.nano"}], NOW)
+        awsb.accrued_usd(
+            [{**instance("i-1"), "type": "t4g.nano"}], NOW, INSTANCE_PRICES
+        )
 
 
 @pytest.mark.parametrize(
@@ -232,7 +235,7 @@ def test_manifest_cost_is_linear_and_covers_instance_hours():
     cost = [awsb.manifest_cost(manifest, s) for s in (0, 3600, 7200)]
     hour = cost[1] - cost[0]
     assert cost[2] - cost[1] == pytest.approx(hour)
-    assert hour >= awsb.PRICES["c8g.2xlarge"] + 2 * awsb.PRICES["c8g.4xlarge"]
+    assert hour >= INSTANCE_PRICES["c8g.2xlarge"] + 2 * INSTANCE_PRICES["c8g.4xlarge"]
 
 
 def test_append_index_writes_the_header_once(tmp_path: Path):

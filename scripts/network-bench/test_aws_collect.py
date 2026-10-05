@@ -16,6 +16,7 @@ from fakes import (
     DESCRIBE,
     DONE_STATE,
     FULL_BALANCE,
+    INSTANCE_PRICES,
     MEMORY_MIB,
     NOW,
     FakeClock,
@@ -221,7 +222,7 @@ def test_rds_parameters_keep_the_reference_tuning() -> None:
         assert rds["parameters"][key] == setting, key
 
 
-@pytest.mark.parametrize("node_type", sorted(awsb.INSTANCE_PRICES))
+@pytest.mark.parametrize("node_type", sorted(MEMORY_MIB))
 def test_memory_budget_fits_the_query_host(node_type: str) -> None:
     """node0 also runs espresso-node and the journal's page cache: Postgres's peak shared and
     autovacuum memory stays within a third of the host."""
@@ -601,7 +602,7 @@ def test_actual_cost_prices_the_observed_duration() -> None:
     runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
     cost = awsb.actual_cost(runner, manifest, NOW)
     assert cost["duration_s"] == 1800.0
-    lines = awsb._cost_lines(manifest["hosts"], 1800.0, None)
+    lines = awsb._cost_lines(manifest["hosts"], 1800.0, None, INSTANCE_PRICES)
     assert cost["actual"] == pytest.approx(sum(line["usd"] for line in lines))
     assert cost["bound"] == manifest["estimate"]["bound_usd"]
 

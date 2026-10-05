@@ -11,6 +11,7 @@ from fakes import (
     DONE_STATE,
     EXPIRES_LATER,
     EXPIRES_PAST,
+    INSTANCE_PRICES,
     LIST_ROLES,
     NOW,
     RDS_CREATED,
@@ -135,9 +136,9 @@ def test_the_fleet_bound_bills_rds_until_its_delete_finishes():
     cfg = awsb.RunConfig(tag="x", nodes=2, ttl_min="150", db_modes=("rds",), load=load)
     hosts = awsb.plan_hosts(cfg)
     ttl_s = 150 * 60.0
-    without = awsb.cost_estimate(hosts, cfg, None, ttl_s, ttl_s)
+    without = awsb.cost_estimate(hosts, cfg, None, ttl_s, ttl_s, INSTANCE_PRICES)
     rds = rds_spec()
-    with_rds = awsb.cost_estimate(hosts, cfg, rds, ttl_s, ttl_s)
+    with_rds = awsb.cost_estimate(hosts, cfg, rds, ttl_s, ttl_s, INSTANCE_PRICES)
     expected = sum(line["usd"] for line in awsb.rds_cost_lines(rds, ttl_s))
     assert with_rds["expected_usd"] - without["expected_usd"] == pytest.approx(expected)
     bound_lines = awsb.rds_cost_lines(rds, ttl_s + awsb.RDS_DELETE_S)
@@ -710,7 +711,7 @@ def test_a_role_joins_its_fleet_and_stands_alone_without_one():
 def test_resource_counts_name_each_kind():
     mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
     (tagged,) = awsb.group_runs(mappings, [INSTANCE_ROW], ["vol-1"], [ROLE_ARN])
-    assert awsb.format_runs([tagged], NOW)[2].split(" | ")[4] == (
+    assert awsb.format_runs([tagged], NOW, INSTANCE_PRICES)[2].split(" | ")[4] == (
         "1 db, 1 instance, 1 key-pair, 1 pg, 1 role, 1 schedule-group, "
         "1 security-group, 1 subgrp, 1 volume"
     )

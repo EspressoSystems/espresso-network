@@ -14,6 +14,7 @@ from fakes import (
     BY_ID,
     DESCRIBE,
     DONE_STATE,
+    INSTANCE_PRICES,
     NOW,
     STATUS_DESCRIBE,
     VOLUME_ID,
@@ -109,7 +110,7 @@ def test_fleet_bound_is_the_rate_over_the_ttl_plus_boot(harness):
     estimate = harness.fleet()["estimate"]
     assert estimate["ttl_s"] == 180 * 60
     rate = awsb.estimate_rate(estimate)
-    assert rate > awsb.PRICES["c8g.2xlarge"] + 2 * awsb.PRICES["c8g.4xlarge"]
+    assert rate > INSTANCE_PRICES["c8g.2xlarge"] + 2 * INSTANCE_PRICES["c8g.4xlarge"]
     egress = next(l["usd"] for l in estimate["lines"] if l["item"] == "egress")
     expected = rate * (180 * 60 + awsb.BOOT_ALLOWANCE_S) / 3600 + egress
     assert estimate["bound_usd"] == pytest.approx(expected)
@@ -625,7 +626,7 @@ def test_volume_after_colocated_empties_the_root_copy_before_it_is_hidden():
 
 def volume_rate(volume: Any) -> float:
     cfg = awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
-    lines = awsb._cost_lines(awsb.plan_hosts(cfg), 3600.0, volume)
+    lines = awsb._cost_lines(awsb.plan_hosts(cfg), 3600.0, volume, INSTANCE_PRICES)
     return sum(l["usd"] for l in lines if l["item"] != "egress")
 
 
@@ -647,7 +648,9 @@ def test_the_fleet_estimate_prices_the_volume_only_when_provisioned():
             ttl_min="60",
             load=netbench.BenchConfig(submit_nodes=1),
         )
-        estimate = awsb.cost_estimate(awsb.plan_hosts(cfg), cfg, None, 3600, 3600)
+        estimate = awsb.cost_estimate(
+            awsb.plan_hosts(cfg), cfg, None, 3600, 3600, INSTANCE_PRICES
+        )
         return next(l["qty"] for l in estimate["lines"] if l["item"] == "gp3 storage")
 
     extra = gb_hours(("colocated", "volume")) - gb_hours(("colocated",))

@@ -121,6 +121,8 @@ SUBMIT_WORKERS = 32
 NODE_TYPE = "c8g.4xlarge"
 CTL_TYPE = "c8g.2xlarge"
 REGION = "eu-west-1"
+# The Pricing API is served from a few regions only, whatever region the prices are for.
+PRICING_REGION = "us-east-1"
 PROFILE = "timeboost-dev"
 ACCOUNT = "027574771971"
 OUT_ROOT = Path("bench-state/aws")
@@ -161,25 +163,13 @@ NODE_ROOT_GB_MIN = 100
 VALIDATOR_DISK_FACTOR = 2
 QUERY_DISK_FACTOR = 3
 
-# On-demand USD, eu-west-1, as of 2026-09-30 (`aws pricing get-products`, EC2/EBS/VPC/RDS
-# pages). Linux instances per hour; the types `--node-type` and `--ctl-type` accept.
-INSTANCE_PRICES = {
-    "c8g.2xlarge": 0.34112,
-    "c8g.4xlarge": 0.68224,
-    "c8g.8xlarge": 1.36448,
-    "c8i.2xlarge": 0.4022,
-    "c8i.4xlarge": 0.8044,
-    "c8i.8xlarge": 1.6088,
-    "c7i.2xlarge": 0.38304,
-    "c7i.4xlarge": 0.76608,
-    "c7i.8xlarge": 1.53216,
-}
-# RDS instances per hour; gp3 GB-month, gp3 IOPS above the 3000 baseline (per IOPS-month), gp3
+# On-demand USD, eu-west-1, as of 2026-09-30 (`aws pricing get-products`, EBS/VPC/RDS pages).
+# EC2 instance prices are read from the Pricing API at preflight (`instance_price`). RDS
+# instances per hour; gp3 GB-month, gp3 IOPS above the 3000 baseline (per IOPS-month), gp3
 # throughput above the 125 MB/s baseline (per MB/s-month), RDS PostgreSQL Single-AZ gp3 storage
 # (per GB-month; the IOPS and MB/s of a 400 GiB volume are included), a public IPv4 address (per
 # hour), internet egress (per GB, first tier).
 PRICES = {
-    **INSTANCE_PRICES,
     "db.m8g.4xlarge": 1.488,
     "gp3_gb_month_usd": 0.088,
     "gp3_iops_month_usd": 0.005,
@@ -627,6 +617,8 @@ class Preflight(TypedDict):
     arch: Arch
     # `MemoryInfo.SizeInMiB` per instance type of the fleet.
     memory_mib: dict[str, int]
+    # On-demand Linux USD per hour per instance type of the fleet.
+    instance_prices: dict[str, float]
     ami_id: str
     images: dict[str, ImageInfo]
     # The engine minor `rds_orderable` resolved; present when the fleet has an rds mode.
@@ -934,14 +926,16 @@ def _run(
     )
 
 
-def aws_argv(*args: str) -> list[str]:
-    return ["aws", "--profile", PROFILE, *args, "--region", REGION, "--output", "json"]
+def aws_argv(*args: str, region: str = REGION) -> list[str]:
+    return ["aws", "--profile", PROFILE, *args, "--region", region, "--output", "json"]
 
 
-def aws_json(run: Runner, *args: str, tolerate: str | None = None) -> Any:
+def aws_json(
+    run: Runner, *args: str, tolerate: str | None = None, region: str = REGION
+) -> Any:
     """The parsed stdout of an `aws` call, None for an empty one or a stderr containing
     `tolerate` (an already-deleted resource)."""
-    result = run(aws_argv(*args))
+    result = run(aws_argv(*args, region=region))
     if result.returncode != 0:
         if tolerate and tolerate in result.stderr:
             return None
@@ -985,7 +979,6 @@ def rds_spec(cfg: RunConfig, pre: Preflight) -> RdsSpec | None:
 
 def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     check_rds_config(cfg)
-    check_priced(cfg.ctl_type, cfg.node_type)
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
     check_submit_nodes(cfg)
@@ -1012,15 +1005,6 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
             }
         )
     return hosts
-
-
-def check_priced(*types: str) -> None:
-    """Refuses, before any AWS call, a type the cost estimate has no price for."""
-    for instance_type in types:
-        if instance_type not in INSTANCE_PRICES:
-            raise Refused(
-                f"{instance_type} has no price; known: {', '.join(sorted(INSTANCE_PRICES))}"
-            )
 
 
 def peers(i: int, n: int) -> list[int]:
@@ -1101,12 +1085,13 @@ def cost_estimate(
     rds: RdsSpec | None,
     expected_s: float,
     worst_s: float,
+    instance_prices: dict[str, float],
 ) -> Estimate:
     """The bound adds the boot before the shutdown timer is armed, and the rds delete."""
     ttl_s = ttl_seconds(cfg, worst_s)
     volume = pg_volume_spec(cfg)
-    lines = _cost_lines(hosts, expected_s, volume)
-    bound_lines = _cost_lines(hosts, ttl_s + BOOT_ALLOWANCE_S, volume)
+    lines = _cost_lines(hosts, expected_s, volume, instance_prices)
+    bound_lines = _cost_lines(hosts, ttl_s + BOOT_ALLOWANCE_S, volume, instance_prices)
     if rds is not None:
         lines += rds_cost_lines(rds, expected_s)
         bound_lines += rds_cost_lines(rds, ttl_s + RDS_DELETE_S)
@@ -1153,8 +1138,21 @@ def estimate_run(manifest: FleetManifest, cfg: RunConfig) -> RunEstimate:
     }
 
 
+def estimate_instance_prices(estimate: Estimate) -> dict[str, float]:
+    """The instance prices an estimate was made at, from its lines."""
+    prefix = "instance "
+    return {
+        line["item"].removeprefix(prefix): line["usd_per_unit"]
+        for line in estimate["lines"]
+        if line["item"].startswith(prefix)
+    }
+
+
 def _cost_lines(
-    hosts: list[HostSpec], duration_s: float, pg_volume: VolumeSpec | None
+    hosts: list[HostSpec],
+    duration_s: float,
+    pg_volume: VolumeSpec | None,
+    instance_prices: dict[str, float],
 ) -> list[CostLine]:
     """The pg volume, if any, bills at the root volumes' gp3 rates."""
     hours = duration_s / 3600
@@ -1166,7 +1164,7 @@ def _cost_lines(
                 f"instance {instance_type}",
                 count * hours,
                 "host-hour",
-                PRICES[instance_type],
+                instance_prices[instance_type],
             )
         )
     disks = [(h["root_gb"], h["root_iops"], h["root_mbps"]) for h in hosts]
@@ -1453,6 +1451,39 @@ def instance_specs(run: Runner, types: set[str]) -> tuple[Arch, dict[str, int]]:
     return distinct.pop(), memory
 
 
+def instance_price(run: Runner, instance_type: str) -> float:
+    """On-demand Linux USD per hour of `instance_type` in REGION, from the Pricing API."""
+    filters = {
+        "instanceType": instance_type,
+        "regionCode": REGION,
+        "operatingSystem": "Linux",
+        "tenancy": "Shared",
+        "preInstalledSw": "NA",
+        "capacitystatus": "Used",
+    }
+    listed = aws_json(
+        run,
+        "pricing",
+        "get-products",
+        "--service-code",
+        "AmazonEC2",
+        "--filters",
+        *(f"Type=TERM_MATCH,Field={k},Value={v}" for k, v in filters.items()),
+        region=PRICING_REGION,
+    )["PriceList"]
+    if len(listed) != 1:
+        raise Refused(
+            f"{instance_type} in {REGION}: {len(listed)} on-demand Linux prices, expected 1"
+        )
+    (term,) = json.loads(listed[0])["terms"]["OnDemand"].values()
+    (dimension,) = term["priceDimensions"].values()
+    return float(dimension["pricePerUnit"]["USD"])
+
+
+def fetch_prices(run: Runner, types: set[str]) -> dict[str, float]:
+    return {t: instance_price(run, t) for t in sorted(types)}
+
+
 def capable_az(run: Runner, types: set[str]) -> str:
     az_sets = []
     for instance_type in sorted(types):
@@ -1625,6 +1656,7 @@ def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Prefligh
     account = caller_account(run)
     types = {h["instance_type"] for h in hosts}
     arch, memory_mib = instance_specs(run, types)
+    prices = fetch_prices(run, types)
     az = capable_az(run, types)
     ami_id = resolve_ami(run, arch)
     rds_minor = rds_orderable(run, cfg, az) if "rds" in cfg.db_modes else None
@@ -1634,6 +1666,7 @@ def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Prefligh
         "az": az,
         "arch": arch,
         "memory_mib": memory_mib,
+        "instance_prices": prices,
         "ami_id": ami_id,
         "images": images,
     }
@@ -2483,6 +2516,7 @@ def estimate_or_refuse(
     hosts: list[HostSpec],
     fleet_dir: Path,
     now: float,
+    instance_prices: dict[str, float],
     fleet: bool = False,
     rds: RdsSpec | None = None,
 ) -> Estimate:
@@ -2492,11 +2526,15 @@ def estimate_or_refuse(
                 "up needs --ttl-min N minutes: a fleet has no worst case to derive it from"
             )
         ttl_s = int(cfg.ttl_min) * 60.0
-        estimate = cost_estimate(hosts, cfg, rds, ttl_s, ttl_s)
+        estimate = cost_estimate(
+            hosts, cfg, rds, ttl_s, ttl_s, instance_prices=instance_prices
+        )
         expires = datetime.fromtimestamp(now + estimate["ttl_s"], UTC)
         log.info(format_fleet_summary(estimate, cfg.max_usd, expires))
     else:
-        estimate = cost_estimate(hosts, cfg, rds, *shot_seconds(cfg))
+        estimate = cost_estimate(
+            hosts, cfg, rds, *shot_seconds(cfg), instance_prices=instance_prices
+        )
         log.info(format_estimate_summary(estimate, cfg.max_usd))
     for line in format_estimate_lines(estimate):
         log.debug(line)
@@ -2821,6 +2859,7 @@ def plan_new_fleet(
         hosts,
         fleet_dir,
         system.clock.time(),
+        pre["instance_prices"],
         fleet=idle_fleet,
         rds=rds_spec(cfg, pre),
     )
@@ -5258,13 +5297,17 @@ def status_cost(
     return f"${usd:.2f} so far, {bound}"
 
 
+def run_prices(run: Runner, runs: list[TaggedRun]) -> dict[str, float]:
+    return fetch_prices(run, {i["type"] for r in runs for i in r["instances"]})
+
+
 def status_all(system: System, args: argparse.Namespace, now: datetime) -> int:
     caller_account(system.run)
     runs = find_runs(system.run, OUT_ROOT, now, system.user())
     if not runs:
         print(f"no espresso-bench resources in {REGION}")
         return EXIT_OK
-    print("\n".join(format_runs(runs, now)))
+    print("\n".join(format_runs(runs, now, run_prices(system.run, runs))))
     return EXIT_OK
 
 
@@ -5657,25 +5700,29 @@ def role_orphan(tagged: TaggedRun, phase: str | None) -> str | None:
     return "role without resources" if only_roles and phase is None else None
 
 
-def accrued_usd(instances: list[Instance], now: datetime) -> float:
-    """Instance-hours since launch at PRICES."""
+def accrued_usd(
+    instances: list[Instance], now: datetime, prices: dict[str, float]
+) -> float:
+    """Instance-hours since launch at `prices`."""
     return sum(
         (now - datetime.fromisoformat(i["launch"])).total_seconds()
         / 3600
-        * PRICES[i["type"]]
+        * prices[i["type"]]
         for i in instances
     )
 
 
-def format_runs(runs: list[TaggedRun], now: datetime) -> list[str]:
-    lines = [
-        "| run | owner | launched | expires | resources | instance USD | orphan |",
-        "|---|---|---|---|---|---|---|",
-    ]
+def format_runs(
+    runs: list[TaggedRun], now: datetime, prices: dict[str, float] | None = None
+) -> list[str]:
+    """One row per run; the instance USD column only with `prices`."""
+    header = ["run", "owner", "launched", "expires", "resources", "orphan"]
+    if prices is not None:
+        header.insert(5, "instance USD")
+    lines = ["| " + " | ".join(header) + " |", "|---" * len(header) + "|"]
     for tagged in runs:
         instances = tagged["instances"]
         launched = min((i["launch"] for i in instances), default="-")[:16]
-        cost = f"{accrued_usd(instances, now):.2f}" if instances else "-"
         kinds = Counter(arn_parts(arn)[0] for arn in tagged["arns"])
         cells = [
             tagged["name"],
@@ -5683,9 +5730,11 @@ def format_runs(runs: list[TaggedRun], now: datetime) -> list[str]:
             launched,
             (tagged["expires"] or "-")[:16],
             ", ".join(f"{n} {kind}" for kind, n in sorted(kinds.items())),
-            cost,
             tagged["orphan"] or "",
         ]
+        if prices is not None:
+            cost = f"{accrued_usd(instances, now, prices):.2f}" if instances else "-"
+            cells.insert(5, cost)
         lines.append("| " + " | ".join(cells) + " |")
     return lines
 
@@ -6617,9 +6666,14 @@ def rds_delete_time(run: Runner, identifier: str, fallback: datetime) -> datetim
 def manifest_cost(
     manifest: FleetManifest, duration_s: float, rds_duration_s: float | None = None
 ) -> float:
-    """USD of the whole fleet running `duration_s` at PRICES. The rds instance, if any, runs
+    """USD of the whole fleet running `duration_s` at the estimate's prices. The rds instance, if any, runs
     `rds_duration_s` (default `duration_s`)."""
-    lines = _cost_lines(manifest["hosts"], duration_s, manifest.get("pg_volume"))
+    lines = _cost_lines(
+        manifest["hosts"],
+        duration_s,
+        manifest.get("pg_volume"),
+        estimate_instance_prices(manifest["estimate"]),
+    )
     if "rds_spec" in manifest:
         lines += rds_cost_lines(
             manifest["rds_spec"],
