@@ -1,9 +1,9 @@
 version: v2
 breaking:
-  # Clients see the API as protobuf on the wire and protoJSON over REST, so those are the
-  # contract. Moving a message between files of the package changes neither.
+  # Wire and protoJSON compatibility plus the package's rpcs and services, so deleting an endpoint
+  # is a break too. Moving a message between files of the package is not.
   use:
-    - WIRE_JSON
+    - PACKAGE
   ignore:
     # Vendored annotation definitions, read only by protoc at build time.
     - google

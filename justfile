@@ -86,13 +86,14 @@ lint *args:
     just clippy {{args}} -- -D warnings
 
 # Check the v2 protos' formatting and, if they changed since `base`, that they stay wire and JSON compatible
-proto-check base="origin/main":
+proto-check $base="origin/main":
     #!/usr/bin/env bash
     set -euo pipefail
     buf format --diff --exit-code crates/espresso/api/proto
-    merge_base=$(git merge-base "{{base}}" HEAD)
-    if git diff --quiet "$merge_base" -- 'crates/espresso/api/proto/*.proto'; then
-        echo "No proto changes since {{base}}"
+    merge_base=$(git merge-base "$base" HEAD)
+    # `buf.yaml` too, so a PR that only loosens the rules is still checked under them.
+    if git diff --quiet "$merge_base" -- 'crates/espresso/api/proto/*.proto' crates/espresso/api/proto/buf.yaml; then
+        echo "No proto changes since $base"
         exit 0
     fi
     # buf's own `.git#ref=` input cannot read a git worktree, so compare against an export.
