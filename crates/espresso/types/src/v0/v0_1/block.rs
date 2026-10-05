@@ -197,7 +197,7 @@ fn deserialize_shared_bytes<'de, D: Deserializer<'de>>(d: D) -> Result<Arc<[u8]>
     if d.is_human_readable() {
         base64_bytes::deserialize(d).map(Arc::from)
     } else {
-        d.deserialize_byte_buf(SharedBytesVisitor)
+        d.deserialize_bytes(SharedBytesVisitor)
     }
 }
 
