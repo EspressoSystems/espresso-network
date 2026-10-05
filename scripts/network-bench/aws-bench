@@ -135,6 +135,10 @@ PUBLISH_REQUIRED = ("summary.md",)
 PUBLISH_MANIFEST_KEYS = ("fleet", "created_at", "git_rev", "query_db", "images")
 # Absent from manifests written before the run command was recorded.
 PUBLISH_MANIFEST_OPTIONAL = ("argv", "fleet_argv")
+# Left out of a recorded command: a remote URL can carry credentials, the others only
+# describe how the original was confirmed or published.
+ARGV_DROP_VALUE = ("--results-remote",)
+ARGV_DROP_FLAG = ("--no-publish", "--yes")
 PUBLISH_OPTIONAL = (
     "result.json",
     "cost.json",
@@ -1381,11 +1385,12 @@ def build_run_manifest(
         "index": index,
         "query_db": cfg.query_db,
         "config_hash": config_hash,
-        "argv": argv,
+        "argv": sanitize_argv(argv),
     }
     if run_estimate is not None:
         manifest["run_estimate"] = run_estimate
-        manifest["fleet_argv"] = fleet["argv"]
+    if cfg.fleet is not None:
+        manifest["fleet_argv"] = sanitize_argv(fleet["argv"])
     return manifest
 
 
@@ -5826,29 +5831,66 @@ def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.Bench
     result["validity"] = check_validity_aws(result, manifest, evidence)
     nb.write_json(run_dir / "result.json", result)
     comparison = nb.compare(result, baseline) if baseline else None
-    summary = nb.render(result, comparison)
-    section = reproduce_lines(manifest)
-    (run_dir / "summary.md").write_text(
-        "\n".join([summary, "", *section, ""]) if section else summary
-    )
+    summary = nb.render(result, comparison) + reproduce_section(manifest)
+    (run_dir / "summary.md").write_text(summary)
     return result
 
 
-def reproduce_lines(manifest: Manifest) -> list[str]:
-    """The command(s) that made this run; empty for a manifest from before they were recorded.
+def sanitize_argv(argv: list[str]) -> list[str]:
+    """Drops the flags of `ARGV_DROP_*` and the value of `--fleet` (a local dir), in both the
+    `--flag value` and `--flag=value` forms."""
+    out: list[str] = []
+    skip_value = False
+    for i, tok in enumerate(argv):
+        if skip_value:
+            skip_value = False
+            continue
+        flag, has_value, _ = tok.partition("=")
+        if flag in ARGV_DROP_FLAG:
+            continue
+        if flag in ARGV_DROP_VALUE:
+            skip_value = not has_value
+            continue
+        if flag == "--fleet":
+            out.append(flag)
+            skip_value = not has_value and i + 1 < len(argv) and argv[i + 1][0] != "-"
+            continue
+        out.append(tok)
+    return out
+
+
+def pin_tag(argv: list[str], tag: str) -> list[str]:
+    """`argv` with `--tag` set to `tag`, replacing the given one."""
+    out: list[str] = []
+    skip_value = False
+    for tok in argv:
+        if skip_value:
+            skip_value = False
+        elif tok == "--tag":
+            skip_value = True
+        elif not tok.startswith("--tag="):
+            out.append(tok)
+    return [*out, "--tag", tag]
+
+
+def reproduce_section(manifest: Manifest) -> str:
+    """The command(s) that made this run, sanitized and pinned to the run's image tag, with
+    the digest the tag resolved to; empty for a manifest from before they were recorded.
     Then `argv` is missing or, for a fleet run, still the `up` command."""
     if "argv" not in manifest or manifest["argv"][0] != "run":
-        return []
-    commands = [manifest["argv"]]
+        return ""
+    tag = manifest["config"]["tag"]
+    run_argv = sanitize_argv(manifest["argv"])
     if "fleet_argv" in manifest:
-        commands.insert(0, manifest["fleet_argv"])
-    return [
-        "### Reproduce",
-        "",
-        "```",
+        commands = [pin_tag(sanitize_argv(manifest["fleet_argv"]), tag), run_argv]
+    else:
+        commands = [pin_tag(run_argv, tag)]
+    node = manifest["images"]["espresso-node"]
+    lines = [
         *(f"just bench aws {shlex.join(argv)}" for argv in commands),
-        "```",
+        f"# espresso-node {node['revision'] or '-'} {node['digest']}",
     ]
+    return "\n".join(["", "", "### Reproduce", "", "```", *lines, "```", ""])
 
 
 def load_config(saved: dict[str, Any]) -> nb.BenchConfig:
@@ -6914,13 +6956,17 @@ def publish_files(run_dir: Path) -> list[Path]:
 
 
 def published_manifest(run_dir: Path) -> dict[str, Any]:
-    """Explicit field allowlist: `node_env` (verbatim, may hold anything), `hosts_info`, `rds_*`
-    and `ssh_public_key` stay local. `argv` is published: flags only, and `--node-env` is
-    documented as not for secrets."""
+    """Explicit field allowlist: `hosts_info`, `rds_*` and `ssh_public_key` stay local.
+    `node_env` and `argv` are public: `--node-env` is documented as not for secrets, and
+    `argv` is sanitized."""
     manifest = nb.read_json(run_dir / MANIFEST_JSON)
     reduced = {key: manifest[key] for key in PUBLISH_MANIFEST_KEYS}
-    reduced |= {k: manifest[k] for k in PUBLISH_MANIFEST_OPTIONAL if k in manifest}
-    reduced["config"] = {k: v for k, v in manifest["config"].items() if k != "node_env"}
+    reduced |= {
+        k: sanitize_argv(manifest[k])
+        for k in PUBLISH_MANIFEST_OPTIONAL
+        if k in manifest
+    }
+    reduced["config"] = manifest["config"]
     if "hosts" in manifest:
         reduced["hosts"] = [
             {key: host[key] for key in ("name", "role", "instance_type")}

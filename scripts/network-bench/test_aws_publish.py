@@ -21,16 +21,17 @@ from fakes import (
 FLEET = "lulu-20261002-131457"
 REJECTED = completed(returncode=1, stderr="! [rejected] HEAD -> main (fetch first)")
 SECRET = "hunter2"
+REMOTE = "https://u:s3cr3t@example.com/r.git"
 MANIFEST = {
     **index_manifest(),
-    "argv": ["run", "--tag", "t"],
-    "fleet_argv": ["up", "--tag", "t"],
+    "argv": ["run", "--tag", "t", "--yes", "--fleet", "d", "--results-remote", REMOTE],
+    "fleet_argv": ["up", "--tag", "t", f"--results-remote={REMOTE}"],
     "ssh_public_key": "ssh-ed25519 AAAA",
     "config": {
         "tag": "t",
         "nodes": 3,
         "node_type": "c8g.4xlarge",
-        "node_env": [f"TOKEN={SECRET}"],
+        "node_env": ["TOKEN=public"],
     },
     "hosts": [
         {"name": "ctl", "role": "ctl", "instance_type": "c8g.2xlarge", "root_gb": 40}
@@ -170,9 +171,14 @@ def test_published_manifest_is_an_allowlist(tmp_path: Path):
         "git_rev": MANIFEST["git_rev"],
         "query_db": "colocated",
         "images": MANIFEST["images"],
-        "argv": ["run", "--tag", "t"],
+        "argv": ["run", "--tag", "t", "--fleet"],
         "fleet_argv": ["up", "--tag", "t"],
-        "config": {"tag": "t", "nodes": 3, "node_type": "c8g.4xlarge"},
+        "config": {
+            "tag": "t",
+            "nodes": 3,
+            "node_type": "c8g.4xlarge",
+            "node_env": ["TOKEN=public"],
+        },
         "hosts": [{"name": "ctl", "role": "ctl", "instance_type": "c8g.2xlarge"}],
     }
 
@@ -374,6 +380,7 @@ def test_publish_to_an_empty_remote_and_again(tmp_path: Path):
     assert git_out("-C", bare, "rev-list", "--count", "main").strip() == "1"
     published = git_out("-C", bare, "grep", "-e", SECRET, "main", check=False)
     assert published == ""
+    assert git_out("-C", bare, "grep", "-e", "s3cr3t", "main", check=False) == ""
 
 
 @pytest.mark.usefixtures("git_identity")

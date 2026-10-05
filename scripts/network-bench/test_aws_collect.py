@@ -911,27 +911,87 @@ def test_report_has_hosts_deployment_and_summary_blocks(collected_run: Path) -> 
     assert "| node1 |" in summary
 
 
-UP = ["up", "--tag", "t", "--nodes", "3", "--yes"]
+UP = ["up", "--tag", "old", "--nodes", "3", "--yes"]
 RUN_FLEET = ["run", "--fleet", "fleet1", "--query-db", "rds", "--yes"]
+NODE = {"espresso-node": {"revision": "abc1234", "digest": "sha256:d1"}}
+CRED = "s3cr3t"
+REMOTE = f"https://u:{CRED}@example.com/r.git"
 
 
-def test_reproduce_lines_single_shot_shows_the_run_command() -> None:
-    argv = ["run", "--tag", "t release", "--yes"]
-    assert awsb.reproduce_lines({"argv": argv}) == [
-        "### Reproduce",
-        "",
-        "```",
-        "just bench aws run --tag 't release' --yes",
-        "```",
+def manifest_of(argv: list[str], **extra: Any) -> dict:
+    return {"argv": argv, "config": {"tag": "t"}, "images": NODE, **extra}
+
+
+def section_commands(section: str) -> list[str]:
+    return [line for line in section.splitlines() if line.startswith("just")]
+
+
+def test_sanitize_argv_drops_remote_confirmation_and_the_fleet_value() -> None:
+    argv = ["run", "--fleet", "d", "--yes", "--results-remote", REMOTE, "--no-publish"]
+    assert awsb.sanitize_argv(argv) == ["run", "--fleet"]
+    argv = ["run", f"--results-remote={REMOTE}", "--fleet=d", "--tag", "t", "--fleet"]
+    assert awsb.sanitize_argv(argv) == ["run", "--fleet", "--tag", "t", "--fleet"]
+    assert awsb.sanitize_argv(["run", "--fleet", "--tag", "t"]) == [
+        "run",
+        "--fleet",
+        "--tag",
+        "t",
     ]
 
 
-def test_reproduce_lines_fleet_run_shows_up_then_run() -> None:
-    lines = awsb.reproduce_lines({"argv": RUN_FLEET, "fleet_argv": UP})
-    assert lines[3:5] == [
-        "just bench aws up --tag t --nodes 3 --yes",
-        "just bench aws run --fleet fleet1 --query-db rds --yes",
+def test_pin_tag_replaces_or_appends() -> None:
+    assert awsb.pin_tag(["run", "--tag", "a", "--nodes", "2"], "b") == [
+        "run",
+        "--nodes",
+        "2",
+        "--tag",
+        "b",
     ]
+    assert awsb.pin_tag(["run", "--tag=a"], "b") == ["run", "--tag", "b"]
+    assert awsb.pin_tag(["run"], "b") == ["run", "--tag", "b"]
+
+
+def test_reproduce_section_single_shot_pins_the_tag_and_shows_the_digest() -> None:
+    argv = [
+        "run",
+        "--tag",
+        "moved",
+        "--note",
+        "a b",
+        "--results-remote",
+        REMOTE,
+        "--yes",
+    ]
+    section = awsb.reproduce_section(manifest_of(argv))
+    assert section == (
+        "\n\n### Reproduce\n\n```\n"
+        "just bench aws run --note 'a b' --tag t\n"
+        "# espresso-node abc1234 sha256:d1\n"
+        "```\n"
+    )
+
+
+def test_reproduce_section_fleet_run_pins_the_up_command() -> None:
+    section = awsb.reproduce_section(
+        manifest_of(["run", "--fleet", "--query-db", "rds"], fleet_argv=UP)
+    )
+    assert section_commands(section) == [
+        "just bench aws up --nodes 3 --tag t",
+        "just bench aws run --fleet --query-db rds",
+    ]
+
+
+def test_reproduce_section_sanitizes_an_unsanitized_manifest() -> None:
+    section = awsb.reproduce_section(manifest_of(RUN_FLEET, fleet_argv=UP))
+    assert section_commands(section) == [
+        "just bench aws up --nodes 3 --tag t",
+        "just bench aws run --fleet --query-db rds",
+    ]
+
+
+def test_reproduce_section_old_single_shot_manifest_gets_one() -> None:
+    section = awsb.reproduce_section(manifest_of(["run", "--tag", "t", "--yes"]))
+    assert section_commands(section) == ["just bench aws run --tag t"]
 
 
 @pytest.mark.parametrize(
@@ -939,18 +999,21 @@ def test_reproduce_lines_fleet_run_shows_up_then_run() -> None:
     [{}, {"argv": UP}],
     ids=["no argv", "fleet run recorded before the run argv: argv is the up command"],
 )
-def test_reproduce_lines_omitted_for_old_manifests(manifest: dict) -> None:
-    assert awsb.reproduce_lines(manifest) == []
+def test_reproduce_section_omitted_for_old_manifests(manifest: dict) -> None:
+    assert awsb.reproduce_section(manifest) == ""
 
 
 def test_summary_ends_with_the_reproduce_section(collected_run: Path) -> None:
     manifest = netbench.read_json(collected_run / "manifest.json")
-    netbench.write_json(
-        collected_run / "manifest.json", {**manifest, "argv": ["run", "--tag", "x"]}
-    )
+    argv = ["run", "--tag", "x", "--results-remote", REMOTE, "--yes"]
+    netbench.write_json(collected_run / "manifest.json", {**manifest, "argv": argv})
     awsb.write_report(collected_run)
     summary = (collected_run / "summary.md").read_text()
-    assert summary.endswith("### Reproduce\n\n```\njust bench aws run --tag x\n```\n")
+    tag = manifest["config"]["tag"]
+    assert section_commands(summary) == [f"just bench aws run --tag {tag}"]
+    assert summary.endswith("```\n")
+    assert CRED not in summary
+    assert "--yes" not in summary
 
 
 def test_summary_of_an_old_manifest_has_no_reproduce_section(
