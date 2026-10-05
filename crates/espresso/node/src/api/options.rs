@@ -24,7 +24,7 @@ use super::{
     },
     fs, sql,
     sql::ArchiveStateGc,
-    state::NodeApiStateImpl,
+    state::ApiState,
     update::{ApiEventConsumer, ApiSink},
 };
 use crate::{
@@ -199,7 +199,7 @@ impl Options {
             };
             let max_connections = self.http.max_connections;
             tasks.spawn("API server", async move {
-                let state = NodeApiStateImpl::new(axum_ds)
+                let state = ApiState::new(axum_ds)
                     .with_env_vars(env_vars)
                     .with_public_node_config(node_cfg);
                 if let Err(e) =
@@ -234,7 +234,7 @@ impl Options {
             let axum_ds = Arc::new(state.clone());
             let max_connections = self.http.max_connections;
             tasks.spawn("API server", async move {
-                let state = NodeApiStateImpl::new(axum_ds)
+                let state = ApiState::new(axum_ds)
                     .with_env_vars(env_vars)
                     .with_public_node_config(node_cfg);
                 if let Err(e) =
@@ -298,7 +298,7 @@ impl Options {
         };
         let max_connections = self.http.max_connections;
         tasks.spawn("API server", async move {
-            let state = NodeApiStateImpl::new(ds_for_axum)
+            let state = ApiState::new(ds_for_axum)
                 .with_env_vars(env_vars)
                 .with_public_node_config(node_cfg);
             if let Err(e) = espresso_api::serve_axum_fs(port, state, modules, max_connections).await
@@ -386,7 +386,7 @@ impl Options {
         let max_connections = self.http.max_connections;
         // Both transports serve the same state; cloning shares the env vars and node config
         // rather than copying the genesis they embed.
-        let mut api_state = NodeApiStateImpl::new(ds.clone())
+        let mut api_state = ApiState::new(ds.clone())
             .with_env_vars(env_vars)
             .with_public_node_config(node_cfg);
         if let Some(ranges_concurrency) = ranges_concurrency {
