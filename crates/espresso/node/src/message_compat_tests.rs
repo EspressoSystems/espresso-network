@@ -73,7 +73,7 @@ use hotshot_types::{
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
     },
     utils::EpochTransitionIndicator,
-    vid::avidm_gf2::AvidmGf2Scheme,
+    vid::avidm_gf2::{AvidmGf2Scheme, avidm_gf2_binding},
 };
 use pretty_assertions::assert_eq;
 use serde::{Serialize, de::DeserializeOwned};
@@ -659,6 +659,7 @@ async fn reference_new_protocol_messages(
         Some(epoch),
         Some(epoch),
         &metadata,
+        avidm_gf2_binding(version),
     )
     .await
     .unwrap()

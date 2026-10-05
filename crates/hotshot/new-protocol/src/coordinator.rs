@@ -923,6 +923,7 @@ where
                     proposal.data.block_header.metadata().clone(),
                     proposal.data.epoch,
                     expected_param,
+                    self.consensus.upgrade_lock().avidm_gf2_binding(view),
                 );
                 self.vid_reconstructor
                     .handle_vid_share(self.public_key.clone(), vid_share);

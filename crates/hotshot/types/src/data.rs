@@ -57,7 +57,7 @@ use crate::{
     vid::{
         advz::{ADVZScheme, advz_scheme},
         avidm::{AvidMScheme, init_avidm_param},
-        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+        avidm_gf2::{AvidmGf2Scheme, avidm_gf2_binding, init_avidm_gf2_param},
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -418,6 +418,7 @@ pub fn vid_commitment(
             &param,
             encoded_transactions,
             ns_table::parse_ns_table(encoded_tx_len, metadata),
+            avidm_gf2_binding(version),
         )
         .map(|(comm, _)| VidCommitment::V2(comm))
         .unwrap()
@@ -458,7 +459,10 @@ pub enum VidCommonRef<'a> {
 }
 
 impl<'a> VidCommonRef<'a> {
-    pub fn is_consistent(&self, comm: &VidCommitment) -> bool {
+    /// Check that `comm` commits to this common. `version` is the protocol
+    /// version of the block `comm` belongs to, which fixes what a V2
+    /// commitment binds.
+    pub fn is_consistent(&self, comm: &VidCommitment, version: Version) -> bool {
         match (self, comm) {
             (Self::V0(common), VidCommitment::V0(comm)) => {
                 ADVZScheme::is_consistent(comm, common).is_ok()
@@ -468,7 +472,7 @@ impl<'a> VidCommonRef<'a> {
             // the commitment. The meaningful checks are in VID share verification.
             (Self::V1(_), VidCommitment::V1(_)) => true,
             (Self::V2(common), VidCommitment::V2(comm)) => {
-                AvidmGf2Scheme::is_consistent(comm, common)
+                AvidmGf2Scheme::is_consistent(comm, common, avidm_gf2_binding(version))
             },
             _ => false,
         }
@@ -484,8 +488,8 @@ impl VidCommon {
         }
     }
 
-    pub fn is_consistent(&self, comm: &VidCommitment) -> bool {
-        self.as_ref().is_consistent(comm)
+    pub fn is_consistent(&self, comm: &VidCommitment, version: Version) -> bool {
+        self.as_ref().is_consistent(comm, version)
     }
 }
 
@@ -617,6 +621,7 @@ impl<TYPES: NodeType> VidDisperse<TYPES> {
                 target_epoch,
                 data_epoch,
                 metadata,
+                upgrade_lock.avidm_gf2_binding(view),
             )
             .await
             .map(|(disperse, duration)| VidDisperseAndDuration {
@@ -835,12 +840,14 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         }
     }
 
-    /// Check if vid common is consistent with the commitment.
-    pub fn is_consistent(&self) -> bool {
+    /// Check if vid common is consistent with the commitment. `version` is
+    /// the protocol version of the share's view, which fixes what a V2
+    /// commitment binds.
+    pub fn is_consistent(&self, version: Version) -> bool {
         match self {
             Self::V0(share) => share.is_consistent(),
             Self::V1(share) => share.is_consistent(),
-            Self::V2(share) => share.is_consistent(),
+            Self::V2(share) => share.is_consistent(avidm_gf2_binding(version)),
         }
     }
 
@@ -854,12 +861,13 @@ impl<TYPES: NodeType> VidDisperseShare<TYPES> {
         }
     }
 
-    /// Internally verify the share given necessary information
-    pub fn verify(&self, total_nodes: usize) -> bool {
+    /// Internally verify the share given necessary information. `version`
+    /// is the protocol version of the share's view.
+    pub fn verify(&self, total_nodes: usize, version: Version) -> bool {
         match self {
             Self::V0(share) => share.verify(total_nodes),
             Self::V1(share) => share.verify(total_nodes),
-            Self::V2(share) => share.verify(total_nodes),
+            Self::V2(share) => share.verify(total_nodes, avidm_gf2_binding(version)),
         }
     }
 

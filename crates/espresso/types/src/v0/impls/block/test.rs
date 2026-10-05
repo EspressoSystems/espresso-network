@@ -11,6 +11,7 @@ use hotshot_types::{
 };
 use jf_advz::VidScheme;
 use rand::RngCore;
+use versions::VERSION_0_1;
 
 use crate::{
     BlockSize, NamespaceId, NodeState, NsProof, Payload, Transaction, TxProof, ValidatedState,
@@ -68,11 +69,12 @@ async fn basic_correctness() {
             assert_eq!(tx, test_tx);
 
             let tx_proof2 = {
-                let (tx2, tx_proof) = TxProof::new(&tx_index, &block, &vid_common).unwrap();
+                let (tx2, tx_proof) =
+                    TxProof::new(&tx_index, &block, &vid_common, VERSION_0_1).unwrap();
                 assert_eq!(tx, tx2);
                 tx_proof
             };
-            assert!(tx_proof2.verify(block.ns_table(), &tx, &vid_commit, &vid_common));
+            assert!(tx_proof2.verify(block.ns_table(), &tx, &vid_commit, &vid_common, VERSION_0_1));
         }
         assert!(
             all_txs.is_empty(),
@@ -89,11 +91,11 @@ async fn basic_correctness() {
                 .remove(&ns_id)
                 .expect("block ns_id missing from test");
 
-            let ns_proof = NsProof::new(&block, &ns_index, &vid_common)
+            let ns_proof = NsProof::new(&block, &ns_index, &vid_common, VERSION_0_1)
                 .expect("namespace_with_proof should succeed");
 
             let (ns_proof_txs, ns_proof_ns_id) = ns_proof
-                .verify(block.ns_table(), &vid_commit, &vid_common)
+                .verify(block.ns_table(), &vid_commit, &vid_common, VERSION_0_1)
                 .unwrap_or_else(|| panic!("namespace {ns_id} proof verification failure"));
 
             assert_eq!(ns_proof_ns_id, ns_id);

@@ -3,14 +3,20 @@ use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
     data::{VidCommitment2, VidDisperseShare2},
     traits::signature_key::SignatureKey,
-    vid::avidm_gf2::AvidmGf2Scheme,
+    vid::avidm_gf2::{AvidmGf2Scheme, CommitmentBinding},
 };
 
 use super::common::utils::{TestData, TestView};
 use crate::{
+    helpers::test_upgrade_lock,
     tests::common::utils::vid_fragments,
     vid::{VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind, VidReconstructor},
 };
+
+/// What the view's payload commitment binds under the test harness's version.
+fn binding(view: &TestView) -> CommitmentBinding {
+    test_upgrade_lock::<TestTypes>().avidm_gf2_binding(view.view_number)
+}
 
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
 const THRESHOLD: u64 = 7;
@@ -60,6 +66,7 @@ fn garbage_share(
         &weights,
         &other_payload,
         std::iter::once(0..other_payload.len()),
+        binding(view),
     )
     .unwrap();
     VidDisperseShare2::<TestTypes> {
@@ -94,6 +101,7 @@ fn non_codeword_shares(view: &TestView) -> (VidCommitment2, Vec<VidDisperseShare
         &weights,
         &payload,
         std::iter::once(0..payload.len()),
+        binding(view),
     )
     .expect("non-codeword dispersal");
     let shares = shares
@@ -130,6 +138,7 @@ fn handle_proposal(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestV
         // The committee-fixed param the coordinator derives; equals the honest
         // shares' `common.param`.
         Some(view.vid_shares[0].common.param.clone()),
+        binding(view),
     );
 }
 
@@ -295,6 +304,7 @@ async fn test_inconsistent_common_shares_ignored() {
         param,
         &other_payload,
         std::iter::once(0..other_payload.len()),
+        binding(view),
     )
     .unwrap();
 
@@ -394,6 +404,7 @@ async fn test_non_codeword_payload_is_unrecoverable() {
         view.proposal.data.block_header.metadata,
         view.proposal.data.epoch,
         Some(shares[0].common.param.clone()),
+        binding(view),
     );
 
     // Feed just enough verifying shares to cover the recovery threshold.
@@ -709,7 +720,7 @@ fn multi_namespace_share(
     let payload: Vec<u8> = (0..ns_count * ns_len).map(|i| i as u8).collect();
     let ns_table = (0..ns_count).map(|i| i * ns_len..(i + 1) * ns_len);
     let (payload_commitment, common, shares) =
-        AvidmGf2Scheme::ns_disperse(&param, &weights, &payload, ns_table).unwrap();
+        AvidmGf2Scheme::ns_disperse(&param, &weights, &payload, ns_table, binding(view)).unwrap();
     VidDisperseShare2 {
         view_number: template.view_number,
         epoch: template.epoch,

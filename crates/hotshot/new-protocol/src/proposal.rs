@@ -436,7 +436,10 @@ impl<T: NodeType> Validator<T> {
         ) {
             return Err(ValidationError::InvalidVidShareProposalSignature);
         }
-        if vid_proposal.data.verify(total_weight) {
+        if vid_proposal
+            .data
+            .verify(total_weight, self.upgrade_lock.avidm_gf2_binding(view))
+        {
             Ok(())
         } else {
             Err(ValidationError::VidShareNotVerified)

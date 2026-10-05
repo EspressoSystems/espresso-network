@@ -770,7 +770,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumVoteTaskState<TYPES, I
                 let membership = self.membership.membership_for_epoch(target_epoch)?;
                 let total_weight = vid_total_weight(membership.stake_table(), target_epoch);
 
-                if !share.data.verify(total_weight) {
+                if !share
+                    .data
+                    .verify(total_weight, self.upgrade_lock.version_infallible(view))
+                {
                     bail!("Failed to verify VID share");
                 }
 

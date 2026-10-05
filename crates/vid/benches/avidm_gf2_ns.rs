@@ -12,7 +12,7 @@ use std::ops::Range;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rand::RngCore;
-use vid::avidm_gf2::namespaced::NsAvidmGf2Scheme;
+use vid::avidm_gf2::namespaced::{CommitmentBinding, NsAvidmGf2Scheme};
 
 /// Split `total_len` into `n` contiguous, near-equal ranges covering the whole payload.
 fn equal_ns_table(total_len: usize, n: usize) -> Vec<Range<usize>> {
@@ -66,6 +66,7 @@ fn avidm_gf2_ns_benchmark(c: &mut Criterion) {
                         &distribution,
                         &payload,
                         ns_table.iter().cloned(),
+                        CommitmentBinding::FullCommon,
                     )
                     .unwrap()
                 })
@@ -77,6 +78,7 @@ fn avidm_gf2_ns_benchmark(c: &mut Criterion) {
             &distribution,
             &payload,
             ns_table.iter().cloned(),
+            CommitmentBinding::FullCommon,
         )
         .unwrap();
 
@@ -86,7 +88,17 @@ fn avidm_gf2_ns_benchmark(c: &mut Criterion) {
                 num_ns,
             ),
             &num_ns,
-            |b, _| b.iter(|| NsAvidmGf2Scheme::verify_share(&commit, &common, &shares[0]).unwrap()),
+            |b, _| {
+                b.iter(|| {
+                    NsAvidmGf2Scheme::verify_share(
+                        &commit,
+                        &common,
+                        &shares[0],
+                        CommitmentBinding::FullCommon,
+                    )
+                    .unwrap()
+                })
+            },
         );
 
         group.bench_with_input(

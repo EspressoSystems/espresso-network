@@ -28,7 +28,7 @@ use jf_merkle_tree_compat::{
     universal_merkle_tree::UniversalMerkleTree,
 };
 use serde::{Deserialize, Serialize};
-use vbs::version::StaticVersion;
+use vbs::version::{StaticVersion, Version};
 use versions::{Upgrade, version};
 
 use crate::{
@@ -114,6 +114,7 @@ impl VerifiableInclusion<MockTypes> for MockInclusionProof {
         tx: &MockTransaction,
         _payload_commitment: &VidCommitment,
         _common: &VidCommon,
+        _version: Version,
     ) -> bool {
         self.0.transactions.contains(tx)
     }
@@ -150,6 +151,7 @@ impl QueryablePayload<MockTypes> for MockPayload {
         _meta: &Self::Metadata,
         _vid: &VidCommonQueryData<MockTypes>,
         _index: &TransactionIndex<MockTypes>,
+        _version: Version,
     ) -> Option<Self::InclusionProof> {
         Some(MockInclusionProof(self.clone()))
     }

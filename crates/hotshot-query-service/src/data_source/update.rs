@@ -32,7 +32,7 @@ use hotshot_types::{
     vid::{
         advz::advz_scheme,
         avidm::{AvidMScheme, init_avidm_param},
-        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+        avidm_gf2::{AvidmGf2Scheme, avidm_gf2_binding, init_avidm_gf2_param},
     },
     vote::HasViewNumber,
 };
@@ -394,8 +394,14 @@ fn genesis_vid<Types: NodeType>(
             let weights = vec![1; GENESIS_VID_NUM_STORAGE_NODES];
             let ns_table = parse_ns_table(bytes.len(), &leaf.block_header().metadata().encode());
 
-            let (calculated_commit, common, mut shares) =
-                AvidmGf2Scheme::ns_disperse(&avidm_gf2_param, &weights, &bytes, ns_table).unwrap();
+            let (calculated_commit, common, mut shares) = AvidmGf2Scheme::ns_disperse(
+                &avidm_gf2_param,
+                &weights,
+                &bytes,
+                ns_table,
+                avidm_gf2_binding(leaf.block_header().version()),
+            )
+            .unwrap();
 
             ensure!(
                 calculated_commit == commit,

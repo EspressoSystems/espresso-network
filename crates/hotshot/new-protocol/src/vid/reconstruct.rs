@@ -8,7 +8,9 @@ use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
     traits::{block_contents::EncodeBytes, node_implementation::NodeType},
-    vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
+    vid::avidm_gf2::{
+        AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share, CommitmentBinding,
+    },
 };
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::{error, warn};
@@ -75,6 +77,8 @@ pub struct VidReconstructor<T: NodeType> {
 pub(crate) struct VidShareAccumulator<T: NodeType> {
     /// The payload commitment claimed by the view's validated proposal.
     payload_commitment: VidCommitment2,
+    /// What `payload_commitment` binds, fixed by the proposal's protocol version.
+    binding: CommitmentBinding,
     metadata: Metadata<T>,
     epoch: EpochNumber,
     /// The VID erasure parameters the committee fixes for this view, used to
@@ -117,6 +121,7 @@ impl<T: NodeType> VidReconstructor<T> {
         metadata: Metadata<T>,
         epoch: EpochNumber,
         expected_param: Option<AvidmGf2Param>,
+        binding: CommitmentBinding,
     ) {
         if self.reconstructed.contains(&view) {
             return;
@@ -135,6 +140,7 @@ impl<T: NodeType> VidReconstructor<T> {
                 metadata,
                 epoch,
                 expected_param,
+                binding,
             )),
         };
         for (sender, share) in self.pending.remove(&view).into_iter().flatten() {
@@ -243,8 +249,17 @@ impl<T: NodeType> VidReconstructor<T> {
             .map(|(key, share)| (key.clone(), share.clone()))
             .collect();
         let epoch = accumulator.epoch;
+        let binding = accumulator.binding;
         let task = self.tasks.spawn_blocking(move || {
-            reconstruct::<T>(view, epoch, payload_commitment, common, shares, metadata)
+            reconstruct::<T>(
+                view,
+                epoch,
+                payload_commitment,
+                common,
+                shares,
+                metadata,
+                binding,
+            )
         });
         self.calculations.insert(view, task);
     }
@@ -282,9 +297,11 @@ impl<T: NodeType> VidShareAccumulator<T> {
         metadata: Metadata<T>,
         epoch: EpochNumber,
         expected_param: Option<AvidmGf2Param>,
+        binding: CommitmentBinding,
     ) -> Self {
         Self {
             payload_commitment,
+            binding,
             metadata,
             epoch,
             expected_param,
@@ -307,10 +324,11 @@ impl<T: NodeType> VidShareAccumulator<T> {
             warn!(%view, ?sender, "VID share commitment differs from the proposal's");
             return;
         }
-        // The commitment binds a share's `ns_commits` but not its `param`, so a
-        // Byzantine voter can pair real `ns_commits` with a forged `param` (e.g.
-        // an inflated `recovery_threshold`). Pinning that common as the
-        // verification oracle would reject every honest share, so reject it now.
+        // Under `CommitmentBinding::NsCommitsOnly` the commitment binds a share's
+        // `ns_commits` but not its `param`, so a Byzantine voter can pair real
+        // `ns_commits` with a forged `param` (e.g. an inflated
+        // `recovery_threshold`). Pinning that common as the verification oracle
+        // would reject every honest share, so reject it now.
         if let Some(expected) = &self.expected_param
             && share.common.param != *expected
         {
@@ -324,7 +342,11 @@ impl<T: NodeType> VidShareAccumulator<T> {
                 warn!(%view, ?sender, "VID share common differs from the accumulator's");
                 return;
             }
-        } else if AvidmGf2Scheme::is_consistent(&self.payload_commitment, &share.common) {
+        } else if AvidmGf2Scheme::is_consistent(
+            &self.payload_commitment,
+            &share.common,
+            self.binding,
+        ) {
             self.common = Some(share.common.clone());
         } else {
             warn!(%view, ?sender, "VID share common is inconsistent with its commitment");
@@ -438,11 +460,17 @@ fn reconstruct<T: NodeType>(
     common: AvidmGf2Common,
     shares: Vec<(T::SignatureKey, AvidmGf2Share)>,
     metadata: Metadata<T>,
+    binding: CommitmentBinding,
 ) -> ReconstructResult<T> {
     let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
-    if let Some(bytes) =
-        decode_and_recommit::<T>(view, &common, &shares, &payload_commitment, &metadata)
-    {
+    if let Some(bytes) = decode_and_recommit::<T>(
+        view,
+        &common,
+        &shares,
+        &payload_commitment,
+        &metadata,
+        binding,
+    ) {
         let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
         let tx_commitments = payload.transaction_commitments(&metadata);
         let output = ObtainedPayload {
@@ -497,6 +525,7 @@ fn decode_and_recommit<T: NodeType>(
     shares: &[AvidmGf2Share],
     payload_commitment: &VidCommitment2,
     metadata: &Metadata<T>,
+    binding: CommitmentBinding,
 ) -> Option<Vec<u8>> {
     let bytes = match AvidmGf2Scheme::recover(common, shares) {
         Ok(bytes) => bytes,
@@ -505,20 +534,29 @@ fn decode_and_recommit<T: NodeType>(
             return None;
         },
     };
-    matches_commitment::<T>(view, &common.param, metadata, &bytes, payload_commitment)
-        .then_some(bytes)
+    matches_commitment::<T>(
+        view,
+        &common.param,
+        metadata,
+        &bytes,
+        payload_commitment,
+        binding,
+    )
+    .then_some(bytes)
 }
 
-/// Whether `bytes` are the payload `payload_commitment` commits to.
+/// Whether `bytes` are the payload `payload_commitment` commits to, under
+/// the `binding` of the block's protocol version.
 pub(crate) fn matches_commitment<T: NodeType>(
     view: ViewNumber,
     param: &AvidmGf2Param,
     metadata: &Metadata<T>,
     payload: &[u8],
     payload_commitment: &VidCommitment2,
+    binding: CommitmentBinding,
 ) -> bool {
     let ns_table = parse_ns_table(payload.len(), &metadata.encode());
-    match AvidmGf2Scheme::commit(param, payload, ns_table) {
+    match AvidmGf2Scheme::commit(param, payload, ns_table, binding) {
         Ok((recomputed, _)) if recomputed == *payload_commitment => true,
         Ok((recomputed, _)) => {
             warn!(

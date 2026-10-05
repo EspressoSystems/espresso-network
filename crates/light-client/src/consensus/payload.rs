@@ -6,7 +6,7 @@ use hotshot_types::{
     vid::{
         advz::{ADVZScheme, advz_scheme},
         avidm::{AvidMScheme, init_avidm_param},
-        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+        avidm_gf2::{AvidmGf2Scheme, avidm_gf2_binding, init_avidm_gf2_param},
     },
 };
 use jf_advz::VidScheme;
@@ -73,6 +73,7 @@ impl PayloadProof {
                     &param,
                     &bytes,
                     parse_ns_table(bytes.len(), &header.ns_table().encode()),
+                    avidm_gf2_binding(header.version()),
                 )
                 .map(|(comm, _)| VidCommitment::V2(comm))
                 .map_err(|err| anyhow!("computing AvidM commitment: {err:#}"))?

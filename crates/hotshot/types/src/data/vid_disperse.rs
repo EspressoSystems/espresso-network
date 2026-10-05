@@ -44,7 +44,7 @@ use crate::{
         avidm::{AvidMCommitment, AvidMCommon, AvidMScheme, AvidMShare, init_avidm_param},
         avidm_gf2::{
             AvidmGf2Commitment, AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share,
-            init_avidm_gf2_param,
+            CommitmentBinding, init_avidm_gf2_param,
         },
     },
     vote::HasViewNumber,
@@ -713,6 +713,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         target_epoch: Option<EpochNumber>,
         data_epoch: Option<EpochNumber>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
+        binding: CommitmentBinding,
     ) -> Result<(Self, Duration)> {
         let target_mem = membership.stake_table_for_epoch(target_epoch)?;
         let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
@@ -733,6 +734,7 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
                 &approximate_weights.weights,
                 &txns,
                 ns_table_clone,
+                binding,
             )
         })
         .await
@@ -912,9 +914,10 @@ impl<TYPES: NodeType> AvidmGf2DisperseShare<TYPES> {
     pub fn payload_byte_len(&self) -> u32 {
         self.common.payload_byte_len() as u32
     }
-    /// Check if vid common is consistent with the commitment.
-    pub fn is_consistent(&self) -> bool {
-        AvidmGf2Scheme::is_consistent(&self.payload_commitment, &self.common)
+    /// Check if vid common is consistent with the commitment, which binds
+    /// what `binding` says it does.
+    pub fn is_consistent(&self, binding: CommitmentBinding) -> bool {
+        AvidmGf2Scheme::is_consistent(&self.payload_commitment, &self.common, binding)
     }
 
     /// Verify share assuming common data is already verified consistent.
@@ -925,12 +928,14 @@ impl<TYPES: NodeType> AvidmGf2DisperseShare<TYPES> {
     }
 
     /// Internally verify the share given necessary information
-    pub fn verify(&self, total_weight: usize) -> bool {
-        // A share's commitment hash-binds its `ns_commits` (via `is_consistent`)
-        // but not its `param`, so check `param` against the committee-derived
-        // expectation; otherwise a forged param would pass verification.
+    pub fn verify(&self, total_weight: usize, binding: CommitmentBinding) -> bool {
+        // Under `CommitmentBinding::NsCommitsOnly` the commitment binds the
+        // share's `ns_commits` (via `is_consistent`) but not its `param`, so
+        // check `param` against the committee-derived expectation; otherwise a
+        // forged param would pass verification. `FullCommon` binds `param` as
+        // well, and the check is then merely redundant.
         init_avidm_gf2_param(total_weight).is_ok_and(|expected| self.common.param == expected)
-            && self.is_consistent()
+            && self.is_consistent(binding)
             && self.verify_with_verified_common()
     }
 }

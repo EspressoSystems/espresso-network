@@ -12,6 +12,7 @@ use hotshot_types::{
 use jf_advz::VidScheme;
 use sha2::Digest;
 use thiserror::Error;
+use vbs::version::Version;
 
 use crate::{
     Index, Iter, NamespaceId, NsIndex, NsPayload, NsPayloadBuilder, NsPayloadRange, NsTable,
@@ -286,8 +287,9 @@ impl QueryablePayload<SeqTypes> for Payload {
         _meta: &Self::Metadata,
         vid: &VidCommonQueryData<SeqTypes>,
         index: &Index,
+        version: Version,
     ) -> Option<Self::InclusionProof> {
-        let proof = TxProof::new(index, self, vid.common())?.1;
+        let proof = TxProof::new(index, self, vid.common(), version)?.1;
         Some(proof)
     }
 }

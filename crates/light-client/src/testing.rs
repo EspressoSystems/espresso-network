@@ -1126,7 +1126,8 @@ impl Client for TestClient {
         let Some(ns_index) = ns_table.find_ns_id(&namespace) else {
             return Ok(NamespaceProof::not_present());
         };
-        let proof = NsProof::new(&payload, &ns_index, &vid_common)
+        let version = inner.leaves[height].header().version();
+        let proof = NsProof::new(&payload, &ns_index, &vid_common, version)
             .context("failed to construct NsProof")?;
         Ok(NamespaceProof::new(proof, vid_common))
     }

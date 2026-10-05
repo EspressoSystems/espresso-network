@@ -55,6 +55,7 @@ impl NamespaceProof {
                 header.ns_table(),
                 &header.payload_commitment(),
                 &proof.common,
+                header.version(),
             )
             .context("invalid namespace proof")?;
         ensure!(
@@ -88,8 +89,10 @@ mod test {
                 position: 0,
             })
             .unwrap();
-        let proof =
-            NamespaceProof::new(NsProof::new(&payload, &0.into(), &common).unwrap(), common);
+        let proof = NamespaceProof::new(
+            NsProof::new(&payload, &0.into(), &common, leaf.header().version()).unwrap(),
+            common,
+        );
         assert_eq!(
             proof.verify(leaf.header(), tx.namespace()).unwrap(),
             vec![tx.clone()]
@@ -123,6 +126,7 @@ mod test {
     async fn test_namespace_proof_invalid_wrong_payload() {
         let client = TestClient::default();
 
+        let leaf1 = client.leaf(1).await;
         let payload1 = client.payload(1).await;
         let common1 = client.vid_common(1).await;
         let tx = payload1
@@ -132,7 +136,7 @@ mod test {
             })
             .unwrap();
         let proof = NamespaceProof::new(
-            NsProof::new(&payload1, &0.into(), &common1).unwrap(),
+            NsProof::new(&payload1, &0.into(), &common1, leaf1.header().version()).unwrap(),
             common1,
         );
 
@@ -158,8 +162,10 @@ mod test {
                 position: 0,
             })
             .unwrap();
-        let proof =
-            NamespaceProof::new(NsProof::new(&payload, &0.into(), &common).unwrap(), common);
+        let proof = NamespaceProof::new(
+            NsProof::new(&payload, &0.into(), &common, leaf.header().version()).unwrap(),
+            common,
+        );
         let err = proof
             .verify(
                 leaf.header(),

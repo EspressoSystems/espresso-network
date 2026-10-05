@@ -167,14 +167,16 @@ where
 pub trait VerifiableInclusion<Types: NodeType>:
     Clone + Debug + PartialEq + Eq + Serialize + DeserializeOwned + Send + Sync
 {
-    /// Verify the inclusion proof against a payload commitment.
-    /// Returns `None` on error.
+    /// Verify the inclusion proof against a payload commitment. `version` is
+    /// the protocol version of the block's header, which fixes what the
+    /// commitment binds.
     fn verify(
         &self,
         metadata: &Metadata<Types>,
         tx: &Transaction<Types>,
         payload_commitment: &VidCommitment,
         common: &VidCommon,
+        version: Version,
     ) -> bool;
 }
 
@@ -229,7 +231,8 @@ where
         index: &TransactionIndex<Types>,
     ) -> Option<Self::Transaction>;
 
-    /// Get an inclusion proof for the given transaction.
+    /// Get an inclusion proof for the given transaction. `version` is the protocol version of
+    /// the block's header, which fixes what its payload commitment binds.
     ///
     /// This function may be slow and computationally intensive, especially for large transactions.
     fn transaction_proof(
@@ -237,6 +240,7 @@ where
         meta: &Self::Metadata,
         vid: &VidCommonQueryData<Types>,
         index: &TransactionIndex<Types>,
+        version: Version,
     ) -> Option<Self::InclusionProof>;
 
     /// Get the index of the `nth` transaction.
@@ -637,7 +641,7 @@ where
         ix: &TransactionIndex<Types>,
     ) -> Option<TransactionInclusionProof<Types>> {
         self.payload()
-            .transaction_proof(self.metadata(), vid_common, ix)
+            .transaction_proof(self.metadata(), vid_common, ix, self.header().version())
     }
 
     pub fn len(&self) -> usize {

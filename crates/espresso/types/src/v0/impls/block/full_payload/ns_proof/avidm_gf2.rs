@@ -4,17 +4,20 @@ use hotshot_types::{
     data::{VidCommitment, VidCommon},
     vid::avidm_gf2::AvidmGf2Common,
 };
-use vid::avidm_gf2::namespaced::NsAvidmGf2Scheme;
+use vid::avidm_gf2::namespaced::{CommitmentBinding, NsAvidmGf2Scheme};
 
 use crate::{
     NamespaceId, NsIndex, NsPayload, NsTable, Payload, Transaction, v0_6::AvidmGf2NsProof,
 };
 
 impl AvidmGf2NsProof {
+    /// Prove the namespace at `index` against the commitment to `common`
+    /// under `binding`.
     pub fn new(
         payload: &Payload,
         index: &NsIndex,
         common: &AvidmGf2Common,
+        binding: CommitmentBinding,
     ) -> Option<AvidmGf2NsProof> {
         let payload_byte_len = payload.byte_len();
         let index = index.0;
@@ -32,7 +35,7 @@ impl AvidmGf2NsProof {
         if ns_table[index].is_empty() {
             None
         } else {
-            match NsAvidmGf2Scheme::namespace_proof(common, &payload.raw_payload, index) {
+            match NsAvidmGf2Scheme::namespace_proof(common, &payload.raw_payload, index, binding) {
                 Ok(proof) => Some(AvidmGf2NsProof(proof)),
                 Err(e) => {
                     tracing::error!("error generating namespace proof: {:?}", e);
@@ -49,10 +52,11 @@ impl AvidmGf2NsProof {
         ns_table: &NsTable,
         commit: &VidCommitment,
         common: &VidCommon,
+        binding: CommitmentBinding,
     ) -> Option<(Vec<Transaction>, NamespaceId)> {
         match (commit, common) {
             (VidCommitment::V2(commit), VidCommon::V2(common)) => {
-                match NsAvidmGf2Scheme::verify_namespace_proof(commit, common, &self.0) {
+                match NsAvidmGf2Scheme::verify_namespace_proof(commit, common, &self.0, binding) {
                     Ok(Ok(_)) => {
                         let ns_id = ns_table.read_ns_id(&NsIndex(self.0.ns_index))?;
                         let ns_payload = NsPayload::from_bytes_slice(&self.0.ns_payload);
@@ -78,13 +82,22 @@ mod tests {
     use hotshot_types::{
         data::{VidCommitment, VidCommon},
         traits::EncodeBytes,
-        vid::avidm_gf2::{AvidmGf2Param, AvidmGf2Scheme},
+        vid::avidm_gf2::{AvidmGf2Param, AvidmGf2Scheme, CommitmentBinding},
     };
 
     use crate::{NsIndex, Payload, v0::impls::block::test::ValidTest, v0_6::AvidmGf2NsProof};
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn ns_proof() {
+        for binding in [
+            CommitmentBinding::NsCommitsOnly,
+            CommitmentBinding::FullCommon,
+        ] {
+            ns_proof_under(binding).await;
+        }
+    }
+
+    async fn ns_proof_under(binding: CommitmentBinding) {
         let test_cases = vec![
             vec![
                 vec![5, 8, 8],
@@ -122,11 +135,13 @@ mod tests {
                 .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
                 .collect::<Vec<_>>();
             let (vid_commit, vid_common) =
-                AvidmGf2Scheme::commit(&param, &block.encode(), ns_table).unwrap();
+                AvidmGf2Scheme::commit(&param, &block.encode(), ns_table, binding).unwrap();
             let ns_proofs: Vec<AvidmGf2NsProof> = block
                 .ns_table()
                 .iter()
-                .map(|ns_index| AvidmGf2NsProof::new(&block, &ns_index, &vid_common).unwrap())
+                .map(|ns_index| {
+                    AvidmGf2NsProof::new(&block, &ns_index, &vid_common, binding).unwrap()
+                })
                 .collect();
             BlockInfo {
                 block,
@@ -160,7 +175,7 @@ mod tests {
 
                 // verify ns_proof
                 let (ns_proof_txs, ns_proof_ns_id) = ns_proof
-                    .verify(block.ns_table(), vid_commit, vid_common)
+                    .verify(block.ns_table(), vid_commit, vid_common, binding)
                     .unwrap_or_else(|| panic!("namespace {ns_id} proof verification failure"));
 
                 assert_eq!(ns_proof_ns_id, ns_id);
@@ -182,14 +197,14 @@ mod tests {
             // wrong vid commitment
             assert!(
                 ns_proof_0_0
-                    .verify(ns_table_0, vid_commit_1, vid_common_0)
+                    .verify(ns_table_0, vid_commit_1, vid_common_0, binding)
                     .is_none()
             );
 
             // wrong ns_proof
             assert!(
                 ns_proof_0_0
-                    .verify(ns_table_1, vid_commit_1, vid_common_1)
+                    .verify(ns_table_1, vid_commit_1, vid_common_1, binding)
                     .is_none()
             );
         }

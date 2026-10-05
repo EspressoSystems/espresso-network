@@ -1,6 +1,6 @@
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
-    vid::avidm_gf2::AvidmGf2Common,
+    vid::avidm_gf2::{AvidmGf2Common, CommitmentBinding},
 };
 
 use crate::{
@@ -10,10 +10,13 @@ use crate::{
 };
 
 impl AvidmGf2TxProof {
+    /// Prove the transaction at `index`, against the commitment to `common`
+    /// under `binding`.
     pub fn new(
         index: &Index,
         payload: &Payload,
         common: &AvidmGf2Common,
+        binding: CommitmentBinding,
     ) -> Option<(Transaction, Self)> {
         let ns_index = &index.ns_index;
         let tx_index = &TxIndex(index.position as usize);
@@ -28,7 +31,7 @@ impl AvidmGf2TxProof {
         let ns_range = payload.ns_table().ns_range(ns_index, &payload_byte_len);
         let ns_byte_len = ns_range.byte_len();
         let ns_payload = payload.read_ns_payload(&ns_range);
-        let ns_proof = AvidmGf2NsProof::new(payload, ns_index, common)?;
+        let ns_proof = AvidmGf2NsProof::new(payload, ns_index, common, binding)?;
 
         // Read the tx table len from this namespace's tx table and compute a
         // proof of correctness.
@@ -76,8 +79,9 @@ impl AvidmGf2TxProof {
         tx: &Transaction,
         commit: &VidCommitment,
         common: &VidCommon,
+        binding: CommitmentBinding,
     ) -> bool {
-        let Some((txs, _)) = self.ns_proof.verify(ns_table, commit, common) else {
+        let Some((txs, _)) = self.ns_proof.verify(ns_table, commit, common, binding) else {
             return false;
         };
         if self.tx_index.0 > txs.len() {

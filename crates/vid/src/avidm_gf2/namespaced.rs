@@ -10,6 +10,7 @@ use super::{AvidmGf2Commit, AvidmGf2Share};
 use crate::{
     VidError, VidResult, VidScheme,
     avidm_gf2::{AvidmGf2Scheme, MerkleTree},
+    utils::blake3::Blake3Node,
 };
 
 /// Dummy struct for namespaced AvidmGf2 scheme
@@ -19,6 +20,26 @@ pub struct NsAvidmGf2Scheme;
 pub type NsAvidmGf2Commit = super::AvidmGf2Commit;
 /// Namespaced parameter type
 pub type NsAvidmGf2Param = super::AvidmGf2Param;
+
+/// What the namespaced commitment binds beyond the per-namespace commitments.
+///
+/// The commitment is the root of a Merkle tree over the namespace
+/// commitments. [`Self::NsCommitsOnly`] stops there; [`Self::FullCommon`]
+/// appends a leaf hashing `param` and `ns_lens`, so `is_consistent` rejects a
+/// common whose decoding parameters or namespace lengths were tampered with,
+/// not only one whose namespace commitments were. The two bindings give
+/// different commitments for the same payload, so which one applies is fixed
+/// by the protocol version a block was produced under and every operation on
+/// a commitment takes it as an argument.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CommitmentBinding {
+    /// Root over the namespace commitments alone. `param` and `ns_lens` are
+    /// unbound and must be checked against another source.
+    NsCommitsOnly,
+    /// Root over the namespace commitments plus a leaf binding `param` and
+    /// `ns_lens`, so the commitment authenticates the entire common.
+    FullCommon,
+}
 
 /// VID Common data that needs to be broadcasted to all storage nodes
 #[derive(Clone, Debug, Hash, Serialize, Deserialize, Eq, PartialEq)]
@@ -35,6 +56,40 @@ impl NsAvidmGf2Common {
     /// Return the total payload byte length
     pub fn payload_byte_len(&self) -> usize {
         self.ns_lens.iter().sum()
+    }
+
+    /// The namespaced commitment to this common data under `binding`.
+    pub fn commitment(&self, binding: CommitmentBinding) -> VidResult<NsAvidmGf2Commit> {
+        Ok(NsAvidmGf2Commit {
+            commit: self.merkle_tree(binding)?.commitment(),
+        })
+    }
+
+    /// The Merkle tree underlying the namespaced commitment: one leaf per
+    /// namespace commitment and, under [`CommitmentBinding::FullCommon`], a
+    /// final leaf binding the rest of the common.
+    pub(crate) fn merkle_tree(&self, binding: CommitmentBinding) -> VidResult<MerkleTree> {
+        let ns_commits = self.ns_commits.iter().map(|c| c.commit);
+        let binding_leaf = match binding {
+            CommitmentBinding::NsCommitsOnly => None,
+            CommitmentBinding::FullCommon => Some(self.binding_leaf()),
+        };
+        MerkleTree::from_elems(None, ns_commits.chain(binding_leaf))
+            .map_err(|err| VidError::Internal(err.into()))
+    }
+
+    /// Hash of the common data fields the namespace commitment leaves do not
+    /// already bind.
+    fn binding_leaf(&self) -> Blake3Node {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"NS_AVIDM_GF2_COMMON");
+        hasher.update(&(self.param.recovery_threshold as u64).to_le_bytes());
+        hasher.update(&(self.param.total_weights as u64).to_le_bytes());
+        hasher.update(&(self.ns_lens.len() as u64).to_le_bytes());
+        for len in &self.ns_lens {
+            hasher.update(&(*len as u64).to_le_bytes());
+        }
+        hasher.finalize().into()
     }
 }
 
@@ -106,6 +161,7 @@ impl NsAvidmGf2Scheme {
         param: &NsAvidmGf2Param,
         payload: &[u8],
         ns_table: impl IntoIterator<Item = Range<usize>>,
+        binding: CommitmentBinding,
     ) -> VidResult<(NsAvidmGf2Commit, NsAvidmGf2Common)> {
         let ns_table = ns_table.into_iter().collect::<Vec<_>>();
         let ns_lens = ns_table.iter().map(|r| r.len()).collect::<Vec<_>>();
@@ -118,25 +174,22 @@ impl NsAvidmGf2Scheme {
             ns_commits,
             ns_lens,
         };
-        let commit = Self::aggregate_commit(&common.ns_commits)?;
+        let commit = common.commitment(binding)?;
         Ok((commit, common))
     }
 
-    /// Aggregate per-namespace commitments into the top-level namespaced
-    /// commitment (the Merkle root over the namespace commits).
-    ///
-    /// Lets a caller that has already computed each namespace's commit (e.g. via
-    /// [`Self::ns_disperse_one`]) form the block commitment without re-encoding.
-    pub fn aggregate_commit(ns_commits: &[AvidmGf2Commit]) -> VidResult<NsAvidmGf2Commit> {
-        let commit = MerkleTree::from_elems(None, ns_commits.iter().map(|c| c.commit))
-            .map_err(|err| VidError::Internal(err.into()))?
-            .commitment();
-        Ok(NsAvidmGf2Commit { commit })
-    }
-
-    /// Check whether the namespaced commitment is consistent with the common data
-    pub fn is_consistent(commit: &NsAvidmGf2Commit, common: &NsAvidmGf2Common) -> bool {
-        Self::aggregate_commit(&common.ns_commits).is_ok_and(|c| c == *commit)
+    /// Check whether the namespaced commitment is consistent with the common
+    /// data. Under [`CommitmentBinding::FullCommon`] a `true` result
+    /// authenticates every field of `common`; under
+    /// [`CommitmentBinding::NsCommitsOnly`] only its `ns_commits`.
+    pub fn is_consistent(
+        commit: &NsAvidmGf2Commit,
+        common: &NsAvidmGf2Common,
+        binding: CommitmentBinding,
+    ) -> bool {
+        common
+            .commitment(binding)
+            .is_ok_and(|recomputed| recomputed == *commit)
     }
 
     /// Disperse a payload according to a distribution table and a namespace
@@ -148,6 +201,7 @@ impl NsAvidmGf2Scheme {
         distribution: &[u32],
         payload: &[u8],
         ns_table: impl IntoIterator<Item = Range<usize>>,
+        binding: CommitmentBinding,
     ) -> VidResult<(NsAvidmGf2Commit, NsAvidmGf2Common, Vec<NsAvidmGf2Share>)> {
         let num_storage_nodes = distribution.len();
         let ns_ranges: Vec<Range<usize>> = ns_table.into_iter().collect();
@@ -171,7 +225,7 @@ impl NsAvidmGf2Scheme {
             ns_commits,
             ns_lens,
         };
-        let commit = Self::aggregate_commit(&common.ns_commits)?;
+        let commit = common.commitment(binding)?;
         let mut shares = vec![NsAvidmGf2Share::default(); num_storage_nodes];
         disperses.into_iter().for_each(|ns_disperse| {
             shares
@@ -213,6 +267,7 @@ impl NsAvidmGf2Scheme {
         distribution: &[u32],
         payload: &[u8],
         ns_table: impl IntoIterator<Item = Range<usize>>,
+        binding: CommitmentBinding,
     ) -> VidResult<(NsAvidmGf2Commit, NsAvidmGf2Common, Vec<NsAvidmGf2Share>)> {
         let num_storage_nodes = distribution.len();
         let ns_ranges: Vec<Range<usize>> = ns_table.into_iter().collect();
@@ -233,7 +288,7 @@ impl NsAvidmGf2Scheme {
             ns_commits,
             ns_lens,
         };
-        let commit = Self::aggregate_commit(&common.ns_commits)?;
+        let commit = common.commitment(binding)?;
         let mut shares = vec![NsAvidmGf2Share::default(); num_storage_nodes];
         disperses.into_iter().for_each(|ns_disperse| {
             shares
@@ -281,8 +336,9 @@ impl NsAvidmGf2Scheme {
         commit: &NsAvidmGf2Commit,
         common: &NsAvidmGf2Common,
         share: &NsAvidmGf2Share,
+        binding: CommitmentBinding,
     ) -> VidResult<crate::VerificationResult> {
-        if !Self::is_consistent(commit, common) {
+        if !Self::is_consistent(commit, common, binding) {
             return Ok(Err(()));
         }
         Self::verify_share_with_verified_common(common, share)
@@ -347,15 +403,19 @@ pub struct NsDispersal {
 pub mod tests {
     use rand::{RngCore, seq::SliceRandom};
 
-    use crate::avidm_gf2::namespaced::NsAvidmGf2Scheme;
+    use crate::avidm_gf2::namespaced::{
+        CommitmentBinding, NsAvidmGf2Commit, NsAvidmGf2Common, NsAvidmGf2Scheme, NsAvidmGf2Share,
+    };
+
+    const BINDINGS: [CommitmentBinding; 2] = [
+        CommitmentBinding::NsCommitsOnly,
+        CommitmentBinding::FullCommon,
+    ];
 
     fn disperse_with_payload(
         payload: &[u8],
-    ) -> (
-        crate::avidm_gf2::namespaced::NsAvidmGf2Commit,
-        crate::avidm_gf2::namespaced::NsAvidmGf2Common,
-        Vec<crate::avidm_gf2::namespaced::NsAvidmGf2Share>,
-    ) {
+        binding: CommitmentBinding,
+    ) -> (NsAvidmGf2Commit, NsAvidmGf2Common, Vec<NsAvidmGf2Share>) {
         let num_storage_nodes = 9;
         let ns_table = [(0usize..15), (15..48)];
 
@@ -367,40 +427,48 @@ pub mod tests {
         let recovery_threshold = total_weights.div_ceil(3) as usize;
         let params = NsAvidmGf2Scheme::setup(recovery_threshold, total_weights as usize).unwrap();
 
-        NsAvidmGf2Scheme::ns_disperse(&params, &weights, payload, ns_table.iter().cloned()).unwrap()
+        NsAvidmGf2Scheme::ns_disperse(
+            &params,
+            &weights,
+            payload,
+            ns_table.iter().cloned(),
+            binding,
+        )
+        .unwrap()
     }
 
-    fn setup_test_data() -> (
-        crate::avidm_gf2::namespaced::NsAvidmGf2Commit,
-        crate::avidm_gf2::namespaced::NsAvidmGf2Common,
-        Vec<crate::avidm_gf2::namespaced::NsAvidmGf2Share>,
-    ) {
+    fn setup_test_data(
+        binding: CommitmentBinding,
+    ) -> (NsAvidmGf2Commit, NsAvidmGf2Common, Vec<NsAvidmGf2Share>) {
         let payload: Vec<u8> = (0u8..48).collect();
-        disperse_with_payload(&payload)
+        disperse_with_payload(&payload, binding)
     }
 
     #[test]
     fn verify_share_with_verified_common_accepts_valid() {
-        let (commit, common, shares) = setup_test_data();
-        assert!(NsAvidmGf2Scheme::is_consistent(&commit, &common));
-        for share in &shares {
-            assert!(
-                NsAvidmGf2Scheme::verify_share_with_verified_common(&common, share)
-                    .is_ok_and(|r| r.is_ok())
-            );
+        for binding in BINDINGS {
+            let (commit, common, shares) = setup_test_data(binding);
+            assert!(NsAvidmGf2Scheme::is_consistent(&commit, &common, binding));
+            for share in &shares {
+                assert!(
+                    NsAvidmGf2Scheme::verify_share_with_verified_common(&common, share)
+                        .is_ok_and(|r| r.is_ok())
+                );
+            }
         }
     }
 
     #[test]
     fn verify_share_with_verified_common_rejects_tampered_share() {
-        let (_commit, common, shares) = setup_test_data();
+        let binding = CommitmentBinding::FullCommon;
+        let (_commit, common, shares) = setup_test_data(binding);
         // Create a tampered share by removing one namespace entry
         let mut tampered = shares[0].clone();
         tampered.0.pop();
         assert!(NsAvidmGf2Scheme::verify_share_with_verified_common(&common, &tampered).is_err());
 
         // Create a tampered share by dispersing a different payload and swapping
-        let (_commit2, _common2, shares2) = disperse_with_payload(&[0xAB; 48]);
+        let (_commit2, _common2, shares2) = disperse_with_payload(&[0xAB; 48], binding);
         let mut mixed = shares[0].clone();
         mixed.0[0] = shares2[0].0[0].clone();
         assert!(
@@ -411,38 +479,152 @@ pub mod tests {
 
     #[test]
     fn composition_equivalence() {
-        let (commit, common, shares) = setup_test_data();
-        for share in &shares {
-            let full_result = NsAvidmGf2Scheme::verify_share(&commit, &common, share)
-                .unwrap()
-                .is_ok();
-            let composed_result = NsAvidmGf2Scheme::is_consistent(&commit, &common)
-                && NsAvidmGf2Scheme::verify_share_with_verified_common(&common, share)
+        for binding in BINDINGS {
+            let (commit, common, shares) = setup_test_data(binding);
+            for share in &shares {
+                let full_result = NsAvidmGf2Scheme::verify_share(&commit, &common, share, binding)
                     .unwrap()
                     .is_ok();
-            assert_eq!(full_result, composed_result);
+                let composed_result = NsAvidmGf2Scheme::is_consistent(&commit, &common, binding)
+                    && NsAvidmGf2Scheme::verify_share_with_verified_common(&common, share)
+                        .unwrap()
+                        .is_ok();
+                assert_eq!(full_result, composed_result);
+            }
         }
     }
 
     #[test]
     fn is_consistent_rejects_tampered_commit() {
-        let (commit, common, _shares) = setup_test_data();
-        // Use commit from a different dispersal
-        let (different_commit, ..) = disperse_with_payload(&[0xCD; 48]);
-        // Verify original is consistent
-        assert!(NsAvidmGf2Scheme::is_consistent(&commit, &common));
-        // Verify different commit is inconsistent with original common
-        assert!(!NsAvidmGf2Scheme::is_consistent(&different_commit, &common));
+        for binding in BINDINGS {
+            let (commit, common, _shares) = setup_test_data(binding);
+            // Use commit from a different dispersal
+            let (different_commit, ..) = disperse_with_payload(&[0xCD; 48], binding);
+            // Verify original is consistent
+            assert!(NsAvidmGf2Scheme::is_consistent(&commit, &common, binding));
+            // Verify different commit is inconsistent with original common
+            assert!(!NsAvidmGf2Scheme::is_consistent(
+                &different_commit,
+                &common,
+                binding
+            ));
+        }
     }
 
     #[test]
     fn is_consistent_rejects_tampered_common() {
-        let (commit, common, _shares) = setup_test_data();
-        // Swap in ns_commits from a different dispersal
-        let (_, different_common, _) = disperse_with_payload(&[0xCD; 48]);
-        let mut tampered_common = common;
-        tampered_common.ns_commits = different_common.ns_commits;
-        assert!(!NsAvidmGf2Scheme::is_consistent(&commit, &tampered_common));
+        for binding in BINDINGS {
+            let (commit, common, _shares) = setup_test_data(binding);
+            // Swap in ns_commits from a different dispersal
+            let (_, different_common, _) = disperse_with_payload(&[0xCD; 48], binding);
+            let mut tampered_common = common;
+            tampered_common.ns_commits = different_common.ns_commits;
+            assert!(!NsAvidmGf2Scheme::is_consistent(
+                &commit,
+                &tampered_common,
+                binding
+            ));
+        }
+    }
+
+    /// The two bindings commit differently to the same payload, and a
+    /// commitment is consistent with its common only under its own binding:
+    /// a verifier cannot be talked into the weaker check by a commitment
+    /// formed under the stronger one, or the other way round.
+    #[test]
+    fn bindings_are_distinct() {
+        let (legacy_commit, common, _) = setup_test_data(CommitmentBinding::NsCommitsOnly);
+        let (bound_commit, bound_common, _) = setup_test_data(CommitmentBinding::FullCommon);
+        assert_eq!(
+            common, bound_common,
+            "the binding changes the commitment only"
+        );
+        assert_ne!(legacy_commit, bound_commit);
+        assert!(!NsAvidmGf2Scheme::is_consistent(
+            &legacy_commit,
+            &common,
+            CommitmentBinding::FullCommon
+        ));
+        assert!(!NsAvidmGf2Scheme::is_consistent(
+            &bound_commit,
+            &common,
+            CommitmentBinding::NsCommitsOnly
+        ));
+    }
+
+    /// `FullCommon` binds `param`: a Byzantine node cannot pass off forged
+    /// decoding parameters beside honest `ns_commits` as belonging to an
+    /// honest commitment. `NsCommitsOnly` cannot tell, which is why callers
+    /// under it check `param` against the committee instead.
+    #[test]
+    fn full_common_rejects_tampered_param() {
+        let (commit, common, _) = setup_test_data(CommitmentBinding::FullCommon);
+        let (legacy_commit, ..) = setup_test_data(CommitmentBinding::NsCommitsOnly);
+
+        let mut tampered = common.clone();
+        tampered.param.recovery_threshold = 1;
+        assert!(!NsAvidmGf2Scheme::is_consistent(
+            &commit,
+            &tampered,
+            CommitmentBinding::FullCommon
+        ));
+        assert!(NsAvidmGf2Scheme::is_consistent(
+            &legacy_commit,
+            &tampered,
+            CommitmentBinding::NsCommitsOnly
+        ));
+
+        let mut tampered = common;
+        tampered.param.total_weights *= 2;
+        assert!(!NsAvidmGf2Scheme::is_consistent(
+            &commit,
+            &tampered,
+            CommitmentBinding::FullCommon
+        ));
+    }
+
+    /// `FullCommon` binds `ns_lens`: a share cannot report a payload length
+    /// other than the one committed to. `NsCommitsOnly` cannot tell.
+    #[test]
+    fn full_common_rejects_tampered_ns_lens() {
+        let (commit, common, shares) = setup_test_data(CommitmentBinding::FullCommon);
+        let (legacy_commit, ..) = setup_test_data(CommitmentBinding::NsCommitsOnly);
+
+        let mut tampered = common.clone();
+        tampered.ns_lens[0] += 1;
+        assert!(!NsAvidmGf2Scheme::is_consistent(
+            &commit,
+            &tampered,
+            CommitmentBinding::FullCommon
+        ));
+        assert!(NsAvidmGf2Scheme::is_consistent(
+            &legacy_commit,
+            &tampered,
+            CommitmentBinding::NsCommitsOnly
+        ));
+
+        // A share verified against the tampered common fails outright, so a
+        // voter never takes the forged `payload_byte_len` from it.
+        for share in &shares {
+            assert_eq!(
+                NsAvidmGf2Scheme::verify_share(
+                    &commit,
+                    &tampered,
+                    share,
+                    CommitmentBinding::FullCommon
+                )
+                .unwrap(),
+                Err(())
+            );
+        }
+
+        let mut tampered = common;
+        tampered.ns_lens.push(0);
+        assert!(!NsAvidmGf2Scheme::is_consistent(
+            &commit,
+            &tampered,
+            CommitmentBinding::FullCommon
+        ));
     }
 
     #[test]
@@ -475,15 +657,21 @@ pub mod tests {
             bytes_random
         };
 
-        let (commit, common, mut shares) =
-            NsAvidmGf2Scheme::ns_disperse(&params, &weights, &payload, ns_table.iter().cloned())
-                .unwrap();
+        let binding = CommitmentBinding::FullCommon;
+        let (commit, common, mut shares) = NsAvidmGf2Scheme::ns_disperse(
+            &params,
+            &weights,
+            &payload,
+            ns_table.iter().cloned(),
+            binding,
+        )
+        .unwrap();
 
         assert_eq!(shares.len(), num_storage_nodes);
 
         assert_eq!(
             commit,
-            NsAvidmGf2Scheme::commit(&params, &payload, ns_table.iter().cloned())
+            NsAvidmGf2Scheme::commit(&params, &payload, ns_table.iter().cloned(), binding)
                 .unwrap()
                 .0
         );
@@ -491,7 +679,8 @@ pub mod tests {
         // verify shares
         shares.iter().for_each(|share| {
             assert!(
-                NsAvidmGf2Scheme::verify_share(&commit, &common, share).is_ok_and(|r| r.is_ok())
+                NsAvidmGf2Scheme::verify_share(&commit, &common, share, binding)
+                    .is_ok_and(|r| r.is_ok())
             )
         });
 
@@ -513,18 +702,18 @@ pub mod tests {
         assert_eq!(payload_recovered, payload);
     }
 
-    /// A caller that encodes each namespace with `ns_disperse_one` and folds the
-    /// per-namespace commits with `aggregate_commit` must get the same
-    /// commitment as the monolithic `commit`.
+    /// A caller that encodes each namespace with `ns_disperse_one` and
+    /// assembles the common from the per-namespace results must get the same
+    /// commitment as the monolithic `commit`, under either binding.
     #[test]
-    fn aggregate_commit_matches_commit() {
+    fn commitment_of_assembled_common_matches_commit() {
         let num_storage_nodes = 9;
         let ns_table = [(0usize..15), (15..48), (48..49)];
         let weights = vec![1u32; num_storage_nodes];
         let params = NsAvidmGf2Scheme::setup(3, num_storage_nodes).unwrap();
         let payload: Vec<u8> = (0..49).map(|i| i as u8).collect();
 
-        let ns_commits: Vec<_> = ns_table
+        let dispersals: Vec<_> = ns_table
             .iter()
             .enumerate()
             .map(|(ns_index, range)| {
@@ -535,13 +724,20 @@ pub mod tests {
                     ns_index,
                 )
                 .unwrap()
-                .commit
             })
             .collect();
-        let aggregated = NsAvidmGf2Scheme::aggregate_commit(&ns_commits).unwrap();
+        let assembled = NsAvidmGf2Common {
+            param: params.clone(),
+            ns_commits: dispersals.iter().map(|d| d.commit).collect(),
+            ns_lens: dispersals.iter().map(|d| d.payload_byte_len).collect(),
+        };
 
-        let (expected, _) =
-            NsAvidmGf2Scheme::commit(&params, &payload, ns_table.iter().cloned()).unwrap();
-        assert_eq!(aggregated, expected);
+        for binding in BINDINGS {
+            let (expected, common) =
+                NsAvidmGf2Scheme::commit(&params, &payload, ns_table.iter().cloned(), binding)
+                    .unwrap();
+            assert_eq!(assembled, common);
+            assert_eq!(assembled.commitment(binding).unwrap(), expected);
+        }
     }
 }

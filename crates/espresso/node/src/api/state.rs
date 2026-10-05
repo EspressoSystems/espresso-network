@@ -523,7 +523,12 @@ where
         };
 
         // Generate namespace proof
-        let Some(proof) = NsProof::new(block.payload(), &ns_index, vid_common.common()) else {
+        let Some(proof) = NsProof::new(
+            block.payload(),
+            &ns_index,
+            vid_common.common(),
+            block.header().version(),
+        ) else {
             // Failed to generate proof - namespace exists but proof generation failed
             return Ok(espresso_types::NamespaceProofQueryData {
                 transactions: vec![],
@@ -594,7 +599,12 @@ where
 
             // Check if namespace exists in this block
             if let Some(ns_index) = ns_table.find_ns_id(&ns_id) {
-                if let Some(proof) = NsProof::new(block.payload(), &ns_index, vid.common()) {
+                if let Some(proof) = NsProof::new(
+                    block.payload(),
+                    &ns_index,
+                    vid.common(),
+                    block.header().version(),
+                ) {
                     let transactions = proof.export_all_txs(&ns_id);
                     proofs.push(espresso_types::NamespaceProofQueryData {
                         transactions,
@@ -634,7 +644,12 @@ where
             .map(move |(block, vid)| {
                 let ns_table = block.payload().ns_table();
                 if let Some(ns_index) = ns_table.find_ns_id(&ns_id) {
-                    if let Some(proof) = NsProof::new(block.payload(), &ns_index, vid.common()) {
+                    if let Some(proof) = NsProof::new(
+                        block.payload(),
+                        &ns_index,
+                        vid.common(),
+                        block.header().version(),
+                    ) {
                         let transactions = proof.export_all_txs(&ns_id);
                         NamespaceProofQueryData {
                             transactions,
@@ -698,7 +713,14 @@ where
             .find_ns_id(&ns_id)
             .ok_or_else(|| anyhow::anyhow!("namespace {} not present in block", namespace))?;
 
-        if NsProof::new(block.payload(), &ns_index, vid_common.common()).is_some() {
+        if NsProof::new(
+            block.payload(),
+            &ns_index,
+            vid_common.common(),
+            block.header().version(),
+        )
+        .is_some()
+        {
             return Err(anyhow::anyhow!("block was correctly encoded"));
         }
 
@@ -4194,7 +4216,7 @@ mod tests {
         vid::{
             advz::advz_scheme,
             avidm::{AvidMScheme, init_avidm_param},
-            avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+            avidm_gf2::{AvidmGf2Scheme, CommitmentBinding, init_avidm_gf2_param},
         },
         x25519,
     };
@@ -4557,8 +4579,14 @@ mod tests {
         assert!(avidm.content[0].payload.starts_with("FIELD~"));
 
         let param = init_avidm_gf2_param(3).unwrap();
-        let (_, _, mut shares) =
-            AvidmGf2Scheme::ns_disperse(&param, &weights, payload, ns_table).unwrap();
+        let (_, _, mut shares) = AvidmGf2Scheme::ns_disperse(
+            &param,
+            &weights,
+            payload,
+            ns_table,
+            CommitmentBinding::FullCommon,
+        )
+        .unwrap();
         let share = VidShare::V2(shares.remove(0));
         let Share::V2(gf2) = proto::VidShareResponse::try_from(&share)
             .unwrap()
@@ -5464,7 +5492,8 @@ mod tests {
         .unwrap();
         let common = VidCommon::V0(advz_scheme(10).disperse(payload.encode()).unwrap().common);
         let index = payload.iter(payload.ns_table()).next().unwrap();
-        let (_, proof) = espresso_types::TxProof::new(&index, &payload, &common).unwrap();
+        let (_, proof) =
+            espresso_types::TxProof::new(&index, &payload, &common, versions::VERSION_0_1).unwrap();
         let rendered = serde_json::to_value(&proof).unwrap();
         let rendered = &rendered["V0"];
 

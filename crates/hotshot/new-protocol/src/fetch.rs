@@ -175,10 +175,17 @@ impl<T: NodeType> Fetcher<T> {
 
                 let epoch = proposal.epoch;
                 let metadata = proposal.block_header.metadata().clone();
+                let binding = consensus.upgrade_lock().avidm_gf2_binding(view);
 
                 self.tasks.spawn_blocking(move || {
-                    if !matches_commitment::<T>(view, &param, &metadata, &data, &payload_commitment)
-                    {
+                    if !matches_commitment::<T>(
+                        view,
+                        &param,
+                        &metadata,
+                        &data,
+                        &payload_commitment,
+                        binding,
+                    ) {
                         return None;
                     }
                     let payload = T::BlockPayload::from_bytes(&data, &metadata);
@@ -259,6 +266,7 @@ mod tests {
 
     use super::{Fetch, Fetcher, Retry};
     use crate::{
+        helpers::test_upgrade_lock,
         message::{
             fetch::Response,
             payload::{PayloadFetchResponse, PayloadResponseBody},
@@ -295,7 +303,9 @@ mod tests {
         let param = expected_vid_param(&harness.membership_coordinator, EpochNumber::genesis())
             .expect("committee resolves");
         let ns_table = ns_table::parse_ns_table(bytes.len(), &metadata.encode());
-        let (commitment, _) = AvidmGf2Scheme::commit(&param, &bytes, ns_table).expect("commit");
+        let binding = test_upgrade_lock::<TestTypes>().avidm_gf2_binding(view());
+        let (commitment, _) =
+            AvidmGf2Scheme::commit(&param, &bytes, ns_table, binding).expect("commit");
 
         let template = &test_data.views[0];
         let parent_leaf: Leaf2<TestTypes> = template.proposal.data.clone().into();

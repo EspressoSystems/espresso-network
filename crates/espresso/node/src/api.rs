@@ -3039,6 +3039,7 @@ mod api_tests {
                         header.ns_table(),
                         &header.payload_commitment(),
                         vid_common.common(),
+                        header.version(),
                     )
                     .unwrap();
             } else {
@@ -12423,6 +12424,7 @@ mod test {
                     header.ns_table(),
                     &header.payload_commitment(),
                     common.common(),
+                    header.version(),
                 )
                 .unwrap();
             assert_eq!(ns_from_proof, ns);

@@ -22,6 +22,7 @@ use light_client::{
 };
 use tagged_base64::TaggedBase64;
 use tokio::spawn;
+use vbs::version::Version;
 use versions::NEW_PROTOCOL_VERSION;
 
 /// Construct a proof that the requested leaf is finalized.
@@ -531,7 +532,7 @@ where
                 .filter_map(|&namespace| {
                     let ns_index = header.ns_table().find_ns_id(&namespace.into())?;
                     Some(
-                        build_namespace_proof(&payload, &ns_index, &vid_common)
+                        build_namespace_proof(&payload, &ns_index, &vid_common, header.version())
                             .map(|proof| (namespace, proof)),
                     )
                 })
@@ -556,18 +557,18 @@ pub(crate) fn parse_namespaces_str(encoded: &str) -> anyhow::Result<Vec<u64>> {
         .map_err(|err| anyhow::anyhow!("invalid namespaces parameter: {err}"))
 }
 
-/// Construct a [`NamespaceProof`] for the namespace at `ns_index` of the given block.
+/// Construct a [`NamespaceProof`] for the namespace at `ns_index` of the given block, whose
+/// header is at protocol `version`.
 fn build_namespace_proof(
     payload: &PayloadQueryData<SeqTypes>,
     ns_index: &NsIndex,
     vid_common: &VidCommonQueryData<SeqTypes>,
+    version: Version,
 ) -> Result<NamespaceProof, Error> {
-    let ns_proof =
-        NsProof::new(payload.data(), ns_index, vid_common.common()).ok_or_else(|| {
-            Error::Custom {
-                message: "failed to construct namespace proof".into(),
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-            }
+    let ns_proof = NsProof::new(payload.data(), ns_index, vid_common.common(), version)
+        .ok_or_else(|| Error::Custom {
+            message: "failed to construct namespace proof".into(),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
         })?;
     Ok(NamespaceProof::new(ns_proof, vid_common.common().clone()))
 }

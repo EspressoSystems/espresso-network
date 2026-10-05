@@ -1,8 +1,9 @@
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
-    vid::avidm::AvidMShare,
+    vid::{avidm::AvidMShare, avidm_gf2::avidm_gf2_binding},
 };
 use serde::{Deserialize, Serialize};
+use vbs::version::Version;
 
 use crate::{
     v0::{NamespaceId, NsIndex, NsPayload, NsTable, Payload, Transaction},
@@ -37,13 +38,23 @@ pub enum NsProof {
 }
 
 impl NsProof {
-    pub fn new(payload: &Payload, index: &NsIndex, common: &VidCommon) -> Option<NsProof> {
+    /// Prove the namespace at `index` of `payload`. `version` is the protocol
+    /// version of the block, which fixes what its V2 commitment binds.
+    pub fn new(
+        payload: &Payload,
+        index: &NsIndex,
+        common: &VidCommon,
+        version: Version,
+    ) -> Option<NsProof> {
         match common {
             VidCommon::V0(common) => Some(NsProof::V0(ADVZNsProof::new(payload, index, common)?)),
             VidCommon::V1(common) => Some(NsProof::V1(AvidMNsProof::new(payload, index, common)?)),
-            VidCommon::V2(common) => {
-                Some(NsProof::V2(AvidmGf2NsProof::new(payload, index, common)?))
-            },
+            VidCommon::V2(common) => Some(NsProof::V2(AvidmGf2NsProof::new(
+                payload,
+                index,
+                common,
+                avidm_gf2_binding(version),
+            )?)),
         }
     }
 
@@ -62,11 +73,14 @@ impl NsProof {
         }
     }
 
+    /// Verify the proof against the block's `commit`. `version` is the
+    /// protocol version of the block, which fixes what a V2 commitment binds.
     pub fn verify(
         &self,
         ns_table: &NsTable,
         commit: &VidCommitment,
         common: &VidCommon,
+        version: Version,
     ) -> Option<(Vec<Transaction>, NamespaceId)> {
         match (self, common) {
             (Self::V0(proof), VidCommon::V0(common)) => proof.verify(ns_table, commit, common),
@@ -74,7 +88,9 @@ impl NsProof {
             (Self::V1IncorrectEncoding(proof), VidCommon::V1(common)) => {
                 proof.verify(ns_table, commit, common)
             },
-            (Self::V2(proof), VidCommon::V2(_)) => proof.verify(ns_table, commit, common),
+            (Self::V2(proof), VidCommon::V2(_)) => {
+                proof.verify(ns_table, commit, common, avidm_gf2_binding(version))
+            },
             _ => {
                 tracing::error!("Incompatible version of VidCommon and NsProof.");
                 None

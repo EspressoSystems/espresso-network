@@ -55,6 +55,7 @@ use crate::{
         signature_key::SignatureKey,
     },
     utils::mnemonic,
+    vid::avidm_gf2::{CommitmentBinding, avidm_gf2_binding},
     vote::HasViewNumber,
 };
 
@@ -774,6 +775,11 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
 
     pub fn upgraded_vid2(&self, view: ViewNumber) -> bool {
         self.version_infallible(view) >= NEW_PROTOCOL_VERSION
+    }
+
+    /// What the AvidmGf2 commitment binds for blocks proposed in `view`.
+    pub fn avidm_gf2_binding(&self, view: ViewNumber) -> CommitmentBinding {
+        avidm_gf2_binding(self.version_infallible(view))
     }
 
     /// Whether a timeout certificate must be a `TimeoutEvidence::V3`.
