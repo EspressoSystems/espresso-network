@@ -77,8 +77,8 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   route already serves an account's path.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
-tests in `crates/espresso/api/src/axum.rs` pin the whole document to a reviewed snapshot and probe each documented path
-against the mounted v2 router.
+tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
+path against the mounted v2 router.
 
 ### Adding an endpoint to an existing service
 
@@ -144,9 +144,9 @@ against the mounted v2 router.
    `serve_axum`, `router_v2` and `serve_tonic` all take, merge `rest::<name>_service_rest_router(...)` in `router_v2`,
    and `add_service` the tonic server in `serve_tonic`. The test stand-in `MockV2State` is generated from the protos by
    `build/mock.rs`, so it needs no change.
-5. Accept the new routes in the OpenAPI snapshot: `v2_openapi_spec_matches_its_snapshot` in
-   `crates/espresso/api/src/axum.rs` fails until `cargo insta review` (or `INSTA_UPDATE=always`) records them, and the
-   reviewer sees the document's diff in `crates/espresso/api/src/snapshots/`.
+5. Add the new routes to the expected set in `v2_openapi_spec_documents_the_proto_routes` in
+   `crates/espresso/api/src/axum.rs`. That test is the tripwire keeping the OpenAPI document and the mounted routes in
+   step, so it fails on purpose until the list is updated.
 
 A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`: mount it behind that flag in
 `router_v2` and `serve_tonic` (`add_optional_service`), register its paths when the flag is off as

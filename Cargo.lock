@@ -4544,7 +4544,6 @@ dependencies = [
  "hotshot-query-service-types",
  "hotshot-types",
  "http-wire",
- "insta",
  "jf-merkle-tree-compat",
  "pbjson",
  "pbjson-build",
