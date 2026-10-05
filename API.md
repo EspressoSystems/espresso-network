@@ -84,7 +84,8 @@ under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/
   transaction filters become mutually exclusive parameters on the same route. The histograms are the one reshaped
   response: v1 serves four parallel arrays it documents as equal length and indexed by `block_heights`, and two of them
   hold nulls a proto `repeated` field cannot carry, so v2 serves one point per block instead. Amounts keep the rendered
-  form v1 writes, currency code and all. Like the v1 module it is mounted only when the node enables `explorer`.
+  form v1 writes, currency code and all. Like the v1 module it is mounted only when the node enables `explorer`, and a
+  disabled node answers its routes with a 404 in the v2 error envelope.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
