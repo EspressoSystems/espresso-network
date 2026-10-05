@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/staking-cli/src/cli.rs`."><title>cli.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="staking_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.1 (8bab26f4f 2026-07-14)" data-channel="1.97.1" data-search-js="search-fd9372ac.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-fcd733ba.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">staking_cli/</div>cli.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#![doc = <span class="macro">include_str!</span>(<span class="string">"../README.md"</span>)]
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/staking-cli/src/cli.rs`."><title>cli.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-0c87338a.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="staking_cli" data-themes="" data-resource-suffix="" data-rustdoc-version="1.99.0 (b940084d7 2026-09-28)" data-channel="1.99.0" data-search-js="search-cf4fc35e.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="../../static.files/src-script-813739b1.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">staking_cli/</div>cli.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="attr">#![doc = <span class="macro">include_str!</span>(<span class="string">"../README.md"</span>)]
 <a href=#2 id=2 data-nosnippet>2</a></span><span class="kw">use </span>std::path::PathBuf;
 <a href=#3 id=3 data-nosnippet>3</a>
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>alloy::{
@@ -488,7 +488,7 @@
 <a href=#488 id=488 data-nosnippet>488</a>    <span class="comment">// Commands that just read from chain
 <a href=#489 id=489 data-nosnippet>489</a>    </span><span class="kw">if let </span>Commands::Account = config.commands {
 <a href=#490 id=490 data-nosnippet>490</a>        <span class="kw">let </span>account = NetworkWallet::&lt;Ethereum&gt;::default_signer_address(
-<a href=#491 id=491 data-nosnippet>491</a>            wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>,
+<a href=#491 id=491 data-nosnippet>491</a>            wallet.as_ref().ok_or_else(require_wallet)<span class="question-mark">?</span>,
 <a href=#492 id=492 data-nosnippet>492</a>        );
 <a href=#493 id=493 data-nosnippet>493</a>        <span class="macro">println!</span>(<span class="string">"{account}"</span>);
 <a href=#494 id=494 data-nosnippet>494</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
@@ -747,7 +747,7 @@
 <a href=#747 id=747 data-nosnippet>747</a>                </span>);
 <a href=#748 id=748 data-nosnippet>748</a>            }
 <a href=#749 id=749 data-nosnippet>749</a>            <span class="kw">if </span>!config.export_calldata {
-<a href=#750 id=750 data-nosnippet>750</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#750 id=750 data-nosnippet>750</a>                wallet.as_ref().ok_or_else(require_wallet)<span class="question-mark">?</span>;
 <a href=#751 id=751 data-nosnippet>751</a>            }
 <a href=#752 id=752 data-nosnippet>752</a>            <span class="kw">let </span>payload = resolve_node_signatures(
 <a href=#753 id=753 data-nosnippet>753</a>                signature_args,
@@ -791,7 +791,7 @@
 <a href=#791 id=791 data-nosnippet>791</a>                </span>);
 <a href=#792 id=792 data-nosnippet>792</a>            }
 <a href=#793 id=793 data-nosnippet>793</a>            <span class="kw">if </span>!config.export_calldata {
-<a href=#794 id=794 data-nosnippet>794</a>                <span class="kw">let </span>w = wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#794 id=794 data-nosnippet>794</a>                <span class="kw">let </span>w = wallet.as_ref().ok_or_else(require_wallet)<span class="question-mark">?</span>;
 <a href=#795 id=795 data-nosnippet>795</a>                <span class="kw">let </span>addr = NetworkWallet::&lt;Ethereum&gt;::default_signer_address(w);
 <a href=#796 id=796 data-nosnippet>796</a>                <span class="macro">tracing::info!</span>(<span class="string">"Updating validator {} with new keys"</span>, addr);
 <a href=#797 id=797 data-nosnippet>797</a>            }
@@ -847,7 +847,7 @@
 <a href=#847 id=847 data-nosnippet>847</a>            skip_reachability_check,
 <a href=#848 id=848 data-nosnippet>848</a>        } =&gt; {
 <a href=#849 id=849 data-nosnippet>849</a>            <span class="kw">if </span>!config.export_calldata {
-<a href=#850 id=850 data-nosnippet>850</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#850 id=850 data-nosnippet>850</a>                wallet.as_ref().ok_or_else(require_wallet)<span class="question-mark">?</span>;
 <a href=#851 id=851 data-nosnippet>851</a>            }
 <a href=#852 id=852 data-nosnippet>852</a>            <span class="kw">if </span>!skip_reachability_check {
 <a href=#853 id=853 data-nosnippet>853</a>                check_if_reachable(p2p_addr).<span class="kw">await</span>;
@@ -865,7 +865,7 @@
 <a href=#865 id=865 data-nosnippet>865</a>            espresso_key_args,
 <a href=#866 id=866 data-nosnippet>866</a>        } =&gt; {
 <a href=#867 id=867 data-nosnippet>867</a>            <span class="kw">if </span>!config.export_calldata {
-<a href=#868 id=868 data-nosnippet>868</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#868 id=868 data-nosnippet>868</a>                wallet.as_ref().ok_or_else(require_wallet)<span class="question-mark">?</span>;
 <a href=#869 id=869 data-nosnippet>869</a>            }
 <a href=#870 id=870 data-nosnippet>870</a>            Transaction::UpdateX25519Key {
 <a href=#871 id=871 data-nosnippet>871</a>                stake_table: stake_table_addr,
@@ -879,7 +879,7 @@
 <a href=#879 id=879 data-nosnippet>879</a>            skip_reachability_check,
 <a href=#880 id=880 data-nosnippet>880</a>        } =&gt; {
 <a href=#881 id=881 data-nosnippet>881</a>            <span class="kw">if </span>!config.export_calldata {
-<a href=#882 id=882 data-nosnippet>882</a>                wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#882 id=882 data-nosnippet>882</a>                wallet.as_ref().ok_or_else(require_wallet)<span class="question-mark">?</span>;
 <a href=#883 id=883 data-nosnippet>883</a>            }
 <a href=#884 id=884 data-nosnippet>884</a>            <span class="kw">if </span>!skip_reachability_check {
 <a href=#885 id=885 data-nosnippet>885</a>                check_if_reachable(p2p_addr).<span class="kw">await</span>;
@@ -930,7 +930,7 @@
 <a href=#930 id=930 data-nosnippet>930</a>                })<span class="question-mark">?
 <a href=#931 id=931 data-nosnippet>931</a>            </span>} <span class="kw">else </span>{
 <a href=#932 id=932 data-nosnippet>932</a>                NetworkWallet::&lt;Ethereum&gt;::default_signer_address(
-<a href=#933 id=933 data-nosnippet>933</a>                    wallet.as_ref().ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>,
+<a href=#933 id=933 data-nosnippet>933</a>                    wallet.as_ref().ok_or_else(require_wallet)<span class="question-mark">?</span>,
 <a href=#934 id=934 data-nosnippet>934</a>                )
 <a href=#935 id=935 data-nosnippet>935</a>            };
 <a href=#936 id=936 data-nosnippet>936</a>            fetch_claim_rewards_inputs(
@@ -993,7 +993,7 @@
 <a href=#993 id=993 data-nosnippet>993</a>    }
 <a href=#994 id=994 data-nosnippet>994</a>
 <a href=#995 id=995 data-nosnippet>995</a>    <span class="comment">// For execution, we need the wallet
-<a href=#996 id=996 data-nosnippet>996</a>    </span><span class="kw">let </span>wallet = wallet.ok_or_else(<span class="kw-2">&amp;</span>require_wallet)<span class="question-mark">?</span>;
+<a href=#996 id=996 data-nosnippet>996</a>    </span><span class="kw">let </span>wallet = wallet.ok_or_else(require_wallet)<span class="question-mark">?</span>;
 <a href=#997 id=997 data-nosnippet>997</a>    <span class="kw">let </span>account = NetworkWallet::&lt;Ethereum&gt;::default_signer_address(<span class="kw-2">&amp;</span>wallet);
 <a href=#998 id=998 data-nosnippet>998</a>
 <a href=#999 id=999 data-nosnippet>999</a>    <span class="comment">// Check that our Ethereum balance isn't zero before proceeding.
