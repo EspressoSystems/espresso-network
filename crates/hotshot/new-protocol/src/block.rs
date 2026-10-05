@@ -128,7 +128,7 @@ struct RetryEntry<T: NodeType> {
 
 struct PoolEntry<T: NodeType> {
     tx: T::Transaction,
-    /// The view the transaction was sent for.
+    /// The view the transaction was sent for, or the view it arrived in if that is later.
     view: ViewNumber,
 }
 
@@ -376,16 +376,17 @@ impl<T: NodeType> BlockBuilder<T> {
         (self.retry_pending.len(), self.retry_total_bytes as usize)
     }
 
-    /// Returns one message per upcoming leader to send `tx` to. Resubmitting a queued
-    /// transaction succeeds without queueing or sending it twice.
+    /// Returns the message for the upcoming leaders, addressed to the next view, which the
+    /// coordinator sends on to the leaders of the `fanout` views from there. Resubmitting a
+    /// queued transaction succeeds without queueing or sending it twice.
     pub fn on_submit_transaction(
         &mut self,
         tx: T::Transaction,
-    ) -> Result<Vec<TransactionMessage<T>>, SubmitError> {
+    ) -> Result<Option<TransactionMessage<T>>, SubmitError> {
         let hash = tx.commit();
 
         if self.retry_pending.contains_key(&hash) {
-            return Ok(Vec::new());
+            return Ok(None);
         }
 
         let size = tx.minimum_block_size();
@@ -414,7 +415,10 @@ impl<T: NodeType> BlockBuilder<T> {
 
         let valid_until = self.current_view + self.config.ttl;
         let sent_until = self.current_view + self.config.fanout.get();
-        let messages = self.to_upcoming_leaders(self.current_view, &Vec::from([tx.clone()]));
+        let message = TransactionMessage {
+            view: self.current_view + 1,
+            transactions: Vec::from([tx.clone()]),
+        };
 
         self.retry_total_bytes += size;
         self.retry_order.insert((valid_until, hash));
@@ -428,31 +432,15 @@ impl<T: NodeType> BlockBuilder<T> {
                 sent_until,
             },
         );
-        Ok(messages)
-    }
-
-    /// One message with `transactions` for the leader of each of the `fanout` views after
-    /// `view`.
-    fn to_upcoming_leaders(
-        &self,
-        view: ViewNumber,
-        transactions: &[T::Transaction],
-    ) -> Vec<TransactionMessage<T>> {
-        (1..=self.config.fanout.get())
-            .map(|ahead| TransactionMessage {
-                view: view + ahead,
-                transactions: transactions.to_vec(),
-            })
-            .collect()
+        Ok(Some(message))
     }
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
-        // A sender behind this node may name a view that has passed. Counting it from now keeps
-        // it from jumping ahead of current transactions or expiring before it can be built.
+        // A sender behind this node may name a view that has passed. Pooling it as of now keeps
+        // it from expiring before it can be built.
         let view = msg.view.max(self.current_view);
-        let max_bytes = self
-            .block_size(view)
-            .saturating_mul(self.config.fanout.get() + 1);
+        let block_size = self.block_size(view);
+        let max_bytes = block_size.saturating_mul(self.config.fanout.get() + 1);
         for tx in msg.transactions {
             let hash = tx.commit();
 
@@ -465,6 +453,10 @@ impl<T: NodeType> BlockBuilder<T> {
             }
 
             let size = tx.minimum_block_size();
+            // It could never be built, and would hold pool space until it expires.
+            if size > block_size {
+                continue;
+            }
             if self.leader_total_bytes + size > max_bytes {
                 continue;
             }
@@ -480,10 +472,10 @@ impl<T: NodeType> BlockBuilder<T> {
         self.mark_included(view, hashes);
     }
 
-    /// Returns the pending transactions to send again, one message per upcoming leader, each
-    /// within one block and one message. A transaction is sent again only once every leader it
-    /// went to has had its turn without including it.
-    pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<TransactionMessage<T>> {
+    /// Returns the pending transactions to send again, within one block and one message,
+    /// addressed to the next view like `on_submit_transaction`. A transaction is sent again only
+    /// once every leader it went to has had its turn without including it.
+    pub fn on_view_changed(&mut self, view: ViewNumber) -> Option<TransactionMessage<T>> {
         self.current_view = view;
         while let Some(&(valid_until, hash)) = self.retry_order.first() {
             if valid_until >= view {
@@ -495,9 +487,12 @@ impl<T: NodeType> BlockBuilder<T> {
 
         let batch = self.resend_batch(view);
         if batch.is_empty() {
-            return Vec::new();
+            return None;
         }
-        self.to_upcoming_leaders(view, &batch)
+        Some(TransactionMessage {
+            view: view + 1,
+            transactions: batch,
+        })
     }
 
     fn resend_batch(&mut self, view: ViewNumber) -> Vec<T::Transaction> {

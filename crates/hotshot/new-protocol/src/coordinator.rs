@@ -26,7 +26,7 @@ use hotshot_types::{
         signature_key::StateSignatureKey,
     },
     upgrade_config::UpgradeConfig,
-    utils::{epoch_from_block_number, is_epoch_root},
+    utils::{is_epoch_root, is_last_block},
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
@@ -650,23 +650,19 @@ where
                         }
                         // We built this block; skip reconstructing it from our own loopback share.
                         self.vid_reconstructor.retire_view(block.view);
-                        // Every leader a transaction was sent to holds a copy of it, not
-                        // only the next one, and each must drop what this block includes.
-                        let mut sent_to = Vec::new();
-                        for ahead in 1..=self.block_builder.fanout().get() {
-                            let view = block.view + ahead;
-                            let Some(leader) = self.upcoming_leader(view, epoch) else {
-                                warn!(%view, %epoch, "failed to resolve leader for dedup manifest");
-                                continue;
-                            };
-                            if sent_to.contains(&leader) {
-                                continue;
-                            }
+                        // Each of this block's transactions was sent to `fanout` leaders up to
+                        // view `block.view - 1 + fanout`, so the leaders of the next
+                        // `fanout - 1` views may hold copies, and must drop them.
+                        let holders = self.upcoming_leaders(
+                            block.view + 1,
+                            self.block_builder.fanout().get() - 1,
+                            epoch,
+                        );
+                        for (_, leader) in holders {
                             self.unicast_block(
                                 &leader,
                                 BlockMessage::DedupManifest(manifest.clone()),
                             )?;
-                            sent_to.push(leader);
                         }
                         return Ok(block.into())
                     }
@@ -1112,10 +1108,12 @@ where
                 info!(%node, %view, %epoch, "view changed");
                 self.timer.reset_with(view);
                 self.gc(epoch, GcScope::Local(view))?;
-                let resends = self.block_builder.on_view_changed(view);
+                let resend = self.block_builder.on_view_changed(view);
                 self.participation.on_view_changed(epoch);
                 self.on_view_changed_metrics(view, epoch);
-                self.send_transactions(resends, epoch)?;
+                if let Some(resend) = resend {
+                    self.send_transactions(resend, epoch)?;
+                }
 
                 // Proactively fetch the DRB for the next epoch so
                 // late-starting nodes have it before they need it
@@ -1750,42 +1748,56 @@ where
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
     }
 
-    /// Sends each message to the leader of its view. Every message carries the same
-    /// transactions, so a leader of several views gets only the one for its earliest view.
+    /// Sends `forward` to the leaders of the `fanout` views from its own, each leader once with
+    /// the earliest of its views.
     fn send_transactions(
         &mut self,
-        messages: Vec<TransactionMessage<T>>,
+        forward: TransactionMessage<T>,
         epoch: EpochNumber,
     ) -> Result<(), CoordinatorError> {
-        let mut sent_to = Vec::new();
-        for message in messages {
-            let view = message.view;
-            let Some(leader) = self.upcoming_leader(view, epoch) else {
-                warn!(%view, %epoch, "failed to resolve leader for transactions");
-                continue;
+        let leaders = self.upcoming_leaders(forward.view, self.block_builder.fanout().get(), epoch);
+        for (view, leader) in leaders {
+            let message = TransactionMessage {
+                view,
+                transactions: forward.transactions.clone(),
             };
-            if sent_to.contains(&leader) {
-                continue;
-            }
             self.unicast_block(&leader, BlockMessage::Transactions(message))
                 .map_err(|e| e.context("unicast transactions"))?;
-            sent_to.push(leader);
         }
         Ok(())
     }
 
-    /// The leader of an upcoming `view`. Consensus picks it with the epoch of the block proposed
-    /// in `view`, which near an epoch's end is the next epoch. That block's height is
-    /// extrapolated from the latest proposal, assuming every view in between adds a block.
-    /// `epoch` is the fallback when there is no proposal yet or its epoch's stake table is
-    /// unknown.
+    /// The leaders of the `count` views from `first`, each once with the earliest of its views.
+    fn upcoming_leaders(
+        &mut self,
+        first: ViewNumber,
+        count: u64,
+        epoch: EpochNumber,
+    ) -> Vec<(ViewNumber, T::SignatureKey)> {
+        let mut leaders = Vec::<(ViewNumber, T::SignatureKey)>::new();
+        for view in (0..count).map(|ahead| first + ahead) {
+            let Some(leader) = self.upcoming_leader(view, epoch) else {
+                warn!(%view, %epoch, "failed to resolve an upcoming leader");
+                continue;
+            };
+            if leaders.iter().all(|(_, known)| *known != leader) {
+                leaders.push((view, leader));
+            }
+        }
+        leaders
+    }
+
+    /// The leader of an upcoming `view`. Consensus picks it with the epoch of the block it
+    /// proposes, which is the next epoch when that block builds on its epoch's last block. Timed
+    /// out views add no block, so the latest proposal is the best guess for that parent. `epoch`
+    /// is the fallback when there is no proposal yet or its epoch's stake table is unknown.
     fn upcoming_leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
         let expected = self.consensus.last_proposal_before(view).map(|p| {
-            let height = p.block_header.block_number() + (*view - *p.view_number());
-            EpochNumber::new(epoch_from_block_number(
-                height,
-                *self.consensus.epoch_height,
-            ))
+            if is_last_block(p.block_header.block_number(), *self.consensus.epoch_height) {
+                p.epoch + 1
+            } else {
+                p.epoch
+            }
         });
         expected
             .and_then(|e| self.leader(view, e))
@@ -1840,18 +1852,18 @@ where
                 });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
-                let messages = match self.block_builder.on_submit_transaction(tx) {
-                    Ok(messages) => messages,
+                let forward = match self.block_builder.on_submit_transaction(tx) {
+                    Ok(forward) => forward,
                     Err(err) => {
                         let _ = respond.send(Err(err));
                         return Ok(());
                     },
                 };
-                // The transaction is queued now, and the retry buffer resends it if this send
-                // fails or there is no leader yet, before the first epoch.
+                // The transaction is queued, and the retry buffer resends it if no leader
+                // resolves now.
                 let _ = respond.send(Ok(()));
-                if let Some(epoch) = self.consensus.current_epoch() {
-                    self.send_transactions(messages, epoch)?;
+                if let Some(forward) = forward {
+                    self.send_transactions(forward, self.epoch())?;
                 }
             },
             ClientRequest::UpdateLeaf { update, respond } => {
