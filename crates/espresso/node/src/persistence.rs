@@ -259,7 +259,7 @@ mod tests {
     use test_utils::reserve_tcp_port;
     use tokio::{spawn, time::sleep};
     use vbs::version::Version;
-    use versions::{NEW_PROTOCOL_VERSION, Upgrade};
+    use versions::Upgrade;
 
     use crate::{
         RECENT_STAKE_TABLES_LIMIT, SequencerApiVersion,
@@ -2286,8 +2286,6 @@ mod tests {
     pub async fn test_stake_table_fetching_from_persistence<P: TestablePersistence>(
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
-        // The new protocol only admits validators with the cliquenet connect info V3 registers.
-        let stake_table_version = StakeTableContractVersion::V3;
         let epoch_height = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -2312,26 +2310,17 @@ mod tests {
 
         let persistence = persistence_options[0].clone().create().await.unwrap();
 
-        // Build the config with PoS hook
         let l1_url = network_config.l1_url();
-
-        let upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
         let testnet_config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(query_api_options)
             .network_config(network_config.clone())
             .persistences(persistence_options.clone())
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                stake_table_version,
-                upgrade,
-            )
-            .await
-            .expect("Pos deployment failed")
-            .build();
+            .build()
+            .await;
 
         //start the network
-        let test_network = TestNetwork::new(testnet_config, upgrade).await;
+        let test_network = TestNetwork::new(testnet_config).await;
 
         let client: Client<ClientErr, SequencerApiVersion> = Client::new(
             format!("http://localhost:{query_service_port}")

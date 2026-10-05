@@ -13,9 +13,7 @@ use espresso_node::{
     api::{
         data_source::testing::TestableSequencerDataSource,
         options,
-        test_helpers::{
-            NEW_PROTOCOL, STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder,
-        },
+        test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
     },
     state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
     testing::{TestConfigBuilder, wait_for_epochs},
@@ -24,7 +22,6 @@ use espresso_types::{L1ClientOptions, SeqTypes};
 use hotshot_contract_adapter::{
     reward::RewardClaimInput,
     sol_types::{EspTokenV2, LightClientV3, RewardClaim},
-    stake_table::StakeTableContractVersion,
 };
 use hotshot_query_service::data_source::SqlDataSource;
 use hotshot_state_prover::{StateProverConfig, v3::service::run_prover_once};
@@ -88,16 +85,12 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .api_config(SqlDataSource::options(&storage[0], api_options))
         .network_config(network_config)
         .persistences(persistence.clone())
-        .pos_hook(
-            DelegationConfig::default(),
-            StakeTableContractVersion::V3,
-            NEW_PROTOCOL,
-        )
-        .await?
-        .build();
+        .delegation(DelegationConfig::default())
+        .build()
+        .await;
 
     println!("Starting Espresso TestNetwork with {} nodes...", NUM_NODES);
-    let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+    let network = TestNetwork::new(config).await;
     println!("TestNetwork started successfully");
 
     let contracts = network.contracts.unwrap();

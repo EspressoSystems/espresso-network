@@ -541,7 +541,7 @@ mod test {
             Options,
             data_source::testing::TestableSequencerDataSource,
             sql::DataSource,
-            test_helpers::{NEW_PROTOCOL, TestNetwork, TestNetworkConfigBuilder},
+            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
         },
         testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
@@ -591,11 +591,10 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
         let client = client(url);
 
         // Check that the block height increases over time.
@@ -632,11 +631,10 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
         let client = client(url.clone());
 
         // Wait for a chain of leaves to be produced.
@@ -717,11 +715,10 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
         let client = client(url.clone());
         let http = HttpClient::new(url);
 
@@ -796,11 +793,10 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
         let client = client(url.clone());
 
         // Wait for a few blocks to be produced.
@@ -853,11 +849,10 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let client = client(url.clone());
         let http = HttpClient::new(url);
 

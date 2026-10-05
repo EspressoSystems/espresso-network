@@ -672,23 +672,25 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         .try_into()
         .expect("one persistence per node");
 
+    let upgrade = match version {
+        DevNodeVersion::V0_3 => Upgrade::trivial(versions::version(0, 3)),
+        DevNodeVersion::V0_4 => Upgrade::trivial(versions::version(0, 4)),
+        DevNodeVersion::V0_5 => Upgrade::trivial(versions::version(0, 5)),
+        DevNodeVersion::V0_6 => Upgrade::trivial(versions::NEW_PROTOCOL_VERSION),
+    };
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
         .api_config(api_options)
         .network_config(network_config)
         .states(states)
         .persistences(persistences)
-        .build();
+        .upgrade(upgrade)
+        // The dev-node deploys its own contracts and puts the stake table in `states`.
+        .no_stake_table()
+        .build()
+        .await;
 
     // Start the nodes
-    let network = {
-        let u = match version {
-            DevNodeVersion::V0_3 => Upgrade::trivial(versions::version(0, 3)),
-            DevNodeVersion::V0_4 => Upgrade::trivial(versions::version(0, 4)),
-            DevNodeVersion::V0_5 => Upgrade::trivial(versions::version(0, 5)),
-            DevNodeVersion::V0_6 => Upgrade::trivial(versions::NEW_PROTOCOL_VERSION),
-        };
-        TestNetwork::new(config, u).await
-    };
+    let network = TestNetwork::new(config).await;
 
     let relay_server_handle = spawn(async move {
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,

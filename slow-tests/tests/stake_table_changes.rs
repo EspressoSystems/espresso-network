@@ -74,9 +74,6 @@ struct StakeTableTestNetwork<const NUM_NODES: usize> {
     client: Client<ClientErr, SequencerApiVersion>,
     stake_table: Address,
     api_port: u16,
-    /// The upgrade the network was started with, reused when starting or
-    /// restarting nodes.
-    upgrade: Upgrade,
     /// Every node's genesis state (its chain config carries the stake table
     /// address), reused for deferred-started nodes.
     genesis_state: ValidatedState,
@@ -88,7 +85,6 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
     async fn start(
         network_config: TestConfig<NUM_NODES>,
         upgrade: Upgrade,
-        stake_table_version: StakeTableContractVersion,
         delegation_config: DelegationConfig,
         registered: &[usize],
         // Nodes started later via [`Self::start_deferred_node`].
@@ -120,13 +116,14 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
             builder = builder.initial_token_supply(supply);
         }
         let config = builder
-            .pos_hook_with_registered(delegation_config, stake_table_version, upgrade, registered)
-            .await
-            .unwrap()
-            .build();
+            .upgrade(upgrade)
+            .delegation(delegation_config)
+            .registered(registered)
+            .build()
+            .await;
         let genesis_state = config.states()[0].clone();
 
-        let network = TestNetwork::new(config, upgrade).await;
+        let network = TestNetwork::new(config).await;
         let stake_table = network
             .contracts
             .as_ref()
@@ -143,7 +140,6 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
             client,
             stake_table,
             api_port,
-            upgrade,
             genesis_state,
             _storage: storage,
         }
@@ -160,7 +156,6 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
                 self.genesis_state.clone(),
                 persistence,
                 node_catchup(self.api_port),
-                self.upgrade,
             )
             .await;
     }
@@ -177,7 +172,6 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
                 self.genesis_state.clone(),
                 persistence,
                 node_catchup(self.api_port),
-                self.upgrade,
             )
             .await;
     }
@@ -235,7 +229,6 @@ async fn test_stake_table_full_set_replacement() -> anyhow::Result<()> {
     let net = StakeTableTestNetwork::start(
         network_config.clone(),
         V6,
-        StakeTableContractVersion::V3,
         DelegationConfig::MultipleDelegators,
         &outgoing,
         &[],
@@ -329,7 +322,6 @@ async fn test_stake_table_grow_and_shrink() -> anyhow::Result<()> {
     let net = StakeTableTestNetwork::start(
         network_config.clone(),
         V6,
-        StakeTableContractVersion::V3,
         DelegationConfig::EqualAmounts,
         &initial,
         &[],
@@ -415,7 +407,6 @@ async fn test_stake_table_delegation_reshuffle() -> anyhow::Result<()> {
     let net = StakeTableTestNetwork::start(
         network_config.clone(),
         V6,
-        StakeTableContractVersion::V3,
         DelegationConfig::EqualAmounts,
         &(0..NUM_NODES).collect::<Vec<_>>(),
         &[],
@@ -571,7 +562,6 @@ async fn fresh_node_joins() -> anyhow::Result<()> {
     let mut net = StakeTableTestNetwork::start(
         network_config.clone(),
         V6,
-        StakeTableContractVersion::V3,
         DelegationConfig::EqualAmounts,
         &initial,
         &[FRESH],
@@ -670,7 +660,6 @@ async fn rotate_validator(rotation: Rotation) -> anyhow::Result<()> {
     let mut net = StakeTableTestNetwork::start(
         network_config.clone(),
         V6,
-        StakeTableContractVersion::V3,
         DelegationConfig::EqualAmounts,
         &(0..NUM_NODES).collect::<Vec<_>>(),
         &[],

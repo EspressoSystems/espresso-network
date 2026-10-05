@@ -2257,7 +2257,7 @@ mod test {
     use super::*;
     use crate::api::{
         Options,
-        test_helpers::{NEW_PROTOCOL, TestNetwork, TestNetworkConfigBuilder},
+        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
     };
 
     async fn start_test_network() -> TestNetwork<persistence::no_storage::Options, 5> {
@@ -2266,10 +2266,9 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(Options::with_port(port))
             .network_config(TestConfigBuilder::default().build())
-            .new_protocol()
-            .await
-            .build();
-        TestNetwork::new(config, NEW_PROTOCOL).await
+            .build()
+            .await;
+        TestNetwork::new(config).await
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

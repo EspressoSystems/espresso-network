@@ -8,19 +8,17 @@ use espresso_node::{
         Options,
         data_source::testing::TestableSequencerDataSource,
         sql::DataSource as SqlDataSource,
-        test_helpers::{NEW_PROTOCOL, TestNetwork, TestNetworkConfigBuilder},
+        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
     },
     catchup::StatePeers,
     testing::{TestConfig, TestConfigBuilder},
 };
 use espresso_types::{FeeAccount, FeeAmount, Header, SeqTypes};
 use futures::{StreamExt, TryStreamExt, future::join_all};
-use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_query_service::{availability::BlockQueryData, types::HeightIndexed};
 use hotshot_types::traits::metrics::NoMetrics;
 use http_client::{Client, error::ClientErr};
 use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
-use staking_cli::demo::DelegationConfig;
 use test_utils::reserve_tcp_port;
 use tokio::time::{sleep, timeout};
 
@@ -60,15 +58,9 @@ async fn slow_test_merklized_state_api() {
                 &NoMetrics,
             )
         }))
-        .pos_hook(
-            DelegationConfig::MultipleDelegators,
-            StakeTableContractVersion::V3,
-            NEW_PROTOCOL,
-        )
-        .await
-        .unwrap()
-        .build();
-    let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        .build()
+        .await;
+    let mut network = TestNetwork::new(config).await;
     let url = format!("http://localhost:{port}").parse().unwrap();
     let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 

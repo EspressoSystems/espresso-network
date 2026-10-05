@@ -1833,7 +1833,7 @@ pub mod test_helpers {
     use test_utils::reserve_tcp_port;
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
-    use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
+    use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
     use super::*;
     use crate::{
@@ -1859,6 +1859,7 @@ pub mod test_helpers {
         pub contracts: Option<Contracts>,
         /// Deferred node indices not yet started (see [`Self::start_deferred_node`]).
         deferred: Vec<usize>,
+        upgrade: Upgrade,
     }
 
     pub struct TestNetworkConfig<const NUM_NODES: usize, P, C>
@@ -1873,6 +1874,7 @@ pub mod test_helpers {
         api_config: Options,
         contracts: Option<Contracts>,
         deferred_start: Vec<usize>,
+        upgrade: Upgrade,
     }
 
     impl<const NUM_NODES: usize, P, C> TestNetworkConfig<{ NUM_NODES }, P, C>
@@ -1883,6 +1885,17 @@ pub mod test_helpers {
         pub fn states(&self) -> [ValidatedState; NUM_NODES] {
             self.state.clone()
         }
+    }
+
+    #[derive(Clone)]
+    enum StakeTableSetup {
+        /// Deploy a V3 stake table and register `registered` (every node when `None`).
+        Deploy {
+            delegation: DelegationConfig,
+            registered: Option<Vec<usize>>,
+        },
+        /// The caller brings its own chain state, or the test runs without a stake table.
+        None,
     }
 
     #[derive(Clone)]
@@ -1899,6 +1912,9 @@ pub mod test_helpers {
         contracts: Option<Contracts>,
         initial_token_supply: Option<U256>,
         deferred_start: Vec<usize>,
+        upgrade: Upgrade,
+        stake_table: StakeTableSetup,
+        states_after_deploy: Option<[ValidatedState; NUM_NODES]>,
     }
 
     impl Default for TestNetworkConfigBuilder<5, no_storage::Options, NullStateCatchup> {
@@ -1912,6 +1928,12 @@ pub mod test_helpers {
                 contracts: None,
                 initial_token_supply: None,
                 deferred_start: Vec::new(),
+                upgrade: NEW_PROTOCOL,
+                stake_table: StakeTableSetup::Deploy {
+                    delegation: DelegationConfig::MultipleDelegators,
+                    registered: None,
+                },
+                states_after_deploy: None,
             }
         }
     }
@@ -1930,6 +1952,12 @@ pub mod test_helpers {
                 contracts: None,
                 initial_token_supply: None,
                 deferred_start: Vec::new(),
+                upgrade: NEW_PROTOCOL,
+                stake_table: StakeTableSetup::Deploy {
+                    delegation: DelegationConfig::MultipleDelegators,
+                    registered: None,
+                },
+                states_after_deploy: None,
             }
         }
     }
@@ -1962,6 +1990,9 @@ pub mod test_helpers {
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
                 deferred_start: self.deferred_start,
+                upgrade: self.upgrade,
+                stake_table: self.stake_table,
+                states_after_deploy: self.states_after_deploy,
             }
         }
 
@@ -1983,6 +2014,9 @@ pub mod test_helpers {
                 contracts: self.contracts,
                 initial_token_supply: self.initial_token_supply,
                 deferred_start: self.deferred_start,
+                upgrade: self.upgrade,
+                stake_table: self.stake_table,
+                states_after_deploy: self.states_after_deploy,
             }
         }
 
@@ -1998,58 +2032,44 @@ pub mod test_helpers {
             self
         }
 
-        pub fn contracts(mut self, contracts: Contracts) -> Self {
-            self.contracts = Some(contracts);
+        /// The version the network starts at and, if it differs from the base, upgrades to.
+        pub fn upgrade(mut self, upgrade: Upgrade) -> Self {
+            self.upgrade = upgrade;
             self
         }
 
-        /// Run the network on the new protocol from genesis: deploys a V3 stake table with
-        /// every node registered and several delegators. Must be called after
-        /// `network_config()` and before `build()`, and the network must be started with
-        /// [`NEW_PROTOCOL`].
-        pub async fn new_protocol(self) -> Self {
-            self.pos_hook(
-                DelegationConfig::MultipleDelegators,
-                StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .expect("failed to deploy the stake table")
-        }
-
-        /// Setup for POS testing. Deploys contracts and adds the
-        /// stake table address to state. Must be called before `build()`.
-        pub async fn pos_hook(
-            self,
-            delegation_config: DelegationConfig,
-            stake_table_version: StakeTableContractVersion,
-            upgrade: Upgrade,
-        ) -> anyhow::Result<Self> {
-            let registered: Vec<usize> = (0..NUM_NODES).collect();
-            self.pos_hook_with_registered(
-                delegation_config,
-                stake_table_version,
-                upgrade,
-                &registered,
-            )
-            .await
-        }
-
-        /// Like [`Self::pos_hook`], but registers only the validators at the
-        /// `registered` node indices on the stake table contract. The other
-        /// nodes still run from genesis (which seeds the first two epochs)
-        /// and can be registered mid-test via [`register_validators`].
-        pub async fn pos_hook_with_registered(
-            self,
-            delegation_config: DelegationConfig,
-            stake_table_version: StakeTableContractVersion,
-            upgrade: Upgrade,
-            registered: &[usize],
-        ) -> anyhow::Result<Self> {
-            if upgrade.base < EPOCH_VERSION && upgrade.target < EPOCH_VERSION {
-                panic!("given version does not require pos deployment");
+        pub fn delegation(mut self, delegation: DelegationConfig) -> Self {
+            let StakeTableSetup::Deploy { delegation: d, .. } = &mut self.stake_table else {
+                panic!("delegation set on a network without a stake table");
             };
+            *d = delegation;
+            self
+        }
 
+        /// Registers only the validators at these node indices. The other nodes still run from
+        /// genesis, which seeds the first two epochs, and can be registered mid-test via
+        /// [`register_validators`].
+        pub fn registered(mut self, registered: &[usize]) -> Self {
+            let StakeTableSetup::Deploy { registered: r, .. } = &mut self.stake_table else {
+                panic!("registered set on a network without a stake table");
+            };
+            *r = Some(registered.to_vec());
+            self
+        }
+
+        pub fn no_stake_table(mut self) -> Self {
+            self.stake_table = StakeTableSetup::None;
+            self
+        }
+
+        /// Replaces every node's state after the stake table deploy, which otherwise starts every
+        /// node from node 0's state.
+        pub fn states_after_deploy(mut self, state: [ValidatedState; NUM_NODES]) -> Self {
+            self.states_after_deploy = Some(state);
+            self
+        }
+
+        async fn deploy(self, delegation_config: DelegationConfig, registered: &[usize]) -> Self {
             let network_config = self
                 .network_config
                 .as_ref()
@@ -2097,9 +2117,9 @@ pub mod test_helpers {
                 .build()
                 .unwrap();
 
-            deploy_stake_table(&args, stake_table_version, &mut contracts)
+            deploy_stake_table(&args, StakeTableContractVersion::V3, &mut contracts)
                 .await
-                .context("failed to deploy contracts")?;
+                .expect("failed to deploy the stake table");
 
             let stake_table_address = contracts
                 .address(Contract::StakeTableProxy)
@@ -2152,12 +2172,23 @@ pub mod test_helpers {
                 chain_config: chain_config.into(),
                 ..state
             };
-            Ok(self
-                .states(std::array::from_fn(|_| state.clone()))
-                .contracts(contracts))
+            let mut builder = self.states(std::array::from_fn(|_| state.clone()));
+            builder.contracts = Some(contracts);
+            builder
         }
 
-        pub fn build(self) -> TestNetworkConfig<{ NUM_NODES }, P, C> {
+        pub async fn build(mut self) -> TestNetworkConfig<{ NUM_NODES }, P, C> {
+            if let StakeTableSetup::Deploy {
+                delegation,
+                registered,
+            } = self.stake_table.clone()
+            {
+                let registered = registered.unwrap_or_else(|| (0..NUM_NODES).collect());
+                self = self.deploy(delegation, &registered).await;
+            }
+            if let Some(state) = self.states_after_deploy.take() {
+                self.state = state;
+            }
             TestNetworkConfig {
                 state: self.state,
                 persistence: self.persistence.unwrap(),
@@ -2166,6 +2197,7 @@ pub mod test_helpers {
                 api_config: self.api_config.unwrap(),
                 contracts: self.contracts,
                 deferred_start: self.deferred_start,
+                upgrade: self.upgrade,
             }
         }
     }
@@ -2173,9 +2205,9 @@ pub mod test_helpers {
     impl<P: PersistenceOptions, const NUM_NODES: usize> TestNetwork<P, { NUM_NODES }> {
         pub async fn new<C: StateCatchup + 'static>(
             cfg: TestNetworkConfig<{ NUM_NODES }, P, C>,
-            upgrade: versions::Upgrade,
         ) -> Self {
             let mut cfg = cfg;
+            let upgrade = cfg.upgrade;
 
             let (builder_task, builder_url) =
                 run_test_builder::<{ NUM_NODES }>(cfg.network_config.builder_port()).await;
@@ -2284,7 +2316,12 @@ pub mod test_helpers {
                 temp_dir,
                 contracts: cfg.contracts,
                 deferred,
+                upgrade,
             }
+        }
+
+        pub fn upgrade(&self) -> Upgrade {
+            self.upgrade
         }
 
         /// Initializes and starts a node deferred at construction (see
@@ -2296,7 +2333,6 @@ pub mod test_helpers {
             state: ValidatedState,
             persistence: P,
             catchup: C,
-            upgrade: versions::Upgrade,
         ) -> &SequencerContext<network::Memory, P::Persistence> {
             assert_eq!(
                 self.deferred.first(),
@@ -2305,9 +2341,7 @@ pub mod test_helpers {
             );
             self.deferred.remove(0);
 
-            let ctx = self
-                .init_and_start(i, state, persistence, catchup, upgrade)
-                .await;
+            let ctx = self.init_and_start(i, state, persistence, catchup).await;
             self.peers.push(ctx);
             self.peers.last().unwrap()
         }
@@ -2323,7 +2357,6 @@ pub mod test_helpers {
             state: ValidatedState,
             persistence: P,
             catchup: C,
-            upgrade: versions::Upgrade,
         ) -> &SequencerContext<network::Memory, P::Persistence> {
             assert_ne!(i, 0, "node 0 runs the API server and cannot be restarted");
             assert!(
@@ -2344,9 +2377,7 @@ pub mod test_helpers {
             .await
             .expect("shut-down node did not release its coordinator port");
 
-            let ctx = self
-                .init_and_start(i, state, persistence, catchup, upgrade)
-                .await;
+            let ctx = self.init_and_start(i, state, persistence, catchup).await;
             self.peers[i - 1] = ctx;
             &self.peers[i - 1]
         }
@@ -2359,7 +2390,6 @@ pub mod test_helpers {
             state: ValidatedState,
             persistence: P,
             catchup: C,
-            upgrade: versions::Upgrade,
         ) -> SequencerContext<network::Memory, P::Persistence> {
             let ctx = self
                 .cfg
@@ -2372,7 +2402,7 @@ pub mod test_helpers {
                     &NoMetrics,
                     STAKE_TABLE_CAPACITY_FOR_TEST,
                     NullEventConsumer,
-                    upgrade,
+                    self.upgrade,
                     self.cfg.upgrades(),
                 )
                 .await;
@@ -2645,11 +2675,10 @@ pub mod test_helpers {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         client.connect(None).await;
 
         // The status API is well tested in the query service repo. Here we are just smoke testing
@@ -2720,11 +2749,10 @@ pub mod test_helpers {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let mut events = network.server.event_stream();
 
         client.connect(None).await;
@@ -2755,11 +2783,10 @@ pub mod test_helpers {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
 
         let mut height: u64;
         // Wait for block >=2 appears
@@ -2796,11 +2823,10 @@ pub mod test_helpers {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         client.connect(None).await;
 
         // Wait for a few blocks to be decided.
@@ -2898,8 +2924,8 @@ mod api_tests {
     };
     use http_client::{Client, error::ClientErr};
     use test_helpers::{
-        NEW_PROTOCOL, TestNetwork, TestNetworkConfigBuilder, catchup_test_helper,
-        state_signature_test_helper, status_test_helper, submit_test_helper,
+        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
+        status_test_helper, submit_test_helper,
     };
     use test_utils::reserve_tcp_port;
     use vbs::version::StaticVersion;
@@ -2969,11 +2995,10 @@ mod api_tests {
             )
             .network_config(network_config)
             .persistences(persistence)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let mut events = network.server.event_stream();
 
         // Connect client.
@@ -3506,7 +3531,6 @@ mod test {
     use hotshot_contract_adapter::{
         reward::RewardClaimInput,
         sol_types::{EspToken, StakeTableV3},
-        stake_table::StakeTableContractVersion,
     };
     use hotshot_query_service::{
         availability::{
@@ -3606,11 +3630,10 @@ mod test {
         let config = TestNetworkConfigBuilder::<5, _, NullStateCatchup>::default()
             .api_config(options)
             .network_config(network_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
 
         client.connect(None).await;
         let health = client.get::<AppHealth>("healthcheck").send().await.unwrap();
@@ -3649,11 +3672,10 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 
@@ -3738,11 +3760,10 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
         let url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
         client.connect(Some(Duration::from_secs(15))).await;
@@ -3775,11 +3796,10 @@ mod test {
                     .light_client(Default::default()),
             )
             .network_config(TestConfigBuilder::default().build())
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
 
         let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
@@ -3826,12 +3846,11 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
         let genesis_state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Wait for replica 0 to reach a (non-genesis) decide, before disconnecting it.
         let mut events = network.peers[0].event_stream();
@@ -3945,12 +3964,11 @@ mod test {
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
             .network_config(TestConfigBuilder::default().build())
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
         let genesis_state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Wait for replica 0 to reach a (non-genesis) decide, before disconnecting it.
         let mut events = network.peers[0].event_stream();
@@ -4080,12 +4098,11 @@ mod test {
             .persistences(persistence)
             .catchups(std::array::from_fn(|_| state_peers()))
             .network_config(TestConfigBuilder::default().build())
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
         let genesis_state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Interleave transactions with idle views so the chain gets both non-empty and empty
         // blocks. Which heights land either way is up to the builder, so the shape is read back
@@ -4314,11 +4331,10 @@ mod test {
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(Options::with_port(port))
             .network_config(network_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
         let genesis_state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Wait for replica 0 to decide in the third epoch.
         let mut events = network.peers[0].event_stream();
@@ -4439,12 +4455,11 @@ mod test {
                 )
             }))
             .network_config(TestConfigBuilder::default().build())
-            .new_protocol()
-            .await
-            .states(states)
-            .build();
+            .states_after_deploy(states)
+            .build()
+            .await;
 
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Wait for few blocks to be decided.
         network
@@ -4523,13 +4538,11 @@ mod test {
                 )
             }))
             .network_config(TestConfigBuilder::default().build())
-            .new_protocol()
-            .await
-            // After `new_protocol`, which would put its own chain config in every state.
-            .states(states)
-            .build();
+            .states_after_deploy(states)
+            .build()
+            .await;
 
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Wait for a few blocks to be decided.
         network
@@ -4579,11 +4592,10 @@ mod test {
             ))
             .persistences(persistence.clone())
             .network_config(TestConfigBuilder::default().build())
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Connect client.
         let client: Client<ClientErr, SequencerApiVersion> =
@@ -4654,11 +4666,10 @@ mod test {
                 )
             }))
             .network_config(TestConfigBuilder::default().build())
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
         let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{port}").parse().unwrap());
         client.connect(None).await;
@@ -4705,11 +4716,10 @@ mod test {
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)
             .network_config(network_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         client.connect(None).await;
 
         // Fetch a network config from the API server. The first peer URL is bogus, to test the
@@ -4779,16 +4789,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
 
         let mut prev_st = None;
         let state = network.server.decided_state().await.unwrap();
@@ -4887,16 +4891,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -4964,8 +4962,6 @@ mod test {
         const NUM_NODES: usize = 5;
         const TARGET_BLOCK_HEIGHT: u64 = 100;
 
-        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .epoch_start_block(0)
@@ -4996,16 +4992,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -5115,9 +5105,12 @@ mod test {
                 )
             }))
             .network_config(test_config)
-            .build();
+            .upgrade(UPGRADE)
+            .no_stake_table()
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, UPGRADE).await;
+        let network = TestNetwork::new(config).await;
         let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
@@ -5199,8 +5192,6 @@ mod test {
         const SHUTDOWN_HEIGHT: u64 = 10;
         const TARGET_BLOCK_HEIGHT: u64 = 50;
 
-        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
-
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
             .epoch_start_block(0)
@@ -5231,16 +5222,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -5297,7 +5282,6 @@ mod test {
     async fn test_new_protocol_validator_exit_at_epoch_boundary() -> anyhow::Result<()> {
         const NUM_NODES: usize = 5;
         const EPOCH_HEIGHT: u64 = 10;
-        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
         /// How many epochs after the exit transaction we allow for the event
         /// to finalize on L1 and reach a stake table snapshot before failing.
         const MAX_ACTIVATION_EPOCHS: u64 = 10;
@@ -5332,16 +5316,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let st_addr = network
             .contracts
             .as_ref()
@@ -5489,16 +5467,11 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await?
-            .build();
+            .build()
+            .await;
 
         let genesis_state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // `TestNetwork` only gives node 0 an API, so node 1 has to be served
         // separately to become the second query node. Its keys are already in the
@@ -5821,16 +5794,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -5941,16 +5908,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -6043,16 +6004,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -6169,16 +6124,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -6247,17 +6196,11 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream();
@@ -6385,17 +6328,11 @@ mod test {
             .network_config(network_config)
             .persistences(persistence_options.clone())
             .catchups(catchup_peers)
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream();
@@ -6533,8 +6470,8 @@ mod test {
             .unwrap();
 
         // The light client skips epoch-root stake-table-hash verification for pre-DRB headers only
-        // on the Decaf chain id, so use it to keep the V3->V4 catchup path covered. Must be set
-        // before `pos_hook`, which preserves the chain id from `state[0]`.
+        // on the Decaf chain id, so use it to keep the V3->V4 catchup path covered. The stake
+        // table deploy in `build()` keeps the chain id from `state[0]`.
         let decaf_state = ValidatedState {
             chain_config: ChainConfig {
                 chain_id: DECAF_CHAIN_ID,
@@ -6562,16 +6499,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
@@ -6784,11 +6715,10 @@ mod test {
             ))
             .network_config(TestConfigBuilder::default().build())
             .persistences(persistence.clone())
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
         let genesis_state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Replace peer 0 with a query node whose state pruner runs every second with zero
         // retention: left to itself, every run would prune right up to the chain tip. Consensus
@@ -7021,16 +6951,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
         // as the keys have already been initialized in the config above.
@@ -7306,16 +7230,11 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::VariableAmounts,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .delegation(DelegationConfig::VariableAmounts)
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let mut events = network.server.event_stream();
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -7553,7 +7472,7 @@ mod test {
             }))
             .initial_token_supply(initial_supply_tokens);
 
-        // Must set states before pos_hook, which preserves chain_id from state[0].
+        // The stake table deploy in `build()` keeps chain_id from state[0].
         if let Some(id) = chain_id {
             let state = ValidatedState {
                 chain_config: ChainConfig {
@@ -7567,16 +7486,11 @@ mod test {
         }
 
         let config = builder
-            .pos_hook(
-                DelegationConfig::VariableAmounts,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .delegation(DelegationConfig::VariableAmounts)
+            .build()
+            .await;
 
-        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let _network = TestNetwork::new(config).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -7778,11 +7692,10 @@ mod test {
             )
             .network_config(network_config)
             .persistences(persistence)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let mut events = network.server.event_stream();
 
         client.connect(None).await;
@@ -7872,11 +7785,10 @@ mod test {
             )
             .network_config(network_config)
             .persistences(persistence)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let mut events = network.server.event_stream();
 
         client.connect(None).await;
@@ -9518,11 +9430,10 @@ mod test {
             .api_config(SqlDataSource::options(&storage[0], options))
             .network_config(network_config)
             .persistences(persistence_options.clone())
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let mut events = network.server.event_stream();
         let start = Instant::now();
         let mut total_transactions = 0;
@@ -9723,11 +9634,10 @@ mod test {
             .api_config(SqlDataSource::options(&storage[0], options))
             .network_config(network_config)
             .persistences(persistence_options.clone())
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let mut events = network.server.event_stream();
         let mut all_transactions = HashMap::new();
         let mut namespace_tx: HashMap<_, HashSet<_>> = HashMap::new();
@@ -9849,15 +9759,9 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+            .build()
+            .await;
+        let mut network = TestNetwork::new(config).await;
 
         let mut events = network.peers[2].event_stream();
         // wait for 4 epochs
@@ -9913,16 +9817,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let mut events = network.server.event_stream();
 
         // Wait until 5 epochs have passed.
@@ -10039,16 +9937,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         let mut events = network.peers[2].event_stream();
         // Wait until at least 5 epochs have passed
@@ -10169,17 +10061,11 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                // We want no new rewards after setting the commission to zero.
-                DelegationConfig::NoSelfDelegation,
-                StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .delegation(DelegationConfig::NoSelfDelegation)
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let contracts = network.contracts.unwrap();
         let st_addr = contracts.address(Contract::StakeTableProxy).unwrap();
 
@@ -10324,18 +10210,11 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                // At 0.6 only validators with a registered x25519 key and p2p address are
-                // eligible, and only the V3 contract registers them.
-                DelegationConfig::EqualAmounts,
-                StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .delegation(DelegationConfig::EqualAmounts)
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let contracts = network.contracts.unwrap();
         let st_addr = contracts.address(Contract::StakeTableProxy).unwrap();
 
@@ -10612,16 +10491,10 @@ mod test {
                         &NoMetrics,
                     )
                 }))
-                .pos_hook(
-                    DelegationConfig::MultipleDelegators,
-                    hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                    NEW_PROTOCOL,
-                )
-                .await
-                .unwrap()
-                .build();
+                .build()
+                .await;
 
-            let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+            let mut network = TestNetwork::new(config).await;
 
             // wait for 4 epochs
             let mut events = network.server.event_stream();
@@ -11615,16 +11488,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -11708,16 +11575,10 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         let client: Client<ClientErr, StaticVersion<0, 1>> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -11808,11 +11669,10 @@ mod test {
                 )
             }))
             .network_config(test_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
         let mut events = network.server.event_stream();
 
         // Submit a transaction.
@@ -12074,11 +11934,10 @@ mod test {
                 )
             }))
             .network_config(test_config)
-            .new_protocol()
-            .await
-            .build();
+            .build()
+            .await;
 
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
         let client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(url);
         client.connect(None).await;
 
@@ -12210,15 +12069,10 @@ mod test {
             .network_config(network_config)
             .persistences(persistence)
             .catchups(catchup_peers)
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await?
-            .build();
+            .build()
+            .await;
 
-        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let network = TestNetwork::new(config).await;
 
         // Wait for chain to advance past our target height
         let height_client: Client<ClientErr, StaticVersion<0, 1>> =
@@ -12294,16 +12148,10 @@ mod test {
                 )
             }))
             .network_config(network_config)
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                Default::default(),
-                NEW_PROTOCOL,
-            )
-            .await
-            .unwrap()
-            .build();
+            .build()
+            .await;
 
-        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let mut network = TestNetwork::new(config).await;
 
         // Watch the decide stream and stop as soon as `boundary - 3` is decided. Consuming the
         // stream (rather than polling `decided_leaf`) makes this independent of block timing: we
@@ -12364,8 +12212,10 @@ mod test {
                 )
             }))
             .network_config(saved_cfg)
-            .build();
-        let network2 = TestNetwork::new(config2, NEW_PROTOCOL).await;
+            .no_stake_table()
+            .build()
+            .await;
+        let network2 = TestNetwork::new(config2).await;
 
         // The restarted network must keep advancing, including across the next epoch boundary.
         // Require BLOCKS_AFTER_RESTART new decides, using a lack-of-progress watchdog so a
