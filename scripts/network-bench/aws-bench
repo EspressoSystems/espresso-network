@@ -133,6 +133,8 @@ INDEX_ROW_JSON = "index-row.json"
 MANIFEST_JSON = "manifest.json"
 PUBLISH_REQUIRED = ("summary.md",)
 PUBLISH_MANIFEST_KEYS = ("fleet", "created_at", "git_rev", "query_db", "images")
+# Absent from manifests written before the run command was recorded.
+PUBLISH_MANIFEST_OPTIONAL = ("argv", "fleet_argv")
 PUBLISH_OPTIONAL = (
     "result.json",
     "cost.json",
@@ -717,6 +719,9 @@ class Manifest(FleetManifest):
     fleet: str
     index: int
     query_db: DbMode
+    # `argv` is the invocation of this run; `fleet_argv` the `up` that created the fleet,
+    # only for `run --fleet`.
+    fleet_argv: NotRequired[list[str]]
     run_estimate: NotRequired[RunEstimate]
     start_spread_s: NotRequired[float]
     config_hash: NotRequired[str]
@@ -1363,6 +1368,7 @@ def build_run_manifest(
     index: int,
     config_hash: str,
     run_estimate: RunEstimate | None,
+    argv: list[str],
 ) -> Manifest:
     """A copy of the fleet manifest, so that `render` needs only the run dir, plus what is
     specific to this measurement."""
@@ -1375,9 +1381,11 @@ def build_run_manifest(
         "index": index,
         "query_db": cfg.query_db,
         "config_hash": config_hash,
+        "argv": argv,
     }
     if run_estimate is not None:
         manifest["run_estimate"] = run_estimate
+        manifest["fleet_argv"] = fleet["argv"]
     return manifest
 
 
@@ -2848,7 +2856,7 @@ def plan_fleet(
         args, cfg, system, idle_fleet=False
     )
     fleet = render_fleet_dir(system, cfg, fleet_dir, hosts, pre, estimate, args.argv)
-    run_dir = render_run(fleet_dir, fleet, cfg, SINGLE_RUN)
+    run_dir = render_run(fleet_dir, fleet, cfg, SINGLE_RUN, args.argv)
     return fleet_dir, run_dir, init_terraform(system.run, fleet_dir), hosts, pre
 
 
@@ -3449,7 +3457,7 @@ def cmd_run_fleet(args: argparse.Namespace, system: System) -> int:
     interrupts.install(system.trap)
     fleet = open_fleet(system, fleet_dir, interrupts)
     cfg = fleet_run_config(args, manifest)
-    run_dir, estimate = admit_run(system, fleet_dir, manifest, cfg)
+    run_dir, estimate = admit_run(system, fleet_dir, manifest, cfg, args.argv)
     bench_run = Run(
         fleet,
         run_dir,
@@ -3529,7 +3537,11 @@ def reject_fleet_flags(argv: list[str]) -> None:
 
 
 def admit_run(
-    system: System, fleet_dir: Path, manifest: FleetManifest, cfg: RunConfig
+    system: System,
+    fleet_dir: Path,
+    manifest: FleetManifest,
+    cfg: RunConfig,
+    argv: list[str],
 ) -> tuple[Path, RunEstimate]:
     """Takes the lock, checks that the fleet can take the run and creates its dir. Any refusal
     releases the lock again and has issued no ssh command."""
@@ -3537,7 +3549,8 @@ def admit_run(
     try:
         estimate = check_run_allowed(manifest, cfg, utc_now(system.clock))
         fleet = retagged(system.http_get, manifest, cfg)
-        return render_run(fleet_dir, fleet, cfg, cfg.query_db, estimate), estimate
+        run_dir = render_run(fleet_dir, fleet, cfg, cfg.query_db, argv, estimate)
+        return run_dir, estimate
     except BaseException:
         release_fleet_lock(fleet_dir)
         raise
@@ -4019,6 +4032,7 @@ def render_run(
     fleet: FleetManifest,
     cfg: RunConfig,
     name: str,
+    argv: list[str],
     run_estimate: RunEstimate | None = None,
 ) -> Path:
     """`runs/<nn>-<name>/` with its manifest, genesis and load config. Without a
@@ -4034,6 +4048,7 @@ def render_run(
         run_index(run_dir),
         run_config_hash(cfg, fleet["hosts"], fleet["images"], genesis, meta),
         run_estimate,
+        argv,
     )
     if meta is not None:
         manifest["latency"] = meta
@@ -5811,8 +5826,29 @@ def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.Bench
     result["validity"] = check_validity_aws(result, manifest, evidence)
     nb.write_json(run_dir / "result.json", result)
     comparison = nb.compare(result, baseline) if baseline else None
-    (run_dir / "summary.md").write_text(nb.render(result, comparison))
+    summary = nb.render(result, comparison)
+    section = reproduce_lines(manifest)
+    (run_dir / "summary.md").write_text(
+        "\n".join([summary, "", *section, ""]) if section else summary
+    )
     return result
+
+
+def reproduce_lines(manifest: Manifest) -> list[str]:
+    """The command(s) that made this run; empty for a manifest from before they were recorded.
+    Then `argv` is missing or, for a fleet run, still the `up` command."""
+    if "argv" not in manifest or manifest["argv"][0] != "run":
+        return []
+    commands = [manifest["argv"]]
+    if "fleet_argv" in manifest:
+        commands.insert(0, manifest["fleet_argv"])
+    return [
+        "### Reproduce",
+        "",
+        "```",
+        *(f"just bench aws {shlex.join(argv)}" for argv in commands),
+        "```",
+    ]
 
 
 def load_config(saved: dict[str, Any]) -> nb.BenchConfig:
@@ -6878,10 +6914,12 @@ def publish_files(run_dir: Path) -> list[Path]:
 
 
 def published_manifest(run_dir: Path) -> dict[str, Any]:
-    """Explicit field allowlist: `argv`, `node_env` (verbatim, may hold anything), `hosts_info`,
-    `rds_*` and `ssh_public_key` stay local."""
+    """Explicit field allowlist: `node_env` (verbatim, may hold anything), `hosts_info`, `rds_*`
+    and `ssh_public_key` stay local. `argv` is published: flags only, and `--node-env` is
+    documented as not for secrets."""
     manifest = nb.read_json(run_dir / MANIFEST_JSON)
     reduced = {key: manifest[key] for key in PUBLISH_MANIFEST_KEYS}
+    reduced |= {k: manifest[k] for k in PUBLISH_MANIFEST_OPTIONAL if k in manifest}
     reduced["config"] = {k: v for k, v in manifest["config"].items() if k != "node_env"}
     if "hosts" in manifest:
         reduced["hosts"] = [

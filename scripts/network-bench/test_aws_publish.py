@@ -23,7 +23,8 @@ REJECTED = completed(returncode=1, stderr="! [rejected] HEAD -> main (fetch firs
 SECRET = "hunter2"
 MANIFEST = {
     **index_manifest(),
-    "argv": ["run", "--node-env", f"TOKEN={SECRET}"],
+    "argv": ["run", "--tag", "t"],
+    "fleet_argv": ["up", "--tag", "t"],
     "ssh_public_key": "ssh-ed25519 AAAA",
     "config": {
         "tag": "t",
@@ -169,6 +170,8 @@ def test_published_manifest_is_an_allowlist(tmp_path: Path):
         "git_rev": MANIFEST["git_rev"],
         "query_db": "colocated",
         "images": MANIFEST["images"],
+        "argv": ["run", "--tag", "t"],
+        "fleet_argv": ["up", "--tag", "t"],
         "config": {"tag": "t", "nodes": 3, "node_type": "c8g.4xlarge"},
         "hosts": [{"name": "ctl", "role": "ctl", "instance_type": "c8g.2xlarge"}],
     }

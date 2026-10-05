@@ -911,6 +911,55 @@ def test_report_has_hosts_deployment_and_summary_blocks(collected_run: Path) -> 
     assert "| node1 |" in summary
 
 
+UP = ["up", "--tag", "t", "--nodes", "3", "--yes"]
+RUN_FLEET = ["run", "--fleet", "fleet1", "--query-db", "rds", "--yes"]
+
+
+def test_reproduce_lines_single_shot_shows_the_run_command() -> None:
+    argv = ["run", "--tag", "t release", "--yes"]
+    assert awsb.reproduce_lines({"argv": argv}) == [
+        "### Reproduce",
+        "",
+        "```",
+        "just bench aws run --tag 't release' --yes",
+        "```",
+    ]
+
+
+def test_reproduce_lines_fleet_run_shows_up_then_run() -> None:
+    lines = awsb.reproduce_lines({"argv": RUN_FLEET, "fleet_argv": UP})
+    assert lines[3:5] == [
+        "just bench aws up --tag t --nodes 3 --yes",
+        "just bench aws run --fleet fleet1 --query-db rds --yes",
+    ]
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [{}, {"argv": UP}],
+    ids=["no argv", "fleet run recorded before the run argv: argv is the up command"],
+)
+def test_reproduce_lines_omitted_for_old_manifests(manifest: dict) -> None:
+    assert awsb.reproduce_lines(manifest) == []
+
+
+def test_summary_ends_with_the_reproduce_section(collected_run: Path) -> None:
+    manifest = netbench.read_json(collected_run / "manifest.json")
+    netbench.write_json(
+        collected_run / "manifest.json", {**manifest, "argv": ["run", "--tag", "x"]}
+    )
+    awsb.write_report(collected_run)
+    summary = (collected_run / "summary.md").read_text()
+    assert summary.endswith("### Reproduce\n\n```\njust bench aws run --tag x\n```\n")
+
+
+def test_summary_of_an_old_manifest_has_no_reproduce_section(
+    collected_run: Path,
+) -> None:
+    awsb.write_report(collected_run)
+    assert "Reproduce" not in (collected_run / "summary.md").read_text()
+
+
 def test_render_is_repeatable(collected_run: Path) -> None:
     assert awsb.write_report(collected_run) == awsb.write_report(collected_run)
 

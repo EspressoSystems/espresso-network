@@ -91,6 +91,8 @@ def test_valid_run_exits_0_with_cost_and_index(run_harness: RunHarness):
     assert manifest["fleet"] == "run1"
     assert manifest["cost_usd"]["actual"] == cost["actual"]
     assert manifest["start_spread_s"] == 0.0
+    assert manifest["argv"] == ["run", "--tag", "t", "--nodes", "2", "--yes"]
+    assert "fleet_argv" not in manifest
     *_, row = run_harness.index().splitlines()
     assert row.startswith("| run1/01-run |")
     assert "| colocated |" in row

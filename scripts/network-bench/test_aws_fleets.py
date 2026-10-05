@@ -46,6 +46,15 @@ def test_run_fleet_without_a_dir_picks_the_only_fleet(harness, runner):
     assert "fleet fleet1 (idle)" in harness.driver_log()
 
 
+def test_fleet_run_manifest_records_both_commands(harness, runner):
+    args = harness.parse("run", "--fleet", "--yes")
+    assert awsb.cmd_run(args, FakeSystem(run=runner)) == awsb.EXIT_OK
+    manifest = netbench.read_json(harness.fleet_dir / "runs" / "01-colocated" / "manifest.json")
+    assert manifest["argv"] == ["run", "--fleet", "--yes"]
+    assert manifest["fleet_argv"] == harness.fleet()["argv"]
+    assert manifest["fleet_argv"][0] == "up"
+
+
 # TEST:down-no-dir-picks-ok
 def test_down_without_a_dir_prompts_with_phase_and_expiry(harness, runner):
     system = down(harness, runner)
