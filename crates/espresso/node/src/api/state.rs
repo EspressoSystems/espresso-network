@@ -2797,6 +2797,11 @@ where
         }
         let target = match target {
             v1::TxIdent::HeightAndOffset(h, o) => {
+                // The query binds `limit + offset` as an i64 row count, which a larger offset
+                // would overflow into a negative or wrapped limit.
+                if limit.checked_add(o).is_none_or(|n| n > i64::MAX as u64) {
+                    return Err(bad_request(format!("offset {o} is too large")));
+                }
                 TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
             },
             v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(

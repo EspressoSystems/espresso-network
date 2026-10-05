@@ -9625,6 +9625,60 @@ mod test {
             assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
         }
 
+        let missing_height = u64::from(u32::MAX);
+        let foreign_tag = tagged_base64::TaggedBase64::new("FOO", &[0; 32]).unwrap();
+        for (v1_path, v2_path, status) in [
+            (
+                format!("explorer/block/{missing_height}"),
+                format!("v2/explorer/block?height={missing_height}"),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                format!("explorer/transaction/{missing_height}/0"),
+                format!("v2/explorer/transaction?height={missing_height}&offset=0"),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                format!("explorer/transactions/from/1/{}/1", u64::MAX),
+                format!(
+                    "v2/explorer/transactions?height=1&offset={}&limit=1",
+                    u64::MAX
+                ),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                format!("explorer/search/{foreign_tag}"),
+                format!("v2/explorer/search?query={foreign_tag}"),
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            for path in [&v1_path, &v2_path] {
+                let err = client
+                    .get::<serde_json::Value>(path)
+                    .send()
+                    .await
+                    .unwrap_err();
+                assert_eq!(err.status, status, "{path}");
+            }
+        }
+        let unknown_block = tagged_base64::TaggedBase64::new("BLOCK", &[0; 32]).unwrap();
+        let v1_search: serde_json::Value = client
+            .get(&format!("explorer/search/{unknown_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v1_search["search_results"]["blocks"],
+            serde_json::json!([]),
+            "an unknown block hash is an empty result, as an unknown transaction hash is"
+        );
+        let v2_search: espresso_api::proto::ExplorerSearchResponse = client
+            .get(&format!("v2/explorer/search?query={unknown_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(v2_search.blocks.is_empty());
+
         let v1_config = client
             .get::<espresso_types::config::PublicNetworkConfig>("config/hotshot")
             .send()
