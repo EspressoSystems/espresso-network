@@ -2125,17 +2125,20 @@ where
                 break;
             };
             // It is unfortunate if this fails, but we can still proceed by notifying with the
-            // object that we fetched, keeping it in memory. Log the error, retry a few times, and
-            // eventually move on.
-            tracing::warn!(
-                obj = obj.debug_name(),
-                "failed to store fetched object: {err:#}"
-            );
-
+            // object that we fetched, keeping it in memory. Retry a few times, and eventually move
+            // on.
             let Some(delay) = backoff.next() else {
+                tracing::warn!(
+                    obj = obj.debug_name(),
+                    "failed to store fetched object: {err:#}"
+                );
                 break;
             };
-            tracing::info!(?delay, "retrying failed operation");
+            tracing::debug!(
+                obj = obj.debug_name(),
+                ?delay,
+                "retrying failed store: {err:#}"
+            );
             sleep(delay).await;
         }
     }

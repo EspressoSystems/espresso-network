@@ -513,8 +513,17 @@ impl Transaction<Write> {
             let query = query_builder.build();
             let statement = query.sql();
 
-            let res = self.execute(query).await.inspect_err(|err| {
-                tracing::error!(statement, "error in statement execution: {err:#}");
+            let res = self.execute(query).await.map_err(|source| {
+                let err = UpsertError::new(table, source);
+                if let UpsertError::Other { source, .. } = &err {
+                    tracing::error!(
+                        table,
+                        statement,
+                        error = %format_args!("{source:#}"),
+                        "upsert failed"
+                    );
+                }
+                err
             })?;
             let rows_modified = res.rows_affected() as usize;
             if rows_modified != num_rows {
@@ -529,6 +538,35 @@ impl Transaction<Write> {
         Ok(())
     }
 }
+
+/// A failed [`upsert`](Transaction::upsert).
+#[derive(Debug, thiserror::Error)]
+pub enum UpsertError {
+    /// Postgres aborted the statement to keep transactions serializable. Retrying the whole
+    /// transaction can succeed.
+    #[error("could not serialize access upserting into {table}")]
+    SerializationConflict { table: String },
+    #[error("upserting into {table}")]
+    Other {
+        table: String,
+        #[source]
+        source: sqlx::Error,
+    },
+}
+
+impl UpsertError {
+    fn new(table: &str, source: sqlx::Error) -> UpsertError {
+        let table = table.to_owned();
+        let code = source.as_database_error().and_then(|err| err.code());
+        match code.as_deref() {
+            Some(SERIALIZATION_FAILURE_CODE) => UpsertError::SerializationConflict { table },
+            _ => UpsertError::Other { table, source },
+        }
+    }
+}
+
+/// SQLSTATE of a PostgreSQL serialization failure.
+const SERIALIZATION_FAILURE_CODE: &str = "40001";
 
 /// Pruning mutations, run under READ COMMITTED isolation on Postgres.
 impl Transaction<Prune> {
