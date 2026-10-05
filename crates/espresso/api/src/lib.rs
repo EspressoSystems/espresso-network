@@ -184,7 +184,10 @@ where
     let router = if modules.explorer {
         router.merge(rest::explorer_service_rest_router(state.clone()))
     } else {
-        router
+        router.merge(axum::router_module_disabled(
+            "explorer",
+            routes::v2::EXPLORER_ROUTES,
+        ))
     };
     let router = if modules.config {
         router.merge(rest::config_service_rest_router(state))

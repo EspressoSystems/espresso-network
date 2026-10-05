@@ -5710,6 +5710,7 @@ mod tests {
         for (prefix, registered) in [
             ("/v2/config/", routes::v2::CONFIG_ROUTES),
             ("/v2/submit/", routes::v2::SUBMIT_ROUTES),
+            ("/v2/explorer/", routes::v2::EXPLORER_ROUTES),
         ] {
             let mut documented: Vec<&str> = paths
                 .keys()
