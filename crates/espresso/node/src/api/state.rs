@@ -2854,72 +2854,6 @@ where
     }
 }
 
-/// The same `Rfc3339` format `Timestamp`'s own `Serialize` uses, so v1 and v2 agree on the string.
-fn explorer_time(time: &hotshot_query_service::explorer::Timestamp) -> String {
-    time.0
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_default()
-}
-
-/// Rendered by `Display`, which is what `MonetaryValue`'s `Serialize` writes.
-fn explorer_amounts(amounts: &[hotshot_query_service::explorer::MonetaryValue]) -> Vec<String> {
-    amounts.iter().map(ToString::to_string).collect()
-}
-
-/// `FeeAccount`'s `Display` drops the `0x` that its serde writes, so rendering these by
-/// `to_string` would disagree with v1 on every address.
-fn explorer_accounts(accounts: &[espresso_types::FeeAccount]) -> Vec<String> {
-    accounts
-        .iter()
-        .map(|account| format!("{:#x}", account.0))
-        .collect()
-}
-
-fn explorer_block_detail(
-    block: &hotshot_query_service::explorer::BlockDetail<SeqTypes>,
-) -> proto::ExplorerBlockDetail {
-    proto::ExplorerBlockDetail {
-        hash: block.hash.to_string(),
-        height: block.height,
-        time: explorer_time(&block.time),
-        num_transactions: block.num_transactions,
-        proposer_id: explorer_accounts(&block.proposer_id),
-        fee_recipient: explorer_accounts(&block.fee_recipient),
-        size: block.size,
-        block_reward: explorer_amounts(&block.block_reward),
-    }
-}
-
-fn explorer_block_summary(
-    block: &hotshot_query_service::explorer::BlockSummary<SeqTypes>,
-) -> proto::ExplorerBlockSummary {
-    proto::ExplorerBlockSummary {
-        hash: block.hash.to_string(),
-        height: block.height,
-        proposer_id: explorer_accounts(&block.proposer_id),
-        num_transactions: block.num_transactions,
-        size: block.size,
-        time: explorer_time(&block.time),
-    }
-}
-
-fn explorer_transaction_summary(
-    transaction: &hotshot_query_service::explorer::TransactionSummary<SeqTypes>,
-) -> proto::ExplorerTransactionSummary {
-    proto::ExplorerTransactionSummary {
-        hash: transaction.hash.to_string(),
-        rollups: transaction
-            .rollups
-            .iter()
-            .map(|namespace| u64::from(*namespace))
-            .collect(),
-        height: transaction.height,
-        offset: transaction.offset,
-        num_transactions: transaction.num_transactions,
-        time: explorer_time(&transaction.time),
-    }
-}
-
 #[tonic::async_trait]
 impl<D> proto::explorer_service_server::ExplorerService for NodeApiStateImpl<D>
 where
@@ -2936,7 +2870,7 @@ where
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::ExplorerBlockDetailResponse {
-            block_detail: Some(explorer_block_detail(&detail.block_detail)),
+            block_detail: Some((&detail.block_detail).into()),
         }))
     }
 
@@ -2945,20 +2879,14 @@ where
         request: tonic::Request<proto::GetExplorerBlockSummariesRequest>,
     ) -> Result<tonic::Response<proto::ExplorerBlockSummariesResponse>, tonic::Status> {
         let request = request.into_inner();
-        let limit = request
-            .limit
-            .ok_or_else(|| tonic::Status::invalid_argument("limit is required"))?;
+        let limit = required(request.limit, "limit")?;
         let ident = block_ident(request.height, request.hash)?;
         let summaries = <Self as v1::ExplorerApi>::get_block_summaries(self, ident, limit)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(
             proto::ExplorerBlockSummariesResponse {
-                block_summaries: summaries
-                    .block_summaries
-                    .iter()
-                    .map(explorer_block_summary)
-                    .collect(),
+                block_summaries: summaries.block_summaries.iter().map(Into::into).collect(),
             },
         ))
     }
@@ -2973,35 +2901,10 @@ where
             .await
             .map_err(to_status)?
             .transaction_detail;
-        let details = &detail.details;
         Ok(tonic::Response::new(
             proto::ExplorerTransactionDetailResponse {
-                details: Some(proto::ExplorerTransactionDetail {
-                    hash: details.hash.to_string(),
-                    height: details.height,
-                    block_confirmed: details.block_confirmed,
-                    offset: details.offset,
-                    num_transactions: details.num_transactions,
-                    size: details.size,
-                    time: explorer_time(&details.time),
-                    sequencing_fees: explorer_amounts(&details.sequencing_fees),
-                    fee_details: details
-                        .fee_details
-                        .iter()
-                        .map(|attribution| proto::FeeAttribution {
-                            target: attribution.target.clone(),
-                            fees: explorer_amounts(&attribution.fees),
-                        })
-                        .collect(),
-                }),
-                data: detail
-                    .data
-                    .iter()
-                    .map(|transaction| proto::ExplorerTransactionData {
-                        namespace: u64::from(transaction.namespace()),
-                        payload: transaction.payload().to_vec(),
-                    })
-                    .collect(),
+                details: Some((&detail.details).into()),
+                data: detail.data.iter().map(Into::into).collect(),
             },
         ))
     }
@@ -3011,18 +2914,16 @@ where
         request: tonic::Request<proto::GetExplorerTransactionSummariesRequest>,
     ) -> Result<tonic::Response<proto::ExplorerTransactionSummariesResponse>, tonic::Status> {
         let request = request.into_inner();
-        let limit = request
-            .limit
-            .ok_or_else(|| tonic::Status::invalid_argument("limit is required"))?;
+        let limit = required(request.limit, "limit")?;
         let ident = transaction_ident(request.height, request.offset, request.hash)?;
-        let filter = match (request.block, request.namespace) {
+        let filter = match (request.block, namespace_from_query(request.namespace)?) {
             (Some(_), Some(_)) => {
                 return Err(tonic::Status::invalid_argument(
                     "block and namespace are mutually exclusive",
                 ));
             },
             (Some(block), None) => v1::TxSummaryFilter::Block(block),
-            (None, Some(namespace)) => v1::TxSummaryFilter::Namespace(namespace),
+            (None, Some(namespace)) => v1::TxSummaryFilter::Namespace(namespace.into()),
             (None, None) => v1::TxSummaryFilter::None,
         };
         let summaries =
@@ -3034,7 +2935,7 @@ where
                 transaction_summaries: summaries
                     .transaction_summaries
                     .iter()
-                    .map(explorer_transaction_summary)
+                    .map(Into::into)
                     .collect(),
             },
         ))
@@ -3048,68 +2949,19 @@ where
             .await
             .map_err(to_status)?
             .explorer_summary;
-        let histograms = &summary.histograms;
-        Ok(tonic::Response::new(proto::ExplorerSummaryResponse {
-            latest_block: Some(explorer_block_detail(&summary.latest_block)),
-            genesis_overview: Some(proto::GenesisOverview {
-                rollups: summary.genesis_overview.rollups,
-                transactions: summary.genesis_overview.transactions,
-                blocks: summary.genesis_overview.blocks,
-            }),
-            latest_blocks: summary
-                .latest_blocks
-                .iter()
-                .map(explorer_block_summary)
-                .collect(),
-            latest_transactions: summary
-                .latest_transactions
-                .iter()
-                .map(explorer_transaction_summary)
-                .collect(),
-            // v1's four arrays are parallel and documented as equal length, so they zip into one
-            // point per block. A shorter array would silently drop points, hence the length check.
-            histograms: {
-                let len = histograms.block_heights.len();
-                if histograms.block_time.len() != len
-                    || histograms.block_size.len() != len
-                    || histograms.block_transactions.len() != len
-                {
-                    return Err(tonic::Status::internal(
-                        "explorer histograms are not the same length",
-                    ));
-                }
-                (0..len)
-                    .map(|i| proto::HistogramPoint {
-                        height: histograms.block_heights[i],
-                        block_time: histograms.block_time[i],
-                        block_size: histograms.block_size[i],
-                        block_transactions: histograms.block_transactions[i],
-                    })
-                    .collect()
-            },
-        }))
+        Ok(tonic::Response::new((&summary).into()))
     }
 
     async fn get_explorer_search(
         &self,
         request: tonic::Request<proto::GetExplorerSearchRequest>,
     ) -> Result<tonic::Response<proto::ExplorerSearchResponse>, tonic::Status> {
-        let query = request
-            .into_inner()
-            .query
-            .ok_or_else(|| tonic::Status::invalid_argument("query is required"))?;
+        let query = required(request.into_inner().query, "query")?;
         let results = <Self as v1::ExplorerApi>::get_search_result(self, query)
             .await
             .map_err(to_status)?
             .search_results;
-        Ok(tonic::Response::new(proto::ExplorerSearchResponse {
-            blocks: results.blocks.iter().map(explorer_block_summary).collect(),
-            transactions: results
-                .transactions
-                .iter()
-                .map(explorer_transaction_summary)
-                .collect(),
-        }))
+        Ok(tonic::Response::new((&results).into()))
     }
 }
 
