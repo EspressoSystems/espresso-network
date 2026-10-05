@@ -1,11 +1,14 @@
-//! A deprecated proto field, message or rpc is flagged in the OpenAPI document, which is how a REST
-//! client learns that a renamed field's old name, or a retired endpoint, is going away.
+//! A deprecated proto field, message, rpc or enum value is flagged in the OpenAPI document, which is
+//! how a REST client learns that a renamed field's old name, or a retired endpoint, is going away.
 //!
-//! No committed proto deprecates anything yet, so the fixture is the real descriptor set with a few
-//! items marked deprecated.
+//! No committed proto deprecates anything yet, so the fixture is the real descriptor set with an
+//! item or two marked deprecated.
 
 use prost::Message as _;
-use prost_types::{FieldOptions, FileDescriptorSet, MessageOptions, MethodOptions};
+use prost_types::{
+    DescriptorProto, EnumValueOptions, FieldOptions, FileDescriptorSet, MessageOptions,
+    MethodOptions,
+};
 use serde_json::{Value, json};
 
 /// `openapi` reads this for the package it generates from.
@@ -18,80 +21,83 @@ const PACKAGE: &str = "espresso.api.v2";
 )]
 mod openapi;
 
-/// Which items of the real descriptor to mark deprecated.
-#[derive(Default)]
-struct Deprecate<'a> {
-    /// As (message, field).
-    fields: &'a [(&'a str, &'a str)],
-    messages: &'a [&'a str],
-    /// As (service, rpc).
-    rpcs: &'a [(&'a str, &'a str)],
-}
-
-/// The OpenAPI document for the real descriptor with `deprecate` applied.
+/// The OpenAPI document for the real descriptor after `edit`.
 ///
 /// The edit is made on the decoded set: re-encoding a prost-types descriptor would drop the
 /// google.api.http bindings, and with them every route.
-fn spec(deprecate: Deprecate) -> Value {
-    let Deprecate {
-        fields,
-        messages,
-        rpcs,
-    } = deprecate;
+fn spec(edit: impl FnOnce(&mut FileDescriptorSet)) -> Value {
     let rest_fdset =
         tonic_rest_build::descriptor::FileDescriptorSet::decode(espresso_api::FILE_DESCRIPTOR_SET)
             .unwrap();
     let mut fdset = FileDescriptorSet::decode(espresso_api::FILE_DESCRIPTOR_SET).unwrap();
-    for message in fdset
-        .file
-        .iter_mut()
-        .flat_map(|file| file.message_type.iter_mut())
-    {
-        if messages.contains(&message.name()) {
-            message.options = Some(MessageOptions {
-                deprecated: Some(true),
-                ..Default::default()
-            });
-        }
-        let message_name = message.name().to_string();
-        for field in &mut message.field {
-            if fields.contains(&(message_name.as_str(), field.name())) {
-                field.options = Some(FieldOptions {
-                    deprecated: Some(true),
-                    ..Default::default()
-                });
-            }
-        }
-    }
-    for service in fdset
-        .file
-        .iter_mut()
-        .flat_map(|file| file.service.iter_mut())
-    {
-        let service_name = service.name().to_string();
-        for method in &mut service.method {
-            if rpcs.contains(&(service_name.as_str(), method.name())) {
-                method.options = Some(MethodOptions {
-                    deprecated: Some(true),
-                    ..Default::default()
-                });
-            }
-        }
-    }
+    edit(&mut fdset);
     openapi::generate_from(&fdset, &rest_fdset).unwrap()
 }
 
-/// Every operation in `spec`, whatever its path and verb.
-fn operations(spec: &Value) -> impl Iterator<Item = &Value> {
+fn message_mut<'a>(fdset: &'a mut FileDescriptorSet, name: &str) -> &'a mut DescriptorProto {
+    fdset
+        .file
+        .iter_mut()
+        .flat_map(|file| file.message_type.iter_mut())
+        .find(|message| message.name() == name)
+        .unwrap_or_else(|| panic!("message {name} exists"))
+}
+
+fn deprecate_message(fdset: &mut FileDescriptorSet, name: &str) {
+    message_mut(fdset, name).options = Some(MessageOptions {
+        deprecated: Some(true),
+        ..Default::default()
+    });
+}
+
+fn deprecate_field(fdset: &mut FileDescriptorSet, message: &str, field: &str) {
+    message_mut(fdset, message)
+        .field
+        .iter_mut()
+        .find(|f| f.name() == field)
+        .unwrap_or_else(|| panic!("field {message}.{field} exists"))
+        .options = Some(FieldOptions {
+        deprecated: Some(true),
+        ..Default::default()
+    });
+}
+
+fn deprecate_rpc(fdset: &mut FileDescriptorSet, service: &str, rpc: &str) {
+    fdset
+        .file
+        .iter_mut()
+        .flat_map(|file| file.service.iter_mut())
+        .filter(|s| s.name() == service)
+        .flat_map(|s| s.method.iter_mut())
+        .find(|method| method.name() == rpc)
+        .unwrap_or_else(|| panic!("rpc {service}.{rpc} exists"))
+        .options = Some(MethodOptions {
+        deprecated: Some(true),
+        ..Default::default()
+    });
+}
+
+fn deprecate_enum_value(fdset: &mut FileDescriptorSet, enum_name: &str, value: &str) {
+    fdset
+        .file
+        .iter_mut()
+        .flat_map(|file| file.enum_type.iter_mut())
+        .filter(|e| e.name() == enum_name)
+        .flat_map(|e| e.value.iter_mut())
+        .find(|v| v.name() == value)
+        .unwrap_or_else(|| panic!("enum value {enum_name}.{value} exists"))
+        .options = Some(EnumValueOptions {
+        deprecated: Some(true),
+        ..Default::default()
+    });
+}
+
+fn operation<'a>(spec: &'a Value, operation_id: &str) -> &'a Value {
     spec["paths"]
         .as_object()
         .unwrap()
         .values()
         .flat_map(|path| path.as_object().unwrap().values())
-}
-
-fn operation<'a>(spec: &'a Value, operation_id: &str) -> &'a Value {
-    operations(spec)
         .find(|op| op["operationId"] == operation_id)
         .unwrap_or_else(|| panic!("operation {operation_id} exists"))
 }
@@ -102,16 +108,13 @@ fn schema<'a>(spec: &'a Value, name: &str) -> &'a Value {
 
 #[test]
 fn nothing_is_flagged_while_no_proto_deprecates_anything() {
-    let spec = spec(Deprecate::default());
+    let spec = spec(|_| {});
     assert!(!spec.to_string().contains("\"deprecated\""));
 }
 
 #[test]
 fn a_deprecated_query_parameter_is_flagged() {
-    let spec = spec(Deprecate {
-        fields: &[("GetHeaderRequest", "height")],
-        ..Default::default()
-    });
+    let spec = spec(|fdset| deprecate_field(fdset, "GetHeaderRequest", "height"));
     let flagged = operation(&spec, "GetHeader")["parameters"]
         .as_array()
         .unwrap()
@@ -124,10 +127,7 @@ fn a_deprecated_query_parameter_is_flagged() {
 
 #[test]
 fn a_deprecated_scalar_property_is_flagged() {
-    let spec = spec(Deprecate {
-        fields: &[("TotalMintedSupplyResponse", "amount")],
-        ..Default::default()
-    });
+    let spec = spec(|fdset| deprecate_field(fdset, "TotalMintedSupplyResponse", "amount"));
     let amount = &schema(&spec, "TotalMintedSupplyResponse")["properties"]["amount"];
     assert_eq!(amount["deprecated"], json!(true));
     assert_eq!(amount["type"], json!("string"));
@@ -135,10 +135,7 @@ fn a_deprecated_scalar_property_is_flagged() {
 
 #[test]
 fn a_deprecated_reference_is_wrapped_so_the_flag_is_not_ignored() {
-    let spec = spec(Deprecate {
-        fields: &[("SyncStatusResponse", "blocks")],
-        ..Default::default()
-    });
+    let spec = spec(|fdset| deprecate_field(fdset, "SyncStatusResponse", "blocks"));
     let properties = &schema(&spec, "SyncStatusResponse")["properties"];
     assert_eq!(
         properties["blocks"],
@@ -155,10 +152,7 @@ fn a_deprecated_reference_is_wrapped_so_the_flag_is_not_ignored() {
 
 #[test]
 fn a_deprecated_message_is_flagged() {
-    let spec = spec(Deprecate {
-        messages: &["SyncStatusResponse"],
-        ..Default::default()
-    });
+    let spec = spec(|fdset| deprecate_message(fdset, "SyncStatusResponse"));
     assert_eq!(
         schema(&spec, "SyncStatusResponse")["deprecated"],
         json!(true)
@@ -171,10 +165,28 @@ fn a_deprecated_message_is_flagged() {
 
 #[test]
 fn a_deprecated_rpc_is_flagged() {
-    let spec = spec(Deprecate {
-        rpcs: &[("AvailabilityService", "GetHeader")],
-        ..Default::default()
-    });
+    let spec = spec(|fdset| deprecate_rpc(fdset, "AvailabilityService", "GetHeader"));
     assert_eq!(operation(&spec, "GetHeader")["deprecated"], json!(true));
     assert_eq!(operation(&spec, "GetLeaf")["deprecated"], Value::Null);
+}
+
+#[test]
+fn a_deprecated_enum_value_is_noted_in_the_enum_description() {
+    let spec = spec(|fdset| {
+        deprecate_enum_value(fdset, "BuilderType", "BUILDER_TYPE_UNSPECIFIED");
+        deprecate_enum_value(fdset, "BuilderType", "BUILDER_TYPE_RANDOM");
+    });
+    let description = schema(&spec, "BuilderType")["description"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        description.lines().collect::<Vec<_>>(),
+        [
+            "- `BUILDER_TYPE_UNSPECIFIED`: Deprecated.",
+            "- `BUILDER_TYPE_EXTERNAL`: Blocks come from the builders at `builder_urls`",
+            "- `BUILDER_TYPE_SIMPLE`: Each node runs its own builder",
+            "- `BUILDER_TYPE_RANDOM`: Deprecated. Each node runs a builder that produces random \
+             transactions",
+        ]
+    );
 }

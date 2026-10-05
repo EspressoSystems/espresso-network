@@ -494,9 +494,18 @@ fn enum_schema(enum_type: &EnumDescriptorProto, comments: &Comments, index: usiz
         .iter()
         .enumerate()
         .filter_map(|(j, value)| {
-            comments
-                .get(&[5, index as i32, 2, j as i32])
-                .map(|comment| format!("- `{}`: {comment}", value.name()))
+            let comment = comments.get(&[5, index as i32, 2, j as i32]);
+            // OpenAPI 3.0 cannot flag a single enum value, so its note is the only place to say so.
+            let note = match (
+                value.options.as_ref().is_some_and(|o| o.deprecated()),
+                comment,
+            ) {
+                (true, Some(comment)) => format!("Deprecated. {comment}"),
+                (true, None) => "Deprecated.".to_string(),
+                (false, Some(comment)) => comment.to_string(),
+                (false, None) => return None,
+            };
+            Some(format!("- `{}`: {note}", value.name()))
         })
         .collect();
     if !value_notes.is_empty() {
