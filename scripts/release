@@ -69,7 +69,7 @@ STATUS_LEGEND = (
     "Backport: 🟢 open · 🟣 merged · 🔴 closed"
 )
 BACKPORT_STATE = {"OPEN": "🟢", "MERGED": "🟣", "CLOSED": "🔴"}
-MAX_ROWS = 150  # GitHub issue bodies cap at 65536 chars; bounds each checklist section
+MAX_ROWS = 140  # GitHub issue bodies cap at 65536 chars; bounds each checklist section
 
 
 # Pure core
@@ -143,6 +143,7 @@ class TrackerState:
     marks: dict[str, MarkKind]
     backport_prs: dict[int, BackportPr]  # keyed by source PR number
     experimental_branches: list[tuple[str, str]]  # name, sha
+    branch_tags: dict[str, str]  # branch commit sha -> first tag containing it
 
 
 def parse_version(text: str) -> Version | None:
@@ -203,6 +204,14 @@ def parse_tag(text: str) -> Tag | None:
         return None
     major, minor, phase, patch = (int(group) for group in match.groups())
     return Tag(Version(major, minor, phase), patch)
+
+
+def first_tags(contained: list[tuple[Tag, list[Commit]]]) -> dict[str, str]:
+    first: dict[str, str] = {}
+    for tag, commits in sorted(contained, key=lambda item: item[0].patch):
+        for commit in commits:
+            first.setdefault(commit.sha, str(tag))
+    return first
 
 
 def next_tag(version: Version, existing: list[str]) -> Tag:
@@ -440,12 +449,28 @@ def row_status(mark: MarkKind | None, landed: bool, backport: BackportPr | None)
     return "⬜"
 
 
+def render_tag_cell(tag: str | None) -> str:
+    return "**untagged**" if tag is None else f"`{tag}`"
+
+
+def render_untagged_summary(state: TrackerState) -> str:
+    untagged = sum(1 for c in state.branch_commits if c.sha not in state.branch_tags)
+    if not untagged:
+        return "_All commits tagged._"
+    latest = max(
+        tag for name, _date, _sha in state.tags if (tag := parse_tag(name)) is not None
+    )
+    noun = "commit" if untagged == 1 else "commits"
+    return f"**{untagged} {noun} since `{latest}`**"
+
+
 def render_row(
     commit: Commit,
     repo: str,
     mark: MarkKind | None,
     landed: bool,
     backport: BackportPr | None,
+    tag: str | None = None,
 ) -> str:
     status = row_status(mark, landed, backport)
     pr = "-"
@@ -460,7 +485,8 @@ def render_row(
     title = _escape_cell(html.escape(bare_subject(commit.subject), quote=False))
     if mark == "skip":
         title = f"~~{title}~~"
-    return f"| {status} | {pr} | {commit_link} | {backport_cell} | {title} |"
+    tag_cell = "" if tag is None else f" {tag} |"
+    return f"| {status} | {pr} | {commit_link} |{tag_cell} {backport_cell} | {title} |"
 
 
 def _cap_rows(
@@ -492,6 +518,7 @@ def render_checklist(
     landed: set[str],
     backport_prs: dict[int, BackportPr],
     repo: str,
+    tag_of: dict[str, str] | None = None,
 ) -> str:
     if anchor is None:
         return "_No anchor tag (`X.Y.Z.0`) for this branch yet._"
@@ -507,12 +534,14 @@ def render_checklist(
             commit_mark(commit.sha, marks),
             commit.sha in landed,
             backport_prs.get(commit.pr) if commit.pr is not None else None,
+            None if tag_of is None else render_tag_cell(tag_of.get(commit.sha)),
         )
         for commit in shown
     ]
-    table = "\n".join(
-        ["|   | PR | Commit | Backport | Title |", "|---|---|---|---|---|", *rows]
-    )
+    tag_header, tag_divider = ("", "") if tag_of is None else (" Tag |", "---|")
+    header = f"|   | PR | Commit |{tag_header} Backport | Title |"
+    divider = f"|---|---|---|{tag_divider}---|---|"
+    table = "\n".join([header, divider, *rows])
     hidden = ported_hidden + other_hidden
     if not hidden:
         return table
@@ -545,6 +574,8 @@ def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
         "",
     ]
     sections += [f"## Commits on `{version.branch}`", ""]
+    if state.anchor is not None and state.anchor_reachable and state.branch_commits:
+        sections += [render_untagged_summary(state), ""]
     sections += [
         render_checklist(
             state.branch_commits,
@@ -555,6 +586,7 @@ def render_body(state: TrackerState, human_notes: str, repo: str) -> str:
             state.landed_on_main,
             {},
             repo,
+            state.branch_tags,
         ),
         "",
     ]
@@ -1041,6 +1073,7 @@ def cmd_cut(args: argparse.Namespace, git: Git, gh: Gh) -> int:
             marks={},
             backport_prs={},
             experimental_branches=[],
+            branch_tags={},
         )
         issue = gh.issue_create(title, "release-tracker", render_body(state, "", repo))
 
@@ -1217,6 +1250,19 @@ def build_tracker_state(
     landed_on_branch = landed(main_commits, branch_commits, cherry_on_branch, merged)
     landed_on_main = landed(branch_commits, main_commits, cherry_on_main, set())
 
+    tags = git.tag_rows(f"{version}.*")
+    branch_tags = (
+        first_tags(
+            [
+                (parsed, git.log(f"{anchor}..{sha}"))
+                for name, _date, sha in tags
+                if (parsed := parse_tag(name)) is not None
+            ]
+        )
+        if anchor and reachable
+        else {}
+    )
+
     comments = gh.issue_comments(issue) if issue is not None else []
     writers = {login for login in command_authors(comments) if gh.can_write(login)}
 
@@ -1230,7 +1276,7 @@ def build_tracker_state(
         anchor_reachable=reachable,
         head_main=head_main,
         head_branch=head_branch,
-        tags=git.tag_rows(f"{version}.*"),
+        tags=tags,
         releases=gh.releases(version),
         main_commits=main_commits,
         branch_commits=branch_commits,
@@ -1239,6 +1285,7 @@ def build_tracker_state(
         marks=marks_from_comments(comments, writers),
         backport_prs=backport_prs,
         experimental_branches=git.ls_remote_heads(f"{branch}--*"),
+        branch_tags=branch_tags,
     )
     return state, body_before
 

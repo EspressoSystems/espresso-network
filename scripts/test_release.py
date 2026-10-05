@@ -72,6 +72,7 @@ def state(**overrides) -> "rel.TrackerState":
         "marks": {},
         "backport_prs": {},
         "experimental_branches": [],
+        "branch_tags": {},
     }
     defaults.update(overrides)
     return rel.TrackerState(**defaults)
@@ -499,6 +500,7 @@ class ChecklistCap(unittest.TestCase):
         body = rel.render_body(
             state(
                 anchor="a" * 40,
+                tags=[("0.6.0.0", "2026-01-01", "a" * 40)],
                 main_commits=main_commits,
                 branch_commits=branch_commits,
             ),
@@ -946,6 +948,89 @@ class RefreshDryRun(unittest.TestCase):
         self.assertIn("# Release 0.6.0", out.getvalue())
         self.assertFalse(runner.ran("gh", "issue", "edit"))
         self.assertFalse(runner.ran("gh", "issue", "comment"))
+
+
+# REQ:release-branch-tags
+
+
+def tag(patch, minor=6) -> "rel.Tag":
+    return rel.Tag(version(0, minor, 3), patch)
+
+
+class FirstTags(unittest.TestCase):
+    def test_release_first_tags_lowest_patch_ok(self):
+        c1, c2, c3 = (commit(sha=str(i) * 40) for i in (1, 2, 3))
+        contained = [
+            (tag(2), [c1, c2, c3]),
+            (tag(1), [c1, c2]),
+            (tag(0), [c1]),
+        ]
+        self.assertEqual(
+            rel.first_tags(contained),
+            {c1.sha: "0.6.3.0", c2.sha: "0.6.3.1", c3.sha: "0.6.3.2"},
+        )
+
+    def test_release_first_tags_untagged_absent_ok(self):
+        self.assertEqual(rel.first_tags([(tag(0), [])]), {})
+
+
+class BranchTagColumn(unittest.TestCase):
+    def render(self, commits, tag_of):
+        return rel.render_checklist(
+            commits, "a" * 40, True, "h" * 40, {}, set(), {}, REPO, tag_of
+        )
+
+    def test_release_branch_tag_column_ok(self):
+        tagged, untagged = commit(sha="1" * 40), commit(sha="2" * 40)
+        rendered = self.render([tagged, untagged], {tagged.sha: "0.6.3.1"})
+        self.assertIn("| Commit | Tag | Backport |", rendered)
+        self.assertIn("| `0.6.3.1` |  | fix: thing |", rendered)
+        self.assertIn("| **untagged** |  | fix: thing |", rendered)
+
+    def test_release_branch_tag_column_main_table_unchanged_ok(self):
+        rendered = self.render([commit()], None)
+        self.assertNotIn("Tag", rendered)
+
+    def test_release_branch_untagged_summary_ok(self):
+        commits = [commit(sha=str(i) * 40) for i in (1, 2, 3)]
+        tags = [("0.6.0.0", "d", "a" * 40), ("0.6.0.2", "d", "b" * 40)]
+        body = rel.render_body(
+            state(
+                anchor="a" * 40,
+                tags=tags,
+                branch_commits=commits,
+                branch_tags={commits[0].sha: "0.6.0.1"},
+            ),
+            "",
+            REPO,
+        )
+        self.assertIn("**2 commits since `0.6.0.2`**\n\n| ", body)
+        body = rel.render_body(
+            state(
+                anchor="a" * 40,
+                tags=tags,
+                branch_commits=commits[:1],
+                branch_tags={commits[0].sha: "0.6.0.1"},
+            ),
+            "",
+            REPO,
+        )
+        self.assertIn("_All commits tagged._\n\n| ", body)
+        body = rel.render_body(
+            state(
+                anchor="a" * 40,
+                tags=tags,
+                branch_commits=commits[:1],
+            ),
+            "",
+            REPO,
+        )
+        self.assertIn("**1 commit since `0.6.0.2`**", body)
+
+    def test_release_branch_untagged_summary_no_table_ok(self):
+        body = rel.render_body(state(anchor="a" * 40), "", REPO)
+        self.assertNotIn("commits since", body)
+        self.assertNotIn("All commits tagged", body)
 
 
 # REQ:release-build-tracker-state
