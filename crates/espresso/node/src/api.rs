@@ -8370,8 +8370,8 @@ mod test {
         let last_block = *blocks.last().unwrap();
 
         // The counts come from aggregates a background task fills in after each block is
-        // stored, so wait for them to reach the last submitted transaction first; nothing else
-        // submits, so every number below is stable from then on.
+        // stored, so wait for them to reach the last submitted transaction first. Nothing else
+        // submits before the counts are compared, so they are stable from then on.
         let expected_total: u64 = namespace_counts
             .iter()
             .map(|(_, count)| u64::from(*count))

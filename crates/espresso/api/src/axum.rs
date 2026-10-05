@@ -22,7 +22,7 @@ use axum::{
     extract::{Path, Request, State, ws::WebSocketUpgrade},
     http::{HeaderMap, StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
-    routing::get,
+    routing::{any, get},
 };
 use http_wire::{
     ContentType, DecodeFailure, WireError, drive_ws_stream, healthcheck_response,
@@ -3579,16 +3579,18 @@ pub fn router_v2_docs() -> Router {
         )
 }
 
-/// The `ConfigService` paths when the `config` module is off. `serve_axum` merges [`router_v2_docs`]
-/// last and axum keeps the last merged router's fallback, so an unregistered v2 path would get
-/// axum's empty 404 instead of the [`v2_error_envelope`] one.
-pub(crate) fn router_config_disabled() -> Router {
+/// A gated module's v2 paths when its flag is off. `serve_axum` merges [`router_v2_docs`] last and
+/// axum keeps the last merged router's fallback, so an unregistered v2 path would get axum's empty
+/// 404 instead of the [`v2_error_envelope`] one.
+pub(crate) fn router_module_disabled(module: &'static str, paths: &[&str]) -> Router {
     let mut router = Router::new();
-    for path in routes::v2::CONFIG_ROUTES {
+    for path in paths {
         router = router.route(
             path,
-            get(|| async {
-                tonic_rest::RestError::from(tonic::Status::not_found("config module disabled"))
+            any(move || async move {
+                tonic_rest::RestError::from(tonic::Status::not_found(format!(
+                    "{module} module disabled"
+                )))
             }),
         );
     }
@@ -5623,40 +5625,54 @@ mod tests {
     /// The docs router is merged in as `serve_axum` does: that merge swaps `router_v2`'s layered
     /// fallback for a plain one, so `router_v2` alone passes even with the paths unregistered.
     #[tokio::test]
-    async fn disabled_config_module_answers_in_the_envelope() {
+    async fn disabled_modules_answer_in_the_envelope() {
         let spec: serde_json::Value = serde_json::from_str(super::V2_OPENAPI).expect("valid JSON");
-        let mut documented: Vec<&str> = spec["paths"]
-            .as_object()
-            .expect("spec has paths")
-            .keys()
-            .map(String::as_str)
-            .filter(|path| path.starts_with("/v2/config/"))
-            .collect();
-        documented.sort_unstable();
-        let mut registered = routes::v2::CONFIG_ROUTES.to_vec();
-        registered.sort_unstable();
-        assert_eq!(registered, documented);
-
+        let paths = spec["paths"].as_object().expect("spec has paths");
         let router = crate::router_v2(Arc::new(MockV2State), crate::OptionalModules::default())
             .merge(router_v2_docs());
-        for path in documented {
-            let req = Request::builder()
-                .uri(path)
-                .body(axum::body::Body::empty())
-                .unwrap();
-            let resp = tower::ServiceExt::oneshot(router.clone(), req)
-                .await
-                .unwrap();
-            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
-            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap_or_else(|err| {
-                panic!("{path}: {err}: {:?}", String::from_utf8_lossy(&body))
-            });
-            assert_eq!(envelope["error"]["code"], 404, "{path}");
-            assert_eq!(envelope["error"]["status"], "NOT_FOUND", "{path}");
+        for (prefix, registered) in [
+            ("/v2/config/", routes::v2::CONFIG_ROUTES),
+            ("/v2/submit/", routes::v2::SUBMIT_ROUTES),
+        ] {
+            let mut documented: Vec<&str> = paths
+                .keys()
+                .map(String::as_str)
+                .filter(|path| path.starts_with(prefix))
+                .collect();
+            documented.sort_unstable();
+            let mut registered = registered.to_vec();
+            registered.sort_unstable();
+            assert_eq!(registered, documented);
+            for path in documented {
+                let method = paths[path]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .next()
+                    .unwrap()
+                    .to_uppercase();
+                assert_disabled_in_envelope(&router, &method, path).await;
+            }
         }
+    }
+
+    async fn assert_disabled_in_envelope(router: &Router, method: &str, path: &str) {
+        let req = Request::builder()
+            .method(method)
+            .uri(path)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router.clone(), req)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{method} {path}");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(&body)
+            .unwrap_or_else(|err| panic!("{path}: {err}: {:?}", String::from_utf8_lossy(&body)));
+        assert_eq!(envelope["error"]["code"], 404, "{path}");
+        assert_eq!(envelope["error"]["status"], "NOT_FOUND", "{path}");
     }
 
     /// A bad query parameter is refused by the extractor and wrapped by the envelope layer,
