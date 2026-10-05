@@ -63,6 +63,16 @@ impl NsAvidMShare {
             && self.content.len() > ns_index
     }
 
+    /// Return the index of the storage node this share is for.
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+
+    /// Return the share content of each namespace, aligned with [`Self::ns_commits`].
+    pub fn content(&self) -> &[RawAvidMShare] {
+        &self.content
+    }
+
     /// Return the list of namespace commitments.
     pub fn ns_commits(&self) -> &[AvidMCommit] {
         &self.ns_commits

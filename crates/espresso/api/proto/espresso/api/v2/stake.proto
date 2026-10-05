@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package espresso.api.v2;
 
-import "espresso/api/v2/types/keys.proto";
+import "espresso/api/v2/keys.proto";
 
 message PeerConnectInfo {
   // "host:port", with an IPv6 literal left unbracketed as v1 writes it

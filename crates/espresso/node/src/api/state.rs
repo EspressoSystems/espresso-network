@@ -5,7 +5,8 @@ use std::{
     collections::HashMap,
     num::NonZeroUsize,
     ops::{Bound, Deref, Range},
-    time::Duration,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 use alloy::primitives::utils::format_ether;
@@ -27,6 +28,7 @@ use espresso_types::{
     },
     v0_6::RewardClaimError,
 };
+use espresso_utils::redact::{redact_url, redact_urls};
 use futures::{StreamExt as _, TryStreamExt as _, join, stream::BoxStream};
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
 use hotshot_new_protocol::message::Certificate2;
@@ -53,6 +55,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     data::{EpochNumber, VidShare},
+    simple_certificate::LightClientStateUpdateCertificateV2,
     utils::{epoch_from_block_number, root_block_in_epoch},
     vid::avidm::AvidMShare,
 };
@@ -60,6 +63,7 @@ use jf_merkle_tree_compat::{
     MerkleTreeScheme,
     prelude::{MerkleProof as InternalMerkleProof, MerkleProof as JfMerkleProof},
 };
+use parking_lot::Mutex;
 use prometheus::Encoder as _;
 use serde_json;
 use tagged_base64::TaggedBase64;
@@ -94,6 +98,31 @@ pub struct NodeApiStateImpl<D> {
     env_vars: std::sync::Arc<Vec<String>>,
     public_node_config: Option<std::sync::Arc<crate::options::PublicNodeConfig>>,
     ranges_concurrency: NonZeroUsize,
+    state_cert_fetches: Arc<StateCertFetches>,
+    /// The reward tree the last reward-amounts page decoded, by height. The tree stored for a
+    /// height never changes, so a client paging through one height decodes it once rather than
+    /// once per page.
+    reward_tree: Arc<Mutex<Option<DecodedRewardTree>>>,
+}
+
+/// A reward tree as stored at a height, decoded.
+type DecodedRewardTree = (u64, Arc<InternalRewardTreeData>);
+
+/// How long to wait for peers to supply a state cert this node does not store.
+const STATE_CERT_FETCH_TIMEOUT: Duration = Duration::from_secs(40);
+
+/// How long a failed fetch of an epoch's state cert is remembered. Asking again within it is
+/// refused at once rather than starting another fetch.
+const STATE_CERT_FAILURE_TTL: Duration = Duration::from_secs(60);
+
+/// State cert fetches from peers in flight at once.
+const STATE_CERT_PEER_FETCHES: usize = 4;
+
+/// Bounds the peer fetches the state cert endpoints start. Any caller can ask for an epoch this
+/// node does not store, and each miss waits on peers for up to [`STATE_CERT_FETCH_TIMEOUT`].
+struct StateCertFetches {
+    in_flight: tokio::sync::Semaphore,
+    failed_at: Mutex<HashMap<u64, Instant>>,
 }
 
 impl<D> NodeApiStateImpl<D> {
@@ -103,6 +132,11 @@ impl<D> NodeApiStateImpl<D> {
             env_vars: std::sync::Arc::new(Vec::new()),
             public_node_config: None,
             ranges_concurrency: NonZeroUsize::new(4).unwrap(),
+            state_cert_fetches: Arc::new(StateCertFetches {
+                in_flight: tokio::sync::Semaphore::new(STATE_CERT_PEER_FETCHES),
+                failed_at: Default::default(),
+            }),
+            reward_tree: Default::default(),
         }
     }
 
@@ -351,20 +385,32 @@ where
             )));
         }
 
-        let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
-            not_found(format!(
-                "failed to load reward tree at height {}: {}",
-                height, err
-            ))
-        })?;
-
-        let tree_data: InternalRewardTreeData =
-            bincode::deserialize(&tree_bytes).map_err(|err| {
-                not_found(format!(
-                    "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
-                    height, err
-                ))
-            })?;
+        let cached = self
+            .reward_tree
+            .lock()
+            .as_ref()
+            .filter(|(at, _)| *at == height)
+            .map(|(_, tree)| tree.clone());
+        let tree_data = match cached {
+            Some(tree) => tree,
+            None => {
+                let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
+                    not_found(format!(
+                        "failed to load reward tree at height {}: {}",
+                        height, err
+                    ))
+                })?;
+                let tree: Arc<InternalRewardTreeData> =
+                    Arc::new(bincode::deserialize(&tree_bytes).map_err(|err| {
+                        not_found(format!(
+                            "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
+                            height, err
+                        ))
+                    })?);
+                *self.reward_tree.lock() = Some((height, tree.clone()));
+                tree
+            },
+        };
 
         let offset_usize = offset as usize;
         let limit_usize = limit as usize;
@@ -462,6 +508,7 @@ where
         + RequestResponseDataSource<SeqTypes>
         + StateCertDataSource
         + StateCertFetchingDataSource<SeqTypes>
+        + NodeStateDataSource
         + Send
         + Sync,
 {
@@ -571,25 +618,26 @@ where
                 .get_vid_common_range(from as usize..until as usize)
         );
 
-        let blocks: Vec<_> = blocks_stream
-            .then(|block| async move { block.resolve().await })
+        // Under the same timeout as every other range: a height past the chain head would
+        // otherwise never resolve, and the request would hold its permit forever.
+        let fetched: Vec<_> = blocks_stream
+            .zip(vids_stream)
+            .then(|(block, vid)| async move {
+                join!(
+                    block.with_timeout(FETCH_TIMEOUT),
+                    vid.with_timeout(FETCH_TIMEOUT)
+                )
+            })
             .collect()
             .await;
-        let vids: Vec<_> = vids_stream
-            .then(|vid| async move { vid.resolve().await })
-            .collect()
-            .await;
-
-        if blocks.len() != vids.len() {
-            return Err(anyhow::anyhow!(
-                "mismatch between blocks and VID common data"
-            ));
-        }
 
         // Generate proofs for each block
         let mut proofs = Vec::new();
 
-        for (block, vid) in blocks.into_iter().zip(vids) {
+        for (height, (block, vid)) in (from..).zip(fetched) {
+            let (Some(block), Some(vid)) = (block, vid) else {
+                return Err(not_found(format!("block {height} not found")));
+            };
             let ns_table = block.payload().ns_table();
 
             // Check if namespace exists in this block
@@ -740,64 +788,75 @@ where
     }
 
     async fn get_state_cert(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV1> {
-        // Try to get from local storage first
-        let state_cert = self.data_source.get_state_cert_by_epoch(epoch).await?;
-
-        let cert = match state_cert {
-            Some(cert) => cert,
-            None => {
-                // Not found locally, try to fetch from peers
-                const TIMEOUT: Duration = Duration::from_secs(40);
-                let cert = self
-                    .data_source
-                    .request_state_cert(epoch, TIMEOUT)
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
-                    })?;
-
-                // Store the fetched certificate
-                self.data_source
-                    .insert_state_cert(epoch, cert.clone())
-                    .await?;
-
-                cert
-            },
-        };
-
         Ok(espresso_types::StateCertQueryDataV1::from(
-            espresso_types::StateCertQueryDataV2(cert),
+            espresso_types::StateCertQueryDataV2(
+                state_cert(&*self.data_source, &self.state_cert_fetches, epoch).await?,
+            ),
         ))
     }
 
     async fn get_state_cert_v2(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV2> {
-        // Try to get from local storage first
-        let state_cert = self.data_source.get_state_cert_by_epoch(epoch).await?;
-
-        let cert = match state_cert {
-            Some(cert) => cert,
-            None => {
-                // Not found locally, try to fetch from peers
-                const TIMEOUT: Duration = Duration::from_secs(40);
-                let cert = self
-                    .data_source
-                    .request_state_cert(epoch, TIMEOUT)
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
-                    })?;
-
-                // Store the fetched certificate
-                self.data_source
-                    .insert_state_cert(epoch, cert.clone())
-                    .await?;
-
-                cert
-            },
-        };
-
-        Ok(espresso_types::StateCertQueryDataV2(cert))
+        Ok(espresso_types::StateCertQueryDataV2(
+            state_cert(&*self.data_source, &self.state_cert_fetches, epoch).await?,
+        ))
     }
+}
+
+/// The stored state cert for `epoch`, or else one fetched from peers and stored.
+async fn state_cert<T>(
+    ds: &T,
+    fetches: &StateCertFetches,
+    epoch: u64,
+) -> anyhow::Result<LightClientStateUpdateCertificateV2<SeqTypes>>
+where
+    T: hotshot_query_service::node::NodeDataSource<SeqTypes>
+        + NodeStateDataSource
+        + StateCertDataSource
+        + StateCertFetchingDataSource<SeqTypes>
+        + Sync
+        + ?Sized,
+{
+    if let Some(cert) = ds.get_state_cert_by_epoch(epoch).await? {
+        return Ok(cert);
+    }
+
+    // No peer can have a cert for an epoch past the next one.
+    if let Some(epoch_height) = ds.node_state().await.epoch_height
+        && epoch_height > 0
+    {
+        let block_height = ds.block_height().await? as u64;
+        let current = epoch_from_block_number(block_height, epoch_height);
+        if epoch > current + 1 {
+            return Err(not_found(format!(
+                "no state cert for epoch {epoch}: the current epoch is {current}"
+            )));
+        }
+    }
+
+    if fetches
+        .failed_at
+        .lock()
+        .get(&epoch)
+        .is_some_and(|at| at.elapsed() < STATE_CERT_FAILURE_TTL)
+    {
+        return Err(not_found(format!(
+            "no peer supplied the state cert for epoch {epoch} recently, retry later"
+        )));
+    }
+    let _permit = fetches.in_flight.acquire().await?;
+    let cert = match ds.request_state_cert(epoch, STATE_CERT_FETCH_TIMEOUT).await {
+        Ok(cert) => cert,
+        Err(err) => {
+            let mut failed_at = fetches.failed_at.lock();
+            failed_at.retain(|_, at| at.elapsed() < STATE_CERT_FAILURE_TTL);
+            failed_at.insert(epoch, Instant::now());
+            return Err(anyhow::anyhow!(
+                "failed to fetch state cert for epoch {epoch}: {err}"
+            ));
+        },
+    };
+    ds.insert_state_cert(epoch, cert.clone()).await?;
+    Ok(cert)
 }
 
 fn not_found(msg: impl Into<String>) -> anyhow::Error {
@@ -2238,15 +2297,13 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             storage: Some(storage.into()),
             genesis_file: genesis_file.to_string(),
             public_api_url: public_api_url.map(|url| url.to_string()),
-            builder_urls: builder_urls.iter().map(ToString::to_string).collect(),
-            state_relay_server_url: state_relay_server_url.to_string(),
-            state_peers: state_peers.iter().map(ToString::to_string).collect(),
-            config_peers: config_peers
-                .unwrap_or_default()
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            orchestrator_url: orchestrator_url.to_string(),
+            // An operator URL can carry an API key in its userinfo, path or query, and this
+            // endpoint is unauthenticated, so only the scheme, host and port are served.
+            builder_urls: redact_urls(&builder_urls),
+            state_relay_server_url: redact_url(&state_relay_server_url),
+            state_peers: redact_urls(&state_peers),
+            config_peers: redact_urls(&config_peers.unwrap_or_default()),
+            orchestrator_url: redact_url(&orchestrator_url),
             cdn_endpoint,
             // `unbracketed_string` rather than `to_string`: NetAddr's Display brackets an IPv6
             // literal and its serde impl does not, so v1 serves the unbracketed form.
@@ -2339,7 +2396,7 @@ impl From<crate::options::ApiModulesConfig> for proto::ApiModules {
                 tonic_port: http.tonic_port.map(u32::from),
             }),
             query: modules.query.map(|query| proto::QueryModule {
-                peers: query.peers.iter().map(ToString::to_string).collect(),
+                peers: redact_urls(&query.peers),
                 light_client: Some(proto::LightClientModuleOptions {
                     num_stake_tables_in_memory: query.light_client.num_stake_tables_in_memory
                         as u64,
@@ -3430,6 +3487,7 @@ where
         + RequestResponseDataSource<SeqTypes>
         + StateCertDataSource
         + StateCertFetchingDataSource<SeqTypes>
+        + NodeStateDataSource
         + Send
         + Sync,
     for<'a> <D::Target as hotshot_query_service::data_source::VersionedDataSource>::ReadOnly<'a>:
@@ -4533,6 +4591,18 @@ mod tests {
         assert!(avidm.ns_commits[0].starts_with("AvidMCommit~"));
         assert_eq!(avidm.content.len(), 2);
         assert!(avidm.content[0].payload.starts_with("FIELD~"));
+        // The conversion reads the share's accessors, so pin each field to the bytes v1 serves.
+        let v1 = &serde_json::to_value(&share).unwrap()["V1"];
+        assert_eq!(avidm.index, v1["index"]);
+        assert_eq!(serde_json::json!(avidm.ns_commits), v1["ns_commits"]);
+        assert_eq!(serde_json::json!(avidm.ns_lens), v1["ns_lens"]);
+        for (content, v1) in avidm.content.iter().zip(v1["content"].as_array().unwrap()) {
+            let range = content.range.as_ref().unwrap();
+            assert_eq!(range.start, v1["range"]["start"]);
+            assert_eq!(range.end, v1["range"]["end"]);
+            assert_eq!(content.payload, v1["payload"]);
+            assert_eq!(content.mt_proofs, v1["mt_proofs"]);
+        }
 
         let param = init_avidm_gf2_param(3).unwrap();
         let (_, _, mut shares) =
@@ -4894,8 +4964,8 @@ mod tests {
     }
 
     /// No test can build this proof, since it needs a malicious dispersal and the vid crate keeps
-    /// the items for one private. Deserializing the JSON v1 would serve pins the two field names
-    /// the conversion reads, so an upstream rename fails here rather than as a 500.
+    /// the items for one private. Deserializing the JSON v1 would serve gives a real value, which
+    /// the conversion must render with the same bytes v1 does.
     #[test]
     fn bad_encoding_namespace_proof_mirrors_its_v1_rendering() {
         // ark-serialize writes a `Vec` as a little-endian u64 length followed by its elements, so

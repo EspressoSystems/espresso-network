@@ -11,10 +11,11 @@ the single definition site for an endpoint: the rpc signature gives the request 
 `google.api.http` option gives the HTTP route, and the comments become the generated documentation.
 
 The directory mirrors the package, `espresso.api.v2`, so a file imports another as
-`import "espresso/api/v2/types/header.proto";`. A service file holds its rpcs and the messages only it uses. A message
-more than one service uses lives in `types/`, in the file for its topic (`header`, `keys`, `merkle`, `stake`), and moves
-there when a second service first needs it: proto short names are unique package-wide, so two services cannot each
-define their own. Service files import `types/` files and never each other. Moving a message between files of the
+`import "espresso/api/v2/header.proto";`. A service file, `<name>_service.proto`, holds its rpcs and the messages only
+it uses. A message more than one service uses lives in the type file for its topic (`header.proto`, `keys.proto`,
+`merkle.proto`, `stake.proto`) and moves there when a second service first needs it: proto short names are unique
+package-wide, so two services cannot each define their own. Service files import type files and never each other. All of
+them share one directory because buf's lint wants one directory per package. Moving a message between files of the
 package changes neither its wire encoding nor its JSON.
 
 From those files, `crates/espresso/api/build.rs` generates everything else into the build's `OUT_DIR` on every build.
@@ -53,11 +54,11 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   query parameter, such as `?height=`, `?hash=` or `?payloadHash=` for a block. The `stream/*` subscriptions are
   server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item. An error arrives as an
   `event: error` frame holding the error envelope and ends the stream. The `*-ranges` batch endpoints are POSTs.
-  `HeaderResponse` is a `oneof` whose arm names the protocol version, and the header messages live in
-  `types/header.proto` because `NodeService` serves them too. Byte fields v1 writes as JSON integer arrays, such as the
-  DRB result and the ADVZ proof indices, are protobuf `bytes`, base64 in JSON, and certificates list who signed as
-  booleans by stake table position rather than v1's bitvec layout. A block range is one response message, so a large one
-  can exceed a gRPC client's default 4 MB decode limit, which clients reading block ranges over gRPC should raise.
+  `HeaderResponse` is a `oneof` whose arm names the protocol version, and the header messages live in `header.proto`
+  because `NodeService` serves them too. Byte fields v1 writes as JSON integer arrays, such as the DRB result and the
+  ADVZ proof indices, are protobuf `bytes`, base64 in JSON, and certificates list who signed as booleans by stake table
+  position rather than v1's bitvec layout. A block range is one response message, so a large one can exceed a gRPC
+  client's default 4 MB decode limit, which clients reading block ranges over gRPC should raise.
 - `MerklizedStateService` serves the block and fee merkle trees: a path lookup per tree and the newest persisted state
   height. A path reuses the `MerkleNode` messages a VID share carries, a oneof over jellyfish's four node variants, and
   every hash, index and element keeps the `FIELD~` TaggedBase64 encoding jellyfish gives it. The proof is the same bytes
@@ -76,8 +77,8 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   route already serves an account's path.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
-tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
-path against the mounted v2 router.
+tests in `crates/espresso/api/src/axum.rs` pin the whole document to a reviewed snapshot and probe each documented path
+against the mounted v2 router.
 
 ### Adding an endpoint to an existing service
 
@@ -136,15 +137,16 @@ path against the mounted v2 router.
 ### Adding a new service
 
 1. Create `crates/espresso/api/proto/espresso/api/v2/<name>_service.proto` (the build globs the directory, so no build
-   script change) with the service, its rpcs, and their `google.api.http` options. Import the `types/` files it needs.
+   script change) with the service, its rpcs, and their `google.api.http` options. Import the type files it needs.
 2. Regenerate as above.
 3. Implement the generated `<name>_service_server::<Name>Service` trait on `NodeApiStateImpl`.
-4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait bound to `serve_axum`, `router_v2` and
-   `serve_tonic`, merge `rest::<name>_service_rest_router(...)` in `router_v2`, and `add_service` the tonic server in
-   `serve_tonic`.
-5. Update the tests in `crates/espresso/api/src/axum.rs`: implement the new trait on `MockV2State`, and add the new
-   routes to the expected set in `v2_openapi_spec_documents_the_proto_routes`. That test is the tripwire keeping the
-   OpenAPI document and the mounted routes in step, so it fails on purpose until the list is updated.
+4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait to `V2Api` and its blanket impl, which
+   `serve_axum`, `router_v2` and `serve_tonic` all take, merge `rest::<name>_service_rest_router(...)` in `router_v2`,
+   and `add_service` the tonic server in `serve_tonic`. The test stand-in `MockV2State` is generated from the protos by
+   `build/mock.rs`, so it needs no change.
+5. Accept the new routes in the OpenAPI snapshot: `v2_openapi_spec_matches_its_snapshot` in
+   `crates/espresso/api/src/axum.rs` fails until `cargo insta review` (or `INSTA_UPDATE=always`) records them, and the
+   reviewer sees the document's diff in `crates/espresso/api/src/snapshots/`.
 
 A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`: mount it behind that flag in
 `router_v2` and `serve_tonic` (`add_optional_service`), register its paths when the flag is off as
@@ -161,6 +163,9 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
   check passes. Pass a tag to compare against it instead: `just proto-breaking 0.6.3.6`. The rules compare a field's
   message type by name, so renaming a message a field refers to counts as a break even though the wire bytes are
   unchanged. buf does not read the `google.api.http` annotation, so a changed route is not caught by it.
+- `just proto-lint` runs `buf lint` with buf's STANDARD rules and `buf format`, both in CI. The exceptions are recorded
+  in `crates/espresso/api/proto/buf.yaml` with their reasons. Run `buf format -w crates/espresso/api/proto` to fix the
+  formatting.
 - An rpc is a GET, or a POST when its input cannot be flat. A POST binds the whole request message as its protoJSON body
   (`body: "*"`) and refuses a query string with a 400.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every

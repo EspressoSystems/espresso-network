@@ -85,6 +85,11 @@ compile-metrics *args:
 lint *args:
     just clippy {{args}} -- -D warnings
 
+# Lint the v2 protos against buf's STANDARD rules and check their formatting
+proto-lint:
+    buf lint crates/espresso/api/proto
+    buf format --diff --exit-code crates/espresso/api/proto
+
 # Fail if the v2 protos break wire or JSON compatibility with a release, by default the newest tag
 proto-breaking against="":
     #!/usr/bin/env bash

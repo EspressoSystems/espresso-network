@@ -97,8 +97,8 @@ jobs:
       - name: Run the script tests
         run: just py::test
 
-  proto-breaking:
-    name: proto breaking changes
+  protos:
+    name: protos
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -110,6 +110,9 @@ jobs:
           version: 1.72.0
           setup_only: true
       - uses: taiki-e/install-action@just
+
+      - name: Lint and format-check the v2 protos
+        run: just proto-lint
 
       # API.md freezes released v2 fields. This enforces it: a change to a proto that shipped in
       # the newest release must keep its wire and protoJSON encoding.

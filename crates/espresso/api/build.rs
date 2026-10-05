@@ -7,22 +7,20 @@ use std::{
 #[path = "build/openapi.rs"]
 mod openapi;
 
-/// Proto package the v2 API is defined in, shared with [`openapi`].
+/// Generates the test stand-in that implements every v2 service.
+#[path = "build/mock.rs"]
+mod mock;
+
+/// Proto package the v2 API is defined in, shared with [`openapi`] and [`mock`].
 pub const PACKAGE: &str = "espresso.api.v2";
 
-/// All .proto files under `<proto_root>/espresso/api/v2`, `types/` included, sorted for
-/// deterministic codegen.
+/// All .proto files under `<proto_root>/espresso/api/v2`, sorted for deterministic codegen.
 fn v2_proto_files(proto_root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    let mut dirs = vec![proto_root.join("espresso/api/v2")];
-    while let Some(dir) = dirs.pop() {
-        for entry in fs::read_dir(dir)? {
-            let path = entry?.path();
-            if path.is_dir() {
-                dirs.push(path);
-            } else if path.extension().is_some_and(|ext| ext == "proto") {
-                files.push(path);
-            }
+    for entry in fs::read_dir(proto_root.join("espresso/api/v2"))? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "proto") {
+            files.push(path);
         }
     }
     files.sort();
@@ -73,9 +71,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         out_dir.join("espresso.api.v2.openapi.json"),
         serde_json::to_string_pretty(&spec)?,
     )?;
+    fs::write(
+        out_dir.join("espresso.api.v2.mock.rs"),
+        mock::generate(&descriptor_bytes)?,
+    )?;
 
     println!("cargo:rerun-if-changed=proto");
     println!("cargo:rerun-if-changed=build/openapi.rs");
+    println!("cargo:rerun-if-changed=build/mock.rs");
 
     Ok(())
 }

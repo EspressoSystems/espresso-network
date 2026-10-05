@@ -198,12 +198,13 @@ impl Options {
                 ..Default::default()
             };
             let max_connections = self.http.max_connections;
+            let listener = espresso_api::bind(port).await?;
             tasks.spawn("API server", async move {
                 let state = NodeApiStateImpl::new(axum_ds)
                     .with_env_vars(env_vars)
                     .with_public_node_config(node_cfg);
                 if let Err(e) =
-                    espresso_api::serve_axum_status(port, state, modules, max_connections).await
+                    espresso_api::serve_axum_status(listener, state, modules, max_connections).await
                 {
                     tracing::error!("Axum server error: {}", e);
                 }
@@ -233,12 +234,13 @@ impl Options {
             };
             let axum_ds = Arc::new(state.clone());
             let max_connections = self.http.max_connections;
+            let listener = espresso_api::bind(port).await?;
             tasks.spawn("API server", async move {
                 let state = NodeApiStateImpl::new(axum_ds)
                     .with_env_vars(env_vars)
                     .with_public_node_config(node_cfg);
                 if let Err(e) =
-                    espresso_api::serve_axum_bare(port, state, modules, max_connections).await
+                    espresso_api::serve_axum_bare(listener, state, modules, max_connections).await
                 {
                     tracing::error!("Axum server error: {}", e);
                 }
@@ -297,11 +299,13 @@ impl Options {
             ..Default::default()
         };
         let max_connections = self.http.max_connections;
+        let listener = espresso_api::bind(port).await?;
         tasks.spawn("API server", async move {
             let state = NodeApiStateImpl::new(ds_for_axum)
                 .with_env_vars(env_vars)
                 .with_public_node_config(node_cfg);
-            if let Err(e) = espresso_api::serve_axum_fs(port, state, modules, max_connections).await
+            if let Err(e) =
+                espresso_api::serve_axum_fs(listener, state, modules, max_connections).await
             {
                 tracing::error!("Axum server error: {}", e);
             }
@@ -393,9 +397,10 @@ impl Options {
             api_state = api_state.with_ranges_concurrency(ranges_concurrency);
         }
         let tonic_state = api_state.clone();
+        let listener = espresso_api::bind(port).await?;
         tasks.spawn("API server", async move {
             if let Err(e) =
-                espresso_api::serve_axum(port, api_state, modules, max_connections).await
+                espresso_api::serve_axum(listener, api_state, modules, max_connections).await
             {
                 tracing::error!("Axum server error: {}", e);
             }
@@ -403,8 +408,15 @@ impl Options {
         });
 
         if let Some(tonic_port) = self.http.tonic_port {
+            let tonic_listener = espresso_api::bind(tonic_port).await?;
+            let grpc = espresso_api::GrpcOptions {
+                max_connections,
+                reflection: self.http.tonic_reflection,
+            };
             tasks.spawn("Tonic gRPC server", async move {
-                if let Err(e) = espresso_api::serve_tonic(tonic_port, tonic_state, modules).await {
+                if let Err(e) =
+                    espresso_api::serve_tonic(tonic_listener, tonic_state, modules, grpc).await
+                {
                     tracing::error!("Tonic gRPC server error: {}", e);
                 }
             });
@@ -439,6 +451,16 @@ pub struct Http {
     /// Optional port for Tonic gRPC API server.
     #[clap(long, env = "ESPRESSO_NODE_TONIC_PORT")]
     pub tonic_port: Option<u16>,
+
+    /// Serve gRPC reflection, the service that lets a client such as grpcurl discover the API's
+    /// services and messages at runtime without the proto files.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_TONIC_REFLECTION",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
+    pub tonic_reflection: bool,
 }
 
 impl Http {
@@ -448,6 +470,7 @@ impl Http {
             port,
             max_connections: None,
             tonic_port: None,
+            tonic_reflection: true,
         }
     }
 }
@@ -539,7 +562,8 @@ fn get_public_env_vars() -> anyhow::Result<Vec<String>> {
     Ok(variables
         .into_iter()
         .map(|key| {
-            let value = env::var(&key).unwrap_or_default();
+            // Several of these name URLs, which can carry an API key past the host.
+            let value = espresso_utils::redact::scrub(&env::var(&key).unwrap_or_default());
             format!("{key}={value}")
         })
         .collect())

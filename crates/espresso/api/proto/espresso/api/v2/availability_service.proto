@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package espresso.api.v2;
 
+import "espresso/api/v2/header.proto";
 import "google/api/annotations.proto";
-import "espresso/api/v2/types/header.proto";
 
 message GetLimitsRequest {}
 

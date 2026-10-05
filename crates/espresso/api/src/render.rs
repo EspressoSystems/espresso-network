@@ -361,10 +361,9 @@ impl From<HashMap<PubKey, f64>> for proto::ParticipationResponse {
     }
 }
 
-/// v1's serialized form is the source for the ADVZ and AvidM arms: jellyfish keeps the ADVZ
-/// share's fields private, and the AvidM payload is ark-serialized into single TaggedBase64
-/// strings that only its serde impl produces. The gf2 arm maps from the share's own accessors,
-/// because its payload is raw bytes that a JSON round trip would inflate into one number per byte.
+/// v1's serialized form is the source for the ADVZ arm only, because jellyfish-compat keeps the
+/// ADVZ share's fields private. The AvidM arms map from the shares' own accessors, so a change
+/// upstream fails to compile here rather than answering 500.
 impl TryFrom<&VidShare> for proto::VidShareResponse {
     type Error = tonic::Status;
 
@@ -389,29 +388,23 @@ impl TryFrom<&VidShare> for proto::VidShareResponse {
                     }),
                 })
             },
-            VidShare::V1(_) => {
-                let json = to_json(share)?;
-                let share = json_entry(&json, "V1")?;
-                proto::vid_share_response::Share::V1(proto::AvidmVidShare {
-                    index: json_field(share, "index")?,
-                    ns_commits: json_field(share, "ns_commits")?,
-                    ns_lens: json_field(share, "ns_lens")?,
-                    content: json_array(share, "content")?
-                        .iter()
-                        .map(|content| {
-                            let range = json_entry(content, "range")?;
-                            Ok(proto::AvidmShareContent {
-                                range: Some(proto::ShardRange {
-                                    start: json_field(range, "start")?,
-                                    end: json_field(range, "end")?,
-                                }),
-                                payload: json_field(content, "payload")?,
-                                mt_proofs: json_field(content, "mt_proofs")?,
-                            })
-                        })
-                        .collect::<Result<_, tonic::Status>>()?,
-                })
-            },
+            VidShare::V1(share) => proto::vid_share_response::Share::V1(proto::AvidmVidShare {
+                index: share.index(),
+                ns_commits: share.ns_commits().iter().map(ToString::to_string).collect(),
+                ns_lens: share.ns_lens().iter().map(|&len| len as u64).collect(),
+                content: share
+                    .content()
+                    .iter()
+                    .map(|content| proto::AvidmShareContent {
+                        range: Some(proto::ShardRange {
+                            start: content.range().start as u64,
+                            end: content.range().end as u64,
+                        }),
+                        payload: field_tb64(content.payload()),
+                        mt_proofs: field_tb64(content.mt_proofs()),
+                    })
+                    .collect(),
+            }),
             VidShare::V2(gf2) => proto::vid_share_response::Share::V2(proto::AvidmGf2VidShare {
                 namespaces: gf2
                     .ns_shares()
@@ -610,7 +603,7 @@ impl From<RewardAccountQueryDataV2> for proto::RewardAccountProofResponse {
 /// `block_state_path_mirrors_its_v1_rendering` pins the two to the same bytes.
 fn field_tb64<T>(value: &T) -> String
 where
-    T: CanonicalSerialize,
+    T: CanonicalSerialize + ?Sized,
 {
     let mut bytes = Vec::new();
     value
@@ -621,8 +614,8 @@ where
         .to_string()
 }
 
-/// jellyfish keeps the fields of the VID shares and common, the range proofs and the bad-encoding
-/// proof private, so v1's serde encoding is their one public view.
+/// jellyfish-compat keeps the fields of the ADVZ share, the ADVZ common and the range proofs
+/// private, so v1's serde encoding is their one public view.
 fn to_json(value: &impl serde::Serialize) -> Result<serde_json::Value, tonic::Status> {
     serde_json::to_value(value)
         .map_err(|err| tonic::Status::internal(format!("v1 encoding failed: {err}")))
@@ -702,7 +695,8 @@ impl From<PublicNetworkConfig> for proto::HotshotConfigResponse {
             view_sync_timeout_ms: view_sync_timeout.as_millis() as u64,
             builder_timeout_ms: builder_timeout.as_millis() as u64,
             data_request_delay_ms: data_request_delay.as_millis() as u64,
-            builder_urls: builder_urls.iter().map(ToString::to_string).collect(),
+            // A builder URL can carry an API key past the host, and the endpoint is unauthenticated.
+            builder_urls: espresso_utils::redact::redact_urls(&builder_urls),
             start_proposing_view,
             stop_proposing_view,
             start_voting_view,
@@ -1152,14 +1146,13 @@ impl TryFrom<&AvidMIncorrectEncodingNsProof> for proto::AvidmBadEncodingNsProof 
 
     fn try_from(proof: &AvidMIncorrectEncodingNsProof) -> Result<Self, Self::Error> {
         let inner = &proof.0;
-        let value = to_json(&inner.ns_proof)?;
         Ok(proto::AvidmBadEncodingNsProof {
             ns_index: inner.ns_index as u64,
             ns_commit: inner.ns_commit.to_string(),
             ns_mt_proof: inner.ns_mt_proof.to_string(),
             ns_proof: Some(proto::AvidmBadEncodingProof {
-                recovered_poly: json_field(&value, "recovered_poly")?,
-                raw_shares: json_field(&value, "raw_shares")?,
+                recovered_poly: field_tb64(inner.ns_proof.recovered_poly()),
+                raw_shares: field_tb64(inner.ns_proof.raw_shares()),
             }),
         })
     }

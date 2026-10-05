@@ -2,11 +2,11 @@ syntax = "proto3";
 
 package espresso.api.v2;
 
+import "espresso/api/v2/header.proto";
+import "espresso/api/v2/keys.proto";
+import "espresso/api/v2/merkle.proto";
+import "espresso/api/v2/stake.proto";
 import "google/api/annotations.proto";
-import "espresso/api/v2/types/header.proto";
-import "espresso/api/v2/types/keys.proto";
-import "espresso/api/v2/types/merkle.proto";
-import "espresso/api/v2/types/stake.proto";
 
 message GetTransactionCountRequest {
   // Lowest block height to include; the genesis block when absent

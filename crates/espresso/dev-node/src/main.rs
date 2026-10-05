@@ -658,6 +658,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         port: sequencer_api_port,
         max_connections: sequencer_api_max_connections,
         tonic_port,
+        tonic_reflection: true,
     })
     .submit(Default::default())
     .config(Default::default())

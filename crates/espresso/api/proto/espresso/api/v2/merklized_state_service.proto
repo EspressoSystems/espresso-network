@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package espresso.api.v2;
 
+import "espresso/api/v2/merkle.proto";
 import "google/api/annotations.proto";
-import "espresso/api/v2/types/merkle.proto";
 
 message GetBlockStatePathRequest {
   // Required, the block height to look up. A snapshot at height `h` commits to the headers below

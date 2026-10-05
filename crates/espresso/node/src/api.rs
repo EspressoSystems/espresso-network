@@ -4479,6 +4479,7 @@ mod test {
                 port,
                 max_connections: None,
                 tonic_port: None,
+                tonic_reflection: true,
             }))
             .states(states)
             .catchups(std::array::from_fn(|_| {
@@ -12340,6 +12341,7 @@ mod test {
                 port,
                 max_connections: None,
                 tonic_port: None,
+                tonic_reflection: true,
             }))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(

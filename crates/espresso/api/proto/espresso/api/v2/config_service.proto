@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package espresso.api.v2;
 
+import "espresso/api/v2/stake.proto";
 import "google/api/annotations.proto";
-import "espresso/api/v2/types/stake.proto";
 
 message GetHotshotConfigRequest {}
 
@@ -40,7 +40,8 @@ message HotshotConfigResponse {
   // Wait before requesting the data behind a proposal from peers
   uint64 data_request_delay_ms = 8;
 
-  // Builders consensus runs with: `--builder-urls` when given, else the network config's
+  // Builders consensus runs with: `--builder-urls` when given, else the network config's. Each is
+  // its scheme, host and port only, with `/***` in place of anything after them
   repeated string builder_urls = 9;
 
   // View from which this node proposes a consensus upgrade
@@ -364,8 +365,8 @@ message FollowerModule {
 
 // The node's effective runtime configuration: CLI flags, environment and defaults merged. The
 // genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1. No credential this
-// node holds is served, but a URL an operator configured with userinfo is served as given, as v1
-// serves it
+// node holds is served. An operator URL is served as its scheme, host and port only, with `/***`
+// in place of anything after them, since a path, query or userinfo can carry an API key
 message RuntimeConfigResponse {
   bool is_da = 1;
 

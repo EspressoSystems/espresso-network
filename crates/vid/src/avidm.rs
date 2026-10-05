@@ -102,6 +102,23 @@ pub struct RawAvidMShare {
     mt_proofs: Vec<MerkleProof>,
 }
 
+impl RawAvidMShare {
+    /// Range of this share in the encoded payload.
+    pub fn range(&self) -> &Range<usize> {
+        &self.range
+    }
+
+    /// One vector of field elements per index in [`Self::range`].
+    pub fn payload(&self) -> &[Vec<F>] {
+        &self.payload
+    }
+
+    /// One Merkle proof per entry of [`Self::payload`].
+    pub fn mt_proofs(&self) -> &[MerkleProof] {
+        &self.mt_proofs
+    }
+}
+
 impl fmt::Debug for RawAvidMShare {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RawAvidMShare")

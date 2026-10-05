@@ -100,6 +100,16 @@ impl AvidMScheme {
 }
 
 impl AvidMBadEncodingProof {
+    /// The polynomial recovered from the VID shares.
+    pub fn recovered_poly(&self) -> &[F] {
+        &self.recovered_poly
+    }
+
+    /// The share indices and their Merkle proofs against the dispersed commitment.
+    pub fn raw_shares(&self) -> &[(usize, MerkleProof)] {
+        &self.raw_shares
+    }
+
     /// Verify a proof of incorrect encoding
     pub fn verify(
         &self,
