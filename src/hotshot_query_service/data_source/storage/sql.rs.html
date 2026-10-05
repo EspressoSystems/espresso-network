@@ -3233,421 +3233,422 @@
 <a href=#3233 id=3233 data-nosnippet>3233</a>        }
 <a href=#3234 id=3234 data-nosnippet>3234</a>        storage.set_pruning_config(
 <a href=#3235 id=3235 data-nosnippet>3235</a>            PrunerCfg::default()
-<a href=#3236 id=3236 data-nosnippet>3236</a>                .with_state_target_retention(Duration::ZERO)
-<a href=#3237 id=3237 data-nosnippet>3237</a>                .with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]),
-<a href=#3238 id=3238 data-nosnippet>3238</a>        );
-<a href=#3239 id=3239 data-nosnippet>3239</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
-<a href=#3240 id=3240 data-nosnippet>3240</a>
-<a href=#3241 id=3241 data-nosnippet>3241</a>        <span class="comment">// The first batch starts at the first state row; the second consumes the empty span up to
-<a href=#3242 id=3242 data-nosnippet>3242</a>        // the next one at once.
-<a href=#3243 id=3243 data-nosnippet>3243</a>        </span><span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">Some</span>(<span class="number">999</span>));
-<a href=#3244 id=3244 data-nosnippet>3244</a>        <span class="macro">assert_eq!</span>(
-<a href=#3245 id=3245 data-nosnippet>3245</a>            storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(),
-<a href=#3246 id=3246 data-nosnippet>3246</a>            <span class="prelude-val">Some</span>(num_blocks - <span class="number">1</span>)
-<a href=#3247 id=3247 data-nosnippet>3247</a>        );
-<a href=#3248 id=3248 data-nosnippet>3248</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
-<a href=#3249 id=3249 data-nosnippet>3249</a>
-<a href=#3250 id=3250 data-nosnippet>3250</a>        <span class="comment">// Only the newest version of each node survives; the headers are untouched.
-<a href=#3251 id=3251 data-nosnippet>3251</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>tx = storage.read().<span class="kw">await</span>.unwrap();
-<a href=#3252 id=3252 data-nosnippet>3252</a>        <span class="macro">assert_eq!</span>(tx.load_pruned_height().<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
-<a href=#3253 id=3253 data-nosnippet>3253</a>        <span class="macro">assert_eq!</span>(
-<a href=#3254 id=3254 data-nosnippet>3254</a>            tx.load_state_pruned_height().<span class="kw">await</span>.unwrap(),
-<a href=#3255 id=3255 data-nosnippet>3255</a>            <span class="prelude-val">Some</span>(num_blocks - <span class="number">1</span>)
-<a href=#3256 id=3256 data-nosnippet>3256</a>        );
-<a href=#3257 id=3257 data-nosnippet>3257</a>        <span class="kw">let </span>(duplicates,) = query_as::&lt;(i64,)&gt;(
-<a href=#3258 id=3258 data-nosnippet>3258</a>            <span class="string">"SELECT count(*) FROM (SELECT count(*) FROM test_tree WHERE created &lt;= $1 GROUP BY \
-<a href=#3259 id=3259 data-nosnippet>3259</a>             path HAVING count(*) &gt; 1) AS s"</span>,
-<a href=#3260 id=3260 data-nosnippet>3260</a>        )
-<a href=#3261 id=3261 data-nosnippet>3261</a>        .bind((num_blocks - <span class="number">1</span>) <span class="kw">as </span>i64)
-<a href=#3262 id=3262 data-nosnippet>3262</a>        .fetch_one(tx.as_mut())
-<a href=#3263 id=3263 data-nosnippet>3263</a>        .<span class="kw">await
-<a href=#3264 id=3264 data-nosnippet>3264</a>        </span>.unwrap();
-<a href=#3265 id=3265 data-nosnippet>3265</a>        <span class="macro">assert_eq!</span>(duplicates, <span class="number">0</span>);
-<a href=#3266 id=3266 data-nosnippet>3266</a>        <span class="kw">let </span>(num_headers,) = query_as::&lt;(i64,)&gt;(<span class="string">"SELECT count(*) FROM header"</span>)
-<a href=#3267 id=3267 data-nosnippet>3267</a>            .fetch_one(tx.as_mut())
-<a href=#3268 id=3268 data-nosnippet>3268</a>            .<span class="kw">await
-<a href=#3269 id=3269 data-nosnippet>3269</a>            </span>.unwrap();
-<a href=#3270 id=3270 data-nosnippet>3270</a>        <span class="macro">assert_eq!</span>(num_headers, num_blocks <span class="kw">as </span>i64);
-<a href=#3271 id=3271 data-nosnippet>3271</a>    }
-<a href=#3272 id=3272 data-nosnippet>3272</a>
-<a href=#3273 id=3273 data-nosnippet>3273</a>    <span class="doccomment">/// Add `height` to `tree`, then insert its header, carrying the tree's new root, and the
-<a href=#3274 id=3274 data-nosnippet>3274</a>    /// state rows for its path.
-<a href=#3275 id=3275 data-nosnippet>3275</a>    </span><span class="kw">async fn </span>insert_mock_state(
-<a href=#3276 id=3276 data-nosnippet>3276</a>        tx: <span class="kw-2">&amp;mut </span>Transaction&lt;Write&gt;,
-<a href=#3277 id=3277 data-nosnippet>3277</a>        tree: <span class="kw-2">&amp;mut </span>MockMerkleTree,
-<a href=#3278 id=3278 data-nosnippet>3278</a>        height: u64,
-<a href=#3279 id=3279 data-nosnippet>3279</a>        timestamp: i64,
-<a href=#3280 id=3280 data-nosnippet>3280</a>    ) {
-<a href=#3281 id=3281 data-nosnippet>3281</a>        tree.update(height <span class="kw">as </span>usize, height <span class="kw">as </span>usize).unwrap();
-<a href=#3282 id=3282 data-nosnippet>3282</a>        tx.upsert(
-<a href=#3283 id=3283 data-nosnippet>3283</a>            <span class="string">"header"</span>,
-<a href=#3284 id=3284 data-nosnippet>3284</a>            [
-<a href=#3285 id=3285 data-nosnippet>3285</a>                <span class="string">"height"</span>,
-<a href=#3286 id=3286 data-nosnippet>3286</a>                <span class="string">"hash"</span>,
-<a href=#3287 id=3287 data-nosnippet>3287</a>                <span class="string">"payload_hash"</span>,
-<a href=#3288 id=3288 data-nosnippet>3288</a>                <span class="string">"timestamp"</span>,
-<a href=#3289 id=3289 data-nosnippet>3289</a>                <span class="string">"data"</span>,
-<a href=#3290 id=3290 data-nosnippet>3290</a>                <span class="string">"ns_table"</span>,
-<a href=#3291 id=3291 data-nosnippet>3291</a>            ],
-<a href=#3292 id=3292 data-nosnippet>3292</a>            [<span class="string">"height"</span>],
-<a href=#3293 id=3293 data-nosnippet>3293</a>            [(
-<a href=#3294 id=3294 data-nosnippet>3294</a>                height <span class="kw">as </span>i64,
-<a href=#3295 id=3295 data-nosnippet>3295</a>                <span class="macro">format!</span>(<span class="string">"hash{height}"</span>),
-<a href=#3296 id=3296 data-nosnippet>3296</a>                <span class="string">"ph"</span>.to_string(),
-<a href=#3297 id=3297 data-nosnippet>3297</a>                timestamp,
-<a href=#3298 id=3298 data-nosnippet>3298</a>                <span class="macro">serde_json::json!</span>({
-<a href=#3299 id=3299 data-nosnippet>3299</a>                    MockMerkleTree::header_state_commitment_field():
-<a href=#3300 id=3300 data-nosnippet>3300</a>                        serde_json::to_value(tree.commitment()).unwrap()
-<a href=#3301 id=3301 data-nosnippet>3301</a>                }),
-<a href=#3302 id=3302 data-nosnippet>3302</a>                <span class="string">"ns"</span>.to_string(),
-<a href=#3303 id=3303 data-nosnippet>3303</a>            )],
-<a href=#3304 id=3304 data-nosnippet>3304</a>        )
-<a href=#3305 id=3305 data-nosnippet>3305</a>        .<span class="kw">await
-<a href=#3306 id=3306 data-nosnippet>3306</a>        </span>.unwrap();
-<a href=#3307 id=3307 data-nosnippet>3307</a>        <span class="kw">let </span>(<span class="kw">_</span>, proof) = tree.lookup(height <span class="kw">as </span>usize).expect_ok().unwrap();
-<a href=#3308 id=3308 data-nosnippet>3308</a>        <span class="kw">let </span>traversal_path =
-<a href=#3309 id=3309 data-nosnippet>3309</a>            &lt;usize <span class="kw">as </span>ToTraversalPath&lt;<span class="number">8</span>&gt;&gt;::to_traversal_path(<span class="kw-2">&amp;</span>(height <span class="kw">as </span>usize), tree.height());
-<a href=#3310 id=3310 data-nosnippet>3310</a>        UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::insert_merkle_nodes(
-<a href=#3311 id=3311 data-nosnippet>3311</a>            tx,
-<a href=#3312 id=3312 data-nosnippet>3312</a>            proof,
-<a href=#3313 id=3313 data-nosnippet>3313</a>            traversal_path,
-<a href=#3314 id=3314 data-nosnippet>3314</a>            height,
-<a href=#3315 id=3315 data-nosnippet>3315</a>        )
-<a href=#3316 id=3316 data-nosnippet>3316</a>        .<span class="kw">await
-<a href=#3317 id=3317 data-nosnippet>3317</a>        </span>.unwrap();
-<a href=#3318 id=3318 data-nosnippet>3318</a>    }
-<a href=#3319 id=3319 data-nosnippet>3319</a>
-<a href=#3320 id=3320 data-nosnippet>3320</a>    <span class="doccomment">/// The state pruned height is `pruned`, the snapshot at `head` is complete, and the one just
-<a href=#3321 id=3321 data-nosnippet>3321</a>    /// below it is gone.
-<a href=#3322 id=3322 data-nosnippet>3322</a>    </span><span class="kw">async fn </span>assert_state_pruned_below_head(storage: <span class="kw-2">&amp;</span>SqlStorage, head: u64, pruned: u64) {
-<a href=#3323 id=3323 data-nosnippet>3323</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.read().<span class="kw">await</span>.unwrap();
-<a href=#3324 id=3324 data-nosnippet>3324</a>        <span class="macro">assert_eq!</span>(tx.load_pruned_height().<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
-<a href=#3325 id=3325 data-nosnippet>3325</a>        <span class="macro">assert_eq!</span>(tx.load_state_pruned_height().<span class="kw">await</span>.unwrap(), <span class="prelude-val">Some</span>(pruned));
-<a href=#3326 id=3326 data-nosnippet>3326</a>        <span class="kw">for </span>key <span class="kw">in </span><span class="number">0</span>..=head <span class="kw">as </span>usize {
-<a href=#3327 id=3327 data-nosnippet>3327</a>            tx.get_path(
-<a href=#3328 id=3328 data-nosnippet>3328</a>                Snapshot::&lt;<span class="kw">_</span>, MockMerkleTree, { MockMerkleTree::ARITY }&gt;::Index(head),
-<a href=#3329 id=3329 data-nosnippet>3329</a>                key,
-<a href=#3330 id=3330 data-nosnippet>3330</a>            )
-<a href=#3331 id=3331 data-nosnippet>3331</a>            .<span class="kw">await
-<a href=#3332 id=3332 data-nosnippet>3332</a>            </span>.unwrap_or_else(|err| <span class="macro">panic!</span>(<span class="string">"head snapshot is missing key {key}: {err:#}"</span>));
-<a href=#3333 id=3333 data-nosnippet>3333</a>        }
-<a href=#3334 id=3334 data-nosnippet>3334</a>        <span class="kw">let </span>err = tx
-<a href=#3335 id=3335 data-nosnippet>3335</a>            .get_path(
-<a href=#3336 id=3336 data-nosnippet>3336</a>                Snapshot::&lt;<span class="kw">_</span>, MockMerkleTree, { MockMerkleTree::ARITY }&gt;::Index(head - <span class="number">1</span>),
-<a href=#3337 id=3337 data-nosnippet>3337</a>                <span class="number">0</span>,
-<a href=#3338 id=3338 data-nosnippet>3338</a>            )
-<a href=#3339 id=3339 data-nosnippet>3339</a>            .<span class="kw">await
-<a href=#3340 id=3340 data-nosnippet>3340</a>            </span>.unwrap_err();
-<a href=#3341 id=3341 data-nosnippet>3341</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, QueryError::NotFound), <span class="string">"{err:?}"</span>);
-<a href=#3342 id=3342 data-nosnippet>3342</a>    }
-<a href=#3343 id=3343 data-nosnippet>3343</a>
-<a href=#3344 id=3344 data-nosnippet>3344</a>    <span class="doccomment">/// Zero retention puts the whole chain past its state retention, but a run still stops below
-<a href=#3345 id=3345 data-nosnippet>3345</a>    /// the state head, which the state writer resumes from. As the writer advances, the cursor
-<a href=#3346 id=3346 data-nosnippet>3346</a>    /// follows it.
-<a href=#3347 id=3347 data-nosnippet>3347</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#3348 id=3348 data-nosnippet>3348</a>    </span><span class="kw">async fn </span>test_state_pruning_stops_below_state_head() {
-<a href=#3349 id=3349 data-nosnippet>3349</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
-<a href=#3350 id=3350 data-nosnippet>3350</a>        <span class="kw">let </span><span class="kw-2">mut </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
-<a href=#3351 id=3351 data-nosnippet>3351</a>            .<span class="kw">await
-<a href=#3352 id=3352 data-nosnippet>3352</a>            </span>.unwrap();
-<a href=#3353 id=3353 data-nosnippet>3353</a>
-<a href=#3354 id=3354 data-nosnippet>3354</a>        <span class="comment">// Recent headers for the whole chain, so only state is eligible for pruning, and state up
-<a href=#3355 id=3355 data-nosnippet>3355</a>        // to a head well below the tip.
-<a href=#3356 id=3356 data-nosnippet>3356</a>        </span><span class="kw">let </span>num_blocks = <span class="number">100u64</span>;
-<a href=#3357 id=3357 data-nosnippet>3357</a>        <span class="kw">let </span>head = <span class="number">20u64</span>;
-<a href=#3358 id=3358 data-nosnippet>3358</a>        <span class="kw">let </span>now = Utc::now().timestamp();
-<a href=#3359 id=3359 data-nosnippet>3359</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = MockMerkleTree::new(MockMerkleTree::tree_height());
-<a href=#3360 id=3360 data-nosnippet>3360</a>        {
-<a href=#3361 id=3361 data-nosnippet>3361</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
-<a href=#3362 id=3362 data-nosnippet>3362</a>            <span class="kw">for </span>height <span class="kw">in </span><span class="number">0</span>..=head {
-<a href=#3363 id=3363 data-nosnippet>3363</a>                insert_mock_state(<span class="kw-2">&amp;mut </span>tx, <span class="kw-2">&amp;mut </span>tree, height, now).<span class="kw">await</span>;
-<a href=#3364 id=3364 data-nosnippet>3364</a>            }
-<a href=#3365 id=3365 data-nosnippet>3365</a>            insert_headers(<span class="kw-2">&amp;mut </span>tx, head + <span class="number">1</span>..num_blocks, now).<span class="kw">await</span>;
-<a href=#3366 id=3366 data-nosnippet>3366</a>            UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::set_last_state_height(<span class="kw-2">&amp;mut </span>tx, head <span class="kw">as </span>usize)
-<a href=#3367 id=3367 data-nosnippet>3367</a>                .<span class="kw">await
-<a href=#3368 id=3368 data-nosnippet>3368</a>                </span>.unwrap();
-<a href=#3369 id=3369 data-nosnippet>3369</a>            tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#3370 id=3370 data-nosnippet>3370</a>        }
-<a href=#3371 id=3371 data-nosnippet>3371</a>        storage.set_pruning_config(
-<a href=#3372 id=3372 data-nosnippet>3372</a>            PrunerCfg::default()
-<a href=#3373 id=3373 data-nosnippet>3373</a>                .with_state_target_retention(Duration::ZERO)
-<a href=#3374 id=3374 data-nosnippet>3374</a>                .with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]),
-<a href=#3375 id=3375 data-nosnippet>3375</a>        );
-<a href=#3376 id=3376 data-nosnippet>3376</a>
-<a href=#3377 id=3377 data-nosnippet>3377</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
-<a href=#3378 id=3378 data-nosnippet>3378</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">Some</span>(head - <span class="number">1</span>));
-<a href=#3379 id=3379 data-nosnippet>3379</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
-<a href=#3380 id=3380 data-nosnippet>3380</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, head, head - <span class="number">1</span>).<span class="kw">await</span>;
-<a href=#3381 id=3381 data-nosnippet>3381</a>
-<a href=#3382 id=3382 data-nosnippet>3382</a>        <span class="comment">// The writer moves on, and the next run follows it.
-<a href=#3383 id=3383 data-nosnippet>3383</a>        </span><span class="kw">let </span>new_head = <span class="number">40u64</span>;
-<a href=#3384 id=3384 data-nosnippet>3384</a>        {
-<a href=#3385 id=3385 data-nosnippet>3385</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
-<a href=#3386 id=3386 data-nosnippet>3386</a>            <span class="kw">for </span>height <span class="kw">in </span>head + <span class="number">1</span>..=new_head {
-<a href=#3387 id=3387 data-nosnippet>3387</a>                insert_mock_state(<span class="kw-2">&amp;mut </span>tx, <span class="kw-2">&amp;mut </span>tree, height, now).<span class="kw">await</span>;
-<a href=#3388 id=3388 data-nosnippet>3388</a>            }
-<a href=#3389 id=3389 data-nosnippet>3389</a>            UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::set_last_state_height(
-<a href=#3390 id=3390 data-nosnippet>3390</a>                <span class="kw-2">&amp;mut </span>tx,
-<a href=#3391 id=3391 data-nosnippet>3391</a>                new_head <span class="kw">as </span>usize,
-<a href=#3392 id=3392 data-nosnippet>3392</a>            )
-<a href=#3393 id=3393 data-nosnippet>3393</a>            .<span class="kw">await
-<a href=#3394 id=3394 data-nosnippet>3394</a>            </span>.unwrap();
-<a href=#3395 id=3395 data-nosnippet>3395</a>            tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#3396 id=3396 data-nosnippet>3396</a>        }
-<a href=#3397 id=3397 data-nosnippet>3397</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
-<a href=#3398 id=3398 data-nosnippet>3398</a>        <span class="macro">assert_eq!</span>(
-<a href=#3399 id=3399 data-nosnippet>3399</a>            storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(),
-<a href=#3400 id=3400 data-nosnippet>3400</a>            <span class="prelude-val">Some</span>(new_head - <span class="number">1</span>)
-<a href=#3401 id=3401 data-nosnippet>3401</a>        );
-<a href=#3402 id=3402 data-nosnippet>3402</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
-<a href=#3403 id=3403 data-nosnippet>3403</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, new_head, new_head - <span class="number">1</span>).<span class="kw">await</span>;
-<a href=#3404 id=3404 data-nosnippet>3404</a>    }
-<a href=#3405 id=3405 data-nosnippet>3405</a>
-<a href=#3406 id=3406 data-nosnippet>3406</a>    <span class="doccomment">/// Without a state head there is no snapshot for the writer to resume from and nothing to
-<a href=#3407 id=3407 data-nosnippet>3407</a>    /// prune, so a run leaves the state cursor alone.
-<a href=#3408 id=3408 data-nosnippet>3408</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#3409 id=3409 data-nosnippet>3409</a>    </span><span class="kw">async fn </span>test_state_pruning_noop_without_state_head() {
-<a href=#3410 id=3410 data-nosnippet>3410</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
-<a href=#3411 id=3411 data-nosnippet>3411</a>        <span class="kw">let </span><span class="kw-2">mut </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
-<a href=#3412 id=3412 data-nosnippet>3412</a>            .<span class="kw">await
-<a href=#3413 id=3413 data-nosnippet>3413</a>            </span>.unwrap();
-<a href=#3414 id=3414 data-nosnippet>3414</a>        {
-<a href=#3415 id=3415 data-nosnippet>3415</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
-<a href=#3416 id=3416 data-nosnippet>3416</a>            insert_headers(<span class="kw-2">&amp;mut </span>tx, <span class="number">0</span>..<span class="number">100</span>, Utc::now().timestamp()).<span class="kw">await</span>;
-<a href=#3417 id=3417 data-nosnippet>3417</a>            tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#3418 id=3418 data-nosnippet>3418</a>        }
-<a href=#3419 id=3419 data-nosnippet>3419</a>        storage.set_pruning_config(
-<a href=#3420 id=3420 data-nosnippet>3420</a>            PrunerCfg::default()
-<a href=#3421 id=3421 data-nosnippet>3421</a>                .with_state_target_retention(Duration::ZERO)
-<a href=#3422 id=3422 data-nosnippet>3422</a>                .with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]),
-<a href=#3423 id=3423 data-nosnippet>3423</a>        );
-<a href=#3424 id=3424 data-nosnippet>3424</a>
-<a href=#3425 id=3425 data-nosnippet>3425</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>Default::default()).<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
-<a href=#3426 id=3426 data-nosnippet>3426</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.read().<span class="kw">await</span>.unwrap();
-<a href=#3427 id=3427 data-nosnippet>3427</a>        <span class="macro">assert_eq!</span>(tx.load_state_pruned_height().<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
-<a href=#3428 id=3428 data-nosnippet>3428</a>    }
-<a href=#3429 id=3429 data-nosnippet>3429</a>
-<a href=#3430 id=3430 data-nosnippet>3430</a>    <span class="doccomment">/// The newest snapshot stays readable once the pruned height has reached it. A pruner from
-<a href=#3431 id=3431 data-nosnippet>3431</a>    /// before the head bound could stamp past the state head, and the writer has to resume from
-<a href=#3432 id=3432 data-nosnippet>3432</a>    /// that snapshot after a restart.
-<a href=#3433 id=3433 data-nosnippet>3433</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#3434 id=3434 data-nosnippet>3434</a>    </span><span class="kw">async fn </span>test_head_snapshot_readable_at_pruned_height() {
-<a href=#3435 id=3435 data-nosnippet>3435</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
-<a href=#3436 id=3436 data-nosnippet>3436</a>        <span class="kw">let </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
-<a href=#3437 id=3437 data-nosnippet>3437</a>            .<span class="kw">await
-<a href=#3438 id=3438 data-nosnippet>3438</a>            </span>.unwrap();
-<a href=#3439 id=3439 data-nosnippet>3439</a>
-<a href=#3440 id=3440 data-nosnippet>3440</a>        <span class="kw">let </span>head = <span class="number">10u64</span>;
-<a href=#3441 id=3441 data-nosnippet>3441</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = MockMerkleTree::new(MockMerkleTree::tree_height());
-<a href=#3442 id=3442 data-nosnippet>3442</a>        {
-<a href=#3443 id=3443 data-nosnippet>3443</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
-<a href=#3444 id=3444 data-nosnippet>3444</a>            <span class="kw">for </span>height <span class="kw">in </span><span class="number">0</span>..=head {
-<a href=#3445 id=3445 data-nosnippet>3445</a>                insert_mock_state(<span class="kw-2">&amp;mut </span>tx, <span class="kw-2">&amp;mut </span>tree, height, <span class="number">0</span>).<span class="kw">await</span>;
-<a href=#3446 id=3446 data-nosnippet>3446</a>            }
-<a href=#3447 id=3447 data-nosnippet>3447</a>            UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::set_last_state_height(<span class="kw-2">&amp;mut </span>tx, head <span class="kw">as </span>usize)
-<a href=#3448 id=3448 data-nosnippet>3448</a>                .<span class="kw">await
-<a href=#3449 id=3449 data-nosnippet>3449</a>                </span>.unwrap();
-<a href=#3450 id=3450 data-nosnippet>3450</a>            tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#3451 id=3451 data-nosnippet>3451</a>        }
-<a href=#3452 id=3452 data-nosnippet>3452</a>
-<a href=#3453 id=3453 data-nosnippet>3453</a>        <span class="comment">// Stamp past the head, as an unbounded run would have.
-<a href=#3454 id=3454 data-nosnippet>3454</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>tx = storage.prune_write().<span class="kw">await</span>.unwrap();
-<a href=#3455 id=3455 data-nosnippet>3455</a>        tx.save_state_pruned_height(head + <span class="number">5</span>).<span class="kw">await</span>.unwrap();
-<a href=#3456 id=3456 data-nosnippet>3456</a>        tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#3457 id=3457 data-nosnippet>3457</a>
-<a href=#3458 id=3458 data-nosnippet>3458</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.read().<span class="kw">await</span>.unwrap();
-<a href=#3459 id=3459 data-nosnippet>3459</a>        <span class="kw">for </span>key <span class="kw">in </span><span class="number">0</span>..=head <span class="kw">as </span>usize {
-<a href=#3460 id=3460 data-nosnippet>3460</a>            tx.get_path(
-<a href=#3461 id=3461 data-nosnippet>3461</a>                Snapshot::&lt;<span class="kw">_</span>, MockMerkleTree, { MockMerkleTree::ARITY }&gt;::Index(head),
-<a href=#3462 id=3462 data-nosnippet>3462</a>                key,
-<a href=#3463 id=3463 data-nosnippet>3463</a>            )
-<a href=#3464 id=3464 data-nosnippet>3464</a>            .<span class="kw">await
-<a href=#3465 id=3465 data-nosnippet>3465</a>            </span>.unwrap_or_else(|err| <span class="macro">panic!</span>(<span class="string">"head snapshot is missing key {key}: {err:#}"</span>));
-<a href=#3466 id=3466 data-nosnippet>3466</a>        }
-<a href=#3467 id=3467 data-nosnippet>3467</a>        <span class="kw">let </span>err = tx
-<a href=#3468 id=3468 data-nosnippet>3468</a>            .get_path(
-<a href=#3469 id=3469 data-nosnippet>3469</a>                Snapshot::&lt;<span class="kw">_</span>, MockMerkleTree, { MockMerkleTree::ARITY }&gt;::Index(head - <span class="number">1</span>),
-<a href=#3470 id=3470 data-nosnippet>3470</a>                <span class="number">0</span>,
-<a href=#3471 id=3471 data-nosnippet>3471</a>            )
-<a href=#3472 id=3472 data-nosnippet>3472</a>            .<span class="kw">await
-<a href=#3473 id=3473 data-nosnippet>3473</a>            </span>.unwrap_err();
-<a href=#3474 id=3474 data-nosnippet>3474</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, QueryError::NotFound), <span class="string">"{err:?}"</span>);
-<a href=#3475 id=3475 data-nosnippet>3475</a>    }
-<a href=#3476 id=3476 data-nosnippet>3476</a>
-<a href=#3477 id=3477 data-nosnippet>3477</a>    <span class="doccomment">/// State up to `head`, then pruned past it by a run from before the state pruner was bounded:
-<a href=#3478 id=3478 data-nosnippet>3478</a>    /// every version superseded at or below `stale_cursor` is gone and the cursor is stamped there.
-<a href=#3479 id=3479 data-nosnippet>3479</a>    </span><span class="kw">async fn </span>state_with_stale_cursor(
-<a href=#3480 id=3480 data-nosnippet>3480</a>        storage: <span class="kw-2">&amp;</span>SqlStorage,
-<a href=#3481 id=3481 data-nosnippet>3481</a>        head: u64,
-<a href=#3482 id=3482 data-nosnippet>3482</a>        stale_cursor: u64,
-<a href=#3483 id=3483 data-nosnippet>3483</a>    ) -&gt; MockMerkleTree {
-<a href=#3484 id=3484 data-nosnippet>3484</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = MockMerkleTree::new(MockMerkleTree::tree_height());
-<a href=#3485 id=3485 data-nosnippet>3485</a>        <span class="kw">let </span>now = Utc::now().timestamp();
-<a href=#3486 id=3486 data-nosnippet>3486</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
-<a href=#3487 id=3487 data-nosnippet>3487</a>        <span class="kw">for </span>height <span class="kw">in </span><span class="number">0</span>..=head {
-<a href=#3488 id=3488 data-nosnippet>3488</a>            insert_mock_state(<span class="kw-2">&amp;mut </span>tx, <span class="kw-2">&amp;mut </span>tree, height, now).<span class="kw">await</span>;
-<a href=#3489 id=3489 data-nosnippet>3489</a>        }
-<a href=#3490 id=3490 data-nosnippet>3490</a>        UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::set_last_state_height(<span class="kw-2">&amp;mut </span>tx, head <span class="kw">as </span>usize)
-<a href=#3491 id=3491 data-nosnippet>3491</a>            .<span class="kw">await
-<a href=#3492 id=3492 data-nosnippet>3492</a>            </span>.unwrap();
-<a href=#3493 id=3493 data-nosnippet>3493</a>        tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#3494 id=3494 data-nosnippet>3494</a>
-<a href=#3495 id=3495 data-nosnippet>3495</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.prune_write().<span class="kw">await</span>.unwrap();
-<a href=#3496 id=3496 data-nosnippet>3496</a>        tx.delete_state_batch([MockMerkleTree::state_type()], <span class="number">0</span>, stale_cursor)
-<a href=#3497 id=3497 data-nosnippet>3497</a>            .<span class="kw">await
-<a href=#3498 id=3498 data-nosnippet>3498</a>            </span>.unwrap();
-<a href=#3499 id=3499 data-nosnippet>3499</a>        tx.save_state_pruned_height(stale_cursor).<span class="kw">await</span>.unwrap();
-<a href=#3500 id=3500 data-nosnippet>3500</a>        tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#3501 id=3501 data-nosnippet>3501</a>        tree
-<a href=#3502 id=3502 data-nosnippet>3502</a>    }
-<a href=#3503 id=3503 data-nosnippet>3503</a>
-<a href=#3504 id=3504 data-nosnippet>3504</a>    <span class="doccomment">/// Advance the state writer from `from` to `head`.
-<a href=#3505 id=3505 data-nosnippet>3505</a>    </span><span class="kw">async fn </span>write_state_to(storage: <span class="kw-2">&amp;</span>SqlStorage, tree: <span class="kw-2">&amp;mut </span>MockMerkleTree, from: u64, head: u64) {
-<a href=#3506 id=3506 data-nosnippet>3506</a>        <span class="kw">let </span>now = Utc::now().timestamp();
-<a href=#3507 id=3507 data-nosnippet>3507</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
-<a href=#3508 id=3508 data-nosnippet>3508</a>        <span class="kw">for </span>height <span class="kw">in </span>from..=head {
-<a href=#3509 id=3509 data-nosnippet>3509</a>            insert_mock_state(<span class="kw-2">&amp;mut </span>tx, tree, height, now).<span class="kw">await</span>;
-<a href=#3510 id=3510 data-nosnippet>3510</a>        }
-<a href=#3511 id=3511 data-nosnippet>3511</a>        UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::set_last_state_height(<span class="kw-2">&amp;mut </span>tx, head <span class="kw">as </span>usize)
-<a href=#3512 id=3512 data-nosnippet>3512</a>            .<span class="kw">await
-<a href=#3513 id=3513 data-nosnippet>3513</a>            </span>.unwrap();
-<a href=#3514 id=3514 data-nosnippet>3514</a>        tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#3515 id=3515 data-nosnippet>3515</a>    }
-<a href=#3516 id=3516 data-nosnippet>3516</a>
-<a href=#3517 id=3517 data-nosnippet>3517</a>    <span class="doccomment">/// Versions at or below `pruned` that another version at or below `pruned` supersedes. A run
-<a href=#3518 id=3518 data-nosnippet>3518</a>    /// that saw every height leaves none.
-<a href=#3519 id=3519 data-nosnippet>3519</a>    </span><span class="kw">async fn </span>superseded_versions_below(storage: <span class="kw-2">&amp;</span>SqlStorage, pruned: u64) -&gt; i64 {
-<a href=#3520 id=3520 data-nosnippet>3520</a>        <span class="kw">let </span>table = MockMerkleTree::state_type();
-<a href=#3521 id=3521 data-nosnippet>3521</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.read().<span class="kw">await</span>.unwrap();
-<a href=#3522 id=3522 data-nosnippet>3522</a>        <span class="kw">let </span>(count,) = query_as::&lt;(i64,)&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#3523 id=3523 data-nosnippet>3523</a>            <span class="string">"SELECT count(*) FROM {table} AS t
-<a href=#3524 id=3524 data-nosnippet>3524</a>             WHERE t.created &lt;= $1 AND EXISTS (
-<a href=#3525 id=3525 data-nosnippet>3525</a>               SELECT 1 FROM {table} AS t2
-<a href=#3526 id=3526 data-nosnippet>3526</a>               WHERE t2.path = t.path AND t2.created &gt; t.created AND t2.created &lt;= $1
-<a href=#3527 id=3527 data-nosnippet>3527</a>             )"
-<a href=#3528 id=3528 data-nosnippet>3528</a>        </span>))
-<a href=#3529 id=3529 data-nosnippet>3529</a>        .bind(pruned <span class="kw">as </span>i64)
-<a href=#3530 id=3530 data-nosnippet>3530</a>        .fetch_one(tx.as_mut())
-<a href=#3531 id=3531 data-nosnippet>3531</a>        .<span class="kw">await
-<a href=#3532 id=3532 data-nosnippet>3532</a>        </span>.unwrap();
-<a href=#3533 id=3533 data-nosnippet>3533</a>        count
-<a href=#3534 id=3534 data-nosnippet>3534</a>    }
-<a href=#3535 id=3535 data-nosnippet>3535</a>
-<a href=#3536 id=3536 data-nosnippet>3536</a>    <span class="doccomment">/// A cursor at or above the head was stamped by a run from before the head bound. The writer
-<a href=#3537 id=3537 data-nosnippet>3537</a>    /// resumes from the head and rewrites every height after it, and a batch only collects what
-<a href=#3538 id=3538 data-nosnippet>3538</a>    /// its own window supersedes, so a run first lowers the cursor to just below the head and then
-<a href=#3539 id=3539 data-nosnippet>3539</a>    /// prunes those heights again as the head moves on, leaving nothing behind.
-<a href=#3540 id=3540 data-nosnippet>3540</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#3541 id=3541 data-nosnippet>3541</a>    </span><span class="kw">async fn </span>test_state_pruning_resumes_from_head_below_stale_cursor() {
-<a href=#3542 id=3542 data-nosnippet>3542</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
-<a href=#3543 id=3543 data-nosnippet>3543</a>        <span class="kw">let </span><span class="kw-2">mut </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
-<a href=#3544 id=3544 data-nosnippet>3544</a>            .<span class="kw">await
-<a href=#3545 id=3545 data-nosnippet>3545</a>            </span>.unwrap();
-<a href=#3546 id=3546 data-nosnippet>3546</a>        <span class="kw">let </span>head = <span class="number">20u64</span>;
-<a href=#3547 id=3547 data-nosnippet>3547</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = state_with_stale_cursor(<span class="kw-2">&amp;</span>storage, head, <span class="number">30</span>).<span class="kw">await</span>;
-<a href=#3548 id=3548 data-nosnippet>3548</a>        storage.set_pruning_config(
-<a href=#3549 id=3549 data-nosnippet>3549</a>            PrunerCfg::default()
-<a href=#3550 id=3550 data-nosnippet>3550</a>                .with_state_target_retention(Duration::ZERO)
-<a href=#3551 id=3551 data-nosnippet>3551</a>                .with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]),
-<a href=#3552 id=3552 data-nosnippet>3552</a>        );
-<a href=#3553 id=3553 data-nosnippet>3553</a>
-<a href=#3554 id=3554 data-nosnippet>3554</a>        <span class="comment">// The first run lowers the cursor and has nothing to delete yet.
-<a href=#3555 id=3555 data-nosnippet>3555</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
-<a href=#3556 id=3556 data-nosnippet>3556</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
-<a href=#3557 id=3557 data-nosnippet>3557</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, head, head - <span class="number">1</span>).<span class="kw">await</span>;
-<a href=#3558 id=3558 data-nosnippet>3558</a>
-<a href=#3559 id=3559 data-nosnippet>3559</a>        <span class="comment">// The writer moves past the stale cursor; the next run prunes those heights as well.
-<a href=#3560 id=3560 data-nosnippet>3560</a>        </span><span class="kw">let </span>new_head = <span class="number">40u64</span>;
-<a href=#3561 id=3561 data-nosnippet>3561</a>        write_state_to(<span class="kw-2">&amp;</span>storage, <span class="kw-2">&amp;mut </span>tree, head + <span class="number">1</span>, new_head).<span class="kw">await</span>;
-<a href=#3562 id=3562 data-nosnippet>3562</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
-<a href=#3563 id=3563 data-nosnippet>3563</a>        <span class="kw">while </span>storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap().is_some() {}
-<a href=#3564 id=3564 data-nosnippet>3564</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, new_head, new_head - <span class="number">1</span>).<span class="kw">await</span>;
-<a href=#3565 id=3565 data-nosnippet>3565</a>        <span class="macro">assert_eq!</span>(superseded_versions_below(<span class="kw-2">&amp;</span>storage, new_head - <span class="number">1</span>).<span class="kw">await</span>, <span class="number">0</span>);
-<a href=#3566 id=3566 data-nosnippet>3566</a>    }
-<a href=#3567 id=3567 data-nosnippet>3567</a>
-<a href=#3568 id=3568 data-nosnippet>3568</a>    <span class="doccomment">/// The pruner's first run comes a whole interval after startup, and by then the writer has
-<a href=#3569 id=3569 data-nosnippet>3569</a>    /// rewritten heights above the head it resumed from; a repair at that point starts pruning
-<a href=#3570 id=3570 data-nosnippet>3570</a>    /// above those heights and never collects what they supersede. So the cursor is lowered when
-<a href=#3571 id=3571 data-nosnippet>3571</a>    /// the storage connects, before the writer can start. Reconnecting stands in for the restart.
-<a href=#3572 id=3572 data-nosnippet>3572</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#3573 id=3573 data-nosnippet>3573</a>    </span><span class="kw">async fn </span>test_stale_state_cursor_is_lowered_on_connect() {
-<a href=#3574 id=3574 data-nosnippet>3574</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
-<a href=#3575 id=3575 data-nosnippet>3575</a>        <span class="kw">let </span>head = <span class="number">20u64</span>;
-<a href=#3576 id=3576 data-nosnippet>3576</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = {
-<a href=#3577 id=3577 data-nosnippet>3577</a>            <span class="kw">let </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
-<a href=#3578 id=3578 data-nosnippet>3578</a>                .<span class="kw">await
-<a href=#3579 id=3579 data-nosnippet>3579</a>                </span>.unwrap();
-<a href=#3580 id=3580 data-nosnippet>3580</a>            state_with_stale_cursor(<span class="kw-2">&amp;</span>storage, head, <span class="number">30</span>).<span class="kw">await
-<a href=#3581 id=3581 data-nosnippet>3581</a>        </span>};
-<a href=#3582 id=3582 data-nosnippet>3582</a>
-<a href=#3583 id=3583 data-nosnippet>3583</a>        <span class="kw">let </span><span class="kw-2">mut </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
-<a href=#3584 id=3584 data-nosnippet>3584</a>            .<span class="kw">await
-<a href=#3585 id=3585 data-nosnippet>3585</a>            </span>.unwrap();
-<a href=#3586 id=3586 data-nosnippet>3586</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, head, head - <span class="number">1</span>).<span class="kw">await</span>;
-<a href=#3587 id=3587 data-nosnippet>3587</a>        storage.set_pruning_config(
-<a href=#3588 id=3588 data-nosnippet>3588</a>            PrunerCfg::default()
-<a href=#3589 id=3589 data-nosnippet>3589</a>                .with_state_target_retention(Duration::ZERO)
-<a href=#3590 id=3590 data-nosnippet>3590</a>                .with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]),
-<a href=#3591 id=3591 data-nosnippet>3591</a>        );
-<a href=#3592 id=3592 data-nosnippet>3592</a>
-<a href=#3593 id=3593 data-nosnippet>3593</a>        <span class="comment">// The writer is past the old head when the pruner first runs, and moves on afterwards.
-<a href=#3594 id=3594 data-nosnippet>3594</a>        </span>write_state_to(<span class="kw-2">&amp;</span>storage, <span class="kw-2">&amp;mut </span>tree, head + <span class="number">1</span>, <span class="number">25</span>).<span class="kw">await</span>;
-<a href=#3595 id=3595 data-nosnippet>3595</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
-<a href=#3596 id=3596 data-nosnippet>3596</a>        <span class="kw">while </span>storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap().is_some() {}
-<a href=#3597 id=3597 data-nosnippet>3597</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, <span class="number">25</span>, <span class="number">24</span>).<span class="kw">await</span>;
-<a href=#3598 id=3598 data-nosnippet>3598</a>        write_state_to(<span class="kw-2">&amp;</span>storage, <span class="kw-2">&amp;mut </span>tree, <span class="number">26</span>, <span class="number">40</span>).<span class="kw">await</span>;
-<a href=#3599 id=3599 data-nosnippet>3599</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
-<a href=#3600 id=3600 data-nosnippet>3600</a>        <span class="kw">while </span>storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap().is_some() {}
-<a href=#3601 id=3601 data-nosnippet>3601</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, <span class="number">40</span>, <span class="number">39</span>).<span class="kw">await</span>;
-<a href=#3602 id=3602 data-nosnippet>3602</a>        <span class="macro">assert_eq!</span>(superseded_versions_below(<span class="kw-2">&amp;</span>storage, <span class="number">39</span>).<span class="kw">await</span>, <span class="number">0</span>);
-<a href=#3603 id=3603 data-nosnippet>3603</a>    }
-<a href=#3604 id=3604 data-nosnippet>3604</a>
-<a href=#3605 id=3605 data-nosnippet>3605</a>    <span class="doccomment">/// Archive nodes prune state through `prune_state_below`, which lowers a stale cursor the same
-<a href=#3606 id=3606 data-nosnippet>3606</a>    /// way.
-<a href=#3607 id=3607 data-nosnippet>3607</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#3608 id=3608 data-nosnippet>3608</a>    </span><span class="kw">async fn </span>test_prune_state_below_resumes_from_head_below_stale_cursor() {
-<a href=#3609 id=3609 data-nosnippet>3609</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
-<a href=#3610 id=3610 data-nosnippet>3610</a>        <span class="kw">let </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
-<a href=#3611 id=3611 data-nosnippet>3611</a>            .<span class="kw">await
-<a href=#3612 id=3612 data-nosnippet>3612</a>            </span>.unwrap();
-<a href=#3613 id=3613 data-nosnippet>3613</a>        <span class="kw">let </span>cfg = PrunerCfg::default().with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]);
-<a href=#3614 id=3614 data-nosnippet>3614</a>        <span class="kw">let </span>head = <span class="number">20u64</span>;
-<a href=#3615 id=3615 data-nosnippet>3615</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = state_with_stale_cursor(<span class="kw-2">&amp;</span>storage, head, <span class="number">30</span>).<span class="kw">await</span>;
-<a href=#3616 id=3616 data-nosnippet>3616</a>
-<a href=#3617 id=3617 data-nosnippet>3617</a>        storage.prune_state_below(u64::MAX, <span class="number">0</span>, <span class="kw-2">&amp;</span>cfg).<span class="kw">await</span>.unwrap();
-<a href=#3618 id=3618 data-nosnippet>3618</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, head, head - <span class="number">1</span>).<span class="kw">await</span>;
-<a href=#3619 id=3619 data-nosnippet>3619</a>
-<a href=#3620 id=3620 data-nosnippet>3620</a>        <span class="kw">let </span>new_head = <span class="number">40u64</span>;
-<a href=#3621 id=3621 data-nosnippet>3621</a>        write_state_to(<span class="kw-2">&amp;</span>storage, <span class="kw-2">&amp;mut </span>tree, head + <span class="number">1</span>, new_head).<span class="kw">await</span>;
-<a href=#3622 id=3622 data-nosnippet>3622</a>        storage.prune_state_below(new_head, <span class="number">0</span>, <span class="kw-2">&amp;</span>cfg).<span class="kw">await</span>.unwrap();
-<a href=#3623 id=3623 data-nosnippet>3623</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, new_head, new_head - <span class="number">1</span>).<span class="kw">await</span>;
-<a href=#3624 id=3624 data-nosnippet>3624</a>        <span class="macro">assert_eq!</span>(superseded_versions_below(<span class="kw-2">&amp;</span>storage, new_head - <span class="number">1</span>).<span class="kw">await</span>, <span class="number">0</span>);
-<a href=#3625 id=3625 data-nosnippet>3625</a>    }
-<a href=#3626 id=3626 data-nosnippet>3626</a>
-<a href=#3627 id=3627 data-nosnippet>3627</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#3628 id=3628 data-nosnippet>3628</a>    </span><span class="kw">async fn </span>test_transaction_upsert_retries() {
-<a href=#3629 id=3629 data-nosnippet>3629</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
-<a href=#3630 id=3630 data-nosnippet>3630</a>        <span class="kw">let </span>config = db.config();
-<a href=#3631 id=3631 data-nosnippet>3631</a>
-<a href=#3632 id=3632 data-nosnippet>3632</a>        <span class="kw">let </span>storage = SqlStorage::connect(config, StorageConnectionType::Query)
-<a href=#3633 id=3633 data-nosnippet>3633</a>            .<span class="kw">await
-<a href=#3634 id=3634 data-nosnippet>3634</a>            </span>.unwrap();
-<a href=#3635 id=3635 data-nosnippet>3635</a>
-<a href=#3636 id=3636 data-nosnippet>3636</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
-<a href=#3637 id=3637 data-nosnippet>3637</a>
-<a href=#3638 id=3638 data-nosnippet>3638</a>        <span class="comment">// Try to upsert into a table that does not exist.
-<a href=#3639 id=3639 data-nosnippet>3639</a>        // This will fail, so our `upsert` function will enter the retry loop.
-<a href=#3640 id=3640 data-nosnippet>3640</a>        // Since the table does not exist, all retries will eventually
-<a href=#3641 id=3641 data-nosnippet>3641</a>        // fail and we expect an error to be returned.
-<a href=#3642 id=3642 data-nosnippet>3642</a>        //
-<a href=#3643 id=3643 data-nosnippet>3643</a>        // Previously, this case would cause  a panic because we were calling
-<a href=#3644 id=3644 data-nosnippet>3644</a>        // methods on `QueryBuilder` after `.build()` without first
-<a href=#3645 id=3645 data-nosnippet>3645</a>        // calling `.reset()`and according to the sqlx docs, that always panics.
-<a href=#3646 id=3646 data-nosnippet>3646</a>        // Now, since we are properly calling `.reset()` inside `upsert()` for
-<a href=#3647 id=3647 data-nosnippet>3647</a>        // the query builder, the function returns an error instead of panicking.
-<a href=#3648 id=3648 data-nosnippet>3648</a>        </span>tx.upsert(<span class="string">"does_not_exist"</span>, [<span class="string">"test"</span>], [<span class="string">"test"</span>], [(<span class="number">1_i64</span>,)])
-<a href=#3649 id=3649 data-nosnippet>3649</a>            .<span class="kw">await
-<a href=#3650 id=3650 data-nosnippet>3650</a>            </span>.unwrap_err();
-<a href=#3651 id=3651 data-nosnippet>3651</a>    }
-<a href=#3652 id=3652 data-nosnippet>3652</a>}
+<a href=#3236 id=3236 data-nosnippet>3236</a>                .with_batch_size(<span class="number">1000</span>)
+<a href=#3237 id=3237 data-nosnippet>3237</a>                .with_state_target_retention(Duration::ZERO)
+<a href=#3238 id=3238 data-nosnippet>3238</a>                .with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]),
+<a href=#3239 id=3239 data-nosnippet>3239</a>        );
+<a href=#3240 id=3240 data-nosnippet>3240</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
+<a href=#3241 id=3241 data-nosnippet>3241</a>
+<a href=#3242 id=3242 data-nosnippet>3242</a>        <span class="comment">// The first batch starts at the first state row; the second consumes the empty span up to
+<a href=#3243 id=3243 data-nosnippet>3243</a>        // the next one at once.
+<a href=#3244 id=3244 data-nosnippet>3244</a>        </span><span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">Some</span>(<span class="number">999</span>));
+<a href=#3245 id=3245 data-nosnippet>3245</a>        <span class="macro">assert_eq!</span>(
+<a href=#3246 id=3246 data-nosnippet>3246</a>            storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(),
+<a href=#3247 id=3247 data-nosnippet>3247</a>            <span class="prelude-val">Some</span>(num_blocks - <span class="number">1</span>)
+<a href=#3248 id=3248 data-nosnippet>3248</a>        );
+<a href=#3249 id=3249 data-nosnippet>3249</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
+<a href=#3250 id=3250 data-nosnippet>3250</a>
+<a href=#3251 id=3251 data-nosnippet>3251</a>        <span class="comment">// Only the newest version of each node survives; the headers are untouched.
+<a href=#3252 id=3252 data-nosnippet>3252</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>tx = storage.read().<span class="kw">await</span>.unwrap();
+<a href=#3253 id=3253 data-nosnippet>3253</a>        <span class="macro">assert_eq!</span>(tx.load_pruned_height().<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
+<a href=#3254 id=3254 data-nosnippet>3254</a>        <span class="macro">assert_eq!</span>(
+<a href=#3255 id=3255 data-nosnippet>3255</a>            tx.load_state_pruned_height().<span class="kw">await</span>.unwrap(),
+<a href=#3256 id=3256 data-nosnippet>3256</a>            <span class="prelude-val">Some</span>(num_blocks - <span class="number">1</span>)
+<a href=#3257 id=3257 data-nosnippet>3257</a>        );
+<a href=#3258 id=3258 data-nosnippet>3258</a>        <span class="kw">let </span>(duplicates,) = query_as::&lt;(i64,)&gt;(
+<a href=#3259 id=3259 data-nosnippet>3259</a>            <span class="string">"SELECT count(*) FROM (SELECT count(*) FROM test_tree WHERE created &lt;= $1 GROUP BY \
+<a href=#3260 id=3260 data-nosnippet>3260</a>             path HAVING count(*) &gt; 1) AS s"</span>,
+<a href=#3261 id=3261 data-nosnippet>3261</a>        )
+<a href=#3262 id=3262 data-nosnippet>3262</a>        .bind((num_blocks - <span class="number">1</span>) <span class="kw">as </span>i64)
+<a href=#3263 id=3263 data-nosnippet>3263</a>        .fetch_one(tx.as_mut())
+<a href=#3264 id=3264 data-nosnippet>3264</a>        .<span class="kw">await
+<a href=#3265 id=3265 data-nosnippet>3265</a>        </span>.unwrap();
+<a href=#3266 id=3266 data-nosnippet>3266</a>        <span class="macro">assert_eq!</span>(duplicates, <span class="number">0</span>);
+<a href=#3267 id=3267 data-nosnippet>3267</a>        <span class="kw">let </span>(num_headers,) = query_as::&lt;(i64,)&gt;(<span class="string">"SELECT count(*) FROM header"</span>)
+<a href=#3268 id=3268 data-nosnippet>3268</a>            .fetch_one(tx.as_mut())
+<a href=#3269 id=3269 data-nosnippet>3269</a>            .<span class="kw">await
+<a href=#3270 id=3270 data-nosnippet>3270</a>            </span>.unwrap();
+<a href=#3271 id=3271 data-nosnippet>3271</a>        <span class="macro">assert_eq!</span>(num_headers, num_blocks <span class="kw">as </span>i64);
+<a href=#3272 id=3272 data-nosnippet>3272</a>    }
+<a href=#3273 id=3273 data-nosnippet>3273</a>
+<a href=#3274 id=3274 data-nosnippet>3274</a>    <span class="doccomment">/// Add `height` to `tree`, then insert its header, carrying the tree's new root, and the
+<a href=#3275 id=3275 data-nosnippet>3275</a>    /// state rows for its path.
+<a href=#3276 id=3276 data-nosnippet>3276</a>    </span><span class="kw">async fn </span>insert_mock_state(
+<a href=#3277 id=3277 data-nosnippet>3277</a>        tx: <span class="kw-2">&amp;mut </span>Transaction&lt;Write&gt;,
+<a href=#3278 id=3278 data-nosnippet>3278</a>        tree: <span class="kw-2">&amp;mut </span>MockMerkleTree,
+<a href=#3279 id=3279 data-nosnippet>3279</a>        height: u64,
+<a href=#3280 id=3280 data-nosnippet>3280</a>        timestamp: i64,
+<a href=#3281 id=3281 data-nosnippet>3281</a>    ) {
+<a href=#3282 id=3282 data-nosnippet>3282</a>        tree.update(height <span class="kw">as </span>usize, height <span class="kw">as </span>usize).unwrap();
+<a href=#3283 id=3283 data-nosnippet>3283</a>        tx.upsert(
+<a href=#3284 id=3284 data-nosnippet>3284</a>            <span class="string">"header"</span>,
+<a href=#3285 id=3285 data-nosnippet>3285</a>            [
+<a href=#3286 id=3286 data-nosnippet>3286</a>                <span class="string">"height"</span>,
+<a href=#3287 id=3287 data-nosnippet>3287</a>                <span class="string">"hash"</span>,
+<a href=#3288 id=3288 data-nosnippet>3288</a>                <span class="string">"payload_hash"</span>,
+<a href=#3289 id=3289 data-nosnippet>3289</a>                <span class="string">"timestamp"</span>,
+<a href=#3290 id=3290 data-nosnippet>3290</a>                <span class="string">"data"</span>,
+<a href=#3291 id=3291 data-nosnippet>3291</a>                <span class="string">"ns_table"</span>,
+<a href=#3292 id=3292 data-nosnippet>3292</a>            ],
+<a href=#3293 id=3293 data-nosnippet>3293</a>            [<span class="string">"height"</span>],
+<a href=#3294 id=3294 data-nosnippet>3294</a>            [(
+<a href=#3295 id=3295 data-nosnippet>3295</a>                height <span class="kw">as </span>i64,
+<a href=#3296 id=3296 data-nosnippet>3296</a>                <span class="macro">format!</span>(<span class="string">"hash{height}"</span>),
+<a href=#3297 id=3297 data-nosnippet>3297</a>                <span class="string">"ph"</span>.to_string(),
+<a href=#3298 id=3298 data-nosnippet>3298</a>                timestamp,
+<a href=#3299 id=3299 data-nosnippet>3299</a>                <span class="macro">serde_json::json!</span>({
+<a href=#3300 id=3300 data-nosnippet>3300</a>                    MockMerkleTree::header_state_commitment_field():
+<a href=#3301 id=3301 data-nosnippet>3301</a>                        serde_json::to_value(tree.commitment()).unwrap()
+<a href=#3302 id=3302 data-nosnippet>3302</a>                }),
+<a href=#3303 id=3303 data-nosnippet>3303</a>                <span class="string">"ns"</span>.to_string(),
+<a href=#3304 id=3304 data-nosnippet>3304</a>            )],
+<a href=#3305 id=3305 data-nosnippet>3305</a>        )
+<a href=#3306 id=3306 data-nosnippet>3306</a>        .<span class="kw">await
+<a href=#3307 id=3307 data-nosnippet>3307</a>        </span>.unwrap();
+<a href=#3308 id=3308 data-nosnippet>3308</a>        <span class="kw">let </span>(<span class="kw">_</span>, proof) = tree.lookup(height <span class="kw">as </span>usize).expect_ok().unwrap();
+<a href=#3309 id=3309 data-nosnippet>3309</a>        <span class="kw">let </span>traversal_path =
+<a href=#3310 id=3310 data-nosnippet>3310</a>            &lt;usize <span class="kw">as </span>ToTraversalPath&lt;<span class="number">8</span>&gt;&gt;::to_traversal_path(<span class="kw-2">&amp;</span>(height <span class="kw">as </span>usize), tree.height());
+<a href=#3311 id=3311 data-nosnippet>3311</a>        UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::insert_merkle_nodes(
+<a href=#3312 id=3312 data-nosnippet>3312</a>            tx,
+<a href=#3313 id=3313 data-nosnippet>3313</a>            proof,
+<a href=#3314 id=3314 data-nosnippet>3314</a>            traversal_path,
+<a href=#3315 id=3315 data-nosnippet>3315</a>            height,
+<a href=#3316 id=3316 data-nosnippet>3316</a>        )
+<a href=#3317 id=3317 data-nosnippet>3317</a>        .<span class="kw">await
+<a href=#3318 id=3318 data-nosnippet>3318</a>        </span>.unwrap();
+<a href=#3319 id=3319 data-nosnippet>3319</a>    }
+<a href=#3320 id=3320 data-nosnippet>3320</a>
+<a href=#3321 id=3321 data-nosnippet>3321</a>    <span class="doccomment">/// The state pruned height is `pruned`, the snapshot at `head` is complete, and the one just
+<a href=#3322 id=3322 data-nosnippet>3322</a>    /// below it is gone.
+<a href=#3323 id=3323 data-nosnippet>3323</a>    </span><span class="kw">async fn </span>assert_state_pruned_below_head(storage: <span class="kw-2">&amp;</span>SqlStorage, head: u64, pruned: u64) {
+<a href=#3324 id=3324 data-nosnippet>3324</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.read().<span class="kw">await</span>.unwrap();
+<a href=#3325 id=3325 data-nosnippet>3325</a>        <span class="macro">assert_eq!</span>(tx.load_pruned_height().<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
+<a href=#3326 id=3326 data-nosnippet>3326</a>        <span class="macro">assert_eq!</span>(tx.load_state_pruned_height().<span class="kw">await</span>.unwrap(), <span class="prelude-val">Some</span>(pruned));
+<a href=#3327 id=3327 data-nosnippet>3327</a>        <span class="kw">for </span>key <span class="kw">in </span><span class="number">0</span>..=head <span class="kw">as </span>usize {
+<a href=#3328 id=3328 data-nosnippet>3328</a>            tx.get_path(
+<a href=#3329 id=3329 data-nosnippet>3329</a>                Snapshot::&lt;<span class="kw">_</span>, MockMerkleTree, { MockMerkleTree::ARITY }&gt;::Index(head),
+<a href=#3330 id=3330 data-nosnippet>3330</a>                key,
+<a href=#3331 id=3331 data-nosnippet>3331</a>            )
+<a href=#3332 id=3332 data-nosnippet>3332</a>            .<span class="kw">await
+<a href=#3333 id=3333 data-nosnippet>3333</a>            </span>.unwrap_or_else(|err| <span class="macro">panic!</span>(<span class="string">"head snapshot is missing key {key}: {err:#}"</span>));
+<a href=#3334 id=3334 data-nosnippet>3334</a>        }
+<a href=#3335 id=3335 data-nosnippet>3335</a>        <span class="kw">let </span>err = tx
+<a href=#3336 id=3336 data-nosnippet>3336</a>            .get_path(
+<a href=#3337 id=3337 data-nosnippet>3337</a>                Snapshot::&lt;<span class="kw">_</span>, MockMerkleTree, { MockMerkleTree::ARITY }&gt;::Index(head - <span class="number">1</span>),
+<a href=#3338 id=3338 data-nosnippet>3338</a>                <span class="number">0</span>,
+<a href=#3339 id=3339 data-nosnippet>3339</a>            )
+<a href=#3340 id=3340 data-nosnippet>3340</a>            .<span class="kw">await
+<a href=#3341 id=3341 data-nosnippet>3341</a>            </span>.unwrap_err();
+<a href=#3342 id=3342 data-nosnippet>3342</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, QueryError::NotFound), <span class="string">"{err:?}"</span>);
+<a href=#3343 id=3343 data-nosnippet>3343</a>    }
+<a href=#3344 id=3344 data-nosnippet>3344</a>
+<a href=#3345 id=3345 data-nosnippet>3345</a>    <span class="doccomment">/// Zero retention puts the whole chain past its state retention, but a run still stops below
+<a href=#3346 id=3346 data-nosnippet>3346</a>    /// the state head, which the state writer resumes from. As the writer advances, the cursor
+<a href=#3347 id=3347 data-nosnippet>3347</a>    /// follows it.
+<a href=#3348 id=3348 data-nosnippet>3348</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#3349 id=3349 data-nosnippet>3349</a>    </span><span class="kw">async fn </span>test_state_pruning_stops_below_state_head() {
+<a href=#3350 id=3350 data-nosnippet>3350</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
+<a href=#3351 id=3351 data-nosnippet>3351</a>        <span class="kw">let </span><span class="kw-2">mut </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+<a href=#3352 id=3352 data-nosnippet>3352</a>            .<span class="kw">await
+<a href=#3353 id=3353 data-nosnippet>3353</a>            </span>.unwrap();
+<a href=#3354 id=3354 data-nosnippet>3354</a>
+<a href=#3355 id=3355 data-nosnippet>3355</a>        <span class="comment">// Recent headers for the whole chain, so only state is eligible for pruning, and state up
+<a href=#3356 id=3356 data-nosnippet>3356</a>        // to a head well below the tip.
+<a href=#3357 id=3357 data-nosnippet>3357</a>        </span><span class="kw">let </span>num_blocks = <span class="number">100u64</span>;
+<a href=#3358 id=3358 data-nosnippet>3358</a>        <span class="kw">let </span>head = <span class="number">20u64</span>;
+<a href=#3359 id=3359 data-nosnippet>3359</a>        <span class="kw">let </span>now = Utc::now().timestamp();
+<a href=#3360 id=3360 data-nosnippet>3360</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = MockMerkleTree::new(MockMerkleTree::tree_height());
+<a href=#3361 id=3361 data-nosnippet>3361</a>        {
+<a href=#3362 id=3362 data-nosnippet>3362</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
+<a href=#3363 id=3363 data-nosnippet>3363</a>            <span class="kw">for </span>height <span class="kw">in </span><span class="number">0</span>..=head {
+<a href=#3364 id=3364 data-nosnippet>3364</a>                insert_mock_state(<span class="kw-2">&amp;mut </span>tx, <span class="kw-2">&amp;mut </span>tree, height, now).<span class="kw">await</span>;
+<a href=#3365 id=3365 data-nosnippet>3365</a>            }
+<a href=#3366 id=3366 data-nosnippet>3366</a>            insert_headers(<span class="kw-2">&amp;mut </span>tx, head + <span class="number">1</span>..num_blocks, now).<span class="kw">await</span>;
+<a href=#3367 id=3367 data-nosnippet>3367</a>            UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::set_last_state_height(<span class="kw-2">&amp;mut </span>tx, head <span class="kw">as </span>usize)
+<a href=#3368 id=3368 data-nosnippet>3368</a>                .<span class="kw">await
+<a href=#3369 id=3369 data-nosnippet>3369</a>                </span>.unwrap();
+<a href=#3370 id=3370 data-nosnippet>3370</a>            tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#3371 id=3371 data-nosnippet>3371</a>        }
+<a href=#3372 id=3372 data-nosnippet>3372</a>        storage.set_pruning_config(
+<a href=#3373 id=3373 data-nosnippet>3373</a>            PrunerCfg::default()
+<a href=#3374 id=3374 data-nosnippet>3374</a>                .with_state_target_retention(Duration::ZERO)
+<a href=#3375 id=3375 data-nosnippet>3375</a>                .with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]),
+<a href=#3376 id=3376 data-nosnippet>3376</a>        );
+<a href=#3377 id=3377 data-nosnippet>3377</a>
+<a href=#3378 id=3378 data-nosnippet>3378</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
+<a href=#3379 id=3379 data-nosnippet>3379</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">Some</span>(head - <span class="number">1</span>));
+<a href=#3380 id=3380 data-nosnippet>3380</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
+<a href=#3381 id=3381 data-nosnippet>3381</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, head, head - <span class="number">1</span>).<span class="kw">await</span>;
+<a href=#3382 id=3382 data-nosnippet>3382</a>
+<a href=#3383 id=3383 data-nosnippet>3383</a>        <span class="comment">// The writer moves on, and the next run follows it.
+<a href=#3384 id=3384 data-nosnippet>3384</a>        </span><span class="kw">let </span>new_head = <span class="number">40u64</span>;
+<a href=#3385 id=3385 data-nosnippet>3385</a>        {
+<a href=#3386 id=3386 data-nosnippet>3386</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
+<a href=#3387 id=3387 data-nosnippet>3387</a>            <span class="kw">for </span>height <span class="kw">in </span>head + <span class="number">1</span>..=new_head {
+<a href=#3388 id=3388 data-nosnippet>3388</a>                insert_mock_state(<span class="kw-2">&amp;mut </span>tx, <span class="kw-2">&amp;mut </span>tree, height, now).<span class="kw">await</span>;
+<a href=#3389 id=3389 data-nosnippet>3389</a>            }
+<a href=#3390 id=3390 data-nosnippet>3390</a>            UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::set_last_state_height(
+<a href=#3391 id=3391 data-nosnippet>3391</a>                <span class="kw-2">&amp;mut </span>tx,
+<a href=#3392 id=3392 data-nosnippet>3392</a>                new_head <span class="kw">as </span>usize,
+<a href=#3393 id=3393 data-nosnippet>3393</a>            )
+<a href=#3394 id=3394 data-nosnippet>3394</a>            .<span class="kw">await
+<a href=#3395 id=3395 data-nosnippet>3395</a>            </span>.unwrap();
+<a href=#3396 id=3396 data-nosnippet>3396</a>            tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#3397 id=3397 data-nosnippet>3397</a>        }
+<a href=#3398 id=3398 data-nosnippet>3398</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
+<a href=#3399 id=3399 data-nosnippet>3399</a>        <span class="macro">assert_eq!</span>(
+<a href=#3400 id=3400 data-nosnippet>3400</a>            storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(),
+<a href=#3401 id=3401 data-nosnippet>3401</a>            <span class="prelude-val">Some</span>(new_head - <span class="number">1</span>)
+<a href=#3402 id=3402 data-nosnippet>3402</a>        );
+<a href=#3403 id=3403 data-nosnippet>3403</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
+<a href=#3404 id=3404 data-nosnippet>3404</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, new_head, new_head - <span class="number">1</span>).<span class="kw">await</span>;
+<a href=#3405 id=3405 data-nosnippet>3405</a>    }
+<a href=#3406 id=3406 data-nosnippet>3406</a>
+<a href=#3407 id=3407 data-nosnippet>3407</a>    <span class="doccomment">/// Without a state head there is no snapshot for the writer to resume from and nothing to
+<a href=#3408 id=3408 data-nosnippet>3408</a>    /// prune, so a run leaves the state cursor alone.
+<a href=#3409 id=3409 data-nosnippet>3409</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#3410 id=3410 data-nosnippet>3410</a>    </span><span class="kw">async fn </span>test_state_pruning_noop_without_state_head() {
+<a href=#3411 id=3411 data-nosnippet>3411</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
+<a href=#3412 id=3412 data-nosnippet>3412</a>        <span class="kw">let </span><span class="kw-2">mut </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+<a href=#3413 id=3413 data-nosnippet>3413</a>            .<span class="kw">await
+<a href=#3414 id=3414 data-nosnippet>3414</a>            </span>.unwrap();
+<a href=#3415 id=3415 data-nosnippet>3415</a>        {
+<a href=#3416 id=3416 data-nosnippet>3416</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
+<a href=#3417 id=3417 data-nosnippet>3417</a>            insert_headers(<span class="kw-2">&amp;mut </span>tx, <span class="number">0</span>..<span class="number">100</span>, Utc::now().timestamp()).<span class="kw">await</span>;
+<a href=#3418 id=3418 data-nosnippet>3418</a>            tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#3419 id=3419 data-nosnippet>3419</a>        }
+<a href=#3420 id=3420 data-nosnippet>3420</a>        storage.set_pruning_config(
+<a href=#3421 id=3421 data-nosnippet>3421</a>            PrunerCfg::default()
+<a href=#3422 id=3422 data-nosnippet>3422</a>                .with_state_target_retention(Duration::ZERO)
+<a href=#3423 id=3423 data-nosnippet>3423</a>                .with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]),
+<a href=#3424 id=3424 data-nosnippet>3424</a>        );
+<a href=#3425 id=3425 data-nosnippet>3425</a>
+<a href=#3426 id=3426 data-nosnippet>3426</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>Default::default()).<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
+<a href=#3427 id=3427 data-nosnippet>3427</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.read().<span class="kw">await</span>.unwrap();
+<a href=#3428 id=3428 data-nosnippet>3428</a>        <span class="macro">assert_eq!</span>(tx.load_state_pruned_height().<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
+<a href=#3429 id=3429 data-nosnippet>3429</a>    }
+<a href=#3430 id=3430 data-nosnippet>3430</a>
+<a href=#3431 id=3431 data-nosnippet>3431</a>    <span class="doccomment">/// The newest snapshot stays readable once the pruned height has reached it. A pruner from
+<a href=#3432 id=3432 data-nosnippet>3432</a>    /// before the head bound could stamp past the state head, and the writer has to resume from
+<a href=#3433 id=3433 data-nosnippet>3433</a>    /// that snapshot after a restart.
+<a href=#3434 id=3434 data-nosnippet>3434</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#3435 id=3435 data-nosnippet>3435</a>    </span><span class="kw">async fn </span>test_head_snapshot_readable_at_pruned_height() {
+<a href=#3436 id=3436 data-nosnippet>3436</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
+<a href=#3437 id=3437 data-nosnippet>3437</a>        <span class="kw">let </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+<a href=#3438 id=3438 data-nosnippet>3438</a>            .<span class="kw">await
+<a href=#3439 id=3439 data-nosnippet>3439</a>            </span>.unwrap();
+<a href=#3440 id=3440 data-nosnippet>3440</a>
+<a href=#3441 id=3441 data-nosnippet>3441</a>        <span class="kw">let </span>head = <span class="number">10u64</span>;
+<a href=#3442 id=3442 data-nosnippet>3442</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = MockMerkleTree::new(MockMerkleTree::tree_height());
+<a href=#3443 id=3443 data-nosnippet>3443</a>        {
+<a href=#3444 id=3444 data-nosnippet>3444</a>            <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
+<a href=#3445 id=3445 data-nosnippet>3445</a>            <span class="kw">for </span>height <span class="kw">in </span><span class="number">0</span>..=head {
+<a href=#3446 id=3446 data-nosnippet>3446</a>                insert_mock_state(<span class="kw-2">&amp;mut </span>tx, <span class="kw-2">&amp;mut </span>tree, height, <span class="number">0</span>).<span class="kw">await</span>;
+<a href=#3447 id=3447 data-nosnippet>3447</a>            }
+<a href=#3448 id=3448 data-nosnippet>3448</a>            UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::set_last_state_height(<span class="kw-2">&amp;mut </span>tx, head <span class="kw">as </span>usize)
+<a href=#3449 id=3449 data-nosnippet>3449</a>                .<span class="kw">await
+<a href=#3450 id=3450 data-nosnippet>3450</a>                </span>.unwrap();
+<a href=#3451 id=3451 data-nosnippet>3451</a>            tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#3452 id=3452 data-nosnippet>3452</a>        }
+<a href=#3453 id=3453 data-nosnippet>3453</a>
+<a href=#3454 id=3454 data-nosnippet>3454</a>        <span class="comment">// Stamp past the head, as an unbounded run would have.
+<a href=#3455 id=3455 data-nosnippet>3455</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>tx = storage.prune_write().<span class="kw">await</span>.unwrap();
+<a href=#3456 id=3456 data-nosnippet>3456</a>        tx.save_state_pruned_height(head + <span class="number">5</span>).<span class="kw">await</span>.unwrap();
+<a href=#3457 id=3457 data-nosnippet>3457</a>        tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#3458 id=3458 data-nosnippet>3458</a>
+<a href=#3459 id=3459 data-nosnippet>3459</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.read().<span class="kw">await</span>.unwrap();
+<a href=#3460 id=3460 data-nosnippet>3460</a>        <span class="kw">for </span>key <span class="kw">in </span><span class="number">0</span>..=head <span class="kw">as </span>usize {
+<a href=#3461 id=3461 data-nosnippet>3461</a>            tx.get_path(
+<a href=#3462 id=3462 data-nosnippet>3462</a>                Snapshot::&lt;<span class="kw">_</span>, MockMerkleTree, { MockMerkleTree::ARITY }&gt;::Index(head),
+<a href=#3463 id=3463 data-nosnippet>3463</a>                key,
+<a href=#3464 id=3464 data-nosnippet>3464</a>            )
+<a href=#3465 id=3465 data-nosnippet>3465</a>            .<span class="kw">await
+<a href=#3466 id=3466 data-nosnippet>3466</a>            </span>.unwrap_or_else(|err| <span class="macro">panic!</span>(<span class="string">"head snapshot is missing key {key}: {err:#}"</span>));
+<a href=#3467 id=3467 data-nosnippet>3467</a>        }
+<a href=#3468 id=3468 data-nosnippet>3468</a>        <span class="kw">let </span>err = tx
+<a href=#3469 id=3469 data-nosnippet>3469</a>            .get_path(
+<a href=#3470 id=3470 data-nosnippet>3470</a>                Snapshot::&lt;<span class="kw">_</span>, MockMerkleTree, { MockMerkleTree::ARITY }&gt;::Index(head - <span class="number">1</span>),
+<a href=#3471 id=3471 data-nosnippet>3471</a>                <span class="number">0</span>,
+<a href=#3472 id=3472 data-nosnippet>3472</a>            )
+<a href=#3473 id=3473 data-nosnippet>3473</a>            .<span class="kw">await
+<a href=#3474 id=3474 data-nosnippet>3474</a>            </span>.unwrap_err();
+<a href=#3475 id=3475 data-nosnippet>3475</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(err, QueryError::NotFound), <span class="string">"{err:?}"</span>);
+<a href=#3476 id=3476 data-nosnippet>3476</a>    }
+<a href=#3477 id=3477 data-nosnippet>3477</a>
+<a href=#3478 id=3478 data-nosnippet>3478</a>    <span class="doccomment">/// State up to `head`, then pruned past it by a run from before the state pruner was bounded:
+<a href=#3479 id=3479 data-nosnippet>3479</a>    /// every version superseded at or below `stale_cursor` is gone and the cursor is stamped there.
+<a href=#3480 id=3480 data-nosnippet>3480</a>    </span><span class="kw">async fn </span>state_with_stale_cursor(
+<a href=#3481 id=3481 data-nosnippet>3481</a>        storage: <span class="kw-2">&amp;</span>SqlStorage,
+<a href=#3482 id=3482 data-nosnippet>3482</a>        head: u64,
+<a href=#3483 id=3483 data-nosnippet>3483</a>        stale_cursor: u64,
+<a href=#3484 id=3484 data-nosnippet>3484</a>    ) -&gt; MockMerkleTree {
+<a href=#3485 id=3485 data-nosnippet>3485</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = MockMerkleTree::new(MockMerkleTree::tree_height());
+<a href=#3486 id=3486 data-nosnippet>3486</a>        <span class="kw">let </span>now = Utc::now().timestamp();
+<a href=#3487 id=3487 data-nosnippet>3487</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
+<a href=#3488 id=3488 data-nosnippet>3488</a>        <span class="kw">for </span>height <span class="kw">in </span><span class="number">0</span>..=head {
+<a href=#3489 id=3489 data-nosnippet>3489</a>            insert_mock_state(<span class="kw-2">&amp;mut </span>tx, <span class="kw-2">&amp;mut </span>tree, height, now).<span class="kw">await</span>;
+<a href=#3490 id=3490 data-nosnippet>3490</a>        }
+<a href=#3491 id=3491 data-nosnippet>3491</a>        UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::set_last_state_height(<span class="kw-2">&amp;mut </span>tx, head <span class="kw">as </span>usize)
+<a href=#3492 id=3492 data-nosnippet>3492</a>            .<span class="kw">await
+<a href=#3493 id=3493 data-nosnippet>3493</a>            </span>.unwrap();
+<a href=#3494 id=3494 data-nosnippet>3494</a>        tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#3495 id=3495 data-nosnippet>3495</a>
+<a href=#3496 id=3496 data-nosnippet>3496</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.prune_write().<span class="kw">await</span>.unwrap();
+<a href=#3497 id=3497 data-nosnippet>3497</a>        tx.delete_state_batch([MockMerkleTree::state_type()], <span class="number">0</span>, stale_cursor)
+<a href=#3498 id=3498 data-nosnippet>3498</a>            .<span class="kw">await
+<a href=#3499 id=3499 data-nosnippet>3499</a>            </span>.unwrap();
+<a href=#3500 id=3500 data-nosnippet>3500</a>        tx.save_state_pruned_height(stale_cursor).<span class="kw">await</span>.unwrap();
+<a href=#3501 id=3501 data-nosnippet>3501</a>        tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#3502 id=3502 data-nosnippet>3502</a>        tree
+<a href=#3503 id=3503 data-nosnippet>3503</a>    }
+<a href=#3504 id=3504 data-nosnippet>3504</a>
+<a href=#3505 id=3505 data-nosnippet>3505</a>    <span class="doccomment">/// Advance the state writer from `from` to `head`.
+<a href=#3506 id=3506 data-nosnippet>3506</a>    </span><span class="kw">async fn </span>write_state_to(storage: <span class="kw-2">&amp;</span>SqlStorage, tree: <span class="kw-2">&amp;mut </span>MockMerkleTree, from: u64, head: u64) {
+<a href=#3507 id=3507 data-nosnippet>3507</a>        <span class="kw">let </span>now = Utc::now().timestamp();
+<a href=#3508 id=3508 data-nosnippet>3508</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
+<a href=#3509 id=3509 data-nosnippet>3509</a>        <span class="kw">for </span>height <span class="kw">in </span>from..=head {
+<a href=#3510 id=3510 data-nosnippet>3510</a>            insert_mock_state(<span class="kw-2">&amp;mut </span>tx, tree, height, now).<span class="kw">await</span>;
+<a href=#3511 id=3511 data-nosnippet>3511</a>        }
+<a href=#3512 id=3512 data-nosnippet>3512</a>        UpdateStateData::&lt;<span class="kw">_</span>, MockMerkleTree, <span class="number">8</span>&gt;::set_last_state_height(<span class="kw-2">&amp;mut </span>tx, head <span class="kw">as </span>usize)
+<a href=#3513 id=3513 data-nosnippet>3513</a>            .<span class="kw">await
+<a href=#3514 id=3514 data-nosnippet>3514</a>            </span>.unwrap();
+<a href=#3515 id=3515 data-nosnippet>3515</a>        tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#3516 id=3516 data-nosnippet>3516</a>    }
+<a href=#3517 id=3517 data-nosnippet>3517</a>
+<a href=#3518 id=3518 data-nosnippet>3518</a>    <span class="doccomment">/// Versions at or below `pruned` that another version at or below `pruned` supersedes. A run
+<a href=#3519 id=3519 data-nosnippet>3519</a>    /// that saw every height leaves none.
+<a href=#3520 id=3520 data-nosnippet>3520</a>    </span><span class="kw">async fn </span>superseded_versions_below(storage: <span class="kw-2">&amp;</span>SqlStorage, pruned: u64) -&gt; i64 {
+<a href=#3521 id=3521 data-nosnippet>3521</a>        <span class="kw">let </span>table = MockMerkleTree::state_type();
+<a href=#3522 id=3522 data-nosnippet>3522</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.read().<span class="kw">await</span>.unwrap();
+<a href=#3523 id=3523 data-nosnippet>3523</a>        <span class="kw">let </span>(count,) = query_as::&lt;(i64,)&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#3524 id=3524 data-nosnippet>3524</a>            <span class="string">"SELECT count(*) FROM {table} AS t
+<a href=#3525 id=3525 data-nosnippet>3525</a>             WHERE t.created &lt;= $1 AND EXISTS (
+<a href=#3526 id=3526 data-nosnippet>3526</a>               SELECT 1 FROM {table} AS t2
+<a href=#3527 id=3527 data-nosnippet>3527</a>               WHERE t2.path = t.path AND t2.created &gt; t.created AND t2.created &lt;= $1
+<a href=#3528 id=3528 data-nosnippet>3528</a>             )"
+<a href=#3529 id=3529 data-nosnippet>3529</a>        </span>))
+<a href=#3530 id=3530 data-nosnippet>3530</a>        .bind(pruned <span class="kw">as </span>i64)
+<a href=#3531 id=3531 data-nosnippet>3531</a>        .fetch_one(tx.as_mut())
+<a href=#3532 id=3532 data-nosnippet>3532</a>        .<span class="kw">await
+<a href=#3533 id=3533 data-nosnippet>3533</a>        </span>.unwrap();
+<a href=#3534 id=3534 data-nosnippet>3534</a>        count
+<a href=#3535 id=3535 data-nosnippet>3535</a>    }
+<a href=#3536 id=3536 data-nosnippet>3536</a>
+<a href=#3537 id=3537 data-nosnippet>3537</a>    <span class="doccomment">/// A cursor at or above the head was stamped by a run from before the head bound. The writer
+<a href=#3538 id=3538 data-nosnippet>3538</a>    /// resumes from the head and rewrites every height after it, and a batch only collects what
+<a href=#3539 id=3539 data-nosnippet>3539</a>    /// its own window supersedes, so a run first lowers the cursor to just below the head and then
+<a href=#3540 id=3540 data-nosnippet>3540</a>    /// prunes those heights again as the head moves on, leaving nothing behind.
+<a href=#3541 id=3541 data-nosnippet>3541</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#3542 id=3542 data-nosnippet>3542</a>    </span><span class="kw">async fn </span>test_state_pruning_resumes_from_head_below_stale_cursor() {
+<a href=#3543 id=3543 data-nosnippet>3543</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
+<a href=#3544 id=3544 data-nosnippet>3544</a>        <span class="kw">let </span><span class="kw-2">mut </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+<a href=#3545 id=3545 data-nosnippet>3545</a>            .<span class="kw">await
+<a href=#3546 id=3546 data-nosnippet>3546</a>            </span>.unwrap();
+<a href=#3547 id=3547 data-nosnippet>3547</a>        <span class="kw">let </span>head = <span class="number">20u64</span>;
+<a href=#3548 id=3548 data-nosnippet>3548</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = state_with_stale_cursor(<span class="kw-2">&amp;</span>storage, head, <span class="number">30</span>).<span class="kw">await</span>;
+<a href=#3549 id=3549 data-nosnippet>3549</a>        storage.set_pruning_config(
+<a href=#3550 id=3550 data-nosnippet>3550</a>            PrunerCfg::default()
+<a href=#3551 id=3551 data-nosnippet>3551</a>                .with_state_target_retention(Duration::ZERO)
+<a href=#3552 id=3552 data-nosnippet>3552</a>                .with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]),
+<a href=#3553 id=3553 data-nosnippet>3553</a>        );
+<a href=#3554 id=3554 data-nosnippet>3554</a>
+<a href=#3555 id=3555 data-nosnippet>3555</a>        <span class="comment">// The first run lowers the cursor and has nothing to delete yet.
+<a href=#3556 id=3556 data-nosnippet>3556</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
+<a href=#3557 id=3557 data-nosnippet>3557</a>        <span class="macro">assert_eq!</span>(storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap(), <span class="prelude-val">None</span>);
+<a href=#3558 id=3558 data-nosnippet>3558</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, head, head - <span class="number">1</span>).<span class="kw">await</span>;
+<a href=#3559 id=3559 data-nosnippet>3559</a>
+<a href=#3560 id=3560 data-nosnippet>3560</a>        <span class="comment">// The writer moves past the stale cursor; the next run prunes those heights as well.
+<a href=#3561 id=3561 data-nosnippet>3561</a>        </span><span class="kw">let </span>new_head = <span class="number">40u64</span>;
+<a href=#3562 id=3562 data-nosnippet>3562</a>        write_state_to(<span class="kw-2">&amp;</span>storage, <span class="kw-2">&amp;mut </span>tree, head + <span class="number">1</span>, new_head).<span class="kw">await</span>;
+<a href=#3563 id=3563 data-nosnippet>3563</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
+<a href=#3564 id=3564 data-nosnippet>3564</a>        <span class="kw">while </span>storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap().is_some() {}
+<a href=#3565 id=3565 data-nosnippet>3565</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, new_head, new_head - <span class="number">1</span>).<span class="kw">await</span>;
+<a href=#3566 id=3566 data-nosnippet>3566</a>        <span class="macro">assert_eq!</span>(superseded_versions_below(<span class="kw-2">&amp;</span>storage, new_head - <span class="number">1</span>).<span class="kw">await</span>, <span class="number">0</span>);
+<a href=#3567 id=3567 data-nosnippet>3567</a>    }
+<a href=#3568 id=3568 data-nosnippet>3568</a>
+<a href=#3569 id=3569 data-nosnippet>3569</a>    <span class="doccomment">/// The pruner's first run comes a whole interval after startup, and by then the writer has
+<a href=#3570 id=3570 data-nosnippet>3570</a>    /// rewritten heights above the head it resumed from; a repair at that point starts pruning
+<a href=#3571 id=3571 data-nosnippet>3571</a>    /// above those heights and never collects what they supersede. So the cursor is lowered when
+<a href=#3572 id=3572 data-nosnippet>3572</a>    /// the storage connects, before the writer can start. Reconnecting stands in for the restart.
+<a href=#3573 id=3573 data-nosnippet>3573</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#3574 id=3574 data-nosnippet>3574</a>    </span><span class="kw">async fn </span>test_stale_state_cursor_is_lowered_on_connect() {
+<a href=#3575 id=3575 data-nosnippet>3575</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
+<a href=#3576 id=3576 data-nosnippet>3576</a>        <span class="kw">let </span>head = <span class="number">20u64</span>;
+<a href=#3577 id=3577 data-nosnippet>3577</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = {
+<a href=#3578 id=3578 data-nosnippet>3578</a>            <span class="kw">let </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+<a href=#3579 id=3579 data-nosnippet>3579</a>                .<span class="kw">await
+<a href=#3580 id=3580 data-nosnippet>3580</a>                </span>.unwrap();
+<a href=#3581 id=3581 data-nosnippet>3581</a>            state_with_stale_cursor(<span class="kw-2">&amp;</span>storage, head, <span class="number">30</span>).<span class="kw">await
+<a href=#3582 id=3582 data-nosnippet>3582</a>        </span>};
+<a href=#3583 id=3583 data-nosnippet>3583</a>
+<a href=#3584 id=3584 data-nosnippet>3584</a>        <span class="kw">let </span><span class="kw-2">mut </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+<a href=#3585 id=3585 data-nosnippet>3585</a>            .<span class="kw">await
+<a href=#3586 id=3586 data-nosnippet>3586</a>            </span>.unwrap();
+<a href=#3587 id=3587 data-nosnippet>3587</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, head, head - <span class="number">1</span>).<span class="kw">await</span>;
+<a href=#3588 id=3588 data-nosnippet>3588</a>        storage.set_pruning_config(
+<a href=#3589 id=3589 data-nosnippet>3589</a>            PrunerCfg::default()
+<a href=#3590 id=3590 data-nosnippet>3590</a>                .with_state_target_retention(Duration::ZERO)
+<a href=#3591 id=3591 data-nosnippet>3591</a>                .with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]),
+<a href=#3592 id=3592 data-nosnippet>3592</a>        );
+<a href=#3593 id=3593 data-nosnippet>3593</a>
+<a href=#3594 id=3594 data-nosnippet>3594</a>        <span class="comment">// The writer is past the old head when the pruner first runs, and moves on afterwards.
+<a href=#3595 id=3595 data-nosnippet>3595</a>        </span>write_state_to(<span class="kw-2">&amp;</span>storage, <span class="kw-2">&amp;mut </span>tree, head + <span class="number">1</span>, <span class="number">25</span>).<span class="kw">await</span>;
+<a href=#3596 id=3596 data-nosnippet>3596</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
+<a href=#3597 id=3597 data-nosnippet>3597</a>        <span class="kw">while </span>storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap().is_some() {}
+<a href=#3598 id=3598 data-nosnippet>3598</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, <span class="number">25</span>, <span class="number">24</span>).<span class="kw">await</span>;
+<a href=#3599 id=3599 data-nosnippet>3599</a>        write_state_to(<span class="kw-2">&amp;</span>storage, <span class="kw-2">&amp;mut </span>tree, <span class="number">26</span>, <span class="number">40</span>).<span class="kw">await</span>;
+<a href=#3600 id=3600 data-nosnippet>3600</a>        <span class="kw">let </span><span class="kw-2">mut </span>pruner = Default::default();
+<a href=#3601 id=3601 data-nosnippet>3601</a>        <span class="kw">while </span>storage.prune(<span class="kw-2">&amp;mut </span>pruner).<span class="kw">await</span>.unwrap().is_some() {}
+<a href=#3602 id=3602 data-nosnippet>3602</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, <span class="number">40</span>, <span class="number">39</span>).<span class="kw">await</span>;
+<a href=#3603 id=3603 data-nosnippet>3603</a>        <span class="macro">assert_eq!</span>(superseded_versions_below(<span class="kw-2">&amp;</span>storage, <span class="number">39</span>).<span class="kw">await</span>, <span class="number">0</span>);
+<a href=#3604 id=3604 data-nosnippet>3604</a>    }
+<a href=#3605 id=3605 data-nosnippet>3605</a>
+<a href=#3606 id=3606 data-nosnippet>3606</a>    <span class="doccomment">/// Archive nodes prune state through `prune_state_below`, which lowers a stale cursor the same
+<a href=#3607 id=3607 data-nosnippet>3607</a>    /// way.
+<a href=#3608 id=3608 data-nosnippet>3608</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#3609 id=3609 data-nosnippet>3609</a>    </span><span class="kw">async fn </span>test_prune_state_below_resumes_from_head_below_stale_cursor() {
+<a href=#3610 id=3610 data-nosnippet>3610</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
+<a href=#3611 id=3611 data-nosnippet>3611</a>        <span class="kw">let </span>storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+<a href=#3612 id=3612 data-nosnippet>3612</a>            .<span class="kw">await
+<a href=#3613 id=3613 data-nosnippet>3613</a>            </span>.unwrap();
+<a href=#3614 id=3614 data-nosnippet>3614</a>        <span class="kw">let </span>cfg = PrunerCfg::default().with_state_tables(<span class="macro">vec!</span>[MockMerkleTree::state_type().into()]);
+<a href=#3615 id=3615 data-nosnippet>3615</a>        <span class="kw">let </span>head = <span class="number">20u64</span>;
+<a href=#3616 id=3616 data-nosnippet>3616</a>        <span class="kw">let </span><span class="kw-2">mut </span>tree = state_with_stale_cursor(<span class="kw-2">&amp;</span>storage, head, <span class="number">30</span>).<span class="kw">await</span>;
+<a href=#3617 id=3617 data-nosnippet>3617</a>
+<a href=#3618 id=3618 data-nosnippet>3618</a>        storage.prune_state_below(u64::MAX, <span class="number">0</span>, <span class="kw-2">&amp;</span>cfg).<span class="kw">await</span>.unwrap();
+<a href=#3619 id=3619 data-nosnippet>3619</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, head, head - <span class="number">1</span>).<span class="kw">await</span>;
+<a href=#3620 id=3620 data-nosnippet>3620</a>
+<a href=#3621 id=3621 data-nosnippet>3621</a>        <span class="kw">let </span>new_head = <span class="number">40u64</span>;
+<a href=#3622 id=3622 data-nosnippet>3622</a>        write_state_to(<span class="kw-2">&amp;</span>storage, <span class="kw-2">&amp;mut </span>tree, head + <span class="number">1</span>, new_head).<span class="kw">await</span>;
+<a href=#3623 id=3623 data-nosnippet>3623</a>        storage.prune_state_below(new_head, <span class="number">0</span>, <span class="kw-2">&amp;</span>cfg).<span class="kw">await</span>.unwrap();
+<a href=#3624 id=3624 data-nosnippet>3624</a>        assert_state_pruned_below_head(<span class="kw-2">&amp;</span>storage, new_head, new_head - <span class="number">1</span>).<span class="kw">await</span>;
+<a href=#3625 id=3625 data-nosnippet>3625</a>        <span class="macro">assert_eq!</span>(superseded_versions_below(<span class="kw-2">&amp;</span>storage, new_head - <span class="number">1</span>).<span class="kw">await</span>, <span class="number">0</span>);
+<a href=#3626 id=3626 data-nosnippet>3626</a>    }
+<a href=#3627 id=3627 data-nosnippet>3627</a>
+<a href=#3628 id=3628 data-nosnippet>3628</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#3629 id=3629 data-nosnippet>3629</a>    </span><span class="kw">async fn </span>test_transaction_upsert_retries() {
+<a href=#3630 id=3630 data-nosnippet>3630</a>        <span class="kw">let </span>db = TmpDb::init().<span class="kw">await</span>;
+<a href=#3631 id=3631 data-nosnippet>3631</a>        <span class="kw">let </span>config = db.config();
+<a href=#3632 id=3632 data-nosnippet>3632</a>
+<a href=#3633 id=3633 data-nosnippet>3633</a>        <span class="kw">let </span>storage = SqlStorage::connect(config, StorageConnectionType::Query)
+<a href=#3634 id=3634 data-nosnippet>3634</a>            .<span class="kw">await
+<a href=#3635 id=3635 data-nosnippet>3635</a>            </span>.unwrap();
+<a href=#3636 id=3636 data-nosnippet>3636</a>
+<a href=#3637 id=3637 data-nosnippet>3637</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.write().<span class="kw">await</span>.unwrap();
+<a href=#3638 id=3638 data-nosnippet>3638</a>
+<a href=#3639 id=3639 data-nosnippet>3639</a>        <span class="comment">// Try to upsert into a table that does not exist.
+<a href=#3640 id=3640 data-nosnippet>3640</a>        // This will fail, so our `upsert` function will enter the retry loop.
+<a href=#3641 id=3641 data-nosnippet>3641</a>        // Since the table does not exist, all retries will eventually
+<a href=#3642 id=3642 data-nosnippet>3642</a>        // fail and we expect an error to be returned.
+<a href=#3643 id=3643 data-nosnippet>3643</a>        //
+<a href=#3644 id=3644 data-nosnippet>3644</a>        // Previously, this case would cause  a panic because we were calling
+<a href=#3645 id=3645 data-nosnippet>3645</a>        // methods on `QueryBuilder` after `.build()` without first
+<a href=#3646 id=3646 data-nosnippet>3646</a>        // calling `.reset()`and according to the sqlx docs, that always panics.
+<a href=#3647 id=3647 data-nosnippet>3647</a>        // Now, since we are properly calling `.reset()` inside `upsert()` for
+<a href=#3648 id=3648 data-nosnippet>3648</a>        // the query builder, the function returns an error instead of panicking.
+<a href=#3649 id=3649 data-nosnippet>3649</a>        </span>tx.upsert(<span class="string">"does_not_exist"</span>, [<span class="string">"test"</span>], [<span class="string">"test"</span>], [(<span class="number">1_i64</span>,)])
+<a href=#3650 id=3650 data-nosnippet>3650</a>            .<span class="kw">await
+<a href=#3651 id=3651 data-nosnippet>3651</a>            </span>.unwrap_err();
+<a href=#3652 id=3652 data-nosnippet>3652</a>    }
+<a href=#3653 id=3653 data-nosnippet>3653</a>}
 </code></pre></div></section></main></body></html>
