@@ -8,7 +8,7 @@ import "google/api/annotations.proto";
 // `optional` for the same reason a query parameter is: an omitted one is refused with a 400
 // rather than read as a zero namespace or an empty payload
 message SubmitTransactionRequest {
-  // Namespace the transaction is sequenced in. Required
+  // Namespace the transaction is sequenced in. Required, and at most u32::MAX
   optional uint64 namespace = 1;
 
   // Transaction payload, base64 in JSON. Required, and may be empty

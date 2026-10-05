@@ -2582,6 +2582,10 @@ where
         let namespace = request
             .namespace
             .ok_or_else(|| tonic::Status::invalid_argument("namespace is required"))?;
+        // The namespace table stores a u32, so a wider id would be sequenced under its truncation
+        // while the returned commitment covers the full value.
+        let namespace = u32::try_from(namespace)
+            .map_err(|_| tonic::Status::invalid_argument("namespace must be at most u32::MAX"))?;
         let payload = request
             .payload
             .ok_or_else(|| tonic::Status::invalid_argument("payload is required"))?;
