@@ -4709,6 +4709,7 @@ dependencies = [
  "clap 4.6.1",
  "client",
  "committable",
+ "crc32fast",
  "csv",
  "derivative",
  "derive_more 2.1.1",

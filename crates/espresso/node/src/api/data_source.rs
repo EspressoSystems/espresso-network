@@ -51,25 +51,48 @@ use crate::{
     state_cert::StateCertFetchError,
 };
 
-pub trait DataSourceOptions: PersistenceOptions {
-    type DataSource: SequencerDataSource<Options = Self>;
+/// Enabling the query module needs backend-specific storage options, so every backend implements
+/// this even though only SQL and fs can actually serve queries.
+pub trait QueryModuleOptions: PersistenceOptions {
+    fn enable_query_module(&self, opt: Options, query: Query) -> anyhow::Result<Options>;
+}
 
-    fn enable_query_module(&self, opt: Options, query: Query) -> Options;
+pub trait DataSourceOptions: QueryModuleOptions {
+    type DataSource: SequencerDataSource<Options = Self>;
+}
+
+impl QueryModuleOptions for persistence::sql::Options {
+    fn enable_query_module(&self, opt: Options, query: Query) -> anyhow::Result<Options> {
+        Ok(opt.query_sql(query, self.clone()))
+    }
 }
 
 impl DataSourceOptions for persistence::sql::Options {
     type DataSource = sql::DataSource;
+}
 
-    fn enable_query_module(&self, opt: Options, query: Query) -> Options {
-        opt.query_sql(query, self.clone())
+impl QueryModuleOptions for persistence::fs::Options {
+    fn enable_query_module(&self, opt: Options, query: Query) -> anyhow::Result<Options> {
+        Ok(opt.query_fs(query, self.clone()))
     }
 }
 
 impl DataSourceOptions for persistence::fs::Options {
     type DataSource = fs::DataSource;
+}
 
-    fn enable_query_module(&self, opt: Options, query: Query) -> Options {
-        opt.query_fs(query, self.clone())
+impl QueryModuleOptions for persistence::journal::Options {
+    fn enable_query_module(&self, opt: Options, query: Query) -> anyhow::Result<Options> {
+        match &self.query_storage {
+            Some(persistence::journal::QueryStorage::Sql(sql)) => {
+                Ok(opt.query_sql(query, (**sql).clone()))
+            },
+            Some(persistence::journal::QueryStorage::Fs(fs)) => Ok(opt.query_fs(query, fs.clone())),
+            None => anyhow::bail!(
+                "storage-journal only stores consensus data and cannot serve the query module on \
+                 its own. Add storage-sql or storage-fs for the query service database"
+            ),
+        }
     }
 }
 

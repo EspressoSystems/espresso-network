@@ -596,6 +596,9 @@ impl ModuleArgs {
                 SequencerModule::StorageSql(m) => {
                     curr = m.add(&mut modules.storage_sql, &mut provided)?
                 },
+                SequencerModule::StorageJournal(m) => {
+                    curr = m.add(&mut modules.storage_journal, &mut provided)?
+                },
                 SequencerModule::Http(m) => curr = m.add(&mut modules.http, &mut provided)?,
                 SequencerModule::Query(m) => curr = m.add(&mut modules.query, &mut provided)?,
                 SequencerModule::Submit(m) => curr = m.add(&mut modules.submit, &mut provided)?,
@@ -658,6 +661,7 @@ macro_rules! module {
 
 module!("storage-fs", persistence::fs::Options);
 module!("storage-sql", persistence::sql::Options);
+module!("storage-journal", persistence::journal::Options);
 module!("http", api::options::Http);
 module!("query", api::options::Query, requires: "http");
 module!("submit", api::options::Submit, requires: "http");
@@ -721,6 +725,10 @@ enum SequencerModule {
     StorageFs(Module<persistence::fs::Options>),
     /// Use a Postgres database for persistent storage.
     StorageSql(Module<persistence::sql::Options>),
+    /// Use an append-only journal for persistent storage.
+    ///
+    /// Does not support the query module: query nodes must use storage-sql.
+    StorageJournal(Module<persistence::journal::Options>),
     /// Run the query API module.
     ///
     /// This module requires the http module to be started.
@@ -770,6 +778,7 @@ enum SequencerModule {
 pub struct Modules {
     pub storage_fs: Option<persistence::fs::Options>,
     pub storage_sql: Option<persistence::sql::Options>,
+    pub storage_journal: Option<persistence::journal::Options>,
     pub http: Option<api::options::Http>,
     pub query: Option<api::options::Query>,
     pub submit: Option<api::options::Submit>,
@@ -844,6 +853,7 @@ pub enum StorageBackend {
     Sql,
     Fs,
     FsDefault,
+    Journal,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -852,12 +862,20 @@ pub struct StorageConfig {
     pub backend: StorageBackend,
     pub fs: Option<FsStorageConfig>,
     pub sql: Option<SqlStorageConfig>,
+    pub journal: Option<JournalStorageConfig>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FsStorageConfig {
     pub path: PathBuf,
     pub consensus_view_retention: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct JournalStorageConfig {
+    pub path: PathBuf,
+    pub view_retention: u64,
+    pub max_bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1016,6 +1034,16 @@ impl From<&persistence::fs::Options> for FsStorageConfig {
     }
 }
 
+impl From<&persistence::journal::Options> for JournalStorageConfig {
+    fn from(o: &persistence::journal::Options) -> Self {
+        Self {
+            path: o.path.clone(),
+            view_retention: o.view_retention,
+            max_bytes: o.max_bytes,
+        }
+    }
+}
+
 impl From<&api::options::Http> for HttpConfig {
     fn from(o: &api::options::Http) -> Self {
         Self {
@@ -1150,25 +1178,26 @@ impl From<&L1ClientOptions> for L1Tuning {
 
 impl PublicNodeConfig {
     pub fn new(opt: &Options, modules: &Modules, genesis: &Genesis) -> Self {
-        let storage = if let Some(sql) = modules.storage_sql.as_ref() {
-            StorageConfig {
-                backend: StorageBackend::Sql,
-                fs: None,
-                sql: Some(SqlStorageConfig::from(sql)),
-            }
-        } else if let Some(fs) = modules.storage_fs.as_ref() {
-            StorageConfig {
-                backend: StorageBackend::Fs,
-                fs: Some(FsStorageConfig::from(fs)),
-                sql: None,
-            }
-        } else {
-            let fs = persistence::fs::Options::try_parse_from(std::iter::empty::<String>()).ok();
-            StorageConfig {
-                backend: StorageBackend::FsDefault,
-                fs: fs.as_ref().map(FsStorageConfig::from),
-                sql: None,
-            }
+        // Consensus always runs on the journal. storage-fs, else storage-sql, backs the query
+        // service when the query module is on, and both are ignored otherwise. Same choice as
+        // `run.rs`.
+        let journal = match &modules.storage_journal {
+            Some(journal) => Some(JournalStorageConfig::from(journal)),
+            None => persistence::journal::Options::from_env()
+                .ok()
+                .as_ref()
+                .map(JournalStorageConfig::from),
+        };
+        let (fs, sql) = match (&modules.query, &modules.storage_fs, &modules.storage_sql) {
+            (None, ..) => (None, None),
+            (Some(_), Some(fs), _) => (Some(FsStorageConfig::from(fs)), None),
+            (Some(_), None, sql) => (None, sql.as_ref().map(SqlStorageConfig::from)),
+        };
+        let storage = StorageConfig {
+            backend: StorageBackend::Journal,
+            fs,
+            sql,
+            journal,
         };
 
         Self {
@@ -1433,7 +1462,7 @@ pub(crate) mod tests {
             cfg.config_peers
         );
         assert_eq!(cfg.l1_ws_provider_count, 0);
-        assert_eq!(cfg.storage.backend, StorageBackend::FsDefault);
+        assert_eq!(cfg.storage.backend, StorageBackend::Journal);
         assert!(cfg.storage.fs.is_none());
         assert!(cfg.storage.sql.is_none());
         assert!(!cfg.modules.submit);
@@ -1619,13 +1648,15 @@ pub(crate) mod tests {
             "--prune",
             "--pruning-threshold",
             "1000000000000",
+            "--",
+            "query",
         ]);
         let modules = opt.modules();
 
         let cfg = PublicNodeConfig::new(&opt, &modules, &test_genesis());
         let json = serde_json::to_string(&cfg).unwrap();
 
-        assert_eq!(cfg.storage.backend, StorageBackend::Sql);
+        assert_eq!(cfg.storage.backend, StorageBackend::Journal);
         assert!(
             json.contains("\"prune\":true"),
             "expected prune:true in JSON: {json}"
