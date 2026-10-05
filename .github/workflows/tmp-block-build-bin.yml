@@ -1,0 +1,36 @@
+name: tmp block_build bench binary
+
+on:
+  push:
+    branches:
+      - ma/tmp-block-build-bin
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Build bench
+        run: |
+          bin=$(cargo bench --locked -p espresso-types --bench block_build --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "block_build") | .executable')
+          cp "$bin" block_build-${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: block_build-${{ matrix.arch }}
+          retention-days: 3
+          path: block_build-${{ matrix.arch }}
