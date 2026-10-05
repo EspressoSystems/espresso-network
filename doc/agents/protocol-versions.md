@@ -25,7 +25,12 @@
   two epochs and neither may reach a threshold. The view times out again and the votes converge as the nodes do. Before
   V0_7 they are pooled instead, since the epoch is then covered by no signature and names no committee. The same upgrade
   carries the `LargeBlock` chain-config change raising `max_block_size`; it is the first upgrade run by the new
-  protocol's own upgrade sub-protocol (`crates/hotshot/new-protocol/src/upgrade.rs`).
+  protocol's own upgrade sub-protocol (`crates/hotshot/new-protocol/src/upgrade.rs`). It also switches the AvidmGf2 VID
+  commitment to bind the full VID common (`VID_BINDS_COMMON_VERSION`): the Merkle root over the namespace commitments
+  gains a leaf hashing `param` and `ns_lens`, so a share's consistency check authenticates the whole common and a leader
+  cannot pair honest namespace commitments with forged namespace lengths or decoding parameters. The two forms are
+  `CommitmentBinding` in `crates/vid/src/avidm_gf2/namespaced.rs`; `avidm_gf2_binding(version)` in hotshot-types picks
+  one, and every commitment, share, common or namespace-proof check goes through it.
 
 What a network runs: `base_version` and `upgrade_version` in `data/genesis/<network>.toml`. Live confirmation is
 `consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see `doc/agents/live-chains.md`.

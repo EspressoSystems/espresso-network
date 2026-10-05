@@ -192,11 +192,13 @@ async fn reference_ns_proof_enum_avidm() -> NamespaceProofQueryData {
     }
 }
 
-/// Commit to the reference payload with the AvidmGf2 (VID2) scheme.
+/// Commit to the reference payload with the AvidmGf2 (VID2) scheme, under the commitment binding
+/// of protocol `version`.
 ///
-/// Ports verifying the `ns_proof_V2` vector need this commitment. It is derivable from the
-/// `ns_commits` of the pinned `vid_common_v2` vector, but it is *not* the `payload_commitment` of
-/// `data/v6/header.json`, which is computed at a total weight of 1 rather than the 10 used here.
+/// Ports verifying the `ns_proof_V2` vector need this commitment. It is derivable from the pinned
+/// `vid_common_v2` vector (from its `ns_commits` alone before V0_7, together with its `param` and
+/// `ns_lens` from V0_7), but it is *not* the `payload_commitment` of `data/v6/header.json`, which
+/// is computed at a total weight of 1 rather than the 10 used here.
 fn reference_avidm_gf2_commit_and_common(
     payload: &Payload,
     version: Version,
@@ -357,7 +359,7 @@ const REFERENCE_V3_HEADER_COMMITMENT: &str = "BLOCK~qKb0axY9NwpusJn5ZFhjJAyG8IYp
 const REFERENCE_V4_HEADER_COMMITMENT: &str = "BLOCK~hPVq9NasWW1vVYGGGr0PSRv1TV3nUV_8ARw5fWHlQLx3";
 const REFERENCE_V5_HEADER_COMMITMENT: &str = "BLOCK~yYZmWrTIWJerGV7VA-EeKWL4tnsdJya1BpK4HWdvnwAA";
 const REFERENCE_V6_HEADER_COMMITMENT: &str = "BLOCK~nAVIoY9ekw8WPwzHnLwTgsPZ1qvBox-WQev4nhcrLoZP";
-const REFERENCE_V7_HEADER_COMMITMENT: &str = "BLOCK~W_EVcweDtXQrM0WyefIOfbRaMN-bfW7oBy8NVJ7eOZgz";
+const REFERENCE_V7_HEADER_COMMITMENT: &str = "BLOCK~Y-R2daYalMrNEmfCqudv5FDVOYM2w8PgKpnxVaFA9iEn";
 
 fn reference_transaction<R>(ns_id: NamespaceId, rng: &mut R) -> Transaction
 where
@@ -682,6 +684,17 @@ async fn test_reference_ns_proof_enum_avidm_gf2() {
         "v6",
         "ns_proof_V2",
         &reference_ns_proof_enum_avidm_gf2(version(0, 6)).await,
+    );
+}
+
+// From V0_7 the AvidmGf2 commitment binds the full VID common, so the proof's Merkle path runs
+// through a tree with one more leaf than the v6 vector's.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_reference_ns_proof_enum_avidm_gf2_v7() {
+    reference_test_without_committable(
+        "v7",
+        "ns_proof_V2",
+        &reference_ns_proof_enum_avidm_gf2(version(0, 7)).await,
     );
 }
 

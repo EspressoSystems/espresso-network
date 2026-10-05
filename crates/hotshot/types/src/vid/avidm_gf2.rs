@@ -8,6 +8,7 @@
 
 use hotshot_utils::anytrace::*;
 use vbs::version::Version;
+use versions::VID_BINDS_COMMON_VERSION;
 pub use vid::avidm_gf2::namespaced::CommitmentBinding;
 
 pub type AvidmGf2Scheme = vid::avidm_gf2::namespaced::NsAvidmGf2Scheme;
@@ -28,7 +29,31 @@ pub fn init_avidm_gf2_param(total_weight: usize) -> Result<AvidmGf2Param> {
 /// V2 commitment of a block, and every check of a share, common or namespace
 /// proof against one, must use the binding of the block's protocol version.
 ///
-/// No version binds the full common yet.
-pub fn avidm_gf2_binding(_version: Version) -> CommitmentBinding {
-    CommitmentBinding::NsCommitsOnly
+/// From [`VID_BINDS_COMMON_VERSION`] the commitment binds the full common;
+/// before it, the namespace commitments alone.
+pub fn avidm_gf2_binding(version: Version) -> CommitmentBinding {
+    if version >= VID_BINDS_COMMON_VERSION {
+        CommitmentBinding::FullCommon
+    } else {
+        CommitmentBinding::NsCommitsOnly
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use versions::NEW_PROTOCOL_VERSION;
+
+    use super::*;
+
+    #[test]
+    fn binding_switches_at_vid_binds_common_version() {
+        assert_eq!(
+            avidm_gf2_binding(NEW_PROTOCOL_VERSION),
+            CommitmentBinding::NsCommitsOnly
+        );
+        assert_eq!(
+            avidm_gf2_binding(VID_BINDS_COMMON_VERSION),
+            CommitmentBinding::FullCommon
+        );
+    }
 }

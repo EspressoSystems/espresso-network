@@ -19,6 +19,9 @@ pub const NEW_PROTOCOL_VERSION: Version = version(0, 6);
 pub const TIMEOUT_EPOCH_VERSION: Version = version(0, 7);
 // The LargeBlock chain-config change ships in the same upgrade as the timeout-epoch binding.
 pub const LARGE_BLOCK_VERSION: Version = TIMEOUT_EPOCH_VERSION;
+// From this version the AvidmGf2 VID commitment binds the full VID common (`param` and
+// `ns_lens`), not only the namespace commitments. Ships in the same upgrade.
+pub const VID_BINDS_COMMON_VERSION: Version = TIMEOUT_EPOCH_VERSION;
 pub const MIN_SUPPORTED_VERSION: Version = VERSION_0_1;
 pub const MAX_SUPPORTED_VERSION: Version = TIMEOUT_EPOCH_VERSION;
 
