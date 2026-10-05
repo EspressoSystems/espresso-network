@@ -5593,7 +5593,7 @@ mod tests {
 
         async fn get_catchup_reward_account_v2(
             &self,
-            _request: tonic::Request<crate::proto::GetCatchupRewardAccountRequest>,
+            _request: tonic::Request<crate::proto::GetCatchupRewardAccountV2Request>,
         ) -> Result<tonic::Response<crate::proto::RewardAccountProofResponse>, tonic::Status>
         {
             Err(tonic::Status::internal("mock"))
@@ -5602,7 +5602,7 @@ mod tests {
         async fn get_catchup_reward_merkle_tree_v2(
             &self,
             _request: tonic::Request<crate::proto::GetCatchupRewardMerkleTreeV2Request>,
-        ) -> Result<tonic::Response<crate::proto::CatchupMerkleTreeResponse>, tonic::Status>
+        ) -> Result<tonic::Response<crate::proto::RewardMerkleTreeV2Response>, tonic::Status>
         {
             Err(tonic::Status::internal("mock"))
         }

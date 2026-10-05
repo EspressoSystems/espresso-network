@@ -2671,7 +2671,7 @@ where
 
     async fn get_catchup_reward_account_v2(
         &self,
-        request: tonic::Request<proto::GetCatchupRewardAccountRequest>,
+        request: tonic::Request<proto::GetCatchupRewardAccountV2Request>,
     ) -> Result<tonic::Response<proto::RewardAccountProofResponse>, tonic::Status> {
         let request = request.into_inner();
         let (height, view) = catchup_at(request.height, request.view)?;
@@ -2685,13 +2685,17 @@ where
     async fn get_catchup_reward_merkle_tree_v2(
         &self,
         request: tonic::Request<proto::GetCatchupRewardMerkleTreeV2Request>,
-    ) -> Result<tonic::Response<proto::CatchupMerkleTreeResponse>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::RewardMerkleTreeV2Response>, tonic::Status> {
         let request = request.into_inner();
         let (height, view) = catchup_at(request.height, request.view)?;
-        let tree = <Self as v1::CatchupApi>::get_reward_merkle_tree_v2(self, height, view)
+        let tree = self
+            .data_source
+            .get_reward_merkle_tree_v2(height, hotshot_types::data::ViewNumber::new(view))
             .await
-            .map_err(to_status)?;
-        Ok(tonic::Response::new(tree_to_proto(&tree)?))
+            .map_err(|err| to_status(not_found(format!("{err:#}"))))?;
+        Ok(tonic::Response::new(proto::RewardMerkleTreeV2Response {
+            tree,
+        }))
     }
 
     async fn get_catchup_state_cert(
@@ -2718,7 +2722,7 @@ fn tree_to_proto<T: serde::Serialize>(
     Ok(proto::CatchupMerkleTreeResponse { tree })
 }
 
-/// The `(height, view)` every catchup route is asked for.
+/// The `(height, view)` the catchup routes over a merkle tree are asked for.
 fn catchup_at(height: Option<u64>, view: Option<u64>) -> Result<(u64, u64), tonic::Status> {
     Ok((required(height, "height")?, required(view, "view")?))
 }

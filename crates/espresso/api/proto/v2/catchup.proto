@@ -8,12 +8,12 @@ import "v2/common.proto";
 import "v2/merklized_state.proto";
 import "v2/reward_state.proto";
 
-// The module peers fetch state from when they fall behind. Every route names the state it wants
-// by the `(height, view)` the asking node is replaying, which is why these are not the snapshot
-// selectors the `merklized-state` module takes.
+// The module peers fetch state from when they fall behind. The routes over the fee, block and
+// reward trees name the state they want by the `(height, view)` the asking node is replaying,
+// which is why these are not the snapshot selectors the `merklized-state` module takes.
 //
 // v1's `reward-accounts-v2` and `reward-amounts` are not carried over: both are tombstones that
-// answer every request with a deprecation 404, and a v2 route's field numbers are frozen
+// answer every request with a deprecation 404
 
 message FeeMerkleProof {
   oneof proof {
@@ -38,12 +38,9 @@ message CatchupFeeAccountResponse {
   FeeAccountProof proof = 2;
 }
 
-// A whole merkle tree. Opaque because a peer feeds it straight back into the tree type rather
-// than reading fields out of it, and modelling every node of a tree buys a caller nothing that
-// the `merklized-state` paths do not already give it
+// A whole merkle tree, opaque to the API
 message CatchupMerkleTreeResponse {
-  // The bytes v1 serves as this endpoint's JSON body, base64 here. Decode and parse as JSON to
-  // get the tree v1 would have returned
+  // The tree as the JSON v1 serves for the same route, base64 in protoJSON
   bytes tree = 1;
 }
 
@@ -116,6 +113,17 @@ message GetCatchupRewardAccountRequest {
   optional string address = 3;
 }
 
+message GetCatchupRewardAccountV2Request {
+  // Height the asking node is replaying. Required
+  optional uint64 height = 1;
+
+  // View the asking node is replaying. Required
+  optional uint64 view = 2;
+
+  // Account to prove, `0x`-prefixed hex. Required
+  optional string address = 3;
+}
+
 message GetCatchupRewardAccountsRequest {
   // Height the asking node is replaying. Required
   optional uint64 height = 1;
@@ -174,7 +182,8 @@ service CatchupService {
     option (google.api.http) = {get: "/v2/catchup/cert2"};
   }
 
-  // Prove one reward account's balance in the v1 tree
+  // Prove one reward account's balance in the v1 tree. An account with no entry gets an absence
+  // proof and a zero balance
   rpc GetCatchupRewardAccount(GetCatchupRewardAccountRequest) returns (RewardAccountProofResponse) {
     option (google.api.http) = {get: "/v2/catchup/reward-account"};
   }
@@ -187,13 +196,15 @@ service CatchupService {
     };
   }
 
-  // Prove one reward account's balance in the v2 tree
-  rpc GetCatchupRewardAccountV2(GetCatchupRewardAccountRequest) returns (RewardAccountProofResponse) {
+  // Prove one reward account's balance in the v2 tree. An account with no entry gets an absence
+  // proof and a zero balance
+  rpc GetCatchupRewardAccountV2(GetCatchupRewardAccountV2Request) returns (RewardAccountProofResponse) {
     option (google.api.http) = {get: "/v2/catchup/reward-account-v2"};
   }
 
-  // Get the whole v2 reward merkle tree at a height and view
-  rpc GetCatchupRewardMerkleTreeV2(GetCatchupRewardMerkleTreeV2Request) returns (CatchupMerkleTreeResponse) {
+  // Get the whole v2 reward merkle tree at a height and view, in the serialized form the
+  // merklized-state reward tree route serves
+  rpc GetCatchupRewardMerkleTreeV2(GetCatchupRewardMerkleTreeV2Request) returns (RewardMerkleTreeV2Response) {
     option (google.api.http) = {get: "/v2/catchup/reward-merkle-tree-v2"};
   }
 

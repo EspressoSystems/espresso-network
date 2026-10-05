@@ -9490,8 +9490,23 @@ mod test {
             "the proof names the account it was asked for"
         );
 
-        // The frontier is a jellyfish proof on both versions, so the position it proves must
-        // match rather than merely being present.
+        // On this pre-epoch network some catchup routes have nothing to serve, so a route both
+        // versions refuse must at least refuse with the same status.
+        fn both_or_same_status<A, B>(
+            route: &str,
+            v1: Result<A, ClientErr>,
+            v2: Result<B, ClientErr>,
+        ) -> Option<(A, B)> {
+            match (v1, v2) {
+                (Ok(v1), Ok(v2)) => Some((v1, v2)),
+                (Err(v1), Err(v2)) => {
+                    assert_eq!(v2.status, v1.status, "{route}");
+                    None
+                },
+                (v1, v2) => panic!("{route}: v1 ok {}, v2 ok {}", v1.is_ok(), v2.is_ok()),
+            }
+        }
+
         let v1_frontier: crate::api::BlocksFrontier = client
             .get(&format!("catchup/{catchup_height}/{catchup_view}/blocks"))
             .send()
@@ -9505,47 +9520,181 @@ mod test {
             .await
             .unwrap();
         assert_eq!(
-            v2_frontier.proof.len(),
-            v1_frontier.proof.len(),
-            "{v2_frontier:?}"
+            v2_frontier,
+            espresso_api::proto::MerklePathResponse::from(&v1_frontier)
         );
 
-        // The one v2 catchup route that takes a body. The tree is opaque bytes, so this proves
-        // only that it round-trips as the JSON v1 would have served.
-        let v2_tree: espresso_api::proto::CatchupMerkleTreeResponse = client
-            .post("v2/catchup/fee-accounts")
-            .body_json(&espresso_api::proto::GetCatchupFeeAccountsRequest {
-                height: Some(catchup_height),
-                view: Some(catchup_view),
-                accounts: vec![format!("0x{account}")],
-            })
-            .unwrap()
+        for (route, v1_path, v2_path) in [
+            ("fee-accounts", "accounts", "fee-accounts"),
+            ("reward-accounts", "reward-accounts", "reward-accounts"),
+        ] {
+            let v1 = client
+                .post::<serde_json::Value>(&format!(
+                    "catchup/{catchup_height}/{catchup_view}/{v1_path}"
+                ))
+                .body_json(&serde_json::json!([format!("0x{account}")]))
+                .unwrap()
+                .send()
+                .await;
+            let v2 = client
+                .post::<espresso_api::proto::CatchupMerkleTreeResponse>(&format!(
+                    "v2/catchup/{v2_path}"
+                ))
+                .body_json(&espresso_api::proto::GetCatchupFeeAccountsRequest {
+                    height: Some(catchup_height),
+                    view: Some(catchup_view),
+                    accounts: vec![format!("0x{account}")],
+                })
+                .unwrap()
+                .send()
+                .await;
+            if let Some((v1, v2)) = both_or_same_status(route, v1, v2) {
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&v2.tree).unwrap(),
+                    v1,
+                    "{route}"
+                );
+            }
+        }
+
+        let v1 = client
+            .get::<espresso_types::v0_3::RewardAccountQueryDataV1>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-account/{account}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardAccountProofResponse>(&format!(
+                "v2/catchup/reward-account?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-account", v1, v2) {
+            assert_eq!(v2, v1.into());
+        }
+
+        let v1 = client
+            .get::<espresso_types::v0_4::RewardAccountQueryDataV2>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-account-v2/{account}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardAccountProofResponse>(&format!(
+                "v2/catchup/reward-account-v2?height={catchup_height}&view={catchup_view}&\
+                 address=0x{account}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-account-v2", v1, v2) {
+            assert_eq!(v2, v1.into());
+        }
+
+        let v1 = client
+            .get::<Vec<u8>>(&format!(
+                "catchup/reward-merkle-tree-v2/{catchup_height}/{catchup_view}"
+            ))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::RewardMerkleTreeV2Response>(&format!(
+                "v2/catchup/reward-merkle-tree-v2?height={catchup_height}&view={catchup_view}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-merkle-tree-v2", v1, v2) {
+            assert_eq!(v2.tree, v1);
+        }
+
+        let decided = leaf.height();
+        let v1_chain: Vec<espresso_types::Leaf2> = client
+            .get(&format!("catchup/{decided}/leafchain"))
             .send()
             .await
             .unwrap();
-        serde_json::from_slice::<serde_json::Value>(&v2_tree.tree)
-            .expect("the tree field carries the JSON v1 serves");
+        let v2_chain: espresso_api::proto::CatchupLeafChainResponse = client
+            .get(&format!("v2/catchup/leaf-chain?height={decided}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(!v1_chain.is_empty());
+        assert_eq!(
+            v2_chain.leaf_chain,
+            v1_chain.iter().map(Into::into).collect::<Vec<_>>()
+        );
 
-        // Asserted against v1's own answer rather than a status picked here, so the two agree on
-        // what a commitment they cannot resolve is, without this test having to say which.
-        let commitment = "CHAIN_CONFIG~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let v1 = client
+            .get::<espresso_types::Certificate2<SeqTypes>>(&format!("catchup/{decided}/cert2"))
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::CatchupCert2Response>(&format!(
+                "v2/catchup/cert2?height={decided}"
+            ))
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("cert2", v1, v2) {
+            assert_eq!(v2.cert2, Some((&v1).into()));
+        }
+
+        let v1 = client
+            .get::<hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<SeqTypes>>(
+                "catchup/1/state-cert",
+            )
+            .send()
+            .await;
+        let v2 = client
+            .get::<espresso_api::proto::StateCertV2Response>("v2/catchup/state-cert?epoch=1")
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("state-cert", v1, v2) {
+            assert_eq!(v2, (&espresso_types::v0_4::StateCertQueryDataV2(v1)).into());
+        }
+
+        let known = leaf.block_header().chain_config().commit();
+        let v1_config: espresso_types::v0_3::ChainConfig = client
+            .get(&format!("catchup/chain-config/{known}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_config: espresso_api::proto::CatchupChainConfigResponse = client
+            .get(&format!("v2/catchup/chain-config?commitment={known}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_config.chain_config, Some((&v1_config).into()));
+        // A well-formed commitment of a config the node never saw, so both versions reach the
+        // lookup rather than refusing to parse it.
+        let unknown = espresso_types::v0_3::ChainConfig {
+            chain_id: 999u64.into(),
+            ..Default::default()
+        }
+        .commit();
         let v1_status = client
-            .get::<serde_json::Value>(&format!("catchup/chain-config/{commitment}"))
+            .get::<serde_json::Value>(&format!("catchup/chain-config/{unknown}"))
             .send()
             .await
             .unwrap_err()
             .status;
         let v2_status = client
-            .get::<serde_json::Value>(&format!("v2/catchup/chain-config?commitment={commitment}"))
+            .get::<serde_json::Value>(&format!("v2/catchup/chain-config?commitment={unknown}"))
             .send()
             .await
             .unwrap_err()
             .status;
+        assert_ne!(v1_status, StatusCode::BAD_REQUEST);
         assert_eq!(v2_status, v1_status);
+
         for query in [
             "v2/catchup/fee-account?view=1&address=0x0",
             "v2/catchup/blocks-frontier?height=1",
             "v2/catchup/leaf-chain",
+            "v2/catchup/cert2",
+            "v2/catchup/chain-config",
+            "v2/catchup/reward-account?height=1&view=1",
+            "v2/catchup/reward-account-v2?view=1&address=0x0",
+            "v2/catchup/reward-merkle-tree-v2?height=1",
             "v2/catchup/state-cert",
         ] {
             let err = client

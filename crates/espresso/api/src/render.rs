@@ -607,7 +607,7 @@ impl From<RewardAccountQueryDataV2> for proto::RewardAccountProofResponse {
         proto::RewardAccountProofResponse {
             balance: balance.to_string(),
             proof: Some(proto::RewardAccountProof {
-                account: account.to_string(),
+                account: format!("{account:#x}"),
                 proof: Some(proto::RewardMerkleProof { proof: Some(proof) }),
             }),
         }
@@ -629,7 +629,7 @@ impl From<v0_3::RewardAccountQueryDataV1> for proto::RewardAccountProofResponse 
         proto::RewardAccountProofResponse {
             balance: query.balance.to_string(),
             proof: Some(proto::RewardAccountProof {
-                account: query.proof.account.to_string(),
+                account: format!("{:#x}", query.proof.account),
                 proof: Some(proto::RewardMerkleProof { proof: Some(proof) }),
             }),
         }
@@ -649,7 +649,7 @@ impl From<AccountQueryData> for proto::CatchupFeeAccountResponse {
         proto::CatchupFeeAccountResponse {
             balance: query.balance.to_string(),
             proof: Some(proto::FeeAccountProof {
-                account: format!("{:#x}", query.proof.account.0),
+                account: format!("{:#x}", query.proof.account),
                 proof: Some(proto::FeeMerkleProof { proof: Some(proof) }),
             }),
         }
