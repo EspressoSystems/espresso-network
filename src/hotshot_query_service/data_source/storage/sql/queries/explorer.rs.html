@@ -586,54 +586,59 @@
 <a href=#586 id=586 data-nosnippet>586</a>            </span>);
 <a href=#587 id=587 data-nosnippet>587</a>            <span class="kw">let </span>row = query(block_query.as_str())
 <a href=#588 id=588 data-nosnippet>588</a>                .bind(<span class="kw-2">&amp;</span>search_query_string)
-<a href=#589 id=589 data-nosnippet>589</a>                .fetch_one(<span class="self">self</span>.as_mut())
+<a href=#589 id=589 data-nosnippet>589</a>                .fetch_optional(<span class="self">self</span>.as_mut())
 <a href=#590 id=590 data-nosnippet>590</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#591 id=591 data-nosnippet>591</a>
-<a href=#592 id=592 data-nosnippet>592</a>            <span class="kw">let </span>block = BlockSummary::from_row(<span class="kw-2">&amp;</span>row)<span class="question-mark">?</span>;
-<a href=#593 id=593 data-nosnippet>593</a>
-<a href=#594 id=594 data-nosnippet>594</a>            <span class="prelude-val">Ok</span>(SearchResult {
-<a href=#595 id=595 data-nosnippet>595</a>                blocks: <span class="macro">vec!</span>[block],
-<a href=#596 id=596 data-nosnippet>596</a>                transactions: Vec::new(),
-<a href=#597 id=597 data-nosnippet>597</a>            })
-<a href=#598 id=598 data-nosnippet>598</a>        } <span class="kw">else </span>{
-<a href=#599 id=599 data-nosnippet>599</a>            <span class="kw">let </span>transactions_query = <span class="macro">format!</span>(
-<a href=#600 id=600 data-nosnippet>600</a>                <span class="string">"SELECT {BLOCK_COLUMNS}
-<a href=#601 id=601 data-nosnippet>601</a>                    FROM header AS h
-<a href=#602 id=602 data-nosnippet>602</a>                    JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
-<a href=#603 id=603 data-nosnippet>603</a>                    JOIN transactions AS t ON h.height = t.block_height
-<a href=#604 id=604 data-nosnippet>604</a>                    WHERE t.hash = $1
-<a href=#605 id=605 data-nosnippet>605</a>                    ORDER BY h.height DESC
-<a href=#606 id=606 data-nosnippet>606</a>                    LIMIT 5"
-<a href=#607 id=607 data-nosnippet>607</a>            </span>);
-<a href=#608 id=608 data-nosnippet>608</a>            <span class="kw">let </span>transactions_query_rows = query(transactions_query.as_str())
-<a href=#609 id=609 data-nosnippet>609</a>                .bind(<span class="kw-2">&amp;</span>search_query_string)
-<a href=#610 id=610 data-nosnippet>610</a>                .fetch(<span class="self">self</span>.as_mut());
-<a href=#611 id=611 data-nosnippet>611</a>            <span class="kw">let </span>transactions_query_result: Vec&lt;TransactionSummary&lt;Types&gt;&gt; = transactions_query_rows
-<a href=#612 id=612 data-nosnippet>612</a>                .map(|row| -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;TransactionSummary&lt;Types&gt;&gt;, QueryError&gt;{
-<a href=#613 id=613 data-nosnippet>613</a>                    <span class="kw">let </span>block = BlockQueryData::&lt;Types&gt;::from_row(<span class="kw-2">&amp;</span>row<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-<a href=#614 id=614 data-nosnippet>614</a>                    <span class="kw">let </span>transactions = block
-<a href=#615 id=615 data-nosnippet>615</a>                        .enumerate()
-<a href=#616 id=616 data-nosnippet>616</a>                        .enumerate()
-<a href=#617 id=617 data-nosnippet>617</a>                        .filter(|(<span class="kw">_</span>, (<span class="kw">_</span>, txn))| txn.commit().to_string() == search_query_string)
-<a href=#618 id=618 data-nosnippet>618</a>                        .map(|(offset, (<span class="kw">_</span>, txn))| {
-<a href=#619 id=619 data-nosnippet>619</a>                            <span class="prelude-val">Ok</span>(TransactionSummary::try_from((
-<a href=#620 id=620 data-nosnippet>620</a>                                <span class="kw-2">&amp;</span>block, offset, txn,
-<a href=#621 id=621 data-nosnippet>621</a>                            ))<span class="question-mark">?</span>)
-<a href=#622 id=622 data-nosnippet>622</a>                        })
-<a href=#623 id=623 data-nosnippet>623</a>                        .try_collect::&lt;TransactionSummary&lt;Types&gt;, Vec&lt;TransactionSummary&lt;Types&gt;&gt;, QueryError&gt;()<span class="question-mark">?</span>;
-<a href=#624 id=624 data-nosnippet>624</a>                    <span class="prelude-val">Ok</span>(transactions)
-<a href=#625 id=625 data-nosnippet>625</a>                })
-<a href=#626 id=626 data-nosnippet>626</a>                .try_collect::&lt;Vec&lt;Vec&lt;TransactionSummary&lt;Types&gt;&gt;&gt;&gt;()
-<a href=#627 id=627 data-nosnippet>627</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#628 id=628 data-nosnippet>628</a>                </span>.into_iter()
-<a href=#629 id=629 data-nosnippet>629</a>                .flatten()
-<a href=#630 id=630 data-nosnippet>630</a>                .collect();
-<a href=#631 id=631 data-nosnippet>631</a>
-<a href=#632 id=632 data-nosnippet>632</a>            <span class="prelude-val">Ok</span>(SearchResult {
-<a href=#633 id=633 data-nosnippet>633</a>                blocks: Vec::new(),
-<a href=#634 id=634 data-nosnippet>634</a>                transactions: transactions_query_result,
-<a href=#635 id=635 data-nosnippet>635</a>            })
-<a href=#636 id=636 data-nosnippet>636</a>        }
-<a href=#637 id=637 data-nosnippet>637</a>    }
-<a href=#638 id=638 data-nosnippet>638</a>}
+<a href=#592 id=592 data-nosnippet>592</a>            <span class="comment">// An unknown hash is an empty result, as in the transaction search.
+<a href=#593 id=593 data-nosnippet>593</a>            </span><span class="kw">let </span>blocks = row
+<a href=#594 id=594 data-nosnippet>594</a>                .map(|row| BlockSummary::from_row(<span class="kw-2">&amp;</span>row))
+<a href=#595 id=595 data-nosnippet>595</a>                .transpose()<span class="question-mark">?
+<a href=#596 id=596 data-nosnippet>596</a>                </span>.into_iter()
+<a href=#597 id=597 data-nosnippet>597</a>                .collect();
+<a href=#598 id=598 data-nosnippet>598</a>
+<a href=#599 id=599 data-nosnippet>599</a>            <span class="prelude-val">Ok</span>(SearchResult {
+<a href=#600 id=600 data-nosnippet>600</a>                blocks,
+<a href=#601 id=601 data-nosnippet>601</a>                transactions: Vec::new(),
+<a href=#602 id=602 data-nosnippet>602</a>            })
+<a href=#603 id=603 data-nosnippet>603</a>        } <span class="kw">else </span>{
+<a href=#604 id=604 data-nosnippet>604</a>            <span class="kw">let </span>transactions_query = <span class="macro">format!</span>(
+<a href=#605 id=605 data-nosnippet>605</a>                <span class="string">"SELECT {BLOCK_COLUMNS}
+<a href=#606 id=606 data-nosnippet>606</a>                    FROM header AS h
+<a href=#607 id=607 data-nosnippet>607</a>                    JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+<a href=#608 id=608 data-nosnippet>608</a>                    JOIN transactions AS t ON h.height = t.block_height
+<a href=#609 id=609 data-nosnippet>609</a>                    WHERE t.hash = $1
+<a href=#610 id=610 data-nosnippet>610</a>                    ORDER BY h.height DESC
+<a href=#611 id=611 data-nosnippet>611</a>                    LIMIT 5"
+<a href=#612 id=612 data-nosnippet>612</a>            </span>);
+<a href=#613 id=613 data-nosnippet>613</a>            <span class="kw">let </span>transactions_query_rows = query(transactions_query.as_str())
+<a href=#614 id=614 data-nosnippet>614</a>                .bind(<span class="kw-2">&amp;</span>search_query_string)
+<a href=#615 id=615 data-nosnippet>615</a>                .fetch(<span class="self">self</span>.as_mut());
+<a href=#616 id=616 data-nosnippet>616</a>            <span class="kw">let </span>transactions_query_result: Vec&lt;TransactionSummary&lt;Types&gt;&gt; = transactions_query_rows
+<a href=#617 id=617 data-nosnippet>617</a>                .map(|row| -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;TransactionSummary&lt;Types&gt;&gt;, QueryError&gt;{
+<a href=#618 id=618 data-nosnippet>618</a>                    <span class="kw">let </span>block = BlockQueryData::&lt;Types&gt;::from_row(<span class="kw-2">&amp;</span>row<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+<a href=#619 id=619 data-nosnippet>619</a>                    <span class="kw">let </span>transactions = block
+<a href=#620 id=620 data-nosnippet>620</a>                        .enumerate()
+<a href=#621 id=621 data-nosnippet>621</a>                        .enumerate()
+<a href=#622 id=622 data-nosnippet>622</a>                        .filter(|(<span class="kw">_</span>, (<span class="kw">_</span>, txn))| txn.commit().to_string() == search_query_string)
+<a href=#623 id=623 data-nosnippet>623</a>                        .map(|(offset, (<span class="kw">_</span>, txn))| {
+<a href=#624 id=624 data-nosnippet>624</a>                            <span class="prelude-val">Ok</span>(TransactionSummary::try_from((
+<a href=#625 id=625 data-nosnippet>625</a>                                <span class="kw-2">&amp;</span>block, offset, txn,
+<a href=#626 id=626 data-nosnippet>626</a>                            ))<span class="question-mark">?</span>)
+<a href=#627 id=627 data-nosnippet>627</a>                        })
+<a href=#628 id=628 data-nosnippet>628</a>                        .try_collect::&lt;TransactionSummary&lt;Types&gt;, Vec&lt;TransactionSummary&lt;Types&gt;&gt;, QueryError&gt;()<span class="question-mark">?</span>;
+<a href=#629 id=629 data-nosnippet>629</a>                    <span class="prelude-val">Ok</span>(transactions)
+<a href=#630 id=630 data-nosnippet>630</a>                })
+<a href=#631 id=631 data-nosnippet>631</a>                .try_collect::&lt;Vec&lt;Vec&lt;TransactionSummary&lt;Types&gt;&gt;&gt;&gt;()
+<a href=#632 id=632 data-nosnippet>632</a>                .<span class="kw">await</span><span class="question-mark">?
+<a href=#633 id=633 data-nosnippet>633</a>                </span>.into_iter()
+<a href=#634 id=634 data-nosnippet>634</a>                .flatten()
+<a href=#635 id=635 data-nosnippet>635</a>                .collect();
+<a href=#636 id=636 data-nosnippet>636</a>
+<a href=#637 id=637 data-nosnippet>637</a>            <span class="prelude-val">Ok</span>(SearchResult {
+<a href=#638 id=638 data-nosnippet>638</a>                blocks: Vec::new(),
+<a href=#639 id=639 data-nosnippet>639</a>                transactions: transactions_query_result,
+<a href=#640 id=640 data-nosnippet>640</a>            })
+<a href=#641 id=641 data-nosnippet>641</a>        }
+<a href=#642 id=642 data-nosnippet>642</a>    }
+<a href=#643 id=643 data-nosnippet>643</a>}
 </code></pre></div></section></main></body></html>
