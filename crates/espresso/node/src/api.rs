@@ -12012,6 +12012,32 @@ mod test {
                 .await?;
                 assert_json_endpoint(&http, api_port, "explorer/transactions/latest/10").await?;
 
+                // Explorer errors keep their status: missing objects are 404 and unsupported
+                // search tags are 400, while a search that finds nothing is an empty result.
+                assert_error_body(&http, api_port, "explorer/block/999999", 404).await?;
+                assert_error_body(&http, api_port, "explorer/transaction/999999/0", 404).await?;
+                assert_error_body(
+                    &http,
+                    api_port,
+                    &format!("explorer/search/{leaf_hash}"),
+                    400,
+                )
+                .await?;
+                let unknown_block = tagged_base64::TaggedBase64::new("BLOCK", &[0; 32])?;
+                let search: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{api_port}/v1/explorer/search/{unknown_block}"
+                    ))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json()
+                    .await?;
+                assert_eq!(
+                    search["search_results"],
+                    serde_json::json!({"blocks": [], "transactions": []})
+                );
+
                 // Light-client endpoints. Use the same block we used for availability tests.
                 assert_json_endpoint(&http, api_port, &format!("light-client/leaf/{avail_block}"))
                     .await?;
