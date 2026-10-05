@@ -6618,6 +6618,7 @@ INDEX_COLUMNS = {
     "tag": "tag@rev",
     "nodes": "N",
     "db": "db",
+    "latency": "latency",
     "rate": "rate MB/s",
     "decided": "decided MB/s",
     "kept_up": "kept up",
@@ -6629,6 +6630,14 @@ INDEX_COLUMNS = {
 INDEX_HEADER = (
     f"| {' | '.join(INDEX_COLUMNS.values())} |\n{'|---' * len(INDEX_COLUMNS)}|\n"
 )
+
+
+def latency_cell(config: dict) -> str:
+    # Manifests from before the flag have no such key.
+    profile = config.get("latency", "off")
+    if profile == "off":
+        return "off"
+    return profile if config["intra_latency"] else f"{profile} no-intra"
 
 
 def index_cells(
@@ -6662,6 +6671,7 @@ def index_cells(
         "tag": f"{manifest['config']['tag']}@{revision}",
         "nodes": str(manifest["config"]["nodes"]),
         "db": manifest["query_db"],
+        "latency": latency_cell(manifest["config"]),
         "rate": rate,
         "decided": decided,
         "kept_up": kept_up,
@@ -6800,6 +6810,9 @@ def legacy_index_row(run_dir: Path) -> dict[str, str]:
     for line in reversed(index.read_text().splitlines()):
         cells = [cell.strip() for cell in line.strip("|").split("|")]
         if cells[0] == f"{fleet}/{name}":
+            # Rows from before the latency column have one cell fewer.
+            if len(cells) == len(INDEX_COLUMNS) - 1:
+                cells.insert(list(INDEX_COLUMNS).index("latency"), "off")
             row = dict(zip(INDEX_COLUMNS, cells, strict=True))
             # Fleet names are `{user}-{%Y%m%d-%H%M%S}`.
             return {**row, "user": fleet.rsplit("-", 2)[0]}

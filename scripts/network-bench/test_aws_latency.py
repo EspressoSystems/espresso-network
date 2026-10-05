@@ -163,6 +163,26 @@ def test_run_shapes_node_hosts_before_the_services(run_harness: RunHarness):
     )
 
 
+@pytest.mark.usefixtures("valid")
+def test_run_index_row_names_the_latency_profile(run_harness: RunHarness):
+    assert run_harness.run(shaping_runner(), "--latency", "decaf-2025") == awsb.EXIT_OK
+    row = netbench.read_json(run_harness.run_dir / "index-row.json")
+    assert row["latency"] == "decaf-2025"
+
+
+@pytest.mark.parametrize(
+    ("config", "cell"),
+    [
+        ({"latency": "off", "intra_latency": True}, "off"),
+        ({"latency": "decaf-2025", "intra_latency": True}, "decaf-2025"),
+        ({"latency": "mainnet", "intra_latency": False}, "mainnet no-intra"),
+        ({}, "off"),
+    ],
+)
+def test_latency_cell(config: dict, cell: str):
+    assert awsb.latency_cell(config) == cell
+
+
 # TEST:run-off-no-tc-ok
 @pytest.mark.usefixtures("valid")
 def test_off_issues_no_tc_or_ping(run_harness: RunHarness):

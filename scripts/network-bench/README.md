@@ -305,7 +305,7 @@ runs/01-run/             one measurement
   run.json agent-state.json agent.log result.json summary.md
 ```
 
-`bench-state/aws/INDEX.md`: one row per run (fleet/run, rev, tag, N, db, capacity, validity, exit, run cost).
+`bench-state/aws/INDEX.md`: one row per run (fleet/run, rev, tag, N, db, latency, capacity, validity, exit, run cost).
 
 - `bench-state/` is git-ignored and per worktree: tfstate and the ssh key of a fleet exist only in the worktree that ran
   `up`. `status --all` and `destroy --orphans` see every fleet through AWS tags.
