@@ -5138,8 +5138,23 @@ def cmd_render(args: argparse.Namespace, system: System) -> int:
     result = write_report(run_dir, baseline)
     log_result(result)
     plot_traces(system.run, run_dir)
+    refresh_index_row(run_dir, result)
     log.info("wrote %s", run_dir / "summary.md")
     return EXIT_OK if result["validity"]["valid"] else EXIT_INVALID
+
+
+def refresh_index_row(run_dir: Path, result: nb.BenchResult) -> None:
+    """Re-derives the measured cells of `index-row.json` from the new result; exit code, cost
+    and user stay as the run recorded them."""
+    path = run_dir / INDEX_ROW_JSON
+    if not path.exists():
+        return
+    row = nb.read_json(path)
+    cost_path = run_dir / "cost.json"
+    cost = nb.read_json(cost_path) if cost_path.exists() else None
+    manifest: Manifest = nb.read_json(run_dir / MANIFEST_JSON)
+    cells = index_cells(manifest, run_dir.name, result, int(row["exit"]), cost)
+    nb.write_json(path, {**cells, "user": row["user"]})
 
 
 def status_run(system: System, fleet_dir: Path, now: datetime) -> int:
@@ -6642,6 +6657,17 @@ def latency_cell(config: dict) -> str:
     return profile if config["intra_latency"] else f"{profile} no-intra"
 
 
+def query_kept_up(limits: nb.Capacity) -> bool:
+    """The query node never bound the capacity: it failed no step, or only above the rate
+    where consensus failed."""
+    query, consensus = limits["query_node"], limits["consensus"]
+    if not query["bounded"]:
+        return True
+    if query["mb_s"] is None:
+        return False
+    return consensus["mb_s"] is None or query["mb_s"] >= consensus["mb_s"]
+
+
 def index_cells(
     manifest: Manifest,
     run_name: str,
@@ -6655,11 +6681,7 @@ def index_cells(
         status = nb.verdict_word(result["validity"])
         limits = result["capacity"]
         rate = nb.fmt_num(limits["overall"]["mb_s"])
-        kept_up = (
-            "yes"
-            if limits["query_node"]["mb_s"] == limits["consensus"]["mb_s"]
-            else "no"
-        )
+        kept_up = "yes" if query_kept_up(limits) else "no"
         passing = [s for s in result["steps"] if s["passed"]]
         if passing:
             decided = nb.fmt_num(passing[-1]["decided_mb_s"])

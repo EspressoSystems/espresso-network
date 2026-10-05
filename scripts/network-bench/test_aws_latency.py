@@ -356,3 +356,52 @@ def test_read_index_row_backfills_latency_from_the_manifest(tmp_path: Path):
     filled = awsb.read_index_row(tmp_path)
     assert filled["latency"] == "decaf-2025"
     assert list(filled) == [*awsb.INDEX_COLUMNS, "user"]
+
+
+def limits(query: float | None, consensus: float | None, query_bounded: bool = True):
+    return {
+        "overall": {"mb_s": consensus, "bounded": True},
+        "consensus": {"mb_s": consensus, "bounded": True},
+        "query_node": {"mb_s": query, "bounded": query_bounded},
+        "failed_at_mb_s": None,
+        "fail_rule": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("limits_", "kept_up"),
+    [
+        (limits(150, 120, query_bounded=False), True),
+        (limits(150, 120), True),
+        (limits(120, 120), True),
+        (limits(100, 120), False),
+        (limits(None, 120), False),
+        (limits(None, None), False),
+        (limits(50, None), True),
+    ],
+)
+def test_query_kept_up(limits_: dict, kept_up: bool):
+    assert awsb.query_kept_up(limits_) is kept_up
+
+
+def test_render_refreshes_the_index_row(tmp_path: Path):
+    write_collected_run(tmp_path)
+    manifest_path = tmp_path / awsb.MANIFEST_JSON
+    netbench.write_json(
+        manifest_path,
+        {
+            **netbench.read_json(manifest_path),
+            "created_at": "2026-10-05T10:00:00+00:00",
+            "git_rev": "abcdef0123456789",
+        },
+    )
+    netbench.write_json(
+        tmp_path / awsb.INDEX_ROW_JSON,
+        {**{key: "-" for key in awsb.INDEX_COLUMNS}, "exit": "1", "user": "lulu"},
+    )
+    result = awsb.write_report(tmp_path)
+    awsb.refresh_index_row(tmp_path, result)
+    row = netbench.read_json(tmp_path / awsb.INDEX_ROW_JSON)
+    assert row["rate"] == netbench.fmt_num(result["capacity"]["overall"]["mb_s"])
+    assert (row["exit"], row["user"], row["cost"]) == ("1", "lulu", "-")
+    assert list(row) == [*awsb.INDEX_COLUMNS, "user"]
