@@ -3,11 +3,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use prost::Message as _;
+
+/// Refuses a proto the v2 API cannot serve, before anything is generated from it.
+#[path = "build/guards.rs"]
+mod guards;
+
 /// Generates the OpenAPI document from the compiled descriptor set.
 #[path = "build/openapi.rs"]
 mod openapi;
 
-/// Proto package the v2 API is defined in, shared with [`openapi`].
+/// Proto package the v2 API is defined in, shared with [`guards`] and [`openapi`].
 pub const PACKAGE: &str = "espresso.api.v2";
 
 /// All .proto files under `<proto_root>/v2`, sorted for deterministic codegen.
@@ -52,9 +58,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .out_dir(&out_dir)
         .build(&[&format!(".{PACKAGE}")])?;
 
-    // `generate` carries the second guard, which refuses non-scalar request fields.
-    openapi::check_bindings(&descriptor_bytes)?;
-    let spec = openapi::generate(&descriptor_bytes)?;
+    let fdset = prost_types::FileDescriptorSet::decode(descriptor_bytes.as_slice())?;
+    let rest_fdset =
+        tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes.as_slice())?;
+    let spec = openapi::generate(&guards::check(&fdset, &rest_fdset)?);
 
     // Routes come from the `google.api.http` annotations, so an endpoint's URL is only ever
     // edited in the proto.
@@ -69,6 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     println!("cargo:rerun-if-changed=proto");
+    println!("cargo:rerun-if-changed=build/guards.rs");
     println!("cargo:rerun-if-changed=build/openapi.rs");
 
     Ok(())

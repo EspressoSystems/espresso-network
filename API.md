@@ -161,7 +161,7 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
   `/v2/node/transaction-count?from=100&to=200&namespace=1` is the rule in practice, with every parameter optional.
 - Consequently request messages must stay flat: scalars and `optional` scalars only. The generated handlers extract with
   `axum::extract::Query`, and `serde_urlencoded` cannot decode repeated or nested message fields, so a request message
-  with a `repeated` or message-typed field would fail every request; `build/openapi.rs` refuses to build one. It also
+  with a `repeated` or message-typed field would fail every request; `build/guards.rs` refuses to build one. It also
   refuses an enum field, which would decode by value name but not by the number protoJSON also allows. Structured input
   goes in a POST body, not a nested request message on a GET. Responses have no such limit: a `map` is allowed there and
   renders as a JSON object whose keys are the stringified map keys, which is how `/v2/availability/block-summary`
@@ -170,7 +170,7 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
   later without touching the other's generated type. Responses are shared where two rpcs genuinely return the same
   thing, as the validator routes do. A GET's request message never reaches the OpenAPI document, since its fields are
   inlined as query parameters, so only response messages and POST bodies become schemas.
-- `build/openapi.rs` refuses any other verb, a GET with a body, a POST without one, a partial body and a path template
+- `build/guards.rs` refuses any other verb, a GET with a body, a POST without one, a partial body and a path template
   before any code is generated. `crates/espresso/api/tests/openapi_guards.rs` covers the refusals, and every build
   covers the passing direction.
 - Unknown fields are rejected rather than ignored, in both JSON bodies and query strings: any query parameter on a
