@@ -3,6 +3,7 @@ syntax = "proto3";
 package espresso.api.v2;
 
 import "google/api/annotations.proto";
+import "v2/availability.proto";
 
 // A block the explorer describes in full
 message ExplorerBlockDetail {
@@ -16,16 +17,17 @@ message ExplorerBlockDetail {
 
   uint64 num_transactions = 4;
 
-  // The addresses that proposed the block, 0x-prefixed hex
+  // The builder fee accounts of the block, 0x-prefixed hex
   repeated string proposer_id = 5;
 
-  // The addresses the block's fees were paid to, 0x-prefixed hex
+  // The builder fee accounts of the block, 0x-prefixed hex
   repeated string fee_recipient = 6;
 
   // Block size in bytes
   uint64 size = 7;
 
-  // Rendered amounts with their currency, as v1 writes them, e.g. "ETH 0.000000000000000455"
+  // Amounts with their currency code, separated by a non-breaking space (U+00A0), e.g.
+  // "ETH 0.000000000000000455"
   repeated string block_reward = 8;
 }
 
@@ -36,7 +38,7 @@ message ExplorerBlockSummary {
 
   uint64 height = 2;
 
-  // The addresses that proposed the block, 0x-prefixed hex
+  // The builder fee accounts of the block, 0x-prefixed hex
   repeated string proposer_id = 3;
 
   uint64 num_transactions = 4;
@@ -53,12 +55,13 @@ message ExplorerTransactionSummary {
   // TaggedBase64 `TX~`
   string hash = 1;
 
-  // Namespaces the block's transactions belong to
+  // The namespace of the transaction
   repeated uint64 rollups = 2;
 
   uint64 height = 3;
 
-  // Position of the transaction within its block
+  // Position of the transaction within its block. Under a `namespace` filter, the position among
+  // that namespace's transactions in the block
   uint64 offset = 4;
 
   // Transactions in the block this one belongs to, not in this transaction
@@ -69,10 +72,10 @@ message ExplorerTransactionSummary {
 }
 
 // Fees attributed to one layer, such as the sequencer or the DA layer
-message FeeAttribution {
+message ExplorerFeeAttribution {
   string target = 1;
 
-  // Rendered amounts with their currency, as v1 writes them
+  // Amounts with their currency code, separated by a non-breaking space (U+00A0)
   repeated string fees = 2;
 }
 
@@ -96,21 +99,13 @@ message ExplorerTransactionDetail {
   // RFC 3339 timestamp
   string time = 7;
 
-  // Rendered amounts with their currency, as v1 writes them
+  // Amounts with their currency code, separated by a non-breaking space (U+00A0)
   repeated string sequencing_fees = 8;
 
-  repeated FeeAttribution fee_details = 9;
+  repeated ExplorerFeeAttribution fee_details = 9;
 }
 
-// One transaction payload carried by the block
-message ExplorerTransactionData {
-  uint64 namespace = 1;
-
-  // base64 in JSON
-  bytes payload = 2;
-}
-
-message GenesisOverview {
+message ExplorerGenesisOverview {
   uint64 rollups = 1;
 
   uint64 transactions = 2;
@@ -118,13 +113,11 @@ message GenesisOverview {
   uint64 blocks = 3;
 }
 
-// One block's point in the explorer's histograms. v1 serves four parallel arrays that it
-// documents as being the same length and indexed by `block_heights`, which leaves a client to
-// re-zip them and has no way to carry v1's nulls through a proto `repeated` field
-message HistogramPoint {
+// One block's point in the explorer's histograms
+message ExplorerHistogramPoint {
   uint64 height = 1;
 
-  // Seconds since the previous block, absent for the first block in the window
+  // Seconds since the previous block, absent for the genesis block
   optional double block_time = 2;
 
   // Block size in bytes, absent when the block was not resolved
@@ -146,7 +139,7 @@ message ExplorerBlockDetailResponse {
 }
 
 message GetExplorerBlockSummariesRequest {
-  // How many blocks to return, counting back from the target. Required
+  // How many blocks to return, counting back from the target, at most 100. Required
   optional uint64 limit = 1;
 
   // Height of the newest block to return. Absent with `hash` absent too means the latest block
@@ -174,28 +167,28 @@ message GetExplorerTransactionDetailRequest {
 message ExplorerTransactionDetailResponse {
   ExplorerTransactionDetail details = 1;
 
-  // The payloads the transaction carries, served apart from its details as v1 serves them
-  repeated ExplorerTransactionData data = 2;
+  repeated Transaction data = 2;
 }
 
 message GetExplorerTransactionSummariesRequest {
-  // How many transactions to return, counting back from the target. Required
+  // How many transactions to return, counting back from the target, at most 100. Required
   optional uint64 limit = 1;
 
-  // Height of the block holding the newest transaction to return, paired with `offset`
+  // Height of the block to start from, paired with `offset`
   optional uint64 height = 2;
 
-  // Position within that block, paired with `height`
+  // How many transactions to skip back from the last transaction of the block at `height`, paired
+  // with `height`
   optional uint64 offset = 3;
 
   // TaggedBase64 `TX~`, an alternative to `height` and `offset`
   optional string hash = 4;
 
-  // Return only transactions in this block. Mutually exclusive with `namespace`
+  // Return only transactions in the block at this height. Mutually exclusive with `namespace`
   optional uint64 block = 5;
 
-  // Return only transactions in this namespace. Mutually exclusive with `block`
-  optional int64 namespace = 6;
+  // Return only transactions in this namespace, a 32-bit id. Mutually exclusive with `block`
+  optional uint64 namespace = 6;
 }
 
 message ExplorerTransactionSummariesResponse {
@@ -207,18 +200,18 @@ message GetExplorerSummaryRequest {}
 message ExplorerSummaryResponse {
   ExplorerBlockDetail latest_block = 1;
 
-  GenesisOverview genesis_overview = 2;
+  ExplorerGenesisOverview genesis_overview = 2;
 
   repeated ExplorerBlockSummary latest_blocks = 3;
 
   repeated ExplorerTransactionSummary latest_transactions = 4;
 
-  // Oldest first, as v1 orders the arrays these replace
-  repeated HistogramPoint histograms = 5;
+  // Oldest first
+  repeated ExplorerHistogramPoint histograms = 5;
 }
 
 message GetExplorerSearchRequest {
-  // A block hash, a transaction hash, or a namespace. Required
+  // A block hash, TaggedBase64 `BLOCK~`, or a transaction hash, TaggedBase64 `TX~`. Required
   optional string query = 1;
 }
 
@@ -254,7 +247,7 @@ service ExplorerService {
     option (google.api.http) = {get: "/v2/explorer/summary"};
   }
 
-  // Search the chain for blocks and transactions matching a hash or namespace
+  // Search the chain for blocks and transactions matching a hash
   rpc GetExplorerSearch(GetExplorerSearchRequest) returns (ExplorerSearchResponse) {
     option (google.api.http) = {get: "/v2/explorer/search"};
   }
