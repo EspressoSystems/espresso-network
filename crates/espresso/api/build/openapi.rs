@@ -29,8 +29,16 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
     // The slim descriptor types from tonic-rest-core carry the google.api.http
     // extension that prost-types drops; decode the same bytes again for the routes.
     let rest_fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
+    generate_from(&fdset, &rest_fdset)
+}
 
-    let routes = collect_routes(&rest_fdset);
+/// [`generate`] over an already-decoded descriptor, read twice as there: `fdset` for messages and
+/// comments, `rest_fdset` for the routes.
+pub fn generate_from(
+    fdset: &FileDescriptorSet,
+    rest_fdset: &tonic_rest_build::descriptor::FileDescriptorSet,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let routes = collect_routes(rest_fdset);
     let package_files: Vec<&FileDescriptorProto> = fdset
         .file
         .iter()
@@ -361,6 +369,9 @@ fn operation(
             op["description"] = json!(text);
         }
     }
+    if method.options.as_ref().is_some_and(|o| o.deprecated()) {
+        op["deprecated"] = json!(true);
+    }
     Ok(op)
 }
 
@@ -415,6 +426,9 @@ fn request_parameters(
         if let Some(comment) = comments.get(&[4, *index as i32, 2, j as i32]) {
             param["description"] = json!(comment);
         }
+        if field.options.as_ref().is_some_and(|o| o.deprecated()) {
+            param["deprecated"] = json!(true);
+        }
         params.push(param);
     }
     Ok(json!(params))
@@ -441,14 +455,16 @@ fn message_schema(
                 .unwrap_or_default();
             notes.push(format!("Member of oneof `{oneof_name}`."));
         }
+        let deprecated = field.options.as_ref().is_some_and(|o| o.deprecated());
+        // OpenAPI 3.0 ignores siblings of $ref; wrap to keep the description and the flag.
+        if (!notes.is_empty() || deprecated) && schema.get("$ref").is_some() {
+            schema = json!({ "allOf": [schema] });
+        }
         if !notes.is_empty() {
-            let description = notes.join(" ");
-            // OpenAPI 3.0 ignores siblings of $ref; wrap to keep the description.
-            if schema.get("$ref").is_some() {
-                schema = json!({ "allOf": [schema], "description": description });
-            } else {
-                schema["description"] = json!(description);
-            }
+            schema["description"] = json!(notes.join(" "));
+        }
+        if deprecated {
+            schema["deprecated"] = json!(true);
         }
         properties.insert(field.json_name().to_string(), schema);
     }
@@ -456,6 +472,9 @@ fn message_schema(
     let mut schema = json!({ "type": "object", "properties": properties });
     if let Some(comment) = comments.get(&[4, index as i32]) {
         schema["description"] = json!(comment);
+    }
+    if message.options.as_ref().is_some_and(|o| o.deprecated()) {
+        schema["deprecated"] = json!(true);
     }
     schema
 }
