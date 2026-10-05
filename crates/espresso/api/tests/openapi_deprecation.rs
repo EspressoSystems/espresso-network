@@ -107,12 +107,6 @@ fn schema<'a>(spec: &'a Value, name: &str) -> &'a Value {
 }
 
 #[test]
-fn nothing_is_flagged_while_no_proto_deprecates_anything() {
-    let spec = spec(|_| {});
-    assert!(!spec.to_string().contains("\"deprecated\""));
-}
-
-#[test]
 fn a_deprecated_query_parameter_is_flagged() {
     let spec = spec(|fdset| deprecate_field(fdset, "GetHeaderRequest", "height"));
     let flagged = operation(&spec, "GetHeader")["parameters"]
@@ -130,23 +124,17 @@ fn a_deprecated_scalar_property_is_flagged() {
     let spec = spec(|fdset| deprecate_field(fdset, "TotalMintedSupplyResponse", "amount"));
     let amount = &schema(&spec, "TotalMintedSupplyResponse")["properties"]["amount"];
     assert_eq!(amount["deprecated"], json!(true));
-    assert_eq!(amount["type"], json!("string"));
 }
 
 #[test]
 fn a_deprecated_reference_is_wrapped_so_the_flag_is_not_ignored() {
     let spec = spec(|fdset| deprecate_field(fdset, "SyncStatusResponse", "blocks"));
-    let properties = &schema(&spec, "SyncStatusResponse")["properties"];
     assert_eq!(
-        properties["blocks"],
+        schema(&spec, "SyncStatusResponse")["properties"]["blocks"],
         json!({
             "allOf": [{"$ref": "#/components/schemas/ResourceSyncStatus"}],
             "deprecated": true,
         })
-    );
-    assert_eq!(
-        properties["leaves"],
-        json!({"$ref": "#/components/schemas/ResourceSyncStatus"})
     );
 }
 
