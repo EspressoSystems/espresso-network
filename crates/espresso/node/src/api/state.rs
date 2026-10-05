@@ -2579,18 +2579,10 @@ where
         request: tonic::Request<proto::SubmitTransactionRequest>,
     ) -> Result<tonic::Response<proto::SubmitTransactionResponse>, tonic::Status> {
         let request = request.into_inner();
-        let namespace = request
-            .namespace
-            .ok_or_else(|| tonic::Status::invalid_argument("namespace is required"))?;
-        // The namespace table stores a u32, so a wider id would be sequenced under its truncation
-        // while the returned commitment covers the full value.
-        let namespace = u32::try_from(namespace)
-            .map_err(|_| tonic::Status::invalid_argument("namespace must be at most u32::MAX"))?;
-        let payload = request
-            .payload
-            .ok_or_else(|| tonic::Status::invalid_argument("payload is required"))?;
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
+        let payload = required(request.payload, "payload")?;
         let transaction = espresso_types::Transaction::new(namespace.into(), payload);
-        let hash = <Self as v1::SubmitApi>::submit(self, transaction)
+        let hash = v1::SubmitApi::submit(self, transaction)
             .await
             .map_err(to_status)?;
         Ok(tonic::Response::new(proto::SubmitTransactionResponse {

@@ -40,8 +40,8 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
   modules. The genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1, and the L1 URLs are reported
   as a count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from
-  v1. Like the v1 `config` module it is only mounted when the node enables that module, so its routes are the one part
-  of the OpenAPI document a deployment may answer with 404, in the v2 error envelope.
+  v1. Like the v1 `config` module it is only mounted when the node enables that module, and a disabled node answers its
+  routes with a 404 in the v2 error envelope.
 - `DatabaseService` mirrors v1's table sizes and migration status.
 - `AvailabilityService` carries over every v1 `availability` endpoint. A single lookup takes exactly one selector as a
   query parameter, such as `?height=`, `?hash=` or `?payloadHash=` for a block. The `stream/*` subscriptions are
@@ -72,10 +72,11 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   recent blocks, so an older height is a 404 on both versions. Its fields take the names `StateCertV2Response` uses for
   the same values, where v1 writes `state`, `next_stake`, `signature` and `v2_signature`. A validator without SQL query
   storage serves it on v1 only, as it does every v2 service.
-- `SubmitService` sequences a transaction sent as a JSON body. v1 decodes that body as either VBS or JSON by
-  `Content-Type`, while v2 is protoJSON only, so a client submitting binary stays on v1. The route is
-  `/v2/submit/transaction` rather than mirroring v1's `submit/submit`. Like the v1 module it is mounted only when the
-  node enables `submit`.
+- `SubmitService` hands a transaction sent as a JSON body to the node for sequencing. v1 decodes that body as either VBS
+  or JSON by `Content-Type`, while v2 REST is protoJSON only and gRPC carries binary protobuf, so a client submitting
+  VBS stays on v1. The route is `/v2/submit/transaction` rather than mirroring v1's `submit/submit`. Like the v1 module
+  it is mounted only when the node enables `submit`, and a disabled node answers its path with a 404 in the v2 error
+  envelope.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
@@ -103,8 +104,7 @@ path against the mounted v2 router.
    }
    ```
 
-   Request message fields become HTTP query parameters. An rpc that declares `body: "*"` instead sends the whole request
-   message as the JSON body, which is what a request that changes state should do.
+   Request message fields become HTTP query parameters, or the JSON body for a POST (see the rules below).
 
    Proto comments are published API surface: an rpc comment becomes the operation summary, and a field comment becomes
    the parameter or property description. So comment an rpc, and comment a field whose units, encoding, or zero value a
@@ -163,8 +163,8 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
   `buf format -w crates/espresso/api/proto`. The rules compare a field's message type by name, so renaming a message a
   field refers to counts as a break even though the wire bytes are unchanged. buf does not read the `google.api.http`
   annotation, so a changed route is not caught by it.
-- An rpc is a GET, or a POST when its input cannot be flat. A POST binds the whole request message as its protoJSON body
-  (`body: "*"`) and refuses a query string with a 400.
+- An rpc is a GET, or a POST when it changes state or its input cannot be flat. A POST binds the whole request message
+  as its protoJSON body (`body: "*"`) and refuses a query string with a 400.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
   field of the request message as a query parameter, so a future block-height lookup is `/v2/...?height=5` rather than
   `/v2/.../5`. This is deliberate. The route lives in the proto annotation and stays a constant, so adding a parameter
