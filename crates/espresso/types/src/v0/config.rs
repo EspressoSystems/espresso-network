@@ -346,7 +346,7 @@ mod tests {
 
     /// `/v2/config/hotshot` renders this struct from the api crate, where these fields are
     /// private and cannot be destructured. Adding one below fails to compile until it is either
-    /// served there or listed among the drops in `proto/v2/config.proto`.
+    /// served there or listed among the drops in `proto/espresso/api/v2/config_service.proto`.
     #[test]
     fn every_field_is_accounted_for_by_the_v2_config_api() {
         let PublicNetworkConfig {

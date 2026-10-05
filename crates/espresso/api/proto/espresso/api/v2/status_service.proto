@@ -3,7 +3,7 @@ syntax = "proto3";
 package espresso.api.v2;
 
 import "google/api/annotations.proto";
-import "v2/common.proto";
+import "espresso/api/v2/types/keys.proto";
 
 message GetBlockHeightRequest {}
 

@@ -6,8 +6,8 @@ Query-service base URLs:
 - Decaf testnet: `https://query.decaf.testnet.espresso.network`
 
 v1 routes are declared in `crates/espresso/api/src/axum/routes.rs`; v2 endpoint paths live in the `google.api.http`
-annotations in `crates/espresso/api/proto/v2/*.proto`. Unversioned and `/v0/` paths are rewritten to `/v1/` before
-routing (`rewrite_legacy_uri` in `crates/espresso/api/src/axum.rs`).
+annotations in `crates/espresso/api/proto/espresso/api/v2/*_service.proto`. Unversioned and `/v0/` paths are rewritten
+to `/v1/` before routing (`rewrite_legacy_uri` in `crates/espresso/api/src/axum.rs`).
 
 - `/v1/status/block-height`
 - `/v1/status/metrics` - Prometheus text. `consensus_genesis{base_version,upgrade_version,genesis_version}` is the

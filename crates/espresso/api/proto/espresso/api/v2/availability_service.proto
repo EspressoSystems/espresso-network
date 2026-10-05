@@ -3,7 +3,7 @@ syntax = "proto3";
 package espresso.api.v2;
 
 import "google/api/annotations.proto";
-import "v2/common.proto";
+import "espresso/api/v2/types/header.proto";
 
 message GetLimitsRequest {}
 
@@ -49,12 +49,6 @@ message HeightRange {
 
   // Required, the height just past the last one in the range (exclusive)
   optional uint64 until = 2;
-}
-
-message ProtocolVersion {
-  uint32 major = 1;
-
-  uint32 minor = 2;
 }
 
 // The aggregate signature on a certificate and who contributed to it

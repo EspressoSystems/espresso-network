@@ -3,7 +3,10 @@ syntax = "proto3";
 package espresso.api.v2;
 
 import "google/api/annotations.proto";
-import "v2/common.proto";
+import "espresso/api/v2/types/header.proto";
+import "espresso/api/v2/types/keys.proto";
+import "espresso/api/v2/types/merkle.proto";
+import "espresso/api/v2/types/stake.proto";
 
 message GetTransactionCountRequest {
   // Lowest block height to include; the genesis block when absent
@@ -118,46 +121,6 @@ message HeaderWindowResponse {
   // was truncated at the limit `/v2/node/limits` reports, so a `window` of exactly that many
   // entries means there is more to fetch rather than nothing after it
   optional HeaderResponse next = 3;
-}
-
-message AdvzMerkleNodeLeaf {
-  // The leaf element, ark-serialized into one TaggedBase64 `FIELD~`
-  string elem = 1;
-
-  // The leaf's index, ark-serialized into one TaggedBase64 `FIELD~`
-  string pos = 2;
-
-  // The leaf's hash, ark-serialized into one TaggedBase64 `FIELD~`
-  string value = 3;
-}
-
-message AdvzMerkleNodeBranch {
-  repeated AdvzMerkleNode children = 1;
-
-  // The branch's hash, ark-serialized into one TaggedBase64 `FIELD~`
-  string value = 2;
-}
-
-message AdvzMerkleNodeForgottenSubtree {
-  // The subtree's hash, ark-serialized into one TaggedBase64 `FIELD~`
-  string value = 1;
-}
-
-// A missing subtree. The arm is present and its object empty
-message AdvzMerkleNodeEmpty {}
-
-// One node of a jellyfish Merkle proof. v1 spells the third arm `ForgettenSubtree`, which is
-// upstream's misspelling; only the wire name here is corrected.
-message AdvzMerkleNode {
-  oneof node {
-    AdvzMerkleNodeLeaf leaf = 1;
-
-    AdvzMerkleNodeBranch branch = 2;
-
-    AdvzMerkleNodeForgottenSubtree forgotten_subtree = 3;
-
-    AdvzMerkleNodeEmpty empty = 4;
-  }
 }
 
 message AdvzMerkleProof {
@@ -281,45 +244,6 @@ message StakeTableResponse {
   optional uint64 epoch = 1;
 
   repeated PeerConfig stake_table = 2;
-}
-
-message Delegator {
-  // 0x-prefixed hex
-  string account = 1;
-
-  // 0x-prefixed hex quantity
-  string amount = 2;
-}
-
-message Validator {
-  // 0x-prefixed hex
-  string account = 1;
-
-  // Absent for a validator registered without one
-  optional BLSPublicKey stake_table_key = 2;
-
-  // Absent for a validator registered without one
-  optional SchnorrPublicKey state_ver_key = 3;
-
-  // Total delegated stake, a 0x-prefixed hex quantity
-  string stake = 4;
-
-  // Hundredths of a percent, so 10000 is the whole reward
-  uint32 commission = 5;
-
-  // Sorted by account; v1 reports a map, which has no order
-  repeated Delegator delegators = 6;
-
-  // Whether the contract verified the registration signature
-  bool authenticated = 7;
-
-  // X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58. Absent for a
-  // validator that registered no network address
-  optional string x25519_key = 8;
-
-  // "host:port", with an IPv6 literal left unbracketed. Absent for a validator that registered
-  // no network address
-  optional string p2p_addr = 9;
 }
 
 message GetValidatorsRequest {

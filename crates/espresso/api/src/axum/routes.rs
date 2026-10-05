@@ -978,7 +978,7 @@ pub mod v1 {
     path_fn!(database_migration_status, DATABASE_MIGRATION_STATUS_ROUTE);
 }
 
-/// The v2 endpoint routes are defined by the `google.api.http` annotations in `proto/v2/` and
+/// The v2 endpoint routes are defined by the `google.api.http` annotations in `proto/espresso/api/v2/` and
 /// registered by the generated `rest::*_rest_router` functions, so only the hand-written docs
 /// routes appear here.
 pub mod v2 {

@@ -159,7 +159,7 @@ pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Er
         "openapi": "3.0.3",
         "info": {
             "title": "Espresso Node API v2",
-            "description": "Generated from the proto definitions in crates/espresso/api/proto/v2. \
+            "description": "Generated from the proto definitions in crates/espresso/api/proto/espresso/api/v2. \
                             JSON follows canonical protoJSON: camelCase field names, 64-bit \
                             integers as decimal strings, bytes as base64, enums as their value \
                             names, oneofs flattened, defaults omitted. Query parameters accept \

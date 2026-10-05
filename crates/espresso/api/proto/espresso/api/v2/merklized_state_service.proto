@@ -3,17 +3,7 @@ syntax = "proto3";
 package espresso.api.v2;
 
 import "google/api/annotations.proto";
-import "v2/node.proto";
-
-message MerklePathResponse {
-  // Index the path was looked up for, ark-serialized, TaggedBase64 `FIELD~`
-  string pos = 1;
-
-  // The path, leaf first and root last. A leaf first means the key is in the tree, and anything
-  // else first means it is not and the path proves that. The node messages are the ones VID shares
-  // use, since both are jellyfish Merkle nodes
-  repeated AdvzMerkleNode proof = 2;
-}
+import "espresso/api/v2/types/merkle.proto";
 
 message GetBlockStatePathRequest {
   // Required, the block height to look up. A snapshot at height `h` commits to the headers below

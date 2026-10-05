@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+message BLSPublicKey {
+  // TaggedBase64, e.g. "BLS_VER_KEY~AAA..."
+  string key = 1;
+}
+
+message SchnorrPublicKey {
+  // TaggedBase64, e.g. "SCHNORR_VER_KEY~AAA..."
+  string key = 1;
+}

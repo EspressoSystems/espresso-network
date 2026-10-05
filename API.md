@@ -6,9 +6,16 @@ The node implements the API traits in `crates/espresso/node/src/api/state.rs`.
 
 ## The v2 API
 
-The v2 API is defined entirely in protobuf. Each rpc in `crates/espresso/api/proto/v2/*.proto` is the single definition
-site for an endpoint: the rpc signature gives the request and response types, the `google.api.http` option gives the
-HTTP route, and the comments become the generated documentation.
+The v2 API is defined entirely in protobuf. Each rpc in `crates/espresso/api/proto/espresso/api/v2/*_service.proto` is
+the single definition site for an endpoint: the rpc signature gives the request and response types, the
+`google.api.http` option gives the HTTP route, and the comments become the generated documentation.
+
+The directory mirrors the package, `espresso.api.v2`, so a file imports another as
+`import "espresso/api/v2/types/header.proto";`. A service file holds its rpcs and the messages only it uses. A message
+more than one service uses lives in `types/`, in the file for its topic (`header`, `keys`, `merkle`, `stake`), and moves
+there when a second service first needs it: proto short names are unique package-wide, so two services cannot each
+define their own. Service files import `types/` files and never each other. Moving a message between files of the
+package changes neither its wire encoding nor its JSON.
 
 From those files, `crates/espresso/api/build.rs` generates everything else into the build's `OUT_DIR` on every build.
 None of it is committed:
@@ -35,22 +42,22 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   where v1 has a route per way of naming a block, v2 has one route with an optional parameter per naming, of which
   exactly one must be given. `/v2/node/block-height` duplicates `/v2/status/block-height` because v1 has both.
 - `ConfigService` serves v1's config module as typed messages. `hotshot` carries every consensus parameter, including
-  the genesis membership and the DA committee overrides. The comment on `HotshotConfigResponse` in `config.proto` says
-  what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
-  modules. The genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1, and the L1 URLs are reported
-  as a count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from
-  v1. Like the v1 `config` module it is only mounted when the node enables that module, so its routes are the one part
-  of the OpenAPI document a deployment may answer with 404, in the v2 error envelope.
+  the genesis membership and the DA committee overrides. The comment on `HotshotConfigResponse` in
+  `config_service.proto` says what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints,
+  storage settings and enabled modules. The genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1,
+  and the L1 URLs are reported as a count because they can carry credentials. Nodes joining through `--config-peers`
+  still fetch the full config from v1. Like the v1 `config` module it is only mounted when the node enables that module,
+  so its routes are the one part of the OpenAPI document a deployment may answer with 404, in the v2 error envelope.
 - `DatabaseService` mirrors v1's table sizes and migration status.
 - `AvailabilityService` carries over every v1 `availability` endpoint. A single lookup takes exactly one selector as a
   query parameter, such as `?height=`, `?hash=` or `?payloadHash=` for a block. The `stream/*` subscriptions are
   server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item. An error arrives as an
   `event: error` frame holding the error envelope and ends the stream. The `*-ranges` batch endpoints are POSTs.
-  `HeaderResponse` is a `oneof` whose arm names the protocol version, and the header messages live in `common.proto`
-  because `NodeService` serves them too. Byte fields v1 writes as JSON integer arrays, such as the DRB result and the
-  ADVZ proof indices, are protobuf `bytes`, base64 in JSON, and certificates list who signed as booleans by stake table
-  position rather than v1's bitvec layout. A block range is one response message, so a large one can exceed a gRPC
-  client's default 4 MB decode limit, which clients reading block ranges over gRPC should raise.
+  `HeaderResponse` is a `oneof` whose arm names the protocol version, and the header messages live in
+  `types/header.proto` because `NodeService` serves them too. Byte fields v1 writes as JSON integer arrays, such as the
+  DRB result and the ADVZ proof indices, are protobuf `bytes`, base64 in JSON, and certificates list who signed as
+  booleans by stake table position rather than v1's bitvec layout. A block range is one response message, so a large one
+  can exceed a gRPC client's default 4 MB decode limit, which clients reading block ranges over gRPC should raise.
 - `MerklizedStateService` serves the block and fee merkle trees: a path lookup per tree and the newest persisted state
   height. A path reuses the `AdvzMerkleNode` messages a VID share carries, a oneof over jellyfish's four node variants,
   and every hash, index and element keeps the `FIELD~` TaggedBase64 encoding jellyfish gives it. The proof is the same
@@ -74,7 +81,8 @@ path against the mounted v2 router.
 
 ### Adding an endpoint to an existing service
 
-1. Define the rpc in the service's proto file, for example `crates/espresso/api/proto/v2/status.proto`:
+1. Define the rpc in the service's proto file, for example
+   `crates/espresso/api/proto/espresso/api/v2/status_service.proto`:
 
    ```proto
    message GetUptimeRequest {}
@@ -127,8 +135,8 @@ path against the mounted v2 router.
 
 ### Adding a new service
 
-1. Create `crates/espresso/api/proto/v2/<name>.proto` (the build globs the directory, so no build script change) with
-   the service, its rpcs, and their `google.api.http` options.
+1. Create `crates/espresso/api/proto/espresso/api/v2/<name>_service.proto` (the build globs the directory, so no build
+   script change) with the service, its rpcs, and their `google.api.http` options. Import the `types/` files it needs.
 2. Regenerate as above.
 3. Implement the generated `<name>_service_server::<Name>Service` trait on `NodeApiStateImpl`.
 4. Wire the transports in `crates/espresso/api/src/lib.rs`: add the trait bound to `serve_axum`, `router_v2` and

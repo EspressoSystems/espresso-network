@@ -3,7 +3,7 @@ syntax = "proto3";
 package espresso.api.v2;
 
 import "google/api/annotations.proto";
-import "v2/merklized_state.proto";
+import "espresso/api/v2/types/merkle.proto";
 
 message GetRewardBalanceRequest {
   // Required, the account to look up, hex with an optional `0x` prefix

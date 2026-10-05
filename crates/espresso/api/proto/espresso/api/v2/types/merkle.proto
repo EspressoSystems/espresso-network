@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+message MerklePathResponse {
+  // Index the path was looked up for, ark-serialized, TaggedBase64 `FIELD~`
+  string pos = 1;
+
+  // The path, leaf first and root last. A leaf first means the key is in the tree, and anything
+  // else first means it is not and the path proves that. The node messages are the ones VID shares
+  // use, since both are jellyfish Merkle nodes
+  repeated AdvzMerkleNode proof = 2;
+}
+
+message AdvzMerkleNodeLeaf {
+  // The leaf element, ark-serialized into one TaggedBase64 `FIELD~`
+  string elem = 1;
+
+  // The leaf's index, ark-serialized into one TaggedBase64 `FIELD~`
+  string pos = 2;
+
+  // The leaf's hash, ark-serialized into one TaggedBase64 `FIELD~`
+  string value = 3;
+}
+
+message AdvzMerkleNodeBranch {
+  repeated AdvzMerkleNode children = 1;
+
+  // The branch's hash, ark-serialized into one TaggedBase64 `FIELD~`
+  string value = 2;
+}
+
+message AdvzMerkleNodeForgottenSubtree {
+  // The subtree's hash, ark-serialized into one TaggedBase64 `FIELD~`
+  string value = 1;
+}
+
+// A missing subtree. The arm is present and its object empty
+message AdvzMerkleNodeEmpty {}
+
+// One node of a jellyfish Merkle proof. v1 spells the third arm `ForgettenSubtree`, which is
+// upstream's misspelling; only the wire name here is corrected.
+message AdvzMerkleNode {
+  oneof node {
+    AdvzMerkleNodeLeaf leaf = 1;
+
+    AdvzMerkleNodeBranch branch = 2;
+
+    AdvzMerkleNodeForgottenSubtree forgotten_subtree = 3;
+
+    AdvzMerkleNodeEmpty empty = 4;
+  }
+}
