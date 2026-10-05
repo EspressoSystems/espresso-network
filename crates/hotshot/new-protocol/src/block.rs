@@ -91,17 +91,20 @@ pub struct BlockBuilderConfig {
     /// `max_block_size` per protocol version; a missing version inherits the previous one.
     pub block_sizes: BTreeMap<Version, u64>,
     pub ttl: u64,
+    /// Views a leader remembers included transactions. Keep it at least `ttl`, or a node still
+    /// resending a transaction gets it included again once leaders have forgotten it.
     pub dedup_window_size: u64,
     pub empty_block_delay: Duration,
 }
 
 impl Default for BlockBuilderConfig {
     fn default() -> Self {
+        let ttl = 10;
         Self {
             max_retry_bytes: 100 * 1024 * 1024,
             block_sizes: BTreeMap::from([(versions::version(0, 0), 2 * 1024 * 1024)]),
-            ttl: 50,
-            dedup_window_size: 10,
+            ttl,
+            dedup_window_size: ttl,
             empty_block_delay: Duration::from_millis(500),
         }
     }
