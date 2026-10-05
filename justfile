@@ -86,14 +86,24 @@ lint *args:
     just clippy {{args}} -- -D warnings
 
 # Fail if the v2 protos break wire or JSON compatibility with a release, by default the newest tag
-proto-breaking against=`git tag --list '[0-9]*.[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1`:
+proto-breaking against="":
     #!/usr/bin/env bash
     set -euo pipefail
+    against="{{against}}"
+    if [ -z "$against" ]; then
+        # The 0.6.3 line shipped an early v2 that nothing consumes, so the freeze starts with the
+        # first release after it.
+        against=$(git tag --list '[0-9]*.[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -v '^0\.6\.3\.' | head -n1 || true)
+    fi
+    if [ -z "$against" ]; then
+        echo "No release has frozen the v2 protos yet"
+        exit 0
+    fi
     # buf's own `.git#tag=` input cannot read a git worktree, so compare against an export.
     base=$(mktemp -d)
     trap 'rm -rf "$base"' EXIT
-    git archive "{{against}}" crates/espresso/api/proto | tar -x -C "$base"
-    echo "Comparing crates/espresso/api/proto against {{against}}"
+    git archive "$against" crates/espresso/api/proto | tar -x -C "$base"
+    echo "Comparing crates/espresso/api/proto against $against"
     buf breaking crates/espresso/api/proto --against "$base/crates/espresso/api/proto"
 
 # postgres and sqlite variants checked separately to cover all code
