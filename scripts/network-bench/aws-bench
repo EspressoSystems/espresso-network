@@ -4874,6 +4874,8 @@ COLLECT_SCRIPT = (
     "uname -r > uname.txt\n"
     "grep MemTotal /proc/meminfo > meminfo.txt\n"
     "cp /var/log/cloud-init-output.log .\n"
+    "ethtool -S $(ip -o -4 route show to default | awk '{print $5}' | head -1)"
+    " | grep allowance_exceeded > ena-allowance.txt\n"
 )
 PG_STATS_SQL = (
     "select json_build_object('database_bytes', pg_database_size('espresso'), 'tables', "

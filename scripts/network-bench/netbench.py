@@ -309,6 +309,7 @@ class LatencyMeta(TypedDict):
     assignment: dict[str, str]  # node name -> location
     matrix_sha256: str
     sysctls: dict[str, str]
+    mtu: int
     probes: list[dict[str, Any]]
 
 
@@ -2431,7 +2432,7 @@ def latency_line(meta: LatencyMeta) -> str:
     sysctls = " ".join(f"{k.rsplit('.', 1)[1]}={v}" for k, v in meta["sysctls"].items())
     return (
         f"- latency: {meta['profile']}, intra {intra}, matrix {meta['matrix_sha256'][:8]};"
-        f" sysctl {sysctls}"
+        f" mtu {meta['mtu']}, sysctl {sysctls}"
     )
 
 

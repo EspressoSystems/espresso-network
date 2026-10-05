@@ -22,16 +22,20 @@ SAME_CITY_RTT_MS = 1.0
 INTRA_REGION_RTT_MS = 10.0
 NETEM_LIMIT = 300000
 TC_IFACE = "IFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -1)"
-# Host TCP settings an operator can set; without them one flow over a 158 ms path tops out
-# near 25 MB/s and restarts from slow start on every view.
+# Host TCP settings an operator can set. 256 MB buffers give a 128 MB window, enough for a
+# 100 MB proposal or the 5 Gbps x 330 ms bandwidth-delay product; Ubuntu's 4 MB cap holds one
+# flow near 25 MB/s at 158 ms. fq matters only where no HTB root is installed.
 TCP_SYSCTLS: tuple[tuple[str, str], ...] = (
     ("net.ipv4.tcp_congestion_control", "bbr"),
-    ("net.ipv4.tcp_rmem", "8192 262144 67108864"),
-    ("net.ipv4.tcp_wmem", "4096 16384 536870912"),
-    ("net.ipv4.tcp_adv_win_scale", "0"),
+    ("net.core.default_qdisc", "fq"),
+    ("net.ipv4.tcp_rmem", "4096 131072 268435456"),
+    ("net.ipv4.tcp_wmem", "4096 16384 268435456"),
     ("net.ipv4.tcp_notsent_lowat", "131072"),
     ("net.ipv4.tcp_slow_start_after_idle", "0"),
+    ("net.ipv4.tcp_mtu_probing", "1"),
 )
+# Validators on the internet see a 1500 byte path; the VPC default of 9001 is not honest.
+MTU = 1500
 TC_CLEAR = 'if tc qdisc show dev "$IFACE" | grep -q "htb 1:"; then tc qdisc del dev "$IFACE" root; fi'
 PROFILES = ("off", "decaf-2025", "mainnet")
 DECAF_SPLIT: tuple[tuple[str, int], ...] = (
@@ -82,6 +86,7 @@ class Shaping:
             },
             "matrix_sha256": matrix_sha256(self.delays),
             "sysctls": dict(TCP_SYSCTLS),
+            "mtu": MTU,
             "probes": [],
         }
 
@@ -221,6 +226,7 @@ def tc_script(
         *(f'sysctl -q -w {key}="{value}"' for key, value in TCP_SYSCTLS),
         TC_IFACE,
         'test -n "$IFACE"',
+        f'ip link set dev "$IFACE" mtu {MTU}',
         TC_CLEAR,
         'tc qdisc add dev "$IFACE" root handle 1: htb default 1',
         'tc class add dev "$IFACE" parent 1: classid 1:1 htb rate 100gbit',
