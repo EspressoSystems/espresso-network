@@ -1,8 +1,11 @@
-use std::{default::Default, iter::Peekable, ops::Range, sync::Arc};
+use std::{default::Default, fmt, iter::Peekable, ops::Range, sync::Arc};
 
 use derive_more::Display;
 use hotshot_types::vid::advz::{LargeRangeProofType, SmallRangeProofType};
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{self, SeqAccess, Visitor},
+};
 use thiserror::Error;
 
 /// Proof of correctness for namespace payload bytes in a block.
@@ -188,8 +191,38 @@ pub struct Payload {
     pub(crate) ns_table: NsTable,
 }
 
-fn deserialize_shared_bytes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Arc<[u8]>, D::Error> {
-    base64_bytes::deserialize(d).map(Arc::from)
+fn deserialize_shared_bytes<'de, D: Deserializer<'de>>(d: D) -> Result<Arc<[u8]>, D::Error> {
+    if d.is_human_readable() {
+        base64_bytes::deserialize(d).map(Arc::from)
+    } else {
+        d.deserialize_byte_buf(SharedBytesVisitor)
+    }
+}
+
+struct SharedBytesVisitor;
+
+impl<'de> Visitor<'de> for SharedBytesVisitor {
+    type Value = Arc<[u8]>;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a byte array")
+    }
+
+    fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+        Ok(Arc::from(v))
+    }
+
+    fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+        Ok(Arc::from(v))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(b) = seq.next_element()? {
+            bytes.push(b);
+        }
+        Ok(Arc::from(bytes))
+    }
 }
 
 /// Byte length of a block payload, which includes all namespaces but *not* the

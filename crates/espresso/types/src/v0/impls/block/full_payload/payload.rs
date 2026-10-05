@@ -115,17 +115,21 @@ impl Payload {
         }
 
         // build block payload and namespace table
-        let mut payload = Vec::with_capacity(block_byte_len as usize);
+        let len = ns_builders.values().map(NsPayloadBuilder::byte_len).sum();
+        // Zeroed bytes are initialized `u8`s.
+        let mut payload = unsafe { Arc::<[u8]>::new_zeroed_slice(len).assume_init() };
+        let out = Arc::get_mut(&mut payload).expect("freshly allocated Arc is unique");
+        let mut end = 0;
         let mut ns_table_builder = NsTableBuilder::new();
         for (ns_id, ns_builder) in ns_builders {
-            ns_builder.write_into(&mut payload);
-            ns_table_builder.append_entry(ns_id, payload.len());
+            end += ns_builder.write_into(&mut out[end..]);
+            ns_table_builder.append_entry(ns_id, end);
         }
         let ns_table = ns_table_builder.into_ns_table();
         let metadata = ns_table.clone();
         Ok((
             Self {
-                raw_payload: payload.into(),
+                raw_payload: payload,
                 ns_table,
             },
             metadata,
@@ -201,11 +205,7 @@ impl BlockPayload<SeqTypes> for Payload {
         // double-hashing the ns_table. Why? To maintain serialization
         // compatibility.
         // https://github.com/EspressoSystems/espresso-network/issues/1576
-        let metadata_bytes = if metadata == &self.ns_table {
-            ns_table_bytes.clone()
-        } else {
-            metadata.encode()
-        };
+        let metadata_bytes = metadata.encode();
 
         let mut digest = sha2::Sha256::new();
         digest.update((self.raw_payload.len() as u64).to_le_bytes());
