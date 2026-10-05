@@ -3,21 +3,19 @@
 //!
 //! The schemas must track what the pbjson impls emit, which is not a proto type's natural JSON:
 //! a `uint64` is a decimal string in a body but plain digits in a query parameter.
-//!
-//! The descriptor must have passed `guards::check`, which refuses every shape this module cannot
-//! describe, so nothing here re-checks one.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use prost::Message as _;
 use prost_types::{
     DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorProto,
-    FileDescriptorSet,
     field_descriptor_proto::{Label, Type},
 };
 use serde_json::{Value, json};
 
-use crate::PACKAGE;
+use crate::{
+    PACKAGE,
+    guards::{Checked, Route},
+};
 
 /// Messages of this package by fully-qualified name, with their file's comments and their index in
 /// that file (which is how source-code-info keys their field comments).
@@ -27,22 +25,10 @@ type Messages<'a> = BTreeMap<String, (&'a DescriptorProto, Comments, usize)>;
 /// second field is the map's value type, which is what the field's schema describes.
 type MapEntries<'a> = BTreeMap<String, &'a DescriptorProto>;
 
-pub fn generate(descriptor_bytes: &[u8]) -> Result<Value, Box<dyn std::error::Error>> {
-    let fdset = FileDescriptorSet::decode(descriptor_bytes)?;
-    // The slim descriptor types from tonic-rest-core carry the google.api.http
-    // extension that prost-types drops; decode the same bytes again for the routes.
-    let rest_fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
-    Ok(generate_from(&fdset, &rest_fdset))
-}
-
-/// [`generate`] over an already-decoded descriptor, read twice as there: `fdset` for messages and
-/// comments, `rest_fdset` for the routes.
-pub fn generate_from(
-    fdset: &FileDescriptorSet,
-    rest_fdset: &tonic_rest_build::descriptor::FileDescriptorSet,
-) -> Value {
-    let routes = collect_routes(rest_fdset);
-    let package_files: Vec<&FileDescriptorProto> = fdset
+pub fn generate(checked: &Checked) -> Value {
+    let routes = checked.routes();
+    let package_files: Vec<&FileDescriptorProto> = checked
+        .fdset()
         .file
         .iter()
         .filter(|f| f.package.as_deref() == Some(PACKAGE))
@@ -173,48 +159,6 @@ fn reachable_schemas(
             reachable_schemas(field.type_name(), messages, map_entries, out);
         }
     }
-}
-
-/// One `google.api.http` annotation.
-pub struct Route {
-    pub verb: String,
-    pub path: String,
-    /// The body selector, empty when the request is read from the query string.
-    pub body: String,
-}
-
-/// `(service, method)` -> its route, from the `google.api.http` annotations.
-pub fn collect_routes(
-    fdset: &tonic_rest_build::descriptor::FileDescriptorSet,
-) -> BTreeMap<(String, String), Route> {
-    let mut routes = BTreeMap::new();
-    for file in &fdset.file {
-        for service in &file.service {
-            for method in &service.method {
-                let Some((verb, path)) = tonic_rest_build::descriptor::extract_http_pattern(method)
-                else {
-                    continue;
-                };
-                let body = method
-                    .options
-                    .as_ref()
-                    .and_then(|options| options.http.as_ref())
-                    .map_or(String::new(), |http| http.body.clone());
-                routes.insert(
-                    (
-                        service.name.clone().unwrap_or_default(),
-                        method.name.clone().unwrap_or_default(),
-                    ),
-                    Route {
-                        verb: verb.to_string(),
-                        path: path.to_string(),
-                        body,
-                    },
-                );
-            }
-        }
-    }
-    routes
 }
 
 fn operation(

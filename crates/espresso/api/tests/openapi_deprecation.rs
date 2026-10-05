@@ -12,11 +12,13 @@ use prost_types::{
 };
 use serde_json::{Value, json};
 
-/// `openapi` reads this for the package it generates from.
+/// `guards` and `openapi` read this for the package they check and generate.
 const PACKAGE: &str = "espresso.api.v2";
 
+#[path = "../build/guards.rs"]
+mod guards;
+
 #[path = "../build/openapi.rs"]
-#[expect(dead_code, reason = "these tests call `generate_from`, not `generate`")]
 mod openapi;
 
 /// The OpenAPI document for the real descriptor after `edit`.
@@ -29,7 +31,10 @@ fn spec(edit: impl FnOnce(&mut FileDescriptorSet)) -> Value {
             .unwrap();
     let mut fdset = FileDescriptorSet::decode(espresso_api::FILE_DESCRIPTOR_SET).unwrap();
     edit(&mut fdset);
-    openapi::generate_from(&fdset, &rest_fdset)
+    let Ok(checked) = guards::check(&fdset, &rest_fdset) else {
+        panic!("a deprecated item passes the guards");
+    };
+    openapi::generate(&checked)
 }
 
 fn message_mut<'a>(fdset: &'a mut FileDescriptorSet, name: &str) -> &'a mut DescriptorProto {

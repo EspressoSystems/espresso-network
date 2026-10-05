@@ -1,25 +1,52 @@
 //! Refuses a proto the v2 API cannot serve or document, before any code is generated from it.
 //!
-//! The generated REST handlers and the OpenAPI generator both assume the shapes checked here, so
-//! everything downstream of [`check`] can take them for granted.
+//! The generated REST handlers and the OpenAPI generator both assume the shapes checked here.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use prost::Message as _;
 use prost_types::{
     DescriptorProto, FileDescriptorProto, FileDescriptorSet,
     field_descriptor_proto::{Label, Type},
 };
 
-use crate::{
-    PACKAGE,
-    openapi::{Route, collect_routes},
-};
+use crate::PACKAGE;
 
-pub fn check(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-    let fdset = FileDescriptorSet::decode(descriptor_bytes)?;
-    let rest_fdset = tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes)?;
-    let routes = collect_routes(&rest_fdset);
+/// `(service, method)` -> its route.
+pub type Routes = BTreeMap<(String, String), Route>;
+
+/// One `google.api.http` annotation.
+pub struct Route {
+    pub verb: String,
+    pub path: String,
+    /// The body selector, empty when the request is read from the query string.
+    pub body: String,
+}
+
+/// A descriptor set that passed [`check`], with its routes. Only [`check`] constructs one, so
+/// holding it is the proof the OpenAPI generator relies on.
+pub struct Checked<'a> {
+    fdset: &'a FileDescriptorSet,
+    routes: Routes,
+}
+
+impl<'a> Checked<'a> {
+    pub fn fdset(&self) -> &'a FileDescriptorSet {
+        self.fdset
+    }
+
+    pub fn routes(&self) -> &Routes {
+        &self.routes
+    }
+}
+
+/// `fdset` and `rest_fdset` are the same descriptor set decoded twice: prost-types drops the
+/// google.api.http extension that the slim tonic-rest types carry, and the slim types drop
+/// everything else.
+pub fn check<'a>(
+    fdset: &'a FileDescriptorSet,
+    rest_fdset: &tonic_rest_build::descriptor::FileDescriptorSet,
+) -> Result<Checked<'a>, Box<dyn std::error::Error>> {
+    let routes = collect_routes(rest_fdset);
     let package_files: Vec<&FileDescriptorProto> = fdset
         .file
         .iter()
@@ -28,7 +55,39 @@ pub fn check(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> 
 
     check_bindings(&routes)?;
     check_types(&package_files)?;
-    check_operations(&package_files, &routes)
+    check_operations(&package_files, &routes)?;
+    Ok(Checked { fdset, routes })
+}
+
+fn collect_routes(fdset: &tonic_rest_build::descriptor::FileDescriptorSet) -> Routes {
+    let mut routes = BTreeMap::new();
+    for file in &fdset.file {
+        for service in &file.service {
+            for method in &service.method {
+                let Some((verb, path)) = tonic_rest_build::descriptor::extract_http_pattern(method)
+                else {
+                    continue;
+                };
+                let body = method
+                    .options
+                    .as_ref()
+                    .and_then(|options| options.http.as_ref())
+                    .map_or(String::new(), |http| http.body.clone());
+                routes.insert(
+                    (
+                        service.name.clone().unwrap_or_default(),
+                        method.name.clone().unwrap_or_default(),
+                    ),
+                    Route {
+                        verb: verb.to_string(),
+                        path: path.to_string(),
+                        body,
+                    },
+                );
+            }
+        }
+    }
+    routes
 }
 
 /// Refuse any binding the generator cannot describe.
@@ -39,9 +98,7 @@ pub fn check(descriptor_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> 
 /// is documented `in: query`, so the document would never declare the template variable.
 ///
 /// An `additional_bindings` block passes unnoticed, since the descriptor types do not decode it.
-fn check_bindings(
-    routes: &BTreeMap<(String, String), Route>,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn check_bindings(routes: &Routes) -> Result<(), Box<dyn std::error::Error>> {
     for ((service, method), Route { verb, path, body }) in routes {
         match (verb.as_str(), body.as_str()) {
             ("get", "") | ("post", "*") => {},
@@ -134,7 +191,7 @@ fn check_types(files: &[&FileDescriptorProto]) -> Result<(), Box<dyn std::error:
 /// Refuse an rpc whose REST route collides with another or whose query string cannot be decoded.
 fn check_operations(
     files: &[&FileDescriptorProto],
-    routes: &BTreeMap<(String, String), Route>,
+    routes: &Routes,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let messages: BTreeMap<String, &DescriptorProto> = files
         .iter()

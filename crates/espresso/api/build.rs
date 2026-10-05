@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use prost::Message as _;
+
 /// Refuses a proto the v2 API cannot serve, before anything is generated from it.
 #[path = "build/guards.rs"]
 mod guards;
@@ -56,8 +58,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .out_dir(&out_dir)
         .build(&[&format!(".{PACKAGE}")])?;
 
-    guards::check(&descriptor_bytes)?;
-    let spec = openapi::generate(&descriptor_bytes)?;
+    let fdset = prost_types::FileDescriptorSet::decode(descriptor_bytes.as_slice())?;
+    let rest_fdset =
+        tonic_rest_build::descriptor::FileDescriptorSet::decode(descriptor_bytes.as_slice())?;
+    let spec = openapi::generate(&guards::check(&fdset, &rest_fdset)?);
 
     // Routes come from the `google.api.http` annotations, so an endpoint's URL is only ever
     // edited in the proto.
