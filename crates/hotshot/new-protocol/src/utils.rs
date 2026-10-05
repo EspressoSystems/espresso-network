@@ -6,7 +6,7 @@ use hotshot_types::{
     message::UpgradeLock,
     stake_table::StakeTableEntries,
     traits::node_implementation::NodeType,
-    utils::epoch_from_block_number,
+    utils::{epoch_from_block_number, is_last_block},
     vote::{Certificate, HasViewNumber},
 };
 
@@ -14,7 +14,8 @@ use crate::message::Certificate2;
 
 /// Verify that a leaf is finalized by a new-protocol Certificate2.
 ///
-/// `cert2` directly commits the newest leaf in `leaf_chain`. By the indirect
+/// `cert2` directly commits the newest leaf in `leaf_chain`, at the leaf's view
+/// or, for an epoch's last block committed by a re-vote, a later one. By the indirect
 /// commit rule, every ancestor of that leaf is finalized as well. This verifier
 /// validates `cert2`, then walks backward through the certified leaf's parent
 /// links until it finds `expected_height`.
@@ -49,9 +50,16 @@ pub async fn verify_new_protocol_leaf_chain<T: NodeType>(
         cert2.data.block_number == newest.height(),
         "cert2 block number does not match the newest leaf"
     );
+    // A re-vote certifies an epoch's last block again at a later view, so its
+    // Cert2 is after the block's own view. No other block is voted on again.
     ensure!(
-        cert2.view_number() == newest.view_number(),
-        "cert2 view does not match the newest leaf"
+        cert2.view_number() >= newest.view_number(),
+        "cert2 view is before the newest leaf's"
+    );
+    ensure!(
+        cert2.view_number() == newest.view_number()
+            || is_last_block(newest.height(), *coordinator.epoch_height()),
+        "cert2 view is after the newest leaf's, which is not the last block of its epoch"
     );
     let epoch = EpochNumber::new(epoch_from_block_number(
         cert2.data.block_number,
@@ -533,6 +541,111 @@ mod test {
             .unwrap_err();
         assert!(
             err.to_string().contains("no stake table available"),
+            "{err:#}"
+        );
+    }
+
+    /// The last leaf of `epoch` at its own view, with a parent QC signed by
+    /// `epoch_quorum`, and a cert2 over it at `cert2_view`.
+    fn last_leaf_with_cert2(
+        epoch: u64,
+        cert2_view: u64,
+        epoch_quorum: &Quorum,
+        upgrade_lock: &UpgradeLock<TestTypes>,
+    ) -> (Leaf2<TestTypes>, Certificate2<TestTypes>) {
+        let last = epoch * EPOCH_HEIGHT;
+        let parent_qc = signed_qc(
+            QuorumData2 {
+                leaf_commit: Commitment::from_raw([9; 32]),
+                epoch: Some(EpochNumber::new(epoch)),
+                block_number: Some(last - 1),
+            },
+            last - 1,
+            epoch_quorum,
+            upgrade_lock,
+        );
+        let leaf = make_leaf(last, last, epoch, parent_qc, NEW_PROTOCOL_VERSION);
+        let cert2 = signed_cert2(
+            Vote2Data {
+                leaf_commit: Committable::commit(&leaf),
+                epoch: EpochNumber::new(epoch),
+                block_number: last,
+            },
+            cert2_view,
+            epoch_quorum,
+            upgrade_lock,
+        );
+        (leaf, cert2)
+    }
+
+    /// An epoch's last block committed by a re-vote has its cert2 at a later view
+    /// than its own, and catch-up must still accept it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_verify_new_protocol_leaf_chain_revote_cert2() {
+        let quorum1 = quorum(0..5);
+        let quorum2 = quorum(5..10);
+        let upgrade_lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+
+        let (leaf, cert2) = last_leaf_with_cert2(1, EPOCH_HEIGHT + 2, &quorum1, &upgrade_lock);
+        let expected = Committable::commit(&leaf);
+
+        let coordinator = coordinator(&quorum1, &quorum2);
+        let verified = verify_new_protocol_leaf_chain(
+            vec![leaf],
+            &coordinator,
+            EPOCH_HEIGHT,
+            &upgrade_lock,
+            cert2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(Committable::commit(&verified), expected);
+    }
+
+    /// Only an epoch's last block is voted on again, so a cert2 after the view of
+    /// any other block, or before the view of the block, is rejected.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_verify_new_protocol_leaf_chain_cert2_view_mismatch() {
+        let quorum1 = quorum(0..5);
+        let quorum2 = quorum(5..10);
+        let upgrade_lock = UpgradeLock::<TestTypes>::new(Upgrade::trivial(NEW_PROTOCOL_VERSION));
+        let coordinator = coordinator(&quorum1, &quorum2);
+
+        let (chain, _) = boundary_cert2_chain(1, &quorum1, &quorum2, &upgrade_lock);
+        let first = &chain[1];
+        let later = signed_cert2(
+            Vote2Data {
+                leaf_commit: Committable::commit(first),
+                epoch: EpochNumber::new(2),
+                block_number: first.height(),
+            },
+            *first.view_number() + 1,
+            &quorum2,
+            &upgrade_lock,
+        );
+        let err = verify_new_protocol_leaf_chain(
+            vec![first.clone()],
+            &coordinator,
+            first.height(),
+            &upgrade_lock,
+            later,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("not the last block"), "{err:#}");
+
+        let (leaf, earlier) = last_leaf_with_cert2(1, EPOCH_HEIGHT - 1, &quorum1, &upgrade_lock);
+        let err = verify_new_protocol_leaf_chain(
+            vec![leaf],
+            &coordinator,
+            EPOCH_HEIGHT,
+            &upgrade_lock,
+            earlier,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("before the newest leaf"),
             "{err:#}"
         );
     }

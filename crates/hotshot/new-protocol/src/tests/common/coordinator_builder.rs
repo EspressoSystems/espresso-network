@@ -190,7 +190,7 @@ pub async fn build_test_coordinator(
         );
         consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
         if let Some(cert2) = storage.cert2(anchor_view).await {
-            consensus.seed_cert2(cert2);
+            consensus.seed_anchor_cert2(cert2);
         }
         anchor_view
     } else {

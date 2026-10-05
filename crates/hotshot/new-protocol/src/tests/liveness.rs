@@ -200,11 +200,12 @@ async fn one_missed_payload_stalls_certification() {
         }
         harness.apply(test_data.views[0].cert1_input()).await;
 
-        // The phase-2 vote is what locks and advances; without reconstruction
-        // the behind node has done neither, and still sits where it started.
+        // The phase-2 vote is what locks and advances past view 1; without
+        // reconstruction the behind node has done neither, and still sits in
+        // the view the anchor's certificate put it in.
         if node == behind {
-            assert_eq!(harness.consensus.current_view(), ViewNumber::genesis());
-            assert_eq!(harness.consensus.locked_view(), None);
+            assert_eq!(harness.consensus.current_view(), ViewNumber::new(1));
+            assert_eq!(harness.consensus.lock_view().map(|lock| lock.view), None);
         }
 
         // View 2, parented at view 1.
@@ -307,9 +308,12 @@ async fn one_missed_payload_stalls_certification() {
         // certificate, and none formed. Every view after 3 therefore replays
         // view 3 — a proposal parented at view 1, six votes, no certificate.
         if current.contains(&node) {
-            assert_eq!(harness.consensus.locked_view(), Some(ViewNumber::new(1)));
+            assert_eq!(
+                harness.consensus.lock_view().map(|lock| lock.view),
+                Some(ViewNumber::new(1))
+            );
         } else {
-            assert_eq!(harness.consensus.locked_view(), None);
+            assert_eq!(harness.consensus.lock_view().map(|lock| lock.view), None);
         }
     }
 
@@ -518,15 +522,14 @@ async fn fetched_payload_restores_certification() {
     );
 }
 
-/// The fetch also fires for a node that never learned the view was certified.
+/// The fetch also fires for a node that missed the view's certificate.
 ///
 /// Same deficit as [`fetched_payload_restores_certification`], one thing
 /// less: this node missed view 1's votes and the certificate broadcast that
-/// followed them, so it holds no `cert1` for the view whose payload it
-/// lacks. What it does hold is the proposals built on that view, each
-/// carrying a certificate for it as `justify_qc` — which is what the scan
-/// reads when it has no certificate of its own. Without that, a node in this
-/// state asks for nothing and stays blocked for good.
+/// followed them. What it does hold is the proposals built on that view, each
+/// carrying a certificate for it as `justify_qc`, which it keeps and which
+/// the scan reads. Without that, a node in this state asks for nothing and
+/// stays blocked for good.
 #[tokio::test]
 async fn missing_certificate_still_requests_the_payload() {
     let test_data = TestData::new(3).await;
@@ -564,13 +567,12 @@ async fn missing_certificate_still_requests_the_payload() {
     let mut harness = ConsensusHarness::new(behind).await;
 
     // View 1 without its share broadcasts and without its certificate: the
-    // node takes part, cannot reconstruct, and never learns that a quorum
-    // certified the view.
+    // node takes part and cannot reconstruct.
     harness
         .apply_pair(test_data.views[0].proposal_input_consensus(&key))
         .await;
     // View 2's proposal is justified at view 1, so it carries the certificate
-    // the node never received.
+    // the node missed.
     harness
         .apply_pair(test_data.views[1].proposal_input_consensus(&key))
         .await;
@@ -584,7 +586,6 @@ async fn missing_certificate_still_requests_the_payload() {
         )))
         .await;
 
-    assert_eq!(harness.consensus.cert1_at(ViewNumber::new(1)), None);
     assert!(
         harness.outputs().iter().any(|o| {
             matches!(o, ConsensusOutput::RequestMissingPayload { view, .. }

@@ -1049,6 +1049,20 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
+    /// Persist the new protocol's latest epoch boundary certificate: the own
+    /// `Certificate1` of the last block of an epoch, at the block's view.
+    ///
+    /// Implementations must apply this as an atomic monotonic compare-and-set,
+    /// ordered by epoch, then view, like [`Self::append_high_qc2`].
+    async fn append_boundary_qc2(&self, _qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load the persisted boundary certificate, if any.
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        Ok(None)
+    }
+
     /// Update the current eQC in storage.
     async fn store_eqc(
         &self,
@@ -1287,6 +1301,14 @@ impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
 
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
         (**self).load_high_qc2().await
+    }
+
+    async fn append_boundary_qc2(&self, qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
+        (**self).append_boundary_qc2(qc).await
+    }
+
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
+        (**self).load_boundary_qc2().await
     }
 }
 

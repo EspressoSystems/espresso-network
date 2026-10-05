@@ -36,8 +36,8 @@ use hotshot_types::{
         Certificate2, SimpleCertificate, SuccessThreshold, Threshold, TimeoutCertificate2,
         TimeoutCertificate3, UpgradeCertificate, ViewSyncFinalizeCertificate2,
     },
-    simple_vote::{QuorumData2, Voteable},
-    traits::EncodeBytes as _,
+    simple_vote::{LockView, QuorumData2, Voteable},
+    traits::{EncodeBytes as _, signature_key::SignatureKey},
     vid::advz::{LargeRangeProofType, SmallRangeProofType},
 };
 use jf_merkle_tree_compat::{
@@ -776,13 +776,18 @@ where
     V: Voteable<SeqTypes>,
     T: Threshold<SeqTypes>,
 {
+    cert.signatures.as_ref().map(qc_signatures)
+}
+
+/// An aggregate signature and who signed it.
+fn qc_signatures(
+    (signature, signers): &<PubKey as SignatureKey>::QcType,
+) -> proto::QuorumSignatures {
     // v1 serializes the bitvec crate's memory layout, the API publishes who signed instead.
-    cert.signatures
-        .as_ref()
-        .map(|(signature, signers)| proto::QuorumSignatures {
-            signature: signature.to_string(),
-            signers: signers.iter().by_vals().collect(),
-        })
+    proto::QuorumSignatures {
+        signature: signature.to_string(),
+        signers: signers.iter().by_vals().collect(),
+    }
 }
 
 impl From<&QuorumData2<SeqTypes>> for proto::QuorumData2 {
@@ -883,14 +888,23 @@ impl From<&TimeoutCertificate2<SeqTypes>> for proto::TimeoutCertificate2 {
 
 impl From<&TimeoutCertificate3<SeqTypes>> for proto::TimeoutCertificate3 {
     fn from(cert: &TimeoutCertificate3<SeqTypes>) -> Self {
+        let lock_view = |lock: &LockView| proto::LockView {
+            epoch: lock.epoch.u64(),
+            view: lock.view.u64(),
+        };
         proto::TimeoutCertificate3 {
-            data: Some(proto::TimeoutData3 {
-                view: cert.data.view.u64(),
-                epoch: cert.data.epoch.u64(),
-            }),
-            vote_commitment: cert.vote_commitment().to_string(),
             view_number: cert.view_number.u64(),
-            signatures: quorum_signatures(cert),
+            epoch: cert.epoch.u64(),
+            lock_cert: cert.lock_cert().map(Into::into),
+            signatures: Some(qc_signatures(&cert.latest.signatures)),
+            earlier: cert
+                .earlier
+                .iter()
+                .map(|group| proto::TimeoutSignatures {
+                    lock: group.lock.as_ref().map(lock_view),
+                    signatures: Some(qc_signatures(&group.signatures)),
+                })
+                .collect(),
         }
     }
 }

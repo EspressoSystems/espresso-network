@@ -246,12 +246,13 @@ async fn validator_leaves_at_epoch_boundary() {
         .build();
     runner.run().await.unwrap();
 
-    // All views 1..=35 decided, so view == block height; node 5's membership
-    // ends with epoch 2 at view 20.
-    for (view, action) in runner.node_storages()[5].action_log().await {
+    // Node 5's membership ends with epoch 2. It may still act for epoch 2 after
+    // view 20: a re-vote of the epoch's last block is in a later view.
+    for (view, epoch, action) in runner.node_storages()[5].action_log().await {
         assert!(
-            *view <= 20,
-            "node 5 recorded {action:?} for view {view} after its membership ended"
+            epoch.is_some_and(|e| *e <= 2),
+            "node 5 recorded {action:?} for view {view} in epoch {epoch:?} after its membership \
+             ended"
         );
     }
 

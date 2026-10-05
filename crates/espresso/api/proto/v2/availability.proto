@@ -94,11 +94,21 @@ message TimeoutData2 {
   optional uint64 epoch = 2;
 }
 
+// A lock, ordered by epoch, then view
+message LockView {
+  uint64 epoch = 1;
+
+  uint64 view = 2;
+}
+
 message TimeoutData3 {
   // View that timed out
   uint64 view = 1;
 
   uint64 epoch = 2;
+
+  // The signer's lock, absent while it is locked on nothing but genesis
+  optional LockView lock = 3;
 }
 
 message ViewSyncFinalizeData2 {
@@ -167,16 +177,30 @@ message TimeoutCertificate2 {
   QuorumSignatures signatures = 4;
 }
 
-// The timeout certificate the new protocol carries, whose epoch is always known
+// The signers of a timeout certificate that hold the same lock, earlier than the certificate's
+message TimeoutSignatures {
+  // Absent for the signers locked on nothing but genesis
+  optional LockView lock = 1;
+
+  QuorumSignatures signatures = 2;
+}
+
+// The timeout certificate the new protocol carries, whose epoch is always known.
+// Every signer signs the lock it holds; the certificate's lock is the latest, and
+// is that of `lock_cert`.
 message TimeoutCertificate3 {
-  TimeoutData3 data = 1;
+  uint64 view_number = 1;
 
-  // TaggedBase64 `COMMIT~`
-  string vote_commitment = 2;
+  uint64 epoch = 2;
 
-  uint64 view_number = 3;
+  // The certificate of the latest lock its signers hold, absent if that lock is genesis
+  QuorumCertificate2 lock_cert = 3;
 
+  // The signers holding that lock
   QuorumSignatures signatures = 4;
+
+  // The signers holding earlier locks, one aggregate signature per lock, earliest first
+  repeated TimeoutSignatures earlier = 5;
 }
 
 message ViewSyncFinalizeCertificate2 {

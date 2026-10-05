@@ -29,8 +29,8 @@ use crate::{
     light_client::{LightClientState, StakeTableState},
     message::UpgradeLock,
     simple_vote::{
-        DaData, DaData2, HasEpoch, NextEpochQuorumData2, QuorumData, QuorumData2, QuorumMarker,
-        TimeoutData, TimeoutData2, TimeoutData3, UpgradeProposalData, UpgradeProposalData2,
+        DaData, DaData2, HasEpoch, LockView, NextEpochQuorumData2, QuorumData, QuorumData2,
+        QuorumMarker, TimeoutData, TimeoutData2, UpgradeProposalData, UpgradeProposalData2,
         VersionedVoteData, ViewSyncCommitData, ViewSyncCommitData2, ViewSyncFinalizeData,
         ViewSyncFinalizeData2, ViewSyncPreCommitData, ViewSyncPreCommitData2, Vote2Data, Voteable,
     },
@@ -42,6 +42,10 @@ use crate::{
     utils::{is_epoch_root, is_epoch_transition},
     vote::{Certificate, HasViewNumber},
 };
+
+mod timeout3;
+
+pub use timeout3::{LatestTimeoutSignatures, TimeoutCertificate3, TimeoutSignatures};
 
 /// Trait which allows use to inject different threshold calculations into a Certificate type
 pub trait Threshold<TYPES: NodeType> {
@@ -754,7 +758,21 @@ impl<T: NodeType> TimeoutEvidence<T> {
         matches!(self, Self::V3(_))
     }
 
+    /// The certificate's lock, and the `Certificate1` that shows it.
+    ///
+    /// `None` for a certificate whose signers did not sign their locks, and
+    /// for one whose signers are all locked on nothing but genesis.
+    pub fn lock(&self) -> Option<(LockView, &QuorumCertificate2<T>)> {
+        match self {
+            Self::V2(_) => None,
+            Self::V3(cert) => cert.lock_cert().map(|cert| (LockView::of(cert), cert)),
+        }
+    }
+
     /// Check that this is the form its view requires, then check the threshold signature.
+    ///
+    /// For a [`Self::V3`] that is the signers' signatures only, not those of
+    /// the lock certificate it carries, which its own epoch's committee signs.
     pub fn is_valid_cert(
         &self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
@@ -774,16 +792,16 @@ impl<T: NodeType> TimeoutEvidence<T> {
                 }
                 cert.is_valid_cert(stake_table, threshold, upgrade_lock)
             },
+            // The lock certificate is signed by its own epoch's committee,
+            // which may not be the one given here, and is NOT checked: a V3
+            // certificate passing this is valid only once the caller has
+            // checked its lock certificate as well.
             Self::V3(cert) => {
                 ensure! {
                     upgrade_lock.timeout_epoch_bound(view),
                     "timeout certificate for view {} must bind its epoch", view
                 }
-                ensure! {
-                    view == cert.data.view,
-                    "timeout certificate view {} != data view {}", view, cert.data.view
-                }
-                cert.is_valid_cert(stake_table, threshold, upgrade_lock)
+                cert.check_signatures(stake_table, threshold, upgrade_lock)
             },
         }
     }
@@ -802,7 +820,7 @@ impl<T: NodeType> HasEpoch for TimeoutEvidence<T> {
     fn epoch(&self) -> Option<EpochNumber> {
         match self {
             Self::V2(cert) => cert.data.epoch,
-            Self::V3(cert) => Some(cert.data.epoch),
+            Self::V3(cert) => Some(cert.epoch),
         }
     }
 }
@@ -929,8 +947,6 @@ pub type DaCertificate2<TYPES> = SimpleCertificate<TYPES, DaData2, SuccessThresh
 pub type TimeoutCertificate<TYPES> = SimpleCertificate<TYPES, TimeoutData, SuccessThreshold>;
 /// Type alias for a `TimeoutCertificate2`, which is a `SimpleCertificate` over `TimeoutData2`
 pub type TimeoutCertificate2<TYPES> = SimpleCertificate<TYPES, TimeoutData2, SuccessThreshold>;
-/// Type alias for a `TimeoutCertificate3`, which is a `SimpleCertificate` over `TimeoutData3`
-pub type TimeoutCertificate3<TYPES> = SimpleCertificate<TYPES, TimeoutData3, SuccessThreshold>;
 /// Type alias for a `ViewSyncPreCommit` certificate over a view number
 pub type ViewSyncPreCommitCertificate<TYPES> =
     SimpleCertificate<TYPES, ViewSyncPreCommitData, OneHonestThreshold>;

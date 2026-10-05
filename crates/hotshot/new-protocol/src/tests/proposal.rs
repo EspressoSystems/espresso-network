@@ -426,13 +426,35 @@ async fn next_epoch_justify_qc_certifying_another_view_epoch_or_block_is_rejecte
     let (proposal, justify_qc_epoch) = first_of_epoch(&proposals);
     let parent_block = proposal.block_header.block_number - 1;
 
+    // A commit earlier than the block is no commit of it.
     let mut wrong_view = proposal.clone();
     let cert2 = wrong_view.next_epoch_justify_qc.as_mut().expect("a cert2");
-    cert2.view_number += 1;
+    cert2.view_number = proposal.justify_qc.view_number() - 1;
     assert!(matches!(
         rejects_next_epoch_justify_qc(&wrong_view, justify_qc_epoch),
         MalformedProposal::NextEpochJustifyQcParent { claimed_view, parent_view, .. }
-            if claimed_view == parent_view + 1
+            if claimed_view + 1 == parent_view
+    ));
+
+    // A later one is: a re-vote commits the block again at a view of its own,
+    // and the first block of the next epoch still names the block's own QC.
+    let mut revoted = proposal.clone();
+    revoted.view_number += 1;
+    let cert2 = revoted.next_epoch_justify_qc.as_mut().expect("a cert2");
+    cert2.view_number += 1;
+    assert!(
+        next_epoch_justify_qc_matches_parent(&revoted, EPOCH_HEIGHT, justify_qc_epoch).is_ok(),
+        "a commit at a later view than the block is accepted"
+    );
+
+    // But not one at the proposal's own view or later: the first block comes
+    // after the commit of its parent.
+    let mut too_late = proposal.clone();
+    let cert2 = too_late.next_epoch_justify_qc.as_mut().expect("a cert2");
+    cert2.view_number = proposal.view_number;
+    assert!(matches!(
+        rejects_next_epoch_justify_qc(&too_late, justify_qc_epoch),
+        MalformedProposal::NextEpochJustifyQcNotEarlier { .. }
     ));
 
     let mut wrong_epoch = proposal.clone();
@@ -534,7 +556,6 @@ async fn skipping_views_without_evidence_for_the_previous_view_is_rejected() {
         },
         TimeoutEvidence::V3(mut tc) => {
             tc.view_number = view;
-            tc.data.view = view;
             TimeoutEvidence::V3(tc)
         },
     };
@@ -590,7 +611,6 @@ async fn evidence_on_a_proposal_that_follows_its_parent_is_checked() {
         },
         TimeoutEvidence::V3(mut tc) => {
             tc.view_number = previous.view_number;
-            tc.data.view = previous.view_number;
             TimeoutEvidence::V3(tc)
         },
     };

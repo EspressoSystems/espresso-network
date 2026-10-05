@@ -15,7 +15,10 @@ use hotshot_types::{
 
 use super::{
     coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
-    utils::{mock_membership_with_num_nodes, record_leader},
+    utils::{
+        mock_membership_with_num_nodes, record_fallback_anchor, record_leader,
+        record_output_leaders,
+    },
 };
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
@@ -230,7 +233,13 @@ impl TestHarness {
             *consensus.epoch_height,
         );
         record_leader(&mut self.trace, consensus, &input);
+        record_fallback_anchor(&mut self.trace, consensus);
         self.coordinator.apply_consensus(input.clone());
+        record_output_leaders(
+            &mut self.trace,
+            self.coordinator.consensus(),
+            self.coordinator.outbox().iter(),
+        );
         // The outbox was drained at the end of the previous call, so it now holds
         // exactly what this input drew — which is what a trace step is.
         self.trace.record(&input, self.coordinator.outbox().iter());

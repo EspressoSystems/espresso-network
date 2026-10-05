@@ -191,6 +191,12 @@ test-all:
 # of `lean/new-protocol-spec`, directly rather than through the Lean machine. A
 # pass means the recorded node obeyed `SafeHistory`; see
 # `lean/new-protocol-diff/NewProtocolDiff/Check.lean`.
+#
+# The suite is recorded twice: at the version the tests default to, and at 0.7
+# (`NP_TEST_VERSION`), whose timeouts sign their lock. The specification covers
+# only lock-signing timeouts, so most runs with a timeout are in scope only in the
+# second pass. A test written for the default version may fail there; its traces
+# are checked all the same.
 test-lean-check dir="":
     #!/usr/bin/env bash
     set -uo pipefail
@@ -201,10 +207,17 @@ test-lean-check dir="":
       exit $?
     fi
     traces="$(pwd)/target/np-traces"
-    rm -rf "$traces"
+    rm -rf "$traces" "$traces-0.7"
     echo "recording to $traces"
     NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || exit $?
-    lean/new-protocol-diff/.lake/build/bin/check "$traces"
+    echo "recording at 0.7 to $traces-0.7"
+    NP_TEST_VERSION=0.7 NP_TRACE_DIR="$traces-0.7" \
+      cargo test -p hotshot-new-protocol --release --lib tests:: \
+      || echo "note: some tests fail at 0.7; checking the traces they recorded" >&2
+    checked=0
+    lean/new-protocol-diff/.lake/build/bin/check "$traces" || checked=$?
+    lean/new-protocol-diff/.lake/build/bin/check "$traces-0.7" || checked=$?
+    exit $checked
 
 # Record runs of the new-protocol tests and replay them against the Lean machine.
 #
@@ -224,22 +237,29 @@ test-lean-diff dir="":
     fi
     # A fixed path, cleared first, so runs overwrite rather than accumulate.
     # Under `target` because it is build output: gitignored, and cleaned with it.
+    # The suite is recorded twice, as for `test-lean-check`: at the default
+    # version, and at 0.7, whose timeouts the specification covers.
     traces="$(pwd)/target/np-traces"
-    rm -rf "$traces"
+    rm -rf "$traces" "$traces-0.7"
     echo "recording to $traces"
     suite=0
     NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || suite=$?
     if [ "$suite" -ne 0 ]; then
       echo "note: the test suite failed; replaying the traces it did record" >&2
     fi
+    echo "recording at 0.7 to $traces-0.7"
+    NP_TEST_VERSION=0.7 NP_TRACE_DIR="$traces-0.7" \
+      cargo test -p hotshot-new-protocol --release --lib tests:: \
+      || echo "note: some tests fail at 0.7; replaying the traces they recorded" >&2
     replayed=0
     lean/new-protocol-diff/.lake/build/bin/replay "$traces" || replayed=$?
+    lean/new-protocol-diff/.lake/build/bin/replay "$traces-0.7" || replayed=$?
     # A corpus from a clean run is worth keeping: `just test-lean-diff $traces`
     # replays it without paying for the suite again.
     if [ "$suite" -ne 0 ]; then
-      rm -rf "$traces"
+      rm -rf "$traces" "$traces-0.7"
     else
-      echo "traces kept in $traces"
+      echo "traces kept in $traces and $traces-0.7"
     fi
     [ "$suite" -eq 0 ] && [ "$replayed" -eq 0 ]
 
