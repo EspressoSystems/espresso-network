@@ -8,8 +8,8 @@ import NewProtocolSpec
 # Names in prose
 
 The documentation is part of the specification, and it names things:
-`SafetySpec.vote2NotInSkippedView`, `GcSpec.voted2Retained`,
-`Vote1Justification.parentLinked`. A rename leaves those mentions behind, and a
+`SafeHistory.vote2BeforeTimeout`, `Synchrony.timeoutLockSpread`,
+`Network.revoteGenuine`. A rename leaves those mentions behind, and a
 reader who looks one up finds nothing. Nothing in Lean checks them — a docstring
 is a string.
 

@@ -2,28 +2,29 @@ import Lean
 import NewProtocolSpec
 
 /-!
-# Results that never reach the document
+# What never reaches the document
 
 The reference splices a declaration by name, so a rename fails the build and the
 prose cannot drift from what it describes. What no build checks is the other
-direction: a result added to the specification and never spliced is simply
-absent, and the document reads as complete because nothing says otherwise. That
-happened — two results of `NewProtocolSpec.Progress` were stated and never named
-here.
+direction: a definition added to the specification and never shown is simply
+absent, and the document reads as complete because nothing says otherwise.
 
-So this checks it. It reads the document's source, collects the declarations
-`{docstring …}` and `{includeDocstring …}` name, and fails if a theorem of a
-results module is missing from that set.
+So this checks it. It reads the document's source, collects the declarations that
+`{docstring …}`, `{includeDocstring …}` and `:::spec …` name, and fails if one of
+these is missing from that set:
+
+* a definition, structure or inductive type of a contract module, the modules a
+  reader has to read to judge what is claimed;
+* a main result.
 
     coverage
 
-Only the results modules are scanned. `X/Defs.lean` holds definitions, which the
-document splices where it introduces them and is not required to splice
-exhaustively, and `X/Lemmas.lean` is scaffolding an audit skips — that is the
-claim {ref "top"}[the audit section] makes, and splicing from it would contradict
-it.
+Theorems of the contract modules are not required: they are lemmas about the
+definitions, such as the epoch arithmetic, and the document splices the ones its
+prose leans on. Nor is anything under `Proofs/`, or `Lists`, which restates a
+history for the machine and the trace checker.
 
-The companion checks are in the other package: `../Lint.lean` fails on a
+The companion checks are in the specification package: `../Lint.lean` fails on a
 backticked name in a docstring that resolves to nothing, and
 `NewProtocolSpec.Checks` on an axiom footprint beyond Lean's own.
 -/
@@ -31,55 +32,77 @@ backticked name in a docstring that resolves to nothing, and
 open Lean
 
 /--
-The modules whose theorems are results.
+The modules that make up the contract.
 
-Hand-maintained, and the one list here that is: a module is a results module
+Hand-maintained, and the one list here that is: a module is part of the contract
 because of what it is for, which nothing in the environment records. Adding a
-module without adding it here leaves its results unchecked, which is the failure
-this file exists to prevent — so the list is short and sits next to the check
-that reads it.
+module without adding it here leaves its definitions unchecked, which is the
+failure this file exists to prevent, so the list sits next to the check that reads
+it.
 -/
-def resultModules : List Name :=
-  [`NewProtocolSpec.Safety, `NewProtocolSpec.Network, `NewProtocolSpec.DecideStream,
-   `NewProtocolSpec.Invariants, `NewProtocolSpec.Progress, `NewProtocolSpec.Deadlock,
-   `NewProtocolSpec.Round]
+def contractModules : List Name :=
+  [`NewProtocolSpec.Base, `NewProtocolSpec.Types, `NewProtocolSpec.Interface,
+   `NewProtocolSpec.Validity, `NewProtocolSpec.History, `NewProtocolSpec.Rules,
+   `NewProtocolSpec.Network, `NewProtocolSpec.Timing, `NewProtocolSpec.Properties]
+
+/-- The results the specification is for, and the witness that its premises can be met. -/
+def mainResults : List Name :=
+  [`NewProtocol.noFork, `NewProtocol.decideAgreement, `NewProtocol.decidesValid, `NewProtocol.Liveness.chainGrows,
+   `NewProtocol.Witness.premises_met,
+   `NewProtocol.Witness.per_epoch]
 
 /--
-Every theorem those modules declare, ignoring the auxiliaries Lean generates.
+Whether a declaration is one a reader meets as a definition.
 
-`Name.isInternal` catches most of them; the rest are the ones elaboration
-reserves a name for, such as the `congr_simp` a structure projection brings with
-it, which `isReservedName` is how Lean itself recognises.
+Theorems are lemmas. Structure projections and constructors are shown by the
+entry of the structure or type they belong to, and instances are notation. What
+Lean generates around a definition, such as recursors, `noConfusion`, matchers and
+the helpers of a derived instance, carries no docstring, which is how it is told
+apart; every definition the specification states has one.
 -/
-def statedResults (env : Environment) : Array Name := Id.run do
+def isDefinition (env : Environment) (name : Name) : IO Bool := do
+  let some info := env.find? name | return false
+  if info.isTheorem then return false
+  if name.isInternal || isReservedName env name then return false
+  if Meta.isInstanceCore env name then return false
+  if (env.getProjectionFnInfo? name).isSome then return false
+  if info matches .ctorInfo _ then return false
+  return (← findDocString? env name).isSome
+
+/-- The declarations a reader must find in the document. -/
+def required (env : Environment) : IO (Array Name) := do
   let mut out := #[]
   for (name, idx) in env.const2ModIdx.toList do
     let some m := env.allImportedModuleNames[idx.toNat]? | continue
-    unless resultModules.contains m do continue
-    unless (env.find? name).any (·.isTheorem) do continue
-    if name.isInternal || isReservedName env name then continue
-    out := out.push name
-  return out
+    unless contractModules.contains m do continue
+    if ← isDefinition env name then out := out.push name
+  return out ++ mainResults.toArray
 
-/-- The declarations the document splices, by name. -/
-def splicedIn (text : String) : NameSet := Id.run do
+/-- The declarations the document shows, by name. -/
+def shown (text : String) : NameSet := Id.run do
   let mut out := {}
-  for role in ["{docstring ", "{includeDocstring "] do
+  for role in ["{docstring ", "{includeDocstring ", ":::spec "] do
     for part in (text.splitOn role).drop 1 do
       let name := part.takeWhile fun (c : Char) =>
         c.isAlphanum || c == '_' || c == '.' || c == '\''
       out := out.insert name.toName
   return out
 
-def main : IO UInt32 := do
+/-
+`unsafe` because loading the environment extensions, which hold the instance and
+matcher tables `isDefinition` reads, runs their initializers.
+-/
+unsafe def main : IO UInt32 := do
   initSearchPath (← findSysroot)
+  enableInitializersExecution
   let env ← importModules #[Import.mk `NewProtocolSpec false true false] Options.empty
-  let spliced := splicedIn (← IO.FS.readFile "Reference.lean")
-  let missing := (statedResults env).filter (!spliced.contains ·)
+    (loadExts := true)
+  let seen := shown (← IO.FS.readFile "Reference.lean")
+  let missing := (← required env).filter (!seen.contains ·)
   if missing.isEmpty then
-    IO.println "every result of the specification reaches the reference"
+    IO.println "every definition of the contract and every main result reaches the reference"
     return 0
-  IO.eprintln s!"{missing.size} result(s) are stated but never spliced into Reference.lean:"
-  for n in missing do
+  IO.eprintln s!"{missing.size} declaration(s) are never shown in Reference.lean:"
+  for n in missing.qsort (·.toString < ·.toString) do
     IO.eprintln s!"  {n}"
   return 1

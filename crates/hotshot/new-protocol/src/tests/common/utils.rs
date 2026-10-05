@@ -1165,6 +1165,8 @@ impl ConsensusHarness {
         self.trace.preamble(
             self.consensus.public_key(),
             self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
         );
         record_leader(&mut self.trace, &self.consensus, &input);
         let before = outbox.len();
@@ -1272,6 +1274,49 @@ impl ConsensusHarness {
             defer_state_for: BTreeSet::new(),
             trace: trace::Recorder::for_current_test(),
         }
+    }
+
+    /// Place the node at `view` in `epoch`, as `Consensus::set_view` does, and
+    /// note the placement in the trace.
+    pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        self.trace.placed(view, epoch);
+        self.consensus.set_view(view, epoch);
+    }
+
+    /// Replace the node's proposal for `view`, as `Consensus::force_set_proposal`
+    /// does, and note the replacement in the trace.
+    pub fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<TestTypes>) {
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        self.trace.forced(view);
+        self.consensus.force_set_proposal(view, proposal);
+    }
+
+    /// Seed proposals the node holds without having received them, and record
+    /// each as a block it holds, so the trace does not show it deciding a block
+    /// it never had.
+    pub fn seed_proposals(&mut self, proposals: impl IntoIterator<Item = Proposal<TestTypes>>) {
+        let proposals: Vec<_> = proposals.into_iter().collect();
+        self.trace.preamble(
+            self.consensus.public_key(),
+            self.consensus.last_decided_leaf(),
+            self.consensus.cert1_at(ViewNumber::genesis()),
+            *self.consensus.epoch_height,
+        );
+        for proposal in &proposals {
+            self.trace.held(proposal);
+        }
+        self.consensus.seed_proposals(proposals);
     }
 
     /// Withhold `view`'s state-validation response until [`Self::release_state`].

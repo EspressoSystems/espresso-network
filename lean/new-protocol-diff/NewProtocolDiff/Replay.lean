@@ -1,6 +1,7 @@
 module
 
 public import NewProtocolDiff.Trace
+public import NewProtocolImpl.Machine
 
 /-!
 # The comparison
@@ -14,27 +15,24 @@ What holds instead is containment on the marks. Any action the recorded
 implementation took at step `n`, the eager machine took at some step `≤ n`, so
 after every step:
 
-* every view the recording has voted, proposed or decided in, the machine has too;
+* every view and epoch the recording has voted, proposed or decided in, the machine
+  has too;
 * at the end, if the recording has caught up, the two agree exactly.
 
 A violation is informative in either direction. The recording ahead of the
 machine means it acted where the specification does not permit it. The machine
-permanently ahead means the recording dropped an obligation — which is what
-`WeaklyFair` forbids, and what no step-local check can see.
+permanently ahead means the recording dropped an obligation, which `Prompt`
+forbids and no check of the recording's own steps can see.
 
 Each mark carries what the action was about as well as the view it was in, so two
 runs that act in the same view for different reasons still part company. What a
 mark cannot carry is anything the machine does not know: a proposal it builds has
-no real identity (`Impl.unassignedIdentity`), and the parent certificate it names
+no real identity (the machine gives it identity zero), and the parent certificate it names
 is a choice the rules leave open when both a `Cert1` and a timeout certificate are
 available.
 
-Both sides' marks come from their *outputs*, never from the machine's state.
-That symmetry is what makes replaying collections safe: pruning drops the marks
-a state carries, so a state-derived comparison would report the machine falling
-behind its own past every time a trace collected. It also disposes of the
-anchor, which `Impl.initial` records as decided by configuration rather than by
-any action, and which no recording would ever report.
+Both sides' marks come from their *outputs*. The anchor is decided by
+configuration rather than by any action, so neither side reports it.
 -/
 
 @[expose] public section
@@ -84,31 +82,46 @@ def Detail.render : Detail → String
   | .decide b => s!"block {renderIdent b.toNat}"
 
 /--
-The marks a run is compared on: the views a node acted in, and what it did there.
+A view and an epoch: what the once-rules count by.
 
-Keyed by view, because that is what both sides can agree on even though the
-machine is eager. The `Detail` is checked only where both sides acted in the same
-view, so an eager machine is never faulted for a view the recording has not
+At an epoch boundary the outgoing committee may vote on its last block again in
+the view the incoming committee proposes its first block in, and a node may vote
+in both. So an action is marked by its view and its epoch.
+-/
+structure Slot where
+  view : ViewNumber
+  epoch : EpochNumber
+deriving DecidableEq, Repr, Ord
+
+/-- A slot as it appears in a divergence report. -/
+def Slot.render (s : Slot) : String := s!"view {s.view.toNat} of epoch {s.epoch.toNat}"
+
+/--
+The marks a run is compared on: the slots a node acted in, and what it did there.
+
+Keyed by view and epoch, because that is what both sides can agree on even though
+the machine is eager. The `Detail` is checked only where both sides acted in the
+same slot, so an eager machine is never faulted for a view the recording has not
 reached yet.
 -/
 structure Marks where
-  voted1 : TreeMap ViewNumber Detail := ∅
-  voted2 : TreeMap ViewNumber Detail := ∅
-  proposed : TreeMap ViewNumber Detail := ∅
-  decided : TreeMap ViewNumber Detail := ∅
+  voted1 : TreeMap Slot Detail := ∅
+  voted2 : TreeMap Slot Detail := ∅
+  proposed : TreeMap Slot Detail := ∅
+  decided : TreeMap Slot Detail := ∅
 
 namespace Marks
 
-/-- A view acted in twice, named by the kind of action. -/
-abbrev Repeat := String × ViewNumber
+/-- A slot acted in twice, named by the kind of action. -/
+abbrev Repeat := String × Slot
 
 /--
-The marks a list of outputs witnesses, and every view already marked before it.
+The marks a list of outputs witnesses, and every slot already marked before it.
 
-Acting twice in a view is non-conformance on its own: `SafetySpec.vote1Once`,
-`SafetySpec.vote2Once`, `StepSpec.proposeOnce` and the freshness in
-`StepSpec.decideJustified` each forbid a second action. The marks are keyed by
-view, so the second would otherwise overwrite the first and leave nothing to see
+Acting twice in a slot is worth reporting on its own: `SafeHistory.vote1Once`,
+`SafeHistory.vote2Once` and `ProtocolHistory.proposeOnce` forbid a second vote or
+proposal in an epoch and view, and a second decide of a block is a repeat delivery. The marks are keyed by
+slot, so the second would otherwise overwrite the first and leave nothing to see
 — the one violation a containment check is blind to.
 
 A repeat is judged against the marks as they stood *before* this step, not
@@ -124,18 +137,22 @@ def ofOutputs (m : Marks) (outputs : List Output) : Marks × List Repeat :=
 where
   step (before : Marks) : Marks × List Repeat → Output → Marks × List Repeat
     | (m, rs), .send (.vote1 v) =>
-      ({ m with voted1 := m.voted1.insert v.view (.vote v.data.blockHash v.signer) },
-        if before.voted1.contains v.view then ("voted1", v.view) :: rs else rs)
+      let k : Slot := ⟨v.view, v.data.epoch⟩
+      ({ m with voted1 := m.voted1.insert k (.vote v.data.blockHash v.signer) },
+        if before.voted1.contains k then ("voted1", k) :: rs else rs)
     | (m, rs), .send (.vote2 v) =>
-      ({ m with voted2 := m.voted2.insert v.view (.vote v.data.blockHash v.signer) },
-        if before.voted2.contains v.view then ("voted2", v.view) :: rs else rs)
+      let k : Slot := ⟨v.view, v.data.epoch⟩
+      ({ m with voted2 := m.voted2.insert k (.vote v.data.blockHash v.signer) },
+        if before.voted2.contains k then ("voted2", k) :: rs else rs)
     | (m, rs), .send (.proposal p) =>
-      ({ m with proposed := m.proposed.insert p.viewNumber (.proposal p.blockHeader) },
-        if before.proposed.contains p.viewNumber then ("proposed", p.viewNumber) :: rs else rs)
+      let k : Slot := ⟨p.viewNumber, p.epoch⟩
+      ({ m with proposed := m.proposed.insert k (.proposal p.blockHeader) },
+        if before.proposed.contains k then ("proposed", k) :: rs else rs)
     | (m, rs), .decided bs _ _ =>
       bs.foldl (fun (m, rs) b =>
-        ({ m with decided := m.decided.insert b.viewNumber (.decide (blockHash b)) },
-          if before.decided.contains b.viewNumber then ("decided", b.viewNumber) :: rs else rs))
+        let k : Slot := ⟨b.viewNumber, b.epoch⟩
+        ({ m with decided := m.decided.insert k (.decide (blockHash b)) },
+          if before.decided.contains k then ("decided", k) :: rs else rs))
         (m, rs)
     | acc, _ => acc
 
@@ -143,29 +160,29 @@ end Marks
 
 /-- Where the two implementations parted company. -/
 inductive Divergence where
-  /-- The recording acted in a view the machine has not: unjustified by the specification. -/
-  | recordingAhead (step : Nat) (kind : String) (view : ViewNumber)
-  /-- Both acted in the view, but not on the same thing. -/
-  | differentDetail (step : Nat) (kind : String) (view : ViewNumber) (recorded machine : Detail)
-  /-- One side acted twice in a view, which the `once` rules forbid outright. -/
-  | actedTwice (step : Nat) (side : String) (kind : String) (view : ViewNumber)
+  /-- The recording acted in a slot the machine has not: unjustified by the specification. -/
+  | recordingAhead (step : Nat) (kind : String) (slot : Slot)
+  /-- Both acted in the slot, but not on the same thing. -/
+  | differentDetail (step : Nat) (kind : String) (slot : Slot) (recorded machine : Detail)
+  /-- One side acted twice in a slot, which the `once` rules forbid outright. -/
+  | actedTwice (step : Nat) (side : String) (kind : String) (slot : Slot)
   /-- The trace could not be read. -/
   | malformed (reason : String)
 deriving Repr
 
 def Divergence.describe : Divergence → String
-  | .recordingAhead n kind v =>
-    s!"step {n}: the recording {kind} in view {v.toNat}, the machine did not"
-  | .differentDetail n kind v r m =>
-    s!"step {n}: both {kind} in view {v.toNat}, the recording on {r.render}, " ++
+  | .recordingAhead n kind k =>
+    s!"step {n}: the recording {kind} in {k.render}, the machine did not"
+  | .differentDetail n kind k r m =>
+    s!"step {n}: both {kind} in {k.render}, the recording on {r.render}, " ++
       s!"the machine on {m.render}"
-  | .actedTwice n side kind v =>
-    s!"step {n}: the {side} {kind} in view {v.toNat} twice"
+  | .actedTwice n side kind k =>
+    s!"step {n}: the {side} {kind} in {k.render} twice"
   | .malformed r => s!"malformed trace: {r}"
 
-/-- The first view the machine is behind the recording on, if any. -/
+/-- The first slot the machine is behind the recording on, if any. -/
 def behind (n : Nat) (recorded machine : Marks) : Option Divergence :=
-  let check (kind : String) (r m : TreeMap ViewNumber Detail) : Option Divergence :=
+  let check (kind : String) (r m : TreeMap Slot Detail) : Option Divergence :=
     r.toList.findSome? fun (v, d) =>
       match m.get? v with
       | none => some (.recordingAhead n kind v)
@@ -185,40 +202,31 @@ structure Outcome where
 /--
 Feed a trace to the machine, checking containment after every step.
 
-A `collect` step prunes the machine, and is the only route to the machine's own
-`gc`. Nothing produces one from a real run: the implementation prunes inside a
-consensus step, and `NewProtocolDiff.Trace` gives the reason a bare collection is
-left out — a trace carries inputs and outputs but never state, so a `.collect`
-could not be checked against `GcSpec` in any case, and omitting it keeps the
-machine holding every mark, which is the stricter comparison.
-
-So this arm is for hand-written traces, and for a recorder that one day says
-where its pruning happened. `GcSpec` itself is not left unverified by that: it is
-part of what `Impl.conforms` proves about the machine. What the replay does not
-do is check the *implementation's* pruning, and that is a limit of the trace
-rather than of this function.
+The machine's state is its history, so it starts empty and each step appends the
+step the machine took. A `collect` event is skipped: the machine keeps
+everything, which is the stricter comparison.
 -/
-def replay (cfg : Config) (leader : ViewNumber → Option PubKey) (node : PubKey)
+def replay (cfg : Config) (leader : EpochNumber → ViewNumber → Option PubKey) (node : PubKey)
     (trace : List Event) : Outcome :=
-  let rec go (n : Nat) (s : Impl.State) (recorded machine : Marks) : List Event → Outcome
+  let rec go (n : Nat) (h : History) (recorded machine : Marks) : List Event → Outcome
     | [] => ⟨n, recorded, machine, none⟩
-    | .collect :: rest => go (n + 1) (s.gc cfg) recorded machine rest
+    | .collect :: rest => go (n + 1) h recorded machine rest
     | .consensus input output :: rest =>
-      let (s', emitted) := Impl.next cfg leader node s input
+      let st := NewProtocolImpl.step cfg leader node h input
       let (recorded', recordedTwice) := recorded.ofOutputs output
-      let (machine', machineTwice) := machine.ofOutputs emitted
+      let (machine', machineTwice) := machine.ofOutputs st.output
       let twice (side : String) (rs : List Marks.Repeat) : Option Divergence :=
         rs.head?.map fun (kind, v) => .actedTwice n side kind v
       match twice "recording" recordedTwice
           |>.orElse (fun _ => twice "machine" machineTwice)
           |>.orElse (fun _ => behind n recorded' machine') with
       | some d => ⟨n, recorded', machine', some d⟩
-      | none => go (n + 1) s' recorded' machine' rest
-  go 0 (Impl.initial cfg) {} {} trace
+      | none => go (n + 1) (h ++ [st]) recorded' machine' rest
+  go 0 [] {} {} trace
 
-/-- Views the machine acted in that the recording never caught up on. -/
-def Outcome.machineAhead (o : Outcome) : List (String × ViewNumber) :=
-  let extra (kind : String) (m r : TreeMap ViewNumber Detail) : List (String × ViewNumber) :=
+/-- Slots the machine acted in that the recording never caught up on. -/
+def Outcome.machineAhead (o : Outcome) : List (String × Slot) :=
+  let extra (kind : String) (m r : TreeMap Slot Detail) : List (String × Slot) :=
     (m.toList.filterMap fun (v, _) => if r.contains v then none else some v).map (kind, ·)
   extra "voted1" o.machine.voted1 o.recorded.voted1
     ++ extra "voted2" o.machine.voted2 o.recorded.voted2
@@ -228,11 +236,9 @@ def Outcome.machineAhead (o : Outcome) : List (String × ViewNumber) :=
 /--
 What a replay concluded, in words.
 
-The machine being ahead is reported in two groups, because the two mean different
-things. An action the machine took and the recording did not may be one the
-recording still owes. A *proposal* is not: the replay makes this node the leader
-of every view, which the network did not, so a proposal the machine made says
-nothing about the recording at all.
+An action the machine took and the recording did not may be one the recording
+still owes: the replay runs on the recorded leader schedule, so this covers
+proposals as much as votes and decides.
 -/
 def Outcome.report (o : Outcome) : String :=
   match o.divergence with
@@ -241,18 +247,9 @@ def Outcome.report (o : Outcome) : String :=
     let ahead := o.machineAhead
     if ahead.isEmpty then s!"OK: {o.steps} steps, marks agree exactly"
     else
-      let (proposals, acts) := ahead.partition (·.1 == "proposed")
-      let line (kv : String × ViewNumber) : String := s!"    {kv.1} view {kv.2.toNat}"
-      let owed :=
-        if acts.isEmpty then ""
-        else
-          s!"\n  the machine is still ahead on {acts.length}, which the recording may owe:\n" ++
-            String.intercalate "\n" (acts.map line)
-      let led :=
-        if proposals.isEmpty then ""
-        else
-          s!"\n  and proposed in {proposals.length} views, being leader of every view here:\n" ++
-            String.intercalate "\n" (proposals.map line)
-      s!"OK: {o.steps} steps, recording contained in machine" ++ owed ++ led
+      let line (kv : String × Slot) : String := s!"    {kv.1} {kv.2.render}"
+      s!"OK: {o.steps} steps, recording contained in machine" ++
+        s!"\n  the machine is still ahead on {ahead.length}, which the recording may owe:\n" ++
+          String.intercalate "\n" (ahead.map line)
 
 end NewProtocolDiff

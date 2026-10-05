@@ -114,6 +114,9 @@ async fn run_seed(seed: u64) -> Reached {
             2 => harness.apply(v.cert1_input()).await,
             3 => harness.apply(v.cert2_input()).await,
             4 => harness.apply(v.timeout_cert_input()).await,
+            // A timer is armed only for a view the node has entered, so one for a
+            // later view cannot fire. One for an earlier view can: it is a late fire.
+            _ if v.view_number > harness.consensus.current_view() => {},
             _ => harness.apply(ConsensusInput::Timeout(v.view_number)).await,
         }
     }

@@ -313,7 +313,7 @@ mod tests {
             TEST_VERSIONS.test.base,
         );
 
-        harness.consensus.force_set_proposal(view(), proposal);
+        harness.force_set_proposal(view(), proposal);
         (bytes, commitment, harness)
     }
 

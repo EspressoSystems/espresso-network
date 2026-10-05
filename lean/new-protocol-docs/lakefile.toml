@@ -14,7 +14,7 @@ path = "../new-protocol-spec"
 [[require]]
 name = "verso"
 git = "https://github.com/leanprover/verso"
-rev = "v4.33.0"
+rev = "v4.34.0"
 
 [[lean_lib]]
 name = "Reference"
@@ -27,3 +27,5 @@ root = "Main"
 [[lean_exe]]
 name = "coverage"
 root = "Coverage"
+# It loads the specification's environment extensions, which runs their initializers.
+supportInterpreter = true

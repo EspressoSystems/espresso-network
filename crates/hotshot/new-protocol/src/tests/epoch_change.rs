@@ -450,9 +450,7 @@ async fn test_handle_epoch_change_replay_of_crossed_boundary() {
     // Simulate a node already deep in epoch 3 — e.g. freshly restarted and
     // seeded from its anchor — with no locked cert (genesis safety), so the
     // locked-cert staleness check cannot reject the replay.
-    harness
-        .consensus
-        .set_view(ViewNumber::new(25), EpochNumber::new(3));
+    harness.set_view(ViewNumber::new(25), EpochNumber::new(3));
 
     // Replay the epoch 1 → 2 boundary (view 10, block 10).
     let epoch_view = &test_data.views[9];
