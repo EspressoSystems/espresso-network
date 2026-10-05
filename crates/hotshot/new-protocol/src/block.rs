@@ -86,6 +86,11 @@ pub struct BlockBuilderOutput<T: NodeType> {
 /// Room in a forwarded message for everything but the transactions.
 const FORWARD_ENVELOPE_BYTES: u64 = 4096;
 
+/// Views between a send and the first view it targets. The next view's leader takes its block
+/// as soon as it pairs this view's proposal, before most of this view's submissions reach it,
+/// so a copy sent to it would mostly wait in its pool for a later turn.
+const SEND_LEAD: u64 = 2;
+
 pub struct BlockBuilderConfig {
     pub max_retry_bytes: u64,
     /// `max_block_size` per protocol version; a missing version inherits the previous one.
@@ -379,9 +384,9 @@ impl<T: NodeType> BlockBuilder<T> {
         (self.retry_pending.len(), self.retry_total_bytes as usize)
     }
 
-    /// Returns the message for the upcoming leaders, addressed to the next view, which the
-    /// coordinator sends on to the leaders of the `fanout` views from there. Resubmitting a
-    /// queued transaction succeeds without queueing or sending it twice.
+    /// Returns the message for the upcoming leaders, addressed to the view `SEND_LEAD` ahead,
+    /// which the coordinator sends on to the leaders of the `fanout` views from there.
+    /// Resubmitting a queued transaction succeeds without queueing or sending it twice.
     pub fn on_submit_transaction(
         &mut self,
         tx: T::Transaction,
@@ -394,10 +399,10 @@ impl<T: NodeType> BlockBuilder<T> {
 
         let size = tx.minimum_block_size();
         let encoded_size = bincode::serialized_size(&tx).expect("transactions serialize");
-        // Forwarding uses the next view's block size, which an upgrade can raise.
+        // Forwarding uses the first target view's block size, which an upgrade can raise.
         let max_bytes = self
             .block_size(self.current_view)
-            .max(self.block_size(self.current_view + 1));
+            .max(self.block_size(self.current_view + SEND_LEAD));
         let budget = forward_budget(message_limit(max_bytes));
         if size > max_bytes {
             return Err(SubmitError::TooLarge {
@@ -417,9 +422,10 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let valid_until = self.current_view + self.config.ttl;
-        let sent_until = self.current_view + self.config.fanout.get();
+        let first_target = self.current_view + SEND_LEAD;
+        let sent_until = first_target + (self.config.fanout.get() - 1);
         let message = TransactionMessage {
-            view: self.current_view + 1,
+            view: first_target,
             transactions: Vec::from([tx.clone()]),
         };
 
@@ -476,8 +482,8 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     /// Returns the pending transactions to send again, within one block and one message,
-    /// addressed to the next view like `on_submit_transaction`. A transaction is sent again only
-    /// once every leader it went to has had its turn without including it.
+    /// addressed like `on_submit_transaction`. A transaction is sent again only once every
+    /// leader it went to has had its turn without including it.
     pub fn on_view_changed(&mut self, view: ViewNumber) -> Option<TransactionMessage<T>> {
         self.current_view = view;
         while let Some(&(valid_until, hash)) = self.retry_order.first() {
@@ -493,13 +499,14 @@ impl<T: NodeType> BlockBuilder<T> {
             return None;
         }
         Some(TransactionMessage {
-            view: view + 1,
+            view: view + SEND_LEAD,
             transactions: batch,
         })
     }
 
     fn resend_batch(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
-        let max_bytes = self.block_size(view + 1);
+        let first_target = view + SEND_LEAD;
+        let max_bytes = self.block_size(first_target);
         let max_encoded = forward_budget(message_limit(max_bytes));
         let mut batch = Vec::new();
         let mut unfit = Vec::new();
@@ -527,7 +534,7 @@ impl<T: NodeType> BlockBuilder<T> {
             warn!(%hash, "pending transaction no longer fits a block, dropping");
             self.remove_pending(hash);
         }
-        let sent_until = view + self.config.fanout.get();
+        let sent_until = first_target + (self.config.fanout.get() - 1);
         batch
             .into_iter()
             .map(|hash| {
