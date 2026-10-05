@@ -385,6 +385,43 @@ def test_query_kept_up(limits_: dict, kept_up: bool):
     assert awsb.query_kept_up(limits_) is kept_up
 
 
+def capacity(query: tuple[float | None, bool], consensus: tuple[float | None, bool]):
+    return {
+        "overall": {"mb_s": None, "bounded": True},
+        "consensus": {"mb_s": consensus[0], "bounded": consensus[1]},
+        "query_node": {"mb_s": query[0], "bounded": query[1]},
+        "failed_at_mb_s": None,
+        "fail_rule": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("limits_", "bound"),
+    [
+        (capacity((180, False), (140, True)), "consensus"),
+        (capacity((100, True), (140, False)), "query"),
+        (capacity((100, True), (140, True)), "query"),
+        (capacity((140, True), (100, True)), "consensus"),
+        (capacity((140, True), (140, True)), "both"),
+        (capacity((None, True), (140, True)), "query"),
+        (capacity((140, True), (None, True)), "consensus"),
+        (capacity((None, True), (None, True)), "both"),
+        (capacity((180, False), (180, False)), "-"),
+    ],
+)
+def test_capacity_bound(limits_: dict, bound: str):
+    assert awsb.capacity_bound(limits_) == bound
+
+
+def test_node_type_is_the_validator_instance_type():
+    hosts = [
+        {"name": "ctl", "role": "ctl", "instance_type": "c8g.2xlarge"},
+        {"name": "node0", "role": "query", "instance_type": "c8in.8xlarge"},
+        {"name": "node1", "role": "node", "instance_type": "c8in.8xlarge"},
+    ]
+    assert awsb.node_type({"hosts": hosts}) == "c8in.8xlarge"
+
+
 def test_render_refreshes_the_index_row(tmp_path: Path):
     write_collected_run(tmp_path)
     manifest_path = tmp_path / awsb.MANIFEST_JSON

@@ -1982,6 +1982,7 @@ def index_manifest() -> dict:
         "fleet": "run1",
         "query_db": "colocated",
         "images": {"espresso-node": {"revision": "bd2ad6e1dc7abc"}},
+        "hosts": [{"name": "node0", "role": "query", "instance_type": "c8g.4xlarge"}],
     }
 
 

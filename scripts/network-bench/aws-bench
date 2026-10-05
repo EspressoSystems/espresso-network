@@ -6699,14 +6699,17 @@ INDEX_COLUMNS = {
     "nodes": "N",
     "db": "db",
     "latency": "latency",
+    "node_type": "node",
     "rate": "rate MB/s",
     "decided": "decided MB/s",
     "kept_up": "kept up",
+    "bound": "bound",
     "lag_p99": "lag p99 ms",
     "status": "status",
     "exit": "exit",
     "cost": "cost run",
 }
+LEGACY_MISSING = ("node_type", "bound")
 INDEX_HEADER = (
     f"| {' | '.join(INDEX_COLUMNS.values())} |\n{'|---' * len(INDEX_COLUMNS)}|\n"
 )
@@ -6731,6 +6734,32 @@ def query_kept_up(limits: nb.Capacity) -> bool:
     return consensus["mb_s"] is None or query["mb_s"] >= consensus["mb_s"]
 
 
+def capacity_bound(limits: nb.Capacity) -> str:
+    """What limited the capacity: `query`, `consensus`, `both` (same rate), or `-` when the
+    ramp top was reached."""
+    query, consensus = limits["query_node"], limits["consensus"]
+    if not (query["bounded"] or consensus["bounded"]):
+        return "-"
+    if not query["bounded"]:
+        return "consensus"
+    if not consensus["bounded"]:
+        return "query"
+    # A bounded limit without a rate failed the first step, the lowest possible.
+    rates = {
+        k: -1.0 if v["mb_s"] is None else v["mb_s"]
+        for k, v in (("query", query), ("consensus", consensus))
+    }
+    if rates["query"] == rates["consensus"]:
+        return "both"
+    return min(rates, key=rates.__getitem__)
+
+
+def node_type(manifest: Manifest) -> str:
+    """Validator hosts share `--node-type`, so node0 stands for all of them."""
+    (node0,) = (h for h in manifest["hosts"] if h["name"] == "node0")
+    return node0["instance_type"]
+
+
 def index_cells(
     manifest: Manifest,
     run_name: str,
@@ -6738,13 +6767,14 @@ def index_cells(
     code: int,
     cost: dict[str, float] | None,
 ) -> dict[str, str]:
-    rate = decided = kept_up = lag = "-"
+    rate = decided = kept_up = bound = lag = "-"
     status = "failed"
     if result is not None:
         status = nb.verdict_word(result["validity"])
         limits = result["capacity"]
         rate = nb.fmt_num(limits["overall"]["mb_s"])
         kept_up = "yes" if query_kept_up(limits) else "no"
+        bound = capacity_bound(limits)
         passing = [s for s in result["steps"] if s["passed"]]
         if passing:
             decided = nb.fmt_num(passing[-1]["decided_mb_s"])
@@ -6759,9 +6789,11 @@ def index_cells(
         "nodes": str(manifest["config"]["nodes"]),
         "db": manifest["query_db"],
         "latency": latency_cell(manifest["config"]),
+        "node_type": node_type(manifest),
         "rate": rate,
         "decided": decided,
         "kept_up": kept_up,
+        "bound": bound,
         "lag_p99": lag,
         "status": status,
         "exit": str(code),
@@ -6909,10 +6941,15 @@ def legacy_index_row(run_dir: Path) -> dict[str, str]:
     for line in reversed(index.read_text().splitlines()):
         cells = [cell.strip() for cell in line.strip("|").split("|")]
         if cells[0] == f"{fleet}/{name}":
-            # Rows from before the latency column have one cell fewer.
-            if len(cells) == len(INDEX_COLUMNS) - 1:
-                cells.insert(list(INDEX_COLUMNS).index("latency"), "off")
-            row = dict(zip(INDEX_COLUMNS, cells, strict=True))
+            # Older rows lack the latency column, then also node type and bound.
+            columns = list(INDEX_COLUMNS)
+            if len(cells) < len(columns):
+                columns = [c for c in columns if c not in LEGACY_MISSING]
+            if len(cells) == len(columns) - 1:
+                cells.insert(columns.index("latency"), "off")
+            row = {c: "-" for c in INDEX_COLUMNS} | dict(
+                zip(columns, cells, strict=True)
+            )
             # Fleet names are `{user}-{%Y%m%d-%H%M%S}`.
             return {**row, "user": fleet.rsplit("-", 2)[0]}
     raise Refused(f"no row for {fleet}/{name} in {index}")
