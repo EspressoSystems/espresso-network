@@ -1159,8 +1159,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
-        UpgradeMap, UpgradeMode,
+        FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade, UpgradeMap,
+        UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -1168,12 +1168,9 @@ pub mod testing {
         future::join_all,
         stream::{Stream, StreamExt},
     };
-    use hotshot::{
-        traits::{
-            BlockPayload,
-            implementations::{MasterMap, MemoryNetwork},
-        },
-        types::EventType,
+    use hotshot::traits::{
+        BlockPayload,
+        implementations::{MasterMap, MemoryNetwork},
     };
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_testing::block_builder::{
@@ -2039,17 +2036,10 @@ pub mod testing {
                     continue;
                 }
 
-                // Decides arrive as `LegacyEvent` before the new protocol and
-                // as `NewDecide` after.
-                let leaf_chain: &[LeafInfo<SeqTypes>] = match &event {
-                    CoordinatorEvent::LegacyEvent(Event {
-                        event: EventType::Decide { leaf_chain, .. },
-                        ..
-                    }) => leaf_chain,
-                    CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos,
-                    _ => continue,
+                let CoordinatorEvent::NewDecide { leaf_infos, .. } = &event else {
+                    continue;
                 };
-                for LeafInfo { leaf, .. } in leaf_chain {
+                for LeafInfo { leaf, .. } in leaf_infos {
                     let Some(payload) = leaf.block_payload() else {
                         let view = leaf.view_number();
                         if let Some(found) = reconstructed.remove(&view) {
@@ -2086,16 +2076,11 @@ pub mod testing {
         tracing::info!(target_epoch, "waiting for epoch");
         let mut last_seen = None;
         while let Some(event) = events.next().await {
-            // Decides arrive as `LegacyEvent` before the new protocol and as
-            // `NewDecide` after; both carry the most recent leaf first.
-            let leaf = match event {
-                CoordinatorEvent::LegacyEvent(Event {
-                    event: EventType::Decide { leaf_chain, .. },
-                    ..
-                }) => leaf_chain[0].leaf.clone(),
-                CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
-                _ => continue,
+            // A decide carries the most recent leaf first.
+            let CoordinatorEvent::NewDecide { leaf_infos, .. } = event else {
+                continue;
             };
+            let leaf = leaf_infos[0].leaf.clone();
             let epoch = leaf.epoch(epoch_height);
             tracing::debug!(
                 "Node decided at height: {}, epoch: {epoch:?}",

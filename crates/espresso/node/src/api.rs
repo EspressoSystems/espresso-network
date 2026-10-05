@@ -2818,23 +2818,37 @@ pub mod test_helpers {
             }
         }
 
-        // Consensus keeps running, so query a decided state: unlike an undecided one it cannot
-        // change or be replaced while the test reads it.
-        let leaf = network.server.decided_leaf().await;
-        let height = leaf.height();
-        let view = leaf.view_number();
-        let state = network.server.state(view).await.unwrap();
+        // Consensus keeps running, so a decided view can lose its state to garbage collection
+        // before the catchup queries reach it. Retry with the newest decided leaf until one round
+        // of queries lands.
+        let (state, res, frontier) = timeout(Duration::from_secs(60), async {
+            loop {
+                let leaf = network.server.decided_leaf().await;
+                let height = leaf.height();
+                let view = leaf.view_number().u64();
+                // A node can decide a leaf before it has validated that leaf's state itself.
+                if let Some(state) = network.server.state(leaf.view_number()).await
+                    && let Ok(res) = client
+                        .get::<AccountQueryData>(&format!(
+                            "catchup/{height}/{view}/account/{:x}",
+                            Address::default()
+                        ))
+                        .send()
+                        .await
+                    && let Ok(frontier) = client
+                        .get::<BlocksFrontier>(&format!("catchup/{height}/{view}/blocks"))
+                        .send()
+                        .await
+                {
+                    break (state, res, frontier);
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("catchup queries did not succeed against a decided state");
 
         // Decided fee state: absent account.
-        let res = client
-            .get::<AccountQueryData>(&format!(
-                "catchup/{height}/{}/account/{:x}",
-                view.u64(),
-                Address::default()
-            ))
-            .send()
-            .await
-            .unwrap();
         assert_eq!(res.balance, U256::ZERO);
         assert_eq!(
             res.proof
@@ -2844,13 +2858,8 @@ pub mod test_helpers {
         );
 
         // Decided block state.
-        let res = client
-            .get::<BlocksFrontier>(&format!("catchup/{height}/{}/blocks", view.u64()))
-            .send()
-            .await
-            .unwrap();
         let root = &state.block_merkle_tree.commitment();
-        BlockMerkleTree::verify(root, root.size() - 1, res)
+        BlockMerkleTree::verify(root, root.size() - 1, frontier)
             .unwrap()
             .unwrap();
     }
@@ -3485,7 +3494,7 @@ mod test {
         ValidatedState, ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
-        v0_3::{Fetcher, RewardAmount, RewardMerkleProofV1},
+        v0_3::{Fetcher, RewardAmount},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events,
     };
@@ -3549,10 +3558,7 @@ mod test {
     use test_utils::reserve_tcp_port;
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
-    use versions::{
-        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION,
-        Upgrade,
-    };
+    use versions::{LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
     use self::{
         data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
@@ -4451,12 +4457,16 @@ mod test {
 
         for peer in &network.peers {
             // A node can decide a leaf before it has validated that leaf's state itself.
-            let state = loop {
-                if let Some(state) = peer.decided_state().await {
-                    break state;
+            let state = timeout(Duration::from_secs(60), async {
+                loop {
+                    if let Some(state) = peer.decided_state().await {
+                        break state;
+                    }
+                    sleep(Duration::from_millis(100)).await;
                 }
-                sleep(Duration::from_millis(100)).await;
-            };
+            })
+            .await
+            .expect("peer never validated a decided state");
 
             assert_eq!(state.chain_config.resolve().unwrap(), chain_config)
         }
@@ -4532,12 +4542,16 @@ mod test {
 
         for peer in &network.peers {
             // A node can decide a leaf before it has validated that leaf's state itself.
-            let state = loop {
-                if let Some(state) = peer.decided_state().await {
-                    break state;
+            let state = timeout(Duration::from_secs(60), async {
+                loop {
+                    if let Some(state) = peer.decided_state().await {
+                        break state;
+                    }
+                    sleep(Duration::from_millis(100)).await;
                 }
-                sleep(Duration::from_millis(100)).await;
-            };
+            })
+            .await
+            .expect("peer never validated a decided state");
 
             assert_eq!(state.chain_config.resolve().unwrap(), cf)
         }
@@ -6119,9 +6133,9 @@ mod test {
 
         Ok(())
     }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_node_stake_table_api() {
-        let upgrade = NEW_PROTOCOL;
         let epoch_height = 20;
 
         let network_config = TestConfigBuilder::default()
@@ -6158,13 +6172,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
-                upgrade,
+                NEW_PROTOCOL,
             )
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, upgrade).await;
+        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -6194,9 +6208,9 @@ mod test {
             .await
             .expect("failed to get stake table");
     }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_stake_table_catchup() {
-        let upgrade = NEW_PROTOCOL;
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -6236,14 +6250,14 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
-                upgrade,
+                NEW_PROTOCOL,
             )
             .await
             .unwrap()
             .build();
 
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream();
@@ -6300,7 +6314,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                upgrade,
+                NEW_PROTOCOL,
                 Default::default(),
             )
             .await;
@@ -6332,9 +6346,9 @@ mod test {
             );
         }
     }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_stake_table_catchup_stress() {
-        let upgrade = NEW_PROTOCOL;
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 6;
 
@@ -6374,14 +6388,14 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 Default::default(),
-                upgrade,
+                NEW_PROTOCOL,
             )
             .await
             .unwrap()
             .build();
 
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream();
@@ -6441,7 +6455,7 @@ mod test {
                 &NoMetrics,
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
-                upgrade,
+                NEW_PROTOCOL,
                 Default::default(),
             )
             .await;
@@ -6486,7 +6500,6 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_catchup_on_restart() -> anyhow::Result<()> {
-        let upgrade = NEW_PROTOCOL;
         // This test verifies that a query node can catch up on
         // merklized state after being offline for multiple epochs.
         //
@@ -6552,13 +6565,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                upgrade,
+                NEW_PROTOCOL,
             )
             .await
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
@@ -6602,7 +6615,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            upgrade,
+                            NEW_PROTOCOL,
                             Default::default(),
                         )
                         .await)
@@ -6645,7 +6658,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            upgrade,
+                            NEW_PROTOCOL,
                             Default::default(),
                         )
                         .await)
@@ -6959,7 +6972,6 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_state_reconstruction() -> anyhow::Result<()> {
-        let upgrade = NEW_PROTOCOL;
         // This test verifies that a query node can successfully reconstruct its state
         // after being shut down from the database
         //
@@ -7012,13 +7024,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                upgrade,
+                NEW_PROTOCOL,
             )
             .await
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
         // Remove peer 0 and restart it with the query module enabled.
         // Adding an additional node to the test network is not straight forward,
         // as the keys have already been initialized in the config above.
@@ -7061,7 +7073,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            upgrade,
+                            NEW_PROTOCOL,
                             Default::default(),
                         )
                         .await)
@@ -7080,12 +7092,16 @@ mod test {
         // back to the legacy handle, which never ran at 0.6.
         let instance = node_0.node_state();
         // A node can decide a leaf before it has validated that leaf's state itself.
-        let state = loop {
-            if let Some(state) = node_0.decided_state().await {
-                break state;
+        let state = timeout(Duration::from_secs(60), async {
+            loop {
+                if let Some(state) = node_0.decided_state().await {
+                    break state;
+                }
+                sleep(Duration::from_millis(100)).await;
             }
-            sleep(Duration::from_millis(100)).await;
-        };
+        })
+        .await
+        .context("node 0 never validated a decided state")?;
         let fee_accounts = state
             .fee_merkle_tree
             .clone()
@@ -7103,19 +7119,23 @@ mod test {
         // proposals are pruned from consensus storage, so shut down only once an undecided
         // proposal is stored for `reconstruct_state` to reach.
         let persistence = node_0.persistence();
-        loop {
-            let decided_view = node_0.decided_leaf().await.view_number();
-            let proposals = persistence.load_quorum_proposals().await?;
-            if proposals.keys().any(|view| *view > decided_view) {
-                break;
+        timeout(Duration::from_secs(60), async {
+            loop {
+                let decided_view = node_0.decided_leaf().await.view_number();
+                let proposals = persistence.load_quorum_proposals().await?;
+                if proposals.keys().any(|view| *view > decided_view) {
+                    break anyhow::Ok(());
+                }
+                sleep(Duration::from_millis(100)).await;
             }
-            sleep(Duration::from_millis(100)).await;
-        }
+        })
+        .await
+        .context("no undecided proposal was stored")??;
 
         tracing::warn!("shutting down node 0");
         node_0.shutdown_consensus().await;
 
-        // The oldest undecided proposal extends the last decided leaf.
+        // The oldest stored proposal. It may already be decided, since pruning lags the decide.
         let (to_view, proposal) = persistence
             .load_quorum_proposals()
             .await?
@@ -7128,6 +7148,9 @@ mod test {
             Client::new(format!("http://localhost:{node_0_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
         wait_until_block_height(&client, "node/block-height", from_height + 1).await;
+        // `reconstruct_state` loads accounts from the merklized state at `from_height`, which a
+        // separate loop writes after the block is indexed.
+        wait_until_block_height(&client, "fee-state/block-height", from_height).await;
 
         let ds = SqlStorage::connect(
             Config::try_from(&node_0_persistence).unwrap(),
@@ -7247,9 +7270,9 @@ mod test {
 
         Ok(())
     }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_block_reward_api() -> anyhow::Result<()> {
-        let upgrade = NEW_PROTOCOL;
         let epoch_height = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -7286,13 +7309,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::VariableAmounts,
                 Default::default(),
-                upgrade,
+                NEW_PROTOCOL,
             )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, upgrade).await;
+        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
         let mut events = network.server.event_stream();
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
@@ -7485,13 +7508,10 @@ mod test {
 
     /// `chain_id`: None = default (35353, non-mainnet), Some(1) = mainnet
     #[rstest]
-    #[case(NEW_PROTOCOL, None)]
-    #[case(NEW_PROTOCOL, Some(1u64))]
+    #[case(None)]
+    #[case(Some(1u64))]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_token_supply_api(
-        #[case] upgrade: Upgrade,
-        #[case] chain_id: Option<u64>,
-    ) -> anyhow::Result<()> {
+    async fn test_token_supply_api(#[case] chain_id: Option<u64>) -> anyhow::Result<()> {
         use alloy::primitives::utils::parse_ether;
         use espresso_types::v0_3::ChainConfig;
 
@@ -7550,13 +7570,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::VariableAmounts,
                 Default::default(),
-                upgrade,
+                NEW_PROTOCOL,
             )
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, upgrade).await;
+        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -9791,18 +9811,10 @@ mod test {
             );
         }
     }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_v3_and_v4_reward_tree_updates() -> anyhow::Result<()> {
-        let upgrade = NEW_PROTOCOL;
-        // This test checks that the correct merkle tree is updated based on version
-        //
-        // When the protocol version is v3:
-        // - The v3 Merkle tree is updated
-        // - The v4 Merkle tree must be empty.
-        //
-        // When the protocol version is v4:
-        // - The v4 Merkle tree is updated
-        // - The v3 Merkle tree must be empty.
+    async fn test_only_v2_reward_tree_updates() -> anyhow::Result<()> {
+        // Rewards accrue in the v2 reward Merkle tree, and the v1 tree stays empty.
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -9840,42 +9852,32 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                upgrade,
+                NEW_PROTOCOL,
             )
             .await
             .unwrap()
             .build();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
         let mut events = network.peers[2].event_stream();
         // wait for 4 epochs
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
         let validated_state = network.server.decided_state().await.unwrap();
-        if upgrade.base == EPOCH_VERSION {
-            let v1_tree = &validated_state.reward_merkle_tree_v1;
-            assert!(v1_tree.num_leaves() > 0, "v1 reward tree tree is empty");
-            let v2_tree = &validated_state.reward_merkle_tree_v2;
-            assert!(
-                v2_tree.num_leaves() == 0,
-                "v2 reward tree tree is not empty"
-            );
-        } else {
-            let v1_tree = &validated_state.reward_merkle_tree_v1;
-            assert!(
-                v1_tree.num_leaves() == 0,
-                "v1 reward tree tree is not empty"
-            );
-            let v2_tree = &validated_state.reward_merkle_tree_v2;
-            assert!(v2_tree.num_leaves() > 0, "v2 reward tree tree is empty");
-        }
+        let v1_tree = &validated_state.reward_merkle_tree_v1;
+        assert!(
+            v1_tree.num_leaves() == 0,
+            "v1 reward tree tree is not empty"
+        );
+        let v2_tree = &validated_state.reward_merkle_tree_v2;
+        assert!(v2_tree.num_leaves() > 0, "v2 reward tree tree is empty");
 
         network.stop_consensus().await;
         Ok(())
     }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn test_state_cert_query() {
-        let upgrade = NEW_PROTOCOL;
         const TEST_EPOCH_HEIGHT: u64 = 10;
         const TEST_EPOCHS: u64 = 5;
 
@@ -9914,13 +9916,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                upgrade,
+                NEW_PROTOCOL,
             )
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, upgrade).await;
+        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
         let mut events = network.server.event_stream();
 
         // Wait until 5 epochs have passed.
@@ -9977,16 +9979,12 @@ mod test {
                 .await
                 .unwrap();
 
-            // verify auth root if the consensus version is v4
-            if header.version() == DRB_AND_HEADER_UPGRADE_VERSION {
-                let auth_root = state_cert_v2.auth_root;
-                let header_auth_root = header.auth_root().unwrap();
-                if auth_root.is_zero() || header_auth_root.is_zero() {
-                    panic!("auth root shouldn't be zero");
-                }
-
-                assert_eq!(auth_root, header_auth_root, "auth root mismatch");
+            let auth_root = state_cert_v2.auth_root;
+            let header_auth_root = header.auth_root().unwrap();
+            if auth_root.is_zero() || header_auth_root.is_zero() {
+                panic!("auth root shouldn't be zero");
             }
+            assert_eq!(auth_root, header_auth_root, "auth root mismatch");
 
             // v1
             let state_query_data_v1 = client
@@ -10007,7 +10005,6 @@ mod test {
     /// restarted node catches up for the missing state certificates.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn test_state_cert_catchup() {
-        let upgrade = NEW_PROTOCOL;
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -10045,13 +10042,13 @@ mod test {
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
                 hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                upgrade,
+                NEW_PROTOCOL,
             )
             .await
             .unwrap()
             .build();
         let state = config.states()[0].clone();
-        let mut network = TestNetwork::new(config, upgrade).await;
+        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
         let mut events = network.peers[2].event_stream();
         // Wait until at least 5 epochs have passed
@@ -10101,7 +10098,7 @@ mod test {
                             &*metrics,
                             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                             consumer,
-                            upgrade,
+                            NEW_PROTOCOL,
                             Default::default(),
                         )
                         .await)
@@ -10138,7 +10135,6 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
 
         // Use version that supports epochs (V3 or V4)
-        let versions = NEW_PROTOCOL;
 
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
@@ -10183,7 +10179,7 @@ mod test {
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, versions).await;
+        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
         let contracts = network.contracts.unwrap();
         let st_addr = contracts.address(Contract::StakeTableProxy).unwrap();
 
@@ -10299,7 +10295,6 @@ mod test {
         const NUM_NODES: usize = 4;
         const EPOCH_HEIGHT: u64 = 10;
 
-        let versions = NEW_PROTOCOL;
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
@@ -10340,7 +10335,7 @@ mod test {
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, versions).await;
+        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
         let contracts = network.contracts.unwrap();
         let st_addr = contracts.address(Contract::StakeTableProxy).unwrap();
 
@@ -10577,9 +10572,9 @@ mod test {
         );
         Ok(())
     }
+
     #[test_log::test]
     fn test_reward_proof_endpoint() {
-        let upgrade = NEW_PROTOCOL;
         let test = async move {
             const EPOCH_HEIGHT: u64 = 10;
             const NUM_NODES: usize = 5;
@@ -10620,13 +10615,13 @@ mod test {
                 .pos_hook(
                     DelegationConfig::MultipleDelegators,
                     hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                    upgrade,
+                    NEW_PROTOCOL,
                 )
                 .await
                 .unwrap()
                 .build();
 
-            let mut network = TestNetwork::new(config, upgrade).await;
+            let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
 
             // wait for 4 epochs
             let mut events = network.server.event_stream();
@@ -10641,957 +10636,928 @@ mod test {
             // there, so the last boundary holds the same tree as the decided state.
             let height = decided_leaf.height() / EPOCH_HEIGHT * EPOCH_HEIGHT;
 
-            // validate proof returned from the api
-            if upgrade.base == EPOCH_VERSION {
-                // V1 case: only the legacy v1 reward tree endpoints apply here
-                wait_until_block_height(&client, "reward-state/block-height", height).await;
+            // Submit two transactions to the same namespace in separate blocks
+            // so the namespace-filtered WS stream produces ≥2 messages.
+            // Submitting both at once risks the builder batching them into a
+            // single block; submitting sequentially (wait between) guarantees
+            // different blocks so the second wait_for_decide_on_handle doesn't
+            // hang looking for an event that was already consumed by the first.
+            let avail_ns = NamespaceId::from(42_u32);
+            let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
+            network
+                .server
+                .submit_transaction(avail_tx.clone())
+                .await
+                .unwrap();
+            let (avail_block, _) = wait_for_decide_on_handle(&mut events, &avail_tx).await;
 
-                network.stop_consensus().await;
+            // Submit the second transaction only after the first is decided,
+            // ensuring it lands in a strictly later block.
+            let avail_tx2 = Transaction::new(avail_ns, vec![4, 5, 6]);
+            network
+                .server
+                .submit_transaction(avail_tx2.clone())
+                .await
+                .unwrap();
+            wait_for_decide_on_handle(&mut events, &avail_tx2).await;
 
-                for (address, _) in validated_state.reward_merkle_tree_v1.iter() {
-                    let (_, expected_proof) = validated_state
-                        .reward_merkle_tree_v1
-                        .lookup(*address)
-                        .expect_ok()
-                        .unwrap();
+            wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
+            // Wait for the availability query service to index avail_block.
+            wait_until_block_height(&client, "node/block-height", avail_block).await;
 
-                    let res = client
-                        .get::<RewardAccountQueryDataV1>(&format!(
-                            "reward-state/proof/{height}/{address}"
+            // Sample a fee account for the fee-state comparisons below.
+            // `validated_state` was captured before the fee-paying blocks above were
+            // decided, so its fee tree can still be empty; poll the decided state while
+            // consensus is still running (it is frozen after stop_consensus). The
+            // decided state can also contain accounts added after `avail_block`, so
+            // only accept an account provable at the `avail_block` snapshot queried
+            // in the comparisons.
+            let sample_start = Instant::now();
+            let fee_account = 'fee_account: loop {
+                // A node can decide a leaf before it has validated that leaf's state itself.
+                let state = network.server.decided_state().await;
+                for (addr, _) in state.iter().flat_map(|state| state.fee_merkle_tree.iter()) {
+                    if client
+                        .get::<MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256>>(&format!(
+                            "fee-state/{avail_block}/{addr}"
                         ))
                         .send()
                         .await
-                        .unwrap();
-
-                    match res.proof.proof {
-                        RewardMerkleProofV1::Presence(p) => {
-                            assert_eq!(
-                                p, expected_proof,
-                                "Proof mismatch for V1 at {height}, addr={address}"
-                            );
-                        },
-                        other => panic!(
-                            "Expected Present proof for V1 at {height}, addr={address}, got \
-                             {other:?}"
-                        ),
+                        .is_ok()
+                    {
+                        break 'fee_account *addr;
                     }
                 }
-            } else {
-                // V2 case
+                assert!(
+                    sample_start.elapsed() < Duration::from_secs(30),
+                    "no fee account provable at avail_block {avail_block} after 30s"
+                );
+                sleep(Duration::from_millis(500)).await;
+            };
 
-                // Submit two transactions to the same namespace in separate blocks
-                // so the namespace-filtered WS stream produces ≥2 messages.
-                // Submitting both at once risks the builder batching them into a
-                // single block; submitting sequentially (wait between) guarantees
-                // different blocks so the second wait_for_decide_on_handle doesn't
-                // hang looking for an event that was already consumed by the first.
-                let avail_ns = NamespaceId::from(42_u32);
-                let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
-                network
-                    .server
-                    .submit_transaction(avail_tx.clone())
+            network.stop_consensus().await;
+
+            let http = reqwest::Client::new();
+
+            for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
+                let (_, expected_proof) = validated_state
+                    .reward_merkle_tree_v2
+                    .lookup(*address)
+                    .expect_ok()
+                    .unwrap();
+
+                let res = client
+                    .get::<RewardAccountQueryDataV2>(&format!(
+                        "reward-state-v2/proof/{height}/{address}"
+                    ))
+                    .send()
                     .await
                     .unwrap();
-                let (avail_block, _) = wait_for_decide_on_handle(&mut events, &avail_tx).await;
 
-                // Submit the second transaction only after the first is decided,
-                // ensuring it lands in a strictly later block.
-                let avail_tx2 = Transaction::new(avail_ns, vec![4, 5, 6]);
-                network
-                    .server
-                    .submit_transaction(avail_tx2.clone())
+                match res.proof.proof.clone() {
+                    RewardMerkleProofV2::Presence(p) => {
+                        assert_eq!(
+                            p, expected_proof,
+                            "Proof mismatch for V2 at {height}, addr={address}"
+                        );
+                    },
+                    other => panic!(
+                        "Expected Present proof for V2 at {height}, addr={address}, got {other:?}"
+                    ),
+                }
+
+                let reward_claim_input = client
+                    .get::<RewardClaimInput>(&format!(
+                        "reward-state-v2/reward-claim-input/{height}/{address}"
+                    ))
+                    .send()
                     .await
                     .unwrap();
-                wait_for_decide_on_handle(&mut events, &avail_tx2).await;
 
-                wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
-                // Wait for the availability query service to index avail_block.
-                wait_until_block_height(&client, "node/block-height", avail_block).await;
+                assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
 
-                // Sample a fee account for the fee-state comparisons below.
-                // `validated_state` was captured before the fee-paying blocks above were
-                // decided, so its fee tree can still be empty; poll the decided state while
-                // consensus is still running (it is frozen after stop_consensus). The
-                // decided state can also contain accounts added after `avail_block`, so
-                // only accept an account provable at the `avail_block` snapshot queried
-                // in the comparisons.
-                let sample_start = Instant::now();
-                let fee_account = 'fee_account: loop {
-                    // A node can decide a leaf before it has validated that leaf's state itself.
-                    let state = network.server.decided_state().await;
-                    for (addr, _) in state.iter().flat_map(|state| state.fee_merkle_tree.iter()) {
-                        if client
-                            .get::<MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256>>(&format!(
-                                "fee-state/{avail_block}/{addr}"
-                            ))
-                            .send()
-                            .await
-                            .is_ok()
-                        {
-                            break 'fee_account *addr;
-                        }
-                    }
-                    assert!(
-                        sample_start.elapsed() < Duration::from_secs(30),
-                        "no fee account provable at avail_block {avail_block} after 30s"
-                    );
-                    sleep(Duration::from_millis(500)).await;
-                };
-
-                network.stop_consensus().await;
-
-                let http = reqwest::Client::new();
-
-                for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
-                    let (_, expected_proof) = validated_state
+                // Behavior relied on by scripts/claim-rewards-loop: an account with no
+                // rewards yields 404; any other error status makes the claim loop exit and
+                // process-compose tear down the whole demo.
+                let absent = alloy::primitives::Address::with_last_byte(0xaa);
+                assert!(
+                    validated_state
                         .reward_merkle_tree_v2
-                        .lookup(*address)
-                        .expect_ok()
-                        .unwrap();
-
-                    let res = client
-                        .get::<RewardAccountQueryDataV2>(&format!(
-                            "reward-state-v2/proof/{height}/{address}"
-                        ))
-                        .send()
-                        .await
-                        .unwrap();
-
-                    match res.proof.proof.clone() {
-                        RewardMerkleProofV2::Presence(p) => {
-                            assert_eq!(
-                                p, expected_proof,
-                                "Proof mismatch for V2 at {height}, addr={address}"
-                            );
-                        },
-                        other => panic!(
-                            "Expected Present proof for V2 at {height}, addr={address}, got \
-                             {other:?}"
-                        ),
-                    }
-
-                    let reward_claim_input = client
-                        .get::<RewardClaimInput>(&format!(
-                            "reward-state-v2/reward-claim-input/{height}/{address}"
-                        ))
-                        .send()
-                        .await
-                        .unwrap();
-
-                    assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
-
-                    // Behavior relied on by scripts/claim-rewards-loop: an account with no
-                    // rewards yields 404; any other error status makes the claim loop exit and
-                    // process-compose tear down the whole demo.
-                    let absent = alloy::primitives::Address::with_last_byte(0xaa);
-                    assert!(
-                        validated_state
-                            .reward_merkle_tree_v2
-                            .iter()
-                            .all(|(addr, _)| addr.0 != absent),
-                        "sentinel address unexpectedly present in reward tree"
-                    );
-                    let err = client
-                        .get::<RewardClaimInput>(&format!(
-                            "reward-state-v2/reward-claim-input/{height}/{absent}"
-                        ))
-                        .send()
-                        .await
-                        .unwrap_err();
-                    assert_matches!(err, ClientErr { status, .. } if status == StatusCode::NOT_FOUND);
-
-                    // Smoke-check each per-address endpoint under reward-state-v2.
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state-v2/proof/{height}/{address}"),
-                    )
-                    .await?;
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
-                    )
-                    .await?;
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state-v2/reward-balance/{height}/{address}"),
-                    )
-                    .await?;
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state-v2/proof/latest/{address}"),
-                    )
-                    .await?;
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state-v2/reward-balance/latest/{address}"),
-                    )
-                    .await?;
-
-                    // The reward-state mount shares its handlers with reward-state-v2 for
-                    // backwards compatibility, so these two routes hit the same v2-tree-backed
-                    // handlers as the pair above, just under reward-state.
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state/proof/latest/{address}"),
-                    )
-                    .await?;
-                    assert_json_endpoint(
-                        &http,
-                        api_port,
-                        &format!("reward-state/reward-balance/latest/{address}"),
-                    )
-                    .await?;
-                }
-
-                let (address, _) = validated_state
-                    .reward_merkle_tree_v2
-                    .iter()
-                    .next()
-                    .expect("a proof-of-stake network has reward accounts");
-                check_reward_state_v2_parity(&client, height, address.0).await;
-
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("reward-state/reward-amounts/{height}/0/1000"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("reward-state/reward-merkle-tree-v2/{height}"),
-                )
-                .await?;
-
-                // Merklized-state `get_path` routes, inherited by both reward mounts from
-                // the legacy `hotshot-query-service` merklized-state base routes (mirrors the block-state /
-                // fee-state checks below). Nothing in this codebase populates the generic
-                // merklized-state tables for the reward trees today; the reward-state modules
-                // persist snapshots via the separate `persist_tree`/`load_tree` bincode-blob
-                // mechanism instead, so these routes fail in practice. We only assert that both
-                // mounts, in both height and commit form, return well-formed JSON.
-                let reward_address = validated_state
-                    .reward_merkle_tree_v2
-                    .iter()
-                    .next()
-                    .map(|(addr, _)| *addr)
-                    .expect("reward tree should have at least one account");
-                let reward_header: Header = client
-                    .get(&format!("availability/header/{height}"))
+                        .iter()
+                        .all(|(addr, _)| addr.0 != absent),
+                    "sentinel address unexpectedly present in reward tree"
+                );
+                let err = client
+                    .get::<RewardClaimInput>(&format!(
+                        "reward-state-v2/reward-claim-input/{height}/{absent}"
+                    ))
                     .send()
                     .await
-                    .unwrap();
-                let reward_mt_commit = match reward_header.reward_merkle_tree_root() {
-                    either::Either::Left(commit) => commit.to_string(),
-                    either::Either::Right(commit) => commit.to_string(),
-                };
-                for mount in ["reward-state", "reward-state-v2"] {
-                    assert_json_body(
-                        &http,
-                        api_port,
-                        &format!("{mount}/{height}/{reward_address}"),
-                    )
-                    .await?;
-                    assert_json_body(
-                        &http,
-                        api_port,
-                        &format!("{mount}/commit/{reward_mt_commit}/{reward_address}"),
-                    )
-                    .await?;
-                }
+                    .unwrap_err();
+                assert_matches!(err, ClientErr { status, .. } if status == StatusCode::NOT_FOUND);
 
-                // Availability v1 routes.
-
-                // Namespace proof by height
+                // Smoke-check each per-address endpoint under reward-state-v2.
                 assert_json_endpoint(
                     &http,
                     api_port,
-                    &format!("availability/block/{avail_block}/namespace/{avail_ns}"),
-                )
-                .await?;
-
-                // Namespace proof by block hash and payload hash
-                let avail_header: Header = client
-                    .get(&format!("availability/header/{avail_block}"))
-                    .send()
-                    .await
-                    .unwrap();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "availability/block/hash/{}/namespace/{avail_ns}",
-                        avail_header.commit()
-                    ),
+                    &format!("reward-state-v2/proof/{height}/{address}"),
                 )
                 .await?;
                 assert_json_endpoint(
                     &http,
                     api_port,
-                    &format!(
-                        "availability/block/payload-hash/{}/namespace/{avail_ns}",
-                        avail_header.payload_commitment()
-                    ),
+                    &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
+                )
+                .await?;
+                assert_json_endpoint(
+                    &http,
+                    api_port,
+                    &format!("reward-state-v2/reward-balance/{height}/{address}"),
+                )
+                .await?;
+                assert_json_endpoint(
+                    &http,
+                    api_port,
+                    &format!("reward-state-v2/proof/latest/{address}"),
+                )
+                .await?;
+                assert_json_endpoint(
+                    &http,
+                    api_port,
+                    &format!("reward-state-v2/reward-balance/latest/{address}"),
                 )
                 .await?;
 
-                // Namespace proof range
+                // The reward-state mount shares its handlers with reward-state-v2 for
+                // backwards compatibility, so these two routes hit the same v2-tree-backed
+                // handlers as the pair above, just under reward-state.
                 assert_json_endpoint(
                     &http,
                     api_port,
-                    &format!(
-                        "availability/block/{avail_block}/{}/namespace/{avail_ns}",
-                        avail_block + 1
-                    ),
-                )
-                .await?;
-
-                // State certificate endpoints (epoch 1 is complete after 4 epochs)
-                assert_json_endpoint(&http, api_port, "availability/state-cert/1").await?;
-                assert_json_endpoint(&http, api_port, "availability/state-cert-v2/1").await?;
-
-                // HotShot availability endpoints: leaf, header, block, payload, vid/common, etc.
-                let avail_leaf: LeafQueryData<SeqTypes> = client
-                    .get(&format!("availability/leaf/{avail_block}"))
-                    .send()
-                    .await
-                    .unwrap();
-                let leaf_hash = avail_leaf.hash();
-                let block_hash = avail_header.commit();
-                let payload_hash = avail_header.payload_commitment();
-
-                // Leaf endpoints
-                assert_json_endpoint(&http, api_port, &format!("availability/leaf/{avail_block}"))
-                    .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/leaf/hash/{leaf_hash}"),
+                    &format!("reward-state/proof/latest/{address}"),
                 )
                 .await?;
                 assert_json_endpoint(
                     &http,
                     api_port,
-                    &format!("availability/leaf/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-
-                // Header endpoints
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/header/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/header/hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/header/payload-hash/{payload_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/header/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-
-                // Block endpoints
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/block/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/block/hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/block/payload-hash/{payload_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/block/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-
-                // Payload endpoints
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/payload/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/payload/hash/{payload_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/payload/block-hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/payload/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-
-                // VID common endpoints
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/vid/common/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/vid/common/hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/vid/common/payload-hash/{payload_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/vid/common/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-
-                // Transaction endpoints
-                let tx_hash = avail_tx.commit();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/{avail_block}/0/noproof"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/hash/{tx_hash}/noproof"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/{avail_block}/0/proof"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/hash/{tx_hash}/proof"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/{avail_block}/0"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/transaction/hash/{tx_hash}"),
-                )
-                .await?;
-
-                // Block summary endpoints
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("availability/block/summary/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "availability/block/summaries/{avail_block}/{}",
-                        avail_block + 1
-                    ),
-                )
-                .await?;
-
-                // Limits endpoint (static response)
-                assert_json_endpoint(&http, api_port, "availability/limits").await?;
-
-                // Cert2 endpoint: a cert2 is stored only at the height it finalizes, and at 0.6
-                // whether `avail_block` was the newest leaf of its decide is up to the decide
-                // batching, so it may or may not have one.
-                assert_json_body(
-                    &http,
-                    api_port,
-                    &format!("availability/cert2/{avail_block}"),
-                )
-                .await?;
-
-                // WebSocket streaming endpoints.
-                //
-                // For unfiltered streams, start 10 blocks before avail_block so there are at
-                // least 10 committed blocks ready to stream (consensus has already stopped).
-                // For namespace-filtered streams, start at avail_block where the two submitted
-                // transactions were included, giving >=2 matching messages.
-                let ws_start = avail_block.saturating_sub(10);
-                assert_ws_endpoint(api_port, &format!("availability/stream/leaves/{ws_start}"))
-                    .await?;
-                assert_ws_endpoint(api_port, &format!("availability/stream/headers/{ws_start}"))
-                    .await?;
-                assert_ws_endpoint(api_port, &format!("availability/stream/blocks/{ws_start}"))
-                    .await?;
-                assert_ws_endpoint(
-                    api_port,
-                    &format!("availability/stream/payloads/{ws_start}"),
-                )
-                .await?;
-                assert_ws_endpoint(
-                    api_port,
-                    &format!("availability/stream/vid/common/{ws_start}"),
-                )
-                .await?;
-                assert_ws_endpoint(
-                    api_port,
-                    &format!("availability/stream/transactions/{ws_start}"),
-                )
-                .await?;
-                // Namespace-filtered streams: start at avail_block; two transactions were
-                // submitted so the stream produces ≥2 messages.
-                assert_ws_endpoint(
-                    api_port,
-                    &format!("availability/stream/transactions/{avail_block}/namespace/{avail_ns}"),
-                )
-                .await?;
-                assert_ws_endpoint(
-                    api_port,
-                    &format!("availability/stream/blocks/{avail_block}/namespace/{avail_ns}"),
-                )
-                .await?;
-
-                // Our clients default to `Accept: application/octet-stream`, so the server must
-                // emit `Message::Binary` (VBS-encoded) frames on that path. Verify it does so
-                // on a representative stream.
-                assert_ws_endpoint_binary(
-                    api_port,
-                    &format!("availability/stream/leaves/{ws_start}"),
-                )
-                .await?;
-
-                // Merklized state endpoints (block-state and fee-state). Wait for
-                // the backend to have indexed the snapshot we'll query.
-                wait_until_block_height(&client, "block-state/block-height", avail_block).await;
-                wait_until_block_height(&client, "fee-state/block-height", avail_block).await;
-
-                // block-state/block-height and fee-state/block-height (latest
-                // height for which merklized state is available).
-                assert_json_endpoint(&http, api_port, "block-state/block-height").await?;
-                assert_json_endpoint(&http, api_port, "fee-state/block-height").await?;
-
-                // block-state path by height: the merkle tree at height H
-                // contains the headers of blocks [0, H), so a valid key is H-1.
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "block-state/{avail_block}/{}",
-                        avail_block.saturating_sub(1)
-                    ),
-                )
-                .await?;
-
-                // block-state path by commit. Use the tree commitment from
-                // the header at avail_block.
-                let block_mt_commit = avail_header.block_merkle_tree_root().to_string();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "block-state/commit/{block_mt_commit}/{}",
-                        avail_block.saturating_sub(1)
-                    ),
-                )
-                .await?;
-
-                // fee-state path by height for a known fee account (sampled above while
-                // consensus was running), and fee-balance/latest for the same account.
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("fee-state/{avail_block}/{fee_account}"),
-                )
-                .await?;
-                let fee_mt_commit = avail_header.fee_merkle_tree_root().to_string();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("fee-state/commit/{fee_mt_commit}/{fee_account}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("fee-state/fee-balance/latest/{fee_account}"),
-                )
-                .await?;
-
-                // Status endpoints. Block height and success rate are stable since consensus is
-                // stopped; time-since-last-decide and metrics vary by wall-clock so we only
-                // check for a 2xx.
-                assert_json_endpoint(&http, api_port, "status/block-height").await?;
-                assert_json_endpoint(&http, api_port, "status/success-rate").await?;
-                assert_endpoint_ok(&http, api_port, "status/time-since-last-decide").await?;
-                assert_endpoint_ok(&http, api_port, "status/metrics").await?;
-
-                // Config endpoints. /runtime returns 404 because no PublicNodeConfig was
-                // configured for this test.
-                assert_json_endpoint(&http, api_port, "config/hotshot").await?;
-                assert_json_endpoint(&http, api_port, "config/env").await?;
-                assert_endpoint_status(&http, api_port, "config/runtime", 404).await?;
-
-                // Node endpoints.
-                assert_json_endpoint(&http, api_port, "node/block-height").await?;
-                assert_json_endpoint(&http, api_port, "node/transactions/count").await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/transactions/count/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/transactions/count/0/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/transactions/count/namespace/{avail_ns}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/transactions/count/namespace/{avail_ns}/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/transactions/count/namespace/{avail_ns}/0/{avail_block}"),
-                )
-                .await?;
-
-                assert_json_endpoint(&http, api_port, "node/payloads/size").await?;
-                assert_json_endpoint(&http, api_port, "node/payloads/total-size").await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/payloads/size/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/payloads/size/0/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/payloads/size/namespace/{avail_ns}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/payloads/size/namespace/{avail_ns}/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/payloads/size/namespace/{avail_ns}/0/{avail_block}"),
-                )
-                .await?;
-
-                assert_json_endpoint(&http, api_port, &format!("node/vid/share/{avail_block}"))
-                    .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/vid/share/hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/vid/share/payload-hash/{payload_hash}"),
-                )
-                .await?;
-
-                assert_json_endpoint(&http, api_port, "node/sync-status").await?;
-                assert_json_endpoint(&http, api_port, "node/limits").await?;
-
-                // Header window: cover all three start variants (time, height, hash). `end` is
-                // an exclusive Unix-second cutoff; using the block's own timestamp + 1 yields
-                // a deterministic single-block window.
-                let avail_ts = avail_header.timestamp();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/header/window/{avail_ts}/{}", avail_ts + 1),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/header/window/from/{avail_block}/{}", avail_ts + 1),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("node/header/window/from/hash/{block_hash}/{}", avail_ts + 1),
-                )
-                .await?;
-
-                assert_json_endpoint(&http, api_port, "node/stake-table/current").await?;
-                assert_json_endpoint(&http, api_port, "node/stake-table/1").await?;
-                assert_json_endpoint(&http, api_port, "node/da-stake-table/current").await?;
-                assert_json_endpoint(&http, api_port, "node/da-stake-table/1").await?;
-
-                assert_json_endpoint(&http, api_port, "node/validators/1").await?;
-                assert_json_endpoint(&http, api_port, "node/all-validators/1/0/100").await?;
-
-                assert_json_endpoint(&http, api_port, "node/participation/proposal/current")
-                    .await?;
-                assert_json_endpoint(&http, api_port, "node/participation/proposal/1").await?;
-                assert_json_endpoint(&http, api_port, "node/participation/vote/current").await?;
-                assert_json_endpoint(&http, api_port, "node/participation/vote/1").await?;
-
-                assert_json_endpoint(&http, api_port, "node/block-reward").await?;
-                assert_json_endpoint(&http, api_port, "node/block-reward/epoch/1").await?;
-
-                assert_json_endpoint(&http, api_port, "node/oldest-block").await?;
-                assert_json_endpoint(&http, api_port, "node/oldest-leaf").await?;
-
-                // Catchup endpoints. View number and height for in-memory state aren't readily
-                // available after stopping consensus, so we check error semantics on
-                // intentionally invalid lookups and the deprecated routes.
-                let decided_view = decided_leaf.view_number().u64();
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("catchup/{height}/{decided_view}/blocks"),
-                )
-                .await?;
-                // chain-config: a malformed TaggedBase64 commitment (bad checksum) parses-fails
-                // on the request path and yields 400.
-                assert_endpoint_status(
-                    &http,
-                    api_port,
-                    "catchup/chain-config/CHAINCONFIG~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                    400,
-                )
-                .await?;
-                // leafchain: undecided height returns 404 from both.
-                assert_endpoint_status(&http, api_port, "catchup/999999/leafchain", 404).await?;
-                // cert2: missing cert returns 404.
-                assert_endpoint_status(&http, api_port, "catchup/999999/cert2", 404).await?;
-                // Deprecated catchup routes still respond 404.
-                assert_endpoint_status(&http, api_port, "catchup/1/reward-amounts/100/0", 404)
-                    .await?;
-
-                // Production peer-catchup posts VBS-binary bodies via http-client.
-                // Exercise the bulk-account POST endpoints in that exact wire format so any
-                // regression to "JSON-only body" is caught here.
-                // Reuse the account sampled above; `validated_state.fee_merkle_tree` was
-                // captured before the fee-paying blocks and can be empty.
-                assert_post_binary(
-                    &http,
-                    api_port,
-                    &format!("catchup/{height}/{decided_view}/accounts"),
-                    &vec![fee_account],
-                )
-                .await?;
-                // reward-accounts V1 takes a Vec<RewardAccountV1>. We send empty since the V2
-                // tree may not have V1-shaped entries in this test, but the wire format is what
-                // we're validating.
-                assert_post_binary(
-                    &http,
-                    api_port,
-                    &format!("catchup/{height}/{decided_view}/reward-accounts"),
-                    &Vec::<espresso_types::v0_3::RewardAccountV1>::new(),
-                )
-                .await?;
-
-                // State signature: missing heights should 404.
-                assert_endpoint_status(&http, api_port, "state-signature/block/999999", 404)
-                    .await?;
-
-                // Error bodies for endpoints that fail via `ApiError` must keep the
-                // `{"Custom":{"message","status"}}` JSON envelope that existing clients parse.
-                // Availability endpoints (`availability/leaf/...`, etc.) are excluded because
-                // they use per-endpoint error variants like `{"FetchLeaf":{...}}`; their status
-                // codes are still checked by `assert_endpoint_status` above.
-                assert_error_body(&http, api_port, "catchup/999999/cert2", 404).await?;
-                assert_error_body(&http, api_port, "catchup/999999/leafchain", 404).await?;
-                assert_error_body(&http, api_port, "state-signature/block/999999", 404).await?;
-
-                // Explorer endpoints.
-                assert_json_endpoint(&http, api_port, "explorer/explorer-summary").await?;
-                assert_json_endpoint(&http, api_port, &format!("explorer/block/{avail_block}"))
-                    .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("explorer/block/hash/{block_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(&http, api_port, "explorer/blocks/latest/10").await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("explorer/blocks/{avail_block}/10"),
-                )
-                .await?;
-                assert_json_endpoint(&http, api_port, "explorer/transactions/latest/10").await?;
-
-                // Light-client endpoints. Use the same block we used for availability tests.
-                assert_json_endpoint(&http, api_port, &format!("light-client/leaf/{avail_block}"))
-                    .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("light-client/leaf/hash/{leaf_hash}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("light-client/payload/{avail_block}"),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!("light-client/payload/{avail_block}/{}", avail_block + 1),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "light-client/namespace/{avail_block}/{}",
-                        u64::from(avail_ns)
-                    ),
-                )
-                .await?;
-                assert_json_endpoint(
-                    &http,
-                    api_port,
-                    &format!(
-                        "light-client/namespace/{avail_block}/{}/{}",
-                        avail_block + 1,
-                        u64::from(avail_ns)
-                    ),
-                )
-                .await?;
-
-                // Regression: an oversized range on the plural namespaces route must return
-                // 400 Bad Request (the status carried by the query-service error), not 500.
-                let encoded_ns = tagged_base64::TaggedBase64::new(
-                    ::light_client::client::NAMESPACES_PARAM_TAG,
-                    &serde_json::to_vec(&vec![u64::from(avail_ns)])?,
-                )?;
-                assert_endpoint_status(
-                    &http,
-                    api_port,
-                    &format!(
-                        "light-client/namespaces/{avail_block}/{}/{encoded_ns}",
-                        avail_block + 200
-                    ),
-                    400,
-                )
-                .await?;
-
-                // Token endpoints.
-                assert_json_endpoint(&http, api_port, "token/total-minted-supply").await?;
-                assert_json_endpoint(&http, api_port, "token/circulating-supply").await?;
-                assert_json_endpoint(&http, api_port, "token/circulating-supply-ethereum").await?;
-                assert_json_endpoint(&http, api_port, "token/total-issued-supply").await?;
-                assert_json_endpoint(&http, api_port, "token/total-reward-distributed").await?;
-
-                // HTTP status codes for common failure cases that clients depend on.
-
-                // Requesting a leaf far ahead of the chain tip times out and returns
-                // 404 Not Found.
-                assert_endpoint_status(&http, api_port, "availability/leaf/999999", 404).await?;
-
-                // Requesting a block range that exceeds the per-request limit
-                // returns 400 Bad Request.
-                assert_endpoint_status(
-                    &http,
-                    api_port,
-                    &format!("availability/block/{avail_block}/{}", avail_block + 200),
-                    400,
-                )
-                .await?;
-
-                // Requesting a namespace proof range that exceeds the limit also
-                // returns 400 Bad Request.
-                assert_endpoint_status(
-                    &http,
-                    api_port,
-                    &format!(
-                        "availability/block/{avail_block}/{}/namespace/{avail_ns}",
-                        avail_block + 200
-                    ),
-                    400,
+                    &format!("reward-state/reward-balance/latest/{address}"),
                 )
                 .await?;
             }
+
+            let (address, _) = validated_state
+                .reward_merkle_tree_v2
+                .iter()
+                .next()
+                .expect("a proof-of-stake network has reward accounts");
+            check_reward_state_v2_parity(&client, height, address.0).await;
+
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("reward-state/reward-amounts/{height}/0/1000"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("reward-state/reward-merkle-tree-v2/{height}"),
+            )
+            .await?;
+
+            // Merklized-state `get_path` routes, inherited by both reward mounts from
+            // the legacy `hotshot-query-service` merklized-state base routes (mirrors the block-state /
+            // fee-state checks below). Nothing in this codebase populates the generic
+            // merklized-state tables for the reward trees today; the reward-state modules
+            // persist snapshots via the separate `persist_tree`/`load_tree` bincode-blob
+            // mechanism instead, so these routes fail in practice. We only assert that both
+            // mounts, in both height and commit form, return well-formed JSON.
+            let reward_address = validated_state
+                .reward_merkle_tree_v2
+                .iter()
+                .next()
+                .map(|(addr, _)| *addr)
+                .expect("reward tree should have at least one account");
+            let reward_header: Header = client
+                .get(&format!("availability/header/{height}"))
+                .send()
+                .await
+                .unwrap();
+            let reward_mt_commit = match reward_header.reward_merkle_tree_root() {
+                either::Either::Left(commit) => commit.to_string(),
+                either::Either::Right(commit) => commit.to_string(),
+            };
+            for mount in ["reward-state", "reward-state-v2"] {
+                assert_json_body(
+                    &http,
+                    api_port,
+                    &format!("{mount}/{height}/{reward_address}"),
+                )
+                .await?;
+                assert_json_body(
+                    &http,
+                    api_port,
+                    &format!("{mount}/commit/{reward_mt_commit}/{reward_address}"),
+                )
+                .await?;
+            }
+
+            // Availability v1 routes.
+
+            // Namespace proof by height
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/{avail_block}/namespace/{avail_ns}"),
+            )
+            .await?;
+
+            // Namespace proof by block hash and payload hash
+            let avail_header: Header = client
+                .get(&format!("availability/header/{avail_block}"))
+                .send()
+                .await
+                .unwrap();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "availability/block/hash/{}/namespace/{avail_ns}",
+                    avail_header.commit()
+                ),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "availability/block/payload-hash/{}/namespace/{avail_ns}",
+                    avail_header.payload_commitment()
+                ),
+            )
+            .await?;
+
+            // Namespace proof range
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "availability/block/{avail_block}/{}/namespace/{avail_ns}",
+                    avail_block + 1
+                ),
+            )
+            .await?;
+
+            // State certificate endpoints (epoch 1 is complete after 4 epochs)
+            assert_json_endpoint(&http, api_port, "availability/state-cert/1").await?;
+            assert_json_endpoint(&http, api_port, "availability/state-cert-v2/1").await?;
+
+            // HotShot availability endpoints: leaf, header, block, payload, vid/common, etc.
+            let avail_leaf: LeafQueryData<SeqTypes> = client
+                .get(&format!("availability/leaf/{avail_block}"))
+                .send()
+                .await
+                .unwrap();
+            let leaf_hash = avail_leaf.hash();
+            let block_hash = avail_header.commit();
+            let payload_hash = avail_header.payload_commitment();
+
+            // Leaf endpoints
+            assert_json_endpoint(&http, api_port, &format!("availability/leaf/{avail_block}"))
+                .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/leaf/hash/{leaf_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/leaf/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Header endpoints
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/header/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/header/hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/header/payload-hash/{payload_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/header/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Block endpoints
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/payload-hash/{payload_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Payload endpoints
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/payload/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/payload/hash/{payload_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/payload/block-hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/payload/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // VID common endpoints
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/vid/common/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/vid/common/hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/vid/common/payload-hash/{payload_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/vid/common/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Transaction endpoints
+            let tx_hash = avail_tx.commit();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/{avail_block}/0/noproof"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/hash/{tx_hash}/noproof"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/{avail_block}/0/proof"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/hash/{tx_hash}/proof"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/{avail_block}/0"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/transaction/hash/{tx_hash}"),
+            )
+            .await?;
+
+            // Block summary endpoints
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/block/summary/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "availability/block/summaries/{avail_block}/{}",
+                    avail_block + 1
+                ),
+            )
+            .await?;
+
+            // Limits endpoint (static response)
+            assert_json_endpoint(&http, api_port, "availability/limits").await?;
+
+            // Cert2 endpoint: a cert2 is stored only at the newest leaf of each decide, so
+            // scan from `avail_block` for one. Every other height has none.
+            let tip = client.get::<u64>("node/block-height").send().await?;
+            let mut cert2_height = None;
+            for height in avail_block..tip {
+                let status = http
+                    .get(format!(
+                        "http://localhost:{api_port}/v1/availability/cert2/{height}"
+                    ))
+                    .send()
+                    .await?
+                    .status()
+                    .as_u16();
+                match status {
+                    200 => {
+                        cert2_height = Some(height);
+                        break;
+                    },
+                    404 => {},
+                    _ => panic!("v1/availability/cert2/{height}: returned {status}"),
+                }
+            }
+            let cert2_height =
+                cert2_height.with_context(|| format!("no cert2 stored in {avail_block}..{tip}"))?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("availability/cert2/{cert2_height}"),
+            )
+            .await?;
+
+            // WebSocket streaming endpoints.
+            //
+            // For unfiltered streams, start 10 blocks before avail_block so there are at
+            // least 10 committed blocks ready to stream (consensus has already stopped).
+            // For namespace-filtered streams, start at avail_block where the two submitted
+            // transactions were included, giving >=2 matching messages.
+            let ws_start = avail_block.saturating_sub(10);
+            assert_ws_endpoint(api_port, &format!("availability/stream/leaves/{ws_start}")).await?;
+            assert_ws_endpoint(api_port, &format!("availability/stream/headers/{ws_start}"))
+                .await?;
+            assert_ws_endpoint(api_port, &format!("availability/stream/blocks/{ws_start}")).await?;
+            assert_ws_endpoint(
+                api_port,
+                &format!("availability/stream/payloads/{ws_start}"),
+            )
+            .await?;
+            assert_ws_endpoint(
+                api_port,
+                &format!("availability/stream/vid/common/{ws_start}"),
+            )
+            .await?;
+            assert_ws_endpoint(
+                api_port,
+                &format!("availability/stream/transactions/{ws_start}"),
+            )
+            .await?;
+            // Namespace-filtered streams: start at avail_block; two transactions were
+            // submitted so the stream produces ≥2 messages.
+            assert_ws_endpoint(
+                api_port,
+                &format!("availability/stream/transactions/{avail_block}/namespace/{avail_ns}"),
+            )
+            .await?;
+            assert_ws_endpoint(
+                api_port,
+                &format!("availability/stream/blocks/{avail_block}/namespace/{avail_ns}"),
+            )
+            .await?;
+
+            // Our clients default to `Accept: application/octet-stream`, so the server must
+            // emit `Message::Binary` (VBS-encoded) frames on that path. Verify it does so
+            // on a representative stream.
+            assert_ws_endpoint_binary(api_port, &format!("availability/stream/leaves/{ws_start}"))
+                .await?;
+
+            // Merklized state endpoints (block-state and fee-state). Wait for
+            // the backend to have indexed the snapshot we'll query.
+            wait_until_block_height(&client, "block-state/block-height", avail_block).await;
+            wait_until_block_height(&client, "fee-state/block-height", avail_block).await;
+
+            // block-state/block-height and fee-state/block-height (latest
+            // height for which merklized state is available).
+            assert_json_endpoint(&http, api_port, "block-state/block-height").await?;
+            assert_json_endpoint(&http, api_port, "fee-state/block-height").await?;
+
+            // block-state path by height: the merkle tree at height H
+            // contains the headers of blocks [0, H), so a valid key is H-1.
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "block-state/{avail_block}/{}",
+                    avail_block.saturating_sub(1)
+                ),
+            )
+            .await?;
+
+            // block-state path by commit. Use the tree commitment from
+            // the header at avail_block.
+            let block_mt_commit = avail_header.block_merkle_tree_root().to_string();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "block-state/commit/{block_mt_commit}/{}",
+                    avail_block.saturating_sub(1)
+                ),
+            )
+            .await?;
+
+            // fee-state path by height for a known fee account (sampled above while
+            // consensus was running), and fee-balance/latest for the same account.
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("fee-state/{avail_block}/{fee_account}"),
+            )
+            .await?;
+            let fee_mt_commit = avail_header.fee_merkle_tree_root().to_string();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("fee-state/commit/{fee_mt_commit}/{fee_account}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("fee-state/fee-balance/latest/{fee_account}"),
+            )
+            .await?;
+
+            // Status endpoints. Block height and success rate are stable since consensus is
+            // stopped; time-since-last-decide and metrics vary by wall-clock so we only
+            // check for a 2xx.
+            assert_json_endpoint(&http, api_port, "status/block-height").await?;
+            assert_json_endpoint(&http, api_port, "status/success-rate").await?;
+            assert_endpoint_ok(&http, api_port, "status/time-since-last-decide").await?;
+            assert_endpoint_ok(&http, api_port, "status/metrics").await?;
+
+            // Config endpoints. /runtime returns 404 because no PublicNodeConfig was
+            // configured for this test.
+            assert_json_endpoint(&http, api_port, "config/hotshot").await?;
+            assert_json_endpoint(&http, api_port, "config/env").await?;
+            assert_endpoint_status(&http, api_port, "config/runtime", 404).await?;
+
+            // Node endpoints.
+            assert_json_endpoint(&http, api_port, "node/block-height").await?;
+            assert_json_endpoint(&http, api_port, "node/transactions/count").await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/transactions/count/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/transactions/count/0/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/transactions/count/namespace/{avail_ns}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/transactions/count/namespace/{avail_ns}/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/transactions/count/namespace/{avail_ns}/0/{avail_block}"),
+            )
+            .await?;
+
+            assert_json_endpoint(&http, api_port, "node/payloads/size").await?;
+            assert_json_endpoint(&http, api_port, "node/payloads/total-size").await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/payloads/size/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/payloads/size/0/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/payloads/size/namespace/{avail_ns}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/payloads/size/namespace/{avail_ns}/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/payloads/size/namespace/{avail_ns}/0/{avail_block}"),
+            )
+            .await?;
+
+            assert_json_endpoint(&http, api_port, &format!("node/vid/share/{avail_block}")).await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/vid/share/hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/vid/share/payload-hash/{payload_hash}"),
+            )
+            .await?;
+
+            assert_json_endpoint(&http, api_port, "node/sync-status").await?;
+            assert_json_endpoint(&http, api_port, "node/limits").await?;
+
+            // Header window: cover all three start variants (time, height, hash). `end` is
+            // an exclusive Unix-second cutoff; using the block's own timestamp + 1 yields
+            // a deterministic single-block window.
+            let avail_ts = avail_header.timestamp();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/header/window/{avail_ts}/{}", avail_ts + 1),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/header/window/from/{avail_block}/{}", avail_ts + 1),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("node/header/window/from/hash/{block_hash}/{}", avail_ts + 1),
+            )
+            .await?;
+
+            assert_json_endpoint(&http, api_port, "node/stake-table/current").await?;
+            assert_json_endpoint(&http, api_port, "node/stake-table/1").await?;
+            assert_json_endpoint(&http, api_port, "node/da-stake-table/current").await?;
+            assert_json_endpoint(&http, api_port, "node/da-stake-table/1").await?;
+
+            assert_json_endpoint(&http, api_port, "node/validators/1").await?;
+            assert_json_endpoint(&http, api_port, "node/all-validators/1/0/100").await?;
+
+            assert_json_endpoint(&http, api_port, "node/participation/proposal/current").await?;
+            assert_json_endpoint(&http, api_port, "node/participation/proposal/1").await?;
+            assert_json_endpoint(&http, api_port, "node/participation/vote/current").await?;
+            assert_json_endpoint(&http, api_port, "node/participation/vote/1").await?;
+
+            assert_json_endpoint(&http, api_port, "node/block-reward").await?;
+            assert_json_endpoint(&http, api_port, "node/block-reward/epoch/1").await?;
+
+            assert_json_endpoint(&http, api_port, "node/oldest-block").await?;
+            assert_json_endpoint(&http, api_port, "node/oldest-leaf").await?;
+
+            // Catchup endpoints. View number and height for in-memory state aren't readily
+            // available after stopping consensus, so we check error semantics on
+            // intentionally invalid lookups and the deprecated routes.
+            let decided_view = decided_leaf.view_number().u64();
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("catchup/{height}/{decided_view}/blocks"),
+            )
+            .await?;
+            // chain-config: a malformed TaggedBase64 commitment (bad checksum) parses-fails
+            // on the request path and yields 400.
+            assert_endpoint_status(
+                &http,
+                api_port,
+                "catchup/chain-config/CHAINCONFIG~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                400,
+            )
+            .await?;
+            // leafchain: undecided height returns 404 from both.
+            assert_endpoint_status(&http, api_port, "catchup/999999/leafchain", 404).await?;
+            // cert2: missing cert returns 404.
+            assert_endpoint_status(&http, api_port, "catchup/999999/cert2", 404).await?;
+            // Deprecated catchup routes still respond 404.
+            assert_endpoint_status(&http, api_port, "catchup/1/reward-amounts/100/0", 404).await?;
+
+            // Production peer-catchup posts VBS-binary bodies via http-client.
+            // Exercise the bulk-account POST endpoints in that exact wire format so any
+            // regression to "JSON-only body" is caught here.
+            // Reuse the account sampled above; `validated_state.fee_merkle_tree` was
+            // captured before the fee-paying blocks and can be empty.
+            assert_post_binary(
+                &http,
+                api_port,
+                &format!("catchup/{height}/{decided_view}/accounts"),
+                &vec![fee_account],
+            )
+            .await?;
+            // reward-accounts V1 takes a Vec<RewardAccountV1>. We send empty since the V2
+            // tree may not have V1-shaped entries in this test, but the wire format is what
+            // we're validating.
+            assert_post_binary(
+                &http,
+                api_port,
+                &format!("catchup/{height}/{decided_view}/reward-accounts"),
+                &Vec::<espresso_types::v0_3::RewardAccountV1>::new(),
+            )
+            .await?;
+
+            // State signature: missing heights should 404.
+            assert_endpoint_status(&http, api_port, "state-signature/block/999999", 404).await?;
+
+            // Error bodies for endpoints that fail via `ApiError` must keep the
+            // `{"Custom":{"message","status"}}` JSON envelope that existing clients parse.
+            // Availability endpoints (`availability/leaf/...`, etc.) are excluded because
+            // they use per-endpoint error variants like `{"FetchLeaf":{...}}`; their status
+            // codes are still checked by `assert_endpoint_status` above.
+            assert_error_body(&http, api_port, "catchup/999999/cert2", 404).await?;
+            assert_error_body(&http, api_port, "catchup/999999/leafchain", 404).await?;
+            assert_error_body(&http, api_port, "state-signature/block/999999", 404).await?;
+
+            // Explorer endpoints.
+            assert_json_endpoint(&http, api_port, "explorer/explorer-summary").await?;
+            assert_json_endpoint(&http, api_port, &format!("explorer/block/{avail_block}")).await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("explorer/block/hash/{block_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(&http, api_port, "explorer/blocks/latest/10").await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("explorer/blocks/{avail_block}/10"),
+            )
+            .await?;
+            assert_json_endpoint(&http, api_port, "explorer/transactions/latest/10").await?;
+
+            // Light-client endpoints. Use the same block we used for availability tests.
+            assert_json_endpoint(&http, api_port, &format!("light-client/leaf/{avail_block}"))
+                .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("light-client/leaf/hash/{leaf_hash}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("light-client/payload/{avail_block}"),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!("light-client/payload/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "light-client/namespace/{avail_block}/{}",
+                    u64::from(avail_ns)
+                ),
+            )
+            .await?;
+            assert_json_endpoint(
+                &http,
+                api_port,
+                &format!(
+                    "light-client/namespace/{avail_block}/{}/{}",
+                    avail_block + 1,
+                    u64::from(avail_ns)
+                ),
+            )
+            .await?;
+
+            // Regression: an oversized range on the plural namespaces route must return
+            // 400 Bad Request (the status carried by the query-service error), not 500.
+            let encoded_ns = tagged_base64::TaggedBase64::new(
+                ::light_client::client::NAMESPACES_PARAM_TAG,
+                &serde_json::to_vec(&vec![u64::from(avail_ns)])?,
+            )?;
+            assert_endpoint_status(
+                &http,
+                api_port,
+                &format!(
+                    "light-client/namespaces/{avail_block}/{}/{encoded_ns}",
+                    avail_block + 200
+                ),
+                400,
+            )
+            .await?;
+
+            // Token endpoints.
+            assert_json_endpoint(&http, api_port, "token/total-minted-supply").await?;
+            assert_json_endpoint(&http, api_port, "token/circulating-supply").await?;
+            assert_json_endpoint(&http, api_port, "token/circulating-supply-ethereum").await?;
+            assert_json_endpoint(&http, api_port, "token/total-issued-supply").await?;
+            assert_json_endpoint(&http, api_port, "token/total-reward-distributed").await?;
+
+            // HTTP status codes for common failure cases that clients depend on.
+
+            // Requesting a leaf far ahead of the chain tip times out and returns
+            // 404 Not Found.
+            assert_endpoint_status(&http, api_port, "availability/leaf/999999", 404).await?;
+
+            // Requesting a block range that exceeds the per-request limit
+            // returns 400 Bad Request.
+            assert_endpoint_status(
+                &http,
+                api_port,
+                &format!("availability/block/{avail_block}/{}", avail_block + 200),
+                400,
+            )
+            .await?;
+
+            // Requesting a namespace proof range that exceeds the limit also
+            // returns 400 Bad Request.
+            assert_endpoint_status(
+                &http,
+                api_port,
+                &format!(
+                    "availability/block/{avail_block}/{}/namespace/{avail_ns}",
+                    avail_block + 200
+                ),
+                400,
+            )
+            .await?;
 
             anyhow::Ok(())
         };
