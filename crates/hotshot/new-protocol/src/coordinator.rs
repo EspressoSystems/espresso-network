@@ -650,12 +650,12 @@ where
                         }
                         // We built this block; skip reconstructing it from our own loopback share.
                         self.vid_reconstructor.retire_view(block.view);
-                        // Each of this block's transactions was sent to `fanout` leaders up to
-                        // view `block.view - 1 + fanout`, so the leaders of the next
-                        // `fanout - 1` views may hold copies, and must drop them.
+                        // A leader of several views builds a copy sent for a later one into this
+                        // block, so a transaction here can be sent from `block.view - 1`, and its
+                        // other copies can sit with the leaders of the next `fanout` views.
                         let holders = self.upcoming_leaders(
                             block.view + 1,
-                            self.block_builder.fanout().get() - 1,
+                            self.block_builder.fanout().get(),
                             epoch,
                         );
                         for (_, leader) in holders {
