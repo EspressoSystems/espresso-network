@@ -49,13 +49,13 @@ message StateHeightResponse {
 service MerklizedStateService {
   // Get the Merkle path to one leaf of the block merkle tree, which commits to past block
   // headers. Exactly one of height or commit selects the snapshot. None or both is a 400
-  rpc GetBlockStatePath(GetBlockStatePathRequest) returns (MerklePathResponse) {
+  rpc GetBlockStatePath(GetBlockStatePathRequest) returns (MerklePath) {
     option (google.api.http) = {get: "/v2/merklized-state/block/path"};
   }
 
   // Get the Merkle path to one account of the fee merkle tree, which holds the fee balances.
   // Exactly one of height or commit selects the snapshot. None or both is a 400
-  rpc GetFeeStatePath(GetFeeStatePathRequest) returns (MerklePathResponse) {
+  rpc GetFeeStatePath(GetFeeStatePathRequest) returns (MerklePath) {
     option (google.api.http) = {get: "/v2/merklized-state/fee/path"};
   }
 

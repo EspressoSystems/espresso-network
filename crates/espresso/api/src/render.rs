@@ -45,8 +45,7 @@ use jf_merkle_tree_compat::{
 use tagged_base64::TaggedBase64;
 
 use crate::proto::{
-    self, advz_merkle_node::Node, header_response::Header as Shape,
-    resolvable_chain_config::ChainConfig,
+    self, header_response::Header as Shape, merkle_node::Node, resolvable_chain_config::ChainConfig,
 };
 
 impl From<ResolvableChainConfig> for proto::ResolvableChainConfig {
@@ -436,15 +435,15 @@ impl TryFrom<&VidShare> for proto::VidShareResponse {
     }
 }
 
-fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, tonic::Status> {
+fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::MerkleNode, tonic::Status> {
     let node = if let Some(leaf) = value.get("Leaf") {
-        Node::Leaf(proto::AdvzMerkleNodeLeaf {
+        Node::Leaf(proto::MerkleNodeLeaf {
             elem: json_field(leaf, "elem")?,
             pos: json_field(leaf, "pos")?,
             value: json_field(leaf, "value")?,
         })
     } else if let Some(branch) = value.get("Branch") {
-        Node::Branch(proto::AdvzMerkleNodeBranch {
+        Node::Branch(proto::MerkleNodeBranch {
             children: json_array(branch, "children")?
                 .iter()
                 .map(advz_merkle_node)
@@ -453,12 +452,12 @@ fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, 
         })
     } else if let Some(subtree) = value.get("ForgettenSubtree") {
         // Upstream's spelling, which the proto field name corrects.
-        Node::ForgottenSubtree(proto::AdvzMerkleNodeForgottenSubtree {
+        Node::ForgottenSubtree(proto::MerkleNodeForgottenSubtree {
             value: json_field(subtree, "value")?,
         })
     } else if value.as_str() == Some("Empty") {
         // A unit variant, so v1 writes it as a bare string.
-        Node::Empty(proto::AdvzMerkleNodeEmpty {})
+        Node::Empty(proto::MerkleNodeEmpty {})
     } else {
         let arms: Vec<&str> = value
             .as_object()
@@ -468,7 +467,7 @@ fn advz_merkle_node(value: &serde_json::Value) -> Result<proto::AdvzMerkleNode, 
             "VID share JSON has an unknown Merkle node arm: {arms:?}"
         )));
     };
-    Ok(proto::AdvzMerkleNode { node: Some(node) })
+    Ok(proto::MerkleNode { node: Some(node) })
 }
 
 impl From<&[Header]> for proto::HeaderRangeResponse {
@@ -537,21 +536,21 @@ impl TryFrom<&[NamespaceProofQueryData]> for proto::NamespaceProofRangeResponse 
     }
 }
 
-impl<E, I, T, const ARITY: usize> From<&MerkleProof<E, I, T, ARITY>> for proto::MerklePathResponse
+impl<E, I, T, const ARITY: usize> From<&MerkleProof<E, I, T, ARITY>> for proto::MerklePath
 where
     E: Element + CanonicalSerialize,
     I: Index + CanonicalSerialize,
     T: NodeValue,
 {
     fn from(proof: &MerkleProof<E, I, T, ARITY>) -> Self {
-        proto::MerklePathResponse {
+        proto::MerklePath {
             pos: field_tb64(&proof.pos),
             proof: proof.proof.iter().map(Into::into).collect(),
         }
     }
 }
 
-impl<E, I, T> From<&MerkleNode<E, I, T>> for proto::AdvzMerkleNode
+impl<E, I, T> From<&MerkleNode<E, I, T>> for proto::MerkleNode
 where
     E: Element + CanonicalSerialize,
     I: Index + CanonicalSerialize,
@@ -559,26 +558,26 @@ where
 {
     fn from(node: &MerkleNode<E, I, T>) -> Self {
         let node = match node {
-            MerkleNode::Empty => Node::Empty(proto::AdvzMerkleNodeEmpty {}),
-            MerkleNode::Branch { value, children } => Node::Branch(proto::AdvzMerkleNodeBranch {
+            MerkleNode::Empty => Node::Empty(proto::MerkleNodeEmpty {}),
+            MerkleNode::Branch { value, children } => Node::Branch(proto::MerkleNodeBranch {
                 value: field_tb64(value),
                 children: children
                     .iter()
-                    .map(|child| proto::AdvzMerkleNode::from(&**child))
+                    .map(|child| proto::MerkleNode::from(&**child))
                     .collect(),
             }),
-            MerkleNode::Leaf { value, pos, elem } => Node::Leaf(proto::AdvzMerkleNodeLeaf {
+            MerkleNode::Leaf { value, pos, elem } => Node::Leaf(proto::MerkleNodeLeaf {
                 value: field_tb64(value),
                 pos: field_tb64(pos),
                 elem: field_tb64(elem),
             }),
             MerkleNode::ForgettenSubtree { value } => {
-                Node::ForgottenSubtree(proto::AdvzMerkleNodeForgottenSubtree {
+                Node::ForgottenSubtree(proto::MerkleNodeForgottenSubtree {
                     value: field_tb64(value),
                 })
             },
         };
-        proto::AdvzMerkleNode { node: Some(node) }
+        proto::MerkleNode { node: Some(node) }
     }
 }
 
@@ -590,10 +589,10 @@ impl From<RewardAccountQueryDataV2> for proto::RewardAccountProofResponse {
         } = query;
         let proof = match proof {
             RewardMerkleProofV2::Presence(proof) => {
-                proto::reward_merkle_proof::Proof::Presence(proto::MerklePathResponse::from(&proof))
+                proto::reward_merkle_proof::Proof::Presence(proto::MerklePath::from(&proof))
             },
             RewardMerkleProofV2::Absence(proof) => {
-                proto::reward_merkle_proof::Proof::Absence(proto::MerklePathResponse::from(&proof))
+                proto::reward_merkle_proof::Proof::Absence(proto::MerklePath::from(&proof))
             },
         };
         proto::RewardAccountProofResponse {

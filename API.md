@@ -59,12 +59,12 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   booleans by stake table position rather than v1's bitvec layout. A block range is one response message, so a large one
   can exceed a gRPC client's default 4 MB decode limit, which clients reading block ranges over gRPC should raise.
 - `MerklizedStateService` serves the block and fee merkle trees: a path lookup per tree and the newest persisted state
-  height. A path reuses the `AdvzMerkleNode` messages a VID share carries, a oneof over jellyfish's four node variants,
-  and every hash, index and element keeps the `FIELD~` TaggedBase64 encoding jellyfish gives it. The proof is the same
-  bytes v1 serves, in a shape a client can walk node by node, though recomputing a leaf hash still needs ark-serialize.
-  An account with no fee entry has a balance of zero. Two v1 shapes collapse: the height and commitment snapshot
-  selectors become query parameters on one route per tree, exactly one required, and v1's two block-height routes both
-  read the same `get_last_state_height`, so v2 serves that number once.
+  height. A path reuses the `MerkleNode` messages a VID share carries, a oneof over jellyfish's four node variants, and
+  every hash, index and element keeps the `FIELD~` TaggedBase64 encoding jellyfish gives it. The proof is the same bytes
+  v1 serves, in a shape a client can walk node by node, though recomputing a leaf hash still needs ark-serialize. An
+  account with no fee entry has a balance of zero. Two v1 shapes collapse: the height and commitment snapshot selectors
+  become query parameters on one route per tree, exactly one required, and v1's two block-height routes both read the
+  same `get_last_state_height`, so v2 serves that number once.
 - `RewardStateService` serves the reward tree (`RewardMerkleTreeV2`) under `/v2/merklized-state/reward/...`: an
   account's balance and its proof, the L1 claim input, paged reward amounts, and the serialized tree. A balance or proof
   takes an optional `height`, absent meaning the newest height the light client contract finalized, where v1 has a route

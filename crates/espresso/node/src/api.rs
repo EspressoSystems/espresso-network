@@ -8834,8 +8834,8 @@ mod test {
         let v1_nodes = v1_advz["evals_proof"]["proof"].as_array().unwrap();
         assert!(v1_nodes.len() > 1, "{v1_advz}");
         assert_eq!(v2_proof.proof.len(), v1_nodes.len());
-        fn assert_node(v1: &serde_json::Value, v2: &espresso_api::proto::AdvzMerkleNode) {
-            use espresso_api::proto::advz_merkle_node::Node;
+        fn assert_node(v1: &serde_json::Value, v2: &espresso_api::proto::MerkleNode) {
+            use espresso_api::proto::merkle_node::Node;
             match (v2.node.as_ref().unwrap(), v1) {
                 (Node::Leaf(leaf), v1) if v1.get("Leaf").is_some() => {
                     let v1 = &v1["Leaf"];
@@ -9202,8 +9202,8 @@ mod test {
         let key = state_height - 1;
         let v1_block: MerkleProof<Commitment<Header>, u64, Sha3Node, 3> =
             fetch(client, &format!("block-state/{state_height}/{key}")).await;
-        let expected = proto::MerklePathResponse::from(&v1_block);
-        let v2: proto::MerklePathResponse = fetch(
+        let expected = proto::MerklePath::from(&v1_block);
+        let v2: proto::MerklePath = fetch(
             client,
             &format!("v2/merklized-state/block/path?key={key}&height={state_height}"),
         )
@@ -9213,24 +9213,24 @@ mod test {
         let commit = root.block_merkle_tree_root();
         let v1_block: MerkleProof<Commitment<Header>, u64, Sha3Node, 3> =
             fetch(client, &format!("block-state/commit/{commit}/{key}")).await;
-        let v2: proto::MerklePathResponse = fetch(
+        let v2: proto::MerklePath = fetch(
             client,
             &format!("v2/merklized-state/block/path?key={key}&commit={commit}"),
         )
         .await;
-        assert_eq!(v2, proto::MerklePathResponse::from(&v1_block));
+        assert_eq!(v2, proto::MerklePath::from(&v1_block));
 
         // The builder paid for `last_block`, so its account is in the fee tree.
         let header: Header = fetch(client, &format!("availability/header/{last_block}")).await;
         let account = header.fee_info().first().expect("a fee was paid").account();
         let v1_fee: MerkleProof<FeeAmount, FeeAccount, Sha3Node, 256> =
             fetch(client, &format!("fee-state/{state_height}/{account}")).await;
-        let v2: proto::MerklePathResponse = fetch(
+        let v2: proto::MerklePath = fetch(
             client,
             &format!("v2/merklized-state/fee/path?address={account}&height={state_height}"),
         )
         .await;
-        assert_eq!(v2, proto::MerklePathResponse::from(&v1_fee));
+        assert_eq!(v2, proto::MerklePath::from(&v1_fee));
 
         let v1_balance: Option<FeeAmount> =
             fetch(client, &format!("fee-state/fee-balance/latest/{account}")).await;

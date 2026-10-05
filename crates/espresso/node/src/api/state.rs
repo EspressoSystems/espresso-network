@@ -3990,7 +3990,7 @@ where
     async fn get_block_state_path(
         &self,
         request: tonic::Request<proto::GetBlockStatePathRequest>,
-    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::MerklePath>, tonic::Status> {
         let request = request.into_inner();
         let key = required(request.key, "key")?;
         let snapshot = snapshot_from_query(request.height, request.commit)?;
@@ -3999,24 +3999,20 @@ where
             <Self as v1::BlockStateApi>::get_block_state_path(self, snapshot, key.to_string())
                 .await
                 .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::MerklePathResponse::from(
-            &proof,
-        )))
+        Ok(tonic::Response::new(proto::MerklePath::from(&proof)))
     }
 
     async fn get_fee_state_path(
         &self,
         request: tonic::Request<proto::GetFeeStatePathRequest>,
-    ) -> Result<tonic::Response<proto::MerklePathResponse>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::MerklePath>, tonic::Status> {
         let request = request.into_inner();
         let address = required(request.address, "address")?;
         let snapshot = snapshot_from_query(request.height, request.commit)?;
         let proof = <Self as v1::FeeStateApi>::get_fee_state_path(self, snapshot, address)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::MerklePathResponse::from(
-            &proof,
-        )))
+        Ok(tonic::Response::new(proto::MerklePath::from(&proof)))
     }
 
     async fn get_latest_fee_balance(
@@ -5837,7 +5833,7 @@ mod tests {
         T: jf_merkle_tree_compat::NodeValue,
     {
         let expected = serde_json::to_value(proof).unwrap();
-        let converted = proto::MerklePathResponse::from(proof);
+        let converted = proto::MerklePath::from(proof);
 
         assert_eq!(converted.pos, expected["pos"].as_str().unwrap());
         let expected_path = expected["proof"].as_array().unwrap();
@@ -5882,8 +5878,8 @@ mod tests {
         assert_matches_v1_rendering(&proof);
     }
 
-    fn assert_merkle_node(node: &proto::AdvzMerkleNode, expected: &serde_json::Value) {
-        use proto::advz_merkle_node::Node;
+    fn assert_merkle_node(node: &proto::MerkleNode, expected: &serde_json::Value) {
+        use proto::merkle_node::Node;
 
         match node.node.as_ref().unwrap() {
             Node::Empty(_) => assert_eq!(expected, "Empty"),

@@ -31,8 +31,8 @@ message GetRewardAccountProofRequest {
 // Mirrors the tree's own presence or absence proof. Exactly one arm is set
 message RewardMerkleProof {
   oneof proof {
-    MerklePathResponse presence = 1;
-    MerklePathResponse absence = 2;
+    MerklePath presence = 1;
+    MerklePath absence = 2;
   }
 }
 

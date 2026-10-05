@@ -127,7 +127,7 @@ message AdvzMerkleProof {
   // The index this proof is for, ark-serialized into one TaggedBase64 `FIELD~`
   string pos = 1;
 
-  repeated AdvzMerkleNode proof = 2;
+  repeated MerkleNode proof = 2;
 }
 
 // Legacy ADVZ share, which only a 0.1 or 0.2 block carries

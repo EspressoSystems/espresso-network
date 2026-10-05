@@ -5429,14 +5429,14 @@ mod tests {
         async fn get_block_state_path(
             &self,
             _request: tonic::Request<crate::proto::GetBlockStatePathRequest>,
-        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+        ) -> Result<tonic::Response<crate::proto::MerklePath>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 
         async fn get_fee_state_path(
             &self,
             _request: tonic::Request<crate::proto::GetFeeStatePathRequest>,
-        ) -> Result<tonic::Response<crate::proto::MerklePathResponse>, tonic::Status> {
+        ) -> Result<tonic::Response<crate::proto::MerklePath>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 
