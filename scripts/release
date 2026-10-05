@@ -470,7 +470,7 @@ def render_row(
     mark: MarkKind | None,
     landed: bool,
     backport: BackportPr | None,
-    tag: str | None = None,
+    tag_cell: str | None = None,
 ) -> str:
     status = row_status(mark, landed, backport)
     pr = "-"
@@ -485,8 +485,8 @@ def render_row(
     title = _escape_cell(html.escape(bare_subject(commit.subject), quote=False))
     if mark == "skip":
         title = f"~~{title}~~"
-    tag_cell = "" if tag is None else f" {tag} |"
-    return f"| {status} | {pr} | {commit_link} |{tag_cell} {backport_cell} | {title} |"
+    tag_col = "" if tag_cell is None else f" {tag_cell} |"
+    return f"| {status} | {pr} | {commit_link} |{tag_col} {backport_cell} | {title} |"
 
 
 def _cap_rows(

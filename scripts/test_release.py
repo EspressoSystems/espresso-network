@@ -1075,11 +1075,29 @@ class BuildTrackerStateAnchor(unittest.TestCase):
                 ),
                 ("gh", "api", "repos/{owner}/{repo}/releases?per_page=100"): "",
                 ("git", "ls-remote", "--heads"): "",
-                ("git", "tag", "--list", "0.6.0.*"): "",
+                ("git", "tag", "--list", "0.6.0.*"): (
+                    f"0.6.0.1\x002026-09-22\x00\x00{branch_sha}\n"
+                    f"0.6.0.0\x002026-09-21\x00\x00{anchor}\n"
+                ),
+                (
+                    "git",
+                    "log",
+                    "--no-merges",
+                    "--format=%H%x00%s",
+                    f"{anchor}..{branch_sha}",
+                ): f"{branch_sha}\x00feat: other, retitled (#20)\n",
+                (
+                    "git",
+                    "log",
+                    "--no-merges",
+                    "--format=%H%x00%s",
+                    f"{anchor}..{anchor}",
+                ): "",
             }
         )
         git, gh = rel.Git(runner), rel.Gh(runner)
         state, _body_before = rel.build_tracker_state(git, gh, 7, version())
+        self.assertEqual(state.branch_tags, {branch_sha: "0.6.0.1"})
         self.assertEqual(
             [c.sha for c in state.main_commits], [cherry_sha, pr_match_sha]
         )
