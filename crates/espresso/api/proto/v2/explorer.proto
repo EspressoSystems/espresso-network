@@ -27,7 +27,7 @@ message ExplorerBlockDetail {
   uint64 size = 7;
 
   // Amounts with their currency code, separated by a non-breaking space (U+00A0), e.g.
-  // "ETH 0.000000000000000455"
+  // "ETH 0.000000000000000455" as JSON writes it
   repeated string block_reward = 8;
 }
 

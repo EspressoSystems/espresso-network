@@ -1252,27 +1252,12 @@ impl From<&LCV3StateSignatureRequestBody> for proto::StateSignatureResponse {
     }
 }
 
-/// The same `Rfc3339` format `Timestamp`'s own `Serialize` uses, so v1 and v2 agree on the string.
-fn explorer_time(time: &explorer::Timestamp) -> String {
-    time.0
-        .format(&time::format_description::well_known::Rfc3339)
-        .expect("a Timestamp is built from a unix time inside RFC 3339's year range")
-}
-
-/// `FeeAccount`'s `Display` drops the `0x` that its serde writes.
-fn explorer_accounts(accounts: &[FeeAccount]) -> Vec<String> {
-    accounts
-        .iter()
-        .map(|account| format!("{:#x}", account.0))
-        .collect()
-}
-
 impl From<&explorer::BlockDetail<SeqTypes>> for proto::ExplorerBlockDetail {
     fn from(block: &explorer::BlockDetail<SeqTypes>) -> Self {
         proto::ExplorerBlockDetail {
             hash: block.hash.to_string(),
             height: block.height,
-            time: explorer_time(&block.time),
+            time: explorer_time(block.time),
             num_transactions: block.num_transactions,
             proposer_id: explorer_accounts(&block.proposer_id),
             fee_recipient: explorer_accounts(&block.fee_recipient),
@@ -1291,7 +1276,7 @@ impl From<&explorer::BlockSummary<SeqTypes>> for proto::ExplorerBlockSummary {
             proposer_id: explorer_accounts(&block.proposer_id),
             num_transactions: block.num_transactions,
             size: block.size,
-            time: explorer_time(&block.time),
+            time: explorer_time(block.time),
         }
     }
 }
@@ -1308,7 +1293,7 @@ impl From<&explorer::TransactionSummary<SeqTypes>> for proto::ExplorerTransactio
             height: transaction.height,
             offset: transaction.offset,
             num_transactions: transaction.num_transactions,
-            time: explorer_time(&transaction.time),
+            time: explorer_time(transaction.time),
         }
     }
 }
@@ -1322,7 +1307,7 @@ impl From<&explorer::TransactionDetail<SeqTypes>> for proto::ExplorerTransaction
             offset: details.offset,
             num_transactions: details.num_transactions,
             size: details.size,
-            time: explorer_time(&details.time),
+            time: explorer_time(details.time),
             sequencing_fees: details
                 .sequencing_fees
                 .iter()
@@ -1388,4 +1373,19 @@ impl From<&explorer::SearchResult<SeqTypes>> for proto::ExplorerSearchResponse {
             transactions: results.transactions.iter().map(Into::into).collect(),
         }
     }
+}
+
+/// The same `Rfc3339` format `Timestamp`'s own `Serialize` uses, so v1 and v2 agree on the string.
+fn explorer_time(time: explorer::Timestamp) -> String {
+    time.0
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("a Timestamp is built from a unix time inside RFC 3339's year range")
+}
+
+/// `FeeAccount`'s `Display` drops the `0x` that its serde writes.
+fn explorer_accounts(accounts: &[FeeAccount]) -> Vec<String> {
+    accounts
+        .iter()
+        .map(|account| format!("{:#x}", account.0))
+        .collect()
 }
