@@ -344,3 +344,15 @@ def test_fleet_run_refuses_no_intra_latency_without_a_profile(harness: FleetHarn
     runner = harness.up_fleet()
     with pytest.raises(awsb.Refused, match="--no-intra-latency"):
         harness.run(runner, "--no-intra-latency")
+
+
+def test_read_index_row_backfills_latency_from_the_manifest(tmp_path: Path):
+    row = {key: "-" for key in awsb.INDEX_COLUMNS if key != "latency"}
+    netbench.write_json(tmp_path / awsb.INDEX_ROW_JSON, {**row, "user": "lulu"})
+    netbench.write_json(
+        tmp_path / awsb.MANIFEST_JSON,
+        {"config": {"latency": "decaf-2025", "intra_latency": True}},
+    )
+    filled = awsb.read_index_row(tmp_path)
+    assert filled["latency"] == "decaf-2025"
+    assert list(filled) == [*awsb.INDEX_COLUMNS, "user"]

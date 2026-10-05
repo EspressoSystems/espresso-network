@@ -6799,9 +6799,21 @@ def commit_message(name: str, row: dict[str, str]) -> str:
 
 
 def read_index_row(run_dir: Path) -> dict[str, str]:
-    """`index-row.json`, or for a run that predates it the row of the local INDEX.md."""
+    """`index-row.json`, or for a run that predates it the row of the local INDEX.md. A row
+    from before the latency column gets that cell from the manifest."""
     path = run_dir / INDEX_ROW_JSON
-    return nb.read_json(path) if path.exists() else legacy_index_row(run_dir)
+    if not path.exists():
+        return legacy_index_row(run_dir)
+    row = nb.read_json(path)
+    if "latency" in row:
+        return row
+    config = nb.read_json(run_dir / MANIFEST_JSON)["config"]
+    filled = {}
+    for key, value in row.items():
+        filled[key] = value
+        if key == "db":
+            filled["latency"] = latency_cell(config)
+    return filled
 
 
 def legacy_index_row(run_dir: Path) -> dict[str, str]:
