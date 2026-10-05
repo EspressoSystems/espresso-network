@@ -1,4 +1,4 @@
-use std::{default::Default, iter::Peekable, ops::Range};
+use std::{default::Default, iter::Peekable, ops::Range, sync::Arc};
 
 use derive_more::Display;
 use hotshot_types::vid::advz::{LargeRangeProofType, SmallRangeProofType};
@@ -179,10 +179,17 @@ pub struct Payload {
     //
     // TODO want to rename thisfield to `ns_payloads`, but can't due to
     // serialization compatibility.
-    #[serde(with = "base64_bytes")]
-    pub(crate) raw_payload: Vec<u8>,
+    #[serde(
+        serialize_with = "base64_bytes::serialize",
+        deserialize_with = "deserialize_shared_bytes"
+    )]
+    pub(crate) raw_payload: Arc<[u8]>,
 
     pub(crate) ns_table: NsTable,
+}
+
+fn deserialize_shared_bytes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Arc<[u8]>, D::Error> {
+    base64_bytes::deserialize(d).map(Arc::from)
 }
 
 /// Byte length of a block payload, which includes all namespaces but *not* the

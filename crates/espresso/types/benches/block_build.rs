@@ -162,6 +162,9 @@ fn bench_tx_stages(group: &mut BenchmarkGroup<WallTime>, case: &Case) {
             )
         })
     });
+    group.bench_function(BenchmarkId::new("payload_clone", &label), |b| {
+        b.iter_with_large_drop(|| black_box(&enc.payload).clone())
+    });
     group.bench_function(BenchmarkId::new("builder_commitment", &label), |b| {
         b.iter(|| enc.sha())
     });
