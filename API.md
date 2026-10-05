@@ -147,6 +147,11 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
 
 - Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never
   renumber, reuse, or change the type of an existing field.
+- A rename is therefore an addition. Add the new name as a new field, or a new rpc, and mark the old one
+  `[deprecated = true]` (`option deprecated = true` on an rpc), which the OpenAPI document flags. Serve both until
+  clients have moved: fill in both in responses and accept either in requests. prost marks the old Rust field
+  `#[deprecated]`, so each handler that still touches it needs `#[expect(deprecated, reason = "...")]` to pass
+  `just lint`. Then delete the old field and `reserved` its number and name, so neither is ever reused.
 - An rpc is a GET, or a POST when its input cannot be flat. A POST binds the whole request message as its protoJSON body
   (`body: "*"`) and refuses a query string with a 400.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
