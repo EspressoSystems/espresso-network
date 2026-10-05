@@ -1002,6 +1002,42 @@ async fn test_state_validation_failed_keeps_proposal() {
     );
 }
 
+/// A VID share whose `ns_lens` disagree with the proposal's namespace table is
+/// refused at pairing: the proposal is not processed and gets no vote1. The
+/// commitment does not bind `ns_lens`, so this check is what keeps a decided
+/// block's stored common honest about its namespace boundaries.
+#[tokio::test]
+async fn test_vid_share_with_mismatched_ns_lens_is_refused() {
+    let test_data = TestData::new(1).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    // Same total as the table's single namespace, split in two.
+    let mut share = view.vid_share_for(&node_key);
+    let len = share.common.payload_byte_len();
+    share.common.ns_lens = vec![0, len];
+
+    let mut harness = ConsensusHarness::new(0).await;
+    harness
+        .apply_pair((
+            ConsensusInput::Proposal(view.leader_public_key, view.proposal_message()),
+            ConsensusInput::VidShare(share),
+        ))
+        .await;
+    assert!(
+        !any(harness.outputs(), is_request_state),
+        "a proposal paired with a mismatched share must not be processed"
+    );
+    assert!(!any(harness.outputs(), is_vote1));
+
+    // The honest share for the same proposal is processed.
+    let mut honest = ConsensusHarness::new(0).await;
+    honest
+        .apply_pair(view.proposal_input_consensus(&node_key))
+        .await;
+    assert!(any(honest.outputs(), is_request_state));
+}
+
 /// Without Certificate2, no decision is made even with all other data.
 #[tokio::test]
 async fn test_decide_requires_cert2() {

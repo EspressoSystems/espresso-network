@@ -52,6 +52,7 @@ use crate::{
     outbox::Outbox,
     state::{StateRequest, StateResponse},
     storage::{ActionKind, StorageOutput},
+    vid::ns_lens_match_metadata,
 };
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -1055,6 +1056,14 @@ impl<T: NodeType> Consensus<T> {
             warn!(
                 %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch, %err,
                 "proposal not safe"
+            );
+            return Protocol::Abort;
+        }
+
+        if !ns_lens_match_metadata::<T>(&vid_share.common, proposal.block_header.metadata()) {
+            warn!(
+                %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
+                "VID share namespace lengths disagree with the proposal's namespace table"
             );
             return Protocol::Abort;
         }
