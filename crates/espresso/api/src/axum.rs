@@ -5571,7 +5571,7 @@ mod tests {
         async fn get_catchup_cert2(
             &self,
             _request: tonic::Request<crate::proto::GetCatchupCert2Request>,
-        ) -> Result<tonic::Response<crate::proto::CatchupCert2Response>, tonic::Status> {
+        ) -> Result<tonic::Response<crate::proto::Cert2Response>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
 

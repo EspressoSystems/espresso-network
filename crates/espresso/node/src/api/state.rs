@@ -2626,13 +2626,13 @@ where
     async fn get_catchup_cert2(
         &self,
         request: tonic::Request<proto::GetCatchupCert2Request>,
-    ) -> Result<tonic::Response<proto::CatchupCert2Response>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::Cert2Response>, tonic::Status> {
         let height = required(request.into_inner().height, "height")?;
         let cert = <Self as v1::CatchupApi>::get_cert2(self, height)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::CatchupCert2Response {
-            cert2: Some((&cert).into()),
+        Ok(tonic::Response::new(proto::Cert2Response {
+            certificate: Some((&cert).into()),
         }))
     }
 

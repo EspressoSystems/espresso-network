@@ -84,7 +84,7 @@ message CatchupChainConfigResponse {
 }
 
 message GetCatchupLeafChainRequest {
-  // Decided height to walk back from. Required
+  // Height whose decide the chain proves, walking forward from it. Required
   optional uint64 height = 1;
 }
 
@@ -96,10 +96,6 @@ message CatchupLeafChainResponse {
 message GetCatchupCert2Request {
   // Height the certificate finalizes. Required
   optional uint64 height = 1;
-}
-
-message CatchupCert2Response {
-  Certificate2 cert2 = 1;
 }
 
 message GetCatchupRewardAccountRequest {
@@ -178,7 +174,7 @@ service CatchupService {
   }
 
   // Get the phase-2 certificate finalizing a height
-  rpc GetCatchupCert2(GetCatchupCert2Request) returns (CatchupCert2Response) {
+  rpc GetCatchupCert2(GetCatchupCert2Request) returns (Cert2Response) {
     option (google.api.http) = {get: "/v2/catchup/cert2"};
   }
 

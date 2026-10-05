@@ -9524,37 +9524,56 @@ mod test {
             espresso_api::proto::MerklePathResponse::from(&v1_frontier)
         );
 
-        for (route, v1_path, v2_path) in [
-            ("fee-accounts", "accounts", "fee-accounts"),
-            ("reward-accounts", "reward-accounts", "reward-accounts"),
-        ] {
-            let v1 = client
-                .post::<serde_json::Value>(&format!(
-                    "catchup/{catchup_height}/{catchup_view}/{v1_path}"
-                ))
-                .body_json(&serde_json::json!([format!("0x{account}")]))
-                .unwrap()
-                .send()
-                .await;
-            let v2 = client
-                .post::<espresso_api::proto::CatchupMerkleTreeResponse>(&format!(
-                    "v2/catchup/{v2_path}"
-                ))
-                .body_json(&espresso_api::proto::GetCatchupFeeAccountsRequest {
-                    height: Some(catchup_height),
-                    view: Some(catchup_view),
-                    accounts: vec![format!("0x{account}")],
-                })
-                .unwrap()
-                .send()
-                .await;
-            if let Some((v1, v2)) = both_or_same_status(route, v1, v2) {
-                assert_eq!(
-                    serde_json::from_slice::<serde_json::Value>(&v2.tree).unwrap(),
-                    v1,
-                    "{route}"
-                );
-            }
+        // The client asks v1 for VBS, so its trees are decoded as their type and compared with
+        // v2's JSON bytes through that type's serde.
+        let accounts = vec![format!("0x{account}")];
+        let v1 = client
+            .post::<espresso_types::FeeMerkleTree>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/accounts"
+            ))
+            .body_json(&accounts)
+            .unwrap()
+            .send()
+            .await;
+        let v2 = client
+            .post::<espresso_api::proto::CatchupMerkleTreeResponse>("v2/catchup/fee-accounts")
+            .body_json(&espresso_api::proto::GetCatchupFeeAccountsRequest {
+                height: Some(catchup_height),
+                view: Some(catchup_view),
+                accounts: accounts.clone(),
+            })
+            .unwrap()
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("fee-accounts", v1, v2) {
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&v2.tree).unwrap(),
+                serde_json::to_value(&v1).unwrap()
+            );
+        }
+        let v1 = client
+            .post::<espresso_types::v0_3::RewardMerkleTreeV1>(&format!(
+                "catchup/{catchup_height}/{catchup_view}/reward-accounts"
+            ))
+            .body_json(&accounts)
+            .unwrap()
+            .send()
+            .await;
+        let v2 = client
+            .post::<espresso_api::proto::CatchupMerkleTreeResponse>("v2/catchup/reward-accounts")
+            .body_json(&espresso_api::proto::GetCatchupRewardAccountsRequest {
+                height: Some(catchup_height),
+                view: Some(catchup_view),
+                accounts,
+            })
+            .unwrap()
+            .send()
+            .await;
+        if let Some((v1, v2)) = both_or_same_status("reward-accounts", v1, v2) {
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&v2.tree).unwrap(),
+                serde_json::to_value(&v1).unwrap()
+            );
         }
 
         let v1 = client
@@ -9629,13 +9648,13 @@ mod test {
             .send()
             .await;
         let v2 = client
-            .get::<espresso_api::proto::CatchupCert2Response>(&format!(
+            .get::<espresso_api::proto::Cert2Response>(&format!(
                 "v2/catchup/cert2?height={decided}"
             ))
             .send()
             .await;
         if let Some((v1, v2)) = both_or_same_status("cert2", v1, v2) {
-            assert_eq!(v2.cert2, Some((&v1).into()));
+            assert_eq!(v2.certificate, Some((&v1).into()));
         }
 
         let v1 = client
