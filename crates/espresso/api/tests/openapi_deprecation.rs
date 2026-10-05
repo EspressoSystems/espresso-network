@@ -1,13 +1,14 @@
-//! A deprecated proto field, message, rpc or enum value is flagged in the OpenAPI document, which is
-//! how a REST client learns that a renamed field's old name, or a retired endpoint, is going away.
+//! A deprecated proto field, message, enum, enum value, rpc or service is flagged in the OpenAPI
+//! document, which is how a REST client learns that a renamed field's old name, or a retired
+//! endpoint, is going away.
 //!
 //! No committed proto deprecates anything yet, so the fixture is the real descriptor set with an
 //! item or two marked deprecated.
 
 use prost::Message as _;
 use prost_types::{
-    DescriptorProto, EnumValueOptions, FieldOptions, FileDescriptorSet, MessageOptions,
-    MethodOptions,
+    DescriptorProto, EnumOptions, EnumValueOptions, FieldOptions, FileDescriptorSet,
+    MessageOptions, MethodOptions, ServiceOptions,
 };
 use serde_json::{Value, json};
 
@@ -72,6 +73,32 @@ fn deprecate_rpc(fdset: &mut FileDescriptorSet, service: &str, rpc: &str) {
         .find(|method| method.name() == rpc)
         .unwrap_or_else(|| panic!("rpc {service}.{rpc} exists"))
         .options = Some(MethodOptions {
+        deprecated: Some(true),
+        ..Default::default()
+    });
+}
+
+fn deprecate_service(fdset: &mut FileDescriptorSet, service: &str) {
+    fdset
+        .file
+        .iter_mut()
+        .flat_map(|file| file.service.iter_mut())
+        .find(|s| s.name() == service)
+        .unwrap_or_else(|| panic!("service {service} exists"))
+        .options = Some(ServiceOptions {
+        deprecated: Some(true),
+        ..Default::default()
+    });
+}
+
+fn deprecate_enum(fdset: &mut FileDescriptorSet, enum_name: &str) {
+    fdset
+        .file
+        .iter_mut()
+        .flat_map(|file| file.enum_type.iter_mut())
+        .find(|e| e.name() == enum_name)
+        .unwrap_or_else(|| panic!("enum {enum_name} exists"))
+        .options = Some(EnumOptions {
         deprecated: Some(true),
         ..Default::default()
     });
@@ -156,6 +183,21 @@ fn a_deprecated_rpc_is_flagged() {
     let spec = spec(|fdset| deprecate_rpc(fdset, "AvailabilityService", "GetHeader"));
     assert_eq!(operation(&spec, "GetHeader")["deprecated"], json!(true));
     assert_eq!(operation(&spec, "GetLeaf")["deprecated"], Value::Null);
+}
+
+#[test]
+fn a_deprecated_service_flags_each_of_its_operations() {
+    let spec = spec(|fdset| deprecate_service(fdset, "TokenService"));
+    for operation_id in ["GetTotalMintedSupply", "GetCirculatingSupply"] {
+        assert_eq!(operation(&spec, operation_id)["deprecated"], json!(true));
+    }
+    assert_eq!(operation(&spec, "GetHeader")["deprecated"], Value::Null);
+}
+
+#[test]
+fn a_deprecated_enum_is_flagged() {
+    let spec = spec(|fdset| deprecate_enum(fdset, "BuilderType"));
+    assert_eq!(schema(&spec, "BuilderType")["deprecated"], json!(true));
 }
 
 #[test]

@@ -126,7 +126,7 @@ pub fn generate_from(
                     .into());
                 }
                 let operation = operation(
-                    service.name(),
+                    service,
                     method,
                     route,
                     comments.get(&[6, si as i32, 2, mi as i32]),
@@ -159,7 +159,8 @@ pub fn generate_from(
     }
 
     // A GET's request message is inlined as query parameters, so nothing can `$ref` it. Publishing
-    // it anyway leaves a client generator with a type per endpoint that it never uses.
+    // it anyway leaves a client generator with a type per endpoint that it never uses. Its own
+    // `deprecated` goes with it, so deprecate its fields, or the rpc, to reach a REST client.
     schemas.retain(|name, _| referenced.contains(name));
     schemas.insert("Error".to_string(), error_schema());
 
@@ -306,7 +307,7 @@ fn collect_routes(
 }
 
 fn operation(
-    service: &str,
+    service: &prost_types::ServiceDescriptorProto,
     method: &prost_types::MethodDescriptorProto,
     route: &Route,
     comment: Option<&str>,
@@ -336,7 +337,7 @@ fn operation(
         request_parameters(method.input_type(), messages)?
     };
     let mut op = json!({
-        "tags": [service.strip_suffix("Service").unwrap_or(service)],
+        "tags": [service.name().strip_suffix("Service").unwrap_or(service.name())],
         "operationId": method.name(),
         "parameters": parameters,
         "responses": {
@@ -369,7 +370,10 @@ fn operation(
             op["description"] = json!(text);
         }
     }
-    if method.options.as_ref().is_some_and(|o| o.deprecated()) {
+    // OpenAPI has no service object to flag, so a deprecated service marks each of its operations.
+    if method.options.as_ref().is_some_and(|o| o.deprecated())
+        || service.options.as_ref().is_some_and(|o| o.deprecated())
+    {
         op["deprecated"] = json!(true);
     }
     Ok(op)
@@ -515,6 +519,9 @@ fn enum_schema(enum_type: &EnumDescriptorProto, comments: &Comments, index: usiz
         // Rendered as markdown by the docs UIs, where a list needs a blank line ahead of it and
         // single newlines collapse, running every value into one paragraph.
         schema["description"] = json!(sections.join("\n\n"));
+    }
+    if enum_type.options.as_ref().is_some_and(|o| o.deprecated()) {
+        schema["deprecated"] = json!(true);
     }
     schema
 }
