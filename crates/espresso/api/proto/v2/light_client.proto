@@ -358,7 +358,7 @@ message GetLightClientPayloadProofRequest {
 }
 
 message GetLightClientPayloadProofRangesRequest {
-  // The ranges to prove, together covering at most the large-object range limit of heights
+  // Non-empty, ascending and disjoint, and together bounded by the large-object range limit
   repeated HeightRange ranges = 1;
 }
 

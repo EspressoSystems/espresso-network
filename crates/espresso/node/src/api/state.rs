@@ -3470,10 +3470,13 @@ where
     ) -> anyhow::Result<Self::NamespaceProof> {
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
+        let end = height
+            .checked_add(1)
+            .ok_or_else(|| not_found(format!("no block at height {height}")))?;
         let mut proofs = crate::api::light_client::get_namespace_proof_range(
             ds,
             height as usize,
-            (height + 1) as usize,
+            end as usize,
             namespace,
             fetch_timeout,
             lc_large_object_range_limit(),
