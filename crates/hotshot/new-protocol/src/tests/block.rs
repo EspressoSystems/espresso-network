@@ -89,8 +89,8 @@ async fn submit_sends_to_each_upcoming_leader() {
     assert_eq!(
         submit(&mut b, tx(1)),
         Vec::from([
-            tx_msg(view(5), Vec::from([tx(1)])),
             tx_msg(view(6), Vec::from([tx(1)])),
+            tx_msg(view(7), Vec::from([tx(1)])),
         ])
     );
     assert!(
@@ -103,25 +103,26 @@ async fn submit_sends_to_each_upcoming_leader() {
 async fn pending_transaction_is_resent_only_after_its_leaders_had_their_turn() {
     let mut b = builder_with(BlockBuilderConfig {
         fanout: 2,
+        ttl: 10,
         ..small_config()
     });
     submit(&mut b, tx(1));
 
-    for v in 1..=3 {
+    for v in 1..=4 {
         assert!(
             b.on_view_changed(view(v)).is_empty(),
             "view {v} is too early to resend"
         );
     }
     assert_eq!(
-        b.on_view_changed(view(4)),
+        b.on_view_changed(view(5)),
         Vec::from([
-            tx_msg(view(5), Vec::from([tx(1)])),
-            tx_msg(view(6), Vec::from([tx(1)])),
+            tx_msg(view(7), Vec::from([tx(1)])),
+            tx_msg(view(8), Vec::from([tx(1)])),
         ])
     );
     assert!(
-        b.on_view_changed(view(5)).is_empty(),
+        b.on_view_changed(view(6)).is_empty(),
         "a resent transaction waits for its new leaders"
     );
 }
@@ -137,8 +138,8 @@ async fn test_retry_buffer() {
     b.on_block_reconstructed(view(1), vec![t1.commit()]);
 
     assert_eq!(
-        b.on_view_changed(view(3)),
-        Vec::from([tx_msg(view(4), Vec::from([t2]))]),
+        b.on_view_changed(view(4)),
+        Vec::from([tx_msg(view(6), Vec::from([t2]))]),
         "only unconfirmed tx should be resent"
     );
 
@@ -157,7 +158,7 @@ async fn test_forward_batch_stops_at_one_block() {
     b.on_submit_transaction(tx(2)).unwrap();
     b.on_submit_transaction(tx(3)).unwrap();
 
-    let resent = b.on_view_changed(view(4));
+    let resent = b.on_view_changed(view(5));
     assert_eq!(resent.len(), 1, "one message per upcoming leader");
     assert_eq!(
         resent[0].transactions.len(),
@@ -201,7 +202,7 @@ fn builder_upgrading(old_size: u64, new_size: u64) -> BlockBuilder<TestTypes> {
             ]),
             ..small_config()
         },
-        upgrading_at(3),
+        upgrading_at(5),
     )
 }
 
@@ -213,18 +214,18 @@ async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
     }
 
     assert_eq!(
-        b.on_view_changed(view(3))[0].transactions.len(),
+        b.on_view_changed(view(4))[0].transactions.len(),
         4,
-        "a resend for view 4 uses the new block size"
+        "a resend for view 6 uses the new block size"
     );
 
-    b.on_transactions(tx_msg(view(2), (5..=7).map(tx).collect()));
-    let (txns, _) = b.drain(view(2), epoch());
-    assert_eq!(txns.len(), 2, "a block for view 2 uses the old size");
+    b.on_transactions(tx_msg(view(4), (5..=7).map(tx).collect()));
+    let (txns, _) = b.drain(view(4), epoch());
+    assert_eq!(txns.len(), 2, "a block for view 4 uses the old size");
 
-    b.on_transactions(tx_msg(view(3), (8..=11).map(tx).collect()));
-    let (txns, _) = b.drain(view(3), epoch());
-    assert_eq!(txns.len(), 4, "a block for view 3 uses the new size");
+    b.on_transactions(tx_msg(view(5), (8..=11).map(tx).collect()));
+    let (txns, _) = b.drain(view(5), epoch());
+    assert_eq!(txns.len(), 4, "a block for view 5 uses the new size");
 }
 
 #[tokio::test]
@@ -235,8 +236,8 @@ async fn test_smaller_blocks_drop_what_no_longer_fits() {
     b.on_submit_transaction(tx(1)).unwrap();
 
     assert_eq!(
-        b.on_view_changed(view(3)),
-        Vec::from([tx_msg(view(4), Vec::from([tx(1)]))]),
+        b.on_view_changed(view(4)),
+        Vec::from([tx_msg(view(6), Vec::from([tx(1)]))]),
         "a transaction over the new size is dropped instead of blocking the batch"
     );
 }
@@ -268,11 +269,11 @@ async fn test_forward_batch_fills_the_block_with_later_transactions() {
     b.on_submit_transaction(TestTransaction::new(vec![3; 2]))
         .unwrap();
 
-    let resent = b.on_view_changed(view(4));
+    let resent = b.on_view_changed(view(5));
     assert_eq!(
         resent,
         Vec::from([tx_msg(
-            view(5),
+            view(7),
             Vec::from([
                 TestTransaction::new(vec![1; 3]),
                 TestTransaction::new(vec![3; 2])
@@ -310,7 +311,7 @@ async fn test_full_forward_fits_in_a_message() {
             .unwrap();
     }
 
-    let resent = b.on_view_changed(view(3)).remove(0);
+    let resent = b.on_view_changed(view(4)).remove(0);
     let forwarded = resent.transactions.len();
     let message = Message::<TestTypes, Validated> {
         sender: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,

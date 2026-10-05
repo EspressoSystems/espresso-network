@@ -87,6 +87,11 @@ pub struct BlockBuilderOutput<T: NodeType> {
 /// Room in a forwarded message for everything but the transactions.
 const FORWARD_ENVELOPE_BYTES: u64 = 4096;
 
+/// Views between a send and the first view it targets. The next view's leader takes its block
+/// as soon as it pairs this view's proposal, before most of this view's submissions reach it,
+/// so a copy sent to it would mostly wait in its pool for a later turn.
+const SEND_LEAD: u64 = 2;
+
 pub struct BlockBuilderConfig {
     pub max_retry_bytes: u64,
     /// `max_block_size` per protocol version; a missing version inherits the previous one.
@@ -390,10 +395,10 @@ impl<T: NodeType> BlockBuilder<T> {
 
         let size = tx.minimum_block_size();
         let encoded_size = bincode::serialized_size(&tx).expect("transactions serialize");
-        // Forwarding uses the next view's block size, which an upgrade can raise.
+        // Forwarding uses the first target view's block size, which an upgrade can raise.
         let max_bytes = self
             .block_size(self.current_view)
-            .max(self.block_size(self.current_view + 1));
+            .max(self.block_size(self.current_view + SEND_LEAD));
         let budget = forward_budget(message_limit(max_bytes));
         if size > max_bytes {
             return Err(SubmitError::TooLarge {
@@ -417,7 +422,7 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let valid_until = self.current_view + self.config.ttl;
-        let sent_until = self.current_view + self.config.fanout;
+        let sent_until = self.last_target(self.current_view);
         let messages = self.to_upcoming_leaders(self.current_view, &Vec::from([tx.clone()]));
 
         self.retry_total_bytes += size;
@@ -462,19 +467,28 @@ impl<T: NodeType> BlockBuilder<T> {
         Ok(())
     }
 
-    /// One message with `transactions` for the leader of each of the `fanout` views after
-    /// `view`.
+    /// One message with `transactions` for the leader of each view a send in `view` targets.
     fn to_upcoming_leaders(
         &self,
         view: ViewNumber,
         transactions: &[T::Transaction],
     ) -> Vec<TransactionMessage<T>> {
-        (1..=self.config.fanout)
-            .map(|ahead| TransactionMessage {
-                view: view + ahead,
+        self.target_views(view)
+            .map(|view| TransactionMessage {
+                view,
                 transactions: transactions.to_vec(),
             })
             .collect()
+    }
+
+    /// The `fanout` views whose leaders a send in `view` targets, from `SEND_LEAD` ahead.
+    fn target_views(&self, view: ViewNumber) -> impl Iterator<Item = ViewNumber> {
+        (0..self.config.fanout).map(move |ahead| view + SEND_LEAD + ahead)
+    }
+
+    /// The last view a send in `view` targets, or `view` itself when it targets none.
+    fn last_target(&self, view: ViewNumber) -> ViewNumber {
+        self.target_views(view).last().unwrap_or(view)
     }
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
@@ -536,7 +550,7 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     fn resend_batch(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
-        let max_bytes = self.block_size(view + 1);
+        let max_bytes = self.block_size(view + SEND_LEAD);
         let max_encoded = forward_budget(message_limit(max_bytes));
         let mut batch = Vec::new();
         let mut unfit = Vec::new();
@@ -564,7 +578,7 @@ impl<T: NodeType> BlockBuilder<T> {
             warn!(%hash, "pending transaction no longer fits a block, dropping");
             self.remove_pending(hash);
         }
-        let sent_until = view + self.config.fanout;
+        let sent_until = self.last_target(view);
         batch
             .into_iter()
             .map(|hash| {
