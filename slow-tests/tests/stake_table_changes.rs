@@ -17,7 +17,7 @@ use espresso_node::{
         sql::DataSource as SqlDataSource,
         test_helpers::{
             TestNetwork, TestNetworkConfigBuilder, assert_node_live, assert_nodes_agree,
-            committee_is, delegate_new, deregister_validators, register_validators,
+            committee_is, delegate_new, deregister_validators, node_storage, register_validators,
             staking_addresses, wait_for_committee,
         },
     },
@@ -25,7 +25,6 @@ use espresso_node::{
     testing::{TestConfig, TestConfigBuilder, wait_for_epochs},
 };
 use espresso_types::{AuthenticatedValidatorMap, PubKey, ValidatedState};
-use futures::future::join_all;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::{
     addr::NetAddr,
@@ -95,13 +94,7 @@ impl<const NUM_NODES: usize> StakeTableTestNetwork<NUM_NODES> {
     ) -> Self {
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let mut builder = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(

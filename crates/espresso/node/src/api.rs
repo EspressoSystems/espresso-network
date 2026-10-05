@@ -1837,7 +1837,8 @@ pub mod test_helpers {
 
     use super::*;
     use crate::{
-        catchup::NullStateCatchup,
+        api::data_source::testing::TestableSequencerDataSource,
+        catchup::{NullStateCatchup, StatePeers},
         network,
         persistence::no_storage,
         testing::{
@@ -1849,6 +1850,14 @@ pub mod test_helpers {
     pub const STAKE_TABLE_CAPACITY_FOR_TEST: usize = 10;
 
     pub const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+
+    /// One storage per node, and each node's persistence options on it.
+    pub async fn node_storage<D: TestableSequencerDataSource, const NUM_NODES: usize>()
+    -> (Vec<D::Storage>, [D::Options; NUM_NODES]) {
+        let storage = join_all((0..NUM_NODES).map(|_| D::create_storage())).await;
+        let persistence = std::array::from_fn(|i| D::persistence_options(&storage[i]));
+        (storage, persistence)
+    }
 
     pub struct TestNetwork<P: PersistenceOptions, const NUM_NODES: usize> {
         pub server: SequencerContext<network::Memory, P::Persistence>,
@@ -2018,6 +2027,27 @@ pub mod test_helpers {
                 stake_table: self.stake_table,
                 states_after_deploy: self.states_after_deploy,
             }
+        }
+
+        /// Every node catches up from node 0's API. Call after `api_config`.
+        pub fn catchup_from_api(
+            self,
+        ) -> TestNetworkConfigBuilder<{ NUM_NODES }, P, StatePeers<SequencerApiVersion>> {
+            let port = self
+                .api_config
+                .as_ref()
+                .expect("catchup_from_api needs api_config")
+                .http
+                .port;
+            let url: Url = format!("http://localhost:{port}").parse().unwrap();
+            self.catchups(std::array::from_fn(|_| {
+                StatePeers::from_urls(
+                    vec![url.clone()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
         }
 
         /// Defers starting the nodes at the given (trailing) indices; they
@@ -2902,10 +2932,7 @@ mod api_tests {
         ValidatedState,
         traits::{EventConsumer, PersistenceOptions},
     };
-    use futures::{
-        future::{self, join_all},
-        stream::StreamExt,
-    };
+    use futures::{future, stream::StreamExt};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::availability::{
         AvailabilityDataSource, BlockQueryData, VidCommonQueryData,
@@ -2924,8 +2951,8 @@ mod api_tests {
     };
     use http_client::{Client, error::ClientErr};
     use test_helpers::{
-        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
-        status_test_helper, submit_test_helper,
+        TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, node_storage,
+        state_signature_test_helper, status_test_helper, submit_test_helper,
     };
     use test_utils::reserve_tcp_port;
     use vbs::version::StaticVersion;
@@ -2981,13 +3008,7 @@ mod api_tests {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         // At 0.6 the query service gets decided payloads from the DA proposals in consensus
         // storage, so the nodes need real persistence.
-        let storage = join_all((0..5).map(|_| D::create_storage())).await;
-        let persistence: [_; 5] = storage
-            .iter()
-            .map(D::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<D, 5>().await;
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(
@@ -3524,7 +3545,7 @@ mod test {
         validators_from_l1_events,
     };
     use futures::{
-        future::{self, join_all, try_join_all},
+        future::{self, try_join_all},
         stream::{StreamExt, TryStreamExt},
         try_join,
     };
@@ -3576,7 +3597,7 @@ mod test {
         update_commission, update_network_config,
     };
     use test_helpers::{
-        NEW_PROTOCOL, TestNetwork, TestNetworkConfigBuilder, catchup_test_helper,
+        NEW_PROTOCOL, TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, node_storage,
         state_signature_test_helper, status_test_helper, submit_test_helper, wait_for_committee,
     };
     use test_utils::reserve_tcp_port;
@@ -4083,13 +4104,7 @@ mod test {
             )
         };
 
-        let dbs = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = dbs
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (dbs, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(
                 SqlDataSource::options(&dbs[0], Options::with_port(port))
@@ -4446,16 +4461,9 @@ mod test {
         // need.
         let config = TestNetworkConfigBuilder::default()
             .api_config(Options::with_port(port))
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .network_config(TestConfigBuilder::default().build())
             .states_after_deploy(states)
+            .catchup_from_api()
             .build()
             .await;
 
@@ -4529,16 +4537,9 @@ mod test {
                 max_connections: None,
                 tonic_port: None,
             }))
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .network_config(TestConfigBuilder::default().build())
             .states_after_deploy(states)
+            .catchup_from_api()
             .build()
             .await;
 
@@ -4577,13 +4578,7 @@ mod test {
     pub(crate) async fn test_restart() {
         const NUM_NODES: usize = 5;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let config = TestNetworkConfigBuilder::default()
             .api_config(SqlDataSource::options(
@@ -4765,13 +4760,7 @@ mod test {
 
         const NUM_NODES: usize = 5;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let l1_url = network_config.l1_url();
         let config = TestNetworkConfigBuilder::with_num_nodes()
@@ -4781,14 +4770,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -4868,13 +4850,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -4883,14 +4859,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -4969,13 +4938,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -4984,14 +4947,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence)
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -5081,13 +5037,7 @@ mod test {
             ..Default::default()
         };
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -5199,13 +5149,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -5214,14 +5158,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence)
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -5293,13 +5230,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -5308,14 +5239,7 @@ mod test {
             ))
             .network_config(network_config.clone())
             .persistences(persistence)
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -5431,13 +5355,7 @@ mod test {
         let api_url: Url = format!("http://localhost:{api_port}").parse()?;
         let query_url: Url = format!("http://localhost:{query_port}").parse()?;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // Both query nodes need the catchup and light client modules: state
         // catchup is served over the former, and the query service validates
@@ -5771,13 +5689,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -5786,14 +5698,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -5885,13 +5790,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -5900,14 +5799,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -5981,13 +5873,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -5996,14 +5882,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -6101,13 +5980,7 @@ mod test {
 
         const NUM_NODES: usize = 2;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -6116,14 +5989,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -6170,14 +6036,7 @@ mod test {
             .build();
 
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-
-        let persistence_options: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence_options) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // setup catchup peers
         let catchup_peers = std::array::from_fn(|_| {
@@ -6302,14 +6161,7 @@ mod test {
             .build();
 
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-
-        let persistence_options: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence_options) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // setup catchup peers
         let catchup_peers = std::array::from_fn(|_| {
@@ -6461,13 +6313,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // The light client skips epoch-root stake-table-hash verification for pre-DRB headers only
         // on the Decaf chain id, so use it to keep the V3->V4 catchup path covered. The stake
@@ -6491,14 +6337,7 @@ mod test {
             .network_config(network_config)
             .persistences(persistence.clone())
             .states(std::array::from_fn(|_| decaf_state.clone()))
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
         let state = config.states()[0].clone();
@@ -6695,13 +6534,7 @@ mod test {
         // loop has to get past the stale pruned height before the check ends.
         const GAP: u64 = 10;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
         // The query node fetches what it missed from the API node, so the API node serves catchup
@@ -6928,13 +6761,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -6943,14 +6770,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
         let state = config.states()[0].clone();
@@ -7207,13 +7027,7 @@ mod test {
 
         const NUM_NODES: usize = 1;
         // Initialize nodes.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -7222,15 +7036,8 @@ mod test {
             ))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .delegation(DelegationConfig::VariableAmounts)
+            .catchup_from_api()
             .build()
             .await;
 
@@ -7442,13 +7249,7 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         const NUM_NODES: usize = 1;
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // Use the real initial supply (3.59B tokens) so the unlock schedule
         // produces realistic locked/unlocked values in the supply calculations.
@@ -7462,14 +7263,6 @@ mod test {
             ))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .initial_token_supply(initial_supply_tokens);
 
         // The stake table deploy in `build()` keeps chain_id from state[0].
@@ -7487,6 +7280,7 @@ mod test {
 
         let config = builder
             .delegation(DelegationConfig::VariableAmounts)
+            .catchup_from_api()
             .build()
             .await;
 
@@ -7676,13 +7470,7 @@ mod test {
 
         // At 0.6 the query service gets decided payloads from the DA proposals in consensus
         // storage, so the nodes need real persistence.
-        let storage = join_all((0..5).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; 5] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, 5>().await;
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(
@@ -7766,13 +7554,7 @@ mod test {
 
         // At 0.6 the query service gets decided payloads from the DA proposals in consensus
         // storage, and proactive fetching is off, so the nodes need real persistence.
-        let storage = join_all((0..5).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; 5] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, 5>().await;
         let network_config = TestConfigBuilder::default().build();
         let mut ds_opts = tmp_options(&storage[0]);
         ds_opts.disable_proactive_fetching = true;
@@ -9415,14 +9197,7 @@ mod test {
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-
-        let persistence_options: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence_options) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let network_config = TestConfigBuilder::default().build();
 
@@ -9619,14 +9394,7 @@ mod test {
         let options = Options::with_port(port).submit(Default::default());
         const NUM_NODES: usize = 2;
         // Initialize storage for each node
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-
-        let persistence_options: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence_options) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let network_config = TestConfigBuilder::default().build();
 
@@ -9736,13 +9504,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -9751,14 +9513,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
         let mut network = TestNetwork::new(config).await;
@@ -9794,13 +9549,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 2;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -9809,14 +9558,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -9914,13 +9656,7 @@ mod test {
         tracing::info!("API PORT = {api_port}");
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -9929,14 +9665,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
         let state = config.states()[0].clone();
@@ -10031,13 +9760,7 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
         // Initialize storage for nodes
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         // Configure test network with epochs
         let network_config = TestConfigBuilder::default()
@@ -10053,15 +9776,8 @@ mod test {
             ))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .delegation(DelegationConfig::NoSelfDelegation)
+            .catchup_from_api()
             .build()
             .await;
 
@@ -10183,13 +9899,7 @@ mod test {
 
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -10202,15 +9912,8 @@ mod test {
             ))
             .network_config(network_config.clone())
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .delegation(DelegationConfig::EqualAmounts)
+            .catchup_from_api()
             .build()
             .await;
 
@@ -10465,13 +10168,7 @@ mod test {
             let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
             println!("API PORT = {api_port}");
 
-            let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-            let persistence: [_; NUM_NODES] = storage
-                .iter()
-                .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap();
+            let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
             let api_opts = Options::with_port(api_port)
                 .catchup(Default::default())
@@ -10483,14 +10180,7 @@ mod test {
                 .api_config(SqlDataSource::options(&storage[0], api_opts))
                 .network_config(network_config.clone())
                 .persistences(persistence.clone())
-                .catchups(std::array::from_fn(|_| {
-                    StatePeers::<StaticVersion<0, 1>>::from_urls(
-                        vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                        Default::default(),
-                        Duration::from_secs(2),
-                        &NoMetrics,
-                    )
-                }))
+                .catchup_from_api()
                 .build()
                 .await;
 
@@ -11465,13 +11155,7 @@ mod test {
 
         const NUM_NODES: usize = 5;
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -11480,14 +11164,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -11552,13 +11229,7 @@ mod test {
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -11567,14 +11238,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
+            .catchup_from_api()
             .build()
             .await;
 
@@ -11645,13 +11309,7 @@ mod test {
 
         // At 0.6 the query service gets decided payloads and VID from the DA proposals and VID
         // shares in consensus storage, so the nodes need real persistence.
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let test_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
@@ -11911,13 +11569,7 @@ mod test {
             .builder_timeout(Duration::from_millis(250))
             .build();
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(
@@ -12044,13 +11696,7 @@ mod test {
 
         let port = reserve_tcp_port().expect("No ports free for query service");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let catchup_peers = std::array::from_fn(|_| {
             StatePeers::<StaticVersion<0, 1>>::from_urls(
@@ -12125,13 +11771,7 @@ mod test {
             .next_view_timeout(Duration::from_secs(10))
             .build();
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
             .api_config(SqlDataSource::options(
@@ -12139,15 +11779,8 @@ mod test {
                 Options::with_port(port),
             ))
             .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .network_config(network_config)
+            .catchup_from_api()
             .build()
             .await;
 
@@ -12203,16 +11836,9 @@ mod test {
                 Options::with_port(port2),
             ))
             .persistences(persistence)
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<SequencerApiVersion>::from_urls(
-                    vec![format!("http://localhost:{port2}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
-                )
-            }))
             .network_config(saved_cfg)
             .no_stake_table()
+            .catchup_from_api()
             .build()
             .await;
         let network2 = TestNetwork::new(config2).await;
