@@ -14,11 +14,6 @@ use alloy::{
 };
 use anyhow::{Context, bail};
 use async_lock::RwLock;
-use cdn_broker::{
-    Broker, Config as BrokerConfig,
-    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
-};
-use cdn_marshal::{Config as MarshalConfig, Marshal};
 use clap::Parser;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
@@ -35,17 +30,14 @@ use espresso_node::{
     context::SequencerContext,
     genesis::{Genesis, L1Finalized, StakeTableConfig},
     keyset::KeySet,
-    network::{
-        self,
-        cdn::{TestingDef, WrappedSignatureKey},
-    },
+    network,
     options::{Modules, Options, PublicNodeConfig},
-    run::init_with_storage,
-    testing::{staking_priv_keys, wait_for_decide_on_handle},
+    run::{NodeContext, init_with_storage},
+    testing::staking_priv_keys,
 };
 use espresso_types::{
-    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, Transaction,
-    eth_signature_key::EthKeyPair, traits::PersistenceOptions, v0_3::ChainConfig,
+    FeeAccount, L1Client, Leaf2, PrivKey, PubKey, SeqTypes, eth_signature_key::EthKeyPair,
+    traits::PersistenceOptions, v0_3::ChainConfig,
 };
 use futures::{
     future::{BoxFuture, FutureExt, join_all, try_join_all},
@@ -54,10 +46,6 @@ use futures::{
 use hotshot::traits::implementations::derive_libp2p_peer_id;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_orchestrator::run_orchestrator;
-use hotshot_testing::{
-    block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
-    test_builder::BuilderChange,
-};
 use hotshot_types::{
     PeerConfig,
     data::EpochNumber,
@@ -70,9 +58,9 @@ use hotshot_types::{
     traits::signature_key::SignatureKey,
     x25519,
 };
+use http_client::{Client, Url, error::ClientErr};
 use itertools::Itertools;
 use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
-use surf_disco::{Url, error::ClientError};
 use tagged_base64::TaggedBase64;
 use tempfile::TempDir;
 use test_utils::reserve_tcp_port;
@@ -80,9 +68,8 @@ use tokio::{
     task::{JoinHandle, spawn},
     time::{sleep, timeout},
 };
-use vbs::version::Version;
 use vec1::vec1;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
+use versions::NEW_PROTOCOL_VERSION;
 
 /// Bound on each per-node recovery wait after a restart.
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
@@ -121,8 +108,8 @@ async fn wait_for_query_node_at_tip(network: &TestNetwork, restarted: usize, hea
     let url: Url = format!("http://127.0.0.1:{restarted_port}")
         .parse()
         .unwrap();
-    let tip_client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(tip_url);
-    let client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(url);
+    let tip_client = Client::<ClientErr, SequencerApiVersion>::new(tip_url);
+    let client = Client::<ClientErr, SequencerApiVersion>::new(url);
 
     let tip = timeout(RECOVERY_TIMEOUT, async {
         loop {
@@ -162,13 +149,8 @@ async fn wait_for_query_node_at_tip(network: &TestNetwork, restarted: usize, hea
     .expect("timed out waiting for restarted query node to reach the tip");
 }
 
-async fn test_restart_helper(
-    network: (usize, usize),
-    restart: (usize, usize),
-    cdn: bool,
-    version: Version,
-) {
-    let mut network = TestNetwork::new(network.0, network.1, cdn, version).await;
+async fn test_restart_helper(network: (usize, usize), restart: (usize, usize)) {
+    let mut network = TestNetwork::new(network.0, network.1).await;
 
     // Let the network get going.
     network.check_progress().await;
@@ -178,150 +160,47 @@ async fn test_restart_helper(
     network.shut_down().await;
 }
 
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_da_with_cdn() {
-    test_restart_helper((2, 3), (1, 0), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_regular_with_cdn() {
-    test_restart_helper((2, 3), (0, 1), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_with_cdn() {
-    test_restart_helper((4, 6), (1, 2), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_minus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 1), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_plus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 3), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_with_cdn() {
-    test_restart_helper((4, 6), (1, 5), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_minus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 4), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_plus_1_with_cdn() {
-    test_restart_helper((4, 6), (2, 5), true, EPOCH_VERSION).await;
-}
-
-#[ignore]
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_with_cdn() {
-    test_restart_helper((2, 8), (2, 8), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_da_with_cdn() {
-    test_restart_helper((2, 8), (2, 0), true, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_da_without_cdn() {
-    test_restart_helper((2, 3), (1, 0), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_1_regular_without_cdn() {
-    test_restart_helper((2, 3), (0, 1), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_without_cdn() {
-    test_restart_helper((4, 6), (1, 2), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_minus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 1), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_f_plus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 3), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_without_cdn() {
-    test_restart_helper((4, 6), (1, 5), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_minus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 4), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_2f_plus_1_without_cdn() {
-    test_restart_helper((4, 6), (2, 5), false, EPOCH_VERSION).await;
-}
-
-#[ignore]
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_without_cdn() {
-    test_restart_helper((2, 8), (2, 8), false, EPOCH_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_all_da_without_cdn() {
-    test_restart_helper((2, 8), (2, 0), false, EPOCH_VERSION).await;
-}
-
-// New protocol (V6) restart tests. These run the network based on
-// `NEW_PROTOCOL_VERSION` from genesis
-// The CDN is not used as cliquenet replaces CDN + libp2p
+// The network runs `NEW_PROTOCOL_VERSION` from genesis, so all consensus
+// traffic is on cliquenet and the harness runs no CDN.
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_new_protocol_1_of_5() {
-    test_restart_helper((2, 3), (1, 0), false, NEW_PROTOCOL_VERSION).await;
+    test_restart_helper((2, 3), (1, 0)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_new_protocol_2_of_10() {
-    test_restart_helper((4, 6), (1, 1), false, NEW_PROTOCOL_VERSION).await;
+    test_restart_helper((4, 6), (1, 1)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_new_protocol_3_of_10() {
-    test_restart_helper((4, 6), (1, 2), false, NEW_PROTOCOL_VERSION).await;
+    test_restart_helper((4, 6), (1, 2)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_new_protocol_4_of_10() {
-    test_restart_helper((4, 6), (1, 3), false, NEW_PROTOCOL_VERSION).await;
+    test_restart_helper((4, 6), (1, 3)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_new_protocol_5_of_10() {
-    test_restart_helper((4, 6), (1, 4), false, NEW_PROTOCOL_VERSION).await;
+    test_restart_helper((4, 6), (1, 4)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_new_protocol_6_of_10() {
-    test_restart_helper((4, 6), (1, 5), false, NEW_PROTOCOL_VERSION).await;
+    test_restart_helper((4, 6), (1, 5)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_new_protocol_7_of_10() {
-    test_restart_helper((4, 6), (2, 5), false, NEW_PROTOCOL_VERSION).await;
+    test_restart_helper((4, 6), (2, 5)).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_new_protocol_10_of_10() {
-    test_restart_helper((2, 8), (2, 8), false, NEW_PROTOCOL_VERSION).await;
+    test_restart_helper((2, 8), (2, 8)).await;
 }
 
 /// Rolling restarts of every node one at a time on its existing storage,
@@ -332,7 +211,7 @@ async fn slow_test_restart_new_protocol_10_of_10() {
 /// legacy networking, which a pure new protocol network does not use.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_new_protocol_rolling_and_full() {
-    let mut network = TestNetwork::new_with_query_nodes(4, 6, NEW_PROTOCOL_VERSION, &[0, 4]).await;
+    let mut network = TestNetwork::new_with_query_nodes(4, 6, &[0, 4]).await;
 
     network.check_progress().await;
     network.wait_for_epoch().await;
@@ -358,37 +237,10 @@ async fn slow_test_restart_new_protocol_rolling_and_full() {
     network.shut_down().await;
 }
 
-#[ignore]
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_staggered() {
-    let mut network = TestNetwork::new(4, 6, false, EPOCH_VERSION).await;
-
-    // Check that the builder works at the beginning.
-    network.check_builder().await;
-
-    // Restart nodes in a staggered fashion, so that progress never halts, but eventually every node
-    // has been restarted. This can lead to a situation where no node has the full validated state
-    // in memory, so we will need a pretty advanced form of catchup in order to make progress and
-    // process blocks after this.
-    for i in 0..4 {
-        network.restart_and_progress([i], []).await;
-    }
-    // Restart the remaining regular nodes.
-    for i in 0..6 {
-        network.restart_and_progress([], [i]).await;
-    }
-
-    // Check that we can still build blocks after the restart.
-    network.check_builder().await;
-
-    network.shut_down().await;
-}
-
 #[derive(Clone, Copy, Debug)]
 struct NetworkParams<'a> {
     genesis_file: &'a Path,
     orchestrator_port: u16,
-    cdn_port: u16,
     l1_provider: &'a str,
     peer_ports: &'a [u16],
     api_ports: &'a [u16],
@@ -513,8 +365,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             &format!("0.0.0.0:{}", node.cliquenet_port),
             "--cliquenet-advertise-address",
             &node.cliquenet_advertise_addr(),
-            "--cdn-endpoint",
-            &format!("127.0.0.1:{}", network.cdn_port),
             "--state-peers",
             &network
                 .state_peer_ports
@@ -576,7 +426,10 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 )
                 .await
                 {
-                    Ok(ctx) => break ctx,
+                    Ok(NodeContext::Validator(ctx)) => break *ctx,
+                    Ok(NodeContext::Follower(_)) => {
+                        unreachable!("the restart tests configure validators")
+                    },
                     Err(err) => {
                         tracing::error!(retries, ?delay, "initialization failed: {err:#}");
                         if retries == 0 {
@@ -729,56 +582,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         bail!("node {node_id} event stream ended unexpectedly");
     }
 
-    async fn check_builder(&self, port: u16) {
-        tracing::info!("testing builder liveness");
-
-        // Configure the builder to shut down in 50 views, so we don't leak resources or ports.
-        let ctx = self.context.as_ref().unwrap();
-        let down_view = ctx.consensus_handle().current_view().await + 50;
-
-        // Start a builder.
-        let url: Url = format!("http://localhost:{port}").parse().unwrap();
-        let task = <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
-            self.num_nodes,
-            format!("http://0.0.0.0:{port}").parse().unwrap(),
-            (),
-            [(down_view.u64(), BuilderChange::Down)]
-                .into_iter()
-                .collect(),
-        )
-        .await;
-        task.start(Box::new(ctx.event_stream().filter_map(|event| {
-            futures::future::ready(match event {
-                CoordinatorEvent::LegacyEvent(e) => Some(e),
-                _ => None,
-            })
-        })));
-
-        // Wait for the API to start serving.
-        let client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(url);
-        assert!(
-            client.connect(Some(Duration::from_secs(60))).await,
-            "timed out connecting to builder API"
-        );
-
-        // Submit a transaction and wait for it to be sequenced.
-        let mut events = ctx.event_stream();
-        let tx = Transaction::random(&mut rand::thread_rng());
-        ctx.submit_transaction(tx.clone()).await.unwrap();
-        let (block, _) = timeout(
-            Duration::from_secs(60),
-            wait_for_decide_on_handle(&mut events, &tx),
-        )
-        .await
-        .expect("timed out waiting for transaction to be sequenced");
-        tracing::info!(block, "transaction sequenced");
-
-        // Wait until the builder is cleaned up.
-        while ctx.consensus_handle().current_view().await <= down_view {
-            sleep(Duration::from_secs(1)).await;
-        }
-    }
-
     /// Wait for the given Epoch.
     async fn wait_for_epoch(&self) {
         let epoch = self.wait_for_epoch;
@@ -864,8 +667,6 @@ struct TestNetwork {
     tmp: TempDir,
     builder_port: u16,
     orchestrator_task: Option<JoinHandle<()>>,
-    broker_task: Option<JoinHandle<()>>,
-    marshal_task: Option<JoinHandle<()>>,
     #[derivative(Debug = "ignore")]
     anvil: AnvilFillProvider,
 }
@@ -875,42 +676,33 @@ impl Drop for TestNetwork {
         if let Some(task) = self.orchestrator_task.take() {
             task.abort();
         }
-        if let Some(task) = self.broker_task.take() {
-            task.abort();
-        }
-        if let Some(task) = self.marshal_task.take() {
-            task.abort();
-        }
     }
 }
 
 impl TestNetwork {
-    async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool, version: Version) -> Self {
-        Self::new_inner(da_nodes, regular_nodes, cdn, version, None).await
+    async fn new(da_nodes: usize, regular_nodes: usize) -> Self {
+        Self::new_inner(da_nodes, regular_nodes, None).await
     }
 
     /// Like [`new`](Self::new), but only the nodes at `query_nodes` (indices
     /// into the full node list, `da_nodes` group first) run the query module
     /// and serve state catchup. Being a query node is independent of the
-    /// da/regular grouping. This variant always runs without the CDN.
+    /// da/regular grouping.
     async fn new_with_query_nodes(
         da_nodes: usize,
         regular_nodes: usize,
-        version: Version,
         query_nodes: &[usize],
     ) -> Self {
         assert!(
             !query_nodes.is_empty() && query_nodes.iter().all(|i| *i < da_nodes + regular_nodes),
             "query node indices out of range: {query_nodes:?}"
         );
-        Self::new_inner(da_nodes, regular_nodes, false, version, Some(query_nodes)).await
+        Self::new_inner(da_nodes, regular_nodes, Some(query_nodes)).await
     }
 
     async fn new_inner(
         da_nodes: usize,
         regular_nodes: usize,
-        cdn: bool,
-        version: Version,
         query_nodes: Option<&[usize]>,
     ) -> Self {
         let tmp = TempDir::new().unwrap();
@@ -925,26 +717,22 @@ impl TestNetwork {
             l1_finalized: L1Finalized::Number { number: 20 },
             header: Default::default(),
             upgrades: Default::default(),
-            // Run the network at `version` from genesis. For the new protocol
-            // (V6) this routes consensus through the cliquenet coordinator; for
-            // that to work each node's cliquenet connect info must be registered
+            // Consensus runs through the cliquenet coordinator from genesis,
+            // so each node's cliquenet connect info must be registered
             // on-chain (see `deploy`) and advertised via the node CLI.
-            base_version: version,
-            upgrade_version: version,
+            base_version: NEW_PROTOCOL_VERSION,
+            upgrade_version: NEW_PROTOCOL_VERSION,
             epoch_height: Some(15),
-            // From V0_4 (DRB_AND_HEADER_UPGRADE_VERSION) on, genesis validation
-            // requires the DRB difficulties to be set. Keep them unset for older
-            // versions to preserve the existing tests' behavior.
-            drb_difficulty: (version >= DRB_AND_HEADER_UPGRADE_VERSION).then_some(10),
+            drb_difficulty: Some(10),
             epoch_start_block: Some(1),
             // TODO we apparently have two `capacity` configurations
             stake_table_capacity: Some(STAKE_TABLE_CAPACITY_FOR_TEST),
-            drb_upgrade_difficulty: (version >= DRB_AND_HEADER_UPGRADE_VERSION).then_some(20),
+            drb_upgrade_difficulty: Some(20),
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
                 .collect(),
-            genesis_version: version,
+            genesis_version: NEW_PROTOCOL_VERSION,
             da_committees: None,
         };
 
@@ -973,19 +761,6 @@ impl TestNetwork {
             builder_port,
         ));
 
-        let cdn_dir = tmp.path().join("cdn");
-        let cdn_port = reserve_tcp_port().unwrap();
-        let broker_task = if cdn {
-            Some(start_broker(&cdn_dir).await)
-        } else {
-            None
-        };
-        let marshal_task = if cdn {
-            Some(start_marshal(&cdn_dir, cdn_port).await)
-        } else {
-            None
-        };
-
         let anvil_port = reserve_tcp_port().unwrap();
         let anvil = Anvil::new()
             .args(["--slots-in-an-epoch", "1"])
@@ -1012,7 +787,6 @@ impl TestNetwork {
         let network_params = NetworkParams {
             genesis_file: &genesis_file_path,
             orchestrator_port,
-            cdn_port,
             l1_provider: &anvil_endpoint,
             api_ports: &api_ports,
             peer_ports: &peer_ports,
@@ -1032,8 +806,6 @@ impl TestNetwork {
             tmp,
             builder_port,
             orchestrator_task,
-            broker_task,
-            marshal_task,
             anvil,
         };
 
@@ -1284,10 +1056,6 @@ impl TestNetwork {
                 "no overlapping heights between node {node_id} and reference node {ref_id}"
             );
         }
-    }
-
-    async fn check_builder(&self) {
-        self.da_nodes[0].check_builder(self.builder_port).await;
     }
 
     /// Restart indicated number of DA and non-DA nodes.
@@ -1578,62 +1346,6 @@ fn start_orchestrator(port: u16, nodes: &[NodeParams], builder_port: u16) -> Joi
         match run_orchestrator(config, bind).await {
             Ok(()) => tracing::warn!("orchestrator exited"),
             Err(err) => tracing::error!(%err, "orchestrator failed"),
-        }
-    })
-}
-
-async fn start_broker(dir: &Path) -> JoinHandle<()> {
-    let (public_key, private_key) = PubKey::generated_from_seed_indexed([0; 32], 1337);
-    let public_port = reserve_tcp_port().unwrap();
-    let private_port = reserve_tcp_port().unwrap();
-    let broker_config: BrokerConfig<TestingDef<SeqTypes>> = BrokerConfig {
-        public_advertise_endpoint: format!("127.0.0.1:{public_port}"),
-        public_bind_endpoint: format!("127.0.0.1:{public_port}"),
-        private_advertise_endpoint: format!("127.0.0.1:{private_port}"),
-        private_bind_endpoint: format!("127.0.0.1:{private_port}"),
-
-        metrics_bind_endpoint: None,
-        discovery_endpoint: dir.display().to_string(),
-        keypair: KeyPair {
-            public_key: WrappedSignatureKey(public_key),
-            private_key,
-        },
-
-        user_message_hook: NoMessageHook,
-        broker_message_hook: NoMessageHook,
-
-        ca_cert_path: None,
-        ca_key_path: None,
-        global_memory_pool_size: Some(1024 * 1024 * 1024),
-    };
-
-    spawn(async move {
-        match Broker::new(broker_config).await.unwrap().start().await {
-            Ok(()) => tracing::warn!("broker exited"),
-            Err(err) => tracing::error!("broker failed: {err:#}"),
-        }
-    })
-}
-
-async fn start_marshal(dir: &Path, port: u16) -> JoinHandle<()> {
-    let marshal_config = MarshalConfig {
-        bind_endpoint: format!("0.0.0.0:{port}"),
-        metrics_bind_endpoint: None,
-        discovery_endpoint: dir.display().to_string(),
-        ca_cert_path: None,
-        ca_key_path: None,
-        global_memory_pool_size: Some(1024 * 1024 * 1024),
-    };
-
-    spawn(async move {
-        match Marshal::<TestingDef<SeqTypes>>::new(marshal_config)
-            .await
-            .unwrap()
-            .start()
-            .await
-        {
-            Ok(()) => tracing::warn!("marshal exited"),
-            Err(err) => tracing::error!("marshal failed: {err:#}"),
         }
     })
 }

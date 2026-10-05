@@ -1,0 +1,201 @@
+name: Network benchmark
+run-name: Network benchmark ${{ inputs.pr && format('PR {0} ', inputs.pr) || '' }}${{ inputs.sha }}
+
+# Throughput and latency of a 3-node network (scripts/network-bench). Report only: the job fails
+# on an invalid run, never on a performance delta. Called by build.yml on every push to main and
+# on pull requests that change the benchmark; dispatched by network-bench-command.yml for
+# `/benchmark` on other pull requests.
+on:
+  workflow_call:
+    inputs:
+      build_run_id:
+        description: build.yml run whose amd-* artifacts hold the binaries
+        type: string
+        required: true
+      sha:
+        description: Commit the binaries were built from
+        type: string
+        required: true
+      pr:
+        description: Pull request number, empty on main
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: build.yml run whose amd-* artifacts hold the binaries
+        type: string
+        required: true
+      sha:
+        description: Commit the binaries were built from
+        type: string
+        required: true
+      pr:
+        description: Pull request number, empty on main
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  bench:
+    name: Network benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A new `/benchmark` replaces the running one of the same pull request; main runs never share
+    # a group.
+    concurrency:
+      group: network-bench-pr-${{ inputs.pr || github.run_id }}
+      cancel-in-progress: true
+    env:
+      BENCH_BIN_DIR: ${{ github.workspace }}/bench-bin
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      PR: ${{ inputs.pr }}
+      SHA: ${{ inputs.sha }}
+    steps:
+      - name: Check inputs
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "sha must be a full commit hash: $SHA" >&2; exit 1; }
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]] || { echo "bad build_run_id: $BUILD_RUN_ID" >&2; exit 1; }
+          [[ "$PR" =~ ^[0-9]*$ ]] || { echo "bad pr: $PR" >&2; exit 1; }
+
+      # A dispatched run executes pull request code; no token is left in .git/config for it.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/install-process-compose
+        with:
+          version: v1.75.2
+      - uses: ./.github/actions/install-foundry
+      - uses: ./.github/actions/install-postgres
+      # No cache: the run executes pull request code, which could write into it before the
+      # post-step save.
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: false
+      - uses: taiki-e/install-action@just
+
+      # A token only for another run: without one the action reads the current run, which is
+      # the build run itself when called from build.yml.
+      - name: Download espresso-node
+        uses: actions/download-artifact@v8
+        with:
+          name: amd-espresso-node
+          path: bench-bin
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ inputs.build_run_id != github.run_id && github.token || '' }}
+      - name: Download espresso-node-sqlite
+        uses: actions/download-artifact@v8
+        with:
+          name: amd-espresso-node-sqlite
+          path: bench-bin
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ inputs.build_run_id != github.run_id && github.token || '' }}
+      - name: Download other binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: amd-other
+          path: bench-bin
+          run-id: ${{ inputs.build_run_id }}
+          github-token: ${{ inputs.build_run_id != github.run_id && github.token || '' }}
+
+      - name: Make binaries executable
+        run: chmod +x bench-bin/*
+
+      - name: Fetch main baseline
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/nextest-ci stats-fetch \
+            --workflow build.yml \
+            --artifact-name network-bench-baseline \
+            --max-runs 30 \
+            --out main-network-bench.json
+
+      - name: Run benchmark
+        timeout-minutes: 15
+        run: |
+          args=()
+          if [[ -s main-network-bench.json ]]; then
+            args+=(--baseline main-network-bench.json)
+          fi
+          if [[ -n "$PR" ]]; then
+            args+=(--pr "$PR")
+          fi
+          just bench::run "${args[@]}"
+
+      - name: Write summary
+        if: always()
+        run: |
+          if [[ -f bench-out/summary.md ]]; then
+            cat bench-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Network benchmark wrote no summary; see the job log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # overwrite: a re-run attempt uploads under the same name.
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: network-bench-${{ github.run_id }}
+          path: bench-out
+          retention-days: 90
+          overwrite: true
+
+      # The one file `nextest-ci stats-fetch` reads back as the baseline. Only build.yml runs on
+      # main publish it; invalid and noisy runs are filtered out when read.
+      - name: Upload baseline
+        if: >-
+          always() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          hashFiles('bench-out/result.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: network-bench-baseline
+          path: bench-out/result.json
+          retention-days: 90
+          overwrite: true
+
+  # Separate job so the write token never reaches a job that runs pull request code. Fork pull
+  # requests get a read-only token, so posting may fail there.
+  comment:
+    name: Post benchmark summary
+    needs: bench
+    if: ${{ !cancelled() && inputs.pr != '' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: network-bench-${{ github.run_id }}
+          path: bench-out
+
+      - name: Add the run link
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            if [[ -f bench-out/summary.md ]]; then
+              cat bench-out/summary.md
+            else
+              echo "Network benchmark wrote no summary."
+            fi
+            echo
+            echo "Run and artifacts: $RUN_URL"
+          } > comment.md
+
+      - uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          number: ${{ inputs.pr }}
+          header: network-bench
+          path: comment.md

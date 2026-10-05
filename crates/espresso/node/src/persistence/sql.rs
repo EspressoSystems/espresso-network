@@ -1,6 +1,9 @@
+#[cfg(feature = "embedded-db")]
+use std::path::Path;
 use std::{
     collections::BTreeMap,
     future::Future,
+    num::NonZeroUsize,
     path::PathBuf,
     str::FromStr,
     sync::Arc,
@@ -53,7 +56,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
-        QuorumProposalWrapperLegacy, VidCommitment, VidCommon, VidDisperseShare, VidDisperseShare0,
+        QuorumProposalWrapperLegacy, VidCommitment, VidCommon, VidDisperseShare,
     },
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
@@ -61,7 +64,7 @@ use hotshot_types::{
     new_protocol::CoordinatorEvent,
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
-        NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
+        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
         block_contents::{BlockHeader, BlockPayload},
@@ -71,13 +74,21 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
+#[cfg(feature = "embedded-db")]
+use sqlx::{Decode, Type};
 use sqlx::{Executor, QueryBuilder, Row, query};
 
+#[cfg(feature = "embedded-db")]
+use crate::persistence::storage_probe::{self, SqlitePragmas, StorageProbe};
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
     catchup::SqlStateCatchup,
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
 };
+
+/// A few days of heights at mainnet rates, and what binds whenever the light client's history is
+/// shorter than that.
+pub const DEFAULT_ARCHIVE_STATE_MIN_RETENTION: u64 = 500_000;
 
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
@@ -154,6 +165,59 @@ pub fn build_sqlite_path(path: &str) -> anyhow::Result<PathBuf> {
     Ok(sub_dir.join("database"))
 }
 
+/// The directory `storage_probe::probe` should classify for a SQLite database at `path`. Falls
+/// back to `.` when `path` has no parent, e.g. a bare relative filename, or the empty `PathBuf`
+/// from `SqliteOptions::default()`.
+#[cfg(feature = "embedded-db")]
+fn sqlite_probe_dir(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
+}
+
+#[cfg(feature = "embedded-db")]
+async fn read_pragma<T>(pool: &sqlx::Pool<Db>, pragma: &str) -> Option<T>
+where
+    T: for<'a> Decode<'a, Db> + Type<Db>,
+{
+    match sqlx::query(pragma).fetch_one(pool).await {
+        Ok(row) => row.try_get(0).ok(),
+        Err(err) => {
+            tracing::debug!(pragma, ?err, "storage probe: pragma query failed");
+            None
+        },
+    }
+}
+
+/// The first failure short-circuits the rest: a pragma query only fails if the pool is unusable.
+#[cfg(feature = "embedded-db")]
+async fn read_pragmas(pool: &sqlx::Pool<Db>) -> Option<SqlitePragmas> {
+    let journal_mode = read_pragma(pool, "PRAGMA journal_mode").await?;
+    // SQLite reports these two back as their numeric settings, not the names used to set them.
+    let synchronous = match read_pragma::<i64>(pool, "PRAGMA synchronous").await? {
+        0 => "off",
+        1 => "normal",
+        2 => "full",
+        3 => "extra",
+        _ => "unknown",
+    };
+    let auto_vacuum = match read_pragma::<i64>(pool, "PRAGMA auto_vacuum").await? {
+        0 => "none",
+        1 => "full",
+        2 => "incremental",
+        _ => "unknown",
+    };
+    let page_size: i64 = read_pragma(pool, "PRAGMA page_size").await?;
+
+    Some(SqlitePragmas {
+        journal_mode,
+        synchronous,
+        auto_vacuum,
+        page_size: page_size as u64,
+    })
+}
+
 /// Options for database-backed persistence, supporting both Postgres and SQLite.
 #[derive(Parser, Clone, Derivative, From, Into)]
 #[derivative(Debug)]
@@ -186,7 +250,7 @@ pub struct Options {
     /// - pruning_threshold: 3 TB
     /// - minimum_retention: 1 day
     /// - target_retention: 7 days
-    /// - batch_size: 1000
+    /// - batch_size: 100
     /// - max_usage: 80%
     /// - interval: 1 hour
     #[clap(long, env = "ESPRESSO_NODE_DATABASE_PRUNE")]
@@ -216,6 +280,10 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_CHUNK_FETCH_DELAY", value_parser = parse_duration)]
     pub(crate) chunk_fetch_delay: Option<Duration>,
 
+    /// How many of a request's height ranges to serve at once.
+    #[clap(long, env = "ESPRESSO_NODE_RANGES_CONCURRENCY")]
+    pub(crate) ranges_concurrency: Option<NonZeroUsize>,
+
     /// The number of items to process in a single transaction when scanning the database for
     /// missing objects.
     #[clap(long, env = "ESPRESSO_NODE_SYNC_STATUS_CHUNK_SIZE")]
@@ -233,6 +301,11 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_SCAN_INTERVAL", value_parser = parse_duration)]
     pub(crate) proactive_scan_interval: Option<Duration>,
 
+    /// How long a proactive scan waits for one request of missing ranges before fetching its
+    /// chunks one at a time instead.
+    #[clap(long, env = "ESPRESSO_NODE_PROACTIVE_FETCH_TIMEOUT", value_parser = parse_duration)]
+    pub(crate) proactive_fetch_timeout: Option<Duration>,
+
     /// Disable the proactive scanner task.
     #[clap(long, env = "ESPRESSO_NODE_DISABLE_PROACTIVE_FETCHING")]
     pub(crate) disable_proactive_fetching: bool,
@@ -243,8 +316,29 @@ pub struct Options {
     /// reconstruct data that was pruned in a previous run where pruning was enabled. This option
     /// instructs the service to run without pruning _and_ reconstruct all previously pruned data by
     /// fetching from peers.
+    ///
+    /// Historical merklized state older than the light client contract history is garbage collected,
+    /// but never less than ESPRESSO_NODE_ARCHIVE_STATE_MIN_RETENTION heights behind the head. Use
+    /// ESPRESSO_NODE_ARCHIVE_FULL_STATE to retain all of it.
     #[clap(long, env = "ESPRESSO_NODE_ARCHIVE", conflicts_with = "prune")]
     pub(crate) archive: bool,
+
+    /// Block heights of merklized state an archive node retains regardless of the light client.
+    ///
+    /// Collection stops at whichever reaches further back, this floor or the light client
+    /// contract's history. Set it to zero to follow the contract alone.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_ARCHIVE_STATE_MIN_RETENTION",
+        default_value_t = DEFAULT_ARCHIVE_STATE_MIN_RETENTION
+    )]
+    pub(crate) archive_state_min_retention: u64,
+
+    /// Retain all historical merklized state on an archive node.
+    ///
+    /// Disables the state garbage collector that archive nodes run by default.
+    #[clap(long, env = "ESPRESSO_NODE_ARCHIVE_FULL_STATE")]
+    pub(crate) archive_full_state: bool,
 
     /// Turns on leaf only data storage
     #[clap(
@@ -325,6 +419,9 @@ pub struct Options {
     // creates a new reference-counted handle to the underlying pool state.
     #[clap(skip)]
     pub(crate) pool: Option<sqlx::Pool<Db>>,
+
+    #[clap(skip)]
+    pub(crate) consensus_only: bool,
 }
 
 impl Default for Options {
@@ -424,15 +521,20 @@ impl From<SqliteOptions> for Options {
             fetch_rate_limit: None,
             active_fetch_delay: None,
             chunk_fetch_delay: None,
+            ranges_concurrency: None,
             sync_status_chunk_size: None,
             sync_status_ttl: None,
             proactive_scan_chunk_size: None,
             proactive_scan_interval: None,
+            proactive_fetch_timeout: None,
             disable_proactive_fetching: false,
             archive: false,
+            archive_state_min_retention: DEFAULT_ARCHIVE_STATE_MIN_RETENTION,
+            archive_full_state: false,
             lightweight: false,
             min_connections: 0,
             pool: None,
+            consensus_only: false,
             serializable_retry: SerializableRetryOptions::default(),
         }
     }
@@ -562,7 +664,8 @@ pub struct PruningOptions {
     pub(crate) target_retention: Option<Duration>,
 
     /// Target retention period for Merklized state.
-    /// State older than this is pruned to free up space.
+    /// State older than this is pruned to free up space, but never at or past the newest
+    /// merklized state, which the state writer resumes from.
     #[clap(
         long,
         env = "ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION",
@@ -571,7 +674,9 @@ pub struct PruningOptions {
     state_target_retention: Option<Duration>,
 
     /// Batch size for pruning.
-    /// This is the number of blocks data to delete in a single transaction.
+    /// This is the number of blocks worth of data to delete in a single transaction. Heights that
+    /// hold no data are skipped without counting, so a batch, and the `Pruned to height` log line,
+    /// can advance by more than this many heights at once.
     #[clap(long, env = "ESPRESSO_NODE_PRUNER_BATCH_SIZE")]
     pub(crate) batch_size: Option<u64>,
 
@@ -700,6 +805,19 @@ pub struct ConsensusPruningOptions {
         default_value = "1000000000"
     )]
     pub(crate) target_usage: u64,
+
+    /// How often to measure consensus storage against TARGET_USAGE.
+    ///
+    /// On SQLite a measurement scans every page of the consensus tables. Between measurements,
+    /// each decide prunes only to TARGET_RETENTION.
+    #[clap(
+        name = "USAGE_CHECK_INTERVAL",
+        long = "consensus-storage-usage-check-interval",
+        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_USAGE_CHECK_INTERVAL",
+        default_value = "5m",
+        value_parser = parse_duration
+    )]
+    pub(crate) usage_check_interval: Duration,
 }
 
 impl Default for ConsensusPruningOptions {
@@ -793,22 +911,31 @@ impl PersistenceOptions for Options {
         self.consensus_pruning.minimum_retention = view_retention;
     }
 
+    fn set_consensus_only(&mut self) {
+        self.consensus_only = true;
+    }
+
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let config = (&*self).try_into()?;
+        let db = SqlStorage::connect(config, StorageConnectionType::Sequencer).await?;
+
+        #[cfg(feature = "embedded-db")]
+        let probe = {
+            let pragmas = read_pragmas(&db.pool()).await;
+            storage_probe::probe(sqlite_probe_dir(&self.sqlite_options.path), pragmas).await?
+        };
+
         let persistence = Persistence {
-            db: SqlStorage::connect(config, StorageConnectionType::Sequencer).await?,
+            db,
             gc_opt: self.consensus_pruning,
+            last_usage_check: Arc::default(),
+            consensus_only: self.consensus_only,
             internal_metrics: PersistenceMetricsValue::default(),
+            #[cfg(feature = "embedded-db")]
+            probe,
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
-
-        #[cfg(not(feature = "embedded-db"))]
-        {
-            let registry = super::migrations::hash_bigint_migrations();
-            let db = persistence.db.clone();
-            tokio::spawn(registry.run_all_migrations(db));
-        }
 
         Ok(persistence)
     }
@@ -823,26 +950,19 @@ impl PersistenceOptions for Options {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum DataMigration {
-    X25519Keys,
-}
-
-impl DataMigration {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::X25519Keys => "x25519_keys",
-        }
-    }
-}
-
 /// Postgres-backed persistence.
 #[derive(Clone, Debug)]
 pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
+    /// When consensus storage usage was last measured, shared by clones.
+    last_usage_check: Arc<parking_lot::Mutex<Option<Instant>>>,
+    consensus_only: bool,
     /// A reference to the internal metrics
     internal_metrics: PersistenceMetricsValue,
+    /// Startup findings about the filesystem and SQLite pragmas backing `db`.
+    #[cfg(feature = "embedded-db")]
+    probe: StorageProbe,
 }
 
 /// PostgreSQL error code for serialization failures under SERIALIZABLE isolation.
@@ -977,41 +1097,6 @@ impl Persistence {
             tx.commit().await
         })
         .await
-    }
-
-    async fn is_migration_complete(&self, name: &str, table_name: &str) -> anyhow::Result<bool> {
-        serializable_retry!(self, || async {
-            let mut tx = self.db.read().await?;
-            let (completed,): (bool,) = query_as(
-                "SELECT completed FROM data_migrations WHERE name = $1 AND table_name = $2",
-            )
-            .bind(name)
-            .bind(table_name)
-            .fetch_one(tx.as_mut())
-            .await
-            .context("migration tracking row missing - schema may be out of sync")?;
-            Ok(completed)
-        })
-        .await
-    }
-
-    async fn mark_migration_complete(
-        tx: &mut Transaction<Write>,
-        name: &str,
-        table_name: &str,
-        migrated_rows: usize,
-    ) -> anyhow::Result<()> {
-        tx.execute(
-            query(
-                "UPDATE data_migrations SET completed = true, migrated_rows = $1 WHERE name = $2 \
-                 AND table_name = $3",
-            )
-            .bind(migrated_rows as i64)
-            .bind(name)
-            .bind(table_name),
-        )
-        .await?;
-        Ok(())
     }
 
     /// The `last_processed_view` cursor: highest view with a generated decide event, or `None`.
@@ -1422,6 +1507,44 @@ impl Persistence {
         }
     }
 
+    async fn skip_decide_events(&self, view: ViewNumber) -> anyhow::Result<()> {
+        let processed = self.load_processed_view().await?;
+        // A gap-fill decide reports the older view it filled. Writing that as the cursor would
+        // rewind it, and a later restart with the query module would resume from pruned views.
+        if processed.is_some_and(|processed| processed >= view) {
+            return Ok(());
+        }
+        let from_view = processed.map_or(ViewNumber::genesis(), |processed| processed + 1);
+        let state_certs = serializable_retry!(self, || async {
+            let mut tx = self.db.read().await?;
+            Self::load_state_certs(&mut tx, from_view, view).await
+        })
+        .await?;
+
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "event_stream",
+                ["id", "last_processed_view"],
+                ["id"],
+                [(1i32, view.u64() as i64)],
+            )
+            .await?;
+            for (epoch, cert) in &state_certs {
+                tx.upsert(
+                    "finalized_state_cert",
+                    ["epoch", "state_cert"],
+                    ["epoch"],
+                    [(*epoch as i64, bincode::serialize(cert)?)],
+                )
+                .await?;
+            }
+            prune_to_view(&mut tx, view.u64()).await?;
+            tx.commit().await
+        })
+        .await
+    }
+
     async fn load_state_certs(
         tx: &mut Transaction<Read>,
         from_view: ViewNumber,
@@ -1456,57 +1579,77 @@ impl Persistence {
         Ok(result)
     }
 
+    /// Prune everything older than the target retention, then, at most once per usage check
+    /// interval, prune toward the minimum retention if storage is over the target usage.
     #[tracing::instrument(skip(self))]
-    async fn prune(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-
-            // Prune everything older than the target retention period.
-            prune_to_view(
-                &mut tx,
-                cur_view.u64().saturating_sub(self.gc_opt.target_retention),
-            )
+    async fn prune_to_retention(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
+        self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.target_retention))
             .await?;
 
-            // Check our storage usage; if necessary we will prune more aggressively (up to the
-            // minimum retention) to get below the target usage.
-            #[cfg(feature = "embedded-db")]
-            let usage_query = format!(
-                "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
-                PRUNE_TABLES
-                    .iter()
-                    .map(|table| format!("'{table}'"))
-                    .join(",")
+        if !self.usage_check_due() {
+            return Ok(());
+        }
+        let usage = self.consensus_storage_usage().await?;
+        tracing::debug!(usage, "consensus storage usage after pruning");
+        if usage > self.gc_opt.target_usage {
+            tracing::warn!(
+                usage,
+                gc_opt = ?self.gc_opt,
+                "consensus storage is running out of space, pruning to minimum retention"
             );
-
-            #[cfg(not(feature = "embedded-db"))]
-            let usage_query = {
-                let table_sizes = PRUNE_TABLES
-                    .iter()
-                    .map(|table| format!("pg_table_size('{table}')"))
-                    .join(" + ");
-                format!("SELECT {table_sizes}")
-            };
-
-            let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
-            tracing::debug!(usage, "consensus storage usage after pruning");
-
-            if (usage as u64) > self.gc_opt.target_usage {
-                tracing::warn!(
-                    usage,
-                    gc_opt = ?self.gc_opt,
-                    "consensus storage is running out of space, pruning to minimum retention"
-                );
-                prune_to_view(
-                    &mut tx,
-                    cur_view.u64().saturating_sub(self.gc_opt.minimum_retention),
-                )
+            self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.minimum_retention))
                 .await?;
-            }
+        }
+        Ok(())
+    }
 
+    async fn prune_below(&self, view: u64) -> anyhow::Result<()> {
+        // An empty write transaction still takes SQLite's write lock.
+        if view == 0 {
+            return Ok(());
+        }
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            prune_to_view(&mut tx, view).await?;
             tx.commit().await
         })
         .await
+    }
+
+    /// Measured in a read transaction: on SQLite it scans every page of the pruned tables, and
+    /// holding the write lock that long stalls the vote and proposal writes consensus waits on.
+    async fn consensus_storage_usage(&self) -> anyhow::Result<u64> {
+        #[cfg(feature = "embedded-db")]
+        let usage_query = format!(
+            "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
+            PRUNE_TABLES
+                .iter()
+                .map(|table| format!("'{table}'"))
+                .join(",")
+        );
+
+        #[cfg(not(feature = "embedded-db"))]
+        let usage_query = {
+            let table_sizes = PRUNE_TABLES
+                .iter()
+                .map(|table| format!("pg_table_size('{table}')"))
+                .join(" + ");
+            format!("SELECT {table_sizes}")
+        };
+
+        let mut tx = self.db.read().await?;
+        let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
+        Ok(usage as u64)
+    }
+
+    fn usage_check_due(&self) -> bool {
+        let now = Instant::now();
+        let mut last = self.last_usage_check.lock();
+        if last.is_some_and(|last| now.duration_since(last) < self.gc_opt.usage_check_interval) {
+            return false;
+        }
+        *last = Some(now);
+        true
     }
 }
 
@@ -1521,10 +1664,6 @@ const PRUNE_TABLES: &[&str] = &[
 ];
 
 async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
-    if view == 0 {
-        // Nothing to prune, the entire chain is younger than the retention period.
-        return Ok(());
-    }
     tracing::debug!(view, "pruning consensus storage");
 
     for table in PRUNE_TABLES {
@@ -1645,13 +1784,18 @@ impl SequencerPersistence for Persistence {
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
         let now = Instant::now();
-        // Generate events for the new leaves, then GC. On error `last_processed_view` is not
-        // advanced past the failure point, so no data is lost and the range is retried.
-        self.generate_decide_events(deciding_qc, consumer).await?;
+        if self.consensus_only {
+            self.skip_decide_events(view).await?;
+        } else {
+            // Generate events for the new leaves, then GC. On error `last_processed_view` is not
+            // advanced past the failure point, so no data is lost and the range is retried.
+            self.generate_decide_events(deciding_qc, consumer).await?;
 
-        // Best-effort GC of data not included in any decide event; runs again at the next decide.
-        if let Err(err) = self.prune(view).await {
-            tracing::warn!(?view, "pruning failed: {err:#}");
+            // Best-effort GC of data not included in any decide event; runs again at the next
+            // decide.
+            if let Err(err) = self.prune_to_retention(view).await {
+                tracing::warn!(?view, "pruning failed: {err:#}");
+            }
         }
         self.internal_metrics
             .internal_process_decided_events_duration
@@ -2115,649 +2259,6 @@ impl SequencerPersistence for Persistence {
         .await
     }
 
-    async fn migrate_anchor_leaf(&self) -> anyhow::Result<()> {
-        let batch_size: i64 = 10000;
-        let mut tx = self.db.read().await?;
-
-        // The SQL migration populates the table name and sets a default value of 0 for migrated rows.
-        // so, fetch_one() would always return a row
-        // The number of migrated rows is updated after each batch insert.
-        // This allows the types migration to resume from where it left off.
-        let (is_completed, mut offset) = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows from epoch_migration WHERE table_name = 'anchor_leaf'",
-        )
-        .fetch_one(tx.as_mut())
-        .await?;
-
-        if is_completed {
-            tracing::info!("decided leaves already migrated");
-            return Ok(());
-        }
-
-        tracing::warn!("migrating decided leaves..");
-        loop {
-            let mut tx = self.db.read().await?;
-            let rows = query(
-                "SELECT view, leaf, qc FROM anchor_leaf WHERE view >= $1 ORDER BY view LIMIT $2",
-            )
-            .bind(offset)
-            .bind(batch_size)
-            .fetch_all(tx.as_mut())
-            .await?;
-
-            drop(tx);
-            if rows.is_empty() {
-                break;
-            }
-            let mut values = Vec::new();
-
-            for row in rows.iter() {
-                let leaf: Vec<u8> = row.try_get("leaf")?;
-                let qc: Vec<u8> = row.try_get("qc")?;
-                let leaf1: Leaf = bincode::deserialize(&leaf)?;
-                let qc1: QuorumCertificate<SeqTypes> = bincode::deserialize(&qc)?;
-                let view: i64 = row.try_get("view")?;
-
-                let leaf2: Leaf2 = leaf1.into();
-                let qc2: QuorumCertificate2<SeqTypes> = qc1.to_qc2();
-
-                let leaf2_bytes = bincode::serialize(&leaf2)?;
-                let qc2_bytes = bincode::serialize(&qc2)?;
-
-                values.push((view, leaf2_bytes, qc2_bytes));
-            }
-
-            let mut query_builder: sqlx::QueryBuilder<Db> =
-                sqlx::QueryBuilder::new("INSERT INTO anchor_leaf2 (view, leaf, qc) ");
-
-            offset = values.last().context("last row")?.0;
-
-            query_builder.push_values(values, |mut b, (view, leaf, qc)| {
-                b.push_bind(view).push_bind(leaf).push_bind(qc);
-            });
-
-            // Offset tracking prevents duplicate inserts
-            // Added as a safeguard.
-            query_builder.push(" ON CONFLICT DO NOTHING");
-
-            let query = query_builder.build();
-
-            let mut tx = self.db.write().await?;
-            query.execute(tx.as_mut()).await?;
-
-            tx.upsert(
-                "epoch_migration",
-                ["table_name", "completed", "migrated_rows"],
-                ["table_name"],
-                [("anchor_leaf".to_string(), false, offset)],
-            )
-            .await?;
-            tx.commit().await?;
-
-            tracing::info!(
-                "anchor leaf migration progress: rows={} offset={}",
-                rows.len(),
-                offset
-            );
-
-            if rows.len() < batch_size as usize {
-                break;
-            }
-        }
-
-        tracing::warn!("migrated decided leaves");
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_migration",
-            ["table_name", "completed", "migrated_rows"],
-            ["table_name"],
-            [("anchor_leaf".to_string(), true, offset)],
-        )
-        .await?;
-        tx.commit().await?;
-
-        tracing::info!("updated epoch_migration table for anchor_leaf");
-
-        Ok(())
-    }
-
-    async fn migrate_da_proposals(&self) -> anyhow::Result<()> {
-        let batch_size: i64 = 10000;
-        let mut tx = self.db.read().await?;
-
-        let (is_completed, mut offset) = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows from epoch_migration WHERE table_name = 'da_proposal'",
-        )
-        .fetch_one(tx.as_mut())
-        .await?;
-
-        if is_completed {
-            tracing::info!("da proposals migration already done");
-            return Ok(());
-        }
-
-        tracing::warn!("migrating da proposals..");
-
-        loop {
-            let mut tx = self.db.read().await?;
-            let rows = query(
-                "SELECT payload_hash, data FROM da_proposal WHERE view >= $1 ORDER BY view LIMIT \
-                 $2",
-            )
-            .bind(offset)
-            .bind(batch_size)
-            .fetch_all(tx.as_mut())
-            .await?;
-
-            drop(tx);
-            if rows.is_empty() {
-                break;
-            }
-            let mut values = Vec::new();
-
-            for row in rows.iter() {
-                let data: Vec<u8> = row.try_get("data")?;
-                let payload_hash: String = row.try_get("payload_hash")?;
-
-                let da_proposal: Proposal<SeqTypes, DaProposal<SeqTypes>> =
-                    bincode::deserialize(&data)?;
-                let da_proposal2: Proposal<SeqTypes, DaProposal2<SeqTypes>> =
-                    convert_proposal(da_proposal);
-
-                let view = da_proposal2.data.view_number.u64() as i64;
-                let data = bincode::serialize(&da_proposal2)?;
-
-                values.push((view, payload_hash, data));
-            }
-
-            let mut query_builder: sqlx::QueryBuilder<Db> =
-                sqlx::QueryBuilder::new("INSERT INTO da_proposal2 (view, payload_hash, data) ");
-
-            offset = values.last().context("last row")?.0;
-            query_builder.push_values(values, |mut b, (view, payload_hash, data)| {
-                b.push_bind(view).push_bind(payload_hash).push_bind(data);
-            });
-            query_builder.push(" ON CONFLICT DO NOTHING");
-            let query = query_builder.build();
-
-            let mut tx = self.db.write().await?;
-            query.execute(tx.as_mut()).await?;
-
-            tx.upsert(
-                "epoch_migration",
-                ["table_name", "completed", "migrated_rows"],
-                ["table_name"],
-                [("da_proposal".to_string(), false, offset)],
-            )
-            .await?;
-            tx.commit().await?;
-
-            tracing::info!(
-                "DA proposals migration progress: rows={} offset={}",
-                rows.len(),
-                offset
-            );
-            if rows.len() < batch_size as usize {
-                break;
-            }
-        }
-
-        tracing::warn!("migrated da proposals");
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_migration",
-            ["table_name", "completed", "migrated_rows"],
-            ["table_name"],
-            [("da_proposal".to_string(), true, offset)],
-        )
-        .await?;
-        tx.commit().await?;
-
-        tracing::info!("updated epoch_migration table for da_proposal");
-
-        Ok(())
-    }
-
-    async fn migrate_vid_shares(&self) -> anyhow::Result<()> {
-        let batch_size: i64 = 10000;
-
-        let mut tx = self.db.read().await?;
-
-        let (is_completed, mut offset) = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows from epoch_migration WHERE table_name = 'vid_share'",
-        )
-        .fetch_one(tx.as_mut())
-        .await?;
-
-        if is_completed {
-            tracing::info!("vid_share migration already done");
-            return Ok(());
-        }
-
-        tracing::warn!("migrating vid shares..");
-        loop {
-            let mut tx = self.db.read().await?;
-            let rows = query(
-                "SELECT payload_hash, data FROM vid_share WHERE view >= $1 ORDER BY view LIMIT $2",
-            )
-            .bind(offset)
-            .bind(batch_size)
-            .fetch_all(tx.as_mut())
-            .await?;
-
-            drop(tx);
-            if rows.is_empty() {
-                break;
-            }
-            let mut values = Vec::new();
-
-            for row in rows.iter() {
-                let data: Vec<u8> = row.try_get("data")?;
-                let payload_hash: String = row.try_get("payload_hash")?;
-
-                let vid_share: Proposal<SeqTypes, VidDisperseShare0<SeqTypes>> =
-                    bincode::deserialize(&data)?;
-                let vid_share2: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
-                    convert_proposal(vid_share);
-
-                let view = vid_share2.data.view_number().u64() as i64;
-                let data = bincode::serialize(&vid_share2)?;
-
-                values.push((view, payload_hash, data));
-            }
-
-            let mut query_builder: sqlx::QueryBuilder<Db> =
-                sqlx::QueryBuilder::new("INSERT INTO vid_share2 (view, payload_hash, data) ");
-
-            offset = values.last().context("last row")?.0;
-
-            query_builder.push_values(values, |mut b, (view, payload_hash, data)| {
-                b.push_bind(view).push_bind(payload_hash).push_bind(data);
-            });
-
-            let query = query_builder.build();
-
-            let mut tx = self.db.write().await?;
-            query.execute(tx.as_mut()).await?;
-
-            tx.upsert(
-                "epoch_migration",
-                ["table_name", "completed", "migrated_rows"],
-                ["table_name"],
-                [("vid_share".to_string(), false, offset)],
-            )
-            .await?;
-            tx.commit().await?;
-
-            tracing::info!(
-                "VID shares migration progress: rows={} offset={}",
-                rows.len(),
-                offset
-            );
-            if rows.len() < batch_size as usize {
-                break;
-            }
-        }
-
-        tracing::warn!("migrated vid shares");
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_migration",
-            ["table_name", "completed", "migrated_rows"],
-            ["table_name"],
-            [("vid_share".to_string(), true, offset)],
-        )
-        .await?;
-        tx.commit().await?;
-
-        tracing::info!("updated epoch_migration table for vid_share");
-
-        Ok(())
-    }
-
-    async fn migrate_quorum_proposals(&self) -> anyhow::Result<()> {
-        let batch_size: i64 = 10000;
-        let mut tx = self.db.read().await?;
-
-        let (is_completed, mut offset) = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows from epoch_migration WHERE table_name = \
-             'quorum_proposals'",
-        )
-        .fetch_one(tx.as_mut())
-        .await?;
-
-        if is_completed {
-            tracing::info!("quorum proposals migration already done");
-            return Ok(());
-        }
-
-        tracing::warn!("migrating quorum proposals..");
-
-        loop {
-            let mut tx = self.db.read().await?;
-            let rows = query(
-                "SELECT view, leaf_hash, data FROM quorum_proposals WHERE view >= $1 ORDER BY \
-                 view LIMIT $2",
-            )
-            .bind(offset)
-            .bind(batch_size)
-            .fetch_all(tx.as_mut())
-            .await?;
-
-            drop(tx);
-
-            if rows.is_empty() {
-                break;
-            }
-
-            let mut values = Vec::new();
-
-            for row in rows.iter() {
-                let leaf_hash: String = row.try_get("leaf_hash")?;
-                let data: Vec<u8> = row.try_get("data")?;
-
-                let quorum_proposal: Proposal<SeqTypes, QuorumProposal<SeqTypes>> =
-                    bincode::deserialize(&data)?;
-                let quorum_proposal2: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
-                    convert_proposal(quorum_proposal);
-
-                let view = quorum_proposal2.data.view_number().u64() as i64;
-                let data = bincode::serialize(&quorum_proposal2)?;
-
-                values.push((view, leaf_hash, data));
-            }
-
-            let mut query_builder: sqlx::QueryBuilder<Db> =
-                sqlx::QueryBuilder::new("INSERT INTO quorum_proposals2 (view, leaf_hash, data) ");
-
-            offset = values.last().context("last row")?.0;
-            query_builder.push_values(values, |mut b, (view, leaf_hash, data)| {
-                b.push_bind(view).push_bind(leaf_hash).push_bind(data);
-            });
-
-            query_builder.push(" ON CONFLICT DO NOTHING");
-
-            let query = query_builder.build();
-
-            let mut tx = self.db.write().await?;
-            query.execute(tx.as_mut()).await?;
-
-            tx.upsert(
-                "epoch_migration",
-                ["table_name", "completed", "migrated_rows"],
-                ["table_name"],
-                [("quorum_proposals".to_string(), false, offset)],
-            )
-            .await?;
-            tx.commit().await?;
-
-            tracing::info!(
-                "quorum proposals migration progress: rows={} offset={}",
-                rows.len(),
-                offset
-            );
-
-            if rows.len() < batch_size as usize {
-                break;
-            }
-        }
-
-        tracing::warn!("migrated quorum proposals");
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_migration",
-            ["table_name", "completed", "migrated_rows"],
-            ["table_name"],
-            [("quorum_proposals".to_string(), true, offset)],
-        )
-        .await?;
-        tx.commit().await?;
-
-        tracing::info!("updated epoch_migration table for quorum_proposals");
-
-        Ok(())
-    }
-
-    async fn migrate_quorum_certificates(&self) -> anyhow::Result<()> {
-        let batch_size: i64 = 10000;
-        let mut tx = self.db.read().await?;
-
-        let (is_completed, mut offset) = query_as::<(bool, i64)>(
-            "SELECT completed, migrated_rows from epoch_migration WHERE table_name = \
-             'quorum_certificate'",
-        )
-        .fetch_one(tx.as_mut())
-        .await?;
-
-        if is_completed {
-            tracing::info!("quorum certificates migration already done");
-            return Ok(());
-        }
-
-        tracing::warn!("migrating quorum certificates..");
-        loop {
-            let mut tx = self.db.read().await?;
-            let rows = query(
-                "SELECT view, leaf_hash, data FROM quorum_certificate WHERE view >= $1 ORDER BY \
-                 view LIMIT $2",
-            )
-            .bind(offset)
-            .bind(batch_size)
-            .fetch_all(tx.as_mut())
-            .await?;
-
-            drop(tx);
-            if rows.is_empty() {
-                break;
-            }
-            let mut values = Vec::new();
-
-            for row in rows.iter() {
-                let leaf_hash: String = row.try_get("leaf_hash")?;
-                let data: Vec<u8> = row.try_get("data")?;
-
-                let qc: QuorumCertificate<SeqTypes> = bincode::deserialize(&data)?;
-                let qc2: QuorumCertificate2<SeqTypes> = qc.to_qc2();
-
-                let view = qc2.view_number().u64() as i64;
-                let data = bincode::serialize(&qc2)?;
-
-                values.push((view, leaf_hash, data));
-            }
-
-            let mut query_builder: sqlx::QueryBuilder<Db> =
-                sqlx::QueryBuilder::new("INSERT INTO quorum_certificate2 (view, leaf_hash, data) ");
-
-            offset = values.last().context("last row")?.0;
-
-            query_builder.push_values(values, |mut b, (view, leaf_hash, data)| {
-                b.push_bind(view).push_bind(leaf_hash).push_bind(data);
-            });
-
-            query_builder.push(" ON CONFLICT DO NOTHING");
-            let query = query_builder.build();
-
-            let mut tx = self.db.write().await?;
-            query.execute(tx.as_mut()).await?;
-
-            tx.upsert(
-                "epoch_migration",
-                ["table_name", "completed", "migrated_rows"],
-                ["table_name"],
-                [("quorum_certificate".to_string(), false, offset)],
-            )
-            .await?;
-            tx.commit().await?;
-
-            tracing::info!(
-                "Quorum certificates migration progress: rows={} offset={}",
-                rows.len(),
-                offset
-            );
-
-            if rows.len() < batch_size as usize {
-                break;
-            }
-        }
-
-        tracing::warn!("migrated quorum certificates");
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_migration",
-            ["table_name", "completed", "migrated_rows"],
-            ["table_name"],
-            [("quorum_certificate".to_string(), true, offset)],
-        )
-        .await?;
-        tx.commit().await?;
-        tracing::info!("updated epoch_migration table for quorum_certificate");
-
-        Ok(())
-    }
-
-    /// Migrate stake table data to include x25519_key and p2p_addr fields.
-    ///
-    /// Data written before x25519 support lacks these fields. This migration
-    /// deserializes legacy records and re-serializes them with the new fields set to None.
-    async fn migrate_x25519_keys(&self) -> anyhow::Result<()> {
-        use super::RegisteredValidatorNoX25519;
-
-        let name = DataMigration::X25519Keys.as_str();
-
-        // Migrate bincode storage (epoch_drb_and_root.stake).
-        if !self
-            .is_migration_complete(name, "epoch_drb_and_root")
-            .await?
-        {
-            let rows: Vec<(i64, Vec<u8>)> = {
-                let mut tx = self.db.read().await?;
-                query_as("SELECT epoch, stake FROM epoch_drb_and_root WHERE stake IS NOT NULL")
-                    .fetch_all(tx.as_mut())
-                    .await?
-            };
-
-            let num_rows = rows.len();
-            let mut tx = self.db.write().await?;
-            for (epoch, stake_bytes) in rows {
-                // Try current format first
-                if bincode::deserialize::<AuthenticatedValidatorMap>(&stake_bytes).is_ok() {
-                    continue;
-                }
-
-                // Legacy format without x25519 fields
-                let old_validators: IndexMap<Address, RegisteredValidatorNoX25519> =
-                    bincode::deserialize(&stake_bytes)
-                        .context("deserializing legacy stake table")?;
-                let validators: AuthenticatedValidatorMap = old_validators
-                    .into_iter()
-                    .map(|(addr, v)| {
-                        let registered = v.migrate();
-                        (
-                            addr,
-                            AuthenticatedValidator::try_from(registered)
-                                .expect("stake tables only contain authenticated validators"),
-                        )
-                    })
-                    .collect();
-
-                let new_bytes =
-                    bincode::serialize(&validators).context("serializing stake table")?;
-
-                tracing::debug!(epoch, "migrating x25519 keys in stake table");
-                tx.execute(
-                    query("UPDATE epoch_drb_and_root SET stake = $1 WHERE epoch = $2")
-                        .bind(&new_bytes)
-                        .bind(epoch),
-                )
-                .await?;
-            }
-            Self::mark_migration_complete(&mut tx, name, "epoch_drb_and_root", num_rows).await?;
-            tx.commit().await?;
-            tracing::info!(
-                num_rows,
-                "x25519_keys migration completed for epoch_drb_and_root"
-            );
-        }
-
-        // Migrate JSONB storage (stake_table_validators).
-        if !self
-            .is_migration_complete(name, "stake_table_validators")
-            .await?
-        {
-            let rows: Vec<(i64, String, serde_json::Value)> = {
-                let mut tx = self.db.read().await?;
-                query_as("SELECT epoch, address, validator FROM stake_table_validators")
-                    .fetch_all(tx.as_mut())
-                    .await?
-            };
-
-            let num_rows = rows.len();
-            let mut tx = self.db.write().await?;
-            for (epoch, address, validator_json) in rows {
-                // Check if JSON already has x25519 fields (can't rely on deserialization
-                // since serde_json fills missing Option<T> fields with None).
-                if validator_json
-                    .as_object()
-                    .is_some_and(|obj| obj.contains_key("x25519_key"))
-                {
-                    continue;
-                }
-
-                // Deserialize (serde_json fills missing Option fields with None),
-                // then re-serialize to ensure x25519_key and p2p_addr are present.
-                let validator: RegisteredValidator<PubKey> =
-                    serde_json::from_value(validator_json).context("deserializing validator")?;
-
-                let new_json = serde_json::to_value(&validator).context("serializing validator")?;
-
-                tracing::debug!(epoch, %address, "migrating x25519 keys for validator");
-                tx.execute(
-                    query(
-                        "UPDATE stake_table_validators SET validator = $1 WHERE epoch = $2 AND \
-                         address = $3",
-                    )
-                    .bind(&new_json)
-                    .bind(epoch)
-                    .bind(&address),
-                )
-                .await?;
-            }
-            Self::mark_migration_complete(&mut tx, name, "stake_table_validators", num_rows)
-                .await?;
-            tx.commit().await?;
-            tracing::info!(
-                num_rows,
-                "x25519_keys migration completed for stake_table_validators"
-            );
-        }
-
-        Ok(())
-    }
-
-    async fn store_next_epoch_quorum_certificate(
-        &self,
-        high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        let qc2_bytes = bincode::serialize(&high_qc).context("serializing next epoch qc")?;
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "next_epoch_quorum_certificate",
-                ["id", "data"],
-                ["id"],
-                [(true, qc2_bytes.clone())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
     async fn load_next_epoch_quorum_certificate(
         &self,
     ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
@@ -2774,6 +2275,41 @@ impl SequencerPersistence for Persistence {
                 anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
             })
             .transpose()
+    }
+
+    async fn append_next_epoch_high_qc2(
+        &self,
+        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let view = next_epoch_high_qc.view_number();
+        let data =
+            bincode::serialize(&next_epoch_high_qc).context("serializing next epoch high_qc2")?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            let stored_view =
+                query("SELECT data FROM next_epoch_quorum_certificate WHERE id = true")
+                    .fetch_optional(tx.as_mut())
+                    .await?
+                    .map(|row| {
+                        let bytes: Vec<u8> = row.get("data");
+                        bincode::deserialize::<NextEpochQuorumCertificate2<SeqTypes>>(&bytes)
+                            .context("deserializing existing next epoch high_qc2")
+                            .map(|qc| qc.view_number())
+                    })
+                    .transpose()?;
+            if stored_view.is_some_and(|stored| stored >= view) {
+                return Ok(());
+            }
+            tx.upsert(
+                "next_epoch_quorum_certificate",
+                ["id", "data"],
+                ["id"],
+                [(true, data.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn store_eqc(
@@ -2821,6 +2357,9 @@ impl SequencerPersistence for Persistence {
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
+        if self.consensus_only {
+            return Ok(());
+        }
         let data = &proposal.data;
         let view = data.view_number().u64();
         let data_bytes = bincode::serialize(proposal).unwrap();
@@ -2858,29 +2397,6 @@ impl SequencerPersistence for Persistence {
                 ["epoch", "drb_result"],
                 ["epoch"],
                 [(epoch_i64, drb_result_vec.clone())],
-            )
-            .await?;
-            tx.commit().await
-        })
-        .await
-    }
-
-    async fn store_epoch_root(
-        &self,
-        epoch: EpochNumber,
-        block_header: <SeqTypes as NodeType>::BlockHeader,
-    ) -> anyhow::Result<()> {
-        let epoch_i64 = epoch.u64() as i64;
-        let block_header_bytes =
-            bincode::serialize(&block_header).context("serializing block header")?;
-
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "epoch_drb_and_root",
-                ["epoch", "block_header"],
-                ["epoch"],
-                [(epoch_i64, block_header_bytes.clone())],
             )
             .await?;
             tx.commit().await
@@ -3106,6 +2622,9 @@ impl SequencerPersistence for Persistence {
 
     fn enable_metrics(&mut self, metrics: &dyn Metrics) {
         self.internal_metrics = PersistenceMetricsValue::new(metrics);
+
+        #[cfg(feature = "embedded-db")]
+        self.probe.register(&*metrics.subgroup("disk".into()));
     }
 }
 
@@ -3219,6 +2738,29 @@ impl MembershipPersistence for Persistence {
                 bincode::deserialize(&bytes).context("deserializing block header")
             })
             .transpose()
+    }
+
+    async fn store_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        block_header: Header,
+    ) -> anyhow::Result<()> {
+        let epoch_i64 = epoch.u64() as i64;
+        let block_header_bytes =
+            bincode::serialize(&block_header).context("serializing block header")?;
+
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "epoch_drb_and_root",
+                ["epoch", "block_header"],
+                ["epoch"],
+                [(epoch_i64, block_header_bytes.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_latest_stake(&self, limit: u64) -> anyhow::Result<Option<Vec<IndexedStake>>> {
@@ -3750,10 +3292,11 @@ mod testing {
 
 #[cfg(test)]
 mod test {
-    use committable::{Commitment, CommitmentBoundsArkless};
-    use espresso_types::{Header, Leaf, NodeState, ValidatedState, traits::NullEventConsumer};
+    use espresso_types::{Leaf, NodeState, ValidatedState, traits::NullEventConsumer};
     use futures::stream::TryStreamExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
+    #[cfg(feature = "embedded-db")]
+    use hotshot_query_service::metrics::PrometheusMetrics;
     use hotshot_types::{
         data::{
             EpochNumber, QuorumProposal2, ns_table::parse_ns_table,
@@ -3761,22 +3304,52 @@ mod test {
         },
         message::convert_proposal,
         simple_certificate::QuorumCertificate,
-        simple_vote::QuorumData,
-        traits::{
-            EncodeBytes,
-            block_contents::{BlockHeader, GENESIS_VID_NUM_STORAGE_NODES},
-            signature_key::SignatureKey,
-        },
+        traits::{EncodeBytes, signature_key::SignatureKey},
         utils::EpochTransitionIndicator,
-        vid::{
-            advz::advz_scheme,
-            avidm::{AvidMScheme, init_avidm_param},
-        },
+        vid::avidm::{AvidMScheme, init_avidm_param},
     };
-    use jf_advz::VidScheme;
 
     use super::*;
     use crate::{BLSPubKey, PubKey, persistence::tests::TestablePersistence as _};
+
+    #[cfg(feature = "embedded-db")]
+    #[tokio::test]
+    async fn read_pragmas_falls_back_to_none_on_query_error() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect(":memory:")
+            .await
+            .unwrap();
+        pool.close().await;
+
+        assert!(read_pragmas(&pool).await.is_none());
+    }
+
+    #[cfg(feature = "embedded-db")]
+    #[tokio::test]
+    async fn read_pragmas_reads_live_values() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect(":memory:")
+            .await
+            .unwrap();
+
+        let pragmas = read_pragmas(&pool).await.expect("pragmas readable");
+
+        assert_eq!(pragmas.journal_mode, "memory");
+        assert_ne!(pragmas.synchronous, "unknown");
+        assert!(pragmas.page_size > 0);
+    }
+
+    #[cfg(feature = "embedded-db")]
+    #[test]
+    fn sqlite_probe_dir_falls_back_to_cwd_without_a_parent() {
+        // `SqliteOptions::default()`'s `path` is empty, whose `parent()` is `Some("")`, not `None`.
+        assert_eq!(sqlite_probe_dir(&PathBuf::new()), Path::new("."));
+        assert_eq!(sqlite_probe_dir(Path::new("database")), Path::new("."));
+        assert_eq!(
+            sqlite_probe_dir(Path::new("/var/lib/espresso/sqlite/database")),
+            Path::new("/var/lib/espresso/sqlite")
+        );
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_quorum_proposals_leaf_hash_migration() {
@@ -3858,147 +3431,6 @@ mod test {
                 row.get::<String, _>("leaf_hash"),
                 Committable::commit(&Leaf::from_quorum_proposal(&qp.data)).to_string()
             );
-        }
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_x25519_keys_migration() {
-        use std::collections::HashMap;
-
-        use crate::persistence::RegisteredValidatorNoX25519;
-
-        let mut validator = RegisteredValidator::mock();
-        validator.delegators.clear();
-        validator.stake = alloy::primitives::U256::from(1000u64);
-
-        let epoch = 1i64;
-        let address = validator.account;
-        let legacy_bls_key = validator.stake_table_key.expect("mock has BLS key");
-
-        let state_ver_key_raw = validator
-            .state_ver_key
-            .clone()
-            .expect("mock has valid Schnorr key");
-
-        // Create legacy data without x25519 fields
-        let legacy = RegisteredValidatorNoX25519 {
-            account: validator.account,
-            stake_table_key: legacy_bls_key,
-            state_ver_key: state_ver_key_raw.clone(),
-            stake: validator.stake,
-            commission: validator.commission,
-            delegators: HashMap::new(),
-            authenticated: true,
-        };
-
-        // Bincode: serialize as legacy map
-        let mut legacy_map: IndexMap<Address, RegisteredValidatorNoX25519> = IndexMap::new();
-        legacy_map.insert(address, legacy);
-        let stake_bytes = bincode::serialize(&legacy_map).unwrap();
-
-        // JSON: serialize without x25519 fields
-        let json_legacy = RegisteredValidatorNoX25519 {
-            account: validator.account,
-            stake_table_key: legacy_bls_key,
-            state_ver_key: state_ver_key_raw,
-            stake: validator.stake,
-            commission: validator.commission,
-            delegators: HashMap::new(),
-            authenticated: true,
-        };
-        let validator_json = serde_json::to_value(&json_legacy).unwrap();
-
-        let db = Persistence::tmp_storage().await;
-        let persistence = Persistence::connect(&db).await;
-        let mut tx = persistence.db.write().await.unwrap();
-
-        tx.execute(
-            query(
-                "INSERT INTO stake_table_validators (epoch, address, validator) VALUES ($1, $2, \
-                 $3)",
-            )
-            .bind(epoch)
-            .bind(format!("{:?}", address))
-            .bind(&validator_json),
-        )
-        .await
-        .unwrap();
-
-        tx.execute(
-            query("INSERT INTO epoch_drb_and_root (epoch, stake) VALUES ($1, $2)")
-                .bind(epoch)
-                .bind(&stake_bytes),
-        )
-        .await
-        .unwrap();
-
-        // Reset migration state so it runs on the newly inserted data
-        tx.execute(query(
-            "UPDATE data_migrations SET completed = false, migrated_rows = 0 WHERE name = \
-             'x25519_keys'",
-        ))
-        .await
-        .unwrap();
-
-        tx.commit().await.unwrap();
-
-        // Verify JSON was inserted without x25519_key
-        {
-            let mut tx = persistence.db.read().await.unwrap();
-            let row: (serde_json::Value,) =
-                query_as("SELECT validator FROM stake_table_validators WHERE epoch = $1")
-                    .bind(epoch)
-                    .fetch_one(tx.as_mut())
-                    .await
-                    .unwrap();
-            let json_obj = row.0.as_object().unwrap();
-            assert!(!json_obj.contains_key("x25519_key"));
-        }
-
-        // Run migrations
-        let persistence = Persistence::connect(&db).await;
-        persistence.migrate_storage().await.unwrap();
-
-        // Verify stake_table_validators now has x25519_key field
-        {
-            let mut tx = persistence.db.read().await.unwrap();
-            let row: (serde_json::Value,) =
-                query_as("SELECT validator FROM stake_table_validators WHERE epoch = $1")
-                    .bind(epoch)
-                    .fetch_one(tx.as_mut())
-                    .await
-                    .unwrap();
-            let json_obj = row.0.as_object().unwrap();
-            assert!(json_obj.contains_key("x25519_key"));
-            assert!(json_obj.get("x25519_key").unwrap().is_null());
-        }
-
-        // Verify epoch_drb_and_root stake was migrated
-        {
-            let mut tx = persistence.db.read().await.unwrap();
-            let row: (Vec<u8>,) = query_as("SELECT stake FROM epoch_drb_and_root WHERE epoch = $1")
-                .bind(epoch)
-                .fetch_one(tx.as_mut())
-                .await
-                .unwrap();
-            let migrated_map: AuthenticatedValidatorMap = bincode::deserialize(&row.0).unwrap();
-            assert!(migrated_map.contains_key(&address));
-            let v = migrated_map.get(&address).unwrap();
-            assert!(v.x25519_key.is_none());
-        }
-
-        // Verify migration tracking
-        {
-            let mut tx = persistence.db.read().await.unwrap();
-            let row: (bool, i64) = query_as(
-                "SELECT completed, migrated_rows FROM data_migrations WHERE name = 'x25519_keys' \
-                 AND table_name = 'epoch_drb_and_root'",
-            )
-            .fetch_one(tx.as_mut())
-            .await
-            .unwrap();
-            assert!(row.0);
-            assert_eq!(row.1, 1);
         }
     }
 
@@ -4239,7 +3671,7 @@ mod test {
             proposal: QuorumProposal2::<SeqTypes> {
                 block_header: leaf.block_header().clone(),
                 view_number: leaf.view_number(),
-                justify_qc: leaf.justify_qc(),
+                justify_qc: leaf.justify_qc().clone(),
                 upgrade_certificate: None,
                 view_change_evidence: None,
                 next_drb_result: None,
@@ -4501,6 +3933,7 @@ mod test {
             // Use a very high target retention, so that pruning is only triggered by the minimum
             // retention.
             target_retention: u64::MAX,
+            usage_check_interval: Duration::ZERO,
         })
         .await
     }
@@ -4515,260 +3948,9 @@ mod test {
             // Use a very high target usage, so that pruning is only triggered by the target
             // retention.
             target_usage: u64::MAX,
+            usage_check_interval: Duration::ZERO,
         })
         .await
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_consensus_migration() {
-        let tmp = Persistence::tmp_storage().await;
-        let mut opt = Persistence::options(&tmp);
-
-        let storage = opt.create().await.unwrap();
-
-        let rows = 300;
-
-        assert!(storage.load_state_cert().await.unwrap().is_none());
-
-        for i in 0..rows {
-            let view = ViewNumber::new(i);
-            let validated_state = ValidatedState::default();
-            let instance_state = NodeState::default();
-
-            let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], i);
-            let (payload, metadata) =
-                Payload::from_transactions([], &validated_state, &instance_state)
-                    .await
-                    .unwrap();
-
-            let payload_bytes = payload.encode();
-
-            let block_header = Header::genesis(
-                &instance_state,
-                payload.clone(),
-                &metadata,
-                TEST_VERSIONS.test.base,
-            );
-
-            let null_quorum_data = QuorumData {
-                leaf_commit: Commitment::<Leaf>::default_commitment_no_preimage(),
-            };
-
-            let justify_qc = QuorumCertificate::new(
-                null_quorum_data.clone(),
-                null_quorum_data.commit(),
-                view,
-                None,
-                std::marker::PhantomData,
-            );
-
-            let quorum_proposal = QuorumProposal {
-                block_header,
-                view_number: view,
-                justify_qc: justify_qc.clone(),
-                upgrade_certificate: None,
-                proposal_certificate: None,
-            };
-
-            let quorum_proposal_signature =
-                BLSPubKey::sign(&privkey, &bincode::serialize(&quorum_proposal).unwrap())
-                    .expect("Failed to sign quorum proposal");
-
-            let proposal = Proposal {
-                data: quorum_proposal.clone(),
-                signature: quorum_proposal_signature,
-                _pd: std::marker::PhantomData::<SeqTypes>,
-            };
-
-            let proposal_bytes = bincode::serialize(&proposal)
-                .context("serializing proposal")
-                .unwrap();
-
-            let mut leaf = Leaf::from_quorum_proposal(&quorum_proposal);
-            leaf.fill_block_payload(
-                payload,
-                GENESIS_VID_NUM_STORAGE_NODES,
-                TEST_VERSIONS.test.base,
-            )
-            .unwrap();
-
-            let mut tx = storage.db.write().await.unwrap();
-
-            let qc_bytes = bincode::serialize(&justify_qc).unwrap();
-            let leaf_bytes = bincode::serialize(&leaf).unwrap();
-
-            tx.upsert(
-                "anchor_leaf",
-                ["view", "leaf", "qc"],
-                ["view"],
-                [(i as i64, leaf_bytes, qc_bytes)],
-            )
-            .await
-            .unwrap();
-
-            let state_cert = LightClientStateUpdateCertificateV2::<SeqTypes> {
-                epoch: EpochNumber::new(i),
-                light_client_state: Default::default(), // filling arbitrary value
-                next_stake_table_state: Default::default(), // filling arbitrary value
-                signatures: vec![],                     // filling arbitrary value
-                auth_root: Default::default(),
-            };
-            // manually upsert the state cert to the finalized database
-            let state_cert_bytes = bincode::serialize(&state_cert).unwrap();
-            tx.upsert(
-                "finalized_state_cert",
-                ["epoch", "state_cert"],
-                ["epoch"],
-                [(i as i64, state_cert_bytes)],
-            )
-            .await
-            .unwrap();
-
-            tx.commit().await.unwrap();
-
-            let disperse = advz_scheme(GENESIS_VID_NUM_STORAGE_NODES)
-                .disperse(payload_bytes.clone())
-                .unwrap();
-
-            let vid = VidDisperseShare0::<SeqTypes> {
-                view_number: ViewNumber::new(i),
-                payload_commitment: Default::default(),
-                share: disperse.shares[0].clone(),
-                common: disperse.common,
-                recipient_key: pubkey,
-            };
-
-            let (payload, metadata) =
-                Payload::from_transactions([], &ValidatedState::default(), &NodeState::default())
-                    .await
-                    .unwrap();
-
-            let da = DaProposal::<SeqTypes> {
-                encoded_transactions: payload.encode(),
-                metadata,
-                view_number: ViewNumber::new(i),
-            };
-
-            let block_payload_signature =
-                BLSPubKey::sign(&privkey, &payload_bytes).expect("Failed to sign block payload");
-
-            let da_proposal = Proposal {
-                data: da,
-                signature: block_payload_signature,
-                _pd: Default::default(),
-            };
-
-            storage
-                .append_vid(&convert_proposal(vid.to_proposal(&privkey).unwrap()))
-                .await
-                .unwrap();
-            storage
-                .append_da(&da_proposal, VidCommitment::V0(disperse.commit))
-                .await
-                .unwrap();
-
-            let leaf_hash = Committable::commit(&leaf);
-            let mut tx = storage.db.write().await.expect("failed to start write tx");
-            tx.upsert(
-                "quorum_proposals",
-                ["view", "leaf_hash", "data"],
-                ["view"],
-                [(i as i64, leaf_hash.to_string(), proposal_bytes)],
-            )
-            .await
-            .expect("failed to upsert quorum proposal");
-
-            let justify_qc = &proposal.data.justify_qc;
-            let justify_qc_bytes = bincode::serialize(&justify_qc)
-                .context("serializing QC")
-                .unwrap();
-            tx.upsert(
-                "quorum_certificate",
-                ["view", "leaf_hash", "data"],
-                ["view"],
-                [(
-                    justify_qc.view_number.u64() as i64,
-                    justify_qc.data.leaf_commit.to_string(),
-                    &justify_qc_bytes,
-                )],
-            )
-            .await
-            .expect("failed to upsert qc");
-
-            tx.commit().await.expect("failed to commit");
-        }
-
-        storage.migrate_storage().await.unwrap();
-
-        let mut tx = storage.db.read().await.unwrap();
-        let (anchor_leaf2_count,) = query_as::<(i64,)>("SELECT COUNT(*) from anchor_leaf2")
-            .fetch_one(tx.as_mut())
-            .await
-            .unwrap();
-        assert_eq!(
-            anchor_leaf2_count, rows as i64,
-            "anchor leaf count does not match rows",
-        );
-
-        let (da_proposal_count,) = query_as::<(i64,)>("SELECT COUNT(*) from da_proposal2")
-            .fetch_one(tx.as_mut())
-            .await
-            .unwrap();
-        assert_eq!(
-            da_proposal_count, rows as i64,
-            "da proposal count does not match rows",
-        );
-
-        let (vid_share_count,) = query_as::<(i64,)>("SELECT COUNT(*) from vid_share2")
-            .fetch_one(tx.as_mut())
-            .await
-            .unwrap();
-        assert_eq!(
-            vid_share_count, rows as i64,
-            "vid share count does not match rows"
-        );
-
-        let (quorum_proposals_count,) =
-            query_as::<(i64,)>("SELECT COUNT(*) from quorum_proposals2")
-                .fetch_one(tx.as_mut())
-                .await
-                .unwrap();
-        assert_eq!(
-            quorum_proposals_count, rows as i64,
-            "quorum proposals count does not match rows",
-        );
-
-        let (quorum_certificates_count,) =
-            query_as::<(i64,)>("SELECT COUNT(*) from quorum_certificate2")
-                .fetch_one(tx.as_mut())
-                .await
-                .unwrap();
-        assert_eq!(
-            quorum_certificates_count, rows as i64,
-            "quorum certificates count does not match rows",
-        );
-
-        let (state_cert_count,) = query_as::<(i64,)>("SELECT COUNT(*) from finalized_state_cert")
-            .fetch_one(tx.as_mut())
-            .await
-            .unwrap();
-        assert_eq!(
-            state_cert_count, rows as i64,
-            "Light client state update certificates count does not match rows",
-        );
-        assert_eq!(
-            storage.load_state_cert().await.unwrap().unwrap(),
-            LightClientStateUpdateCertificateV2::<SeqTypes> {
-                epoch: EpochNumber::new(rows - 1),
-                light_client_state: Default::default(),
-                next_stake_table_state: Default::default(),
-                signatures: vec![],
-                auth_root: Default::default(),
-            },
-            "Wrong light client state update certificate in the storage",
-        );
-
-        storage.migrate_storage().await.unwrap();
     }
 
     /// Regression test for an ambiguous behavior in `store_events`/`load_events`.
@@ -4810,6 +3992,57 @@ mod test {
                 (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
             );
         }
+    }
+
+    /// A gap-fill decide reports the older view it filled, after a newer decide already moved
+    /// the cursor past it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_consensus_only_decide_never_rewinds_cursor() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        opt.set_consensus_only();
+        let storage = opt.create().await.unwrap();
+
+        for view in [10, 5] {
+            storage
+                .append_decided_leaves(ViewNumber::new(view), [], None, &NullEventConsumer)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            storage.load_processed_view().await.unwrap(),
+            Some(ViewNumber::new(10))
+        );
+    }
+
+    /// The probe is taken in `create()` and only reaches the exported registry through
+    /// `enable_metrics`, which `init_node` calls.
+    #[cfg(feature = "embedded-db")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_storage_probe_reaches_exported_registry() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut persistence = Persistence::options(&tmp).create().await.unwrap();
+
+        // Dropping WAL from `sqlite_options()` should fail this assertion.
+        assert_eq!(
+            persistence
+                .probe
+                .pragmas
+                .as_ref()
+                .map(|pragmas| pragmas.journal_mode.as_str()),
+            Some("wal")
+        );
+
+        let metrics = PrometheusMetrics::default();
+        persistence.enable_metrics(&*Metrics::subgroup(&metrics, "consensus".to_string()));
+
+        let exported = metrics.export().unwrap();
+        assert!(exported.contains("consensus_disk_info"), "{exported}");
+        assert!(exported.contains("backend=\"sqlite\""), "{exported}");
+        assert!(
+            exported.contains("consensus_disk_fsync_micros"),
+            "{exported}"
+        );
     }
 }
 

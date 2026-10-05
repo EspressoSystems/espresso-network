@@ -114,7 +114,7 @@ pub async fn verify_leaf_chain<T: NodeType>(
     // Derive each QC's epoch from the height of the leaf it certifies; trusting
     // the epoch claimed in the QC would let a stale epoch's quorum pick the
     // stake table that verifies its own signatures.
-    let validate_qc = |qc: QuorumCertificate2<T>, certified_height: u64| -> anyhow::Result<()> {
+    let validate_qc = |qc: &QuorumCertificate2<T>, certified_height: u64| -> anyhow::Result<()> {
         let epoch = EpochNumber::new(epoch_from_block_number(certified_height, epoch_height));
         ensure!(
             qc.data.epoch() == Some(epoch),

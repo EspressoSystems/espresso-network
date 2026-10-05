@@ -1,0 +1,13 @@
+{"version": "1.2.0",
+ "packagesDir": ".lake/packages",
+ "packages":
+ [{"type": "path",
+   "scope": "",
+   "name": "«new-protocol-spec»",
+   "manifestFile": "lake-manifest.json",
+   "inherited": false,
+   "dir": "../new-protocol-spec",
+   "configFile": "lakefile.toml"}],
+ "name": "«new-protocol-impl»",
+ "lakeDir": ".lake",
+ "fixedToolchain": false}

@@ -108,10 +108,23 @@ impl tide_disco::error::Error for Error {
             },
             Error::TxnUnpack { .. } => StatusCode::BAD_REQUEST,
             Error::TxnSubmit { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-            Error::Custom { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            Error::Custom { status, .. } => *status,
             Error::BuilderAddress { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Error::TxnStat { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
+    }
+}
+
+impl http_client::ClientError for Error {
+    fn catch_all(status: http_client::StatusCode, msg: String) -> Self {
+        Error::Custom {
+            message: msg,
+            status: status.into(),
+        }
+    }
+
+    fn status(&self) -> http_client::StatusCode {
+        disco_types::error::Error::status(self).into()
     }
 }
 

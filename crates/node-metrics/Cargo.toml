@@ -1,0 +1,50 @@
+[package]
+name = "node-metrics"
+description = "A Library for collecting, recording and distributing information about the Espresso Block Chain Network"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+
+[features]
+testing = ["espresso-types/testing", "hotshot-query-service/testing"]
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+bincode = { workspace = true }
+bitvec = { workspace = true }
+circular-buffer = { workspace = true }
+clap = { workspace = true }
+espresso-types = { workspace = true, features = ["node"] }
+espresso-utils = { workspace = true, features = ["full"] }
+futures = { workspace = true }
+hotshot = { workspace = true }
+hotshot-example-types = { workspace = true }
+hotshot-query-service = { workspace = true }
+http-client = { workspace = true }
+http-wire = { workspace = true, features = ["server"] }
+
+# Dependencies for feature `testing`
+hotshot-types = { workspace = true }
+indexmap = { workspace = true }
+prometheus-parse = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+vbs = { workspace = true }
+
+[dev-dependencies]
+node-metrics = { path = ".", features = ["testing"] }
+test-log = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

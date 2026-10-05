@@ -45,7 +45,7 @@ use vbs::version::StaticVersion;
 // instead we write `with_minor_versions!(some_macro!(args))`.
 macro_rules! with_minor_versions {
     ($m:ident!($($arg:tt),*)) => {
-        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6);
+        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7);
     };
 }
 
@@ -96,6 +96,7 @@ reexport_unchanged_types!(
     Iter,
     L1BlockInfo,
     L1ClientOptions,
+    L1SafetyMargin,
     L1Snapshot,
     NamespaceId,
     NsIndex,
@@ -182,8 +183,8 @@ pub use crate::{
         to_registered_validator_map,
     },
     v0_1::{
-        BLOCK_MERKLE_TREE_HEIGHT, DECAF_CHAIN_ID, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN,
-        NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
+        BLOCK_MERKLE_TREE_HEIGHT, DECAF_CHAIN_ID, FEE_MERKLE_TREE_HEIGHT, MAINNET_CHAIN_ID,
+        NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
     },
     v0_3::ChainConfig,
 };

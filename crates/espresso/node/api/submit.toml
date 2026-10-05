@@ -1,4 +1,0 @@
-[route.submit]
-PATH = ["/submit"]
-METHOD = "POST"
-DOC = "Submit transaction to HotShot handle."

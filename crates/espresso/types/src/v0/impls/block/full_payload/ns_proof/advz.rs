@@ -25,7 +25,7 @@ impl ADVZNsProof {
     /// ([`TxProof::new`](crate::block::namespace_payload::TxProof::new)
     /// conforms to this convention.) In the future we should change this API to
     /// conform to convention. But that would require a change to our RPC
-    /// endpoint API at [`endpoints`](crate::api::endpoints), which is a hassle.
+    /// endpoint API, which is a hassle.
     pub fn new(payload: &Payload, index: &NsIndex, common: &ADVZCommon) -> Option<ADVZNsProof> {
         let payload_byte_len = payload.byte_len();
         if !payload_byte_len.is_consistent(common) {

@@ -2,9 +2,11 @@ use std::{fs, io::BufReader, path::Path};
 
 use hotshot_types::traits::metrics::{Counter, Gauge, Metrics};
 use procfs::{
-    Current, LoadAverage, PressureRecord, get_pressure,
+    Current, CurrentSI, KernelStats, LoadAverage, PressureRecord, get_pressure,
     process::{Io, Process},
 };
+
+use crate::accumulate::SecondsAccumulator;
 
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 const HOST_PRESSURE_DIR: &str = "/proc/pressure";
@@ -47,30 +49,6 @@ fn detect_cgroup_v2() -> bool {
         && Path::new(CGROUP_ROOT).join("memory.current").exists()
 }
 
-/// Accumulates fractional units (µs or ticks) into a counter measured in whole seconds,
-/// preserving sub-second precision across many ticks.
-#[derive(Default)]
-struct SecondsAccumulator {
-    /// Last absolute reading from the kernel, in the source unit (µs or ticks).
-    last: Option<u64>,
-    /// Sub-second remainder carried between calls, in the source unit.
-    remainder: u64,
-}
-
-impl SecondsAccumulator {
-    /// Feed an absolute monotonic reading. Returns whole-seconds delta to add to the counter.
-    fn observe(&mut self, current: u64, units_per_second: u64) -> usize {
-        let Some(prev) = self.last.replace(current) else {
-            return 0;
-        };
-        let delta = current.saturating_sub(prev);
-        let total = self.remainder + delta;
-        let whole = total / units_per_second;
-        self.remainder = total % units_per_second;
-        whole as usize
-    }
-}
-
 /// Tracks the previous absolute value of a `u64` counter for delta-add against a `Counter`.
 #[derive(Default)]
 struct U64Delta {
@@ -86,6 +64,35 @@ impl U64Delta {
     }
 }
 
+/// Per-mode host CPU time counters, matching the fields of `/proc/stat`'s aggregate `cpu` line.
+struct CpuModeCounters {
+    user: Box<dyn Counter>,
+    nice: Box<dyn Counter>,
+    system: Box<dyn Counter>,
+    idle: Box<dyn Counter>,
+    iowait: Box<dyn Counter>,
+    irq: Box<dyn Counter>,
+    softirq: Box<dyn Counter>,
+    steal: Box<dyn Counter>,
+    guest: Box<dyn Counter>,
+    guest_nice: Box<dyn Counter>,
+}
+
+/// Cross-tick accumulator state mirroring [`CpuModeCounters`].
+#[derive(Default)]
+struct CpuModeAccumulators {
+    user: SecondsAccumulator,
+    nice: SecondsAccumulator,
+    system: SecondsAccumulator,
+    idle: SecondsAccumulator,
+    iowait: SecondsAccumulator,
+    irq: SecondsAccumulator,
+    softirq: SecondsAccumulator,
+    steal: SecondsAccumulator,
+    guest: SecondsAccumulator,
+    guest_nice: SecondsAccumulator,
+}
+
 /// Immutable per-tick context detected once at startup.
 #[derive(Clone, Copy)]
 struct Env {
@@ -98,6 +105,7 @@ struct Env {
 #[derive(Default)]
 struct Previous {
     cpu_ticks: SecondsAccumulator,
+    cpu_modes: CpuModeAccumulators,
     pressure_cpu_some: SecondsAccumulator,
     pressure_memory_some: SecondsAccumulator,
     pressure_memory_full: SecondsAccumulator,
@@ -120,6 +128,7 @@ pub struct LinuxMetrics {
     load15_milli: Box<dyn Gauge>,
 
     process_cpu_seconds_total: Box<dyn Counter>,
+    cpu_mode_seconds_total: CpuModeCounters,
 
     pressure_cpu_some_total: Box<dyn Counter>,
     pressure_memory_some_total: Box<dyn Counter>,
@@ -165,6 +174,22 @@ impl LinuxMetrics {
 
             process_cpu_seconds_total: metrics
                 .create_counter("process_cpu_seconds_total".into(), seconds()),
+            cpu_mode_seconds_total: {
+                let family = metrics
+                    .counter_family("node_cpu_mode_seconds_total".into(), vec!["mode".into()]);
+                CpuModeCounters {
+                    user: family.create(vec!["user".into()]),
+                    nice: family.create(vec!["nice".into()]),
+                    system: family.create(vec!["system".into()]),
+                    idle: family.create(vec!["idle".into()]),
+                    iowait: family.create(vec!["iowait".into()]),
+                    irq: family.create(vec!["irq".into()]),
+                    softirq: family.create(vec!["softirq".into()]),
+                    steal: family.create(vec!["steal".into()]),
+                    guest: family.create(vec!["guest".into()]),
+                    guest_nice: family.create(vec!["guest_nice".into()]),
+                }
+            },
 
             pressure_cpu_some_total: metrics
                 .create_counter("node_pressure_cpu_waiting_seconds_total".into(), seconds()),
@@ -253,11 +278,43 @@ impl LinuxMetrics {
             }
         }
 
+        self.sample_cpu_stat(env.ticks_per_second);
+
         self.sample_pressure(env.pressure);
 
         if env.cgroup_v2 {
             self.sample_cgroup_cpu();
             self.sample_cgroup_memory();
+        }
+    }
+
+    /// Host-wide CPU time by mode, aggregated across all CPUs. Unlike `process_cpu_seconds_total`,
+    /// this exposes time (e.g. `steal`) the process itself never sees but that still explains why
+    /// the host is slow. `guest`/`guest_nice` ticks are already included in `user`/`nice`
+    /// respectively (the kernel's `account_guest_time()` double-books them), so summing all modes
+    /// over-counts the denominator on hypervisors and understates utilization.
+    fn sample_cpu_stat(&mut self, ticks_per_second: u64) {
+        let Some(cpu) = read_or_debug("/proc/stat", KernelStats::current).map(|s| s.total) else {
+            return;
+        };
+        let counters = &self.cpu_mode_seconds_total;
+        let prev = &mut self.prev.cpu_modes;
+        let modes: [(&dyn Counter, &mut SecondsAccumulator, Option<u64>); 10] = [
+            (&*counters.user, &mut prev.user, Some(cpu.user)),
+            (&*counters.nice, &mut prev.nice, Some(cpu.nice)),
+            (&*counters.system, &mut prev.system, Some(cpu.system)),
+            (&*counters.idle, &mut prev.idle, Some(cpu.idle)),
+            (&*counters.iowait, &mut prev.iowait, cpu.iowait),
+            (&*counters.irq, &mut prev.irq, cpu.irq),
+            (&*counters.softirq, &mut prev.softirq, cpu.softirq),
+            (&*counters.steal, &mut prev.steal, cpu.steal),
+            (&*counters.guest, &mut prev.guest, cpu.guest),
+            (&*counters.guest_nice, &mut prev.guest_nice, cpu.guest_nice),
+        ];
+        for (counter, acc, ticks) in modes {
+            if let Some(ticks) = ticks {
+                counter.add(acc.observe(ticks, ticks_per_second));
+            }
         }
     }
 
@@ -435,36 +492,6 @@ fn read_u64_file(path: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn seconds_accumulator_first_sample_is_zero() {
-        let mut acc = SecondsAccumulator::default();
-        assert_eq!(acc.observe(123_456, 1_000_000), 0);
-    }
-
-    #[test]
-    fn seconds_accumulator_preserves_remainder() {
-        let mut acc = SecondsAccumulator::default();
-        // First call seeds the baseline.
-        assert_eq!(acc.observe(0, 1_000_000), 0);
-        // 0.5s delta — no whole second yet.
-        assert_eq!(acc.observe(500_000, 1_000_000), 0);
-        // Another 0.6s delta — one whole second, 0.1s remainder.
-        assert_eq!(acc.observe(1_100_000, 1_000_000), 1);
-        // Another 0.95s — total now 1.05s of remainder + delta → 1 sec.
-        assert_eq!(acc.observe(2_050_000, 1_000_000), 1);
-    }
-
-    #[test]
-    fn seconds_accumulator_handles_counter_reset() {
-        let mut acc = SecondsAccumulator::default();
-        acc.observe(10_000_000, 1_000_000);
-        // Apparent regression (e.g. proc remount or wraparound), saturate to 0.
-        assert_eq!(acc.observe(5_000_000, 1_000_000), 0);
-        // After saturating, `last` should equal the most recent reading; the next
-        // legitimate delta from there should still register.
-        assert_eq!(acc.observe(6_000_000, 1_000_000), 1);
-    }
 
     #[test]
     fn u64_delta_first_sample_is_zero() {

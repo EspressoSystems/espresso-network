@@ -27,7 +27,6 @@ use axum::{
     routing::{get, post},
 };
 use clap::{Parser, ValueEnum};
-use espresso_api::{cors_layer, healthcheck_response};
 use espresso_contract_deployer::{
     self as deployer, Contract, Contracts, DEFAULT_EXIT_ESCROW_PERIOD_SECONDS, DeployedContracts,
     HttpProviderWithWallet, network_config::light_client_genesis_from_stake_table,
@@ -58,6 +57,7 @@ use hotshot_types::{
     stake_table::{HSStakeTable, one_honest_threshold},
     utils::epoch_from_block_number,
 };
+use http_wire::{cors_layer, healthcheck_response};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
 use staking_cli::demo::{DelegationConfig, StakingTransactions};
@@ -184,10 +184,6 @@ struct Args {
     #[clap(long, env = "ESPRESSO_NODE_TONIC_PORT")]
     tonic_port: Option<u16>,
 
-    /// Port for connecting to the builder.
-    #[clap(short, long, env = "ESPRESSO_BUILDER_PORT")]
-    builder_port: Option<u16>,
-
     /// Port for connecting to the prover.
     #[clap(short, long, env = "ESPRESSO_PROVER_PORT")]
     prover_port: Option<u16>,
@@ -272,7 +268,6 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         sequencer_api_port,
         sequencer_api_max_connections,
         tonic_port,
-        builder_port,
         prover_port,
         dev_node_port,
         sql,
@@ -331,7 +326,6 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     let network_config = TestConfigBuilder::default()
         .epoch_height(epoch_height)
-        .builder_port(builder_port)
         .stake_table_capacity(STAKE_TABLE_CAPACITY_FOR_TEST)
         .state_relay_url(relay_server_url.clone())
         .l1_url(l1_url.clone())
@@ -669,7 +663,6 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     .config(Default::default())
     .explorer(Default::default())
     .query_sql(Default::default(), sql)
-    .hotshot_events(Default::default())
     .light_client(Default::default());
     let consensus_dbs = join_all((0..NUM_NODES).map(|_| DataSource::create_storage())).await;
     let persistences: [_; NUM_NODES] = consensus_dbs
@@ -939,7 +932,7 @@ async fn healthcheck(headers: HeaderMap) -> Response {
 
 /// Serves the dev-info/set-hotshot-down/set-hotshot-up routes at both the `/v0/api/...` forms
 /// tide-disco served directly and the unversioned `/api/...` forms it served via a redirect
-/// (used by the Go SDK and surf-disco clients, respectively).
+/// (used by the Go SDK and our HTTP clients, respectively).
 fn dev_node_router(state: DevNodeState) -> Router {
     let api = Router::new().nest(
         "/api",

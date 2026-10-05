@@ -4,12 +4,12 @@ Four crates gate node-side functionality behind an opt-in feature; their `defaul
 without the feature yields a build for constrained targets (SP1 zkVM, riscv32/riscv64). In-repo dependents enable the
 features they need explicitly in their manifests.
 
-| Crate                       | Feature       | Gates                                                                                                                    |
-| --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| espresso-types              | `node`        | L1 client, persistence traits, Fetcher L1 methods, block proposal, full alloy                                            |
-| hotshot-query-service-types | `sqlx`, `web` | sql storage types; events-service error conversion (error types and client-error impl are unconditional via disco-types) |
-| espresso-utils              | `full`        | node and tooling helpers (clap, tokio, surf, ...); the pure `ser` module stays                                           |
-| light-client                | `client`      | host query client, sqlite storage, query-service provider; `state.rs` and `consensus/` stay                              |
+| Crate                       | Feature       | Gates                                                                                                                                   |
+| --------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| espresso-types              | `node`        | L1 client, persistence traits, Fetcher L1 methods, block proposal, full alloy                                                           |
+| hotshot-query-service-types | `sqlx`, `web` | sql storage types; events-service error conversion and `http_client::ClientError` impl (error types stay unconditional via disco-types) |
+| espresso-utils              | `full`        | node and tooling helpers (clap, tokio, reqwest, ...); the pure `ser` module stays                                                       |
+| light-client                | `client`      | host query client, sqlite storage, query-service provider; `state.rs` and `consensus/` stay                                             |
 
 - `espresso-types/testing` implies `node`. `light-client/testing` implies `client` but not `rlp`.
   `espresso-utils/testing` implies nothing; request `full` alongside it where needed.
@@ -30,8 +30,9 @@ features they need explicitly in their manifests.
 - `EpochCommittees::add_epoch_root` (`crates/espresso/types/src/v0/impls/committee.rs`): always panics.
 - `get_l1_deposits` (`crates/espresso/types/src/v0/impls/state.rs`): panics only if the chain has a fee contract and the
   header references a finalized L1 block; otherwise returns `[]` like the node build.
-- `Fetcher::initial_supply_or_fetch` (`crates/espresso/types/src/v0/impls/stake_table.rs`): panics unless
-  `initial_supply` was pre-populated; reachable through `fetch_and_calculate_block_reward`.
+- `Fetcher::initial_supply_or_fetch` (`crates/espresso/types/src/v0/impls/stake_table.rs`): returns the hardcoded supply
+  for a known stake table contract; for any other contract, panics unless `initial_supply` was pre-populated. Reachable
+  through `fetch_and_calculate_block_reward`.
 
 Functions with no non-node callers are compiled out instead (e.g. `EpochCommittees::reload_stake`, the `L1Client`
 cluster): calling them without `node` is a compile error, not a panic.

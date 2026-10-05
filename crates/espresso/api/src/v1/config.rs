@@ -1,6 +1,4 @@
 //! V1 config API.
-//!
-//! Mirrors the tide-disco endpoints defined in `crates/espresso/node/api/config.toml`.
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -12,6 +10,8 @@ pub trait ConfigApi {
 
     async fn hotshot_config(&self) -> anyhow::Result<Self::HotShotConfig>;
 
+    /// The allowlisted environment variables, each as a single `KEY=value` string. Unset
+    /// variables are present with an empty value.
     async fn env(&self) -> anyhow::Result<Vec<String>>;
 
     async fn runtime_config(&self) -> anyhow::Result<Self::RuntimeConfig>;

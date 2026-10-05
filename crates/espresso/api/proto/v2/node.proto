@@ -1,0 +1,437 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "google/api/annotations.proto";
+import "v2/common.proto";
+
+message GetTransactionCountRequest {
+  // Lowest block height to include; the genesis block when absent
+  optional uint64 from = 1;
+
+  // Highest block height to include (inclusive); the latest aggregated block when absent,
+  // which can lag the chain tip
+  optional uint64 to = 2;
+
+  // Count only this namespace's transactions; every namespace when absent
+  optional uint64 namespace = 3;
+}
+
+message TransactionCountResponse {
+  uint64 count = 1;
+}
+
+message GetPayloadSizeRequest {
+  // Lowest block height to include; the genesis block when absent
+  optional uint64 from = 1;
+
+  // Highest block height to include (inclusive); the latest aggregated block when absent,
+  // which can lag the chain tip
+  optional uint64 to = 2;
+
+  // Measure only this namespace's payload data; every namespace when absent
+  optional uint64 namespace = 3;
+}
+
+message PayloadSizeResponse {
+  // Cumulative payload size in bytes
+  uint64 size = 1;
+}
+
+message GetSyncStatusRequest {}
+
+// Whether this node stores an object, still has to fetch it, or deleted it on purpose
+enum SyncStatus {
+  // Never returned; proto3 requires a zero value
+  SYNC_STATUS_UNSPECIFIED = 0;
+  SYNC_STATUS_PRESENT = 1;
+  // Not stored yet; the node fetches it from peers in the background
+  SYNC_STATUS_MISSING = 2;
+  // Deleted by the pruner; the node will not fetch it again
+  SYNC_STATUS_PRUNED = 3;
+}
+
+message SyncStatusRange {
+  // First height in the range (inclusive)
+  uint64 start = 1;
+
+  // Height just past the last one in the range (exclusive)
+  uint64 end = 2;
+
+  SyncStatus status = 3;
+}
+
+message ResourceSyncStatus {
+  // Number of missing objects, not counting pruned ones
+  uint64 missing = 1;
+
+  // Contiguous height ranges sharing one status, in ascending order
+  repeated SyncStatusRange ranges = 2;
+}
+
+message SyncStatusResponse {
+  ResourceSyncStatus blocks = 1;
+
+  ResourceSyncStatus leaves = 2;
+
+  ResourceSyncStatus vid_common = 3;
+
+  // Height of the last pruned object: everything at or below it is pruned rather than missing.
+  // Absent when nothing has been pruned
+  optional uint64 pruned_height = 4;
+}
+
+message GetBlockRewardRequest {
+  // Epoch whose block reward to report; when absent, the protocol-wide reward used before
+  // rewards became epoch-dependent
+  optional uint64 epoch = 1;
+}
+
+message BlockRewardResponse {
+  // Reward distributed per block, in wei (decimal string); absent when the node does not know
+  // a reward for the epoch
+  optional string amount = 1;
+}
+
+message GetHeaderWindowRequest {
+  // Start of the window, a Unix timestamp in seconds
+  optional uint64 start_time = 1;
+
+  // Start the window at this block, by height
+  optional uint64 start_height = 2;
+
+  // Start the window at this block, named by its hash. TaggedBase64 `BLOCK~`
+  optional string start_hash = 3;
+
+  // End of the window, a Unix timestamp in seconds. Required
+  optional uint64 end = 4;
+}
+
+message HeaderWindowResponse {
+  // Headers whose timestamps fall in the window
+  repeated HeaderResponse window = 1;
+
+  // The header before the window, absent at the start of the chain
+  optional HeaderResponse prev = 2;
+
+  // The header after the window. Absent both when the window reaches the chain tip and when it
+  // was truncated at the limit `/v2/node/limits` reports, so a `window` of exactly that many
+  // entries means there is more to fetch rather than nothing after it
+  optional HeaderResponse next = 3;
+}
+
+message AdvzMerkleNodeLeaf {
+  // The leaf element, ark-serialized into one TaggedBase64 `FIELD~`
+  string elem = 1;
+
+  // The leaf's index, ark-serialized into one TaggedBase64 `FIELD~`
+  string pos = 2;
+
+  // The leaf's hash, ark-serialized into one TaggedBase64 `FIELD~`
+  string value = 3;
+}
+
+message AdvzMerkleNodeBranch {
+  repeated AdvzMerkleNode children = 1;
+
+  // The branch's hash, ark-serialized into one TaggedBase64 `FIELD~`
+  string value = 2;
+}
+
+message AdvzMerkleNodeForgottenSubtree {
+  // The subtree's hash, ark-serialized into one TaggedBase64 `FIELD~`
+  string value = 1;
+}
+
+// A missing subtree. The arm is present and its object empty
+message AdvzMerkleNodeEmpty {}
+
+// One node of a jellyfish Merkle proof. v1 spells the third arm `ForgettenSubtree`, which is
+// upstream's misspelling; only the wire name here is corrected.
+message AdvzMerkleNode {
+  oneof node {
+    AdvzMerkleNodeLeaf leaf = 1;
+
+    AdvzMerkleNodeBranch branch = 2;
+
+    AdvzMerkleNodeForgottenSubtree forgotten_subtree = 3;
+
+    AdvzMerkleNodeEmpty empty = 4;
+  }
+}
+
+message AdvzMerkleProof {
+  // The index this proof is for, ark-serialized into one TaggedBase64 `FIELD~`
+  string pos = 1;
+
+  repeated AdvzMerkleNode proof = 2;
+}
+
+// Legacy ADVZ share, which only a 0.1 or 0.2 block carries
+message AdvzVidShare {
+  // Which storage node's share this is
+  uint32 index = 1;
+
+  // ark-serialized, one TaggedBase64 `FIELD~`
+  string aggregate_proofs = 2;
+
+  // ark-serialized, one TaggedBase64 `FIELD~`. jf-advz documents this as carrying nothing
+  // meaningful; it is served for v1 parity
+  string evals = 3;
+
+  AdvzMerkleProof evals_proof = 4;
+}
+
+// Half-open range of shard indices this share holds in the encoded payload. Its length is the
+// storage node's VID weight
+message ShardRange {
+  uint64 start = 1;
+
+  uint64 end = 2;
+}
+
+message AvidmShareContent {
+  ShardRange range = 1;
+
+  // The share's field elements, ark-serialized into one TaggedBase64 `FIELD~`
+  string payload = 2;
+
+  // The share's Merkle proofs, ark-serialized into one TaggedBase64 `FIELD~`
+  string mt_proofs = 3;
+}
+
+// Both AvidM schemes disperse per namespace, so a share carries one entry per namespace of the
+// block rather than one for the whole payload. The per-namespace lists line up only for a share
+// that passed VID verification, which this endpoint does not repeat.
+message AvidmVidShare {
+  // Which storage node's share this is
+  uint32 index = 1;
+
+  // TaggedBase64 `AvidMCommit~`, one per namespace
+  repeated string ns_commits = 2;
+
+  // Payload bytes in each namespace, aligned with ns_commits
+  repeated uint64 ns_lens = 3;
+
+  // One entry per namespace, aligned with ns_commits
+  repeated AvidmShareContent content = 4;
+}
+
+message AvidmGf2Namespace {
+  ShardRange range = 1;
+
+  // One entry per shard in the range, each the shard's raw bytes. Base64 in JSON, where v1
+  // served an array of numbers
+  repeated bytes payload = 2;
+
+  // One `MERKLE_PROOF~` TaggedBase64 per shard
+  repeated string mt_proofs = 3;
+}
+
+message AvidmGf2VidShare {
+  // One entry per namespace of the block
+  repeated AvidmGf2Namespace namespaces = 1;
+}
+
+message GetVidShareRequest {
+  // Block height
+  optional uint64 height = 1;
+
+  // Block hash, TaggedBase64 `BLOCK~`
+  optional string hash = 2;
+
+  // Payload hash, which several blocks can share; the lowest wins. TaggedBase64, with the tag
+  // set by the block's VID scheme, so pass a header's payload_commitment verbatim
+  optional string payload_hash = 3;
+}
+
+// The arm names the VID scheme the block was disseminated with
+message VidShareResponse {
+  oneof share {
+    AdvzVidShare v0 = 1;
+
+    AvidmVidShare v1 = 2;
+
+    AvidmGf2VidShare v2 = 3;
+  }
+}
+
+message GetNodeBlockHeightRequest {}
+
+message NodeBlockHeightResponse {
+  // The current height of the chain as this node sees it
+  uint64 height = 1;
+}
+
+message GetNodeLimitsRequest {}
+
+message NodeLimitsResponse {
+  // Most headers a header window request may return
+  uint64 window_limit = 1;
+}
+
+message GetStakeTableRequest {
+  // The current epoch when absent
+  optional uint64 epoch = 1;
+}
+
+message StakeTableResponse {
+  // The epoch this table is for: the one requested, or the current one. Absent on a network
+  // without epochs. v1 reports it only on its `current` route.
+  optional uint64 epoch = 1;
+
+  repeated PeerConfig stake_table = 2;
+}
+
+message Delegator {
+  // 0x-prefixed hex
+  string account = 1;
+
+  // 0x-prefixed hex quantity
+  string amount = 2;
+}
+
+message Validator {
+  // 0x-prefixed hex
+  string account = 1;
+
+  // Absent for a validator registered without one
+  optional BLSPublicKey stake_table_key = 2;
+
+  // Absent for a validator registered without one
+  optional SchnorrPublicKey state_ver_key = 3;
+
+  // Total delegated stake, a 0x-prefixed hex quantity
+  string stake = 4;
+
+  // Hundredths of a percent, so 10000 is the whole reward
+  uint32 commission = 5;
+
+  // Sorted by account; v1 reports a map, which has no order
+  repeated Delegator delegators = 6;
+
+  // Whether the contract verified the registration signature
+  bool authenticated = 7;
+
+  // X25519 public key for cliquenet, TaggedBase64 rather than x25519's own base58. Absent for a
+  // validator that registered no network address
+  optional string x25519_key = 8;
+
+  // "host:port", with an IPv6 literal left unbracketed. Absent for a validator that registered
+  // no network address
+  optional string p2p_addr = 9;
+}
+
+message GetValidatorsRequest {
+  // Epoch whose eligible validators to report. Required
+  optional uint64 epoch = 1;
+}
+
+message ValidatorsResponse {
+  // Sorted by account, since v1 keys these by account and a map has no order
+  repeated Validator validators = 1;
+}
+
+message GetAllValidatorsRequest {
+  // Epoch whose registered validators to page through. Required
+  optional uint64 epoch = 1;
+
+  // Registered validators are ordered by account, so a page is stable. Required
+  optional uint64 offset = 2;
+
+  // Validators to return, at most 1000. Required
+  optional uint64 limit = 3;
+}
+
+message ParticipationEntry {
+  BLSPublicKey key = 1;
+
+  // From 0 to 1; see the rpc for what it is a fraction of
+  double participation = 2;
+}
+
+message GetProposalParticipationRequest {
+  // The current epoch when absent
+  optional uint64 epoch = 1;
+}
+
+message GetVoteParticipationRequest {
+  // The current epoch when absent
+  optional uint64 epoch = 1;
+}
+
+message ParticipationResponse {
+  // Sorted by key; v1 reports a map, which has no order
+  repeated ParticipationEntry participation = 1;
+}
+
+service NodeService {
+  // Count the transactions in a block range, optionally in one namespace
+  rpc GetTransactionCount(GetTransactionCountRequest) returns (TransactionCountResponse) {
+    option (google.api.http) = {get: "/v2/node/transaction-count"};
+  }
+
+  // Get the cumulative payload size of a block range, optionally of one namespace
+  rpc GetPayloadSize(GetPayloadSizeRequest) returns (PayloadSizeResponse) {
+    option (google.api.http) = {get: "/v2/node/payload-size"};
+  }
+
+  // Get which blocks, leaves and VID common data this node stores, still fetches, or has pruned
+  rpc GetSyncStatus(GetSyncStatusRequest) returns (SyncStatusResponse) {
+    option (google.api.http) = {get: "/v2/node/sync-status"};
+  }
+
+  // Get the block reward for an epoch
+  rpc GetBlockReward(GetBlockRewardRequest) returns (BlockRewardResponse) {
+    option (google.api.http) = {get: "/v2/node/block-reward"};
+  }
+
+  // Get the height of the chain as this node sees it. `/v2/status/block-height` answers the same
+  // question; both exist because v1 has both, and a client watching one module should not have to
+  // call into another.
+  rpc GetNodeBlockHeight(GetNodeBlockHeightRequest) returns (NodeBlockHeightResponse) {
+    option (google.api.http) = {get: "/v2/node/block-height"};
+  }
+
+  // Get the headers whose timestamps fall in a window, plus the headers either side of it. The
+  // window starts at exactly one of start_time, start_height or start_hash
+  rpc GetHeaderWindow(GetHeaderWindowRequest) returns (HeaderWindowResponse) {
+    option (google.api.http) = {get: "/v2/node/header-window"};
+  }
+
+  // Get this node's VID share for a block, selected by exactly one of height, hash or
+  // payload_hash
+  rpc GetVidShare(GetVidShareRequest) returns (VidShareResponse) {
+    option (google.api.http) = {get: "/v2/node/vid-share"};
+  }
+
+  // Get this node's request limits
+  rpc GetNodeLimits(GetNodeLimitsRequest) returns (NodeLimitsResponse) {
+    option (google.api.http) = {get: "/v2/node/limits"};
+  }
+
+  // Get the consensus stake table for an epoch
+  rpc GetStakeTable(GetStakeTableRequest) returns (StakeTableResponse) {
+    option (google.api.http) = {get: "/v2/node/stake-table"};
+  }
+
+  // Get the validators eligible for consensus in an epoch
+  rpc GetValidators(GetValidatorsRequest) returns (ValidatorsResponse) {
+    option (google.api.http) = {get: "/v2/node/validators"};
+  }
+
+  // Get a page of every registered validator in an epoch, eligible or not
+  rpc GetAllValidators(GetAllValidatorsRequest) returns (ValidatorsResponse) {
+    option (google.api.http) = {get: "/v2/node/all-validators"};
+  }
+
+  // Get, per validator, the proposals it made as a fraction of the views it led in an epoch
+  rpc GetProposalParticipation(GetProposalParticipationRequest) returns (ParticipationResponse) {
+    option (google.api.http) = {get: "/v2/node/participation/proposal"};
+  }
+
+  // Get, per validator, the votes it cast as a fraction of an epoch's views
+  rpc GetVoteParticipation(GetVoteParticipationRequest) returns (ParticipationResponse) {
+    option (google.api.http) = {get: "/v2/node/participation/vote"};
+  }
+}

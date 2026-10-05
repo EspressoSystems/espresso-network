@@ -8,7 +8,7 @@ use espresso_types::{
     Certificate2, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey,
     Transaction,
     config::PublicNetworkConfig,
-    v0::traits::{PersistenceOptions, SequencerPersistence},
+    v0::traits::PersistenceOptions,
     v0_3::{
         AuthenticatedValidator, ChainConfig, RegisteredValidator, RewardAccountProofV1,
         RewardAccountQueryDataV1, RewardAccountV1, RewardAmount, RewardMerkleTreeV1,
@@ -27,15 +27,17 @@ use hotshot_query_service::{
 };
 use hotshot_types::{
     PeerConfig,
+    addr::NetAddr,
     data::{EpochNumber, VidShare, ViewNumber},
-    light_client::LCV3StateSignatureRequestBody,
+    light_client::{LCV3StateSignatureRequestBody, StateVerKey},
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{network::ConnectedNetwork, node_implementation::NodeType},
+    traits::node_implementation::NodeType,
+    x25519,
 };
 use indexmap::IndexMap;
 use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use serde::{Deserialize, Serialize};
-use tide_disco::Url;
+use url::Url;
 
 use super::{
     AccountQueryData, BlocksFrontier, fs,
@@ -44,7 +46,7 @@ use super::{
 };
 use crate::{
     SeqTypes, U256,
-    api::{ApiState, LightClientProvider},
+    api::{ApiState, LightClientProvider, context::ApiContext},
     persistence,
     state_cert::StateCertFetchError,
 };
@@ -94,22 +96,25 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub(super) async fn provider<N, P>(
+pub(super) async fn provider<C: ApiContext>(
     peers: impl IntoIterator<Item = Url>,
-    state: &ApiState<N, P>,
+    state: &ApiState<C>,
     opt: LightClientOptions,
     db_opt: LightClientSqliteOptions,
-) -> anyhow::Result<Provider>
-where
-    N: ConnectedNetwork<PubKey>,
-    P: SequencerPersistence,
-{
-    Ok(Provider::default()
-        .with_provider(LightClientProvider::new(peers, state.clone(), opt, db_opt).await?))
+) -> anyhow::Result<Provider> {
+    Ok(Provider::default().with_provider(LightClientProvider::new(
+        peers,
+        state.clone(),
+        opt,
+        db_opt,
+    )?))
 }
 
-pub(crate) trait SubmitDataSource<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
-    fn submit(&self, tx: Transaction) -> impl Send + Future<Output = anyhow::Result<()>>;
+pub(crate) trait SubmitDataSource {
+    fn submit(
+        &self,
+        tx: Transaction,
+    ) -> impl Send + Future<Output = anyhow::Result<Commitment<Transaction>>>;
 }
 
 pub(crate) trait HotShotConfigDataSource {
@@ -117,12 +122,48 @@ pub(crate) trait HotShotConfigDataSource {
 }
 
 #[async_trait]
-pub(crate) trait StateSignatureDataSource<N: ConnectedNetwork<PubKey>> {
+pub(crate) trait StateSignatureDataSource {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody>;
 }
 
 pub(crate) trait NodeStateDataSource {
     fn node_state(&self) -> impl Send + Future<Output = NodeState>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodePublicKeys {
+    pub eth_account: Option<Address>,
+    pub consensus_key: BLSPubKey,
+    pub state_ver_key: StateVerKey,
+    #[serde(with = "x25519_tagged")]
+    pub x25519_key: Option<x25519::PublicKey>,
+    /// Cliquenet address peers dial: the configured advertise address, `None` when there is none.
+    pub p2p_addr: Option<NetAddr>,
+}
+
+mod x25519_tagged {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+
+    use super::x25519;
+
+    pub fn serialize<S: Serializer>(
+        key: &Option<x25519::PublicKey>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        key.as_ref().map(ToString::to_string).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<x25519::PublicKey>, D::Error> {
+        Option::<String>::deserialize(d)?
+            .map(|s| s.parse().map_err(D::Error::custom))
+            .transpose()
+    }
+}
+
+pub(crate) trait NodeKeysDataSource {
+    fn node_public_keys(&self) -> impl Send + Future<Output = Option<NodePublicKeys>>;
 }
 
 pub(crate) trait TokenDataSource<T: NodeType> {
@@ -587,6 +628,53 @@ pub(crate) trait PruningDataSource {
     fn get_oldest_leaf(
         &self,
     ) -> impl Send + Future<Output = anyhow::Result<Option<LeafQueryData<SeqTypes>>>>;
+}
+
+#[cfg(test)]
+mod test {
+    use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey as _};
+
+    use super::*;
+
+    #[test]
+    fn test_node_public_keys_serialize_like_stake_table() {
+        let account = Address::random();
+        let consensus_key = BLSPubKey::generated_from_seed_indexed([1; 32], 0).0;
+        let state_ver_key = StateKeyPair::generate_from_seed_indexed([2; 32], 0).ver_key();
+        let x25519_key = x25519::Keypair::generated_from_seed_indexed([3; 32], 0)
+            .unwrap()
+            .public_key();
+        let p2p_addr: NetAddr = "node.example.com:9977".parse().unwrap();
+
+        let validator = serde_json::to_value(RegisteredValidator::<BLSPubKey> {
+            account,
+            stake_table_key: Some(consensus_key),
+            state_ver_key: Some(state_ver_key.clone()),
+            stake: U256::from(1u64),
+            commission: 0,
+            delegators: HashMap::new(),
+            authenticated: true,
+            x25519_key: Some(x25519_key),
+            p2p_addr: Some(p2p_addr.clone()),
+        })
+        .unwrap();
+
+        let keys = serde_json::to_value(NodePublicKeys {
+            eth_account: Some(account),
+            consensus_key,
+            state_ver_key,
+            x25519_key: Some(x25519_key),
+            p2p_addr: Some(p2p_addr),
+        })
+        .unwrap();
+
+        assert_eq!(keys["eth_account"], validator["account"]);
+        assert_eq!(keys["consensus_key"], validator["stake_table_key"]);
+        assert_eq!(keys["state_ver_key"], validator["state_ver_key"]);
+        assert_eq!(keys["x25519_key"], x25519_key.to_string());
+        assert_eq!(keys["p2p_addr"], validator["p2p_addr"]);
+        assert_eq!(keys["p2p_addr"], "node.example.com:9977");
+    }
 }
 
 #[cfg(any(test, feature = "testing"))]

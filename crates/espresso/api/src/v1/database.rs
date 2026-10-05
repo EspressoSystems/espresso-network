@@ -1,7 +1,7 @@
 //! V1 database API.
 //!
-//! Mirrors the tide-disco endpoints defined in `crates/espresso/node/api/database.toml`.
-//! Diagnostic-only; not required to be byte-identical with the tide-disco response.
+//! Diagnostic. `DatabaseService` mirrors this shape on v2, where field numbers are frozen, so
+//! the fields here are no longer free to change.
 
 use async_trait::async_trait;
 use serde::Serialize;

@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde::Serialize;
@@ -26,11 +28,11 @@ pub enum PayloadId {
 pub trait AvailabilityApi {
     type NamespaceProofQueryData: Serialize + Send + Sync + 'static;
 
-    type IncorrectEncodingProof: Serialize + Send + Sync;
+    type IncorrectEncodingProof: Serialize + Send + Sync + 'static;
 
-    type StateCertQueryDataV1: Serialize + Send + Sync;
+    type StateCertQueryDataV1: Serialize + Send + Sync + 'static;
 
-    type StateCertQueryDataV2: Serialize + Send + Sync;
+    type StateCertQueryDataV2: Serialize + Send + Sync + 'static;
 
     async fn get_namespace_proof(
         &self,
@@ -62,10 +64,9 @@ pub trait AvailabilityApi {
     async fn get_state_cert_v2(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV2>;
 }
 
-/// HotShot core availability API — mirrors the hotshot-query-service availability endpoints.
+/// HotShot core availability API: mirrors the hotshot-query-service availability endpoints.
 ///
-/// Each method corresponds to a tide-disco route exposed by the hotshot-query-service, copied
-/// verbatim to axum with no path or output changes.
+/// Each method corresponds to a hotshot-query-service route, with no path or output changes.
 #[async_trait]
 pub trait HotShotAvailabilityApi {
     type Leaf: Serialize + Send + Sync + 'static;
@@ -104,6 +105,18 @@ pub trait HotShotAvailabilityApi {
         &self,
         from: usize,
         until: usize,
+    ) -> anyhow::Result<Vec<Self::VidCommon>>;
+
+    /// The objects for a set of half-open height ranges, which must be ascending and disjoint.
+    ///
+    /// These carry a fragmented set of heights in one request, for peers catching up. Like the
+    /// range endpoints they answer in full or not at all: a height the node lacks is fetched from
+    /// its own peers, and a 404 means at least one was not available in time.
+    async fn get_leaf_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Leaf>>;
+    async fn get_block_ranges(&self, ranges: Vec<Range<u64>>) -> anyhow::Result<Vec<Self::Block>>;
+    async fn get_vid_common_ranges(
+        &self,
+        ranges: Vec<Range<u64>>,
     ) -> anyhow::Result<Vec<Self::VidCommon>>;
 
     async fn get_transaction_by_position(

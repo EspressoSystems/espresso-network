@@ -1,4 +1,0 @@
-[route.getfeebalance]
-PATH = ["fee-balance/latest/:address"]
-":address" = "Literal"
-DOC = "Get current balance in fee state. Expected parameter is an Ethereum address in hex format."

@@ -1,0 +1,62 @@
+set positional-arguments
+
+repo_root := source_directory() / ".." / ".."
+bench := source_directory() / "bench"
+target_dir := env_var_or_default("CARGO_TARGET_DIR", repo_root / "target")
+bin_dir := env_var_or_default("BENCH_BIN_DIR", target_dir / "release")
+out := env_var_or_default("BENCH_OUT", "bench-out")
+storage_root := env_var_or_default("BENCH_STORAGE_ROOT", "/tmp")
+
+default:
+    just --list --justfile {{quote(source_file())}}
+
+# Release binaries the benchmark network runs; postgres and sqlite builds need separate invocations.
+build:
+    cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node --bin espresso-node --bin orchestrator --bin state-relay-server --bin deploy
+    cd {{quote(repo_root)}} && cargo build --locked --release -p espresso-node-sqlite
+
+# Start the network, load and measure it, tear it down; writes result.json and summary.md.
+run *args:
+    cd {{quote(repo_root)}} && {{quote(bench)}} run --bin-dir {{quote(bin_dir)}} --out {{quote(out)}} --storage-root {{quote(storage_root)}} "$@"
+
+# Re-analyse a run directory, optionally against a baseline, without rerunning.
+render dir=out *args:
+    cd {{quote(repo_root)}} && {{quote(bench)}} render "$@"
+
+# Compare a result.json with a baseline (a result.json or `nextest-ci stats-fetch` output).
+compare result baseline:
+    cd {{quote(repo_root)}} && {{quote(bench)}} compare "$1" --baseline "$2"
+
+# Runner info and CPU calibration only.
+sysinfo:
+    cd {{quote(repo_root)}} && {{quote(bench)}} sysinfo --out {{quote(out)}}
+
+# Remove the output directory and storage left by an interrupted run.
+clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if pgrep -u "$(id -u)" -f 'network-bench/process-compose.yaml|network-bench/bench run' > /dev/null; then
+        echo "a benchmark network is running; stop it first" >&2
+        exit 1
+    fi
+    cd {{quote(repo_root)}}
+    rm -rf {{quote(out)}}
+    root=$(realpath -m {{quote(storage_root)}})
+    # `find -user` does not follow links. A link is bench's /tmp/enb.x -> <storage root>/enb.y;
+    # it and its target go only if the target is exactly that and ours.
+    find /tmp -mindepth 1 -maxdepth 1 -name 'enb.*' -user "$(id -u)" -print0 |
+        while IFS= read -r -d '' dir; do
+            if [[ -L $dir ]]; then
+                target=$(readlink -f -- "$dir" || true)
+                if [[ -n $target && -d $target && -O $target && $(dirname -- "$target") == "$root" && $(basename -- "$target") == enb.* ]]; then
+                    rm -rf -- "$target"
+                    rm -f -- "$dir"
+                elif [[ ! -e $dir ]]; then
+                    rm -f -- "$dir"
+                else
+                    echo "kept $dir -> ${target:-$(readlink -- "$dir")}" >&2
+                fi
+            else
+                rm -rf -- "$dir"
+            fi
+        done

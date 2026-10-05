@@ -81,7 +81,10 @@ struct Args {
     #[arg(long, env = "ESPRESSO_ORCHESTRATOR_KEYGEN_SEED", default_value = "0x0000000000000000000000000000000000000000000000000000000000000000", value_parser = parse_seed)]
     keygen_seed: [u8; 32],
 
-    /// HotShot builder URL
+    /// HotShot builder URLs, only used by networks below `NEW_PROTOCOL_VERSION`.
+    ///
+    /// From `NEW_PROTOCOL_VERSION` on, leaders build blocks in-process and never contact a
+    /// builder. When no URL is given, nodes receive the placeholder from the default config.
     #[arg(long, env = "ESPRESSO_ORCHESTRATOR_BUILDER_URLS", num_args = 1.., value_delimiter = ',')]
     builder_urls: Vec<Url>,
 
@@ -145,7 +148,9 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
     config.libp2p_config = Some(libp2p_config);
     config.config.start_threshold = args.start_threshold.into();
     config.config.da_staked_committee_size = args.num_nodes.get();
-    config.config.builder_urls = Vec1::try_from_vec(args.builder_urls).unwrap();
+    if let Ok(builder_urls) = Vec1::try_from_vec(args.builder_urls) {
+        config.config.builder_urls = builder_urls;
+    }
     config.config.builder_timeout = args.builder_timeout;
     tokio::select! {
         res = run_orchestrator(

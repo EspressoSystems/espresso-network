@@ -1,0 +1,67 @@
+name: Release Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "MAJOR.MINOR.PHASE, e.g. 0.6.0"
+        required: true
+        type: string
+      source_ref:
+        description: "Ref to cut the release branch from"
+        required: true
+        type: string
+        default: main
+  delete:
+
+concurrency:
+  group: release-branch
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      # `scripts/release cut` fans out to build.yml / update-release-tracker.yml
+      # via `gh workflow run` since GITHUB_TOKEN-pushed tags don't fire push
+      # events on other workflows.
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Cut the release branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: scripts/release cut --version "$VERSION" --source-ref "$SOURCE_REF"
+
+  teardown:
+    if: |
+      github.event_name == 'delete' &&
+      github.event.ref_type == 'branch' &&
+      startsWith(github.event.ref, 'release-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Tear down the release branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.ref }}
+        run: scripts/release teardown --branch "$BRANCH"

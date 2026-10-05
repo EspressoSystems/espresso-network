@@ -1,6 +1,4 @@
 //! V1 catchup API.
-//!
-//! Mirrors the tide-disco endpoints defined in `crates/espresso/node/api/catchup.toml`.
 
 use async_trait::async_trait;
 use serde::Serialize;

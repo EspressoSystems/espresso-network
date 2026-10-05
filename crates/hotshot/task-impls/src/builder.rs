@@ -15,8 +15,8 @@ use hotshot_types::{
     data::VidCommitment,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
 };
+use http_client::{Client, Url, healthcheck::HealthStatus};
 use serde::{Deserialize, Serialize};
-use surf_disco::{Client, Url, client::HealthStatus};
 use tagged_base64::TaggedBase64;
 use thiserror::Error;
 use tokio::time::sleep;
@@ -61,7 +61,7 @@ impl From<BuilderApiError> for BuilderClientError {
 
 /// Client for builder API
 pub struct BuilderClient<TYPES: NodeType, Ver: StaticVersionType> {
-    /// Underlying surf_disco::Client for the legacy builder api
+    /// Underlying http_client::Client for the legacy builder api
     client: Client<BuilderApiError, Ver>,
     /// Marker for [`NodeType`] used here
     _marker: std::marker::PhantomData<TYPES>,

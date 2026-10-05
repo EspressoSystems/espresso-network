@@ -1,6 +1,6 @@
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::traits::signature_key::SignatureKey;
+use hotshot_types::{traits::signature_key::SignatureKey, vote::HasViewNumber};
 
 use crate::consensus::{ConsensusInput, ConsensusOutput};
 
@@ -10,6 +10,14 @@ pub(crate) fn is_vote1(output: &ConsensusOutput<TestTypes>) -> bool {
 
 pub(crate) fn is_vote2(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::SendVote2(_))
+}
+
+pub(crate) fn is_vote1_for_view(output: &ConsensusOutput<TestTypes>, view: u64) -> bool {
+    matches!(output, ConsensusOutput::SendVote1(v) if *v.view_number() == view)
+}
+
+pub(crate) fn is_vote2_for_view(output: &ConsensusOutput<TestTypes>, view: u64) -> bool {
+    matches!(output, ConsensusOutput::SendVote2(v) if *v.view_number() == view)
 }
 
 pub(crate) fn is_leaf_decided(output: &ConsensusOutput<TestTypes>) -> bool {
@@ -116,6 +124,10 @@ pub(crate) fn is_timeout_one_honest(input: &ConsensusInput<TestTypes>) -> bool {
 
 pub(crate) fn is_timeout_cert(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::TimeoutCertificate(_))
+}
+
+pub(crate) fn is_upgrade_cert_formed(input: &ConsensusInput<TestTypes>) -> bool {
+    matches!(input, ConsensusInput::UpgradeCertificateFormed(_))
 }
 
 pub(crate) fn is_drb_result(input: &ConsensusInput<TestTypes>) -> bool {
