@@ -146,16 +146,12 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
 ### Rules and caveats
 
 - Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never
-  renumber, reuse, or change the type of an existing field. `just proto-breaking` enforces this in CI: it runs
-  `buf breaking` with the `WIRE_JSON` rules (`crates/espresso/api/proto/buf.yaml`) against the newest
-  `MAJOR.MINOR.PHASE.PATCH` tag, so a proto that has not shipped yet can still change freely. The 0.6.3 line is skipped:
-  it carried an early v2 that nothing consumes, so the freeze starts with the first release after it, and until then the
-  check passes. Pass a tag to compare against it instead: `just proto-breaking 0.6.3.6`. The rules compare a field's
+  renumber, reuse, or change the type of an existing field. `just proto-check` enforces this on every PR: it checks the
+  protos' formatting with `buf format`, and when a proto changed it runs `buf breaking` with the `WIRE_JSON` rules
+  (`crates/espresso/api/proto/buf.yaml`) against the merge base with the PR's base branch. Run it locally as
+  `just proto-check`, and fix formatting with `buf format -w crates/espresso/api/proto`. The rules compare a field's
   message type by name, so renaming a message a field refers to counts as a break even though the wire bytes are
   unchanged. buf does not read the `google.api.http` annotation, so a changed route is not caught by it.
-- `just proto-lint` runs `buf lint` with buf's STANDARD rules and `buf format`, both in CI. The exceptions are recorded
-  in `crates/espresso/api/proto/buf.yaml` with their reasons. Run `buf format -w crates/espresso/api/proto` to fix the
-  formatting.
 - An rpc is a GET, or a POST when its input cannot be flat. A POST binds the whole request message as its protoJSON body
   (`body: "*"`) and refuses a query string with a 400.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
