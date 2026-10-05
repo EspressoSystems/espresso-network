@@ -17,7 +17,7 @@ use process_metrics::ProcessMetrics;
 use url::Url;
 
 use super::{
-    ContextDataSource, StorageState,
+    ApiDataSource, ContextDataSource,
     context::ApiContext,
     data_source::{
         NodeStateDataSource, Provider, PruningDataSource, SequencerDataSource, provider,
@@ -517,7 +517,7 @@ pub struct LightClient;
 fn init_query_data_source<C: ApiContext, D>(
     ds: D,
     state: ContextDataSource<C>,
-) -> (Box<dyn Metrics>, Arc<StorageState<C, D>>)
+) -> (Box<dyn Metrics>, Arc<ApiDataSource<C, D>>)
 where
     D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
 {

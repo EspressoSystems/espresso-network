@@ -15,7 +15,7 @@ use hotshot_query_service::{
 };
 use hotshot_types::new_protocol::CoordinatorEvent;
 
-use super::{StorageState, context::ApiContext, data_source::SequencerDataSource};
+use super::{ApiDataSource, context::ApiContext, data_source::SequencerDataSource};
 use crate::{EventConsumer, SeqTypes};
 
 #[async_trait]
@@ -66,7 +66,7 @@ pub(crate) struct ApiEventConsumer<C, D>
 where
     C: ApiContext,
 {
-    inner: Arc<StorageState<C, D>>,
+    inner: Arc<ApiDataSource<C, D>>,
 }
 
 #[async_trait]

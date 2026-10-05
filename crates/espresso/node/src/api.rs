@@ -154,9 +154,9 @@ impl<C: ApiContext> ContextDataSource<C> {
     }
 }
 
-type StorageState<C, D> = ExtensibleDataSource<D, ContextDataSource<C>>;
+type ApiDataSource<C, D> = ExtensibleDataSource<D, ContextDataSource<C>>;
 
-impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C, D> {
+impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for ApiDataSource<C, D> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_initial_supply_l1().await
     }
@@ -170,13 +170,13 @@ impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C
     }
 }
 
-impl<C: ApiContext, D: Send + Sync> SubmitDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Send + Sync> SubmitDataSource for ApiDataSource<C, D> {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         self.as_ref().submit(tx).await
     }
 }
 
-impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for ApiDataSource<C, D> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
@@ -455,7 +455,7 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ContextDataSource<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for ApiDataSource<C, D> {
     async fn request_vid_shares(
         &self,
         block_number: u64,
@@ -469,7 +469,7 @@ impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for StorageStat
 }
 
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> StateCertFetchingDataSource<SeqTypes> for ApiDataSource<C, D> {
     async fn request_state_cert(
         &self,
         epoch: u64,
@@ -657,7 +657,7 @@ impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ContextDataSource<
 
 // Thin wrapper implementations that delegate to persistence
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateCertDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> StateCertDataSource for ApiDataSource<C, D> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -729,14 +729,14 @@ impl<C: ApiContext> SubmitDataSource for ContextDataSource<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> NodeStateDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> NodeStateDataSource for ApiDataSource<C, D> {
     async fn node_state(&self) -> NodeState {
         self.as_ref().node_state().await
     }
 }
 
 impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::DatabaseMetadataSource
-    for StorageState<C, D>
+    for ApiDataSource<C, D>
 where
     D: data_source::DatabaseMetadataSource + Send + Sync,
 {
@@ -750,7 +750,7 @@ where
 }
 
 impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::PruningDataSource
-    for StorageState<C, D>
+    for ApiDataSource<C, D>
 where
     D: data_source::PruningDataSource + Send + Sync,
 {
@@ -769,7 +769,7 @@ where
     }
 }
 
-impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for ApiDataSource<C, D> {
     #[tracing::instrument(skip(self, instance))]
     async fn get_accounts(
         &self,
@@ -1121,7 +1121,7 @@ impl<C: ApiContext> CatchupDataSource for ContextDataSource<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> HotShotConfigDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> HotShotConfigDataSource for ApiDataSource<C, D> {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.as_ref().network_config().await.into()
     }
@@ -1133,7 +1133,7 @@ impl<C: ApiContext> HotShotConfigDataSource for ContextDataSource<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> NodeKeysDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> NodeKeysDataSource for ApiDataSource<C, D> {
     async fn node_public_keys(&self) -> Option<NodePublicKeys> {
         self.as_ref().node_public_keys().await
     }
@@ -1161,7 +1161,7 @@ impl<C: ApiContext> NodeKeysDataSource for ContextDataSource<C> {
 }
 
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateSignatureDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> StateSignatureDataSource for ApiDataSource<C, D> {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
@@ -3108,8 +3108,8 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
-            Arc::new(StorageState::new(
+        let data_source: Arc<ApiDataSource<SequencerContext<network::Memory, NoStorage>, _>> =
+            Arc::new(ApiDataSource::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
                     .unwrap(),
@@ -3336,8 +3336,8 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
-            Arc::new(StorageState::new(
+        let data_source: Arc<ApiDataSource<SequencerContext<network::Memory, NoStorage>, _>> =
+            Arc::new(ApiDataSource::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
                     .unwrap(),
