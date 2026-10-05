@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, marker::PhantomData, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, marker::PhantomData, num::NonZeroU64, sync::Arc, time::Duration};
 
 use committable::Committable;
 use hotshot::types::BLSPubKey;
@@ -53,7 +53,7 @@ fn small_config() -> BlockBuilderConfig {
         ttl: 5,
         dedup_window_size: 3,
         empty_block_delay: Duration::from_millis(500),
-        fanout: 1,
+        fanout: NonZeroU64::MIN,
     }
 }
 
@@ -73,7 +73,7 @@ fn builder_with(config: BlockBuilderConfig) -> BlockBuilder<TestTypes> {
 #[tokio::test]
 async fn submit_sends_to_each_upcoming_leader() {
     let mut b = builder_with(BlockBuilderConfig {
-        fanout: 2,
+        fanout: NonZeroU64::new(2).unwrap(),
         ..small_config()
     });
     b.on_view_changed(view(4));
@@ -94,7 +94,7 @@ async fn submit_sends_to_each_upcoming_leader() {
 #[tokio::test]
 async fn pending_transaction_is_resent_only_after_its_leaders_had_their_turn() {
     let mut b = builder_with(BlockBuilderConfig {
-        fanout: 2,
+        fanout: NonZeroU64::new(2).unwrap(),
         ..small_config()
     });
     b.on_submit_transaction(tx(1)).unwrap();
@@ -541,6 +541,39 @@ async fn pooled_transactions_expire_after_ttl() {
 
     let (txns, _) = b.drain(view(7), epoch());
     assert_eq!(txns, Vec::from([tx(2)]));
+}
+
+#[tokio::test]
+async fn transactions_sent_for_a_past_view_count_from_the_current_view() {
+    let mut b = builder();
+    b.on_view_changed(view(10));
+    b.on_transactions(tx_msg(view(2), Vec::from([tx(1)])));
+    b.on_transactions(tx_msg(view(11), Vec::from([tx(2)])));
+    b.on_view_changed(view(12));
+
+    let (txns, _) = b.drain(view(12), epoch());
+    assert_eq!(
+        txns,
+        Vec::from([tx(1), tx(2)]),
+        "a transaction sent for a past view is pooled as of view 10, so it has not expired"
+    );
+}
+
+#[tokio::test]
+async fn submit_before_the_first_view_change_targets_the_start_view() {
+    let mut b = builder();
+    b.start_at(view(500));
+
+    assert_eq!(
+        b.on_submit_transaction(tx(1)).unwrap(),
+        Vec::from([tx_msg(view(501), Vec::from([tx(1)]))])
+    );
+    b.on_view_changed(view(500));
+    assert_eq!(
+        b.outstanding_transactions().0,
+        1,
+        "the transaction is still pending after the first view change"
+    );
 }
 
 #[tokio::test]

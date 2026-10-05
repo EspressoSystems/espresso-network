@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     panic::resume_unwind,
     sync::Arc,
     time::Duration,
@@ -95,7 +95,7 @@ pub struct BlockBuilderConfig {
     pub empty_block_delay: Duration,
     /// How many upcoming leaders each transaction is sent to. A leader holds up to
     /// `fanout + 1` blocks of transactions for its later views.
-    pub fanout: u64,
+    pub fanout: NonZeroU64,
 }
 
 impl Default for BlockBuilderConfig {
@@ -106,7 +106,7 @@ impl Default for BlockBuilderConfig {
             ttl: 50,
             dedup_window_size: 10,
             empty_block_delay: Duration::from_millis(500),
-            fanout: 2,
+            fanout: NonZeroU64::new(2).expect("2 is non-zero"),
         }
     }
 }
@@ -361,8 +361,15 @@ impl<T: NodeType> BlockBuilder<T> {
         self.view_transactions = self.view_transactions.split_off(&view_number);
     }
 
-    pub fn fanout(&self) -> u64 {
+    pub fn fanout(&self) -> NonZeroU64 {
         self.config.fanout
+    }
+
+    /// Starts the builder at `view` instead of genesis. Transactions can be submitted before
+    /// the first `on_view_changed`, and would otherwise target the leaders of the first views
+    /// and expire at the first view change.
+    pub fn start_at(&mut self, view: ViewNumber) {
+        self.current_view = view;
     }
 
     pub fn outstanding_transactions(&self) -> (usize, usize) {
@@ -406,7 +413,7 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let valid_until = self.current_view + self.config.ttl;
-        let sent_until = self.current_view + self.config.fanout;
+        let sent_until = self.current_view + self.config.fanout.get();
         let messages = self.to_upcoming_leaders(self.current_view, &Vec::from([tx.clone()]));
 
         self.retry_total_bytes += size;
@@ -431,7 +438,7 @@ impl<T: NodeType> BlockBuilder<T> {
         view: ViewNumber,
         transactions: &[T::Transaction],
     ) -> Vec<TransactionMessage<T>> {
-        (1..=self.config.fanout)
+        (1..=self.config.fanout.get())
             .map(|ahead| TransactionMessage {
                 view: view + ahead,
                 transactions: transactions.to_vec(),
@@ -440,9 +447,12 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
+        // A sender behind this node may name a view that has passed. Counting it from now keeps
+        // it from jumping ahead of current transactions or expiring before it can be built.
+        let view = msg.view.max(self.current_view);
         let max_bytes = self
-            .block_size(msg.view)
-            .saturating_mul(self.config.fanout + 1);
+            .block_size(view)
+            .saturating_mul(self.config.fanout.get() + 1);
         for tx in msg.transactions {
             let hash = tx.commit();
 
@@ -460,9 +470,8 @@ impl<T: NodeType> BlockBuilder<T> {
             }
 
             self.leader_total_bytes += size;
-            self.leader_order.insert((msg.view, hash));
-            self.leader_buffer
-                .insert(hash, PoolEntry { tx, view: msg.view });
+            self.leader_order.insert((view, hash));
+            self.leader_buffer.insert(hash, PoolEntry { tx, view });
         }
     }
 
@@ -520,7 +529,7 @@ impl<T: NodeType> BlockBuilder<T> {
             warn!(%hash, "pending transaction no longer fits a block, dropping");
             self.remove_pending(hash);
         }
-        let sent_until = view + self.config.fanout;
+        let sent_until = view + self.config.fanout.get();
         batch
             .into_iter()
             .map(|hash| {
