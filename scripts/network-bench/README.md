@@ -28,6 +28,10 @@ scripts/network-bench/
                         metrics scrape, analysis, validity, compare, summary
   bench                 local driver: preflight, process-compose, host sampling
   aws-bench             AWS driver (laptop) + host agents (agent-drive, agent-host)
+  latency.py            --latency profiles: node placement, RTT matrix, per-node tc script, probes
+  latency-matrix.csv    56 measured AWS region pairs (espresso-deploy 34b35f6)
+  mainnet-locations     regenerates mainnet-locations.json from the mainnet stake table
+  mainnet-locations.json mainnet validator cities: nodes, stake share, lat/lon (no IPs)
   genesis.toml          0.6, 100 MB blocks, 1 wei base fee
   process-compose.yaml  local 3-node network
   justfile              recipe `aws` forwards to aws-bench: just bench aws <verb>
@@ -149,9 +153,9 @@ laptop                       EC2, one AZ, private IPs
 ### Run phases
 
 ```
-preflight -> plan -> confirm $ -> apply -> provisioned -> services -> nodes -> measuring
-    |          |          |                                                       |
-  exit 2     exit 2     exit 2                                                    v
+preflight -> plan -> confirm $ -> apply -> provisioned -> [shaping] -> services -> nodes -> measuring
+    |          |          |                                                                    |
+  exit 2     exit 2     exit 2                                                                 v
                                   destroying <- report <- collecting <------------+
                                       |
                         exit 0/1, or 3 (failed, destroyed), or 4 (resources remain)
@@ -163,6 +167,7 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> services -> nodes -> m
 | plan        | render run dir, `tofu init/plan`, estimate at the `PRICES` constants (eu-west-1 on-demand)                                                         | over `--max-usd`, declined, no tty w/o `--yes`: exit 2 |
 | apply       | `tofu apply`, local state in run dir; instances terminate on shutdown, cloud-init arms `shutdown -P +TTL` first                                    | last tf stderr line, destroy, exit 3                   |
 | provisioned | ssh + `cloud-init status --wait`, digests == manifest, render env/start.sh (need private IPs), rsync `/opt/bench`, start `agent-host`              |                                                        |
+| shaping     | `--latency` only: one tc netem leaf per peer on every node, then ping probes against the expected RTT                                              | probe off by > max(2 ms, 10 %): collect, exit 3        |
 | services    | anvil (`eth_chainId`), deploy (code at genesis addresses), orchestrator + relay (`/healthcheck`), postgres (`pg_isready`)                          |                                                        |
 | nodes       | `docker create` all, `docker start` at one wall-clock instant, record spread                                                                       | spread >= 2 s: noisy                                   |
 | measuring   | `agent-drive` under `systemd-run`: wait heights, `netbench.drive_load`; laptop polls state, rsyncs every 60 s                                      | agent error: collect, exit 3                           |
@@ -222,6 +227,35 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
   apply fails, the fleet is destroyed, exit 3.
 - Cost: the fleet bound is rate x (TTL + destroy + rds delete).
 
+### Latency simulation
+
+All hosts share one AZ (about 0.1 ms between nodes). `--latency <profile>` gives every node a virtual location and
+shapes node-to-node egress with tc netem so each pair sees its real-world RTT: HTB root with an unshaped default class,
+one class + netem leaf + u32 filter per peer keyed on the peer's private IP, half the directed RTT on each side. ctl
+traffic (orchestrator, L1, relay, submit, metrics), RDS and ssh are never shaped, so a run is not a full WAN simulation.
+Node-to-node catchup on 8080 is shaped like consensus.
+
+| Profile      | Locations                                                                            | Cross RTT                            | Intra RTT |
+| ------------ | ------------------------------------------------------------------------------------ | ------------------------------------ | --------- |
+| `off`        | none (default)                                                                       |                                      |           |
+| `decaf-2025` | 38:28:22:8:4 over eu-central-1, ap-southeast-1, us-east-1, ap-southeast-2, sa-east-1 | measured, `latency-matrix.csv`       | 10 ms     |
+| `mainnet`    | mainnet validator cities by node count, `mainnet-locations.json`                     | `max(1 ms, 0.0157 ms/km x distance)` | 1 ms      |
+
+- `decaf-2025`: the split of the 2025 benchmark network that emulated Decaf (robnet, espresso-deploy, gitbook benchmarks
+  page); how the counts were derived is not recorded, and decaf today is 69 % Europe.
+- `mainnet`: 92 validators on 2026-10-05, Europe 74 nodes (70 % stake), North America 15, Asia 3. Regenerate with
+  `uv run --script scripts/network-bench/mainnet-locations` (fetches the stake table, sends validator IPs to ip-api.com;
+  the file holds only city, country, lat/lon, node count, stake share).
+- Model: 0.0157 ms/km is the least-squares fit through the origin over the 56 measured AWS pairs (RMSE 33 ms; fibre at
+  2/3 c is 0.0100 ms/km, so 1.57x path stretch). Measured pairs always win; the model is used for city pairs only.
+- Intra RTT applies between nodes sharing a location; `--no-intra-latency` drops it (cross shaping stays) to remove that
+  variable. 10 ms is the low end of the 5 to 45 ms band measured between European mainnet nodes.
+- Nodes fill locations in profile order by largest remainder: 5 nodes on `decaf-2025` are eu-central-1 2, ap-southeast-1
+  2, us-east-1 1.
+- Recorded: `manifest.json` and `result.json` `deployment.latency` (profile, intra, nodes per location, assignment,
+  matrix sha256, probes), a `- latency:` bullet in `summary.md`, and the matrix sha256 in `config_hash`.
+- `run --fleet` clears any previous qdisc during reset, so a run without `--latency` measures a clean fleet.
+
 ### Cleanup
 
 Every resource carries `espresso-bench-run=<fleet>`, `-owner` and `-expires`. Hosts and the pg volume terminate at the
@@ -259,7 +293,7 @@ fleet.lock               pid, hostname, run name; present while a run holds the 
 rds.json (0600)          rds fleets: endpoint, identifier, password
 cost.json                expected, bound, actual USD of the fleet (instances, volume, rds)
 runs/01-run/             one measurement
-  manifest.json          fleet.json copy plus fleet, start_spread_s, config_hash
+  manifest.json          fleet.json copy plus fleet, start_spread_s, config_hash, latency (profile, probes)
   genesis.toml topology.json config.json
   hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz, collect-<k>/ (`collect`),
                          cloud-init-output.log, chrony.txt, host.jsonl, pg-stats.json (node0)
@@ -310,6 +344,12 @@ just bench aws plan --tag release-x --nodes 4 --db-modes colocated,volume
 just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --max-usd 10 --yes
 # single shot, fixed load steps, every step run, query node lag up to 600 s tolerated
 just bench aws run --tag release-x --steps 50,60,80 --keep-going --cap-s 600 --tx-timeout-s 600
+# single shot with simulated geography, 10 ms between same-region nodes
+just bench aws run --tag release-x --nodes 5 --latency decaf-2025
+# same, cross-region latency only
+just bench aws run --tag release-x --nodes 5 --latency decaf-2025 --no-intra-latency
+# mainnet-like city distribution on an idle fleet
+just bench aws run --fleet --latency mainnet
 # single shot on Intel hosts (amd64 AMI and images)
 just bench aws run --tag release-x --node-type c8i.4xlarge --ctl-type c8i.2xlarge
 # single shot, txs to every node including node0, no tx forwarding
