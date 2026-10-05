@@ -1,0 +1,9 @@
+version: v2
+breaking:
+  # Clients see the API as protobuf on the wire and protoJSON over REST, so those are the
+  # contract. Moving a message between files of the package changes neither.
+  use:
+    - WIRE_JSON
+  ignore:
+    # Vendored annotation definitions, read only by protoc at build time.
+    - google

@@ -85,6 +85,17 @@ compile-metrics *args:
 lint *args:
     just clippy {{args}} -- -D warnings
 
+# Fail if the v2 protos break wire or JSON compatibility with a release, by default the newest tag
+proto-breaking against=`git tag --list '[0-9]*.[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1`:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # buf's own `.git#tag=` input cannot read a git worktree, so compare against an export.
+    base=$(mktemp -d)
+    trap 'rm -rf "$base"' EXIT
+    git archive "{{against}}" crates/espresso/api/proto | tar -x -C "$base"
+    echo "Comparing crates/espresso/api/proto against {{against}}"
+    buf breaking crates/espresso/api/proto --against "$base/crates/espresso/api/proto"
+
 # postgres and sqlite variants checked separately to cover all code
 clippy *args:
     cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
