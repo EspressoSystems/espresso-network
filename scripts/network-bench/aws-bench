@@ -2352,6 +2352,15 @@ def add_results_remote_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+class DefaultsFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Also shows the default of flags without help text, which the base class skips."""
+
+    def _format_action(self, action: argparse.Action) -> str:
+        if action.help is None and action.default not in (None, argparse.SUPPRESS):
+            action.help = "default: %(default)s"
+        return super()._format_action(action)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -2362,7 +2371,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     plan_p = sub.add_parser(
         "plan",
         help="render the run dir and print the cost estimate",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=DefaultsFormatter,
     )
     add_run_flags(plan_p)
     add_node_env_flag(plan_p)
@@ -2377,7 +2386,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     up_p = sub.add_parser(
         "up",
         help="plan, confirm, provision a fleet and leave it idle for `run --fleet`",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=DefaultsFormatter,
     )
     add_run_flags(up_p)
     add_ttl_flag(up_p)
@@ -2402,7 +2411,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "run",
         help="plan, confirm, provision, load, measure, collect, destroy; with --fleet, "
         "measure on a fleet from `up`",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=DefaultsFormatter,
         allow_abbrev=False,
     )
     add_run_flags(run_p, tag_required=False)
@@ -2464,7 +2473,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     publish_p = sub.add_parser(
         "publish",
         help="push run dirs to the shared results repo (retry, backfill)",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=DefaultsFormatter,
     )
     publish_p.add_argument("dirs", type=Path, nargs="+", metavar="RUN_DIR")
     add_results_remote_flag(publish_p)
