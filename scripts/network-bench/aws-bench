@@ -75,6 +75,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar, cast
 
+import latency
 import netbench as nb
 
 _T = TypeVar("_T")
@@ -439,6 +440,7 @@ UP_MAX_USD = 60.0
 # What `reset_chain` leaves in BENCH_DIR: `up` wrote these and the shipped agents run from here.
 RESET_KEEP = (
     "netbench.py",
+    "latency.py",
     "aws-bench",
     "ready.json",
     "digests.json",
@@ -564,6 +566,10 @@ class TfFailed(Exception):
 class RemoteError(Exception):
     """ssh/rsync/cloud-init/gate failure against a live fleet; always caught in `cmd_run` and
     turned into a destroy-then-exit-3, the same as `nb.NetworkError` in the local bench."""
+
+
+class ShapingMismatch(RemoteError):
+    """A ping probe after `shape_nodes` is outside the tolerance of its expected delay."""
 
 
 class Interrupted(Exception):
@@ -722,6 +728,7 @@ class Manifest(FleetManifest):
     run_estimate: NotRequired[RunEstimate]
     start_spread_s: NotRequired[float]
     config_hash: NotRequired[str]
+    latency: NotRequired[nb.LatencyMeta]
 
 
 class AgentState(TypedDict):
@@ -822,6 +829,9 @@ class RunConfig:
     max_block_size: str = "50mb"
     # espresso-node writes leader_trace_node{N}.csv to /opt/bench/trace; `trace-plots` renders it.
     leader_trace: bool = False
+    # `latency.PROFILES` name; `off` shapes nothing. `intra_latency` adds the same-location delay.
+    latency: str = "off"
+    intra_latency: bool = True
     ttl_min: str = "auto"
     fleet: Path | None = None
     force: bool = False
@@ -2141,6 +2151,26 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     parser.add_argument("--max-usd", type=float, default=defaults.max_usd)
 
 
+def add_latency_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--latency",
+        choices=latency.PROFILES,
+        default=RunConfig.latency,
+        help="emulate geographic node-to-node latency with tc netem",
+    )
+    parser.add_argument(
+        "--no-intra-latency",
+        dest="intra_latency",
+        action="store_false",
+        help="with --latency: no delay between nodes of the same location",
+    )
+
+
+def check_latency_flags(profile: str, intra: bool) -> None:
+    if profile == "off" and not intra:
+        raise Refused("--no-intra-latency needs --latency decaf-2025 or mainnet")
+
+
 def add_node_env_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--node-env",
@@ -2211,6 +2241,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     for key in keys:
         if keys.count(key) > 1:
             raise Refused(f"--node-env repeats {key}")
+    check_latency_flags(args.latency, args.intra_latency)
     load = nb.BenchConfig(
         steps=args.steps,
         step_s=args.step_s,
@@ -2230,6 +2261,8 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         node_env=tuple(args.node_env),
         max_block_size=args.max_block_size,
         leader_trace=args.leader_trace,
+        latency=args.latency,
+        intra_latency=args.intra_latency,
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
@@ -2302,6 +2335,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_node_env_flag(plan_p)
     add_block_size_flag(plan_p)
     add_leader_trace_flag(plan_p)
+    add_latency_flags(plan_p)
     add_submit_nodes_flag(plan_p)
     add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
@@ -2321,6 +2355,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         node_env=[],
         max_block_size=defaults.max_block_size,
         leader_trace=defaults.leader_trace,
+        latency=defaults.latency,
+        intra_latency=defaults.intra_latency,
         submit_nodes=None,
         fleet=None,
         force=False,
@@ -2340,6 +2376,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_node_env_flag(run_p)
     add_block_size_flag(run_p)
     add_leader_trace_flag(run_p)
+    add_latency_flags(run_p)
     add_submit_nodes_flag(run_p)
     add_ttl_flag(run_p)
     run_p.add_argument(
@@ -2889,6 +2926,13 @@ def measure_run(run: Run) -> None:
         ship(remote, run.run_dir)
         start_hostmon(remote)
         create_containers(remote)
+        if run.cfg.latency != "off":
+            enter_phase(
+                fleet, run.manifest_path, "shaping", "tc netem per peer, ping probes"
+            )
+            shaping = latency_shaping(run.cfg, len(_node_names(remote.hosts)))
+            shape_nodes(remote, shaping)
+            verify_shaping(remote, shaping, run.manifest_path)
         enter_phase(
             fleet,
             run.manifest_path,
@@ -3419,6 +3463,8 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         node_env=cli.node_env,
         max_block_size=cli.max_block_size,
         leader_trace=cli.leader_trace,
+        latency=cli.latency,
+        intra_latency=cli.intra_latency,
         fleet=cli.fleet,
         force=cli.force,
     )
@@ -3737,6 +3783,7 @@ def reset_script(role: str, pg_store: str = "") -> str:
         f'if [ -n "$ids" ]; then docker stop -t {int(FREEZE_STOP_TIMEOUT_S)} $ids; '
         "docker rm -f $ids; fi\n"
         "find /data/journal -mindepth 1 -delete\n"
+        f"{latency.TC_IFACE}\n{latency.TC_CLEAR}\n"
         f"find {BENCH_DIR} -mindepth 1 -maxdepth 1 {keep} -exec rm -rf {{}} +\n"
     )
     if role == "query":
@@ -3932,13 +3979,16 @@ def render_run(
         (SCRIPT_DIR / "genesis.toml").read_bytes(), cfg.nodes, cfg.max_block_size
     )
     run_dir = new_run_dir(fleet_dir, name)
+    meta = latency_meta(cfg, fleet["hosts"]) if cfg.latency != "off" else None
     manifest = build_run_manifest(
         fleet,
         cfg,
         run_index(run_dir),
-        run_config_hash(cfg, fleet["hosts"], fleet["images"], genesis),
+        run_config_hash(cfg, fleet["hosts"], fleet["images"], genesis, meta),
         run_estimate,
     )
+    if meta is not None:
+        manifest["latency"] = meta
     nb.write_json(run_dir / "manifest.json", manifest)
     append_event(run_dir, "planned", "manifest-written", None)
     (run_dir / "genesis.toml").write_bytes(genesis)
@@ -3946,11 +3996,36 @@ def render_run(
     return run_dir
 
 
+def latency_shaping(cfg: RunConfig, node_count: int) -> latency.Shaping:
+    """Data problems (missing CSV pair, unknown location) are refused before any AWS write."""
+    try:
+        return latency.shaping(cfg.latency, node_count, cfg.intra_latency)
+    except (KeyError, ValueError, OSError) as exc:
+        raise Refused(f"latency {cfg.latency}: {type(exc).__name__}: {exc}") from exc
+
+
+def latency_meta(cfg: RunConfig, hosts: list[HostSpec]) -> nb.LatencyMeta:
+    shaping = latency_shaping(cfg, sum(host["role"] != "ctl" for host in hosts))
+    meta = cast(nb.LatencyMeta, shaping.meta())
+    log.info(
+        "latency %s: %s; intra %g ms %s",
+        meta["profile"],
+        ", ".join(f"{label} {count}" for label, count in meta["nodes"].items()),
+        shaping.profile.intra_ms[shaping.assignment[0]],
+        "on" if cfg.intra_latency else "off",
+    )
+    return meta
+
+
 def run_config_hash(
-    cfg: RunConfig, hosts: list[HostSpec], images: dict[str, ImageInfo], genesis: bytes
+    cfg: RunConfig,
+    hosts: list[HostSpec],
+    images: dict[str, ImageInfo],
+    genesis: bytes,
+    latency_meta: nb.LatencyMeta | None = None,
 ) -> str:
     """Load config plus what else changes the measured system: image digests, the fleet's
-    shape, the query database placement and the rendered genesis."""
+    shape, the query database placement, the rendered genesis and the latency matrix."""
     digests = {name: image["digest"] for name, image in sorted(images.items())}
     return nb.config_hash(
         cfg.load,
@@ -3961,6 +4036,19 @@ def run_config_hash(
             cfg.query_db.encode(),
             *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
             *([b"leader-trace"] if cfg.leader_trace else []),
+            *(
+                [
+                    json.dumps(
+                        {
+                            "latency": cfg.latency,
+                            "intra": cfg.intra_latency,
+                            "matrix": latency_meta["matrix_sha256"],
+                        }
+                    ).encode()
+                ]
+                if latency_meta is not None
+                else []
+            ),
         ],
     )
 
@@ -4282,9 +4370,13 @@ def digest_mismatches(
 
 
 def ship_agents(remote: Remote) -> str:
-    """The laptop's current `aws-bench` and `netbench.py` to every host, whatever `up` put
-    there. Returns the git revision they were shipped from."""
-    files = [SCRIPT_DIR / "netbench.py", SCRIPT_DIR / "aws-bench"]
+    """The laptop's current `aws-bench`, `netbench.py` and `latency.py` to every host, whatever
+    `up` put there. Returns the git revision they were shipped from."""
+    files = [
+        SCRIPT_DIR / "netbench.py",
+        SCRIPT_DIR / "latency.py",
+        SCRIPT_DIR / "aws-bench",
+    ]
     remote.parallel(
         lambda host: remote.rsync_to(host, files, f"{BENCH_DIR}/"), remote.hosts
     )
@@ -4312,6 +4404,62 @@ def start_hostmon(remote: Remote) -> None:
         )
 
     remote.parallel(start, remote.hosts)
+
+
+def shape_nodes(remote: Remote, shaping: latency.Shaping) -> None:
+    names = _node_names(remote.hosts)
+    peer_ips = {i: remote.hosts[name]["private_ip"] for i, name in enumerate(names)}
+    scripts = {
+        name: latency.tc_script(i, peer_ips, shaping.delays)
+        for i, name in enumerate(names)
+    }
+    remote.parallel(lambda name: remote.ssh(name, bounded(scripts[name])), names)
+
+
+def verify_shaping(
+    remote: Remote, shaping: latency.Shaping, manifest_path: Path
+) -> None:
+    """Pings from node0 and fails when a measured RTT leaves the tolerance of its expected delay
+    or a ping prints no summary. The probes are written to the manifest either way."""
+    names = _node_names(remote.hosts)
+    probes: list[dict[str, Any]] = []
+    failures: list[str] = []
+    for probe in latency.probe_pairs(shaping.assignment, shaping.delays, shaping.intra):
+        target = remote.hosts[names[probe.dst]]["private_ip"]
+        result = remote.ssh(
+            names[probe.src], bounded(f"ping -c 5 -i 0.2 -n -q {target}"), check=False
+        )
+        label = f"probe node{probe.src}->node{probe.dst} {probe.tier}"
+        try:
+            measured = latency.parse_ping_avg_ms(result.stdout)
+        except ValueError:
+            failures.append(f"{label}: no ping summary, rc {result.returncode}")
+            probes.append(
+                {
+                    **dataclasses.asdict(probe),
+                    "measured_ms": None,
+                    "ok": False,
+                    "rc": result.returncode,
+                    "stdout": result.stdout,
+                }
+            )
+            continue
+        log.info(
+            "%s: expected %.1f ms, measured %.1f ms",
+            label,
+            probe.expected_ms,
+            measured,
+        )
+        error = latency.probe_error(probe, measured)
+        if error is not None:
+            failures.append(error)
+        probes.append(
+            {**dataclasses.asdict(probe), "measured_ms": measured, "ok": error is None}
+        )
+    meta = {**shaping.meta(), "probes": probes}
+    update_manifest(manifest_path, "shaping", latency=meta)
+    if failures:
+        raise ShapingMismatch("; ".join(failures))
 
 
 def create_containers(remote: Remote) -> None:
@@ -4784,6 +4932,7 @@ COLLECT_EXCLUDES = (
     "--exclude=/out/",
     "--exclude=/aws-bench",
     "--exclude=/netbench.py",
+    "--exclude=/latency.py",
     "--exclude=/pg.json",
 )
 
@@ -5990,6 +6139,7 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
         "clock_offset_ms_max": max(evidence["clock_offset_ms"].values(), default=0.0),
         "cost_usd": manifest["cost_usd"],
         "query_db": query_db_meta(manifest, evidence),
+        **({"latency": manifest["latency"]} if "latency" in manifest else {}),
         # Manifests from before the flag have no such key.
         **({"node_env": config["node_env"]} if config.get("node_env") else {}),
         **(

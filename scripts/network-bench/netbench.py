@@ -300,6 +300,17 @@ class QueryDbMeta(TypedDict):
     instance_class: NotRequired[str]
 
 
+class LatencyMeta(TypedDict):
+    """`--latency` emulation: node counts per location and the pinged probes."""
+
+    profile: str
+    intra: bool
+    nodes: dict[str, int]
+    assignment: dict[str, str]  # node name -> location
+    matrix_sha256: str
+    probes: list[dict[str, Any]]
+
+
 class DeploymentMeta(TypedDict):
     """AWS fleet metadata; absent for the local bench."""
 
@@ -317,6 +328,7 @@ class DeploymentMeta(TypedDict):
     fleet: NotRequired[str]
     run_index: NotRequired[int]
     query_db: NotRequired[QueryDbMeta]
+    latency: NotRequired[LatencyMeta]
     # `KEY=VALUE` overrides of every node's environment.
     node_env: NotRequired[list[str]]
     # Genesis `max_block_size`; absent in manifests from before the flag.
@@ -2413,6 +2425,11 @@ def runner_lines(result: BenchResult) -> list[str]:
     ]
 
 
+def latency_line(meta: LatencyMeta) -> str:
+    intra = "on" if meta["intra"] else "off"
+    return f"- latency: {meta['profile']}, intra {intra}, matrix {meta['matrix_sha256'][:8]}"
+
+
 def deployment_lines(result: BenchResult) -> list[str]:
     """AWS fleet metadata and cost; empty for the local bench."""
     if "deployment" not in result:
@@ -2440,6 +2457,7 @@ def deployment_lines(result: BenchResult) -> list[str]:
         ),
         f"- cost: {cost_line}",
         *([query_db_line(d["query_db"])] if "query_db" in d else []),
+        *([latency_line(d["latency"])] if "latency" in d else []),
         *(
             [f"- max block size: {d['max_block_size']}"]
             if "max_block_size" in d

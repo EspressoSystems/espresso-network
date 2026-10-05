@@ -13,6 +13,7 @@ import importlib.util
 import itertools
 import json
 import math
+import re
 import selectors
 import signal
 import stat
@@ -598,8 +599,10 @@ class FakeRunner:
         on_poll=None,
         describe: str = "[]",
         balance: subprocess.CompletedProcess | None = None,
+        pings: dict[str, float] | None = None,
     ):
         self.responses = responses or {}
+        self.pings = pings
         self.states = states
         self.apply = apply or completed()
         self.destroys = destroys or [completed()]
@@ -697,6 +700,12 @@ class FakeRunner:
             return completed(stdout="1000.5\n")
         if "docker inspect -f" in command:
             return completed(stdout="2026-09-29T15:00:00.100000000Z\n")
+        if "ping -c" in command:
+            assert self.pings is not None, "FakeRunner: ping needs `pings`"
+            match = re.search(r"(\d+\.\d+\.\d+\.\d+)'?$", command)
+            assert match, f"FakeRunner: no ping target in {command!r}"
+            ms = self.pings[match.group(1)]
+            return completed(stdout=f"rtt min/avg/max/mdev = {ms}/{ms}/{ms}/0.1 ms\n")
         if "docker wait deploy" in command:
             return completed(stdout="0\n")
         return completed()
