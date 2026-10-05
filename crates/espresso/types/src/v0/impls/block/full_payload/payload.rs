@@ -354,3 +354,6 @@ impl Payload {
         &mut self.ns_table
     }
 }
+
+#[cfg(test)]
+mod test;
