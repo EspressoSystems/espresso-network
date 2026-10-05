@@ -394,6 +394,10 @@ where
                     empty_block_delay,
                     block_sizes,
                     forward_transactions: std::env::var_os("NP_NO_TX_FORWARDING").is_none(),
+                    fanout: std::env::var("NP_TX_FANOUT")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(BlockBuilderConfig::default().fanout),
                     ..BlockBuilderConfig::default()
                 },
                 upgrade_lock.clone(),
