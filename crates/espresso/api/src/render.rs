@@ -1073,6 +1073,16 @@ impl TryFrom<&VidCommon> for proto::vid_common::Common {
     }
 }
 
+impl TryFrom<&VidCommon> for proto::VidCommon {
+    type Error = tonic::Status;
+
+    fn try_from(common: &VidCommon) -> Result<Self, Self::Error> {
+        Ok(proto::VidCommon {
+            common: Some(common.try_into()?),
+        })
+    }
+}
+
 /// `VidCommonResponse` inlines the `VidCommon` oneof, so the two generated enums hold the same
 /// arms.
 impl From<proto::vid_common::Common> for proto::vid_common_response::Common {

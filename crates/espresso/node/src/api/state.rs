@@ -2,7 +2,7 @@
 //! data source this type wraps.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     num::NonZeroUsize,
     ops::{Bound, Deref, Range},
     time::Duration,
@@ -93,6 +93,10 @@ use super::{
 ///
 /// Matches the `hotshot_query_service` availability API default.
 const FETCH_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Bounds the namespace list of a v2 multi-namespace light-client request, as the URL length
+/// bounds v1's.
+const MAX_NAMESPACES_PER_REQUEST: usize = 100;
 
 /// Node API state implementation
 ///
@@ -3379,6 +3383,10 @@ where
         start: u64,
         end: u64,
     ) -> anyhow::Result<Vec<Self::PayloadProof>> {
+        validate_ranges(
+            std::iter::once(start..end).collect(),
+            lc_large_object_range_limit(),
+        )?;
         let ds = &*self.data_source;
         let fetch_timeout = FETCH_TIMEOUT;
         let start = start as usize;
@@ -3599,7 +3607,7 @@ where
     async fn get_light_client_payload_proof(
         &self,
         request: tonic::Request<proto::GetLightClientPayloadProofRequest>,
-    ) -> Result<tonic::Response<proto::LightClientPayloadProof>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::LightClientPayloadProofResponse>, tonic::Status> {
         let height = required(request.into_inner().height, "height")?;
         let proof = <Self as v1::LightClientApi>::get_payload_proof(self, height)
             .await
@@ -3627,13 +3635,31 @@ where
         ))
     }
 
+    async fn get_light_client_payload_proof_ranges(
+        &self,
+        request: tonic::Request<proto::GetLightClientPayloadProofRangesRequest>,
+    ) -> Result<tonic::Response<proto::LightClientPayloadProofRangeResponse>, tonic::Status> {
+        let ranges = ranges_from_body(request.into_inner().ranges)?;
+        let proofs = <Self as v1::LightClientApi>::get_payload_proof_ranges(self, ranges)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::LightClientPayloadProofRangeResponse {
+                proofs: proofs
+                    .iter()
+                    .map(payload_proof_to_proto)
+                    .collect::<Result<_, _>>()?,
+            },
+        ))
+    }
+
     async fn get_light_client_namespace_proof(
         &self,
         request: tonic::Request<proto::GetLightClientNamespaceProofRequest>,
-    ) -> Result<tonic::Response<proto::LightClientNamespaceProof>, tonic::Status> {
+    ) -> Result<tonic::Response<proto::LightClientNamespaceProofResponse>, tonic::Status> {
         let request = request.into_inner();
         let height = required(request.height, "height")?;
-        let namespace = required(request.namespace, "namespace")?;
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?.into();
         let proof = <Self as v1::LightClientApi>::get_lc_namespace_proof(self, height, namespace)
             .await
             .map_err(to_status)?;
@@ -3646,7 +3672,7 @@ where
     ) -> Result<tonic::Response<proto::LightClientNamespaceProofRangeResponse>, tonic::Status> {
         let request = request.into_inner();
         let range = range_from_query(request.from, request.until)?;
-        let namespace = required(request.namespace, "namespace")?;
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?.into();
         let proofs = <Self as v1::LightClientApi>::get_lc_namespace_proof_range(
             self,
             range.start,
@@ -3672,13 +3698,25 @@ where
     {
         let request = request.into_inner();
         let range = range_from_query(request.from, request.until)?;
+        // Every entry costs a lookup in every block of the range.
+        let namespaces = request
+            .namespaces
+            .into_iter()
+            .map(|namespace| namespace_id(namespace).map(u64::from))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if namespaces.len() > MAX_NAMESPACES_PER_REQUEST {
+            return Err(tonic::Status::invalid_argument(format!(
+                "at most {MAX_NAMESPACES_PER_REQUEST} distinct namespaces per request"
+            )));
+        }
+        let namespaces: Vec<u64> = namespaces.into_iter().collect();
         // v1's trait method takes the namespaces as its TaggedBase64 path segment, which this
         // would only build to have it parsed straight back.
         let blocks = crate::api::light_client::get_namespaces_proof_range(
             &*self.data_source,
             range.start as usize,
             range.end as usize,
-            &request.namespaces,
+            &namespaces,
             FETCH_TIMEOUT,
             lc_large_object_range_limit(),
         )
@@ -3735,8 +3773,8 @@ fn header_query(
     }
 }
 
-// The light-client proof types are foreign to this crate and to `espresso-api`'s proto types
-// alike, so the orphan rule leaves these as functions rather than `From` impls in `render`.
+// `espresso-api` does not depend on `light-client`, so these cannot be `From` impls in `render`,
+// and the orphan rule rules them out here.
 fn leaf_proof_to_proto(proof: &LeafProof) -> proto::LightClientLeafProofResponse {
     proto::LightClientLeafProofResponse {
         leaves: proof.leaves().iter().map(Into::into).collect(),
@@ -3777,32 +3815,30 @@ fn finality_proof_to_proto(proof: &FinalityProof) -> proto::FinalityProof {
 
 fn payload_proof_to_proto(
     proof: &PayloadProof,
-) -> Result<proto::LightClientPayloadProof, tonic::Status> {
-    Ok(proto::LightClientPayloadProof {
+) -> Result<proto::LightClientPayloadProofResponse, tonic::Status> {
+    Ok(proto::LightClientPayloadProofResponse {
         payload: Some(proof.payload().into()),
-        vid_common: Some(proto::VidCommon {
-            common: Some(proof.vid_common().try_into()?),
-        }),
+        vid_common: Some(proof.vid_common().try_into()?),
     })
 }
 
 fn lc_namespace_proof_to_proto(
     proof: &NamespaceProof,
-) -> Result<proto::LightClientNamespaceProof, tonic::Status> {
-    Ok(proto::LightClientNamespaceProof {
-        proof: proof.ns_proof().map(TryInto::try_into).transpose()?,
-        vid_common: proof
-            .vid_common()
-            .map(|common| {
-                Ok::<_, tonic::Status>(proto::VidCommon {
-                    common: Some(common.try_into()?),
+) -> Result<proto::LightClientNamespaceProofResponse, tonic::Status> {
+    Ok(proto::LightClientNamespaceProofResponse {
+        contents: proof
+            .contents()
+            .map(|(proof, common)| {
+                Ok::<_, tonic::Status>(proto::LightClientNamespaceProofContents {
+                    proof: Some(proof.try_into()?),
+                    vid_common: Some(common.try_into()?),
                 })
             })
             .transpose()?,
     })
 }
 
-// `StakeTableEvent` and its points come from crates `espresso-api` does not depend on.
+// The point types come from `hotshot-contract-adapter`, which `espresso-api` does not depend on.
 fn stake_table_event_to_proto(event: &StakeTableEvent) -> proto::StakeTableEvent {
     use proto::stake_table_event::Event;
 
@@ -4163,15 +4199,15 @@ fn block_id_from_query(
     }
 }
 
+fn namespace_from_query(namespace: Option<u64>) -> Result<Option<u32>, tonic::Status> {
+    namespace.map(namespace_id).transpose()
+}
+
 /// Namespace ids are 32 bits on chain but travel as uint64 so they round-trip with the
 /// responses' `namespace` fields. Anything wider is a client error, not a truncation.
-fn namespace_from_query(namespace: Option<u64>) -> Result<Option<u32>, tonic::Status> {
-    namespace
-        .map(|namespace| {
-            u32::try_from(namespace)
-                .map_err(|_| tonic::Status::invalid_argument("namespace does not fit in 32 bits"))
-        })
-        .transpose()
+fn namespace_id(namespace: u64) -> Result<u32, tonic::Status> {
+    u32::try_from(namespace)
+        .map_err(|_| tonic::Status::invalid_argument("namespace does not fit in 32 bits"))
 }
 
 fn required<T>(value: Option<T>, name: &str) -> Result<T, tonic::Status> {
@@ -6734,5 +6770,122 @@ mod tests {
                 tonic::Code::InvalidArgument
             );
         }
+    }
+
+    /// Every stake table event, compared field by field with the JSON v1 serves for it. The two
+    /// spell a field differently (`blsVK` against `blsVk`) and encode amounts, timestamps and
+    /// bytes differently, so each pair of values is compared as the quantity or bytes it holds.
+    #[test]
+    fn stake_table_events_carry_every_v1_field() {
+        use espresso_types::testing::TestValidator;
+        use hotshot_contract_adapter::sol_types::StakeTableV3::{
+            CommissionUpdated, Delegated, Undelegated, UndelegatedV2, ValidatorExitV2,
+        };
+
+        let validator = TestValidator::random();
+        let delegator = Address::repeat_byte(7);
+        let events = [
+            StakeTableEvent::Register((&validator).into()),
+            StakeTableEvent::RegisterV2((&validator).into()),
+            StakeTableEvent::RegisterV3((&validator).into()),
+            StakeTableEvent::Deregister((&validator).into()),
+            StakeTableEvent::DeregisterV2(ValidatorExitV2 {
+                validator: validator.account,
+                unlocksAt: U256::from(1_700_000_000u64),
+            }),
+            StakeTableEvent::Delegate(Delegated {
+                delegator,
+                validator: validator.account,
+                amount: U256::from(10u64).pow(U256::from(20u64)),
+            }),
+            StakeTableEvent::Undelegate(Undelegated {
+                delegator,
+                validator: validator.account,
+                amount: U256::from(12_345u64),
+            }),
+            StakeTableEvent::UndelegateV2(UndelegatedV2 {
+                delegator,
+                validator: validator.account,
+                undelegationId: 7,
+                amount: U256::from(54_321u64),
+                unlocksAt: U256::from(1_700_000_001u64),
+            }),
+            StakeTableEvent::KeyUpdate((&validator).into()),
+            StakeTableEvent::KeyUpdateV2((&validator).into()),
+            StakeTableEvent::CommissionUpdate(CommissionUpdated {
+                validator: validator.account,
+                timestamp: U256::from(1_700_000_002u64),
+                oldCommission: 100,
+                newCommission: 250,
+            }),
+            validator.x25519_update([9; 32]),
+            validator.p2p_update("10.0.0.1:9000"),
+        ];
+        for event in &events {
+            let v1 = serde_json::to_value(event).unwrap();
+            let (variant, v1) = v1.as_object().unwrap().iter().next().unwrap();
+            let v2 = serde_json::to_value(stake_table_event_to_proto(event)).unwrap();
+            let v2 = v2.as_object().unwrap().values().next().unwrap();
+            assert_same_event_value(variant, v1, v2);
+        }
+    }
+
+    /// protoJSON omits a zero value, so a field v2 leaves out must be zero on v1.
+    fn assert_same_event_value(path: &str, v1: &serde_json::Value, v2: &serde_json::Value) {
+        use serde_json::Value;
+
+        let normalize = |key: &str| key.replace('_', "").to_lowercase();
+        match (v1, v2) {
+            (Value::Object(v1), Value::Object(v2)) => {
+                let v2: HashMap<String, &Value> = v2
+                    .iter()
+                    .map(|(key, value)| (normalize(key), value))
+                    .collect();
+                assert!(
+                    v2.keys()
+                        .all(|key| v1.keys().any(|v1_key| normalize(v1_key) == *key)),
+                    "{path}: v2 has a field v1 does not"
+                );
+                for (key, v1_value) in v1 {
+                    let path = format!("{path}.{key}");
+                    match v2.get(&normalize(key)) {
+                        Some(v2_value) => assert_same_event_value(&path, v1_value, v2_value),
+                        None => assert!(
+                            is_zero(v1_value),
+                            "{path}: v1 has {v1_value}, which v2 does not carry"
+                        ),
+                    }
+                }
+            },
+            (Value::Number(v1), Value::Number(v2)) => assert_eq!(v1, v2, "{path}"),
+            (Value::Number(v1), Value::String(v2)) => assert_eq!(v1.to_string(), *v2, "{path}"),
+            (Value::String(v1), Value::String(v2)) => {
+                let same = v1.eq_ignore_ascii_case(v2)
+                    || hex_quantity(v1).is_some_and(|v1| v2.parse::<U256>().ok() == Some(v1))
+                    || hex_bytes(v1).is_some_and(|v1| {
+                        base64::engine::general_purpose::STANDARD.decode(v2).ok() == Some(v1)
+                    });
+                assert!(same, "{path}: v1 {v1:?}, v2 {v2:?}");
+            },
+            _ => panic!("{path}: v1 {v1}, v2 {v2}"),
+        }
+    }
+
+    fn is_zero(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Number(number) => number.as_u64() == Some(0),
+            serde_json::Value::String(string) => {
+                string.is_empty() || hex_quantity(string) == Some(U256::ZERO)
+            },
+            _ => false,
+        }
+    }
+
+    fn hex_quantity(value: &str) -> Option<U256> {
+        U256::from_str_radix(value.strip_prefix("0x")?, 16).ok()
+    }
+
+    fn hex_bytes(value: &str) -> Option<Vec<u8>> {
+        alloy::hex::decode(value.strip_prefix("0x")?).ok()
     }
 }

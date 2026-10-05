@@ -5001,6 +5001,7 @@ mod tests {
             "/v2/light-client/stake-table",
             "/v2/light-client/payload",
             "/v2/light-client/payload-range",
+            "/v2/light-client/payload-ranges",
             "/v2/light-client/namespace",
             "/v2/light-client/namespace-range",
             "/v2/light-client/namespaces-range",
@@ -5583,7 +5584,8 @@ mod tests {
         async fn get_light_client_payload_proof(
             &self,
             _request: tonic::Request<crate::proto::GetLightClientPayloadProofRequest>,
-        ) -> Result<tonic::Response<crate::proto::LightClientPayloadProof>, tonic::Status> {
+        ) -> Result<tonic::Response<crate::proto::LightClientPayloadProofResponse>, tonic::Status>
+        {
             Err(tonic::Status::internal("mock"))
         }
 
@@ -5597,10 +5599,20 @@ mod tests {
             Err(tonic::Status::internal("mock"))
         }
 
+        async fn get_light_client_payload_proof_ranges(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientPayloadProofRangesRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::LightClientPayloadProofRangeResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+
         async fn get_light_client_namespace_proof(
             &self,
             _request: tonic::Request<crate::proto::GetLightClientNamespaceProofRequest>,
-        ) -> Result<tonic::Response<crate::proto::LightClientNamespaceProof>, tonic::Status>
+        ) -> Result<tonic::Response<crate::proto::LightClientNamespaceProofResponse>, tonic::Status>
         {
             Err(tonic::Status::internal("mock"))
         }
@@ -5891,6 +5903,7 @@ mod tests {
             ("/v2/config/", routes::v2::CONFIG_ROUTES),
             ("/v2/submit/", routes::v2::SUBMIT_ROUTES),
             ("/v2/explorer/", routes::v2::EXPLORER_ROUTES),
+            ("/v2/light-client/", routes::v2::LIGHT_CLIENT_ROUTES),
         ] {
             let mut documented: Vec<&str> = paths
                 .keys()

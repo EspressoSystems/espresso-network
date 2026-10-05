@@ -32,18 +32,14 @@ impl NamespaceProof {
         Self { proof: None }
     }
 
-    /// Inspect the namespace proof without verifying it.
+    /// Inspect the namespace proof and the VID common data it is checked against, without
+    /// verifying them.
     ///
     /// [`None`] for a trivial proof, which claims the namespace is not present in the block.
-    pub fn ns_proof(&self) -> Option<&NsProof> {
-        self.proof.as_ref().map(|proof| &proof.proof)
-    }
-
-    /// Inspect the VID common data the namespace proof is checked against.
-    ///
-    /// [`None`] exactly when [`ns_proof`](Self::ns_proof) is.
-    pub fn vid_common(&self) -> Option<&VidCommon> {
-        self.proof.as_ref().map(|proof| &proof.common)
+    pub fn contents(&self) -> Option<(&NsProof, &VidCommon)> {
+        self.proof
+            .as_ref()
+            .map(|proof| (&proof.proof, &proof.common))
     }
 
     /// Verify a [`NamespaceProof`].

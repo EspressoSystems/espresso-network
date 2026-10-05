@@ -199,7 +199,10 @@ where
     let router = if modules.light_client {
         router.merge(rest::light_client_service_rest_router(state.clone()))
     } else {
-        router
+        router.merge(axum::router_module_disabled(
+            "light-client",
+            routes::v2::LIGHT_CLIENT_ROUTES,
+        ))
     };
     let router = if modules.config {
         router.merge(rest::config_service_rest_router(state))

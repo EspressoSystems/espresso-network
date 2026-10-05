@@ -11194,7 +11194,7 @@ mod test {
             .send()
             .await
             .unwrap();
-        let v2_payload: espresso_api::proto::LightClientPayloadProof = client
+        let v2_payload: espresso_api::proto::LightClientPayloadProofResponse = client
             .get(&format!("v2/light-client/payload?height={height}"))
             .send()
             .await
@@ -11212,6 +11212,34 @@ mod test {
             .await
             .unwrap();
         assert_eq!(v2_payloads.proofs.len(), 1);
+        let v1_batch: Vec<PayloadProof> = client
+            .post("light-client/payload/ranges")
+            .body_json(&std::iter::once(height..root).collect::<Vec<_>>())
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let v2_batch: espresso_api::proto::LightClientPayloadProofRangeResponse = client
+            .post("v2/light-client/payload-ranges")
+            .body_json(
+                &espresso_api::proto::GetLightClientPayloadProofRangesRequest {
+                    ranges: vec![espresso_api::proto::HeightRange {
+                        from: Some(height),
+                        until: Some(root),
+                    }],
+                },
+            )
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(v2_batch.proofs.len(), v1_batch.len());
+        for (v1, v2) in v1_batch.iter().zip(&v2_batch.proofs) {
+            assert_eq!(
+                v2.payload.as_ref().unwrap().raw_payload,
+                v1.payload().encode().to_vec()
+            );
+        }
 
         // A namespace the block does not carry gets the trivial proof on both versions.
         let absent = 999;
@@ -11221,19 +11249,14 @@ mod test {
                 .send()
                 .await
                 .unwrap();
-            let v2_ns: espresso_api::proto::LightClientNamespaceProof = client
+            let v2_ns: espresso_api::proto::LightClientNamespaceProofResponse = client
                 .get(&format!(
                     "v2/light-client/namespace?height={height}&namespace={ns}"
                 ))
                 .send()
                 .await
                 .unwrap();
-            assert_eq!(v2_ns.proof.is_some(), v1_ns.ns_proof().is_some(), "{ns}");
-            assert_eq!(
-                v2_ns.vid_common.is_some(),
-                v1_ns.vid_common().is_some(),
-                "{ns}"
-            );
+            assert_eq!(v2_ns.contents.is_some(), v1_ns.contents().is_some(), "{ns}");
         }
         assert!(
             client
@@ -11241,7 +11264,7 @@ mod test {
                 .send()
                 .await
                 .unwrap()
-                .ns_proof()
+                .contents()
                 .is_some(),
             "the block carries {namespace}, so the check above compared real proofs"
         );
@@ -11327,6 +11350,8 @@ mod test {
             "v2/light-client/stake-table".to_owned(),
             format!("v2/light-client/namespace?height={height}"),
             format!("v2/light-client/payload-range?from={height}"),
+            format!("v2/light-client/payload-range?from={root}&until={height}"),
+            format!("v2/light-client/namespace?height={height}&namespace=4294967296"),
         ] {
             let err = client
                 .get::<serde_json::Value>(&query)
@@ -11334,6 +11359,23 @@ mod test {
                 .await
                 .unwrap_err();
             assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+
+        for namespaces in [(0..=100).collect::<Vec<u64>>(), vec![1 << 32]] {
+            let err = client
+                .post::<serde_json::Value>("v2/light-client/namespaces-range")
+                .body_json(
+                    &espresso_api::proto::GetLightClientNamespacesProofRangeRequest {
+                        from: Some(height),
+                        until: Some(root),
+                        namespaces,
+                    },
+                )
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST);
         }
     }
 
