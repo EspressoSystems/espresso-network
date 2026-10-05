@@ -71,7 +71,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from functools import cache
+from functools import cache, partial
 from pathlib import Path
 from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar, cast
 
@@ -852,6 +852,8 @@ Ask = Callable[[str], bool]
 Which = Callable[[str], str | None]
 HttpReply = tuple[int, Mapping[str, str], bytes]
 HttpGet = Callable[[str, dict[str, str]], HttpReply]
+# Sends a signal to the in-flight subprocesses; returns their `command_label`s.
+Forward = Callable[[int], list[str]]
 
 
 @dataclass(frozen=True)
@@ -867,6 +869,7 @@ class System:
     hostname: Callable[[], str]
     pid: int
     pid_alive: Callable[[int], bool]
+    forward: Forward
 
 
 Command = Callable[[argparse.Namespace, System], int]
@@ -894,8 +897,9 @@ def _pid_alive(pid: int) -> bool:
 
 
 def host_system() -> System:
+    children = Children(os.killpg)
     return System(
-        run=_run,
+        run=partial(_run, children),
         clock=nb.SYSTEM_CLOCK,
         trap=_trap,
         which=shutil.which,
@@ -906,6 +910,7 @@ def host_system() -> System:
         hostname=socket.gethostname,
         pid=os.getpid(),
         pid_alive=_pid_alive,
+        forward=children.forward,
     )
 
 
@@ -918,21 +923,53 @@ def stamp() -> str:
     return datetime.now(UTC).isoformat()
 
 
+class Children:
+    """`_run`'s subprocesses in flight, by pid, each leading its own process group. No lock:
+    `forward` runs in the signal handler, which could interrupt its holder."""
+
+    def __init__(self, kill: Callable[[int, int], None]) -> None:
+        self.kill = kill
+        self.running: dict[int, list[str]] = {}
+
+    def forward(self, signum: int) -> list[str]:
+        """Signals the `tofu` children only, e.g. `tofu apply`; never raises."""
+        sent = []
+        for pid, argv in list(self.running.items()):
+            if argv[0] != "tofu":
+                continue
+            try:
+                self.kill(pid, signum)
+            except OSError:
+                continue
+            step = next((a for a in argv[1:] if not a.startswith("-")), "")
+            sent.append(f"tofu {step}")
+        return sent
+
+
 def _run(
-    argv: list[str], env: dict[str, str] | None = None
+    children: Children, argv: list[str], env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     """`env` is added to the inherited environment."""
     log.debug("+ %s", " ".join(argv))
     # A new session keeps the terminal's Ctrl-C away from tofu and rsync: the driver gets it
     # first, then decides (see `Interrupts`).
-    return subprocess.run(
+    with subprocess.Popen(
         argv,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        check=False,
         start_new_session=True,
         env=None if env is None else {**os.environ, **env},
-    )
+    ) as proc:
+        children.running[proc.pid] = argv
+        try:
+            stdout, stderr = proc.communicate()
+        except BaseException:
+            proc.kill()
+            raise
+        finally:
+            del children.running[proc.pid]
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
 def aws_argv(*args: str, region: str = REGION) -> list[str]:
@@ -1708,7 +1745,8 @@ class Terraform:
     def _tofu(self, step: TfStep, *args: str) -> str:
         result = self.run(["tofu", f"-chdir={self.dir}", step, *args], self.env)
         if result.returncode != 0:
-            raise TfFailed(step, last_line(result.stderr))
+            message = tofu_error(result.stderr) or f"exit {result.returncode}"
+            raise TfFailed(step, message)
         return result.stdout
 
     def init(self) -> None:
@@ -1727,8 +1765,29 @@ class Terraform:
         self._tofu("destroy", "-input=false", "-auto-approve")
 
 
+ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def tofu_error(stderr: str) -> str:
+    """The first `Error:` block of tofu's stderr on one line, without colours and the `╷│╵`
+    box; else the last non-blank line, "" for a blank stderr. The block ends at the box's `╵`,
+    an unboxed blank line, or the next `Error:`."""
+    lines = [ANSI_SGR.sub("", line).strip() for line in stderr.splitlines()]
+    texts = [line.removeprefix("│").strip() for line in lines]
+    start = next((i for i, text in enumerate(texts) if text.startswith("Error:")), None)
+    if start is None:
+        return last_line("\n".join(lines))
+    block = [texts[start]]
+    for line, text in zip(lines[start + 1 :], texts[start + 1 :], strict=True):
+        if line in ("╵", "") or text.startswith("Error:"):
+            break
+        if text:
+            block.append(text)
+    return "; ".join(block)
+
+
 def last_line(stderr: str) -> str:
-    return next(line for line in reversed(stderr.splitlines()) if line.strip())
+    return next((line for line in reversed(stderr.splitlines()) if line.strip()), "")
 
 
 def render_tfvars(
@@ -2576,11 +2635,14 @@ def estimate_or_refuse(
 
 class Interrupts:
     """The first SIGINT/SIGTERM/SIGHUP sets `event`; `check` turns it into `Interrupted` at the
-    next phase boundary or wait, so a `tofu apply` or rsync in flight always finishes. After
-    `disarm` signals are logged and ignored, except that the third one sets `skip_collect`."""
+    next phase boundary or wait, so a `tofu apply` or rsync in flight finishes. Every later
+    signal, armed or not, forwards SIGINT to the `tofu` subprocesses in flight: tofu stops
+    gracefully and writes its state on the first, exits on the next. After `disarm` signals are otherwise
+    logged and ignored, except that the third one sets `skip_collect`."""
 
-    def __init__(self, clock: nb.Clock) -> None:
+    def __init__(self, clock: nb.Clock, forward: Forward) -> None:
         self.clock = clock
+        self.forward = forward
         self.event = threading.Event()
         self.skip_collect = threading.Event()
         self.signals = 0
@@ -2592,6 +2654,8 @@ class Interrupts:
 
     def _handle(self, signum: int, frame: Any) -> None:
         self.signals += 1
+        if self.signals > 1 and (sent := self.forward(signal.SIGINT)):
+            log.warning("signal %d: forwarded SIGINT to %s", signum, ", ".join(sent))
         if self.signals >= SKIP_COLLECT_SIGNALS:
             self.skip_collect.set()
             log.warning("signal %d: skipping the rest of the collection", signum)
@@ -2771,7 +2835,7 @@ def cmd_run(args: argparse.Namespace, system: System) -> int:
             "run needs --tag, or --fleet [FLEET] to measure on a fleet from `up`"
         )
     cfg = dataclasses.replace(fleet_config_from_args(args), db_modes=(args.query_db,))
-    interrupts = Interrupts(system.clock)
+    interrupts = Interrupts(system.clock, system.forward)
     started = system.clock.time()
     try:
         fleet_dir, run_dir, tf = prepare_run(args, cfg, system)
@@ -3320,7 +3384,7 @@ def cmd_up(args: argparse.Namespace, system: System) -> int:
     """Plans, confirms and provisions a fleet, then leaves it `idle` for `run --fleet`. A
     failure destroys it again (exit 3, or 4 when resources may remain)."""
     cfg = fleet_config_from_args(args)
-    interrupts = Interrupts(system.clock)
+    interrupts = Interrupts(system.clock, system.forward)
     try:
         fleet_dir, tf = prepare_up(args, cfg, system)
     except KeyboardInterrupt:
@@ -3458,7 +3522,7 @@ def cmd_run_fleet(args: argparse.Namespace, system: System) -> int:
     setup_logging(fleet_dir)
     log.debug("argv %s", args.argv)
     log.info("fleet %s (%s)", manifest["name"], manifest["phase"])
-    interrupts = Interrupts(system.clock)
+    interrupts = Interrupts(system.clock, system.forward)
     interrupts.install(system.trap)
     fleet = open_fleet(system, fleet_dir, interrupts)
     cfg = fleet_run_config(args, manifest)
@@ -5361,7 +5425,9 @@ def cmd_down(args: argparse.Namespace, system: System) -> int:
     setup_logging(fleet_dir)
     cfg = config_from_manifest(manifest["config"])
     tf = Terraform(system.run, fleet_dir / "terraform", terraform_env())
-    fleet = FleetState(system, cfg, fleet_dir, tf, Interrupts(system.clock))
+    fleet = FleetState(
+        system, cfg, fleet_dir, tf, Interrupts(system.clock, system.forward)
+    )
     if manifest["phase"] == "running":
         # `Remote` inside `best_effort`: a refused ControlPath must not block the destroy.
         best_effort(

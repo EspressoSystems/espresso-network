@@ -371,7 +371,7 @@ def init_bare(root: Path) -> Path:
 def test_publish_to_an_empty_remote_and_again(tmp_path: Path):
     bare = init_bare(tmp_path)
     run_dir = make_run_dir(tmp_path)
-    system = FakeSystem(run=awsb._run)
+    system = FakeSystem(run=awsb.host_system().run)
     for _ in range(2):
         awsb.publish_run(system, run_dir, f"file://{bare}")
     tree = git_out("-C", bare, "ls-tree", "-r", "--name-only", "main").split()
@@ -387,12 +387,12 @@ def test_publish_to_an_empty_remote_and_again(tmp_path: Path):
 def test_rebase_after_another_publisher_pushed_first(tmp_path: Path):
     bare = init_bare(tmp_path)
     url = f"file://{bare}"
-    system = FakeSystem(run=awsb._run)
+    system = FakeSystem(run=awsb.host_system().run)
     awsb.publish_run(system, make_run_dir(tmp_path), url)
     pushed = []
 
     def push_from_another_clone(argv, env=None):
-        done = awsb._run(argv, env)
+        done = system.run(argv, env)
         if "clone" in argv and not pushed:
             pushed.append(True)
             other = tmp_path / "other"

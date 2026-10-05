@@ -410,18 +410,51 @@ def test_preflight_resolves_az_ami_and_images(monkeypatch: pytest.MonkeyPatch):
     assert set(result["images"]) == set(awsb.image_refs(cfg))
 
 
+LOCK_ERROR = """\
+\x1b[31m╷\x1b[0m\x1b[0m
+\x1b[31m│\x1b[0m \x1b[0m\x1b[1m\x1b[31mError: \x1b[0m\x1b[0m\x1b[1mError acquiring the state lock\x1b[0m
+\x1b[31m│\x1b[0m \x1b[0m
+\x1b[31m│\x1b[0m \x1b[0m\x1b[0mError message: resource temporarily unavailable
+\x1b[31m│\x1b[0m \x1b[0mLock Info:
+\x1b[31m│\x1b[0m \x1b[0m  ID:        82827aee-aaa4-486e-a5d6-8bb5751a086e
+\x1b[31m╵\x1b[0m\x1b[0m
+"""
+
+
 @pytest.mark.parametrize(
     ("stage", "stderr", "message"),
     [
         (
             "apply",
-            "Error: creating\nVcpuLimitExceeded: x\n\n",
-            "tofu apply failed: VcpuLimitExceeded: x",
+            "Error: creating\nVcpuLimitExceeded: x\n\nlater\n",
+            "tofu apply failed: Error: creating; VcpuLimitExceeded: x",
         ),
-        ("destroy", "boom", "tofu destroy failed: boom"),
+        (
+            "apply",
+            "Error: one\nError: two\n",
+            "tofu apply failed: Error: one",
+        ),
+        ("destroy", "boom\n\x1b[31mlast\x1b[0m\n\n", "tofu destroy failed: last"),
+        ("destroy", " \n\n", "tofu destroy failed: exit 1"),
+        (
+            "destroy",
+            "noise\n" + LOCK_ERROR + "tail\n",
+            (
+                "tofu destroy failed: Error: Error acquiring the state lock; "
+                "Error message: resource temporarily unavailable; Lock Info:; "
+                "ID:        82827aee-aaa4-486e-a5d6-8bb5751a086e"
+            ),
+        ),
+    ],
+    ids=[
+        "plain-error",
+        "next-error",
+        "no-error-block",
+        "blank-stderr",
+        "boxed-lock-error",
     ],
 )
-def test_tofu_failure_raises_with_stage_and_last_line(stage, stderr, message):
+def test_tofu_failure_raises_with_stage_and_error_block(stage, stderr, message):
     runner = FakeRunner(
         {("tofu", f"-chdir={TF_DIR}", stage): completed(returncode=1, stderr=stderr)}
     )

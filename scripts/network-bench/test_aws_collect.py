@@ -866,7 +866,7 @@ def lagging_run(system: FakeSystem, tmp_path: Path) -> Any:
         awsb.RunConfig(tag="x"),
         tmp_path / "fleet",
         None,
-        awsb.Interrupts(system.clock),
+        awsb.Interrupts(system.clock, system.forward),
     )
     agent = DONE_STATE | {"t1": system.clock.time()}
     return awsb.Run(fleet, tmp_path / "run", fleet.cfg, 0.0, agent=agent)

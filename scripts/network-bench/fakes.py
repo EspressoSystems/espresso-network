@@ -721,6 +721,10 @@ class FakeRunner:
         return completed()
 
 
+def no_children(signum: int) -> list[str]:
+    return []
+
+
 def no_http_pool(clock: netbench.Clock) -> netbench.Http:
     raise AssertionError("unexpected HTTP pool")
 
@@ -785,6 +789,8 @@ class FakeSystem:
     hostname: Callable[[], str] = lambda: "testhost"
     pid: int = 4242
     dead_pids: set[int] = field(default_factory=set)
+    running: list[str] = field(default_factory=list)
+    forwarded: list[int] = field(default_factory=list)
 
     def which(self, name: str) -> str | None:
         if self.tools is None or name in self.tools:
@@ -812,6 +818,10 @@ class FakeSystem:
 
     def pid_alive(self, pid: int) -> bool:
         return pid not in self.dead_pids
+
+    def forward(self, signum: int) -> list[str]:
+        self.forwarded.append(signum)
+        return self.running
 
     def fire(self, signum: int) -> None:
         self.handlers[signum](signum, None)

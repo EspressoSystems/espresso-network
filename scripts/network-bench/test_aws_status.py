@@ -4,9 +4,11 @@ import io
 import json
 import os
 import re
+import signal
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import netbench
 import pytest
@@ -517,6 +519,56 @@ def test_pid_alive_for_this_process_and_not_for_an_impossible_pid():
     assert not awsb._pid_alive(pid_max + 1)
 
 
+def test_children_forward_to_each_process_group_and_skip_exited_ones():
+    killed = []
+    errors = {2: ProcessLookupError, 3: PermissionError}
+
+    def kill(pid: int, signum: int) -> None:
+        if pid in errors:
+            raise errors[pid]
+        killed.append((pid, signum))
+
+    children = awsb.Children(kill)
+    children.running[1] = ["tofu", "-chdir=x", "apply", "-input=false"]
+    children.running[2] = ["tofu", "-chdir=x", "destroy"]
+    children.running[3] = ["tofu", "-chdir=x", "output"]
+    children.running[4] = ["rsync", "-a", "x"]
+    assert children.forward(signal.SIGINT) == ["tofu apply"]
+    assert killed == [(1, signal.SIGINT)]
+
+
+class Raised(Exception):
+    pass
+
+
+# Without the kill, leaving `Popen` waits out the `sleep 30`.
+@pytest.mark.timeout(5)
+def test_run_kills_and_forgets_the_child_when_the_wait_raises():
+    children = awsb.Children(os.killpg)
+    seen: list[int] = []
+
+    def on_usr1(signum: int, frame: Any) -> None:
+        seen.extend(children.running)
+        raise Raised
+
+    previous = signal.signal(signal.SIGUSR1, on_usr1)
+    try:
+        with pytest.raises(Raised):
+            awsb._run(children, ["sh", "-c", f"kill -USR1 {os.getpid()}; sleep 30"])
+    finally:
+        signal.signal(signal.SIGUSR1, previous)
+    assert len(seen) == 1
+    assert not awsb._pid_alive(seen[0])
+    assert children.running == {}
+
+
+def test_run_captures_output_and_forgets_the_child():
+    children = awsb.Children(os.killpg)
+    result = awsb._run(children, ["sh", "-c", "echo out; echo err >&2; exit 3"])
+    assert (result.returncode, result.stdout, result.stderr) == (3, "out\n", "err\n")
+    assert children.running == {}
+
+
 # TEST:system-ask-no-tty-refuses-ok
 def test_ask_without_a_tty_refuses(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("y\n"))
@@ -531,7 +583,7 @@ BOUNDARY = {"_run", "_ask", "_http_get", "_trap", "_pid_alive", "host_system", "
 EFFECTS = """
 subprocess.run subprocess.Popen subprocess.check_output shutil.which sys.stdin input
 datetime.now time.time time.sleep time.monotonic signal.signal getpass.getuser
-socket.gethostname os.getpid os.kill urllib.request.urlopen nb.SYSTEM_CLOCK nb.HttpPool
+socket.gethostname os.getpid os.kill os.killpg urllib.request.urlopen nb.SYSTEM_CLOCK nb.HttpPool
 """
 SIDE_EFFECTS = set(EFFECTS.split())
 

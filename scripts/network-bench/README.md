@@ -181,9 +181,10 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
 
 | Event                          | Handling                                                                                                               |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `tofu apply` fails             | log the last stderr line (e.g. `VcpuLimitExceeded`), destroy, exit 3                                                   |
+| `tofu apply` fails             | log the `Error:` block on one line (else the last stderr line), destroy, exit 3                                        |
 | node never ready / agent error | collect all, failure summary with last log lines, destroy, exit 3                                                      |
 | Ctrl-C                         | finish current phase, bounded collect, destroy, exit 3 or 4                                                            |
+| Ctrl-C again                   | SIGINT to a `tofu` command in flight (stops and writes state; a further one exits it); third skips the collection      |
 | destroy fails x3               | sweep by tag `espresso-bench-run=<name>`; leftovers → exit 4, `status --all` lists them                                |
 | laptop dies                    | agents keep running, TTL ends instances (and the pg volume), a schedule deletes the rds instance 5 min before the TTL; |
 |                                | `status/down FLEET`, `collect/render RUN_DIR` recover; `run --fleet --force` replaces a stale lock                     |

@@ -26,6 +26,7 @@ from fakes import (
     fake_image,
     fake_images,
     fake_preflight,
+    no_children,
     raiser,
     remote,
     two_node_hosts_info,
@@ -188,13 +189,13 @@ def test_skipped_collection_still_destroys(run_harness: RunHarness):
 
 
 def test_sighup_is_handled_like_sigint(system: FakeSystem, clock: FakeClock):
-    awsb.Interrupts(clock).install(system.trap)
+    awsb.Interrupts(clock, system.forward).install(system.trap)
     assert set(system.handlers) == {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
 
 
 @pytest.fixture
 def interrupts(system: FakeSystem, clock: FakeClock) -> Any:
-    interrupts = awsb.Interrupts(clock)
+    interrupts = awsb.Interrupts(clock, system.forward)
     interrupts.install(system.trap)
     return interrupts
 
@@ -211,6 +212,28 @@ def test_first_signal_logs_the_phase_and_later_ones_remind(
         "interrupt received; stopping after the current step (services)",
         "still waiting for the current step (services)",
     ]
+
+
+def test_signals_after_the_first_forward_sigint_to_the_running_command(
+    system: FakeSystem, interrupts: Any, caplog: pytest.LogCaptureFixture
+):
+    system.running = ["tofu apply"]
+    with caplog.at_level(logging.WARNING, awsb.log.name):
+        system.fire(signal.SIGINT)
+        assert system.forwarded == []
+        system.fire(signal.SIGTERM)
+        system.fire(signal.SIGINT)
+    assert system.forwarded == [signal.SIGINT, signal.SIGINT]
+    assert "signal 15: forwarded SIGINT to tofu apply" in caplog.messages
+    assert interrupts.skip_collect.is_set()
+
+
+def test_signals_after_disarm_still_forward(system: FakeSystem, interrupts: Any):
+    system.running = ["tofu destroy"]
+    interrupts.disarm()
+    system.fire(signal.SIGINT)
+    system.fire(signal.SIGINT)
+    assert system.forwarded == [signal.SIGINT]
 
 
 def test_interrupts_are_ignored_after_disarm(system: FakeSystem, interrupts: Any):
@@ -288,7 +311,7 @@ def test_destroy_backs_off_between_attempts(
         awsb.RunConfig(tag="x"),
         tmp_path / "fleet1",
         FailingTerraform(failures),
-        awsb.Interrupts(clock),
+        awsb.Interrupts(clock, no_children),
     )
     assert awsb.destroy_fleet(fleet) == destroyed
     assert clock.sleeps == [awsb.DESTROY_BACKOFF_S] * sleeps
@@ -471,7 +494,7 @@ def test_an_absolute_fleet_dir_that_overflows_the_socket_path_is_refused(
 def test_wait_ssh_retries_until_reachable(isolated: Path, clock: FakeClock):
     results = iter([completed(returncode=255, stderr="refused")] * 2 + [completed()])
     ssh = remote(lambda argv, env=None: next(results), isolated)
-    awsb.wait_ssh(ssh, "ctl", awsb.Interrupts(clock))
+    awsb.wait_ssh(ssh, "ctl", awsb.Interrupts(clock, no_children))
     assert clock.sleeps == [awsb.SSH_RETRY_S, awsb.SSH_RETRY_S * 1.5]
 
 
@@ -479,7 +502,9 @@ def test_wait_ssh_gives_up_after_the_timeout(isolated: Path):
     runner = FakeRunner({("ssh",): completed(returncode=255, stderr="refused")})
     clock = FakeClock()
     with pytest.raises(awsb.RemoteError, match="not reachable"):
-        awsb.wait_ssh(remote(runner, isolated), "ctl", awsb.Interrupts(clock))
+        awsb.wait_ssh(
+            remote(runner, isolated), "ctl", awsb.Interrupts(clock, no_children)
+        )
     assert clock.time() >= awsb.SSH_READY_TIMEOUT_S
 
 
@@ -489,7 +514,11 @@ def test_a_gate_that_never_passes_hits_the_clock_limit(isolated: Path):
     clock = FakeClock(limit_s=awsb.GATE_TIMEOUT_S / 2)
     with pytest.raises(RuntimeError, match="FakeClock: advanced past"):
         awsb.gate(
-            remote(runner, isolated), "ctl", "anvil", "curl x", awsb.Interrupts(clock)
+            remote(runner, isolated),
+            "ctl",
+            "anvil",
+            "curl x",
+            awsb.Interrupts(clock, no_children),
         )
 
 
@@ -499,7 +528,11 @@ def test_gate_retries_until_its_timeout_on_the_clock(isolated: Path):
     clock = FakeClock(limit_s=10 * awsb.GATE_TIMEOUT_S)
     with pytest.raises(awsb.RemoteError, match="gate `anvil`"):
         awsb.gate(
-            remote(runner, isolated), "ctl", "anvil", "curl x", awsb.Interrupts(clock)
+            remote(runner, isolated),
+            "ctl",
+            "anvil",
+            "curl x",
+            awsb.Interrupts(clock, no_children),
         )
     assert clock.time() >= awsb.GATE_TIMEOUT_S
 
@@ -566,7 +599,9 @@ def test_freeze_command_ignores_only_a_missing_container(
 
 def poll(runner: Scripted, tmp: Path, clock: FakeClock) -> Any:
     cfg = awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
-    return awsb.poll_agent(remote(runner, tmp), tmp, cfg, awsb.Interrupts(clock))
+    return awsb.poll_agent(
+        remote(runner, tmp), tmp, cfg, awsb.Interrupts(clock, no_children)
+    )
 
 
 def agent_state(state: dict) -> subprocess.CompletedProcess:
@@ -729,7 +764,9 @@ def test_a_failed_deploy_raises(
 ):
     runner = Scripted({"docker wait deploy": [result]})
     with pytest.raises(awsb.RemoteError, match=match):
-        awsb.start_support(remote(runner, isolated), [], awsb.Interrupts(clock))
+        awsb.start_support(
+            remote(runner, isolated), [], awsb.Interrupts(clock, no_children)
+        )
 
 
 # TEST:support-plan-order-ok
@@ -784,7 +821,7 @@ def test_start_support_starts_the_planned_containers_in_order(
 ):
     runner = Scripted({"docker wait deploy": [completed(stdout="0\n")]})
     hosts = remote(runner, isolated)
-    awsb.start_support(hosts, ["0xabc"], awsb.Interrupts(clock), "rds")
+    awsb.start_support(hosts, ["0xabc"], awsb.Interrupts(clock, no_children), "rds")
     commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
     started = [
         c.rpartition("docker start ")[2] for c in commands if "docker start" in c
@@ -856,7 +893,7 @@ def test_skip_collect_is_checked_before_every_collect_step(
     ran: list[str],
     skipped: list[str],
 ):
-    interrupts = awsb.Interrupts(clock)
+    interrupts = awsb.Interrupts(clock, no_children)
     fleet = awsb.FleetState(
         FakeSystem(),
         awsb.RunConfig(tag="x"),
