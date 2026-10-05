@@ -216,6 +216,8 @@ def test_tc_script_four_peers():
     assert "10.0.0.10/32" not in script
     assert "delay 5ms limit 300000" in script
     assert "match ip dst 10.0.0.12/32 flowid 1:4" in script
+    assert 'sysctl -q -w net.ipv4.tcp_slow_start_after_idle="0"' in script
+    assert script.index("sysctl") < script.index("tc qdisc add")
 
 
 def test_tc_script_skips_peers_without_delay():
@@ -304,5 +306,6 @@ def test_shaping_meta_shape():
             "node4": "us-east-1",
         },
         "matrix_sha256": DECAF5_SHA256,
+        "sysctls": dict(latency.TCP_SYSCTLS),
         "probes": [],
     }

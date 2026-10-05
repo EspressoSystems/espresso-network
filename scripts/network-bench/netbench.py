@@ -308,6 +308,7 @@ class LatencyMeta(TypedDict):
     nodes: dict[str, int]
     assignment: dict[str, str]  # node name -> location
     matrix_sha256: str
+    sysctls: dict[str, str]
     probes: list[dict[str, Any]]
 
 
@@ -2427,7 +2428,11 @@ def runner_lines(result: BenchResult) -> list[str]:
 
 def latency_line(meta: LatencyMeta) -> str:
     intra = "on" if meta["intra"] else "off"
-    return f"- latency: {meta['profile']}, intra {intra}, matrix {meta['matrix_sha256'][:8]}"
+    sysctls = " ".join(f"{k.rsplit('.', 1)[1]}={v}" for k, v in meta["sysctls"].items())
+    return (
+        f"- latency: {meta['profile']}, intra {intra}, matrix {meta['matrix_sha256'][:8]};"
+        f" sysctl {sysctls}"
+    )
 
 
 def deployment_lines(result: BenchResult) -> list[str]:

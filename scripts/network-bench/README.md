@@ -255,6 +255,9 @@ Node-to-node catchup on 8080 is shaped like consensus.
 - Recorded: `manifest.json` and `result.json` `deployment.latency` (profile, intra, nodes per location, assignment,
   matrix sha256, probes), a `- latency:` bullet in `summary.md`, and the matrix sha256 in `config_hash`.
 - `run --fleet` clears any previous qdisc during reset, so a run without `--latency` measures a clean fleet.
+- The shaping step also sets the host TCP sysctls an operator would set for a WAN (bbr, `tcp_rmem` to 64 MB, `tcp_wmem`
+  to 512 MB, `tcp_slow_start_after_idle=0`, `tcp_notsent_lowat`, `tcp_adv_win_scale=0`); Ubuntu defaults cap one flow
+  over a 158 ms path near 25 MB/s. The set is recorded in `deployment.latency.sysctls`.
 
 ### Cleanup
 
