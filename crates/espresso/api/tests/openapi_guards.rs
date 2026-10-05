@@ -8,8 +8,11 @@
 use prost::Message as _;
 use tonic_rest_build::descriptor::{FileDescriptorSet, HttpPattern, HttpRule, MethodOptions};
 
-/// `openapi` reads this for the package it generates from.
+/// `guards` and `openapi` read this for the package they check and generate.
 const PACKAGE: &str = "espresso.api.v2";
+
+#[path = "../build/guards.rs"]
+mod guards;
 
 #[path = "../build/openapi.rs"]
 mod openapi;
@@ -35,13 +38,13 @@ fn descriptor_with_binding(pattern: HttpPattern, body: &str) -> Vec<u8> {
 
 #[test]
 fn the_committed_protos_pass_their_own_guards() {
-    openapi::check_bindings(espresso_api::FILE_DESCRIPTOR_SET).unwrap();
+    guards::check(espresso_api::FILE_DESCRIPTOR_SET).unwrap();
     openapi::generate(espresso_api::FILE_DESCRIPTOR_SET).unwrap();
 }
 
 #[test]
 fn a_verb_other_than_get_or_post_is_refused() {
-    let err = openapi::check_bindings(&descriptor_with_binding(
+    let err = guards::check(&descriptor_with_binding(
         HttpPattern::Put("/v2/node/anything".to_string()),
         "*",
     ))
@@ -51,7 +54,7 @@ fn a_verb_other_than_get_or_post_is_refused() {
 
 #[test]
 fn a_post_without_a_body_is_refused() {
-    let err = openapi::check_bindings(&descriptor_with_binding(
+    let err = guards::check(&descriptor_with_binding(
         HttpPattern::Post("/v2/node/anything".to_string()),
         "",
     ))
@@ -61,7 +64,7 @@ fn a_post_without_a_body_is_refused() {
 
 #[test]
 fn a_get_with_a_body_is_refused() {
-    let err = openapi::check_bindings(&descriptor_with_binding(
+    let err = guards::check(&descriptor_with_binding(
         HttpPattern::Get("/v2/node/anything".to_string()),
         "*",
     ))
@@ -71,7 +74,7 @@ fn a_get_with_a_body_is_refused() {
 
 #[test]
 fn a_partial_body_is_refused() {
-    let err = openapi::check_bindings(&descriptor_with_binding(
+    let err = guards::check(&descriptor_with_binding(
         HttpPattern::Post("/v2/node/anything".to_string()),
         "ranges",
     ))
@@ -81,7 +84,7 @@ fn a_partial_body_is_refused() {
 
 #[test]
 fn a_path_template_is_refused() {
-    let err = openapi::check_bindings(&descriptor_with_binding(
+    let err = guards::check(&descriptor_with_binding(
         HttpPattern::Get("/v2/node/anything/{height}".to_string()),
         "",
     ))

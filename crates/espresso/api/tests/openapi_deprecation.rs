@@ -16,10 +16,7 @@ use serde_json::{Value, json};
 const PACKAGE: &str = "espresso.api.v2";
 
 #[path = "../build/openapi.rs"]
-#[expect(
-    dead_code,
-    reason = "the binding guards are covered by `openapi_guards`"
-)]
+#[expect(dead_code, reason = "these tests call `generate_from`, not `generate`")]
 mod openapi;
 
 /// The OpenAPI document for the real descriptor after `edit`.
@@ -32,7 +29,7 @@ fn spec(edit: impl FnOnce(&mut FileDescriptorSet)) -> Value {
             .unwrap();
     let mut fdset = FileDescriptorSet::decode(espresso_api::FILE_DESCRIPTOR_SET).unwrap();
     edit(&mut fdset);
-    openapi::generate_from(&fdset, &rest_fdset).unwrap()
+    openapi::generate_from(&fdset, &rest_fdset)
 }
 
 fn message_mut<'a>(fdset: &'a mut FileDescriptorSet, name: &str) -> &'a mut DescriptorProto {
