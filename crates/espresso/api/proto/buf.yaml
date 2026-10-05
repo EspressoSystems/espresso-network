@@ -1,0 +1,22 @@
+version: v2
+lint:
+  use:
+    - STANDARD
+  except:
+    # Each rpc returns a response named for what it carries (`HeaderResponse`), and rpcs that
+    # return the same thing share it, which API.md allows. Both go once responses become thin
+    # `GetXResponse` wrappers around resource messages.
+    - RPC_RESPONSE_STANDARD_NAME
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    # Package `espresso.api.v2` lives in `v2/`. Goes once the files move to `espresso/api/v2/`.
+    - PACKAGE_DIRECTORY_MATCH
+  ignore:
+    # Vendored annotation definitions, read only by protoc at build time.
+    - google
+breaking:
+  # Clients see the API as protobuf on the wire and protoJSON over REST, so those are the
+  # contract. Moving a message between files of the package changes neither.
+  use:
+    - WIRE_JSON
+  ignore:
+    - google

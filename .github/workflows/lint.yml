@@ -97,6 +97,28 @@ jobs:
       - name: Run the script tests
         run: just py::test
 
+  protos:
+    name: protos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The comparison base is the newest release tag, so it needs tags and their history.
+          fetch-depth: 0
+      - uses: bufbuild/buf-action@v1
+        with:
+          version: 1.72.0
+          setup_only: true
+      - uses: taiki-e/install-action@just
+
+      - name: Lint and format-check the v2 protos
+        run: just proto-lint
+
+      # API.md freezes released v2 fields. This enforces it: a change to a proto that shipped in
+      # the newest release must keep its wire and protoJSON encoding.
+      - name: Check the v2 protos against the newest release
+        run: just proto-breaking
+
   allocator-patches:
     name: allocator patches
     runs-on: ubuntu-latest
