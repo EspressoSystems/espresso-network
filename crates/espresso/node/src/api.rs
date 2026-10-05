@@ -3536,11 +3536,11 @@ mod test {
     };
     use espresso_types::{
         FeeAmount, Header, L1ClientOptions, NamespaceId, NamespaceProofQueryData, NsProof,
-        RegisteredValidatorMap, StakeTableState, StateCertQueryDataV1, StateCertQueryDataV2,
-        ValidatedState, ValidatorLeaderCounts,
+        RegisteredValidatorMap, RewardDistributor, StakeTableState, StateCertQueryDataV1,
+        StateCertQueryDataV2, ValidatedState, ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
-        v0_3::{Fetcher, RewardAmount},
+        v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events,
     };
@@ -4834,6 +4834,264 @@ mod test {
             }
 
             target_bh = header.height();
+        }
+
+        Ok(())
+    }
+
+    /// Every validator account and delegator registered in these epochs.
+    async fn reward_addresses(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        epochs: impl IntoIterator<Item = u64>,
+    ) -> HashSet<Address> {
+        let mut addresses = HashSet::new();
+        for epoch in epochs {
+            let validators = client
+                .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
+                .send()
+                .await
+                .expect("failed to get validators");
+            for v in validators.values() {
+                addresses.insert(v.account);
+                addresses.extend(v.delegators.keys());
+            }
+        }
+        addresses
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pos_rewards_basic() -> anyhow::Result<()> {
+        // A single validator that is also its only delegator leads every block, so the rewards
+        // for an epoch, applied at the last block of the next one, all go to it.
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 1;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config.clone())
+            .persistences(persistence.clone())
+            .catchup_from_api()
+            .delegation(DelegationConfig::VariableAmounts)
+            .build()
+            .await;
+
+        let network = TestNetwork::new(config).await;
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        // The first rewards are for epoch 3, applied at the last block of epoch 4.
+        let first_boundary = 4 * EPOCH_HEIGHT;
+        wait_until_block_height(&client, "reward-state-v2/block-height", first_boundary).await;
+
+        let address = network_config.staking_priv_keys()[0].signer.address();
+        let block_reward = network
+            .server
+            .node_state()
+            .coordinator
+            .membership()
+            .epoch_block_reward(3.into())
+            .expect("block reward is not None");
+
+        let before = client
+            .get::<Option<RewardAmount>>(&format!(
+                "reward-state-v2/reward-balance/{}/{address}",
+                first_boundary - EPOCH_HEIGHT
+            ))
+            .send()
+            .await?;
+        assert_eq!(before, None, "rewards before the first boundary");
+        let amount = client
+            .get::<Option<RewardAmount>>(&format!(
+                "reward-state-v2/reward-balance/{first_boundary}/{address}"
+            ))
+            .send()
+            .await?
+            .expect("no reward at the first boundary");
+        assert_eq!(
+            amount.0,
+            U256::from(EPOCH_HEIGHT) * block_reward.0,
+            "reward amount don't match"
+        );
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cumulative_pos_rewards() -> anyhow::Result<()> {
+        // Five validators with several delegators each, one of which is also a validator. Across
+        // every account, the balances grow only at an epoch's last block, and there by exactly
+        // the previous epoch's total: its block reward for each of its blocks.
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchup_from_api()
+            .build()
+            .await;
+
+        let network = TestNetwork::new(config).await;
+        let node_state = network.server.node_state();
+        let membership = node_state.coordinator.membership();
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        // The boundaries that apply the rewards for epochs 3 and 4.
+        let boundaries = [4 * EPOCH_HEIGHT, 5 * EPOCH_HEIGHT];
+        wait_until_block_height(&client, "reward-state-v2/block-height", boundaries[1]).await;
+        let addresses = reward_addresses(&client, [3, 4]).await;
+
+        let mut prev_total = U256::ZERO;
+        for height in [3 * EPOCH_HEIGHT].into_iter().chain(boundaries) {
+            let mut total = U256::ZERO;
+            for address in &addresses {
+                if let Some(amount) = client
+                    .get::<Option<RewardAmount>>(&format!(
+                        "reward-state-v2/reward-balance/{height}/{address}"
+                    ))
+                    .send()
+                    .await?
+                {
+                    total += amount.0;
+                }
+            }
+            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
+            let expected = if epoch <= 3 {
+                U256::ZERO
+            } else {
+                let block_reward = membership
+                    .epoch_block_reward((epoch - 1).into())
+                    .expect("block reward is not None");
+                U256::from(EPOCH_HEIGHT) * block_reward.0
+            };
+            assert_eq!(total - prev_total, expected, "rewards applied at {height}");
+            prev_total = total;
+        }
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_epoch_rewards_per_account() -> anyhow::Result<()> {
+        // Every account's balance matches the epoch's rewards computed from the leader counts
+        // in the header of the epoch's last block: each leader gets its count times the block
+        // reward, split between its commission and its delegators by stake. Also checks that
+        // each validator's delegations sum to its stake, that the commission is within rounding
+        // of its rate, and that the header totals what was distributed.
+        const EPOCH_HEIGHT: u64 = 10;
+        const NUM_NODES: usize = 5;
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence.clone())
+            .catchup_from_api()
+            .build()
+            .await;
+
+        let network = TestNetwork::new(config).await;
+        let coordinator = network.server.node_state().coordinator;
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+
+        wait_until_block_height(&client, "reward-state-v2/block-height", 5 * EPOCH_HEIGHT).await;
+
+        let mut expected = HashMap::<Address, U256>::new();
+        let mut total_distributed = U256::ZERO;
+        for epoch in [3, 4] {
+            let header: Header = client
+                .get(&format!("availability/header/{}", epoch * EPOCH_HEIGHT))
+                .send()
+                .await?;
+            let leader_counts = *header
+                .leader_counts()
+                .expect("V6 header must have leader_counts");
+            let snapshot = coordinator
+                .membership()
+                .snapshot(epoch.into())
+                .expect("snapshot");
+            let block_reward = snapshot.epoch_block_reward().expect("block reward");
+
+            for (validator, count) in
+                ValidatorLeaderCounts::new(&snapshot, leader_counts)?.active_leaders()
+            {
+                let delegator_stake_sum: U256 = validator.delegators.values().cloned().sum();
+                assert_eq!(delegator_stake_sum, validator.stake);
+
+                let validator_reward = block_reward.0 * U256::from(count);
+                let computed = RewardDistributor::new(
+                    validator.clone(),
+                    RewardAmount(validator_reward),
+                    Default::default(),
+                )
+                .compute_rewards()?;
+
+                let calculated_commission = U256::from(validator.commission)
+                    .checked_mul(validator_reward)
+                    .context("overflow")?
+                    .checked_div(U256::from(COMMISSION_BASIS_POINTS))
+                    .context("overflow")?;
+                assert!(
+                    computed.leader_commission().0 - calculated_commission <= U256::from(10_u64),
+                    "commission of {} is off by more than rounding",
+                    validator.account
+                );
+
+                for (address, amount) in computed.all_rewards() {
+                    *expected.entry(address).or_default() += amount.0;
+                }
+                total_distributed += validator_reward;
+            }
+
+            let boundary = (epoch + 1) * EPOCH_HEIGHT;
+            for (address, amount) in &expected {
+                let balance = client
+                    .get::<Option<RewardAmount>>(&format!(
+                        "reward-state-v2/reward-balance/{boundary}/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .unwrap_or_else(|| panic!("no reward for {address} at {boundary}"));
+                assert_eq!(balance.0, *amount, "reward of {address} at {boundary}");
+            }
+            let boundary_header: Header = client
+                .get(&format!("availability/header/{boundary}"))
+                .send()
+                .await?;
+            assert_eq!(
+                boundary_header.total_reward_distributed().unwrap().0,
+                total_distributed,
+                "total distributed at {boundary}"
+            );
         }
 
         Ok(())
