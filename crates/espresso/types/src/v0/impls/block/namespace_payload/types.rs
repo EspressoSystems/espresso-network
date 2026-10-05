@@ -331,21 +331,31 @@ impl NsPayloadBuilder {
             .extend(usize_to_bytes::<TX_OFFSET_BYTE_LEN>(self.tx_bodies.len()));
     }
 
-    /// Serialize to bytes and consume self.
+    /// Serialize to bytes.
     pub fn into_bytes(self) -> Vec<u8> {
-        let mut result = Vec::with_capacity(
-            NUM_TXS_BYTE_LEN + self.tx_table_entries.len() + self.tx_bodies.len(),
-        );
+        let mut result = vec![0; self.byte_len()];
         self.write_into(&mut result);
         result
     }
 
-    /// Append the serialized namespace to `out` and consume self.
-    pub fn write_into(self, out: &mut Vec<u8>) {
+    /// Byte length of the serialized namespace.
+    pub fn byte_len(&self) -> usize {
+        Self::tx_table_header_byte_len() + self.tx_table_entries.len() + self.tx_bodies.len()
+    }
+
+    /// Write the serialized namespace to the start of `out` and return the byte count.
+    ///
+    /// # Panics
+    ///
+    /// If `out` is shorter than [`Self::byte_len`].
+    pub fn write_into(&self, out: &mut [u8]) -> usize {
         let num_txs = NumTxsUnchecked(self.tx_table_entries.len() / TX_OFFSET_BYTE_LEN);
-        out.extend(num_txs.to_payload_bytes());
-        out.extend(self.tx_table_entries);
-        out.extend(self.tx_bodies);
+        let (header, rest) = out.split_at_mut(NUM_TXS_BYTE_LEN);
+        header.copy_from_slice(&num_txs.to_payload_bytes());
+        let (entries, rest) = rest.split_at_mut(self.tx_table_entries.len());
+        entries.copy_from_slice(&self.tx_table_entries);
+        rest[..self.tx_bodies.len()].copy_from_slice(&self.tx_bodies);
+        self.byte_len()
     }
 
     /// Byte length of a tx table header.

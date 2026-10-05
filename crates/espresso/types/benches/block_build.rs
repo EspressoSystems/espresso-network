@@ -162,8 +162,16 @@ fn bench_tx_stages(group: &mut BenchmarkGroup<WallTime>, case: &Case) {
             )
         })
     });
-    group.bench_function(BenchmarkId::new("payload_clone", &label), |b| {
-        b.iter_with_large_drop(|| black_box(&enc.payload).clone())
+    group.bench_function(BenchmarkId::new("from_bytes", &label), |b| {
+        b.iter_with_large_drop(|| {
+            Payload::from_bytes(black_box(&enc.payload_bytes), black_box(&enc.ns_table))
+        })
+    });
+    let serialized = bincode::serialize(&enc.payload).expect("bincode serialize");
+    group.bench_function(BenchmarkId::new("decode", &label), |b| {
+        b.iter_with_large_drop(|| {
+            bincode::deserialize::<Payload>(black_box(&serialized)).expect("bincode deserialize")
+        })
     });
     group.bench_function(BenchmarkId::new("builder_commitment", &label), |b| {
         b.iter(|| enc.sha())
