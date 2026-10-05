@@ -9,6 +9,7 @@ from fakes import (
     DESCRIBE,
     DONE_STATE,
     FakeRunner,
+    FakeSystem,
     FleetHarness,
     RunHarness,
     awsb,
@@ -405,3 +406,25 @@ def test_render_refreshes_the_index_row(tmp_path: Path):
     assert row["rate"] == netbench.fmt_num(result["capacity"]["overall"]["mb_s"])
     assert (row["exit"], row["user"], row["cost"]) == ("1", "lulu", "-")
     assert list(row) == [*awsb.INDEX_COLUMNS, "user"]
+
+
+def test_latency_line_before_host_tuning():
+    meta: netbench.LatencyMeta = {
+        "profile": "decaf-2025",
+        "intra": True,
+        "nodes": {},
+        "assignment": {},
+        "matrix_sha256": "ab" * 32,
+        "probes": [],
+    }
+    assert (
+        netbench.latency_line(meta)
+        == "- latency: decaf-2025, intra on, matrix abababab"
+    )
+
+
+def test_publish_does_not_sign(tmp_path: Path):
+    runner = FakeRunner()
+    runner.respond("commit", lambda argv: completed())
+    awsb.git_run(FakeSystem(run=runner), tmp_path, "commit", "-m", "x")
+    assert runner.ran("commit.gpgsign=false", "commit -m x")

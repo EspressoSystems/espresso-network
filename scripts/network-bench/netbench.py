@@ -308,8 +308,9 @@ class LatencyMeta(TypedDict):
     nodes: dict[str, int]
     assignment: dict[str, str]  # node name -> location
     matrix_sha256: str
-    sysctls: dict[str, str]
-    mtu: int
+    # Runs from before the host tuning have neither key.
+    sysctls: NotRequired[dict[str, str]]
+    mtu: NotRequired[int]
     probes: list[dict[str, Any]]
 
 
@@ -2429,11 +2430,13 @@ def runner_lines(result: BenchResult) -> list[str]:
 
 def latency_line(meta: LatencyMeta) -> str:
     intra = "on" if meta["intra"] else "off"
-    sysctls = " ".join(f"{k.rsplit('.', 1)[1]}={v}" for k, v in meta["sysctls"].items())
-    return (
-        f"- latency: {meta['profile']}, intra {intra}, matrix {meta['matrix_sha256'][:8]};"
-        f" mtu {meta['mtu']}, sysctl {sysctls}"
-    )
+    line = f"- latency: {meta['profile']}, intra {intra}, matrix {meta['matrix_sha256'][:8]}"
+    if "mtu" in meta:
+        line += f"; mtu {meta['mtu']}"
+    if "sysctls" in meta:
+        sysctls = (f"{k.rsplit('.', 1)[1]}={v}" for k, v in meta["sysctls"].items())
+        line += f"; sysctl {' '.join(sysctls)}"
+    return line
 
 
 def deployment_lines(result: BenchResult) -> list[str]:
