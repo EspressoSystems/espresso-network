@@ -37,7 +37,7 @@ use hotshot_query_service::availability::{
 };
 use hotshot_types::{
     addr::NetAddr,
-    data::{VidCommitment, VidCommon, vid_commitment},
+    data::{VidCommitment, VidCommon, VidShare, vid_commitment},
     light_client::StateVerKey,
     simple_certificate::{
         LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
@@ -188,15 +188,20 @@ async fn reference_ns_proof_enum_avidm() -> NamespaceProofQueryData {
 /// `ns_commits` of the pinned `vid_common_v2` vector, but it is *not* the `payload_commitment` of
 /// `data/v6/header.json`, which is computed at a total weight of 1 rather than the 10 used here.
 fn reference_avidm_gf2_commit_and_common(payload: &Payload) -> (VidCommitment, VidCommon) {
+    let param = init_avidm_gf2_param(10).unwrap();
+    let (commit, common) =
+        AvidmGf2Scheme::commit(&param, &payload.encode(), reference_ns_ranges(payload)).unwrap();
+    (VidCommitment::V2(commit), VidCommon::V2(common))
+}
+
+/// The byte range of each namespace of `payload`, in namespace-table order.
+fn reference_ns_ranges(payload: &Payload) -> Vec<std::ops::Range<usize>> {
     let payload_byte_len = payload.byte_len();
     let ns_table = payload.ns_table();
-    let ns_table = ns_table
+    ns_table
         .iter()
         .map(|index| ns_table.ns_range(&index, &payload_byte_len).0)
-        .collect::<Vec<_>>();
-    let param = init_avidm_gf2_param(10).unwrap();
-    let (commit, common) = AvidmGf2Scheme::commit(&param, &payload.encode(), ns_table).unwrap();
-    (VidCommitment::V2(commit), VidCommon::V2(common))
+        .collect()
 }
 
 async fn reference_ns_proof_enum_avidm_gf2() -> NamespaceProofQueryData {
@@ -217,6 +222,44 @@ async fn reference_ns_proof_enum_avidm_gf2() -> NamespaceProofQueryData {
         .expect("reference V2 ns proof verifies");
     assert_eq!(ns_id, REFERENCE_NAMESPACE_ID.into());
     assert_eq!(verified_transactions, transactions);
+
+    NamespaceProofQueryData {
+        proof: Some(proof),
+        transactions,
+    }
+}
+
+/// The reference payload dispersed as a non-codeword in every namespace, at the parameters of
+/// [`reference_avidm_gf2_commit_and_common`] and one unit of weight per node, and the proof that
+/// the reference namespace is one. The proof holds the shares at the first four positions, which
+/// are the original shards, so it decodes to the reference payload, which commits elsewhere.
+async fn reference_ns_proof_enum_avidm_gf2_incorrect_encoding() -> NamespaceProofQueryData {
+    let payload = reference_payload().await;
+    let ns_table = payload.ns_table();
+    let ns_index = ns_table
+        .find_ns_id(&(REFERENCE_NAMESPACE_ID.into()))
+        .unwrap();
+
+    let param = init_avidm_gf2_param(10).unwrap();
+    let (commit, common, shares) = AvidmGf2Scheme::ns_disperse_non_codeword(
+        &param,
+        &[1; 10],
+        &payload.encode(),
+        reference_ns_ranges(&payload),
+    )
+    .unwrap();
+    let commit = VidCommitment::V2(commit);
+    let common = VidCommon::V2(common);
+    let shares: Vec<VidShare> = shares.into_iter().map(VidShare::V2).collect();
+    let proof =
+        NsProof::new_with_incorrect_encoding(&shares, ns_table, &ns_index, &commit, &common)
+            .expect("the non-codeword dispersal proves the reference namespace empty");
+
+    let (transactions, ns_id) = proof
+        .verify(ns_table, &commit, &common)
+        .expect("reference V2 incorrect-encoding proof verifies");
+    assert_eq!(ns_id, REFERENCE_NAMESPACE_ID.into());
+    assert!(transactions.is_empty());
 
     NamespaceProofQueryData {
         proof: Some(proof),
@@ -663,6 +706,16 @@ async fn test_reference_ns_proof_enum_avidm_gf2() {
         "v6",
         "ns_proof_V2",
         &reference_ns_proof_enum_avidm_gf2().await,
+    );
+}
+
+// The NsProof::V2IncorrectEncoding variant: an AvidmGf2 (VID2) namespace proved a non-codeword.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_reference_ns_proof_enum_avidm_gf2_incorrect_encoding() {
+    reference_test_without_committable(
+        "v6",
+        "ns_proof_V2IncorrectEncoding",
+        &reference_ns_proof_enum_avidm_gf2_incorrect_encoding().await,
     );
 }
 
