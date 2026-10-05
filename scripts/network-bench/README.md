@@ -3,6 +3,18 @@
 Load staircase of 1 MB transactions against an espresso-node network. Output: capacity in MB/s, split into the consensus
 limit and the query-node limit.
 
+Related repos:
+
+- [espresso-network-bench-results](https://github.com/EspressoSystems/espresso-network-bench-results): results of this
+  benchmark
+- [espresso-deploy](https://github.com/EspressoSystems/espresso-deploy): cross-region 100-node AWS benchmark
+- [network-deploy](https://github.com/EspressoSystems/network-deploy): deployment of all Espresso networks, has a load
+  generator
+- [espresso-stack-benchmarks](https://github.com/EspressoSystems/espresso-stack-benchmarks): Espresso Stack chain
+  benchmarks
+- [vid-bench](https://github.com/EspressoSystems/vid-bench): VID benchmarks
+- [allocator-benchmarks](https://github.com/EspressoSystems/allocator-benchmarks)
+
 | Driver      | Network                                              | Command              |
 | ----------- | ---------------------------------------------------- | -------------------- |
 | `bench`     | 3 nodes on this machine, `process-compose.yaml` (CI) | `just bench run`     |
