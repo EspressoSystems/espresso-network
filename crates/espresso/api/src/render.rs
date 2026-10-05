@@ -29,6 +29,7 @@ use hotshot_query_service_types::{
 use hotshot_types::{
     HotShotConfig, PeerConfig,
     data::{Leaf2, VidCommon, VidShare, ViewChangeEvidence2},
+    light_client::LCV3StateSignatureRequestBody,
     network::BuilderType,
     simple_certificate::{
         Certificate2, SimpleCertificate, SuccessThreshold, Threshold, TimeoutCertificate2,
@@ -1233,6 +1234,19 @@ impl From<&StateCertQueryDataV2<SeqTypes>> for proto::StateCertV2Response {
                 })
                 .collect(),
             auth_root: format!("{:#x}", cert.auth_root),
+        }
+    }
+}
+
+impl From<&LCV3StateSignatureRequestBody> for proto::StateSignatureResponse {
+    fn from(body: &LCV3StateSignatureRequestBody) -> Self {
+        proto::StateSignatureResponse {
+            key: body.key.to_string(),
+            light_client_state: body.state.to_string(),
+            next_stake_table_state: body.next_stake.to_string(),
+            auth_root: format!("{:#x}", body.auth_root),
+            lcv3_signature: body.signature.to_string(),
+            lcv2_signature: body.v2_signature.to_string(),
         }
     }
 }

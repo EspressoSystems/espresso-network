@@ -8323,9 +8323,8 @@ mod test {
         }
     }
 
-    /// The v2 node, config, database and availability endpoints adapt the v1 handlers, so on one
-    /// node both versions must report the same values, with v2's query parameters selecting what
-    /// v1's path parameters do.
+    /// The v2 endpoints adapt the v1 handlers, so on one node both versions must report the same
+    /// values, with v2's query parameters selecting what v1's path parameters do.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_v2_api_agrees_with_v1() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -8601,7 +8600,7 @@ mod test {
         let block_height: u64 = client.get("status/block-height").send().await.unwrap();
         let (height, v1_signature) = {
             let mut found = None;
-            for height in (1..block_height).rev().take(10) {
+            for height in (1..block_height).rev().take(50) {
                 // As raw JSON, so the v2 strings are compared against the bytes v1 serves rather
                 // than against a `Display` impl that could disagree with its own serde.
                 match client
@@ -8641,13 +8640,13 @@ mod test {
             ]),
             "v1 grew a field `StateSignatureResponse` does not carry"
         );
+        assert_eq!(v2_signature.key, v1_signature["key"].as_str().unwrap());
         assert_eq!(
-            v2_signature.key.unwrap().key,
-            v1_signature["key"].as_str().unwrap()
+            v2_signature.light_client_state,
+            v1_signature["state"].as_str().unwrap()
         );
-        assert_eq!(v2_signature.state, v1_signature["state"].as_str().unwrap());
         assert_eq!(
-            v2_signature.next_stake,
+            v2_signature.next_stake_table_state,
             v1_signature["next_stake"].as_str().unwrap()
         );
         assert_eq!(
@@ -8655,11 +8654,11 @@ mod test {
             v1_signature["auth_root"].as_str().unwrap()
         );
         assert_eq!(
-            v2_signature.signature,
+            v2_signature.lcv3_signature,
             v1_signature["signature"].as_str().unwrap()
         );
         assert_eq!(
-            v2_signature.v2_signature,
+            v2_signature.lcv2_signature,
             v1_signature["v2_signature"].as_str().unwrap()
         );
 

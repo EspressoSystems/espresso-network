@@ -68,9 +68,10 @@ and `/v2/state-signature/...`.
   `RewardMerkleTreeV1`, its account proof and its path lookup, stay on v1. v2 has no path lookup for
   `RewardMerkleTreeV2`: v1's reads merklized-state tables no reward tree populates, so it cannot succeed, and the proof
   route already serves an account's path.
-- `StateSignatureService` serves this node's light client state signature for a block, with the height as a query
-  parameter rather than a path segment. A node keeps signatures only for recent blocks, so an older height is a 404 on
-  both versions.
+- `StateSignatureService` serves this node's light client state signature for a block. A node keeps signatures only for
+  recent blocks, so an older height is a 404 on both versions. Its fields take the names `StateCertV2Response` uses for
+  the same values, where v1 writes `state`, `next_stake`, `signature` and `v2_signature`. A validator without SQL query
+  storage serves it on v1 only, as it does every v2 service.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

@@ -3,7 +3,6 @@ syntax = "proto3";
 package espresso.api.v2;
 
 import "google/api/annotations.proto";
-import "v2/common.proto";
 
 message GetStateSignatureRequest {
   // Block height the signature covers. Required
@@ -13,22 +12,24 @@ message GetStateSignatureRequest {
 // This node's signature over the light client state at one block, in the form the state relay
 // server receives it. A node keeps these only for recent blocks, so an older height is a 404
 message StateSignatureResponse {
-  SchnorrPublicKey key = 1;
+  // Schnorr verification key, TaggedBase64 `SCHNORR_VER_KEY~`
+  string key = 1;
 
   // TaggedBase64 `LIGHT_CLIENT_STATE~`
-  string state = 2;
+  string light_client_state = 2;
 
   // Stake table backing the next block, TaggedBase64 `STAKE_TABLE_STATE~`
-  string next_stake = 3;
+  string next_stake_table_state = 3;
 
   // 32 bytes, 0x-prefixed hex
   string auth_root = 4;
 
-  // TaggedBase64 `SCHNORR_SIG~`
-  string signature = 5;
+  // Signature for the LCV3 light-client contract, over the state, the next stake table and the
+  // auth root, TaggedBase64 `SCHNORR_SIG~`
+  string lcv3_signature = 5;
 
-  // The same state signed for light client V2, TaggedBase64 `SCHNORR_SIG~`
-  string v2_signature = 6;
+  // Signature for the LCV2 light-client contract, TaggedBase64 `SCHNORR_SIG~`
+  string lcv2_signature = 6;
 }
 
 service StateSignatureService {

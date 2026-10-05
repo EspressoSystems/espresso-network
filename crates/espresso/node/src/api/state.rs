@@ -2639,16 +2639,7 @@ where
         let body = v1::StateSignatureApi::get_state_signature(self, height)
             .await
             .map_err(to_status)?;
-        Ok(tonic::Response::new(proto::StateSignatureResponse {
-            key: Some(proto::SchnorrPublicKey {
-                key: body.key.to_string(),
-            }),
-            state: body.state.to_string(),
-            next_stake: body.next_stake.to_string(),
-            auth_root: body.auth_root.to_string(),
-            signature: body.signature.to_string(),
-            v2_signature: body.v2_signature.to_string(),
-        }))
+        Ok(tonic::Response::new((&body).into()))
     }
 }
 
