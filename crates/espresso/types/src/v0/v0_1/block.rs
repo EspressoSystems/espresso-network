@@ -8,6 +8,8 @@ use serde::{
 };
 use thiserror::Error;
 
+use crate::Transaction;
+
 /// Proof of correctness for namespace payload bytes in a block.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ADVZNsProof {
@@ -356,11 +358,11 @@ pub struct TxIter(pub(crate) Range<usize>);
 
 /// Build an individual namespace payload one transaction at a time.
 ///
-/// Use [`Self::append_tx`] to add each transaction. Use [`Self::into_bytes`]
-/// when you're done. The returned bytes include a well-formed tx table and all
-/// tx payloads.
+/// Use [`Self::append_tx`] to add each transaction. Use [`Self::write_into`]
+/// or [`Self::into_bytes`] when you're done. The output includes a well-formed
+/// tx table and all tx payloads.
 #[derive(Default)]
 pub struct NsPayloadBuilder {
-    pub(crate) tx_table_entries: Vec<u8>,
-    pub(crate) tx_bodies: Vec<u8>,
+    pub(crate) txs: Vec<Transaction>,
+    pub(crate) bodies_len: usize,
 }
