@@ -40,6 +40,11 @@ use crate::{
     state::HeaderRequest,
 };
 
+type PoolEntry<T> = (
+    Commitment<<T as NodeType>::Transaction>,
+    Arc<<T as NodeType>::Transaction>,
+);
+
 #[derive(Debug, thiserror::Error)]
 pub enum BlockError {
     #[error("payload construction failed: {0}")]
@@ -149,8 +154,7 @@ pub struct BlockBuilder<T: NodeType> {
     /// leader and view, so a second block for the view is votable only if its
     /// payload is the same. It is the same whenever the new parent does not
     /// change how the payload is built.
-    #[allow(clippy::type_complexity)]
-    view_transactions: BTreeMap<ViewNumber, Vec<(Commitment<T::Transaction>, Arc<T::Transaction>)>>,
+    view_transactions: BTreeMap<ViewNumber, Vec<PoolEntry<T>>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -283,11 +287,7 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert((view, parent_commitment), handle);
     }
 
-    #[allow(clippy::type_complexity)]
-    fn transactions_for(
-        &mut self,
-        view: ViewNumber,
-    ) -> Vec<(Commitment<T::Transaction>, Arc<T::Transaction>)> {
+    fn transactions_for(&mut self, view: ViewNumber) -> Vec<PoolEntry<T>> {
         if let Some(txs) = self.view_transactions.get(&view) {
             return txs.clone();
         }
