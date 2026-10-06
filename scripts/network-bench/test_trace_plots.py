@@ -125,6 +125,15 @@ def test_main_writes_per_step_stats_and_table(tmp_path: Path):
     assert len(lines) == 5
 
 
+def test_stats_cover_only_the_measured_halves_with_steps(tmp_path: Path):
+    write_run(tmp_path)
+    write_steps(tmp_path)
+    plots.main([str(tmp_path)])
+    stats = read_stats(tmp_path)
+    assert stats["leader_path"]["views"] == 20
+    assert stats["finality"]["views"] == 19  # view 9 is before the warmup
+
+
 def test_table_without_steps_has_one_row_for_all_views(tmp_path: Path):
     write_run(tmp_path)
     plots.main([str(tmp_path)])

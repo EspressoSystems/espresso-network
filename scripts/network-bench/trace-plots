@@ -8,7 +8,8 @@ aws-bench) into `<run_dir>/trace/`: `leader_path.png` (median waterfall and per-
 segments), `leader_path_typical.png` and `leader_path_worst.png` (single-view waterfalls),
 `leader_path.md` (segment medians per load step of `<run_dir>/steps.json`, if present, over
 the views whose t0 lies in the step's measured half),
-`finality.png` (cluster finality histogram and CDF) and `stats.json`.
+`finality.png` (cluster finality histogram and CDF) and `stats.json`. With `steps.json`, all of
+these cover only the views in the measured halves; without it, every view after the warmup.
 
     trace-plots RUN_DIR [--warmup N]
 """
@@ -17,6 +18,7 @@ import argparse
 import json
 import sys
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 
 import leadertrace
@@ -68,9 +70,11 @@ def main(argv: list[str]) -> None:
     steps_file = args.run_dir / "steps.json"
     steps = None
     if steps_file.exists():
-        steps = step_stats(
-            path, leadertrace.view_times(trace), json.loads(steps_file.read_text())
-        )
+        steps = json.loads(steps_file.read_text())
+        times = leadertrace.view_times(trace)
+        path = measured(path, steps, lambda view: times[view - 1]) or path
+        finality = measured(finality, steps, times.__getitem__) or finality
+        steps = step_stats(path, times, steps)
     stats = build_stats(path, list(finality.values()), skipped, finality_skipped, steps)
     out = args.run_dir / "trace"
     out.mkdir(exist_ok=True)
@@ -136,6 +140,19 @@ def pick_views(totals: dict[int, float]) -> dict[str, int]:
     }
 
 
+def in_measured(t: float, steps: list[dict]) -> bool:
+    return any(step["t_mid"] <= t <= step["t_end"] for step in steps)
+
+
+def measured(by_view: dict, steps: list[dict], time_of: Callable[[int], float]) -> dict:
+    """The entries of `by_view` whose time lies in the measured half of any step."""
+    return {
+        view: value
+        for view, value in by_view.items()
+        if in_measured(time_of(view), steps)
+    }
+
+
 def step_stats(
     path: dict[int, list[float]], times: dict[int, float], steps: list[dict]
 ) -> list[dict]:
@@ -147,7 +164,7 @@ def step_stats(
         rows = [
             durations
             for view, durations in path.items()
-            if step["t_mid"] <= times[view - 1] <= step["t_end"]
+            if in_measured(times[view - 1], [step])
         ]
         medians = np.median(rows, axis=0) if rows else None
         result.append(
