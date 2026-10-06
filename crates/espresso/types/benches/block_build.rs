@@ -10,6 +10,9 @@
 //! `tx_clone` times a full copy of the transactions for comparison.
 //!
 //! `RAYON_NUM_THREADS` is read once per process and recorded in the benchmark id.
+//!
+//! To compare two git refs on the critical path, run `just bench-block-build BASE HEAD`
+//! (scripts/bench-block-build), which isolates each benchmark in its own process.
 
 use std::{hint::black_box, thread, time::Duration};
 

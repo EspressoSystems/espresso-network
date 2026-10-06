@@ -1,4 +1,4 @@
-scripts := "nextest-ci compile-metrics release test_compile_metrics.py test_nextest_ci.py test_release.py network-bench/bench network-bench/test_bench.py"
+scripts := "nextest-ci compile-metrics release bench-block-build test_compile_metrics.py test_nextest_ci.py test_release.py network-bench/bench network-bench/test_bench.py"
 
 fmt *args:
     ruff format {{scripts}} {{args}}
