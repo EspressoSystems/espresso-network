@@ -151,7 +151,9 @@ where
 mod test {
     use std::{cmp::min, num::NonZeroUsize};
 
+    use committable::Commitment;
     use futures::StreamExt;
+    use tagged_base64::{Tagged, TaggedBase64};
 
     use super::*;
     use crate::{
@@ -282,6 +284,24 @@ mod test {
             .await
             .unwrap();
         assert!(!search_results.blocks.is_empty());
+
+        // Hashes that are not in the chain find nothing, for blocks and transactions alike.
+        for tag in [
+            Commitment::<Header<MockTypes>>::tag(),
+            Commitment::<Transaction<MockTypes>>::tag(),
+        ] {
+            let unknown = TaggedBase64::new(&tag, &[0; 32]).unwrap();
+            let search_results = ds.get_search_results(unknown).await.unwrap();
+            assert!(search_results.blocks.is_empty());
+            assert!(search_results.transactions.is_empty());
+        }
+
+        // Only block and transaction hashes are searchable.
+        let unsupported = TaggedBase64::new("COMMIT", &[0; 32]).unwrap();
+        assert!(matches!(
+            ds.get_search_results(unsupported).await,
+            Err(GetSearchResultsError::InvalidQuery(_))
+        ));
 
         if num_transactions > 0 {
             let last_transaction = latest_transactions.first().unwrap();

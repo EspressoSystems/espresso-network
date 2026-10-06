@@ -26,7 +26,7 @@ use hotshot_types::{
         signature_key::StateSignatureKey,
     },
     upgrade_config::UpgradeConfig,
-    utils::is_epoch_root,
+    utils::{is_epoch_root, is_last_block},
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
@@ -48,8 +48,8 @@ use crate::{
     helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, CatchupEvidence, Certificate1, ConsensusMessage, Message, MessageType,
-        OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
+        self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
+        MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
         TransactionMessage, Unchecked, Validated, Vote2, payload::PayloadFetchMessage,
     },
     network::Cliquenet,
@@ -190,6 +190,8 @@ where
         consensus_metrics: ConsensusMetricsValue,
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
+        /// The anchor's cert2 persisted on a prior run.
+        anchor_cert2: Option<Certificate2<T>>,
         upgrade_config: UpgradeConfig,
     ) -> Self {
         let mut consensus = Consensus::new(
@@ -286,6 +288,9 @@ where
         // this must run after `seed_parent`.
         if let Some(locked_qc) = locked_qc {
             consensus.seed_locked_cert(locked_qc);
+        }
+        if let Some(cert2) = anchor_cert2 {
+            consensus.seed_cert2(cert2);
         }
         consensus.resume_from_restart(
             anchor_view,
@@ -416,6 +421,9 @@ where
     pub fn start(&mut self) {
         let cur_view = self.consensus.current_view();
         let next_view = cur_view + 1;
+        // Client requests are served before the outbox reaches the builder, so it must know the
+        // view before that first `ViewChanged`.
+        self.block_builder.start_at(next_view);
         let epoch = self
             .consensus
             .current_epoch()
@@ -629,7 +637,6 @@ where
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
                         self.state_manager.request_header(HeaderRequest::from(&block));
-                        let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
                         // Retain the payload and persist it when consensus proposes this
@@ -649,11 +656,20 @@ where
                         }
                         // We built this block; skip reconstructing it from our own loopback share.
                         self.vid_reconstructor.retire_view(block.view);
-                        self.unicast_to_leader(
-                            next_view,
+                        // A leader of several views builds a copy sent for a later one into this
+                        // block, so a transaction here can be sent from `block.view - 1`, and its
+                        // other copies can sit with the leaders of the next `fanout` views.
+                        let holders = self.upcoming_leaders(
+                            block.view + 1,
+                            self.block_builder.fanout().get(),
                             epoch,
-                            BlockMessage::DedupManifest(manifest),
-                        )?;
+                        );
+                        for (_, leader) in holders {
+                            self.unicast_block(
+                                &leader,
+                                BlockMessage::DedupManifest(manifest.clone()),
+                            )?;
+                        }
                         return Ok(block.into())
                     }
                     Err(err) => {
@@ -1095,20 +1111,11 @@ where
                 info!(%node, %view, %epoch, "view changed");
                 self.timer.reset_with(view);
                 self.gc(epoch, GcScope::Local(view))?;
-                let txns = self.block_builder.on_view_changed(view);
+                let resend = self.block_builder.on_view_changed(view);
                 self.participation.on_view_changed(epoch);
                 self.on_view_changed_metrics(view, epoch);
-                if !txns.is_empty() {
-                    let next_view = view + 1;
-                    self.unicast_to_leader(
-                        next_view,
-                        epoch,
-                        BlockMessage::Transactions(TransactionMessage {
-                            view: next_view,
-                            transactions: txns,
-                        }),
-                    )
-                    .map_err(|e| e.context("unicast transactions"))?;
+                if let Some(resend) = resend {
+                    self.send_transactions(resend, epoch)?;
                 }
 
                 // Proactively fetch the DRB for the next epoch so
@@ -1567,7 +1574,9 @@ where
                             count = msg.transactions.len(),
                             "recv transactions"
                         );
-                        self.block_builder.on_transactions(msg)
+                        if !self.is_view_too_far_ahead(msg.view) {
+                            self.block_builder.on_transactions(msg)
+                        }
                     },
                     BlockMessage::DedupManifest(manifest) => {
                         debug!(
@@ -1727,24 +1736,75 @@ where
             .map_err(|e| CoordinatorError::from(e).context(ctx))
     }
 
-    fn unicast_to_leader(
+    fn unicast_block(
         &mut self,
-        view: ViewNumber,
-        epoch: EpochNumber,
+        leader: &T::SignatureKey,
         msg: BlockMessage<T>,
     ) -> Result<(), CoordinatorError> {
-        let Some(leader) = self.leader(view, epoch) else {
-            warn!(%view, %epoch, "failed to resolve leader for unicast");
-            return Ok(());
-        };
         let message = Message {
             sender: self.public_key.clone(),
             message_type: MessageType::Block(msg),
         };
         self.network
             .sender()
-            .unicast(self.consensus.current_view(), &leader, &message)
+            .unicast(self.consensus.current_view(), leader, &message)
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
+    }
+
+    /// Sends `forward` to the leaders of the `fanout` views from its own, each leader once with
+    /// the earliest of its views.
+    fn send_transactions(
+        &mut self,
+        forward: TransactionMessage<T>,
+        epoch: EpochNumber,
+    ) -> Result<(), CoordinatorError> {
+        let leaders = self.upcoming_leaders(forward.view, self.block_builder.fanout().get(), epoch);
+        for (view, leader) in leaders {
+            let message = TransactionMessage {
+                view,
+                transactions: forward.transactions.clone(),
+            };
+            self.unicast_block(&leader, BlockMessage::Transactions(message))
+                .map_err(|e| e.context("unicast transactions"))?;
+        }
+        Ok(())
+    }
+
+    /// The leaders of the `count` views from `first`, each once with the earliest of its views.
+    fn upcoming_leaders(
+        &mut self,
+        first: ViewNumber,
+        count: u64,
+        epoch: EpochNumber,
+    ) -> Vec<(ViewNumber, T::SignatureKey)> {
+        let mut leaders = Vec::<(ViewNumber, T::SignatureKey)>::new();
+        for view in (0..count).map(|ahead| first + ahead) {
+            let Some(leader) = self.upcoming_leader(view, epoch) else {
+                warn!(%view, %epoch, "failed to resolve an upcoming leader");
+                continue;
+            };
+            if leaders.iter().all(|(_, known)| *known != leader) {
+                leaders.push((view, leader));
+            }
+        }
+        leaders
+    }
+
+    /// The leader of an upcoming `view`. Consensus picks it with the epoch of the block it
+    /// proposes, which is the next epoch when that block builds on its epoch's last block. Timed
+    /// out views add no block, so the latest proposal is the best guess for that parent. `epoch`
+    /// is the fallback when there is no proposal yet or its epoch's stake table is unknown.
+    fn upcoming_leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
+        let expected = self.consensus.last_proposal_before(view).map(|p| {
+            if is_last_block(p.block_header.block_number(), *self.consensus.epoch_height) {
+                p.epoch + 1
+            } else {
+                p.epoch
+            }
+        });
+        expected
+            .and_then(|e| self.leader(view, e))
+            .or_else(|| self.leader(view, epoch))
     }
 
     fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
@@ -1795,7 +1855,19 @@ where
                 });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
-                let _ = respond.send(self.block_builder.on_submit_transaction(tx));
+                let forward = match self.block_builder.on_submit_transaction(tx) {
+                    Ok(forward) => forward,
+                    Err(err) => {
+                        let _ = respond.send(Err(err));
+                        return Ok(());
+                    },
+                };
+                // The transaction is queued, and the retry buffer resends it if no leader
+                // resolves now.
+                let _ = respond.send(Ok(()));
+                if let Some(forward) = forward {
+                    self.send_transactions(forward, self.epoch())?;
+                }
             },
             ClientRequest::UpdateLeaf { update, respond } => {
                 self.state_manager.update_state(update);

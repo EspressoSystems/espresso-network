@@ -13,7 +13,7 @@ use hotshot_types::{
     traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
 };
 use tide_disco::Url;
-use versions::{MIN_SUPPORTED_VERSION, Upgrade};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
     node_stake::TestNodeStakes,
@@ -152,7 +152,7 @@ impl<TYPES: NodeType> TestDescription<TYPES> {
         let (staked_nodes, da_nodes) =
             gen_node_lists::<TYPES>(num_nodes, num_da_nodes, &self.node_stakes);
 
-        let upgrade = Upgrade::trivial(MIN_SUPPORTED_VERSION);
+        let upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
         Self {
             test_config: default_hotshot_config::<TYPES>(
                 staked_nodes,
@@ -243,7 +243,7 @@ impl<TYPES: NodeType> TestDescription<TYPES> {
 }
 
 impl<TYPES: NodeType> Default for TestDescription<TYPES> {
-    /// seven nodes, all on the DA committee, running the minimum supported version
+    /// seven nodes, all on the DA committee, running the new-protocol version (0.6)
     fn default() -> Self {
         let num_nodes_with_stake = 7;
         let num_da_nodes = num_nodes_with_stake;
@@ -263,7 +263,7 @@ impl<TYPES: NodeType> Default for TestDescription<TYPES> {
                 epoch_start_block,
             ),
             timing_data: TimingData::default(),
-            upgrade: Upgrade::trivial(MIN_SUPPORTED_VERSION),
+            upgrade: Upgrade::trivial(NEW_PROTOCOL_VERSION),
             node_stakes,
         }
     }
