@@ -6,6 +6,7 @@ use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_merkle_tree::{MerkleTreeScheme, append_only::MerkleTree as JfMerkleTree};
 use p3_maybe_rayon::prelude::*;
+use reed_solomon_simd::ReedSolomonEncoder;
 use serde::{Deserialize, Serialize};
 use tagged_base64::tagged;
 
@@ -228,15 +229,24 @@ impl AvidmGf2Scheme {
         Ok(MerkleTree::from_elems(None, &share_digests)?)
     }
 
-    /// Merkle tree over all shards of `payload`, without keeping the payload shards around.
+    /// Merkle tree over all shards of `payload`, hashing recovery shards in place in the encoder.
     fn raw_commit(param: &AvidmGf2Param, payload: &[u8]) -> VidResult<MerkleTree> {
+        let original_count = param.recovery_threshold;
+        let recovery_count = param.total_weights - original_count;
         let shard_bytes = Self::shard_bytes(param, payload.len());
-        let original = Self::chunk_and_pad(payload, shard_bytes, param.recovery_threshold)?;
-        let recovery = Self::encode_recovery(param, &original)?;
+        let original = Self::chunk_and_pad(payload, shard_bytes, original_count)?;
+        if recovery_count == 0 {
+            return Self::merkle_tree(&original);
+        }
+        let mut encoder = ReedSolomonEncoder::new(original_count, recovery_count, shard_bytes)?;
+        for shard in &original {
+            encoder.add_original_shard(shard)?;
+        }
+        let result = encoder.encode()?;
         let shards: Vec<&[u8]> = original
             .iter()
             .map(AsRef::as_ref)
-            .chain(recovery.iter().map(Vec::as_slice))
+            .chain(result.recovery_iter())
             .collect();
         Self::merkle_tree(&shards)
     }
