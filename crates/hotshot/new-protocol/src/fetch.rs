@@ -182,14 +182,14 @@ impl<T: NodeType> Fetcher<T> {
                         return None;
                     }
                     let payload = T::BlockPayload::from_bytes(&data, &metadata);
-                    let tx_commitments = payload.transaction_commitments(&metadata);
+                    let tx_digests = payload.transaction_digests(&metadata);
                     Some(ObtainedPayload {
                         view,
                         epoch,
                         payload_commitment,
                         payload,
                         metadata,
-                        tx_commitments,
+                        tx_digests,
                     })
                 });
 

@@ -10,7 +10,7 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_certificate::UpgradeCertificate,
     simple_vote::UpgradeProposalData,
-    traits::signature_key::SignatureKey,
+    traits::{block_contents::Transaction as _, signature_key::SignatureKey},
 };
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
 
@@ -134,7 +134,7 @@ async fn test_retry_buffer() {
     b.on_submit_transaction(t1.clone()).unwrap();
     b.on_submit_transaction(t2.clone()).unwrap();
 
-    b.on_block_reconstructed(view(1), vec![t1.commit()]);
+    b.on_block_reconstructed(view(1), vec![t1.digest()]);
 
     assert_eq!(
         b.on_view_changed(view(3)),
@@ -437,7 +437,7 @@ async fn test_request_block_same_view_reuses_transactions() {
     assert_eq!(outputs[0].payload_commitment, outputs[1].payload_commitment);
     let mut hashes = outputs[1].manifest.hashes.clone();
     hashes.sort();
-    let mut expected = vec![tx(1).commit(), tx(2).commit()];
+    let mut expected = vec![tx(1).digest(), tx(2).digest()];
     expected.sort();
     assert_eq!(hashes, expected);
 
@@ -483,7 +483,7 @@ async fn test_dedup_window() {
     b.on_dedup_manifest(DedupManifest {
         view: view(1),
         epoch: epoch(),
-        hashes: vec![t.commit()],
+        hashes: vec![t.digest()],
     });
     b.on_transactions(tx_msg(view(1), vec![t.clone()]));
     let (txns, _) = b.drain(view(1), epoch());
@@ -513,7 +513,7 @@ async fn test_dedup_window() {
 async fn reconstructed_block_drops_its_transactions_from_leader_buffer() {
     let mut b = builder();
     b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
-    b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), Vec::from([tx(1).digest()]));
     let (txns, _) = b.drain(view(2), epoch());
     assert_eq!(txns, Vec::from([tx(2)]));
 }
@@ -552,7 +552,7 @@ async fn pooled_transactions_expire_after_ttl() {
 #[tokio::test]
 async fn reconstructed_block_drops_later_copies_of_its_transactions() {
     let mut b = builder();
-    b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), Vec::from([tx(1).digest()]));
     b.on_transactions(tx_msg(view(2), Vec::from([tx(1)])));
     let (txns, _) = b.drain(view(2), epoch());
     assert!(txns.is_empty());

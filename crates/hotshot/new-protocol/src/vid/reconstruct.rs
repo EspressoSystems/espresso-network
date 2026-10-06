@@ -3,11 +3,13 @@ use std::{
     ops::Range,
 };
 
-use committable::Commitment;
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
-    traits::{block_contents::EncodeBytes, node_implementation::NodeType},
+    traits::{
+        block_contents::{EncodeBytes, TxDigest},
+        node_implementation::NodeType,
+    },
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
 use tokio::task::{AbortHandle, JoinSet};
@@ -29,7 +31,7 @@ pub struct ObtainedPayload<T: NodeType> {
     pub payload_commitment: VidCommitment2,
     pub payload: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-    pub tx_commitments: Vec<Commitment<T::Transaction>>,
+    pub tx_digests: Vec<TxDigest>,
 }
 
 /// Why a reconstruction attempt failed.
@@ -481,14 +483,14 @@ fn reconstruct<T: NodeType>(
             crate::leader_trace::LeaderEvent::RecoverVMinus1DecodeEnd
         );
         let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
-        let tx_commitments = payload.transaction_commitments(&metadata);
+        let tx_digests = payload.transaction_digests(&metadata);
         let output = ObtainedPayload {
             view,
             epoch,
             payload_commitment,
             payload,
             metadata,
-            tx_commitments,
+            tx_digests,
         };
         return Ok(output);
     }

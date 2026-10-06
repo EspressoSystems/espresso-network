@@ -67,7 +67,7 @@ use hotshot_types::{
     },
     traits::{
         BlockPayload, EncodeBytes,
-        block_contents::BlockHeader,
+        block_contents::{BlockHeader, Transaction as _},
         election::Membership,
         node_implementation::NodeType,
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
@@ -746,7 +746,7 @@ async fn reference_new_protocol_messages(
             MessageType::Block(BlockMessage::DedupManifest(DedupManifest {
                 view,
                 epoch,
-                hashes: vec![transaction.commit()],
+                hashes: vec![transaction.digest()],
             })),
             MessageType::ProposalFetch(ProposalFetchMessage::Request(
                 ProposalFetchRequest::new(view, sender, &priv_key).unwrap(),

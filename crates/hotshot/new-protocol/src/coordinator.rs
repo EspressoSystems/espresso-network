@@ -732,7 +732,7 @@ where
         self.payload_txn_bytes
             .insert(out.view, out.payload.txn_bytes());
         self.block_builder
-            .on_block_reconstructed(out.view, out.tx_commitments);
+            .on_block_reconstructed(out.view, out.tx_digests);
         if let Some(proposal) = self.consensus.proposal_at(out.view) {
             // Only pair the payload with the header if the proposal commits to it
             if proposal.block_header.payload_commitment()
@@ -885,7 +885,7 @@ where
                         // its transactions count as included.
                         self.block_builder.on_block_reconstructed(
                             view,
-                            da.payload.transaction_commitments(&da.metadata),
+                            da.payload.transaction_digests(&da.metadata),
                         );
                         // Consensus drops the built block below each decided view, before a
                         // late decide of this view may arrive, so it has to be handed out now.

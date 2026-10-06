@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use committable::{Commitment, Committable};
+use committable::Commitment;
 use hotshot::traits::{BlockPayload, ValidatedState as _};
 use hotshot_types::{
     consensus::PayloadWithMetadata,
@@ -18,7 +18,7 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{
         EncodeBytes,
-        block_contents::{BuilderFee, Transaction},
+        block_contents::{BuilderFee, Transaction, TxDigest},
         node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
     },
@@ -81,7 +81,7 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub builder_commitment: BuilderCommitment,
     pub builder_fee: BuilderFee<T>,
     pub payload_commitment: VidCommitment,
-    pub manifest: DedupManifest<T>,
+    pub manifest: DedupManifest,
 }
 
 /// Room in a forwarded message for everything but the transactions.
@@ -131,10 +131,7 @@ struct RetryEntry<T: NodeType> {
     sent_until: ViewNumber,
 }
 
-type TakenBlock<T> = Vec<(
-    Commitment<<T as NodeType>::Transaction>,
-    <T as NodeType>::Transaction,
-)>;
+type TakenBlock<T> = Vec<(TxDigest, <T as NodeType>::Transaction)>;
 
 struct PoolEntry<T: NodeType> {
     tx: T::Transaction,
@@ -145,13 +142,13 @@ struct PoolEntry<T: NodeType> {
 pub struct BlockBuilder<T: NodeType> {
     instance: Arc<T::InstanceState>,
     membership: EpochMembershipCoordinator<T>,
-    retry_pending: HashMap<Commitment<T::Transaction>, RetryEntry<T>>,
-    retry_order: BTreeSet<(ViewNumber, Commitment<T::Transaction>)>,
+    retry_pending: HashMap<TxDigest, RetryEntry<T>>,
+    retry_order: BTreeSet<(ViewNumber, TxDigest)>,
     retry_total_bytes: u64,
-    leader_buffer: HashMap<Commitment<T::Transaction>, PoolEntry<T>>,
-    leader_order: BTreeSet<(ViewNumber, Commitment<T::Transaction>)>,
+    leader_buffer: HashMap<TxDigest, PoolEntry<T>>,
+    leader_order: BTreeSet<(ViewNumber, TxDigest)>,
     leader_total_bytes: u64,
-    dedups: BTreeMap<ViewNumber, HashSet<Commitment<T::Transaction>>>,
+    dedups: BTreeMap<ViewNumber, HashSet<TxDigest>>,
     config: BlockBuilderConfig,
     upgrade_lock: UpgradeLock<T>,
     current_view: ViewNumber,
@@ -332,7 +329,7 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect()
     }
 
-    fn remove_pooled(&mut self, hash: &Commitment<T::Transaction>) -> Option<T::Transaction> {
+    fn remove_pooled(&mut self, hash: &TxDigest) -> Option<T::Transaction> {
         let entry = self.leader_buffer.remove(hash)?;
         self.leader_order.remove(&(entry.view, *hash));
         self.leader_total_bytes -= entry.tx.minimum_block_size();
@@ -382,7 +379,7 @@ impl<T: NodeType> BlockBuilder<T> {
         &mut self,
         tx: T::Transaction,
     ) -> Result<Vec<TransactionMessage<T>>, SubmitError> {
-        let hash = tx.commit();
+        let hash = tx.digest();
 
         if self.retry_pending.contains_key(&hash) {
             return Ok(Vec::new());
@@ -435,11 +432,7 @@ impl<T: NodeType> BlockBuilder<T> {
         Ok(messages)
     }
 
-    fn pool_submitted(
-        &mut self,
-        hash: Commitment<T::Transaction>,
-        tx: T::Transaction,
-    ) -> Result<(), SubmitError> {
+    fn pool_submitted(&mut self, hash: TxDigest, tx: T::Transaction) -> Result<(), SubmitError> {
         if self.leader_buffer.contains_key(&hash)
             || self.dedups.values().any(|hs| hs.contains(&hash))
         {
@@ -487,7 +480,7 @@ impl<T: NodeType> BlockBuilder<T> {
         let hashes = msg
             .transactions
             .par_iter()
-            .map(Committable::commit)
+            .map(Transaction::digest)
             .collect::<Vec<_>>();
         for (hash, tx) in hashes.into_iter().zip(msg.transactions) {
             if self.dedups.values().any(|hs| hs.contains(&hash)) {
@@ -510,7 +503,7 @@ impl<T: NodeType> BlockBuilder<T> {
         }
     }
 
-    pub fn on_dedup_manifest(&mut self, manifest: DedupManifest<T>) {
+    pub fn on_dedup_manifest(&mut self, manifest: DedupManifest) {
         let DedupManifest { view, hashes, .. } = manifest;
         self.mark_included(view, hashes);
     }
@@ -589,7 +582,7 @@ impl<T: NodeType> BlockBuilder<T> {
         }
     }
 
-    fn remove_pending(&mut self, hash: &Commitment<T::Transaction>) {
+    fn remove_pending(&mut self, hash: &TxDigest) {
         if let Some(entry) = self.retry_pending.remove(hash) {
             self.retry_order.remove(&(entry.valid_until, *hash));
             self.retry_total_bytes -= entry.size;
@@ -610,18 +603,14 @@ impl<T: NodeType> BlockBuilder<T> {
 
     /// Call for every block this node proposes or reconstructs, so it stops forwarding the
     /// block's transactions and drops copies that reach it later.
-    pub fn on_block_reconstructed(
-        &mut self,
-        view: ViewNumber,
-        tx_commitments: Vec<Commitment<T::Transaction>>,
-    ) {
-        for hash in &tx_commitments {
+    pub fn on_block_reconstructed(&mut self, view: ViewNumber, tx_digests: Vec<TxDigest>) {
+        for hash in &tx_digests {
             self.remove_pending(hash);
         }
-        self.mark_included(view, tx_commitments);
+        self.mark_included(view, tx_digests);
     }
 
-    fn mark_included(&mut self, view: ViewNumber, hashes: Vec<Commitment<T::Transaction>>) {
+    fn mark_included(&mut self, view: ViewNumber, hashes: Vec<TxDigest>) {
         for hash in &hashes {
             self.remove_pooled(hash);
         }
@@ -643,7 +632,7 @@ impl<T: NodeType> BlockBuilder<T> {
         &mut self,
         view: ViewNumber,
         epoch: EpochNumber,
-    ) -> (Vec<T::Transaction>, DedupManifest<T>) {
+    ) -> (Vec<T::Transaction>, DedupManifest) {
         let (hashes, txs) = self.take_block(view).into_iter().unzip();
 
         let manifest = DedupManifest {
