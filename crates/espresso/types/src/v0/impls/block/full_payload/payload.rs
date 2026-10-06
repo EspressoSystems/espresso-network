@@ -116,7 +116,8 @@ impl Payload {
 
         // build block payload and namespace table
         let len = ns_builders.values().map(NsPayloadBuilder::byte_len).sum();
-        // Zeroed bytes are initialized `u8`s.
+        // Perf: one zeroed allocation, filled in place.
+        // SAFETY: zeroed bytes are initialized `u8`s.
         let mut payload = unsafe { Arc::<[u8]>::new_zeroed_slice(len).assume_init() };
         let out = Arc::get_mut(&mut payload).expect("freshly allocated Arc is unique");
         let mut end = 0;

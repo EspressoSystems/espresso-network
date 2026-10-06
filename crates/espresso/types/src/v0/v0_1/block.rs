@@ -193,6 +193,7 @@ pub struct Payload {
     pub(crate) ns_table: NsTable,
 }
 
+/// Perf: binary formats decode one byte buffer instead of a `u8` sequence.
 fn deserialize_shared_bytes<'de, D: Deserializer<'de>>(d: D) -> Result<Arc<[u8]>, D::Error> {
     if d.is_human_readable() {
         base64_bytes::deserialize(d).map(Arc::from)
@@ -363,6 +364,7 @@ pub struct TxIter(pub(crate) Range<usize>);
 /// payloads.
 #[derive(Default)]
 pub struct NsPayloadBuilder {
+    /// Perf: bodies are copied once, straight into the payload.
     pub(crate) txs: Vec<Transaction>,
     pub(crate) bodies_len: usize,
 }
