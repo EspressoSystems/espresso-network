@@ -116,6 +116,19 @@ SKIP_COLLECT_SIGNALS = 3
 STEP_START_MB_S = 4.0
 STEP_FACTOR = 1.5
 STEP_TOP_MB_S = 200.0
+# `--search` defaults for the flags it shortens: a probe of one minute, and in flight and tx
+# timeouts of one minute of load.
+SEARCH_STEP_S = 60
+SEARCH_CAP_S = 60.0
+SEARCH_TX_TIMEOUT_S = 60
+# A typical search: 8 probes plus the confirm's second step, with a drain after each of the
+# two failing probes.
+SEARCH_EXPECTED_PROBES = 9
+SEARCH_EXPECTED_DRAINS = 2
+# Share of the Postgres volume `--offered-gb` may fill.
+PG_FILL_MAX = 0.9
+# Share of node0's root volume the payload may fill when Postgres is colocated.
+COLOCATED_FILL_MAX = 0.6
 # Submit threads: a 1 MB POST takes tens of ms on the private network; 200 tx/s needs this many.
 SUBMIT_WORKERS = 32
 NODE_TYPE = "c8g.4xlarge"
@@ -841,6 +854,7 @@ class RunConfig:
     ttl_min: str = "auto"
     fleet: Path | None = None
     force: bool = False
+    search: nb.SearchConfig | None = None
 
 
 # Callers need the return code and stderr, unlike scripts/release's Runner, to report a
@@ -992,14 +1006,55 @@ def aws_json(run: Runner, *args: str, region: str, tolerate: str | None = None) 
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
+def payload_factor(nodes: int) -> float:
+    """Payload bytes node0 stores per offered byte: its own copy plus a share of the
+    others'."""
+    return 1 + 3 / nodes
+
+
 def node_root_gb(cfg: RunConfig, query: bool) -> int:
     """`--root-gb` if given, else sized from the bytes offered over the whole ramp (an upper
-    bound, the staircase stops early without keep_going) at 1 MB per MB/s-second."""
+    bound, the staircase stops early without keep_going) at 1 MB per MB/s-second; with
+    `--search` from `--offered-gb`."""
     if cfg.root_gb != "auto":
         return int(cfg.root_gb)
+    if cfg.search:
+        return search_root_gb(cfg, query)
     payload_gb = sum(cfg.load.steps) * cfg.load.step_s / 1000
     factor = QUERY_DISK_FACTOR if query else VALIDATOR_DISK_FACTOR
     return max(NODE_ROOT_GB_MIN, math.ceil(RESERVED_GB + factor * payload_gb))
+
+
+def search_root_gb(cfg: RunConfig, query: bool) -> int:
+    """Validators keep the journal; node0 with a colocated Postgres also the payloads."""
+    assert cfg.search
+    offered = cfg.search.offered_gb
+    if query and "colocated" in cfg.db_modes:
+        need = RESERVED_GB + payload_factor(cfg.nodes) * offered / COLOCATED_FILL_MAX
+    else:
+        need = RESERVED_GB + VALIDATOR_DISK_FACTOR * offered
+    return max(NODE_ROOT_GB_MIN, math.ceil(round(need, 6)))
+
+
+def check_search(cfg: RunConfig) -> None:
+    """Refuses, before any AWS call, a search that cannot run as configured."""
+    search = cfg.search
+    if search is None:
+        return
+    if cfg.load.keep_going:
+        raise Refused("--search cannot run with --keep-going")
+    first_gb = search.start_mb_s * (cfg.load.warmup_s + cfg.load.step_s) / 1000
+    if search.offered_gb < first_gb:
+        raise Refused(
+            f"--offered-gb {search.offered_gb:g} is below the {first_gb:.1f} GB of the "
+            f"warmup and first probe at {search.start_mb_s:g} MB/s"
+        )
+    stored_gb = payload_factor(cfg.nodes) * search.offered_gb
+    if {"volume", "rds"} & set(cfg.db_modes) and stored_gb > PG_FILL_MAX * PG_GB:
+        raise Refused(
+            f"--offered-gb {search.offered_gb:g} stores {stored_gb:.0f} GB on node0, more "
+            f"than {PG_FILL_MAX:.0%} of the {PG_GB} GiB Postgres volume"
+        )
 
 
 def check_rds_config(cfg: RunConfig) -> None:
@@ -1028,6 +1083,7 @@ def rds_spec(cfg: RunConfig, pre: Preflight) -> RdsSpec | None:
 
 def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     check_rds_config(cfg)
+    check_search(cfg)
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
     check_submit_nodes(cfg)
@@ -1077,9 +1133,24 @@ def plan_peers(hosts: list[HostSpec]) -> dict[str, list[str]]:
     }
 
 
-def load_seconds(load: nb.BenchConfig) -> float:
+def load_seconds(
+    load: nb.BenchConfig, search: nb.SearchConfig | None = None, worst: bool = False
+) -> float:
     """warmup, every step, the refine step, and the two drains (before the refine step and at
-    the end). With keep_going: no refine step, the drain after the last step at its timeout."""
+    the end). With keep_going: no refine step, the drain after the last step at its timeout.
+    With `search`: `max_probes` probes of the longest kind each followed by a drain if `worst`;
+    else the expected probes and two drains."""
+    if search:
+        drain_s = load.tx_timeout_s + nb.DRAIN_SLACK_S
+        if worst:
+            probe_s = 2 * load.step_s + drain_s
+            return load.warmup_s + search.max_probes * probe_s + load.tx_timeout_s
+        return (
+            load.warmup_s
+            + SEARCH_EXPECTED_PROBES * load.step_s
+            + SEARCH_EXPECTED_DRAINS * drain_s
+            + load.tx_timeout_s
+        )
     if load.keep_going:
         return (
             load.warmup_s
@@ -1121,10 +1192,11 @@ def run_seconds(cfg: RunConfig, pull: bool = False) -> tuple[float, float]:
 def _measure_seconds(cfg: RunConfig) -> tuple[float, float]:
     """Services, ready, load and collect. `worst_s` swaps in the timeouts that bound a laptop
     disconnect: the ready timeout and the collection cap."""
-    fixed = SERVICES_S + load_seconds(cfg.load)
+    expected_load = load_seconds(cfg.load, cfg.search, worst=False)
+    worst_load = load_seconds(cfg.load, cfg.search, worst=True)
     return (
-        fixed + READY_EXPECTED_S + COLLECT_EXPECTED_S,
-        fixed + READY_TIMEOUT_S + COLLECT_MAX_S,
+        SERVICES_S + expected_load + READY_EXPECTED_S + COLLECT_EXPECTED_S,
+        SERVICES_S + worst_load + READY_TIMEOUT_S + COLLECT_MAX_S,
     )
 
 
@@ -1291,6 +1363,17 @@ def format_estimate_summary(estimate: Estimate, max_usd: float) -> str:
         f"cost: expected ${estimate['expected_usd']:.2f} "
         f"({round(estimate['expected_s'] / 60)} min), "
         f"hard bound ${estimate['bound_usd']:.2f}, limit ${max_usd:.2f}"
+    )
+
+
+def format_search_summary(cfg: RunConfig) -> str:
+    assert cfg.search
+    search = cfg.search
+    return (
+        f"search from {nb.fmt_num(search.start_mb_s)} MB/s: climb x{nb.CLIMB_FACTOR:g}, "
+        f"bisect to {nb.fmt_num(search.resolution_mb_s)} MB/s, confirm "
+        f"{2 * cfg.load.step_s} s; at most {search.max_probes} probes, "
+        f"{nb.fmt_num(search.offered_gb)} GB offered"
     )
 
 
@@ -2248,15 +2331,27 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     parser.add_argument("--nodes", type=int, default=defaults.nodes)
     parser.add_argument("--node-type", default=defaults.node_type)
     parser.add_argument("--ctl-type", default=defaults.ctl_type)
+    steps = ", ".join(f"{rate:g}" for rate in load.steps)
     parser.add_argument(
         "--steps",
         type=nb.parse_rates,
-        default=load.steps,
-        help="MB/s per step, increasing; CI uses a linear ramp, AWS x1.5 up to 200",
+        help=f"MB/s per step, increasing; default {steps} (x1.5 up to 200)",
     )
-    parser.add_argument("--step-s", type=int, default=load.step_s)
-    parser.add_argument("--cap-s", type=float, default=load.cap_s)
-    parser.add_argument("--tx-timeout-s", type=int, default=load.tx_timeout_s)
+    parser.add_argument(
+        "--step-s",
+        type=int,
+        help=f"default {load.step_s}, with --search {SEARCH_STEP_S}",
+    )
+    parser.add_argument(
+        "--cap-s",
+        type=float,
+        help=f"default {load.cap_s:g}, with --search {SEARCH_CAP_S:g}",
+    )
+    parser.add_argument(
+        "--tx-timeout-s",
+        type=int,
+        help=f"default {load.tx_timeout_s}, with --search {SEARCH_TX_TIMEOUT_S}",
+    )
     parser.add_argument("--submit-workers", type=positive_int, default=load.workers)
     parser.add_argument("--warmup-s", type=int, default=load.warmup_s)
     parser.add_argument(
@@ -2264,6 +2359,7 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         action="store_true",
         help="run every step whatever its verdict, then wait for the query node to catch up",
     )
+    add_search_flags(parser)
     parser.add_argument("--root-gb", default=defaults.root_gb)
     parser.add_argument("--pg-iops", type=int, default=defaults.pg_iops)
     parser.add_argument("--pg-mbps", type=int, default=defaults.pg_mbps)
@@ -2272,6 +2368,34 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         "--region",
         default=REGION,
         help="AWS region of the fleet; commands on the fleet read it from its manifest",
+    )
+
+
+def add_search_flags(parser: argparse.ArgumentParser) -> None:
+    search = nb.SearchConfig()
+    parser.add_argument(
+        "--search",
+        nargs="?",
+        const=search.start_mb_s,
+        type=positive_float,
+        metavar="START",
+        help="search the capacity instead of the ramp: climb from START MB/s "
+        f"(bare: {search.start_mb_s:g}), bisect, confirm",
+    )
+    parser.add_argument(
+        "--resolution-mb-s",
+        type=positive_float,
+        help=f"with --search: bracket width to stop at, default {search.resolution_mb_s:g}",
+    )
+    parser.add_argument(
+        "--max-probes",
+        type=positive_int,
+        help=f"with --search: default {search.max_probes}",
+    )
+    parser.add_argument(
+        "--offered-gb",
+        type=positive_float,
+        help=f"with --search: bytes offered in total, default {search.offered_gb:g}",
     )
 
 
@@ -2370,16 +2494,8 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         if keys.count(key) > 1:
             raise Refused(f"--node-env repeats {key}")
     check_latency_flags(args.latency, args.intra_latency)
-    load = nb.BenchConfig(
-        steps=args.steps,
-        step_s=args.step_s,
-        submit_nodes=submit_nodes(args, args.nodes),
-        workers=args.submit_workers,
-        cap_s=args.cap_s,
-        tx_timeout_s=args.tx_timeout_s,
-        warmup_s=args.warmup_s,
-        keep_going=args.keep_going,
-    )
+    search = search_from_args(args)
+    load = load_from_args(args, search)
     return RunConfig(
         tag=args.tag,
         nodes=args.nodes,
@@ -2397,7 +2513,63 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         region=args.region,
         max_usd=args.max_usd,
         yes=args.yes,
+        search=search,
     )
+
+
+def search_from_args(args: argparse.Namespace) -> nb.SearchConfig | None:
+    budgets = {
+        "resolution_mb_s": args.resolution_mb_s,
+        "max_probes": args.max_probes,
+        "offered_gb": args.offered_gb,
+    }
+    given = {key: value for key, value in budgets.items() if value is not None}
+    if args.search is None:
+        if given:
+            flags = ", ".join("--" + key.replace("_", "-") for key in given)
+            raise Refused(f"{flags} needs --search")
+        return None
+    return nb.SearchConfig(start_mb_s=args.search, **given)
+
+
+def load_from_args(
+    args: argparse.Namespace, search: nb.SearchConfig | None
+) -> nb.BenchConfig:
+    """Flags not given take the ramp's defaults, or the search's. A search probes one rate at
+    a time, so `--steps` takes at most one value, unused."""
+    defaults = aws_load()
+    if search is None:
+        step_s, cap_s, tx_timeout_s = (
+            defaults.step_s,
+            defaults.cap_s,
+            defaults.tx_timeout_s,
+        )
+        steps = defaults.steps
+    else:
+        step_s, cap_s, tx_timeout_s = SEARCH_STEP_S, SEARCH_CAP_S, SEARCH_TX_TIMEOUT_S
+        if args.steps is not None and len(args.steps) > 1:
+            raise Refused("--search takes one --steps value")
+        steps = (search.start_mb_s,)
+    return nb.BenchConfig(
+        steps=steps if args.steps is None else args.steps,
+        step_s=step_s if args.step_s is None else args.step_s,
+        submit_nodes=submit_nodes(args, args.nodes),
+        workers=args.submit_workers,
+        cap_s=cap_s if args.cap_s is None else args.cap_s,
+        tx_timeout_s=tx_timeout_s if args.tx_timeout_s is None else args.tx_timeout_s,
+        warmup_s=args.warmup_s,
+        keep_going=args.keep_going,
+    )
+
+
+def positive_float(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        value = 0.0
+    if not value > 0:
+        raise argparse.ArgumentTypeError(f"expected a positive number: {text}")
+    return value
 
 
 def positive_int(text: str) -> int:
@@ -2450,6 +2622,11 @@ def add_results_remote_flag(parser: argparse.ArgumentParser) -> None:
 
 class DefaultsFormatter(argparse.ArgumentDefaultsHelpFormatter):
     """Also shows the default of flags without help text, which the base class skips."""
+
+    def _get_help_string(self, action: argparse.Action) -> str | None:
+        return (
+            action.help if action.default is None else super()._get_help_string(action)
+        )
 
     def _format_action(self, action: argparse.Action) -> str:
         if action.help is None and action.default not in (None, argparse.SUPPRESS):
@@ -2644,6 +2821,8 @@ def estimate_or_refuse(
             hosts, cfg, rds, *shot_seconds(cfg), instance_prices=instance_prices
         )
         log.info(format_estimate_summary(estimate, cfg.max_usd))
+        if cfg.search:
+            log.info(format_search_summary(cfg))
     for line in format_estimate_lines(estimate):
         log.debug(line)
     if estimate["bound_usd"] > cfg.max_usd:
@@ -3624,8 +3803,10 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         intra_latency=cli.intra_latency,
         fleet=cli.fleet,
         force=cli.force,
+        search=cli.search,
     )
     check_submit_nodes(cfg)
+    check_search(cfg)
     return cfg
 
 
@@ -4201,6 +4382,11 @@ def run_config_hash(
             *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
             *([b"leader-trace"] if cfg.leader_trace else []),
             *(
+                [json.dumps(dataclasses.asdict(cfg.search), sort_keys=True).encode()]
+                if cfg.search
+                else []
+            ),
+            *(
                 [
                     json.dumps(
                         {
@@ -4441,6 +4627,7 @@ def render_host_files(
         run_dir / "hosts" / "ctl" / "agent.json",
         {
             "cfg": dataclasses.asdict(cfg.load),
+            "search": None if cfg.search is None else dataclasses.asdict(cfg.search),
             "topology": topo,
             "ready_timeout_s": READY_TIMEOUT_S,
         },
@@ -4962,7 +5149,10 @@ def poll_agent(
     begin = clock.monotonic()
     poll = PollState(
         begin=begin,
-        deadline=begin + READY_TIMEOUT_S + load_seconds(cfg.load) + AGENT_SLACK_S,
+        deadline=begin
+        + READY_TIMEOUT_S
+        + load_seconds(cfg.load, cfg.search, worst=True)
+        + AGENT_SLACK_S,
         next_log=begin + AGENT_LOG_S,
         next_sync=begin + OUT_RSYNC_S,
         unreachable=0,
@@ -5687,6 +5877,7 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     if "node_env" in saved:
         fields["node_env"] = tuple(saved["node_env"])
     fields.setdefault("region", LEGACY_REGION)
+    fields["search"] = search_config(saved.get("search"))
     return RunConfig(**fields)
 
 
@@ -6027,6 +6218,10 @@ def reproduce_section(manifest: Manifest) -> str:
         f"# espresso-node {node['revision'] or '-'} {node['digest']}",
     ]
     return "\n".join(["", "", "### Reproduce", "", "```", *lines, "```", ""])
+
+
+def search_config(saved: dict[str, Any] | None) -> nb.SearchConfig | None:
+    return None if saved is None else nb.SearchConfig(**saved)
 
 
 def load_config(saved: dict[str, Any]) -> nb.BenchConfig:
@@ -7268,6 +7463,7 @@ def cmd_agent_drive(args: argparse.Namespace, system: System) -> int:
     their private URLs. SIGTERM unwinds like Ctrl-C so `drive_load` flushes its output."""
     agent = nb.read_json(args.config)
     cfg = load_config(agent["cfg"])
+    search = search_config(agent["search"])
     topo: nb.Topology = agent["topology"]
     args.out.mkdir(parents=True, exist_ok=True)
     reporter = AgentReporter(args.out / "agent-state.json")
@@ -7309,6 +7505,7 @@ def cmd_agent_drive(args: argparse.Namespace, system: System) -> int:
             system.clock,
             system.http_pool,
             nb.SCAN_PROCESSES,
+            search,
         )
         reporter.set_phase("done", "load finished")
         return EXIT_OK

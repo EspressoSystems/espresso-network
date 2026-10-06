@@ -230,6 +230,56 @@ Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 
   apply fails, the fleet is destroyed, exit 3.
 - Cost: the fleet bound is rate x (TTL + destroy + rds delete).
 
+### Search
+
+`--search [START]` replaces the ramp with an unattended capacity search. One probe is one step of `--step-s` judged by
+the unchanged step rules. Defaults with `--search`: `--step-s 60`, `--cap-s 60`, `--tx-timeout-s 60` (explicit flags
+win). `--search` with 2+ `--steps` values or with `--keep-going` is refused.
+
+| flag                | default  | meaning                                          |
+| ------------------- | -------- | ------------------------------------------------ |
+| `--search [START]`  | 100 MB/s | first probe rate                                 |
+| `--resolution-mb-s` | 10       | stop when `failed_at - capacity` is at most this |
+| `--max-probes`      | 12       | probe budget                                     |
+| `--offered-gb`      | 150      | offered-bytes budget, also sizes the disks       |
+
+Probe rules (`netbench.next_probe`, from the step list alone):
+
+- Climb x1.25 from the last pass until a probe fails.
+- Bisect (lo, hi) until `hi - lo <= resolution`.
+- Confirm: one probe at lo of `2 x step_s`, measured over the second `step_s`; a failed confirm lowers hi to lo.
+- Collapse (decided < 0.5 x submitted): re-run lo (or START); a failing re-run stops `degraded after overload at X` or
+  `below start`.
+- Drain before the probe that follows a failing one, timeout `tx_timeout_s + DRAIN_SLACK_S`; timeout stops
+  `drain timeout`.
+- Stop reasons: `resolved`, `probe budget`, `disk budget`, `drain timeout`, `degraded after overload`, `below start`,
+  `generator throttled`.
+- A query-bound limit with an unbounded consensus side starts a second search on the consensus side under the remaining
+  budgets.
+
+Sizing and cost:
+
+- Validators `20 + 2 x offered_gb` GB; node0 with colocated Postgres `20 + payload_factor x offered_gb / 0.6`, else as
+  validators; `payload_factor = 1 + 3 / nodes`. A `volume` or `rds` store must hold `payload_factor x offered_gb` within
+  90% of 400 GiB, else the plan is refused.
+- Worst load time `warmup + max_probes x (2 x step_s + tx_timeout_s + DRAIN_SLACK_S) + tx_timeout_s` feeds the cost
+  bound, the TTL check of `run --fleet` and the agent poll deadline. Expected:
+  `warmup + 9 x step_s + 2 x (tx_timeout_s + DRAIN_SLACK_S) + tx_timeout_s`.
+- A search run hashes differently from a ramp run: `config_hash` gains the search config.
+
+Evidence for the thresholds (`bench-state/aws/<fleet>/runs/01-run/`):
+
+| observation                                                                    | runs                                                                                          |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| cliff knee 1.04-1.14x above the last pass                                      | 110032 140 P / 150 F; 142122 140 / 160; 134659 185 / 190; 085524 (N=20) 205 / 210             |
+| soft knee 1.03-1.07x                                                           | 084701 145 / 150 (p50 1356 ms); 181858 160 / 165 (p50 1436 ms)                                |
+| collapsed probes decide 25-39% of offered, soft fails 94-100%                  | 104246 150 26%, 135 36%; 110032 150 33%, 145 25%                                              |
+| drain after a cliff equals `tx_timeout_s`; marginal fails drain in 6.6-7.5 s   | 104246, 110032 120 s at tx_timeout 120; 111444 599.9 s at 600; 152335, 084701, 091325, 181858 |
+| refine after a cliff failed 2 of 2 under decaf-2025, passed 4 of 4 elsewhere   | 104246, 110032; 134659, 145915, 085524, 084701                                                |
+| ramp top below capacity                                                        | 063626 passed 240; 174648 220; 084214 210; 070603 200                                         |
+| first-step failures cost $1.2-2.6 for no number                                | 100645, 171115, 064525, 065534                                                                |
+| node0 payload per offered byte: 2.0 (N=3), 1.5 (N=5), 1.26 (N=10), 1.15 (N=20) | 145915, 152335, 084214                                                                        |
+
 ### Latency simulation
 
 All hosts share one AZ (about 0.1 ms between nodes). `--latency <profile>` gives every node a virtual location and
@@ -352,6 +402,8 @@ just bench aws plan --tag release-x --nodes 4 --db-modes colocated,volume
 just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --max-usd 10 --yes
 # single shot, fixed load steps, every step run, query node lag up to 600 s tolerated
 just bench aws run --tag release-x --steps 50,60,80 --keep-going --cap-s 600 --tx-timeout-s 600
+# single shot, unattended capacity search from 100 MB/s, bounded at $15
+just bench aws run --tag release-x --nodes 5 --search --max-usd 15 --yes
 # single shot with simulated geography, 10 ms between same-region nodes
 just bench aws run --tag release-x --nodes 5 --latency decaf-2025
 # same, cross-region latency only

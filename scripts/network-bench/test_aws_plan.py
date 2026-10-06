@@ -1,10 +1,12 @@
 import argparse
+import dataclasses
 import json
 import re
 import shutil
 import subprocess
 import threading
 from collections.abc import Iterator
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ import pytest
 from fakes import (
     C8IN_8XLARGE_PRICE_ITEM,
     DOTENV_TEXT,
+    INSTANCE_PRICES,
     MEMORY_MIB,
     STS_CALL,
     FakeRegistry,
@@ -1245,3 +1248,202 @@ def test_manifest_config_round_trips_submit_nodes():
     cfg = small_cfg(nodes=3, submit=3)
     saved = json.loads(json.dumps(awsb.config_to_json(cfg)))
     assert awsb.config_from_manifest(saved).load.submit_nodes == 3
+
+
+def search_cfg(*flags: str, **fields: Any) -> Any:
+    argv = ["plan", "--tag", "x", "--nodes", "5", "--search", *flags]
+    cfg = awsb.config_from_args(awsb.parse_args(argv))
+    return replace(cfg, **fields)
+
+
+# TEST:aws-search-flags-ok
+@pytest.mark.parametrize(
+    ("flags", "start", "step_s", "cap_s", "tx_timeout_s"),
+    [
+        ((), 100.0, 60, 60.0, 60),
+        (("150",), 150.0, 60, 60.0, 60),
+        (("150", "--cap-s", "120"), 150.0, 60, 120.0, 60),
+        (("150", "--step-s", "30", "--tx-timeout-s", "90"), 150.0, 30, 60.0, 90),
+    ],
+)
+def test_search_flags_build_the_config(flags, start, step_s, cap_s, tx_timeout_s):
+    cfg = search_cfg(*flags)
+    assert cfg.search == netbench.SearchConfig(start_mb_s=start)
+    load = cfg.load
+    assert (load.step_s, load.cap_s, load.tx_timeout_s) == (step_s, cap_s, tx_timeout_s)
+
+
+def test_search_flags_override_the_budgets():
+    cfg = search_cfg(
+        "--resolution-mb-s", "5", "--max-probes", "8", "--offered-gb", "90"
+    )
+    assert cfg.search == netbench.SearchConfig(
+        resolution_mb_s=5.0, max_probes=8, offered_gb=90.0
+    )
+
+
+def test_without_search_the_legacy_defaults_hold():
+    args = awsb.parse_args(["plan", "--tag", "x"])
+    cfg = awsb.config_from_args(args)
+    assert cfg.search is None
+    legacy = awsb.aws_load()
+    load = cfg.load
+    assert (load.steps, load.step_s, load.cap_s, load.tx_timeout_s) == (
+        legacy.steps,
+        legacy.step_s,
+        legacy.cap_s,
+        legacy.tx_timeout_s,
+    )
+
+
+@pytest.mark.parametrize("flag", ["--max-probes", "--offered-gb", "--resolution-mb-s"])
+def test_search_budget_flags_need_search(flag):
+    args = awsb.parse_args(["plan", "--tag", "x", flag, "5"])
+    with pytest.raises(awsb.Refused, match="needs --search"):
+        awsb.config_from_args(args)
+
+
+# TEST:aws-check-search-fails
+def test_search_refuses_two_steps():
+    args = awsb.parse_args(
+        ["plan", "--tag", "x", "--search", "150", "--steps", "100,200"]
+    )
+    with pytest.raises(awsb.Refused, match="--search takes one --steps value"):
+        awsb.config_from_args(args)
+
+
+def test_search_refuses_keep_going():
+    cfg = search_cfg("150")
+    kept = replace(cfg, load=replace(cfg.load, keep_going=True))
+    with pytest.raises(awsb.Refused, match="--keep-going"):
+        awsb.check_search(kept)
+
+
+def test_search_refuses_a_volume_too_small_for_the_payload():
+    cfg = search_cfg("150", "--offered-gb", "200", nodes=3, db_modes=("volume",))
+    with pytest.raises(awsb.Refused, match="Postgres volume"):
+        awsb.plan_hosts(cfg)
+
+
+# TEST:rds-search-ok
+def test_search_checks_the_rds_volume_with_the_same_factor():
+    ok = search_cfg(
+        "150", db_modes=("rds",), pg_iops=awsb.RDS_IOPS, pg_mbps=awsb.RDS_MBPS
+    )
+    awsb.check_search(ok)
+    too_big = replace(ok, search=replace(ok.search, offered_gb=300.0), nodes=3)
+    with pytest.raises(awsb.Refused, match="Postgres volume"):
+        awsb.check_search(too_big)
+
+
+# TEST:offered-gb-small-fails
+def test_search_refuses_an_offer_below_the_first_probe():
+    with pytest.raises(awsb.Refused, match="--offered-gb"):
+        awsb.check_search(search_cfg("150", "--offered-gb", "10"))
+
+
+# TEST:aws-disk-sizing-ok
+@pytest.mark.parametrize(
+    ("db_modes", "validator_gb", "query_gb"),
+    [(("colocated",), 260, 340), (("volume",), 260, 260), (("rds",), 260, 260)],
+)
+def test_search_sizes_disks_from_the_offered_gb(db_modes, validator_gb, query_gb):
+    cfg = search_cfg("--offered-gb", "120", db_modes=db_modes)
+    assert awsb.node_root_gb(cfg, query=False) == validator_gb
+    assert awsb.node_root_gb(cfg, query=True) == query_gb
+
+
+def test_payload_factor():
+    assert awsb.payload_factor(3) == 2.0
+    assert awsb.payload_factor(5) == pytest.approx(1.6)
+
+
+def test_explicit_root_gb_wins_over_the_search_sizing():
+    assert awsb.node_root_gb(search_cfg(root_gb="500"), query=True) == 500
+
+
+# TEST:aws-time-cost-ok
+def test_search_load_seconds():
+    load = netbench.BenchConfig(step_s=60, warmup_s=60, tx_timeout_s=60)
+    search = netbench.SearchConfig()
+    slack = netbench.DRAIN_SLACK_S
+    assert (
+        awsb.load_seconds(load, search, worst=True)
+        == 60 + 12 * (2 * 60 + 60 + slack) + 60
+    )
+    assert (
+        awsb.load_seconds(load, search, worst=False)
+        == 60 + 9 * 60 + 2 * (60 + slack) + 60
+    )
+
+
+def test_search_measure_seconds_use_the_worst_load_for_the_bound():
+    cfg = search_cfg("150")
+    expected_s, worst_s = awsb._measure_seconds(cfg)
+    assert expected_s == (
+        awsb.SERVICES_S
+        + awsb.load_seconds(cfg.load, cfg.search, worst=False)
+        + awsb.READY_EXPECTED_S
+        + awsb.COLLECT_EXPECTED_S
+    )
+    assert worst_s == (
+        awsb.SERVICES_S
+        + awsb.load_seconds(cfg.load, cfg.search, worst=True)
+        + awsb.READY_TIMEOUT_S
+        + awsb.COLLECT_MAX_S
+    )
+
+
+def test_search_summary_line():
+    assert awsb.format_search_summary(search_cfg()) == (
+        "search from 100 MB/s: climb x1.25, bisect to 10 MB/s, confirm 120 s; "
+        "at most 12 probes, 150 GB offered"
+    )
+
+
+def test_estimate_logs_the_search_summary(caplog):
+    cfg = search_cfg("150")
+    hosts = awsb.plan_hosts(cfg)
+    with caplog.at_level("INFO", logger="aws-bench"):
+        awsb.estimate_or_refuse(
+            replace(cfg, max_usd=1000.0),
+            hosts,
+            Path("."),
+            0.0,
+            INSTANCE_PRICES,
+        )
+    summary = awsb.format_search_summary(cfg)
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages[-1] == summary
+    assert messages[-2].startswith("cost: expected")
+
+
+# TEST:aws-config-hash-ok
+def test_search_changes_the_run_config_hash():
+    ramp = awsb.RunConfig(tag="x")
+    searched = replace(ramp, search=netbench.SearchConfig())
+    other = replace(ramp, search=netbench.SearchConfig(start_mb_s=150.0))
+    args = ([], {}, b"")
+    hashes = {awsb.run_config_hash(c, *args) for c in (ramp, searched, other)}
+    assert len(hashes) == 3
+
+
+def test_the_ramp_run_config_hash_ignores_the_search_field():
+    cfg = awsb.RunConfig(tag="x")
+    assert awsb.run_config_hash(cfg, [], {}, b"") == netbench.config_hash(
+        cfg.load, [b"", b"{}", b"[]", b"colocated"]
+    )
+
+
+def test_search_survives_the_manifest_round_trip():
+    cfg = search_cfg("150")
+    assert awsb.config_from_manifest(awsb.config_to_json(cfg)).search == cfg.search
+    ramp = awsb.config_to_json(awsb.RunConfig(tag="x"))
+    del ramp["search"]
+    assert awsb.config_from_manifest(ramp).search is None
+
+
+def test_search_config_reads_the_agent_key():
+    assert awsb.search_config(None) is None
+    saved = dataclasses.asdict(netbench.SearchConfig(start_mb_s=150.0))
+    assert awsb.search_config(saved) == netbench.SearchConfig(start_mb_s=150.0)

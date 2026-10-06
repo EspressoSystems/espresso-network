@@ -1020,3 +1020,31 @@ def test_run_in_another_region_records_it_and_calls_aws_there(
     fleet = netbench.read_json(run_harness.fleet_dir / "fleet.json")
     manifest = netbench.read_json(run_harness.run_dir / "manifest.json")
     assert fleet["config"]["region"] == manifest["config"]["region"] == "eu-central-1"
+
+
+# TEST:aws-search-flags-ok
+def test_search_reaches_manifest_agent_and_reproduce(run_harness: RunHarness):
+    runner = FakeRunner(states=[DONE_STATE])
+    run_harness.run(runner, "--search", "150")
+    run_dir = run_harness.run_dir
+    saved = netbench.read_json(run_dir / "manifest.json")["config"]
+    expected = {
+        "start_mb_s": 150.0,
+        "resolution_mb_s": 10.0,
+        "max_probes": 12,
+        "offered_gb": 150.0,
+    }
+    assert saved["search"] == expected
+    agent = netbench.read_json(run_dir / "hosts" / "ctl" / "agent.json")
+    assert agent["search"] == expected
+    assert (agent["cfg"]["step_s"], agent["cfg"]["cap_s"]) == (60, 60.0)
+    assert agent["cfg"]["tx_timeout_s"] == 60
+    manifest = netbench.read_json(run_dir / "manifest.json")
+    assert "--search" in manifest["argv"] and "150" in manifest["argv"]
+    assert "--search 150" in awsb.reproduce_section(manifest)
+
+
+def test_a_ramp_run_records_no_search(run_harness: RunHarness):
+    run_harness.run(FakeRunner(states=[DONE_STATE]))
+    agent = netbench.read_json(run_harness.run_dir / "hosts" / "ctl" / "agent.json")
+    assert agent["search"] is None

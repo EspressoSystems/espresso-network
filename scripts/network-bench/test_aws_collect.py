@@ -664,7 +664,10 @@ def agent(tmp_path: Path, agent_out: Path, monkeypatch: pytest.MonkeyPatch) -> A
     }
     cfg = dataclasses.asdict(netbench.BenchConfig())
     config = tmp_path / "agent.json"
-    netbench.write_json(config, {"cfg": cfg, "topology": topo, "ready_timeout_s": 5})
+    netbench.write_json(
+        config,
+        {"cfg": cfg, "search": None, "topology": topo, "ready_timeout_s": 5},
+    )
     args = awsb.parse_args(["agent-drive", str(config), str(agent_out)])
     monkeypatch.setattr(netbench, "sample_metrics", lambda *a, **k: None)
     # `logging.basicConfig` sets INFO only on a root logger without handlers.

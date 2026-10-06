@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -424,3 +424,18 @@ def test_prune_plan_takes_a_fleet_without_a_recorded_region_as_eu_west_1():
     old = manifest("done")
     del old["config"]["region"]
     assert prune_plan(old) == ([(DIR, old)], [])
+
+
+# TEST:fleet-ttl-short-fails
+def test_search_run_needs_the_search_worst_case_from_the_ttl(harness, runner):
+    manifest = harness.fleet()
+    ramp = awsb.fleet_run_config(harness.run_args(), manifest)
+    searched = awsb.fleet_run_config(harness.run_args("--search", "150"), manifest)
+    assert searched.search is not None
+    assert (
+        awsb.estimate_run(manifest, searched)["worst_s"]
+        > awsb.estimate_run(manifest, ramp)["worst_s"]
+    )
+    now = datetime.fromisoformat(manifest["expires_at"]) - timedelta(minutes=30)
+    with pytest.raises(awsb.Refused, match="this run needs up to"):
+        awsb.check_run_allowed(manifest, searched, now)
