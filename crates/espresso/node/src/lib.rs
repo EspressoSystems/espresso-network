@@ -2365,7 +2365,7 @@ mod test {
         let mut parent = {
             // TODO refactor repeated code from other tests
             let (genesis_payload, genesis_ns_table) =
-                Payload::from_transactions([], &ValidatedState::default(), &NodeState::mock())
+                Payload::from_transactions(&[], &ValidatedState::default(), &NodeState::mock())
                     .await
                     .unwrap();
 

@@ -105,7 +105,7 @@ fn chain_config() -> ChainConfig {
 }
 
 fn build(txs: Vec<Transaction>) -> (Payload, NsTable) {
-    Payload::from_transactions_sync(txs, chain_config()).expect("payload construction")
+    Payload::from_transactions_sync(&txs, chain_config()).expect("payload construction")
 }
 
 /// Same order of operations as block.rs:220-262; outputs are returned so their drop is untimed.

@@ -33,7 +33,7 @@ async fn basic_correctness() {
         tracing::info!("test case {} nss {} txs", test.nss.len(), all_txs.len());
 
         let block =
-            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
                 .await
                 .unwrap()
                 .0;
@@ -128,7 +128,7 @@ async fn enforce_max_block_size() {
         chain_config: chain_config.into(),
         ..Default::default()
     };
-    let block = Payload::from_transactions(test.all_txs(), &validated_state, &instance_state)
+    let block = Payload::from_transactions(&test.all_txs(), &validated_state, &instance_state)
         .await
         .unwrap()
         .0;
@@ -150,7 +150,7 @@ async fn enforce_max_block_size() {
         ..Default::default()
     };
 
-    let block = Payload::from_transactions(test.all_txs(), &validated_state, &instance_state)
+    let block = Payload::from_transactions(&test.all_txs(), &validated_state, &instance_state)
         .await
         .unwrap()
         .0;
@@ -239,7 +239,7 @@ async fn transaction_commitments_match_serial() {
         .zip(counts)
     {
         let (payload, meta) =
-            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
                 .await
                 .unwrap();
 

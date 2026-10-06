@@ -131,10 +131,11 @@ struct RetryEntry<T: NodeType> {
     sent_until: ViewNumber,
 }
 
-type TakenBlock<T> = Vec<(
-    Commitment<<T as NodeType>::Transaction>,
-    <T as NodeType>::Transaction,
-)>;
+/// Transactions taken for a view's block, with their hashes in the same order.
+struct TakenBlock<T: NodeType> {
+    hashes: Vec<Commitment<T::Transaction>>,
+    txs: Vec<T::Transaction>,
+}
 
 struct PoolEntry<T: NodeType> {
     tx: T::Transaction,
@@ -217,22 +218,19 @@ impl<T: NodeType> BlockBuilder<T> {
         let handle = self.tasks.spawn(async move {
             // Without this an idle network produces empty blocks as fast as consensus can run
             // them, flooding the coordinator's event queue.
-            if buffer.is_empty() {
+            if buffer.txs.is_empty() {
                 sleep(empty_block_delay).await;
             }
-            let (hashes, txs): (Vec<_>, Vec<_>) =
-                buffer.iter().map(|(hash, tx)| (*hash, tx.clone())).unzip();
             let manifest = DedupManifest {
                 view,
                 epoch,
-                hashes,
+                hashes: buffer.hashes.clone(),
             };
 
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
-            // Perf: copy the transactions here, off the coordinator loop.
             let (payload, metadata) =
-                T::BlockPayload::from_transactions(txs, &validated_state, &instance)
+                T::BlockPayload::from_transactions(&buffer.txs, &validated_state, &instance)
                     .await
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
@@ -322,15 +320,14 @@ impl<T: NodeType> BlockBuilder<T> {
             bytes += size;
             taken.push(*hash);
         }
-        taken
-            .into_iter()
+        let txs = taken
+            .iter()
             .map(|hash| {
-                let tx = self
-                    .remove_pooled(&hash)
-                    .expect("hashes come from the pool's own order");
-                (hash, tx)
+                self.remove_pooled(hash)
+                    .expect("hashes come from the pool's own order")
             })
-            .collect()
+            .collect();
+        TakenBlock { hashes: taken, txs }
     }
 
     fn remove_pooled(&mut self, hash: &Commitment<T::Transaction>) -> Option<T::Transaction> {
@@ -645,7 +642,7 @@ impl<T: NodeType> BlockBuilder<T> {
         view: ViewNumber,
         epoch: EpochNumber,
     ) -> (Vec<T::Transaction>, DedupManifest<T>) {
-        let (hashes, txs) = self.take_block(view).into_iter().unzip();
+        let TakenBlock { hashes, txs } = self.take_block(view);
 
         let manifest = DedupManifest {
             view,

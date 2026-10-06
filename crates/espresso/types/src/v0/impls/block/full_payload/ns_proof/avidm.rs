@@ -182,7 +182,7 @@ mod tests {
 
         let blocks: Vec<BlockInfo> = future::join_all(tests.iter().map(|t| async {
             let block =
-                Payload::from_transactions(t.all_txs(), &Default::default(), &Default::default())
+                Payload::from_transactions(&t.all_txs(), &Default::default(), &Default::default())
                     .await
                     .unwrap()
                     .0;

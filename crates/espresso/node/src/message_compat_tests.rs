@@ -20,7 +20,7 @@
 //! If this test is failing and you did not intend to change the consensus API, figure out what
 //! code changed caused the serialization change and revert it.
 
-use std::{fmt::Debug, path::Path};
+use std::{fmt::Debug, path::Path, slice};
 
 use alloy::primitives::U256;
 use bitvec::bitvec;
@@ -209,7 +209,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let block_header = leaf.block_header().clone();
     let transaction = Transaction::new(1_u32.into(), vec![1, 2, 3]);
     let (payload, metadata) = Payload::from_transactions(
-        [transaction.clone()],
+        slice::from_ref(&transaction),
         &ValidatedState::default(),
         &node_state,
     )
@@ -475,7 +475,7 @@ async fn reference_new_protocol_messages(
 
     let transaction = Transaction::new(1_u32.into(), vec![1, 2, 3]);
     let (payload, metadata) = Payload::from_transactions(
-        [transaction.clone()],
+        slice::from_ref(&transaction),
         &ValidatedState::default(),
         &node_state,
     )

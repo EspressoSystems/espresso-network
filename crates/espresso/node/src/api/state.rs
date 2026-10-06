@@ -5423,7 +5423,7 @@ mod tests {
             .map(|byte| espresso_types::Transaction::new(namespace, vec![byte; 8]))
             .collect();
         let (payload, _) = espresso_types::Payload::from_transactions(
-            transactions,
+            &transactions,
             &Default::default(),
             &Default::default(),
         )

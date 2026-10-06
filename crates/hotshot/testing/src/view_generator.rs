@@ -103,7 +103,7 @@ impl TestView {
 
         let (block_payload, metadata) =
             <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(
-                transactions.clone(),
+                &transactions,
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
             )
@@ -285,7 +285,7 @@ impl TestView {
 
         let (block_payload, metadata) =
             <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(
-                transactions.clone(),
+                transactions,
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
             )

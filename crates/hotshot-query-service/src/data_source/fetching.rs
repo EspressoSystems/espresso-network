@@ -3463,9 +3463,9 @@ mod test {
 
         for i in 0..n {
             // Height i carries i+1 distinct transactions.
-            let txs = (0..=i).map(|j| mock_transaction(vec![j as u8]));
+            let txs: Vec<_> = (0..=i).map(|j| mock_transaction(vec![j as u8])).collect();
             let (payload, metadata) = <MockPayload as BlockPayload<MockTypes>>::from_transactions(
-                txs,
+                &txs,
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
             )

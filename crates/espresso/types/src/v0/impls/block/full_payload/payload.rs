@@ -78,7 +78,7 @@ impl Payload {
 
     /// Need a sync version of [`BlockPayload::from_transactions`] in order to impl [`BlockPayload::empty`].
     pub fn from_transactions_sync(
-        transactions: impl IntoIterator<Item = <Self as BlockPayload<SeqTypes>>::Transaction> + Send,
+        transactions: &[Transaction],
         chain_config: ChainConfig,
     ) -> Result<
         (Self, <Self as BlockPayload<SeqTypes>>::Metadata),
@@ -90,7 +90,7 @@ impl Payload {
 
         // add each tx to its namespace
         let mut ns_builders = BTreeMap::<NamespaceId, NsPayloadBuilder>::new();
-        for tx in transactions.into_iter() {
+        for tx in transactions {
             let tx_size = tx.size_in_block(!ns_builders.contains_key(&tx.namespace()));
 
             if tx_size > max_block_byte_len {
@@ -160,7 +160,7 @@ impl BlockPayload<SeqTypes> for Payload {
     type ValidatedState = ValidatedState;
 
     async fn from_transactions(
-        transactions: impl IntoIterator<Item = Self::Transaction> + Send,
+        transactions: &[Self::Transaction],
         validated_state: &Self::ValidatedState,
         instance_state: &Self::Instance,
     ) -> Result<(Self, Self::Metadata), Self::Error> {
@@ -192,7 +192,7 @@ impl BlockPayload<SeqTypes> for Payload {
     }
 
     fn empty() -> (Self, Self::Metadata) {
-        let payload = Self::from_transactions_sync(vec![], Default::default())
+        let payload = Self::from_transactions_sync(&[], Default::default())
             .unwrap()
             .0;
 

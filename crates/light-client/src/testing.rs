@@ -510,7 +510,7 @@ impl InnerTestClient {
             };
             tracing::debug!(?transactions, "generated block {i}");
             let (payload, ns_table) =
-                Payload::from_transactions_sync(transactions, node_state.chain_config).unwrap();
+                Payload::from_transactions_sync(&transactions, node_state.chain_config).unwrap();
             let payload_comm = vid_commitment(
                 &payload.encode(),
                 &ns_table.encode(),
@@ -1058,7 +1058,7 @@ impl Client for TestClient {
         let payload = if inner.invalid_payloads.contains(&height) {
             tracing::info!(height, "return mock incorrect payload proof");
             Payload::from_transactions_sync(
-                [Transaction::random(&mut rand::thread_rng())],
+                &[Transaction::random(&mut rand::thread_rng())],
                 NodeState::mock_v3().chain_config,
             )
             .unwrap()
@@ -1109,7 +1109,7 @@ impl Client for TestClient {
             rand::thread_rng().fill_bytes(&mut payload);
             let tx = Transaction::new(namespace, payload);
             let node_state = NodeState::mock_v3();
-            Payload::from_transactions_sync([tx], node_state.chain_config).unwrap()
+            Payload::from_transactions_sync(&[tx], node_state.chain_config).unwrap()
         } else {
             (
                 inner.payloads[height].clone(),
