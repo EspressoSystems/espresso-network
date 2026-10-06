@@ -57,7 +57,6 @@ jobs:
             target/release/reset-storage
             target/release/deploy
             target/release/keygen
-            target/release/permissionless-builder
             target/release/nasty-client
             target/release/espresso-dev-node
             target/release/pub-key
@@ -102,7 +101,6 @@ jobs:
             target/release/utils
             target/release/deploy
             target/release/keygen
-            target/release/permissionless-builder
             target/release/nasty-client
             target/release/espresso-dev-node
             target/release/pub-key
@@ -125,7 +123,6 @@ jobs:
       orchestrator-tag: ${{ steps.orchestrator.outputs.tags }}
       submit-transactions-tag: ${{ steps.submit-transactions.outputs.tags }}
       deploy-tag: ${{ steps.deploy.outputs.tags }}
-      builder-tag: ${{ steps.builder.outputs.tags }}
       nasty-client-tag: ${{ steps.nasty-client.outputs.tags }}
       espresso-dev-node-tag: ${{ steps.espresso-dev-node.outputs.tags }}
       bridge-tag: ${{ steps.bridge.outputs.tags }}
@@ -241,15 +238,6 @@ jobs:
           images: |
             ghcr.io/espressosystems/espresso-network/deploy
             ghcr.io/espressosystems/espresso-sequencer/deploy
-          flavor: suffix=bench
-
-      - name: Generate builder metadata
-        uses: docker/metadata-action@v6
-        id: builder
-        with:
-          images: |
-            ghcr.io/espressosystems/espresso-network/builder
-            ghcr.io/espressosystems/espresso-sequencer/builder
           flavor: suffix=bench
 
       - name: Generate nasty-client metadata
@@ -391,16 +379,6 @@ jobs:
           tags: ${{ steps.deploy.outputs.tags }}
           labels: ${{ steps.deploy.outputs.labels }}
 
-      - name: Build and push builder docker
-        uses: docker/build-push-action@v7
-        with:
-          context: ./
-          file: ./docker/permissionless-builder.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.builder.outputs.tags }}
-          labels: ${{ steps.builder.outputs.labels }}
-
       - name: Build and push nasty-client docker
         uses: docker/build-push-action@v7
         with:
@@ -451,7 +429,6 @@ jobs:
           docker pull ${{ needs.build-dockers.outputs.orchestrator-tag }}
           docker pull ${{ needs.build-dockers.outputs.submit-transactions-tag }}
           docker pull ${{ needs.build-dockers.outputs.deploy-tag }}
-          docker pull ${{ needs.build-dockers.outputs.builder-tag }}
           docker pull ${{ needs.build-dockers.outputs.nasty-client-tag }}
           docker pull ${{ needs.build-dockers.outputs.bridge-tag }}
       - name: Tag new docker images
@@ -465,7 +442,6 @@ jobs:
           docker tag ${{ needs.build-dockers.outputs.orchestrator-tag }} ghcr.io/espressosystems/espresso-network/orchestrator:main
           docker tag ${{ needs.build-dockers.outputs.submit-transactions-tag }} ghcr.io/espressosystems/espresso-network/submit-transactions:main
           docker tag ${{ needs.build-dockers.outputs.deploy-tag }} ghcr.io/espressosystems/espresso-network/deploy:main
-          docker tag ${{ needs.build-dockers.outputs.builder-tag }} ghcr.io/espressosystems/espresso-network/builder:main
           docker tag ${{ needs.build-dockers.outputs.nasty-client-tag }} ghcr.io/espressosystems/espresso-network/nasty-client:main
           docker tag ${{ needs.build-dockers.outputs.bridge-tag }} ghcr.io/espressosystems/espresso-network/bridge:main
 

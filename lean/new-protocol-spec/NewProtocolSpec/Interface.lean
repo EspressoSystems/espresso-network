@@ -195,9 +195,13 @@ reset. Each of those is one half of a seam whose other half is an `Input`,
 and the specification keeps only the half that says what the node *knows*: a
 request carries no protocol content, constrains nothing, and naming one would
 prescribe a decomposition into modules that an implementation is free not to
-have. What obliges a node to ask is that nothing else will make the input
-arrive, and starving its own subsystems is how it fails
-`WeaklyFair` — not a rule about the request.
+have.
+
+Nothing here obliges a node to ask: an input that never arrives leaves the action
+it would have justified unenabled, and an unenabled action is owed nothing. So a
+node that starves its own subsystems satisfies fairness vacuously rather than
+failing it. That a node asks for what it needs is a property of an implementation
+and not of this specification.
 -/
 inductive Output where
   /-- Send a protocol message to peers. -/

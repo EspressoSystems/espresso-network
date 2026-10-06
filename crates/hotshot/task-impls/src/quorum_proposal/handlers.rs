@@ -483,6 +483,7 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
         // have gone wrong there anyway.
         let mut upgrade_certificate = parent_leaf
             .upgrade_certificate()
+            .cloned()
             .or(formed_upgrade_certificate);
 
         if let Some(cert) = upgrade_certificate.clone()

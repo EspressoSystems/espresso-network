@@ -21,7 +21,10 @@ use chrono::Utc;
 use futures::future::FutureExt;
 use hotshot_types::{
     data::VidShare,
-    traits::{metrics::Metrics, node_implementation::NodeType},
+    traits::{
+        metrics::{Gauge, Metrics},
+        node_implementation::NodeType,
+    },
 };
 use itertools::Itertools;
 use log::LevelFilter;
@@ -547,6 +550,7 @@ pub struct SqlStorage {
     pool: Pool<Db>,
     metrics: PrometheusMetrics,
     pool_metrics: PoolMetrics,
+    pruned_heights: PrunedHeightMetrics,
     pruner_cfg: Option<PrunerCfg>,
     serializable_retry_config: SerializableRetryConfig,
 }
@@ -603,6 +607,28 @@ pub struct Pruner<'a> {
 enum PruneCategory {
     Data,
     State,
+}
+
+#[derive(Clone, Debug)]
+struct PrunedHeightMetrics {
+    data: Box<dyn Gauge>,
+    state: Box<dyn Gauge>,
+}
+
+impl PrunedHeightMetrics {
+    fn new(metrics: &(impl Metrics + ?Sized)) -> PrunedHeightMetrics {
+        PrunedHeightMetrics {
+            data: metrics.create_gauge("data_height".into(), None),
+            state: metrics.create_gauge("state_height".into(), None),
+        }
+    }
+
+    fn set(&self, category: PruneCategory, height: u64) {
+        match category {
+            PruneCategory::Data => self.data.set(height as usize),
+            PruneCategory::State => self.state.set(height as usize),
+        }
+    }
 }
 
 impl<'a> Pruner<'a> {
@@ -669,6 +695,7 @@ impl SqlStorage {
     ) -> Result<Self, Error> {
         let metrics = PrometheusMetrics::default();
         let pool_metrics = PoolMetrics::new(&*metrics.subgroup("sql".into()));
+        let pruned_heights = PrunedHeightMetrics::new(&*metrics.subgroup("pruner".into()));
 
         #[cfg(feature = "embedded-db")]
         let pool = config.pool_opt.clone();
@@ -688,6 +715,7 @@ impl SqlStorage {
                 return Ok(Self {
                     metrics,
                     pool_metrics,
+                    pruned_heights,
                     pool,
                     pruner_cfg,
                     serializable_retry_config,
@@ -785,13 +813,18 @@ impl SqlStorage {
 
         conn.close().await?;
 
-        Ok(Self {
+        let storage = Self {
             pool,
             pool_metrics,
+            pruned_heights,
             metrics,
             pruner_cfg,
             serializable_retry_config,
-        })
+        };
+        // Before the state writer can start: it resumes from the head, and the heights it rewrites
+        // have to come under a pruning batch again. The pruner's first run is an interval away.
+        storage.state_prune_start().await?;
+        Ok(storage)
     }
 }
 
@@ -1238,20 +1271,16 @@ impl SqlStorage {
             .context("pruning config not found")?;
         let now = Utc::now().timestamp();
 
-        let (min_height, state_min_height) = {
+        let min_height = {
             let mut tx = self
                 .read()
                 .await
-                .context("opening transaction to load pruned heights")?;
-            (
-                tx.load_pruned_height()
-                    .await?
-                    .map_or(0, |pruned| pruned + 1),
-                tx.load_state_pruned_height()
-                    .await?
-                    .map_or(0, |pruned| pruned + 1),
-            )
+                .context("opening transaction to load the pruned height")?;
+            self.load_pruned_height(&mut tx, PruneCategory::Data)
+                .await?
+                .map_or(0, |pruned| pruned + 1)
         };
+        let (state_min_height, state_head) = self.state_prune_start().await?;
         Ok(Pruner {
             data: PruneState {
                 min_height,
@@ -1266,22 +1295,76 @@ impl SqlStorage {
                     .context("getting height for minimum retention")?
                     .map_or(min_height, |to_prune| to_prune + 1),
             },
+            // State is never pruned to or past the state head. The state writer resumes from the
+            // head snapshot and reads it to catch up, and pruning to a height makes every snapshot
+            // below it unreadable, so a writer that has fallen behind holds the state pruner back
+            // instead of being overtaken by it.
             state: PruneState {
                 min_height: state_min_height,
-                target_height: self
-                    .get_height_by_timestamp(now - (cfg.state_target_retention().as_secs()) as i64)
+                target_height: min(
+                    state_head,
+                    self.get_height_by_timestamp(
+                        now - (cfg.state_target_retention().as_secs()) as i64,
+                    )
                     .await
                     .context("getting height for state target retention")?
                     .map_or(state_min_height, |to_prune| to_prune + 1),
-                minimum_retention_height: self
-                    .get_height_by_timestamp(now - (cfg.state_minimum_retention().as_secs()) as i64)
+                ),
+                minimum_retention_height: min(
+                    state_head,
+                    self.get_height_by_timestamp(
+                        now - (cfg.state_minimum_retention().as_secs()) as i64,
+                    )
                     .await
                     .context("getting height for state minimum retention")?
                     .map_or(state_min_height, |to_prune| to_prune + 1),
+                ),
             },
             cfg,
             extra_pruning: false,
         })
+    }
+
+    /// The first height the state pruner may delete, with the state head.
+    ///
+    /// The state writer resumes from the head and the pruner never passes it, so the cursor sits
+    /// below the head. A cursor at or above it was stamped by a run from before that bound, while
+    /// the writer was behind. The writer then rewrites every height from the head on, and a batch
+    /// only collects the versions its own window supersedes, so pruning has to see those heights
+    /// again: the cursor is lowered to just below the head, and pruning resumes from there.
+    /// `connect` does this before the writer can start; each run repeats it as a backstop.
+    async fn state_prune_start(&self) -> anyhow::Result<(u64, u64)> {
+        let (pruned, head) = {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction to load state heights")?;
+            (
+                self.load_pruned_height(&mut tx, PruneCategory::State)
+                    .await?,
+                tx.get_last_state_height().await? as u64,
+            )
+        };
+        match pruned {
+            Some(pruned) if pruned >= head && head > 0 => {
+                tracing::warn!(
+                    pruned,
+                    head,
+                    "state pruned height is at or above the state head; resuming from the head"
+                );
+                let mut tx = self
+                    .prune_write()
+                    .await
+                    .context("opening transaction to lower the state pruned height")?;
+                tx.save_state_pruned_height(head - 1).await?;
+                tx.commit()
+                    .await
+                    .context("committing the state pruned height")?;
+                self.pruned_heights.set(PruneCategory::State, head - 1);
+                Ok((head, head))
+            },
+            _ => Ok((pruned.map_or(0, |pruned| pruned + 1), head)),
+        }
     }
 
     /// Choose the next `category` batch below `bound`, as the inclusive window `(from, to)`.
@@ -1337,6 +1420,7 @@ impl SqlStorage {
             .context("opening transaction for pruned height")?;
         tx.save_pruned_height(to).await?;
         tx.commit().await.context("committing pruned height")?;
+        self.pruned_heights.set(PruneCategory::Data, to);
 
         let mut tx = self
             .prune_write()
@@ -1358,7 +1442,26 @@ impl SqlStorage {
             .context("opening transaction to delete state")?;
         tx.delete_state_batch(cfg.state_tables(), from, to).await?;
         tx.save_state_pruned_height(to).await?;
-        tx.commit().await.context("committing deleted state")
+        tx.commit().await.context("committing deleted state")?;
+        self.pruned_heights.set(PruneCategory::State, to);
+        Ok(())
+    }
+
+    async fn load_pruned_height(
+        &self,
+        tx: &mut Transaction<Read>,
+        category: PruneCategory,
+    ) -> anyhow::Result<Option<u64>> {
+        let pruned = match category {
+            PruneCategory::Data => tx.load_pruned_height().await?,
+            PruneCategory::State => tx.load_state_pruned_height().await?,
+        };
+        // Setting the gauge only on commit would leave it at zero after a restart, for good once
+        // the cutoff stops moving.
+        if let Some(pruned) = pruned {
+            self.pruned_heights.set(category, pruned);
+        }
+        Ok(pruned)
     }
 
     /// Prune merklized state below `height`, never within `min_retention` of the state head and
@@ -1369,18 +1472,7 @@ impl SqlStorage {
         min_retention: u64,
         cfg: &PrunerCfg,
     ) -> anyhow::Result<()> {
-        let (min_height, head) = {
-            let mut tx = self
-                .read()
-                .await
-                .context("opening transaction to load state heights")?;
-            (
-                tx.load_state_pruned_height()
-                    .await?
-                    .map_or(0, |pruned| pruned + 1),
-                tx.get_last_state_height().await? as u64,
-            )
-        };
+        let (min_height, head) = self.state_prune_start().await?;
 
         let target = min(height, head.saturating_sub(min_retention));
         if min_height >= target {
@@ -1397,7 +1489,7 @@ impl SqlStorage {
         let mut from = min_height;
         let mut batches = 0u64;
         while let Some(to) = next_batch(from, cfg.batch_size(), target) {
-            let mut backoff = ExponentialBuilder::default().build();
+            let mut backoff = ExponentialBuilder::default().with_max_times(10).build();
             loop {
                 match self.prune_state_batch(cfg, from, to).await {
                     Ok(()) => break,
@@ -1411,14 +1503,28 @@ impl SqlStorage {
                 }
             }
             from = to + 1;
+            sleep(Duration::from_secs(1)).await;
 
             batches += 1;
-            if batches.is_multiple_of(10) {
-                tracing::info!(from, target, "archived state pruning progress");
+            if batches.is_multiple_of(100) {
+                tracing::info!(
+                    target: "announce",
+                    pruned_height = to,
+                    target,
+                    batches,
+                    "state pruning progress"
+                );
                 self.vacuum(cfg.incremental_vacuum_pages()).await?;
             }
         }
-        self.vacuum(cfg.incremental_vacuum_pages()).await
+        self.vacuum(cfg.incremental_vacuum_pages()).await?;
+        tracing::warn!(
+            pruned_height = from - 1,
+            head,
+            batches,
+            "archived state pruning finished"
+        );
+        Ok(())
     }
 
     async fn get_disk_usage(&self) -> anyhow::Result<u64> {
@@ -1556,7 +1662,7 @@ impl PruneStorage for SqlStorage {
 
         // Pruning beyond the target retention is triggered when usage exceeds the threshold.
         if usage > threshold {
-            tracing::warn!(usage, threshold, "Disk usage exceeds pruning threshold");
+            tracing::info!(usage, threshold, "Disk usage exceeds pruning threshold");
             pruner.extra_pruning = true;
         }
         if !pruner.extra_pruning {
@@ -2214,6 +2320,89 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_windowed_state_pruning_matches_unbounded_delete() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let table = MockMerkleTree::state_type();
+
+        // Mix appends, which are never superseded, with rewrites of a few hot keys, and leave some
+        // heights without state so windows get skipped.
+        let heights = 300u64;
+        let mut tree: UniversalMerkleTree<_, _, _, 8, _> =
+            MockMerkleTree::new(MockMerkleTree::tree_height());
+        let mut tx = storage.write().await.unwrap();
+        for height in (0..=heights).filter(|height| height % 13 != 0) {
+            let key = if height % 3 == 0 {
+                (height % 4) as usize
+            } else {
+                height as usize
+            };
+            tree.update(key, height as usize).unwrap();
+            let (_, proof) = tree.lookup(key).expect_ok().unwrap();
+            let path = <usize as ToTraversalPath<8>>::to_traversal_path(&key, tree.height());
+            UpdateStateData::<_, MockMerkleTree, 8>::insert_merkle_nodes(
+                &mut tx, proof, path, height,
+            )
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        let prune_height = 250u64;
+        let mut tx = storage.write().await.unwrap();
+        query(&format!(
+            "CREATE TABLE expected AS SELECT path, created FROM {table} AS t
+             WHERE NOT (
+               t.created <= $1
+               AND EXISTS (
+                 SELECT 1 FROM {table} AS t2
+                 WHERE t2.path = t.path AND t2.created > t.created AND t2.created <= $1
+               )
+             )"
+        ))
+        .bind(prune_height as i64)
+        .execute(tx.as_mut())
+        .await
+        .unwrap();
+        let (expected,) = query_as::<(i64,)>("SELECT count(*) FROM expected")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        let (total,) = query_as::<(i64,)>(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        assert!(
+            total > expected,
+            "the unbounded delete would remove nothing"
+        );
+        tx.commit().await.unwrap();
+
+        let batch_size = 7;
+        for from in (0..=prune_height).step_by(batch_size) {
+            let to = min(from + batch_size as u64 - 1, prune_height);
+            let mut tx = storage.prune_write().await.unwrap();
+            tx.delete_state_batch([table], from, to).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let mut tx = storage.read().await.unwrap();
+        for (lhs, rhs) in [(table, "expected"), ("expected", table)] {
+            let (diff,) = query_as::<(i64,)>(&format!(
+                "SELECT count(*) FROM (
+                   SELECT path, created FROM {lhs} EXCEPT SELECT path, created FROM {rhs}
+                 ) AS d"
+            ))
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+            assert_eq!(diff, 0, "{diff} rows in {lhs} missing from {rhs}");
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_minimum_retention_pruning() {
         let db = TmpDb::init().await;
 
@@ -2590,7 +2779,14 @@ mod test {
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(20));
     }
 
+    fn pruned_height_gauge(storage: &SqlStorage, name: &str) -> usize {
+        let pruner_metrics = storage.metrics().get_subgroup(["pruner"]).unwrap();
+        pruner_metrics.get_gauge(name).unwrap().get()
+    }
+
     async fn assert_state_pruned_to(storage: &SqlStorage, pruned: Option<u64>, written: u64) {
+        let gauge = pruned_height_gauge(storage, "state_height");
+        assert_eq!(gauge as u64, pruned.unwrap_or(0));
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), pruned);
         for height in 1..=written {
@@ -2700,6 +2896,16 @@ mod test {
             .await
             .unwrap();
         assert_eq!(headers as u64, heights);
+        drop(tx);
+
+        // After a restart the gauge reports the stored marker even with nothing left to prune.
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        storage.prune_state_below(100, 0, &cfg).await.unwrap();
+        assert_state_pruned_to(&storage, Some(9), heights).await;
+        let exported = storage.metrics().export().unwrap();
+        assert!(exported.contains("pruner_state_height 9"), "{exported}");
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -2808,6 +3014,11 @@ mod test {
             assert_eq!(
                 tx.load_state_pruned_height().await.unwrap(),
                 Some(num_blocks - 1)
+            );
+            assert_eq!(pruned_height_gauge(&storage, "data_height"), 0);
+            assert_eq!(
+                pruned_height_gauge(&storage, "state_height") as u64,
+                num_blocks - 1
             );
 
             for height in 0..num_blocks {
@@ -2934,6 +3145,7 @@ mod test {
         assert_eq!(storage.prune(&mut pruner).await.unwrap(), None);
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_pruned_height().await.unwrap(), Some(5009));
+        assert_eq!(pruned_height_gauge(&storage, "data_height"), 5009);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -2943,11 +3155,18 @@ mod test {
             .await
             .unwrap();
 
-        // Recent headers for every height, so only state is eligible for pruning, and no state.
+        // Recent headers for every height, so only state is eligible for pruning, and a state head
+        // at the tip but no state rows.
         let num_blocks = 10_000u64;
         {
             let mut tx = storage.write().await.unwrap();
             insert_headers(&mut tx, 0..num_blocks, Utc::now().timestamp()).await;
+            UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(
+                &mut tx,
+                num_blocks as usize,
+            )
+            .await
+            .unwrap();
             tx.commit().await.unwrap();
         }
         storage.set_pruning_config(
@@ -3014,6 +3233,7 @@ mod test {
         }
         storage.set_pruning_config(
             PrunerCfg::default()
+                .with_batch_size(1000)
                 .with_state_target_retention(Duration::ZERO)
                 .with_state_tables(vec![MockMerkleTree::state_type().into()]),
         );
@@ -3049,6 +3269,360 @@ mod test {
             .await
             .unwrap();
         assert_eq!(num_headers, num_blocks as i64);
+    }
+
+    /// Add `height` to `tree`, then insert its header, carrying the tree's new root, and the
+    /// state rows for its path.
+    async fn insert_mock_state(
+        tx: &mut Transaction<Write>,
+        tree: &mut MockMerkleTree,
+        height: u64,
+        timestamp: i64,
+    ) {
+        tree.update(height as usize, height as usize).unwrap();
+        tx.upsert(
+            "header",
+            [
+                "height",
+                "hash",
+                "payload_hash",
+                "timestamp",
+                "data",
+                "ns_table",
+            ],
+            ["height"],
+            [(
+                height as i64,
+                format!("hash{height}"),
+                "ph".to_string(),
+                timestamp,
+                serde_json::json!({
+                    MockMerkleTree::header_state_commitment_field():
+                        serde_json::to_value(tree.commitment()).unwrap()
+                }),
+                "ns".to_string(),
+            )],
+        )
+        .await
+        .unwrap();
+        let (_, proof) = tree.lookup(height as usize).expect_ok().unwrap();
+        let traversal_path =
+            <usize as ToTraversalPath<8>>::to_traversal_path(&(height as usize), tree.height());
+        UpdateStateData::<_, MockMerkleTree, 8>::insert_merkle_nodes(
+            tx,
+            proof,
+            traversal_path,
+            height,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// The state pruned height is `pruned`, the snapshot at `head` is complete, and the one just
+    /// below it is gone.
+    async fn assert_state_pruned_below_head(storage: &SqlStorage, head: u64, pruned: u64) {
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(pruned));
+        for key in 0..=head as usize {
+            tx.get_path(
+                Snapshot::<_, MockMerkleTree, { MockMerkleTree::ARITY }>::Index(head),
+                key,
+            )
+            .await
+            .unwrap_or_else(|err| panic!("head snapshot is missing key {key}: {err:#}"));
+        }
+        let err = tx
+            .get_path(
+                Snapshot::<_, MockMerkleTree, { MockMerkleTree::ARITY }>::Index(head - 1),
+                0,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, QueryError::NotFound), "{err:?}");
+    }
+
+    /// Zero retention puts the whole chain past its state retention, but a run still stops below
+    /// the state head, which the state writer resumes from. As the writer advances, the cursor
+    /// follows it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_pruning_stops_below_state_head() {
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        // Recent headers for the whole chain, so only state is eligible for pruning, and state up
+        // to a head well below the tip.
+        let num_blocks = 100u64;
+        let head = 20u64;
+        let now = Utc::now().timestamp();
+        let mut tree = MockMerkleTree::new(MockMerkleTree::tree_height());
+        {
+            let mut tx = storage.write().await.unwrap();
+            for height in 0..=head {
+                insert_mock_state(&mut tx, &mut tree, height, now).await;
+            }
+            insert_headers(&mut tx, head + 1..num_blocks, now).await;
+            UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(&mut tx, head as usize)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        storage.set_pruning_config(
+            PrunerCfg::default()
+                .with_state_target_retention(Duration::ZERO)
+                .with_state_tables(vec![MockMerkleTree::state_type().into()]),
+        );
+
+        let mut pruner = Default::default();
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), Some(head - 1));
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), None);
+        assert_state_pruned_below_head(&storage, head, head - 1).await;
+
+        // The writer moves on, and the next run follows it.
+        let new_head = 40u64;
+        {
+            let mut tx = storage.write().await.unwrap();
+            for height in head + 1..=new_head {
+                insert_mock_state(&mut tx, &mut tree, height, now).await;
+            }
+            UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(
+                &mut tx,
+                new_head as usize,
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+        let mut pruner = Default::default();
+        assert_eq!(
+            storage.prune(&mut pruner).await.unwrap(),
+            Some(new_head - 1)
+        );
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), None);
+        assert_state_pruned_below_head(&storage, new_head, new_head - 1).await;
+    }
+
+    /// Without a state head there is no snapshot for the writer to resume from and nothing to
+    /// prune, so a run leaves the state cursor alone.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_pruning_noop_without_state_head() {
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        {
+            let mut tx = storage.write().await.unwrap();
+            insert_headers(&mut tx, 0..100, Utc::now().timestamp()).await;
+            tx.commit().await.unwrap();
+        }
+        storage.set_pruning_config(
+            PrunerCfg::default()
+                .with_state_target_retention(Duration::ZERO)
+                .with_state_tables(vec![MockMerkleTree::state_type().into()]),
+        );
+
+        assert_eq!(storage.prune(&mut Default::default()).await.unwrap(), None);
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(tx.load_state_pruned_height().await.unwrap(), None);
+    }
+
+    /// The newest snapshot stays readable once the pruned height has reached it. A pruner from
+    /// before the head bound could stamp past the state head, and the writer has to resume from
+    /// that snapshot after a restart.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_head_snapshot_readable_at_pruned_height() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let head = 10u64;
+        let mut tree = MockMerkleTree::new(MockMerkleTree::tree_height());
+        {
+            let mut tx = storage.write().await.unwrap();
+            for height in 0..=head {
+                insert_mock_state(&mut tx, &mut tree, height, 0).await;
+            }
+            UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(&mut tx, head as usize)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Stamp past the head, as an unbounded run would have.
+        let mut tx = storage.prune_write().await.unwrap();
+        tx.save_state_pruned_height(head + 5).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let mut tx = storage.read().await.unwrap();
+        for key in 0..=head as usize {
+            tx.get_path(
+                Snapshot::<_, MockMerkleTree, { MockMerkleTree::ARITY }>::Index(head),
+                key,
+            )
+            .await
+            .unwrap_or_else(|err| panic!("head snapshot is missing key {key}: {err:#}"));
+        }
+        let err = tx
+            .get_path(
+                Snapshot::<_, MockMerkleTree, { MockMerkleTree::ARITY }>::Index(head - 1),
+                0,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, QueryError::NotFound), "{err:?}");
+    }
+
+    /// State up to `head`, then pruned past it by a run from before the state pruner was bounded:
+    /// every version superseded at or below `stale_cursor` is gone and the cursor is stamped there.
+    async fn state_with_stale_cursor(
+        storage: &SqlStorage,
+        head: u64,
+        stale_cursor: u64,
+    ) -> MockMerkleTree {
+        let mut tree = MockMerkleTree::new(MockMerkleTree::tree_height());
+        let now = Utc::now().timestamp();
+        let mut tx = storage.write().await.unwrap();
+        for height in 0..=head {
+            insert_mock_state(&mut tx, &mut tree, height, now).await;
+        }
+        UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(&mut tx, head as usize)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let mut tx = storage.prune_write().await.unwrap();
+        tx.delete_state_batch([MockMerkleTree::state_type()], 0, stale_cursor)
+            .await
+            .unwrap();
+        tx.save_state_pruned_height(stale_cursor).await.unwrap();
+        tx.commit().await.unwrap();
+        tree
+    }
+
+    /// Advance the state writer from `from` to `head`.
+    async fn write_state_to(storage: &SqlStorage, tree: &mut MockMerkleTree, from: u64, head: u64) {
+        let now = Utc::now().timestamp();
+        let mut tx = storage.write().await.unwrap();
+        for height in from..=head {
+            insert_mock_state(&mut tx, tree, height, now).await;
+        }
+        UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(&mut tx, head as usize)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    /// Versions at or below `pruned` that another version at or below `pruned` supersedes. A run
+    /// that saw every height leaves none.
+    async fn superseded_versions_below(storage: &SqlStorage, pruned: u64) -> i64 {
+        let table = MockMerkleTree::state_type();
+        let mut tx = storage.read().await.unwrap();
+        let (count,) = query_as::<(i64,)>(&format!(
+            "SELECT count(*) FROM {table} AS t
+             WHERE t.created <= $1 AND EXISTS (
+               SELECT 1 FROM {table} AS t2
+               WHERE t2.path = t.path AND t2.created > t.created AND t2.created <= $1
+             )"
+        ))
+        .bind(pruned as i64)
+        .fetch_one(tx.as_mut())
+        .await
+        .unwrap();
+        count
+    }
+
+    /// A cursor at or above the head was stamped by a run from before the head bound. The writer
+    /// resumes from the head and rewrites every height after it, and a batch only collects what
+    /// its own window supersedes, so a run first lowers the cursor to just below the head and then
+    /// prunes those heights again as the head moves on, leaving nothing behind.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_pruning_resumes_from_head_below_stale_cursor() {
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let head = 20u64;
+        let mut tree = state_with_stale_cursor(&storage, head, 30).await;
+        storage.set_pruning_config(
+            PrunerCfg::default()
+                .with_state_target_retention(Duration::ZERO)
+                .with_state_tables(vec![MockMerkleTree::state_type().into()]),
+        );
+
+        // The first run lowers the cursor and has nothing to delete yet.
+        let mut pruner = Default::default();
+        assert_eq!(storage.prune(&mut pruner).await.unwrap(), None);
+        assert_state_pruned_below_head(&storage, head, head - 1).await;
+
+        // The writer moves past the stale cursor; the next run prunes those heights as well.
+        let new_head = 40u64;
+        write_state_to(&storage, &mut tree, head + 1, new_head).await;
+        let mut pruner = Default::default();
+        while storage.prune(&mut pruner).await.unwrap().is_some() {}
+        assert_state_pruned_below_head(&storage, new_head, new_head - 1).await;
+        assert_eq!(superseded_versions_below(&storage, new_head - 1).await, 0);
+    }
+
+    /// The pruner's first run comes a whole interval after startup, and by then the writer has
+    /// rewritten heights above the head it resumed from; a repair at that point starts pruning
+    /// above those heights and never collects what they supersede. So the cursor is lowered when
+    /// the storage connects, before the writer can start. Reconnecting stands in for the restart.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_stale_state_cursor_is_lowered_on_connect() {
+        let db = TmpDb::init().await;
+        let head = 20u64;
+        let mut tree = {
+            let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+                .await
+                .unwrap();
+            state_with_stale_cursor(&storage, head, 30).await
+        };
+
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        assert_state_pruned_below_head(&storage, head, head - 1).await;
+        storage.set_pruning_config(
+            PrunerCfg::default()
+                .with_state_target_retention(Duration::ZERO)
+                .with_state_tables(vec![MockMerkleTree::state_type().into()]),
+        );
+
+        // The writer is past the old head when the pruner first runs, and moves on afterwards.
+        write_state_to(&storage, &mut tree, head + 1, 25).await;
+        let mut pruner = Default::default();
+        while storage.prune(&mut pruner).await.unwrap().is_some() {}
+        assert_state_pruned_below_head(&storage, 25, 24).await;
+        write_state_to(&storage, &mut tree, 26, 40).await;
+        let mut pruner = Default::default();
+        while storage.prune(&mut pruner).await.unwrap().is_some() {}
+        assert_state_pruned_below_head(&storage, 40, 39).await;
+        assert_eq!(superseded_versions_below(&storage, 39).await, 0);
+    }
+
+    /// Archive nodes prune state through `prune_state_below`, which lowers a stale cursor the same
+    /// way.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_prune_state_below_resumes_from_head_below_stale_cursor() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let cfg = PrunerCfg::default().with_state_tables(vec![MockMerkleTree::state_type().into()]);
+        let head = 20u64;
+        let mut tree = state_with_stale_cursor(&storage, head, 30).await;
+
+        storage.prune_state_below(u64::MAX, 0, &cfg).await.unwrap();
+        assert_state_pruned_below_head(&storage, head, head - 1).await;
+
+        let new_head = 40u64;
+        write_state_to(&storage, &mut tree, head + 1, new_head).await;
+        storage.prune_state_below(new_head, 0, &cfg).await.unwrap();
+        assert_state_pruned_below_head(&storage, new_head, new_head - 1).await;
+        assert_eq!(superseded_versions_below(&storage, new_head - 1).await, 0);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

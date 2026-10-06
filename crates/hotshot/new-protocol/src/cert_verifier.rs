@@ -16,12 +16,12 @@ use hotshot_types::{
         Certificate1, Certificate2, SimpleCertificate, Threshold, TimeoutCertificate2,
         TimeoutCertificate3,
     },
-    simple_vote::{HasEpoch, Voteable},
+    simple_vote::{HasEpoch, QuorumData2, TimeoutData2, TimeoutData3, Vote2Data, Voteable},
     stake_table::StakeTableEntries,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::{Certificate, HasViewNumber},
 };
-use hotshot_utils::anytrace::{Result, Wrap};
+use hotshot_utils::anytrace::{Result, Wrap, bail, ensure};
 use tokio_util::task::JoinMap;
 use tracing::{error, warn};
 
@@ -95,7 +95,7 @@ pub trait Verifiable<T: NodeType>: HasViewNumber + HasEpoch + Sized {
 impl<T, D, V> Verifiable<T> for SimpleCertificate<T, D, V>
 where
     T: NodeType,
-    D: Voteable<T> + HasEpoch + 'static,
+    D: Voteable<T> + HasEpoch + Meta + 'static,
     V: Threshold<T>,
     Self: Certificate<T, D> + Send + 'static,
 {
@@ -110,12 +110,83 @@ where
         self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
-        _epoch_height: u64,
+        epoch_height: u64,
         upgrade_lock: &UpgradeLock<T>,
     ) -> Result<Self> {
-        self.is_valid_cert(stake_table, threshold, upgrade_lock)?;
+        ensure! {
+            self.data.consistent_with(self.view_number(), epoch_height),
+            "certificate data is inconsistent"
+        }
+        if self.view_number() == ViewNumber::genesis() && D::UNSIGNED_AT_GENESIS_ALLOWED {
+            return Ok(self);
+        }
+        verify_signatures(&self, stake_table, threshold, upgrade_lock)?;
         Ok(self)
     }
+}
+
+/// Meta information about vote data.
+trait Meta {
+    const UNSIGNED_AT_GENESIS_ALLOWED: bool = false;
+
+    /// Whether the data is consistent, internally and with the certificate's view.
+    ///
+    /// Checked in `check`, so a certificate failing it is never recorded as
+    /// verified and cannot retire its key for other senders. It runs before the
+    /// genesis exemption, which therefore cannot skip it.
+    fn consistent_with(&self, view: ViewNumber, epoch_height: u64) -> bool;
+}
+
+impl<T: NodeType> Meta for QuorumData2<T> {
+    // A `Cert1` at the genesis view may be unsigned, because the genesis QC is.
+    // Every other certificate is formed from signed votes, at the genesis view
+    // as at any other, so none of them gets this exception.
+    const UNSIGNED_AT_GENESIS_ALLOWED: bool = true;
+
+    fn consistent_with(&self, _: ViewNumber, epoch_height: u64) -> bool {
+        self.is_well_formed(epoch_height)
+    }
+}
+
+impl<T: NodeType> Meta for Vote2Data<T> {
+    fn consistent_with(&self, _: ViewNumber, epoch_height: u64) -> bool {
+        self.is_well_formed(epoch_height)
+    }
+}
+
+impl Meta for TimeoutData2 {
+    fn consistent_with(&self, view: ViewNumber, _: u64) -> bool {
+        self.view == view
+    }
+}
+
+impl Meta for TimeoutData3 {
+    fn consistent_with(&self, view: ViewNumber, _: u64) -> bool {
+        self.view == view
+    }
+}
+
+/// Verify a certificate's signatures, at the genesis view as at any other.
+///
+/// TODO: Almost a duplicate of `SimpleCertificate::is_valid_cert`.
+pub(crate) fn verify_signatures<T, D, V>(
+    cert: &SimpleCertificate<T, D, V>,
+    stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+    threshold: U256,
+    upgrade_lock: &UpgradeLock<T>,
+) -> Result<()>
+where
+    T: NodeType,
+    D: Voteable<T> + 'static,
+    V: Threshold<T>,
+    SimpleCertificate<T, D, V>: Certificate<T, D>,
+{
+    let Some(signatures) = cert.signatures.as_ref() else {
+        bail!("certificate has no signatures");
+    };
+    let params = <T::SignatureKey as SignatureKey>::public_parameter(stake_table, threshold);
+    let commit = cert.data_commitment(upgrade_lock)?;
+    <T::SignatureKey as SignatureKey>::check(&params, commit.as_ref(), signatures).wrap()
 }
 
 impl<T: NodeType> Verifiable<T> for EpochChangeMessage<T, Unchecked> {
@@ -134,10 +205,8 @@ impl<T: NodeType> Verifiable<T> for EpochChangeMessage<T, Unchecked> {
         upgrade_lock: &UpgradeLock<T>,
     ) -> Result<Self::Output> {
         self.well_formed(epoch_height).wrap()?;
-        self.cert1
-            .is_valid_cert(stake_table, threshold, upgrade_lock)?;
-        self.cert2
-            .is_valid_cert(stake_table, threshold, upgrade_lock)?;
+        verify_signatures(&self.cert1, stake_table, threshold, upgrade_lock)?;
+        verify_signatures(&self.cert2, stake_table, threshold, upgrade_lock)?;
         Ok(self.into_validated())
     }
 }

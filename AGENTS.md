@@ -22,6 +22,7 @@ the generic BFT consensus library it is built on, `contracts/` the Solidity L1 s
 - `doc/upgrades.md` - configuring and running a consensus upgrade
 - `doc/software-releases.md` - release branches, `MAJOR.MINOR.PHASE.PATCH` tags, the tracker issue and its commands
 - `doc/espresso-dev-node.md` - single-process dev node, for rollup integration work
+- `doc/light-client-follower.md` - a query node without stake that follows the chain through the light client
 - `doc/pup.md` - `pup` Datadog CLI, for logs and metrics of Espresso's own infrastructure
 
 ## Writing Reviewable Code

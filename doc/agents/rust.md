@@ -22,7 +22,6 @@ cargo nextest run -p <package> -- <test_name>
 
 just check                            # postgres + embedded-db variants (pre-commit only)
 just lint                             # clippy with -D warnings
-just hotshot::test <test_name>        # HotShot consensus tests
 just test-demo base                   # basic E2E
 just test-demo pos-base               # PoS E2E
 just test-slow                        # long-running tests
@@ -35,8 +34,8 @@ just demo-native                      # local network via process-compose
 - HTTP API: axum routers in `crates/espresso/api/src/axum.rs`; v1 API traits in `crates/espresso/api/src/v1/`; v2 is
   generated from `crates/espresso/api/proto/v2/`. Both are implemented on the node's state in
   `crates/espresso/node/src/api/state.rs`
-- HTTP clients: `http-client` (reqwest). `surf-disco` is gone; `tide-disco` survives only in the builder,
-  events-service, dev-node and hotshot-testing crates
+- HTTP clients: `http-client` (reqwest). `surf-disco` is gone; `tide-disco` survives only in the builder-api,
+  events-service and hotshot-testing crates
 
 ## Type-driven design
 
@@ -97,7 +96,8 @@ Test layers:
 - Unit (`cargo nextest -p <crate>`): individual functions/modules
 - Reference (`cargo nextest -p espresso-types reference`): serialization compatibility, in
   `crates/espresso/types/src/reference_tests.rs`
-- HotShot (`just hotshot::test <test_name>`): consensus tasks, network sims, in `crates/hotshot/testing/tests/`
+- New protocol (`cargo nextest run -p hotshot-new-protocol`): consensus, cutover, network sims, in
+  `crates/hotshot/new-protocol/src/tests/`
 - Integration (`cargo nextest run -p tests`): full system E2E in `tests/`
 - Slow (`just test-slow`): in `slow-tests/`
 

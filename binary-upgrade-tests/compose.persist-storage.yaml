@@ -21,7 +21,7 @@ services:
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
 
   espresso-node-1:
-    command: espresso-node -- storage-sql -- http -- query -- explorer -- light-client
+    command: espresso-node -- storage-sql -- http -- query -- submit -- explorer -- light-client
     environment:
       ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS: espresso-node-1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       LIGHT_CLIENT_DB_PATH: /store/lc

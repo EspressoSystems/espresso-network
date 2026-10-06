@@ -5,13 +5,19 @@ use hotshot::types::SignatureKey;
 use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
+    simple_certificate::{SimpleCertificate, Threshold},
     simple_vote::{HasEpoch, VersionedVoteData},
     stake_table::StakeTableEntries,
     traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
-    vote::{Certificate, Vote, VoteAccumulator},
+    vote::{Certificate, HasViewNumber, Vote, VoteAccumulator},
 };
 use hotshot_utils::anytrace;
 use tracing::{info, warn};
+
+use crate::cert_verifier::verify_signatures;
+
+/// The certificate formed from votes of type `V` under threshold `Th`.
+pub type Cert<T, V, Th> = SimpleCertificate<T, <V as Vote<T>>::Commitment, Th>;
 
 /// A [`VoteAccumulator`] that validates certificates before emitting them.
 ///
@@ -19,13 +25,14 @@ use tracing::{info, warn};
 /// certificate is invalid, votes with invalid signatures are discarded, the
 /// remaining ones are accumulated again, and every subsequent vote is verified
 /// before it is accumulated.
-pub struct CheckedAccumulator<T, V, C>
+pub struct CheckedAccumulator<T, V, Th>
 where
     T: NodeType,
     V: Vote<T>,
-    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch,
+    Th: Threshold<T>,
+    Cert<T, V, Th>: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch,
 {
-    accumulator: VoteAccumulator<T, V, C>,
+    accumulator: VoteAccumulator<T, V, Cert<T, V, Th>>,
 
     /// Votes accumulated so far, kept for recovery from an invalid certificate.
     votes: Vec<V>,
@@ -40,11 +47,13 @@ where
     upgrade_lock: UpgradeLock<T>,
 }
 
-impl<T, V, C> CheckedAccumulator<T, V, C>
+impl<T, V, Th> CheckedAccumulator<T, V, Th>
 where
     T: NodeType,
     V: Vote<T>,
-    C: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch,
+    V::Commitment: 'static,
+    Th: Threshold<T>,
+    Cert<T, V, Th>: Certificate<T, V::Commitment, Voteable = V::Commitment> + HasEpoch,
 {
     pub fn new(membership: EpochMembership<T>, lock: UpgradeLock<T>) -> Self {
         Self {
@@ -59,7 +68,7 @@ where
     /// Accumulate a vote.
     ///
     /// Returns a valid certificate once enough votes have been collected.
-    pub fn add(&mut self, vote: V) -> Option<C> {
+    pub fn add(&mut self, vote: V) -> Option<Cert<T, V, Th>> {
         if self.verify_votes {
             if !self.is_valid_vote(&vote) {
                 return None;
@@ -68,7 +77,7 @@ where
                 .accumulator
                 .accumulate(&vote, self.membership.clone())?;
             debug_assert!(self.validate(&cert).is_ok());
-            info!(view = %cert.view_number(), cert = type_name::<C>(), "certificate formed");
+            info!(view = %cert.view_number(), cert = type_name::<Cert<T, V, Th>>(), "certificate formed");
             return Some(cert);
         }
 
@@ -79,7 +88,7 @@ where
 
         match self.validate(&cert) {
             Ok(()) => {
-                info!(view = %cert.view_number(), cert = type_name::<C>(), "certificate formed");
+                info!(view = %cert.view_number(), cert = type_name::<Cert<T, V, Th>>(), "certificate formed");
                 Some(cert)
             },
             Err(err) => {
@@ -98,7 +107,7 @@ where
     /// stake table come from one snapshot, and the caller sizes an allocation
     /// with the result.
     pub fn min_votes(&self) -> usize {
-        let table = C::stake_table(&self.membership);
+        let table = Cert::<T, V, Th>::stake_table(&self.membership);
         let largest = table
             .0
             .iter()
@@ -109,12 +118,12 @@ where
             return 1;
         }
         let nodes = table.0.len().max(1);
-        let votes = C::threshold(&self.membership).div_ceil(largest);
+        let votes = Cert::<T, V, Th>::threshold(&self.membership).div_ceil(largest);
         usize::try_from(votes).unwrap_or(nodes).clamp(1, nodes)
     }
 
     /// Discard votes with invalid signatures and accumulate the rest again.
-    fn recover(&mut self) -> Option<C> {
+    fn recover(&mut self) -> Option<Cert<T, V, Th>> {
         self.verify_votes = true;
         self.accumulator.clear();
         for vote in mem::take(&mut self.votes) {
@@ -123,7 +132,7 @@ where
             }
             if let Some(cert) = self.accumulator.accumulate(&vote, self.membership.clone()) {
                 debug_assert!(self.validate(&cert).is_ok());
-                info!(view = %cert.view_number(), cert = type_name::<C>(), "certificate formed");
+                info!(view = %cert.view_number(), cert = type_name::<Cert<T, V, Th>>(), "certificate formed");
                 return Some(cert);
             }
         }
@@ -131,10 +140,10 @@ where
     }
 
     /// Check the certificate's aggregate signature against the stake table.
-    fn validate(&self, cert: &C) -> anytrace::Result<()> {
-        let table = StakeTableEntries::from(C::stake_table(&self.membership));
-        let thresh = C::threshold(&self.membership);
-        cert.is_valid_cert(&table.0, thresh, &self.upgrade_lock)
+    fn validate(&self, cert: &Cert<T, V, Th>) -> anytrace::Result<()> {
+        let table = StakeTableEntries::from(Cert::<T, V, Th>::stake_table(&self.membership));
+        let thresh = Cert::<T, V, Th>::threshold(&self.membership);
+        verify_signatures(cert, &table.0, thresh, &self.upgrade_lock)
     }
 
     /// Check the vote's signature.
@@ -156,7 +165,7 @@ where
         if !valid {
             warn!(
                 view = %vote.view_number(),
-                cert = type_name::<C>(),
+                cert = type_name::<Cert<T, V, Th>>(),
                 signer = %vote.signing_key(),
                 "invalid vote"
             );

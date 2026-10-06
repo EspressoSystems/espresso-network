@@ -148,6 +148,20 @@ structure Vote2Justification (s : NodeState) (p : Proposal) : Prop where
   reconstructed : s.blocksReconstructed p.viewNumber p.payloadCommit
 
 /--
+The parent certificate a proposal names is one the node may build on.
+
+After a timeout it is the locked certificate, together with the timeout
+certificate as evidence; otherwise it is the certificate of the immediately
+preceding view. Named rather than written inline so that a statement about
+proposing has one place to point at.
+-/
+def ParentCertJustified (s : NodeState) (p : Proposal) : Prop :=
+  match p.timeoutEvidence with
+  | some tc => s.timeoutCerts p.viewNumber = some tc ∧ s.lockedCert = some p.parentCert
+  | none => s.cert1s (p.viewNumber - 1) = some p.parentCert
+      ∧ p.parentCert.view + 1 = p.viewNumber
+
+/--
 What must hold of state `s` for node `node` to propose `p`.
 
 Freshness and the timeout bar are separate, see `ProposeEnabled`.
@@ -159,20 +173,8 @@ structure ProposalJustification (s : NodeState) (p : Proposal) : Prop where
   /-- We only emit proposals that would pass our own admission check. -/
   wellFormed : ProposalWellFormed p
 
-  /--
-  The parent certificate is justified.
-
-  After a timeout it is our locked certificate, together with the timeout
-  certificate as evidence; otherwise it is the certificate of the
-  immediately preceding view.
-  -/
-  justified : match p.timeoutEvidence with
-    | some tc =>
-        s.timeoutCerts p.viewNumber = some tc
-        ∧ s.lockedCert = some p.parentCert
-    | none =>
-        s.cert1s (p.viewNumber - 1) = some p.parentCert
-        ∧ p.parentCert.view + 1 = p.viewNumber
+  /-- The parent certificate is justified; see `ParentCertJustified`. -/
+  justified : ParentCertJustified s p
 
   /--
   We hold the parent block, and the header we propose is the one built for
@@ -270,6 +272,11 @@ in its own right, once enough of its voters had timed out.
 
 What the node must not do is commit a view one of its own vote1s skipped over;
 `Vote1SkippedView` says why.
+
+The block is read from `NodeState.admitted`, while casting the vote2 moves the
+lock, and `SafetySpec.lockJustified` reads `NodeState.proposals`. The two agree
+where it matters: `admitted_held` says what is admitted above the decide floor is
+held, so a vote2 that is owed is also one the node may cast.
 -/
 def Vote2Enabled (s : NodeState) (p : Proposal) : Prop :=
   Vote2Justification s p ∧ ¬ Vote1SkippedView s p.viewNumber
@@ -806,18 +813,6 @@ structure StepSpec (s : NodeState) (input : Input) (output : List Output) (s' : 
   completeness (see `DecideInv`). Nothing else may cut the
   chain short: a held ancestor may not be withheld, or a node could strand
   blocks it holds behind a delivery it is never obliged to repeat.
-
-  **The stop condition is judged after the step, freshness before it**, and
-  the asymmetry is forced. Freshness is what stops a node re-deciding, so it
-  must hold of the state the step *began* in. The stop condition cannot: the
-  floor is derived from the decided views, so a step's own decides move it,
-  and the holdings the walk runs on include what this very step ingested.
-  `DecideEnabled` is a predicate of one state and reads it as it stands
-  there, so judging the stop at `s` would leave a decide forbidden during
-  the step that makes it owed and owed once that step is over — a bar no
-  input-driven implementation can live with, since a schedule need never
-  deliver another input, and `WeaklyFair` forces every implementation to
-  leave nothing enabled when a step ends.
   -/
   decideJustified : ∀ blocks c1 c2, Output.decided blocks c1 c2 ∈ output →
     (∃ head rest, blocks = head :: rest
