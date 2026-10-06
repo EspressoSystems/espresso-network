@@ -34,9 +34,10 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, decides_view, is_leaf_decided, is_persist_proposal, is_proposal,
-            is_proposal_for_view, is_record_action, is_request_block_and_header, is_request_state,
-            is_send_cert2, is_send_timeout_cert, is_send_timeout_vote, is_view_changed, is_vote1,
-            is_vote1_for_view, is_vote2, is_vote2_for_view, node_index_for_key,
+            is_proposal_for_view, is_proposal_paired, is_record_action,
+            is_request_block_and_header, is_request_state, is_send_cert2, is_send_timeout_cert,
+            is_send_timeout_vote, is_view_changed, is_vote1, is_vote1_for_view, is_vote2,
+            is_vote2_for_view, node_index_for_key,
         },
         utils::{ConsensusHarness, MockBlock, state_verified_input},
     },
@@ -1003,9 +1004,11 @@ async fn test_state_validation_failed_keeps_proposal() {
 }
 
 /// A VID share whose `ns_lens` disagree with the proposal's namespace table is
-/// refused at pairing: the proposal is not processed and gets no vote1. The
-/// commitment does not bind `ns_lens`, so this check is what keeps a decided
-/// block's stored common honest about its namespace boundaries.
+/// refused at pairing: no `ProposalPaired` persists it or seeds the
+/// reconstructor with its common, and the proposal is not processed and gets
+/// no vote1. The commitment does not bind `ns_lens`, so this check is what
+/// keeps a decided block's stored common honest about its namespace
+/// boundaries.
 #[tokio::test]
 async fn test_vid_share_with_mismatched_ns_lens_is_refused() {
     let test_data = TestData::new(1).await;
@@ -1024,6 +1027,10 @@ async fn test_vid_share_with_mismatched_ns_lens_is_refused() {
             ConsensusInput::VidShare(share),
         ))
         .await;
+    assert!(
+        !any(harness.outputs(), is_proposal_paired),
+        "a mismatched share must not be persisted or seed the reconstructor"
+    );
     assert!(
         !any(harness.outputs(), is_request_state),
         "a proposal paired with a mismatched share must not be processed"

@@ -1011,6 +1011,18 @@ impl<T: NodeType> Consensus<T> {
         vid_share: VidDisperseShare2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
+        // Refuse the share before `ProposalPaired` persists it and seeds the
+        // reconstructor with its common.
+        if !ns_lens_match_metadata(
+            &vid_share.common,
+            &proposal.proposal.data.block_header.metadata().encode(),
+        ) {
+            warn!(
+                view = %proposal.view_number(), proposer = %KeyPrefix::from(&sender),
+                "VID share namespace lengths disagree with the proposal's namespace table"
+            );
+            return Protocol::Abort;
+        }
         outbox.push_back(ConsensusOutput::ProposalPaired {
             proposal: proposal.proposal.clone(),
             vid_share: vid_share.clone(),
@@ -1056,17 +1068,6 @@ impl<T: NodeType> Consensus<T> {
             warn!(
                 %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch, %err,
                 "proposal not safe"
-            );
-            return Protocol::Abort;
-        }
-
-        if !ns_lens_match_metadata(
-            &vid_share.common,
-            &proposal.block_header.metadata().encode(),
-        ) {
-            warn!(
-                %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
-                "VID share namespace lengths disagree with the proposal's namespace table"
             );
             return Protocol::Abort;
         }
