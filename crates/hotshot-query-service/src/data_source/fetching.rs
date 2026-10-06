@@ -928,37 +928,47 @@ where
     /// Reconstruction runs on views that are not yet (and may never be)
     /// decided, so the block is only stored if it matches the decided leaf at
     /// the same height. If that leaf hasn't been ingested yet the payload is
-    /// dropped: when the decide arrives, [`append`](Self::append) spawns a
-    /// fetch that back-fills the payload from a peer.
+    /// dropped, and either the caller sends it again after the decide or
+    /// [`append`](Self::append) fetches it.
     async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         let height = block.height();
-        let leaf = {
-            let mut tx = self.read().await.context("opening read transaction")?;
-            match tx.get_leaf(LeafId::Number(height as usize)).await {
-                Ok(leaf) => leaf,
-                Err(QueryError::Missing | QueryError::NotFound) => {
-                    tracing::info!(
-                        height,
-                        "dropping reconstructed payload; leaf not yet available"
-                    );
-                    return Ok(());
-                },
-                Err(err) => {
-                    return Err(err).context(format!(
-                        "loading leaf {height} to verify reconstructed payload"
-                    ));
-                },
-            }
+        let mut tx = self.read().await.context("opening read transaction")?;
+        let leaf = match tx.get_leaf(LeafId::Number(height as usize)).await {
+            Ok(leaf) => leaf,
+            Err(QueryError::Missing | QueryError::NotFound) => {
+                tracing::debug!(height, "dropping block payload; leaf not yet available");
+                return Ok(());
+            },
+            Err(err) => {
+                return Err(err).context(format!("loading leaf {height} to verify block payload"));
+            },
         };
         if leaf.block_hash() != block.hash() {
             tracing::warn!(
                 height,
                 decided = %leaf.block_hash(),
-                reconstructed = %block.hash(),
-                "reconstructed payload does not match decided block; discarding"
+                payload_block = %block.hash(),
+                "block payload does not match decided block; discarding"
             );
             return Ok(());
         }
+        // Storing is an upsert that rewrites the whole payload, and the same block arrives
+        // again on every replay, so skip blocks that are already stored. The payload row is
+        // shared by every height with the same payload, so it only counts once this height's
+        // transactions are indexed too.
+        match tx
+            .get_payload_metadata(BlockId::Number(height as usize))
+            .await
+        {
+            Ok(stored) if stored.num_transactions == 0 || !stored.namespaces.is_empty() => {
+                return Ok(());
+            },
+            Ok(_) | Err(QueryError::Missing | QueryError::NotFound) => {},
+            Err(err) => {
+                return Err(err).context(format!("checking whether block {height} is stored"));
+            },
+        }
+        drop(tx);
         self.fetcher.store_and_notify(&block).await;
         Ok(())
     }

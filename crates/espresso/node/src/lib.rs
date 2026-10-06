@@ -2013,7 +2013,7 @@ pub mod testing {
 
         // At 0.6 a decide carries the block payload only on the node that
         // built the block; every other node receives the payload through a
-        // separate `BlockPayloadReconstructed` event, which can arrive before
+        // separate `BlockPayload` event, which can arrive before
         // or after the decide. Pair the two by view so the transaction is
         // only reported once its block is decided.
         let mut reconstructed = HashMap::new();
@@ -2024,7 +2024,7 @@ pub mod testing {
                 let event = events.next().await.unwrap();
                 tracing::info!("Received event from handle: {event:?}");
 
-                if let CoordinatorEvent::BlockPayloadReconstructed {
+                if let CoordinatorEvent::BlockPayload {
                     view,
                     header,
                     payload,
