@@ -1,15 +1,15 @@
 //! Leader block-build stages from `request_block` (crates/hotshot/new-protocol/src/block.rs).
 //!
-//! Inputs mirror the network-bench load generator: random 1 MB transactions (plus one
-//! 100 KB variant) round-robin over 16 namespaces, protocol version 0.6 (AvidmGf2).
-//! VID total weight is the node count (stake 1 per node) and, for VID-only stages, the
-//! `approximate_weights` result for large equal stakes (1000 + nodes).
+//! Inputs mirror the network-bench load generator: random 1 MB transactions round-robin over
+//! 16 namespaces in 30 to 70 MB blocks, protocol version 0.6 (AvidmGf2). VID total weight is
+//! the node count (stake 1 per node) and the `approximate_weights` result for large equal
+//! stakes (1000 + nodes).
 //!
-//! `request_block` here starts at `from_transactions`, which borrows the cached transactions.
-//! `tx_clone` times a full copy of them for comparison.
+//! `request_block` runs the leader's build task: `from_transactions` on the cached
+//! transactions, then transaction, VID and builder commitments in parallel.
+//! `tx_clone` times a full copy of the transactions for comparison.
 //!
-//! `ESPRESSO_BENCH_BLAKE3_TX_HASH` and `RAYON_NUM_THREADS` are read once per process,
-//! so each combination needs its own run. Both are recorded in the benchmark id.
+//! `RAYON_NUM_THREADS` is read once per process and recorded in the benchmark id.
 
 use std::{hint::black_box, thread, time::Duration};
 
@@ -32,19 +32,12 @@ const NODES: [usize; 2] = [3, 10];
 /// `approximate_weights` adds 1 per node on top of `VID_TARGET_TOTAL_STAKE`.
 const SCALED_WEIGHT_BASE: usize = 1000;
 /// (block size in MB, tx size in bytes)
-const BLOCKS: [(usize, usize); 9] = [
-    (1, MB),
-    (2, MB),
-    (5, MB),
-    (10, MB),
-    (20, MB),
-    (33, MB),
-    (34, MB),
-    (50, MB),
-    (33, MB / 10),
-];
+const BLOCKS: [(usize, usize); 5] = [(30, MB), (40, MB), (50, MB), (60, MB), (70, MB)];
 
-type Commitments = (VidCommitment, BuilderCommitment);
+type Commitments = (
+    Vec<Commitment<Transaction>>,
+    (VidCommitment, BuilderCommitment),
+);
 
 struct Case {
     label: String,
@@ -113,15 +106,20 @@ fn request_block(txs: &[Transaction], weight: usize) -> (Payload, impl Sized, Co
     let payload_bytes = payload.encode();
     let metadata_bytes = ns_table.encode();
     let commitments = rayon::join(
+        || payload.transaction_commitments(&ns_table),
         || {
-            vid_commitment(
-                &payload_bytes,
-                &metadata_bytes,
-                weight,
-                NEW_PROTOCOL_VERSION,
+            rayon::join(
+                || {
+                    vid_commitment(
+                        &payload_bytes,
+                        &metadata_bytes,
+                        weight,
+                        NEW_PROTOCOL_VERSION,
+                    )
+                },
+                || payload.builder_commitment(&ns_table),
             )
         },
-        || payload.builder_commitment(&ns_table),
     );
     (payload, payload_bytes, commitments)
 }
@@ -221,7 +219,6 @@ fn bench_request_block(
 
 fn bench_block_build(c: &mut Criterion) {
     let threads = rayon::current_num_threads();
-    let blake3 = u8::from(std::env::var_os("ESPRESSO_BENCH_BLAKE3_TX_HASH").is_some());
     let mut rng = ChaCha20Rng::seed_from_u64(42);
     let mut group = c.benchmark_group("block_build");
     group
@@ -232,7 +229,7 @@ fn bench_block_build(c: &mut Criterion) {
 
     for (block_mb, tx_size) in BLOCKS {
         let case = Case {
-            label: format!("{block_mb}MB_{}KB_t{threads}_b3{blake3}", tx_size / 1000),
+            label: format!("{block_mb}MB_{}KB_t{threads}", tx_size / 1000),
             txs: transactions(block_mb, tx_size, &mut rng),
         };
         bench_tx_stages(&mut group, &case);
