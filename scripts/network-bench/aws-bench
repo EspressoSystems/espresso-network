@@ -121,14 +121,16 @@ STEP_TOP_MB_S = 200.0
 SEARCH_STEP_S = 60
 SEARCH_CAP_S = 60.0
 SEARCH_TX_TIMEOUT_S = 60
-# A typical search: 8 probes plus the confirm's second step, with a drain after each of the
-# two failing probes.
-SEARCH_EXPECTED_PROBES = 9
-SEARCH_EXPECTED_DRAINS = 2
+# A typical search from the default start: 10 probes plus the confirm's second step, with a
+# drain after each of three failing probes.
+SEARCH_EXPECTED_PROBES = 11
+SEARCH_EXPECTED_DRAINS = 3
 # Share of the Postgres volume `--offered-gb` may fill.
 PG_FILL_MAX = 0.9
-# Share of node0's root volume the payload may fill when Postgres is colocated.
-COLOCATED_FILL_MAX = 0.6
+# Share of node0's usable disk the payload may fill when Postgres is colocated: the journal
+# takes up to 0.4 of it (JOURNAL_MAX_BYTES_FRACTION x QUERY_JOURNAL_FRACTION), Postgres WAL and
+# indexes the rest.
+COLOCATED_FILL_MAX = 0.5
 # Submit threads: a 1 MB POST takes tens of ms on the private network; 200 tx/s needs this many.
 SUBMIT_WORKERS = 32
 NODE_TYPE = "c8g.4xlarge"
@@ -1033,6 +1035,7 @@ def search_root_gb(cfg: RunConfig, query: bool) -> int:
         need = RESERVED_GB + payload_factor(cfg.nodes) * offered / COLOCATED_FILL_MAX
     else:
         need = RESERVED_GB + VALIDATOR_DISK_FACTOR * offered
+    # round: float noise must not add a GB to an exact size.
     return max(NODE_ROOT_GB_MIN, math.ceil(round(need, 6)))
 
 
@@ -1055,6 +1058,22 @@ def check_search(cfg: RunConfig) -> None:
             f"--offered-gb {search.offered_gb:g} stores {stored_gb:.0f} GB on node0, more "
             f"than {PG_FILL_MAX:.0%} of the {PG_GB} GiB Postgres volume"
         )
+
+
+def check_fleet_disks(manifest: FleetManifest, cfg: RunConfig) -> None:
+    """Refuses a search whose offered bytes the fleet's root disks, sized at `up`, cannot hold."""
+    if cfg.search is None:
+        return
+    for host in manifest["hosts"]:
+        if host["role"] == "ctl":
+            continue
+        need = node_root_gb(cfg, host["role"] == "query")
+        if host["root_gb"] < need:
+            raise Refused(
+                f"{host['name']} has a {host['root_gb']} GB root disk, --offered-gb "
+                f"{cfg.search.offered_gb:g} needs {need}: up a fleet with --search and "
+                f"that --offered-gb, or lower it"
+            )
 
 
 def check_rds_config(cfg: RunConfig) -> None:
@@ -2565,8 +2584,8 @@ def load_from_args(
 def positive_float(text: str) -> float:
     try:
         value = float(text)
-    except ValueError:
-        value = 0.0
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected a number: {text}") from exc
     if not value > 0:
         raise argparse.ArgumentTypeError(f"expected a positive number: {text}")
     return value
@@ -3807,6 +3826,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
     )
     check_submit_nodes(cfg)
     check_search(cfg)
+    check_fleet_disks(saved, cfg)
     return cfg
 
 

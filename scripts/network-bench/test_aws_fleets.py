@@ -49,7 +49,9 @@ def test_run_fleet_without_a_dir_picks_the_only_fleet(harness, runner):
 def test_fleet_run_manifest_records_both_commands(harness, runner):
     args = harness.parse("run", "--fleet", "--yes")
     assert awsb.cmd_run(args, FakeSystem(run=runner)) == awsb.EXIT_OK
-    manifest = netbench.read_json(harness.fleet_dir / "runs" / "01-colocated" / "manifest.json")
+    manifest = netbench.read_json(
+        harness.fleet_dir / "runs" / "01-colocated" / "manifest.json"
+    )
     assert manifest["argv"] == ["run", "--fleet"]
     assert manifest["fleet_argv"] == awsb.sanitize_argv(harness.fleet()["argv"])
     assert manifest["fleet_argv"][0] == "up"
@@ -426,16 +428,36 @@ def test_prune_plan_takes_a_fleet_without_a_recorded_region_as_eu_west_1():
     assert prune_plan(old) == ([(DIR, old)], [])
 
 
+def with_disks(manifest: dict, root_gb: int) -> dict:
+    return {
+        **manifest,
+        "hosts": [{**host, "root_gb": root_gb} for host in manifest["hosts"]],
+    }
+
+
 # TEST:fleet-ttl-short-fails
 def test_search_run_needs_the_search_worst_case_from_the_ttl(harness, runner):
-    manifest = harness.fleet()
+    manifest = with_disks(harness.fleet(), 1000)
     ramp = awsb.fleet_run_config(harness.run_args(), manifest)
     searched = awsb.fleet_run_config(harness.run_args("--search", "150"), manifest)
     assert searched.search is not None
-    assert (
-        awsb.estimate_run(manifest, searched)["worst_s"]
-        > awsb.estimate_run(manifest, ramp)["worst_s"]
+    ramp_needed_s = (
+        awsb.estimate_run(manifest, ramp)["worst_s"]
+        + awsb.NOLOGIN_LEAD_S
+        + awsb.DESTROY_S
     )
-    now = datetime.fromisoformat(manifest["expires_at"]) - timedelta(minutes=30)
+    now = datetime.fromisoformat(manifest["expires_at"]) - timedelta(
+        seconds=ramp_needed_s + 60
+    )
+    awsb.check_run_allowed(manifest, ramp, now)
     with pytest.raises(awsb.Refused, match="this run needs up to"):
         awsb.check_run_allowed(manifest, searched, now)
+
+
+def test_search_run_needs_the_fleet_disks_to_hold_the_offered_gb(harness, runner):
+    manifest = harness.fleet()
+    with pytest.raises(awsb.Refused, match="root disk"):
+        awsb.fleet_run_config(harness.run_args("--search", "150"), manifest)
+    awsb.fleet_run_config(
+        harness.run_args("--search", "150"), with_disks(manifest, 1000)
+    )

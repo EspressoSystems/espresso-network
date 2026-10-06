@@ -1201,6 +1201,7 @@ def test_heights_not_yet_on_the_query_node_count_as_lagging():
 
 def verdict(rate, consensus=(), query=()):
     return {
+        "kind": "ramp",
         "rate_mb_s": rate,
         "submitted_mb_s": rate,
         "decided_mb_s": rate,
@@ -1677,3 +1678,54 @@ def test_legacy_staircase_reports_why_it_stopped(staircase):
     assert staircase(steps=(0.16,), tx_timeout_s=1).meta["stop_reason"] == (
         "first step failed"
     )
+
+
+def test_a_confirm_that_fails_consensus_bounds_the_consensus_limit_below_it():
+    query = ["query lag grows 76 ms/s"]
+    steps = [
+        *passes(200.0),
+        probe_step(244.1, "climb", query=query),
+        probe_step(274.6, "bisect", consensus=SOFT),
+        probe_step(259.4, "bisect", query=query),
+        probe_step(259.4, "confirm", consensus=SOFT),
+    ]
+    assert netbench.capacity(steps)["consensus"] == {
+        "mb_s": 244.1,
+        "bounded": True,
+        "failed_at_mb_s": 259.4,
+    }
+
+
+def test_a_collapsed_confirm_at_the_start_rate_ends_the_search():
+    steps = [
+        *passes(100.0),
+        soft_fail(125.0, "climb"),
+        soft_fail(112.5),
+        soft_fail(106.25),
+        collapse(100.0, "confirm"),
+        probe_step(100.0, "recovery"),
+    ]
+    assert probe(steps) == "below start"
+
+
+def test_a_forgiven_first_probe_does_not_hide_a_query_bound_search():
+    steps = [
+        collapse(100.0),
+        probe_step(100.0, "recovery"),
+        probe_step(125.0, "climb", query=["query lag grows 76 ms/s"]),
+    ]
+    assert netbench.search_sides(steps) == "consensus"
+
+
+def test_a_keep_going_ramp_reports_that_it_ran_every_step(staircase):
+    run = staircase(steps=(0.02, 0.16, 0.04), tx_timeout_s=1, keep_going=True)
+    assert run.meta["stop_reason"] == "ramp exhausted"
+
+
+def test_step_table_renders_steps_from_before_kind():
+    current = make_result([step(4.0), step(6.0)])
+    for s in current["steps"]:
+        cast(dict[str, Any], s).pop("kind")
+    current["steps"][1]["refine"] = True
+    table = "\n".join(netbench.step_table(current, None))
+    assert "| 6 (refine) |" in table

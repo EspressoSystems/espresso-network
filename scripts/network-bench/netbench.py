@@ -66,12 +66,12 @@ DRAIN_IDLE_S = 5.0
 # Over the tx timeout: settling, the idle window, and the query node's catch-up.
 DRAIN_SLACK_S = 10 + DRAIN_IDLE_S
 CATCHUP_TIMEOUT_S = 600
-# Payloads are read a block behind the query node's height: a payload requested as soon as its
-# header is stored can start a peer fetch that races the node's own insert.
 COLLAPSE_RATIO = 0.5
 CLIMB_FACTOR = 1.25
 # Float slack when comparing a bracket to the resolution.
 RESOLUTION_EPS = 1e-9
+# Payloads are read a block behind the query node's height: a payload requested as soon as its
+# header is stored can start a peer fetch that races the node's own insert.
 PAYLOAD_LAG_BLOCKS = 1
 MISSING_PAYLOAD_S = 10
 # One slow or failed answer from the query node must not end the run.
@@ -954,6 +954,7 @@ async def generate_load(
             for poller in pollers:
                 poller.cancel()
     except* (NetworkError, OSError) as group:
+        end["stop_reason"] = "network error"
         raise NetworkError(f"load generator: {innermost(group)}") from group
     finally:
         submitter.close()
@@ -1140,14 +1141,14 @@ async def ramp_steps(
     return {
         "drain_s": drained,
         "refine_skipped": skipped,
-        "stop_reason": ramp_stop_reason(passed, skipped),
+        "stop_reason": ramp_stop_reason(passed, skipped, cfg.keep_going),
     }
 
 
-def ramp_stop_reason(passed: list[bool], skipped: bool) -> str:
+def ramp_stop_reason(passed: list[bool], skipped: bool, keep_going: bool) -> str:
     if skipped:
         return "drain timeout"
-    if all(passed):
+    if keep_going or all(passed):
         return "ramp exhausted"
     return "first step failed" if passed.index(False) == 0 else "refined"
 
@@ -1285,7 +1286,7 @@ def pick_probe(
     if side == "consensus" and last["cap_waits"] and last["query_fails"]:
         return "generator throttled"
     lo, hi = bracket(steps, side)
-    if last.get("kind") == "recovery" and side_fails(last, side):
+    if last["kind"] == "recovery" and side_fails(last, side):
         if any(not side_fails(s, side) for s in steps):
             return f"degraded after overload at {fmt_num(steps[-2]['rate_mb_s'])}"
         return "below start"
@@ -1303,8 +1304,7 @@ def pick_probe(
 
 
 def is_confirm(step: Mapping[str, Any], rate: float) -> bool:
-    # Steps recorded before `kind` have none.
-    return step.get("kind") == "confirm" and step["rate_mb_s"] == rate
+    return step["kind"] == "confirm" and step["rate_mb_s"] == rate
 
 
 def side_fails(step: Mapping[str, Any], side: Side) -> list[str]:
@@ -1320,19 +1320,17 @@ def collapsed(step: Mapping[str, Any]) -> bool:
 
 
 def settled(steps: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    """Without a collapsed probe whose recovery at the same rate passed: a retry of the first
-    probe, which says that rate is fine."""
-    return [
-        step
-        for step, after in itertools.zip_longest(steps, steps[1:])
-        if not (
-            after
-            and collapsed(step)
-            and after.get("kind") == "recovery"
-            and after["rate_mb_s"] == step["rate_mb_s"]
-            and not side_fails(after, "overall")
-        )
-    ]
+    """Without a collapsed first probe whose retry at the same rate passed: a cold start, which
+    says nothing about that rate."""
+    if (
+        len(steps) > 1
+        and collapsed(steps[0])
+        and steps[1]["kind"] == "recovery"
+        and steps[1]["rate_mb_s"] == steps[0]["rate_mb_s"]
+        and not side_fails(steps[1], "overall")
+    ):
+        return list(steps[1:])
+    return list(steps)
 
 
 def bracket(
@@ -1364,9 +1362,10 @@ def offered_gb(steps: Sequence[Mapping[str, Any]], cfg: BenchConfig) -> float:
 
 def search_sides(steps: Sequence[Mapping[str, Any]]) -> Side | None:
     """ "consensus" when only the query side failed so far: the consensus limit is above."""
-    if any(s["consensus_fails"] for s in steps):
+    seen = settled(steps)
+    if any(s["consensus_fails"] for s in seen):
         return None
-    return "consensus" if any(s["query_fails"] for s in steps) else None
+    return "consensus" if any(s["query_fails"] for s in seen) else None
 
 
 def search_log_prefix(
@@ -1849,17 +1848,17 @@ def capacity(steps: Sequence[Mapping[str, Any]]) -> Capacity:
     rate, so the two limits need not bracket the steps the ramp passed. A rate that failed in
     any probe fails. The query side takes evidence only from steps whose consensus side
     passed: query lag under a collapsed consensus says nothing about the query node."""
-    ordered = sorted(
-        settled(steps),
-        key=lambda s: (s["rate_mb_s"], not side_fails(s, "overall")),
-    )
+    seen = settled(steps)
 
     def limit(
         fails: Callable[[Mapping[str, Any]], list[str]],
         evidence: Callable[[Mapping[str, Any]], bool] = lambda s: True,
     ) -> tuple[Limit, Any]:
         passed = None
-        for step in filter(evidence, ordered):
+        # At one rate a failing probe comes first.
+        for step in sorted(
+            filter(evidence, seen), key=lambda s: (s["rate_mb_s"], not fails(s))
+        ):
             if fails(step):
                 at = step["rate_mb_s"]
                 return {"mb_s": passed, "bounded": True, "failed_at_mb_s": at}, step
@@ -1888,7 +1887,7 @@ def capacity(steps: Sequence[Mapping[str, Any]]) -> Capacity:
         "confirmed": overall["mb_s"] is not None
         and any(
             is_confirm(s, overall["mb_s"]) and not side_fails(s, "overall")
-            for s in ordered
+            for s in seen
         ),
     }
 
@@ -2019,6 +2018,11 @@ def analyze(out: Path, cfg: BenchConfig, topo: Topology) -> BenchResult:
     return result
 
 
+def step_kind(step: Mapping[str, Any]) -> ProbeKind:
+    """steps.json and result.json from before `kind` have only `refine`."""
+    return step.get("kind", "refine" if step["refine"] else "ramp")
+
+
 def step_result(
     judged: dict[str, Any],
     txs: list[dict[str, Any]],
@@ -2042,8 +2046,7 @@ def step_result(
     return {
         "rate_mb_s": judged["rate_mb_s"],
         "refine": judged["refine"],
-        # steps.json from before `kind` has only `refine`.
-        "kind": judged.get("kind", "refine" if judged["refine"] else "ramp"),
+        "kind": step_kind(judged),
         "t_start": judged["t_start"],
         "t_mid": t0,
         "t_end": t1,
@@ -2684,7 +2687,7 @@ def search_lines(result: BenchResult) -> list[str]:
     reason = result["load"]["stop_reason"]
     if reason is None:
         return []
-    probes = sum(1 for s in result["steps"] if s["kind"] not in ("ramp", "refine"))
+    probes = sum(1 for s in result["steps"] if step_kind(s) not in ("ramp", "refine"))
     after = f" after {probes} probes" if probes else ""
     return [f"- search: {reason}{after}"]
 
@@ -2919,7 +2922,7 @@ def step_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
         rows = {row["label"]: row for row in other["rows"]} if other else {}
         cells = [step_cell(step, label, rows.get(label)) for label in STEP_COLUMNS]
         lines.append(
-            f"| {fmt_num(rate)}{'' if step['kind'] == 'ramp' else f' ({step['kind']})'} | "
+            f"| {fmt_num(rate)}{'' if step_kind(step) == 'ramp' else f' ({step_kind(step)})'} | "
             + " | ".join(cells)
             + f" | {step_verdict(step)} |{tail}"
         )

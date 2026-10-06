@@ -1345,7 +1345,7 @@ def test_search_refuses_an_offer_below_the_first_probe():
 # TEST:aws-disk-sizing-ok
 @pytest.mark.parametrize(
     ("db_modes", "validator_gb", "query_gb"),
-    [(("colocated",), 260, 340), (("volume",), 260, 260), (("rds",), 260, 260)],
+    [(("colocated",), 260, 404), (("volume",), 260, 260), (("rds",), 260, 260)],
 )
 def test_search_sizes_disks_from_the_offered_gb(db_modes, validator_gb, query_gb):
     cfg = search_cfg("--offered-gb", "120", db_modes=db_modes)
@@ -1373,7 +1373,7 @@ def test_search_load_seconds():
     )
     assert (
         awsb.load_seconds(load, search, worst=False)
-        == 60 + 9 * 60 + 2 * (60 + slack) + 60
+        == 60 + 11 * 60 + 3 * (60 + slack) + 60
     )
 
 
@@ -1447,3 +1447,8 @@ def test_search_config_reads_the_agent_key():
     assert awsb.search_config(None) is None
     saved = dataclasses.asdict(netbench.SearchConfig(start_mb_s=150.0))
     assert awsb.search_config(saved) == netbench.SearchConfig(start_mb_s=150.0)
+
+
+def test_colocated_payload_and_journal_leave_headroom_on_node0():
+    journal = awsb.JOURNAL_MAX_BYTES_FRACTION * awsb.QUERY_JOURNAL_FRACTION
+    assert awsb.COLOCATED_FILL_MAX + journal <= 0.9

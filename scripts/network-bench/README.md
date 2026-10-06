@@ -255,16 +255,19 @@ Probe rules (`netbench.next_probe`, from the step list alone):
 - Stop reasons: `resolved`, `probe budget`, `disk budget`, `drain timeout`, `degraded after overload`, `below start`,
   `generator throttled`.
 - A query-bound limit with an unbounded consensus side starts a second search on the consensus side under the remaining
-  budgets.
+  budgets. Its consensus verdicts include transactions the lagging query node has not yet scanned, so a consensus limit
+  found there is a lower bound tied to the query lag.
 
 Sizing and cost:
 
-- Validators `20 + 2 x offered_gb` GB; node0 with colocated Postgres `20 + payload_factor x offered_gb / 0.6`, else as
-  validators; `payload_factor = 1 + 3 / nodes`. A `volume` or `rds` store must hold `payload_factor x offered_gb` within
-  90% of 400 GiB, else the plan is refused.
+- Validators `20 + 2 x offered_gb` GB; node0 with colocated Postgres `20 + payload_factor x offered_gb / 0.5` (the
+  journal takes up to 0.4 of the usable disk), else as validators; `payload_factor = 1 + 3 / nodes`. A `volume` or `rds`
+  store must hold `payload_factor x offered_gb` within 90% of 400 GiB, else the plan is refused.
 - Worst load time `warmup + max_probes x (2 x step_s + tx_timeout_s + DRAIN_SLACK_S) + tx_timeout_s` feeds the cost
   bound, the TTL check of `run --fleet` and the agent poll deadline. Expected:
-  `warmup + 9 x step_s + 2 x (tx_timeout_s + DRAIN_SLACK_S) + tx_timeout_s`.
+  `warmup + 11 x step_s + 3 x (tx_timeout_s + DRAIN_SLACK_S) + tx_timeout_s`.
+- `run --fleet F --search` is refused when a root disk of the fleet, sized at `up`, is below the size `--offered-gb`
+  needs.
 - A search run hashes differently from a ramp run: `config_hash` gains the search config.
 
 Evidence for the thresholds (`bench-state/aws/<fleet>/runs/01-run/`):
