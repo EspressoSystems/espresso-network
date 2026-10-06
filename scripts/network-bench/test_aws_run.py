@@ -397,6 +397,20 @@ def test_an_exception_with_leftovers_exits_4_with_command_last(
     assert run_harness.ends_with_down_command()
 
 
+@pytest.mark.usefixtures("valid")
+def test_an_exception_in_destroy_still_writes_the_report(
+    run_harness: RunHarness, monkeypatch: pytest.MonkeyPatch
+):
+    reports = []
+    monkeypatch.setattr(awsb, "destroy_fleet", raiser(RuntimeError("boom")))
+    monkeypatch.setattr(
+        awsb, "write_report", lambda *a, **k: reports.append(a) or valid_result()
+    )
+    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
+    assert run_harness.run(runner) == awsb.EXIT_LEFTOVER
+    assert reports
+
+
 def test_truncated_node_log_does_not_break_the_failure_summary(tmp_path: Path):
     host_dir = tmp_path / "hosts" / "node0"
     host_dir.mkdir(parents=True)

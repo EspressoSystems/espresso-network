@@ -3546,12 +3546,15 @@ def log_result(result: nb.BenchResult) -> None:
 
 def teardown(run: Run) -> int:
     """Always attempts the destroy, then fetches CloudWatch and reports. An exception in the
-    bookkeeping afterwards is logged and leaves the exit code to the result if the destroy
+    destroy or the bookkeeping is logged and leaves the exit code to the result if the destroy
     worked, else to `EXIT_LEFTOVER`."""
     destroyed = False
     result = None
     try:
         destroyed = down_fleet(run.fleet)
+    except Exception:
+        log.exception("destroy failed")
+    try:
         collect_cloudwatch(run)
         result = report_run(run)
         code = record_outcome(run, result, destroyed)
