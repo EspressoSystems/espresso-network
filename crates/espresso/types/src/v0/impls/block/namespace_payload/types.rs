@@ -339,12 +339,14 @@ impl NsPayloadBuilder {
 
     /// Write the serialized namespace to the start of `out` and return the byte count.
     pub(crate) fn write_into(&self, out: &mut [u8]) -> Result<usize, BlockBuildingError> {
-        let (len, actual) = (self.byte_len(), out.len());
-        let short = || BlockBuildingError::NsPayloadLength {
-            expected: len,
-            actual,
-        };
-        let out = out.get_mut(..len).ok_or_else(short)?;
+        let len = self.byte_len();
+        let actual = out.len();
+        let out = out
+            .get_mut(..len)
+            .ok_or(BlockBuildingError::NsPayloadBufferTooShort {
+                expected: len,
+                actual,
+            })?;
         let num_txs = NumTxsUnchecked(self.txs.len());
         let (header, rest) = out.split_at_mut(NUM_TXS_BYTE_LEN);
         header.copy_from_slice(&num_txs.to_payload_bytes());
@@ -352,16 +354,11 @@ impl NsPayloadBuilder {
         let mut end = 0;
         for (entry, tx) in entries.chunks_exact_mut(TX_OFFSET_BYTE_LEN).zip(&self.txs) {
             let body = tx.payload();
-            bodies
-                .get_mut(end..end + body.len())
-                .ok_or_else(short)?
-                .copy_from_slice(body);
+            bodies[end..end + body.len()].copy_from_slice(body);
             end += body.len();
             entry.copy_from_slice(&usize_to_bytes::<TX_OFFSET_BYTE_LEN>(end));
         }
-        if end != bodies.len() {
-            return Err(short());
-        }
+        debug_assert_eq!(end, self.bodies_len);
         Ok(len)
     }
 
