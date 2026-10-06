@@ -46,6 +46,31 @@ pub trait Transaction:
     /// Since each new namespace adds overhead
     /// just ignore this parameter by default and use it when needed
     fn minimum_block_size(&self) -> u64;
+
+    /// Identifies the transaction inside consensus: pooling, forwarding and dedup.
+    ///
+    /// Unlike [`Committable::commit`] this appears in no header, signature or external API, so
+    /// an implementation is free to pick a faster hash than its commitment. Defaults to the
+    /// commitment.
+    fn digest(&self) -> TxDigest {
+        TxDigest(<[u8; 32]>::from(self.commit()))
+    }
+}
+
+/// See [`Transaction::digest`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TxDigest(pub [u8; 32]);
+
+impl Display for TxDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.iter().try_for_each(|b| write!(f, "{b:02x}"))
+    }
+}
+
+impl Debug for TxDigest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TxDigest({self})")
+    }
 }
 
 /// Abstraction over the full contents of a block
@@ -113,6 +138,11 @@ pub trait BlockPayload<TYPES: NodeType>:
         metadata: &Self::Metadata,
     ) -> Vec<Commitment<Self::Transaction>> {
         self.transactions(metadata).map(|tx| tx.commit()).collect()
+    }
+
+    /// [`Transaction::digest`] of each transaction, in [`Self::transactions`] order.
+    fn transaction_digests(&self, metadata: &Self::Metadata) -> Vec<TxDigest> {
+        self.transactions(metadata).map(|tx| tx.digest()).collect()
     }
 
     /// Number of transactions in the block.

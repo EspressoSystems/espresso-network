@@ -1,6 +1,6 @@
 use committable::{Commitment, Committable};
 use hotshot_query_service_types::explorer::traits::ExplorerTransaction;
-use hotshot_types::traits::block_contents::Transaction as HotShotTransaction;
+use hotshot_types::traits::block_contents::{Transaction as HotShotTransaction, TxDigest};
 use serde::{Deserialize, Deserializer, de::Error};
 
 use super::NsPayloadBuilder;
@@ -117,6 +117,33 @@ impl HotShotTransaction for Transaction {
 
         len as u64
     }
+
+    /// BLAKE3 over namespace and payload. Keccak, which [`Committable::commit`] uses, is an
+    /// order of magnitude slower on large payloads and sits on the leader's path to a proposal
+    /// (`benches/tx_hash.rs`).
+    fn digest(&self) -> TxDigest {
+        let mut hasher = blake3::Hasher::new_derive_key("espresso transaction digest v1");
+        hasher.update(&self.namespace.0.to_le_bytes());
+        update_payload(&mut hasher, &self.payload);
+        TxDigest(*hasher.finalize().as_bytes())
+    }
+}
+
+/// Splits payloads of 128 KiB and up across the rayon pool; below that, BLAKE3's docs find the
+/// split costs more than it saves.
+#[cfg(feature = "node")]
+fn update_payload(hasher: &mut blake3::Hasher, payload: &[u8]) {
+    if payload.len() >= 128 * 1024 {
+        hasher.update_rayon(payload);
+    } else {
+        hasher.update(payload);
+    }
+}
+
+/// zkVM targets build without rayon.
+#[cfg(not(feature = "node"))]
+fn update_payload(hasher: &mut blake3::Hasher, payload: &[u8]) {
+    hasher.update(payload);
 }
 
 impl Committable for Transaction {
@@ -139,5 +166,32 @@ impl ExplorerTransaction<SeqTypes> for Transaction {
 
     fn payload_size(&self) -> u64 {
         self.payload.len() as u64
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use hotshot_types::traits::block_contents::Transaction as _;
+
+    use crate::{NamespaceId, Transaction};
+
+    /// Nodes key each other's dedup messages by this digest, so the rayon split must not change
+    /// it: a node with one core and a node with sixteen have to agree.
+    #[test]
+    fn digest_is_independent_of_rayon_split() {
+        for len in [0, 1, 128 * 1024 - 1, 128 * 1024, 3 * 1024 * 1024 + 7] {
+            let tx = Transaction::new(NamespaceId::from(7u32), vec![0xab; len]);
+            let mut hasher = blake3::Hasher::new_derive_key("espresso transaction digest v1");
+            hasher.update(&7u64.to_le_bytes());
+            hasher.update(tx.payload());
+            assert_eq!(tx.digest().0, *hasher.finalize().as_bytes(), "len {len}");
+        }
+    }
+
+    #[test]
+    fn digest_covers_namespace() {
+        let a = Transaction::new(NamespaceId::from(1u32), vec![1, 2, 3]);
+        let b = Transaction::new(NamespaceId::from(2u32), vec![1, 2, 3]);
+        assert_ne!(a.digest(), b.digest());
     }
 }

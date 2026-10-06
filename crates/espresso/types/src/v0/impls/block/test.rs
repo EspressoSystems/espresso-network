@@ -6,7 +6,7 @@ use hotshot::traits::BlockPayload;
 use hotshot_query_service::availability::{QueryablePayload, VerifiableInclusion};
 use hotshot_types::{
     data::{VidCommitment, VidCommon},
-    traits::EncodeBytes,
+    traits::{EncodeBytes, block_contents::Transaction as _},
     vid::advz::advz_scheme,
 };
 use jf_advz::VidScheme;
@@ -201,8 +201,8 @@ fn random_bytes<R: RngCore>(len: usize, rng: &mut R) -> Vec<u8> {
     result
 }
 
-/// `transaction_commitments` must agree with the serial default element for
-/// element, on both sides of [`MIN_PARALLEL_TRANSACTIONS`].
+/// `transaction_commitments` and `transaction_digests` must agree with the serial
+/// default element for element, on both sides of [`MIN_PARALLEL_TRANSACTIONS`].
 ///
 /// Callers pair a commitment index with a transaction index — the decide path in
 /// `hotshot-task-impls` does exactly that — so a reordering would misattribute
@@ -255,6 +255,13 @@ async fn transaction_commitments_match_serial() {
         assert_eq!(
             BlockPayload::<crate::SeqTypes>::transaction_commitments(&payload, &meta),
             serial,
+        );
+        let serial_digests: Vec<_> = BlockPayload::<crate::SeqTypes>::transactions(&payload, &meta)
+            .map(|txn| txn.digest())
+            .collect();
+        assert_eq!(
+            BlockPayload::<crate::SeqTypes>::transaction_digests(&payload, &meta),
+            serial_digests,
         );
     }
 }

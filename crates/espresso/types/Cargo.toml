@@ -22,6 +22,7 @@ node = [
     "alloy/node-bindings",
     "alloy/provider-ws",
     "alloy/signer-ledger",
+    "blake3/rayon",
     "dep:hotshot",
     "dep:hotshot-libp2p-networking",
     "dep:hotshot-new-protocol",

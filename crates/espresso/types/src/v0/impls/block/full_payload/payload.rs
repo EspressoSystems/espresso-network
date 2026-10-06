@@ -5,7 +5,10 @@ use committable::{Commitment, Committable};
 use hotshot_query_service_types::availability::{QueryablePayload, VidCommonQueryData};
 use hotshot_types::{
     data::ViewNumber,
-    traits::{BlockPayload, EncodeBytes},
+    traits::{
+        BlockPayload, EncodeBytes,
+        block_contents::{Transaction as _, TxDigest},
+    },
     utils::BuilderCommitment,
     vid::advz::{ADVZCommon, ADVZScheme},
 };
@@ -256,6 +259,23 @@ impl BlockPayload<SeqTypes> for Payload {
             return indices.iter().map(commit).collect();
         }
         indices.par_iter().map(commit).collect()
+    }
+
+    /// Parallel like [`Self::transaction_commitments`], in the same order.
+    fn transaction_digests(&self, metadata: &Self::Metadata) -> Vec<TxDigest> {
+        use p3_maybe_rayon::prelude::*;
+
+        let digest = |index: &Index| {
+            self.transaction(index)
+                .expect("index yielded by iter must resolve to a transaction")
+                .digest()
+        };
+
+        let indices: Vec<Index> = QueryablePayload::iter(self, metadata).collect();
+        if indices.len() < MIN_PARALLEL_TRANSACTIONS {
+            return indices.iter().map(digest).collect();
+        }
+        indices.par_iter().map(digest).collect()
     }
 
     fn txn_bytes(&self) -> usize {
