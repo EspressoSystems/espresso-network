@@ -6087,7 +6087,6 @@ dependencies = [
  "hotshot-types",
  "hotshot-utils",
  "jf-advz",
- "p3-maybe-rayon",
  "parking_lot",
  "rand 0.8.6",
  "reqwest 0.12.28",
@@ -6199,7 +6198,6 @@ dependencies = [
  "time 0.3.51",
  "tokio",
  "tracing",
- "vbs",
  "versions",
 ]
 
