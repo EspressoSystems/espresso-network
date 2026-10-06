@@ -38,6 +38,7 @@ def test_main_writes_the_chart_from_a_minimal_run_dir(tmp_path: Path):
             "rate_mb_s": rate,
             "refine": refine,
             "t_start": t0 + start,
+            "t_mid": t0 + start + 7.5,
             "t_end": t0 + start + 15,
             "consensus_fails": [],
             "query_fails": ["lag"] if refine else [],

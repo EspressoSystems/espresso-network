@@ -5,8 +5,9 @@
 # ///
 """Plots decided MB/s (consensus counters) against the MB/s the query node makes transactions
 available (`t_included` of `load.jsonl`), with the submitted rate as reference, into
-`<run_dir>/throughput.png`. Step bands are labelled with the target rate, `(r)` for a refine
-step, and tinted when the step failed.
+`<run_dir>/throughput.png`. Each step starts at a vertical line, is labelled with its target rate
+(`(r)` for a refine step) and drawn as a dashed target segment; the shaded band is its measured
+half, tinted when the step failed.
 
     throughput-plot RUN_DIR
 """
@@ -78,16 +79,31 @@ def main(argv: list[str] | None = None) -> None:
     inc = [tx["t_included"] for tx in txs if tx["t_included"] is not None]
     inc_t, query = binned_mb_s(inc, tx_size, t0, t1)
 
-    def minutes(t: np.ndarray | float) -> np.ndarray | float:
+    def minutes[T: (np.ndarray, float)](t: T) -> T:
         return (t - t0) / 60
 
     fig, ax = plt.subplots(figsize=(13, 5), facecolor=SURFACE)
     ax.set_facecolor(SURFACE)
-    for step in steps:
+    for i, step in enumerate(steps):
         start, end = minutes(step["t_start"]), minutes(step["t_end"])
         failed = step["consensus_fails"] or step["query_fails"]
-        ax.axvspan(start, end, color=BAND_FAILED if failed else BAND, zorder=0)
+        ax.axvspan(
+            minutes(step["t_mid"]),
+            end,
+            color=BAND_FAILED if failed else BAND,
+            zorder=0,
+            label="_nolegend_" if i else "measured half",
+        )
         ax.axvline(start, color=MUTED, lw=0.6, alpha=0.5, zorder=0)
+        ax.hlines(
+            step["rate_mb_s"],
+            start,
+            end,
+            color=INK,
+            lw=1,
+            linestyles="--",
+            label="_nolegend_" if i else "step target",
+        )
         label = f"{step['rate_mb_s']:.0f}{' (r)' if step['refine'] else ''}"
         ax.text(
             (start + end) / 2,
@@ -131,7 +147,7 @@ def main(argv: list[str] | None = None) -> None:
     ax.legend(
         loc="upper center",
         bbox_to_anchor=(0.5, -0.14),
-        ncol=4,
+        ncol=6,
         fontsize=8,
         frameon=False,
         labelcolor=INK,
