@@ -3061,11 +3061,11 @@ def cmd_run(args: argparse.Namespace, system: System) -> int:
         )
     cfg = dataclasses.replace(fleet_config_from_args(args), db_modes=(args.query_db,))
     interrupts = Interrupts(system.clock, system.forward)
-    started = system.clock.time()
     try:
         fleet_dir, run_dir, tf = prepare_run(args, cfg, system)
     except KeyboardInterrupt:
         raise Refused("interrupted; nothing was created") from None
+    started = system.clock.time()
     interrupts.install(system.trap)
     try:
         fleet = FleetState(system, cfg, fleet_dir, tf, interrupts)
@@ -3525,7 +3525,7 @@ def record_outcome(run: Run, result: nb.BenchResult | None, destroyed: bool) -> 
     cost = close_fleet(fleet, destroyed)
     code = exit_code(run.error, result, destroyed)
     update_manifest(run.manifest_path, "done" if destroyed else "left-running")
-    record_index(run, result, code, write_run_cost(run))
+    record_index(run, result, code, write_run_cost(run, cost))
     if cost is not None:
         log.info(
             "destroyed; actual cost $%.2f (bound $%.2f); run dir %s",
@@ -4186,15 +4186,17 @@ def reset_rds_store(remote: Remote, fleet_dir: Path, interrupts: Interrupts) -> 
     )
 
 
-def write_run_cost(run: Run) -> dict[str, float]:
-    """The fleet's hourly rate over the run's wall time, from its start to now."""
+def write_run_cost(
+    run: Run, actual: dict[str, float] | None = None
+) -> dict[str, float]:
+    """The fleet's billed cost once known, else the hourly rate over the run's wall time."""
     rate = estimate_rate(run.fleet.manifest["estimate"])
-    duration_s = run.fleet.system.clock.time() - run.started
-    cost = {
-        "usd_per_hour": rate,
-        "duration_s": duration_s,
-        "usd": rate * duration_s / 3600,
-    }
+    if actual is None:
+        duration_s = run.fleet.system.clock.time() - run.started
+        usd = rate * duration_s / 3600
+    else:
+        duration_s, usd = actual["duration_s"], actual["actual"]
+    cost = {"usd_per_hour": rate, "duration_s": duration_s, "usd": usd}
     nb.write_json(run.run_dir / "cost.json", cost)
     return cost
 

@@ -99,7 +99,9 @@ def test_valid_run_exits_0_with_cost_and_index(run_harness: RunHarness):
     assert row.startswith("| run1/01-run |")
     assert "| colocated |" in row
     assert "| valid | 0 |" in row
-    assert netbench.read_json(run_harness.run_dir / "cost.json")["usd"] > 0
+    assert (
+        netbench.read_json(run_harness.run_dir / "cost.json")["usd"] == cost["actual"]
+    )
 
 
 # TEST:system-expiry-exact-ok
