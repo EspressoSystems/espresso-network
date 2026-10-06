@@ -17,6 +17,7 @@ use data_source::{
     StateCertDataSource, StateCertFetchingDataSource, SubmitDataSource,
 };
 use derivative::Derivative;
+use espresso_api::error::SubmitError;
 use espresso_types::{
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
     FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
@@ -718,7 +719,10 @@ impl<C: ApiContext> SubmitDataSource for ApiState<C> {
 
         // reject transaction bigger than block size
         if txn_size > max_block_size {
-            bail!("transaction size ({txn_size}) is greater than max_block_size ({max_block_size})")
+            return Err(SubmitError::Invalid(format!(
+                "transaction size ({txn_size}) is greater than max_block_size ({max_block_size})"
+            ))
+            .into());
         }
 
         handle.submit_transaction(tx).await
@@ -3487,7 +3491,10 @@ mod test {
         data_source::{
             Transaction as _, VersionedDataSource,
             sql::Config,
-            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
+            storage::{
+                MerklizedStateHeightStorage, SqlStorage, StorageConnectionType,
+                UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
+            },
         },
         explorer::TransactionSummariesResponse,
         node::{NodeDataSource as _, SyncStatus, SyncStatusQueryData},
@@ -7205,6 +7212,223 @@ mod test {
         Ok(())
     }
 
+    /// A node that was down for longer than its state retention comes back with its merklized
+    /// state well behind the chain. The state loop can only continue from its newest snapshot, so
+    /// the state pruner must not get ahead of it. Restart a query node behind a pruned height that
+    /// an unbounded pruner run has already stamped past its state head, and check that the loop
+    /// still resumes and reaches the tip, and that every pruner run from then on stamps below the
+    /// state head.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_pruner_stays_below_state_head() -> anyhow::Result<()> {
+        const NUM_NODES: usize = 5;
+        // Blocks the chain moves on by while the query node is down, and the margin by which the
+        // loop has to get past the stale pruned height before the check ends.
+        const GAP: u64 = 10;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
+        // The query node fetches what it missed from the API node, so the API node serves catchup
+        // and light client proofs.
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default()),
+            ))
+            .network_config(TestConfigBuilder::default().build())
+            .persistences(persistence.clone())
+            .build();
+        let genesis_state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+
+        // Replace peer 0 with a query node whose state pruner runs every second with zero
+        // retention: left to itself, every run would prune right up to the chain tip. Consensus
+        // data stays out of it: the test genesis has timestamp 0, so any data retention would
+        // delete the genesis leaf the loop's first catchup reads.
+        network.peers[0].shut_down().await;
+        network.peers.remove(0);
+        let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let mut db_opt = tmp_options(&storage[1]);
+        db_opt.prune = true;
+        db_opt.pruning = <persistence::sql::PruningOptions as clap::Parser>::parse_from([
+            "pruning",
+            "--target-retention",
+            "4294967295s",
+            "--state-target-retention",
+            "0s",
+            "--interval",
+            "1s",
+        ]);
+        let start_query_node = {
+            let cfg = network.cfg.clone();
+            let node_persistence = persistence[1].clone();
+            let db_opt = db_opt.clone();
+            let api_url = api_url.clone();
+            move || {
+                let cfg = cfg.clone();
+                let genesis_state = genesis_state.clone();
+                let node_persistence = node_persistence.clone();
+                let db_opt = db_opt.clone();
+                let api_url = api_url.clone();
+                async move {
+                    let opt = Options::with_port(query_port).query_sql(
+                        Query {
+                            peers: vec![api_url.clone()],
+                            ..Default::default()
+                        },
+                        db_opt,
+                    );
+                    let ctx = opt
+                        .serve(move |metrics, consumer, storage| {
+                            async move {
+                                Ok(cfg
+                                    .init_node(
+                                        1,
+                                        genesis_state,
+                                        node_persistence,
+                                        Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                                            vec![api_url],
+                                            Default::default(),
+                                            Duration::from_secs(2),
+                                            &NoMetrics,
+                                        )),
+                                        storage,
+                                        &*metrics,
+                                        STAKE_TABLE_CAPACITY_FOR_TEST,
+                                        consumer,
+                                        MOCK_SEQUENCER_VERSIONS,
+                                        Default::default(),
+                                    )
+                                    .await)
+                            }
+                            .boxed()
+                        })
+                        .await
+                        .expect("query node should start");
+                    ctx.start_consensus().await;
+                    ctx
+                }
+            }
+        };
+
+        let mut query_node = start_query_node().await;
+        let query_client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{query_port}").parse().unwrap());
+        assert!(query_client.connect(Some(Duration::from_secs(60))).await);
+        let api_client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(api_url.clone());
+        assert!(api_client.connect(Some(Duration::from_secs(60))).await);
+
+        // Let the loop build some state, then take the node down while the chain moves on.
+        wait_until_block_height(&query_client, "block-state/block-height", 5).await;
+        tracing::info!("query node has state; shutting it down");
+        query_node.shut_down().await;
+        drop(query_node);
+        // `shut_down` aborts the server task without waiting for it, so wait for the port before
+        // rebinding it.
+        timeout(Duration::from_secs(30), async {
+            while std::net::TcpListener::bind(("127.0.0.1", query_port)).is_err() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("shut-down query node did not release its port")?;
+        let db =
+            SqlStorage::connect(Config::try_from(&db_opt)?, StorageConnectionType::Query).await?;
+        let (_, head_at_shutdown) = state_heights(&db).await;
+        wait_until_block_height(&api_client, "status/block-height", head_at_shutdown + GAP).await;
+        // `status/block-height` counts blocks, so the tip is one below it.
+        let stale_cursor = api_client.get::<u64>("status/block-height").send().await? - 1;
+        tracing::info!(
+            head_at_shutdown,
+            stale_cursor,
+            "chain moved on; restarting query node"
+        );
+
+        // A pruner from before the state pruner was bounded by the state head could have stamped
+        // past the loop while it was behind. Stamp the tip as such a run would have; id 2 is the
+        // state cursor.
+        {
+            let mut tx = db.write().await?;
+            tx.upsert(
+                "pruned_height",
+                ["id", "last_height"],
+                ["id"],
+                [(2i32, stale_cursor as i64)],
+            )
+            .await?;
+            tx.commit().await?;
+        }
+        ensure!(
+            state_heights(&db).await.0 == Some(stale_cursor),
+            "the stale cursor was not stamped"
+        );
+
+        // The loop has to resume from its head, get past the stale cursor and reach the tip, and
+        // every pruner run from then on has to stamp below the head.
+        let _query_node = start_query_node().await;
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let (pruned, head) = state_heights(&db).await;
+            let pruned = pruned.context("state pruned height is stamped")?;
+            tracing::info!(pruned, head, stale_cursor, "state loop progress");
+            if pruned > stale_cursor {
+                ensure!(
+                    pruned < head,
+                    "state pruner passed the state head: pruned {pruned}, head {head}"
+                );
+                if head > stale_cursor + GAP {
+                    break;
+                }
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "state loop did not get past the stale pruned height {stale_cursor}: pruned \
+                 {pruned}, head {head}"
+            );
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        // The head snapshot is served. The loop and the pruner keep moving, so a head read just
+        // before a pruner run can be below the cursor by the time the query runs; read it again.
+        for attempt in 1.. {
+            let (_, head) = state_heights(&db).await;
+            let frontier = query_client
+                .get::<MerkleProof<Commitment<Header>, u64, Sha3Node, 3>>(&format!(
+                    "block-state/{head}/{}",
+                    head - 1
+                ))
+                .send()
+                .await;
+            match frontier {
+                Ok(_) => break,
+                Err(err) if attempt < 10 => {
+                    tracing::info!(head, %err, "retrying the head frontier query");
+                    sleep(Duration::from_millis(200)).await;
+                },
+                Err(err) => bail!("block frontier at the state head {head} is not served: {err}"),
+            }
+        }
+        Ok(())
+    }
+
+    /// The state pruned height, then the state head. Read in that order: every move of the
+    /// cursor, up by a batch or down by the startup repair, lands below the head, and the head
+    /// only grows, so a head read after the cursor is always above it.
+    async fn state_heights(db: &SqlStorage) -> (Option<u64>, u64) {
+        let mut tx = db.read().await.unwrap();
+        let pruned = tx.load_state_pruned_height().await.unwrap();
+        let head = tx.get_last_state_height().await.unwrap() as u64;
+        (pruned, head)
+    }
+
     #[rstest]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -8099,9 +8323,8 @@ mod test {
         }
     }
 
-    /// The v2 node, config, database and availability endpoints adapt the v1 handlers, so on one
-    /// node both versions must report the same values, with v2's query parameters selecting what
-    /// v1's path parameters do.
+    /// The v2 endpoints adapt the v1 handlers, so on one node both versions must report the same
+    /// values, with v2's query parameters selecting what v1's path parameters do.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_v2_api_agrees_with_v1() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -8371,6 +8594,96 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(v2_err.status, v1_err.status);
+
+        // The signer covers only the newest leaf of each decide and runs behind the query
+        // storage, so search back from the tip for a height v1 answers rather than naming one.
+        let block_height: u64 = client.get("status/block-height").send().await.unwrap();
+        let (height, v1_signature) = {
+            let mut found = None;
+            for height in (1..block_height).rev().take(50) {
+                // As raw JSON, so the v2 strings are compared against the bytes v1 serves rather
+                // than against a `Display` impl that could disagree with its own serde.
+                match client
+                    .get::<serde_json::Value>(&format!("state-signature/block/{height}"))
+                    .send()
+                    .await
+                {
+                    Ok(body) => {
+                        found = Some((height, body));
+                        break;
+                    },
+                    Err(err) if err.status == StatusCode::NOT_FOUND => {},
+                    Err(err) => panic!("v1 state-signature/block/{height}: {err:?}"),
+                }
+            }
+            found.expect("no recent block carries a state signature")
+        };
+        let v2_signature: espresso_api::proto::StateSignatureResponse = client
+            .get(&format!("v2/state-signature/block?height={height}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v1_signature
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                "auth_root",
+                "key",
+                "next_stake",
+                "signature",
+                "state",
+                "v2_signature",
+            ]),
+            "v1 grew a field `StateSignatureResponse` does not carry"
+        );
+        assert_eq!(v2_signature.key, v1_signature["key"].as_str().unwrap());
+        assert_eq!(
+            v2_signature.light_client_state,
+            v1_signature["state"].as_str().unwrap()
+        );
+        assert_eq!(
+            v2_signature.next_stake_table_state,
+            v1_signature["next_stake"].as_str().unwrap()
+        );
+        assert_eq!(
+            v2_signature.auth_root,
+            v1_signature["auth_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            v2_signature.lcv3_signature,
+            v1_signature["signature"].as_str().unwrap()
+        );
+        assert_eq!(
+            v2_signature.lcv2_signature,
+            v1_signature["v2_signature"].as_str().unwrap()
+        );
+
+        // The height is required rather than defaulted to the genesis block.
+        let err = client
+            .get::<serde_json::Value>("v2/state-signature/block")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        // A height the node never signed is a 404 on both versions.
+        let unsigned = block_height + 1000;
+        let v1_err = client
+            .get::<serde_json::Value>(&format!("state-signature/block/{unsigned}"))
+            .send()
+            .await
+            .unwrap_err();
+        let v2_err = client
+            .get::<serde_json::Value>(&format!("v2/state-signature/block?height={unsigned}"))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(v1_err.status, StatusCode::NOT_FOUND);
+        assert_eq!(v2_err.status, StatusCode::NOT_FOUND);
 
         // Every decided view moves these, so retry until a pair straddles no view.
         let (v1_votes, v2_votes) = {
@@ -11787,6 +12100,32 @@ mod test {
                 )
                 .await?;
                 assert_json_endpoint(&http, api_port, "explorer/transactions/latest/10").await?;
+
+                // Explorer errors keep their status: missing objects are 404 and unsupported
+                // search tags are 400, while a search that finds nothing is an empty result.
+                assert_error_body(&http, api_port, "explorer/block/999999", 404).await?;
+                assert_error_body(&http, api_port, "explorer/transaction/999999/0", 404).await?;
+                assert_error_body(
+                    &http,
+                    api_port,
+                    &format!("explorer/search/{leaf_hash}"),
+                    400,
+                )
+                .await?;
+                let unknown_block = tagged_base64::TaggedBase64::new("BLOCK", &[0; 32])?;
+                let search: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{api_port}/v1/explorer/search/{unknown_block}"
+                    ))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json()
+                    .await?;
+                assert_eq!(
+                    search["search_results"],
+                    serde_json::json!({"blocks": [], "transactions": []})
+                );
 
                 // Light-client endpoints. Use the same block we used for availability tests.
                 assert_json_endpoint(&http, api_port, &format!("light-client/leaf/{avail_block}"))
