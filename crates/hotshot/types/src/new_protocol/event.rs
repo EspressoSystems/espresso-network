@@ -33,8 +33,10 @@ pub enum CoordinatorEvent<TYPES: NodeType> {
     },
     /// A block payload this node obtained for `view`: reconstructed from VID
     /// shares, fetched from a peer, or built and proposed by this node. The view
-    /// may never be decided. Lets downstream consumers (e.g. query service)
-    /// fill in a payload that was missing when the view was decided.
+    /// may never be decided. A payload obtained before its view decides also
+    /// rides along in `NewDecide`; this lets downstream consumers (e.g. the
+    /// query service) fill in a payload that was still missing when the view
+    /// was decided.
     BlockPayload {
         view: ViewNumber,
         header: TYPES::BlockHeader,
