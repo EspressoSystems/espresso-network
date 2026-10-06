@@ -1371,11 +1371,15 @@ impl Persistence {
                     .transpose()?;
 
                 // No lower bound: a payload stored for a view an earlier decide already passed
-                // still has to reach the consumer.
+                // still has to reach the consumer. Each row is a whole block, so a backlog is
+                // drained a few rows per pass, oldest first.
                 let pending = tx
                     .fetch_all(
-                        query("SELECT view, header, payload FROM pending_payload WHERE view <= $1")
-                            .bind(to_view.u64() as i64),
+                        query(
+                            "SELECT view, header, payload FROM pending_payload WHERE view <= $1 \
+                             ORDER BY view LIMIT 16",
+                        )
+                        .bind(to_view.u64() as i64),
                     )
                     .await?
                     .into_iter()
@@ -1478,7 +1482,7 @@ impl Persistence {
             }
 
             for (view, PendingPayload { header, payload }) in pending {
-                let event = CoordinatorEvent::BlockPayloadReconstructed {
+                let event = CoordinatorEvent::BlockPayload {
                     view,
                     header,
                     payload: Arc::new(payload),
@@ -1804,34 +1808,26 @@ impl SequencerPersistence for Persistence {
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
-        let mut values = Vec::new();
-        let mut payloads = Vec::new();
-        for (info, cert) in leaf_chain {
-            let mut leaf = info.leaf.clone();
-            let view = cert.view_number().u64() as i64;
-            // The payload is kept out of the leaf row. At 0.6 the only leaf that arrives with one
-            // is a block this node built, and it goes to `pending_payload` like a reconstructed
-            // one. Older leaves get theirs from the DA proposal.
-            if let Some(payload) = leaf.unfill_block_payload()
-                && !self.consensus_only
-                && leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION
-            {
-                payloads.push((
-                    view,
-                    leaf.block_header().payload_commitment().to_string(),
-                    bincode::serialize(leaf.block_header())?,
-                    payload.encode().to_vec(),
-                ));
-            }
+        let values = leaf_chain
+            .into_iter()
+            .map(|(info, cert)| {
+                // The leaf may come with a large payload attached. We don't care about this payload
+                // because we already store it separately, in `pending_payload` or, before 0.6, as
+                // part of the DA proposal. Storing it here contributes to load on the DB for no
+                // reason, so we remove it before serializing the leaf.
+                let mut leaf = info.leaf.clone();
+                leaf.unfill_block_payload();
 
-            let leaf_bytes = bincode::serialize(&leaf)?;
-            let qc_bytes = bincode::serialize(cert.qc())?;
-            let next_epoch_qc_bytes = match cert.next_epoch_qc() {
-                Some(qc) => Some(bincode::serialize(qc)?),
-                None => None,
-            };
-            values.push((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes));
-        }
+                let view = cert.view_number().u64() as i64;
+                let leaf_bytes = bincode::serialize(&leaf)?;
+                let qc_bytes = bincode::serialize(cert.qc())?;
+                let next_epoch_qc_bytes = match cert.next_epoch_qc() {
+                    Some(qc) => Some(bincode::serialize(qc)?),
+                    None => None,
+                };
+                Ok((view, leaf_bytes, qc_bytes, next_epoch_qc_bytes))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         // Append the new leaves. We do this in its own transaction because even if GC or the
         // event consumer later fails, there is no need to abort the storage of the leaves.
@@ -1844,15 +1840,6 @@ impl SequencerPersistence for Persistence {
                 values.clone(),
             )
             .await?;
-            if !payloads.is_empty() {
-                tx.upsert(
-                    "pending_payload",
-                    ["view", "payload_hash", "header", "payload"],
-                    ["view"],
-                    payloads.clone(),
-                )
-                .await?;
-            }
             tx.commit().await
         })
         .await?;
@@ -3334,50 +3321,28 @@ impl Provider<SeqTypes, PayloadRequest> for Persistence {
             },
         };
 
-        match query_as::<(Vec<u8>, Vec<u8>)>(
+        let (header, payload) = match query_as::<(Vec<u8>, Vec<u8>)>(
             "SELECT header, payload FROM pending_payload WHERE payload_hash = $1 LIMIT 1",
         )
         .bind(req.0.to_string())
         .fetch_optional(tx.as_mut())
         .await
         {
-            Ok(Some((header, payload))) => match bincode::deserialize::<Header>(&header) {
-                Ok(header) => return Some(Payload::from_bytes(&payload, header.metadata())),
-                Err(err) => tracing::error!("error decoding pending payload header: {err:#}"),
-            },
-            Ok(None) => {},
-            Err(err) => tracing::warn!("error loading pending payload: {err:#}"),
-        }
-
-        // Payloads of blocks from before 0.6 are only in the DA proposals.
-        let bytes = match query_as::<(Vec<u8>,)>(
-            "SELECT data FROM da_proposal2 WHERE payload_hash = $1 LIMIT 1",
-        )
-        .bind(req.0.to_string())
-        .fetch_optional(tx.as_mut())
-        .await
-        {
-            Ok(Some((bytes,))) => bytes,
+            Ok(Some(row)) => row,
             Ok(None) => return None,
             Err(err) => {
-                tracing::warn!("error loading DA proposal: {err:#}");
+                tracing::warn!("error loading pending payload: {err:#}");
                 return None;
             },
         };
 
-        let proposal: Proposal<SeqTypes, DaProposal2<SeqTypes>> = match bincode::deserialize(&bytes)
-        {
-            Ok(proposal) => proposal,
+        match bincode::deserialize::<Header>(&header) {
+            Ok(header) => Some(Payload::from_bytes(&payload, header.metadata())),
             Err(err) => {
-                tracing::error!("error decoding DA proposal: {err:#}");
-                return None;
+                tracing::error!("error decoding pending payload header: {err:#}");
+                None
             },
-        };
-
-        Some(Payload::from_bytes(
-            &proposal.data.encoded_transactions,
-            &proposal.data.metadata,
-        ))
+        }
     }
 }
 
@@ -3817,20 +3782,6 @@ mod test {
             _pd: Default::default(),
         };
 
-        let block_payload_signature = BLSPubKey::sign(&privkey, &leaf_payload_bytes_arc)
-            .expect("Failed to sign block payload");
-        let da_proposal = Proposal {
-            data: DaProposal2::<SeqTypes> {
-                encoded_transactions: leaf_payload_bytes_arc,
-                metadata: leaf_payload.ns_table().clone(),
-                view_number: ViewNumber::new(0),
-                epoch: None,
-                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
-            },
-            signature: block_payload_signature,
-            _pd: Default::default(),
-        };
-
         let mut next_quorum_proposal = quorum_proposal.clone();
         next_quorum_proposal.data.proposal.view_number += 1;
         next_quorum_proposal.data.proposal.justify_qc.view_number += 1;
@@ -3843,7 +3794,7 @@ mod test {
 
         // Add to database.
         storage
-            .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
+            .append_pending_payload(leaf.view_number(), leaf.block_header(), &leaf_payload)
             .await
             .unwrap();
         storage.append_vid(&vid_share).await.unwrap();
@@ -3868,7 +3819,7 @@ mod test {
         assert_eq!(
             leaf_payload,
             storage
-                .fetch(PayloadRequest(vid_share.data.payload_commitment()))
+                .fetch(PayloadRequest(leaf.block_header().payload_commitment()))
                 .await
                 .unwrap()
         );
