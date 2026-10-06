@@ -68,6 +68,10 @@ DRAIN_SLACK_S = 10 + DRAIN_IDLE_S
 CATCHUP_TIMEOUT_S = 600
 # Payloads are read a block behind the query node's height: a payload requested as soon as its
 # header is stored can start a peer fetch that races the node's own insert.
+COLLAPSE_RATIO = 0.5
+CLIMB_FACTOR = 1.25
+# Float slack when comparing a bracket to the resolution.
+RESOLUTION_EPS = 1e-9
 PAYLOAD_LAG_BLOCKS = 1
 MISSING_PAYLOAD_S = 10
 # One slow or failed answer from the query node must not end the run.
@@ -213,6 +217,12 @@ class LoadStats(TypedDict):
     # With keep_going: after the last step, None past CATCHUP_TIMEOUT_S.
     drain_s: float | None
     refine_skipped: bool
+    # Why the staircase ended; None for runs recorded before it existed.
+    stop_reason: str | None
+
+
+ProbeKind = Literal["ramp", "refine", "climb", "bisect", "recovery", "confirm"]
+Side = Literal["overall", "consensus"]
 
 
 class StepWindow(TypedDict):
@@ -220,6 +230,7 @@ class StepWindow(TypedDict):
 
     rate_mb_s: float
     refine: bool
+    kind: ProbeKind
     t_start: float
     t_mid: float
     t_end: float
@@ -263,6 +274,7 @@ class Limit(TypedDict):
     # None: below the first step. Not `bounded`: every step passed, a lower bound.
     mb_s: float | None
     bounded: bool
+    failed_at_mb_s: float | None
 
 
 class Capacity(TypedDict):
@@ -271,6 +283,10 @@ class Capacity(TypedDict):
     query_node: Limit
     failed_at_mb_s: float | None
     fail_rule: str | None
+    # Overall `failed_at_mb_s - mb_s`: what the probes could tell apart; None when unbounded.
+    resolution_mb_s: float | None
+    # A passing confirm probe ran at the overall limit.
+    confirmed: bool
 
 
 class Validity(TypedDict):
@@ -382,6 +398,29 @@ class BenchConfig:
     # Every step runs whatever its verdict, no refine step; then the backlog drains, see
     # run_staircase. In flight and tx timeouts stay bound by `cap_s` and `tx_timeout_s`.
     keep_going: bool = False
+
+
+@dataclass(frozen=True)
+class SearchConfig:
+    """Capacity search in place of the ramp: climb from `start_mb_s`, bisect to
+    `resolution_mb_s`, confirm; at most `max_probes` probes and `offered_gb` offered."""
+
+    start_mb_s: float = 100.0
+    resolution_mb_s: float = 10.0
+    max_probes: int = 12
+    offered_gb: float = 150.0
+
+
+class Probe(TypedDict):
+    rate_mb_s: float
+    kind: ProbeKind
+    duration_s: int
+
+
+class StaircaseEnd(TypedDict):
+    drain_s: float | None
+    refine_skipped: bool
+    stop_reason: str
 
 
 def parse_rates(text: str) -> tuple[float, ...]:
@@ -566,6 +605,7 @@ def drive_load(
     clock: Clock = SYSTEM_CLOCK,
     http: HttpFactory = HttpPool,
     scan_processes: int = 0,
+    search: SearchConfig | None = None,
 ) -> tuple[float, float]:
     """Saves the stake table, runs the load staircase, then writes every node's final metrics
     snapshot. Returns when the steps started and ended. The caller must have already waited for readiness with `wait_ready`. Raises
@@ -577,12 +617,20 @@ def drive_load(
         query_url = topo["nodes"][topo["query_node"]]
         stake_table = get_ok(pool, query_url + "/v1/node/stake-table/current")
         (out / "stake-table.json").write_bytes(stake_table)
-        log.info(
-            "load: warmup %d s, then steps of %d s at %s MB/s",
-            cfg.warmup_s,
-            cfg.step_s,
-            ", ".join(map(fmt_num, cfg.steps)),
-        )
+        if search:
+            log.info(
+                "load: warmup %d s, then search from %s MB/s in probes of %d s",
+                cfg.warmup_s,
+                fmt_num(search.start_mb_s),
+                cfg.step_s,
+            )
+        else:
+            log.info(
+                "load: warmup %d s, then steps of %d s at %s MB/s",
+                cfg.warmup_s,
+                cfg.step_s,
+                ", ".join(map(fmt_num, cfg.steps)),
+            )
         validators = [
             url for node, url in topo["nodes"].items() if node != topo["query_node"]
         ]
@@ -597,6 +645,7 @@ def drive_load(
                 clock,
                 http,
                 scan_processes,
+                search,
             )
         )
         for node, url in topo["nodes"].items():
@@ -826,6 +875,7 @@ async def generate_load(
     clock: Clock,
     http: HttpFactory,
     scan_processes: int = 0,
+    search: SearchConfig | None = None,
 ) -> tuple[float, float]:
     """The load staircase, then up to `tx_timeout_s` for the stragglers. Returns when the
     steps started and ended. Writes one line per transaction to load.jsonl, per block height
@@ -857,8 +907,11 @@ async def generate_load(
     counters: list[dict[str, Any]] = []
     heights: Heights | None = None
     steps: list[dict[str, Any]] = []
-    drained: float | None = None
-    skipped = False
+    end: StaircaseEnd = {
+        "drain_s": None,
+        "refine_skipped": False,
+        "stop_reason": "interrupted",
+    }
     try:
         heights = Heights(await tracking.call(block_count, query_url, "query"))
         async with asyncio.TaskGroup() as group:
@@ -895,7 +948,7 @@ async def generate_load(
                 bodies,
                 clock,
             )
-            drained, skipped = await run_staircase(load, heights, counters, steps)
+            end = await run_staircase(load, heights, counters, steps, out, search)
             done.set()
             await tracker
             for poller in pollers:
@@ -910,9 +963,7 @@ async def generate_load(
         polling.close()
         # In `finally` so a load cut short (SIGTERM of the AWS agent) keeps its raw data.
         if heights is not None:
-            write_load_files(
-                out, state, heights, counters, steps, marker, drained, skipped
-            )
+            write_load_files(out, state, heights, counters, steps, marker, end)
     return steps[0]["t_start"], steps[-1]["t_end"]
 
 
@@ -923,8 +974,7 @@ def write_load_files(
     counters: list[dict[str, Any]],
     steps: list[dict[str, Any]],
     marker: bytes,
-    drained: float | None,
-    skipped: bool,
+    end: StaircaseEnd,
 ) -> None:
     # A load cut short leaves txs still queued for a submit thread (`t_submit` inf, not JSON).
     sent = (tx for tx in state.txs if math.isfinite(tx.t_submit))
@@ -941,8 +991,9 @@ def write_load_files(
             "cap_waits": state.cap_waits,
             "submit_errors": state.submit_errors,
             "missing_payloads": state.missing_payloads,
-            "drain_s": drained,
-            "refine_skipped": skipped,
+            "drain_s": end["drain_s"],
+            "refine_skipped": end["refine_skipped"],
+            "stop_reason": end["stop_reason"],
             "marker": marker.hex(),
         },
     )
@@ -1020,68 +1071,312 @@ async def run_staircase(
     heights: "Heights",
     counters: list[dict[str, Any]],
     steps: list[dict[str, Any]],
-) -> tuple[float | None, bool]:
-    """Warmup, then steps up the ramp until one fails, then one refine step once the failed
-    step's backlog drained. Each step is judged on what is known at its end; the report keeps
-    that verdict. Appends to `steps` as they end, so a run cut short keeps them. Returns the
-    drain time and whether the drain timed out, which skips the refine step. With
-    `keep_going` every step of the ramp runs, without a refine step, and the drain follows
-    the last step."""
+    out: Path,
+    search: SearchConfig | None = None,
+) -> StaircaseEnd:
+    """Warmup, then the ramp or, with `search`, the capacity search. Each step is judged on
+    what is known at its end; the report keeps that verdict. Appends to `steps` as they end and
+    rewrites `out`/steps.json each time, so a run cut short keeps them."""
+    cfg = load.cfg
+    warmup_mb_s = search.start_mb_s if search else cfg.steps[0]
+    async with asyncio.TaskGroup() as submits:
+        await pace(load, submits, warmup_mb_s, load.clock.time() + cfg.warmup_s)
+        if search:
+            return await search_probes(
+                load, submits, heights, counters, steps, out, search
+            )
+        return await ramp_steps(load, submits, heights, counters, steps, out)
+
+
+async def ramp_steps(
+    load: Load,
+    submits: asyncio.TaskGroup,
+    heights: "Heights",
+    counters: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+    out: Path,
+) -> StaircaseEnd:
+    """Steps up the ramp until one fails, then one refine step once the failed step's backlog
+    drained. The drain timing out skips the refine step. With `keep_going` every step of the
+    ramp runs, without a refine step, and the drain follows the last step."""
     cfg = load.cfg
     passed: list[bool] = []
     drained, skipped = None, False
-    async with asyncio.TaskGroup() as submits:
-        await pace(load, submits, cfg.steps[0], load.clock.time() + cfg.warmup_s)
-        while (rate := next_rate(cfg.steps, passed, cfg.keep_going)) is not None:
-            refine = not cfg.keep_going and not all(passed)
-            if refine:
-                drained = await drain(
-                    load.state,
-                    counters,
-                    heights,
-                    cfg.tx_timeout_s + DRAIN_SLACK_S,
-                    load.clock,
-                )
-                if drained is None:
-                    log.warning("backlog did not drain, skipping the refine step")
-                    skipped = True
-                    break
-                log.info("backlog drained in %.1f s", drained)
-            start = load.clock.time()
-            cap_waits = load.state.cap_waits
-            await pace(load, submits, rate, start + cfg.step_s)
-            step: StepWindow = {
-                "rate_mb_s": rate,
-                "refine": refine,
-                "t_start": start,
-                "t_mid": start + cfg.step_s / 2,
-                "t_end": load.clock.time(),
-            }
-            txs = [dataclasses.asdict(tx) for tx in load.state.txs]
-            judged = judge_step(
-                step, cfg, txs, list(heights.records()), counters, load.clock.time()
-            )
-            judged["cap_waits"] = load.state.cap_waits - cap_waits
-            fails = judged["consensus_fails"] + judged["query_fails"]
-            log_step(judged, fails)
-            passed.append(not fails)
-            steps.append(judged)
-        if cfg.keep_going:
-            # Not waiting for pending: a transaction of a lost payload stays pending until its
-            # timeout, which `keep_going` runs set above the lag.
-            drained = await drain(
-                load.state,
-                counters,
-                heights,
-                CATCHUP_TIMEOUT_S,
-                load.clock,
-                wait_pending=False,
-            )
+    while (rate := next_rate(cfg.steps, passed, cfg.keep_going)) is not None:
+        refine = not cfg.keep_going and not all(passed)
+        if refine:
+            drained = await cooldown(load, heights, counters)
             if drained is None:
-                log.warning("backlog did not drain in %d s", CATCHUP_TIMEOUT_S)
-            else:
-                log.info("backlog drained in %.1f s", drained)
-    return drained, skipped
+                log.warning("backlog did not drain, skipping the refine step")
+                skipped = True
+                break
+        judged = await run_probe(
+            load,
+            submits,
+            heights,
+            counters,
+            rate,
+            cfg.step_s,
+            "refine" if refine else "ramp",
+        )
+        passed.append(not side_fails(judged, "overall"))
+        steps.append(judged)
+        write_json(out / "steps.json", steps)
+    if cfg.keep_going:
+        # Not waiting for pending: a transaction of a lost payload stays pending until its
+        # timeout, which `keep_going` runs set above the lag.
+        drained = await drain(
+            load.state,
+            counters,
+            heights,
+            CATCHUP_TIMEOUT_S,
+            load.clock,
+            wait_pending=False,
+        )
+        if drained is None:
+            log.warning("backlog did not drain in %d s", CATCHUP_TIMEOUT_S)
+        else:
+            log.info("backlog drained in %.1f s", drained)
+    return {
+        "drain_s": drained,
+        "refine_skipped": skipped,
+        "stop_reason": ramp_stop_reason(passed, skipped),
+    }
+
+
+def ramp_stop_reason(passed: list[bool], skipped: bool) -> str:
+    if skipped:
+        return "drain timeout"
+    if all(passed):
+        return "ramp exhausted"
+    return "first step failed" if passed.index(False) == 0 else "refined"
+
+
+async def search_probes(
+    load: Load,
+    submits: asyncio.TaskGroup,
+    heights: "Heights",
+    counters: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+    out: Path,
+    search: SearchConfig,
+) -> StaircaseEnd:
+    """Probes chosen by `next_probe` until it names a stop reason. A resolved search whose
+    only limit is the query service goes on to search the consensus limit."""
+    cfg = load.cfg
+    side: Side = "overall"
+    drained = None
+    while True:
+        found = next_probe(steps, search, cfg, side)
+        if side == "overall" and found == "resolved" and search_sides(steps):
+            side = "consensus"
+            log.info("query node limits first, searching the consensus limit")
+            continue
+        if isinstance(found, str):
+            reason = found
+            break
+        if steps and side_fails(steps[-1], "overall"):
+            drained = await cooldown(load, heights, counters)
+            if drained is None:
+                log.warning("backlog did not drain, stopping the search")
+                reason = "drain timeout"
+                break
+        label = search_log_prefix(steps, found, side)
+        judged = await run_probe(
+            load,
+            submits,
+            heights,
+            counters,
+            found["rate_mb_s"],
+            found["duration_s"],
+            found["kind"],
+            label,
+        )
+        steps.append(judged)
+        write_json(out / "steps.json", steps)
+    log.info("search: %s after %d probes", reason, len(steps))
+    return {"drain_s": drained, "refine_skipped": False, "stop_reason": reason}
+
+
+async def run_probe(
+    load: Load,
+    submits: asyncio.TaskGroup,
+    heights: "Heights",
+    counters: list[dict[str, Any]],
+    rate: float,
+    duration_s: float,
+    kind: ProbeKind,
+    label: str | None = None,
+) -> dict[str, Any]:
+    """One step at `rate` for `duration_s`, measured over its second half, and its verdict."""
+    start = load.clock.time()
+    cap_waits = load.state.cap_waits
+    await pace(load, submits, rate, start + duration_s)
+    step: StepWindow = {
+        "rate_mb_s": rate,
+        "refine": kind == "refine",
+        "kind": kind,
+        "t_start": start,
+        "t_mid": start + duration_s / 2,
+        "t_end": load.clock.time(),
+    }
+    txs = [dataclasses.asdict(tx) for tx in load.state.txs]
+    judged = judge_step(
+        step, load.cfg, txs, list(heights.records()), counters, load.clock.time()
+    )
+    judged["cap_waits"] = load.state.cap_waits - cap_waits
+    log_step(judged, side_fails(judged, "overall"), label)
+    return judged
+
+
+async def cooldown(
+    load: Load, heights: "Heights", counters: list[dict[str, Any]]
+) -> float | None:
+    """Drain after a failed step; None if it timed out."""
+    drained = await drain(
+        load.state,
+        counters,
+        heights,
+        load.cfg.tx_timeout_s + DRAIN_SLACK_S,
+        load.clock,
+    )
+    if drained is not None:
+        log.info("backlog drained in %.1f s", drained)
+    return drained
+
+
+def next_probe(
+    steps: Sequence[Mapping[str, Any]],
+    search: SearchConfig,
+    cfg: BenchConfig,
+    side: Side,
+) -> Probe | str:
+    """The next probe after `steps`, or the reason to stop, from the steps alone. Climbs from
+    the start rate until a probe fails, bisects the bracket to the resolution, then confirms
+    its lower end for two steps. A collapsed probe is followed by a recovery probe at the
+    highest pass: a failing recovery ends the search. The budgets stop it before a probe that
+    would exceed them."""
+    chosen = pick_probe(steps, search, cfg, side)
+    if isinstance(chosen, str):
+        return chosen
+    if len(steps) >= search.max_probes:
+        return "probe budget"
+    spent = (
+        offered_gb(steps, cfg) if steps else cfg.warmup_s * chosen["rate_mb_s"] / 1000
+    )
+    if spent + chosen["rate_mb_s"] * chosen["duration_s"] / 1000 > search.offered_gb:
+        return "disk budget"
+    return chosen
+
+
+def pick_probe(
+    steps: Sequence[Mapping[str, Any]],
+    search: SearchConfig,
+    cfg: BenchConfig,
+    side: Side,
+) -> Probe | str:
+    def probe(rate: float, kind: ProbeKind, step_count: int = 1) -> Probe:
+        return {"rate_mb_s": rate, "kind": kind, "duration_s": step_count * cfg.step_s}
+
+    if not steps:
+        return probe(search.start_mb_s, "climb")
+    last = steps[-1]
+    # Phase 2 probes fail the query side; the generator then waits on the lagging query node.
+    if side == "consensus" and last["cap_waits"] and last["query_fails"]:
+        return "generator throttled"
+    lo, hi = bracket(steps, side)
+    if last.get("kind") == "recovery" and side_fails(last, side):
+        if any(not side_fails(s, side) for s in steps):
+            return f"degraded after overload at {fmt_num(steps[-2]['rate_mb_s'])}"
+        return "below start"
+    if collapsed(last):
+        return probe(search.start_mb_s if lo is None else lo, "recovery")
+    if lo is None:
+        return "below start"
+    if hi is None:
+        return probe(lo * CLIMB_FACTOR, "climb")
+    if hi - lo > search.resolution_mb_s + RESOLUTION_EPS:
+        return probe((lo + hi) / 2, "bisect")
+    if not any(is_confirm(s, lo) and not side_fails(s, side) for s in steps):
+        return probe(lo, "confirm", 2)
+    return "resolved"
+
+
+def is_confirm(step: Mapping[str, Any], rate: float) -> bool:
+    # Steps recorded before `kind` have none.
+    return step.get("kind") == "confirm" and step["rate_mb_s"] == rate
+
+
+def side_fails(step: Mapping[str, Any], side: Side) -> list[str]:
+    """Failed rules of a step: both sides for `overall`, the consensus side alone otherwise."""
+    if side == "consensus":
+        return step["consensus_fails"]
+    return step["consensus_fails"] + step["query_fails"]
+
+
+def collapsed(step: Mapping[str, Any]) -> bool:
+    """Decided under COLLAPSE_RATIO of what was submitted: overload, not a marginal miss."""
+    return (step["decided_mb_s"] or 0.0) < COLLAPSE_RATIO * step["submitted_mb_s"]
+
+
+def settled(steps: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Without a collapsed probe whose recovery at the same rate passed: a retry of the first
+    probe, which says that rate is fine."""
+    return [
+        step
+        for step, after in itertools.zip_longest(steps, steps[1:])
+        if not (
+            after
+            and collapsed(step)
+            and after.get("kind") == "recovery"
+            and after["rate_mb_s"] == step["rate_mb_s"]
+            and not side_fails(after, "overall")
+        )
+    ]
+
+
+def bracket(
+    steps: Sequence[Mapping[str, Any]], side: Side
+) -> tuple[float | None, float | None]:
+    """`(lo, hi)`: the highest rate passing `side` below the lowest rate failing it. A rate
+    that failed once fails, however often it passed."""
+    seen = settled(steps)
+    hi = min((s["rate_mb_s"] for s in seen if side_fails(s, side)), default=None)
+    lo = max(
+        (
+            s["rate_mb_s"]
+            for s in seen
+            if not side_fails(s, side) and (hi is None or s["rate_mb_s"] < hi)
+        ),
+        default=None,
+    )
+    return lo, hi
+
+
+def offered_gb(steps: Sequence[Mapping[str, Any]], cfg: BenchConfig) -> float:
+    """What the generator offered: the warmup at the first probe's rate plus every probe."""
+    if not steps:
+        return 0.0
+    warmup = cfg.warmup_s * steps[0]["rate_mb_s"]
+    probes = sum(s["rate_mb_s"] * (s["t_end"] - s["t_start"]) for s in steps)
+    return (warmup + probes) / 1000
+
+
+def search_sides(steps: Sequence[Mapping[str, Any]]) -> Side | None:
+    """ "consensus" when only the query side failed so far: the consensus limit is above."""
+    if any(s["consensus_fails"] for s in steps):
+        return None
+    return "consensus" if any(s["query_fails"] for s in steps) else None
+
+
+def search_log_prefix(
+    steps: Sequence[Mapping[str, Any]], probe: Probe, side: Side
+) -> str:
+    lo, hi = bracket(steps, side)
+    return (
+        f"probe {len(steps) + 1} {probe['kind']} {fmt_num(probe['rate_mb_s'])} MB/s "
+        f"[lo {fmt_num(lo) or '-'} hi {fmt_num(hi) or '-'}]"
+    )
 
 
 async def drain(
@@ -1093,15 +1388,16 @@ async def drain(
     wait_pending: bool = True,
 ) -> float | None:
     """Submits nothing until no transaction is pending (unless `wait_pending` is off), decided
-    bytes stopped growing and the query node caught up with the validators. Seconds that took,
-    or None after `timeout_s`."""
+    bytes stopped growing and the query node caught up with a validator height past the one at
+    the idle point, so a stalled chain does not count as drained. Seconds that took, or None
+    after `timeout_s`."""
     state.rate_mb_s = 0.0
     start, target = clock.time(), None
     while clock.time() - start < timeout_s:
         pending = len(state.pending) if wait_pending else 0
         if target is None and pending == 0 and is_idle(counters, clock.time()):
             # Fixed once settled: empty blocks keep the validator height moving.
-            target = heights.top("validator")
+            target = heights.top("validator") + 1
         if target is not None and heights.top("query") >= target:
             return clock.time() - start
         await clock.asleep(0.1)
@@ -1116,12 +1412,12 @@ def is_idle(counters: Sequence[Mapping[str, Any]], now: float) -> bool:
     return len({c["decided_bytes"] for c in recent}) == 1
 
 
-def log_step(m: dict[str, Any], fails: list[str]) -> None:
+def log_step(m: dict[str, Any], fails: list[str], label: str | None = None) -> None:
     consensus, lag = m["consensus_latency_ms"], m["query_lag_ms"]
     log.info(
-        "step %s MB/s: submitted %s, decided %s MB/s, consensus p50 %s ms, query lag p50 "
+        "%s: submitted %s, decided %s MB/s, consensus p50 %s ms, query lag p50 "
         "%s ms: %s",
-        fmt_num(m["rate_mb_s"]),
+        label or f"step {fmt_num(m['rate_mb_s'])} MB/s",
         fmt_num(m["submitted_mb_s"]),
         fmt_num(m["decided_mb_s"]),
         fmt_num(consensus["p50"] if consensus else None),
@@ -1550,28 +1846,49 @@ def capacity(steps: Sequence[Mapping[str, Any]]) -> Capacity:
 
     A side can fail at one rate and pass at a higher one: noise, or a refine step below the
     first failure that trips the other side. Its limit is still below its lowest failing
-    rate, so the two limits need not bracket the steps the ramp passed."""
-    ordered = sorted(steps, key=lambda s: s["rate_mb_s"])
+    rate, so the two limits need not bracket the steps the ramp passed. A rate that failed in
+    any probe fails. The query side takes evidence only from steps whose consensus side
+    passed: query lag under a collapsed consensus says nothing about the query node."""
+    ordered = sorted(
+        settled(steps),
+        key=lambda s: (s["rate_mb_s"], not side_fails(s, "overall")),
+    )
 
-    def limit(fails: Callable[[Mapping[str, Any]], list[str]]) -> tuple[Limit, Any]:
+    def limit(
+        fails: Callable[[Mapping[str, Any]], list[str]],
+        evidence: Callable[[Mapping[str, Any]], bool] = lambda s: True,
+    ) -> tuple[Limit, Any]:
         passed = None
-        for step in ordered:
+        for step in filter(evidence, ordered):
             if fails(step):
-                return {"mb_s": passed, "bounded": True}, step
+                at = step["rate_mb_s"]
+                return {"mb_s": passed, "bounded": True, "failed_at_mb_s": at}, step
             passed = step["rate_mb_s"]
-        return {"mb_s": passed, "bounded": False}, None
+        return {"mb_s": passed, "bounded": False, "failed_at_mb_s": None}, None
 
-    overall, failed = limit(lambda s: s["consensus_fails"] + s["query_fails"])
+    overall, failed = limit(lambda s: side_fails(s, "overall"))
     return {
         "overall": overall,
         "consensus": limit(lambda s: s["consensus_fails"])[0],
-        "query_node": limit(lambda s: s["query_fails"])[0],
+        "query_node": limit(
+            lambda s: s["query_fails"], lambda s: not s["consensus_fails"]
+        )[0],
         "failed_at_mb_s": failed["rate_mb_s"] if failed else None,
         "fail_rule": (
-            f"{'; '.join(failed['consensus_fails'] + failed['query_fails'])} at "
+            f"{'; '.join(side_fails(failed, 'overall'))} at "
             f"{fmt_num(failed['rate_mb_s'])} MB/s"
             if failed
             else None
+        ),
+        "resolution_mb_s": (
+            failed["rate_mb_s"] - overall["mb_s"]
+            if failed and overall["mb_s"] is not None
+            else None
+        ),
+        "confirmed": overall["mb_s"] is not None
+        and any(
+            is_confirm(s, overall["mb_s"]) and not side_fails(s, "overall")
+            for s in ordered
         ),
     }
 
@@ -1593,7 +1910,13 @@ def capacity_line(cap: Capacity) -> str:
             f"query node limits at {value} MB/s, consensus {bound} "
             f"{fmt_num(consensus['mb_s'])} MB/s"
         )
-    return f"Capacity **{value} MB/s**: {who} ({cap['fail_rule']})."
+    resolution = cap["resolution_mb_s"]
+    spread = (
+        f" (+-{fmt_num(resolution)}{', confirmed' if cap['confirmed'] else ''})"
+        if resolution is not None
+        else ""
+    )
+    return f"Capacity **{value} MB/s**{spread}: {who} ({cap['fail_rule']})."
 
 
 def sample_metrics(
@@ -1719,6 +2042,8 @@ def step_result(
     return {
         "rate_mb_s": judged["rate_mb_s"],
         "refine": judged["refine"],
+        # steps.json from before `kind` has only `refine`.
+        "kind": judged.get("kind", "refine" if judged["refine"] else "ramp"),
         "t_start": judged["t_start"],
         "t_mid": t0,
         "t_end": t1,
@@ -1762,11 +2087,9 @@ def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
     for node, stats in result["nodes"].items():
         if stats["decided_blocks"] <= 0:
             invalid.append(f"{node} decided no blocks in the window")
-    for step in result["steps"]:
-        if not step["decided_mb_s"]:
-            invalid.append(
-                f"the {fmt_num(step['rate_mb_s'])} MB/s step decided nothing"
-            )
+    # A collapsed probe may decide nothing; only a run with no decided step is broken.
+    if result["steps"] and not any(step["decided_mb_s"] for step in result["steps"]):
+        invalid.append("every step decided nothing")
     load = result["load"]
     if load["included"] <= 0:
         invalid.append("no transactions included")
@@ -2048,6 +2371,8 @@ def load_stats(
         "tracker_lag_ms": quantiles(scan_lags(heights, t0, t1)),
         "drain_s": meta["drain_s"],
         "refine_skipped": meta["refine_skipped"],
+        # Absent from load-meta.json of runs before it was recorded.
+        "stop_reason": meta.get("stop_reason"),
     }
 
 
@@ -2153,7 +2478,10 @@ def compare(current: BenchResult, baseline: Baseline) -> Comparison:
             usable.append(run)
     usable = usable[:BASELINE_RUNS]
     noisy = current["validity"]["noisy"]
-    resolution = ramp_resolution(current["config"]["steps"])
+    # A search or refine resolves finer than the ramp gap; old results have no stored value.
+    resolution = current["capacity"].get("resolution_mb_s") or ramp_resolution(
+        current["config"]["steps"]
+    )
     capacity_rows = [
         compare_capacity(
             label,
@@ -2328,6 +2656,7 @@ def render(result: BenchResult, comparison: Comparison | None) -> str:
         "",
         f"- {status_line(result)}",
         f"- {capacity_line(result['capacity'])}",
+        *search_lines(result),
         f"- {baseline_line(comparison)}",
         "",
         *capacity_table(result, comparison),
@@ -2349,6 +2678,15 @@ def render(result: BenchResult, comparison: Comparison | None) -> str:
         *footer(result),
     ]
     return "\n".join(lines) + "\n"
+
+
+def search_lines(result: BenchResult) -> list[str]:
+    reason = result["load"]["stop_reason"]
+    if reason is None:
+        return []
+    probes = sum(1 for s in result["steps"] if s["kind"] not in ("ramp", "refine"))
+    after = f" after {probes} probes" if probes else ""
+    return [f"- search: {reason}{after}"]
 
 
 def status_line(result: BenchResult) -> str:
@@ -2581,7 +2919,7 @@ def step_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
         rows = {row["label"]: row for row in other["rows"]} if other else {}
         cells = [step_cell(step, label, rows.get(label)) for label in STEP_COLUMNS]
         lines.append(
-            f"| {fmt_num(rate)}{' (refine)' if step['refine'] else ''} | "
+            f"| {fmt_num(rate)}{'' if step['kind'] == 'ramp' else f' ({step['kind']})'} | "
             + " | ".join(cells)
             + f" | {step_verdict(step)} |{tail}"
         )

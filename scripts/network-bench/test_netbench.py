@@ -192,8 +192,8 @@ def test_capacity_verdict(current, steal, runs, expected):
 
 def test_one_refine_step_shift_is_not_lost_to_float_error():
     resolution = netbench.ramp_resolution((0.1, 0.3))
-    current: netbench.Limit = {"mb_s": 0.2, "bounded": True}
-    baseline: netbench.Limit = {"mb_s": 0.3, "bounded": True}
+    current: netbench.Limit = {"mb_s": 0.2, "bounded": True, "failed_at_mb_s": 0.25}
+    baseline: netbench.Limit = {"mb_s": 0.3, "bounded": True, "failed_at_mb_s": 0.35}
     verdict = netbench.compare_capacity("x", current, [baseline], resolution, False)
     assert verdict["verdict"] == "worse"
 
@@ -264,11 +264,11 @@ def test_baseline_exclusion(runs, excluded):
         (edited(STALLED), {"node1": 0.5}, False, False, "stake table is not 3"),
         (edited(TRACKER_LAG), {}, True, True, "benchmark tracker behind"),
         (
-            make_result([step(4.0), step(6.0, 0.0, FAIL)]),
+            make_result([step(4.0, 0.0, FAIL), step(6.0, 0.0, FAIL)]),
             {},
             False,
             False,
-            "the 6 MB/s step decided nothing",
+            "every step decided nothing",
         ),
     ],
 )
@@ -375,6 +375,7 @@ def run_load(
     """One step of `duration` clock seconds at `rate` MB/s with at most `cap_txs` in flight,
     no warmup, unless `kwargs` sets `steps`. `FakeNode` arguments in `kwargs` go to the node."""
     fake = {k: kwargs.pop(k) for k in NODE_KEYS & kwargs.keys()}
+    search = kwargs.pop("search", None)
     clock = fakes.FakeClock(threaded=any(k.endswith("_delay") for k in fake))
     node = fakes.FakeNode(clock, **fake)
     defaults: dict[str, Any] = {
@@ -388,7 +389,7 @@ def run_load(
     config = netbench.BenchConfig(**defaults | kwargs)
     urls = [node.url] * nodes
     load = netbench.generate_load(
-        config, urls, node.url, [node.url] * 2, out, clock, node.connect
+        config, urls, node.url, [node.url] * 2, out, clock, node.connect, search=search
     )
     clock.run(load)
     return Load(
@@ -660,7 +661,13 @@ def test_dead_network_raises_without_starting_load(tmp_path: Path):
 
 def write_load_files(out: Path, state: netbench.LoadState) -> dict[str, str]:
     netbench.write_load_files(
-        out, state, netbench.Heights(7), [], [], b"\x01", None, False
+        out,
+        state,
+        netbench.Heights(7),
+        [],
+        [],
+        b"\x01",
+        {"drain_s": None, "refine_skipped": False, "stop_reason": "ramp exhausted"},
     )
     return {p.name: p.read_text() for p in out.iterdir()}
 
@@ -707,7 +714,11 @@ def test_steps_and_capacity(tmp_path: Path):
     # 16 included and one timed out, of 1 MB each, in the 15 s measured half.
     assert one["submitted_mb_s"] == pytest.approx(17 / 15)
     assert two["consensus_fails"] == ["decided 50% of submitted"]
-    assert result["capacity"]["overall"] == {"mb_s": 1.0, "bounded": True}
+    assert result["capacity"]["overall"] == {
+        "mb_s": 1.0,
+        "bounded": True,
+        "failed_at_mb_s": 2.0,
+    }
     node0, load = result["nodes"]["node0"], result["load"]
     assert (node0["decided_blocks"], node0["cpu_cores"]) == (120, 0.5)
     window = result["window"]
@@ -734,7 +745,11 @@ def test_report_keeps_the_ramp_verdict(tmp_path: Path):
     netbench.write_json(path, steps)
     result = analyze(tmp_path)
     assert not result["steps"][0]["passed"]
-    assert result["capacity"]["overall"] == {"mb_s": None, "bounded": True}
+    assert result["capacity"]["overall"] == {
+        "mb_s": None,
+        "bounded": True,
+        "failed_at_mb_s": 1.0,
+    }
 
 
 def test_no_scrapes_is_invalid_not_a_crash(tmp_path: Path):
@@ -796,7 +811,7 @@ def drain(state, heights, timeout_s, clock, **kwargs) -> float | None:
 def test_drain_without_pending_ignores_stuck_transactions():
     state = netbench.LoadState()
     state.submitted(netbench.Tx(id=0, node=0, t_queued=0.0))
-    heights = heights_at(5, 5)
+    heights = heights_at(5, 6)
     assert drain(state, heights, 0.3, fakes.FakeClock()) is None
     assert drain(state, heights, 0.3, fakes.FakeClock(), wait_pending=False) is not None
 
@@ -966,7 +981,7 @@ def test_drain_waits_for_the_query_node():
     state = netbench.LoadState()
     heights = heights_at(5, 3)
     assert drain(state, heights, 0.3, fakes.FakeClock()) is None
-    heights.saw("query", 5, 0.0)
+    heights.saw("query", 6, 0.0)
     assert drain(state, heights, 0.3, fakes.FakeClock()) is not None
 
 
@@ -975,8 +990,8 @@ def test_drain_does_not_chase_new_validator_heights():
 
     def grow(now: float) -> None:
         if now >= 0.05:
-            heights.saw("validator", 6, now)
-            heights.saw("query", 5, now)
+            heights.saw("validator", 7, now)
+            heights.saw("query", 6, now)
 
     clock = fakes.FakeClock(on_advance=grow)
     assert drain(netbench.LoadState(), heights, 1.0, clock) is not None
@@ -986,6 +1001,7 @@ def step_window() -> netbench.StepWindow:
     return {
         "rate_mb_s": 10.0,
         "refine": False,
+        "kind": "ramp",
         "t_start": 0.0,
         "t_mid": 15.0,
         "t_end": 30.0,
@@ -1184,7 +1200,13 @@ def test_heights_not_yet_on_the_query_node_count_as_lagging():
 
 
 def verdict(rate, consensus=(), query=()):
-    return {"rate_mb_s": rate, "consensus_fails": [*consensus], "query_fails": [*query]}
+    return {
+        "rate_mb_s": rate,
+        "submitted_mb_s": rate,
+        "decided_mb_s": rate,
+        "consensus_fails": [*consensus],
+        "query_fails": [*query],
+    }
 
 
 DECIDED_90 = ["decided 90% of offered"]
@@ -1196,25 +1218,25 @@ QUERY_LAG = ["query lag p50 1500 ms > 1000 ms"]
     [
         (
             [verdict(4.0), verdict(6.0)],
-            {"mb_s": 6.0, "bounded": False},
+            {"mb_s": 6.0, "bounded": False, "failed_at_mb_s": None},
             "Capacity **>= 6 MB/s**: no step failed.",
         ),
         (
             [verdict(4.0), verdict(6.0), verdict(8.0, DECIDED_90), verdict(7.0)],
-            {"mb_s": 7.0, "bounded": True},
-            "Capacity **7 MB/s**: consensus limits (decided 90% of offered at 8 MB/s).",
+            {"mb_s": 7.0, "bounded": True, "failed_at_mb_s": 8.0},
+            "Capacity **7 MB/s** (+-1): consensus limits (decided 90% of offered at 8 MB/s).",
         ),
         (
             [verdict(4.0), verdict(6.0, query=QUERY_LAG), verdict(5.0)],
-            {"mb_s": 5.0, "bounded": True},
+            {"mb_s": 5.0, "bounded": True, "failed_at_mb_s": 6.0},
             (
-                "Capacity **5 MB/s**: query node limits at 5 MB/s, consensus >= 6 MB/s "
+                "Capacity **5 MB/s** (+-1): query node limits at 5 MB/s, consensus >= 6 MB/s "
                 "(query lag p50 1500 ms > 1000 ms at 6 MB/s)."
             ),
         ),
         (
             [verdict(4.0, ["1 view timeouts"])],
-            {"mb_s": None, "bounded": True},
+            {"mb_s": None, "bounded": True, "failed_at_mb_s": 4.0},
             "Capacity **< 4 MB/s**: consensus limits (1 view timeouts at 4 MB/s).",
         ),
     ],
@@ -1283,4 +1305,375 @@ def test_progress_line_shows_the_submitted_offered_and_query_rates(
     assert "(lag 500 ms), block 30 s, 50 MB;" in line
     assert (
         "submitting 3 of 60 MB/s, decided 2.5 MB/s, query 1 MB/s; 90 submitted" in line
+    )
+
+
+SEARCH = netbench.SearchConfig(
+    start_mb_s=100.0, resolution_mb_s=10.0, max_probes=12, offered_gb=150.0
+)
+SEARCH_CFG = netbench.BenchConfig(step_s=60, warmup_s=0)
+SOFT = ["consensus latency p50 1400 ms > 1000 ms"]
+
+
+def probe_step(
+    rate: float,
+    kind: str = "climb",
+    decided: float = 1.0,
+    consensus: list[str] | None = None,
+    query: list[str] | None = None,
+    cap_waits: int = 0,
+    duration: float = 60.0,
+) -> dict[str, Any]:
+    """`decided` is the fraction of the rate; no rule fails unless given."""
+    return {
+        "rate_mb_s": rate,
+        "kind": kind,
+        "refine": False,
+        "submitted_mb_s": rate,
+        "decided_mb_s": rate * decided,
+        "consensus_fails": consensus or [],
+        "query_fails": query or [],
+        "cap_waits": cap_waits,
+        "t_start": 0.0,
+        "t_end": duration,
+    }
+
+
+def passes(*rates: float, kind: str = "climb") -> list[dict[str, Any]]:
+    return [probe_step(r, kind) for r in rates]
+
+
+def soft_fail(rate: float, kind: str = "bisect") -> dict[str, Any]:
+    return probe_step(rate, kind, 0.9, SOFT)
+
+
+def collapse(rate: float, kind: str = "climb") -> dict[str, Any]:
+    return probe_step(rate, kind, 0.4, ["decided 40% of submitted"])
+
+
+def probe(steps, search=SEARCH, cfg=SEARCH_CFG, side="overall"):
+    return netbench.next_probe(steps, search, cfg, side)
+
+
+def as_tuple(p) -> Any:
+    return p if isinstance(p, str) else (p["rate_mb_s"], p["kind"], p["duration_s"])
+
+
+@pytest.mark.parametrize(
+    ("steps", "expected"),
+    [
+        ([], (100.0, "climb", 60)),
+        (passes(100.0), (125.0, "climb", 60)),
+        (passes(100.0, 125.0), (156.25, "climb", 60)),
+    ],
+)
+def test_next_probe_climbs(steps, expected):
+    assert as_tuple(probe(steps)) == expected
+
+
+def test_next_probe_bisects_until_the_bracket_is_within_resolution():
+    steps = [*passes(100.0, 125.0), soft_fail(156.25, "climb")]
+    assert as_tuple(probe(steps)) == (140.625, "bisect", 60)
+    steps.append(probe_step(140.625, "bisect"))
+    assert as_tuple(probe(steps)) == (148.4375, "bisect", 60)
+    steps.append(probe_step(148.4375, "bisect"))
+    assert as_tuple(probe(steps)) == (148.4375, "confirm", 120)
+
+
+def test_next_probe_recovers_after_a_collapse():
+    steps = [*passes(100.0, 125.0), collapse(156.25)]
+    assert as_tuple(probe(steps)) == (125.0, "recovery", 60)
+    ok = [*steps, probe_step(125.0, "recovery")]
+    assert as_tuple(probe(ok)) == (140.625, "bisect", 60)
+    bad = [*steps, probe_step(125.0, "recovery", 0.9, SOFT)]
+    assert probe(bad) == "degraded after overload at 156"
+
+
+def test_a_collapsed_first_probe_is_retried_at_start():
+    steps = [collapse(100.0)]
+    assert as_tuple(probe(steps)) == (100.0, "recovery", 60)
+    assert probe([*steps, probe_step(100.0, "recovery", 0.9, SOFT)]) == "below start"
+
+
+def test_a_passing_retry_of_the_first_probe_forgives_its_collapse():
+    steps = [collapse(100.0), probe_step(100.0, "recovery")]
+    assert netbench.bracket(steps, "overall") == (100.0, None)
+    assert as_tuple(probe(steps)) == (125.0, "climb", 60)
+    assert netbench.capacity(steps)["overall"]["bounded"] is False
+
+
+def test_next_probe_confirms_the_resolved_bracket_and_resumes_when_it_fails():
+    steps = [
+        *passes(100.0, 125.0),
+        soft_fail(156.25, "climb"),
+        probe_step(140.625, "bisect"),
+        soft_fail(148.4375),
+    ]
+    assert as_tuple(probe(steps)) == (140.625, "confirm", 120)
+    steps.append(soft_fail(140.625, "confirm"))
+    assert as_tuple(probe(steps)) == (132.8125, "bisect", 60)
+    wide = dataclasses.replace(SEARCH, resolution_mb_s=20.0)
+    assert as_tuple(probe(steps, wide)) == (125.0, "confirm", 120)
+
+
+def test_next_probe_stops_resolved_after_a_passing_confirm():
+    steps = [
+        *passes(100.0, 125.0),
+        soft_fail(156.25, "climb"),
+        probe_step(148.4375, "bisect"),
+        probe_step(148.4375, "confirm"),
+    ]
+    assert probe(steps) == "resolved"
+
+
+def test_next_probe_stops_at_the_budgets():
+    assert probe(passes(*range(10, 22))) == "probe budget"
+    small = dataclasses.replace(SEARCH, offered_gb=120.0)
+    big = [probe_step(100.0, duration=1150.0)]
+    assert netbench.offered_gb(big, SEARCH_CFG) == pytest.approx(115.0)
+    assert probe(big, small) == "disk budget"
+    assert probe([], dataclasses.replace(SEARCH, offered_gb=1.0)) == "disk budget"
+
+
+def query_bound_steps() -> list[dict[str, Any]]:
+    return [
+        *passes(100.0, 200.0),
+        probe_step(210.0, "bisect", query=["query lag grows 76 ms/s"]),
+        probe_step(220.0, "bisect", query=["query lag grows 59 ms/s"]),
+    ]
+
+
+def test_a_query_bound_search_continues_on_the_consensus_side():
+    steps = query_bound_steps()
+    assert netbench.search_sides(steps) == "consensus"
+    assert netbench.search_sides([*steps, collapse(300.0)]) is None
+    assert netbench.search_sides(passes(100.0)) is None
+    assert as_tuple(probe(steps, side="consensus")) == (275.0, "climb", 60)
+    throttled = [*steps[:-1], {**steps[-1], "cap_waits": 3}]
+    assert probe(throttled, side="consensus") == "generator throttled"
+
+
+def test_the_first_consensus_probe_above_the_query_limit_can_fail():
+    steps = [*query_bound_steps(), collapse(275.0)]
+    cap = netbench.capacity(steps)
+    assert cap["consensus"] == {"mb_s": 220.0, "bounded": True, "failed_at_mb_s": 275.0}
+
+
+@pytest.mark.parametrize(
+    ("steps", "expected"),
+    [
+        ([soft_fail(100.0, "climb")], "below start"),
+        ([collapse(100.0), collapse(100.0, "recovery")], "below start"),
+        (
+            [*passes(100.0), collapse(125.0), collapse(100.0, "recovery")],
+            "degraded after overload at 125",
+        ),
+    ],
+)
+def test_next_probe_stops_below_start_or_degraded(steps, expected):
+    assert probe(steps) == expected
+
+
+def test_a_collapsed_confirm_is_followed_by_a_recovery_at_the_next_lower_pass():
+    steps = [
+        *passes(100.0, 125.0, 150.0),
+        soft_fail(160.0),
+        collapse(150.0, "confirm"),
+    ]
+    assert as_tuple(probe(steps)) == (125.0, "recovery", 60)
+
+
+def test_the_bracket_ignores_passes_above_the_lowest_failure():
+    steps = [*passes(200.0), soft_fail(210.0), *passes(205.0, 215.0)]
+    assert netbench.bracket(steps, "overall") == (205.0, 210.0)
+
+
+def test_a_bracket_at_resolution_is_confirmed_without_repeating_a_rate():
+    tiny = dataclasses.replace(SEARCH, resolution_mb_s=0.02)
+    steps = [*passes(0.06), soft_fail(0.08)]
+    assert as_tuple(probe(steps, tiny)) == (0.06, "confirm", 120)
+
+
+def test_search_log_prefix_shows_the_bracket():
+    steps = [*passes(187.5), soft_fail(210.9)]
+    p: netbench.Probe = {"rate_mb_s": 199.2, "kind": "bisect", "duration_s": 60}
+    assert (
+        netbench.search_log_prefix(steps, p, "overall")
+        == "probe 3 bisect 199 MB/s [lo 188 hi 211]"
+    )
+
+
+def test_search_staircase_converges_within_resolution(staircase, tmp_path: Path):
+    search = netbench.SearchConfig(0.05, 0.01, 12, 1.0)
+    run = staircase(steps=(0.05,), tx_timeout_s=1, search=search)
+    kinds = [s["kind"] for s in run.steps]
+    assert kinds[0] == "climb"
+    assert kinds[-1] == "confirm"
+    assert kinds == sorted(kinds, key=["climb", "bisect", "confirm"].index)
+    assert len(kinds) <= 8
+    cap = netbench.capacity(run.steps)
+    assert 0.07 <= some(cap["overall"]["mb_s"]) <= 0.08
+    assert cap["confirmed"]
+    assert some(cap["resolution_mb_s"]) <= 0.01 + 1e-9
+    assert run.meta["stop_reason"] == "resolved"
+
+
+def test_search_writes_steps_json_after_every_probe(tmp_path: Path):
+    seen: list[int] = []
+
+    def watch(now: float) -> None:
+        path = tmp_path / "steps.json"
+        if path.exists() and (n := len(netbench.read_json(path))) not in seen:
+            seen.append(n)
+
+    clock = fakes.FakeClock(on_advance=watch)
+    node = fakes.FakeNode(clock, include=True, block_txs=1)
+    cfg = netbench.BenchConfig(
+        tx_size=4000,
+        workers=3,
+        steps=(0.05,),
+        step_s=int(STEP_S),
+        warmup_s=0,
+        tx_timeout_s=1,
+    )
+    search = netbench.SearchConfig(0.05, 0.01, 12, 1.0)
+    clock.run(
+        netbench.generate_load(
+            cfg,
+            [node.url],
+            node.url,
+            [node.url] * 2,
+            tmp_path,
+            clock,
+            node.connect,
+            search=search,
+        )
+    )
+    assert seen[:2] == [1, 2]
+
+
+def test_search_drains_only_after_failing_probes(staircase, monkeypatch):
+    drained: list[int] = []
+    real = netbench.drain
+
+    async def spy(*args: Any, **kwargs: Any) -> float | None:
+        drained.append(len(args[0].txs))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(netbench, "drain", spy)
+    search = netbench.SearchConfig(0.05, 0.01, 12, 1.0)
+    run = staircase(steps=(0.05,), tx_timeout_s=1, search=search)
+    failing = sum(bool(s["consensus_fails"] + s["query_fails"]) for s in run.steps[:-1])
+    assert len(drained) == failing
+
+
+def test_search_stops_when_the_backlog_does_not_drain(staircase, monkeypatch):
+    async def undrained(*_: Any, **__: Any) -> None:
+        return None
+
+    monkeypatch.setattr(netbench, "drain", undrained)
+    search = netbench.SearchConfig(0.05, 0.01, 12, 1.0)
+    run = staircase(steps=(0.05,), tx_timeout_s=1, search=search)
+    assert run.meta["stop_reason"] == "drain timeout"
+    assert netbench.capacity(run.steps)["overall"]["bounded"]
+
+
+def test_drain_needs_the_validator_height_to_advance_after_idle():
+    frozen = heights_at(5, 5)
+    assert drain(netbench.LoadState(), frozen, 0.3, fakes.FakeClock()) is None
+    heights = heights_at(5, 5)
+
+    def advance(now: float) -> None:
+        if now >= 0.05:
+            heights.saw("validator", 6, now)
+            heights.saw("query", 6, now)
+
+    clock = fakes.FakeClock(on_advance=advance)
+    assert some(drain(netbench.LoadState(), heights, 1.0, clock)) < 0.5
+
+
+def test_one_passing_run_does_not_hide_a_failing_probe_at_the_same_rate():
+    cap = netbench.capacity(
+        [*passes(100.0, 150.0), soft_fail(150.0, "confirm"), *passes(125.0)]
+    )
+    assert cap["overall"] == {"mb_s": 125.0, "bounded": True, "failed_at_mb_s": 150.0}
+    assert cap["resolution_mb_s"] == 25.0
+    assert not cap["confirmed"]
+
+
+def test_confirmed_needs_a_passing_confirm_at_the_limit():
+    steps = [*passes(100.0), probe_step(100.0, "confirm"), soft_fail(110.0)]
+    assert netbench.capacity(steps)["confirmed"]
+    assert not netbench.capacity([*passes(100.0), soft_fail(110.0)])["confirmed"]
+
+
+def test_query_limit_ignores_steps_whose_consensus_failed():
+    steps = [
+        *passes(100.0),
+        probe_step(150.0, "bisect", 0.4, ["decided 40% of submitted"]),
+    ]
+    assert netbench.capacity(steps)["query_node"] == {
+        "mb_s": 100.0,
+        "bounded": False,
+        "failed_at_mb_s": None,
+    }
+
+
+def test_a_collapsed_step_that_decided_nothing_does_not_invalidate_the_run():
+    steps = [step(4.0), step(6.0, 0.0, FAIL)]
+    validity = netbench.check_validity(make_result(steps), ALL_ANSWERED)
+    assert validity["valid"]
+
+
+def test_stop_reason_reaches_the_summary(tmp_path: Path):
+    write_run_dir(tmp_path)
+    meta = netbench.read_json(tmp_path / "load-meta.json")
+    netbench.write_json(tmp_path / "load-meta.json", meta | {"stop_reason": "resolved"})
+    result = analyze(tmp_path)
+    assert result["load"]["stop_reason"] == "resolved"
+    assert "search: resolved" in netbench.render(result, None)
+
+
+def test_a_load_without_stop_reason_reads_none(tmp_path: Path):
+    write_run_dir(tmp_path)
+    result = analyze(tmp_path)
+    assert result["load"]["stop_reason"] is None
+    assert "search:" not in netbench.render(result, None)
+
+
+def test_old_steps_json_without_kind_renders_ramp_and_refine(tmp_path: Path):
+    write_run_dir(tmp_path)
+    steps = netbench.read_json(tmp_path / "steps.json")
+    old = [{k: v for k, v in s.items() if k != "kind"} for s in steps]
+    old[1]["refine"] = True
+    netbench.write_json(tmp_path / "steps.json", old)
+    result = analyze(tmp_path)
+    assert [s["kind"] for s in result["steps"]] == ["ramp", "refine"]
+    assert "(refine)" in netbench.render(result, None)
+
+
+def test_compare_uses_the_stored_resolution():
+    current = make_result([step(150.0)])
+    current["config"]["steps"] = [150.0]
+    current["capacity"]["resolution_mb_s"] = 5.8
+    comparison = compare(current, [make_result([step(150.0)])])
+    assert row(comparison, "capacity")["resolution_mb_s"] == 5.8
+    current["capacity"]["resolution_mb_s"] = None
+    comparison = compare(current, [make_result([step(150.0)])])
+    assert row(comparison, "capacity")["resolution_mb_s"] == 75.0
+
+
+def test_legacy_config_hash_keeps_its_value():
+    assert netbench.config_hash(netbench.BenchConfig(), []) == "bdf88113f497"
+
+
+def test_legacy_staircase_reports_why_it_stopped(staircase):
+    assert staircase(steps=(0.02, 0.04, 0.16), tx_timeout_s=1).meta["stop_reason"] == (
+        "refined"
+    )
+    assert staircase(steps=(0.02,), tx_timeout_s=1).meta["stop_reason"] == (
+        "ramp exhausted"
+    )
+    assert staircase(steps=(0.16,), tx_timeout_s=1).meta["stop_reason"] == (
+        "first step failed"
     )

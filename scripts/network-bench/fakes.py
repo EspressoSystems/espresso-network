@@ -879,6 +879,7 @@ def step(
         "rate_mb_s": rate,
         "cap_waits": 0,
         "refine": False,
+        "kind": "ramp",
         "t_start": 0.0,
         "t_mid": 15.0,
         "t_end": 30.0,
@@ -993,6 +994,7 @@ def make_result(
             "tracker_lag_ms": quantiles(50.0, 100.0),
             "drain_s": 3.0,
             "refine_skipped": False,
+            "stop_reason": None,
         },
         "stake_table": ["0x1", "0x1", "0x1"],
         "validity": {"valid": True, "noisy": False, "reasons": []},
@@ -1095,6 +1097,7 @@ def write_run_dir(out):
         {
             "rate_mb_s": 1.0,
             "refine": False,
+            "kind": "ramp",
             "t_start": 100.0,
             "t_mid": 115.0,
             "t_end": 130.0,
@@ -1102,6 +1105,7 @@ def write_run_dir(out):
         {
             "rate_mb_s": 2.0,
             "refine": False,
+            "kind": "ramp",
             "t_start": 130.0,
             "t_mid": 145.0,
             "t_end": 160.0,
