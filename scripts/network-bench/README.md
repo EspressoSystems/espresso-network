@@ -241,7 +241,7 @@ just bench aws run --tag release-x --nodes 3 --search --max-usd 30
 | flag                | default  | meaning                                            |
 | ------------------- | -------- | -------------------------------------------------- |
 | `--search [START]`  | 100 MB/s | first probe; ~0.8x a known capacity saves climbing |
-| `--resolution-mb-s` | 10       | stop when `failed_at - capacity` is at most this   |
+| `--resolution-mb-s` | 5        | stop when `failed_at - capacity` is at most this   |
 | `--max-probes`      | 12       | probe budget                                       |
 | `--offered-gb`      | 150      | offered-bytes budget; sizes the disks              |
 

@@ -406,7 +406,7 @@ class SearchConfig:
     `resolution_mb_s`, confirm; at most `max_probes` probes and `offered_gb` offered."""
 
     start_mb_s: float = 100.0
-    resolution_mb_s: float = 10.0
+    resolution_mb_s: float = 5.0
     max_probes: int = 12
     offered_gb: float = 150.0
 

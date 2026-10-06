@@ -437,7 +437,7 @@ def with_disks(manifest: dict, root_gb: int) -> dict:
 
 # TEST:fleet-ttl-short-fails
 def test_search_run_needs_the_search_worst_case_from_the_ttl(harness, runner):
-    manifest = with_disks(harness.fleet(), 1000)
+    manifest = with_disks(harness.fleet(), 1200)
     ramp = awsb.fleet_run_config(harness.run_args(), manifest)
     searched = awsb.fleet_run_config(harness.run_args("--search", "150"), manifest)
     assert searched.search is not None
@@ -459,5 +459,5 @@ def test_search_run_needs_the_fleet_disks_to_hold_the_offered_gb(harness, runner
     with pytest.raises(awsb.Refused, match="root disk"):
         awsb.fleet_run_config(harness.run_args("--search", "150"), manifest)
     awsb.fleet_run_config(
-        harness.run_args("--search", "150"), with_disks(manifest, 1000)
+        harness.run_args("--search", "150"), with_disks(manifest, 1200)
     )

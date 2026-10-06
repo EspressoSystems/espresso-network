@@ -127,10 +127,6 @@ SEARCH_EXPECTED_PROBES = 11
 SEARCH_EXPECTED_DRAINS = 3
 # Share of the Postgres volume `--offered-gb` may fill.
 PG_FILL_MAX = 0.9
-# Share of node0's usable disk the payload may fill when Postgres is colocated: the journal
-# takes up to 0.4 of it (JOURNAL_MAX_BYTES_FRACTION x QUERY_JOURNAL_FRACTION), Postgres WAL and
-# indexes the rest.
-COLOCATED_FILL_MAX = 0.5
 # Submit threads: a 1 MB POST takes tens of ms on the private network; 200 tx/s needs this many.
 SUBMIT_WORKERS = 32
 NODE_TYPE = "c8g.4xlarge"
@@ -1028,11 +1024,15 @@ def node_root_gb(cfg: RunConfig, query: bool) -> int:
 
 
 def search_root_gb(cfg: RunConfig, query: bool) -> int:
-    """Validators keep the journal; node0 with a colocated Postgres also the payloads."""
+    """Validators keep the journal; node0's halved journal cap must hold `payload_factor x
+    offered` below the noisy mark, which also leaves a colocated Postgres its payloads."""
     assert cfg.search
     offered = cfg.search.offered_gb
-    if query and "colocated" in cfg.db_modes:
-        need = RESERVED_GB + payload_factor(cfg.nodes) * offered / COLOCATED_FILL_MAX
+    if query:
+        cap = (
+            JOURNAL_MAX_BYTES_FRACTION * QUERY_JOURNAL_FRACTION * JOURNAL_NOISY_FRACTION
+        )
+        need = RESERVED_GB + payload_factor(cfg.nodes) * offered / cap
     else:
         need = RESERVED_GB + VALIDATOR_DISK_FACTOR * offered
     # round: float noise must not add a GB to an exact size.

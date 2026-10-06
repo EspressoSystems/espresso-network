@@ -1030,7 +1030,7 @@ def test_search_reaches_manifest_agent_and_reproduce(run_harness: RunHarness):
     saved = netbench.read_json(run_dir / "manifest.json")["config"]
     expected = {
         "start_mb_s": 150.0,
-        "resolution_mb_s": 10.0,
+        "resolution_mb_s": 5.0,
         "max_probes": 12,
         "offered_gb": 150.0,
     }
