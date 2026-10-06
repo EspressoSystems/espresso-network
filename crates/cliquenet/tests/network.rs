@@ -692,3 +692,123 @@ async fn update_party_address() {
     assert_eq!(src, pka);
     assert_eq!(data, Bytes::from("after"));
 }
+
+/// Cliquenet does not relay: B and C have unreachable addresses for one
+/// another, so neither ever dials the other and B's messages to C are not
+/// delivered, even though both can talk to A.
+#[tokio::test]
+async fn no_relay_between_disconnected_peers() {
+    let a = Node::new(reserve_port());
+    let b = Node::new(reserve_port());
+    let c = Node::new(reserve_port());
+
+    let dead_b = Node {
+        key: b.key,
+        port: reserve_port(),
+        keypair: b.keypair.clone(),
+    };
+    let dead_c = Node {
+        key: c.key,
+        port: reserve_port(),
+        keypair: c.keypair.clone(),
+    };
+
+    let mut net_a = Network::create(make_config(&a, &[&a, &b, &c]))
+        .await
+        .unwrap();
+    let mut net_b = Network::create(make_config(&b, &[&a, &b, &dead_c]))
+        .await
+        .unwrap();
+    let mut net_c = Network::create(make_config(&c, &[&a, &dead_b, &c]))
+        .await
+        .unwrap();
+
+    sleep(SETTLE).await;
+
+    net_a.broadcast(Slot::MIN, b"from-a".to_vec()).unwrap();
+    for net in [&mut net_a, &mut net_b, &mut net_c] {
+        let (src, data) = timeout(TIMEOUT, net.receive())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+        assert_eq!(src, a.key);
+        assert_eq!(data, Bytes::from("from-a"));
+    }
+
+    net_b.unicast(Slot::MIN, c.key, b"b-to-c".to_vec()).unwrap();
+    assert!(
+        timeout(Duration::from_secs(2), net_c.receive())
+            .await
+            .is_err(),
+        "message crossed a blocked pair"
+    );
+
+    net_b.unicast(Slot::MIN, a.key, b"b-to-a".to_vec()).unwrap();
+    let (src, data) = timeout(TIMEOUT, net_a.receive())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(src, b.key);
+    assert_eq!(data, Bytes::from("b-to-a"));
+}
+
+/// Like [`update_party_address`], but the update arrives while the
+/// connection to the old address is alive, exercising the cancellation of
+/// an established connection instead of a redirected reconnect.
+#[tokio::test]
+async fn update_party_address_live_connection() {
+    let a = Node::new(reserve_port());
+    let b1 = Node::new(reserve_port());
+    let pka = a.key;
+    let pkb = b1.key;
+
+    let all = [&a, &b1];
+    let net_a = Network::create(make_config(&a, &all)).await.unwrap();
+    let mut net_b1 = Network::create(make_config(&b1, &all)).await.unwrap();
+
+    sleep(SETTLE).await;
+
+    net_a.unicast(Slot::MIN, pkb, b"before".to_vec()).unwrap();
+    let (src, data) = timeout(TIMEOUT, net_b1.receive())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(src, pka);
+    assert_eq!(data, Bytes::from("before"));
+
+    let b2 = Node {
+        key: b1.key,
+        port: reserve_port(),
+        keypair: b1.keypair.clone(),
+    };
+
+    net_a
+        .add_peers(Role::Active, [(pkb, b2.addr().into())])
+        .unwrap();
+
+    // Let the update be processed before dropping the old instance: while
+    // it runs it may transiently reconnect (inbound connections are
+    // validated by IP only, and it shares ours).
+    sleep(Duration::from_millis(100)).await;
+    drop(net_b1);
+
+    net_a.unicast(Slot::MIN, pkb, b"during".to_vec()).unwrap();
+
+    let all_b2 = [&a, &b2];
+    let mut net_b2 = Network::create(make_config(&b2, &all_b2)).await.unwrap();
+
+    let (src, data) = timeout(Duration::from_secs(15), net_b2.receive())
+        .await
+        .expect("timed out — message queued during rotation was lost")
+        .expect("channel closed");
+    assert_eq!(src, pka);
+    assert_eq!(data, Bytes::from("during"));
+
+    net_a.unicast(Slot::MIN, pkb, b"after".to_vec()).unwrap();
+    let (src, data) = timeout(TIMEOUT, net_b2.receive())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(src, pka);
+    assert_eq!(data, Bytes::from("after"));
+}

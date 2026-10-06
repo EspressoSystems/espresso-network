@@ -96,6 +96,20 @@ pub struct KeySet {
     pub x25519: x25519::SecretKey,
 }
 
+impl KeySet {
+    /// Derive a keyset from a mnemonic, at `index` or 0.
+    pub fn from_mnemonic(mnemonic: Mnemonic<English>, index: Option<u64>) -> anyhow::Result<Self> {
+        Self::try_from(KeySetOptions {
+            mnemonic: Some(mnemonic),
+            index,
+            key_file: None,
+            private_staking_key: None,
+            private_state_key: None,
+            private_x25519_key: None,
+        })
+    }
+}
+
 impl TryFrom<KeySetOptions> for KeySet {
     type Error = anyhow::Error;
 
@@ -231,16 +245,7 @@ mod tests {
     use super::*;
 
     fn generate_keys() -> KeySet {
-        let mnemonic: Mnemonic<English> = Mnemonic::new(&mut rand::rngs::OsRng);
-        KeySet::try_from(KeySetOptions {
-            mnemonic: Some(mnemonic),
-            index: None,
-            key_file: None,
-            private_staking_key: None,
-            private_state_key: None,
-            private_x25519_key: None,
-        })
-        .unwrap()
+        KeySet::from_mnemonic(Mnemonic::new(&mut rand::rngs::OsRng), None).unwrap()
     }
 
     fn staking_tb64(keys: &KeySet) -> TaggedBase64 {

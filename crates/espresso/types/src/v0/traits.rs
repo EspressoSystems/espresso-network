@@ -493,6 +493,7 @@ pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
 
     fn set_view_retention(&mut self, view_retention: u64);
+    fn set_consensus_only(&mut self);
     async fn create(&mut self) -> anyhow::Result<Self::Persistence>;
     async fn reset(self) -> anyhow::Result<()>;
 }
@@ -527,6 +528,13 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 
     /// Load the epoch root block header for `epoch`.
     async fn load_epoch_root(&self, epoch: EpochNumber) -> anyhow::Result<Option<Header>>;
+
+    /// Store the epoch root block header for `epoch`.
+    async fn store_epoch_root(
+        &self,
+        epoch: EpochNumber,
+        block_header: Header,
+    ) -> anyhow::Result<()>;
 
     /// Store stake table at `epoch` in the persistence layer
     async fn store_stake(
@@ -884,7 +892,7 @@ pub trait SequencerPersistence:
                 // `cert1` certifies the newest leaf; each newer leaf's justify_qc certifies the
                 // next older leaf.
                 let certifying_qcs = std::iter::once(cert1.clone())
-                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()))
+                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc().clone()))
                     .take(leaf_infos.len())
                     .map(CertificatePair::non_epoch_change);
 
@@ -1099,11 +1107,6 @@ pub trait SequencerPersistence:
     ) -> anyhow::Result<()>;
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()>;
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput>;
-    async fn store_epoch_root(
-        &self,
-        epoch: EpochNumber,
-        block_header: <SeqTypes as NodeType>::BlockHeader,
-    ) -> anyhow::Result<()>;
     async fn add_state_cert(
         &self,
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,

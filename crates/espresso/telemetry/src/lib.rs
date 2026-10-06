@@ -1,6 +1,7 @@
 mod lifecycle;
 mod push_task;
 mod rate_limit;
+mod redact_exporter;
 pub mod remote_write;
 pub mod token;
 

@@ -15,6 +15,9 @@ use crate::{FeeAccount, FeeAmount};
 #[display("{_0}")]
 pub struct ChainId(pub U256);
 
+/// Chain id of the Espresso mainnet.
+pub const MAINNET_CHAIN_ID: ChainId = ChainId(U256::ONE);
+
 /// Chain id of the Decaf testnet. Used to gate Decaf-specific light-client behavior.
 pub const DECAF_CHAIN_ID: ChainId = ChainId(U256::from_limbs([0xdecaf, 0, 0, 0]));
 

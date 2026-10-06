@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    num::NonZeroUsize,
     sync::Arc,
 };
 
@@ -22,10 +23,26 @@ use tracing::{error, info};
 
 use crate::message::{Message, MessageType, Unchecked, Validated};
 
-#[derive(Debug)]
+/// A predicate that discards inbound messages.
+///
+/// For tests that need to lose specific traffic rather than a whole connection.
+#[cfg(any(test, feature = "testing"))]
+pub type InboundFilter<T> = Box<dyn Fn(&Message<T, Unchecked>) -> bool + Send + Sync>;
+
 pub struct Cliquenet<T: NodeType> {
     inner: Sender<T>,
     receiver: NetworkReceiver,
+    #[cfg(any(test, feature = "testing"))]
+    ifilter: InboundFilter<T>,
+}
+
+impl<T: NodeType> std::fmt::Debug for Cliquenet<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cliquenet")
+            .field("inner", &self.inner)
+            .field("receiver", &self.receiver)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -42,13 +59,29 @@ struct Shared<K> {
     epoch: EpochNumber,
 }
 
+/// Lower bound of `message_limit`.
+pub const MIN_MESSAGE_LIMIT: NonZeroUsize =
+    NonZeroUsize::new(10 * 1024 * 1024).expect("10 MiB > 0");
+
+/// Room above a full block for message envelopes.
+const MESSAGE_HEADROOM: usize = 64 * 1024;
+
+/// Message limit for blocks of at most `max_block_size`.
+pub fn message_limit(max_block_size: u64) -> NonZeroUsize {
+    let block = usize::try_from(max_block_size).unwrap_or(usize::MAX);
+    let limit = block.saturating_add(MESSAGE_HEADROOM);
+    NonZeroUsize::new(limit).map_or(MIN_MESSAGE_LIMIT, |n| n.max(MIN_MESSAGE_LIMIT))
+}
+
 impl<T: NodeType> Cliquenet<T> {
+    #[expect(clippy::too_many_arguments)]
     pub async fn create<A, P, S>(
         name: S,
         signing_key: T::SignatureKey,
         keypair: Keypair,
         addr: A,
         parties: P,
+        max_message_size: Option<NonZeroUsize>,
         upgrade_lock: UpgradeLock<T>,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
@@ -69,6 +102,7 @@ impl<T: NodeType> Cliquenet<T> {
                     .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
             )
             .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
+            .maybe_max_message_size(max_message_size)
             .build();
 
         Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
@@ -94,6 +128,8 @@ impl<T: NodeType> Cliquenet<T> {
         let (send, recv) = network.split_into();
 
         Ok(Self {
+            #[cfg(any(test, feature = "testing"))]
+            ifilter: Box::new(|_| false),
             inner: Sender {
                 my_keys: (signing_key, public_key),
                 sender: send,
@@ -111,30 +147,48 @@ impl<T: NodeType> Cliquenet<T> {
         &self.inner
     }
 
+    /// The epoch whose peer window is applied.
+    #[cfg(test)]
+    pub(crate) fn epoch(&self) -> EpochNumber {
+        self.inner.shared.read().epoch
+    }
+
+    /// Discard inbound messages the predicate matches.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn drop_inbound(&mut self, filter: InboundFilter<T>) {
+        self.ifilter = filter;
+    }
+
     pub async fn receive(&mut self) -> Result<Message<T, Unchecked>, NetworkError> {
-        let (src, bytes) = self
-            .receiver
-            .receive()
-            .await
-            .ok_or(cliquenet::NetworkError::ChannelClosed)?;
-        let msg = self.deserialize(&bytes)?;
-        let key = self
-            .inner
-            .shared
-            .read()
-            .peers
-            .get(&msg.sender)
-            .map(|info| info.x25519_key)
-            .or_else(|| {
-                (msg.sender == self.inner.my_keys.0).then_some(self.inner.my_keys.1.into())
-            });
-        if Some(src.into()) != key {
-            return Err(NetworkError::InvalidSender {
-                msg: key,
-                src: src.into(),
-            });
+        loop {
+            let (src, bytes) = self
+                .receiver
+                .receive()
+                .await
+                .ok_or(cliquenet::NetworkError::ChannelClosed)?;
+            let msg = self.deserialize(&bytes)?;
+            let key = self
+                .inner
+                .shared
+                .read()
+                .peers
+                .get(&msg.sender)
+                .map(|info| info.x25519_key)
+                .or_else(|| {
+                    (msg.sender == self.inner.my_keys.0).then_some(self.inner.my_keys.1.into())
+                });
+            if Some(src.into()) != key {
+                return Err(NetworkError::InvalidSender {
+                    msg: key,
+                    src: src.into(),
+                });
+            }
+            #[cfg(any(test, feature = "testing"))]
+            if (self.ifilter)(&msg) {
+                continue;
+            }
+            return Ok(msg);
         }
-        Ok(msg)
     }
 
     pub async fn shutdown(&mut self) {
@@ -398,6 +452,10 @@ impl<T: NodeType> Sender<T> {
         let bytes = self.serialize(m)?;
         self.sender.broadcast(Slot::new(*v), bytes)?;
         Ok(())
+    }
+
+    pub fn max_message_size(&self) -> NonZeroUsize {
+        self.sender.config().max_message_size()
     }
 
     fn serialize(&self, m: &Message<T, Validated>) -> Result<Vec<u8>, NetworkError> {

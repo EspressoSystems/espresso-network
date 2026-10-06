@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::{cmp::max, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, bail, ensure};
 use async_lock::Mutex;
@@ -14,7 +14,7 @@ use futures::{StreamExt, future::Future};
 use hotshot::traits::ValidatedState as HotShotState;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, LeafQueryData},
-    data_source::{Transaction, VersionedDataSource, storage::pruning::PrunedHeightDataSource},
+    data_source::{Transaction, VersionedDataSource},
     merklized_state::{MerklizedStateHeightPersistence, UpdateStateData},
     status::StatusDataSource,
     types::HeightIndexed,
@@ -268,6 +268,9 @@ where
         .await
         .context("failed to persist reward proofs")?;
 
+    // The nodes and the new head commit together, so no node version ever exists above the head:
+    // the head snapshot is the newest version of everything it touches, which is what keeps it
+    // intact under pruning and lets the loop resume from it after a crash.
     tracing::debug!("storing state update");
     let mut tx = storage
         .write()
@@ -275,13 +278,6 @@ where
         .context("opening transaction for state update")?;
 
     store_state_update(&mut tx, block_number, version, &state, &delta).await?;
-
-    tx.commit().await?;
-
-    let mut tx = storage
-        .write()
-        .await
-        .context("opening transaction for state update")?;
 
     if parent_chain_config != state.chain_config {
         let cf = state
@@ -376,20 +372,13 @@ where
     instance.epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
     let peers = SqlStateCatchup::new(storage.clone(), Default::default());
 
-    // get last saved merklized state
+    // Resume from the newest snapshot in storage. The loop cannot start anywhere else:
+    // `from_header` gives it a bare state, and its catchup fills in the block frontier and any fee
+    // account it has not seen from the parent's snapshot in this database, which exists only up to
+    // the head. The state pruner in turn never advances to the head, so that snapshot stays
+    // readable however far behind the chain the loop has fallen.
     let (last_height, parent_leaf, mut leaves) = {
         let last_height = storage.get_last_state_height().await?;
-        let pruned_height = storage.load_state_pruned_height().await?;
-
-        let height = match pruned_height {
-            // If `last_height > pruned_height`, start from `last_height`
-            // as it represents the latest state in storage.
-            // If `pruned_height > last_height`, start from `pruned_height`
-            // as data below this height is no longer needed and will be pruned again during the next pruner run.
-            Some(pruned_height) => max(last_height, pruned_height as usize + 1),
-            // if we have not pruned any data then just start from last_height
-            None => last_height,
-        };
 
         // Check for environment variable override
         let height =
@@ -398,7 +387,7 @@ where
                     Ok(override_height) => {
                         tracing::error!(
                             node_id = instance.node_id,
-                            calculated_height = height,
+                            last_height,
                             override_height,
                             "overriding initial state storage height from environment variable"
                         );
@@ -407,13 +396,13 @@ where
                     Err(e) => {
                         tracing::error!(
                             "failed to parse ESPRESSO_NODE_STATE_STORAGE_INITIAL_HEIGHT: {e}, \
-                             using calculated height {height}"
+                             using last height {last_height}"
                         );
-                        height
+                        last_height
                     },
                 }
             } else {
-                height
+                last_height
             };
 
         let current_height = storage.block_height().await?;
@@ -533,7 +522,6 @@ pub(crate) trait SequencerStateDataSource:
     + VersionedDataSource
     + CatchupStorage
     + RewardMerkleTreeDataSource
-    + PrunedHeightDataSource
     + MerklizedStateHeightPersistence
 {
 }
@@ -546,7 +534,6 @@ impl<T> SequencerStateDataSource for T where
         + VersionedDataSource
         + CatchupStorage
         + RewardMerkleTreeDataSource
-        + PrunedHeightDataSource
         + MerklizedStateHeightPersistence
 {
 }

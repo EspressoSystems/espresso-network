@@ -106,9 +106,13 @@ pub enum SendAction {
 
 impl Network {
     pub async fn create(conf: Config) -> Result<Self, NetworkError> {
-        let listener = TcpListener::bind(conf.bind.to_string())
-            .await
-            .map_err(|e| NetworkError::Bind(conf.bind.clone(), e))?;
+        let listener = {
+            let result = match &conf.bind {
+                NetAddr::Inet(ip, port) => TcpListener::bind((*ip, *port)).await,
+                NetAddr::Name(hs, port) => TcpListener::bind((&**hs, *port)).await,
+            };
+            result.map_err(|e| NetworkError::Bind(conf.bind.clone(), e))?
+        };
 
         let addr = listener.local_addr()?;
         let node = conf.keypair.public_key();
@@ -144,7 +148,7 @@ impl Network {
             metrics: metr,
         };
 
-        info!(name = %conf.name, %node, %addr, "listening");
+        info!(name = %conf.name, %node, %addr, max_message_size = %conf.max_message_size, "listening");
 
         Ok(Self { recv, send })
     }

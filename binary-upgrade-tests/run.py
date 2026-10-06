@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["httpx", "rich"]
+# dependencies = ["httpx", "pyyaml", "rich"]
 # ///
 """Binary upgrade test driver.
 
@@ -17,6 +17,7 @@ import argparse
 import dataclasses
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -30,6 +31,7 @@ from pathlib import Path
 from typing import Literal
 
 import httpx
+import yaml
 from rich.logging import RichHandler
 
 log = logging.getLogger("binary-upgrade-test")
@@ -52,8 +54,8 @@ SAFE_STOP_WINDOW = (2, 10)
 
 
 # Services NOT touched by the binary upgrade test:
-#   - one-shots that already ran in phase 1 (deploy-*, fund-builder,
-#     stake-for-demo, cdn-whitelist, wait-for-v4)
+#   - one-shots that already ran in phase 1 (deploy-*, stake-for-demo,
+#     cdn-whitelist, wait-for-v4)
 #   - infra that doesn't use an espresso-network image (postgres, keydb,
 #     L1 anvil, block-explorer)
 NOUPGRADE_SERVICES = (
@@ -67,7 +69,6 @@ NOUPGRADE_SERVICES = (
     "deploy-prover-contracts",
     "espresso-node-db-0",
     "espresso-node-db-1",
-    "fund-builder",
     "keydb",
     "stake-for-demo",
     "wait-for-lc-epoch-2",
@@ -84,9 +85,15 @@ PERSIST_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.persist-storage.
 NODE_5_FS_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-fs.yaml"
 NODE_5_PG_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-pg.yaml"
 LC_GATING_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.lc-gating.yaml"
+STAKE_NODE_5_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.stake-node-5.yaml"
 
 
-YYYYMMDD_TAG_PATTERN = "20[0-9][0-9][0-1][0-9][0-3][0-9]"
+RELEASE_TAG_GLOB = "[0-9]*.[0-9]*.[0-9]*.[0-9]*"
+RELEASE_TAG_RE = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+
+# Legacy tags; remove once every deployed network runs an X.Y.Z.N tag.
+LEGACY_TAG_GLOB = "20[0-9][0-9][0-1][0-9][0-3][0-9]"
+LEGACY_TAG_RE = re.compile(r"^20\d{2}[01]\d[0-3]\d$")
 
 # ---------------------------------------------------------------------------
 # Action types
@@ -202,24 +209,42 @@ SCENARIOS: dict[str, list[Action]] = {
 }
 
 
-def yyyymmdd_tags() -> list[str]:
+def release_tags() -> list[str]:
+    """Return release tags oldest-first by creation date.
+
+    Creation order is uniform across the legacy YYYYMMDD and the X.Y.Z.N schemes and
+    across parallel release branches, where version order is not chronological.
+    """
     out = subprocess.check_output(
-        ["git", "tag", "-l", YYYYMMDD_TAG_PATTERN], cwd=REPO_ROOT, text=True
+        [
+            "git",
+            "tag",
+            "--list",
+            LEGACY_TAG_GLOB,
+            RELEASE_TAG_GLOB,
+            "--sort=creatordate",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
     )
-    return sorted(out.strip().splitlines())
+    return [
+        t
+        for t in out.strip().splitlines()
+        if RELEASE_TAG_RE.match(t) or LEGACY_TAG_RE.match(t)
+    ]
 
 
 def default_base_tag() -> str:
-    """Pick the YYYYMMDD tag to upgrade from.
+    """Pick the release tag to upgrade from.
 
-    On a tagged release build (HEAD points at a YYYYMMDD tag), use the
+    On a tagged release build (HEAD points at a known release tag), use the
     previous tag so we test the new release against the prior one. Otherwise
-    use the latest YYYYMMDD tag.
+    use the latest release tag.
     """
-    tags = yyyymmdd_tags()
+    tags = release_tags()
     if not tags:
         raise RuntimeError(
-            f"No tags matching {YYYYMMDD_TAG_PATTERN}; run with --tags fetched."
+            f"No tags matching {RELEASE_TAG_GLOB} or {LEGACY_TAG_GLOB}; run with --tags fetched."
         )
     head_tag = subprocess.run(
         ["git", "describe", "--tags", "--exact-match"],
@@ -232,7 +257,7 @@ def default_base_tag() -> str:
         idx = tags.index(head_tag)
         if idx == 0:
             raise RuntimeError(
-                f"HEAD is at {head_tag}, the oldest YYYYMMDD tag; no previous to upgrade from."
+                f"HEAD is at {head_tag}, the oldest release tag; no previous to upgrade from."
             )
         return tags[idx - 1]
     return tags[-1]
@@ -721,6 +746,37 @@ def extract_base_files(base_tag: str, base_dir: Path) -> None:
             text=True,
         )
         (base_dir / name).write_text(content)
+    compose_file = base_dir / "docker-compose.yaml"
+    compose_file.write_text(
+        yaml.safe_dump(drop_builder(yaml.safe_load(compose_file.read_text())))
+    )
+
+
+def drop_builder(compose: dict) -> dict:
+    """Remove the builder from the base tag's compose.
+
+    #4939 deleted it, so the upgrade tag has no image to roll it to. Both tags
+    run a 0.6 genesis, whose leaders build blocks in-process and never contact
+    a builder, so the base tag can run without it too.
+    """
+    services = compose["services"]
+    for name in ("permissionless-builder", "fund-builder"):
+        del services[name]
+        for service in services.values():
+            service.get("depends_on", {}).pop(name, None)
+    for service in services.values():
+        if env := service.get("environment"):
+            # The base tag's orchestrator unwraps its builder URLs into a Vec1
+            # and panics on an empty one, so it keeps a URL, the dead one main
+            # uses. The submitter loses its URL and falls back to the node API.
+            service["environment"] = [
+                "ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:1"
+                if var.startswith("ESPRESSO_ORCHESTRATOR_BUILDER_URLS=")
+                else var
+                for var in env
+                if not var.startswith("ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=")
+            ]
+    return compose
 
 
 def env_file_keys(path: Path) -> set[str]:
@@ -946,6 +1002,10 @@ def _execute(action: Action, compose: Compose, config: Config) -> None:
 
 
 def run_scenario(actions: list[Action], compose: Compose, config: Config) -> None:
+    # stake-for-demo runs during boot, so node 5 has to be registered before we
+    # know it is wanted; the overlay is inert for every later command.
+    if any(isinstance(action, JoinNode) for action in actions):
+        compose = compose.with_overlays(STAKE_NODE_5_OVERLAY)
     _boot_network(compose, config)
     for action in actions:
         _execute(action, compose, config)
@@ -981,7 +1041,7 @@ def main() -> int:
 
     config = Config.from_env()
     log.info(f"BASE_TAG={config.base_tag} UPGRADE_TAG={config.upgrade_tag}")
-    os.environ.setdefault("ESPRESSO_NODE_GENESIS_FILE", "genesis/demo-drb-header.toml")
+    os.environ.setdefault("ESPRESSO_NODE_GENESIS_FILE", "genesis/demo-ff.toml")
     load_project_env()
 
     with compose_session(config) as compose:

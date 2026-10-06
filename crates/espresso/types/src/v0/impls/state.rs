@@ -450,13 +450,28 @@ impl ValidatedState {
 #[derive(Debug)]
 pub(crate) struct Proposal<'a> {
     header: &'a Header,
-    block_size: u32,
+    /// `None` when this node does not hold the payload; see [`Self::without_size`].
+    block_size: Option<u32>,
 }
 
 #[cfg_attr(not(feature = "node"), allow(dead_code))]
 impl<'a> Proposal<'a> {
     pub(crate) fn new(header: &'a Header, block_size: u32) -> Self {
-        Self { header, block_size }
+        Self {
+            header,
+            block_size: Some(block_size),
+        }
+    }
+
+    /// A proposal whose payload size this node does not know, e.g. one fetched
+    /// from a peer without a VID share. Only valid for a proposal a quorum has
+    /// already certified, which vouches for the checks this skips: block size,
+    /// fee and namespace table.
+    pub(crate) fn without_size(header: &'a Header) -> Self {
+        Self {
+            header,
+            block_size: None,
+        }
     }
     /// The L1 head block number in the proposal must be non-decreasing relative
     /// to the parent.
@@ -712,7 +727,10 @@ impl<'a> ValidatedTransition<'a> {
     /// Validate that proposal block size does not exceed configured
     /// `ChainConfig.max_block_size`.
     fn validate_block_size(&self) -> Result<(), ProposalValidationError> {
-        let block_size = self.proposal.block_size as u64;
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
+        let block_size = block_size as u64;
         if block_size > *self.expected_chain_config.max_block_size {
             return Err(ProposalValidationError::MaxBlockSizeExceeded {
                 max_block_size: self.expected_chain_config.max_block_size,
@@ -729,8 +747,11 @@ impl<'a> ValidatedTransition<'a> {
         let Some(amount) = self.proposal.header.fee_info().amount() else {
             return Err(ProposalValidationError::SomeFeeAmountOutOfRange);
         };
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
 
-        if amount < self.expected_chain_config.base_fee * U256::from(self.proposal.block_size) {
+        if amount < self.expected_chain_config.base_fee * U256::from(block_size) {
             return Err(ProposalValidationError::InsufficientFee {
                 max_block_size: self.expected_chain_config.max_block_size,
                 base_fee: self.expected_chain_config.base_fee,
@@ -817,11 +838,14 @@ impl<'a> ValidatedTransition<'a> {
     }
     /// Proxy to [`super::NsTable::validate()`].
     fn validate_namespace_table(&self) -> Result<(), ProposalValidationError> {
+        let Some(block_size) = self.proposal.block_size else {
+            return Ok(());
+        };
         self.proposal
             .header
             .ns_table()
             // Should be safe since `u32` will always fit in a `usize`.
-            .validate(&PayloadByteLen(self.proposal.block_size as usize))
+            .validate(&PayloadByteLen(block_size as usize))
             .map_err(ProposalValidationError::from)
     }
 
@@ -1172,6 +1196,7 @@ impl ValidatedState {
             UpgradeType::DrbAndHeader { chain_config } => chain_config,
             UpgradeType::NewProtocol { chain_config } => chain_config,
             UpgradeType::EpochReward { chain_config } => chain_config,
+            UpgradeType::LargeBlock { chain_config } => chain_config,
         };
 
         self.chain_config = cf.into();
@@ -1314,7 +1339,7 @@ impl HotShotState<SeqTypes> for ValidatedState {
         instance: &Self::Instance,
         parent_leaf: &Leaf2,
         proposed_header: &Header,
-        payload_byte_len: u32,
+        payload_byte_len: Option<u32>,
         version: Version,
         view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
@@ -1358,7 +1383,10 @@ impl HotShotState<SeqTypes> for ValidatedState {
             let validated_state = ValidatedTransition::new(
                 validated_state,
                 parent_leaf.block_header(),
-                Proposal::new(proposed_header, payload_byte_len),
+                match payload_byte_len {
+                    Some(len) => Proposal::new(proposed_header, len),
+                    None => Proposal::without_size(proposed_header),
+                },
                 total_rewards_distributed,
                 version,
                 validation_start_time,
@@ -1461,7 +1489,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for BlockMerkleTree {
     type Digest = Sha3Digest;
 
     fn state_type() -> &'static str {
-        "block_merkle_tree_bigint"
+        "block_merkle_tree"
     }
 
     fn header_state_commitment_field() -> &'static str {
@@ -1493,7 +1521,7 @@ impl MerklizedState<SeqTypes, { Self::ARITY }> for FeeMerkleTree {
     type Digest = Sha3Digest;
 
     fn state_type() -> &'static str {
-        "fee_merkle_tree_bigint"
+        "fee_merkle_tree"
     }
 
     fn header_state_commitment_field() -> &'static str {
@@ -1591,12 +1619,17 @@ mod test {
     use hotshot_query_service::{Resolvable, testing::mocks::MOCK_UPGRADE};
     use hotshot_types::{data::ViewNumber, traits::signature_key::BuilderSignatureKey};
     use tracing::debug;
-    use versions::{FEE_VERSION, MAX_SUPPORTED_VERSION, version};
+    use versions::{
+        FEE_VERSION, LARGE_BLOCK_VERSION, MAX_SUPPORTED_VERSION, NEW_PROTOCOL_VERSION, version,
+    };
 
     use super::*;
     use crate::{
         BlockSize, FeeAccountProof, FeeMerkleProof, Leaf, Payload, TimestampMillis, Transaction,
-        eth_signature_key::EthKeyPair, mock::MockStateCatchup, v0_1, v0_2, v0_3, v0_4, v0_5, v0_6,
+        UpgradeMode, UpgradeType, ViewBasedUpgrade,
+        eth_signature_key::{BuilderSignature, EthKeyPair},
+        mock::MockStateCatchup,
+        v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7,
     };
 
     impl Transaction {
@@ -1651,6 +1684,12 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
+                Header::V7(parent) => Header::V7(v0_7::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1692,6 +1731,11 @@ mod test {
                     builder_signature: Some(sig),
                     ..header.clone()
                 }),
+                Header::V7(header) => Header::V7(v0_7::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
             }
         }
 
@@ -1707,34 +1751,43 @@ mod test {
                 self.metadata(),
             )
             .unwrap();
+            self.with_fee(fee_info, Some(sig))
+        }
 
+        /// Replaces the fee info and builder signature.
+        fn with_fee(&self, fee_info: FeeInfo, builder_signature: Option<BuilderSignature>) -> Self {
             match self {
-                Header::V1(_) => panic!(
-                    "You called `Header.invalid_builder_signature()` on unimplemented version (v1)"
-                ),
+                Header::V1(_) => {
+                    panic!("You called `Header.with_fee()` on unimplemented version (v1)")
+                },
                 Header::V2(parent) => Header::V2(v0_2::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V3(parent) => Header::V3(v0_3::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V4(parent) => Header::V4(v0_4::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V5(parent) => Header::V5(v0_5::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
                     ..parent.clone()
                 }),
                 Header::V6(parent) => Header::V6(v0_6::Header {
                     fee_info,
-                    builder_signature: Some(sig),
+                    builder_signature,
+                    ..parent.clone()
+                }),
+                Header::V7(parent) => Header::V7(v0_7::Header {
+                    fee_info,
+                    builder_signature,
                     ..parent.clone()
                 }),
             }
@@ -2156,6 +2209,57 @@ mod test {
         );
     }
 
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_validation_without_payload_size_skips_size_checks() {
+        use NsTableValidationError::InvalidFinalOffset;
+        // A proposal adopted without its VID share carries no payload size. Under
+        // this chain config every size-dependent check rejects the block once a
+        // size is supplied.
+        let tx = Transaction::of_size(20);
+        let (header, block_size) = tx.into_mock_header().await;
+        let instance = NodeState::mock_v2().with_chain_config(ChainConfig {
+            max_block_size: BlockSize::from_integer(10).unwrap(),
+            base_fee: 1000.into(),
+            ..ValidatedState::default().chain_config.resolve().unwrap()
+        });
+
+        let sized = ValidatedTransition::mock(
+            instance.clone(),
+            &header,
+            Proposal::new(&header, block_size),
+        );
+        assert!(matches!(
+            sized.validate_block_size(),
+            Err(ProposalValidationError::MaxBlockSizeExceeded { .. })
+        ));
+        assert!(matches!(
+            sized.validate_fee(),
+            Err(ProposalValidationError::InsufficientFee { .. })
+        ));
+        // Standing in a size of zero, as the fetch path once did, rejects every
+        // non-empty block.
+        let zero_sized =
+            ValidatedTransition::mock(instance.clone(), &header, Proposal::new(&header, 0));
+        assert_eq!(
+            ProposalValidationError::InvalidNsTable(InvalidFinalOffset),
+            zero_sized.validate_namespace_table().unwrap_err()
+        );
+
+        let sizeless =
+            ValidatedTransition::mock(instance.clone(), &header, Proposal::without_size(&header));
+        sizeless.validate_block_size().unwrap();
+        sizeless.validate_fee().unwrap();
+        sizeless.validate_namespace_table().unwrap();
+
+        // Fee presence does not depend on the size and is still checked.
+        let fee_account = EthKeyPair::random().fee_account();
+        let header = header.with_fee(FeeInfo::new(fee_account, FeeAmount(U256::MAX)), None);
+        let err = ValidatedTransition::mock(instance, &header, Proposal::without_size(&header))
+            .validate_fee()
+            .unwrap_err();
+        assert_eq!(ProposalValidationError::SomeFeeAmountOutOfRange, err);
+    }
+
     #[test_log::test]
     fn test_charge_fee() {
         let src = FeeAccount::generated_from_seed_indexed([0; 32], 0).0;
@@ -2323,6 +2427,11 @@ mod test {
                 ..header
             }),
             Header::V6(header) => Header::V6(v0_6::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
+            Header::V7(header) => Header::V7(v0_7::Header {
                 builder_signature: Some(sig),
                 fee_info: FeeInfo::new(account, data),
                 ..header
@@ -2500,11 +2609,45 @@ mod test {
                 &instance,
                 &parent_leaf,
                 &proposed_header,
-                0, /* payload_byte_len */
+                Some(0), /* payload_byte_len */
                 FEE_VERSION,
                 0, /* view_number */
             )
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn test_apply_large_block_upgrade() {
+        let upgraded_chain_config = ChainConfig {
+            max_block_size: (10 * 1024 * 1024).into(),
+            ..Default::default()
+        };
+        let upgrade = crate::Upgrade {
+            mode: UpgradeMode::View(ViewBasedUpgrade {
+                start_voting_view: None,
+                stop_voting_view: None,
+                start_proposing_view: 1,
+                stop_proposing_view: 10,
+            }),
+            upgrade_type: UpgradeType::LargeBlock {
+                chain_config: upgraded_chain_config,
+            },
+        };
+        let instance = NodeState::mock()
+            .with_current_version(NEW_PROTOCOL_VERSION)
+            .with_upgrades([(LARGE_BLOCK_VERSION, upgrade)].into());
+
+        let mut state = ValidatedState::default();
+        let pre_upgrade_chain_config = state.chain_config;
+        state.apply_upgrade(&instance, NEW_PROTOCOL_VERSION);
+        assert_eq!(state.chain_config, pre_upgrade_chain_config);
+
+        state.apply_upgrade(&instance, LARGE_BLOCK_VERSION);
+        assert_eq!(state.chain_config, upgraded_chain_config.into());
+        assert_eq!(
+            state.chain_config.resolve().unwrap().max_block_size,
+            (10 * 1024 * 1024).into()
+        );
     }
 }

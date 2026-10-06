@@ -90,6 +90,7 @@ contract LightClientV3 is LightClientV2 {
             emit NewEpoch(newStateEpoch + 1);
         }
 
+        // forge-lint: disable-next-line(unsafe-typecast)
         updateStateHistory(uint64(currentBlockNumber()), uint64(block.timestamp), newState);
 
         emit NewState(newState.viewNum, newState.blockHeight, newState.blockCommRoot);
@@ -144,6 +145,8 @@ contract LightClientV3 is LightClientV2 {
             encodedNextStakeTable = abi.encode(votingStakeTableState);
         }
 
+        // All three operands are fixed length, so the packing is unambiguous.
+        // forge-lint: disable-next-item(encode-packed-collision)
         bytes32 msgSigned =
             keccak256(abi.encodePacked(abi.encode(state), encodedNextStakeTable, newAuthRoot));
         publicInput[4] = uint256(msgSigned) % BN254.R_MOD;

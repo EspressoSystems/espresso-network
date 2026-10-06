@@ -40,7 +40,7 @@ pub struct StateRequest<T: NodeType> {
     pub block: BlockNumber,
     pub proposal: Proposal<T>,
     pub parent_commitment: Commitment<Leaf2<T>>,
-    pub payload_size: u32,
+    pub payload_size: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -94,13 +94,20 @@ pub struct StateEntry<T: NodeType> {
 pub struct StateManager<T: NodeType> {
     instance: Arc<T::InstanceState>,
     validated_states: BTreeMap<Commitment<Leaf2<T>>, StateEntry<T>>,
-    state_requests: HashMap<Commitment<Leaf2<T>>, (AbortHandle, ViewNumber)>,
+    state_requests: HashMap<Commitment<Leaf2<T>>, InFlight<T>>,
     header_requests: HashMap<(ViewNumber, Commitment<Leaf2<T>>), AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
     upgrade_lock: UpgradeLock<T>,
     tasks: JoinSet<Completed<T>>,
     validate_duration_metric: Option<Arc<dyn Histogram>>,
     update_leaf_duration_metric: Option<Arc<dyn Histogram>>,
+}
+
+/// The proposal lets `gc` seed a stub for a validation it aborts.
+struct InFlight<T: NodeType> {
+    handle: AbortHandle,
+    view: ViewNumber,
+    proposal: Proposal<T>,
 }
 
 enum Pending<T: NodeType> {
@@ -231,6 +238,7 @@ impl<T: NodeType> StateManager<T> {
 
         let instance = self.instance.clone();
         let header = request.proposal.block_header.clone();
+        let proposal = request.proposal.clone();
         let view = request.view;
         let payload_size = request.payload_size;
 
@@ -282,7 +290,14 @@ impl<T: NodeType> StateManager<T> {
             }
         });
 
-        self.state_requests.insert(commitment, (handle, view));
+        self.state_requests.insert(
+            commitment,
+            InFlight {
+                handle,
+                view,
+                proposal,
+            },
+        );
     }
 
     pub fn request_header(&mut self, request: HeaderRequest<T>) {
@@ -373,8 +388,8 @@ impl<T: NodeType> StateManager<T> {
         } = update;
         let commitment = leaf.commit();
         self.insert_state(view, state, delta, leaf);
-        if let Some((task, _)) = self.state_requests.remove(&commitment) {
-            task.abort();
+        if let Some(in_flight) = self.state_requests.remove(&commitment) {
+            in_flight.handle.abort();
         }
         self.start_pending(commitment);
     }
@@ -437,18 +452,12 @@ impl<T: NodeType> StateManager<T> {
         }
     }
 
+    /// The decided view's own validation, or a header this node needs to
+    /// propose, may be queued behind a validation aborted here. A stub for the
+    /// aborted proposal lets them proceed via catchup instead of hanging.
     pub fn gc(&mut self, view_number: ViewNumber) {
         self.validated_states
             .retain(|_, entry| entry.leaf.view_number() >= view_number);
-
-        for (task, view) in self.state_requests.values() {
-            if *view < view_number {
-                task.abort();
-            }
-        }
-
-        self.state_requests
-            .retain(|_, (_, view)| *view >= view_number);
 
         self.header_requests.retain(|(view, _), handle| {
             let keep = *view >= view_number;
@@ -462,6 +471,17 @@ impl<T: NodeType> StateManager<T> {
             pending.retain(|p| p.view() >= view_number);
             !pending.is_empty()
         });
+
+        let stale: Vec<_> = self
+            .state_requests
+            .extract_if(|_, in_flight| in_flight.view < view_number)
+            .collect();
+        for (commitment, in_flight) in stale {
+            in_flight.handle.abort();
+            if self.pending_requests.contains_key(&commitment) {
+                self.seed_from_header(in_flight.proposal);
+            }
+        }
     }
 
     fn start_pending(&mut self, finished_commitment: Commitment<Leaf2<T>>) {

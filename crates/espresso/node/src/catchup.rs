@@ -30,7 +30,7 @@ use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
 };
-use hotshot_new_protocol::{storage::NewProtocolStorage, utils::verify_new_protocol_leaf_chain};
+use hotshot_new_protocol::utils::verify_new_protocol_leaf_chain;
 use hotshot_types::{
     ValidatorConfig,
     data::ViewNumber,
@@ -56,9 +56,8 @@ use url::Url;
 use vbs::version::StaticVersionType;
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
-use crate::{
-    api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
-    consensus_handle::ConsensusHandle,
+use crate::api::{
+    BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data, context::ConsensusSource,
 };
 
 // This newtype is probably not worth having. It's only used to be able to log
@@ -169,7 +168,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         // is a lot cheaper than holding the read lock the entire time we are making requests (which
         // could be a while).
         let mut scores = { (*self.scores.read().await).clone() };
-        let mut logs = vec![format!("Fetching failed.\n")];
+        let mut logs = vec!["Fetching failed.\n".to_string()];
         while let Some((id, score)) = scores.pop() {
             let client = &self.clients[id];
             tracing::info!("fetching from {}", client.url);
@@ -656,6 +655,16 @@ pub(crate) trait CatchupStorage: Sync {
             bail!("leaf fetch is not supported for this data source");
         }
     }
+
+    /// The serialized tree the header at `height` commits to.
+    fn load_serialized_reward_merkle_tree_v2(
+        &self,
+        _height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async {
+            bail!("reward merkle tree is not supported for this data source");
+        }
+    }
 }
 
 impl CatchupStorage for hotshot_query_service::data_source::MetricsDataSource {}
@@ -726,6 +735,12 @@ where
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
         self.inner().get_leaf(height).await
+    }
+
+    async fn load_serialized_reward_merkle_tree_v2(&self, height: u64) -> anyhow::Result<Vec<u8>> {
+        self.inner()
+            .load_serialized_reward_merkle_tree_v2(height)
+            .await
     }
 }
 
@@ -1116,7 +1131,7 @@ impl ParallelStateCatchup {
             futures.push(AbortOnDropHandle::new(tokio::spawn(closure(provider))));
         }
 
-        let mut logs = vec![format!("No providers returned a successful result.\n")];
+        let mut logs = vec!["No providers returned a successful result.\n".to_string()];
         // Return the first successful result
         while let Some(result) = futures.next().await {
             // Unwrap the inner (join) result
@@ -1768,16 +1783,13 @@ impl StateCatchup for ParallelStateCatchup {
 
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
-pub async fn add_fee_accounts_to_state<I: hotshot::traits::NodeImplementation<SeqTypes>>(
-    consensus_handle: &ConsensusHandle<SeqTypes, I>,
+pub async fn add_fee_accounts_to_state(
+    consensus_handle: &dyn ConsensusSource,
     view: &ViewNumber,
     accounts: &[FeeAccount],
     tree: &FeeMerkleTree,
     leaf: Leaf2,
-) -> anyhow::Result<()>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+) -> anyhow::Result<()> {
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1818,16 +1830,13 @@ where
 
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
-pub async fn add_v2_reward_accounts_to_state<I: hotshot::traits::NodeImplementation<SeqTypes>>(
-    consensus_handle: &ConsensusHandle<SeqTypes, I>,
+pub async fn add_v2_reward_accounts_to_state(
+    consensus_handle: &dyn ConsensusSource,
     view: &ViewNumber,
     accounts: &[RewardAccountV2],
     tree: &RewardMerkleTreeV2,
     leaf: Leaf2,
-) -> anyhow::Result<()>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+) -> anyhow::Result<()> {
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
@@ -1868,16 +1877,13 @@ where
 
 /// Add accounts to the in-memory consensus state.
 /// We use this during catchup after receiving verified accounts.
-pub async fn add_v1_reward_accounts_to_state<I: hotshot::traits::NodeImplementation<SeqTypes>>(
-    consensus_handle: &ConsensusHandle<SeqTypes, I>,
+pub async fn add_v1_reward_accounts_to_state(
+    consensus_handle: &dyn ConsensusSource,
     view: &ViewNumber,
     accounts: &[RewardAccountV1],
     tree: &RewardMerkleTreeV1,
     leaf: Leaf2,
-) -> anyhow::Result<()>
-where
-    I::Storage: NewProtocolStorage<SeqTypes>,
-{
+) -> anyhow::Result<()> {
     let (existing_state, delta) = consensus_handle.state_and_delta(*view).await;
     let (state, delta) = match existing_state {
         Some(existing) => {
