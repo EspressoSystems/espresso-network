@@ -4291,22 +4291,28 @@ mod tests {
         );
     }
 
-    /// Covers the five shapes and all seven arms: every version's vector must select the arm named
+    /// Covers the four shapes and all seven arms: every version's vector must select the arm named
     /// after it, and the proto message must carry exactly the fields v1 serializes, so neither a
     /// new protocol version nor a proto edit can add or drop a header field without failing here.
+    /// A version may drop a field its shape still declares, which the shape then renders empty;
+    /// the table names that field so the check stays exact for the rest.
     #[test]
     fn every_header_version_maps_to_its_arm_and_fields() {
-        for (version, shape) in [
-            ("v1", "HeaderV1"),
-            ("v2", "HeaderV1"),
-            ("v3", "HeaderV3"),
-            ("v4", "HeaderV4"),
-            ("v5", "HeaderV5"),
-            ("v6", "HeaderV5"),
-            ("v7", "HeaderV7"),
+        for (version, shape, dropped) in [
+            ("v1", "HeaderV1", None),
+            ("v2", "HeaderV1", None),
+            ("v3", "HeaderV3", None),
+            ("v4", "HeaderV4", None),
+            ("v5", "HeaderV5", None),
+            ("v6", "HeaderV5", None),
+            ("v7", "HeaderV5", Some("builder_commitment")),
         ] {
             let (header, fields) = reference_header(version);
-            assert_same_fields(shape, &fields);
+            let mut expected = fields.clone();
+            if let Some(field) = dropped {
+                expected[field] = String::new().into();
+            }
+            assert_same_fields(shape, &expected);
 
             use proto::header_response::Header;
             let converted = proto::HeaderResponse::from(&header).header.unwrap();
@@ -4414,6 +4420,10 @@ mod tests {
                     "v6"
                 },
                 Header::V7(header) => {
+                    assert_eq!(
+                        header.builder_commitment, "",
+                        "0.7 carries no builder commitment"
+                    );
                     assert_shared_fields!(&header);
                     "v7"
                 },
