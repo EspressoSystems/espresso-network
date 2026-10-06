@@ -10,31 +10,68 @@ use espresso_node::{
         sql::DataSource as SqlDataSource,
         test_helpers::{TestNetwork, TestNetworkConfigBuilder},
     },
+    catchup::StatePeers,
     testing::{TestConfig, TestConfigBuilder},
 };
 use espresso_types::{FeeAccount, FeeAmount, Header, SeqTypes};
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, future::join_all};
+use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_query_service::{availability::BlockQueryData, types::HeightIndexed};
+use hotshot_types::traits::metrics::NoMetrics;
 use http_client::{Client, error::ClientErr};
 use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
+use staking_cli::demo::DelegationConfig;
 use test_utils::reserve_tcp_port;
-use tokio::time::sleep;
-use versions::{EPOCH_VERSION, Upgrade};
+use tokio::time::{sleep, timeout};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
+
+const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {
+    const NUM_NODES: usize = 5;
+    const EPOCH_HEIGHT: u64 = 20;
     let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
-    let storage = SqlDataSource::create_storage().await;
+    // SQL persistence on every node and catchup from node 0's query API: at
+    // 0.6 the query node fills decided blocks' payloads from its persisted DA
+    // proposals, and epoch boundaries need state catchup.
+    let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+    let persistence: [_; NUM_NODES] = storage
+        .iter()
+        .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
 
-    let options = SqlDataSource::options(&storage, Options::with_port(port));
-
-    let network_config = TestConfigBuilder::default().build();
-    let config = TestNetworkConfigBuilder::default()
-        .api_config(options)
-        .network_config(network_config)
+    let network_config = TestConfigBuilder::default()
+        .epoch_height(EPOCH_HEIGHT)
+        .epoch_start_block(0)
         .build();
-    let mut network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+    let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+        .api_config(SqlDataSource::options(
+            &storage[0],
+            Options::with_port(port),
+        ))
+        .network_config(network_config)
+        .persistences(persistence)
+        .catchups(std::array::from_fn(|_| {
+            StatePeers::<SequencerApiVersion>::from_urls(
+                vec![format!("http://localhost:{port}").parse().unwrap()],
+                Default::default(),
+                Duration::from_secs(2),
+                &NoMetrics,
+            )
+        }))
+        .pos_hook(
+            DelegationConfig::MultipleDelegators,
+            StakeTableContractVersion::V3,
+            NEW_PROTOCOL,
+        )
+        .await
+        .unwrap()
+        .build();
+    let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
     let url = format!("http://localhost:{port}").parse().unwrap();
     let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 
@@ -42,15 +79,19 @@ async fn slow_test_merklized_state_api() {
 
     // Wait until some blocks have been decided.
     tracing::info!("waiting for blocks");
-    let blocks = client
-        .socket("availability/stream/blocks/0")
-        .subscribe::<BlockQueryData<SeqTypes>>()
-        .await
-        .unwrap()
-        .take(4)
-        .try_collect::<Vec<_>>()
-        .await
-        .unwrap();
+    let blocks = timeout(
+        Duration::from_secs(120),
+        client
+            .socket("availability/stream/blocks/0")
+            .subscribe::<BlockQueryData<SeqTypes>>()
+            .await
+            .unwrap()
+            .take(4)
+            .try_collect::<Vec<_>>(),
+    )
+    .await
+    .expect("the query service did not serve the first blocks in time")
+    .unwrap();
 
     // sleep for few seconds so that state data is upserted
     tracing::info!("waiting for state to be inserted");

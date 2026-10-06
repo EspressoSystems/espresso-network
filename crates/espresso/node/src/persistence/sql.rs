@@ -250,7 +250,7 @@ pub struct Options {
     /// - pruning_threshold: 3 TB
     /// - minimum_retention: 1 day
     /// - target_retention: 7 days
-    /// - batch_size: 1000
+    /// - batch_size: 100
     /// - max_usage: 80%
     /// - interval: 1 hour
     #[clap(long, env = "ESPRESSO_NODE_DATABASE_PRUNE")]
@@ -419,6 +419,9 @@ pub struct Options {
     // creates a new reference-counted handle to the underlying pool state.
     #[clap(skip)]
     pub(crate) pool: Option<sqlx::Pool<Db>>,
+
+    #[clap(skip)]
+    pub(crate) consensus_only: bool,
 }
 
 impl Default for Options {
@@ -531,6 +534,7 @@ impl From<SqliteOptions> for Options {
             lightweight: false,
             min_connections: 0,
             pool: None,
+            consensus_only: false,
             serializable_retry: SerializableRetryOptions::default(),
         }
     }
@@ -660,7 +664,8 @@ pub struct PruningOptions {
     pub(crate) target_retention: Option<Duration>,
 
     /// Target retention period for Merklized state.
-    /// State older than this is pruned to free up space.
+    /// State older than this is pruned to free up space, but never at or past the newest
+    /// merklized state, which the state writer resumes from.
     #[clap(
         long,
         env = "ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION",
@@ -800,6 +805,19 @@ pub struct ConsensusPruningOptions {
         default_value = "1000000000"
     )]
     pub(crate) target_usage: u64,
+
+    /// How often to measure consensus storage against TARGET_USAGE.
+    ///
+    /// On SQLite a measurement scans every page of the consensus tables. Between measurements,
+    /// each decide prunes only to TARGET_RETENTION.
+    #[clap(
+        name = "USAGE_CHECK_INTERVAL",
+        long = "consensus-storage-usage-check-interval",
+        env = "ESPRESSO_NODE_CONSENSUS_STORAGE_USAGE_CHECK_INTERVAL",
+        default_value = "5m",
+        value_parser = parse_duration
+    )]
+    pub(crate) usage_check_interval: Duration,
 }
 
 impl Default for ConsensusPruningOptions {
@@ -893,6 +911,10 @@ impl PersistenceOptions for Options {
         self.consensus_pruning.minimum_retention = view_retention;
     }
 
+    fn set_consensus_only(&mut self) {
+        self.consensus_only = true;
+    }
+
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let config = (&*self).try_into()?;
         let db = SqlStorage::connect(config, StorageConnectionType::Sequencer).await?;
@@ -906,6 +928,8 @@ impl PersistenceOptions for Options {
         let persistence = Persistence {
             db,
             gc_opt: self.consensus_pruning,
+            last_usage_check: Arc::default(),
+            consensus_only: self.consensus_only,
             internal_metrics: PersistenceMetricsValue::default(),
             #[cfg(feature = "embedded-db")]
             probe,
@@ -931,6 +955,9 @@ impl PersistenceOptions for Options {
 pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
+    /// When consensus storage usage was last measured, shared by clones.
+    last_usage_check: Arc<parking_lot::Mutex<Option<Instant>>>,
+    consensus_only: bool,
     /// A reference to the internal metrics
     internal_metrics: PersistenceMetricsValue,
     /// Startup findings about the filesystem and SQLite pragmas backing `db`.
@@ -1480,6 +1507,44 @@ impl Persistence {
         }
     }
 
+    async fn skip_decide_events(&self, view: ViewNumber) -> anyhow::Result<()> {
+        let processed = self.load_processed_view().await?;
+        // A gap-fill decide reports the older view it filled. Writing that as the cursor would
+        // rewind it, and a later restart with the query module would resume from pruned views.
+        if processed.is_some_and(|processed| processed >= view) {
+            return Ok(());
+        }
+        let from_view = processed.map_or(ViewNumber::genesis(), |processed| processed + 1);
+        let state_certs = serializable_retry!(self, || async {
+            let mut tx = self.db.read().await?;
+            Self::load_state_certs(&mut tx, from_view, view).await
+        })
+        .await?;
+
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "event_stream",
+                ["id", "last_processed_view"],
+                ["id"],
+                [(1i32, view.u64() as i64)],
+            )
+            .await?;
+            for (epoch, cert) in &state_certs {
+                tx.upsert(
+                    "finalized_state_cert",
+                    ["epoch", "state_cert"],
+                    ["epoch"],
+                    [(*epoch as i64, bincode::serialize(cert)?)],
+                )
+                .await?;
+            }
+            prune_to_view(&mut tx, view.u64()).await?;
+            tx.commit().await
+        })
+        .await
+    }
+
     async fn load_state_certs(
         tx: &mut Transaction<Read>,
         from_view: ViewNumber,
@@ -1514,57 +1579,77 @@ impl Persistence {
         Ok(result)
     }
 
+    /// Prune everything older than the target retention, then, at most once per usage check
+    /// interval, prune toward the minimum retention if storage is over the target usage.
     #[tracing::instrument(skip(self))]
-    async fn prune(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
-        serializable_retry!(self, || async {
-            let mut tx = self.db.write().await?;
-
-            // Prune everything older than the target retention period.
-            prune_to_view(
-                &mut tx,
-                cur_view.u64().saturating_sub(self.gc_opt.target_retention),
-            )
+    async fn prune_to_retention(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
+        self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.target_retention))
             .await?;
 
-            // Check our storage usage; if necessary we will prune more aggressively (up to the
-            // minimum retention) to get below the target usage.
-            #[cfg(feature = "embedded-db")]
-            let usage_query = format!(
-                "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
-                PRUNE_TABLES
-                    .iter()
-                    .map(|table| format!("'{table}'"))
-                    .join(",")
+        if !self.usage_check_due() {
+            return Ok(());
+        }
+        let usage = self.consensus_storage_usage().await?;
+        tracing::debug!(usage, "consensus storage usage after pruning");
+        if usage > self.gc_opt.target_usage {
+            tracing::warn!(
+                usage,
+                gc_opt = ?self.gc_opt,
+                "consensus storage is running out of space, pruning to minimum retention"
             );
-
-            #[cfg(not(feature = "embedded-db"))]
-            let usage_query = {
-                let table_sizes = PRUNE_TABLES
-                    .iter()
-                    .map(|table| format!("pg_table_size('{table}')"))
-                    .join(" + ");
-                format!("SELECT {table_sizes}")
-            };
-
-            let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
-            tracing::debug!(usage, "consensus storage usage after pruning");
-
-            if (usage as u64) > self.gc_opt.target_usage {
-                tracing::warn!(
-                    usage,
-                    gc_opt = ?self.gc_opt,
-                    "consensus storage is running out of space, pruning to minimum retention"
-                );
-                prune_to_view(
-                    &mut tx,
-                    cur_view.u64().saturating_sub(self.gc_opt.minimum_retention),
-                )
+            self.prune_below(cur_view.u64().saturating_sub(self.gc_opt.minimum_retention))
                 .await?;
-            }
+        }
+        Ok(())
+    }
 
+    async fn prune_below(&self, view: u64) -> anyhow::Result<()> {
+        // An empty write transaction still takes SQLite's write lock.
+        if view == 0 {
+            return Ok(());
+        }
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            prune_to_view(&mut tx, view).await?;
             tx.commit().await
         })
         .await
+    }
+
+    /// Measured in a read transaction: on SQLite it scans every page of the pruned tables, and
+    /// holding the write lock that long stalls the vote and proposal writes consensus waits on.
+    async fn consensus_storage_usage(&self) -> anyhow::Result<u64> {
+        #[cfg(feature = "embedded-db")]
+        let usage_query = format!(
+            "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
+            PRUNE_TABLES
+                .iter()
+                .map(|table| format!("'{table}'"))
+                .join(",")
+        );
+
+        #[cfg(not(feature = "embedded-db"))]
+        let usage_query = {
+            let table_sizes = PRUNE_TABLES
+                .iter()
+                .map(|table| format!("pg_table_size('{table}')"))
+                .join(" + ");
+            format!("SELECT {table_sizes}")
+        };
+
+        let mut tx = self.db.read().await?;
+        let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
+        Ok(usage as u64)
+    }
+
+    fn usage_check_due(&self) -> bool {
+        let now = Instant::now();
+        let mut last = self.last_usage_check.lock();
+        if last.is_some_and(|last| now.duration_since(last) < self.gc_opt.usage_check_interval) {
+            return false;
+        }
+        *last = Some(now);
+        true
     }
 }
 
@@ -1579,10 +1664,6 @@ const PRUNE_TABLES: &[&str] = &[
 ];
 
 async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
-    if view == 0 {
-        // Nothing to prune, the entire chain is younger than the retention period.
-        return Ok(());
-    }
     tracing::debug!(view, "pruning consensus storage");
 
     for table in PRUNE_TABLES {
@@ -1703,13 +1784,18 @@ impl SequencerPersistence for Persistence {
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
         let now = Instant::now();
-        // Generate events for the new leaves, then GC. On error `last_processed_view` is not
-        // advanced past the failure point, so no data is lost and the range is retried.
-        self.generate_decide_events(deciding_qc, consumer).await?;
+        if self.consensus_only {
+            self.skip_decide_events(view).await?;
+        } else {
+            // Generate events for the new leaves, then GC. On error `last_processed_view` is not
+            // advanced past the failure point, so no data is lost and the range is retried.
+            self.generate_decide_events(deciding_qc, consumer).await?;
 
-        // Best-effort GC of data not included in any decide event; runs again at the next decide.
-        if let Err(err) = self.prune(view).await {
-            tracing::warn!(?view, "pruning failed: {err:#}");
+            // Best-effort GC of data not included in any decide event; runs again at the next
+            // decide.
+            if let Err(err) = self.prune_to_retention(view).await {
+                tracing::warn!(?view, "pruning failed: {err:#}");
+            }
         }
         self.internal_metrics
             .internal_process_decided_events_duration
@@ -2271,6 +2357,9 @@ impl SequencerPersistence for Persistence {
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
+        if self.consensus_only {
+            return Ok(());
+        }
         let data = &proposal.data;
         let view = data.view_number().u64();
         let data_bytes = bincode::serialize(proposal).unwrap();
@@ -3582,7 +3671,7 @@ mod test {
             proposal: QuorumProposal2::<SeqTypes> {
                 block_header: leaf.block_header().clone(),
                 view_number: leaf.view_number(),
-                justify_qc: leaf.justify_qc(),
+                justify_qc: leaf.justify_qc().clone(),
                 upgrade_certificate: None,
                 view_change_evidence: None,
                 next_drb_result: None,
@@ -3844,6 +3933,7 @@ mod test {
             // Use a very high target retention, so that pruning is only triggered by the minimum
             // retention.
             target_retention: u64::MAX,
+            usage_check_interval: Duration::ZERO,
         })
         .await
     }
@@ -3858,6 +3948,7 @@ mod test {
             // Use a very high target usage, so that pruning is only triggered by the target
             // retention.
             target_usage: u64::MAX,
+            usage_check_interval: Duration::ZERO,
         })
         .await
     }
@@ -3901,6 +3992,27 @@ mod test {
                 (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
             );
         }
+    }
+
+    /// A gap-fill decide reports the older view it filled, after a newer decide already moved
+    /// the cursor past it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_consensus_only_decide_never_rewinds_cursor() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        opt.set_consensus_only();
+        let storage = opt.create().await.unwrap();
+
+        for view in [10, 5] {
+            storage
+                .append_decided_leaves(ViewNumber::new(view), [], None, &NullEventConsumer)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            storage.load_processed_view().await.unwrap(),
+            Some(ViewNumber::new(10))
+        );
     }
 
     /// The probe is taken in `create()` and only reaches the exported registry through

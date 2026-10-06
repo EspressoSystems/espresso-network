@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["httpx", "rich"]
+# dependencies = ["httpx", "pyyaml", "rich"]
 # ///
 """Binary upgrade test driver.
 
@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Literal
 
 import httpx
+import yaml
 from rich.logging import RichHandler
 
 log = logging.getLogger("binary-upgrade-test")
@@ -745,6 +746,37 @@ def extract_base_files(base_tag: str, base_dir: Path) -> None:
             text=True,
         )
         (base_dir / name).write_text(content)
+    compose_file = base_dir / "docker-compose.yaml"
+    compose_file.write_text(
+        yaml.safe_dump(drop_builder(yaml.safe_load(compose_file.read_text())))
+    )
+
+
+def drop_builder(compose: dict) -> dict:
+    """Remove the builder from the base tag's compose.
+
+    #4939 deleted it, so the upgrade tag has no image to roll it to. Both tags
+    run a 0.6 genesis, whose leaders build blocks in-process and never contact
+    a builder, so the base tag can run without it too.
+    """
+    services = compose["services"]
+    for name in ("permissionless-builder", "fund-builder"):
+        del services[name]
+        for service in services.values():
+            service.get("depends_on", {}).pop(name, None)
+    for service in services.values():
+        if env := service.get("environment"):
+            # The base tag's orchestrator unwraps its builder URLs into a Vec1
+            # and panics on an empty one, so it keeps a URL, the dead one main
+            # uses. The submitter loses its URL and falls back to the node API.
+            service["environment"] = [
+                "ESPRESSO_ORCHESTRATOR_BUILDER_URLS=http://localhost:1"
+                if var.startswith("ESPRESSO_ORCHESTRATOR_BUILDER_URLS=")
+                else var
+                for var in env
+                if not var.startswith("ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=")
+            ]
+    return compose
 
 
 def env_file_keys(path: Path) -> set[str]:

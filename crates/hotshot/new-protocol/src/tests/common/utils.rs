@@ -36,6 +36,7 @@ use hotshot_types::{
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
         TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence, UpgradeCertificate,
+        UpgradeCertificate2,
     },
     simple_vote::{
         LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutData3, TimeoutVote2,
@@ -69,6 +70,7 @@ use crate::{
     state::StateResponse,
     storage::StorageOutput,
     trace,
+    upgrade::expected_upgrade_data,
 };
 
 /// DRB result used by `TestData` for epoch transition proposals.
@@ -338,6 +340,31 @@ impl TestView {
         }
     }
 
+    /// An upgrade vote from a specific validator binding `epoch`, for the
+    /// checks that bound which epochs a vote may name.
+    pub fn upgrade_vote_input_for_epoch(
+        &self,
+        node_index: u64,
+        epoch: EpochNumber,
+    ) -> Message<TestTypes, Validated> {
+        let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let upgrade = test_upgrade_lock::<TestTypes>().upgrade();
+        let data = expected_upgrade_data(&upgrade, self.view_number, epoch)
+            .expect("test views are far from overflowing");
+        let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
+            data,
+            self.view_number,
+            &pub_key,
+            &priv_key,
+            &test_upgrade_lock(),
+        )
+        .expect("Failed to sign UpgradeVote2");
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::UpgradeVote(vote)),
+        }
+    }
+
     /// Build an Event for a timeout certificate.
     pub fn timeout_cert_input(&self) -> ConsensusInput<TestTypes> {
         ConsensusInput::TimeoutCertificate(ValidCert::new(
@@ -501,7 +528,8 @@ impl TestData {
 
             let upgrade_attached = upgrade_cert.as_ref().is_some_and(|(target_view, cert)| {
                 if *target_view == view_number {
-                    proposal.upgrade_certificate = Some(cert.clone());
+                    proposal.upgrade_certificate =
+                        Some(UpgradeCertificate2::restore_epoch(cert.clone(), epoch));
                     true
                 } else {
                     false

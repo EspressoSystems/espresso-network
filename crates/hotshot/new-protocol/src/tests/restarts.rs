@@ -8,14 +8,12 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     traits::signature_key::SignatureKey,
 };
+use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
-use crate::{
-    helpers::test_timeout_epoch_lock,
-    tests::common::{
-        runner::{NodeAction, NodeChange, TestRunner},
-        utils::{build_timeout_cert, mock_membership_with_num_nodes},
-        views,
-    },
+use crate::tests::common::{
+    runner::{NodeAction, NodeChange, TestRunner},
+    utils::{build_timeout_cert, mock_membership_with_num_nodes},
+    views,
 };
 
 // ---------------------------------------------------------------------------
@@ -296,7 +294,7 @@ async fn late_start_one_node_with_epochs_bound() {
                 action: NodeAction::Start,
             }],
         )])
-        .upgrade_lock(test_timeout_epoch_lock())
+        .upgrade(Upgrade::trivial(TIMEOUT_EPOCH_VERSION))
         .build()
         .run()
         .await

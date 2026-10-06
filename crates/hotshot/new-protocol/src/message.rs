@@ -6,17 +6,15 @@ use std::marker::PhantomData;
 use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{
-        EpochNumber, VidDisperseShare2, ViewNumber, vid_disperse::AvidmGf2DisperseShareFragment,
+        EpochNumber, UpgradeProposal2, VidDisperseShare2, ViewNumber,
+        vid_disperse::AvidmGf2DisperseShareFragment,
     },
     message::Proposal as SignedProposal,
     request_response::ProposalRequestPayload,
-    simple_certificate::{
-        OneHonestThreshold, SimpleCertificate, TimeoutCertificate2, TimeoutCertificate3,
-        TimeoutEvidence,
-    },
+    simple_certificate::{TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence},
     simple_vote::{
-        HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutData3,
-        TimeoutVote2, TimeoutVote3, Vote2Data,
+        HasEpoch, LightClientStateUpdateVote2, QuorumVote2, SimpleVote, TimeoutVote2, TimeoutVote3,
+        UpgradeVote2, Vote2Data,
     },
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
@@ -35,13 +33,11 @@ use crate::{
     message::payload::PayloadFetchMessage,
     proposal::{
         MalformedProposal, epoch_matches_height, justify_qc_matches_parent,
-        view_change_evidence_matches_parent,
+        state_cert_matches_parent, view_change_evidence_matches_parent,
     },
 };
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
-pub type TimeoutOneHonest<T> = SimpleCertificate<T, TimeoutData2, OneHonestThreshold>;
-pub type TimeoutOneHonest3<T> = SimpleCertificate<T, TimeoutData3, OneHonestThreshold>;
 
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
 pub enum TimeoutVote<T: NodeType> {
@@ -58,6 +54,13 @@ impl<T: NodeType> TimeoutVote<T> {
         match self {
             Self::V2(vote) => vote.signing_key(),
             Self::V3(vote) => vote.signing_key(),
+        }
+    }
+
+    pub fn is_well_formed(&self) -> bool {
+        match self {
+            Self::V2(v) => v.view_number() == v.data.view,
+            Self::V3(v) => v.view_number() == v.data.view,
         }
     }
 }
@@ -151,6 +154,13 @@ impl<T: NodeType> HasViewNumber for Vote1<T> {
         self.vote.view_number()
     }
 }
+
+/// The leader's broadcast of an upgrade proposal for the network to vote on.
+pub type UpgradeProposalMessage<T> = SignedProposal<T, UpgradeProposal2>;
+
+/// An upgrade vote, broadcast all-to-all. Its signed data binds the voter's
+/// epoch, which selects the stake table under which the vote is tallied.
+pub type UpgradeVoteMessage<T> = UpgradeVote2<T>;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
@@ -295,6 +305,7 @@ impl<T: NodeType, S> EpochChangeMessage<T, S> {
         }
         epoch_matches_height(&self.proposal, epoch_height)?;
         justify_qc_matches_parent(&self.proposal, epoch_height)?;
+        state_cert_matches_parent(&self.proposal, epoch_height)?;
         view_change_evidence_matches_parent(&self.proposal)?;
         Ok(())
     }
@@ -389,8 +400,12 @@ pub enum ConsensusMessage<T: NodeType, S> {
     /// A node's own VID share, broadcast independently of Vote1.
     VidShareBroadcast(VidDisperseShare2<T>),
     HighQc(Certificate1<T>),
+    // Only append new variants: bincode tags variants by index, so reordering
+    // or inserting breaks wire compatibility within a protocol version.
     TimeoutVote3(TimeoutVoteMessage3<T>),
     TimeoutCertificate3(TimeoutCertificate3<T>),
+    UpgradeProposal(UpgradeProposalMessage<T>),
+    UpgradeVote(UpgradeVoteMessage<T>),
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
@@ -410,6 +425,8 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::HighQc(c) => ConsensusMessage::HighQc(c),
             Self::TimeoutVote3(v) => ConsensusMessage::TimeoutVote3(v),
             Self::TimeoutCertificate3(c) => ConsensusMessage::TimeoutCertificate3(c),
+            Self::UpgradeProposal(p) => ConsensusMessage::UpgradeProposal(p),
+            Self::UpgradeVote(v) => ConsensusMessage::UpgradeVote(v),
         }
     }
 }
@@ -430,6 +447,8 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::HighQc(certificate) => certificate.view_number(),
             Self::TimeoutVote3(msg) => msg.view_number(),
             Self::TimeoutCertificate3(certificate) => certificate.view_number(),
+            Self::UpgradeProposal(proposal) => proposal.data.view_number(),
+            Self::UpgradeVote(vote) => vote.view_number(),
         }
     }
 }

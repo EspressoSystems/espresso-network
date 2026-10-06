@@ -20,22 +20,10 @@ test(test_process_client_handling_stream_subscribe_voters)
 slow-timeout = { period = "2s", terminate-after = 1 }
 retries = 10
 
-[[profile.default.overrides]]
-filter = 'test(test_hotshot_event_streaming_epoch_progression)'
-slow-timeout = { period = "8m", terminate-after = 4 }
-
-[[profile.default.overrides]]
-filter = 'test(test_pos_upgrade_view_based)'
-slow-timeout = { period = "2m", terminate-after = 5 }
 
 [[profile.default.overrides]]
 filter = 'test(test_light_client_completeness)'
 slow-timeout = { period = "2m", terminate-after = 15 }
-
-[[profile.default.overrides]]
-filter = 'test(test_light_client_new_protocol_upgrade)'
-slow-timeout = { period = "2m", terminate-after = 15 }
-threads-required = 'num-cpus'
 
 [[profile.default.overrides]]
 filter = 'test(test_new_protocol_query_node_restart_with_fresh_storage)'
@@ -43,21 +31,14 @@ slow-timeout = { period = "2m", terminate-after = 15 }
 threads-required = 'num-cpus'
 
 [[profile.default.overrides]]
+filter = 'test(test_light_client_follower_query_node)'
+slow-timeout = { period = "2m", terminate-after = 15 }
+threads-required = 'num-cpus'
+
+[[profile.default.overrides]]
 filter = 'test(slow_test_restart_new_protocol)'
 slow-timeout = { period = "2m", terminate-after = 5 }
 threads-required = 'num-cpus'
-
-# The stake-table-change upgrade tests run many epochs across a real protocol
-# upgrade (epoch_height 70 for the 0.5->0.6 cutover cases). This block must
-# stay above the binary-wide `stake_table_changes` override: nextest takes
-# the first matching override per setting, and these tests need the larger
-# terminate-after. (Overrides in the default profile also apply to the slow
-# profile these tests run under.)
-[[profile.default.overrides]]
-filter = 'package(slow-tests) & binary(stake_table_changes) & test(/test_(stake_table_full_swap|stake_table_single_removal|new_protocol_upgrade_ineligible)/)'
-slow-timeout = { period = "2m", terminate-after = 15 }
-threads-required = 'num-cpus'
-retries = 0
 
 # Stake-table-change integration tests (slow-tests crate): multi-node
 # networks against a real L1, running for several epochs. No retries: these
@@ -92,28 +73,6 @@ path = "junit.xml"
 store-failure-output = true
 report-name = "nextest"
 
-# cross_tests! macro tests: use binary() not test(), because the macro names the
-# binary after the file but the test function is always the base test name.
-#
-# Example: `cargo nextest list ..`
-#     package:binary
-#         test
-#
-#     hotshot-testing::test_epoch_success_overlap_3f:
-#         test_epoch_success::testtypesrandomizedcommitteemembers_stablequorumfilterconfig_123_6__stablequorumfilterconfig_123_6___::cliquenetimpl_::test_epoch_success
-[[profile.hotshot.overrides]]
-filter = """
-test(test_success_with_async_delay_with_epochs) |
-test(test_success_with_async_delay_2_with_epochs) |
-test(test_combined_network_half_dc) |
-test(test_staggered_restart_first_block) |
-test(/test_staggered_restart$/) |
-binary(test_epoch_success_overlap_2_f) |
-binary(test_epoch_success_overlap_3f) |
-binary(test_epoch_success_types_randomized_leader)
-"""
-retries = 3
-
 # New-protocol integration tests (crates/hotshot/new-protocol). Some restart
 # and late-start tests have max_runtime up to 500s, so we give them more
 # headroom than the default profile's 360s termination.
@@ -121,15 +80,6 @@ retries = 3
 slow-timeout = { period = "2m", terminate-after = 3 }
 default-filter = 'package(hotshot-new-protocol)'
 retries = 0
-
-# The 0.5 -> 0.6 cutover runs once per network, and the seed race it seeds
-# (nodes activate locked at different views) wedges a run for good, so a retry
-# re-rolls the race rather than papering over a slow test. Delete this override
-# and crates/hotshot/new-protocol/src/tests/legacy_cutover.rs once mainnet and
-# the demo/staging configs are all on 0.6.
-[[profile.new-protocol.overrides]]
-filter = 'test(/^tests::legacy_cutover::/)'
-retries = 2
 
 [profile.slow]
 # Without `terminate-after` a hung test runs until the job timeout, which discards

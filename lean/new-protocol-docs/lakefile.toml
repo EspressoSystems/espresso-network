@@ -23,3 +23,7 @@ roots = ["Reference", "Style"]
 [[lean_exe]]
 name = "reference"
 root = "Main"
+
+[[lean_exe]]
+name = "coverage"
+root = "Coverage"

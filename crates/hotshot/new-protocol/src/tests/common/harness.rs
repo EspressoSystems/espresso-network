@@ -10,9 +10,13 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    upgrade_config::UpgradeConfig,
 };
 
-use super::utils::{mock_membership_with_num_nodes, record_leader};
+use super::{
+    coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
+    utils::{mock_membership_with_num_nodes, record_leader},
+};
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     cert_verifier::CertVerifiers,
@@ -21,13 +25,14 @@ use crate::{
     epoch::EpochManager,
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
-    message::Message,
+    message::{Certificate1, Message},
     network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     tests::common::mock::MockCoordinator,
     trace,
+    upgrade::UpgradeProtocol,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -127,11 +132,16 @@ impl TestHarness {
             upgrade_lock.clone(),
         );
 
+        let genesis_qc = build_genesis_cert1(&genesis_leaf);
         let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
-        let proposal_validator =
-            ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+        let proposal_validator = ProposalValidator::new(
+            membership.clone(),
+            epoch_height,
+            upgrade_lock.clone(),
+            Some(&genesis_qc),
+        );
         let share_validator =
             VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
@@ -146,6 +156,7 @@ impl TestHarness {
             keypair,
             addr,
             vec![],
+            None,
             upgrade_lock.clone(),
             Box::new(NoMetrics),
         )
@@ -174,6 +185,13 @@ impl TestHarness {
                 upgrade_lock.clone(),
             ))
             .epoch_root_collector(epoch_root_collector)
+            .upgrade_vote_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
+            .upgrade_protocol(UpgradeProtocol::new(
+                UpgradeConfig::default(),
+                upgrade_lock.clone(),
+                public_key,
+                private_key.clone(),
+            ))
             .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
@@ -324,6 +342,17 @@ impl TestHarness {
 
     pub fn current_view(&self) -> hotshot_types::data::ViewNumber {
         self.coordinator.current_view()
+    }
+
+    /// Seed the genesis QC and proposal as `Coordinator::maker` does, and return
+    /// the QC. The harness otherwise starts without them.
+    pub fn seed_genesis(&mut self) -> Certificate1<TestTypes> {
+        let consensus = self.coordinator.consensus_mut();
+        let genesis_leaf = consensus.last_decided_leaf().clone();
+        let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+        let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+        consensus.seed_parent(genesis_cert1.clone(), genesis_proposal, std::iter::empty());
+        genesis_cert1
     }
 
     pub fn coordinator(&self) -> &MockCoordinator {

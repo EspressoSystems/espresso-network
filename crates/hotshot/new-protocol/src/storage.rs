@@ -11,7 +11,7 @@ use hotshot_types::{
     },
     event::HotShotAction,
     message::Proposal as SignedProposal,
-    simple_certificate::LightClientStateUpdateCertificateV2,
+    simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
     traits::{
         EncodeBytes,
         metrics::{Histogram, Metrics},
@@ -298,6 +298,34 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         self.handles.entry(view).or_default().push(handle);
     }
 
+    /// Persist a decided upgrade certificate. Keyed at
+    /// `new_version_first_view` so the decided-view GC cannot abort the write
+    /// before the certificate takes effect.
+    pub fn update_decided_upgrade_certificate(&mut self, cert: UpgradeCertificate<T>) {
+        let view = cert.data.new_version_first_view;
+        let storage = self.storage.clone();
+        let handle = self.tasks.spawn(async move {
+            loop {
+                match storage
+                    .update_decided_upgrade_certificate(Some(cert.clone()))
+                    .await
+                {
+                    Ok(()) => return None,
+                    Err(err) => {
+                        warn!(%err, "failed to persist decided upgrade certificate, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
+    }
+
+    /// `proposal` must already be validated: `state_cert`'s presence is not
+    /// re-checked here, only gated at write time by `state_cert_matches_parent`
+    /// (received proposals) and `maybe_propose` (self-proposed ones).
+    /// `seed_proposals` reads persisted rows back on restart without
+    /// re-checking, so that write-time gate is the only thing enforcing this.
     pub fn append_proposal(&mut self, proposal: Proposal<T>) {
         let view = proposal.view_number;
         let commitment = proposal_commitment(&proposal);
@@ -398,7 +426,8 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 
 #[async_trait]
 impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
-    async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
+    async fn append_cert2(&self, view: ViewNumber, cert: Certificate2<T>) -> anyhow::Result<()> {
+        self.insert_cert2(view, cert).await;
         Ok(())
     }
 

@@ -42,6 +42,8 @@ impl PersistenceOptions for Options {
 
     fn set_view_retention(&mut self, _: u64) {}
 
+    fn set_consensus_only(&mut self) {}
+
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         Ok(NoStorage)
     }
