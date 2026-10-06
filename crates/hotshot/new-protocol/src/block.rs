@@ -24,6 +24,7 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
+use rand::seq::SliceRandom;
 use tokio::{
     task::{AbortHandle, JoinSet, spawn_blocking},
     time::sleep,
@@ -291,9 +292,11 @@ impl<T: NodeType> BlockBuilder<T> {
         if let Some(txs) = self.view_transactions.get(&view) {
             return txs.clone();
         }
-        let txs: Vec<_> = std::mem::take(&mut self.leader_buffer)
+        let mut txs: Vec<_> = std::mem::take(&mut self.leader_buffer)
             .into_values()
             .collect();
+        // Explicit, so block contents do not depend on map iteration order.
+        txs.shuffle(&mut rand::thread_rng());
         self.leader_total_bytes = 0;
         self.view_transactions.insert(view, txs.clone());
         txs
