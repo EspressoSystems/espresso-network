@@ -144,6 +144,7 @@ laptop                       EC2, one AZ, private IPs
   manifest.
 - vCPUs: an Intel vCPU is a hyperthread (c8i.4xlarge: 16 vCPU = 8 cores); a Graviton vCPU is a physical core
   (c8g.4xlarge: 16 cores).
+- Choosing a type: [instance-types.md](instance-types.md) compares leader block-build time and cost per block.
 - Stake: equal, orchestrator self-registration; 5 nodes → quorum 4, lagging `node0` never stalls consensus.
 - Peers: `node0` has state peers like every node and no API peers.
 - Keys: test mnemonic, index 20 + i. No `keygen`, no `stake-for-demo`.
