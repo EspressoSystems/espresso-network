@@ -2111,6 +2111,18 @@ def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
         noisy.append(
             f"benchmark tracker behind: payload scans lag node0 by {tracker['p99']:.0f} ms p99"
         )
+    mb_s = result["capacity"]["overall"]["mb_s"]
+    short = [
+        step["submitted_mb_s"]
+        for step in result["steps"]
+        if step["rate_mb_s"] == mb_s
+        and step["submitted_mb_s"] < SUBMIT_SHORT_RATIO * mb_s
+    ]
+    if short:
+        noisy.append(
+            f"load generator submitted {fmt_num(min(short))} of {fmt_num(mb_s)} MB/s "
+            "at the capacity step"
+        )
     if load["submit_errors"]:
         noisy.append(f"{load['submit_errors']} submit errors")
     if load["missing_payloads"]:

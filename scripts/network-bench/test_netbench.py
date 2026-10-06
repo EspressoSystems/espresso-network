@@ -264,6 +264,13 @@ def test_baseline_exclusion(runs, excluded):
         (edited(STALLED), {"node1": 0.5}, False, False, "stake table is not 3"),
         (edited(TRACKER_LAG), {}, True, True, "benchmark tracker behind"),
         (
+            make_result([step(4.0), step(6.0, submitted=5.4), step(8.0, 7.0, FAIL)]),
+            {},
+            True,
+            True,
+            "load generator submitted 5.4 of 6",
+        ),
+        (
             make_result([step(4.0, 0.0, FAIL), step(6.0, 0.0, FAIL)]),
             {},
             False,

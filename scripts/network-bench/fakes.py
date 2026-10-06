@@ -873,6 +873,7 @@ def step(
     consensus: Iterable[str] = (),
     query: Iterable[str] = (),
     consensus_p50: float = 900.0,
+    submitted: float | None = None,
 ) -> netbench.StepResult:
     """A step at `rate` MB/s that decides `decided` (default: all of it)."""
     return {
@@ -883,7 +884,7 @@ def step(
         "t_start": 0.0,
         "t_mid": 15.0,
         "t_end": 30.0,
-        "submitted_mb_s": rate,
+        "submitted_mb_s": rate if submitted is None else submitted,
         "queued_mb_s": rate,
         "queue_wait_ms": quantiles(1.0, 5.0),
         "submit_rtt_ms": quantiles(20.0, 50.0),
