@@ -5,8 +5,8 @@
 //! VID total weight is the node count (stake 1 per node) and, for VID-only stages, the
 //! `approximate_weights` result for large equal stakes (1000 + nodes).
 //!
-//! `request_block` here starts at `from_transactions`. The `transactions_for` clone of the
-//! pool (block.rs:305) is timed separately as `tx_clone`.
+//! `request_block` here starts at the build task's copy of the cached transactions. The
+//! `tx_clone` stage times that copy alone.
 //!
 //! `ESPRESSO_BENCH_BLAKE3_TX_HASH` and `RAYON_NUM_THREADS` are read once per process,
 //! so each combination needs its own run. Both are recorded in the benchmark id.
@@ -108,9 +108,10 @@ fn build(txs: Vec<Transaction>) -> (Payload, NsTable) {
     Payload::from_transactions_sync(txs, chain_config()).expect("payload construction")
 }
 
-/// Same order of operations as block.rs:220-262; outputs are returned so their drop is untimed.
-fn request_block(txs: Vec<Transaction>, weight: usize) -> (Payload, impl Sized, Commitments) {
-    let (payload, ns_table) = build(txs);
+/// Same order of operations as the build task in block.rs; outputs are returned so their drop is
+/// untimed.
+fn request_block(txs: &[Transaction], weight: usize) -> (Payload, impl Sized, Commitments) {
+    let (payload, ns_table) = build(txs.to_vec());
     let payload_bytes = payload.encode();
     let metadata_bytes = ns_table.encode();
     let commitments = rayon::join(
@@ -216,11 +217,7 @@ fn bench_request_block(
     weight: usize,
 ) {
     group.bench_function(BenchmarkId::new("request_block", label), |b| {
-        b.iter_batched(
-            || case.txs.clone(),
-            |txs| request_block(txs, weight),
-            BatchSize::LargeInput,
-        )
+        b.iter_with_large_drop(|| request_block(&case.txs, weight))
     });
 }
 
