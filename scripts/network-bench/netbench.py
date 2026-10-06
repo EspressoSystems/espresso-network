@@ -2116,7 +2116,7 @@ def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
         step["submitted_mb_s"]
         for step in result["steps"]
         if step["rate_mb_s"] == mb_s
-        and step["submitted_mb_s"] < SUBMIT_SHORT_RATIO * mb_s
+        and step["submitted_mb_s"] < SUBMIT_SHORT_RATIO * step["rate_mb_s"]
     ]
     if short:
         noisy.append(
