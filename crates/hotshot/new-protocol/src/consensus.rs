@@ -205,9 +205,6 @@ pub struct Consensus<T: NodeType> {
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
     unpaired_proposals: UnpairedProposals<T>,
     unpaired_vid_shares: UnpairedVidShares<T>,
-    /// The parents each view's block was already requested for, so a proposal parked for its
-    /// share and its later pairing ask the block builder once.
-    requested_blocks: BTreeMap<ViewNumber, Vec<Commitment<Leaf2<T>>>>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeSet<(ViewNumber, VidCommitment2)>,
     blocks: BTreeMap<(ViewNumber, VidCommitment2), T::BlockPayload>,
@@ -314,6 +311,15 @@ enum SafetyError {
     LockedCertCommitment(#[source] anytrace::Error),
 }
 
+/// How a proposal's `next_drb_result` compares with the next epoch's DRB this node holds.
+enum NextDrb {
+    /// The proposal needs no DRB, or carries the one this node holds.
+    Consistent,
+    /// The proposal needs a DRB this node does not hold yet.
+    Unknown,
+    Mismatch,
+}
+
 impl<T: NodeType> Consensus<T> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<B>(
@@ -376,7 +382,6 @@ impl<T: NodeType> Consensus<T> {
             vid_shares: BTreeMap::new(),
             unpaired_proposals: BTreeMap::new(),
             unpaired_vid_shares: BTreeMap::new(),
-            requested_blocks: BTreeMap::new(),
             epoch_height: epoch_height.into(),
         }
     }
@@ -902,7 +907,6 @@ impl<T: NodeType> Consensus<T> {
                 self.unpaired_proposals = self.unpaired_proposals.split_off(&(keep_from, None, vc));
                 self.unpaired_vid_shares =
                     self.unpaired_vid_shares.split_off(&(keep_from, None, vc));
-                self.requested_blocks = self.requested_blocks.split_off(&keep_from);
                 self.vote1_parent = self.vote1_parent.split_off(&keep_from);
                 self.leaves = self.leaves.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
@@ -1090,30 +1094,18 @@ impl<T: NodeType> Consensus<T> {
                 .insert(state_cert.epoch, state_cert.clone());
         }
 
-        // Request the DRB if we don't have it yet.  A mismatching DRB is
-        // a hard failure (invalid leader), but a missing DRB is
-        // recoverable — the proposal is stored and voting will proceed
-        // once the DRB arrives.  Same epoch guard as `maybe_propose`:
-        // transitions in epoch >= 2 (`> genesis`) carry `next_drb_result`
-        // (the successor epoch's DRB lives in this leaf, so the successor
-        // epoch's catchup path unwraps `leaf.next_drb_result`).
-        if proposal.epoch > EpochNumber::genesis()
-            && is_epoch_transition(block_number, *self.epoch_height)
-        {
-            if let Some(drb) = self.drb_results.get(&(epoch + 1)) {
-                if proposal
-                    .next_drb_result
-                    .is_none_or(|proposed_drb| drb != &proposed_drb)
-                {
-                    warn!(
-                        %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
-                        "DRB result does not match proposal"
-                    );
-                    return Protocol::Abort;
-                }
-            } else {
-                outbox.push_back(ConsensusOutput::RequestDrbResult(epoch + 1));
-            }
+        // A mismatching DRB is a hard failure (invalid leader), but a missing DRB is
+        // recoverable: the proposal is stored and voting will proceed once the DRB arrives.
+        match self.check_next_drb(&proposal) {
+            NextDrb::Consistent => {},
+            NextDrb::Unknown => outbox.push_back(ConsensusOutput::RequestDrbResult(epoch + 1)),
+            NextDrb::Mismatch => {
+                warn!(
+                    %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
+                    "DRB result does not match proposal"
+                );
+                return Protocol::Abort;
+            },
         }
 
         self.request_state(&proposal, payload_size, outbox);
@@ -1298,24 +1290,42 @@ impl<T: NodeType> Consensus<T> {
     /// One speculative build per view bounds what a leader's proposals alone can cost the next.
     fn may_build_on_parked(&self, proposal: &Proposal<T>) -> bool {
         let view = proposal.view_number();
+        let vc = VidCommitment2::default();
         let first_for_view = !self.proposals.contains_key(&view)
-            && !self.unpaired_proposals.keys().any(|(v, ..)| *v == view);
-        let transition = proposal.epoch > EpochNumber::genesis()
-            && is_epoch_transition(proposal.block_header.block_number(), *self.epoch_height);
-        let drb_matches = !transition
-            || self
-                .drb_results
-                .get(&(proposal.epoch + 1))
-                .is_none_or(|drb| proposal.next_drb_result == Some(*drb));
+            && self
+                .unpaired_proposals
+                .range((view, None, vc)..(view + 1, None, vc))
+                .next()
+                .is_none();
+        let drb_consistent = match self.check_next_drb(proposal) {
+            NextDrb::Consistent | NextDrb::Unknown => true,
+            NextDrb::Mismatch => false,
+        };
         first_for_view
             && self.wants_proposal_for_view(&view)
             && proposal.justify_qc.epoch().is_some()
             && self.is_safe(proposal).is_ok()
-            && drb_matches
+            && drb_consistent
+    }
+
+    fn check_next_drb(&self, proposal: &Proposal<T>) -> NextDrb {
+        // Same epoch guard as `maybe_propose`: transitions in epoch >= 2 (`> genesis`) carry
+        // `next_drb_result` (the successor epoch's DRB lives in this leaf, so the successor
+        // epoch's catchup path unwraps `leaf.next_drb_result`).
+        let carries_next_drb = proposal.epoch > EpochNumber::genesis()
+            && is_epoch_transition(proposal.block_header.block_number(), *self.epoch_height);
+        if !carries_next_drb {
+            return NextDrb::Consistent;
+        }
+        match self.drb_results.get(&(proposal.epoch + 1)) {
+            Some(drb) if proposal.next_drb_result == Some(*drb) => NextDrb::Consistent,
+            Some(_) => NextDrb::Mismatch,
+            None => NextDrb::Unknown,
+        }
     }
 
     fn request_block_and_header_if_next_leader(
-        &mut self,
+        &self,
         proposal: &Proposal<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
@@ -1326,12 +1336,6 @@ impl<T: NodeType> Consensus<T> {
             proposal.epoch
         };
         if self.is_leader(view + 1, epoch) {
-            let requested = self.requested_blocks.entry(view + 1).or_default();
-            let parent = proposal_commitment(proposal);
-            if requested.contains(&parent) {
-                return;
-            }
-            requested.push(parent);
             outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
                 BlockAndHeaderRequest {
                     view: view + 1,

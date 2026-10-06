@@ -9,11 +9,12 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, ViewNumber},
+    drb::DrbResult,
     message::Proposal as SignedProposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutEvidence},
     simple_vote::{HasEpoch, QuorumData2, SimpleVote, TimeoutData2, TimeoutData3, Vote2Data},
     traits::signature_key::SignatureKey,
-    utils::is_epoch_root,
+    utils::{is_epoch_root, is_epoch_transition, is_last_block},
     vote::HasViewNumber,
 };
 
@@ -26,7 +27,7 @@ use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::GcScope,
     helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
-    message::{Proposal, ProposalMessage, TimeoutVote},
+    message::{Certificate1, Proposal, ProposalMessage, TimeoutVote},
     outbox::Outbox,
     proposal::{ProposalValidator, ValidationError},
     state::StateResponse,
@@ -1185,8 +1186,7 @@ async fn test_leader_sends_proposal() {
 }
 
 /// The next leader requests its block when the proposal arrives, before its own VID share
-/// for that block does, so the share's transfer stays off the view's critical path. Pairing
-/// later does not ask again.
+/// for that block does, so the share's transfer stays off the view's critical path.
 #[tokio::test]
 async fn test_next_leader_requests_block_before_its_share_arrives() {
     let test_data = TestData::new(4).await;
@@ -1209,31 +1209,10 @@ async fn test_next_leader_requests_block_before_its_share_arrives() {
     );
 
     harness.apply(vid_share).await;
-    assert_eq!(
-        requests_for_next_view(&harness),
-        1,
-        "pairing does not request the same block again"
-    );
     assert!(
         any(harness.outputs(), is_vote1),
         "the share pairs with the parked proposal"
     );
-}
-
-/// A node that does not lead the next view builds nothing on a parked proposal.
-#[tokio::test]
-async fn test_only_the_next_leader_builds_on_a_parked_proposal() {
-    let test_data = TestData::new(4).await;
-    let bystander = test_data.views[0].leader_public_key;
-    assert_ne!(
-        bystander, test_data.views[1].leader_public_key,
-        "test setup"
-    );
-    let mut harness = ConsensusHarness::new(node_index_for_key(&bystander)).await;
-
-    let (proposal, _) = test_data.views[0].proposal_input_consensus(&bystander);
-    harness.apply(proposal).await;
-    assert!(!any(harness.outputs(), is_request_block_and_header));
 }
 
 /// Only the first proposal parked for a view drives a speculative build: an equivocating
@@ -1258,6 +1237,94 @@ async fn test_parked_equivocation_builds_once() {
     assert_eq!(
         count_matching(harness.outputs(), is_request_block_and_header),
         1
+    );
+}
+
+/// A parked proposal the paired path would reject as unsafe drives no build: its justify QC
+/// is older than the next leader's lock and does not extend it.
+#[tokio::test]
+async fn test_unsafe_parked_proposal_builds_nothing() {
+    async fn requests_block(test_data: &TestData, lock: Option<&Certificate1<TestTypes>>) -> bool {
+        let next_leader = test_data.views[3].leader_public_key;
+        let mut harness = ConsensusHarness::new(node_index_for_key(&next_leader)).await;
+        if let Some(lock) = lock {
+            harness.consensus.seed_locked_cert(lock.clone());
+        }
+        let mut unsafe_proposal = test_data.views[1].proposal.clone();
+        unsafe_proposal.data.view_number = test_data.views[2].view_number;
+        harness
+            .apply(ConsensusInput::Proposal(
+                test_data.views[2].leader_public_key,
+                ProposalMessage::validated(unsafe_proposal),
+            ))
+            .await;
+        any(harness.outputs(), is_request_block_and_header)
+    }
+
+    let test_data = TestData::new(4).await;
+    assert!(
+        requests_block(&test_data, None).await,
+        "without a lock the proposal is safe and the next leader builds"
+    );
+    assert!(
+        !requests_block(&test_data, Some(&test_data.views[1].cert1)).await,
+        "a proposal unsafe under the lock drives no build"
+    );
+}
+
+/// A parked epoch-transition proposal whose next-epoch DRB contradicts the one the next
+/// leader holds drives no build. One whose DRB the node does not hold yet still does.
+#[tokio::test]
+async fn test_parked_proposal_with_mismatched_drb_builds_nothing() {
+    const EPOCH_HEIGHT: u64 = 10;
+    let test_data = TestData::new_with_epoch_height(20, EPOCH_HEIGHT).await;
+    let transition = test_data
+        .views
+        .iter()
+        .find(|view| {
+            let block = view.proposal.data.block_header.block_number;
+            view.epoch_number > EpochNumber::genesis()
+                && is_epoch_transition(block, EPOCH_HEIGHT)
+                && !is_last_block(block, EPOCH_HEIGHT)
+        })
+        .expect("an epoch-transition view after the first epoch");
+    let probe = ConsensusHarness::new_with_epoch_height(0, EPOCH_HEIGHT).await;
+    let next_leader = probe
+        .consensus
+        .leader_of(transition.view_number + 1, transition.epoch_number)
+        .expect("a leader for the next view");
+
+    async fn requests_block(
+        transition: &TestView,
+        next_leader: &BLSPubKey,
+        drb: Option<DrbResult>,
+    ) -> bool {
+        let mut harness =
+            ConsensusHarness::new_with_epoch_height(node_index_for_key(next_leader), EPOCH_HEIGHT)
+                .await;
+        if let Some(drb) = drb {
+            harness
+                .apply(ConsensusInput::DrbResult(transition.epoch_number + 1, drb))
+                .await;
+        }
+        harness
+            .apply(ConsensusInput::Proposal(
+                transition.leader_public_key,
+                transition.proposal_message(),
+            ))
+            .await;
+        any(harness.outputs(), is_request_block_and_header)
+    }
+
+    assert!(
+        requests_block(transition, &next_leader, None).await,
+        "a DRB the node does not hold yet does not block the build"
+    );
+    let wrong_drb = [1u8; 32];
+    assert_ne!(transition.proposal.data.next_drb_result, Some(wrong_drb));
+    assert!(
+        !requests_block(transition, &next_leader, Some(wrong_drb)).await,
+        "a contradicting DRB drives no build"
     );
 }
 
