@@ -110,6 +110,11 @@ vec1 = { workspace = true }
 versions = { workspace = true }
 vid = { workspace = true }
 
+# sha2 0.10 only uses the ARMv8 SHA-256 instructions with `asm`.
+# sha2 0.11 detects them at runtime, but upgrading is blocked by deps pinned to digest 0.10.
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+sha2 = { workspace = true, features = ["asm"] }
+
 [dev-dependencies]
 # Tests depend on our own testing feature.
 espresso-types = { path = ".", features = ["testing"] }
