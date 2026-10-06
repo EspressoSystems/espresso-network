@@ -96,6 +96,8 @@ pub struct BlockBuilderConfig {
     pub max_retry_bytes: u64,
     /// `max_block_size` per protocol version; a missing version inherits the previous one.
     pub block_sizes: BTreeMap<Version, u64>,
+    /// Views after submission a node keeps resending a transaction. Its last resends target
+    /// leaders past that, who drop it from their pools on their own.
     pub ttl: u64,
     pub dedup_window_size: u64,
     pub empty_block_delay: Duration,

@@ -202,7 +202,7 @@ fn builder_upgrading(old_size: u64, new_size: u64) -> BlockBuilder<TestTypes> {
             ]),
             ..small_config()
         },
-        upgrading_at(5),
+        upgrading_at(6),
     )
 }
 
@@ -219,13 +219,13 @@ async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
         "a resend for view 6 uses the new block size"
     );
 
-    b.on_transactions(tx_msg(view(4), (5..=7).map(tx).collect()));
-    let (txns, _) = b.drain(view(4), epoch());
-    assert_eq!(txns.len(), 2, "a block for view 4 uses the old size");
-
-    b.on_transactions(tx_msg(view(5), (8..=11).map(tx).collect()));
+    b.on_transactions(tx_msg(view(5), (5..=7).map(tx).collect()));
     let (txns, _) = b.drain(view(5), epoch());
-    assert_eq!(txns.len(), 4, "a block for view 5 uses the new size");
+    assert_eq!(txns.len(), 2, "a block for view 5 uses the old size");
+
+    b.on_transactions(tx_msg(view(6), (8..=11).map(tx).collect()));
+    let (txns, _) = b.drain(view(6), epoch());
+    assert_eq!(txns.len(), 4, "a block for view 6 uses the new size");
 }
 
 #[tokio::test]
