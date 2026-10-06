@@ -53,7 +53,7 @@ scripts/network-bench/
 - Pacer: a tx every `tx_size / rate`. A pacer woken late sends every tx that came due, up to 1 s of load at once
   (`CATCHUP_S`); schedule lost beyond that stays lost. The in-flight cap still applies. Txs are sent only before the
   step's end, so a catch-up never spills into the next step.
-- Payload scans (fetch, JSON, base64, marker search) run in 2 processes (`SCAN_PROCESSES`), so they do not compete with
+- Payload scans (fetch, JSON, base64, marker search) run in 4 processes (`SCAN_PROCESSES`), so they do not compete with
   the pacer for the GIL; stdlib only, no extra dependencies.
 - `just bench selftest --rate 250`: the load driver against a local null server that accepts submits and serves blocks
   of the received txs; prints achieved submitted MB/s, queue wait and the CPU of the driver, its scan processes and the

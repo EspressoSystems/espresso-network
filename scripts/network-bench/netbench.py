@@ -80,7 +80,7 @@ READ_RETRY_S = 1.0
 # Payload scans run in this many processes when the caller asks for them (a block of 100 MB
 # costs about a core-second of JSON, base64 and search, which in the load process would
 # compete with the pacer for the GIL); this many blocks are scanned at once.
-SCAN_PROCESSES = 2
+SCAN_PROCESSES = 4
 SCAN_BATCH = 4
 # Request bodies are slices of one random pool of this many txs' size.
 BODY_POOL_TXS = 256
