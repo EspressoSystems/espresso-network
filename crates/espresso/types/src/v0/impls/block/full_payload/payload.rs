@@ -34,8 +34,8 @@ pub enum BlockBuildingError {
     UnexpectedGenesis,
     #[error("ChainConfig is not available")]
     MissingChainConfig(String),
-    #[error("Namespace payload is {expected} bytes, buffer is {actual}")]
-    NsPayloadLength { expected: usize, actual: usize },
+    #[error("Namespace payload needs {expected} bytes, buffer has {actual}")]
+    NsPayloadBufferTooShort { expected: usize, actual: usize },
 }
 
 /// Proposer-side limit that keeps VID dispersal size bounded. Not a

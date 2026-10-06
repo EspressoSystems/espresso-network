@@ -2,6 +2,7 @@ use hotshot::traits::BlockPayload;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::BlockBuildingError;
 use crate::{
     NamespaceId, NsPayloadBuilder, NsTable, Payload, SeqTypes, Transaction, v0_3::ChainConfig,
 };
@@ -73,6 +74,13 @@ fn write_into_rejects_short_buffer() {
     let tx = Transaction::new(NamespaceId::from(1u32), vec![7; 10]);
     let mut builder = NsPayloadBuilder::default();
     builder.append_tx(&tx);
-    let mut out = vec![0; builder.byte_len() - 1];
-    assert!(builder.write_into(&mut out).is_err());
+    let expected = builder.byte_len();
+    let mut out = vec![0; expected - 1];
+    assert_eq!(
+        builder.write_into(&mut out),
+        Err(BlockBuildingError::NsPayloadBufferTooShort {
+            expected,
+            actual: expected - 1,
+        })
+    );
 }
