@@ -357,6 +357,7 @@ impl NsPayloadBuilder {
             end += body.len();
             *entry = usize_to_bytes::<TX_OFFSET_BYTE_LEN>(end);
         }
+        debug_assert_eq!(end, self.bodies_len);
         self.byte_len()
     }
 
