@@ -22,10 +22,10 @@ existing run dir. `agent-drive` (on ctl) and `agent-host` (on every host) run un
 uv-managed python 3.14 from /opt/bench.
 
 Prerequisites: opentofu and awscli2 (nix devShell), the AWS profile `timeboost-dev` for account
-027574771971 in eu-west-1 (constants below), and `--tag` naming the ghcr tag CI pushed for a
-`release-*` branch. Each fleet gets a fresh ssh key, deleted after destroy.
-`run` pushes its results to the shared results repo unless `--no-publish`; `publish RUN_DIR...` retries or
-backfills.
+027574771971 (constants below), the default region eu-west-1 (`--region` overrides it), and `--tag`
+naming the ghcr tag CI pushed for a `release-*` branch. Each fleet gets a fresh ssh key, deleted
+after destroy. `run` pushes its results to the shared results repo unless `--no-publish`;
+`publish RUN_DIR...` retries or backfills.
 Recipes: `just bench aws plan|up|run|down|status|list|collect|render|destroy|prune|publish`.
 
 Exit codes of `run`: 0 valid, 1 invalid result, 2 refused before any AWS write, 3 failed after
@@ -120,7 +120,9 @@ STEP_TOP_MB_S = 200.0
 SUBMIT_WORKERS = 32
 NODE_TYPE = "c8g.4xlarge"
 CTL_TYPE = "c8g.2xlarge"
-REGION = "eu-west-1"
+REGION = "eu-west-1"  # default of `--region`
+# Fleets and IAM roles from before `--region` carry no region.
+LEGACY_REGION = "eu-west-1"
 # The Pricing API is served from a few regions only, whatever region the prices are for.
 PRICING_REGION = "us-east-1"
 PROFILE = "timeboost-dev"
@@ -170,6 +172,7 @@ VALIDATOR_DISK_FACTOR = 2
 QUERY_DISK_FACTOR = 3
 
 # On-demand USD, eu-west-1, as of 2026-09-30 (`aws pricing get-products`, EBS/VPC/RDS pages).
+# Used as the estimate in every region.
 # EC2 instance prices are read from the Pricing API at preflight (`instance_price`). RDS
 # instances per hour; gp3 GB-month, gp3 IOPS above the 3000 baseline (per IOPS-month), gp3
 # throughput above the 125 MB/s baseline (per MB/s-month), RDS PostgreSQL Single-AZ gp3 storage
@@ -453,6 +456,7 @@ FLEET_ONLY_FLAGS = (
     "--pg-mbps",
     "--ttl-min",
     "--max-usd",
+    "--region",
 )
 # Thread pool size for parallel ssh/rsync calls; also the espresso-deploy fan-out limit.
 REMOTE_POOL_SIZE = 16
@@ -475,7 +479,7 @@ FREEZE_STOP_TIMEOUT_S = 30.0
 DESTROY_RETRIES = 3
 DESTROY_BACKOFF_S = 20.0
 # The rds instance, its subnet and parameter groups, delete schedule group and IAM role
-# (under `IAM_ROLE_PATH`) are all named `<RDS_PREFIX><fleet>`.
+# (under `IAM_ROLE_PATH` and the region) are all named `<RDS_PREFIX><fleet>`.
 RDS_PREFIX = "espresso-bench-"
 IAM_ROLE_PATH = "/espresso-bench/"
 # delete-security-group right after termination fails with DependencyViolation until the
@@ -820,6 +824,7 @@ class RunConfig:
     root_gb: str = "auto"
     pg_iops: int = 12000
     pg_mbps: int = 500
+    region: str = REGION
     max_usd: float = 10.0
     yes: bool = False
     db_modes: tuple[DbMode, ...] = ("colocated",)
@@ -972,13 +977,11 @@ def _run(
     return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
-def aws_argv(*args: str, region: str = REGION) -> list[str]:
+def aws_argv(*args: str, region: str) -> list[str]:
     return ["aws", "--profile", PROFILE, *args, "--region", region, "--output", "json"]
 
 
-def aws_json(
-    run: Runner, *args: str, tolerate: str | None = None, region: str = REGION
-) -> Any:
+def aws_json(run: Runner, *args: str, region: str, tolerate: str | None = None) -> Any:
     """The parsed stdout of an `aws` call, None for an empty one or a stderr containing
     `tolerate` (an already-deleted resource)."""
     result = run(aws_argv(*args, region=region))
@@ -1448,10 +1451,10 @@ def tools_on_path(which: Which, names: Iterable[str]) -> None:
         raise Refused(f"missing tools on PATH: {', '.join(missing)}")
 
 
-def caller_account(run: Runner) -> str:
+def caller_account(run: Runner, region: str) -> str:
     """The account guard: the first AWS call preflight makes, so a mismatch is caught before
     any other `aws` call (a wrong profile must never touch the right account by accident)."""
-    account = aws_json(run, "sts", "get-caller-identity")["Account"]
+    account = aws_json(run, "sts", "get-caller-identity", region=region)["Account"]
     if account != ACCOUNT:
         raise Refused(
             f"caller account {account} is not {ACCOUNT}: is profile {PROFILE} the benchmark "
@@ -1460,7 +1463,7 @@ def caller_account(run: Runner) -> str:
     return account
 
 
-def resolve_ami(run: Runner, arch: Arch) -> str:
+def resolve_ami(run: Runner, region: str, arch: Arch) -> str:
     ami_id = aws_json(
         run,
         "ec2",
@@ -1471,17 +1474,25 @@ def resolve_ami(run: Runner, arch: Arch) -> str:
         f"Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-{arch}-server-*",
         "--query",
         "sort_by(Images, &CreationDate)[-1].ImageId",
+        region=region,
     )
     if ami_id is None:
-        raise Refused(f"no Ubuntu 24.04 {arch} AMI found in {REGION}")
+        raise Refused(f"no Ubuntu 24.04 {arch} AMI found in {region}")
     return ami_id
 
 
-def instance_specs(run: Runner, types: set[str]) -> tuple[Arch, dict[str, int]]:
+def instance_specs(
+    run: Runner, region: str, types: set[str]
+) -> tuple[Arch, dict[str, int]]:
     """The one architecture every type runs, as Ubuntu and OCI name it, and the memory in MiB
     of each type."""
     described = aws_json(
-        run, "ec2", "describe-instance-types", "--instance-types", *sorted(types)
+        run,
+        "ec2",
+        "describe-instance-types",
+        "--instance-types",
+        *sorted(types),
+        region=region,
     )["InstanceTypes"]
     memory = {t["InstanceType"]: t["MemoryInfo"]["SizeInMiB"] for t in described}
     archs = {
@@ -1501,11 +1512,11 @@ def instance_specs(run: Runner, types: set[str]) -> tuple[Arch, dict[str, int]]:
     return distinct.pop(), memory
 
 
-def instance_price(run: Runner, instance_type: str) -> float:
-    """On-demand Linux USD per hour of `instance_type` in REGION, from the Pricing API."""
+def instance_price(run: Runner, region: str, instance_type: str) -> float:
+    """On-demand Linux USD per hour of `instance_type` in `region`, from the Pricing API."""
     filters = {
         "instanceType": instance_type,
-        "regionCode": REGION,
+        "regionCode": region,
         "operatingSystem": "Linux",
         "tenancy": "Shared",
         "preInstalledSw": "NA",
@@ -1523,18 +1534,18 @@ def instance_price(run: Runner, instance_type: str) -> float:
     )["PriceList"]
     if len(listed) != 1:
         raise Refused(
-            f"{instance_type} in {REGION}: {len(listed)} on-demand Linux prices, expected 1"
+            f"{instance_type} in {region}: {len(listed)} on-demand Linux prices, expected 1"
         )
     (term,) = json.loads(listed[0])["terms"]["OnDemand"].values()
     (dimension,) = term["priceDimensions"].values()
     return float(dimension["pricePerUnit"]["USD"])
 
 
-def fetch_prices(run: Runner, types: set[str]) -> dict[str, float]:
-    return {t: instance_price(run, t) for t in sorted(types)}
+def fetch_prices(run: Runner, region: str, types: set[str]) -> dict[str, float]:
+    return {t: instance_price(run, region, t) for t in sorted(types)}
 
 
-def capable_az(run: Runner, types: set[str]) -> str:
+def capable_az(run: Runner, region: str, types: set[str]) -> str:
     az_sets = []
     for instance_type in sorted(types):
         offerings = aws_json(
@@ -1545,12 +1556,13 @@ def capable_az(run: Runner, types: set[str]) -> str:
             "availability-zone",
             "--filters",
             f"Name=instance-type,Values={instance_type}",
+            region=region,
         )["InstanceTypeOfferings"]
         az_sets.append({o["Location"] for o in offerings})
     capable = set.intersection(*az_sets) if az_sets else set()
     if not capable:
         raise Refused(
-            f"no AZ in {REGION} offers every instance type: {', '.join(sorted(types))}"
+            f"no AZ in {region} offers every instance type: {', '.join(sorted(types))}"
         )
     return min(capable)
 
@@ -1586,6 +1598,7 @@ def rds_orderable(run: Runner, cfg: RunConfig, az: str) -> str:
         "postgres",
         "--db-instance-class",
         RDS_CLASS,
+        region=cfg.region,
     )["OrderableDBInstanceOptions"]
     versions = [
         option["EngineVersion"] for option in options if _rds_option_fits(option, az)
@@ -1703,12 +1716,12 @@ def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Prefligh
     tools_on_path(
         system.which, ["tofu", "aws", "ssh", "scp", "rsync", "git", "ssh-keygen"]
     )
-    account = caller_account(run)
+    account = caller_account(run, cfg.region)
     types = {h["instance_type"] for h in hosts}
-    arch, memory_mib = instance_specs(run, types)
-    prices = fetch_prices(run, types)
-    az = capable_az(run, types)
-    ami_id = resolve_ami(run, arch)
+    arch, memory_mib = instance_specs(run, cfg.region, types)
+    prices = fetch_prices(run, cfg.region, types)
+    az = capable_az(run, cfg.region, types)
+    ami_id = resolve_ami(run, cfg.region, arch)
     rds_minor = rds_orderable(run, cfg, az) if "rds" in cfg.db_modes else None
     images = resolve_images(system.http_get, cfg, rds_minor, arch)
     pre: Preflight = {
@@ -1726,9 +1739,8 @@ def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Prefligh
 
 
 def terraform_env() -> dict[str, str]:
-    """Region, profile and account go into `terraform.tfvars.json` and the provider block, not
-    the environment: `region` and `profile` are provider arguments. `TF_PLUGIN_CACHE_DIR` has
-    no HCL equivalent, so it stays here."""
+    """Region goes into `terraform.tfvars.json`, profile and account into the provider block.
+    `TF_PLUGIN_CACHE_DIR` has no HCL equivalent, so it stays here."""
     TF_PLUGIN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return {"TF_PLUGIN_CACHE_DIR": str(TF_PLUGIN_CACHE_DIR)}
 
@@ -1809,6 +1821,7 @@ def render_tfvars(
         "name": name,
         "owner": owner,
         "git_rev": git_rev,
+        "region": cfg.region,
         "az": az,
         "ami_id": ami_id,
         "ssh_public_key": ssh_pub,
@@ -2255,6 +2268,15 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     parser.add_argument("--pg-iops", type=int, default=defaults.pg_iops)
     parser.add_argument("--pg-mbps", type=int, default=defaults.pg_mbps)
     parser.add_argument("--max-usd", type=float, default=defaults.max_usd)
+    parser.add_argument(
+        "--region",
+        default=REGION,
+        help="AWS region of the fleet; commands on the fleet read it from its manifest",
+    )
+
+
+def add_region_flag(parser: argparse.ArgumentParser, default: str | None) -> None:
+    parser.add_argument("--region", default=default, help="AWS region to sweep")
 
 
 def add_latency_flags(parser: argparse.ArgumentParser) -> None:
@@ -2372,6 +2394,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
+        region=args.region,
         max_usd=args.max_usd,
         yes=args.yes,
     )
@@ -2525,6 +2548,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     status_p.add_argument("dir", nargs="?", metavar="FLEET")
     status_p.add_argument("--all", action="store_true")
+    add_region_flag(status_p, None)
     status_p.set_defaults(func=cmd_status)
 
     list_p = sub.add_parser("list", help="local fleets, newest first; no AWS calls")
@@ -2555,6 +2579,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     destroy_p = sub.add_parser("destroy", help="sweep orphaned runs")
     destroy_p.add_argument("--orphans", action="store_true", required=True)
     destroy_p.add_argument("--yes", action="store_true")
+    add_region_flag(destroy_p, REGION)
     destroy_p.set_defaults(func=cmd_destroy)
 
     prune_p = sub.add_parser(
@@ -2562,6 +2587,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     prune_p.add_argument("--older-than", type=days_arg, required=True, metavar="DAYS")
     prune_p.add_argument("--yes", action="store_true")
+    add_region_flag(prune_p, REGION)
     prune_p.set_defaults(func=cmd_prune)
 
     agent_drive_p = sub.add_parser("agent-drive", help="ctl only: run the load driver")
@@ -3109,7 +3135,7 @@ CollectStep = Literal[
     "rds_metrics",
     "rds_logs",
 ]
-RdsCollect = Callable[[Runner, RdsInfo, float, float, Path], None]
+RdsCollect = Callable[[Runner, str, RdsInfo, float, float, Path], None]
 
 
 def collect_plan(
@@ -3207,7 +3233,12 @@ def collect_rds(run: Run, what: str, collect: RdsCollect) -> None:
         return
     fleet = run.fleet
     collect(
-        fleet.system.run, fleet.manifest["rds"], agent["t0"], agent["t1"], run.run_dir
+        fleet.system.run,
+        fleet.cfg.region,
+        fleet.manifest["rds"],
+        agent["t0"],
+        agent["t1"],
+        run.run_dir,
     )
 
 
@@ -3364,7 +3395,7 @@ def destroy_fleet(fleet: FleetState) -> bool:
         "tofu destroy failed; sweeping resources tagged %s", fleet.fleet_dir.name
     )
     try:
-        swept = sweep(fleet.system, fleet.fleet_dir.name)
+        swept = sweep(fleet.system, fleet.cfg.region, fleet.fleet_dir.name)
     except Refused as exc:
         log.error("sweep failed: %s", exc)
     else:
@@ -4007,7 +4038,7 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
         "account %s (%s) %s, az %s, ami %s (%s)",
         pre["account"],
         PROFILE,
-        REGION,
+        cfg.region,
         pre["az"],
         pre["ami_id"],
         pre["arch"],
@@ -4267,13 +4298,14 @@ def parse_rds_output(output: dict[str, Any]) -> RdsInfo:
     }
 
 
-def describe_rds(run: Runner, identifier: str) -> dict[str, Any]:
+def describe_rds(run: Runner, region: str, identifier: str) -> dict[str, Any]:
     return aws_json(
         run,
         "rds",
         "describe-db-instances",
         "--db-instance-identifier",
         identifier,
+        region=region,
     )["DBInstances"][0]
 
 
@@ -4284,7 +4316,7 @@ def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
     clock = fleet.system.clock
     deadline = clock.monotonic() + RDS_SYNC_TIMEOUT_S
     while True:
-        instance = describe_rds(fleet.system.run, identifier)
+        instance = describe_rds(fleet.system.run, fleet.cfg.region, identifier)
         state = instance["DBInstanceStatus"]
         applied = instance["DBParameterGroups"][0]["ParameterApplyStatus"]
         if state == "available" and applied == "in-sync":
@@ -4297,6 +4329,7 @@ def wait_rds_in_sync(fleet: FleetState, identifier: str) -> dict[str, Any]:
                 "reboot-db-instance",
                 "--db-instance-identifier",
                 identifier,
+                region=fleet.cfg.region,
             )
             rebooted = True
         if clock.monotonic() >= deadline:
@@ -5107,6 +5140,8 @@ def collect_hosts(
 def cmd_status(args: argparse.Namespace, system: System) -> int:
     if args.dir is not None and args.all:
         raise Refused("status takes FLEET or --all, not both")
+    if args.dir is not None and args.region is not None:
+        raise Refused("--region sweeps a region with --all; FLEET has its own")
     now = utc_now(system.clock)
     if args.all:
         return status_all(system, args, now)
@@ -5316,7 +5351,8 @@ def status_run(system: System, fleet_dir: Path, now: datetime) -> int:
         cost = nb.read_json(cost_path)
         print(f"- cost: ${cost['actual']:.2f} actual, bound ${cost['bound']:.2f}")
         return EXIT_OK
-    instances = describe_instances(run, f"Name=tag:{TAG_RUN},Values={name}")
+    region = manifest_region(manifest)
+    instances = describe_instances(run, region, f"Name=tag:{TAG_RUN},Values={name}")
     hosts = manifest.get("hosts_info", {})
     by_id = {info["instance_id"]: host for host, info in hosts.items()}
     for instance in instances:
@@ -5338,15 +5374,15 @@ def status_run(system: System, fleet_dir: Path, now: datetime) -> int:
         print(f"- agent: {agent}")
     if "pg_volume_id" in manifest:
         volume = manifest["pg_volume_id"]
-        print(f"- pg volume {volume}: {volume_state(run, volume)}")
+        print(f"- pg volume {volume}: {volume_state(run, region, volume)}")
     if "rds" in manifest:
         rds = manifest["rds"]
-        print(f"- rds {rds['identifier']}: {rds_state(run, rds)}")
+        print(f"- rds {rds['identifier']}: {rds_state(run, region, rds)}")
     print(f"- cost: {status_cost(run, manifest, instances, now)}")
     return EXIT_OK
 
 
-def volume_state(run: Runner, volume: str) -> str:
+def volume_state(run: Runner, region: str, volume: str) -> str:
     state = aws_json(
         run,
         "ec2",
@@ -5355,12 +5391,13 @@ def volume_state(run: Runner, volume: str) -> str:
         volume,
         "--query",
         "Volumes[0].State",
+        region=region,
         tolerate="InvalidVolume.NotFound",
     )
     return state or "gone"
 
 
-def rds_state(run: Runner, rds: RdsInfo) -> str:
+def rds_state(run: Runner, region: str, rds: RdsInfo) -> str:
     """`available, parameters in-sync`; `gone` once the schedule or a destroy has deleted the
     instance."""
     out = aws_json(
@@ -5369,6 +5406,7 @@ def rds_state(run: Runner, rds: RdsInfo) -> str:
         "describe-db-instances",
         "--db-instance-identifier",
         rds["identifier"],
+        region=region,
         tolerate="DBInstanceNotFound",
     )
     if not out:
@@ -5391,17 +5429,32 @@ def status_cost(
     return f"${usd:.2f} so far, {bound}"
 
 
-def run_prices(run: Runner, runs: list[TaggedRun]) -> dict[str, float]:
-    return fetch_prices(run, {i["type"] for r in runs for i in r["instances"]})
+def run_prices(run: Runner, region: str, runs: list[TaggedRun]) -> dict[str, float]:
+    return fetch_prices(run, region, {i["type"] for r in runs for i in r["instances"]})
+
+
+def print_other_regions(region: str) -> None:
+    """The regions of local fleets that may still hold resources and that a sweep of `region`
+    does not see."""
+    fleets = (read_fleet_or_none(path) for path in fleet_dirs(OUT_ROOT))
+    others = {
+        manifest_region(f)
+        for f in fleets
+        if f is not None and f["phase"] not in TERMINAL_PHASES
+    } - {region}
+    if others:
+        print(f"other regions with local fleets: {', '.join(sorted(others))}")
 
 
 def status_all(system: System, args: argparse.Namespace, now: datetime) -> int:
-    caller_account(system.run)
-    runs = find_runs(system.run, OUT_ROOT, now, system.user())
+    region = args.region or REGION
+    caller_account(system.run, region)
+    print_other_regions(region)
+    runs = find_runs(system.run, region, OUT_ROOT, now, system.user())
     if not runs:
-        print(f"no espresso-bench resources in {REGION}")
+        print(f"no espresso-bench resources in {region}")
         return EXIT_OK
-    print("\n".join(format_runs(runs, now, run_prices(system.run, runs))))
+    print("\n".join(format_runs(runs, now, run_prices(system.run, region, runs))))
     return EXIT_OK
 
 
@@ -5483,11 +5536,12 @@ def log_down(fleet_dir: Path, cost: dict[str, float] | None) -> None:
 
 def cmd_destroy(args: argparse.Namespace, system: System) -> int:
     now = utc_now(system.clock)
-    caller_account(system.run)
-    runs = find_runs(system.run, OUT_ROOT, now, system.user())
+    caller_account(system.run, args.region)
+    print_other_regions(args.region)
+    runs = find_runs(system.run, args.region, OUT_ROOT, now, system.user())
     orphans = [r for r in runs if r["orphan"] is not None]
     if not orphans:
-        print(f"no orphaned espresso-bench resources in {REGION}")
+        print(f"no orphaned espresso-bench resources in {args.region}")
         return EXIT_OK
     print("\n".join(format_runs(orphans, now)))
     instances = sum(len(r["instances"]) for r in orphans)
@@ -5501,13 +5555,13 @@ def cmd_destroy(args: argparse.Namespace, system: System) -> int:
     try:
         for orphan in orphans:
             log.info("sweeping %s", orphan["name"])
-            sweep(system, orphan["name"])
+            sweep(system, args.region, orphan["name"])
             mark_swept(OUT_ROOT / orphan["name"])
         # `sweep` removes the role of a fleet that still has rds resources.
         swept_rds = rds_fleets(arn for o in orphans for arn in o["arns"])
         with_role = {o["name"] for o in orphans if has_role(o)} - swept_rds
         if with_role:
-            sweep_iam(system.run, with_role)
+            sweep_iam(system.run, args.region, with_role)
     except Refused as exc:
         log.error("sweep failed, resources may remain: %s", exc)
         return EXIT_LEFTOVER
@@ -5518,13 +5572,14 @@ def cmd_destroy(args: argparse.Namespace, system: System) -> int:
 def cmd_prune(args: argparse.Namespace, system: System) -> int:
     """Deletes whole fleet dirs, results included; `INDEX.md` keeps their rows."""
     now = utc_now(system.clock)
-    caller_account(system.run)
-    tagged = {r["name"] for r in find_runs(system.run, OUT_ROOT, now, system.user())}
+    caller_account(system.run, args.region)
+    found = find_runs(system.run, args.region, OUT_ROOT, now, system.user())
+    tagged = {r["name"] for r in found}
     dirs = fleet_dirs(OUT_ROOT)
     locked = {path.name for path in dirs if (path / FLEET_LOCK).exists()}
     rows = [(path, read_fleet_or_none(path)) for path in dirs]
     cutoff = now - timedelta(days=args.older_than)
-    delete, kept = prune_plan(rows, tagged, locked, cutoff)
+    delete, kept = prune_plan(rows, tagged, locked, cutoff, args.region)
     runs = {path: len(run_dirs(path)) for path, _ in delete}
     print("\n".join(format_prune(delete, runs, kept)))
     if not delete:
@@ -5544,16 +5599,18 @@ def prune_plan(
     tagged: set[str],
     locked: set[str],
     cutoff: datetime,
+    region: str,
 ) -> tuple[list[tuple[Path, FleetManifest]], list[tuple[Path, str]]]:
     """The dirs created before `cutoff` to delete, and the ones kept with the reason. A dir
-    without `fleet.json` has no age and is always kept. `tagged` and `locked` hold dir names."""
+    without `fleet.json` has no age and is always kept. `tagged` and `locked` hold dir names;
+    `tagged` comes from `region`, so a fleet of another region is kept."""
     delete: list[tuple[Path, FleetManifest]] = []
     kept: list[tuple[Path, str]] = []
     for path, fleet in rows:
         if fleet is None:
             kept.append((path, f"no {FLEET_JSON}"))
         elif datetime.fromisoformat(fleet["created_at"]) < cutoff:
-            reason = prune_blocker(path.name, fleet, tagged, locked)
+            reason = prune_blocker(path.name, fleet, tagged, locked, region)
             if reason is None:
                 delete.append((path, fleet))
             else:
@@ -5562,11 +5619,13 @@ def prune_plan(
 
 
 def prune_blocker(
-    name: str, fleet: FleetManifest, tagged: set[str], locked: set[str]
+    name: str, fleet: FleetManifest, tagged: set[str], locked: set[str], region: str
 ) -> str | None:
     # `applying` is written before `tofu apply`, so a `planned` fleet never created anything.
     if fleet["phase"] not in ("planned", "done", "swept"):
         return f"phase {fleet['phase']}"
+    if manifest_region(fleet) != region:
+        return f"region {manifest_region(fleet)}"
     if name in locked:
         return "locked"
     if name in tagged:
@@ -5610,6 +5669,10 @@ def mark_swept(fleet_dir: Path) -> None:
         remove_ssh_key(fleet_dir)
 
 
+def manifest_region(manifest: FleetManifest) -> str:
+    return config_from_manifest(manifest["config"]).region
+
+
 def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     """Inverse of `config_to_json`."""
     fields: dict[str, Any] = {
@@ -5623,6 +5686,7 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     # Dirs from before the flag have no such key.
     if "node_env" in saved:
         fields["node_env"] = tuple(saved["node_env"])
+    fields.setdefault("region", LEGACY_REGION)
     return RunConfig(**fields)
 
 
@@ -5642,7 +5706,9 @@ def next_collect_index(run_dir: Path) -> int:
     return max(indices, default=0) + 1
 
 
-def find_runs(run: Runner, out_root: Path, now: datetime, user: str) -> list[TaggedRun]:
+def find_runs(
+    run: Runner, region: str, out_root: Path, now: datetime, user: str
+) -> list[TaggedRun]:
     """Every run with a resource tagged `espresso-bench-run`, with the reason
     it counts as an orphan (if it does)."""
     out = aws_json(
@@ -5653,10 +5719,11 @@ def find_runs(run: Runner, out_root: Path, now: datetime, user: str) -> list[Tag
         f"Key={TAG_RUN}",
         "--query",
         "ResourceTagMappingList[].{arn:ResourceARN,tags:Tags}",
+        region=region,
     )
-    instances = describe_instances(run, f"Name=tag-key,Values={TAG_RUN}")
-    volumes = describe_volumes(run, f"Name=tag-key,Values={TAG_RUN}")
-    runs = group_runs(out, instances, volumes, list_scheduler_roles(run))
+    instances = describe_instances(run, region, f"Name=tag-key,Values={TAG_RUN}")
+    volumes = describe_volumes(run, region, f"Name=tag-key,Values={TAG_RUN}")
+    runs = group_runs(out, instances, volumes, list_scheduler_roles(run, region))
     for tagged in runs:
         phase = local_phase(out_root, tagged["name"])
         tagged["orphan"] = classify_orphan(tagged, phase, now, user) or role_orphan(
@@ -5665,7 +5732,7 @@ def find_runs(run: Runner, out_root: Path, now: datetime, user: str) -> list[Tag
     return runs
 
 
-def describe_instances(run: Runner, *filters: str) -> list[Instance]:
+def describe_instances(run: Runner, region: str, *filters: str) -> list[Instance]:
     return aws_json(
         run,
         "ec2",
@@ -5675,10 +5742,11 @@ def describe_instances(run: Runner, *filters: str) -> list[Instance]:
         "--query",
         "Reservations[].Instances[].{id:InstanceId,type:InstanceType,"
         "state:State.Name,launch:LaunchTime,reason:StateTransitionReason}",
+        region=region,
     )
 
 
-def describe_volumes(run: Runner, *filters: str) -> list[str]:
+def describe_volumes(run: Runner, region: str, *filters: str) -> list[str]:
     """Ids of the volumes EC2 has; the tag API keeps listing a deleted volume for a while."""
     return aws_json(
         run,
@@ -5688,6 +5756,7 @@ def describe_volumes(run: Runner, *filters: str) -> list[str]:
         *filters,
         "--query",
         "Volumes[].VolumeId",
+        region=region,
     )
 
 
@@ -6089,7 +6158,7 @@ def collect_ebs_balance(
     start, end = metric_window(t0, t1)
     metrics = {qid: (metric, "Minimum") for qid, metric in EBS_BALANCE_METRICS.items()}
     queries = metric_queries("AWS/EC2", ("InstanceId", instance_id), metrics)
-    stdout = get_metric_data(run, queries, start, end)
+    stdout = get_metric_data(run, manifest_region(manifest), queries, start, end)
     balance: Ec2Balance = {
         "instance_id": instance_id,
         "period_s": CLOUDWATCH_PERIOD_S,
@@ -6108,13 +6177,13 @@ def metric_window(t0: float, t1: float) -> tuple[float, float]:
 
 
 def collect_rds_metrics(
-    run: Runner, rds: RdsInfo, t0: float, t1: float, out: Path
+    run: Runner, region: str, rds: RdsInfo, t0: float, t1: float, out: Path
 ) -> None:
     """`cloudwatch/rds.json`, in the format of `cloudwatch/ec2-node0.json`."""
     start, end = metric_window(t0, t1)
     dimension = ("DBInstanceIdentifier", rds["identifier"])
     queries = metric_queries("AWS/RDS", dimension, RDS_METRICS)
-    stdout = get_metric_data(run, queries, start, end)
+    stdout = get_metric_data(run, region, queries, start, end)
     names = {query_id: metric for query_id, (metric, _) in RDS_METRICS.items()}
     path = out / RDS_CLOUDWATCH_FILE
     path.parent.mkdir(exist_ok=True)
@@ -6131,7 +6200,7 @@ def collect_rds_metrics(
 
 
 def collect_rds_logs(
-    run: Runner, rds: RdsInfo, t0: float, t1: float, out: Path
+    run: Runner, region: str, rds: RdsInfo, t0: float, t1: float, out: Path
 ) -> None:
     """Every database log written since the load started. The upper bound is left open: the
     log of the current hour is still written after the window and holds most of it."""
@@ -6144,6 +6213,7 @@ def collect_rds_logs(
         rds["identifier"],
         "--file-last-written",
         str(since_ms),
+        region=region,
     )
     files = [f for f in listing["DescribeDBLogFiles"] if f["LastWritten"] >= since_ms]
     directory = out / RDS_LOGS_DIR
@@ -6159,6 +6229,7 @@ def collect_rds_logs(
             file["LogFileName"],
             "--starting-token",
             "0",
+            region=region,
         )
         (directory / Path(file["LogFileName"]).name).write_text(portion["LogFileData"])
     log.info("rds logs: %d files in %s", len(files), directory)
@@ -6188,7 +6259,11 @@ def metric_queries(
 
 
 def get_metric_data(
-    run: Runner, queries: list[dict[str, Any]], start: float, end: float
+    run: Runner,
+    region: str,
+    queries: list[dict[str, Any]],
+    start: float,
+    end: float,
 ) -> dict[str, Any]:
     return aws_json(
         run,
@@ -6200,6 +6275,7 @@ def get_metric_data(
         datetime.fromtimestamp(end, UTC).isoformat(),
         "--metric-data-queries",
         json.dumps(queries),
+        region=region,
     )
 
 
@@ -6346,7 +6422,7 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
     return {
         "provider": "aws",
         "account": ACCOUNT,
-        "region": REGION,
+        "region": manifest_region(manifest),
         "az": manifest["az"],
         "ami": manifest["ami_id"],
         "hosts": {
@@ -6506,7 +6582,7 @@ def write_failure_summary(run_dir: Path, manifest: Manifest, error: str | None) 
     (run_dir / "summary.md").write_text("\n".join(lines))
 
 
-def tagged_resources(run: Runner, name: str | None = None) -> list[str]:
+def tagged_resources(run: Runner, region: str, name: str | None = None) -> list[str]:
     """ARNs of resources tagged `espresso-bench-run`, of one run when `name` is given."""
     tag = f"Key={TAG_RUN}" + (f",Values={name}" if name is not None else "")
     return aws_json(
@@ -6517,6 +6593,7 @@ def tagged_resources(run: Runner, name: str | None = None) -> list[str]:
         tag,
         "--query",
         "ResourceTagMappingList[].ResourceARN",
+        region=region,
     )
 
 
@@ -6606,19 +6683,21 @@ def sweep_plan(arns: list[str]) -> list[SweepStep]:
     return plan
 
 
-def sweep(system: System, name: str | None) -> list[str]:
+def sweep(system: System, region: str, name: str | None) -> list[str]:
     """Deletes what `tagged_resources` finds as `sweep_plan` orders it, then the scheduler role
     of an rds fleet. Returns every ARN found."""
-    arns = tagged_resources(system.run, name)
+    arns = tagged_resources(system.run, region, name)
     for step in sweep_plan(arns):
         if step["action"] == "aws":
-            aws_json(system.run, *step["args"], tolerate=step["tolerate"])
+            aws_json(
+                system.run, *step["args"], region=region, tolerate=step["tolerate"]
+            )
         elif step["action"] == "delete_rds":
-            delete_rds(system.run, step["resource"])
+            delete_rds(system.run, region, step["resource"])
         else:
-            delete_security_group(system, step["resource"])
+            delete_security_group(system, region, step["resource"])
     if fleets := rds_fleets(arns):
-        sweep_iam(system.run, fleets)
+        sweep_iam(system.run, region, fleets)
     return arns
 
 
@@ -6631,7 +6710,7 @@ def rds_fleets(arns: Iterable[str]) -> set[str]:
     }
 
 
-def delete_rds(run: Runner, identifier: str) -> None:
+def delete_rds(run: Runner, region: str, identifier: str) -> None:
     """Deletes the instance and waits until it is gone. One the schedule or a destroy is
     already deleting is only waited for."""
     status = aws_json(
@@ -6642,6 +6721,7 @@ def delete_rds(run: Runner, identifier: str) -> None:
         identifier,
         "--query",
         "DBInstances[0].DBInstanceStatus",
+        region=region,
         tolerate="DBInstanceNotFound",
     )
     if not status:
@@ -6655,6 +6735,7 @@ def delete_rds(run: Runner, identifier: str) -> None:
             identifier,
             "--skip-final-snapshot",
             "--delete-automated-backups",
+            region=region,
             tolerate="DBInstanceNotFound",
         )
     log.info("waiting for rds %s to be deleted", identifier)
@@ -6665,12 +6746,21 @@ def delete_rds(run: Runner, identifier: str) -> None:
         "db-instance-deleted",
         "--db-instance-identifier",
         identifier,
+        region=region,
     )
 
 
-def list_scheduler_roles(run: Runner) -> list[str]:
-    """ARNs of the IAM roles under `IAM_ROLE_PATH`. A profile without `iam:ListRoles` sees
-    none; only rds fleets create roles, and they need IAM rights anyway."""
+def role_region(role_arn: str) -> str:
+    """`eu-central-1` of `arn:aws:iam::1:role/espresso-bench/eu-central-1/espresso-bench-f`;
+    the old path `espresso-bench/` has no region. IAM is global, so the path keeps a sweep from
+    seeing the roles of other regions."""
+    path = arn_parts(role_arn)[1].rpartition("/")[0]
+    return path.removeprefix(IAM_ROLE_PATH.strip("/")).strip("/") or LEGACY_REGION
+
+
+def list_scheduler_roles(run: Runner, region: str) -> list[str]:
+    """ARNs of the IAM roles under `IAM_ROLE_PATH` of `region`. A profile without
+    `iam:ListRoles` sees none; only rds fleets create roles, and they need IAM rights anyway."""
     out = aws_json(
         run,
         "iam",
@@ -6679,18 +6769,19 @@ def list_scheduler_roles(run: Runner) -> list[str]:
         IAM_ROLE_PATH,
         "--query",
         "Roles[].Arn",
+        region=region,
         tolerate="AccessDenied",
     )
     if out is None:
         log.warning("iam:ListRoles denied: scheduler roles are not listed")
         return []
-    return out
+    return [arn for arn in out if role_region(arn) == region]
 
 
-def sweep_iam(run: Runner, fleets: set[str]) -> None:
+def sweep_iam(run: Runner, region: str, fleets: set[str]) -> None:
     """Deletes the scheduler role of each fleet in `fleets` that has one, inline policies
     first."""
-    for arn in list_scheduler_roles(run):
+    for arn in list_scheduler_roles(run, region):
         if role_fleet(arn) not in fleets:
             continue
         role = arn_parts(arn)[1].rpartition("/")[2]
@@ -6702,6 +6793,7 @@ def sweep_iam(run: Runner, fleets: set[str]) -> None:
             role,
             "--query",
             "PolicyNames",
+            region=region,
             tolerate="NoSuchEntity",
         )
         for policy in listed or []:
@@ -6713,6 +6805,7 @@ def sweep_iam(run: Runner, fleets: set[str]) -> None:
                 role,
                 "--policy-name",
                 policy,
+                region=region,
                 tolerate="NoSuchEntity",
             )
         aws_json(
@@ -6721,11 +6814,12 @@ def sweep_iam(run: Runner, fleets: set[str]) -> None:
             "delete-role",
             "--role-name",
             role,
+            region=region,
             tolerate="NoSuchEntity",
         )
 
 
-def delete_security_group(system: System, group: str) -> None:
+def delete_security_group(system: System, region: str, group: str) -> None:
     for attempt in range(1, SG_DELETE_RETRIES + 1):
         try:
             aws_json(
@@ -6734,6 +6828,7 @@ def delete_security_group(system: System, group: str) -> None:
                 "delete-security-group",
                 "--group-id",
                 group,
+                region=region,
             )
             return
         except Refused as exc:
@@ -6752,7 +6847,10 @@ def actual_cost(
     """expected, bound and actual USD, with the run's wall time in `duration_s`. Actual is the
     estimate's price lines at the time between the first launch and the last termination,
     from `describe-instances` (terminated instances stay listed for about an hour)."""
-    rows = describe_instances(run, f"Name=tag:{TAG_RUN},Values={manifest['name']}")
+    region = manifest_region(manifest)
+    rows = describe_instances(
+        run, region, f"Name=tag:{TAG_RUN},Values={manifest['name']}"
+    )
     if not rows:
         raise RemoteError(f"no instances tagged {manifest['name']} to price")
     launches = [datetime.fromisoformat(row["launch"]) for row in rows]
@@ -6789,11 +6887,15 @@ def rds_billed_s(
     created = first_launch
     if "rds" in manifest and "created_at" in manifest["rds"]:
         created = datetime.fromisoformat(manifest["rds"]["created_at"])
-    deleted = rds_delete_time(run, rds_identifier(manifest["name"]), now)
+    deleted = rds_delete_time(
+        run, manifest_region(manifest), rds_identifier(manifest["name"]), now
+    )
     return (deleted - created).total_seconds()
 
 
-def rds_delete_time(run: Runner, identifier: str, fallback: datetime) -> datetime:
+def rds_delete_time(
+    run: Runner, region: str, identifier: str, fallback: datetime
+) -> datetime:
     """When RDS logged the deletion, whether the schedule or `tofu destroy` did it; `fallback`
     (the driver's clock after the destroy) when it logged none."""
     out = aws_json(
@@ -6808,6 +6910,7 @@ def rds_delete_time(run: Runner, identifier: str, fallback: datetime) -> datetim
         "deletion",
         "--duration",
         str(RDS_EVENTS_MINUTES),
+        region=region,
     )
     deleted = [
         datetime.fromisoformat(event["Date"])

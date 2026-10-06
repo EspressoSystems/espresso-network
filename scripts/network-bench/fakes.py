@@ -2013,6 +2013,11 @@ def write_fleet(
             "created_at": created_at,
             "expires_at": expires_at,
             "estimate": {"bound_usd": 2.5},
+            "config": awsb.config_to_json(awsb.RunConfig(tag="t")),
         },
     )
     return fleet_dir
+
+
+def aws_regions(runner: FakeRunner) -> set[str]:
+    return {c[c.index("--region") + 1] for c in runner.calls if c[0] == "aws"}

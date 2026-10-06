@@ -551,7 +551,7 @@ def test_host_sample_stats_rates_and_coverage() -> None:
 
 def test_sweep_terminates_then_deletes_group_and_key() -> None:
     runner = FakeRunner(states=[DONE_STATE])
-    assert len(awsb.sweep(FakeSystem(run=runner), "run1")) == 3
+    assert len(awsb.sweep(FakeSystem(run=runner), awsb.REGION, "run1")) == 3
     assert [c[3:5] for c in runner.calls if c[0] == "aws"] == [
         ["resourcegroupstaggingapi", "get-resources"],
         ["ec2", "terminate-instances"],
@@ -575,7 +575,7 @@ def test_security_group_delete_retries_on_dependency_violation(
             stderr="DependencyViolation: has a dependent object" if busy else "",
         )
 
-    awsb.delete_security_group(FakeSystem(run=runner, clock=clock), "sg-1")
+    awsb.delete_security_group(FakeSystem(run=runner, clock=clock), awsb.REGION, "sg-1")
     assert len(attempts) == 3
     assert clock.sleeps == [awsb.SG_DELETE_BACKOFF_S] * 2
 
@@ -587,14 +587,19 @@ def test_security_group_delete_retries_on_dependency_violation(
 def test_security_group_delete_errors(stderr: str, attempts: int) -> None:
     runner = FakeRunner({("aws",): completed(returncode=254, stderr=stderr)})
     with pytest.raises(awsb.Refused, match=stderr):
-        awsb.delete_security_group(FakeSystem(run=runner), "sg-1")
+        awsb.delete_security_group(FakeSystem(run=runner), awsb.REGION, "sg-1")
     assert len(runner.calls) == attempts
 
 
 def cost_manifest() -> dict:
     cfg = two_node_cfg()
     hosts = awsb.plan_hosts(cfg)
-    return {"name": "run1", "hosts": hosts, "estimate": shot_estimate(hosts, cfg)}
+    return {
+        "name": "run1",
+        "config": awsb.config_to_json(cfg),
+        "hosts": hosts,
+        "estimate": shot_estimate(hosts, cfg),
+    }
 
 
 def test_actual_cost_prices_the_observed_duration() -> None:
@@ -773,7 +778,10 @@ def test_genesis_contracts_are_deduplicated(tmp_path: Path) -> None:
 
 
 def collect_ebs(runner: FakeRunner, out: Path) -> dict:
-    manifest = {"hosts_info": two_node_hosts_info()}
+    manifest = {
+        "config": awsb.config_to_json(two_node_cfg()),
+        "hosts_info": two_node_hosts_info(),
+    }
     awsb.collect_ebs_balance(runner, manifest, 100.0, 160.0, out)
     return netbench.read_json(out / awsb.EC2_NODE0_FILE)
 

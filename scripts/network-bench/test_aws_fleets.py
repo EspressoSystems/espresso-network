@@ -289,12 +289,13 @@ YOUNG = "2026-09-29T14:00:00+00:00"
 DIR = Path("a")
 
 
-def manifest(phase: str, created_at: str = OLD) -> dict[str, str]:
-    return {"phase": phase, "created_at": created_at}
+def manifest(phase: str, created_at: str = OLD, **config) -> dict:
+    cfg = awsb.config_to_json(awsb.RunConfig(tag="t", **config))
+    return {"phase": phase, "created_at": created_at, "config": cfg}
 
 
-def prune_plan(fleet, tagged: tuple[str, ...] = (), locked: tuple[str, ...] = ()):
-    return awsb.prune_plan([(DIR, fleet)], set(tagged), set(locked), CUTOFF)
+def prune_plan(fleet, tagged=(), locked=(), region="eu-west-1"):
+    return awsb.prune_plan([(DIR, fleet)], set(tagged), set(locked), CUTOFF, region)
 
 
 @pytest.mark.parametrize("phase", ["planned", "done", "swept"])
@@ -411,3 +412,15 @@ def test_prune_needs_at_least_one_day(days: str):
         awsb.parse_args(["prune", "--older-than", days])
     with pytest.raises(SystemExit):
         awsb.parse_args(["prune"])
+
+
+def test_prune_plan_keeps_a_fleet_of_another_region():
+    old = manifest("done", region="eu-central-1")
+    assert prune_plan(old) == ([], [(DIR, "region eu-central-1")])
+    assert prune_plan(old, region="eu-central-1") == ([(DIR, old)], [])
+
+
+def test_prune_plan_takes_a_fleet_without_a_recorded_region_as_eu_west_1():
+    old = manifest("done")
+    del old["config"]["region"]
+    assert prune_plan(old) == ([(DIR, old)], [])

@@ -17,6 +17,12 @@ variable "git_rev" {
   description = "Short git rev of the tree under test."
 }
 
+variable "region" {
+  type        = string
+  default     = "eu-west-1"
+  description = "AWS region. The default exists only for tfvars written before `--region`."
+}
+
 variable "az" {
   type        = string
   description = "Availability zone `aws-bench preflight` resolved."

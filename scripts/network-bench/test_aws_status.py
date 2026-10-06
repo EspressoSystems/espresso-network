@@ -26,6 +26,7 @@ from fakes import (
     FakeRunner,
     FakeSystem,
     RunHarness,
+    aws_regions,
     awsb,
     completed,
     index_manifest,
@@ -204,7 +205,10 @@ def test_destroy_orphans_failed_sweep_exits_4(capsys):
 def test_destroy_orphans_marks_local_state_swept(isolated: Path, capsys):
     fleet_dir = isolated / awsb.OUT_ROOT / "amy"
     fleet_dir.mkdir(parents=True)
-    netbench.write_json(fleet_dir / "fleet.json", {"phase": "left-running"})
+    config = awsb.config_to_json(awsb.RunConfig(tag="t"))
+    netbench.write_json(
+        fleet_dir / "fleet.json", {"phase": "left-running", "config": config}
+    )
     key = fleet_dir / "ssh" / "id_ed25519"
     key.parent.mkdir()
     key.write_text("private")
@@ -227,7 +231,7 @@ def test_sweep_tolerates_only_an_already_deleted_volume(stderr, expect):
         **runner.responses,
     }
     with expect:
-        awsb.sweep(FakeSystem(run=runner), "r")
+        awsb.sweep(FakeSystem(run=runner), awsb.REGION, "r")
 
 
 def test_manifest_cost_is_linear_and_covers_instance_hours():
@@ -662,3 +666,86 @@ def test_render_survives_a_failing_plot(tmp_path: Path):
         "WARNING trace-plots exited 2: no traces"
         in (tmp_path / "driver.log").read_text()
     )
+
+
+@pytest.fixture
+def kept_in_frankfurt(
+    run_harness: RunHarness, monkeypatch: pytest.MonkeyPatch
+) -> FakeRunner:
+    runner = FakeRunner(
+        states=[DONE_STATE],
+        describe=STATUS_DESCRIBE,
+        destroys=[completed(returncode=1, stderr="locked")],
+    )
+    with monkeypatch.context() as m:
+        m.setattr(awsb, "write_report", lambda *_: valid_result())
+        code = run_harness.run(runner, "--region", "eu-central-1")
+    assert code == awsb.EXIT_LEFTOVER
+    runner.calls.clear()
+    return runner
+
+
+def test_status_of_a_fleet_uses_its_recorded_region(
+    run_harness, kept_in_frankfurt, capsys
+):
+    _status(run_harness, kept_in_frankfurt, capsys)
+    assert aws_regions(kept_in_frankfurt) == {"eu-central-1"}
+
+
+def test_status_of_a_fleet_recorded_without_a_region_uses_eu_west_1(
+    run_harness, kept_in_frankfurt, capsys
+):
+    path = run_harness.fleet_dir / "fleet.json"
+    manifest = netbench.read_json(path)
+    del manifest["config"]["region"]
+    netbench.write_json(path, manifest)
+    _status(run_harness, kept_in_frankfurt, capsys)
+    assert aws_regions(kept_in_frankfurt) == {"eu-west-1"}
+
+
+def test_status_all_takes_the_region_flag(capsys):
+    runner = tag_runner([], [])
+    argv = ["status", "--all", "--region", "eu-central-1"]
+    _, out = run_cmd(capsys, awsb.cmd_status, argv, FakeSystem(run=runner))
+    assert out == "no espresso-bench resources in eu-central-1\n"
+    assert aws_regions(runner) == {"eu-central-1"}
+
+
+def test_status_of_a_fleet_refuses_a_region_flag():
+    runner = FakeRunner()
+    args = awsb.parse_args(["status", "d", "--region", "eu-central-1"])
+    with pytest.raises(awsb.Refused, match="--region"):
+        awsb.cmd_status(args, FakeSystem(run=runner))
+    assert runner.calls == []
+
+
+def write_fleet_in(out: Path, name: str, phase: str, region: str | None) -> None:
+    config = awsb.config_to_json(awsb.RunConfig(tag="t", region=region or "x"))
+    if region is None:
+        del config["region"]
+    (out / name).mkdir(parents=True)
+    netbench.write_json(out / name / "fleet.json", {"phase": phase, "config": config})
+
+
+@pytest.mark.parametrize("verb", ["status --all", "destroy --orphans --yes"])
+def test_sweeps_name_the_other_regions_of_unfinished_local_fleets(
+    capsys, verb, run_harness
+):
+    out = run_harness.out
+    write_fleet_in(out, "a", "idle", "eu-central-1")
+    write_fleet_in(out, "b", "done", "us-west-2")
+    write_fleet_in(out, "c", "idle", None)
+    write_fleet_in(out, "d", "left-running", "eu-central-1")
+    func = awsb.cmd_status if verb.startswith("status") else awsb.cmd_destroy
+    runner = tag_runner([], [])
+    _, text = run_cmd(capsys, func, verb.split(), FakeSystem(run=runner))
+    assert "other regions with local fleets: eu-central-1" in text
+    assert "us-west-2" not in text
+    assert aws_regions(runner) == {"eu-west-1"}
+
+
+def test_a_sweep_of_the_regions_own_fleets_names_no_other_region(capsys, run_harness):
+    write_fleet_in(run_harness.out, "a", "idle", "eu-central-1")
+    argv = ["status", "--all", "--region", "eu-central-1"]
+    _, text = run_cmd(capsys, awsb.cmd_status, argv, FakeSystem(run=tag_runner([], [])))
+    assert "other regions" not in text

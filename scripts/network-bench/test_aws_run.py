@@ -21,6 +21,7 @@ from fakes import (
     FakeSystem,
     RunHarness,
     Scripted,
+    aws_regions,
     awsb,
     completed,
     fake_image,
@@ -305,7 +306,9 @@ def test_destroy_backs_off_between_attempts(
     sweeps: int,
 ):
     swept: list[str] = []
-    monkeypatch.setattr(awsb, "sweep", lambda _system, name: swept.append(name) or [])
+    monkeypatch.setattr(
+        awsb, "sweep", lambda _system, _region, name: swept.append(name) or []
+    )
     fleet = awsb.FleetState(
         system,
         awsb.RunConfig(tag="x"),
@@ -1001,3 +1004,19 @@ def test_a_raising_plot_step_keeps_the_result_and_the_summary(
     assert run_harness.run(runner, "--leader-trace") == awsb.EXIT_OK
     assert (run_harness.run_dir / "summary.md").read_text() == "report"
     assert "WARNING trace-plots failed: RuntimeError: plot broke" in run_harness.log()
+
+
+@pytest.mark.usefixtures("valid")
+def test_run_in_another_region_records_it_and_calls_aws_there(
+    run_harness: RunHarness,
+):
+    runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
+    assert run_harness.run(runner, "--region", "eu-central-1") == awsb.EXIT_OK
+    assert aws_regions(runner) == {"eu-central-1"}
+    tfvars = netbench.read_json(
+        run_harness.fleet_dir / "terraform" / "terraform.tfvars.json"
+    )
+    assert tfvars["region"] == "eu-central-1"
+    fleet = netbench.read_json(run_harness.fleet_dir / "fleet.json")
+    manifest = netbench.read_json(run_harness.run_dir / "manifest.json")
+    assert fleet["config"]["region"] == manifest["config"]["region"] == "eu-central-1"

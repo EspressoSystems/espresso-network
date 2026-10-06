@@ -1,5 +1,5 @@
 provider "aws" {
-  region  = local.region
+  region  = var.region
   profile = "timeboost-dev"
 
   allowed_account_ids = [local.account_id]
@@ -18,7 +18,6 @@ provider "aws" {
 # requested instance type and resolved the AMI of their architecture; this module only looks
 # up that AZ's default subnet.
 locals {
-  region     = "eu-west-1"
   account_id = "027574771971"
 }
 
@@ -147,7 +146,7 @@ resource "aws_instance" "host" {
   lifecycle {
     precondition {
       condition     = local.pinned_subnet != ""
-      error_message = "No default subnet for ${var.az} in ${local.region}."
+      error_message = "No default subnet for ${var.az} in ${var.region}."
     }
   }
 }
@@ -248,7 +247,7 @@ resource "aws_iam_role" "scheduler" {
   count = local.rds_enabled ? 1 : 0
 
   name = local.rds_name
-  path = "/espresso-bench/"
+  path = "/espresso-bench/${var.region}/"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -274,7 +273,7 @@ resource "aws_iam_role_policy" "scheduler" {
     Statement = [{
       Effect   = "Allow"
       Action   = "rds:DeleteDBInstance"
-      Resource = "arn:aws:rds:${local.region}:${local.account_id}:db:${local.rds_name}"
+      Resource = "arn:aws:rds:${var.region}:${local.account_id}:db:${local.rds_name}"
     }]
   })
 }

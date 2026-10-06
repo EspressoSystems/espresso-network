@@ -260,7 +260,26 @@ def test_plan_renders_manifest_and_peers(fleet_dir):
     assert run_manifest["hosts"] == manifest["hosts"]
     tfvars = netbench.read_json(fleet_dir / "terraform" / "terraform.tfvars.json")
     assert tfvars["expires_at"] == ""
-    assert not {"account_id", "region", "profile"} & tfvars.keys()
+    assert tfvars["region"] == "eu-west-1"
+    assert not {"account_id", "profile"} & tfvars.keys()
+
+
+@pytest.mark.usefixtures("preflighted")
+def test_plan_in_another_region_records_it_in_tfvars_and_manifests(fleet_dir):
+    args = plan_args("--region", "us-east-1")
+    assert awsb.cmd_plan(args, FakeSystem(run=FakeRunner(states=[]))) == awsb.EXIT_OK
+    tfvars = netbench.read_json(fleet_dir / "terraform" / "terraform.tfvars.json")
+    assert tfvars["region"] == "us-east-1"
+    fleet = netbench.read_json(fleet_dir / "fleet.json")
+    run_manifest = netbench.read_json(fleet_dir / "runs/01-run/manifest.json")
+    assert fleet["config"]["region"] == run_manifest["config"]["region"] == "us-east-1"
+    assert awsb.manifest_region(fleet) == "us-east-1"
+
+
+def test_config_from_a_manifest_without_a_region_is_eu_west_1():
+    saved = awsb.config_to_json(small_cfg())
+    del saved["region"]
+    assert awsb.config_from_manifest(saved).region == awsb.LEGACY_REGION == "eu-west-1"
 
 
 @pytest.mark.usefixtures("preflighted")
@@ -333,7 +352,7 @@ def test_account_mismatch_refuses_after_one_call():
 # REQ:awsbench-account-guard
 def test_caller_account_returns_the_matching_account():
     runner = FakeRunner({STS_CALL: sts_response(awsb.ACCOUNT)})
-    assert awsb.caller_account(runner) == awsb.ACCOUNT
+    assert awsb.caller_account(runner, awsb.REGION) == awsb.ACCOUNT
 
 
 def offerings(*azs: str) -> subprocess.CompletedProcess:
@@ -350,7 +369,10 @@ def test_capable_az_is_the_lowest_az_offering_every_type():
         "Values=c8g.4xlarge",
         lambda _: offerings("eu-west-1b", "eu-west-1c", "eu-west-1a"),
     )
-    assert awsb.capable_az(runner, {"c8g.2xlarge", "c8g.4xlarge"}) == "eu-west-1b"
+    assert (
+        awsb.capable_az(runner, awsb.REGION, {"c8g.2xlarge", "c8g.4xlarge"})
+        == "eu-west-1b"
+    )
 
 
 def test_no_capable_az_refuses():
@@ -358,7 +380,7 @@ def test_no_capable_az_refuses():
     runner.respond("Values=c8g.2xlarge", lambda _: offerings("eu-west-1a"))
     runner.respond("Values=c8g.4xlarge", lambda _: offerings("eu-west-1b"))
     with pytest.raises(awsb.Refused, match="no AZ in eu-west-1 offers"):
-        awsb.capable_az(runner, {"c8g.2xlarge", "c8g.4xlarge"})
+        awsb.capable_az(runner, awsb.REGION, {"c8g.2xlarge", "c8g.4xlarge"})
 
 
 def test_plan_runs_preflight_and_tofu_plan_without_apply(fleet_dir, preflighted):
@@ -578,7 +600,7 @@ def test_instance_specs_maps_ec2_architectures(supported: list[str], arch: str):
         "describe-instance-types",
         lambda _: instance_types(dict.fromkeys(types, supported)),
     )
-    assert awsb.instance_specs(runner, types) == (
+    assert awsb.instance_specs(runner, awsb.REGION, types) == (
         arch,
         {"c8i.2xlarge": 16384, "c8i.8xlarge": 65536},
     )
@@ -598,7 +620,7 @@ def test_instance_specs_refuses_a_type_without_memory():
         "describe-instance-types", lambda _: completed(stdout=json.dumps(body))
     )
     with pytest.raises(KeyError, match="MemoryInfo"):
-        awsb.instance_specs(runner, {"c8g.4xlarge"})
+        awsb.instance_specs(runner, awsb.REGION, {"c8g.4xlarge"})
 
 
 def intel_preflight_runner(ctl_arch: str = "x86_64") -> FakeRunner:
@@ -696,13 +718,13 @@ def pricing_runner() -> FakeRunner:
 def test_instance_price_reads_the_real_price_list_shape():
     runner = FakeRunner()
     runner.respond("get-products", lambda _: price_list(C8IN_8XLARGE_PRICE_ITEM))
-    assert awsb.instance_price(runner, "c8in.8xlarge") == 2.45952
+    assert awsb.instance_price(runner, "eu-central-1", "c8in.8xlarge") == 2.45952
     (call,) = runner.calls
     assert call[call.index("--region") + 1] == "us-east-1"
     assert call[call.index("--service-code") + 1] == "AmazonEC2"
     for field, value in {
         "instanceType": "c8in.8xlarge",
-        "regionCode": "eu-west-1",
+        "regionCode": "eu-central-1",
         "operatingSystem": "Linux",
         "tenancy": "Shared",
         "preInstalledSw": "NA",
@@ -713,7 +735,7 @@ def test_instance_price_reads_the_real_price_list_shape():
 
 def test_instance_price_of_an_unknown_type_raises():
     with pytest.raises(awsb.Refused, match=r"m7a\.large in eu-west-1: 0 on-demand"):
-        awsb.instance_price(pricing_runner(), "m7a.large")
+        awsb.instance_price(pricing_runner(), awsb.REGION, "m7a.large")
 
 
 def test_instance_price_of_several_products_raises():
@@ -721,7 +743,7 @@ def test_instance_price_of_several_products_raises():
     runner = FakeRunner()
     runner.respond("get-products", lambda _: price_list(item, item))
     with pytest.raises(awsb.Refused, match=r"c8g\.4xlarge in eu-west-1: 2 on-demand"):
-        awsb.instance_price(runner, "c8g.4xlarge")
+        awsb.instance_price(runner, awsb.REGION, "c8g.4xlarge")
 
 
 @pytest.mark.usefixtures("fleet_dir")

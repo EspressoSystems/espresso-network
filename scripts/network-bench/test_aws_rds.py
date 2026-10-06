@@ -410,7 +410,7 @@ def test_every_log_written_since_the_load_started_is_downloaded(tmp_path):
         {"LogFileName": "error/postgresql.log.12", "LastWritten": 9_000_000},
     ]
     runner = RdsRunner([DONE_STATE], logs=logs)
-    awsb.collect_rds_logs(runner, RDS_OUTPUT, 100.0, 160.0, tmp_path)
+    awsb.collect_rds_logs(runner, awsb.REGION, RDS_OUTPUT, 100.0, 160.0, tmp_path)
     logs_dir = tmp_path / awsb.RDS_LOGS_DIR
     saved = sorted(p.name for p in logs_dir.iterdir())
     assert saved == ["postgresql.log.11", "postgresql.log.12"]
@@ -568,7 +568,10 @@ FALLBACK = datetime(2026, 9, 30, 14, 0, tzinfo=UTC)
 )
 def test_only_a_deletion_event_ends_the_bill_before_the_driver_clock(events, expected):
     runner = RdsRunner([DONE_STATE], events=events)
-    assert awsb.rds_delete_time(runner, "espresso-bench-fleet1", FALLBACK) == expected
+    assert (
+        awsb.rds_delete_time(runner, awsb.REGION, "espresso-bench-fleet1", FALLBACK)
+        == expected
+    )
 
 
 def test_a_fleet_that_failed_before_the_instance_was_seen_counts_from_launch(harness):
@@ -601,7 +604,7 @@ def test_the_delete_schedule_does_not_wait_for_the_instance():
 def sweep_fleet1(**kwargs) -> FakeRunner:
     mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
     runner = rds_tag_runner(mappings, [], roles=[ROLE_ARN], **kwargs)
-    awsb.sweep(FakeSystem(run=runner), "fleet1")
+    awsb.sweep(FakeSystem(run=runner), awsb.REGION, "fleet1")
     return runner
 
 
@@ -651,7 +654,7 @@ def test_a_group_the_destroy_already_deleted_is_tolerated():
     failing(runner, "delete-db-subnet-group", "DBSubnetGroupNotFoundFault")
     failing(runner, "delete-db-parameter-group", "DBParameterGroupNotFound")
     failing(runner, "delete-schedule-group", "ResourceNotFoundException")
-    awsb.sweep(FakeSystem(run=runner), "fleet1")
+    awsb.sweep(FakeSystem(run=runner), awsb.REGION, "fleet1")
     verbs = aws_verbs(runner)
     assert ("rds", "delete-db-subnet-group") in verbs
     assert ("rds", "delete-db-parameter-group") in verbs
@@ -662,14 +665,14 @@ def test_another_fleets_role_is_left_alone():
     mappings = rds_fleet_mappings("fleet1", "bob", EXPIRES_LATER)
     other = "arn:aws:iam::1:role/espresso-bench/espresso-bench-other"
     runner = rds_tag_runner(mappings, [], roles=[other])
-    awsb.sweep(FakeSystem(run=runner), "fleet1")
+    awsb.sweep(FakeSystem(run=runner), awsb.REGION, "fleet1")
     assert ("iam", "delete-role") not in aws_verbs(runner)
 
 
 def test_a_fleet_without_rds_touches_no_iam():
     mappings = [mapping(arn("ec2", "security-group/sg-1"), "fleet1", None, None)]
     runner = rds_tag_runner(mappings, [])
-    awsb.sweep(FakeSystem(run=runner), "fleet1")
+    awsb.sweep(FakeSystem(run=runner), awsb.REGION, "fleet1")
     assert not any(service == "iam" for service, _ in aws_verbs(runner))
 
 
@@ -678,14 +681,14 @@ def test_no_iam_permission_lists_no_roles():
     runner.responses[LIST_ROLES] = completed(
         returncode=254, stderr="AccessDenied: iam:ListRoles"
     )
-    assert awsb.list_scheduler_roles(runner) == []
+    assert awsb.list_scheduler_roles(runner, awsb.REGION) == []
 
 
 def test_other_iam_errors_raise():
     runner = rds_tag_runner([], [])
     runner.responses[LIST_ROLES] = completed(returncode=254, stderr="Throttling")
     with pytest.raises(awsb.Refused, match="Throttling"):
-        awsb.list_scheduler_roles(runner)
+        awsb.list_scheduler_roles(runner, awsb.REGION)
 
 
 # REQ:orphans-rds-expiry
@@ -740,7 +743,8 @@ def destroy_orphans(capsys) -> Any:
 
 def write_fleet(out: Path, name: str, phase: str) -> None:
     (out / name).mkdir(parents=True)
-    netbench.write_json(out / name / "fleet.json", {"phase": phase})
+    config = awsb.config_to_json(awsb.RunConfig(tag="t"))
+    netbench.write_json(out / name / "fleet.json", {"phase": phase, "config": config})
 
 
 def fleet1_runner(owner: str, expires: str) -> FakeRunner:
@@ -832,3 +836,30 @@ def test_an_rds_fleet_shows_the_instance_and_parameters(harness, capsys):
     argv = ["status", str(harness.fleet_dir)]
     _, text = run_cmd(capsys, awsb.cmd_status, argv, FakeSystem(run=runner))
     assert "- rds espresso-bench-fleet1: available, parameters in-sync" in text
+
+
+FRANKFURT_ROLE = "arn:aws:iam::1:role/espresso-bench/eu-central-1/espresso-bench-fleet2"
+
+
+def test_roles_are_listed_per_region_and_the_old_path_is_eu_west_1():
+    runner = rds_tag_runner([], [], roles=[ROLE_ARN, FRANKFURT_ROLE])
+    assert awsb.list_scheduler_roles(runner, "eu-west-1") == [ROLE_ARN]
+    assert awsb.list_scheduler_roles(runner, "eu-central-1") == [FRANKFURT_ROLE]
+
+
+@pytest.mark.usefixtures("out_root")
+def test_an_orphan_sweep_leaves_another_regions_role_alone(destroy_orphans):
+    runner = rds_tag_runner([], [], roles=[FRANKFURT_ROLE])
+    code, text = destroy_orphans(runner)
+    assert code == awsb.EXIT_OK
+    assert "no orphaned" in text
+    assert ("iam", "delete-role") not in aws_verbs(runner)
+
+
+def test_a_sweep_deletes_only_its_regions_role():
+    mappings = rds_fleet_mappings("fleet2", "bob", EXPIRES_LATER)
+    runner = rds_tag_runner(mappings, [], roles=[FRANKFURT_ROLE])
+    awsb.sweep(FakeSystem(run=runner), "eu-west-1", "fleet2")
+    assert ("iam", "delete-role") not in aws_verbs(runner)
+    awsb.sweep(FakeSystem(run=runner), "eu-central-1", "fleet2")
+    assert ("iam", "delete-role") in aws_verbs(runner)

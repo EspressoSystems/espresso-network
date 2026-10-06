@@ -21,6 +21,7 @@ from fakes import (
     FakeRunner,
     FakeSystem,
     FleetHarness,
+    aws_regions,
     awsb,
     completed,
     fake_image,
@@ -827,3 +828,35 @@ def test_submit_nodes_above_the_fleet_size_is_refused(harness, runner):
 def test_submit_nodes_is_not_an_up_flag(harness):
     with pytest.raises(SystemExit):
         harness.up_args("--submit-nodes", "2")
+
+
+def tfvars_path(harness: FleetHarness) -> Path:
+    return harness.fleet_dir / "terraform" / "terraform.tfvars.json"
+
+
+def test_down_of_a_fleet_in_another_region_sweeps_there(harness):
+    runner = FakeRunner(states=[DONE_STATE])
+    assert harness.up(runner, "--region", "eu-central-1") == awsb.EXIT_OK
+    assert netbench.read_json(tfvars_path(harness))["region"] == "eu-central-1"
+    runner.calls.clear()
+    runner.destroys = [completed(returncode=1, stderr="locked")]
+    assert harness.down(runner, "--yes") == awsb.EXIT_LEFTOVER
+    assert runner.ran("terminate-instances", "i-1")
+    assert aws_regions(runner) == {"eu-central-1"}
+    assert netbench.read_json(tfvars_path(harness))["region"] == "eu-central-1"
+
+
+def test_down_of_a_fleet_recorded_before_regions_uses_eu_west_1(harness):
+    runner = FakeRunner(states=[DONE_STATE])
+    assert harness.up(runner) == awsb.EXIT_OK
+    fleet = harness.fleet()
+    del fleet["config"]["region"]
+    netbench.write_json(harness.fleet_dir / "fleet.json", fleet)
+    tfvars = netbench.read_json(tfvars_path(harness))
+    del tfvars["region"]
+    netbench.write_json(tfvars_path(harness), tfvars)
+    runner.calls.clear()
+    runner.destroys = [completed(returncode=1, stderr="locked")]
+    assert harness.down(runner, "--yes") == awsb.EXIT_LEFTOVER
+    assert aws_regions(runner) == {"eu-west-1"}
+    assert "region" not in netbench.read_json(tfvars_path(harness))

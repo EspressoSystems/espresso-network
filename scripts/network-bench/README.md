@@ -137,10 +137,11 @@ laptop                       EC2, one AZ, private IPs
 | `node1..` | `c8g.4xlarge` | espresso-node `-- storage-journal -- http -- status -- submit -- catchup -- config`, `agent-host`        |
 
 - Types: the table's are the defaults; `--node-type` (node0..) and `--ctl-type` (`ctl`) on `plan`, `up` and single-shot
-  `run`; `run --fleet` refuses them. Preflight reads each type's on-demand Linux price in eu-west-1 from the AWS Pricing
-  API (`pricing get-products`, endpoint us-east-1); a type with no single matching price is refused. Both types must
-  share one architecture; preflight reads it from `describe-instance-types` and picks the Ubuntu AMI and image platform
-  (`linux/arm64` or `linux/amd64`) to match. Recorded as `arch` in the manifest.
+  `run`; `run --fleet` refuses them. Preflight reads each type's on-demand Linux price in the run's region (`--region`,
+  default eu-west-1) from the AWS Pricing API (`pricing get-products`, endpoint us-east-1); a type with no single
+  matching price is refused. Both types must share one architecture; preflight reads it from `describe-instance-types`
+  and picks the Ubuntu AMI and image platform (`linux/arm64` or `linux/amd64`) to match. Recorded as `arch` in the
+  manifest.
 - vCPUs: an Intel vCPU is a hyperthread (c8i.4xlarge: 16 vCPU = 8 cores); a Graviton vCPU is a physical core
   (c8g.4xlarge: 16 cores).
 - Stake: equal, orchestrator self-registration; 5 nodes → quorum 4, lagging `node0` never stalls consensus.
@@ -417,8 +418,9 @@ just bench clean
   `running`, `dirty`, `left-running`, `destroying` or `destroyed`, expired or not; several or none is refused with the
   list. `collect` without `RUN_DIR` takes that fleet's last run.
 
-- Needs: nix devShell (opentofu, awscli2), AWS profile `timeboost-dev` (account 027574771971, eu-west-1; constants in
-  `aws-bench` and `aws/terraform/main.tf`), `ssh-keygen`, rev pushed as `release-*` so CI publishes images.
+- Needs: nix devShell (opentofu, awscli2), AWS profile `timeboost-dev` (account 027574771971; region eu-west-1 unless
+  `--region`; constants in `aws-bench` and `aws/terraform/main.tf`), `ssh-keygen`, rev pushed as `release-*` so CI
+  publishes images.
 - Every fleet gets an ed25519 key in `<fleet>/ssh/`; the private half is deleted after destroy (kept after a failed
   destroy).
 
