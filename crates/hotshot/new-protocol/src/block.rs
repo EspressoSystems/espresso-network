@@ -95,6 +95,14 @@ struct RetryEntry<T: NodeType> {
     size: u64,
 }
 
+/// Memory charged per retry entry on top of its block size, so tiny
+/// transactions cannot outgrow `max_retry_bytes`. Doubled for table slack.
+const fn retry_entry_overhead<T: NodeType>() -> u64 {
+    let map = size_of::<(Commitment<T::Transaction>, RetryEntry<T>)>();
+    let order = size_of::<(ViewNumber, Commitment<T::Transaction>)>();
+    2 * (map + order) as u64
+}
+
 pub struct BlockBuilder<T: NodeType> {
     instance: Arc<T::InstanceState>,
     membership: EpochMembershipCoordinator<T>,
@@ -111,6 +119,27 @@ pub struct BlockBuilder<T: NodeType> {
     // `handle_proposal_with_vid_share` and one from
     // `handle_timeout_certificate`) don't dedup against each other.
     calculations: BTreeMap<(ViewNumber, Commitment<Leaf2<T>>), AbortHandle>,
+<<<<<<< HEAD
+||||||| parent of 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
+    /// The transactions taken for the first block of each view.
+    ///
+    /// Every later block for the view is built from exactly these. A leader
+    /// disperses a block as soon as it is built, and peers keep one share per
+    /// leader and view, so a second block for the view is votable only if its
+    /// payload is the same. It is the same whenever the new parent does not
+    /// change how the payload is built.
+    #[allow(clippy::type_complexity)]
+    view_transactions: BTreeMap<ViewNumber, Vec<(Commitment<T::Transaction>, T::Transaction)>>,
+=======
+    /// The transactions taken for the first block of each view.
+    ///
+    /// Every later block for the view is built from exactly these. A leader
+    /// disperses a block as soon as it is built, and peers keep one share per
+    /// leader and view, so a second block for the view is votable only if its
+    /// payload is the same. It is the same whenever the new parent does not
+    /// change how the payload is built.
+    view_transactions: BTreeMap<ViewNumber, Vec<T::Transaction>>,
+>>>>>>> 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -148,8 +177,14 @@ impl<T: NodeType> BlockBuilder<T> {
             return;
         };
         let epoch = request.epoch;
+<<<<<<< HEAD
         let buffer = std::mem::take(&mut self.leader_buffer);
         self.leader_total_bytes = 0;
+||||||| parent of 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
+        let buffer = self.transactions_for(view);
+=======
+        let txs = self.transactions_for(view);
+>>>>>>> 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
         let instance = self.instance.clone();
         let membership = self.membership.clone();
 
@@ -158,15 +193,9 @@ impl<T: NodeType> BlockBuilder<T> {
         let handle = self.tasks.spawn(async move {
             // Without this an idle network produces empty blocks as fast as consensus can run
             // them, flooding the coordinator's event queue.
-            if buffer.is_empty() {
+            if txs.is_empty() {
                 sleep(empty_block_delay).await;
             }
-            let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
-            let manifest = DedupManifest {
-                view,
-                epoch,
-                hashes,
-            };
 
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
@@ -185,33 +214,44 @@ impl<T: NodeType> BlockBuilder<T> {
             let commitments = spawn_blocking(move || {
                 let payload_bytes = payload.payload.encode();
                 let metadata_bytes = payload.metadata.encode();
-                // The two commitments are independent, and neither can be split:
-                // `vid_commitment` erasure-codes the payload (parallel over
-                // namespaces internally) and `builder_commitment` is a serial
-                // SHA-256 over every transaction. Running them sequentially made the
-                // leader pay both in turn on the path that gates its proposal, so
-                // the hash rides alongside the erasure code instead, occupying one
-                // worker for its duration rather than adding its full wall time.
-                let (payload_commitment, builder_commitment) = rayon::join(
+                // Independent work, run in parallel rather than paid for in
+                // turn on the leader's proposal path.
+                let (hashes, (payload_commitment, builder_commitment)) = rayon::join(
+                    || payload.payload.transaction_commitments(&payload.metadata),
                     || {
-                        vid_commitment(
-                            payload_bytes.as_ref(),
-                            metadata_bytes.as_ref(),
-                            total_weight,
-                            version,
+                        rayon::join(
+                            || {
+                                vid_commitment(
+                                    payload_bytes.as_ref(),
+                                    metadata_bytes.as_ref(),
+                                    total_weight,
+                                    version,
+                                )
+                            },
+                            || payload.payload.builder_commitment(&payload.metadata),
                         )
                     },
-                    || payload.payload.builder_commitment(&payload.metadata),
                 );
                 let block_size = payload_bytes.len() as u64;
-                (payload, block_size, payload_commitment, builder_commitment)
+                (
+                    payload,
+                    block_size,
+                    payload_commitment,
+                    builder_commitment,
+                    hashes,
+                )
             });
-            let (payload, block_size, payload_commitment, builder_commitment) =
+            let (payload, block_size, payload_commitment, builder_commitment, hashes) =
                 match commitments.await {
                     Ok(out) => out,
                     Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
                     Err(_) => return Err(BlockError::Cancelled),
                 };
+            let manifest = DedupManifest {
+                view,
+                epoch,
+                hashes,
+            };
             let (builder_key, builder_private_key) =
                 T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
             let offered_fee = block_size;
@@ -239,6 +279,94 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert((view, parent_commitment), handle);
     }
 
+<<<<<<< HEAD
+||||||| parent of 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
+    fn transactions_for(
+        &mut self,
+        view: ViewNumber,
+    ) -> Vec<(Commitment<T::Transaction>, T::Transaction)> {
+        if let Some(txs) = self.view_transactions.get(&view) {
+            return txs.clone();
+        }
+        let txs = self.take_block(view);
+        self.view_transactions.insert(view, txs.clone());
+        txs
+    }
+
+    /// Removes up to one block of pooled transactions, those sent for the earliest views first.
+    fn take_block(
+        &mut self,
+        view: ViewNumber,
+    ) -> Vec<(Commitment<T::Transaction>, T::Transaction)> {
+        let max_bytes = self.block_size(view);
+        let mut bytes = 0;
+        let mut taken = Vec::new();
+        for (_, hash) in &self.leader_order {
+            let size = self.leader_buffer[hash].tx.minimum_block_size();
+            if bytes + size > max_bytes {
+                continue;
+            }
+            bytes += size;
+            taken.push(*hash);
+        }
+        taken
+            .into_iter()
+            .map(|hash| {
+                let tx = self
+                    .remove_pooled(&hash)
+                    .expect("hashes come from the pool's own order");
+                (hash, tx)
+            })
+            .collect()
+    }
+
+    fn remove_pooled(&mut self, hash: &Commitment<T::Transaction>) -> Option<T::Transaction> {
+        let entry = self.leader_buffer.remove(hash)?;
+        self.leader_order.remove(&(entry.view, *hash));
+        self.leader_total_bytes -= entry.tx.minimum_block_size();
+        Some(entry.tx)
+    }
+
+=======
+    fn transactions_for(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
+        if let Some(txs) = self.view_transactions.get(&view) {
+            return txs.clone();
+        }
+        let txs = self.take_block(view);
+        self.view_transactions.insert(view, txs.clone());
+        txs
+    }
+
+    /// Removes up to one block of pooled transactions, those sent for the earliest views first.
+    fn take_block(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
+        let max_bytes = self.block_size(view);
+        let mut bytes = 0;
+        let mut taken = Vec::new();
+        for (_, hash) in &self.leader_order {
+            let size = self.leader_buffer[hash].tx.minimum_block_size();
+            if bytes + size > max_bytes {
+                continue;
+            }
+            bytes += size;
+            taken.push(*hash);
+        }
+        taken
+            .into_iter()
+            .map(|hash| {
+                self.remove_pooled(&hash)
+                    .expect("hashes come from the pool's own order")
+            })
+            .collect()
+    }
+
+    fn remove_pooled(&mut self, hash: &Commitment<T::Transaction>) -> Option<T::Transaction> {
+        let entry = self.leader_buffer.remove(hash)?;
+        self.leader_order.remove(&(entry.view, *hash));
+        self.leader_total_bytes -= entry.tx.minimum_block_size();
+        Some(entry.tx)
+    }
+
+>>>>>>> 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
     pub async fn next(&mut self) -> Option<Result<BlockBuilderOutput<T>, BlockError>> {
         loop {
             match self.tasks.join_next().await {
@@ -276,14 +404,65 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let size = tx.minimum_block_size();
+<<<<<<< HEAD
         if self.retry_total_bytes + size > self.config.max_retry_bytes {
+||||||| parent of 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
+        let encoded_size = bincode::serialized_size(&tx).expect("transactions serialize");
+        // Forwarding uses the first target view's block size, which an upgrade can raise.
+        let max_bytes = self
+            .block_size(self.current_view)
+            .max(self.block_size(self.current_view + SEND_LEAD));
+        let budget = forward_budget(message_limit(max_bytes));
+        if size > max_bytes {
+            return Err(SubmitError::TooLarge {
+                size,
+                limit: max_bytes,
+            });
+        }
+        if encoded_size > budget {
+            return Err(SubmitError::TooLarge {
+                size: encoded_size,
+                limit: budget,
+            });
+        }
+        if self.retry_total_bytes + size > self.config.max_retry_bytes {
+=======
+        let encoded_size = bincode::serialized_size(&tx).expect("transactions serialize");
+        // Forwarding uses the first target view's block size, which an upgrade can raise.
+        let max_bytes = self
+            .block_size(self.current_view)
+            .max(self.block_size(self.current_view + SEND_LEAD));
+        let budget = forward_budget(message_limit(max_bytes));
+        if size > max_bytes {
+            return Err(SubmitError::TooLarge {
+                size,
+                limit: max_bytes,
+            });
+        }
+        if encoded_size > budget {
+            return Err(SubmitError::TooLarge {
+                size: encoded_size,
+                limit: budget,
+            });
+        }
+        let charge = size + retry_entry_overhead::<T>();
+        if self.retry_total_bytes + charge > self.config.max_retry_bytes {
+>>>>>>> 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
             warn!("retry buffer full, rejecting {hash}");
             return;
         }
 
         let valid_until = self.current_view + self.config.ttl;
 
+<<<<<<< HEAD
         self.retry_total_bytes += size;
+||||||| parent of 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
+        self.retry_total_bytes += size;
+        self.retry_order.insert((valid_until, hash));
+=======
+        self.retry_total_bytes += charge;
+        self.retry_order.insert((valid_until, hash));
+>>>>>>> 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
         self.retry_pending.insert(
             hash,
             RetryEntry {
@@ -341,6 +520,70 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect()
     }
 
+<<<<<<< HEAD
+||||||| parent of 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
+    /// Drops pooled transactions sent for views more than `ttl` behind `view`: their senders
+    /// have stopped retrying them.
+    fn expire_pooled(&mut self, view: ViewNumber) {
+        while let Some(&(sent_for, hash)) = self.leader_order.first() {
+            if sent_for + self.config.ttl >= view {
+                break;
+            }
+            self.remove_pooled(&hash);
+        }
+    }
+
+    fn remove_pending(&mut self, hash: &Commitment<T::Transaction>) {
+        if let Some(entry) = self.retry_pending.remove(hash) {
+            self.retry_order.remove(&(entry.valid_until, *hash));
+            self.retry_total_bytes -= entry.size;
+        }
+    }
+
+    /// The block size of the protocol version running at `view`.
+    fn block_size(&self, view: ViewNumber) -> u64 {
+        let version = self.upgrade_lock.version_infallible(view);
+        *self
+            .config
+            .block_sizes
+            .range(..=version)
+            .next_back()
+            .expect("block sizes start at or below the running version")
+            .1
+    }
+
+=======
+    /// Drops pooled transactions sent for views more than `ttl` behind `view`: their senders
+    /// have stopped retrying them.
+    fn expire_pooled(&mut self, view: ViewNumber) {
+        while let Some(&(sent_for, hash)) = self.leader_order.first() {
+            if sent_for + self.config.ttl >= view {
+                break;
+            }
+            self.remove_pooled(&hash);
+        }
+    }
+
+    fn remove_pending(&mut self, hash: &Commitment<T::Transaction>) {
+        if let Some(entry) = self.retry_pending.remove(hash) {
+            self.retry_order.remove(&(entry.valid_until, *hash));
+            self.retry_total_bytes -= entry.size + retry_entry_overhead::<T>();
+        }
+    }
+
+    /// The block size of the protocol version running at `view`.
+    fn block_size(&self, view: ViewNumber) -> u64 {
+        let version = self.upgrade_lock.version_infallible(view);
+        *self
+            .config
+            .block_sizes
+            .range(..=version)
+            .next_back()
+            .expect("block sizes start at or below the running version")
+            .1
+    }
+
+>>>>>>> 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
     /// Call for every block this node proposes or reconstructs, so it stops forwarding the
     /// block's transactions and drops copies that reach it later.
     pub fn on_block_reconstructed(
@@ -376,6 +619,7 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     #[cfg(test)]
+<<<<<<< HEAD
     pub(crate) fn drain(
         &mut self,
         view: ViewNumber,
@@ -391,6 +635,25 @@ impl<T: NodeType> BlockBuilder<T> {
         };
 
         (txs, manifest)
+||||||| parent of 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
+    pub(crate) fn drain(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+    ) -> (Vec<T::Transaction>, DedupManifest<T>) {
+        let (hashes, txs) = self.take_block(view).into_iter().unzip();
+
+        let manifest = DedupManifest {
+            view,
+            epoch,
+            hashes,
+        };
+
+        (txs, manifest)
+=======
+    pub(crate) fn drain(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
+        self.take_block(view)
+>>>>>>> 86b898ff9f2 (feat(block): keep VID dispersal size predictable (#5068))
     }
 }
 
