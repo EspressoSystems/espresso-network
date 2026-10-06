@@ -1716,7 +1716,7 @@ impl BlockHeader<SeqTypes> for Header {
     fn builder_commitment(&self) -> BuilderCommitment {
         self.builder_commitment()
             .cloned()
-            .unwrap_or_else(|| BuilderCommitment::from_bytes([]))
+            .unwrap_or_else(BuilderCommitment::empty)
     }
 
     fn get_light_client_state(&self, view: ViewNumber) -> anyhow::Result<LightClientState> {

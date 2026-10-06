@@ -82,7 +82,6 @@ use hotshot_types::{
         node_implementation::{NodeImplementation, NodeType},
         storage::Storage,
     },
-    utils::BuilderCommitment,
     x25519,
 };
 use libp2p::Multiaddr;
@@ -1019,10 +1018,6 @@ where
         state_catchup: state_catchup_providers,
         persistence,
     })
-}
-
-pub fn empty_builder_commitment() -> BuilderCommitment {
-    BuilderCommitment::from_bytes([])
 }
 
 /// Scans the whole L1 contract history when nothing is persisted yet, keeping every

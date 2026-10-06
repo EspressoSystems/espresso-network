@@ -262,7 +262,7 @@ impl<T: NodeType> BlockBuilder<T> {
                             // leader skips the SHA-256 over the whole payload that produced it.
                             || {
                                 if version >= NO_BUILDER_COMMITMENT_VERSION {
-                                    BuilderCommitment::from_bytes([])
+                                    BuilderCommitment::empty()
                                 } else {
                                     payload.payload.builder_commitment(&payload.metadata)
                                 }
