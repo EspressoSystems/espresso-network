@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["MIN_PARALLEL_TRANSACTIONS"],"enum":["BlockBuildingError"]};
+window.SIDEBAR_ITEMS = {"constant":["MAX_NAMESPACES_PER_BLOCK","MIN_PARALLEL_TRANSACTIONS"],"enum":["BlockBuildingError"]};
