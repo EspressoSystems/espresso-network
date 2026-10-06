@@ -214,7 +214,8 @@ impl AvidmGf2Scheme {
             reed_solomon_simd::encode(original_count, recovery_count, &original)?
         };
 
-        let shares = [original, recovery].concat();
+        let mut shares = original;
+        shares.extend(recovery);
         let share_digests: Vec<Blake3Node> = shares
             .par_iter()
             .map(|share| Blake3Node::from(blake3::hash(share)))
