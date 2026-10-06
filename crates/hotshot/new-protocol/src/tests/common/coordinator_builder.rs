@@ -189,6 +189,9 @@ pub async fn build_test_coordinator(
                 .map(|p| Proposal::from(p.data.clone())),
         );
         consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
+        if let Some(cert2) = storage.cert2(anchor_view).await {
+            consensus.seed_cert2(cert2);
+        }
         anchor_view
     } else {
         // The synthetic genesis proposal carries the genesis cert1 as its
