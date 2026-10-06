@@ -149,6 +149,11 @@ impl Payload {
 /// erasure decode and the vote.
 pub(crate) const MIN_PARALLEL_TRANSACTIONS: usize = 32;
 
+/// Payload size from which [`BlockPayload::transaction_commitments`] hashes in
+/// parallel regardless of transaction count; a few large transactions are slow to
+/// hash serially.
+pub(crate) const MIN_PARALLEL_BYTES: usize = 1 << 20;
+
 #[async_trait]
 impl BlockPayload<SeqTypes> for Payload {
     // TODO BlockPayload trait eliminate unneeded args, return vals of type
@@ -232,7 +237,7 @@ impl BlockPayload<SeqTypes> for Payload {
     ///
     /// Indices are materialized first — an `NsIndex` plus a position, far smaller
     /// than the transactions themselves — so only the hashing goes wide, and only
-    /// past [`MIN_PARALLEL_TRANSACTIONS`].
+    /// past [`MIN_PARALLEL_TRANSACTIONS`] or [`MIN_PARALLEL_BYTES`].
     ///
     /// Order must match [`Self::transactions`]: callers pair a commitment index
     /// with a transaction index. `par_iter` is an indexed parallel iterator, so
@@ -254,7 +259,8 @@ impl BlockPayload<SeqTypes> for Payload {
         };
 
         let indices: Vec<Index> = QueryablePayload::iter(self, metadata).collect();
-        if indices.len() < MIN_PARALLEL_TRANSACTIONS {
+        if indices.len() < MIN_PARALLEL_TRANSACTIONS && self.raw_payload.len() < MIN_PARALLEL_BYTES
+        {
             return indices.iter().map(commit).collect();
         }
         indices.par_iter().map(commit).collect()
