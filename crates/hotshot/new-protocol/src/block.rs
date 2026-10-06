@@ -102,6 +102,11 @@ pub struct BlockBuilderConfig {
     /// Off, a node never sends submitted transactions to other leaders and includes them only
     /// in the blocks it proposes itself.
     pub forward_transactions: bool,
+    /// Views after the latest proposal seen that a send targets first. The view after a
+    /// proposal belongs to a leader that built when the proposal reached it, so 2 is the
+    /// earliest a send can land in; 3 spends a view of latency to arrive well before its
+    /// leader builds.
+    pub send_lead: u64,
 }
 
 impl Default for BlockBuilderConfig {
@@ -114,6 +119,7 @@ impl Default for BlockBuilderConfig {
             empty_block_delay: Duration::from_millis(500),
             fanout: 2,
             forward_transactions: true,
+            send_lead: 2,
         }
     }
 }
@@ -488,13 +494,15 @@ impl<T: NodeType> BlockBuilder<T> {
         self.proposal_view = self.proposal_view.max(Some(view));
     }
 
-    /// The first view a send in `view` targets: two after the latest proposal seen, and never
-    /// behind the view after `view`, which a view change without a proposal (a timeout) can
-    /// leave the latest proposal short of.
+    /// The first view a send in `view` targets: `send_lead` after the latest proposal seen,
+    /// and never behind where `view` itself puts it, one less, since a view change without a
+    /// proposal (a timeout) can leave the latest proposal short of `view`.
     fn first_target(&self, view: ViewNumber) -> ViewNumber {
+        let lead = self.config.send_lead.max(1);
+        let floor = view + (lead - 1);
         self.proposal_view
-            .map_or(view + 1, |proposal| proposal + 2)
-            .max(view + 1)
+            .map_or(floor, |proposal| proposal + lead)
+            .max(floor)
     }
 
     /// The `fanout` views whose leaders a send in `view` targets.

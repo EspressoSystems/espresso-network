@@ -398,6 +398,10 @@ where
                         .ok()
                         .and_then(|v| v.parse().ok())
                         .unwrap_or(BlockBuilderConfig::default().fanout),
+                    send_lead: std::env::var("NP_TX_SEND_LEAD")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(BlockBuilderConfig::default().send_lead),
                     ..BlockBuilderConfig::default()
                 },
                 upgrade_lock.clone(),

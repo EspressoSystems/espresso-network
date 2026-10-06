@@ -62,6 +62,7 @@ fn small_config() -> BlockBuilderConfig {
         empty_block_delay: Duration::from_millis(500),
         fanout: 1,
         forward_transactions: true,
+        send_lead: 2,
     }
 }
 
@@ -121,6 +122,27 @@ async fn submit_targets_two_views_after_the_latest_proposal() {
         submit(&mut b, tx(3)),
         Vec::from([tx_msg(view(7), Vec::from([tx(3)]))]),
         "a proposal ahead of the view counts"
+    );
+}
+
+#[tokio::test]
+async fn send_lead_three_targets_a_view_further() {
+    let mut b = builder_with(BlockBuilderConfig {
+        send_lead: 3,
+        ..small_config()
+    });
+    b.on_view_changed(view(4));
+
+    assert_eq!(
+        submit(&mut b, tx(1)),
+        Vec::from([tx_msg(view(6), Vec::from([tx(1)]))]),
+        "before this view's proposal"
+    );
+    b.on_proposal(view(4));
+    assert_eq!(
+        submit(&mut b, tx(2)),
+        Vec::from([tx_msg(view(7), Vec::from([tx(2)]))]),
+        "after it"
     );
 }
 
