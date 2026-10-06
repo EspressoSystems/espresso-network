@@ -8,8 +8,8 @@
 //! `request_block` here starts at `from_transactions`. The `transactions_for` clone of the
 //! pool (block.rs:305) is timed separately as `tx_clone`.
 //!
-//! `ESPRESSO_BENCH_BLAKE3_TX_HASH` and `RAYON_NUM_THREADS` are read once per process,
-//! so each combination needs its own run. Both are recorded in the benchmark id.
+//! `RAYON_NUM_THREADS` is read once per process, so each value needs its own run. It is
+//! recorded in the benchmark id.
 
 use std::{hint::black_box, thread, time::Duration};
 
@@ -226,7 +226,6 @@ fn bench_request_block(
 
 fn bench_block_build(c: &mut Criterion) {
     let threads = rayon::current_num_threads();
-    let blake3 = u8::from(std::env::var_os("ESPRESSO_BENCH_BLAKE3_TX_HASH").is_some());
     let mut rng = ChaCha20Rng::seed_from_u64(42);
     let mut group = c.benchmark_group("block_build");
     group
@@ -237,7 +236,7 @@ fn bench_block_build(c: &mut Criterion) {
 
     for (block_mb, tx_size) in BLOCKS {
         let case = Case {
-            label: format!("{block_mb}MB_{}KB_t{threads}_b3{blake3}", tx_size / 1000),
+            label: format!("{block_mb}MB_{}KB_t{threads}", tx_size / 1000),
             txs: transactions(block_mb, tx_size, &mut rng),
         };
         bench_tx_stages(&mut group, &case);
