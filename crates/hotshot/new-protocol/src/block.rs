@@ -134,15 +134,18 @@ struct RetryEntry<T: NodeType> {
     sent_until: ViewNumber,
 }
 
-type TakenBlock<T> = Vec<(
-    Commitment<<T as NodeType>::Transaction>,
-    <T as NodeType>::Transaction,
-)>;
-
 struct PoolEntry<T: NodeType> {
     tx: T::Transaction,
     /// The view the transaction was sent for, or the view it arrived in if that is later.
     view: ViewNumber,
+}
+
+/// Memory charged per retry entry on top of its block size, so tiny
+/// transactions cannot outgrow `max_retry_bytes`. Doubled for table slack.
+const fn retry_entry_overhead<T: NodeType>() -> u64 {
+    let map = size_of::<(Commitment<T::Transaction>, RetryEntry<T>)>();
+    let order = size_of::<(ViewNumber, Commitment<T::Transaction>)>();
+    2 * (map + order) as u64
 }
 
 pub struct BlockBuilder<T: NodeType> {
@@ -170,7 +173,7 @@ pub struct BlockBuilder<T: NodeType> {
     /// leader and view, so a second block for the view is votable only if its
     /// payload is the same. It is the same whenever the new parent does not
     /// change how the payload is built.
-    view_transactions: BTreeMap<ViewNumber, Arc<TakenBlock<T>>>,
+    view_transactions: BTreeMap<ViewNumber, Arc<Vec<T::Transaction>>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -211,7 +214,7 @@ impl<T: NodeType> BlockBuilder<T> {
             return;
         };
         let epoch = request.epoch;
-        let buffer = self.transactions_for(view);
+        let txs = self.transactions_for(view);
         let instance = self.instance.clone();
         let membership = self.membership.clone();
 
@@ -220,23 +223,19 @@ impl<T: NodeType> BlockBuilder<T> {
         let handle = self.tasks.spawn(async move {
             // Without this an idle network produces empty blocks as fast as consensus can run
             // them, flooding the coordinator's event queue.
-            if buffer.is_empty() {
+            if txs.is_empty() {
                 sleep(empty_block_delay).await;
             }
-            let (hashes, txs): (Vec<_>, Vec<_>) =
-                buffer.iter().map(|(hash, tx)| (*hash, tx.clone())).unzip();
-            let manifest = DedupManifest {
-                view,
-                epoch,
-                hashes,
-            };
 
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
-            let (payload, metadata) =
-                T::BlockPayload::from_transactions(txs, &validated_state, &instance)
-                    .await
-                    .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
+            let (payload, metadata) = T::BlockPayload::from_transactions(
+                txs.iter().cloned(),
+                &validated_state,
+                &instance,
+            )
+            .await
+            .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
 
             let total_weight = {
@@ -248,33 +247,44 @@ impl<T: NodeType> BlockBuilder<T> {
             let commitments = spawn_blocking(move || {
                 let payload_bytes = payload.payload.encode();
                 let metadata_bytes = payload.metadata.encode();
-                // The two commitments are independent, and neither can be split:
-                // `vid_commitment` erasure-codes the payload (parallel over
-                // namespaces internally) and `builder_commitment` is a serial
-                // SHA-256 over every transaction. Running them sequentially made the
-                // leader pay both in turn on the path that gates its proposal, so
-                // the hash rides alongside the erasure code instead, occupying one
-                // worker for its duration rather than adding its full wall time.
-                let (payload_commitment, builder_commitment) = rayon::join(
+                // Independent work, run in parallel rather than paid for in
+                // turn on the leader's proposal path.
+                let (hashes, (payload_commitment, builder_commitment)) = rayon::join(
+                    || payload.payload.transaction_commitments(&payload.metadata),
                     || {
-                        vid_commitment(
-                            payload_bytes.as_ref(),
-                            metadata_bytes.as_ref(),
-                            total_weight,
-                            version,
+                        rayon::join(
+                            || {
+                                vid_commitment(
+                                    payload_bytes.as_ref(),
+                                    metadata_bytes.as_ref(),
+                                    total_weight,
+                                    version,
+                                )
+                            },
+                            || payload.payload.builder_commitment(&payload.metadata),
                         )
                     },
-                    || payload.payload.builder_commitment(&payload.metadata),
                 );
                 let block_size = payload_bytes.len() as u64;
-                (payload, block_size, payload_commitment, builder_commitment)
+                (
+                    payload,
+                    block_size,
+                    payload_commitment,
+                    builder_commitment,
+                    hashes,
+                )
             });
-            let (payload, block_size, payload_commitment, builder_commitment) =
+            let (payload, block_size, payload_commitment, builder_commitment, hashes) =
                 match commitments.await {
                     Ok(out) => out,
                     Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
                     Err(_) => return Err(BlockError::Cancelled),
                 };
+            let manifest = DedupManifest {
+                view,
+                epoch,
+                hashes,
+            };
             let (builder_key, builder_private_key) =
                 T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
             let offered_fee = block_size;
@@ -302,7 +312,7 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert((view, parent_commitment), handle);
     }
 
-    fn transactions_for(&mut self, view: ViewNumber) -> Arc<TakenBlock<T>> {
+    fn transactions_for(&mut self, view: ViewNumber) -> Arc<Vec<T::Transaction>> {
         if let Some(txs) = self.view_transactions.get(&view) {
             return Arc::clone(txs);
         }
@@ -312,7 +322,7 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     /// Removes up to one block of pooled transactions, those sent for the earliest views first.
-    fn take_block(&mut self, view: ViewNumber) -> TakenBlock<T> {
+    fn take_block(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         let max_bytes = self.block_size(view);
         let mut bytes = 0;
         let mut taken = Vec::new();
@@ -327,10 +337,8 @@ impl<T: NodeType> BlockBuilder<T> {
         taken
             .into_iter()
             .map(|hash| {
-                let tx = self
-                    .remove_pooled(&hash)
-                    .expect("hashes come from the pool's own order");
-                (hash, tx)
+                self.remove_pooled(&hash)
+                    .expect("hashes come from the pool's own order")
             })
             .collect()
     }
@@ -415,7 +423,8 @@ impl<T: NodeType> BlockBuilder<T> {
                 limit: budget,
             });
         }
-        if self.retry_total_bytes + size > self.config.max_retry_bytes {
+        let charge = size + retry_entry_overhead::<T>();
+        if self.retry_total_bytes + charge > self.config.max_retry_bytes {
             warn!("retry buffer full, rejecting {hash}");
             return Err(SubmitError::RetryBufferFull);
         }
@@ -428,7 +437,7 @@ impl<T: NodeType> BlockBuilder<T> {
             transactions: Vec::from([tx.clone()]),
         };
 
-        self.retry_total_bytes += size;
+        self.retry_total_bytes += charge;
         self.retry_order.insert((valid_until, hash));
         self.retry_pending.insert(
             hash,
@@ -561,7 +570,7 @@ impl<T: NodeType> BlockBuilder<T> {
     fn remove_pending(&mut self, hash: &Commitment<T::Transaction>) {
         if let Some(entry) = self.retry_pending.remove(hash) {
             self.retry_order.remove(&(entry.valid_until, *hash));
-            self.retry_total_bytes -= entry.size;
+            self.retry_total_bytes -= entry.size + retry_entry_overhead::<T>();
         }
     }
 
@@ -608,20 +617,8 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     #[cfg(test)]
-    pub(crate) fn drain(
-        &mut self,
-        view: ViewNumber,
-        epoch: EpochNumber,
-    ) -> (Vec<T::Transaction>, DedupManifest<T>) {
-        let (hashes, txs) = self.take_block(view).into_iter().unzip();
-
-        let manifest = DedupManifest {
-            view,
-            epoch,
-            hashes,
-        };
-
-        (txs, manifest)
+    pub(crate) fn drain(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
+        self.take_block(view)
     }
 }
 
