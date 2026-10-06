@@ -7217,12 +7217,15 @@ def index_cells(
     if result is not None:
         status = nb.verdict_word(result["validity"])
         limits = result["capacity"]
-        rate = nb.fmt_num(limits["overall"]["mb_s"])
+        mb_s = limits["overall"]["mb_s"]
+        rate = "-" if mb_s is None else nb.fmt_num(mb_s)
         bound = capacity_bound(limits)
-        passing = [s for s in result["steps"] if s["passed"]]
-        if passing:
-            decided = nb.fmt_num(passing[-1]["decided_mb_s"])
-            quantiles = passing[-1]["query_lag_ms"]
+        at_limit = [
+            s for s in result["steps"] if s["passed"] and s["rate_mb_s"] == mb_s
+        ]
+        if at_limit:
+            decided = nb.fmt_num(at_limit[-1]["decided_mb_s"])
+            quantiles = at_limit[-1]["query_lag_ms"]
             lag = f"{quantiles['p99']:.0f}" if quantiles else "-"
     revision = (manifest["images"]["espresso-node"]["revision"] or "-")[:10]
     return {

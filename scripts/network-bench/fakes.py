@@ -1375,7 +1375,12 @@ def valid_result(valid: bool = True) -> dict:
             "fail_rule": None,
         },
         "steps": [
-            {"passed": True, "decided_mb_s": 8.0, "query_lag_ms": {"p99": 120.0}}
+            {
+                "passed": True,
+                "rate_mb_s": 8.0,
+                "decided_mb_s": 8.0,
+                "query_lag_ms": {"p99": 120.0},
+            }
         ],
     }
 

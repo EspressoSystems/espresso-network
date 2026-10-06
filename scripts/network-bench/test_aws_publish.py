@@ -15,6 +15,8 @@ from fakes import (
     awsb,
     completed,
     index_manifest,
+    make_result,
+    step,
     valid_result,
 )
 
@@ -208,6 +210,16 @@ def test_index_cells_of_a_failed_run():
     assert cells["exit"] == "3"
     assert cells["cost"] == "0.50"
     assert cells["nodes"] == "5"
+
+
+def test_index_cells_read_decided_and_lag_at_the_capacity_step():
+    failing = ["decided 80% of offered"]
+    steps = [step(4.0), step(6.0, 5.0, consensus=failing), step(8.0)]
+    cells = awsb.index_cells(index_manifest(), "01-run", make_result(steps), 0, None)
+    assert (cells["rate"], cells["decided"]) == ("4", "4")
+    unpassed = make_result([step(4.0, 3.0, consensus=failing)])
+    cells = awsb.index_cells(index_manifest(), "01-run", unpassed, 0, None)
+    assert (cells["rate"], cells["decided"], cells["lag_p99"]) == ("-", "-", "-")
 
 
 def test_published_row_without_new_cells_derives_them(tmp_path: Path):
