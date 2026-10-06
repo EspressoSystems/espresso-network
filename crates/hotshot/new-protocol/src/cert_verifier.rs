@@ -622,14 +622,16 @@ where
         self.invalid_certs
     }
 
-    /// Try `key`'s parked copies until one spawns.
+    /// Try `key`'s parked copies, in random order, until one spawns.
     ///
-    /// A copy whose sender is now busy on another key is dropped rather than
-    /// re-parked, and a copy deferred for a missing stake table lands in
-    /// `pending` without its epoch being requested here: the table was
-    /// available when the in-flight copy spawned, so [`Self::retry_pending`]
-    /// recovers it. Either way the key stays incomplete and the next
-    /// rebroadcast spawns afresh.
+    /// The order is random so that a Byzantine sender whose copies always
+    /// prove invalid can't be first in line every time and delay the honest
+    /// copies behind it. A copy whose sender is now busy on another key is
+    /// dropped rather than re-parked, and a copy deferred for a missing stake
+    /// table lands in `pending` without its epoch being requested here: the
+    /// table was available when the in-flight copy spawned, so
+    /// [`Self::retry_pending`] recovers it. Either way the key stays
+    /// incomplete and the next rebroadcast spawns afresh.
     fn promote_parked(&mut self, key: CompletionKey) {
         let (view, _) = key;
         if view < self.lower_bound || self.completed.contains(&key) {
@@ -645,8 +647,10 @@ where
     }
 
     fn next_parked_sender(&mut self, key: CompletionKey) -> Option<(T::SignatureKey, C)> {
+        use rand::seq::IteratorRandom;
+
         let map = self.parked.get_mut(&key)?;
-        let sender = map.keys().next().cloned()?;
+        let sender = map.keys().choose(&mut rand::thread_rng()).cloned()?;
         let cert = map.remove(&sender)?;
         if map.is_empty() {
             self.parked.remove(&key);
