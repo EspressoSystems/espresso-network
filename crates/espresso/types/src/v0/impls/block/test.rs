@@ -14,7 +14,7 @@ use rand::RngCore;
 
 use crate::{
     BlockSize, NamespaceId, NodeState, NsProof, Payload, Transaction, TxProof, ValidatedState,
-    v0::impls::block::{MAX_NAMESPACES_PER_BLOCK, MIN_PARALLEL_TRANSACTIONS},
+    v0::impls::block::{MAX_NAMESPACES_PER_BLOCK, MIN_PARALLEL_BYTES, MIN_PARALLEL_TRANSACTIONS},
     v0_3::ChainConfig,
 };
 
@@ -380,4 +380,31 @@ async fn transaction_commitments_match_serial() {
             serial,
         );
     }
+}
+
+/// A few transactions past [`MIN_PARALLEL_BYTES`] take the parallel branch and must keep the
+/// serial order.
+#[test]
+fn transaction_commitments_match_serial_few_large() {
+    let mut rng = jf_utils::test_rng();
+    let test = ValidTest::from_tx_lengths(
+        vec![
+            vec![MIN_PARALLEL_BYTES / 2; 2],
+            vec![MIN_PARALLEL_BYTES / 2],
+        ],
+        &mut rng,
+    );
+    let chain_config = ChainConfig {
+        max_block_size: (4 * MIN_PARALLEL_BYTES as u64).into(),
+        ..Default::default()
+    };
+    let (payload, meta) = Payload::from_transactions_sync(&test.all_txs(), chain_config).unwrap();
+    let serial: Vec<_> = BlockPayload::<crate::SeqTypes>::transactions(&payload, &meta)
+        .map(|txn| txn.commit())
+        .collect();
+    assert_eq!(serial.len(), 3);
+    assert_eq!(
+        BlockPayload::<crate::SeqTypes>::transaction_commitments(&payload, &meta),
+        serial,
+    );
 }
