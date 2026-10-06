@@ -741,7 +741,7 @@ where
                 self.outbox.push_back(ConsensusOutput::BlockPayload {
                     view: out.view,
                     header: proposal.block_header.clone(),
-                    payload: Arc::new(out.payload),
+                    payload: Arc::new(out.payload.clone()),
                 });
             } else {
                 warn!(
@@ -752,7 +752,11 @@ where
                 );
             }
         }
-        ConsensusInput::BlockReconstructed(out.view, out.payload_commitment)
+        ConsensusInput::BlockReconstructed {
+            view: out.view,
+            payload_commitment: out.payload_commitment,
+            payload: out.payload,
+        }
     }
 
     pub fn apply_consensus(&mut self, input: ConsensusInput<T>) {
