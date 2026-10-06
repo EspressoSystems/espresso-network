@@ -672,7 +672,7 @@ pub mod availability_tests {
         // `append` would back-fill it from storage by payload hash.
         let (payload2, metadata2) =
             <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(
-                [mock_transaction(vec![1])],
+                &[mock_transaction(vec![1])],
                 &Default::default(),
                 &Default::default(),
             )
@@ -815,7 +815,7 @@ pub mod persistence_tests {
         let mut tx = ds.write().await.unwrap();
         for height in 0..4u64 {
             let (payload, metadata) = <MockPayload as BlockPayload<MockTypes>>::from_transactions(
-                [mock_transaction(vec![height as u8])],
+                &[mock_transaction(vec![height as u8])],
                 &Default::default(),
                 &Default::default(),
             )
@@ -1108,7 +1108,7 @@ pub mod node_tests {
             // Generate a unique payload and VID data, so that missing data is actually missing
             // (otherwise it could be borrowed from another block).
             let (payload, metadata) = <MockPayload as BlockPayload<MockTypes>>::from_transactions(
-                vec![mock_transaction(vec![i as u8])],
+                &[mock_transaction(vec![i as u8])],
                 &Default::default(),
                 &Default::default(),
             )
@@ -1361,7 +1361,7 @@ pub mod node_tests {
             // computing the total size.
             let (payload, metadata) =
                 <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(
-                    [mock_transaction(vec![i as u8 % 2])],
+                    &[mock_transaction(vec![i as u8 % 2])],
                     &TestValidatedState::default(),
                     &TestInstanceState::default(),
                 )

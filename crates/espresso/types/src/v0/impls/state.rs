@@ -1636,7 +1636,7 @@ mod test {
         async fn into_mock_header(self) -> (Header, u32) {
             let instance = NodeState::mock_v2();
             let (payload, metadata) =
-                Payload::from_transactions([self], &instance.genesis_state, &instance)
+                Payload::from_transactions(&[self], &instance.genesis_state, &instance)
                     .await
                     .unwrap();
 
@@ -2447,7 +2447,7 @@ mod test {
         let instance = NodeState::mock().with_genesis_version(version(0, 4));
 
         let (payload, metadata) =
-            Payload::from_transactions([], &instance.genesis_state, &instance)
+            Payload::from_transactions(&[], &instance.genesis_state, &instance)
                 .await
                 .unwrap();
 

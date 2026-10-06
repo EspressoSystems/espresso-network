@@ -95,7 +95,7 @@ pub trait BlockPayload<TYPES: NodeType>:
     /// # Errors
     /// If the transaction length conversion fails.
     async fn from_transactions(
-        transactions: impl IntoIterator<Item = Self::Transaction> + Send,
+        transactions: &[Self::Transaction],
         validated_state: &Self::ValidatedState,
         instance_state: &Self::Instance,
     ) -> Result<(Self, Self::Metadata), Self::Error>;

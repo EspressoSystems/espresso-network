@@ -5,8 +5,8 @@
 //! VID total weight is the node count (stake 1 per node) and, for VID-only stages, the
 //! `approximate_weights` result for large equal stakes (1000 + nodes).
 //!
-//! `request_block` here starts at the build task's copy of the cached transactions. The
-//! `tx_clone` stage times that copy alone.
+//! `request_block` here starts at `from_transactions`, which borrows the cached transactions.
+//! `tx_clone` times a full copy of them for comparison.
 //!
 //! `ESPRESSO_BENCH_BLAKE3_TX_HASH` and `RAYON_NUM_THREADS` are read once per process,
 //! so each combination needs its own run. Both are recorded in the benchmark id.
@@ -14,9 +14,7 @@
 use std::{hint::black_box, thread, time::Duration};
 
 use committable::{Commitment, Committable};
-use criterion::{
-    BatchSize, BenchmarkGroup, BenchmarkId, Criterion, SamplingMode, measurement::WallTime,
-};
+use criterion::{BenchmarkGroup, BenchmarkId, Criterion, SamplingMode, measurement::WallTime};
 use espresso_types::{ChainConfig, NamespaceId, NsTable, Payload, Transaction};
 use hotshot_types::{
     data::{VidCommitment, vid_commitment},
@@ -61,7 +59,7 @@ struct Encoded {
 }
 
 impl Encoded {
-    fn new(txs: Vec<Transaction>) -> Self {
+    fn new(txs: &[Transaction]) -> Self {
         let (payload, ns_table) = build(txs);
         let payload_bytes = payload.encode().to_vec();
         let metadata_bytes = ns_table.encode().to_vec();
@@ -104,14 +102,14 @@ fn chain_config() -> ChainConfig {
     }
 }
 
-fn build(txs: Vec<Transaction>) -> (Payload, NsTable) {
+fn build(txs: &[Transaction]) -> (Payload, NsTable) {
     Payload::from_transactions_sync(txs, chain_config()).expect("payload construction")
 }
 
 /// Same order of operations as the build task in block.rs; outputs are returned so their drop is
 /// untimed.
 fn request_block(txs: &[Transaction], weight: usize) -> (Payload, impl Sized, Commitments) {
-    let (payload, ns_table) = build(txs.to_vec());
+    let (payload, ns_table) = build(txs);
     let payload_bytes = payload.encode();
     let metadata_bytes = ns_table.encode();
     let commitments = rayon::join(
@@ -151,10 +149,10 @@ fn bench_tx_stages(group: &mut BenchmarkGroup<WallTime>, case: &Case) {
         b.iter_with_large_drop(|| black_box(txs).clone())
     });
     group.bench_function(BenchmarkId::new("from_transactions", &label), |b| {
-        b.iter_batched(|| txs.clone(), build, BatchSize::LargeInput)
+        b.iter_with_large_drop(|| build(black_box(txs)))
     });
 
-    let enc = Encoded::new(txs.clone());
+    let enc = Encoded::new(txs);
     group.bench_function(BenchmarkId::new("encode", &label), |b| {
         b.iter_with_large_drop(|| {
             (
@@ -181,7 +179,7 @@ fn bench_tx_stages(group: &mut BenchmarkGroup<WallTime>, case: &Case) {
 
 fn bench_commit_stages(group: &mut BenchmarkGroup<WallTime>, case: &Case, nodes: usize) {
     let label = format!("{}_n{nodes}", case.label);
-    let enc = Encoded::new(case.txs.clone());
+    let enc = Encoded::new(&case.txs);
 
     group.bench_function(BenchmarkId::new("vid_commitment", &label), |b| {
         b.iter(|| enc.vid(nodes))

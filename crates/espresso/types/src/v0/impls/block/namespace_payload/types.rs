@@ -325,9 +325,9 @@ impl Iterator for TxIter {
     }
 }
 
-impl NsPayloadBuilder {
+impl<'a> NsPayloadBuilder<'a> {
     /// Add a transaction's payload to this namespace
-    pub fn append_tx(&mut self, tx: Transaction) {
+    pub fn append_tx(&mut self, tx: &'a Transaction) {
         self.bodies_len += tx.payload().len();
         self.txs.push(tx);
     }

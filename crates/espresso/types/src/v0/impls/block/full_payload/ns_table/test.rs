@@ -69,7 +69,7 @@ async fn payload_byte_len() {
     let mut rng = jf_utils::test_rng();
     let test = ValidTest::from_tx_lengths(test_case, &mut rng);
     let mut block =
-        Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+        Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
             .await
             .unwrap()
             .0;
@@ -103,7 +103,7 @@ async fn payload_byte_len() {
     modify_final_offset(-1);
 
     // zero-length payload
-    let empty_block = Payload::from_transactions([], &Default::default(), &Default::default())
+    let empty_block = Payload::from_transactions(&[], &Default::default(), &Default::default())
         .await
         .unwrap()
         .0;

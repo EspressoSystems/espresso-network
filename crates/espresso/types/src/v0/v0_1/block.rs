@@ -363,8 +363,8 @@ pub struct TxIter(pub(crate) Range<usize>);
 /// when you're done. The output includes a well-formed tx table and all tx
 /// payloads.
 #[derive(Default)]
-pub struct NsPayloadBuilder {
+pub struct NsPayloadBuilder<'a> {
     /// Perf: bodies are copied once, straight into the payload.
-    pub(crate) txs: Vec<Transaction>,
+    pub(crate) txs: Vec<&'a Transaction>,
     pub(crate) bodies_len: usize,
 }

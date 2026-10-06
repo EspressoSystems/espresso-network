@@ -229,14 +229,10 @@ impl<T: NodeType> BlockBuilder<T> {
 
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
-            // Perf: copy the transactions here, off the coordinator loop.
-            let (payload, metadata) = T::BlockPayload::from_transactions(
-                txs.iter().cloned(),
-                &validated_state,
-                &instance,
-            )
-            .await
-            .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
+            let (payload, metadata) =
+                T::BlockPayload::from_transactions(&txs, &validated_state, &instance)
+                    .await
+                    .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
 
             let total_weight = {

@@ -14,7 +14,7 @@ struct Legacy {
 }
 
 fn payload(txs: Vec<Transaction>) -> Payload {
-    Payload::from_transactions_sync(txs, ChainConfig::default())
+    Payload::from_transactions_sync(&txs, ChainConfig::default())
         .unwrap()
         .0
 }
@@ -70,8 +70,9 @@ fn empty_payload_round_trips() {
 
 #[test]
 fn write_into_rejects_short_buffer() {
+    let tx = Transaction::new(NamespaceId::from(1u32), vec![7; 10]);
     let mut builder = NsPayloadBuilder::default();
-    builder.append_tx(Transaction::new(NamespaceId::from(1u32), vec![7; 10]));
+    builder.append_tx(&tx);
     let mut out = vec![0; builder.byte_len() - 1];
     assert!(builder.write_into(&mut out).is_err());
 }

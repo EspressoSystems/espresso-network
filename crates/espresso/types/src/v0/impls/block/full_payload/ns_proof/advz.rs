@@ -204,7 +204,7 @@ mod tests {
             // cannot escape `FnMut` closure body` caused by mutable variable `vid`
             // below.
             let blocks_only = future::join_all(tests.iter().map(|t| async {
-                Payload::from_transactions(t.all_txs(), &Default::default(), &Default::default())
+                Payload::from_transactions(&t.all_txs(), &Default::default(), &Default::default())
                     .await
                     .unwrap()
                     .0

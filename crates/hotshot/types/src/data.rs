@@ -1558,7 +1558,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         let epoch = genesis_epoch_from_version(version);
 
         let (payload, metadata) =
-            TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
+            TYPES::BlockPayload::from_transactions(&[], validated_state, instance_state)
                 .await
                 .unwrap();
 
@@ -1969,7 +1969,7 @@ impl<TYPES: NodeType> Leaf<TYPES> {
         version: Version,
     ) -> Self {
         let (payload, metadata) =
-            TYPES::BlockPayload::from_transactions([], validated_state, instance_state)
+            TYPES::BlockPayload::from_transactions(&[], validated_state, instance_state)
                 .await
                 .unwrap();
 

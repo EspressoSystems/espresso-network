@@ -34,7 +34,7 @@ async fn basic_correctness() {
         tracing::info!("test case {} nss {} txs", test.nss.len(), all_txs.len());
 
         let block =
-            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
                 .await
                 .unwrap()
                 .0;
@@ -129,7 +129,7 @@ async fn enforce_max_block_size() {
         chain_config: chain_config.into(),
         ..Default::default()
     };
-    let block = Payload::from_transactions(test.all_txs(), &validated_state, &instance_state)
+    let block = Payload::from_transactions(&test.all_txs(), &validated_state, &instance_state)
         .await
         .unwrap()
         .0;
@@ -151,7 +151,7 @@ async fn enforce_max_block_size() {
         ..Default::default()
     };
 
-    let block = Payload::from_transactions(test.all_txs(), &validated_state, &instance_state)
+    let block = Payload::from_transactions(&test.all_txs(), &validated_state, &instance_state)
         .await
         .unwrap()
         .0;
@@ -166,7 +166,7 @@ async fn ns_limit_exact() {
         .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
         .collect();
 
-    let block = Payload::from_transactions(txs, &Default::default(), &Default::default())
+    let block = Payload::from_transactions(&txs, &Default::default(), &Default::default())
         .await
         .unwrap()
         .0;
@@ -185,7 +185,7 @@ async fn ns_limit() {
         .collect();
     txs.push(Transaction::new(admitted_ns, vec![1, 2, 3]));
 
-    let block = Payload::from_transactions(txs, &Default::default(), &Default::default())
+    let block = Payload::from_transactions(&txs, &Default::default(), &Default::default())
         .await
         .unwrap()
         .0;
@@ -212,7 +212,7 @@ async fn ns_limit_commitments_cover_included_only() {
         .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
         .collect();
     let (block, ns_table) =
-        Payload::from_transactions(txs.clone(), &Default::default(), &Default::default())
+        Payload::from_transactions(&txs, &Default::default(), &Default::default())
             .await
             .unwrap();
 
@@ -267,7 +267,7 @@ fn ns_limit_ignores_deferred_bytes() {
     txs.push(deferred_tx);
     txs.push(final_tx);
 
-    let block = Payload::from_transactions_sync(txs, chain_config)
+    let block = Payload::from_transactions_sync(&txs, chain_config)
         .unwrap()
         .0;
 
@@ -362,7 +362,7 @@ async fn transaction_commitments_match_serial() {
         .zip(counts)
     {
         let (payload, meta) =
-            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
                 .await
                 .unwrap();
 
