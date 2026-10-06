@@ -148,7 +148,9 @@ impl<T: NodeType> BlockBuilder<T> {
             return;
         };
         let epoch = request.epoch;
-        let buffer = std::mem::take(&mut self.leader_buffer);
+        let txs: Vec<T::Transaction> = std::mem::take(&mut self.leader_buffer)
+            .into_values()
+            .collect();
         self.leader_total_bytes = 0;
         let instance = self.instance.clone();
         let membership = self.membership.clone();
@@ -158,15 +160,9 @@ impl<T: NodeType> BlockBuilder<T> {
         let handle = self.tasks.spawn(async move {
             // Without this an idle network produces empty blocks as fast as consensus can run
             // them, flooding the coordinator's event queue.
-            if buffer.is_empty() {
+            if txs.is_empty() {
                 sleep(empty_block_delay).await;
             }
-            let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
-            let manifest = DedupManifest {
-                view,
-                epoch,
-                hashes,
-            };
 
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
@@ -185,33 +181,44 @@ impl<T: NodeType> BlockBuilder<T> {
             let commitments = spawn_blocking(move || {
                 let payload_bytes = payload.payload.encode();
                 let metadata_bytes = payload.metadata.encode();
-                // The two commitments are independent, and neither can be split:
-                // `vid_commitment` erasure-codes the payload (parallel over
-                // namespaces internally) and `builder_commitment` is a serial
-                // SHA-256 over every transaction. Running them sequentially made the
-                // leader pay both in turn on the path that gates its proposal, so
-                // the hash rides alongside the erasure code instead, occupying one
-                // worker for its duration rather than adding its full wall time.
-                let (payload_commitment, builder_commitment) = rayon::join(
+                // Independent work, run in parallel rather than paid for in
+                // turn on the leader's proposal path.
+                let (hashes, (payload_commitment, builder_commitment)) = rayon::join(
+                    || payload.payload.transaction_commitments(&payload.metadata),
                     || {
-                        vid_commitment(
-                            payload_bytes.as_ref(),
-                            metadata_bytes.as_ref(),
-                            total_weight,
-                            version,
+                        rayon::join(
+                            || {
+                                vid_commitment(
+                                    payload_bytes.as_ref(),
+                                    metadata_bytes.as_ref(),
+                                    total_weight,
+                                    version,
+                                )
+                            },
+                            || payload.payload.builder_commitment(&payload.metadata),
                         )
                     },
-                    || payload.payload.builder_commitment(&payload.metadata),
                 );
                 let block_size = payload_bytes.len() as u64;
-                (payload, block_size, payload_commitment, builder_commitment)
+                (
+                    payload,
+                    block_size,
+                    payload_commitment,
+                    builder_commitment,
+                    hashes,
+                )
             });
-            let (payload, block_size, payload_commitment, builder_commitment) =
+            let (payload, block_size, payload_commitment, builder_commitment, hashes) =
                 match commitments.await {
                     Ok(out) => out,
                     Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
                     Err(_) => return Err(BlockError::Cancelled),
                 };
+            let manifest = DedupManifest {
+                view,
+                epoch,
+                hashes,
+            };
             let (builder_key, builder_private_key) =
                 T::BuilderSignatureKey::generated_from_seed_indexed([0u8; 32], 0);
             let offered_fee = block_size;
