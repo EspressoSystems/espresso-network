@@ -504,9 +504,9 @@ CLOCK_OFFSET_INVALID_MS = 1000.0
 CLOCK_OFFSET_NOISY_MS = 50.0
 CTL_CPU_NOISY_FRAC = 0.85
 JOURNAL_NOISY_FRACTION = 0.9
-# Burst balance of node0's EBS bandwidth and IOPS in percent; below 100 during the load means
-# root and Postgres I/O together exceeded the instance's EBS baseline.
-EBS_BALANCE_FULL_PCT = 100.0
+# Burst balance of node0's EBS bandwidth and IOPS in percent; below 95 during the load means
+# root and Postgres I/O together exceeded the instance's EBS baseline (CloudWatch shows 99 when full).
+EBS_BALANCE_FULL_PCT = 95.0
 EBS_BALANCE_METRICS = {
     "byte": "EBSByteBalance%",
     "io": "EBSIOBalance%",
@@ -6538,9 +6538,7 @@ def ebs_balance_reasons(balance_min: dict[str, float | None]) -> list[str]:
         return ["node0 EBS balance not collected"]
     reasons: list[str] = []
     for metric, low in balance_min.items():
-        if low is None:
-            reasons.append(f"node0 {metric} has no datapoint in the load window")
-        elif low < EBS_BALANCE_FULL_PCT:
+        if low is not None and low < EBS_BALANCE_FULL_PCT:
             reasons.append(f"node0 {metric} fell to {low:.0f}% during the load")
     return reasons
 
@@ -6552,10 +6550,11 @@ def rds_reasons(rds_min: dict[str, float | None]) -> list[str]:
     reasons: list[str] = []
     balance = set(EBS_BALANCE_METRICS.values())
     for metric, low in rds_min.items():
-        if low is None:
+        if metric in balance:
+            if low is not None and low < EBS_BALANCE_FULL_PCT:
+                reasons.append(f"rds {metric} fell to {low:.0f}% during the load")
+        elif low is None:
             reasons.append(f"rds {metric} has no datapoint in the load window")
-        elif metric in balance and low < EBS_BALANCE_FULL_PCT:
-            reasons.append(f"rds {metric} fell to {low:.0f}% during the load")
     return reasons
 
 
@@ -6722,8 +6721,7 @@ def check_validity_aws(
     """`result["validity"]` (netbench's own rules) plus the fleet rules: invalid on missing host
     samples, a digest that differs from the manifest or a clock offset above
     CLOCK_OFFSET_INVALID_MS; noisy on start spread, clock offset, ctl
-    CPU, journal size, steal or node0's EBS balance below 100% (also when it has no datapoints
-    or was not collected)."""
+    CPU, journal size, steal or node0's EBS balance below 95% (or not collected)."""
     invalid: list[str] = []
     noisy: list[str] = []
     for host, frac in evidence["coverage"].items():

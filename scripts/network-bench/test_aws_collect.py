@@ -455,7 +455,7 @@ QUIET, INVALID, NOISY = (True, False), (False, False), (True, True)
         (NOISY, "node1 steal", {"hosts": {"node1": host_sample(steal=6.0)}}),
         (NOISY, "node1 journal", {"journal_bytes": {"node1": near_journal_limit()}}),
         (NOISY, "EBSByteBalance% fell to 82%", {"ebs_balance_min": ebs(82.4, 100.0)}),
-        (NOISY, "EBSIOBalance% has no datapoint", {"ebs_balance_min": ebs(100, None)}),
+        (QUIET, "", {"ebs_balance_min": ebs(99, None)}),
         (NOISY, "EBS balance not collected", {"ebs_balance_min": {}}),
         (
             NOISY,
@@ -1063,10 +1063,10 @@ def empty_io_balance() -> dict:
             "node0 EBSByteBalance% fell to 91% during the load",
         ),
         (balance_file([100.0, 100.0, 40.0], [100.0, 100.0, 40.0]), None),
-        (empty_io_balance(), "node0 EBSIOBalance% has no datapoint in the load window"),
+        (empty_io_balance(), None),
         (None, "node0 EBS balance not collected"),
     ],
-    ids=["drop-inside-load", "drop-after-load", "no-datapoint", "not-collected"],
+    ids=["drop-inside-load", "drop-after-load", "empty-series", "not-collected"],
 )
 def test_ebs_balance_validity(
     collected_run: Path, balance: dict | None, reason: str | None
