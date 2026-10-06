@@ -504,6 +504,42 @@ pub mod tests {
     use super::AvidmGf2Scheme;
     use crate::VidScheme;
 
+    /// Digest over the commitment and every share's range and shards.
+    fn output_digest(rt: usize, tw: usize, len: usize) -> String {
+        let payload: Vec<u8> = (0..len).map(|i| (i * 31 + 7) as u8).collect();
+        let param = AvidmGf2Scheme::setup(rt, tw).unwrap();
+        let commit = AvidmGf2Scheme::commit(&param, &payload).unwrap();
+        let distribution: Vec<u32> = (0..tw).map(|_| 1).collect();
+        let (dcommit, shares) = AvidmGf2Scheme::disperse(&param, &distribution, &payload).unwrap();
+        assert_eq!(commit, dcommit);
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(commit.as_ref());
+        for share in &shares {
+            hasher.update(&share.range().start.to_le_bytes());
+            hasher.update(&share.range().end.to_le_bytes());
+            for shard in share.payload() {
+                hasher.update(&(shard.len() as u64).to_le_bytes());
+                hasher.update(shard);
+            }
+        }
+        hasher.finalize().to_hex().to_string()
+    }
+
+    #[test]
+    fn outputs_are_pinned() {
+        let mut out = String::new();
+        for (rt, tw) in [(1, 1), (1, 3), (3, 10), (4, 12), (5, 5), (7, 20)] {
+            for len in [0, 1, 31, 32, 33, 63, 64, 65, 1000, 4097, 100_000] {
+                out += &format!("{rt} {tw} {len} {}\n", output_digest(rt, tw, len));
+            }
+        }
+        let got = blake3::hash(out.as_bytes()).to_hex().to_string();
+        assert_eq!(
+            got, "3c96b583adfdf90d15d80c117f9ab76625995e851743204c4e9c5725b5b7950a",
+            "{out}"
+        );
+    }
+
     #[test]
     fn round_trip() {
         // play with these items
