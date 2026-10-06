@@ -16,6 +16,8 @@ use hotshot_types::{
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::{error, warn};
 
+use super::ns_lens_match_metadata;
+
 pub(crate) type Metadata<T> = <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata;
 
 type ReconstructResult<T> =
@@ -320,18 +322,26 @@ impl<T: NodeType> VidShareAccumulator<T> {
             warn!(%view, ?sender, "VID share common param differs from the committee's");
             return;
         }
-        // The commitment hash-binds the common, so trust it as the verification
-        // oracle only after that check; later shares must carry the same common.
+        // The commitment hash-binds the common's `ns_commits` but not its
+        // `ns_lens`, which a forwarded share could shuffle against the
+        // proposal's table. Trust a common as the verification oracle only
+        // after both checks; later shares must carry the same common.
         if let Some(common) = &self.common {
             if share.common != *common {
                 warn!(%view, ?sender, "VID share common differs from the accumulator's");
                 return;
             }
-        } else if AvidmGf2Scheme::is_consistent(&self.payload_commitment, &share.common) {
-            self.common = Some(share.common.clone());
-        } else {
+        } else if !AvidmGf2Scheme::is_consistent(&self.payload_commitment, &share.common) {
             warn!(%view, ?sender, "VID share common is inconsistent with its commitment");
             return;
+        } else if !ns_lens_match_metadata(&share.common, &self.metadata.encode()) {
+            warn!(
+                %view, ?sender,
+                "VID share namespace lengths disagree with the proposal's namespace table"
+            );
+            return;
+        } else {
+            self.common = Some(share.common.clone());
         }
         // A share whose namespaces disagree on the shard range is malformed.
         let Some(range) = share.share.range() else {

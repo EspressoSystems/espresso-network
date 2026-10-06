@@ -570,6 +570,31 @@ async fn test_poisoned_common_param_does_not_block_reconstruction() {
     expect_reconstruction(&mut reconstructor, view).await;
 }
 
+/// A Byzantine voter forwards its real share with `ns_lens` that disagree with
+/// the proposal's namespace table. The common still passes `is_consistent`,
+/// since the commitment covers `ns_commits` only, so admitted first it would
+/// pin a common every honest share differs from. The accumulator checks the
+/// lengths against the table before pinning and reconstructs from the honest
+/// shares.
+#[tokio::test]
+async fn test_mismatched_ns_lens_common_does_not_block_reconstruction() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    let mut poison = honest_share(view, 9);
+    let len = poison.common.payload_byte_len();
+    poison.common.ns_lens = vec![0, len];
+
+    handle_proposal(&mut reconstructor, view);
+    feed(&mut reconstructor, poison);
+    for i in 0..9u64 {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+
+    expect_reconstruction(&mut reconstructor, view).await;
+}
+
 /// A squatter occupies an honest voter's shard range with garbage under its own
 /// key (admitted on the crypto-free fast path). When the genuine owner's share
 /// arrives, the collision triggers verification: the garbage is evicted and the
@@ -1023,6 +1048,10 @@ fn test_ns_lens_must_match_a_table_sized_for_their_total() {
     let mut shrunk = common.clone();
     shrunk.ns_lens = vec![90];
     assert!(!ns_lens_match_metadata(&shrunk, &table));
+
+    let mut fewer = common.clone();
+    fewer.ns_lens = vec![100];
+    assert!(!ns_lens_match_metadata(&fewer, &table));
 
     // Metadata that is no table reads as one namespace spanning the total.
     let (_, single) =
