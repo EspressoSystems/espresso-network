@@ -96,6 +96,16 @@ func TestHeader0_6(t *testing.T) {
 	requireCommitment(t, header, "BLOCK~nAVIoY9ekw8WPwzHnLwTgsPZ1qvBox-WQev4nhcrLoZP")
 }
 
+// 0.7 dropped `builder_commitment`.
+func TestHeader0_7(t *testing.T) {
+	header := getHeaderFromTestFile("../../../data/v7/header.json", t)
+
+	require.Equal(t, common_types.Version{Major: 0, Minor: 7}, header.Version())
+	require.Equal(t, uint64(42), header.GetBlockHeight())
+	require.Nil(t, header.GetBuilderCommitment())
+	requireCommitment(t, header, "BLOCK~Y05GqjVqwmnMOza3LMLFagoyQxwEDFcYQCRRnzpho5a1")
+}
+
 // A header from mainnet, which runs 0.6, against the hash the query service reports for its
 // block. Unlike the reference vectors it has no `next_stake_table_hash` and a large
 // `total_reward_distributed`.
@@ -108,7 +118,7 @@ func TestHeaderMainnet0_6(t *testing.T) {
 }
 
 func TestHeaderImplMarshalAndUnmarshal(t *testing.T) {
-	for _, version := range []string{"v1", "v2", "v3", "v4", "v5", "v6"} {
+	for _, version := range []string{"v1", "v2", "v3", "v4", "v5", "v6", "v7"} {
 		header := getHeaderFromTestFile("../../../data/"+version+"/header.json", t)
 		testHeaderImplMarshalAndUnmarshal(header, t)
 	}
