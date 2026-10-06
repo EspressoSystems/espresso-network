@@ -359,8 +359,8 @@ pub struct TxIter(pub(crate) Range<usize>);
 /// Build an individual namespace payload one transaction at a time.
 ///
 /// Use [`Self::append_tx`] to add each transaction. Use [`Self::write_into`]
-/// or [`Self::into_bytes`] when you're done. The output includes a well-formed
-/// tx table and all tx payloads.
+/// when you're done. The output includes a well-formed tx table and all tx
+/// payloads.
 #[derive(Default)]
 pub struct NsPayloadBuilder {
     pub(crate) txs: Vec<Transaction>,

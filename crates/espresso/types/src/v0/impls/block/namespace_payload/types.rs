@@ -330,13 +330,6 @@ impl NsPayloadBuilder {
         self.txs.push(tx);
     }
 
-    /// Serialize to bytes.
-    pub fn into_bytes(self) -> Vec<u8> {
-        let mut result = vec![0; self.byte_len()];
-        self.write_into(&mut result);
-        result
-    }
-
     /// Byte length of the serialized namespace.
     pub(crate) fn byte_len(&self) -> usize {
         Self::tx_table_header_byte_len() + self.txs.len() * TX_OFFSET_BYTE_LEN + self.bodies_len
