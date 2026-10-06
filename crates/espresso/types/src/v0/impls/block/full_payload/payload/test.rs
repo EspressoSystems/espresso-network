@@ -2,7 +2,9 @@ use hotshot::traits::BlockPayload;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{NamespaceId, NsTable, Payload, SeqTypes, Transaction, v0_3::ChainConfig};
+use crate::{
+    NamespaceId, NsPayloadBuilder, NsTable, Payload, SeqTypes, Transaction, v0_3::ChainConfig,
+};
 
 #[derive(Serialize)]
 struct Legacy {
@@ -64,4 +66,12 @@ fn empty_payload_round_trips() {
         let json: Value = serde_json::to_value(&p).unwrap();
         assert_eq!(serde_json::from_value::<Payload>(json).unwrap(), p);
     }
+}
+
+#[test]
+fn write_into_rejects_short_buffer() {
+    let mut builder = NsPayloadBuilder::default();
+    builder.append_tx(Transaction::new(NamespaceId::from(1u32), vec![7; 10]));
+    let mut out = vec![0; builder.byte_len() - 1];
+    assert!(builder.write_into(&mut out).is_err());
 }

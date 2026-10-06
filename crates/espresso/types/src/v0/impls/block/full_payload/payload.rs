@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, iter, sync::Arc};
 
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -34,6 +34,8 @@ pub enum BlockBuildingError {
     UnexpectedGenesis,
     #[error("ChainConfig is not available")]
     MissingChainConfig(String),
+    #[error("Namespace payload is {expected} bytes, buffer is {actual}")]
+    NsPayloadLength { expected: usize, actual: usize },
 }
 
 /// Proposer-side limit that keeps VID dispersal size bounded. Not a
@@ -130,14 +132,13 @@ impl Payload {
 
         // build block payload and namespace table
         let len = ns_builders.values().map(NsPayloadBuilder::byte_len).sum();
-        // Perf: one zeroed allocation, filled in place.
-        // SAFETY: zeroed bytes are initialized `u8`s.
-        let mut payload = unsafe { Arc::<[u8]>::new_zeroed_slice(len).assume_init() };
+        // Perf: one allocation, filled in place.
+        let mut payload: Arc<[u8]> = iter::repeat_n(0, len).collect();
         let out = Arc::get_mut(&mut payload).expect("freshly allocated Arc is unique");
         let mut end = 0;
         let mut ns_table_builder = NsTableBuilder::new();
         for (ns_id, ns_builder) in ns_builders {
-            end += ns_builder.write_into(&mut out[end..]);
+            end += ns_builder.write_into(&mut out[end..])?;
             ns_table_builder.append_entry(ns_id, end);
         }
         let ns_table = ns_table_builder.into_ns_table();
