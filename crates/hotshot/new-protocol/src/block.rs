@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     panic::resume_unwind,
     sync::Arc,
     time::Duration,
@@ -86,6 +86,11 @@ pub struct BlockBuilderOutput<T: NodeType> {
 /// Room in a forwarded message for everything but the transactions.
 const FORWARD_ENVELOPE_BYTES: u64 = 4096;
 
+/// Views between a send and the first view it targets. The next view's leader takes its block
+/// as soon as it pairs this view's proposal, before most of this view's submissions reach it,
+/// so a copy sent to it would mostly wait in its pool for a later turn.
+const SEND_LEAD: u64 = 2;
+
 pub struct BlockBuilderConfig {
     pub max_retry_bytes: u64,
     /// `max_block_size` per protocol version; a missing version inherits the previous one.
@@ -95,6 +100,9 @@ pub struct BlockBuilderConfig {
     /// resending a transaction gets it included again once leaders have forgotten it.
     pub dedup_window_size: u64,
     pub empty_block_delay: Duration,
+    /// How many upcoming leaders each transaction is sent to. A leader holds up to
+    /// `fanout + 1` blocks of transactions for its later views.
+    pub fanout: NonZeroU64,
 }
 
 impl Default for BlockBuilderConfig {
@@ -106,6 +114,7 @@ impl Default for BlockBuilderConfig {
             ttl,
             dedup_window_size: ttl,
             empty_block_delay: Duration::from_millis(500),
+            fanout: NonZeroU64::new(2).expect("2 is non-zero"),
         }
     }
 }
@@ -121,6 +130,14 @@ struct RetryEntry<T: NodeType> {
     size: u64,
     /// Bytes on the wire, which can exceed `size`.
     encoded_size: u64,
+    /// The last view whose leader was sent this transaction.
+    sent_until: ViewNumber,
+}
+
+struct PoolEntry<T: NodeType> {
+    tx: T::Transaction,
+    /// The view the transaction was sent for, or the view it arrived in if that is later.
+    view: ViewNumber,
 }
 
 pub struct BlockBuilder<T: NodeType> {
@@ -129,7 +146,8 @@ pub struct BlockBuilder<T: NodeType> {
     retry_pending: HashMap<Commitment<T::Transaction>, RetryEntry<T>>,
     retry_order: BTreeSet<(ViewNumber, Commitment<T::Transaction>)>,
     retry_total_bytes: u64,
-    leader_buffer: HashMap<Commitment<T::Transaction>, T::Transaction>,
+    leader_buffer: HashMap<Commitment<T::Transaction>, PoolEntry<T>>,
+    leader_order: BTreeSet<(ViewNumber, Commitment<T::Transaction>)>,
     leader_total_bytes: u64,
     dedups: BTreeMap<ViewNumber, HashSet<Commitment<T::Transaction>>>,
     config: BlockBuilderConfig,
@@ -168,6 +186,7 @@ impl<T: NodeType> BlockBuilder<T> {
             retry_order: BTreeSet::new(),
             retry_total_bytes: 0,
             leader_buffer: HashMap::new(),
+            leader_order: BTreeSet::new(),
             leader_total_bytes: 0,
             dedups: BTreeMap::new(),
             current_view: ViewNumber::genesis(),
@@ -285,12 +304,43 @@ impl<T: NodeType> BlockBuilder<T> {
         if let Some(txs) = self.view_transactions.get(&view) {
             return txs.clone();
         }
-        let txs: Vec<_> = std::mem::take(&mut self.leader_buffer)
-            .into_iter()
-            .collect();
-        self.leader_total_bytes = 0;
+        let txs = self.take_block(view);
         self.view_transactions.insert(view, txs.clone());
         txs
+    }
+
+    /// Removes up to one block of pooled transactions, those sent for the earliest views first.
+    fn take_block(
+        &mut self,
+        view: ViewNumber,
+    ) -> Vec<(Commitment<T::Transaction>, T::Transaction)> {
+        let max_bytes = self.block_size(view);
+        let mut bytes = 0;
+        let mut taken = Vec::new();
+        for (_, hash) in &self.leader_order {
+            let size = self.leader_buffer[hash].tx.minimum_block_size();
+            if bytes + size > max_bytes {
+                continue;
+            }
+            bytes += size;
+            taken.push(*hash);
+        }
+        taken
+            .into_iter()
+            .map(|hash| {
+                let tx = self
+                    .remove_pooled(&hash)
+                    .expect("hashes come from the pool's own order");
+                (hash, tx)
+            })
+            .collect()
+    }
+
+    fn remove_pooled(&mut self, hash: &Commitment<T::Transaction>) -> Option<T::Transaction> {
+        let entry = self.leader_buffer.remove(hash)?;
+        self.leader_order.remove(&(entry.view, *hash));
+        self.leader_total_bytes -= entry.tx.minimum_block_size();
+        Some(entry.tx)
     }
 
     pub async fn next(&mut self) -> Option<Result<BlockBuilderOutput<T>, BlockError>> {
@@ -319,24 +369,40 @@ impl<T: NodeType> BlockBuilder<T> {
         self.view_transactions = self.view_transactions.split_off(&view_number);
     }
 
+    pub fn fanout(&self) -> NonZeroU64 {
+        self.config.fanout
+    }
+
+    /// Starts the builder at `view` instead of genesis. Transactions can be submitted before
+    /// the first `on_view_changed`, and would otherwise target the leaders of the first views
+    /// and expire at the first view change.
+    pub fn start_at(&mut self, view: ViewNumber) {
+        self.current_view = view;
+    }
+
     pub fn outstanding_transactions(&self) -> (usize, usize) {
         (self.retry_pending.len(), self.retry_total_bytes as usize)
     }
 
-    /// Resubmitting a queued transaction succeeds without queueing it twice.
-    pub fn on_submit_transaction(&mut self, tx: T::Transaction) -> Result<(), SubmitError> {
+    /// Returns the message for the upcoming leaders, addressed to the view `SEND_LEAD` ahead,
+    /// which the coordinator sends on to the leaders of the `fanout` views from there.
+    /// Resubmitting a queued transaction succeeds without queueing or sending it twice.
+    pub fn on_submit_transaction(
+        &mut self,
+        tx: T::Transaction,
+    ) -> Result<Option<TransactionMessage<T>>, SubmitError> {
         let hash = tx.commit();
 
         if self.retry_pending.contains_key(&hash) {
-            return Ok(());
+            return Ok(None);
         }
 
         let size = tx.minimum_block_size();
         let encoded_size = bincode::serialized_size(&tx).expect("transactions serialize");
-        // Forwarding uses the next view's block size, which an upgrade can raise.
+        // Forwarding uses the first target view's block size, which an upgrade can raise.
         let max_bytes = self
             .block_size(self.current_view)
-            .max(self.block_size(self.current_view + 1));
+            .max(self.block_size(self.current_view + SEND_LEAD));
         let budget = forward_budget(message_limit(max_bytes));
         if size > max_bytes {
             return Err(SubmitError::TooLarge {
@@ -356,6 +422,12 @@ impl<T: NodeType> BlockBuilder<T> {
         }
 
         let valid_until = self.current_view + self.config.ttl;
+        let first_target = self.current_view + SEND_LEAD;
+        let sent_until = first_target + (self.config.fanout.get() - 1);
+        let message = TransactionMessage {
+            view: first_target,
+            transactions: Vec::from([tx.clone()]),
+        };
 
         self.retry_total_bytes += size;
         self.retry_order.insert((valid_until, hash));
@@ -366,13 +438,18 @@ impl<T: NodeType> BlockBuilder<T> {
                 valid_until,
                 size,
                 encoded_size,
+                sent_until,
             },
         );
-        Ok(())
+        Ok(Some(message))
     }
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
-        let max_bytes = self.block_size(msg.view);
+        // A sender behind this node may name a view that has passed. Pooling it as of now keeps
+        // it from expiring before it can be built.
+        let view = msg.view.max(self.current_view);
+        let block_size = self.block_size(view);
+        let max_bytes = block_size.saturating_mul(self.config.fanout.get() + 1);
         for tx in msg.transactions {
             let hash = tx.commit();
 
@@ -385,12 +462,17 @@ impl<T: NodeType> BlockBuilder<T> {
             }
 
             let size = tx.minimum_block_size();
+            // It could never be built, and would hold pool space until it expires.
+            if size > block_size {
+                continue;
+            }
             if self.leader_total_bytes + size > max_bytes {
                 continue;
             }
 
             self.leader_total_bytes += size;
-            self.leader_buffer.insert(hash, tx);
+            self.leader_order.insert((view, hash));
+            self.leader_buffer.insert(hash, PoolEntry { tx, view });
         }
     }
 
@@ -399,8 +481,10 @@ impl<T: NodeType> BlockBuilder<T> {
         self.mark_included(view, hashes);
     }
 
-    /// Returns pending transactions for the next leader, within one block and one message.
-    pub fn on_view_changed(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
+    /// Returns the pending transactions to send again, within one block and one message,
+    /// addressed like `on_submit_transaction`. A transaction is sent again only once every
+    /// leader it went to has had its turn without including it.
+    pub fn on_view_changed(&mut self, view: ViewNumber) -> Option<TransactionMessage<T>> {
         self.current_view = view;
         while let Some(&(valid_until, hash)) = self.retry_order.first() {
             if valid_until >= view {
@@ -408,8 +492,21 @@ impl<T: NodeType> BlockBuilder<T> {
             }
             self.remove_pending(&hash);
         }
+        self.expire_pooled(view);
 
-        let max_bytes = self.block_size(view + 1);
+        let batch = self.resend_batch(view);
+        if batch.is_empty() {
+            return None;
+        }
+        Some(TransactionMessage {
+            view: view + SEND_LEAD,
+            transactions: batch,
+        })
+    }
+
+    fn resend_batch(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
+        let first_target = view + SEND_LEAD;
+        let max_bytes = self.block_size(first_target);
         let max_encoded = forward_budget(message_limit(max_bytes));
         let mut batch = Vec::new();
         let mut unfit = Vec::new();
@@ -420,18 +517,46 @@ impl<T: NodeType> BlockBuilder<T> {
                 unfit.push(*hash);
                 continue;
             }
+            // A node sees a block's transactions as included only once it has reconstructed
+            // the block, about a view after its leader built it. Resending in that view would
+            // send again most of what the last leader just included.
+            if entry.sent_until + 1 >= view {
+                continue;
+            }
             if bytes + entry.size > max_bytes || encoded + entry.encoded_size > max_encoded {
                 continue;
             }
             bytes += entry.size;
             encoded += entry.encoded_size;
-            batch.push(entry.tx.clone());
+            batch.push(*hash);
         }
         for hash in &unfit {
             warn!(%hash, "pending transaction no longer fits a block, dropping");
             self.remove_pending(hash);
         }
+        let sent_until = first_target + (self.config.fanout.get() - 1);
         batch
+            .into_iter()
+            .map(|hash| {
+                let entry = self
+                    .retry_pending
+                    .get_mut(&hash)
+                    .expect("batched hashes come from the retry buffer");
+                entry.sent_until = sent_until;
+                entry.tx.clone()
+            })
+            .collect()
+    }
+
+    /// Drops pooled transactions sent for views more than `ttl` behind `view`: their senders
+    /// have stopped retrying them.
+    fn expire_pooled(&mut self, view: ViewNumber) {
+        while let Some(&(sent_for, hash)) = self.leader_order.first() {
+            if sent_for + self.config.ttl >= view {
+                break;
+            }
+            self.remove_pooled(&hash);
+        }
     }
 
     fn remove_pending(&mut self, hash: &Commitment<T::Transaction>) {
@@ -468,9 +593,7 @@ impl<T: NodeType> BlockBuilder<T> {
 
     fn mark_included(&mut self, view: ViewNumber, hashes: Vec<Commitment<T::Transaction>>) {
         for hash in &hashes {
-            if let Some(tx) = self.leader_buffer.remove(hash) {
-                self.leader_total_bytes -= tx.minimum_block_size();
-            }
+            self.remove_pooled(hash);
         }
 
         let lower_bound: ViewNumber = self
@@ -491,8 +614,7 @@ impl<T: NodeType> BlockBuilder<T> {
         view: ViewNumber,
         epoch: EpochNumber,
     ) -> (Vec<T::Transaction>, DedupManifest<T>) {
-        let (hashes, txs) = self.leader_buffer.drain().unzip();
-        self.leader_total_bytes = 0;
+        let (hashes, txs) = self.take_block(view).into_iter().unzip();
 
         let manifest = DedupManifest {
             view,

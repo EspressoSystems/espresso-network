@@ -491,6 +491,11 @@ impl<T: NodeType> Consensus<T> {
         self.proposals.get(&view)
     }
 
+    /// The proposal with the highest view below `view`, if any.
+    pub fn last_proposal_before(&self, view: ViewNumber) -> Option<&Proposal<T>> {
+        self.proposals.range(..view).next_back().map(|(_, p)| p)
+    }
+
     /// Return the Certificate1 (QC) stored at the given view, if any.
     pub fn cert1_at(&self, view: ViewNumber) -> Option<&Certificate1<T>> {
         self.certs.get(&view)
