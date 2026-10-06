@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use hotshot::{traits::BlockPayload, types::BLSPubKey};
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -381,9 +381,9 @@ async fn run_instrumented(
                 };
                 let size = cfg.block_size;
                 let d = disperser.clone();
-                let (view, epoch) = (req.view, req.epoch);
+                let epoch = req.epoch;
                 builds.spawn_blocking(move || {
-                    let (block, dispersal) = build_test_block(size, &d, view, epoch)?;
+                    let (block, dispersal) = build_test_block(size, &d, epoch)?;
                     Ok((pending, block, dispersal))
                 });
                 continue; // skip process_consensus_output for this one
@@ -467,18 +467,14 @@ struct TestBlock {
 fn build_test_block(
     size: usize,
     disperser: &BenchDisperser,
-    view: ViewNumber,
     epoch: EpochNumber,
 ) -> Result<(TestBlock, Dispersal)> {
-    use hotshot_types::traits::EncodeBytes;
-
     // Split the configured payload into BENCH_TX_BYTES-byte transactions, with at
     // least one so `--block-size 0` still yields a valid (tiny) payload.
     let num_txs = size.div_ceil(BENCH_TX_BYTES).max(1);
     let mut transactions = Vec::with_capacity(num_txs);
     transactions.resize_with(num_txs, || TestTransaction::new(vec![0u8; BENCH_TX_BYTES]));
     let block = TestBlockPayload { transactions };
-    let encoded = block.encode();
 
     let metadata = TestMetadata {
         num_transactions: num_txs as u64,
