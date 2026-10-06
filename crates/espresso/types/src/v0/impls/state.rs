@@ -1902,7 +1902,12 @@ mod test {
     /// when the commitments match, without asking peers.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_chain_config_resolved_from_instance() {
-        let instance = NodeState::mock();
+        // The mock peers serve the default config, so the instance's must differ from it for
+        // an answer fetched from them to fail the assertion.
+        let instance = NodeState::mock().with_chain_config(ChainConfig {
+            max_block_size: BlockSize(300),
+            ..Default::default()
+        });
         let commitment_only = ResolvableChainConfig::from(instance.chain_config.commit());
         let state = ValidatedState {
             chain_config: commitment_only,

@@ -3896,16 +3896,21 @@ mod test {
     }
 
     async fn run_catchup_test(url_suffix: &str) {
-        // Start a sequencer network, using the query service for catchup.
+        // Start a sequencer network, using the query service for catchup. Node 0 keeps merklized
+        // state in SQL: in memory it holds only the states from its decided view up, and a node
+        // restarted under load handles proposals behind the network, so by the time it asks for
+        // a parent's frontier a peer without storage has dropped that view, and the request
+        // retries forever.
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         const NUM_NODES: usize = 5;
+        let storage = SqlDataSource::create_storage().await;
 
         let url: url::Url = format!("http://localhost:{port}{url_suffix}")
             .parse()
             .unwrap();
 
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
-            .api_config(Options::with_port(port))
+            .api_config(SqlDataSource::options(&storage, Options::with_port(port)))
             .network_config(TestConfigBuilder::default().build())
             .without_api_catchup()
             .catchups(std::array::from_fn(|_| {
@@ -3928,14 +3933,28 @@ mod test {
     }
 
     /// Restarts replica 1 from genesis after the network has moved on without it, and waits for
-    /// it to decide blocks past the height the network had reached when it came back. We don't
-    /// just stop consensus and restart it; we fully drop the node and recreate it so it loses all
-    /// of its temporary state. It should be able to catch up by listening to proposals and then
-    /// rebuild its state with `catchup`.
+    /// it to decide blocks past the height the network had reached when it came back, with a
+    /// state it validated itself. We don't just stop consensus and restart it; we fully drop the
+    /// node and recreate it so it loses all of its temporary state. It should be able to catch up
+    /// by listening to proposals and then rebuild its state with `catchup`.
     async fn restarted_node_catches_up<const NUM_NODES: usize>(
         network: &mut TestNetwork<no_storage::Options, NUM_NODES>,
         catchup: impl StateCatchup + 'static,
     ) {
+        // A decide proves only that the node hears the network: it takes a proposal and its two
+        // certificates, all broadcast, and never a validated state. A state this node computed
+        // carries a delta, where the `from_header` stub it holds otherwise has none.
+        restart_from_genesis_and_decide(network, catchup, |info| info.delta.is_some()).await;
+    }
+
+    /// Restarts replica 1 from genesis after the network has moved on without it, then waits for
+    /// it to decide a leaf past the height the network had reached when it came back that also
+    /// satisfies `caught_up`. Returns every leaf it decided on the way, oldest first.
+    async fn restart_from_genesis_and_decide<const NUM_NODES: usize>(
+        network: &mut TestNetwork<no_storage::Options, NUM_NODES>,
+        catchup: impl StateCatchup + 'static,
+        caught_up: impl Fn(&LeafInfo<SeqTypes>) -> bool,
+    ) -> Vec<LeafInfo<SeqTypes>> {
         // Wait for replica 1 to reach a (non-genesis) decide, before disconnecting it.
         let mut events = network.node(1).event_stream();
         loop {
@@ -3972,16 +3991,30 @@ mod test {
             )
             .await;
         let mut events = node.event_stream();
-        timeout(Duration::from_secs(120), async {
+        let mut decided = Vec::new();
+        let done = timeout(Duration::from_secs(120), async {
             loop {
                 let event = events.next().await.unwrap();
-                if decided_leaves(&event).is_some_and(|chain| chain[0].leaf.height() >= target) {
+                let Some(chain) = decided_leaves(&event) else {
+                    continue;
+                };
+                decided.extend(chain.iter().rev().cloned());
+                let newest = &chain[0];
+                if newest.leaf.height() >= target && caught_up(newest) {
                     break;
                 }
             }
         })
-        .await
-        .expect("restarted node never caught up");
+        .await;
+        assert!(
+            done.is_ok(),
+            "restarted node never caught up to height {target}; decided (height, validated): {:?}",
+            decided
+                .iter()
+                .map(|info| (info.leaf.height(), info.delta.is_some()))
+                .collect::<Vec<_>>()
+        );
+        decided
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -3999,9 +4032,13 @@ mod test {
         run_catchup_test("/v1").await;
     }
 
+    /// With no source of state, a node restarted from genesis still follows the network, since a
+    /// decide takes nothing it has to compute. But it cannot catch up: its first proposal has no
+    /// parent state, so it validates the next one from a `from_header` stub, which needs the
+    /// block merkle frontier from a peer, and its first decide garbage-collects everything older,
+    /// so it can't replay from genesis either. Every state it reports stays a stub.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_catchup_no_state_peers() {
-        // Start a sequencer network, using the query service for catchup.
+    async fn test_restart_no_state_peers_decides_without_catchup() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         const NUM_NODES: usize = 5;
         let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
@@ -4010,7 +4047,13 @@ mod test {
             .without_api_catchup()
             .build();
         let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
-        restarted_node_catches_up(&mut network, NullStateCatchup::default()).await;
+        let decided =
+            restart_from_genesis_and_decide(&mut network, NullStateCatchup::default(), |_| true)
+                .await;
+        assert!(
+            decided.iter().all(|info| info.delta.is_none()),
+            "a node without state peers validated a state it had no way to rebuild"
+        );
     }
 
     /// A query node with a gap must fill it from a peer over the path production runs: the
