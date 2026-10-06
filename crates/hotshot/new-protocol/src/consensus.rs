@@ -442,6 +442,12 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    /// Restore the anchor's cert2 persisted on a prior run. When the anchor is an epoch's last
+    /// block, the next epoch's first proposal needs it as its `next_epoch_justify_qc`.
+    pub fn seed_cert2(&mut self, cert2: Certificate2<T>) {
+        self.certs2.insert(cert2.view_number(), cert2);
+    }
+
     /// Advance the locked-QC persistence watermark to `view` if it is newer.
     fn bump_stored_high_qc(&mut self, view: ViewNumber) {
         if self.stored_high_qc.is_none_or(|cur| cur < view) {
@@ -490,6 +496,11 @@ impl<T: NodeType> Consensus<T> {
     /// Return the proposal stored at the given view, if any.
     pub fn proposal_at(&self, view: ViewNumber) -> Option<&Proposal<T>> {
         self.proposals.get(&view)
+    }
+
+    /// The proposal with the highest view below `view`, if any.
+    pub fn last_proposal_before(&self, view: ViewNumber) -> Option<&Proposal<T>> {
+        self.proposals.range(..view).next_back().map(|(_, p)| p)
     }
 
     /// Return the Certificate1 (QC) stored at the given view, if any.
