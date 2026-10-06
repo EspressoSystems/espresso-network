@@ -1,15 +1,18 @@
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
-    data::{VidCommitment2, VidDisperseShare2},
+    data::{VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
     traits::signature_key::SignatureKey,
-    vid::avidm_gf2::AvidmGf2Scheme,
+    vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
 };
 
 use super::common::utils::{TestData, TestView};
 use crate::{
     tests::common::utils::vid_fragments,
-    vid::{VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind, VidReconstructor},
+    vid::{
+        VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind, VidReconstructor,
+        matches_commitment, ns_lens_match_metadata,
+    },
 };
 
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
@@ -929,4 +932,101 @@ fn epoch_window_bounds() {
         EpochNumber::new(u64::MAX),
         EpochNumber::genesis()
     ));
+}
+
+/// Encode a namespace table whose namespaces end at `offsets`.
+fn ns_table(offsets: &[u32]) -> Vec<u8> {
+    let mut bytes = (offsets.len() as u32).to_le_bytes().to_vec();
+    for (id, offset) in offsets.iter().enumerate() {
+        bytes.extend_from_slice(&(id as u32).to_le_bytes());
+        bytes.extend_from_slice(&offset.to_le_bytes());
+    }
+    bytes
+}
+
+/// The commitment covers neither the namespace table nor `ns_lens`, and for a
+/// one-namespace block a table sized for another payload parses to the honest
+/// table. A leader claiming a shorter block than it dispersed passes every
+/// pairing check and recovers the dispersed bytes; the recommit must refuse
+/// the table rather than accept the fallback, or the block decides with a
+/// header that misdescribes its payload.
+#[test]
+fn test_recommit_refuses_ns_table_sized_for_another_payload() {
+    let param = init_avidm_gf2_param(1000).unwrap();
+    let payload = vec![0xabu8; 20_000];
+    let table = ns_table(&[20_000]);
+    let (commitment, common, shares) = AvidmGf2Scheme::ns_disperse(
+        &param,
+        &[100; 10],
+        &payload,
+        parse_ns_table(payload.len(), &table),
+    )
+    .unwrap();
+    let view = ViewNumber::new(1);
+
+    let short = 20_000 - 10 * 1024;
+    let short_table = ns_table(&[short as u32]);
+    let mut forged = common.clone();
+    forged.ns_lens = vec![short];
+    assert!(AvidmGf2Scheme::is_consistent(&commitment, &forged));
+    assert!(ns_lens_match_metadata(&forged, &short_table));
+    let recovered = AvidmGf2Scheme::recover(&forged, &shares).unwrap();
+    assert_eq!(recovered, payload);
+    assert!(!matches_commitment(
+        view,
+        &param,
+        &short_table,
+        &recovered,
+        &commitment
+    ));
+
+    assert!(matches_commitment(
+        view,
+        &param,
+        &table,
+        &recovered,
+        &commitment
+    ));
+    // Metadata that is no table reads as one namespace, as it does for the disperser.
+    assert!(matches_commitment(
+        view,
+        &param,
+        &[],
+        &recovered,
+        &commitment
+    ));
+    for claimed in [20_000 - 1, 20_000 + 1] {
+        assert!(
+            !matches_commitment(view, &param, &ns_table(&[claimed]), &recovered, &commitment),
+            "{claimed}"
+        );
+    }
+}
+
+/// `ns_lens` must be what the header's table gives at the total they claim,
+/// and the table must be sized for that total: a one-entry `ns_lens` would
+/// otherwise match the single-namespace fallback at any total.
+#[test]
+fn test_ns_lens_must_match_a_table_sized_for_their_total() {
+    let param = init_avidm_gf2_param(1000).unwrap();
+    let payload = vec![1u8; 100];
+    let table = ns_table(&[30, 100]);
+    let (_, common) =
+        AvidmGf2Scheme::commit(&param, &payload, parse_ns_table(payload.len(), &table)).unwrap();
+    assert_eq!(common.ns_lens, vec![30, 70]);
+    assert!(ns_lens_match_metadata(&common, &table));
+
+    let mut shuffled = common.clone();
+    shuffled.ns_lens = vec![40, 60];
+    assert!(!ns_lens_match_metadata(&shuffled, &table));
+
+    let mut shrunk = common.clone();
+    shrunk.ns_lens = vec![90];
+    assert!(!ns_lens_match_metadata(&shrunk, &table));
+
+    // Metadata that is no table reads as one namespace spanning the total.
+    let (_, single) =
+        AvidmGf2Scheme::commit(&param, &payload, parse_ns_table(payload.len(), &[])).unwrap();
+    assert_eq!(single.ns_lens, vec![100]);
+    assert!(ns_lens_match_metadata(&single, &[]));
 }

@@ -6,7 +6,10 @@ use std::{
 use committable::Commitment;
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
+    data::{
+        EpochNumber, VidCommitment2, VidDisperseShare2, ViewNumber,
+        ns_table::{ns_table_payload_byte_len, parse_ns_table},
+    },
     traits::{block_contents::EncodeBytes, node_implementation::NodeType},
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
@@ -515,7 +518,16 @@ fn decode_and_recommit<T: NodeType>(
     .then_some(bytes)
 }
 
-/// Whether `bytes` are the payload `payload_commitment` commits to.
+/// Whether `payload` is what `payload_commitment` commits to, sliced by the
+/// header's namespace table `ns_table`.
+///
+/// The commitment covers each namespace's bytes but not the table, and
+/// `parse_ns_table` substitutes one namespace spanning the payload for a table
+/// sized for another payload. For a one-namespace block that substitute is the
+/// honest table, so a header claiming a shorter or longer payload would
+/// recommit to the same bytes and decide with a table that misdescribes them.
+/// Refuse such a table instead: it must be sized for `payload`, or be no
+/// table at all, which the disperser also reads as one namespace.
 pub(crate) fn matches_commitment(
     view: ViewNumber,
     param: &AvidmGf2Param,
@@ -523,6 +535,17 @@ pub(crate) fn matches_commitment(
     payload: &[u8],
     payload_commitment: &VidCommitment2,
 ) -> bool {
+    if let Some(claimed) = ns_table_payload_byte_len(ns_table)
+        && claimed != payload.len()
+    {
+        warn!(
+            %view,
+            claimed,
+            actual = payload.len(),
+            "namespace table is sized for another payload"
+        );
+        return false;
+    }
     let ns_table = parse_ns_table(payload.len(), ns_table);
     match AvidmGf2Scheme::commit(param, payload, ns_table) {
         Ok((recomputed, _)) if recomputed == *payload_commitment => true,
