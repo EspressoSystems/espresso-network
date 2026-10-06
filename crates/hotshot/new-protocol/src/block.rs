@@ -87,11 +87,6 @@ pub struct BlockBuilderOutput<T: NodeType> {
 /// Room in a forwarded message for everything but the transactions.
 const FORWARD_ENVELOPE_BYTES: u64 = 4096;
 
-/// Views between a send and the first view it targets. The next view's leader takes its block
-/// as soon as it pairs this view's proposal, before most of this view's submissions reach it,
-/// so a copy sent to it would mostly wait in its pool for a later turn.
-const SEND_LEAD: u64 = 2;
-
 pub struct BlockBuilderConfig {
     pub max_retry_bytes: u64,
     /// `max_block_size` per protocol version; a missing version inherits the previous one.
@@ -162,6 +157,9 @@ pub struct BlockBuilder<T: NodeType> {
     config: BlockBuilderConfig,
     upgrade_lock: UpgradeLock<T>,
     current_view: ViewNumber,
+    /// The latest view whose proposal this node has seen. A send targets the views after its
+    /// successor, whose leader built its block the moment the proposal reached it.
+    proposal_view: Option<ViewNumber>,
     // Keyed by (view, parent_proposal commitment) so that two requests for
     // the same view but different parents (e.g. one from
     // `handle_proposal_with_vid_share` and one from
@@ -198,6 +196,7 @@ impl<T: NodeType> BlockBuilder<T> {
             leader_total_bytes: 0,
             dedups: BTreeMap::new(),
             current_view: ViewNumber::genesis(),
+            proposal_view: None,
             calculations: BTreeMap::new(),
             view_transactions: BTreeMap::new(),
             tasks: JoinSet::new(),
@@ -400,7 +399,7 @@ impl<T: NodeType> BlockBuilder<T> {
         // Forwarding uses the first target view's block size, which an upgrade can raise.
         let max_bytes = self
             .block_size(self.current_view)
-            .max(self.block_size(self.current_view + SEND_LEAD));
+            .max(self.block_size(self.first_target(self.current_view)));
         let budget = forward_budget(message_limit(max_bytes));
         if size > max_bytes {
             return Err(SubmitError::TooLarge {
@@ -483,9 +482,25 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect()
     }
 
-    /// The `fanout` views whose leaders a send in `view` targets, from `SEND_LEAD` ahead.
+    /// Records a proposal this node has seen. From now on a send skips that view's successor,
+    /// whose leader built its block when the proposal reached it.
+    pub fn on_proposal(&mut self, view: ViewNumber) {
+        self.proposal_view = self.proposal_view.max(Some(view));
+    }
+
+    /// The first view a send in `view` targets: two after the latest proposal seen, and never
+    /// behind the view after `view`, which a view change without a proposal (a timeout) can
+    /// leave the latest proposal short of.
+    fn first_target(&self, view: ViewNumber) -> ViewNumber {
+        self.proposal_view
+            .map_or(view + 1, |proposal| proposal + 2)
+            .max(view + 1)
+    }
+
+    /// The `fanout` views whose leaders a send in `view` targets.
     fn target_views(&self, view: ViewNumber) -> impl Iterator<Item = ViewNumber> {
-        (0..self.config.fanout).map(move |ahead| view + SEND_LEAD + ahead)
+        let first = self.first_target(view);
+        (0..self.config.fanout).map(move |ahead| first + ahead)
     }
 
     /// The last view a send in `view` targets, or `view` itself when it targets none.
@@ -552,7 +567,7 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     fn resend_batch(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
-        let max_bytes = self.block_size(view + SEND_LEAD);
+        let max_bytes = self.block_size(self.first_target(view));
         let max_encoded = forward_budget(message_limit(max_bytes));
         let mut batch = Vec::new();
         let mut unfit = Vec::new();

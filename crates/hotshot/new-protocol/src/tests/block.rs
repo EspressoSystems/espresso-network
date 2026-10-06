@@ -85,6 +85,7 @@ async fn submit_sends_to_each_upcoming_leader() {
         ..small_config()
     });
     b.on_view_changed(view(4));
+    b.on_proposal(view(4));
 
     assert_eq!(
         submit(&mut b, tx(1)),
@@ -100,29 +101,70 @@ async fn submit_sends_to_each_upcoming_leader() {
 }
 
 #[tokio::test]
+async fn submit_targets_two_views_after_the_latest_proposal() {
+    let mut b = builder();
+    b.on_view_changed(view(4));
+
+    assert_eq!(
+        submit(&mut b, tx(1)),
+        Vec::from([tx_msg(view(5), Vec::from([tx(1)]))]),
+        "before this view's proposal, the next view's leader has not built yet"
+    );
+    b.on_proposal(view(4));
+    assert_eq!(
+        submit(&mut b, tx(2)),
+        Vec::from([tx_msg(view(6), Vec::from([tx(2)]))]),
+        "once it is seen, that leader has built"
+    );
+    b.on_proposal(view(5));
+    assert_eq!(
+        submit(&mut b, tx(3)),
+        Vec::from([tx_msg(view(7), Vec::from([tx(3)]))]),
+        "a proposal ahead of the view counts"
+    );
+}
+
+#[tokio::test]
+async fn target_stays_ahead_of_the_view_when_proposals_are_missing() {
+    let mut b = builder();
+    b.on_proposal(view(2));
+    b.on_view_changed(view(6));
+
+    assert_eq!(
+        submit(&mut b, tx(1)),
+        Vec::from([tx_msg(view(7), Vec::from([tx(1)]))])
+    );
+}
+
+#[tokio::test]
 async fn pending_transaction_is_resent_only_after_its_leaders_had_their_turn() {
     let mut b = builder_with(BlockBuilderConfig {
         fanout: 2,
         ttl: 10,
         ..small_config()
     });
+    b.on_view_changed(view(4));
+    b.on_proposal(view(4));
     submit(&mut b, tx(1));
 
-    for v in 1..=4 {
+    for v in 5..=8 {
+        b.on_proposal(view(v - 1));
         assert!(
             b.on_view_changed(view(v)).is_empty(),
             "view {v} is too early to resend"
         );
     }
+    b.on_proposal(view(8));
     assert_eq!(
-        b.on_view_changed(view(5)),
+        b.on_view_changed(view(9)),
         Vec::from([
-            tx_msg(view(7), Vec::from([tx(1)])),
-            tx_msg(view(8), Vec::from([tx(1)])),
+            tx_msg(view(10), Vec::from([tx(1)])),
+            tx_msg(view(11), Vec::from([tx(1)])),
         ])
     );
+    b.on_proposal(view(9));
     assert!(
-        b.on_view_changed(view(6)).is_empty(),
+        b.on_view_changed(view(10)).is_empty(),
         "a resent transaction waits for its new leaders"
     );
 }
@@ -139,7 +181,7 @@ async fn test_retry_buffer() {
 
     assert_eq!(
         b.on_view_changed(view(4)),
-        Vec::from([tx_msg(view(6), Vec::from([t2]))]),
+        Vec::from([tx_msg(view(5), Vec::from([t2]))]),
         "only unconfirmed tx should be resent"
     );
 
@@ -209,21 +251,27 @@ fn builder_upgrading(old_size: u64, new_size: u64) -> BlockBuilder<TestTypes> {
 #[tokio::test]
 async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
     let mut b = builder_upgrading(2, 4);
-    for n in 1..=4 {
+    for n in 1..=6 {
         b.on_submit_transaction(tx(n)).unwrap();
     }
 
     assert_eq!(
         b.on_view_changed(view(4))[0].transactions.len(),
+        2,
+        "a resend for view 5 uses the old block size"
+    );
+    b.on_proposal(view(4));
+    assert_eq!(
+        b.on_view_changed(view(5))[0].transactions.len(),
         4,
         "a resend for view 6 uses the new block size"
     );
 
-    b.on_transactions(tx_msg(view(5), (5..=7).map(tx).collect()));
+    b.on_transactions(tx_msg(view(5), (7..=9).map(tx).collect()));
     let (txns, _) = b.drain(view(5), epoch());
     assert_eq!(txns.len(), 2, "a block for view 5 uses the old size");
 
-    b.on_transactions(tx_msg(view(6), (8..=11).map(tx).collect()));
+    b.on_transactions(tx_msg(view(6), (10..=13).map(tx).collect()));
     let (txns, _) = b.drain(view(6), epoch());
     assert_eq!(txns.len(), 4, "a block for view 6 uses the new size");
 }
@@ -231,13 +279,20 @@ async fn test_larger_blocks_apply_once_the_upgrade_takes_effect() {
 #[tokio::test]
 async fn test_smaller_blocks_drop_what_no_longer_fits() {
     let mut b = builder_upgrading(4, 2);
+    b.on_view_changed(view(4));
+    b.on_proposal(view(4));
     b.on_submit_transaction(TestTransaction::new(vec![0; 3]))
         .unwrap();
     b.on_submit_transaction(tx(1)).unwrap();
 
+    for v in 5..=7 {
+        b.on_proposal(view(v - 1));
+        assert!(b.on_view_changed(view(v)).is_empty());
+    }
+    b.on_proposal(view(7));
     assert_eq!(
-        b.on_view_changed(view(4)),
-        Vec::from([tx_msg(view(6), Vec::from([tx(1)]))]),
+        b.on_view_changed(view(8)),
+        Vec::from([tx_msg(view(9), Vec::from([tx(1)]))]),
         "a transaction over the new size is dropped instead of blocking the batch"
     );
 }
@@ -273,7 +328,7 @@ async fn test_forward_batch_fills_the_block_with_later_transactions() {
     assert_eq!(
         resent,
         Vec::from([tx_msg(
-            view(7),
+            view(6),
             Vec::from([
                 TestTransaction::new(vec![1; 3]),
                 TestTransaction::new(vec![3; 2])

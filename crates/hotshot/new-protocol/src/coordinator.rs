@@ -934,6 +934,7 @@ where
                 let epoch = proposal.data.epoch;
                 let block = proposal.data.block_header.block_number();
                 info!(%node, %view, %epoch, %block, "send proposal");
+                self.block_builder.on_proposal(view);
                 if let Some(m) = &self.metrics
                     && proposal.data.view_change_evidence.is_none()
                     && let Some((prev_view, received_at)) = self.proposal_received_at
@@ -1130,6 +1131,7 @@ where
                     sender = %KeyPrefix::from(&sender),
                     "proposal validated"
                 );
+                self.block_builder.on_proposal(proposal.data.view_number);
             },
             ConsensusOutput::ViewChanged(view, epoch) => {
                 let current_view = self.consensus.current_view();
