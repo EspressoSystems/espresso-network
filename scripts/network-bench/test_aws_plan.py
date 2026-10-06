@@ -911,6 +911,12 @@ def node_env(name: str, nodes: int = 5) -> dict[str, str]:
     return parse_env(awsb.render_node_env(spec, fleet(nodes), awsb.pg_endpoint()))
 
 
+def test_node_env_streams_l1_heads_over_websocket():
+    env = node_env("node1")
+    http = env["ESPRESSO_L1_PROVIDER"]
+    assert env["ESPRESSO_L1_WS_PROVIDER"] == http.replace("http://", "ws://", 1)
+
+
 def test_node_env_overrides_reach_every_node():
     extra = ("ESPRESSO_QUERY_PAYLOAD_DIR=/payload", "RUST_LOG=debug,a=b")
     hosts = fleet(5)
