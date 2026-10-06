@@ -847,6 +847,11 @@ def test_finish_saves_node0_balance(run_harness: RunHarness) -> None:
     assert run_harness.run(runner) == awsb.EXIT_OK
     assert runner.count("get-metric-data") == 1
     assert (run_harness.run_dir / awsb.EC2_NODE0_FILE).exists()
+    commands = [" ".join(call) for call in runner.calls]
+    destroyed = next(
+        i for i, c in enumerate(commands) if "tofu" in c and "destroy" in c
+    )
+    assert destroyed < next(i for i, c in enumerate(commands) if "get-metric-data" in c)
 
 
 @pytest.mark.usefixtures("valid")

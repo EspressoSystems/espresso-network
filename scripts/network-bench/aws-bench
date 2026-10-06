@@ -3079,8 +3079,8 @@ def cmd_run(args: argparse.Namespace, system: System) -> int:
         )
         with recording(bench_run):
             up_fleet(fleet)
-        result = run_on_fleet(bench_run)
-        return teardown(bench_run, result)
+        run_on_fleet(bench_run, cloudwatch=False)
+        return teardown(bench_run)
     except Exception:
         log.exception("unexpected error")
         log.error(LEFTOVER_MESSAGE, fleet_dir)
@@ -3240,16 +3240,25 @@ def up_fleet(fleet: FleetState) -> None:
     update_manifest(fleet.manifest_path, "idle")
 
 
-def run_on_fleet(run: Run) -> nb.BenchResult | None:
-    """One measurement, then collect and report. Never raises. A `run.error` from `up_fleet`
-    skips the load; the collect still runs against whatever hosts are known."""
+def run_on_fleet(run: Run, cloudwatch: bool) -> None:
+    """One measurement, then collect. Never raises. A `run.error` from `up_fleet` skips the
+    load; the collect still runs against whatever hosts are known."""
     if run.error is None:
         update_manifest(run.fleet.manifest_path, "running")
         measure_run(run)
     try:
-        return finish_run(run)
+        finish_run(run, cloudwatch)
     except Exception as exc:  # the fleet costs money until teardown, whatever failed
         log.exception("finish failed")
+        run.error = run.error or f"finish failed: {type(exc).__name__}: {exc}"
+
+
+def report_run(run: Run) -> nb.BenchResult | None:
+    """The report of the collected run. Never raises."""
+    try:
+        return report(run)
+    except Exception as exc:
+        log.exception("report failed")
         run.error = run.error or f"finish failed: {type(exc).__name__}: {exc}"
         return None
 
@@ -3338,7 +3347,7 @@ RdsCollect = Callable[[Runner, str, RdsInfo, float, float, Path], None]
 
 
 def collect_plan(
-    error: str | None, agent_started: bool, query_db: DbMode
+    error: str | None, agent_started: bool, query_db: DbMode, cloudwatch: bool
 ) -> list[CollectStep]:
     """The collection steps in order. `skip_collect` is not an input: it can be set by a signal
     during any step, so `finish_run` checks it before each one."""
@@ -3346,15 +3355,21 @@ def collect_plan(
     steps += ["freeze", "collect_hosts"]
     if agent_started:
         steps.append("rsync_out")
-    steps.append("ebs_balance")
+    if cloudwatch:
+        steps += cloudwatch_steps(query_db)
     if query_db == "rds":
-        steps += ["rds_metrics", "rds_logs"]
+        steps.append("rds_logs")
     return steps
 
 
-def finish_run(run: Run) -> nb.BenchResult | None:
-    """Stops the load if it still runs, freezes and collects every host, then reports. Signals
-    are ignored from here on: teardown must not be cut short."""
+def cloudwatch_steps(query_db: DbMode) -> list[CollectStep]:
+    return ["ebs_balance", "rds_metrics"] if query_db == "rds" else ["ebs_balance"]
+
+
+def finish_run(run: Run, cloudwatch: bool) -> None:
+    """Stops the load if it still runs, freezes and collects every host. CloudWatch is part of
+    it only on a fleet that stays up; a single shot fetches it after the destroy. Signals are
+    ignored from here on: teardown must not be cut short."""
     interrupts = run.fleet.interrupts
     interrupts.disarm()
     remote = run.fleet.remote
@@ -3372,25 +3387,44 @@ def finish_run(run: Run) -> nb.BenchResult | None:
                 "final rsync",
                 lambda: remote.rsync_from("ctl", f"{BENCH_DIR}/out/", run.run_dir),
             ),
-            "ebs_balance": (
-                "node0 EBS balance",
-                lambda: collect_node0_ebs_balance(run),
-            ),
-            "rds_metrics": rds_step(run, "rds metrics", collect_rds_metrics),
+            **cloudwatch_actions(run),
             "rds_logs": rds_step(run, "rds logs", collect_rds_logs),
         }
-        for name in collect_plan(run.error, run.agent_started, run.cfg.query_db):
-            what, action = actions[name]
-            if interrupts.skip_collect.is_set():
-                log.warning("%s skipped", what)
-            else:
-                best_effort(what, action)
-    return report(run)
+        plan = collect_plan(run.error, run.agent_started, run.cfg.query_db, cloudwatch)
+        run_steps(interrupts, [actions[name] for name in plan])
+
+
+def run_steps(
+    interrupts: Interrupts, steps: list[tuple[str, Callable[[], object]]]
+) -> None:
+    for what, action in steps:
+        if interrupts.skip_collect.is_set():
+            log.warning("%s skipped", what)
+        else:
+            best_effort(what, action)
+
+
+def cloudwatch_actions(run: Run) -> dict[CollectStep, tuple[str, Callable[[], object]]]:
+    return {
+        "ebs_balance": ("node0 EBS balance", lambda: collect_node0_ebs_balance(run)),
+        "rds_metrics": rds_step(run, "rds metrics", collect_rds_metrics),
+    }
+
+
+def collect_cloudwatch(run: Run) -> None:
+    """The CloudWatch part of the collection, for a single shot after its destroy: only the
+    manifest ids are needed, and the wait for the lag is no longer billed."""
+    if run.fleet.remote is None:
+        return
+    actions = cloudwatch_actions(run)
+    run_steps(
+        run.fleet.interrupts,
+        [actions[name] for name in cloudwatch_steps(run.cfg.query_db)],
+    )
 
 
 def collect_node0_ebs_balance(run: Run) -> None:
-    """Waits until CloudWatch has the end of the load window, then fetches node0's EBS balance.
-    Runs after the host collection, which usually takes longer than the lag."""
+    """Waits until CloudWatch has the end of the load window, then fetches node0's EBS balance."""
     agent = published_window(run, "node0 EBS balance")
     if agent is None:
         return
@@ -3510,12 +3544,16 @@ def log_result(result: nb.BenchResult) -> None:
     log.info(nb.capacity_line(result["capacity"]).replace("**", ""))
 
 
-def teardown(run: Run, result: nb.BenchResult | None) -> int:
-    """Always attempts the destroy. An exception in the bookkeeping afterwards is logged and
-    leaves the exit code to the result if the destroy worked, else to `EXIT_LEFTOVER`."""
+def teardown(run: Run) -> int:
+    """Always attempts the destroy, then fetches CloudWatch and reports. An exception in the
+    bookkeeping afterwards is logged and leaves the exit code to the result if the destroy
+    worked, else to `EXIT_LEFTOVER`."""
     destroyed = False
+    result = None
     try:
         destroyed = down_fleet(run.fleet)
+        collect_cloudwatch(run)
+        result = report_run(run)
         code = record_outcome(run, result, destroyed)
     except Exception:
         log.exception("teardown failed")
@@ -3800,7 +3838,8 @@ def cmd_run_fleet(args: argparse.Namespace, system: System) -> int:
             if cfg.query_db == "rds":
                 reset_rds_store(fleet.remote, fleet_dir, interrupts)
         reset_failed = bench_run.error is not None
-        result = run_on_fleet(bench_run)
+        run_on_fleet(bench_run, cloudwatch=True)
+        result = report_run(bench_run)
         return end_fleet_run(bench_run, result, reset_failed)
     except Exception:
         log.exception("unexpected error")

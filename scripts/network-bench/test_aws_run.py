@@ -836,25 +836,28 @@ def test_start_support_starts_the_planned_containers_in_order(
 
 # TEST:collect-plan-skip-ok
 @pytest.mark.parametrize(
-    ("error", "agent_started", "query_db", "plan"),
+    ("error", "agent_started", "query_db", "cloudwatch", "plan"),
     [
         (
             None,
             True,
             "colocated",
+            True,
             ["freeze", "collect_hosts", "rsync_out", "ebs_balance"],
         ),
-        (None, False, "colocated", ["freeze", "collect_hosts", "ebs_balance"]),
+        (None, False, "colocated", True, ["freeze", "collect_hosts", "ebs_balance"]),
         (
             "boom",
             True,
             "volume",
+            True,
             ["stop_agent", "freeze", "collect_hosts", "rsync_out", "ebs_balance"],
         ),
         (
             None,
             True,
             "rds",
+            True,
             [
                 "freeze",
                 "collect_hosts",
@@ -864,13 +867,24 @@ def test_start_support_starts_the_planned_containers_in_order(
                 "rds_logs",
             ],
         ),
+        (
+            None,
+            True,
+            "rds",
+            False,
+            ["freeze", "collect_hosts", "rsync_out", "rds_logs"],
+        ),
     ],
-    ids=["clean", "no-agent", "error", "rds"],
+    ids=["clean", "no-agent", "error", "rds", "single-shot-rds"],
 )
 def test_collect_plan(
-    error: str | None, agent_started: bool, query_db: str, plan: list[str]
+    error: str | None,
+    agent_started: bool,
+    query_db: str,
+    cloudwatch: bool,
+    plan: list[str],
 ):
-    assert awsb.collect_plan(error, agent_started, query_db) == plan
+    assert awsb.collect_plan(error, agent_started, query_db, cloudwatch) == plan
 
 
 def skip_collect(interrupts: Any) -> None:
@@ -882,12 +896,18 @@ def no_signal(interrupts: Any) -> None:
 
 
 @pytest.mark.parametrize(
-    ("on_freeze", "ran", "skipped"),
+    ("on_freeze", "cloudwatch", "ran", "skipped"),
     [
-        (skip_collect, ["freeze"], ["collect", "final rsync", "node0 EBS balance"]),
-        (no_signal, ["freeze", "collect", "final rsync", "ebs balance"], []),
+        (
+            skip_collect,
+            True,
+            ["freeze"],
+            ["collect", "final rsync", "node0 EBS balance"],
+        ),
+        (no_signal, True, ["freeze", "collect", "final rsync", "ebs balance"], []),
+        (no_signal, False, ["freeze", "collect", "final rsync"], []),
     ],
-    ids=["signal", "no-signal"],
+    ids=["signal", "no-signal", "single-shot"],
 )
 def test_skip_collect_is_checked_before_every_collect_step(
     isolated: Path,
@@ -895,6 +915,7 @@ def test_skip_collect_is_checked_before_every_collect_step(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     on_freeze: Callable[[Any], None],
+    cloudwatch: bool,
     ran: list[str],
     skipped: list[str],
 ):
@@ -917,14 +938,15 @@ def test_skip_collect_is_checked_before_every_collect_step(
         return action
 
     monkeypatch.setattr(awsb, "update_manifest", step("manifest"))
-    monkeypatch.setattr(awsb, "report", step("report"))
     monkeypatch.setattr(awsb, "freeze", step("freeze", lambda: on_freeze(interrupts)))
     monkeypatch.setattr(awsb, "collect_hosts", step("collect"))
     monkeypatch.setattr(awsb.Remote, "rsync_from", step("final rsync"))
     monkeypatch.setattr(awsb, "collect_node0_ebs_balance", step("ebs balance"))
     with caplog.at_level(logging.WARNING, awsb.log.name):
-        awsb.finish_run(awsb.Run(fleet, isolated, fleet.cfg, 0.0, agent_started=True))
-    assert steps == ["manifest", *ran, "report"]
+        awsb.finish_run(
+            awsb.Run(fleet, isolated, fleet.cfg, 0.0, agent_started=True), cloudwatch
+        )
+    assert steps == ["manifest", *ran]
     assert caplog.messages == [f"{what} skipped" for what in skipped]
 
 
