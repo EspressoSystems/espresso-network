@@ -34,10 +34,10 @@ pub use fragments::{VidFragmentAccumulator, VidFragmentError};
 use hotshot_types::{
     data::{EpochNumber, ns_table::parse_ns_table, vid_disperse::vid_total_weight},
     epoch_membership::EpochMembershipCoordinator,
-    traits::{block_contents::EncodeBytes, node_implementation::NodeType},
+    traits::node_implementation::NodeType,
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, init_avidm_gf2_param},
 };
-pub(crate) use reconstruct::{Metadata, matches_commitment};
+pub(crate) use reconstruct::matches_commitment;
 pub use reconstruct::{
     ObtainedPayload, VidReconstructError, VidReconstructErrorKind, VidReconstructor,
 };
@@ -67,11 +67,8 @@ pub fn expected_vid_param<T: NodeType>(
 /// The total is not checked here: the application's header validation pins it
 /// to the header, and reconstruction recommits the recovered bytes at their
 /// true length.
-pub(crate) fn ns_lens_match_metadata<T: NodeType>(
-    common: &AvidmGf2Common,
-    metadata: &Metadata<T>,
-) -> bool {
-    let expected = parse_ns_table(common.payload_byte_len(), &metadata.encode());
+pub(crate) fn ns_lens_match_metadata(common: &AvidmGf2Common, ns_table: &[u8]) -> bool {
+    let expected = parse_ns_table(common.payload_byte_len(), ns_table);
     common.ns_lens.len() == expected.len()
         && common
             .ns_lens

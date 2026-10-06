@@ -505,19 +505,25 @@ fn decode_and_recommit<T: NodeType>(
             return None;
         },
     };
-    matches_commitment::<T>(view, &common.param, metadata, &bytes, payload_commitment)
-        .then_some(bytes)
+    matches_commitment(
+        view,
+        &common.param,
+        &metadata.encode(),
+        &bytes,
+        payload_commitment,
+    )
+    .then_some(bytes)
 }
 
 /// Whether `bytes` are the payload `payload_commitment` commits to.
-pub(crate) fn matches_commitment<T: NodeType>(
+pub(crate) fn matches_commitment(
     view: ViewNumber,
     param: &AvidmGf2Param,
-    metadata: &Metadata<T>,
+    ns_table: &[u8],
     payload: &[u8],
     payload_commitment: &VidCommitment2,
 ) -> bool {
-    let ns_table = parse_ns_table(payload.len(), &metadata.encode());
+    let ns_table = parse_ns_table(payload.len(), ns_table);
     match AvidmGf2Scheme::commit(param, payload, ns_table) {
         Ok((recomputed, _)) if recomputed == *payload_commitment => true,
         Ok((recomputed, _)) => {

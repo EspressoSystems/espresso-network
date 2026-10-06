@@ -27,7 +27,7 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
-        block_contents::BlockHeader,
+        block_contents::{BlockHeader, EncodeBytes},
         node_implementation::NodeType,
         signature_key::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
@@ -1060,7 +1060,10 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
 
-        if !ns_lens_match_metadata::<T>(&vid_share.common, proposal.block_header.metadata()) {
+        if !ns_lens_match_metadata(
+            &vid_share.common,
+            &proposal.block_header.metadata().encode(),
+        ) {
             warn!(
                 %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
                 "VID share namespace lengths disagree with the proposal's namespace table"
