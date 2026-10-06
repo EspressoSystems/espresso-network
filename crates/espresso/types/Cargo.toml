@@ -138,6 +138,10 @@ toml = { workspace = true }
 warp = { workspace = true }
 
 [[bench]]
+name = "tx_hash"
+harness = false
+
+[[bench]]
 name = "reward_mt"
 harness = false
 
