@@ -27,8 +27,9 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
-`MerklizedStateService` and `RewardStateService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`,
-`/v2/config/...`, `/v2/database/...`, `/v2/availability/...` and `/v2/merklized-state/...`.
+`MerklizedStateService`, `RewardStateService` and `StateSignatureService`, served under `/v2/status/...`,
+`/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`, `/v2/merklized-state/...`
+and `/v2/state-signature/...`.
 
 - `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
@@ -67,6 +68,10 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   `RewardMerkleTreeV1`, its account proof and its path lookup, stay on v1. v2 has no path lookup for
   `RewardMerkleTreeV2`: v1's reads merklized-state tables no reward tree populates, so it cannot succeed, and the proof
   route already serves an account's path.
+- `StateSignatureService` serves this node's light client state signature for a block. A node keeps signatures only for
+  recent blocks, so an older height is a 404 on both versions. Its fields take the names `StateCertV2Response` uses for
+  the same values, where v1 writes `state`, `next_stake`, `signature` and `v2_signature`. A validator without SQL query
+  storage serves it on v1 only, as it does every v2 service.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
@@ -146,7 +151,13 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
 ### Rules and caveats
 
 - Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never
-  renumber, reuse, or change the type of an existing field.
+  renumber, reuse, or change the type of an existing field. `just proto-check` enforces this on every PR: it checks the
+  protos' formatting with `buf format`, and when a proto changed it runs `buf breaking` with the `PACKAGE` rules
+  (`crates/espresso/api/proto/buf.yaml`) against the merge base with the PR's base branch, so deleting an rpc or a
+  service fails it as well as changing a field. Run it locally as `just proto-check`, and fix formatting with
+  `buf format -w crates/espresso/api/proto`. The rules compare a field's message type by name, so renaming a message a
+  field refers to counts as a break even though the wire bytes are unchanged. buf does not read the `google.api.http`
+  annotation, so a changed route is not caught by it.
 - An rpc is a GET, or a POST when its input cannot be flat. A POST binds the whole request message as its protoJSON body
   (`body: "*"`) and refuses a query string with a 400.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every

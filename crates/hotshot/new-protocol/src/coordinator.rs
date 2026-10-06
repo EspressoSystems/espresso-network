@@ -17,8 +17,8 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
-        QuorumCertificate2, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
-        UpgradeCertificate2,
+        OneHonestThreshold, SuccessThreshold, TimeoutCertificate2, TimeoutCertificate3,
+        TimeoutEvidence, UpgradeCertificate2,
     },
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2, TimeoutVote3},
     traits::{
@@ -26,7 +26,7 @@ use hotshot_types::{
         signature_key::StateSignatureKey,
     },
     upgrade_config::UpgradeConfig,
-    utils::is_epoch_root,
+    utils::{is_epoch_root, is_last_block},
     vote::{HasViewNumber, Vote},
 };
 use time::OffsetDateTime;
@@ -49,9 +49,8 @@ use crate::{
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
-        MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage,
-        TimeoutOneHonest, TimeoutOneHonest3, TimeoutVote, TransactionMessage, Unchecked, Validated,
-        Vote2, payload::PayloadFetchMessage,
+        MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
+        TransactionMessage, Unchecked, Validated, Vote2, payload::PayloadFetchMessage,
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -111,14 +110,14 @@ pub struct Coordinator<T: NodeType, S> {
     vid_reconstructor: VidReconstructor<T>,
     #[builder(default)]
     vid_fragment_accumulator: VidFragmentAccumulator<T>,
-    vote1_collector: VoteCollector<T, SimpleTally<T, QuorumVote2<T>, QuorumCertificate2<T>>>,
-    vote2_collector: VoteCollector<T, SimpleTally<T, Vote2<T>, Certificate2<T>>>,
-    timeout_collector: VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutCertificate2<T>>>,
+    vote1_collector: VoteCollector<T, SimpleTally<T, QuorumVote2<T>, SuccessThreshold>>,
+    vote2_collector: VoteCollector<T, SimpleTally<T, Vote2<T>, SuccessThreshold>>,
+    timeout_collector: VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, SuccessThreshold>>,
     timeout_one_honest_collector:
-        VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, TimeoutOneHonest<T>>>,
-    timeout3_collector: VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, TimeoutCertificate3<T>>>,
+        VoteCollector<T, SimpleTally<T, TimeoutVote2<T>, OneHonestThreshold>>,
+    timeout3_collector: VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, SuccessThreshold>>,
     timeout_one_honest3_collector:
-        VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, TimeoutOneHonest3<T>>>,
+        VoteCollector<T, SimpleTally<T, TimeoutVote3<T>, OneHonestThreshold>>,
     epoch_root_collector: VoteCollector<T, EpochRootTally<T>>,
     upgrade_vote_collector: VoteCollector<T, UpgradeTally<T>>,
     upgrade_protocol: UpgradeProtocol<T>,
@@ -191,6 +190,8 @@ where
         consensus_metrics: ConsensusMetricsValue,
         /// Locked QC persisted on a prior run; restored so the lock survives restart.
         locked_qc: Option<Certificate1<T>>,
+        /// The anchor's cert2 persisted on a prior run.
+        anchor_cert2: Option<Certificate2<T>>,
         upgrade_config: UpgradeConfig,
     ) -> Self {
         let mut consensus = Consensus::new(
@@ -288,6 +289,9 @@ where
         if let Some(locked_qc) = locked_qc {
             consensus.seed_locked_cert(locked_qc);
         }
+        if let Some(cert2) = anchor_cert2 {
+            consensus.seed_cert2(cert2);
+        }
         consensus.resume_from_restart(
             anchor_view,
             initializer.start_view(),
@@ -312,6 +316,7 @@ where
         );
 
         let lock = upgrade_lock.clone();
+        let genesis_qc = consensus.cert1_at(ViewNumber::genesis()).cloned();
 
         // Covers a crash between deciding an upgrade and persisting its
         // certificate. A certificate for another target would make
@@ -395,6 +400,7 @@ where
                 membership_coordinator.clone(),
                 initializer.epoch_height(),
                 upgrade_lock.clone(),
+                genesis_qc.as_ref(),
             ))
             .share_validator(VidShareValidator::new(
                 membership_coordinator.clone(),
@@ -415,6 +421,9 @@ where
     pub fn start(&mut self) {
         let cur_view = self.consensus.current_view();
         let next_view = cur_view + 1;
+        // Client requests are served before the outbox reaches the builder, so it must know the
+        // view before that first `ViewChanged`.
+        self.block_builder.start_at(next_view);
         let epoch = self
             .consensus
             .current_epoch()
@@ -628,7 +637,6 @@ where
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
                         self.state_manager.request_header(HeaderRequest::from(&block));
-                        let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
                         // Retain the payload and persist it when consensus proposes this
@@ -640,6 +648,7 @@ where
                                     epoch: block.epoch,
                                     payload: block.payload.payload.clone(),
                                     metadata: block.payload.metadata.clone(),
+                                    hashes: manifest.hashes.clone(),
                                 },
                             );
                         } else {
@@ -647,11 +656,20 @@ where
                         }
                         // We built this block; skip reconstructing it from our own loopback share.
                         self.vid_reconstructor.retire_view(block.view);
-                        self.unicast_to_leader(
-                            next_view,
+                        // A leader of several views builds a copy sent for a later one into this
+                        // block, so a transaction here can be sent from `block.view - 1`, and its
+                        // other copies can sit with the leaders of the next `fanout` views.
+                        let holders = self.upcoming_leaders(
+                            block.view + 1,
+                            self.block_builder.fanout().get(),
                             epoch,
-                            BlockMessage::DedupManifest(manifest),
-                        )?;
+                        );
+                        for (_, leader) in holders {
+                            self.unicast_block(
+                                &leader,
+                                BlockMessage::DedupManifest(manifest.clone()),
+                            )?;
+                        }
                         return Ok(block.into())
                     }
                     Err(err) => {
@@ -878,10 +896,7 @@ where
                         // A leader never reconstructs its own block, and a block it built
                         // but did not propose puts nothing on the chain, so this is where
                         // its transactions count as included.
-                        self.block_builder.on_block_reconstructed(
-                            view,
-                            da.payload.transaction_commitments(&da.metadata),
-                        );
+                        self.block_builder.on_block_reconstructed(view, da.hashes);
                         self.storage.append_da(
                             view,
                             da.epoch,
@@ -1096,20 +1111,11 @@ where
                 info!(%node, %view, %epoch, "view changed");
                 self.timer.reset_with(view);
                 self.gc(epoch, GcScope::Local(view))?;
-                let txns = self.block_builder.on_view_changed(view);
+                let resend = self.block_builder.on_view_changed(view);
                 self.participation.on_view_changed(epoch);
                 self.on_view_changed_metrics(view, epoch);
-                if !txns.is_empty() {
-                    let next_view = view + 1;
-                    self.unicast_to_leader(
-                        next_view,
-                        epoch,
-                        BlockMessage::Transactions(TransactionMessage {
-                            view: next_view,
-                            transactions: txns,
-                        }),
-                    )
-                    .map_err(|e| e.context("unicast transactions"))?;
+                if let Some(resend) = resend {
+                    self.send_transactions(resend, epoch)?;
                 }
 
                 // Proactively fetch the DRB for the next epoch so
@@ -1192,6 +1198,11 @@ where
     #[cfg(test)]
     pub(crate) fn consensus_mut(&mut self) -> &mut Consensus<T> {
         &mut self.consensus
+    }
+
+    #[cfg(test)]
+    pub(crate) fn network(&self) -> &Cliquenet<T> {
+        &self.network
     }
 
     /// Refresh the network's peer window for `epoch`.
@@ -1317,6 +1328,10 @@ where
                         warn!(%node, %sender, %view, "vote1 signing key != sender");
                         return None;
                     }
+                    if !vote1.vote.data.is_well_formed(*self.consensus.epoch_height) {
+                        warn!(%node, %sender, %view, "vote1 is not well formed");
+                        return None;
+                    }
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
@@ -1370,6 +1385,10 @@ where
                         warn!(%node, %sender, %view, "vote2 signing key != sender");
                         return None;
                     }
+                    if !vote2.data.is_well_formed(*self.consensus.epoch_height) {
+                        warn!(%node, %sender, %view, "vote2 is not well formed");
+                        return None;
+                    }
                     debug!(%node, %sender, %view, "recv vote2");
                     self.vote2_collector.accumulate_vote(vote2);
                     None
@@ -1387,6 +1406,10 @@ where
                     }
                     if self.is_epoch_too_far_ahead(certificate1.epoch()) {
                         warn!(%node, %sender, %view, "certificate1 epoch is too far ahead");
+                        return None;
+                    }
+                    if view == ViewNumber::genesis() {
+                        warn!(%node, %sender, "certificate1 at the genesis view");
                         return None;
                     }
                     if let Some(epoch) = self
@@ -1469,11 +1492,7 @@ where
                         epoch = ?qc.epoch().map(|e| *e),
                         "recv high qc"
                     );
-                    if let Some(epoch) = self
-                        .cert_verifiers
-                        .advance
-                        .verify(message.sender.clone(), qc)
-                    {
+                    if let Some(epoch) = self.verify_advance(&message.sender, qc) {
                         self.epoch_manager.request_drb_result(epoch);
                     }
                     None
@@ -1527,6 +1546,16 @@ where
                         warn!(%node, %sender, %view, "upgrade vote is too far ahead");
                         return None;
                     }
+                    if !self.is_vote_epoch_admissible(vote.epoch()) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            epoch = ?vote.epoch(),
+                            "upgrade vote epoch is out of range"
+                        );
+                        return None;
+                    }
                     if vote.signing_key() != message.sender {
                         warn!(%node, %sender, %view, "upgrade vote signing key != sender");
                         return None;
@@ -1545,7 +1574,9 @@ where
                             count = msg.transactions.len(),
                             "recv transactions"
                         );
-                        self.block_builder.on_transactions(msg)
+                        if !self.is_view_too_far_ahead(msg.view) {
+                            self.block_builder.on_transactions(msg)
+                        }
                     },
                     BlockMessage::DedupManifest(manifest) => {
                         debug!(
@@ -1705,24 +1736,75 @@ where
             .map_err(|e| CoordinatorError::from(e).context(ctx))
     }
 
-    fn unicast_to_leader(
+    fn unicast_block(
         &mut self,
-        view: ViewNumber,
-        epoch: EpochNumber,
+        leader: &T::SignatureKey,
         msg: BlockMessage<T>,
     ) -> Result<(), CoordinatorError> {
-        let Some(leader) = self.leader(view, epoch) else {
-            warn!(%view, %epoch, "failed to resolve leader for unicast");
-            return Ok(());
-        };
         let message = Message {
             sender: self.public_key.clone(),
             message_type: MessageType::Block(msg),
         };
         self.network
             .sender()
-            .unicast(self.consensus.current_view(), &leader, &message)
+            .unicast(self.consensus.current_view(), leader, &message)
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
+    }
+
+    /// Sends `forward` to the leaders of the `fanout` views from its own, each leader once with
+    /// the earliest of its views.
+    fn send_transactions(
+        &mut self,
+        forward: TransactionMessage<T>,
+        epoch: EpochNumber,
+    ) -> Result<(), CoordinatorError> {
+        let leaders = self.upcoming_leaders(forward.view, self.block_builder.fanout().get(), epoch);
+        for (view, leader) in leaders {
+            let message = TransactionMessage {
+                view,
+                transactions: forward.transactions.clone(),
+            };
+            self.unicast_block(&leader, BlockMessage::Transactions(message))
+                .map_err(|e| e.context("unicast transactions"))?;
+        }
+        Ok(())
+    }
+
+    /// The leaders of the `count` views from `first`, each once with the earliest of its views.
+    fn upcoming_leaders(
+        &mut self,
+        first: ViewNumber,
+        count: u64,
+        epoch: EpochNumber,
+    ) -> Vec<(ViewNumber, T::SignatureKey)> {
+        let mut leaders = Vec::<(ViewNumber, T::SignatureKey)>::new();
+        for view in (0..count).map(|ahead| first + ahead) {
+            let Some(leader) = self.upcoming_leader(view, epoch) else {
+                warn!(%view, %epoch, "failed to resolve an upcoming leader");
+                continue;
+            };
+            if leaders.iter().all(|(_, known)| *known != leader) {
+                leaders.push((view, leader));
+            }
+        }
+        leaders
+    }
+
+    /// The leader of an upcoming `view`. Consensus picks it with the epoch of the block it
+    /// proposes, which is the next epoch when that block builds on its epoch's last block. Timed
+    /// out views add no block, so the latest proposal is the best guess for that parent. `epoch`
+    /// is the fallback when there is no proposal yet or its epoch's stake table is unknown.
+    fn upcoming_leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
+        let expected = self.consensus.last_proposal_before(view).map(|p| {
+            if is_last_block(p.block_header.block_number(), *self.consensus.epoch_height) {
+                p.epoch + 1
+            } else {
+                p.epoch
+            }
+        });
+        expected
+            .and_then(|e| self.leader(view, e))
+            .or_else(|| self.leader(view, epoch))
     }
 
     fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
@@ -1773,8 +1855,19 @@ where
                 });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
-                self.block_builder.on_submit_transaction(tx);
-                let _ = respond.send(());
+                let forward = match self.block_builder.on_submit_transaction(tx) {
+                    Ok(forward) => forward,
+                    Err(err) => {
+                        let _ = respond.send(Err(err));
+                        return Ok(());
+                    },
+                };
+                // The transaction is queued, and the retry buffer resends it if no leader
+                // resolves now.
+                let _ = respond.send(Ok(()));
+                if let Some(forward) = forward {
+                    self.send_transactions(forward, self.epoch())?;
+                }
             },
             ClientRequest::UpdateLeaf { update, respond } => {
                 self.state_manager.update_state(update);
@@ -2084,12 +2177,13 @@ where
             warn!(%node, %sender, %view, "timeout vote signing key != sender");
             return;
         }
+
         let current_view = self.consensus.current_view();
         let has_evidence = evidence.is_some();
 
         if let Some(e) = evidence.filter(|e| e.view_number() >= current_view) {
             let epoch = match e {
-                CatchupEvidence::Qc(qc) => self.cert_verifiers.advance.verify(sender.clone(), qc),
+                CatchupEvidence::Qc(qc) => self.verify_advance(sender, qc),
                 CatchupEvidence::Tc(tc) => self.verify_timeout_cert(sender, tc),
                 CatchupEvidence::Tc3(tc) => self.verify_timeout_cert3(sender, tc),
             };
@@ -2100,6 +2194,11 @@ where
 
         if self.is_view_too_far_ahead(view) {
             warn!(%node, %sender, %view, "timeout vote is too far ahead");
+            return;
+        }
+
+        if !vote.is_well_formed() {
+            warn!(%node, %sender, %view, "timeout vote not well formed");
             return;
         }
 
@@ -2156,6 +2255,31 @@ where
                 self.timeout_one_honest3_collector.accumulate_vote(vote);
             },
         }
+    }
+
+    /// Submit a `Cert1` that would advance our view for verification.
+    ///
+    /// A certificate at the genesis view passes the verifier unsigned, which is
+    /// right only for the genesis QC, so any other one claiming that view is
+    /// dropped here. Dropping it before verification rather than in consensus
+    /// also keeps it out of the verifier's completed keys, where a forgery
+    /// naming the genesis epoch would shadow the genesis QC itself.
+    fn verify_advance(
+        &mut self,
+        sender: &T::SignatureKey,
+        qc: Certificate1<T>,
+    ) -> Option<EpochNumber> {
+        let genesis = ViewNumber::genesis();
+        if qc.view_number() == genesis
+            && self
+                .consensus
+                .cert1_at(genesis)
+                .is_none_or(|seeded| seeded.data != qc.data)
+        {
+            warn!(node = %self.node_id, %sender, "cert1 at the genesis view is not the genesis QC");
+            return None;
+        }
+        self.cert_verifiers.advance.verify(sender.clone(), qc)
     }
 
     fn verify_timeout_cert(
@@ -2227,6 +2351,7 @@ struct PendingDa<T: NodeType> {
     epoch: EpochNumber,
     payload: T::BlockPayload,
     metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    hashes: Vec<Commitment<T::Transaction>>,
 }
 
 type ProposalFetchResponseSender<T> =

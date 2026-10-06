@@ -715,65 +715,68 @@ impl Storage for SqliteStorage {
 
                     // Insert only newly used BLS keys.
                     QueryBuilder::new("INSERT INTO stake_table_bls_key (epoch, key) ")
-                    .push_values(stake_table.used_bls_keys(), |mut q, key| {
-                        q.push_bind(epoch).push_bind(key.to_string());
-                    })
-                    // If we insert keys out of order, make sure `epoch` reflects the earliest time
-                    // when this key was added to the state.
-                    .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
-                    .build()
-                    .execute(tx.as_mut())
-                    .await
-                    .context(format!("inserting newly used BLS keys for epoch {epoch}"))?;
+                        .push_values(stake_table.used_bls_keys(), |mut q, key| {
+                            q.push_bind(epoch).push_bind(key.to_string());
+                        })
+                        // If we insert keys out of order, make sure `epoch` reflects the earliest time
+                        // when this key was added to the state.
+                        .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
+                        .build()
+                        .execute(tx.as_mut())
+                        .await
+                        .context(format!("inserting newly used BLS keys for epoch {epoch}"))?;
 
                     // Insert only newly used Schnorr keys.
                     QueryBuilder::new("INSERT INTO stake_table_schnorr_key (epoch, key) ")
-                    .push_values(stake_table.used_schnorr_keys(), |mut q, key| {
-                        q.push_bind(epoch).push_bind(key.to_string());
-                    })
-                    // If we insert keys out of order, make sure `epoch` reflects the earliest time
-                    // when this key was added to the state.
-                    .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
-                    .build()
-                    .execute(tx.as_mut())
-                    .await
-                    .context(format!(
-                        "inserting newly used Schnorr keys for epoch {epoch}"
-                    ))?;
-
-                    // Insert only newly used x25519 keys.
-                    if !stake_table.used_x25519_keys().is_empty() {
-                        QueryBuilder::new("INSERT INTO stake_table_x25519_key (epoch, key) ")
-                        .push_values(stake_table.used_x25519_keys(), |mut q, key| {
+                        .push_values(stake_table.used_schnorr_keys(), |mut q, key| {
                             q.push_bind(epoch).push_bind(key.to_string());
                         })
-                        // If we insert keys out of order, make sure `epoch` reflects the earliest
-                        // time when this key was added to the state.
+                        // If we insert keys out of order, make sure `epoch` reflects the earliest time
+                        // when this key was added to the state.
                         .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
                         .build()
                         .execute(tx.as_mut())
                         .await
                         .context(format!(
-                            "inserting newly used x25519 keys for epoch {epoch}"
+                            "inserting newly used Schnorr keys for epoch {epoch}"
                         ))?;
+
+                    // Insert only newly used x25519 keys.
+                    if !stake_table.used_x25519_keys().is_empty() {
+                        QueryBuilder::new("INSERT INTO stake_table_x25519_key (epoch, key) ")
+                            .push_values(stake_table.used_x25519_keys(), |mut q, key| {
+                                q.push_bind(epoch).push_bind(key.to_string());
+                            })
+                            // If we insert keys out of order, make sure `epoch` reflects the earliest
+                            // time when this key was added to the state.
+                            .push(
+                                " ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, \
+                                 excluded.epoch)",
+                            )
+                            .build()
+                            .execute(tx.as_mut())
+                            .await
+                            .context(format!(
+                                "inserting newly used x25519 keys for epoch {epoch}"
+                            ))?;
                     }
 
                     // Insert only the new validator exits.
                     if !stake_table.validator_exits().is_empty() {
                         QueryBuilder::new("INSERT INTO stake_table_exit (epoch, address) ")
-                        .push_values(stake_table.validator_exits(), |mut q, address| {
-                            q.push_bind(epoch).push_bind(address.to_string());
-                        })
-                        // If we insert exits out of order, make sure `epoch` reflects the earliest
-                        // time when this exit was added to the state.
-                        .push(
-                            " ON CONFLICT (address) DO UPDATE SET epoch = min(epoch, \
-                             excluded.epoch)",
-                        )
-                        .build()
-                        .execute(tx.as_mut())
-                        .await
-                        .context(format!("inserting new validator exits for epoch {epoch}"))?;
+                            .push_values(stake_table.validator_exits(), |mut q, address| {
+                                q.push_bind(epoch).push_bind(address.to_string());
+                            })
+                            // If we insert exits out of order, make sure `epoch` reflects the earliest
+                            // time when this exit was added to the state.
+                            .push(
+                                " ON CONFLICT (address) DO UPDATE SET epoch = min(epoch, \
+                                 excluded.epoch)",
+                            )
+                            .build()
+                            .execute(tx.as_mut())
+                            .await
+                            .context(format!("inserting new validator exits for epoch {epoch}"))?;
                     }
 
                     // Delete the second oldest stake table if necessary to ensure the number of stake

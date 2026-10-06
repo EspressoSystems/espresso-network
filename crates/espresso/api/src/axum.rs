@@ -86,6 +86,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
         };
         (status, Json(ErrorResponse::new(status, self.to_string()))).into_response()
     }
@@ -424,67 +425,99 @@ pub(crate) fn router_reward(state: RewardState) -> ApiRouter {
         .api_route(
             routes::v1::REWARD_CLAIM_INPUT_ROUTE,
             get_with(get_reward_claim_input, |op| {
-                op.summary("Get reward claim input").description("Returns the RewardClaimInput needed to call claimRewards() on L1: lifetime rewards, Merkle proof, and auth root inputs, for the account at the given block height finalized by the light client contract.")
+                op.summary("Get reward claim input").description(
+                    "Returns the RewardClaimInput needed to call claimRewards() on L1: lifetime \
+                     rewards, Merkle proof, and auth root inputs, for the account at the given \
+                     block height finalized by the light client contract.",
+                )
             }),
         )
         .api_route(
             routes::v1::REWARD_BALANCE_ROUTE,
             get_with(get_reward_balance, |op| {
-                op.summary("Get reward balance at height").description("Get balance in reward state at a specific height for an Ethereum address.")
+                op.summary("Get reward balance at height").description(
+                    "Get balance in reward state at a specific height for an Ethereum address.",
+                )
             }),
         )
         .api_route(
             routes::v1::LATEST_REWARD_BALANCE_ROUTE,
             get_with(get_latest_reward_balance, |op| {
-                op.summary("Get latest reward balance").description("Get current balance in reward state for an Ethereum address.")
+                op.summary("Get latest reward balance")
+                    .description("Get current balance in reward state for an Ethereum address.")
             }),
         )
         .api_route(
             routes::v1::REWARD_ACCOUNT_PROOF_ROUTE,
             get_with(get_reward_account_proof, |op| {
-                op.summary("Get reward account proof").description("Get the Merkle proof for a reward account at a given block height (RewardAccountProofV1 pre-V4, RewardAccountProofV2 from V4 onward).")
+                op.summary("Get reward account proof").description(
+                    "Get the Merkle proof for a reward account at a given block height \
+                     (RewardAccountProofV1 pre-V4, RewardAccountProofV2 from V4 onward).",
+                )
             }),
         )
         .api_route(
             routes::v1::LATEST_REWARD_ACCOUNT_PROOF_ROUTE,
             get_with(get_latest_reward_account_proof, |op| {
-                op.summary("Get latest reward account proof").description("Get the Merkle proof (RewardAccountProofV2) for a reward account at the latest block height finalized by the light client contract.")
+                op.summary("Get latest reward account proof").description(
+                    "Get the Merkle proof (RewardAccountProofV2) for a reward account at the \
+                     latest block height finalized by the light client contract.",
+                )
             }),
         )
         .api_route(
             routes::v1::REWARD_AMOUNTS_ROUTE,
             get_with(get_reward_amounts, |op| {
-                op.summary("List reward amounts").description("Return all RewardMerkleTreeV2 accounts stored for the requested height, paginated by offset and limit (limit must be <= 10000).")
+                op.summary("List reward amounts").description(
+                    "Return all RewardMerkleTreeV2 accounts stored for the requested height, \
+                     paginated by offset and limit (limit must be <= 10000).",
+                )
             }),
         )
         .api_route(
             routes::v1::REWARD_MERKLE_TREE_V2_ROUTE,
             get_with(get_reward_merkle_tree_v2, |op| {
-                op.summary("Get RewardMerkleTreeV2 snapshot").description("Get the snapshot of this node's RewardMerkleTreeV2 at the given block height, serialized as RewardMerkleTreeV2Data.")
+                op.summary("Get RewardMerkleTreeV2 snapshot").description(
+                    "Get the snapshot of this node's RewardMerkleTreeV2 at the given block \
+                     height, serialized as RewardMerkleTreeV2Data.",
+                )
             }),
         )
         .api_route(
             routes::v1::REWARD_STATE_HEIGHT_ROUTE,
             get_with(get_reward_state_height, |op| {
-                op.summary("Get reward-state block height").description("Latest block height for which the merklized reward state (V1) is available.")
+                op.summary("Get reward-state block height").description(
+                    "Latest block height for which the merklized reward state (V1) is available.",
+                )
             }),
         )
         .api_route(
             routes::v1::REWARD_STATE_V2_HEIGHT_ROUTE,
             get_with(get_reward_state_v2_height, |op| {
-                op.summary("Get reward-state-v2 block height").description("Latest block height for which the merklized reward state (V2) is available.")
+                op.summary("Get reward-state-v2 block height").description(
+                    "Latest block height for which the merklized reward state (V2) is available.",
+                )
             }),
         )
         .api_route(
             routes::v1::REWARD_V1_BALANCE_ROUTE,
             get_with(get_reward_balance_v1, |op| {
-                op.summary("Get reward balance at height (v1 mount)").description("Same handler as reward-state-v2/reward-balance, registered on the reward-state mount; tide-disco shared this handler across both merklized-state mounts.")
+                op.summary("Get reward balance at height (v1 mount)")
+                    .description(
+                        "Same handler as reward-state-v2/reward-balance, registered on the \
+                         reward-state mount; tide-disco shared this handler across both \
+                         merklized-state mounts.",
+                    )
             }),
         )
         .api_route(
             routes::v1::REWARD_V1_ACCOUNT_PROOF_ROUTE,
             get_with(get_reward_account_proof_v1, |op| {
-                op.summary("Get reward account proof (v1 mount)").description("Same handler as reward-state-v2/proof, registered on the reward-state mount; tide-disco shared this handler across both merklized-state mounts.")
+                op.summary("Get reward account proof (v1 mount)")
+                    .description(
+                        "Same handler as reward-state-v2/proof, registered on the reward-state \
+                         mount; tide-disco shared this handler across both merklized-state mounts.",
+                    )
             }),
         )
         // Tide-disco twins of the reward-state-v2 routes above, registered on the same
@@ -492,49 +525,84 @@ pub(crate) fn router_reward(state: RewardState) -> ApiRouter {
         .api_route(
             routes::v1::REWARD_V1_LATEST_BALANCE_ROUTE,
             get_with(get_latest_reward_balance, |op| {
-                op.summary("Get latest reward balance (v1 mount)").description("Same handler as reward-state-v2/reward-balance/latest, registered on the reward-state mount; tide-disco shared this handler across both merklized-state mounts.")
+                op.summary("Get latest reward balance (v1 mount)")
+                    .description(
+                        "Same handler as reward-state-v2/reward-balance/latest, registered on the \
+                         reward-state mount; tide-disco shared this handler across both \
+                         merklized-state mounts.",
+                    )
             }),
         )
         .api_route(
             routes::v1::REWARD_V1_LATEST_ACCOUNT_PROOF_ROUTE,
             get_with(get_latest_reward_account_proof, |op| {
-                op.summary("Get latest reward account proof (v1 mount)").description("Same handler as reward-state-v2/proof/latest, registered on the reward-state mount; tide-disco shared this handler across both merklized-state mounts.")
+                op.summary("Get latest reward account proof (v1 mount)")
+                    .description(
+                        "Same handler as reward-state-v2/proof/latest, registered on the \
+                         reward-state mount; tide-disco shared this handler across both \
+                         merklized-state mounts.",
+                    )
             }),
         )
         .api_route(
             routes::v1::REWARD_V1_AMOUNTS_ROUTE,
             get_with(get_reward_amounts, |op| {
-                op.summary("List reward amounts (v1 mount)").description("Same handler as reward-state-v2/reward-amounts, registered on the reward-state mount; tide-disco shared this handler across both merklized-state mounts.")
+                op.summary("List reward amounts (v1 mount)").description(
+                    "Same handler as reward-state-v2/reward-amounts, registered on the \
+                     reward-state mount; tide-disco shared this handler across both \
+                     merklized-state mounts.",
+                )
             }),
         )
         .api_route(
             routes::v1::REWARD_V1_MERKLE_TREE_V2_ROUTE,
             get_with(get_reward_merkle_tree_v2, |op| {
-                op.summary("Get RewardMerkleTreeV2 snapshot (v1 mount)").description("Same handler as reward-state-v2/reward-merkle-tree-v2, registered on the reward-state mount; tide-disco shared this handler across both merklized-state mounts.")
+                op.summary("Get RewardMerkleTreeV2 snapshot (v1 mount)")
+                    .description(
+                        "Same handler as reward-state-v2/reward-merkle-tree-v2, registered on the \
+                         reward-state mount; tide-disco shared this handler across both \
+                         merklized-state mounts.",
+                    )
             }),
         )
         .api_route(
             routes::v1::REWARD_STATE_PATH_BY_HEIGHT_ROUTE,
             get_with(get_reward_state_path_v1_by_height, |op| {
-                op.summary("Get reward-state Merkle path by height").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state (V1) tree, by block height and key.")
+                op.summary("Get reward-state Merkle path by height")
+                    .description(
+                        "Retrieve the Merkle path for the membership proof of a leaf in the \
+                         reward-state (V1) tree, by block height and key.",
+                    )
             }),
         )
         .api_route(
             routes::v1::REWARD_STATE_PATH_BY_COMMIT_ROUTE,
             get_with(get_reward_state_path_v1_by_commit, |op| {
-                op.summary("Get reward-state Merkle path by commitment").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state (V1) tree, by tree commitment and key.")
+                op.summary("Get reward-state Merkle path by commitment")
+                    .description(
+                        "Retrieve the Merkle path for the membership proof of a leaf in the \
+                         reward-state (V1) tree, by tree commitment and key.",
+                    )
             }),
         )
         .api_route(
             routes::v1::REWARD_STATE_V2_PATH_BY_HEIGHT_ROUTE,
             get_with(get_reward_state_path_v2_by_height, |op| {
-                op.summary("Get reward-state-v2 Merkle path by height").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state-v2 tree, by block height and key.")
+                op.summary("Get reward-state-v2 Merkle path by height")
+                    .description(
+                        "Retrieve the Merkle path for the membership proof of a leaf in the \
+                         reward-state-v2 tree, by block height and key.",
+                    )
             }),
         )
         .api_route(
             routes::v1::REWARD_STATE_V2_PATH_BY_COMMIT_ROUTE,
             get_with(get_reward_state_path_v2_by_commit, |op| {
-                op.summary("Get reward-state-v2 Merkle path by commitment").description("Retrieve the Merkle path for the membership proof of a leaf in the reward-state-v2 tree, by tree commitment and key.")
+                op.summary("Get reward-state-v2 Merkle path by commitment")
+                    .description(
+                        "Retrieve the Merkle path for the membership proof of a leaf in the \
+                         reward-state-v2 tree, by tree commitment and key.",
+                    )
             }),
         )
         .with_state(state)
@@ -1597,7 +1665,11 @@ pub(crate) fn router_status(state: StatusState) -> ApiRouter {
     };
 
     let status_keys = |State(state): State<StatusState>| async move {
-        state.keys().await.map(ApiJson).map_err(ApiError::Internal)
+        state
+            .keys()
+            .await
+            .map(ApiJson)
+            .map_err(classify_availability_error)
     };
 
     ApiRouter::new()
@@ -3821,7 +3893,8 @@ mod tests {
 
     /// Implements every v1 API trait with `unimplemented!()` bodies, purely so `create_router_v1`
     /// can be instantiated in tests that only exercise the static docs routes (root redirect,
-    /// swagger UI, OpenAPI spec) and never call into a handler.
+    /// swagger UI, OpenAPI spec) and never call into a handler. The one exception is `keys`,
+    /// which answers like a node without validator keys.
     #[derive(Clone)]
     struct MockState;
 
@@ -4177,7 +4250,10 @@ mod tests {
             unimplemented!()
         }
         async fn keys(&self) -> anyhow::Result<Self::Keys> {
-            unimplemented!()
+            Err(
+                crate::error::AvailabilityError::NotFound("this node has no validator keys".into())
+                    .into(),
+            )
         }
     }
 
@@ -4757,6 +4833,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn status_keys_without_validator_keys_is_not_found() {
+        let router = create_router_v1(MockState);
+        let req = Request::builder()
+            .uri(routes::v1::STATUS_KEYS_ROUTE)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(router, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn v1_swagger_ui_serves_html() {
         let router = create_router_v1(MockState);
         let req = Request::builder()
@@ -4888,6 +4975,7 @@ mod tests {
             "/v2/availability/stream/vid-common",
             "/v2/availability/stream/transactions",
             "/v2/availability/stream/namespace-proofs",
+            "/v2/state-signature/block",
         ]
         .into_iter()
         .collect();
@@ -5424,6 +5512,16 @@ mod tests {
             _request: tonic::Request<crate::proto::GetRewardMerkleTreeV2Request>,
         ) -> Result<tonic::Response<crate::proto::RewardMerkleTreeV2Response>, tonic::Status>
         {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl crate::proto::state_signature_service_server::StateSignatureService for MockV2State {
+        async fn get_state_signature(
+            &self,
+            _request: tonic::Request<crate::proto::GetStateSignatureRequest>,
+        ) -> Result<tonic::Response<crate::proto::StateSignatureResponse>, tonic::Status> {
             Err(tonic::Status::internal("mock"))
         }
     }
