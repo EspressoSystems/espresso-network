@@ -4772,7 +4772,7 @@ def start_hostmon(remote: Remote) -> None:
         pg = f" --pg {PG_JSON}" if role == "query" else ""
         remote.ssh(
             host,
-            f"sudo systemd-run --unit bench-host --collect {AGENT_PYTHON} {BENCH_DIR}/aws-bench "
+            f"sudo systemd-run --unit bench-host --collect -p TimeoutStopSec=3 {AGENT_PYTHON} {BENCH_DIR}/aws-bench "
             f"agent-host {BENCH_DIR}/host.jsonl --role {role}{pg}",
         )
 
