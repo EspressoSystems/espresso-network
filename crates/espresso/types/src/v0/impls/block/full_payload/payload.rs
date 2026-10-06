@@ -41,7 +41,7 @@ impl Payload {
         &self.ns_table
     }
 
-    /// The bytes [`BlockPayload::encode`] returns, without its copy into a fresh `Arc`.
+    /// The bytes [`BlockPayload::encode`] returns, without the `Arc` handle.
     pub fn raw_payload(&self) -> &[u8] {
         &self.raw_payload
     }
@@ -115,11 +115,15 @@ impl Payload {
         }
 
         // build block payload and namespace table
-        let mut payload = Vec::new();
+        let len = ns_builders.values().map(NsPayloadBuilder::byte_len).sum();
+        // Zeroed bytes are initialized `u8`s.
+        let mut payload = unsafe { Arc::<[u8]>::new_zeroed_slice(len).assume_init() };
+        let out = Arc::get_mut(&mut payload).expect("freshly allocated Arc is unique");
+        let mut end = 0;
         let mut ns_table_builder = NsTableBuilder::new();
         for (ns_id, ns_builder) in ns_builders {
-            payload.extend(ns_builder.into_bytes());
-            ns_table_builder.append_entry(ns_id, payload.len());
+            end += ns_builder.write_into(&mut out[end..]);
+            ns_table_builder.append_entry(ns_id, end);
         }
         let ns_table = ns_table_builder.into_ns_table();
         let metadata = ns_table.clone();
@@ -178,10 +182,9 @@ impl BlockPayload<SeqTypes> for Payload {
         Self::from_transactions_sync(transactions, chain_config)
     }
 
-    // TODO avoid cloning the entire payload here?
     fn from_bytes(block_payload_bytes: &[u8], ns_table: &Self::Metadata) -> Self {
         Self {
-            raw_payload: block_payload_bytes.to_vec(),
+            raw_payload: block_payload_bytes.into(),
             ns_table: ns_table.clone(),
         }
     }
@@ -300,7 +303,7 @@ impl std::fmt::Display for Payload {
 
 impl EncodeBytes for Payload {
     fn encode(&self) -> Arc<[u8]> {
-        Arc::from(self.raw_payload.as_ref())
+        Arc::clone(&self.raw_payload)
     }
 }
 
@@ -351,3 +354,6 @@ impl Payload {
         &mut self.ns_table
     }
 }
+
+#[cfg(test)]
+mod test;

@@ -134,6 +134,11 @@ struct RetryEntry<T: NodeType> {
     sent_until: ViewNumber,
 }
 
+type TakenBlock<T> = Vec<(
+    Commitment<<T as NodeType>::Transaction>,
+    <T as NodeType>::Transaction,
+)>;
+
 struct PoolEntry<T: NodeType> {
     tx: T::Transaction,
     /// The view the transaction was sent for, or the view it arrived in if that is later.
@@ -165,8 +170,7 @@ pub struct BlockBuilder<T: NodeType> {
     /// leader and view, so a second block for the view is votable only if its
     /// payload is the same. It is the same whenever the new parent does not
     /// change how the payload is built.
-    #[allow(clippy::type_complexity)]
-    view_transactions: BTreeMap<ViewNumber, Vec<(Commitment<T::Transaction>, T::Transaction)>>,
+    view_transactions: BTreeMap<ViewNumber, Arc<TakenBlock<T>>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -219,7 +223,8 @@ impl<T: NodeType> BlockBuilder<T> {
             if buffer.is_empty() {
                 sleep(empty_block_delay).await;
             }
-            let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
+            let (hashes, txs): (Vec<_>, Vec<_>) =
+                buffer.iter().map(|(hash, tx)| (*hash, tx.clone())).unzip();
             let manifest = DedupManifest {
                 view,
                 epoch,
@@ -297,23 +302,17 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert((view, parent_commitment), handle);
     }
 
-    fn transactions_for(
-        &mut self,
-        view: ViewNumber,
-    ) -> Vec<(Commitment<T::Transaction>, T::Transaction)> {
+    fn transactions_for(&mut self, view: ViewNumber) -> Arc<TakenBlock<T>> {
         if let Some(txs) = self.view_transactions.get(&view) {
-            return txs.clone();
+            return Arc::clone(txs);
         }
-        let txs = self.take_block(view);
-        self.view_transactions.insert(view, txs.clone());
+        let txs = Arc::new(self.take_block(view));
+        self.view_transactions.insert(view, Arc::clone(&txs));
         txs
     }
 
     /// Removes up to one block of pooled transactions, those sent for the earliest views first.
-    fn take_block(
-        &mut self,
-        view: ViewNumber,
-    ) -> Vec<(Commitment<T::Transaction>, T::Transaction)> {
+    fn take_block(&mut self, view: ViewNumber) -> TakenBlock<T> {
         let max_bytes = self.block_size(view);
         let mut bytes = 0;
         let mut taken = Vec::new();

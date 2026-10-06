@@ -1,9 +1,14 @@
-use std::{default::Default, iter::Peekable, ops::Range};
+use std::{default::Default, fmt, iter::Peekable, ops::Range, sync::Arc};
 
 use derive_more::Display;
 use hotshot_types::vid::advz::{LargeRangeProofType, SmallRangeProofType};
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{self, SeqAccess, Visitor},
+};
 use thiserror::Error;
+
+use crate::Transaction;
 
 /// Proof of correctness for namespace payload bytes in a block.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -179,10 +184,47 @@ pub struct Payload {
     //
     // TODO want to rename thisfield to `ns_payloads`, but can't due to
     // serialization compatibility.
-    #[serde(with = "base64_bytes")]
-    pub(crate) raw_payload: Vec<u8>,
+    #[serde(
+        serialize_with = "base64_bytes::serialize",
+        deserialize_with = "deserialize_shared_bytes"
+    )]
+    pub(crate) raw_payload: Arc<[u8]>,
 
     pub(crate) ns_table: NsTable,
+}
+
+fn deserialize_shared_bytes<'de, D: Deserializer<'de>>(d: D) -> Result<Arc<[u8]>, D::Error> {
+    if d.is_human_readable() {
+        base64_bytes::deserialize(d).map(Arc::from)
+    } else {
+        d.deserialize_bytes(SharedBytesVisitor)
+    }
+}
+
+struct SharedBytesVisitor;
+
+impl<'de> Visitor<'de> for SharedBytesVisitor {
+    type Value = Arc<[u8]>;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a byte array")
+    }
+
+    fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+        Ok(Arc::from(v))
+    }
+
+    fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+        Ok(Arc::from(v))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(b) = seq.next_element()? {
+            bytes.push(b);
+        }
+        Ok(Arc::from(bytes))
+    }
 }
 
 /// Byte length of a block payload, which includes all namespaces but *not* the
@@ -316,11 +358,11 @@ pub struct TxIter(pub(crate) Range<usize>);
 
 /// Build an individual namespace payload one transaction at a time.
 ///
-/// Use [`Self::append_tx`] to add each transaction. Use [`Self::into_bytes`]
-/// when you're done. The returned bytes include a well-formed tx table and all
-/// tx payloads.
+/// Use [`Self::append_tx`] to add each transaction. Use [`Self::write_into`]
+/// or [`Self::into_bytes`] when you're done. The output includes a well-formed
+/// tx table and all tx payloads.
 #[derive(Default)]
 pub struct NsPayloadBuilder {
-    pub(crate) tx_table_entries: Vec<u8>,
-    pub(crate) tx_bodies: Vec<u8>,
+    pub(crate) txs: Vec<Transaction>,
+    pub(crate) bodies_len: usize,
 }

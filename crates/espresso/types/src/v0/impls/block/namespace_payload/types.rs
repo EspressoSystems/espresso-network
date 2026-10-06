@@ -326,21 +326,45 @@ impl Iterator for TxIter {
 impl NsPayloadBuilder {
     /// Add a transaction's payload to this namespace
     pub fn append_tx(&mut self, tx: Transaction) {
-        self.tx_bodies.extend(tx.into_payload());
-        self.tx_table_entries
-            .extend(usize_to_bytes::<TX_OFFSET_BYTE_LEN>(self.tx_bodies.len()));
+        self.bodies_len += tx.payload().len();
+        self.txs.push(tx);
     }
 
-    /// Serialize to bytes and consume self.
+    /// Serialize to bytes.
     pub fn into_bytes(self) -> Vec<u8> {
-        let mut result = Vec::with_capacity(
-            NUM_TXS_BYTE_LEN + self.tx_table_entries.len() + self.tx_bodies.len(),
-        );
-        let num_txs = NumTxsUnchecked(self.tx_table_entries.len() / TX_OFFSET_BYTE_LEN);
-        result.extend(num_txs.to_payload_bytes());
-        result.extend(self.tx_table_entries);
-        result.extend(self.tx_bodies);
+        let mut result = vec![0; self.byte_len()];
+        self.write_into(&mut result);
         result
+    }
+
+    /// Byte length of the serialized namespace.
+    pub(crate) fn byte_len(&self) -> usize {
+        Self::tx_table_header_byte_len() + self.txs.len() * TX_OFFSET_BYTE_LEN + self.bodies_len
+    }
+
+    /// Write the serialized namespace to the start of `out` and return the byte count.
+    ///
+    /// # Panics
+    ///
+    /// If `out` is shorter than [`Self::byte_len`].
+    pub(crate) fn write_into(&self, out: &mut [u8]) -> usize {
+        let num_txs = NumTxsUnchecked(self.txs.len());
+        let (header, rest) = out.split_at_mut(NUM_TXS_BYTE_LEN);
+        header.copy_from_slice(&num_txs.to_payload_bytes());
+        let (entries, bodies) = rest.split_at_mut(self.txs.len() * TX_OFFSET_BYTE_LEN);
+        let mut end = 0;
+        for (entry, tx) in entries
+            .as_chunks_mut::<TX_OFFSET_BYTE_LEN>()
+            .0
+            .iter_mut()
+            .zip(&self.txs)
+        {
+            let body = tx.payload();
+            bodies[end..end + body.len()].copy_from_slice(body);
+            end += body.len();
+            *entry = usize_to_bytes::<TX_OFFSET_BYTE_LEN>(end);
+        }
+        self.byte_len()
     }
 
     /// Byte length of a tx table header.
