@@ -931,28 +931,25 @@ impl Header {
 
         // Eagerly start the previous epoch's reward calculation if it hasn't
         // been kicked off yet, so the result is ready by the epoch boundary.
-        // A background attempt that already failed is cleared here so it is
-        // retried on the next block instead of staying latched until the
-        // boundary.
+        // A background attempt that already failed is cleared first, so it is
+        // retried now instead of staying latched until the boundary.
         if epoch > first_epoch + 2 {
             if let Some(err) = reward_calculator.reap_finished_task(prev_epoch).await {
                 tracing::warn!(
                     %epoch,
                     %prev_epoch,
-                    "background epoch rewards calculation failed, respawning: {err:#}"
+                    err = %format!("{err:#}"),
+                    "background epoch rewards calculation failed, respawning"
                 );
             }
-            if !reward_calculator.is_calculating(prev_epoch) {
-                tracing::info!(%epoch, %prev_epoch, "triggering catchup reward calculation");
-                reward_calculator.spawn_background_task(
-                    prev_epoch,
-                    epoch_height,
-                    validated_state.reward_merkle_tree_v2.clone(),
-                    instance_state.clone(),
-                    coordinator.clone(),
-                    None,
-                );
-            }
+            reward_calculator.spawn_background_task(
+                prev_epoch,
+                epoch_height,
+                validated_state.reward_merkle_tree_v2.clone(),
+                instance_state.clone(),
+                coordinator.clone(),
+                None,
+            );
         }
 
         if !is_last_block(height, epoch_height) {
@@ -970,7 +967,8 @@ impl Header {
                 tracing::warn!(
                     %epoch,
                     %prev_epoch,
-                    "background epoch rewards calculation failed, recalculating: {err:#}"
+                    err = %format!("{err:#}"),
+                    "background epoch rewards calculation failed, recalculating"
                 );
                 None
             },

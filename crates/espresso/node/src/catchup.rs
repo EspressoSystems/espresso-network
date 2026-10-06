@@ -1930,13 +1930,29 @@ mod test {
 
     use super::*;
 
-    /// A remote catchup provider whose reward merkle tree fetch fails a fixed
-    /// number of times before succeeding, for testing retry behavior.
+    /// A catchup provider whose reward merkle tree fetch fails a fixed number
+    /// of times before succeeding, for testing retry and local-first behavior.
     #[derive(Debug)]
     struct FlakyRewardTreeProvider {
         attempts: AtomicUsize,
         failures_before_success: usize,
         backoff: BackoffParams,
+        local: bool,
+    }
+
+    impl FlakyRewardTreeProvider {
+        fn new(failures_before_success: usize, local: bool) -> Self {
+            Self {
+                attempts: AtomicUsize::new(0),
+                failures_before_success,
+                backoff: BackoffParams::default(),
+                local,
+            }
+        }
+
+        fn attempts(&self) -> usize {
+            self.attempts.load(AtomicOrdering::SeqCst)
+        }
     }
 
     #[async_trait]
@@ -2026,7 +2042,7 @@ mod test {
         }
 
         fn is_local(&self) -> bool {
-            false
+            self.local
         }
     }
 
@@ -2036,11 +2052,7 @@ mod test {
     /// own retrying fetch, a single transient failure is fatal.
     #[tokio::test]
     async fn test_reward_merkle_tree_v2_fetch_retries() {
-        let provider = Arc::new(FlakyRewardTreeProvider {
-            attempts: AtomicUsize::new(0),
-            failures_before_success: 1,
-            backoff: BackoffParams::default(),
-        });
+        let provider = Arc::new(FlakyRewardTreeProvider::new(1, false));
         let catchup = ParallelStateCatchup::new(
             &[provider.clone() as Arc<dyn StateCatchup>],
             Duration::from_secs(1),
@@ -2052,7 +2064,30 @@ mod test {
             .await
             .expect("fetch should succeed after a transient failure");
 
-        assert_eq!(provider.attempts.load(AtomicOrdering::SeqCst), 2);
+        assert_eq!(provider.attempts(), 2);
+    }
+
+    /// A local provider that has the tree serves it without any remote request.
+    #[tokio::test]
+    async fn test_reward_merkle_tree_v2_fetch_prefers_local() {
+        let local = Arc::new(FlakyRewardTreeProvider::new(0, true));
+        let remote = Arc::new(FlakyRewardTreeProvider::new(0, false));
+        let catchup = ParallelStateCatchup::new(
+            &[
+                local.clone() as Arc<dyn StateCatchup>,
+                remote.clone() as Arc<dyn StateCatchup>,
+            ],
+            Duration::from_secs(1),
+        );
+
+        let root = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT).commitment();
+        catchup
+            .fetch_reward_merkle_tree_v2(1, ViewNumber::new(0), root, Arc::new(vec![]))
+            .await
+            .expect("fetch should succeed locally");
+
+        assert_eq!(local.attempts(), 1);
+        assert_eq!(remote.attempts(), 0);
     }
 
     #[test]

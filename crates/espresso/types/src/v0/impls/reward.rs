@@ -1108,12 +1108,6 @@ impl EpochRewardsCalculator {
         Self::default()
     }
 
-    /// Check if the result for `epoch` is being calculated or was already handed out.
-    pub fn is_calculating(&self, epoch: EpochNumber) -> bool {
-        self.pending.as_ref().is_some_and(|p| p.epoch == epoch)
-            || self.applied.as_ref().is_some_and(|r| r.epoch == epoch)
-    }
-
     /// Retrieve the completed reward calculation for `epoch`.
     ///
     /// Returns `None` when there is no pending task or earlier result for the requested epoch.
@@ -1483,6 +1477,9 @@ impl CalcTask {
 
 #[cfg(test)]
 pub mod tests {
+    use std::time::Duration;
+
+    use tokio::time::timeout;
 
     use super::*;
 
@@ -1522,7 +1519,7 @@ pub mod tests {
         });
 
         let first = calculator.get_result(epoch).await.unwrap().unwrap();
-        assert!(calculator.is_calculating(epoch));
+        assert!(!calculator.needs_spawn(epoch, None));
         let second = calculator.get_result(epoch).await.unwrap().unwrap();
 
         assert_eq!(first.epoch, epoch);
@@ -1549,16 +1546,14 @@ pub mod tests {
             task: CalcTask::Running(tokio::spawn(async move { Ok(result) })),
         });
         calculator.get_result(epoch).await.unwrap().unwrap();
-        assert!(calculator.is_calculating(epoch));
         assert!(!calculator.needs_spawn(epoch, None));
 
         // Discarding another epoch leaves the result alone.
         calculator.discard(epoch + 1);
-        assert!(calculator.is_calculating(epoch));
+        assert!(!calculator.needs_spawn(epoch, None));
 
         calculator.discard(epoch);
 
-        assert!(!calculator.is_calculating(epoch));
         assert!(calculator.needs_spawn(epoch, None));
         assert!(calculator.get_result(epoch).await.is_none());
     }
@@ -1575,7 +1570,7 @@ pub mod tests {
 
         calculator.discard(epoch);
 
-        assert!(!calculator.is_calculating(epoch));
+        assert!(calculator.needs_spawn(epoch, None));
         assert!(calculator.pending.is_none());
     }
 
@@ -1689,7 +1684,7 @@ pub mod tests {
             .expect("failure should be reaped");
         assert!(err.to_string().contains("boom"));
         // The failed task is cleared so a fresh one can be spawned.
-        assert!(!calc.is_calculating(epoch));
+        assert!(calc.needs_spawn(epoch, None));
     }
 
     #[tokio::test]
@@ -1713,7 +1708,7 @@ pub mod tests {
         assert!(calc.reap_finished_task(epoch).await.is_none());
         // The cached success still counts as pending and is returned by
         // `get_result` at the boundary.
-        assert!(calc.is_calculating(epoch));
+        assert!(!calc.needs_spawn(epoch, None));
         let result = calc
             .get_result(epoch)
             .await
@@ -1726,6 +1721,7 @@ pub mod tests {
     async fn test_reap_finished_task_ignores_running_task() {
         let epoch = EpochNumber::new(3);
         let handle = tokio::spawn(std::future::pending::<anyhow::Result<EpochRewardsResult>>());
+        let abort = handle.abort_handle();
 
         let mut calc = EpochRewardsCalculator::new();
         calc.pending = Some(PendingRewards {
@@ -1735,6 +1731,72 @@ pub mod tests {
         });
 
         assert!(calc.reap_finished_task(epoch).await.is_none());
-        assert!(calc.is_calculating(epoch), "running task must stay pending");
+        assert!(
+            !calc.needs_spawn(epoch, None),
+            "running task must stay pending"
+        );
+        abort.abort();
+    }
+
+    #[tokio::test]
+    async fn test_get_result_failure_clears_task() {
+        let epoch = EpochNumber::new(3);
+        let handle = finished_task(Err(anyhow::anyhow!("boom"))).await;
+
+        let mut calc = EpochRewardsCalculator::new();
+        calc.pending = Some(PendingRewards {
+            epoch,
+            leader_counts: None,
+            task: CalcTask::Running(handle),
+        });
+
+        let err = calc
+            .get_result(epoch)
+            .await
+            .expect("task should be pending")
+            .expect_err("task failure should be returned");
+        assert!(err.to_string().contains("boom"));
+        // The boundary falls back to a fresh calculation.
+        assert!(calc.needs_spawn(epoch, None));
+    }
+
+    /// A boundary application cancelled mid-await (the view timed out) must leave the task
+    /// pending, so the next application joins the same task instead of starting a duplicate.
+    #[tokio::test]
+    async fn test_get_result_cancelled_keeps_task_pending() {
+        let epoch = EpochNumber::new(3);
+        let result = EpochRewardsResult {
+            epoch,
+            reward_tree: RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT),
+            total_distributed: RewardAmount(U256::from(42)),
+            changed_accounts: HashSet::new(),
+        };
+        let (finish, finished) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            finished.await?;
+            Ok(result)
+        });
+
+        let mut calc = EpochRewardsCalculator::new();
+        calc.pending = Some(PendingRewards {
+            epoch,
+            leader_counts: None,
+            task: CalcTask::Running(handle),
+        });
+
+        let cancelled = timeout(Duration::from_millis(10), calc.get_result(epoch)).await;
+        assert!(cancelled.is_err(), "the task has not finished yet");
+        assert!(
+            !calc.needs_spawn(epoch, None),
+            "cancelled await must leave the task pending"
+        );
+
+        finish.send(()).unwrap();
+        let result = calc
+            .get_result(epoch)
+            .await
+            .expect("task should be pending")
+            .expect("task should succeed");
+        assert_eq!(result.total_distributed.0, U256::from(42));
     }
 }
