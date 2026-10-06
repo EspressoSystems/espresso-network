@@ -157,6 +157,7 @@ PUBLISH_OPTIONAL = (
     "cost.json",
     "trace/leader_path.md",
     "trace/stats.json",
+    "throughput.png",
 )
 PG_GB = 400
 RDS_CLASS = "db.m8g.4xlarge"
@@ -3457,6 +3458,7 @@ def report(run: Run) -> nb.BenchResult | None:
     if run.agent is not None:
         try:
             write_run_json(run)
+            plot_throughput(run.fleet.system.run, run.run_dir)
             result = write_report(run.run_dir)
         except Exception as exc:
             log.exception("report failed")
@@ -3470,25 +3472,37 @@ def report(run: Run) -> nb.BenchResult | None:
 
 
 def plot_traces(runner: Runner, run_dir: Path) -> None:
-    """Renders the leader traces of a `--leader-trace` run. Any failure only warns: the report
-    is already written."""
+    """Renders the leader traces of a `--leader-trace` run."""
     try:
         manifest: Manifest = nb.read_json(run_dir / "manifest.json")
-        if not config_from_manifest(manifest["config"]).leader_trace:
-            return
+        leader_trace = config_from_manifest(manifest["config"]).leader_trace
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trace-plots failed: %s: %s", type(exc).__name__, exc)
+        return
+    if leader_trace:
+        run_plot(runner, "trace-plots", run_dir)
+
+
+def plot_throughput(runner: Runner, run_dir: Path) -> None:
+    run_plot(runner, "throughput-plot", run_dir)
+
+
+def run_plot(runner: Runner, script_name: str, run_dir: Path) -> None:
+    """Any failure only warns: the run's result does not depend on its plots."""
+    try:
         done = runner(
             [
                 "timeout",
                 str(TRACE_PLOTS_TIMEOUT_S),
-                str(SCRIPT_DIR / "trace-plots"),
+                str(SCRIPT_DIR / script_name),
                 str(run_dir),
             ]
         )
         if done.returncode != 0:
             last = (done.stderr.strip().splitlines() or [""])[-1]
-            log.warning("trace-plots exited %d: %s", done.returncode, last)
+            log.warning("%s exited %d: %s", script_name, done.returncode, last)
     except Exception as exc:  # noqa: BLE001
-        log.warning("trace-plots failed: %s: %s", type(exc).__name__, exc)
+        log.warning("%s failed: %s: %s", script_name, type(exc).__name__, exc)
 
 
 def log_result(result: nb.BenchResult) -> None:
@@ -5515,6 +5529,7 @@ def cmd_render(args: argparse.Namespace, system: System) -> int:
         )
     setup_logging(run_dir)
     baseline = nb.load_baseline(args.baseline) if args.baseline else None
+    plot_throughput(system.run, run_dir)
     result = write_report(run_dir, baseline)
     log_result(result)
     plot_traces(system.run, run_dir)
@@ -6180,7 +6195,11 @@ def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.Bench
     result["validity"] = check_validity_aws(result, manifest, evidence)
     nb.write_json(run_dir / "result.json", result)
     comparison = nb.compare(result, baseline) if baseline else None
-    summary = nb.render(result, comparison) + reproduce_section(manifest)
+    summary = (
+        nb.render(result, comparison)
+        + reproduce_section(manifest)
+        + throughput_section(run_dir)
+    )
     (run_dir / "summary.md").write_text(summary)
     return result
 
@@ -6240,6 +6259,12 @@ def reproduce_section(manifest: Manifest) -> str:
         f"# espresso-node {node['revision'] or '-'} {node['digest']}",
     ]
     return "\n".join(["", "", "### Reproduce", "", "```", *lines, "```", ""])
+
+
+def throughput_section(run_dir: Path) -> str:
+    if not (run_dir / "throughput.png").is_file():
+        return ""
+    return "\n![decided and query node MB/s](throughput.png)\n"
 
 
 def search_config(saved: dict[str, Any] | None) -> nb.SearchConfig | None:

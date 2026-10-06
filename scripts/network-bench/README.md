@@ -335,7 +335,7 @@ runs/01-run/             one measurement
   rds-logs/              postgres logs of the run window (rds runs)
   metrics.jsonl heights.jsonl consensus.jsonl load.jsonl load-meta.json steps.json
   stake-table.json final-<node>.prom
-  run.json agent-state.json agent.log result.json summary.md
+  run.json agent-state.json agent.log result.json summary.md throughput.png
 ```
 
 `bench-state/aws/INDEX.md`: one row per run (fleet/run, rev, tag, N, db, latency, capacity, validity, exit, run cost).
@@ -351,10 +351,11 @@ runs/01-run/             one measurement
 
 ### Publishing results
 
-- `run` (single-shot and `--fleet`) pushes the run's `summary.md`, `result.json`, `cost.json`, `trace/*.png`,
-  `trace/leader_path.md`, `trace/stats.json`, `index-row.json` and a reduced `manifest.json` to `runs/<fleet>/<run>/` of
-  the shared results repo (`EspressoSystems/espresso-network-bench-results`); a workflow there rebuilds its `INDEX.md`
-  and `README.md` (leaderboard, recent runs, totals). Other files stay local; symlinks are refused.
+- `run` (single-shot and `--fleet`) pushes the run's `summary.md`, `result.json`, `cost.json`, `throughput.png` (decided
+  and query node MB/s, linked from `summary.md`), `trace/*.png`, `trace/leader_path.md`, `trace/stats.json`,
+  `index-row.json` and a reduced `manifest.json` to `runs/<fleet>/<run>/` of the shared results repo
+  (`EspressoSystems/espresso-network-bench-results`); a workflow there rebuilds its `INDEX.md` and `README.md`
+  (leaderboard, recent runs, totals). Other files stay local; symlinks are refused.
 - The published `manifest.json` keeps `fleet`, `created_at`, `git_rev`, `query_db`, `images`, `config` without
   `node_env`, and each host's name, role and instance type. `summary.md` is published as written, so it still lists
   `--node-env` values.

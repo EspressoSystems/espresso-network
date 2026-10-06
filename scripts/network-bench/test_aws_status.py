@@ -628,8 +628,7 @@ def enable_leader_trace(run_dir: Path) -> None:
 def test_render_plots_the_traces_of_a_leader_trace_run(tmp_path: Path):
     write_collected_run(tmp_path)
     enable_leader_trace(tmp_path)
-    runner = FakeRunner()
-    runner.respond("trace-plots", lambda _: completed())
+    runner = FakeRunner({("timeout",): completed()})
     code = awsb.cmd_render(
         awsb.parse_args(["render", str(tmp_path)]), FakeSystem(run=runner)
     )
@@ -638,9 +637,10 @@ def test_render_plots_the_traces_of_a_leader_trace_run(tmp_path: Path):
         [
             "timeout",
             str(awsb.TRACE_PLOTS_TIMEOUT_S),
-            str(awsb.SCRIPT_DIR / "trace-plots"),
+            str(awsb.SCRIPT_DIR / script),
             str(tmp_path),
         ]
+        for script in ("throughput-plot", "trace-plots")
     ]
     assert (tmp_path / "summary.md").exists()
 

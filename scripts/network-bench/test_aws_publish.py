@@ -81,6 +81,7 @@ def make_run_dir(root: Path, with_row: bool = True, run: str = "01-run") -> Path
         "result.json": json.dumps({"capacity": CAPACITY}),
         "manifest.json": json.dumps(MANIFEST),
         "cost.json": "{}",
+        "throughput.png": "p",
         "trace/leader_path.md": "m",
         "trace/stats.json": "{}",
         "trace/finality.png": "p",
@@ -129,6 +130,7 @@ def test_allowlist_excludes_secrets_and_big_files(tmp_path: Path):
         "summary.md",
         "result.json",
         "cost.json",
+        "throughput.png",
         "trace/leader_path.md",
         "trace/stats.json",
         "trace/finality.png",
@@ -140,6 +142,7 @@ def test_failed_run_has_no_result_or_trace(tmp_path: Path):
     for name in (
         "result.json",
         "cost.json",
+        "throughput.png",
         "trace/leader_path.md",
         "trace/stats.json",
         "trace/finality.png",

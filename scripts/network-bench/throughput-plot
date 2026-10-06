@@ -1,0 +1,148 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.14"
+# dependencies = ["matplotlib", "numpy"]
+# ///
+"""Plots decided MB/s (consensus counters) against the MB/s the query node makes transactions
+available (`t_included` of `load.jsonl`), with the submitted rate as reference, into
+`<run_dir>/throughput.png`. Step bands are labelled with the target rate, `(r)` for a refine
+step, and tinted when the step failed.
+
+    throughput-plot RUN_DIR
+"""
+
+import argparse
+import json
+import math
+from pathlib import Path
+
+import matplotlib
+import numpy as np
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+SMOOTH_S = 10
+SURFACE = "#fcfcfb"
+INK = "#52514e"
+MUTED = "#898781"
+DECIDED = "#2a78d6"
+QUERY = "#eb6834"
+BAND = "#f0efec"
+BAND_FAILED = "#fbe3e2"
+
+
+def decided_mb_s(counters: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+    """Rate between consecutive counter samples, at the later sample's time."""
+    ts = np.array([c["ts"] for c in counters])
+    decided = np.array([c["decided_bytes"] for c in counters])
+    return ts[1:], np.diff(decided) / np.diff(ts) / 1e6
+
+
+def binned_mb_s(
+    times: list[float], tx_size: int, t0: float, t1: float, bin_s: float = 1.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """MB/s of the transactions whose time falls in each `bin_s` bin of `[t0, t1]`, at the
+    bin's end."""
+    bins = math.ceil((t1 - t0) / bin_s)
+    edges = np.linspace(t0, t0 + bins * bin_s, bins + 1)
+    counts, _ = np.histogram(times, edges)
+    return edges[1:], counts * tx_size / bin_s / 1e6
+
+
+def moving_mean(y: np.ndarray, w: int = SMOOTH_S) -> np.ndarray:
+    """Centered mean; the window shrinks at the edges instead of reading zeros."""
+    box = np.ones(w)
+    return np.convolve(y, box, "same") / np.convolve(np.ones_like(y), box, "same")
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    with path.open() as f:
+        return [json.loads(line) for line in f]
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("run_dir", type=Path)
+    run_dir = parser.parse_args(argv).run_dir
+
+    t0 = json.loads((run_dir / "run.json").read_text())["t0"]
+    tx_size = json.loads((run_dir / "config.json").read_text())["tx_size"]
+    steps = json.loads((run_dir / "steps.json").read_text())
+    counters = read_jsonl(run_dir / "consensus.jsonl")
+    txs = read_jsonl(run_dir / "load.jsonl")
+    t1 = counters[-1]["ts"]
+
+    dec_t, dec = decided_mb_s(counters)
+    sub_t, sub = binned_mb_s([tx["t_submit"] for tx in txs], tx_size, t0, t1)
+    inc = [tx["t_included"] for tx in txs if tx["t_included"] is not None]
+    inc_t, query = binned_mb_s(inc, tx_size, t0, t1)
+
+    def minutes(t: np.ndarray | float) -> np.ndarray | float:
+        return (t - t0) / 60
+
+    fig, ax = plt.subplots(figsize=(13, 5), facecolor=SURFACE)
+    ax.set_facecolor(SURFACE)
+    for step in steps:
+        start, end = minutes(step["t_start"]), minutes(step["t_end"])
+        failed = step["consensus_fails"] or step["query_fails"]
+        ax.axvspan(start, end, color=BAND_FAILED if failed else BAND, zorder=0)
+        ax.axvline(start, color=MUTED, lw=0.6, alpha=0.5, zorder=0)
+        label = f"{step['rate_mb_s']:.0f}{' (r)' if step['refine'] else ''}"
+        ax.text(
+            (start + end) / 2,
+            1.01,
+            label,
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            color=INK,
+        )
+    ax.plot(
+        minutes(sub_t),
+        moving_mean(sub),
+        color=MUTED,
+        lw=0.8,
+        label=f"submitted, {SMOOTH_S} s mean",
+    )
+    ax.plot(minutes(dec_t), dec, color=DECIDED, lw=0.8, alpha=0.3, label="decided, 1 s")
+    ax.plot(
+        minutes(dec_t),
+        moving_mean(dec),
+        color=DECIDED,
+        lw=2,
+        label=f"decided, {SMOOTH_S} s mean",
+    )
+    ax.plot(
+        minutes(inc_t),
+        moving_mean(query),
+        color=QUERY,
+        lw=2,
+        label=f"query node, {SMOOTH_S} s mean",
+    )
+    ax.set_xlim(minutes(t0), minutes(t1))
+    ax.set_ylim(bottom=0)
+    ax.set_ylabel("MB/s", color=INK)
+    ax.set_xlabel("minutes since run start", color=INK)
+    ax.tick_params(colors=INK)
+    ax.grid(alpha=0.3)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.14),
+        ncol=4,
+        fontsize=8,
+        frameon=False,
+        labelcolor=INK,
+    )
+    run = run_dir.resolve()
+    fig.suptitle(
+        f"{run.parent.parent.name}/{run.name}: decided vs query node MB/s", color=INK
+    )
+    fig.tight_layout()
+    fig.savefig(run_dir / "throughput.png", dpi=130, facecolor=SURFACE)
+
+
+if __name__ == "__main__":
+    main()
