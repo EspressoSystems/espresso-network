@@ -29,19 +29,22 @@ use committable::Committable;
 use espresso_types::{StateCertQueryDataV1, StateCertQueryDataV2};
 use espresso_utils::commitment_to_u256;
 use hotshot::types::BLSPubKey;
-use hotshot_contract_adapter::sol_types::StakeTableV3::{ValidatorExitV2, ValidatorRegisteredV3};
+use hotshot_contract_adapter::sol_types::StakeTableV3::{
+    P2pAddrUpdated, ValidatorExitV2, ValidatorRegisteredV3, X25519KeyUpdated,
+};
 use hotshot_example_types::node_types::TEST_VERSIONS;
 use hotshot_query_service::availability::{
     BlockQueryData, LeafQueryData, LeafQueryDataLegacy, PayloadQueryData, TransactionQueryData,
-    TransactionWithProofQueryData, VidCommonQueryData,
+    TransactionWithProofQueryData, VerifiableInclusion, VidCommonQueryData,
 };
 use hotshot_types::{
     addr::NetAddr,
-    data::{VidCommitment, VidCommon, vid_commitment},
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommon, ViewChangeEvidence2, vid_commitment},
     light_client::StateVerKey,
     simple_certificate::{
-        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
+        LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2, SimpleCertificate,
     },
+    simple_vote::{QuorumData2, TimeoutData2},
     traits::{
         BlockPayload, EncodeBytes,
         signature_key::{BuilderSignatureKey, StateSignatureKey},
@@ -64,12 +67,12 @@ use vbs::{
     BinarySerializer,
     version::{StaticVersion, Version},
 };
-use versions::{EPOCH_REWARD_VERSION, EPOCH_VERSION, version};
+use versions::{EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, version};
 
 use crate::{
     ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
     NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
-    StakeTableState, Transaction, ValidatedState, ValidatorSet,
+    StakeTableState, Transaction, TxProof, ValidatedState, ValidatorSet,
     v0_1::{self, ADVZNsProof},
     v0_2,
     v0_3::{COMMISSION_BASIS_POINTS, EventKey, RegisteredValidator, RewardAmount, StakeTableEvent},
@@ -78,6 +81,7 @@ use crate::{
         RewardAccountV2, RewardMerkleTreeV2,
     },
     v0_5::{LeaderCounts, MAX_VALIDATORS},
+    validators_from_l1_events,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -224,6 +228,45 @@ async fn reference_ns_proof_enum_avidm_gf2() -> NamespaceProofQueryData {
     }
 }
 
+/// A leaf proposed after a timeout, so the vector pins the view change evidence both in the leaf's
+/// encoding and, through the leaf commitment the QC carries, in what the QC signs.
+async fn reference_leaf_after_timeout() -> LeafQueryData<SeqTypes> {
+    // `Leaf2::genesis` builds the header at the node's version, not at the version it is given.
+    let node_state = NodeState::mock()
+        .with_current_version(NEW_PROTOCOL_VERSION)
+        .with_genesis_version(NEW_PROTOCOL_VERSION);
+    let mut leaf = Leaf2::genesis(
+        &ValidatedState::default(),
+        &node_state,
+        NEW_PROTOCOL_VERSION,
+    )
+    .await;
+    // The leaf commitment covers the evidence only for leaves that carry an epoch.
+    assert!(leaf.with_epoch);
+
+    let view = leaf.view_number();
+    let epoch = EpochNumber::genesis();
+    let timeout = TimeoutData2 {
+        view,
+        epoch: Some(epoch),
+    };
+    leaf.view_change_evidence = Some(ViewChangeEvidence2::Timeout(SimpleCertificate::new(
+        timeout.clone(),
+        timeout.commit(),
+        view,
+        None,
+        Default::default(),
+    )));
+
+    let data = QuorumData2 {
+        leaf_commit: leaf.commit(),
+        epoch: Some(epoch),
+        block_number: Some(leaf.height()),
+    };
+    let qc = SimpleCertificate::new(data, data.commit(), view, None, Default::default());
+    LeafQueryData::new(leaf, qc).unwrap()
+}
+
 async fn reference_ns_table() -> NsTable {
     reference_payload().await.ns_table().clone()
 }
@@ -275,12 +318,14 @@ fn reference_stake_table_hash() -> StakeTableHash {
     let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
     // Reconstruct stake table from events
-    // TODO: once V3 fixtures include x25519/p2p data, exercise NEW_PROTOCOL_VERSION here too.
     ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), EPOCH_VERSION)
         .unwrap()
         .stake_table_hash
         .unwrap()
 }
+
+const REFERENCE_NEW_PROTOCOL_STAKE_TABLE_HASH: &str =
+    "STAKE_TABLE~z-GU-RiVPZ4cFwAiJJz-p_U63cxsyETAB0nfxq-ypQrG";
 
 const REFERENCE_FEE_INFO_COMMITMENT: &str = "FEE_INFO~xCCeTjJClBtwtOUrnAmT65LNTQGceuyjSJHUFfX6VRXR";
 
@@ -322,6 +367,27 @@ async fn reference_header(version: Version) -> Header {
         Some(staket_table_hash),
         leader_counts,
     )
+}
+
+fn reference_validator_registered_v3(index: u64) -> ValidatorRegisteredV3 {
+    let seed = [0; 32];
+    ValidatorRegisteredV3 {
+        account: FeeAccount::generated_from_seed_indexed(seed, index).0.0,
+        blsVK: BLSPubKey::generated_from_seed_indexed(seed, index).0.into(),
+        schnorrVK: StateVerKey::generated_from_seed_indexed(seed, index)
+            .0
+            .into(),
+        commission: COMMISSION_BASIS_POINTS,
+        blsSig: Default::default(),
+        schnorrSig: Default::default(),
+        metadataUri: "https://example.com".to_string(),
+        x25519Key: x25519::Keypair::generated_from_seed_indexed(seed, index)
+            .unwrap()
+            .public_key()
+            .as_bytes()
+            .into(),
+        p2pAddr: "localhost:8080".to_string(),
+    }
 }
 
 fn reference_leader_counts() -> LeaderCounts {
@@ -627,6 +693,41 @@ async fn test_reference_header_v7() {
     );
 }
 
+/// The x25519 key and p2p address only enter the stake table hash once a validator registers or
+/// updates them, which the decaf events behind the header vectors never do.
+#[test_log::test]
+fn test_reference_new_protocol_stake_table_hash() {
+    let first = reference_validator_registered_v3(0);
+    let second = reference_validator_registered_v3(1);
+    let events = [
+        StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
+            validator: second.account,
+            x25519Key: x25519::Keypair::generated_from_seed_indexed([0; 32], 2)
+                .unwrap()
+                .public_key()
+                .as_bytes()
+                .into(),
+        }),
+        StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
+            validator: second.account,
+            p2pAddr: "[::1]:9000".to_string(),
+        }),
+        ValidatorExitV2 {
+            validator: first.account,
+            unlocksAt: U256::MAX,
+        }
+        .into(),
+    ];
+    let (_, hash) =
+        validators_from_l1_events([first.into(), second.into()].into_iter().chain(events)).unwrap();
+
+    tracing::info!("actual stake table hash: {hash}");
+    assert_eq!(
+        hash,
+        REFERENCE_NEW_PROTOCOL_STAKE_TABLE_HASH.parse().unwrap()
+    );
+}
+
 #[test_log::test]
 fn test_reference_transaction() {
     reference_test(
@@ -705,6 +806,12 @@ async fn test_leaf_query_data_v3() {
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_leaf_query_data_after_timeout_v6() {
+    let leaf = reference_leaf_after_timeout().await;
+    reference_test_without_committable("v6", "leaf_query_data", &leaf);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_block_query_data() {
     let block = reference_block().await;
     reference_test_without_committable("v1", "block_query_data", &block);
@@ -775,6 +882,36 @@ async fn test_transaction_query_data() {
         .collect::<Vec<_>>();
 
     reference_test_without_committable("v1", "transaction_query_data", &transactions);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_transaction_query_data_avidm_gf2() {
+    let header = reference_header(NEW_PROTOCOL_VERSION).await;
+    let payload = reference_payload().await;
+    let (commit, common) = reference_avidm_gf2_commit_and_common(&payload);
+    let block = BlockQueryData::<SeqTypes>::new(header, payload);
+    let vid = VidCommonQueryData::<SeqTypes>::new(block.header().clone(), common.clone());
+
+    let transactions = block
+        .enumerate()
+        .enumerate()
+        .map(|(i, (index, _))| {
+            let tx = block.transaction(&index).unwrap();
+            let tx = TransactionQueryData::new(tx, &block, &index, i as u64).unwrap();
+            let proof = block.transaction_proof(&vid, &index).unwrap();
+            assert!(matches!(proof, TxProof::V2(_)));
+            // Pinning a proof that does not verify would be worse than pinning none.
+            assert!(proof.verify(
+                block.payload().ns_table(),
+                tx.transaction(),
+                &commit,
+                &common
+            ));
+            TransactionWithProofQueryData::new(tx, proof)
+        })
+        .collect::<Vec<_>>();
+
+    reference_test_without_committable("v6", "transaction_query_data", &transactions);
 }
 
 // State certificate
@@ -901,54 +1038,17 @@ fn test_stake_table_state_serialization() {
         .join("../../../data/insta_snapshots");
     settings.set_snapshot_path(data_dir);
 
-    let seed = [0; 32];
     let mut state = StakeTableState::default();
     state
-        .apply_event(
-            ValidatorRegisteredV3 {
-                account: FeeAccount::generated_from_seed_indexed(seed, 0).0.0,
-                blsVK: BLSPubKey::generated_from_seed_indexed(seed, 0).0.into(),
-                schnorrVK: StateVerKey::generated_from_seed_indexed(seed, 0).0.into(),
-                commission: COMMISSION_BASIS_POINTS,
-                blsSig: Default::default(),
-                schnorrSig: Default::default(),
-                metadataUri: "https://example.com".to_string(),
-                x25519Key: x25519::Keypair::generated_from_seed_indexed(seed, 0)
-                    .unwrap()
-                    .public_key()
-                    .as_bytes()
-                    .into(),
-                p2pAddr: "localhost:8080".to_string(),
-            }
-            .into(),
-        )
+        .apply_event(reference_validator_registered_v3(0).into())
         .unwrap()
         .unwrap();
 
     // Register a second validator, then have them exit. This ensures all the fields of the state
     // get exercised.
-    let account = FeeAccount::generated_from_seed_indexed(seed, 1).0.0;
-    state
-        .apply_event(
-            ValidatorRegisteredV3 {
-                account,
-                blsVK: BLSPubKey::generated_from_seed_indexed(seed, 1).0.into(),
-                schnorrVK: StateVerKey::generated_from_seed_indexed(seed, 1).0.into(),
-                commission: COMMISSION_BASIS_POINTS,
-                blsSig: Default::default(),
-                schnorrSig: Default::default(),
-                metadataUri: "https://example.com".to_string(),
-                x25519Key: x25519::Keypair::generated_from_seed_indexed(seed, 1)
-                    .unwrap()
-                    .public_key()
-                    .as_bytes()
-                    .into(),
-                p2pAddr: "localhost:8080".to_string(),
-            }
-            .into(),
-        )
-        .unwrap()
-        .unwrap();
+    let registered = reference_validator_registered_v3(1);
+    let account = registered.account;
+    state.apply_event(registered.into()).unwrap().unwrap();
     state
         .apply_event(
             ValidatorExitV2 {
