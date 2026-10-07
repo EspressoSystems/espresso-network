@@ -121,8 +121,8 @@ def test_node_root_gb_scales_with_offered_payload(steps, validator_gb, query_gb)
 @pytest.mark.parametrize(
     ("keep_going", "expected"),
     [
-        (False, 60 + 3 * 30 + 2 * 30 + netbench.DRAIN_SLACK_S),
-        (True, 60 + 2 * 30 + netbench.CATCHUP_TIMEOUT_S + 30),
+        (False, 60 + 3 * 30 + awsb.DRAIN_EXPECTED_S + 30),
+        (True, 60 + 2 * 30 + netbench.DRAIN_MAX_S + 30),
     ],
 )
 def test_load_seconds(keep_going, expected):
@@ -147,6 +147,8 @@ def test_worst_uses_ready_timeout_and_collect_max():
         - awsb.READY_EXPECTED_S
         + awsb.COLLECT_MAX_S
         - awsb.COLLECT_EXPECTED_S
+        + netbench.DRAIN_MAX_S
+        - awsb.DRAIN_EXPECTED_S
     )
 
 
@@ -166,10 +168,10 @@ def test_estimate_matches_hand_computed_totals():
     # of cost_estimate's formula, so a formula regression trips this test.
     cfg = small_cfg(pg_iops=6000, pg_mbps=500)
     estimate = shot_estimate(awsb.plan_hosts(cfg), cfg)
-    assert estimate["expected_s"] == 1695.0
-    assert estimate["ttl_s"] == 3315.0
-    assert estimate["expected_usd"] == pytest.approx(0.878257, abs=1e-5)
-    assert estimate["bound_usd"] == pytest.approx(1.794118, abs=1e-5)
+    assert estimate["expected_s"] == 1670.0
+    assert estimate["ttl_s"] == 3570.0
+    assert estimate["expected_usd"] == pytest.approx(0.865536, abs=1e-5)
+    assert estimate["bound_usd"] == pytest.approx(1.923865, abs=1e-5)
 
 
 def test_bound_is_cost_at_ttl():
@@ -1366,14 +1368,13 @@ def test_explicit_root_gb_wins_over_the_search_sizing():
 def test_search_load_seconds():
     load = netbench.BenchConfig(step_s=60, warmup_s=60, tx_timeout_s=60)
     search = netbench.SearchConfig()
-    slack = netbench.DRAIN_SLACK_S
     assert (
         awsb.load_seconds(load, search, worst=True)
-        == 60 + 12 * (2 * 60 + 60 + slack) + 60
+        == 60 + 12 * (2 * 60 + netbench.DRAIN_MAX_S) + 60
     )
     assert (
         awsb.load_seconds(load, search, worst=False)
-        == 60 + 11 * 60 + 3 * (60 + slack) + 60
+        == 60 + 11 * 60 + 3 * awsb.DRAIN_EXPECTED_S + 60
     )
 
 

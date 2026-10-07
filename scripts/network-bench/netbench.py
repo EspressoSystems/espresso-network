@@ -63,9 +63,13 @@ MIN_READY_HEIGHT = 5
 PROGRESS_S = 30
 # Decided bytes flat this long mean consensus is idle: a block under a backlog can take 2.5 s.
 DRAIN_IDLE_S = 5.0
-# Over the tx timeout: settling, the idle window, and the query node's catch-up.
-DRAIN_SLACK_S = 10 + DRAIN_IDLE_S
-CATCHUP_TIMEOUT_S = 600
+# Empty blocks the query node must show after consensus went idle.
+EMPTY_BLOCKS = 3
+# After that, the wait for sent transactions to resolve; the tracker scans a block behind.
+DRAIN_GRACE_S = 10.0
+# A drain gives up after this long without a new validator height, or in total.
+DRAIN_STALL_S = 30.0
+DRAIN_MAX_S = 300.0
 COLLAPSE_RATIO = 0.5
 CLIMB_FACTOR = 1.25
 # Float slack when comparing a bracket to the resolution.
@@ -214,7 +218,7 @@ class LoadStats(TypedDict):
     # Per height: the bench finished scanning its payload after it could start.
     tracker_lag_ms: Quantiles | None
     # Before the refine step; skipped if the failed step's backlog did not drain in time.
-    # With keep_going: after the last step, None past CATCHUP_TIMEOUT_S.
+    # With keep_going: after the last step, None past DRAIN_MAX_S.
     drain_s: float | None
     refine_skipped: bool
     # Why the staircase ended; None for runs recorded before it existed.
@@ -1126,18 +1130,9 @@ async def ramp_steps(
         steps.append(judged)
         write_json(out / "steps.json", steps)
     if cfg.keep_going:
-        # Not waiting for pending: a transaction of a lost payload stays pending until its
-        # timeout, which `keep_going` runs set above the lag.
-        drained = await drain(
-            load.state,
-            counters,
-            heights,
-            CATCHUP_TIMEOUT_S,
-            load.clock,
-            wait_pending=False,
-        )
+        drained = await drain(load.state, counters, heights, load.clock)
         if drained is None:
-            log.warning("backlog did not drain in %d s", CATCHUP_TIMEOUT_S)
+            log.warning("backlog did not drain")
         else:
             log.info("backlog drained in %.1f s", drained)
     return {
@@ -1236,13 +1231,7 @@ async def cooldown(
     load: Load, heights: "Heights", counters: list[dict[str, Any]]
 ) -> float | None:
     """Drain after a failed step; None if it timed out."""
-    drained = await drain(
-        load.state,
-        counters,
-        heights,
-        load.cfg.tx_timeout_s + DRAIN_SLACK_S,
-        load.clock,
-    )
+    drained = await drain(load.state, counters, heights, load.clock)
     if drained is not None:
         log.info("backlog drained in %.1f s", drained)
     return drained
@@ -1384,23 +1373,29 @@ async def drain(
     state: LoadState,
     counters: list[dict[str, Any]],
     heights: "Heights",
-    timeout_s: float,
     clock: Clock,
-    wait_pending: bool = True,
 ) -> float | None:
-    """Submits nothing until no transaction is pending (unless `wait_pending` is off), decided
-    bytes stopped growing and the query node caught up with a validator height past the one at
-    the idle point, so a stalled chain does not count as drained. Seconds that took, or None
-    after `timeout_s`."""
+    """Drops the transactions never sent and submits nothing more. Drained once decided bytes
+    stopped growing and the query node shows EMPTY_BLOCKS validator heights past the idle
+    point; then waits up to DRAIN_GRACE_S for pending transactions. Seconds that took, or
+    None if no validator height appeared for DRAIN_STALL_S or after DRAIN_MAX_S."""
     drop_unsent(state)
     state.rate_mb_s = 0.0
-    start, target = clock.time(), None
-    while clock.time() - start < timeout_s:
-        pending = len(state.pending) if wait_pending else 0
-        if target is None and pending == 0 and is_idle(counters, clock.time()):
-            # Fixed once settled: empty blocks keep the validator height moving.
-            target = heights.top("validator") + 1
+    start = clock.time()
+    top, moved, target = heights.top("validator"), start, None
+    while (now := clock.time()) - start < DRAIN_MAX_S:
+        if (seen := heights.top("validator")) != top:
+            top, moved = seen, now
+        if now - moved >= DRAIN_STALL_S:
+            return None
+        if not is_idle(counters, now):
+            target = None
+        elif target is None:
+            target = top + EMPTY_BLOCKS
         if target is not None and heights.top("query") >= target:
+            grace = now + DRAIN_GRACE_S
+            while state.pending and clock.time() < grace:
+                await clock.asleep(0.1)
             return clock.time() - start
         await clock.asleep(0.1)
     return None
@@ -3155,7 +3150,7 @@ def drain_lines(drain_s: float | None, keep_going: bool) -> list[str]:
         when = "after the last step" if keep_going else "before the refine step"
         return [f"- backlog drained in {drain_s:.1f} s {when}"]
     if keep_going:
-        return [f"- backlog did not drain in {CATCHUP_TIMEOUT_S} s after the last step"]
+        return [f"- backlog did not drain in {DRAIN_MAX_S:.0f} s after the last step"]
     return []
 
 

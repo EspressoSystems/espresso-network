@@ -125,6 +125,8 @@ SEARCH_TX_TIMEOUT_S = 60
 # drain after each of three failing probes.
 SEARCH_EXPECTED_PROBES = 11
 SEARCH_EXPECTED_DRAINS = 3
+# A drain's idle window and grace, plus the empty blocks and the backlog of a typical probe.
+DRAIN_EXPECTED_S = nb.DRAIN_IDLE_S + nb.DRAIN_GRACE_S + 5
 # Share of the Postgres volume `--offered-gb` may fill.
 PG_FILL_MAX = 0.9
 # Submit threads: a 1 MB POST takes tens of ms on the private network; 200 tx/s needs this many.
@@ -1156,12 +1158,12 @@ def plan_peers(hosts: list[HostSpec]) -> dict[str, list[str]]:
 def load_seconds(
     load: nb.BenchConfig, search: nb.SearchConfig | None = None, worst: bool = False
 ) -> float:
-    """warmup, every step, the refine step, and the two drains (before the refine step and at
-    the end). With keep_going: no refine step, the drain after the last step at its timeout.
-    With `search`: `max_probes` probes of the longest kind each followed by a drain if `worst`;
-    else the expected probes and two drains."""
+    """warmup, every step, the refine step, the drain before it and the wait for the last
+    transactions. With keep_going: no refine step, the drain after the last step at its cap.
+    With `search`: `max_probes` probes of the longest kind each followed by a drain at its cap
+    if `worst`; else the expected probes and drains."""
+    drain_s = nb.DRAIN_MAX_S if worst or load.keep_going else DRAIN_EXPECTED_S
     if search:
-        drain_s = load.tx_timeout_s + nb.DRAIN_SLACK_S
         if worst:
             probe_s = 2 * load.step_s + drain_s
             return load.warmup_s + search.max_probes * probe_s + load.tx_timeout_s
@@ -1173,16 +1175,13 @@ def load_seconds(
         )
     if load.keep_going:
         return (
-            load.warmup_s
-            + len(load.steps) * load.step_s
-            + nb.CATCHUP_TIMEOUT_S
-            + load.tx_timeout_s
+            load.warmup_s + len(load.steps) * load.step_s + drain_s + load.tx_timeout_s
         )
     return (
         load.warmup_s
         + (len(load.steps) + 1) * load.step_s
-        + 2 * load.tx_timeout_s
-        + nb.DRAIN_SLACK_S
+        + drain_s
+        + load.tx_timeout_s
     )
 
 

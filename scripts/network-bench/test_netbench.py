@@ -811,10 +811,8 @@ def heights_at(validator: int, query: int | None) -> netbench.Heights:
     return heights
 
 
-def drain(state, heights, timeout_s, clock, **kwargs) -> float | None:
-    return clock.run(
-        netbench.drain(state, idle_counters(), heights, timeout_s, clock, **kwargs)
-    )
+def drain(state, heights, clock) -> float | None:
+    return clock.run(netbench.drain(state, idle_counters(), heights, clock))
 
 
 def sent_tx(state: netbench.LoadState, tx_id: int, sent: bool) -> netbench.Tx:
@@ -833,7 +831,7 @@ def test_drain_drops_transactions_never_sent():
     clock = fakes.FakeClock()
     state = netbench.LoadState()
     sent, queued = sent_tx(state, 0, True), sent_tx(state, 1, False)
-    drain(state, heights_at(5, 8), 1.0, clock)
+    drain(state, heights_at(5, 8), clock)
     assert state.pending == {0: sent}
     assert state.txs == [sent]
     pool = NoRequests(fakes.FakeNode(clock, include=False), clock)
@@ -841,12 +839,18 @@ def test_drain_drops_transactions_never_sent():
     assert queued.t_submit == math.inf
 
 
-def test_drain_without_pending_ignores_stuck_transactions():
+def test_drain_returns_after_the_grace_with_a_sent_transaction_pending():
     state = netbench.LoadState()
     sent_tx(state, 0, True)
-    heights = heights_at(5, 6)
-    assert drain(state, heights, 0.3, fakes.FakeClock()) is None
-    assert drain(state, heights, 0.3, fakes.FakeClock(), wait_pending=False) is not None
+    clock = fakes.FakeClock()
+    elapsed = drain(state, heights_at(5, 8), clock)
+    assert elapsed == pytest.approx(netbench.DRAIN_GRACE_S, abs=0.5)
+
+
+def test_drain_gives_up_when_the_validator_height_stalls():
+    clock = fakes.FakeClock()
+    assert drain(netbench.LoadState(), heights_at(5, 5), clock) is None
+    assert clock.now == pytest.approx(netbench.DRAIN_STALL_S, abs=0.5)
 
 
 @pytest.mark.parametrize(
@@ -855,7 +859,7 @@ def test_drain_without_pending_ignores_stuck_transactions():
         (None, False, []),
         (3.0, False, ["- backlog drained in 3.0 s before the refine step"]),
         (3.0, True, ["- backlog drained in 3.0 s after the last step"]),
-        (None, True, ["- backlog did not drain in 600 s after the last step"]),
+        (None, True, ["- backlog did not drain in 300 s after the last step"]),
     ],
 )
 def test_drain_lines(drain_s, keep_going, lines):
@@ -1010,24 +1014,17 @@ def test_idle_needs_decided_bytes_flat_for_longer_than_a_slow_block():
     assert not netbench.is_idle([], 0.0)
 
 
-def test_drain_waits_for_the_query_node():
-    state = netbench.LoadState()
-    heights = heights_at(5, 3)
-    assert drain(state, heights, 0.3, fakes.FakeClock()) is None
-    heights.saw("query", 6, 0.0)
-    assert drain(state, heights, 0.3, fakes.FakeClock()) is not None
+def test_drain_waits_for_the_query_node_to_show_the_empty_blocks():
+    heights = heights_at(5, 7)
 
+    def catch_up(now: float) -> None:
+        if now >= 2.0:
+            heights.saw("query", 8, now)
 
-def test_drain_does_not_chase_new_validator_heights():
-    heights = heights_at(5, None)
-
-    def grow(now: float) -> None:
-        if now >= 0.05:
-            heights.saw("validator", 7, now)
-            heights.saw("query", 6, now)
-
-    clock = fakes.FakeClock(on_advance=grow)
-    assert drain(netbench.LoadState(), heights, 1.0, clock) is not None
+    clock = fakes.FakeClock(on_advance=catch_up)
+    assert some(drain(netbench.LoadState(), heights, clock)) == pytest.approx(
+        2.0, abs=0.2
+    )
 
 
 def step_window() -> netbench.StepWindow:
@@ -1612,18 +1609,16 @@ def test_search_stops_when_the_backlog_does_not_drain(staircase, monkeypatch):
     assert netbench.capacity(run.steps)["overall"]["bounded"]
 
 
-def test_drain_needs_the_validator_height_to_advance_after_idle():
-    frozen = heights_at(5, 5)
-    assert drain(netbench.LoadState(), frozen, 0.3, fakes.FakeClock()) is None
+def test_drain_needs_empty_blocks_after_idle():
     heights = heights_at(5, 5)
 
     def advance(now: float) -> None:
         if now >= 0.05:
-            heights.saw("validator", 6, now)
-            heights.saw("query", 6, now)
+            heights.saw("validator", 8, now)
+            heights.saw("query", 8, now)
 
     clock = fakes.FakeClock(on_advance=advance)
-    assert some(drain(netbench.LoadState(), heights, 1.0, clock)) < 0.5
+    assert some(drain(netbench.LoadState(), heights, clock)) < 0.5
 
 
 def test_one_passing_run_does_not_hide_a_failing_probe_at_the_same_rate():
