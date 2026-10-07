@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fmt::{Debug, Display},
     future::Future,
     marker::PhantomData,
@@ -18,7 +19,6 @@ use futures::{
     stream::{BoxStream, Stream, StreamExt},
 };
 use hotshot::{HotShotInitializer, SystemContext};
-use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
 use hotshot_new_protocol::{
     coordinator::Coordinator,
     network::{Cliquenet, NetworkError},
@@ -50,7 +50,7 @@ use tokio::{
 };
 use tracing::{Instrument, Level, info};
 use url::Url;
-use versions::NEW_PROTOCOL_VERSION;
+use versions::{NEW_PROTOCOL_VERSION, Version};
 
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
@@ -97,9 +97,6 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     /// Background tasks to shut down when the node is dropped.
     tasks: TaskList,
 
-    /// events streamer to stream hotshot events to external clients
-    events_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
-
     detached: bool,
 
     node_state: NodeState,
@@ -136,6 +133,7 @@ where
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
         empty_block_delay: Duration,
+        block_sizes: BTreeMap<Version, u64>,
     ) -> anyhow::Result<Self>
     where
         F: AsyncFnOnce(UpgradeLock<SeqTypes>) -> Result<Cliquenet<SeqTypes>, NetworkError>,
@@ -166,10 +164,6 @@ where
 
         let initializer_for_coordinator = initializer.clone();
 
-        let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
-            stake_table.0,
-            0,
-        )));
         let consensus_metrics = ConsensusMetricsValue::new(metrics);
 
         let handle = SystemContext::init(
@@ -225,6 +219,10 @@ where
             .load_high_qc2()
             .await
             .context("loading persisted locked QC")?;
+        let anchor_cert2 = persistence
+            .load_cert2(initializer_for_coordinator.anchor_leaf().view_number())
+            .await
+            .context("loading the anchor's cert2")?;
 
         let coordinator = Coordinator::maker()
             .membership_coordinator(membership_coordinator.clone())
@@ -237,10 +235,12 @@ where
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .empty_block_delay(empty_block_delay)
+            .block_sizes(block_sizes)
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
             .maybe_locked_qc(locked_qc)
+            .maybe_anchor_cert2(anchor_cert2)
             .upgrade_config(UpgradeConfig {
                 start_proposing_view: config.start_proposing_view,
                 stop_proposing_view: config.stop_proposing_view,
@@ -342,7 +342,6 @@ where
             state_signer,
             external_event_handler,
             request_response_protocol,
-            event_streamer,
             instance_state,
             network_config,
             validator_config,
@@ -362,7 +361,6 @@ where
         state_signer: StateSigner<SequencerApiVersion>,
         external_event_handler: ExternalEventHandler,
         request_response_protocol: RequestResponseProtocol<ConsensusNode<N, P>, N, P>,
-        event_streamer: Arc<RwLock<EventsStreamer<SeqTypes>>>,
         node_state: NodeState,
         network_config: NetworkConfig<SeqTypes>,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -382,7 +380,6 @@ where
             tasks: Default::default(),
             detached: false,
             wait_for_orchestrator: None,
-            events_streamer: event_streamer.clone(),
             node_state,
             network_config,
             validator_config,
@@ -425,7 +422,6 @@ where
                 persistence,
                 ctx.state_signer.clone(),
                 external_event_handler,
-                Some(event_streamer.clone()),
                 event_consumer,
                 decide_tx,
             ),
@@ -465,11 +461,6 @@ where
 
     pub async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<()> {
         self.consensus_handle.submit_transaction(tx).await
-    }
-
-    /// get event streamer
-    pub fn event_streamer(&self) -> Arc<RwLock<EventsStreamer<SeqTypes>>> {
-        self.events_streamer.clone()
     }
 
     /// Return a reference to the consensus adapter.
@@ -641,13 +632,6 @@ impl DecideProcessorMetrics {
     }
 }
 
-/// How many new-protocol decides to wait for before tearing down the legacy
-/// consensus stack (tasks + network). Once the coordinator has decided even a
-/// single leaf the cutover boundary is final and all consensus traffic runs
-/// on the coordinator's network; the margin only gives slightly-lagging peers
-/// a window to finish crossing the boundary with legacy help.
-const LEGACY_SHUTDOWN_DECIDE_COUNT: u64 = 100;
-
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_events<N, P, C>(
@@ -657,7 +641,6 @@ async fn handle_events<N, P, C>(
     persistence: Arc<P>,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler,
-    events_streamer: Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>,
     event_consumer: Arc<C>,
     decide_tx: watch::Sender<DecideSignal>,
 ) where
@@ -665,23 +648,10 @@ async fn handle_events<N, P, C>(
     P: SequencerPersistence,
     C: PersistenceEventConsumer + 'static,
 {
-    let mut new_protocol_decides: u64 = 0;
-
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
 
         match &event {
-            CoordinatorEvent::NewDecide { .. } => {
-                new_protocol_decides += 1;
-                if new_protocol_decides == LEGACY_SHUTDOWN_DECIDE_COUNT {
-                    tracing::info!(
-                        node_id,
-                        "new protocol is live, shutting down legacy consensus and network"
-                    );
-                    let handle = consensus_handle.clone();
-                    spawn(async move { handle.shut_down_legacy().await });
-                }
-            },
             CoordinatorEvent::LegacyEvent(hotshot_event) => {
                 if let hotshot_types::event::EventType::ExternalMessageReceived { ref data, .. } =
                     hotshot_event.event
@@ -689,7 +659,6 @@ async fn handle_events<N, P, C>(
                 {
                     tracing::warn!(%err, "Failed to handle legacy external message");
                 }
-                consensus_handle.activate().await;
             },
             CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
@@ -731,19 +700,7 @@ async fn handle_events<N, P, C>(
                 .await;
         };
 
-        let events_streamer_fut = async {
-            if let CoordinatorEvent::LegacyEvent(ref hotshot_event) = event
-                && let Some(events_streamer) = events_streamer.as_ref()
-            {
-                events_streamer
-                    .write()
-                    .await
-                    .handle_event(hotshot_event.clone())
-                    .await;
-            }
-        };
-
-        tokio::join!(persistence_fut, state_signer_fut, events_streamer_fut);
+        tokio::join!(persistence_fut, state_signer_fut);
     }
 }
 

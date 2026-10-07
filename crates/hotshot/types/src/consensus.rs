@@ -336,7 +336,7 @@ impl<TYPES: NodeType> ParticipationTracker<TYPES> {
         membership: &EpochMembershipCoordinator<TYPES>,
     ) {
         if let Err(err) = track_decided_qc_participation(
-            &leaf.justify_qc(),
+            leaf.justify_qc(),
             membership,
             &mut self.validator,
             &mut self.vote,

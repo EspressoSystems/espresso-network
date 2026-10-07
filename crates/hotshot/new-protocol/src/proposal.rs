@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use alloy::primitives::U256;
 use committable::Committable;
 use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::light_client::validate_light_client_state_update_certificate;
@@ -8,20 +9,25 @@ use hotshot_types::{
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
-        SimpleCertificate, SuccessThreshold, TimeoutEvidence, check_qc_state_cert_correspondence,
+        LightClientStateUpdateCertificateV2, SimpleCertificate, SuccessThreshold, TimeoutEvidence,
+        check_qc_state_cert_correspondence,
     },
-    simple_vote::{HasEpoch, QuorumMarker, Voteable},
+    simple_vote::{HasEpoch, QuorumData2, QuorumMarker, Voteable},
     stake_table::StakeTableEntries,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     utils::{epoch_from_block_number, is_epoch_root, is_last_block},
-    vote::{Certificate, HasViewNumber},
+    vote::HasViewNumber,
 };
-use hotshot_utils::anytrace;
+use hotshot_utils::anytrace::{self, ensure};
 use tokio::task::JoinSet;
 use tracing::error;
 
 use crate::{
-    message::{Certificate2, Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage},
+    cert_verifier::verify_signatures,
+    message::{
+        Certificate1, Certificate2, Proposal, ProposalMessage, Unchecked, Validated,
+        VidShareMessage,
+    },
     upgrade::expected_upgrade_data,
 };
 
@@ -61,13 +67,23 @@ struct Validator<T: NodeType> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     epoch_height: u64,
     upgrade_lock: UpgradeLock<T>,
+
+    /// The data of the genesis QC, the only `justify_qc` a proposal may carry
+    /// at the genesis view.
+    ///
+    /// `None` when the node did not start from genesis, which then refuses
+    /// every such proposal.
+    genesis_qc: Option<QuorumData2<T>>,
 }
 
 impl<T: NodeType> ProposalValidator<T> {
+    /// Create a validator accepting `genesis_qc` as a proposal's parent at the
+    /// genesis view, and no other certificate there.
     pub fn new(
         c: EpochMembershipCoordinator<T>,
         epoch_height: u64,
         upgrade_lock: UpgradeLock<T>,
+        genesis_qc: Option<&Certificate1<T>>,
     ) -> Self {
         Self {
             tasks: JoinSet::new(),
@@ -75,6 +91,7 @@ impl<T: NodeType> ProposalValidator<T> {
                 membership_coordinator: c,
                 epoch_height,
                 upgrade_lock,
+                genesis_qc: genesis_qc.map(|qc| qc.data),
             }),
         }
     }
@@ -96,7 +113,7 @@ impl<T: NodeType> ProposalValidator<T> {
             let parts = well_formed(&p.proposal.data, v.epoch_height)?;
             let sender = v.signature(&p.proposal).await?;
             v.certificates(&p.proposal.data, &parts).await?;
-            v.state_cert(&p.proposal.data).await?;
+            v.state_cert(&p.proposal.data, &parts).await?;
             v.upgrade_certificate(&p.proposal.data).await?;
             let validated_proposal = ValidatedProposal {
                 sender,
@@ -132,6 +149,7 @@ impl<T: NodeType> VidShareValidator<T> {
                 membership_coordinator: c,
                 epoch_height,
                 upgrade_lock,
+                genesis_qc: None,
             }),
         }
     }
@@ -170,6 +188,7 @@ pub(crate) fn well_formed<T: NodeType>(
     let justify_qc_epoch = justify_qc_matches_parent(proposal, epoch_height)?;
     Ok(Parts {
         justify_qc_epoch,
+        state_cert: state_cert_matches_parent(proposal, epoch_height)?,
         next_epoch_justify_qc: next_epoch_justify_qc_matches_parent(
             proposal,
             epoch_height,
@@ -183,6 +202,9 @@ pub(crate) fn well_formed<T: NodeType>(
 pub(crate) struct Parts<'a, T: NodeType> {
     /// The justify QC's epoch.
     pub(crate) justify_qc_epoch: EpochNumber,
+
+    /// The state_cert an epoch-root-parent proposal carries.
+    pub(crate) state_cert: Option<&'a LightClientStateUpdateCertificateV2<T>>,
 
     /// The boundary block's Cert2.
     pub(crate) next_epoch_justify_qc: Option<&'a Certificate2<T>>,
@@ -217,6 +239,11 @@ pub(crate) fn epoch_matches_height<T: NodeType>(
 /// covered by those signatures, so a mismatch is not something a proposer can
 /// produce by relabelling a genuine certificate.
 ///
+/// A justify QC at the genesis view must certify the genesis block. Such a
+/// certificate is not signed, so its epoch and block number are otherwise
+/// whatever the proposer wrote, and together they would let it claim any
+/// epoch for the proposal.
+///
 /// Returns that epoch, which the QC checks resolve their membership through.
 pub(crate) fn justify_qc_matches_parent<T: NodeType>(
     proposal: &Proposal<T>,
@@ -246,7 +273,41 @@ pub(crate) fn justify_qc_matches_parent<T: NodeType>(
             claimed: claimed_block,
         });
     }
+    if proposal.justify_qc.view_number() == ViewNumber::genesis() && claimed_block != 0 {
+        return Err(MalformedProposal::GenesisJustifyQcBlockNumber {
+            view,
+            claimed: claimed_block,
+        });
+    }
     Ok(claimed_epoch)
+}
+
+/// A proposal must carry `state_cert` exactly when its justify QC certifies an
+/// epoch-root block.
+///
+/// Returns the certificate to verify next, or `None` when the proposal's
+/// parent is not an epoch root and it carries none.
+///
+/// Unlike the rest of what a proposal claims about its parent, this field is
+/// not covered by the leaf commitment the proposer signs
+/// (`Leaf2::from_quorum_proposal` drops it). Its correspondence to the
+/// justify QC is checked separately (see [`Validator::state_cert`]); this
+/// function is what enforces its presence, which nothing else does.
+pub(crate) fn state_cert_matches_parent<T: NodeType>(
+    proposal: &Proposal<T>,
+    epoch_height: u64,
+) -> Result<Option<&LightClientStateUpdateCertificateV2<T>>, MalformedProposal> {
+    let view = proposal.view_number();
+    let requires_state_cert = proposal
+        .justify_qc
+        .data
+        .block_number
+        .is_some_and(|bn| is_epoch_root(bn, epoch_height));
+    match (proposal.state_cert.as_ref(), requires_state_cert) {
+        (Some(_), false) => Err(MalformedProposal::StateCertUnexpected(view)),
+        (None, true) => Err(MalformedProposal::StateCertMissing(view)),
+        (state_cert, _) => Ok(state_cert),
+    }
 }
 
 /// The first proposal of an epoch must carry the boundary block's Cert2, which
@@ -301,7 +362,11 @@ pub(crate) fn next_epoch_justify_qc_matches_parent<T: NodeType>(
 /// certificate for the view immediately before it.
 ///
 /// Returns the certificate to verify the signatures on, or `None` when the
-/// proposal follows its parent directly and needs none.
+/// proposal follows its parent directly and carries none.
+///
+/// A proposal may carry a certificate it does not need: a leader holding one for
+/// the view before builds on its lock, which can be that view's own certificate.
+/// It is checked all the same, since it becomes part of the block.
 ///
 /// The parent view being earlier is what the walks over stored proposals
 /// descend on, and, like the rest of what a proposal says about its parent, it
@@ -314,10 +379,10 @@ pub(crate) fn view_change_evidence_matches_parent<T: NodeType>(
     if parent_view >= view {
         return Err(MalformedProposal::ParentNotEarlier { view, parent_view });
     }
-    if parent_view + 1 == view {
-        return Ok(None);
-    }
     let Some(tc) = proposal.view_change_evidence.as_ref() else {
+        if parent_view + 1 == view {
+            return Ok(None);
+        }
         return Err(MalformedProposal::ViewChangeEvidenceMissing(view));
     };
     // The timeout certificate must certify the immediately preceding view.
@@ -390,12 +455,19 @@ impl<T: NodeType> Validator<T> {
     /// signatures over it.
     async fn certificates(&self, proposal: &Proposal<T>, parts: &Parts<'_, T>) -> Result<()> {
         let epoch = parts.justify_qc_epoch;
-        self.verify_cert(
-            &proposal.justify_qc,
-            epoch,
-            ValidationError::InvalidJustifyQc,
-        )
-        .await?;
+        if proposal.justify_qc.view_number() == ViewNumber::genesis() {
+            // The genesis QC is unsigned, so it is recognised by its data.
+            if self.genesis_qc.as_ref() != Some(&proposal.justify_qc.data) {
+                return Err(ValidationError::NotGenesisQc(proposal.view_number()));
+            }
+        } else {
+            self.verify_cert(
+                &proposal.justify_qc,
+                epoch,
+                ValidationError::InvalidJustifyQc,
+            )
+            .await?;
+        }
         if let Some(cert2) = parts.next_epoch_justify_qc {
             self.verify_cert(cert2, epoch, ValidationError::InvalidNextEpochJustifyQc)
                 .await?;
@@ -407,14 +479,21 @@ impl<T: NodeType> Validator<T> {
             };
             let membership = self.membership(tc_epoch).await?;
             let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
-            tc.is_valid_cert(&entries, membership.success_threshold(), &self.upgrade_lock)
-                .map_err(ValidationError::InvalidViewChangeEvidence)?;
+            verify_timeout_evidence(
+                tc,
+                &entries,
+                membership.success_threshold(),
+                &self.upgrade_lock,
+            )
+            .map_err(ValidationError::InvalidViewChangeEvidence)?;
         }
         Ok(())
     }
 
     /// Verify a certificate's signatures against the stake table and threshold
     /// of `epoch`'s committee, labelling an invalid one with `invalid`.
+    ///
+    /// Unlike `is_valid_cert`, this checks them at the genesis view too.
     async fn verify_cert<D>(
         &self,
         cert: &SimpleCertificate<T, D, SuccessThreshold>,
@@ -426,24 +505,24 @@ impl<T: NodeType> Validator<T> {
     {
         let membership = self.membership(epoch).await?;
         let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
-        cert.is_valid_cert(&entries, membership.success_threshold(), &self.upgrade_lock)
-            .map_err(invalid)
+        verify_signatures(
+            cert,
+            &entries,
+            membership.success_threshold(),
+            &self.upgrade_lock,
+        )
+        .map_err(invalid)
     }
 
-    /// Validate the state_cert on an epoch-root proposal.
+    /// Verify the signature on the state_cert a [well-formed](well_formed)
+    /// proposal's parts say it carries.
     ///
-    /// If the justify_qc points at an epoch-root block, the proposal MUST
-    /// carry a matching `LightClientStateUpdateCertificateV2`.
-    async fn state_cert(&self, proposal: &Proposal<T>) -> Result<()> {
-        let Some(qc_block_number) = proposal.justify_qc.data.block_number else {
+    /// Presence is already settled by [`state_cert_matches_parent`]; this
+    /// only checks a present one's correspondence to the justify QC and its
+    /// threshold signature.
+    async fn state_cert(&self, proposal: &Proposal<T>, parts: &Parts<'_, T>) -> Result<()> {
+        let Some(state_cert) = parts.state_cert else {
             return Ok(());
-        };
-        if !is_epoch_root(qc_block_number, self.epoch_height) {
-            // Non-epoch-root parent → no state_cert required.
-            return Ok(());
-        }
-        let Some(state_cert) = proposal.state_cert.as_ref() else {
-            return Err(ValidationError::MissingStateCert);
         };
         if !check_qc_state_cert_correspondence(&proposal.justify_qc, state_cert, self.epoch_height)
         {
@@ -484,7 +563,7 @@ impl<T: NodeType> Validator<T> {
         let membership = self.membership(cert.data.epoch).await?;
         let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
         let threshold = membership.upgrade_threshold();
-        cert.is_valid_cert(&entries, threshold, &self.upgrade_lock)
+        verify_signatures(cert, &entries, threshold, &self.upgrade_lock)
             .map_err(ValidationError::InvalidUpgradeCertificate)
     }
 
@@ -514,6 +593,9 @@ pub enum ValidationError {
     #[error("invalid proposal justify qc: {0}")]
     InvalidJustifyQc(#[source] anytrace::Error),
 
+    #[error("justify_qc of proposal at view {0} is at the genesis view but is not the genesis QC")]
+    NotGenesisQc(ViewNumber),
+
     #[error("invalid next_epoch_justify_qc: {0}")]
     InvalidNextEpochJustifyQc(#[source] anytrace::Error),
 
@@ -534,9 +616,6 @@ pub enum ValidationError {
 
     #[error("failed to get leader for view {0}, epoch {1}: {2}")]
     NoLeader(ViewNumber, EpochNumber, #[source] anytrace::Error),
-
-    #[error("proposal justify_qc is epoch-root but state_cert is missing")]
-    MissingStateCert,
 
     #[error("state_cert does not correspond to justify_qc")]
     StateCertCorrespondence,
@@ -560,6 +639,43 @@ pub enum ValidationError {
     InvalidUpgradeCertificate(#[source] anytrace::Error),
 }
 
+/// Check that a timeout certificate has the form its view requires, names that
+/// view in its data, and carries a quorum's signatures.
+///
+/// `TimeoutEvidence::is_valid_cert` checks the same, except that it skips the
+/// signatures at the genesis view. Every timeout certificate is formed from
+/// signed votes, at the genesis view as at any other, so none is exempt here.
+fn verify_timeout_evidence<T: NodeType>(
+    tc: &TimeoutEvidence<T>,
+    stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+    threshold: U256,
+    upgrade_lock: &UpgradeLock<T>,
+) -> anytrace::Result<()> {
+    let view = tc.view_number();
+    ensure!(
+        tc.binds_epoch() == upgrade_lock.timeout_epoch_bound(view),
+        "timeout certificate for view {view} has the wrong form for its version"
+    );
+    match tc {
+        TimeoutEvidence::V2(cert) => {
+            ensure!(
+                view == cert.data.view,
+                "timeout certificate view {view} != data view {}",
+                cert.data.view
+            );
+            verify_signatures(cert, stake_table, threshold, upgrade_lock)
+        },
+        TimeoutEvidence::V3(cert) => {
+            ensure!(
+                view == cert.data.view,
+                "timeout certificate view {view} != data view {}",
+                cert.data.view
+            );
+            verify_signatures(cert, stake_table, threshold, upgrade_lock)
+        },
+    }
+}
+
 /// Reason a proposal is not [well-formed](well_formed).
 #[derive(Copy, Clone, Debug, thiserror::Error)]
 pub enum MalformedProposal {
@@ -579,6 +695,12 @@ pub enum MalformedProposal {
 
     #[error("justify_qc of proposal at view {0} names no block number")]
     JustifyQcWithoutBlockNumber(ViewNumber),
+
+    #[error(
+        "justify_qc of proposal at view {view} is at the genesis view but certifies block \
+         {claimed}, not the genesis block"
+    )]
+    GenesisJustifyQcBlockNumber { view: ViewNumber, claimed: u64 },
 
     #[error(
         "justify_qc of proposal at view {view} claims epoch {claimed}, but its parent block \
@@ -648,4 +770,10 @@ pub enum MalformedProposal {
         view: ViewNumber,
         evidence_view: ViewNumber,
     },
+
+    #[error("state_cert on proposal at view {0}, whose justify_qc is not at an epoch-root block")]
+    StateCertUnexpected(ViewNumber),
+
+    #[error("epoch-root-parent proposal at view {0} is missing state_cert")]
+    StateCertMissing(ViewNumber),
 }

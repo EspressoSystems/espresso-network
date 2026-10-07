@@ -44,28 +44,10 @@ pub async fn bootstrap_epoch_window(
         .first_epoch()
         .context("first_epoch not seeded; genesis stake table missing")?;
 
-    // Find the highest contiguous pair `(H, H-1)` already in memory. Both
-    // are needed as the starting point of the forward walk: `add_epoch_root`
-    // for epoch `K+2` requires the stake table at `K`, so to derive both
-    // `H+1` (needs `H-1`) and `H+2` (needs `H`) we need `H` and `H-1`
-    // present. If only `H` is present (e.g. `set_first_epoch` ran without a
-    // matching reload, or persistence has gaps near the tip), the walk's
-    // first iteration would otherwise fall into a deep walk-back that may
-    // be unfillable from peers and would silently terminate the bootstrap
-    // at a stale epoch.
-    //
-    // `set_first_epoch` always seeds `first_epoch` and `first_epoch + 1`,
-    // so the scan terminates at worst at `first_epoch + 1`.
-    let mut highest = {
-        let initial = membership.highest_known_epoch().unwrap_or(first_epoch + 1);
-        let mut h = initial;
-        while h > first_epoch + 1
-            && !(membership.snapshot(h).is_some() && membership.snapshot(h - 1).is_some())
-        {
-            h = h - 1;
-        }
-        h
-    };
+    // Catchup resumes from the latest consecutive pair of stake tables we
+    // hold, so a gap near the tip is bridged by the step that runs into it
+    // rather than having to be found here.
+    let mut highest = membership.highest_known_epoch().unwrap_or(first_epoch + 1);
 
     tracing::info!(
         %first_epoch,

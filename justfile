@@ -2,6 +2,7 @@ mod hotshot
 mod py "scripts/py.just"
 mod binary-upgrade-tests "binary-upgrade-tests/justfile"
 mod soak "crates/process-metrics/justfile"
+mod bench "scripts/network-bench/justfile"
 
 default:
     just --list
@@ -84,6 +85,23 @@ compile-metrics *args:
 lint *args:
     just clippy {{args}} -- -D warnings
 
+# Check the v2 protos' formatting and, if they changed since `base`, that they stay wire and JSON compatible
+proto-check $base="origin/main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    buf format --diff --exit-code crates/espresso/api/proto
+    merge_base=$(git merge-base "$base" HEAD)
+    # `buf.yaml` too, so a PR that only loosens the rules is still checked under them.
+    if git diff --quiet "$merge_base" -- 'crates/espresso/api/proto/*.proto' crates/espresso/api/proto/buf.yaml; then
+        echo "No proto changes since $base"
+        exit 0
+    fi
+    # buf's own `.git#ref=` input cannot read a git worktree, so compare against an export.
+    dir=$(mktemp -d)
+    trap 'rm -rf "$dir"' EXIT
+    git archive "$merge_base" crates/espresso/api/proto | tar -x -C "$dir"
+    buf breaking crates/espresso/api/proto --against "$dir/crates/espresso/api/proto"
+
 # postgres and sqlite variants checked separately to cover all code
 clippy *args:
     cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
@@ -103,14 +121,16 @@ build profile="dev" features="":
 demo-native-da-committees *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
-demo-native-new-protocol-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-new-protocol-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
-
 demo-native-large-block-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-large-block-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-ff *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+# A/B the leader block-build critical path between two git refs (see scripts/bench-block-build)
+[positional-arguments]
+bench-block-build *args:
+    scripts/bench-block-build "$@"
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
@@ -134,7 +154,7 @@ anvil *args:
 # slow-tests: slow and serial tests
 # espresso-dev-node: enables embedded-db
 # espresso-crypto-helper: vendored openssl leaks to workspace via feature unification
-nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude hotshot-examples --exclude espresso-crypto-helper"
+nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
@@ -249,10 +269,8 @@ check-features-ci *args:
         --exclude hotshot \
         --exclude hotshot-builder-api \
         --exclude hotshot-contract-adapter \
-        --exclude hotshot-events-service \
         --exclude hotshot-example-types \
         --exclude hotshot-libp2p-networking \
-        --exclude hotshot-macros \
         --exclude hotshot-orchestrator \
         --exclude hotshot-query-service \
         --exclude hotshot-state-prover \

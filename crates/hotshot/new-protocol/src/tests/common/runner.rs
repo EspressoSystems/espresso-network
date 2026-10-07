@@ -39,7 +39,7 @@ use tracing::{debug, info};
 use crate::{
     cert_verifier::ValidCert,
     client::{ClientApi, CoordinatorClient},
-    consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
+    consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, error::Severity},
     message::{ConsensusMessage, Message, MessageType, Unchecked},
     network::Cliquenet,
@@ -81,9 +81,11 @@ pub enum NodeAction {
     /// Start: bring a node that was initially offline into the network
     /// with a fresh coordinator from genesis.
     Start,
-    // TODO: Fix the shutdown test and add this back.
-    // /// Shutdown: take the node offline.
-    // Shutdown,
+    /// Shutdown: take the node offline for the rest of the run. Views it
+    /// leads afterwards are not predicted from `down_nodes`; list them in
+    /// `expected_failed_views`, or the run fails with `NotEnoughDecided`
+    /// for the first such view.
+    Shutdown,
 }
 
 /// Configuration for a multi-node integration test.
@@ -197,8 +199,6 @@ pub struct TestRunner {
     #[builder(skip)]
     decided_transactions: BTreeMap<ViewNumber, Vec<Commitment<TestTransaction>>>,
 
-    pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
-
     /// The version upgrade every node is configured for. Trivial by default.
     #[builder(default = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION))]
     upgrade: versions::Upgrade,
@@ -223,6 +223,7 @@ pub struct NodeProgress {
     pub decided: usize,
     pub target: usize,
     pub highest_view: Option<ViewNumber>,
+    pub timed_out_views: BTreeSet<ViewNumber>,
     pub down: bool,
 }
 
@@ -234,8 +235,14 @@ fn format_progress(progress: &[NodeProgress]) -> String {
                 .highest_view
                 .map_or_else(|| "none".to_string(), |v| v.to_string());
             let down = if p.down { " down" } else { "" };
+            let timed_out = p
+                .timed_out_views
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
             format!(
-                "node {} decided={}/{} highest={highest}{down}",
+                "node {} decided={}/{} highest={highest} timed_out=[{timed_out}]{down}",
                 p.idx, p.decided, p.target
             )
         })
@@ -392,6 +399,7 @@ impl TestRunner {
     fn timeout_error(
         &self,
         node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],
+        node_timeouts: &[BTreeSet<ViewNumber>],
         currently_down: &BTreeSet<usize>,
     ) -> TestError {
         TestError::Timeout {
@@ -403,6 +411,7 @@ impl TestRunner {
                     decided: commits.len(),
                     target: self.target_for(idx),
                     highest_view: commits.keys().last().copied(),
+                    timed_out_views: node_timeouts[idx].clone(),
                     down: currently_down.contains(&idx),
                 })
                 .collect(),
@@ -530,7 +539,6 @@ impl TestRunner {
                 client,
                 self.epoch_height,
                 self.view_timeout,
-                self.pre_cutover_seed.clone(),
                 UpgradeSetup {
                     lock: upgrade_lock,
                     config: self.upgrade_config.clone(),
@@ -558,18 +566,6 @@ impl TestRunner {
             let generation = generations[i];
             let (cancel_tx, cancel_rx) = oneshot::channel();
             cancels.insert(i, cancel_tx);
-            let mut initial_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
-            if let Some(seed) = &self.pre_cutover_seed {
-                let anchor_view = seed.decided_anchor.view_number();
-                let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
-                for v in 1..*anchor_view {
-                    initial_commits.insert(ViewNumber::new(v), anchor_commit);
-                }
-                initial_commits.insert(anchor_view, anchor_commit);
-                for leaf in &seed.undecided {
-                    initial_commits.insert(leaf.view_number(), leaf.commit().into());
-                }
-            }
             node_handles.push(Some(tokio::spawn(run_node(
                 coord,
                 self.node_storages[i].clone(),
@@ -578,7 +574,6 @@ impl TestRunner {
                 generation,
                 external_events_tx,
                 cancel_rx,
-                initial_commits,
             ))));
         }
 
@@ -603,21 +598,6 @@ impl TestRunner {
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
         let mut max_decided_view: u64 = 0;
 
-        // Seeded leaves never fire `LeafDecided`; pre-populate them.
-        if let Some(seed) = &self.pre_cutover_seed {
-            let anchor_view = seed.decided_anchor.view_number();
-            let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
-            for commits in &mut node_commits {
-                for v in 1..*anchor_view {
-                    commits.insert(ViewNumber::new(v), anchor_commit);
-                }
-                commits.insert(anchor_view, anchor_commit);
-                for leaf in &seed.undecided {
-                    commits.insert(leaf.view_number(), leaf.commit().into());
-                }
-            }
-        }
-
         let deadline = Instant::now() + self.max_runtime;
         while node_commits
             .iter()
@@ -625,7 +605,7 @@ impl TestRunner {
             .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_for(i))
         {
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-                return Err(self.timeout_error(&node_commits, &currently_down));
+                return Err(self.timeout_error(&node_commits, &node_timeouts, &currently_down));
             };
 
             // Apply pending node changes when progress reaches their view.
@@ -693,7 +673,6 @@ impl TestRunner {
                                     client,
                                     self.epoch_height,
                                     self.view_timeout,
-                                    self.pre_cutover_seed.clone(),
                                     UpgradeSetup {
                                         lock: upgrade_lock,
                                         config: self.upgrade_config.clone(),
@@ -707,9 +686,6 @@ impl TestRunner {
                                 let generation = generations[change.idx];
                                 let (cancel_tx, cancel_rx) = oneshot::channel();
                                 cancels.insert(change.idx, cancel_tx);
-                                // Restarted nodes start with a fresh commits
-                                // map (mirroring the wipe at line ~404 below).
-                                let initial_commits = BTreeMap::new();
                                 node_handles[change.idx] = Some(tokio::spawn(run_node(
                                     coord,
                                     self.node_storages[change.idx].clone(),
@@ -718,19 +694,28 @@ impl TestRunner {
                                     generation,
                                     external_events_tx,
                                     cancel_rx,
-                                    initial_commits,
                                 )));
                                 currently_down.remove(&change.idx);
                                 node_commits[change.idx] = BTreeMap::new();
                             },
-                            // NodeAction::Shutdown => {
-                            //     if let Some(handle) = node_handles[change.idx].take() {
-                            //         handle.abort();
-                            //     }
-                            //     network_state.shutdown_node(change.idx).await;
-                            //     generations[change.idx] += 1;
-                            //     currently_down.insert(change.idx);
-                            // },
+                            NodeAction::Shutdown => {
+                                // Stop the coordinator gracefully so it closes
+                                // its cliquenet listener and flushes storage.
+                                if let Some(tx) = cancels.remove(&change.idx) {
+                                    let (a, b) = oneshot::channel();
+                                    if tx.send(a).is_ok() {
+                                        let _ = b.await;
+                                    }
+                                }
+                                if let Some(handle) = node_handles[change.idx].take() {
+                                    handle.abort();
+                                    let _ = handle.await;
+                                }
+                                // Stale events queued by the stopped task are
+                                // ignored from here on.
+                                generations[change.idx] += 1;
+                                currently_down.insert(change.idx);
+                            },
                         }
                     }
                 }
@@ -742,7 +727,9 @@ impl TestRunner {
             let tagged = match timeout(remaining, event_rx.recv()).await {
                 Ok(Some(tagged)) => tagged,
                 Ok(None) => unreachable!("run() holds event_tx for the whole loop"),
-                Err(_) => return Err(self.timeout_error(&node_commits, &currently_down)),
+                Err(_) => {
+                    return Err(self.timeout_error(&node_commits, &node_timeouts, &currently_down));
+                },
             };
             if tagged.generation != generations[tagged.idx] {
                 continue;
@@ -943,9 +930,8 @@ async fn run_node(
     generation: u64,
     external_events_tx: Sender<Event<TestTypes>>,
     mut cancel: oneshot::Receiver<oneshot::Sender<()>>,
-    initial_commits: BTreeMap<ViewNumber, [u8; 32]>,
 ) {
-    let mut commits: BTreeMap<ViewNumber, [u8; 32]> = initial_commits;
+    let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
     let mut last_view = ViewNumber::genesis();
     let send = |event: NodeEvent| {
         let _ = output_tx.send(TaggedEvent {

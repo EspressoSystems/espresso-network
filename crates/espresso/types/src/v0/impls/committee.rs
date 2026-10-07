@@ -57,10 +57,10 @@ pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 /// Default for how long `load_stake_table` may spend on each of its two
 /// phases.
 ///
-/// Sized against hotshot's `DEFAULT_CATCHUP_TIMEOUT` (300 s): catchup's
-/// discovery walk calls `load_stake_table` once per missing epoch, so under
-/// a stalled store each epoch can burn this budget before the watchdog
-/// abandons the attempt. Keep the two in ratio when changing either.
+/// Catchup calls `load_stake_table` once per epoch it walks and bounds each
+/// call by its own `DEFAULT_CATCHUP_TIMEOUT` (300 s), so this is the tighter
+/// of the two and is what a stalled store actually costs per epoch. Neither
+/// bounds a walk as a whole.
 const DEFAULT_STORAGE_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Type to describe DA and Stake memberships.
@@ -791,6 +791,9 @@ impl Membership<SeqTypes> for EpochCommittees {
             Ok(Some(loaded)) => loaded,
             Ok(None) => return false,
             Err(_) => {
+                if self.inner.read().snapshots.contains_key(&epoch) {
+                    return true;
+                }
                 warn!(
                     %epoch,
                     timeout = ?self.storage_read_timeout,

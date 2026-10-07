@@ -93,6 +93,7 @@ async fn create_network(
         keypair,
         bind_addr,
         parties,
+        None,
         upgrade_lock(),
         Box::new(NoMetrics),
     )
@@ -187,8 +188,12 @@ async fn build_coordinator(
     );
     consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
 
-    let proposal_validator =
-        ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let proposal_validator = ProposalValidator::new(
+        membership.clone(),
+        epoch_height,
+        upgrade_lock.clone(),
+        consensus.cert1_at(ViewNumber::genesis()),
+    );
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
@@ -231,7 +236,7 @@ async fn build_coordinator(
         .build();
 
     // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
-    coordinator.start(None);
+    coordinator.start();
 
     // Process initial outputs so the timer resets before the event loop.
     while let Some(output) = coordinator.outbox_mut().pop_front() {

@@ -101,6 +101,12 @@ pub struct SimpleCertificate<
 impl<TYPES: NodeType, VOTEABLE: Voteable<TYPES>, THRESHOLD: Threshold<TYPES>>
     SimpleCertificate<TYPES, VOTEABLE, THRESHOLD>
 {
+    /// The commitment the signatures are over, which a client cannot recompute without the vote's
+    /// versioned encoding.
+    pub fn vote_commitment(&self) -> Commitment<VOTEABLE> {
+        self.vote_commitment
+    }
+
     /// Creates a new instance of `SimpleCertificate`
     pub fn new(
         data: VOTEABLE,
@@ -762,12 +768,20 @@ impl<T: NodeType> TimeoutEvidence<T> {
                     !upgrade_lock.timeout_epoch_bound(view),
                     "timeout certificate for view {} must not bind its epoch", view
                 }
+                ensure! {
+                    view == cert.data.view,
+                    "timeout certificate view {} != data view {}", view, cert.data.view
+                }
                 cert.is_valid_cert(stake_table, threshold, upgrade_lock)
             },
             Self::V3(cert) => {
                 ensure! {
                     upgrade_lock.timeout_epoch_bound(view),
                     "timeout certificate for view {} must bind its epoch", view
+                }
+                ensure! {
+                    view == cert.data.view,
+                    "timeout certificate view {} != data view {}", view, cert.data.view
                 }
                 cert.is_valid_cert(stake_table, threshold, upgrade_lock)
             },
@@ -1174,8 +1188,8 @@ impl<TYPES: NodeType> CertificatePair<TYPES> {
     /// Create a certificate for the parent of a leaf, using the justifying QCs in the leaf.
     pub fn for_parent(leaf: &Leaf2<TYPES>) -> Self {
         Self {
-            qc: leaf.justify_qc(),
-            next_epoch_qc: leaf.next_epoch_justify_qc(),
+            qc: leaf.justify_qc().clone(),
+            next_epoch_qc: leaf.next_epoch_justify_qc().cloned(),
         }
     }
 

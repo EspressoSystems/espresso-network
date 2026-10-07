@@ -26,8 +26,10 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 
 ### What is served today
 
-`StatusService`, `TokenService`, `NodeService`, `ConfigService` and `DatabaseService`, served under `/v2/status/...`,
-`/v2/token/...`, `/v2/node/...`, `/v2/config/...` and `/v2/database/...`.
+`StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
+`MerklizedStateService`, `RewardStateService`, `StateSignatureService`, `SubmitService` and `ExplorerService`, served
+under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`, `/v2/availability/...`,
+`/v2/merklized-state/...`, `/v2/state-signature/...`, `/v2/submit/...` and `/v2/explorer/...`.
 
 - `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
@@ -38,9 +40,52 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   what it drops from v1's orchestrator wrapper. `runtime` carries the identity, endpoints, storage settings and enabled
   modules. The genesis and the catchup, proposal-fetcher, libp2p and L1 tuning stay on v1, and the L1 URLs are reported
   as a count because they can carry credentials. Nodes joining through `--config-peers` still fetch the full config from
-  v1. Like the v1 `config` module it is only mounted when the node enables that module, so its routes are the one part
-  of the OpenAPI document a deployment may answer with 404, in the v2 error envelope.
+  v1. Like the v1 `config` module it is only mounted when the node enables that module, and a disabled node answers its
+  routes with a 404 in the v2 error envelope.
 - `DatabaseService` mirrors v1's table sizes and migration status.
+- `AvailabilityService` carries over every v1 `availability` endpoint. A single lookup takes exactly one selector as a
+  query parameter, such as `?height=`, `?hash=` or `?payloadHash=` for a block. The `stream/*` subscriptions are
+  server-sent events under `/v2/availability/stream/...`, one JSON `data:` frame per item. An error arrives as an
+  `event: error` frame holding the error envelope and ends the stream. The `*-ranges` batch endpoints are POSTs.
+  `HeaderResponse` is a `oneof` whose arm names the protocol version, and the header messages live in `common.proto`
+  because `NodeService` serves them too. Byte fields v1 writes as JSON integer arrays, such as the DRB result and the
+  ADVZ proof indices, are protobuf `bytes`, base64 in JSON, and certificates list who signed as booleans by stake table
+  position rather than v1's bitvec layout. A block range is one response message, so a large one can exceed a gRPC
+  client's default 4 MB decode limit, which clients reading block ranges over gRPC should raise.
+- `MerklizedStateService` serves the block and fee merkle trees: a path lookup per tree and the newest persisted state
+  height. A path reuses the `AdvzMerkleNode` messages a VID share carries, a oneof over jellyfish's four node variants,
+  and every hash, index and element keeps the `FIELD~` TaggedBase64 encoding jellyfish gives it. The proof is the same
+  bytes v1 serves, in a shape a client can walk node by node, though recomputing a leaf hash still needs ark-serialize.
+  An account with no fee entry has a balance of zero. Two v1 shapes collapse: the height and commitment snapshot
+  selectors become query parameters on one route per tree, exactly one required, and v1's two block-height routes both
+  read the same `get_last_state_height`, so v2 serves that number once.
+- `RewardStateService` serves the reward tree (`RewardMerkleTreeV2`) under `/v2/merklized-state/reward/...`: an
+  account's balance and its proof, the L1 claim input, paged reward amounts, and the serialized tree. A balance or proof
+  takes an optional `height`, absent meaning the newest height the light client contract finalized, where v1 has a route
+  for each. The account balance and the claim input's lifetime rewards are decimal strings, where v1 serves them as `0x`
+  hex, and a page of reward amounts comes in the tree's own order, where v1 reverses it. The serialized tree is one
+  message, so a large one can exceed a gRPC client's default 4 MB decode limit. The routes over the older
+  `RewardMerkleTreeV1`, its account proof and its path lookup, stay on v1. v2 has no path lookup for
+  `RewardMerkleTreeV2`: v1's reads merklized-state tables no reward tree populates, so it cannot succeed, and the proof
+  route already serves an account's path.
+- `StateSignatureService` serves this node's light client state signature for a block. A node keeps signatures only for
+  recent blocks, so an older height is a 404 on both versions. Its fields take the names `StateCertV2Response` uses for
+  the same values, where v1 writes `state`, `next_stake`, `signature` and `v2_signature`. A validator without SQL query
+  storage serves it on v1 only, as it does every v2 service.
+- `SubmitService` hands a transaction sent as a JSON body to the node for sequencing. v1 decodes that body as either VBS
+  or JSON by `Content-Type`, while v2 REST is protoJSON only and gRPC carries binary protobuf, so a client submitting
+  VBS stays on v1. The route is `/v2/submit/transaction` rather than mirroring v1's `submit/submit`. Like the v1 module
+  it is mounted only when the node enables `submit`, and a disabled node answers its path with a 404 in the v2 error
+  envelope.
+- `ExplorerService` serves v1's explorer module. v1 spells each way of naming a block or transaction as its own route,
+  and v2 collapses them into one route per operation with the identifier as parameters: a block is `?height=` or
+  `?hash=`, a transaction `?height=&offset=` or `?hash=`, and neither given means the latest, as v1's `latest` list
+  routes do, which v2 extends to the single block and transaction lookups. The `block` and `namespace` transaction
+  filters become mutually exclusive parameters on the same route. The histograms are the one reshaped response: v1
+  serves four parallel arrays it documents as equal length and indexed by `block_heights`, and two of them hold nulls a
+  proto `repeated` field cannot carry, so v2 serves one point per block instead. Amounts keep the rendered form v1
+  writes, currency code and all. Like the v1 module it is mounted only when the node enables `explorer`, and a disabled
+  node answers its routes with a 404 in the v2 error envelope.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented
@@ -68,7 +113,7 @@ path against the mounted v2 router.
    }
    ```
 
-   Request message fields become HTTP query parameters.
+   Request message fields become HTTP query parameters, or the JSON body for a POST (see the rules below).
 
    Proto comments are published API surface: an rpc comment becomes the operation summary, and a field comment becomes
    the parameter or property description. So comment an rpc, and comment a field whose units, encoding, or zero value a
@@ -86,8 +131,9 @@ path against the mounted v2 router.
 
 3. Implement the new trait method in `crates/espresso/node/src/api/state.rs`. The build fails there until you do, which
    is the complete to-do list. Follow the local pattern: a thin tonic method that delegates to the v1 trait method where
-   one exists (otherwise fetches from the data source), converts to the proto type inline, and maps errors with
-   `to_status` so `AvailabilityError::NotFound` becomes gRPC `not_found` / HTTP 404.
+   one exists (otherwise fetches from the data source), converts to the proto type through a `From` impl in
+   `crates/espresso/api/src/render.rs` where espresso-api can name the source type (inline otherwise), and maps errors
+   with `to_status` so `AvailabilityError::NotFound` becomes gRPC `not_found` / HTTP 404.
 
 4. Verify:
 
@@ -119,9 +165,15 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
 ### Rules and caveats
 
 - Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never
-  renumber, reuse, or change the type of an existing field.
-- Only GET bindings are used so far. The generator (`tonic-rest-build`) supports other methods, but decide the
-  request-body mapping deliberately before introducing the first one.
+  renumber, reuse, or change the type of an existing field. `just proto-check` enforces this on every PR: it checks the
+  protos' formatting with `buf format`, and when a proto changed it runs `buf breaking` with the `PACKAGE` rules
+  (`crates/espresso/api/proto/buf.yaml`) against the merge base with the PR's base branch, so deleting an rpc or a
+  service fails it as well as changing a field. Run it locally as `just proto-check`, and fix formatting with
+  `buf format -w crates/espresso/api/proto`. The rules compare a field's message type by name, so renaming a message a
+  field refers to counts as a break even though the wire bytes are unchanged. buf does not read the `google.api.http`
+  annotation, so a changed route is not caught by it.
+- An rpc is a GET, or a POST when it changes state or its input cannot be flat. A POST binds the whole request message
+  as its protoJSON body (`body: "*"`) and refuses a query string with a 400.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every
   field of the request message as a query parameter, so a future block-height lookup is `/v2/...?height=5` rather than
   `/v2/.../5`. This is deliberate. The route lives in the proto annotation and stays a constant, so adding a parameter
@@ -131,22 +183,23 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
   `axum::extract::Query`, and `serde_urlencoded` cannot decode repeated or nested message fields, so a request message
   with a `repeated` or message-typed field would fail every request; `build/openapi.rs` refuses to build one. It also
   refuses an enum field, which would decode by value name but not by the number protoJSON also allows. Structured input
-  needs the POST body mapping decided above, not a nested request message on a GET.
+  goes in a POST body, not a nested request message on a GET. Responses have no such limit: a `map` is allowed there and
+  renders as a JSON object whose keys are the stringified map keys, which is how `/v2/availability/block-summary`
+  carries its per-namespace totals.
 - Every rpc gets its own request message, even when two are field-for-field identical, so either can take a parameter
   later without touching the other's generated type. Responses are shared where two rpcs genuinely return the same
-  thing, as the validator routes do. Request messages never reach the OpenAPI document, since their fields are inlined
-  as query parameters; only response messages become schemas, which is why a duplicate response would be a duplicate
-  schema and a duplicate request costs nothing.
-- Only GET bindings and constant paths are used, and `build/openapi.rs` refuses both a non-GET binding and a path
-  template before any code is generated. `crates/espresso/api/tests/openapi_guards.rs` covers the refusals; every build
+  thing, as the validator routes do. A GET's request message never reaches the OpenAPI document, since its fields are
+  inlined as query parameters, so only response messages and POST bodies become schemas.
+- `build/openapi.rs` refuses any other verb, a GET with a body, a POST without one, a partial body and a path template
+  before any code is generated. `crates/espresso/api/tests/openapi_guards.rs` covers the refusals, and every build
   covers the passing direction.
 - Unknown fields are rejected rather than ignored, in both JSON bodies and query strings: any query parameter on a
   parameterless endpoint is a 400. This is pbjson's default and is worth keeping, since a typo'd parameter would
-  otherwise return a confidently wrong response. Those rejections come from `axum::extract::Query`, not from the
-  handler, so they arrive as plain text; `axum::v2_error_envelope` rewrites them into the envelope below, which is why
-  the v2 routers are layered with it in `serve_axum`. The layer covers the mounted routes only: a request to an unknown
-  path under `/v2/`, or a known path with the wrong method, is answered by the router before the layer runs and keeps
-  axum's plain-text body.
+  otherwise return a confidently wrong response. Those rejections come from `axum::extract::Query` or `Json`, not from
+  the handler, so they arrive as plain text, and `axum::v2_error_envelope` rewrites them into the envelope below, which
+  is why the v2 routers are layered with it in `serve_axum`. The layer covers the mounted routes only: a request to an
+  unknown path under `/v2/`, or a known path with the wrong method, is answered by the router before the layer runs and
+  keeps axum's plain-text body.
 - Build inside the nix shell. `prost-build` shells out to `protoc`, and the shell pins its version.
 - `tonic-rest` is pinned with `=` because its runtime half is on the public HTTP path: it renders every v2 error body
   and copies request headers into tonic metadata. Read the diff before bumping it.
@@ -156,11 +209,14 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
   further than it looks: the genesis header is served with no `height` key at all, and an L1 block finalized at zero
   with no `number`, where v1 writes both. A generated client reads the field's default and is unaffected; a hand-written
   one must treat absent as zero. Marking a response field `optional` would emit it at zero, which is deliberately not
-  done, so the whole surface follows one rule. Standard protobuf tooling can generate compatible clients.
-  Deserialization accepts both camelCase and the original proto field names, so query parameters keep their snake_case
-  proto names. Every request field is `optional`, which the build enforces, so a handler can tell an omitted parameter
-  from a zero one: the ones an endpoint cannot do without are refused with a 400, and the rest carry their meaning when
-  absent in the field's own documentation. The shape is pinned by `crates/espresso/api/tests/proto_json.rs`.
+  done unless absent and zero mean different things. Certificate vote data keeps its epoch and block number `optional`
+  because the vote commitment hashes an absent value differently from zero, and the explorer histograms keep a block's
+  time and size `optional` because v1 serves a null for a value it does not have. Standard protobuf tooling can generate
+  compatible clients. Deserialization accepts both camelCase and the original proto field names, so query parameters
+  keep their snake_case proto names. Every request field is `optional`, which the build enforces, so a handler can tell
+  an omitted parameter from a zero one: the ones an endpoint cannot do without are refused with a 400, and the rest
+  carry their meaning when absent in the field's own documentation. The shape is pinned by
+  `crates/espresso/api/tests/proto_json.rs`.
 - Only `serve_axum` (the SQL storage mode) mounts the v2 routes and their docs. `serve_axum_fs`, `serve_axum_status`,
   and `serve_axum_bare` serve v1 only, so v2 requests 404 there. `TestNetwork` defaults to filesystem storage when a
   test does not configure storage, which is why v2 endpoints need a SQL-backed network to exercise.

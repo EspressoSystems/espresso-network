@@ -178,6 +178,10 @@ where
         self.inner.read().table.first_epoch().map(EpochNumber::new)
     }
 
+    fn highest_known_epoch(&self) -> Option<EpochNumber> {
+        self.inner.read().epochs.iter().max().copied()
+    }
+
     fn set_first_epoch(&self, e: EpochNumber, initial_drb_result: DrbResult) {
         let mut inner = self.inner.write();
         inner.epochs.insert(e);

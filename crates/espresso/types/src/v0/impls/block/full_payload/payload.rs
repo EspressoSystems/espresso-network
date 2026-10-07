@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use committable::Committable;
+use committable::{Commitment, Committable};
 use hotshot_query_service_types::availability::{QueryablePayload, VidCommonQueryData};
 use hotshot_types::{
     data::ViewNumber,
@@ -36,9 +36,18 @@ pub enum BlockBuildingError {
     MissingChainConfig(String),
 }
 
+/// Proposer-side limit that keeps VID dispersal size bounded. Not a
+/// validation rule.
+pub(crate) const MAX_NAMESPACES_PER_BLOCK: usize = 50;
+
 impl Payload {
     pub fn ns_table(&self) -> &NsTable {
         &self.ns_table
+    }
+
+    /// The bytes [`BlockPayload::encode`] returns, without its copy into a fresh `Arc`.
+    pub fn raw_payload(&self) -> &[u8] {
+        &self.raw_payload
     }
 
     /// Read a transaction from this payload.
@@ -77,14 +86,22 @@ impl Payload {
         (Self, <Self as BlockPayload<SeqTypes>>::Metadata),
         <Self as BlockPayload<SeqTypes>>::Error,
     > {
+        let _span = tracing::debug_span!("from_transactions").entered();
         // accounting for block byte length limit
         let max_block_byte_len = u64::from(chain_config.max_block_size);
         let mut block_byte_len = 0;
 
         // add each tx to its namespace
         let mut ns_builders = BTreeMap::<NamespaceId, NsPayloadBuilder>::new();
+        let mut deferred = 0usize;
         for tx in transactions.into_iter() {
-            let tx_size = tx.size_in_block(!ns_builders.contains_key(&tx.namespace()));
+            let opens_new_ns = !ns_builders.contains_key(&tx.namespace());
+            if opens_new_ns && ns_builders.len() >= MAX_NAMESPACES_PER_BLOCK {
+                deferred += 1;
+                continue;
+            }
+
+            let tx_size = tx.size_in_block(opens_new_ns);
 
             if tx_size > max_block_byte_len {
                 // skip this transaction since it exceeds the block size limit
@@ -108,6 +125,9 @@ impl Payload {
             let ns_builder = ns_builders.entry(tx.namespace()).or_default();
             ns_builder.append_tx(tx);
         }
+        if deferred > 0 {
+            tracing::debug!(deferred, "namespace limit reached");
+        }
 
         // build block payload and namespace table
         let mut payload = Vec::new();
@@ -127,6 +147,16 @@ impl Payload {
         ))
     }
 }
+
+/// Transaction count below which [`BlockPayload::transaction_commitments`] hashes
+/// serially.
+///
+/// Splitting and joining across the rayon pool costs more than the handful of
+/// Keccak256 rounds it would distribute, so small blocks — the common case — are
+/// better off never leaving the calling thread. The parallel path exists for
+/// recovery of large blocks, where this work is the serial tail between the
+/// erasure decode and the vote.
+pub(crate) const MIN_PARALLEL_TRANSACTIONS: usize = 32;
 
 #[async_trait]
 impl BlockPayload<SeqTypes> for Payload {
@@ -204,6 +234,40 @@ impl BlockPayload<SeqTypes> for Payload {
         metadata: &'a Self::Metadata,
     ) -> impl 'a + Iterator<Item = Self::Transaction> {
         self.enumerate(metadata).map(|(_, t)| t)
+    }
+
+    /// The per-transaction Keccak256 is the serial tail of block recovery: it
+    /// runs between the parallel erasure decode and the vote, and grows linearly
+    /// with the block's transaction count. Each hash is independent.
+    ///
+    /// Indices are materialized first — an `NsIndex` plus a position, far smaller
+    /// than the transactions themselves — so only the hashing goes wide, and only
+    /// past [`MIN_PARALLEL_TRANSACTIONS`].
+    ///
+    /// Order must match [`Self::transactions`]: callers pair a commitment index
+    /// with a transaction index. `par_iter` is an indexed parallel iterator, so
+    /// `collect` preserves it, and the index sequence is `iter`'s, exactly as the
+    /// serial default gets it through `enumerate`.
+    fn transaction_commitments(
+        &self,
+        metadata: &Self::Metadata,
+    ) -> Vec<Commitment<Self::Transaction>> {
+        use p3_maybe_rayon::prelude::*;
+
+        // `iter` only yields in-bounds indices; the same assumption `enumerate`
+        // documents and unwraps on. Both branches resolve through this, so they
+        // cannot disagree on contents or order.
+        let commit = |index: &Index| {
+            self.transaction(index)
+                .expect("index yielded by iter must resolve to a transaction")
+                .commit()
+        };
+
+        let indices: Vec<Index> = QueryablePayload::iter(self, metadata).collect();
+        if indices.len() < MIN_PARALLEL_TRANSACTIONS {
+            return indices.iter().map(commit).collect();
+        }
+        indices.par_iter().map(commit).collect()
     }
 
     fn txn_bytes(&self) -> usize {
