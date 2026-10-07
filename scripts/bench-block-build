@@ -3,40 +3,22 @@
 # requires-python = ">=3.11"
 # dependencies = ["matplotlib", "pandas", "tabulate", "typer"]
 # ///
-r"""A/B the leader's block-build critical path between two git refs.
+r"""A/B the leader's block build between two git refs, step by step.
 
-Runs the `request_block` benchmarks of the `block_build` bench in espresso-types, which call the
-leader's own code (`from_transactions` and new-protocol's `block_commitments`), for a base and a
-head ref. Prints a markdown table with the whole build and one row per step, and draws a waterfall of
-the steps.
+Runs the `request_block` benchmarks of espresso-types' `block_build` bench for both refs and
+writes tmp/bench-block-build/<base>-<head>.{csv,md,svg}: samples, a table of the whole build and
+each step, and a waterfall chart.
 
     just bench-block-build                      # origin/main vs this checkout, edits included
     just bench-block-build main my-branch
-    scripts/bench-block-build --filter 'request_block/50MB' --repeats 3 main HEAD   # quick check
-    scripts/bench-block-build --malloc default --malloc hugetlb main HEAD
+    scripts/bench-block-build --filter 'request_block/50MB' --repeats 3 main HEAD
     scripts/bench-block-build --chart tmp/bench-block-build/<base>-<head>.csv
 
-Method:
-    Each ref is built once in a temporary git worktree; binaries are cached by commit in
-    tmp/bench-block-build/bin. Each benchmark runs in its own process, because glibc's mmap
-    threshold depends on what the process allocated earlier. Base and head alternate. Samples are
-    pooled across repeats; the table also lists each run's median, so a noisy run stands out.
-    The change carries one standard error, from the spread of each side's run medians, and is
-    marked as noise when it is within two of them. Chart whiskers show the same error per step.
-    Before each run, while the bench is idle, the script samples /proc/stat for 0.3 s; CPU busy
-    then is other work. It is stored per run as `other_cpu` in the CSV, and the script warns
-    when it exceeds 5%.
-    Steps partly run in parallel, so they do not add up to the total.
-
-    Runs use `GLIBC_TUNABLES=glibc.malloc.hugetlb=1` (the AWS bench node setting) by default.
-    Without it, glibc maps every buffer of 32 MiB or more (64 MiB on worker threads) fresh per
-    block in 4 KiB pages, and the page faults dominate and vary between runs.
-
-The head defaults to this checkout: with uncommitted edits it is built in place, otherwise its
-commit is used. When both sides are the same commit it is measured once and the table shows
-absolute numbers.
-Both refs must contain crates/espresso/types/benches/block_build.rs. Results go to
-tmp/bench-block-build/<base>-<head>.{csv,md,svg}.
+Each ref is built in a temporary git worktree, sharing tmp/bench-block-build/target. Each
+benchmark runs in its own process, since glibc's mmap threshold depends on earlier allocations,
+with base and head alternating, under glibc.malloc.hugetlb=1 by default (the AWS bench nodes).
+Changes carry one standard error from the spread of run medians and are marked as noise within
+two. Before each run the script samples /proc/stat while idle and warns if other work is busy.
 """
 
 import json
@@ -45,6 +27,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from enum import Enum
 from pathlib import Path
@@ -54,12 +37,14 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import typer
 
-OUT = Path("tmp/bench-block-build")
+ROOT = Path(
+    subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
+)
+OUT = ROOT / "tmp/bench-block-build"
 BENCH_FILE = "crates/espresso/types/benches/block_build.rs"
 WORKTREE = "worktree"
 DEFAULT_FILTER = r"^block_build/request_block/(30|50|70)MB_1000KB_t\d+_n100$"
-# Waterfall lanes top to bottom: the whole build, its sequential prefix, the commitment phase and
-# the steps inside it that run in parallel.
+BUSY_LIMIT = 0.05
 LANES = {
     "request_block": "#898781",
     "from_transactions": "#2a78d6",
@@ -88,56 +73,44 @@ def main(
     base: Annotated[str, typer.Argument()] = "origin/main",
     head: Annotated[
         str,
-        typer.Argument(
-            help=f"git ref, or {WORKTREE!r} for the checkout with its edits"
-        ),
+        typer.Argument(help=f"git ref, or {WORKTREE!r}: this checkout with its edits"),
     ] = WORKTREE,
-    bench_filter: Annotated[
-        str, typer.Option("--filter", help="regex over full benchmark ids")
-    ] = DEFAULT_FILTER,
+    bench_filter: Annotated[str, typer.Option("--filter")] = DEFAULT_FILTER,
     repeats: Annotated[int, typer.Option(min=2)] = 10,
-    malloc: Annotated[
-        list[Malloc] | None,
-        typer.Option(help="repeat to measure several; default hugetlb"),
-    ] = None,
-    dry_run: Annotated[
-        bool, typer.Option(help="resolve refs and show the plan")
-    ] = False,
+    malloc: Annotated[list[Malloc] | None, typer.Option(help="default hugetlb")] = None,
+    dry_run: Annotated[bool, typer.Option(help="resolve refs and stop")] = False,
     chart: Annotated[
         Path | None, typer.Option(help="redraw the SVG of a saved .csv")
     ] = None,
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    mallocs = malloc or [Malloc.hugetlb]
     if chart:
         waterfall(pd.read_csv(chart), chart.with_suffix(".svg"))
         return
     refs = {"base": base, "head": head}
-    # Each side is a commit sha, or WORKTREE when it is the checkout with uncommitted edits.
     shas = {side: resolve(ref) for side, ref in refs.items()}
     for side, sha in shas.items():
-        log.info("%s %s = %s (%s)", side, refs[side], sha[:10], cache_state(sha))
+        log.info("%s %s = %s", side, refs[side], sha[:10])
         if not has_bench(sha):
             raise SystemExit(f"{side} {refs[side]} has no {BENCH_FILE}")
-    log.info(
-        "filter %s, %d repeats, malloc %s",
-        bench_filter,
-        repeats,
-        [m.value for m in mallocs],
-    )
     if dry_run:
         return
-
-    # Both refs at one commit: measure it once and report absolute numbers.
     if shas["base"] == shas["head"]:
         del shas["base"]
-    binaries = {side: build(sha) for side, sha in shas.items()}
-    names = [n for n in list_benches(binaries["head"]) if re.search(bench_filter, n)]
-    if not names:
-        raise SystemExit(f"no benchmark matches {bench_filter!r}")
     labels = {side: f"{side} {refs[side]} {sha[:10]}" for side, sha in shas.items()}
-    runs = measure(binaries, labels, names, mallocs, repeats)
+    with tempfile.TemporaryDirectory(prefix="bench-block-build-") as tmp:
+        binaries = {side: build(sha, Path(tmp)) for side, sha in shas.items()}
+        names = [
+            n for n in list_benches(binaries["head"]) if re.search(bench_filter, n)
+        ]
+        if not names:
+            raise SystemExit(f"no benchmark matches {bench_filter!r}")
+        mallocs = malloc or [Malloc.hugetlb]
+        runs = measure(
+            binaries, labels, names, mallocs, repeats, Path(tmp) / "criterion"
+        )
 
+    OUT.mkdir(parents=True, exist_ok=True)
     stem = OUT / "-".join(sha[:10] for sha in shas.values())
     runs.to_csv(stem.with_suffix(".csv"), index=False)
     table = summarize(runs)
@@ -153,9 +126,9 @@ def measure(
     names: list[str],
     mallocs: list[Malloc],
     repeats: int,
+    home: Path,
 ) -> pd.DataFrame:
-    """One row per sample: malloc, benchmark, side, label, rep, step, start, duration (ms), and
-    the share of CPU other work used just before the run (`other_cpu`)."""
+    """One row per step sample, with the run's side, repeat and CPU share of other work."""
     frames = []
     for rep in range(repeats):
         order = list(binaries) if rep % 2 == 0 else list(reversed(binaries))
@@ -163,17 +136,21 @@ def measure(
             for name in names:
                 for side in order:
                     busy = other_cpu()
-                    warn_if_busy(busy, f"before rep {rep} {side} {name}")
-                    run = run_one(binaries[side], name, MALLOC_ENV[malloc])
-                    run = run.assign(
-                        malloc=malloc.value,
-                        benchmark=name,
-                        side=side,
-                        label=labels[side],
-                        rep=rep,
-                        other_cpu=busy,
+                    if busy > BUSY_LIMIT:
+                        log.warning(
+                            "warning: other work used %.0f%% of CPU", busy * 100
+                        )
+                    run = run_one(binaries[side], name, MALLOC_ENV[malloc], home)
+                    frames.append(
+                        run.assign(
+                            malloc=malloc.value,
+                            benchmark=name,
+                            side=side,
+                            label=labels[side],
+                            rep=rep,
+                            other_cpu=busy,
+                        )
                     )
-                    frames.append(run)
                     total = run.loc[run.step == "request_block", "duration"].median()
                     log.info(
                         "rep %d %s %s %s %.2f ms", rep, malloc.value, side, name, total
@@ -182,66 +159,47 @@ def measure(
 
 
 def summarize(runs: pd.DataFrame) -> str:
-    """Markdown table: the whole build, then each step both sides recorded, pooled over repeats."""
-    if runs.side.nunique() == 1:
-        return summarize_one(runs)
-    pooled = runs.pivot_table(
-        index=["malloc", "benchmark", "step"],
-        columns="side",
-        values="duration",
-        aggfunc="median",
-    ).dropna()
-    per_run = runs.groupby(
-        ["malloc", "benchmark", "step", "side", "rep"]
-    ).duration.median()
-    by_side = per_run.groupby(level=[0, 1, 2, 3])
-    spread = by_side.agg(lambda v: " ".join(f"{x:.2f}" for x in v))
-    sem = by_side.sem().unstack("side")
-    change = pooled["head"] / pooled["base"] - 1
-    # Standard error of the relative change, from the spread of each side's run medians.
-    ratio = pooled["head"] / pooled["base"]
-    change_se = (sem["head"] ** 2 + ratio**2 * sem["base"] ** 2) ** 0.5 / pooled["base"]
-    table = pooled.assign(
-        change=[
-            f"{c:+.1%} ± {se:.1%}{'' if abs(c) > 2 * se else ' (noise)'}"
-            for c, se in zip(change, change_se.reindex(change.index), strict=True)
-        ],
-        base_runs=spread.xs("base", level="side"),
-        head_runs=spread.xs("head", level="side"),
-    ).reset_index()
-    return order_rows(table).to_markdown(index=False, floatfmt=".2f")
-
-
-def summarize_one(runs: pd.DataFrame) -> str:
-    """Markdown table for a single ref: median, standard error and run medians per step."""
     keys = ["malloc", "benchmark", "step"]
-    per_run = runs.groupby([*keys, "rep"]).duration.median().groupby(level=keys)
-    table = pd.DataFrame(
-        {
-            "ms": runs.groupby(keys).duration.median(),
-            "± se": per_run.sem(),
-            "runs": per_run.agg(lambda v: " ".join(f"{x:.2f}" for x in v)),
-        }
-    ).reset_index()
-    return order_rows(table).to_markdown(index=False, floatfmt=".2f")
-
-
-def order_rows(table: pd.DataFrame) -> pd.DataFrame:
-    """Shorter benchmark names; per benchmark the whole build first, then steps by name."""
-    table["benchmark"] = table.benchmark.str.removeprefix("block_build/")
-    table["order"] = table.step.ne("request_block")
-    return table.sort_values(["malloc", "benchmark", "order", "step"]).drop(
-        columns="order"
+    per_run = (
+        runs.groupby([*keys, "side", "rep"])
+        .duration.median()
+        .groupby(level=[*keys, "side"])
     )
+    median = runs.pivot_table(
+        index=keys, columns="side", values="duration", aggfunc="median"
+    )
+    sem = per_run.sem().unstack("side")
+    run_medians = per_run.agg(lambda v: " ".join(f"{x:.2f}" for x in v)).unstack("side")
+    if "base" not in median:
+        table = pd.DataFrame(
+            {"ms": median["head"], "± se": sem["head"], "runs": run_medians["head"]}
+        )
+    else:
+        median = median.dropna()
+        ratio = median["head"] / median["base"]
+        # Delta-method standard error of head / base.
+        se = (sem["head"] ** 2 + ratio**2 * sem["base"] ** 2) ** 0.5 / median["base"]
+        change = [
+            f"{r - 1:+.1%} ± {e:.1%}{'' if abs(r - 1) > 2 * e else ' (noise)'}"
+            for r, e in zip(ratio, se.reindex(ratio.index), strict=True)
+        ]
+        table = median.assign(
+            change=change, base_runs=run_medians["base"], head_runs=run_medians["head"]
+        )
+    table = table.reset_index()
+    table["benchmark"] = table.benchmark.str.removeprefix("block_build/")
+    table["later"] = table.step.ne("request_block")
+    table = table.sort_values(["malloc", "benchmark", "later", "step"]).drop(
+        columns="later"
+    )
+    return table.to_markdown(index=False, floatfmt=".2f")
 
 
 def waterfall(runs: pd.DataFrame, path: Path) -> None:
-    """One panel per malloc, benchmark and side: bars at each step's median start and duration."""
-    steps = runs[runs.step.isin(LANES.keys())]
+    """One panel per malloc, benchmark and ref: each step at its median start and duration."""
     keys = ["malloc", "benchmark", "label", "step"]
-    medians = steps.groupby(keys)[["start", "duration"]].median()
-    # Error bars: standard error of the duration across run medians.
-    sem = steps.groupby([*keys, "rep"]).duration.median().groupby(level=keys).sem()
+    medians = runs.groupby(keys)[["start", "duration"]].median()
+    sem = runs.groupby([*keys, "rep"]).duration.median().groupby(level=keys).sem()
     panels = medians.index.droplevel("step").unique()
     fig, axes = plt.subplots(
         len(panels), sharex=True, squeeze=False, figsize=(10, 2.2 * len(panels))
@@ -259,16 +217,12 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
             xerr=errors,
             error_kw={"ecolor": "#52514e", "capsize": 3},
         )
-        for lane, (start, duration), error in zip(
-            lanes, bars.itertuples(index=False), errors, strict=True
+        for lane, start, duration, error in zip(
+            lanes, bars.start, bars.duration, errors, strict=True
         ):
             note = "not run" if pd.isna(duration) else f"{duration:.1f} ms"
-            ax.text(
-                0 if pd.isna(start) else start + duration + error,
-                lane,
-                f"  {note}",
-                va="center",
-            )
+            x = 0 if pd.isna(start) else start + duration + error
+            ax.text(x, lane, f"  {note}", va="center")
         ax.set_yticks(list(lanes), list(LANES))
         ax.invert_yaxis()
         ax.set_title(
@@ -276,8 +230,7 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
         )
         ax.grid(axis="x", color="#e1e0d9")
         ax.set_axisbelow(True)
-    end = (medians.start + medians.duration).max()
-    axes[-1, 0].set_xlim(0, end * 1.15)
+    axes[-1, 0].set_xlim(0, (medians.start + medians.duration).max() * 1.15)
     axes[-1, 0].set_xlabel(
         "ms since the build started; overlapping bars ran in parallel;"
         " whiskers are one standard error across runs"
@@ -286,80 +239,58 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
     fig.savefig(path)
 
 
-# Share of CPU time other work may use while the bench is idle before a run warns.
-BUSY_LIMIT = 0.05
-
-
 def other_cpu(window: float = 0.3) -> float:
-    """Share of CPU time busy over `window` seconds, sampled while no benchmark runs, so all of
-    it is other work."""
+    """Share of CPU busy over `window` seconds while no benchmark runs, i.e. other work."""
 
-    def times() -> tuple[int, int]:
-        fields = [
-            int(x) for x in Path("/proc/stat").read_text().split("\n", 1)[0].split()[1:]
-        ]
-        # user..steal; guest and guest_nice are already counted in user and nice.
-        fields = fields[:8]
-        idle = fields[3] + fields[4]  # idle + iowait
-        return idle, sum(fields)
+    def idle_total() -> tuple[int, int]:
+        # user..steal; guest time is already counted in user and nice.
+        line = Path("/proc/stat").read_text().split("\n", 1)[0]
+        fields = [int(x) for x in line.split()[1:9]]
+        return fields[3] + fields[4], sum(fields)
 
-    idle0, total0 = times()
+    idle0, total0 = idle_total()
     time.sleep(window)
-    idle1, total1 = times()
+    idle1, total1 = idle_total()
     return 1 - (idle1 - idle0) / max(total1 - total0, 1)
 
 
-def warn_if_busy(busy: float, when: str) -> None:
-    if busy > BUSY_LIMIT:
-        log.warning(
-            "warning: other work used %.0f%% of CPU %s; results are skewed, run on an idle machine",
-            busy * 100,
-            when,
-        )
-
-
-def run_one(binary: Path, name: str, env: dict[str, str]) -> pd.DataFrame:
-    home = OUT / "criterion"
+def run_one(binary: Path, name: str, env: dict[str, str], home: Path) -> pd.DataFrame:
     sample_file, steps_file = (
         home / name / "new" / "sample.json",
         home / name / "steps.json",
     )
-    # A binary without this benchmark exits 0 and writes nothing; never read a previous run.
+    # A binary without this benchmark exits 0 and writes nothing.
     sample_file.unlink(missing_ok=True)
     steps_file.unlink(missing_ok=True)
     run = subprocess.run(
         [binary, "--bench", "--noplot", f"^{re.escape(name)}$"],
-        env={**os.environ, **env, "CRITERION_HOME": str(home.resolve())},
+        env={**os.environ, **env, "CRITERION_HOME": str(home)},
         check=False,
         capture_output=True,
         text=True,
     )
-    if run.returncode or not sample_file.exists():
+    if run.returncode or not steps_file.exists():
         raise SystemExit(f"{binary} {name} failed:\n{run.stderr}")
-    if not steps_file.exists():
-        raise SystemExit(f"{binary} {name} recorded no steps")
     # Steps start with criterion's warm-up iterations; keep one per measured iteration.
     measured = int(sum(json.loads(sample_file.read_text())["iters"]))
-    rows = [
-        (step, s, d)
-        for step, spans in json.loads(steps_file.read_text()).items()
-        for s, d in spans[-measured:]
-    ]
+    steps = json.loads(steps_file.read_text())
+    rows = [(step, s, d) for step, spans in steps.items() for s, d in spans[-measured:]]
     return pd.DataFrame(rows, columns=["step", "start", "duration"])
 
 
 def list_benches(binary: Path) -> list[str]:
     out = subprocess.run(
         [binary, "--bench", "--list"], check=True, capture_output=True, text=True
-    )
+    ).stdout
     return [
         line.removesuffix(": benchmark")
-        for line in out.stdout.splitlines()
+        for line in out.splitlines()
         if line.endswith(": benchmark")
     ]
 
 
 def resolve(ref: str) -> str:
+    """A commit sha, or WORKTREE for this checkout when it has uncommitted edits."""
     if ref == WORKTREE:
         if git("status", "--porcelain", "--untracked-files=no"):
             return WORKTREE
@@ -369,44 +300,41 @@ def resolve(ref: str) -> str:
 
 def has_bench(sha: str) -> bool:
     if sha == WORKTREE:
-        return Path(BENCH_FILE).exists()
+        return (ROOT / BENCH_FILE).exists()
     probe = ["git", "cat-file", "-e", f"{sha}:{BENCH_FILE}"]
     return subprocess.run(probe, check=False, capture_output=True).returncode == 0
 
 
-def cache_state(sha: str) -> str:
+def build(sha: str, tmp: Path) -> Path:
+    """Build the bench for `sha` and copy it into `tmp`, since both refs build the same path."""
     if sha == WORKTREE:
-        return "uncommitted edits, build here"
-    return "cached" if (OUT / "bin" / sha).exists() else "build in worktree"
-
-
-def build(sha: str) -> Path:
-    target = OUT / "bin" / sha
-    if sha == WORKTREE:
-        log.info("building block_build in the working tree")
-        return install(cargo_bench(Path.cwd(), dict(os.environ)), target)
-    if target.exists():
-        return target
-    worktree = (OUT / "worktrees" / sha).resolve()
-    # A run killed mid-build leaves its worktree behind.
-    shutil.rmtree(worktree, ignore_errors=True)
-    git("worktree", "prune")
-    git("worktree", "add", "--detach", str(worktree), sha)
-    # Share build artifacts between refs unless the caller already picked a target dir.
-    env = {"CARGO_TARGET_DIR": str((OUT / "target").resolve()), **os.environ}
-    try:
+        log.info("building block_build in this checkout")
+        executable = cargo_bench(ROOT, dict(os.environ))
+    else:
         log.info("building block_build at %s", sha[:10])
-        executable = cargo_bench(worktree, env)
-        return install(executable, target)
-    finally:
-        git("worktree", "remove", "--force", str(worktree))
+        worktree = tmp / sha
+        git("worktree", "prune")
+        git("worktree", "add", "--detach", str(worktree), sha)
+        env = {"CARGO_TARGET_DIR": str(OUT / "target"), **os.environ}
+        try:
+            executable = cargo_bench(worktree, env)
+        finally:
+            git("worktree", "remove", "--force", str(worktree))
+    return Path(shutil.copy2(executable, tmp / f"block_build-{sha[:10]}"))
 
 
 def cargo_bench(cwd: Path, env: dict[str, str]) -> Path:
-    """Build the bench in `cwd` and return the executable cargo reports."""
-    cargo = ["cargo", "bench", "-p", "espresso-types", "--bench", "block_build"]
+    cargo = [
+        "cargo",
+        "bench",
+        "-p",
+        "espresso-types",
+        "--bench",
+        "block_build",
+        "--no-run",
+    ]
     out = subprocess.run(
-        [*cargo, "--no-run", "--message-format=json"],
+        [*cargo, "--message-format=json"],
         cwd=cwd,
         env=env,
         check=True,
@@ -421,15 +349,6 @@ def cargo_bench(cwd: Path, env: dict[str, str]) -> Path:
         ):
             return Path(msg["executable"])
     raise SystemExit("cargo did not report a block_build executable")
-
-
-def install(executable: Path, target: Path) -> Path:
-    """Copy the bench binary into the cache atomically, so an interrupted copy is never used."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_suffix(".partial")
-    shutil.copy2(executable, partial)
-    os.replace(partial, target)
-    return target
 
 
 def git(*args: str) -> str:
