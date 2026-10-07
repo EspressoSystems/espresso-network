@@ -1233,7 +1233,7 @@ impl SequencerPersistence for Persistence {
         &self,
         view: ViewNumber,
         header: &Header,
-        payload: &Payload,
+        payload: &Arc<Payload>,
     ) -> anyhow::Result<()> {
         self.put_pending_payload(view, header, payload).await
     }
