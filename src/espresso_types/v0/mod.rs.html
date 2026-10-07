@@ -159,33 +159,38 @@
 <a href=#159 id=159 data-nosnippet>159</a><span class="kw">pub const </span>MOCK_SEQUENCER_VERSIONS: versions::Upgrade =
 <a href=#160 id=160 data-nosnippet>160</a>    versions::Upgrade::new(version(<span class="number">0</span>, <span class="number">1</span>), version(<span class="number">0</span>, <span class="number">2</span>));
 <a href=#161 id=161 data-nosnippet>161</a>
-<a href=#162 id=162 data-nosnippet>162</a><span class="kw">pub type </span>FeeVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">2</span>&gt;;
-<a href=#163 id=163 data-nosnippet>163</a><span class="kw">pub type </span>EpochVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">3</span>&gt;;
-<a href=#164 id=164 data-nosnippet>164</a><span class="kw">pub type </span>DrbAndHeaderUpgradeVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">4</span>&gt;;
-<a href=#165 id=165 data-nosnippet>165</a><span class="kw">pub type </span>EpochRewardVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">5</span>&gt;;
+<a href=#162 id=162 data-nosnippet>162</a><span class="doccomment">/// The version integration tests run a network at: the oldest one a live
+<a href=#163 id=163 data-nosnippet>163</a>/// network can start from.
+<a href=#164 id=164 data-nosnippet>164</a></span><span class="kw">pub const </span>TEST_UPGRADE: versions::Upgrade =
+<a href=#165 id=165 data-nosnippet>165</a>    versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION);
 <a href=#166 id=166 data-nosnippet>166</a>
-<a href=#167 id=167 data-nosnippet>167</a><span class="kw">pub type </span>Leaf = hotshot_types::data::Leaf&lt;SeqTypes&gt;;
-<a href=#168 id=168 data-nosnippet>168</a><span class="kw">pub type </span>Leaf2 = hotshot_types::data::Leaf2&lt;SeqTypes&gt;;
-<a href=#169 id=169 data-nosnippet>169</a>
-<a href=#170 id=170 data-nosnippet>170</a><span class="kw">pub type </span>Event = hotshot_types::event::Event&lt;SeqTypes&gt;;
+<a href=#167 id=167 data-nosnippet>167</a><span class="kw">pub type </span>FeeVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">2</span>&gt;;
+<a href=#168 id=168 data-nosnippet>168</a><span class="kw">pub type </span>EpochVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">3</span>&gt;;
+<a href=#169 id=169 data-nosnippet>169</a><span class="kw">pub type </span>DrbAndHeaderUpgradeVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">4</span>&gt;;
+<a href=#170 id=170 data-nosnippet>170</a><span class="kw">pub type </span>EpochRewardVersion = StaticVersion&lt;<span class="number">0</span>, <span class="number">5</span>&gt;;
 <a href=#171 id=171 data-nosnippet>171</a>
-<a href=#172 id=172 data-nosnippet>172</a><span class="kw">pub type </span>PubKey = BLSPubKey;
-<a href=#173 id=173 data-nosnippet>173</a><span class="kw">pub type </span>PrivKey = &lt;PubKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey;
+<a href=#172 id=172 data-nosnippet>172</a><span class="kw">pub type </span>Leaf = hotshot_types::data::Leaf&lt;SeqTypes&gt;;
+<a href=#173 id=173 data-nosnippet>173</a><span class="kw">pub type </span>Leaf2 = hotshot_types::data::Leaf2&lt;SeqTypes&gt;;
 <a href=#174 id=174 data-nosnippet>174</a>
-<a href=#175 id=175 data-nosnippet>175</a><span class="kw">pub type </span>NetworkConfig = hotshot_types::network::NetworkConfig&lt;SeqTypes&gt;;
+<a href=#175 id=175 data-nosnippet>175</a><span class="kw">pub type </span>Event = hotshot_types::event::Event&lt;SeqTypes&gt;;
 <a href=#176 id=176 data-nosnippet>176</a>
-<a href=#177 id=177 data-nosnippet>177</a><span class="kw">pub use </span><span class="self">self</span>::impls::{
-<a href=#178 id=178 data-nosnippet>178</a>    AuthenticatedValidatorMap, NodeState, RegisteredValidatorMap, UpgradeMap, ValidatedState,
-<a href=#179 id=179 data-nosnippet>179</a>};
-<a href=#180 id=180 data-nosnippet>180</a><span class="kw">pub use crate</span>::{
-<a href=#181 id=181 data-nosnippet>181</a>    v0::impls::{
-<a href=#182 id=182 data-nosnippet>182</a>        StakeTableHash, StakeTableState, calculate_proportion_staked_and_reward_rate,
-<a href=#183 id=183 data-nosnippet>183</a>        to_registered_validator_map,
-<a href=#184 id=184 data-nosnippet>184</a>    },
-<a href=#185 id=185 data-nosnippet>185</a>    v0_1::{
-<a href=#186 id=186 data-nosnippet>186</a>        BLOCK_MERKLE_TREE_HEIGHT, DECAF_CHAIN_ID, FEE_MERKLE_TREE_HEIGHT, MAINNET_CHAIN_ID,
-<a href=#187 id=187 data-nosnippet>187</a>        NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
-<a href=#188 id=188 data-nosnippet>188</a>    },
-<a href=#189 id=189 data-nosnippet>189</a>    v0_3::ChainConfig,
-<a href=#190 id=190 data-nosnippet>190</a>};
+<a href=#177 id=177 data-nosnippet>177</a><span class="kw">pub type </span>PubKey = BLSPubKey;
+<a href=#178 id=178 data-nosnippet>178</a><span class="kw">pub type </span>PrivKey = &lt;PubKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey;
+<a href=#179 id=179 data-nosnippet>179</a>
+<a href=#180 id=180 data-nosnippet>180</a><span class="kw">pub type </span>NetworkConfig = hotshot_types::network::NetworkConfig&lt;SeqTypes&gt;;
+<a href=#181 id=181 data-nosnippet>181</a>
+<a href=#182 id=182 data-nosnippet>182</a><span class="kw">pub use </span><span class="self">self</span>::impls::{
+<a href=#183 id=183 data-nosnippet>183</a>    AuthenticatedValidatorMap, NodeState, RegisteredValidatorMap, UpgradeMap, ValidatedState,
+<a href=#184 id=184 data-nosnippet>184</a>};
+<a href=#185 id=185 data-nosnippet>185</a><span class="kw">pub use crate</span>::{
+<a href=#186 id=186 data-nosnippet>186</a>    v0::impls::{
+<a href=#187 id=187 data-nosnippet>187</a>        StakeTableHash, StakeTableState, calculate_proportion_staked_and_reward_rate,
+<a href=#188 id=188 data-nosnippet>188</a>        to_registered_validator_map,
+<a href=#189 id=189 data-nosnippet>189</a>    },
+<a href=#190 id=190 data-nosnippet>190</a>    v0_1::{
+<a href=#191 id=191 data-nosnippet>191</a>        BLOCK_MERKLE_TREE_HEIGHT, DECAF_CHAIN_ID, FEE_MERKLE_TREE_HEIGHT, MAINNET_CHAIN_ID,
+<a href=#192 id=192 data-nosnippet>192</a>        NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
+<a href=#193 id=193 data-nosnippet>193</a>    },
+<a href=#194 id=194 data-nosnippet>194</a>    v0_3::ChainConfig,
+<a href=#195 id=195 data-nosnippet>195</a>};
 </code></pre></div></section></main></body></html>
