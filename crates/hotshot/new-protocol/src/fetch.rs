@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{VidCommitment, VidCommitment2, ViewNumber},
+    data::{VidCommitment2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
@@ -117,51 +117,49 @@ impl<T: NodeType> Fetcher<T> {
         sender: &T::SignatureKey,
         consensus: &Consensus<T>,
         membership: &EpochMembershipCoordinator<T>,
-    ) -> bool {
+    ) -> Vec<VidCommitment2> {
         let view = response.view_number();
         match response.into_body() {
             PayloadResponseBody::NotAvailable | PayloadResponseBody::TooLarge => {
-                let spent = self
-                    .requested
-                    .iter_mut()
-                    .filter(|((asked_view, _), _)| *asked_view == view)
-                    .any(|(_, fetch)| fetch.pending.remove(sender));
-                if !spent {
+                let refused = self.refused(view, sender);
+                if refused.is_empty() {
                     warn!(%view, %sender, "payload refusal from unexpected peer");
                 }
-                spent
+                refused
             },
-            PayloadResponseBody::Payload { commitment, data } => {
-                let Some(proposal) = consensus.proposal_at(view) else {
-                    return false;
-                };
-
-                let VidCommitment::V2(payload_commitment) =
-                    proposal.block_header.payload_commitment()
-                else {
-                    return false;
-                };
-
-                if payload_commitment != commitment {
-                    warn!(%view, "payload response does not match the proposal's commitment");
-                    return false;
-                }
-
+            PayloadResponseBody::Payload {
+                commitment: payload_commitment,
+                data,
+            } => {
+                // A request names only the view, and a peer that kept another
+                // proposal's payload for it answers with that one. That is no
+                // answer to what was asked, so it counts as a refusal.
                 if !self
                     .requested
                     .get(&(view, payload_commitment))
                     .is_some_and(|fetch| fetch.pending.contains(sender))
                 {
-                    warn!(%view, "payload response from unexpected peer");
-                    return false;
+                    let refused = self.refused(view, sender);
+                    if refused.is_empty() {
+                        warn!(%view, %sender, "payload response from unexpected peer");
+                    } else {
+                        debug!(%view, %sender, "payload response for another payload than asked");
+                    }
+                    return refused;
                 }
+
+                let Some(proposal) = consensus.proposal_with_payload(view, payload_commitment)
+                else {
+                    warn!(%view, "payload response does not match a proposal's commitment");
+                    return Vec::new();
+                };
 
                 if consensus.is_reconstructed(view, payload_commitment) {
                     debug!(%view, "payload already obtained; dropping the response");
                     if let Some(fetch) = self.requested.get_mut(&(view, payload_commitment)) {
                         fetch.pending.remove(sender);
                     }
-                    return false;
+                    return Vec::new();
                 }
 
                 if let Some(fetch) = self.requested.get_mut(&(view, payload_commitment)) {
@@ -170,7 +168,7 @@ impl<T: NodeType> Fetcher<T> {
 
                 let Some(param) = expected_vid_param(membership, proposal.epoch) else {
                     warn!(%view, "no VID param for fetched payload; dropping");
-                    return false;
+                    return Vec::new();
                 };
 
                 let epoch = proposal.epoch;
@@ -193,13 +191,29 @@ impl<T: NodeType> Fetcher<T> {
                     })
                 });
 
-                false
+                Vec::new()
             },
         }
     }
 
     pub fn gc(&mut self, view: ViewNumber) {
         self.requested.retain(|(v, _), _| *v > view);
+    }
+
+    /// `sender` answered a request at `view` without the payload asked for.
+    ///
+    /// Every payload pending from it at `view` counts as refused, not only the
+    /// one it answered: a peer serves one block per view (`Server::blocks`), so
+    /// one that refuses or sends another payload has none of the others either.
+    /// Returns those payloads, which are the ones worth asking another peer for.
+    fn refused(&mut self, view: ViewNumber, sender: &T::SignatureKey) -> Vec<VidCommitment2> {
+        self.requested
+            .iter_mut()
+            .filter(|((asked_view, _), _)| *asked_view == view)
+            .filter_map(|((_, commitment), fetch)| {
+                fetch.pending.remove(sender).then_some(*commitment)
+            })
+            .collect()
     }
 
     fn select_peer(
@@ -212,7 +226,9 @@ impl<T: NodeType> Fetcher<T> {
     ) -> Option<T::SignatureKey> {
         use rand::seq::IteratorRandom;
 
-        let epoch = consensus.proposal_at(view)?.epoch;
+        let epoch = consensus
+            .proposal_with_payload(view, payload_commitment)?
+            .epoch;
         let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
 
         let mut rng = rand::thread_rng();
@@ -339,12 +355,14 @@ mod tests {
         sender: BLSPubKey,
         harness: &ConsensusHarness,
     ) -> bool {
-        fetcher.response(
-            response,
-            &sender,
-            &harness.consensus,
-            &harness.membership_coordinator,
-        )
+        !fetcher
+            .response(
+                response,
+                &sender,
+                &harness.consensus,
+                &harness.membership_coordinator,
+            )
+            .is_empty()
     }
 
     /// The payload a peer we asked sends, which re-commits to what our own
@@ -410,14 +428,31 @@ mod tests {
         );
     }
 
-    /// A response naming a commitment our proposal does not carry is not the
-    /// block we asked for, and is not a reason to draw another peer.
+    /// A response naming another commitment than the one asked for is not the
+    /// payload we wanted, so it counts as a refusal.
+    ///
+    /// A request names only the view, and a peer that kept another proposal's
+    /// payload for it answers with that one. Waiting on it would stall the fetch,
+    /// so another peer is drawn, once: the answer uses up the peer's slot.
     #[tokio::test]
-    async fn a_response_for_another_commitment_is_dropped() {
+    async fn a_response_for_another_commitment_is_a_refusal() {
         let (bytes, commitment, harness) = payload_and_consensus().await;
         let peer = key(1);
         let mut fetcher = fetcher_expecting(peer, commitment);
 
+        assert!(accept(
+            &mut fetcher,
+            payload_response(VidCommitment2::default(), bytes.clone()),
+            peer,
+            &harness
+        ));
+        assert!(
+            !fetcher
+                .requested
+                .get(&(view(), commitment))
+                .is_some_and(|fetch| fetch.pending.contains(&peer)),
+            "the peer no longer owes us an answer"
+        );
         assert!(!accept(
             &mut fetcher,
             payload_response(VidCommitment2::default(), bytes),
