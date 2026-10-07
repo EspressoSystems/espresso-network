@@ -1,3 +1,4 @@
+use anyhow::bail;
 use clap::{Parser, Subcommand};
 use espresso_node::{
     api::data_source::{DataSourceOptions, SequencerDataSource},
@@ -21,6 +22,14 @@ struct Options {
     #[clap(long)]
     stake_table_only: bool,
 
+    /// Only clear the merklized state (fee, block and reward merkle trees), keeping blocks,
+    /// leaves, payloads, VID and consensus storage. SQL storage only.
+    ///
+    /// On its next start the node rebuilds the state by replaying every leaf from genesis, and
+    /// serves state queries only up to the height the replay has reached.
+    #[clap(long, conflicts_with = "stake_table_only")]
+    merklized_state_only: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -39,6 +48,9 @@ async fn main() -> anyhow::Result<()> {
     opt.logging.init();
 
     match opt.command {
+        Command::Fs(_) if opt.merklized_state_only => {
+            bail!("file system storage has no merklized state, use `sql` instead")
+        },
         Command::Fs(persistence_opt) => {
             if opt.stake_table_only {
                 tracing::warn!(
@@ -51,7 +63,10 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Command::Sql(persistence_opt) => {
-            if opt.stake_table_only {
+            if opt.merklized_state_only {
+                tracing::warn!("clearing merklized state from SQL storage {persistence_opt:?}");
+                persistence_opt.reset_merklized_state().await
+            } else if opt.stake_table_only {
                 tracing::warn!("clearing stake table events from SQL storage {persistence_opt:?}");
                 clear_stake_table_events(*persistence_opt).await
             } else {
