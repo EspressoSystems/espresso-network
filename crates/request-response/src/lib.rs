@@ -57,11 +57,11 @@ type ActiveRequestsMap = Arc<RwLock<HashMap<RequestHash, Vec<Waiter>>>>;
 /// A type alias for the list of tasks that are responding to requests
 pub type IncomingRequests<K> = NamedSemaphore<K>;
 
-/// The number of serialized responses each waiter buffers before drops occur. Must cover the
-/// maximum number of simultaneous responders (a broadcast request can be answered by every node
-/// at once while its single waiter decodes and validates serially), and bounds the memory a
-/// flood of responses to one request can pin
-const RESPONSE_BUFFER_SIZE: usize = 128;
+/// The number of serialized responses each waiter buffers before drops occur. Only one valid
+/// response is needed and batched senders keep re-requesting, so extra responses are free to
+/// drop. Kept small because bodies (leaves, merkle trees, VID shares) can be large and every
+/// in-flight request pins its own buffer
+const RESPONSE_BUFFER_SIZE: usize = 16;
 
 /// The type of request to make
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -624,7 +624,9 @@ impl<
         // satisfied. A waiter dropped concurrently just yields a `Closed` error, also ignored
         let body = Bytes::from(body.to_vec());
         for waiter in waiters {
-            let _ = waiter.try_send(Arc::clone(&body));
+            if let Err(mpsc::error::TrySendError::Full(_)) = waiter.try_send(Arc::clone(&body)) {
+                debug!("Dropped response for request {request_hash}: waiter buffer full");
+            }
         }
     }
 }
@@ -643,9 +645,13 @@ struct Waiter {
 /// the waiter when dropped, so map entries are cleaned up on success, timeout, and
 /// cancellation alike
 struct ResponseReceiver {
+    /// The request hash this receiver's waiter is registered under
     request_hash: RequestHash,
+    /// The id of this receiver's [`Waiter`]
     id: u64,
+    /// Receives the serialized bodies of candidate responses
     receiver: mpsc::Receiver<Bytes>,
+    /// The map to deregister from on drop
     active_requests: ActiveRequestsMap,
 }
 
