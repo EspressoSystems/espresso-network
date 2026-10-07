@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["matplotlib", "pandas", "tabulate", "typer"]
+# dependencies = ["matplotlib", "pandas", "psutil", "tabulate", "typer"]
 # ///
 r"""A/B the leader's block build between two git refs, step by step.
 
@@ -18,7 +18,7 @@ Each ref is built in a temporary git worktree into this checkout's target dir. E
 benchmark runs in its own process, since glibc's mmap threshold depends on earlier allocations,
 with base and head alternating, under glibc.malloc.hugetlb=1 by default (the AWS bench nodes).
 Changes carry one standard error from the spread of run medians and are marked as noise within
-two. Before each run the script samples /proc/stat while idle and warns if other work is busy.
+two. Before each run the script samples CPU use while idle and warns if other work is busy.
 """
 
 import json
@@ -28,13 +28,13 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import psutil
 import typer
 
 ROOT = Path(
@@ -241,17 +241,7 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
 
 def other_cpu(window: float = 0.3) -> float:
     """Share of CPU busy over `window` seconds while no benchmark runs, i.e. other work."""
-
-    def idle_total() -> tuple[int, int]:
-        # user..steal; guest time is already counted in user and nice.
-        line = Path("/proc/stat").read_text().split("\n", 1)[0]
-        fields = [int(x) for x in line.split()[1:9]]
-        return fields[3] + fields[4], sum(fields)
-
-    idle0, total0 = idle_total()
-    time.sleep(window)
-    idle1, total1 = idle_total()
-    return 1 - (idle1 - idle0) / max(total1 - total0, 1)
+    return psutil.cpu_percent(interval=window) / 100
 
 
 def run_one(binary: Path, name: str, env: dict[str, str], home: Path) -> pd.DataFrame:
