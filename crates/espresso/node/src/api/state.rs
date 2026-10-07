@@ -2347,7 +2347,6 @@ impl From<crate::options::ApiModulesConfig> for proto::ApiModules {
                 light_client_db: Some(proto::LightClientDbOptions {
                     num_connections: query.light_client_db.num_connections,
                     num_leaves: query.light_client_db.num_leaves,
-                    num_stake_tables: query.light_client_db.num_stake_tables,
                     lc_path: query
                         .light_client_db
                         .lc_path
@@ -5741,8 +5740,6 @@ mod tests {
             "7",
             "--light-client-db-num-leaves",
             "11",
-            "--light-client-db-num-stake-tables",
-            "13",
             "--",
             "config",
         ]);
@@ -5862,12 +5859,11 @@ mod tests {
                                 .num_stake_tables_in_memory
                                 as u64,
                         }),
-                        // Three same-typed fields whose defaults are 5/100/100, so the flags above
-                        // give each a distinct value: a crossed pair would pass otherwise.
+                        // Two same-typed fields whose defaults are 5/100, so the flags above give
+                        // each a distinct value: a crossed pair would pass otherwise.
                         light_client_db: Some(proto::LightClientDbOptions {
                             num_connections: 7,
                             num_leaves: 11,
-                            num_stake_tables: 13,
                             lc_path: None,
                         }),
                     }),
