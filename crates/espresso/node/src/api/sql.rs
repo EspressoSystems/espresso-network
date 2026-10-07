@@ -57,7 +57,7 @@ use super::{
 };
 use crate::{
     SeqTypes,
-    api::RewardMerkleTreeDataSource,
+    api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
     catchup::{CatchupStorage, NullStateCatchup},
     persistence::{ChainConfigPersistence, sql::Options},
     state::compute_state_update,
@@ -925,6 +925,27 @@ impl CatchupStorage for SqlStorage {
             .context(format!("leaf {height} not available"))?;
         Ok(lqd.leaf().clone())
     }
+
+    /// The tree is stored only at the heights it changed, so the latest row at or below `height`
+    /// may be an older epoch's: it is served only if it matches the header at `height`.
+    async fn load_serialized_reward_merkle_tree_v2(&self, height: u64) -> anyhow::Result<Vec<u8>> {
+        let tree_bytes = self.load_latest_tree(height).await?;
+        let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&tree_bytes)
+            .context("Failed to deserialize RewardMerkleTreeV2 from storage")?;
+        let tree = PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances)
+            .await
+            .context("Failed to reconstruct reward merkle tree from storage")?;
+        let leaf = CatchupStorage::get_leaf(self, height).await?;
+        let either::Either::Right(expected_root) = leaf.block_header().reward_merkle_tree_root()
+        else {
+            bail!("header {height} has no V2 reward merkle tree");
+        };
+        ensure!(
+            tree.tree.commitment() == expected_root,
+            "the reward merkle tree in storage at or below height {height} is from an older epoch"
+        );
+        Ok(tree_bytes)
+    }
 }
 
 impl RewardMerkleTreeDataSource for DataSource {
@@ -1072,6 +1093,12 @@ impl CatchupStorage for DataSource {
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
         self.as_ref().get_leaf(height).await
+    }
+
+    async fn load_serialized_reward_merkle_tree_v2(&self, height: u64) -> anyhow::Result<Vec<u8>> {
+        self.as_ref()
+            .load_serialized_reward_merkle_tree_v2(height)
+            .await
     }
 }
 

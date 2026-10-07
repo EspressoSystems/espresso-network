@@ -1685,6 +1685,146 @@ mod test {
         assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
     }
 
+    /// A cert2 from consensus must wake anyone already waiting on it; only the peer-fetch path
+    /// used to notify, so a `get_cert2` issued before the decide stayed pending forever.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_append_notifies_cert2_waiters() {
+        let db = TmpDb::init().await;
+        let ds = data_source(&db, &NoFetching).await;
+
+        // Height 1 is unknown, so the request waits purely on a notification, as a client
+        // asking ahead of the decide does.
+        {
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf(&v6_leaf(0).await).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let leaf = v6_leaf(1).await;
+        let cert2 = cert2_for(&leaf);
+        let fetch = ds.get_cert2(leaf.height()).await;
+
+        ds.append(BlockInfo::from(leaf).with_cert2(cert2.clone()))
+            .await
+            .unwrap();
+
+        let fetched = timeout(Duration::from_secs(30), fetch.into_future())
+            .await
+            .expect("append did not notify cert2 waiters");
+        assert_eq!(fetched.data.leaf_commit, cert2.data.leaf_commit);
+    }
+
+    /// `append` fetches a decided leaf's missing block and VID common and drops the handles. A
+    /// handle is only a notifier subscription; the fetch is detached and must still finish.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_append_fetches_missing_objects_after_dropping_handles() {
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+        let (leaves, _common) = seed_chain(&server, 1).await;
+        let (port, _server_task) = serve_availability(server).await;
+
+        // Proactive fetching and the aggregator are off, so only `append` can fetch these.
+        let client_db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let client = builder(&client_db, &provider)
+            .await
+            .disable_aggregator()
+            .build()
+            .await
+            .unwrap();
+
+        client
+            .append(BlockInfo::new(leaves[1].clone(), None, None, None))
+            .await
+            .unwrap();
+
+        // Read straight from storage, so the check cannot itself trigger the fetch it is verifying.
+        let id = BlockId::<MockTypes>::Number(leaves[1].height() as usize);
+        timeout(Duration::from_secs(30), async {
+            loop {
+                {
+                    let mut tx = client.read().await.unwrap();
+                    if tx.get_block(id).await.is_ok() && tx.get_vid_common(id).await.is_ok() {
+                        break;
+                    }
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("dropping the fetch handles stopped the fetches");
+    }
+
+    /// Consensus attaches a cert2 only to the newest leaf of a decide batch, and `append` is not
+    /// a fetch, so an older leaf's cert2 has to be asked for there.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_backfill_cert2_for_appended_leaf() {
+        let leaves = [v6_leaf(0).await, v6_leaf(1).await, v6_leaf(2).await];
+        let cert2 = cert2_for(&leaves[1]);
+
+        // The server holds only the cert2, so nothing but a cert2 request can deliver it.
+        let server_db = TmpDb::init().await;
+        let server = data_source(&server_db, &NoFetching).await;
+        {
+            let mut tx = server.write().await.unwrap();
+            tx.insert_cert2(leaves[1].height(), cert2.clone())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        let (port, _server_task) = serve_availability(server).await;
+
+        let client_db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let client = builder(&client_db, &provider)
+            .await
+            .with_max_retry_interval(Duration::from_secs(1))
+            .disable_aggregator()
+            .build()
+            .await
+            .unwrap();
+        {
+            let mut tx = client.write().await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // A decide batch: the older leaf without a cert2, the newest with its own.
+        let common = VidCommon::V0(advz_scheme(2).disperse([]).unwrap().common);
+        let block_info = |leaf: &LeafQueryData<MockTypes>| {
+            let header = leaf.header().clone();
+            BlockInfo::new(
+                leaf.clone(),
+                Some(BlockQueryData::<MockTypes>::new(
+                    header.clone(),
+                    MockPayload::genesis(),
+                )),
+                Some(VidCommonQueryData::<MockTypes>::new(header, common.clone())),
+                None,
+            )
+        };
+        client.append(block_info(&leaves[1])).await.unwrap();
+        client
+            .append(block_info(&leaves[2]).with_cert2(cert2_for(&leaves[2])))
+            .await
+            .unwrap();
+
+        let backfilled = timeout(Duration::from_secs(30), async {
+            loop {
+                {
+                    let mut tx = client.read().await.unwrap();
+                    if let Some(cert2) = tx.load_cert2(leaves[1].height()).await.unwrap() {
+                        break cert2;
+                    }
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .expect("cert2 was not backfilled for the appended leaf");
+        assert_eq!(backfilled.data.leaf_commit, cert2.data.leaf_commit);
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_scanner_backfills_fragmented_range() {
         // A server holding the full history 0..=20: leaves, blocks, and VID common.

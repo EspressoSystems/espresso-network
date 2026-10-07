@@ -16,6 +16,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 #[cfg(target_os = "linux")]
 use hotshot_types::addr::NetAddr;
+use versions::{TIMEOUT_EPOCH_VERSION, Upgrade};
 
 use crate::tests::common::{
     runner::{NodeAction, NodeChange, TestRunner},
@@ -49,6 +50,42 @@ async fn validator_joins_at_epoch_boundary() {
                 action: NodeAction::Start,
             }],
         )])
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
+
+/// The 0.7 twin of `validator_joins_at_epoch_boundary`: the same rotation, at
+/// the version whose timeout votes and certificates bind their epoch.
+///
+/// Every view has to decide here, node 5 leads none before it joins, and it
+/// is in the committee only from epoch 3, so nothing times out: what this
+/// covers is that the epoch binding version does not disturb a committee
+/// change, the catchup a joining validator does, or the peer set that follows
+/// it. A timeout across two committees that differ is not covered by this
+/// test, and the runner cannot express it — a stake schedule cannot be
+/// combined with `down_nodes`.
+#[tokio::test(flavor = "multi_thread")]
+async fn validator_joins_at_epoch_boundary_bound() {
+    TestRunner::builder()
+        .num_nodes(6)
+        .target_decisions(45)
+        .max_runtime(Duration::from_secs(500))
+        .epoch_height(15)
+        .stake_table_schedule(StakeTableSchedule {
+            initial: vec![0, 1, 2, 3, 4],
+            changes: vec![(3, vec![0, 1, 2, 3, 4, 5])],
+            ..Default::default()
+        })
+        .node_changes(vec![(
+            17,
+            vec![NodeChange {
+                idx: 5,
+                action: NodeAction::Start,
+            }],
+        )])
+        .upgrade(Upgrade::trivial(TIMEOUT_EPOCH_VERSION))
         .build()
         .run()
         .await

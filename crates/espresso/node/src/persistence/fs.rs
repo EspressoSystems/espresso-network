@@ -55,7 +55,11 @@ use super::{
 };
 use crate::{
     RECENT_STAKE_TABLES_LIMIT, ViewNumber,
-    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
+    persistence::{
+        migrate_network_config,
+        persistence_metrics::PersistenceMetricsValue,
+        storage_probe::{self, StorageProbe},
+    },
 };
 
 /// Deserialize a stake table from bytes, trying current and legacy formats.
@@ -142,6 +146,9 @@ pub struct Options {
         default_value = "130000"
     )]
     pub(crate) consensus_view_retention: u64,
+
+    #[clap(skip)]
+    pub(crate) consensus_only: bool,
 }
 
 impl Default for Options {
@@ -155,6 +162,7 @@ impl Options {
         Self {
             path,
             consensus_view_retention: 130000,
+            consensus_only: false,
         }
     }
 
@@ -171,9 +179,17 @@ impl PersistenceOptions for Options {
         self.consensus_view_retention = view_retention;
     }
 
+    fn set_consensus_only(&mut self) {
+        self.consensus_only = true;
+    }
+
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let path = self.path.clone();
         let view_retention = self.consensus_view_retention;
+        // Fail fast if the data directory can't be created: every writer would fail on it later
+        // anyway, and the fsync probe below needs it to exist.
+        fs::create_dir_all(&path).context("creating storage directory")?;
+        let probe = storage_probe::probe(&path, None).await?;
 
         Ok(Persistence {
             inner: Arc::new(RwLock::new(Inner {
@@ -181,6 +197,8 @@ impl PersistenceOptions for Options {
                 view_retention,
             })),
             metrics: Arc::new(PersistenceMetricsValue::default()),
+            probe,
+            consensus_only: self.consensus_only,
         })
     }
 
@@ -198,6 +216,9 @@ pub struct Persistence {
     inner: Arc<RwLock<Inner>>,
     /// A reference to the metrics trait
     metrics: Arc<PersistenceMetricsValue>,
+    /// Startup findings about the filesystem backing the data directory.
+    probe: StorageProbe,
+    consensus_only: bool,
 }
 
 #[derive(Debug)]
@@ -567,6 +588,18 @@ impl Inner {
         Ok(intervals)
     }
 
+    fn skip_decide_events(
+        &mut self,
+        view: ViewNumber,
+    ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
+        for (leaf_view, _) in view_files(self.decided_leaf2_path())? {
+            if leaf_view <= view {
+                self.store_finalized_state_cert(leaf_view)?;
+            }
+        }
+        Ok(Vec::from([ViewNumber::genesis()..=view]))
+    }
+
     fn load_da_proposal(
         &self,
         view: ViewNumber,
@@ -830,12 +863,15 @@ impl SequencerPersistence for Persistence {
         let now = Instant::now();
         // On error, GC does not run over the failed range, so the leaves stay on disk and are
         // retried; no data is lost.
-        let intervals = self
-            .inner
-            .write()
-            .await
-            .generate_decide_events(view, deciding_qc, consumer)
-            .await?;
+        let mut inner = self.inner.write().await;
+        let intervals = if self.consensus_only {
+            inner.skip_decide_events(view)?
+        } else {
+            inner
+                .generate_decide_events(view, deciding_qc, consumer)
+                .await?
+        };
+        drop(inner);
 
         // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).
         let processed = intervals.iter().map(|i| *i.end()).max();
@@ -1284,6 +1320,9 @@ impl SequencerPersistence for Persistence {
         proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
         _vid_commit: VidCommitment,
     ) -> anyhow::Result<()> {
+        if self.consensus_only {
+            return Ok(());
+        }
         let mut inner = self.inner.write().await;
         let view_number = proposal.data.view_number().u64();
         let dir_path = inner.da2_dir_path();
@@ -1589,8 +1628,9 @@ impl SequencerPersistence for Persistence {
         Ok(())
     }
 
-    fn enable_metrics(&mut self, _metrics: &dyn Metrics) {
-        // todo!()
+    fn enable_metrics(&mut self, metrics: &dyn Metrics) {
+        self.metrics = Arc::new(PersistenceMetricsValue::new(metrics));
+        self.probe.register(&*metrics.subgroup("disk".into()));
     }
 }
 
@@ -2138,7 +2178,7 @@ mod test {
     use espresso_types::{Leaf, NodeState, PubKey};
     use hotshot::types::SignatureKey;
     use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
+    use hotshot_query_service::{metrics::PrometheusMetrics, testing::mocks::MOCK_UPGRADE};
     use hotshot_types::{data::QuorumProposal2, simple_vote::Vote2Data};
     use serde_json::json;
     use tempfile::TempDir;
@@ -2629,6 +2669,25 @@ mod test {
                 .get(&EpochNumber::new(6))
                 .unwrap()
                 .contains_key(&current_addr)
+        );
+    }
+
+    /// The probe is taken in `create()` and only reaches the exported registry through
+    /// `enable_metrics`, mirroring the sqlite backend's `test_storage_probe_reaches_exported_registry`.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_storage_probe_reaches_exported_registry() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut persistence = Persistence::options(&tmp).create().await.unwrap();
+
+        let metrics = PrometheusMetrics::default();
+        persistence.enable_metrics(&*Metrics::subgroup(&metrics, "consensus".to_string()));
+
+        let exported = metrics.export().unwrap();
+        assert!(exported.contains("consensus_disk_info"), "{exported}");
+        assert!(exported.contains("backend=\"fs\""), "{exported}");
+        assert!(
+            exported.contains("consensus_disk_fsync_micros"),
+            "{exported}"
         );
     }
 }

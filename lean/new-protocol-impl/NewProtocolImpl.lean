@@ -207,8 +207,8 @@ well-formed, so each link strictly descends.
 That is what lets the decide round be a single scan. An obligation that waited for the
 hole to fill would have had to be repaired from outside — the node cannot reach a block
 nobody is obliged to send it — and `WeaklyFair` forces every implementation to leave
-nothing owed at a step boundary, since an input-driven node emits nothing during a
-collection and a schedule need never deliver another input. So the bar would have made
+no decide owed at a step boundary. A collection emits nothing, a schedule need never
+deliver another input, and no collection can disable a decide. So the bar would have made
 the obligation unsatisfiable rather than merely awkward. With ancestry out of
 `DecideEnabled`, a decide owed at the end of a pass was owed at its start and the round's
 own attempt took it: nothing an attempt does can make a view an earlier attempt passed

@@ -35,7 +35,7 @@ pub fn migrate_legacy_env_vars() -> Vec<(&'static str, &'static str)> {
             "ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS",
             "ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS",
         ),
-        // ── crates/builder/src/bin/permissionless-builder.rs ──
+        // ── crates/espresso/node/src/options.rs, bin/nasty-client.rs, bin/deploy.rs ──
         // Peer nodes used to fetch missing state
         (
             "ESPRESSO_NODE_STATE_PEERS",

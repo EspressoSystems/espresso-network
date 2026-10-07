@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Generates the OpenAPI document from the compiled descriptor set into `src/generated/`.
+/// Generates the OpenAPI document from the compiled descriptor set.
 #[path = "build/openapi.rs"]
 mod openapi;
 
@@ -23,21 +23,10 @@ fn v2_proto_files(proto_root: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Writes only when the content changes, so a rerun does not bump mtimes on artifacts that are
-/// `include!`d and force a rebuild of the whole crate.
-fn write_if_changed(path: PathBuf, content: &str) -> std::io::Result<()> {
-    if fs::read_to_string(&path).is_ok_and(|existing| existing == content) {
-        return Ok(());
-    }
-    fs::write(path, content)
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let proto_root = manifest_dir.join("proto");
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
-    let src_dir = manifest_dir.join("src/generated");
-    fs::create_dir_all(&src_dir)?;
 
     // Generate message types plus the tonic server traits in one pass. The types get no serde
     // derives: JSON is canonical protoJSON, implemented by the pbjson pass below. Clients are
@@ -63,9 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .out_dir(&out_dir)
         .build(&[&format!(".{PACKAGE}")])?;
 
-    // Both guards run while every generated file is still in OUT_DIR, so a proto either of them
-    // refuses leaves nothing rewritten under `src/generated`. `generate` carries the second one,
-    // which refuses non-scalar request fields.
+    // `generate` carries the second guard, which refuses non-scalar request fields.
     openapi::check_bindings(&descriptor_bytes)?;
     let spec = openapi::generate(&descriptor_bytes)?;
 
@@ -75,18 +62,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rest_code = tonic_rest_build::generate(&descriptor_bytes, &rest_config)?;
     // Repo convention: no em dashes in committed text.
     let rest_code = rest_code.replace('\u{2014}', "-");
-    write_if_changed(src_dir.join("espresso.api.v2.rest.rs"), &rest_code)?;
-
-    write_if_changed(
-        src_dir.join("espresso.api.v2.openapi.json"),
-        &serde_json::to_string_pretty(&spec)?,
+    fs::write(out_dir.join("espresso.api.v2.rest.rs"), rest_code)?;
+    fs::write(
+        out_dir.join("espresso.api.v2.openapi.json"),
+        serde_json::to_string_pretty(&spec)?,
     )?;
-
-    // Copied rather than generated in place, so an unchanged proto leaves the tree untouched and
-    // does not force a rebuild of everything downstream.
-    for file in ["espresso.api.v2.rs", "espresso.api.v2.serde.rs"] {
-        write_if_changed(src_dir.join(file), &fs::read_to_string(out_dir.join(file))?)?;
-    }
 
     println!("cargo:rerun-if-changed=proto");
     println!("cargo:rerun-if-changed=build/openapi.rs");

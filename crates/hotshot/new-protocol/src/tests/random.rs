@@ -21,7 +21,7 @@
 
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::{data::EpochNumber, traits::signature_key::SignatureKey};
+use hotshot_types::traits::signature_key::SignatureKey;
 use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
 use crate::{
@@ -114,14 +114,7 @@ async fn run_seed(seed: u64) -> Reached {
             2 => harness.apply(v.cert1_input()).await,
             3 => harness.apply(v.cert2_input()).await,
             4 => harness.apply(v.timeout_cert_input()).await,
-            _ => {
-                harness
-                    .apply(ConsensusInput::Timeout(
-                        v.view_number,
-                        EpochNumber::genesis(),
-                    ))
-                    .await
-            },
+            _ => harness.apply(ConsensusInput::Timeout(v.view_number)).await,
         }
     }
 
