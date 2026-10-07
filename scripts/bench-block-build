@@ -54,6 +54,7 @@ LANES = {
     "request_block": "#898781",
     "from_transactions": "#2a78d6",
     "block_commitments": "#c3c2b7",
+    "encode": "#e87ba4",
     "transaction_commitments": "#eb6834",
     "vid_commitment": "#1baf7a",
     "builder_commitment": "#eda100",
@@ -226,6 +227,8 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
         )
         ax.grid(axis="x", color="#e1e0d9")
         ax.set_axisbelow(True)
+    end = (medians.start + medians.duration).max()
+    axes[-1, 0].set_xlim(0, end * 1.15)
     axes[-1, 0].set_xlabel(
         "ms since the build started; overlapping bars ran in parallel"
     )
