@@ -1160,9 +1160,9 @@ def load_seconds(
 ) -> float:
     """warmup, every step, the refine step, the drain before it and the wait for the last
     transactions. With keep_going: no refine step, the drain after the last step at its cap.
-    With `search`: `max_probes` probes of the longest kind each followed by a drain at its cap
-    if `worst`; else the expected probes and drains."""
-    drain_s = nb.DRAIN_MAX_S if worst or load.keep_going else DRAIN_EXPECTED_S
+    With `search`: `max_probes` probes of the longest kind each followed by a drain.
+    `worst` sizes a drain at its cap plus the grace; else at its expected time."""
+    drain_s = nb.DRAIN_MAX_S + nb.DRAIN_GRACE_S if worst else DRAIN_EXPECTED_S
     if search:
         if worst:
             probe_s = 2 * load.step_s + drain_s
@@ -1174,8 +1174,9 @@ def load_seconds(
             + load.tx_timeout_s
         )
     if load.keep_going:
+        final_s = nb.final_drain_max_s(load.tx_timeout_s) + nb.DRAIN_GRACE_S
         return (
-            load.warmup_s + len(load.steps) * load.step_s + drain_s + load.tx_timeout_s
+            load.warmup_s + len(load.steps) * load.step_s + final_s + load.tx_timeout_s
         )
     return (
         load.warmup_s

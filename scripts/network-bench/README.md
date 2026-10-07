@@ -60,16 +60,18 @@ scripts/network-bench/
   server. The driver's ceiling, not the network's.
 - Default ramp: CI linear 4..16 MB/s; AWS x1.5 per step from 4 to 200 MB/s (the target), stops at the first failing
   step, then one refine step halfway back. `--search` replaces it, see [Search](#search).
-- `--keep-going`: every step runs whatever its verdict, no refine step; then the load stops until drained
-  (`--keep-going` and the drain below, at most 300 s), reported as the backlog drain time. Set `--cap-s` and
-  `--tx-timeout-s` above the expected lag (e.g. 600): inclusion is read from the query node, so a lag above `--cap-s`
-  throttles the load and one above `--tx-timeout-s` times transactions out. Consensus latency of a lagging step is not
-  reliable. Transactions of a lost payload stay pending until `--tx-timeout-s`, which the end of the run waits for. Not
-  for the CI job: its step timeout is 15 min.
+- `--keep-going`: every step runs whatever its verdict, no refine step; then the load stops until drained (see Drain
+  below; cap `max(300 s, --tx-timeout-s)`), reported as the backlog drain time. Set `--cap-s` and `--tx-timeout-s` above
+  the expected lag (e.g. 600): inclusion is read from the query node, so a lag above `--cap-s` throttles the load and
+  one above `--tx-timeout-s` times transactions out. Consensus latency of a lagging step is not reliable. Transactions
+  of a lost payload stay pending until `--tx-timeout-s`, which the end of the run waits for. Not for the CI job: its
+  step timeout is 15 min.
 - Drain (before a refine step or search probe, and after a `--keep-going` run): transactions still queued for a submit
   thread are dropped, nothing new is submitted. Drained once decided bytes are flat for 5 s and the query node shows 3
-  empty blocks past that point, then up to 10 s for pending transactions. Gives up after 30 s without a new validator
-  height or 300 s in total (`drain timeout`).
+  empty blocks past that point and a counter sample taken after them is still flat, then up to 10 s for pending
+  transactions. Gives up after 30 s without a new validator height or 300 s in total (`drain timeout`); the cap of the
+  final drain of a `--keep-going` run is `max(300 s, --tx-timeout-s)`. Sent transactions still pending at the end of a
+  drain carry into the next probe until their timeout.
 - `--max-block-size SIZE` (`plan` and `run`, also `run --fleet`; not an `up` flag; default `50mb`): genesis
   `max_block_size` of both chain configs, e.g. `30mb`, `100mb`; part of the config hash through the genesis and shown in
   the summary's deployment block. On 5 x c8g.4xlarge the block interval grows superlinearly above about 60 MB blocks,

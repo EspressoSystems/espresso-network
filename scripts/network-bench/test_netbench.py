@@ -805,14 +805,28 @@ def idle_counters() -> list[dict[str, Any]]:
 
 def heights_at(validator: int, query: int | None) -> netbench.Heights:
     heights = netbench.Heights(0)
-    heights.saw("validator", validator, 0.0)
+    heights.saw("validator", validator, -1.0)
     if query is not None:
-        heights.saw("query", query, 0.0)
+        heights.saw("query", query, -1.0)
     return heights
 
 
-def drain(state, heights, clock) -> float | None:
-    return clock.run(netbench.drain(state, idle_counters(), heights, clock))
+def drain(
+    state, heights, clock, decided=lambda ts: 1, max_s=netbench.DRAIN_MAX_S
+) -> float | None:
+    """Counters are sampled every second as the clock advances; `decided(ts)` is the value."""
+    counters = idle_counters()
+    chained = clock.on_advance
+
+    def advance(now: float) -> None:
+        while counters[-1]["ts"] + 1 <= now:
+            ts = counters[-1]["ts"] + 1
+            counters.append({"ts": ts, "decided_bytes": decided(ts)})
+        if chained:
+            chained(now)
+
+    clock.on_advance = advance
+    return clock.run(netbench.drain(state, counters, heights, clock, max_s))
 
 
 def sent_tx(state: netbench.LoadState, tx_id: int, sent: bool) -> netbench.Tx:
@@ -847,10 +861,11 @@ def test_drain_returns_after_the_grace_with_a_sent_transaction_pending():
     assert elapsed == pytest.approx(netbench.DRAIN_GRACE_S, abs=0.5)
 
 
-def test_drain_gives_up_when_the_validator_height_stalls():
+def test_drain_gives_up_when_the_validator_height_stalls(caplog):
     clock = fakes.FakeClock()
     assert drain(netbench.LoadState(), heights_at(5, 5), clock) is None
     assert clock.now == pytest.approx(netbench.DRAIN_STALL_S, abs=0.5)
+    assert "stalled" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -859,11 +874,17 @@ def test_drain_gives_up_when_the_validator_height_stalls():
         (None, False, []),
         (3.0, False, ["- backlog drained in 3.0 s before the refine step"]),
         (3.0, True, ["- backlog drained in 3.0 s after the last step"]),
-        (None, True, ["- backlog did not drain in 300 s after the last step"]),
+        (
+            None,
+            True,
+            [
+                "- backlog did not drain (chain stalled or cap of 600 s) after the last step"
+            ],
+        ),
     ],
 )
 def test_drain_lines(drain_s, keep_going, lines):
-    assert netbench.drain_lines(drain_s, keep_going) == lines
+    assert netbench.drain_lines(drain_s, keep_going, 600.0) == lines
 
 
 def test_theil_sen_ignores_an_outlier():
@@ -1023,8 +1044,54 @@ def test_drain_waits_for_the_query_node_to_show_the_empty_blocks():
 
     clock = fakes.FakeClock(on_advance=catch_up)
     assert some(drain(netbench.LoadState(), heights, clock)) == pytest.approx(
-        2.0, abs=0.2
+        3.0, abs=0.2
     )
+
+
+def test_drain_needs_a_counter_sample_after_the_empty_blocks(caplog):
+    """Counters are polled every second: samples from before the last empty block say nothing
+    about it. Here decided bytes grow in the first sample after the query node caught up."""
+    heights = heights_at(5, 7)
+
+    def catch_up(now: float) -> None:
+        if now >= 2.5:
+            heights.saw("query", 8, now)
+
+    clock = fakes.FakeClock(on_advance=catch_up)
+    elapsed = drain(
+        netbench.LoadState(), heights, clock, decided=lambda ts: 1 + (ts >= 3)
+    )
+    assert some(elapsed) > 3.0 + netbench.DRAIN_IDLE_S - 1.0
+
+
+def test_drain_target_resets_when_decided_bytes_grow():
+    heights = heights_at(5, 5)
+
+    def advance(now: float) -> None:
+        if now >= 2.0:
+            heights.saw("validator", 7, now)
+        if now >= 9.0:
+            heights.saw("query", 8, now)
+        if now >= 12.0:
+            heights.saw("query", 10, now)
+
+    clock = fakes.FakeClock(on_advance=advance)
+    elapsed = drain(
+        netbench.LoadState(), heights, clock, decided=lambda ts: 1 + (ts >= 3)
+    )
+    assert some(elapsed) >= 12.0
+
+
+def test_drain_gives_up_at_the_cap_while_blocks_keep_coming(caplog):
+    heights = heights_at(5, 5)
+
+    def blocks(now: float) -> None:
+        heights.saw("validator", 5 + int(now // 5), now)
+
+    clock = fakes.FakeClock(on_advance=blocks)
+    assert drain(netbench.LoadState(), heights, clock, max_s=60.0) is None
+    assert clock.now == pytest.approx(60.0, abs=0.5)
+    assert "cap of 60 s" in caplog.text
 
 
 def step_window() -> netbench.StepWindow:
@@ -1607,18 +1674,6 @@ def test_search_stops_when_the_backlog_does_not_drain(staircase, monkeypatch):
     run = staircase(steps=(0.05,), tx_timeout_s=1, search=search)
     assert run.meta["stop_reason"] == "drain timeout"
     assert netbench.capacity(run.steps)["overall"]["bounded"]
-
-
-def test_drain_needs_empty_blocks_after_idle():
-    heights = heights_at(5, 5)
-
-    def advance(now: float) -> None:
-        if now >= 0.05:
-            heights.saw("validator", 8, now)
-            heights.saw("query", 8, now)
-
-    clock = fakes.FakeClock(on_advance=advance)
-    assert some(drain(netbench.LoadState(), heights, clock)) < 0.5
 
 
 def test_one_passing_run_does_not_hide_a_failing_probe_at_the_same_rate():

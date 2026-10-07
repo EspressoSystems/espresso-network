@@ -965,6 +965,7 @@ def make_result(
             "step_s": 30,
             "warmup_s": 60,
             "cap_s": 5.0,
+            "tx_timeout_s": 30,
             "latency_target_ms": 1000,
             "query_lag_target_ms": 1000,
             "keep_going": False,

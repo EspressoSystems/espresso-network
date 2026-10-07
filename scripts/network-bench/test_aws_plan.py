@@ -119,15 +119,20 @@ def test_node_root_gb_scales_with_offered_payload(steps, validator_gb, query_gb)
 
 
 @pytest.mark.parametrize(
-    ("keep_going", "expected"),
+    ("keep_going", "tx_timeout_s", "expected"),
     [
-        (False, 60 + 3 * 30 + awsb.DRAIN_EXPECTED_S + 30),
-        (True, 60 + 2 * 30 + netbench.DRAIN_MAX_S + 30),
+        (False, 30, 60 + 3 * 30 + awsb.DRAIN_EXPECTED_S + 30),
+        (True, 30, 60 + 2 * 30 + netbench.DRAIN_MAX_S + netbench.DRAIN_GRACE_S + 30),
+        (True, 600, 60 + 2 * 30 + 600 + netbench.DRAIN_GRACE_S + 600),
     ],
 )
-def test_load_seconds(keep_going, expected):
+def test_load_seconds(keep_going, tx_timeout_s, expected):
     load = netbench.BenchConfig(
-        steps=(4.0, 8.0), step_s=30, warmup_s=60, tx_timeout_s=30, keep_going=keep_going
+        steps=(4.0, 8.0),
+        step_s=30,
+        warmup_s=60,
+        tx_timeout_s=tx_timeout_s,
+        keep_going=keep_going,
     )
     assert awsb.load_seconds(load) == expected
 
@@ -148,6 +153,7 @@ def test_worst_uses_ready_timeout_and_collect_max():
         + awsb.COLLECT_MAX_S
         - awsb.COLLECT_EXPECTED_S
         + netbench.DRAIN_MAX_S
+        + netbench.DRAIN_GRACE_S
         - awsb.DRAIN_EXPECTED_S
     )
 
@@ -169,9 +175,9 @@ def test_estimate_matches_hand_computed_totals():
     cfg = small_cfg(pg_iops=6000, pg_mbps=500)
     estimate = shot_estimate(awsb.plan_hosts(cfg), cfg)
     assert estimate["expected_s"] == 1670.0
-    assert estimate["ttl_s"] == 3570.0
+    assert estimate["ttl_s"] == 3580.0
     assert estimate["expected_usd"] == pytest.approx(0.865536, abs=1e-5)
-    assert estimate["bound_usd"] == pytest.approx(1.923865, abs=1e-5)
+    assert estimate["bound_usd"] == pytest.approx(1.928954, abs=1e-5)
 
 
 def test_bound_is_cost_at_ttl():
@@ -1370,7 +1376,7 @@ def test_search_load_seconds():
     search = netbench.SearchConfig()
     assert (
         awsb.load_seconds(load, search, worst=True)
-        == 60 + 12 * (2 * 60 + netbench.DRAIN_MAX_S) + 60
+        == 60 + 12 * (2 * 60 + netbench.DRAIN_MAX_S + netbench.DRAIN_GRACE_S) + 60
     )
     assert (
         awsb.load_seconds(load, search, worst=False)
