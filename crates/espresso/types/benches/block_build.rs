@@ -5,7 +5,8 @@
 //! `hotshot_new_protocol::block::block_commitments`, the function the leader calls. A tracing
 //! layer records each step span's start and duration; when `CRITERION_HOME` is set they are
 //! written to `steps.json` next to the benchmark's criterion output. Step samples start with
-//! criterion's warm-up iterations; scripts/bench-block-build keeps one per measured iteration.
+//! criterion's warm-up iterations; scripts/bench-block-build keeps one per measured iteration,
+//! which assumes every recorded span opens exactly once per iteration.
 //!
 //! Inputs mirror the network-bench load generator: random 1 MB transactions round-robin over
 //! 16 namespaces in 30 to 70 MB blocks, protocol version 0.6 (AvidmGf2), 100 nodes. Real stakes
@@ -57,7 +58,6 @@ fn bench_block_build(c: &mut Criterion) {
     for block_mb in BLOCK_MB {
         let label = format!("{block_mb}MB_1000KB_t{threads}_n{NODES}");
         let txs = OnceLock::new();
-        STEPS.lock().expect("steps lock").clear();
         group.bench_function(BenchmarkId::new("request_block", &label), |b| {
             let txs = txs.get_or_init(|| transactions(block_mb));
             b.iter_with_large_drop(|| request_block(txs))
@@ -123,6 +123,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StepTimer {
     }
 
     fn on_close(&self, id: span::Id, ctx: Context<'_, S>) {
+        let end = Instant::now();
         let span = ctx.span(&id).expect("closing span is registered");
         let start = *span
             .extensions()
@@ -137,7 +138,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StepTimer {
             .expect("steps lock")
             .entry(span.name())
             .or_default()
-            .push([ms(start - origin), ms(start.elapsed())]);
+            .push([ms(start - origin), ms(end - start)]);
     }
 }
 

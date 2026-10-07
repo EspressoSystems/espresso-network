@@ -10,7 +10,7 @@ lint *args:
 
 check *args:
     ty check {{scripts}} {{args}}
-    for s in {{uv_scripts}}; do ty check --python "$(uv python find --script "$s")" "$s" {{args}}; done
+    for s in {{uv_scripts}}; do uv sync --script "$s" && ty check --python "$(uv python find --script "$s")" "$s" {{args}}; done
 
 test *args:
     python3 -m unittest discover -p "test_*.py" {{args}}
