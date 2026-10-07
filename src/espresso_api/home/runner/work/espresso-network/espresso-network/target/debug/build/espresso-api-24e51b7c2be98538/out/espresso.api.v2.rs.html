@@ -7066,399 +7066,399 @@
 <a href=#7066 id=7066 data-nosnippet>7066</a>        <span class="kw">const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = SERVICE_NAME;
 <a href=#7067 id=7067 data-nosnippet>7067</a>    }
 <a href=#7068 id=7068 data-nosnippet>7068</a>}
-<a href=#7069 id=7069 data-nosnippet>7069</a><span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-<a href=#7070 id=7070 data-nosnippet>7070</a></span><span class="kw">pub struct </span>GetTotalMintedSupplyRequest {}
-<a href=#7071 id=7071 data-nosnippet>7071</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-<a href=#7072 id=7072 data-nosnippet>7072</a></span><span class="kw">pub struct </span>TotalMintedSupplyResponse {
-<a href=#7073 id=7073 data-nosnippet>7073</a>    <span class="doccomment">/// Total supply of the ESP token minted on Ethereum, in ESP (decimal string);
-<a href=#7074 id=7074 data-nosnippet>7074</a>    /// excludes unclaimed rewards
-<a href=#7075 id=7075 data-nosnippet>7075</a>    </span><span class="attr">#[prost(string, tag = <span class="string">"1"</span>)]
-<a href=#7076 id=7076 data-nosnippet>7076</a>    </span><span class="kw">pub </span>amount: ::prost::alloc::string::String,
+<a href=#7069 id=7069 data-nosnippet>7069</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7070 id=7070 data-nosnippet>7070</a></span><span class="kw">pub struct </span>SubmitTransactionRequest {
+<a href=#7071 id=7071 data-nosnippet>7071</a>    <span class="doccomment">/// Namespace the transaction is sequenced in. Required, and at most u32::MAX
+<a href=#7072 id=7072 data-nosnippet>7072</a>    </span><span class="attr">#[prost(uint64, optional, tag = <span class="string">"1"</span>)]
+<a href=#7073 id=7073 data-nosnippet>7073</a>    </span><span class="kw">pub </span>namespace: ::core::option::Option&lt;u64&gt;,
+<a href=#7074 id=7074 data-nosnippet>7074</a>    <span class="doccomment">/// Transaction payload, base64 in JSON. Required, and may be empty
+<a href=#7075 id=7075 data-nosnippet>7075</a>    </span><span class="attr">#[prost(bytes = <span class="string">"vec"</span>, optional, tag = <span class="string">"2"</span>)]
+<a href=#7076 id=7076 data-nosnippet>7076</a>    </span><span class="kw">pub </span>payload: ::core::option::Option&lt;::prost::alloc::vec::Vec&lt;u8&gt;&gt;,
 <a href=#7077 id=7077 data-nosnippet>7077</a>}
-<a href=#7078 id=7078 data-nosnippet>7078</a><span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-<a href=#7079 id=7079 data-nosnippet>7079</a></span><span class="kw">pub struct </span>GetCirculatingSupplyRequest {}
-<a href=#7080 id=7080 data-nosnippet>7080</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-<a href=#7081 id=7081 data-nosnippet>7081</a></span><span class="kw">pub struct </span>CirculatingSupplyResponse {
-<a href=#7082 id=7082 data-nosnippet>7082</a>    <span class="doccomment">/// Circulating supply in ESP (decimal string): initial_supply + reward_distributed -
-<a href=#7083 id=7083 data-nosnippet>7083</a>    /// locked, following the mainnet unlock schedule
-<a href=#7084 id=7084 data-nosnippet>7084</a>    </span><span class="attr">#[prost(string, tag = <span class="string">"1"</span>)]
-<a href=#7085 id=7085 data-nosnippet>7085</a>    </span><span class="kw">pub </span>amount: ::prost::alloc::string::String,
-<a href=#7086 id=7086 data-nosnippet>7086</a>}
-<a href=#7087 id=7087 data-nosnippet>7087</a><span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-<a href=#7088 id=7088 data-nosnippet>7088</a></span><span class="kw">pub struct </span>GetCirculatingSupplyEthereumRequest {}
-<a href=#7089 id=7089 data-nosnippet>7089</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-<a href=#7090 id=7090 data-nosnippet>7090</a></span><span class="kw">pub struct </span>CirculatingSupplyEthereumResponse {
-<a href=#7091 id=7091 data-nosnippet>7091</a>    <span class="doccomment">/// Circulating supply of ESP tokens on Ethereum L1, in ESP (decimal string):
-<a href=#7092 id=7092 data-nosnippet>7092</a>    /// total_supply_l1 - locked
-<a href=#7093 id=7093 data-nosnippet>7093</a>    </span><span class="attr">#[prost(string, tag = <span class="string">"1"</span>)]
-<a href=#7094 id=7094 data-nosnippet>7094</a>    </span><span class="kw">pub </span>amount: ::prost::alloc::string::String,
-<a href=#7095 id=7095 data-nosnippet>7095</a>}
-<a href=#7096 id=7096 data-nosnippet>7096</a><span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-<a href=#7097 id=7097 data-nosnippet>7097</a></span><span class="kw">pub struct </span>GetTotalIssuedSupplyRequest {}
-<a href=#7098 id=7098 data-nosnippet>7098</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-<a href=#7099 id=7099 data-nosnippet>7099</a></span><span class="kw">pub struct </span>TotalIssuedSupplyResponse {
-<a href=#7100 id=7100 data-nosnippet>7100</a>    <span class="doccomment">/// Total issued supply in ESP (decimal string): initial_supply +
-<a href=#7101 id=7101 data-nosnippet>7101</a>    /// total_reward_distributed, including rewards not yet claimed on Ethereum
-<a href=#7102 id=7102 data-nosnippet>7102</a>    </span><span class="attr">#[prost(string, tag = <span class="string">"1"</span>)]
-<a href=#7103 id=7103 data-nosnippet>7103</a>    </span><span class="kw">pub </span>amount: ::prost::alloc::string::String,
-<a href=#7104 id=7104 data-nosnippet>7104</a>}
-<a href=#7105 id=7105 data-nosnippet>7105</a><span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-<a href=#7106 id=7106 data-nosnippet>7106</a></span><span class="kw">pub struct </span>GetTotalRewardDistributedRequest {}
-<a href=#7107 id=7107 data-nosnippet>7107</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-<a href=#7108 id=7108 data-nosnippet>7108</a></span><span class="kw">pub struct </span>TotalRewardDistributedResponse {
-<a href=#7109 id=7109 data-nosnippet>7109</a>    <span class="doccomment">/// Total rewards distributed by consensus, in ESP (decimal string), including rewards
-<a href=#7110 id=7110 data-nosnippet>7110</a>    /// not yet claimed on Ethereum
-<a href=#7111 id=7111 data-nosnippet>7111</a>    </span><span class="attr">#[prost(string, tag = <span class="string">"1"</span>)]
-<a href=#7112 id=7112 data-nosnippet>7112</a>    </span><span class="kw">pub </span>amount: ::prost::alloc::string::String,
-<a href=#7113 id=7113 data-nosnippet>7113</a>}
-<a href=#7114 id=7114 data-nosnippet>7114</a><span class="doccomment">/// Generated server implementations.
-<a href=#7115 id=7115 data-nosnippet>7115</a></span><span class="kw">pub mod </span>token_service_server {
-<a href=#7116 id=7116 data-nosnippet>7116</a>    <span class="attr">#![allow(
-<a href=#7117 id=7117 data-nosnippet>7117</a>        unused_variables,
-<a href=#7118 id=7118 data-nosnippet>7118</a>        dead_code,
-<a href=#7119 id=7119 data-nosnippet>7119</a>        missing_docs,
-<a href=#7120 id=7120 data-nosnippet>7120</a>        clippy::wildcard_imports,
-<a href=#7121 id=7121 data-nosnippet>7121</a>        clippy::let_unit_value,
-<a href=#7122 id=7122 data-nosnippet>7122</a>    )]
-<a href=#7123 id=7123 data-nosnippet>7123</a>    </span><span class="kw">use </span>tonic::codegen::<span class="kw-2">*</span>;
-<a href=#7124 id=7124 data-nosnippet>7124</a>    <span class="doccomment">/// Generated trait containing gRPC methods that should be implemented for use with TokenServiceServer.
-<a href=#7125 id=7125 data-nosnippet>7125</a>    </span><span class="attr">#[async_trait]
-<a href=#7126 id=7126 data-nosnippet>7126</a>    </span><span class="kw">pub trait </span>TokenService: std::marker::Send + std::marker::Sync + <span class="lifetime">'static </span>{
-<a href=#7127 id=7127 data-nosnippet>7127</a>        <span class="doccomment">/// Get the total supply of the ESP token minted on Ethereum; excludes unclaimed rewards
-<a href=#7128 id=7128 data-nosnippet>7128</a>        </span><span class="kw">async fn </span>get_total_minted_supply(
-<a href=#7129 id=7129 data-nosnippet>7129</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#7130 id=7130 data-nosnippet>7130</a>            request: tonic::Request&lt;<span class="kw">super</span>::GetTotalMintedSupplyRequest&gt;,
-<a href=#7131 id=7131 data-nosnippet>7131</a>        ) -&gt; std::result::Result&lt;
-<a href=#7132 id=7132 data-nosnippet>7132</a>            tonic::Response&lt;<span class="kw">super</span>::TotalMintedSupplyResponse&gt;,
-<a href=#7133 id=7133 data-nosnippet>7133</a>            tonic::Status,
-<a href=#7134 id=7134 data-nosnippet>7134</a>        &gt;;
-<a href=#7135 id=7135 data-nosnippet>7135</a>        <span class="doccomment">/// Get the circulating supply, following the mainnet unlock schedule
-<a href=#7136 id=7136 data-nosnippet>7136</a>        </span><span class="kw">async fn </span>get_circulating_supply(
-<a href=#7137 id=7137 data-nosnippet>7137</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#7138 id=7138 data-nosnippet>7138</a>            request: tonic::Request&lt;<span class="kw">super</span>::GetCirculatingSupplyRequest&gt;,
-<a href=#7139 id=7139 data-nosnippet>7139</a>        ) -&gt; std::result::Result&lt;
-<a href=#7140 id=7140 data-nosnippet>7140</a>            tonic::Response&lt;<span class="kw">super</span>::CirculatingSupplyResponse&gt;,
-<a href=#7141 id=7141 data-nosnippet>7141</a>            tonic::Status,
-<a href=#7142 id=7142 data-nosnippet>7142</a>        &gt;;
-<a href=#7143 id=7143 data-nosnippet>7143</a>        <span class="doccomment">/// Get the circulating supply of ESP tokens on Ethereum L1
-<a href=#7144 id=7144 data-nosnippet>7144</a>        </span><span class="kw">async fn </span>get_circulating_supply_ethereum(
-<a href=#7145 id=7145 data-nosnippet>7145</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#7146 id=7146 data-nosnippet>7146</a>            request: tonic::Request&lt;<span class="kw">super</span>::GetCirculatingSupplyEthereumRequest&gt;,
-<a href=#7147 id=7147 data-nosnippet>7147</a>        ) -&gt; std::result::Result&lt;
-<a href=#7148 id=7148 data-nosnippet>7148</a>            tonic::Response&lt;<span class="kw">super</span>::CirculatingSupplyEthereumResponse&gt;,
-<a href=#7149 id=7149 data-nosnippet>7149</a>            tonic::Status,
-<a href=#7150 id=7150 data-nosnippet>7150</a>        &gt;;
-<a href=#7151 id=7151 data-nosnippet>7151</a>        <span class="doccomment">/// Get the total issued supply, including rewards not yet claimed on Ethereum
-<a href=#7152 id=7152 data-nosnippet>7152</a>        </span><span class="kw">async fn </span>get_total_issued_supply(
-<a href=#7153 id=7153 data-nosnippet>7153</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#7154 id=7154 data-nosnippet>7154</a>            request: tonic::Request&lt;<span class="kw">super</span>::GetTotalIssuedSupplyRequest&gt;,
-<a href=#7155 id=7155 data-nosnippet>7155</a>        ) -&gt; std::result::Result&lt;
-<a href=#7156 id=7156 data-nosnippet>7156</a>            tonic::Response&lt;<span class="kw">super</span>::TotalIssuedSupplyResponse&gt;,
-<a href=#7157 id=7157 data-nosnippet>7157</a>            tonic::Status,
-<a href=#7158 id=7158 data-nosnippet>7158</a>        &gt;;
-<a href=#7159 id=7159 data-nosnippet>7159</a>        <span class="doccomment">/// Get the total rewards distributed by consensus, including rewards not yet claimed on Ethereum
-<a href=#7160 id=7160 data-nosnippet>7160</a>        </span><span class="kw">async fn </span>get_total_reward_distributed(
-<a href=#7161 id=7161 data-nosnippet>7161</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#7162 id=7162 data-nosnippet>7162</a>            request: tonic::Request&lt;<span class="kw">super</span>::GetTotalRewardDistributedRequest&gt;,
-<a href=#7163 id=7163 data-nosnippet>7163</a>        ) -&gt; std::result::Result&lt;
-<a href=#7164 id=7164 data-nosnippet>7164</a>            tonic::Response&lt;<span class="kw">super</span>::TotalRewardDistributedResponse&gt;,
-<a href=#7165 id=7165 data-nosnippet>7165</a>            tonic::Status,
-<a href=#7166 id=7166 data-nosnippet>7166</a>        &gt;;
-<a href=#7167 id=7167 data-nosnippet>7167</a>    }
-<a href=#7168 id=7168 data-nosnippet>7168</a>    <span class="attr">#[derive(Debug)]
-<a href=#7169 id=7169 data-nosnippet>7169</a>    </span><span class="kw">pub struct </span>TokenServiceServer&lt;T&gt; {
-<a href=#7170 id=7170 data-nosnippet>7170</a>        inner: Arc&lt;T&gt;,
-<a href=#7171 id=7171 data-nosnippet>7171</a>        accept_compression_encodings: EnabledCompressionEncodings,
-<a href=#7172 id=7172 data-nosnippet>7172</a>        send_compression_encodings: EnabledCompressionEncodings,
-<a href=#7173 id=7173 data-nosnippet>7173</a>        max_decoding_message_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#7174 id=7174 data-nosnippet>7174</a>        max_encoding_message_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#7175 id=7175 data-nosnippet>7175</a>    }
-<a href=#7176 id=7176 data-nosnippet>7176</a>    <span class="kw">impl</span>&lt;T&gt; TokenServiceServer&lt;T&gt; {
-<a href=#7177 id=7177 data-nosnippet>7177</a>        <span class="kw">pub fn </span>new(inner: T) -&gt; <span class="self">Self </span>{
-<a href=#7178 id=7178 data-nosnippet>7178</a>            <span class="self">Self</span>::from_arc(Arc::new(inner))
+<a href=#7078 id=7078 data-nosnippet>7078</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7079 id=7079 data-nosnippet>7079</a></span><span class="kw">pub struct </span>SubmitTransactionResponse {
+<a href=#7080 id=7080 data-nosnippet>7080</a>    <span class="doccomment">/// Commitment to the accepted transaction, TaggedBase64 `TX~`
+<a href=#7081 id=7081 data-nosnippet>7081</a>    </span><span class="attr">#[prost(string, tag = <span class="string">"1"</span>)]
+<a href=#7082 id=7082 data-nosnippet>7082</a>    </span><span class="kw">pub </span>hash: ::prost::alloc::string::String,
+<a href=#7083 id=7083 data-nosnippet>7083</a>}
+<a href=#7084 id=7084 data-nosnippet>7084</a><span class="doccomment">/// Generated server implementations.
+<a href=#7085 id=7085 data-nosnippet>7085</a></span><span class="kw">pub mod </span>submit_service_server {
+<a href=#7086 id=7086 data-nosnippet>7086</a>    <span class="attr">#![allow(
+<a href=#7087 id=7087 data-nosnippet>7087</a>        unused_variables,
+<a href=#7088 id=7088 data-nosnippet>7088</a>        dead_code,
+<a href=#7089 id=7089 data-nosnippet>7089</a>        missing_docs,
+<a href=#7090 id=7090 data-nosnippet>7090</a>        clippy::wildcard_imports,
+<a href=#7091 id=7091 data-nosnippet>7091</a>        clippy::let_unit_value,
+<a href=#7092 id=7092 data-nosnippet>7092</a>    )]
+<a href=#7093 id=7093 data-nosnippet>7093</a>    </span><span class="kw">use </span>tonic::codegen::<span class="kw-2">*</span>;
+<a href=#7094 id=7094 data-nosnippet>7094</a>    <span class="doccomment">/// Generated trait containing gRPC methods that should be implemented for use with SubmitServiceServer.
+<a href=#7095 id=7095 data-nosnippet>7095</a>    </span><span class="attr">#[async_trait]
+<a href=#7096 id=7096 data-nosnippet>7096</a>    </span><span class="kw">pub trait </span>SubmitService: std::marker::Send + std::marker::Sync + <span class="lifetime">'static </span>{
+<a href=#7097 id=7097 data-nosnippet>7097</a>        <span class="doccomment">/// Submit a transaction for sequencing
+<a href=#7098 id=7098 data-nosnippet>7098</a>        </span><span class="kw">async fn </span>submit_transaction(
+<a href=#7099 id=7099 data-nosnippet>7099</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#7100 id=7100 data-nosnippet>7100</a>            request: tonic::Request&lt;<span class="kw">super</span>::SubmitTransactionRequest&gt;,
+<a href=#7101 id=7101 data-nosnippet>7101</a>        ) -&gt; std::result::Result&lt;
+<a href=#7102 id=7102 data-nosnippet>7102</a>            tonic::Response&lt;<span class="kw">super</span>::SubmitTransactionResponse&gt;,
+<a href=#7103 id=7103 data-nosnippet>7103</a>            tonic::Status,
+<a href=#7104 id=7104 data-nosnippet>7104</a>        &gt;;
+<a href=#7105 id=7105 data-nosnippet>7105</a>    }
+<a href=#7106 id=7106 data-nosnippet>7106</a>    <span class="attr">#[derive(Debug)]
+<a href=#7107 id=7107 data-nosnippet>7107</a>    </span><span class="kw">pub struct </span>SubmitServiceServer&lt;T&gt; {
+<a href=#7108 id=7108 data-nosnippet>7108</a>        inner: Arc&lt;T&gt;,
+<a href=#7109 id=7109 data-nosnippet>7109</a>        accept_compression_encodings: EnabledCompressionEncodings,
+<a href=#7110 id=7110 data-nosnippet>7110</a>        send_compression_encodings: EnabledCompressionEncodings,
+<a href=#7111 id=7111 data-nosnippet>7111</a>        max_decoding_message_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#7112 id=7112 data-nosnippet>7112</a>        max_encoding_message_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#7113 id=7113 data-nosnippet>7113</a>    }
+<a href=#7114 id=7114 data-nosnippet>7114</a>    <span class="kw">impl</span>&lt;T&gt; SubmitServiceServer&lt;T&gt; {
+<a href=#7115 id=7115 data-nosnippet>7115</a>        <span class="kw">pub fn </span>new(inner: T) -&gt; <span class="self">Self </span>{
+<a href=#7116 id=7116 data-nosnippet>7116</a>            <span class="self">Self</span>::from_arc(Arc::new(inner))
+<a href=#7117 id=7117 data-nosnippet>7117</a>        }
+<a href=#7118 id=7118 data-nosnippet>7118</a>        <span class="kw">pub fn </span>from_arc(inner: Arc&lt;T&gt;) -&gt; <span class="self">Self </span>{
+<a href=#7119 id=7119 data-nosnippet>7119</a>            <span class="self">Self </span>{
+<a href=#7120 id=7120 data-nosnippet>7120</a>                inner,
+<a href=#7121 id=7121 data-nosnippet>7121</a>                accept_compression_encodings: Default::default(),
+<a href=#7122 id=7122 data-nosnippet>7122</a>                send_compression_encodings: Default::default(),
+<a href=#7123 id=7123 data-nosnippet>7123</a>                max_decoding_message_size: <span class="prelude-val">None</span>,
+<a href=#7124 id=7124 data-nosnippet>7124</a>                max_encoding_message_size: <span class="prelude-val">None</span>,
+<a href=#7125 id=7125 data-nosnippet>7125</a>            }
+<a href=#7126 id=7126 data-nosnippet>7126</a>        }
+<a href=#7127 id=7127 data-nosnippet>7127</a>        <span class="kw">pub fn </span>with_interceptor&lt;F&gt;(
+<a href=#7128 id=7128 data-nosnippet>7128</a>            inner: T,
+<a href=#7129 id=7129 data-nosnippet>7129</a>            interceptor: F,
+<a href=#7130 id=7130 data-nosnippet>7130</a>        ) -&gt; InterceptedService&lt;<span class="self">Self</span>, F&gt;
+<a href=#7131 id=7131 data-nosnippet>7131</a>        <span class="kw">where
+<a href=#7132 id=7132 data-nosnippet>7132</a>            </span>F: tonic::service::Interceptor,
+<a href=#7133 id=7133 data-nosnippet>7133</a>        {
+<a href=#7134 id=7134 data-nosnippet>7134</a>            InterceptedService::new(<span class="self">Self</span>::new(inner), interceptor)
+<a href=#7135 id=7135 data-nosnippet>7135</a>        }
+<a href=#7136 id=7136 data-nosnippet>7136</a>        <span class="doccomment">/// Enable decompressing requests with the given encoding.
+<a href=#7137 id=7137 data-nosnippet>7137</a>        </span><span class="attr">#[must_use]
+<a href=#7138 id=7138 data-nosnippet>7138</a>        </span><span class="kw">pub fn </span>accept_compressed(<span class="kw-2">mut </span><span class="self">self</span>, encoding: CompressionEncoding) -&gt; <span class="self">Self </span>{
+<a href=#7139 id=7139 data-nosnippet>7139</a>            <span class="self">self</span>.accept_compression_encodings.enable(encoding);
+<a href=#7140 id=7140 data-nosnippet>7140</a>            <span class="self">self
+<a href=#7141 id=7141 data-nosnippet>7141</a>        </span>}
+<a href=#7142 id=7142 data-nosnippet>7142</a>        <span class="doccomment">/// Compress responses with the given encoding, if the client supports it.
+<a href=#7143 id=7143 data-nosnippet>7143</a>        </span><span class="attr">#[must_use]
+<a href=#7144 id=7144 data-nosnippet>7144</a>        </span><span class="kw">pub fn </span>send_compressed(<span class="kw-2">mut </span><span class="self">self</span>, encoding: CompressionEncoding) -&gt; <span class="self">Self </span>{
+<a href=#7145 id=7145 data-nosnippet>7145</a>            <span class="self">self</span>.send_compression_encodings.enable(encoding);
+<a href=#7146 id=7146 data-nosnippet>7146</a>            <span class="self">self
+<a href=#7147 id=7147 data-nosnippet>7147</a>        </span>}
+<a href=#7148 id=7148 data-nosnippet>7148</a>        <span class="doccomment">/// Limits the maximum size of a decoded message.
+<a href=#7149 id=7149 data-nosnippet>7149</a>        ///
+<a href=#7150 id=7150 data-nosnippet>7150</a>        /// Default: `4MB`
+<a href=#7151 id=7151 data-nosnippet>7151</a>        </span><span class="attr">#[must_use]
+<a href=#7152 id=7152 data-nosnippet>7152</a>        </span><span class="kw">pub fn </span>max_decoding_message_size(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
+<a href=#7153 id=7153 data-nosnippet>7153</a>            <span class="self">self</span>.max_decoding_message_size = <span class="prelude-val">Some</span>(limit);
+<a href=#7154 id=7154 data-nosnippet>7154</a>            <span class="self">self
+<a href=#7155 id=7155 data-nosnippet>7155</a>        </span>}
+<a href=#7156 id=7156 data-nosnippet>7156</a>        <span class="doccomment">/// Limits the maximum size of an encoded message.
+<a href=#7157 id=7157 data-nosnippet>7157</a>        ///
+<a href=#7158 id=7158 data-nosnippet>7158</a>        /// Default: `usize::MAX`
+<a href=#7159 id=7159 data-nosnippet>7159</a>        </span><span class="attr">#[must_use]
+<a href=#7160 id=7160 data-nosnippet>7160</a>        </span><span class="kw">pub fn </span>max_encoding_message_size(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
+<a href=#7161 id=7161 data-nosnippet>7161</a>            <span class="self">self</span>.max_encoding_message_size = <span class="prelude-val">Some</span>(limit);
+<a href=#7162 id=7162 data-nosnippet>7162</a>            <span class="self">self
+<a href=#7163 id=7163 data-nosnippet>7163</a>        </span>}
+<a href=#7164 id=7164 data-nosnippet>7164</a>    }
+<a href=#7165 id=7165 data-nosnippet>7165</a>    <span class="kw">impl</span>&lt;T, B&gt; tonic::codegen::Service&lt;http::Request&lt;B&gt;&gt; <span class="kw">for </span>SubmitServiceServer&lt;T&gt;
+<a href=#7166 id=7166 data-nosnippet>7166</a>    <span class="kw">where
+<a href=#7167 id=7167 data-nosnippet>7167</a>        </span>T: SubmitService,
+<a href=#7168 id=7168 data-nosnippet>7168</a>        B: Body + std::marker::Send + <span class="lifetime">'static</span>,
+<a href=#7169 id=7169 data-nosnippet>7169</a>        B::Error: Into&lt;StdError&gt; + std::marker::Send + <span class="lifetime">'static</span>,
+<a href=#7170 id=7170 data-nosnippet>7170</a>    {
+<a href=#7171 id=7171 data-nosnippet>7171</a>        <span class="kw">type </span>Response = http::Response&lt;tonic::body::Body&gt;;
+<a href=#7172 id=7172 data-nosnippet>7172</a>        <span class="kw">type </span>Error = std::convert::Infallible;
+<a href=#7173 id=7173 data-nosnippet>7173</a>        <span class="kw">type </span>Future = BoxFuture&lt;<span class="self">Self</span>::Response, <span class="self">Self</span>::Error&gt;;
+<a href=#7174 id=7174 data-nosnippet>7174</a>        <span class="kw">fn </span>poll_ready(
+<a href=#7175 id=7175 data-nosnippet>7175</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#7176 id=7176 data-nosnippet>7176</a>            _cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;,
+<a href=#7177 id=7177 data-nosnippet>7177</a>        ) -&gt; Poll&lt;std::result::Result&lt;(), <span class="self">Self</span>::Error&gt;&gt; {
+<a href=#7178 id=7178 data-nosnippet>7178</a>            Poll::Ready(<span class="prelude-val">Ok</span>(()))
 <a href=#7179 id=7179 data-nosnippet>7179</a>        }
-<a href=#7180 id=7180 data-nosnippet>7180</a>        <span class="kw">pub fn </span>from_arc(inner: Arc&lt;T&gt;) -&gt; <span class="self">Self </span>{
-<a href=#7181 id=7181 data-nosnippet>7181</a>            <span class="self">Self </span>{
-<a href=#7182 id=7182 data-nosnippet>7182</a>                inner,
-<a href=#7183 id=7183 data-nosnippet>7183</a>                accept_compression_encodings: Default::default(),
-<a href=#7184 id=7184 data-nosnippet>7184</a>                send_compression_encodings: Default::default(),
-<a href=#7185 id=7185 data-nosnippet>7185</a>                max_decoding_message_size: <span class="prelude-val">None</span>,
-<a href=#7186 id=7186 data-nosnippet>7186</a>                max_encoding_message_size: <span class="prelude-val">None</span>,
-<a href=#7187 id=7187 data-nosnippet>7187</a>            }
-<a href=#7188 id=7188 data-nosnippet>7188</a>        }
-<a href=#7189 id=7189 data-nosnippet>7189</a>        <span class="kw">pub fn </span>with_interceptor&lt;F&gt;(
-<a href=#7190 id=7190 data-nosnippet>7190</a>            inner: T,
-<a href=#7191 id=7191 data-nosnippet>7191</a>            interceptor: F,
-<a href=#7192 id=7192 data-nosnippet>7192</a>        ) -&gt; InterceptedService&lt;<span class="self">Self</span>, F&gt;
-<a href=#7193 id=7193 data-nosnippet>7193</a>        <span class="kw">where
-<a href=#7194 id=7194 data-nosnippet>7194</a>            </span>F: tonic::service::Interceptor,
-<a href=#7195 id=7195 data-nosnippet>7195</a>        {
-<a href=#7196 id=7196 data-nosnippet>7196</a>            InterceptedService::new(<span class="self">Self</span>::new(inner), interceptor)
-<a href=#7197 id=7197 data-nosnippet>7197</a>        }
-<a href=#7198 id=7198 data-nosnippet>7198</a>        <span class="doccomment">/// Enable decompressing requests with the given encoding.
-<a href=#7199 id=7199 data-nosnippet>7199</a>        </span><span class="attr">#[must_use]
-<a href=#7200 id=7200 data-nosnippet>7200</a>        </span><span class="kw">pub fn </span>accept_compressed(<span class="kw-2">mut </span><span class="self">self</span>, encoding: CompressionEncoding) -&gt; <span class="self">Self </span>{
-<a href=#7201 id=7201 data-nosnippet>7201</a>            <span class="self">self</span>.accept_compression_encodings.enable(encoding);
-<a href=#7202 id=7202 data-nosnippet>7202</a>            <span class="self">self
-<a href=#7203 id=7203 data-nosnippet>7203</a>        </span>}
-<a href=#7204 id=7204 data-nosnippet>7204</a>        <span class="doccomment">/// Compress responses with the given encoding, if the client supports it.
-<a href=#7205 id=7205 data-nosnippet>7205</a>        </span><span class="attr">#[must_use]
-<a href=#7206 id=7206 data-nosnippet>7206</a>        </span><span class="kw">pub fn </span>send_compressed(<span class="kw-2">mut </span><span class="self">self</span>, encoding: CompressionEncoding) -&gt; <span class="self">Self </span>{
-<a href=#7207 id=7207 data-nosnippet>7207</a>            <span class="self">self</span>.send_compression_encodings.enable(encoding);
-<a href=#7208 id=7208 data-nosnippet>7208</a>            <span class="self">self
-<a href=#7209 id=7209 data-nosnippet>7209</a>        </span>}
-<a href=#7210 id=7210 data-nosnippet>7210</a>        <span class="doccomment">/// Limits the maximum size of a decoded message.
-<a href=#7211 id=7211 data-nosnippet>7211</a>        ///
-<a href=#7212 id=7212 data-nosnippet>7212</a>        /// Default: `4MB`
-<a href=#7213 id=7213 data-nosnippet>7213</a>        </span><span class="attr">#[must_use]
-<a href=#7214 id=7214 data-nosnippet>7214</a>        </span><span class="kw">pub fn </span>max_decoding_message_size(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
-<a href=#7215 id=7215 data-nosnippet>7215</a>            <span class="self">self</span>.max_decoding_message_size = <span class="prelude-val">Some</span>(limit);
-<a href=#7216 id=7216 data-nosnippet>7216</a>            <span class="self">self
-<a href=#7217 id=7217 data-nosnippet>7217</a>        </span>}
-<a href=#7218 id=7218 data-nosnippet>7218</a>        <span class="doccomment">/// Limits the maximum size of an encoded message.
-<a href=#7219 id=7219 data-nosnippet>7219</a>        ///
-<a href=#7220 id=7220 data-nosnippet>7220</a>        /// Default: `usize::MAX`
-<a href=#7221 id=7221 data-nosnippet>7221</a>        </span><span class="attr">#[must_use]
-<a href=#7222 id=7222 data-nosnippet>7222</a>        </span><span class="kw">pub fn </span>max_encoding_message_size(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
-<a href=#7223 id=7223 data-nosnippet>7223</a>            <span class="self">self</span>.max_encoding_message_size = <span class="prelude-val">Some</span>(limit);
-<a href=#7224 id=7224 data-nosnippet>7224</a>            <span class="self">self
-<a href=#7225 id=7225 data-nosnippet>7225</a>        </span>}
-<a href=#7226 id=7226 data-nosnippet>7226</a>    }
-<a href=#7227 id=7227 data-nosnippet>7227</a>    <span class="kw">impl</span>&lt;T, B&gt; tonic::codegen::Service&lt;http::Request&lt;B&gt;&gt; <span class="kw">for </span>TokenServiceServer&lt;T&gt;
-<a href=#7228 id=7228 data-nosnippet>7228</a>    <span class="kw">where
-<a href=#7229 id=7229 data-nosnippet>7229</a>        </span>T: TokenService,
-<a href=#7230 id=7230 data-nosnippet>7230</a>        B: Body + std::marker::Send + <span class="lifetime">'static</span>,
-<a href=#7231 id=7231 data-nosnippet>7231</a>        B::Error: Into&lt;StdError&gt; + std::marker::Send + <span class="lifetime">'static</span>,
-<a href=#7232 id=7232 data-nosnippet>7232</a>    {
-<a href=#7233 id=7233 data-nosnippet>7233</a>        <span class="kw">type </span>Response = http::Response&lt;tonic::body::Body&gt;;
-<a href=#7234 id=7234 data-nosnippet>7234</a>        <span class="kw">type </span>Error = std::convert::Infallible;
-<a href=#7235 id=7235 data-nosnippet>7235</a>        <span class="kw">type </span>Future = BoxFuture&lt;<span class="self">Self</span>::Response, <span class="self">Self</span>::Error&gt;;
-<a href=#7236 id=7236 data-nosnippet>7236</a>        <span class="kw">fn </span>poll_ready(
-<a href=#7237 id=7237 data-nosnippet>7237</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#7238 id=7238 data-nosnippet>7238</a>            _cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;,
-<a href=#7239 id=7239 data-nosnippet>7239</a>        ) -&gt; Poll&lt;std::result::Result&lt;(), <span class="self">Self</span>::Error&gt;&gt; {
-<a href=#7240 id=7240 data-nosnippet>7240</a>            Poll::Ready(<span class="prelude-val">Ok</span>(()))
-<a href=#7241 id=7241 data-nosnippet>7241</a>        }
-<a href=#7242 id=7242 data-nosnippet>7242</a>        <span class="kw">fn </span>call(<span class="kw-2">&amp;mut </span><span class="self">self</span>, req: http::Request&lt;B&gt;) -&gt; <span class="self">Self</span>::Future {
-<a href=#7243 id=7243 data-nosnippet>7243</a>            <span class="kw">match </span>req.uri().path() {
-<a href=#7244 id=7244 data-nosnippet>7244</a>                <span class="string">"/espresso.api.v2.TokenService/GetTotalMintedSupply" </span>=&gt; {
-<a href=#7245 id=7245 data-nosnippet>7245</a>                    <span class="attr">#[allow(non_camel_case_types)]
-<a href=#7246 id=7246 data-nosnippet>7246</a>                    </span><span class="kw">struct </span>GetTotalMintedSupplySvc&lt;T: TokenService&gt;(<span class="kw">pub </span>Arc&lt;T&gt;);
-<a href=#7247 id=7247 data-nosnippet>7247</a>                    <span class="kw">impl</span>&lt;
-<a href=#7248 id=7248 data-nosnippet>7248</a>                        T: TokenService,
-<a href=#7249 id=7249 data-nosnippet>7249</a>                    &gt; tonic::server::UnaryService&lt;<span class="kw">super</span>::GetTotalMintedSupplyRequest&gt;
-<a href=#7250 id=7250 data-nosnippet>7250</a>                    <span class="kw">for </span>GetTotalMintedSupplySvc&lt;T&gt; {
-<a href=#7251 id=7251 data-nosnippet>7251</a>                        <span class="kw">type </span>Response = <span class="kw">super</span>::TotalMintedSupplyResponse;
-<a href=#7252 id=7252 data-nosnippet>7252</a>                        <span class="kw">type </span>Future = BoxFuture&lt;
-<a href=#7253 id=7253 data-nosnippet>7253</a>                            tonic::Response&lt;<span class="self">Self</span>::Response&gt;,
-<a href=#7254 id=7254 data-nosnippet>7254</a>                            tonic::Status,
-<a href=#7255 id=7255 data-nosnippet>7255</a>                        &gt;;
-<a href=#7256 id=7256 data-nosnippet>7256</a>                        <span class="kw">fn </span>call(
-<a href=#7257 id=7257 data-nosnippet>7257</a>                            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#7258 id=7258 data-nosnippet>7258</a>                            request: tonic::Request&lt;<span class="kw">super</span>::GetTotalMintedSupplyRequest&gt;,
-<a href=#7259 id=7259 data-nosnippet>7259</a>                        ) -&gt; <span class="self">Self</span>::Future {
-<a href=#7260 id=7260 data-nosnippet>7260</a>                            <span class="kw">let </span>inner = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>);
-<a href=#7261 id=7261 data-nosnippet>7261</a>                            <span class="kw">let </span>fut = <span class="kw">async move </span>{
-<a href=#7262 id=7262 data-nosnippet>7262</a>                                &lt;T <span class="kw">as </span>TokenService&gt;::get_total_minted_supply(
-<a href=#7263 id=7263 data-nosnippet>7263</a>                                        <span class="kw-2">&amp;</span>inner,
-<a href=#7264 id=7264 data-nosnippet>7264</a>                                        request,
-<a href=#7265 id=7265 data-nosnippet>7265</a>                                    )
-<a href=#7266 id=7266 data-nosnippet>7266</a>                                    .<span class="kw">await
-<a href=#7267 id=7267 data-nosnippet>7267</a>                            </span>};
-<a href=#7268 id=7268 data-nosnippet>7268</a>                            Box::pin(fut)
-<a href=#7269 id=7269 data-nosnippet>7269</a>                        }
-<a href=#7270 id=7270 data-nosnippet>7270</a>                    }
-<a href=#7271 id=7271 data-nosnippet>7271</a>                    <span class="kw">let </span>accept_compression_encodings = <span class="self">self</span>.accept_compression_encodings;
-<a href=#7272 id=7272 data-nosnippet>7272</a>                    <span class="kw">let </span>send_compression_encodings = <span class="self">self</span>.send_compression_encodings;
-<a href=#7273 id=7273 data-nosnippet>7273</a>                    <span class="kw">let </span>max_decoding_message_size = <span class="self">self</span>.max_decoding_message_size;
-<a href=#7274 id=7274 data-nosnippet>7274</a>                    <span class="kw">let </span>max_encoding_message_size = <span class="self">self</span>.max_encoding_message_size;
-<a href=#7275 id=7275 data-nosnippet>7275</a>                    <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
-<a href=#7276 id=7276 data-nosnippet>7276</a>                    <span class="kw">let </span>fut = <span class="kw">async move </span>{
-<a href=#7277 id=7277 data-nosnippet>7277</a>                        <span class="kw">let </span>method = GetTotalMintedSupplySvc(inner);
-<a href=#7278 id=7278 data-nosnippet>7278</a>                        <span class="kw">let </span>codec = tonic_prost::ProstCodec::default();
-<a href=#7279 id=7279 data-nosnippet>7279</a>                        <span class="kw">let </span><span class="kw-2">mut </span>grpc = tonic::server::Grpc::new(codec)
-<a href=#7280 id=7280 data-nosnippet>7280</a>                            .apply_compression_config(
-<a href=#7281 id=7281 data-nosnippet>7281</a>                                accept_compression_encodings,
-<a href=#7282 id=7282 data-nosnippet>7282</a>                                send_compression_encodings,
-<a href=#7283 id=7283 data-nosnippet>7283</a>                            )
-<a href=#7284 id=7284 data-nosnippet>7284</a>                            .apply_max_message_size_config(
-<a href=#7285 id=7285 data-nosnippet>7285</a>                                max_decoding_message_size,
-<a href=#7286 id=7286 data-nosnippet>7286</a>                                max_encoding_message_size,
-<a href=#7287 id=7287 data-nosnippet>7287</a>                            );
-<a href=#7288 id=7288 data-nosnippet>7288</a>                        <span class="kw">let </span>res = grpc.unary(method, req).<span class="kw">await</span>;
-<a href=#7289 id=7289 data-nosnippet>7289</a>                        <span class="prelude-val">Ok</span>(res)
-<a href=#7290 id=7290 data-nosnippet>7290</a>                    };
-<a href=#7291 id=7291 data-nosnippet>7291</a>                    Box::pin(fut)
-<a href=#7292 id=7292 data-nosnippet>7292</a>                }
-<a href=#7293 id=7293 data-nosnippet>7293</a>                <span class="string">"/espresso.api.v2.TokenService/GetCirculatingSupply" </span>=&gt; {
-<a href=#7294 id=7294 data-nosnippet>7294</a>                    <span class="attr">#[allow(non_camel_case_types)]
-<a href=#7295 id=7295 data-nosnippet>7295</a>                    </span><span class="kw">struct </span>GetCirculatingSupplySvc&lt;T: TokenService&gt;(<span class="kw">pub </span>Arc&lt;T&gt;);
-<a href=#7296 id=7296 data-nosnippet>7296</a>                    <span class="kw">impl</span>&lt;
-<a href=#7297 id=7297 data-nosnippet>7297</a>                        T: TokenService,
-<a href=#7298 id=7298 data-nosnippet>7298</a>                    &gt; tonic::server::UnaryService&lt;<span class="kw">super</span>::GetCirculatingSupplyRequest&gt;
-<a href=#7299 id=7299 data-nosnippet>7299</a>                    <span class="kw">for </span>GetCirculatingSupplySvc&lt;T&gt; {
-<a href=#7300 id=7300 data-nosnippet>7300</a>                        <span class="kw">type </span>Response = <span class="kw">super</span>::CirculatingSupplyResponse;
-<a href=#7301 id=7301 data-nosnippet>7301</a>                        <span class="kw">type </span>Future = BoxFuture&lt;
-<a href=#7302 id=7302 data-nosnippet>7302</a>                            tonic::Response&lt;<span class="self">Self</span>::Response&gt;,
-<a href=#7303 id=7303 data-nosnippet>7303</a>                            tonic::Status,
-<a href=#7304 id=7304 data-nosnippet>7304</a>                        &gt;;
-<a href=#7305 id=7305 data-nosnippet>7305</a>                        <span class="kw">fn </span>call(
-<a href=#7306 id=7306 data-nosnippet>7306</a>                            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#7307 id=7307 data-nosnippet>7307</a>                            request: tonic::Request&lt;<span class="kw">super</span>::GetCirculatingSupplyRequest&gt;,
-<a href=#7308 id=7308 data-nosnippet>7308</a>                        ) -&gt; <span class="self">Self</span>::Future {
-<a href=#7309 id=7309 data-nosnippet>7309</a>                            <span class="kw">let </span>inner = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>);
-<a href=#7310 id=7310 data-nosnippet>7310</a>                            <span class="kw">let </span>fut = <span class="kw">async move </span>{
-<a href=#7311 id=7311 data-nosnippet>7311</a>                                &lt;T <span class="kw">as </span>TokenService&gt;::get_circulating_supply(<span class="kw-2">&amp;</span>inner, request)
-<a href=#7312 id=7312 data-nosnippet>7312</a>                                    .<span class="kw">await
-<a href=#7313 id=7313 data-nosnippet>7313</a>                            </span>};
-<a href=#7314 id=7314 data-nosnippet>7314</a>                            Box::pin(fut)
-<a href=#7315 id=7315 data-nosnippet>7315</a>                        }
-<a href=#7316 id=7316 data-nosnippet>7316</a>                    }
-<a href=#7317 id=7317 data-nosnippet>7317</a>                    <span class="kw">let </span>accept_compression_encodings = <span class="self">self</span>.accept_compression_encodings;
-<a href=#7318 id=7318 data-nosnippet>7318</a>                    <span class="kw">let </span>send_compression_encodings = <span class="self">self</span>.send_compression_encodings;
-<a href=#7319 id=7319 data-nosnippet>7319</a>                    <span class="kw">let </span>max_decoding_message_size = <span class="self">self</span>.max_decoding_message_size;
-<a href=#7320 id=7320 data-nosnippet>7320</a>                    <span class="kw">let </span>max_encoding_message_size = <span class="self">self</span>.max_encoding_message_size;
-<a href=#7321 id=7321 data-nosnippet>7321</a>                    <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
-<a href=#7322 id=7322 data-nosnippet>7322</a>                    <span class="kw">let </span>fut = <span class="kw">async move </span>{
-<a href=#7323 id=7323 data-nosnippet>7323</a>                        <span class="kw">let </span>method = GetCirculatingSupplySvc(inner);
-<a href=#7324 id=7324 data-nosnippet>7324</a>                        <span class="kw">let </span>codec = tonic_prost::ProstCodec::default();
-<a href=#7325 id=7325 data-nosnippet>7325</a>                        <span class="kw">let </span><span class="kw-2">mut </span>grpc = tonic::server::Grpc::new(codec)
-<a href=#7326 id=7326 data-nosnippet>7326</a>                            .apply_compression_config(
-<a href=#7327 id=7327 data-nosnippet>7327</a>                                accept_compression_encodings,
-<a href=#7328 id=7328 data-nosnippet>7328</a>                                send_compression_encodings,
-<a href=#7329 id=7329 data-nosnippet>7329</a>                            )
-<a href=#7330 id=7330 data-nosnippet>7330</a>                            .apply_max_message_size_config(
-<a href=#7331 id=7331 data-nosnippet>7331</a>                                max_decoding_message_size,
-<a href=#7332 id=7332 data-nosnippet>7332</a>                                max_encoding_message_size,
-<a href=#7333 id=7333 data-nosnippet>7333</a>                            );
-<a href=#7334 id=7334 data-nosnippet>7334</a>                        <span class="kw">let </span>res = grpc.unary(method, req).<span class="kw">await</span>;
-<a href=#7335 id=7335 data-nosnippet>7335</a>                        <span class="prelude-val">Ok</span>(res)
-<a href=#7336 id=7336 data-nosnippet>7336</a>                    };
-<a href=#7337 id=7337 data-nosnippet>7337</a>                    Box::pin(fut)
-<a href=#7338 id=7338 data-nosnippet>7338</a>                }
-<a href=#7339 id=7339 data-nosnippet>7339</a>                <span class="string">"/espresso.api.v2.TokenService/GetCirculatingSupplyEthereum" </span>=&gt; {
-<a href=#7340 id=7340 data-nosnippet>7340</a>                    <span class="attr">#[allow(non_camel_case_types)]
-<a href=#7341 id=7341 data-nosnippet>7341</a>                    </span><span class="kw">struct </span>GetCirculatingSupplyEthereumSvc&lt;T: TokenService&gt;(<span class="kw">pub </span>Arc&lt;T&gt;);
-<a href=#7342 id=7342 data-nosnippet>7342</a>                    <span class="kw">impl</span>&lt;
-<a href=#7343 id=7343 data-nosnippet>7343</a>                        T: TokenService,
-<a href=#7344 id=7344 data-nosnippet>7344</a>                    &gt; tonic::server::UnaryService&lt;
-<a href=#7345 id=7345 data-nosnippet>7345</a>                        <span class="kw">super</span>::GetCirculatingSupplyEthereumRequest,
-<a href=#7346 id=7346 data-nosnippet>7346</a>                    &gt; <span class="kw">for </span>GetCirculatingSupplyEthereumSvc&lt;T&gt; {
-<a href=#7347 id=7347 data-nosnippet>7347</a>                        <span class="kw">type </span>Response = <span class="kw">super</span>::CirculatingSupplyEthereumResponse;
-<a href=#7348 id=7348 data-nosnippet>7348</a>                        <span class="kw">type </span>Future = BoxFuture&lt;
-<a href=#7349 id=7349 data-nosnippet>7349</a>                            tonic::Response&lt;<span class="self">Self</span>::Response&gt;,
-<a href=#7350 id=7350 data-nosnippet>7350</a>                            tonic::Status,
-<a href=#7351 id=7351 data-nosnippet>7351</a>                        &gt;;
-<a href=#7352 id=7352 data-nosnippet>7352</a>                        <span class="kw">fn </span>call(
-<a href=#7353 id=7353 data-nosnippet>7353</a>                            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#7354 id=7354 data-nosnippet>7354</a>                            request: tonic::Request&lt;
-<a href=#7355 id=7355 data-nosnippet>7355</a>                                <span class="kw">super</span>::GetCirculatingSupplyEthereumRequest,
-<a href=#7356 id=7356 data-nosnippet>7356</a>                            &gt;,
-<a href=#7357 id=7357 data-nosnippet>7357</a>                        ) -&gt; <span class="self">Self</span>::Future {
-<a href=#7358 id=7358 data-nosnippet>7358</a>                            <span class="kw">let </span>inner = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>);
-<a href=#7359 id=7359 data-nosnippet>7359</a>                            <span class="kw">let </span>fut = <span class="kw">async move </span>{
-<a href=#7360 id=7360 data-nosnippet>7360</a>                                &lt;T <span class="kw">as </span>TokenService&gt;::get_circulating_supply_ethereum(
-<a href=#7361 id=7361 data-nosnippet>7361</a>                                        <span class="kw-2">&amp;</span>inner,
-<a href=#7362 id=7362 data-nosnippet>7362</a>                                        request,
-<a href=#7363 id=7363 data-nosnippet>7363</a>                                    )
-<a href=#7364 id=7364 data-nosnippet>7364</a>                                    .<span class="kw">await
-<a href=#7365 id=7365 data-nosnippet>7365</a>                            </span>};
-<a href=#7366 id=7366 data-nosnippet>7366</a>                            Box::pin(fut)
-<a href=#7367 id=7367 data-nosnippet>7367</a>                        }
-<a href=#7368 id=7368 data-nosnippet>7368</a>                    }
-<a href=#7369 id=7369 data-nosnippet>7369</a>                    <span class="kw">let </span>accept_compression_encodings = <span class="self">self</span>.accept_compression_encodings;
-<a href=#7370 id=7370 data-nosnippet>7370</a>                    <span class="kw">let </span>send_compression_encodings = <span class="self">self</span>.send_compression_encodings;
-<a href=#7371 id=7371 data-nosnippet>7371</a>                    <span class="kw">let </span>max_decoding_message_size = <span class="self">self</span>.max_decoding_message_size;
-<a href=#7372 id=7372 data-nosnippet>7372</a>                    <span class="kw">let </span>max_encoding_message_size = <span class="self">self</span>.max_encoding_message_size;
-<a href=#7373 id=7373 data-nosnippet>7373</a>                    <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
-<a href=#7374 id=7374 data-nosnippet>7374</a>                    <span class="kw">let </span>fut = <span class="kw">async move </span>{
-<a href=#7375 id=7375 data-nosnippet>7375</a>                        <span class="kw">let </span>method = GetCirculatingSupplyEthereumSvc(inner);
-<a href=#7376 id=7376 data-nosnippet>7376</a>                        <span class="kw">let </span>codec = tonic_prost::ProstCodec::default();
-<a href=#7377 id=7377 data-nosnippet>7377</a>                        <span class="kw">let </span><span class="kw-2">mut </span>grpc = tonic::server::Grpc::new(codec)
-<a href=#7378 id=7378 data-nosnippet>7378</a>                            .apply_compression_config(
-<a href=#7379 id=7379 data-nosnippet>7379</a>                                accept_compression_encodings,
-<a href=#7380 id=7380 data-nosnippet>7380</a>                                send_compression_encodings,
-<a href=#7381 id=7381 data-nosnippet>7381</a>                            )
-<a href=#7382 id=7382 data-nosnippet>7382</a>                            .apply_max_message_size_config(
-<a href=#7383 id=7383 data-nosnippet>7383</a>                                max_decoding_message_size,
-<a href=#7384 id=7384 data-nosnippet>7384</a>                                max_encoding_message_size,
-<a href=#7385 id=7385 data-nosnippet>7385</a>                            );
-<a href=#7386 id=7386 data-nosnippet>7386</a>                        <span class="kw">let </span>res = grpc.unary(method, req).<span class="kw">await</span>;
-<a href=#7387 id=7387 data-nosnippet>7387</a>                        <span class="prelude-val">Ok</span>(res)
-<a href=#7388 id=7388 data-nosnippet>7388</a>                    };
-<a href=#7389 id=7389 data-nosnippet>7389</a>                    Box::pin(fut)
-<a href=#7390 id=7390 data-nosnippet>7390</a>                }
-<a href=#7391 id=7391 data-nosnippet>7391</a>                <span class="string">"/espresso.api.v2.TokenService/GetTotalIssuedSupply" </span>=&gt; {
-<a href=#7392 id=7392 data-nosnippet>7392</a>                    <span class="attr">#[allow(non_camel_case_types)]
-<a href=#7393 id=7393 data-nosnippet>7393</a>                    </span><span class="kw">struct </span>GetTotalIssuedSupplySvc&lt;T: TokenService&gt;(<span class="kw">pub </span>Arc&lt;T&gt;);
-<a href=#7394 id=7394 data-nosnippet>7394</a>                    <span class="kw">impl</span>&lt;
-<a href=#7395 id=7395 data-nosnippet>7395</a>                        T: TokenService,
-<a href=#7396 id=7396 data-nosnippet>7396</a>                    &gt; tonic::server::UnaryService&lt;<span class="kw">super</span>::GetTotalIssuedSupplyRequest&gt;
-<a href=#7397 id=7397 data-nosnippet>7397</a>                    <span class="kw">for </span>GetTotalIssuedSupplySvc&lt;T&gt; {
-<a href=#7398 id=7398 data-nosnippet>7398</a>                        <span class="kw">type </span>Response = <span class="kw">super</span>::TotalIssuedSupplyResponse;
-<a href=#7399 id=7399 data-nosnippet>7399</a>                        <span class="kw">type </span>Future = BoxFuture&lt;
-<a href=#7400 id=7400 data-nosnippet>7400</a>                            tonic::Response&lt;<span class="self">Self</span>::Response&gt;,
-<a href=#7401 id=7401 data-nosnippet>7401</a>                            tonic::Status,
-<a href=#7402 id=7402 data-nosnippet>7402</a>                        &gt;;
-<a href=#7403 id=7403 data-nosnippet>7403</a>                        <span class="kw">fn </span>call(
-<a href=#7404 id=7404 data-nosnippet>7404</a>                            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#7405 id=7405 data-nosnippet>7405</a>                            request: tonic::Request&lt;<span class="kw">super</span>::GetTotalIssuedSupplyRequest&gt;,
-<a href=#7406 id=7406 data-nosnippet>7406</a>                        ) -&gt; <span class="self">Self</span>::Future {
-<a href=#7407 id=7407 data-nosnippet>7407</a>                            <span class="kw">let </span>inner = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>);
-<a href=#7408 id=7408 data-nosnippet>7408</a>                            <span class="kw">let </span>fut = <span class="kw">async move </span>{
-<a href=#7409 id=7409 data-nosnippet>7409</a>                                &lt;T <span class="kw">as </span>TokenService&gt;::get_total_issued_supply(
-<a href=#7410 id=7410 data-nosnippet>7410</a>                                        <span class="kw-2">&amp;</span>inner,
-<a href=#7411 id=7411 data-nosnippet>7411</a>                                        request,
-<a href=#7412 id=7412 data-nosnippet>7412</a>                                    )
-<a href=#7413 id=7413 data-nosnippet>7413</a>                                    .<span class="kw">await
-<a href=#7414 id=7414 data-nosnippet>7414</a>                            </span>};
-<a href=#7415 id=7415 data-nosnippet>7415</a>                            Box::pin(fut)
-<a href=#7416 id=7416 data-nosnippet>7416</a>                        }
-<a href=#7417 id=7417 data-nosnippet>7417</a>                    }
-<a href=#7418 id=7418 data-nosnippet>7418</a>                    <span class="kw">let </span>accept_compression_encodings = <span class="self">self</span>.accept_compression_encodings;
-<a href=#7419 id=7419 data-nosnippet>7419</a>                    <span class="kw">let </span>send_compression_encodings = <span class="self">self</span>.send_compression_encodings;
-<a href=#7420 id=7420 data-nosnippet>7420</a>                    <span class="kw">let </span>max_decoding_message_size = <span class="self">self</span>.max_decoding_message_size;
-<a href=#7421 id=7421 data-nosnippet>7421</a>                    <span class="kw">let </span>max_encoding_message_size = <span class="self">self</span>.max_encoding_message_size;
-<a href=#7422 id=7422 data-nosnippet>7422</a>                    <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
-<a href=#7423 id=7423 data-nosnippet>7423</a>                    <span class="kw">let </span>fut = <span class="kw">async move </span>{
-<a href=#7424 id=7424 data-nosnippet>7424</a>                        <span class="kw">let </span>method = GetTotalIssuedSupplySvc(inner);
-<a href=#7425 id=7425 data-nosnippet>7425</a>                        <span class="kw">let </span>codec = tonic_prost::ProstCodec::default();
-<a href=#7426 id=7426 data-nosnippet>7426</a>                        <span class="kw">let </span><span class="kw-2">mut </span>grpc = tonic::server::Grpc::new(codec)
-<a href=#7427 id=7427 data-nosnippet>7427</a>                            .apply_compression_config(
-<a href=#7428 id=7428 data-nosnippet>7428</a>                                accept_compression_encodings,
-<a href=#7429 id=7429 data-nosnippet>7429</a>                                send_compression_encodings,
-<a href=#7430 id=7430 data-nosnippet>7430</a>                            )
-<a href=#7431 id=7431 data-nosnippet>7431</a>                            .apply_max_message_size_config(
-<a href=#7432 id=7432 data-nosnippet>7432</a>                                max_decoding_message_size,
-<a href=#7433 id=7433 data-nosnippet>7433</a>                                max_encoding_message_size,
-<a href=#7434 id=7434 data-nosnippet>7434</a>                            );
-<a href=#7435 id=7435 data-nosnippet>7435</a>                        <span class="kw">let </span>res = grpc.unary(method, req).<span class="kw">await</span>;
-<a href=#7436 id=7436 data-nosnippet>7436</a>                        <span class="prelude-val">Ok</span>(res)
-<a href=#7437 id=7437 data-nosnippet>7437</a>                    };
-<a href=#7438 id=7438 data-nosnippet>7438</a>                    Box::pin(fut)
-<a href=#7439 id=7439 data-nosnippet>7439</a>                }
-<a href=#7440 id=7440 data-nosnippet>7440</a>                <span class="string">"/espresso.api.v2.TokenService/GetTotalRewardDistributed" </span>=&gt; {
-<a href=#7441 id=7441 data-nosnippet>7441</a>                    <span class="attr">#[allow(non_camel_case_types)]
-<a href=#7442 id=7442 data-nosnippet>7442</a>                    </span><span class="kw">struct </span>GetTotalRewardDistributedSvc&lt;T: TokenService&gt;(<span class="kw">pub </span>Arc&lt;T&gt;);
-<a href=#7443 id=7443 data-nosnippet>7443</a>                    <span class="kw">impl</span>&lt;
-<a href=#7444 id=7444 data-nosnippet>7444</a>                        T: TokenService,
-<a href=#7445 id=7445 data-nosnippet>7445</a>                    &gt; tonic::server::UnaryService&lt;
-<a href=#7446 id=7446 data-nosnippet>7446</a>                        <span class="kw">super</span>::GetTotalRewardDistributedRequest,
-<a href=#7447 id=7447 data-nosnippet>7447</a>                    &gt; <span class="kw">for </span>GetTotalRewardDistributedSvc&lt;T&gt; {
-<a href=#7448 id=7448 data-nosnippet>7448</a>                        <span class="kw">type </span>Response = <span class="kw">super</span>::TotalRewardDistributedResponse;
-<a href=#7449 id=7449 data-nosnippet>7449</a>                        <span class="kw">type </span>Future = BoxFuture&lt;
-<a href=#7450 id=7450 data-nosnippet>7450</a>                            tonic::Response&lt;<span class="self">Self</span>::Response&gt;,
-<a href=#7451 id=7451 data-nosnippet>7451</a>                            tonic::Status,
-<a href=#7452 id=7452 data-nosnippet>7452</a>                        &gt;;
-<a href=#7453 id=7453 data-nosnippet>7453</a>                        <span class="kw">fn </span>call(
-<a href=#7454 id=7454 data-nosnippet>7454</a>                            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#7455 id=7455 data-nosnippet>7455</a>                            request: tonic::Request&lt;
-<a href=#7456 id=7456 data-nosnippet>7456</a>                                <span class="kw">super</span>::GetTotalRewardDistributedRequest,
-<a href=#7457 id=7457 data-nosnippet>7457</a>                            &gt;,
+<a href=#7180 id=7180 data-nosnippet>7180</a>        <span class="kw">fn </span>call(<span class="kw-2">&amp;mut </span><span class="self">self</span>, req: http::Request&lt;B&gt;) -&gt; <span class="self">Self</span>::Future {
+<a href=#7181 id=7181 data-nosnippet>7181</a>            <span class="kw">match </span>req.uri().path() {
+<a href=#7182 id=7182 data-nosnippet>7182</a>                <span class="string">"/espresso.api.v2.SubmitService/SubmitTransaction" </span>=&gt; {
+<a href=#7183 id=7183 data-nosnippet>7183</a>                    <span class="attr">#[allow(non_camel_case_types)]
+<a href=#7184 id=7184 data-nosnippet>7184</a>                    </span><span class="kw">struct </span>SubmitTransactionSvc&lt;T: SubmitService&gt;(<span class="kw">pub </span>Arc&lt;T&gt;);
+<a href=#7185 id=7185 data-nosnippet>7185</a>                    <span class="kw">impl</span>&lt;
+<a href=#7186 id=7186 data-nosnippet>7186</a>                        T: SubmitService,
+<a href=#7187 id=7187 data-nosnippet>7187</a>                    &gt; tonic::server::UnaryService&lt;<span class="kw">super</span>::SubmitTransactionRequest&gt;
+<a href=#7188 id=7188 data-nosnippet>7188</a>                    <span class="kw">for </span>SubmitTransactionSvc&lt;T&gt; {
+<a href=#7189 id=7189 data-nosnippet>7189</a>                        <span class="kw">type </span>Response = <span class="kw">super</span>::SubmitTransactionResponse;
+<a href=#7190 id=7190 data-nosnippet>7190</a>                        <span class="kw">type </span>Future = BoxFuture&lt;
+<a href=#7191 id=7191 data-nosnippet>7191</a>                            tonic::Response&lt;<span class="self">Self</span>::Response&gt;,
+<a href=#7192 id=7192 data-nosnippet>7192</a>                            tonic::Status,
+<a href=#7193 id=7193 data-nosnippet>7193</a>                        &gt;;
+<a href=#7194 id=7194 data-nosnippet>7194</a>                        <span class="kw">fn </span>call(
+<a href=#7195 id=7195 data-nosnippet>7195</a>                            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#7196 id=7196 data-nosnippet>7196</a>                            request: tonic::Request&lt;<span class="kw">super</span>::SubmitTransactionRequest&gt;,
+<a href=#7197 id=7197 data-nosnippet>7197</a>                        ) -&gt; <span class="self">Self</span>::Future {
+<a href=#7198 id=7198 data-nosnippet>7198</a>                            <span class="kw">let </span>inner = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>);
+<a href=#7199 id=7199 data-nosnippet>7199</a>                            <span class="kw">let </span>fut = <span class="kw">async move </span>{
+<a href=#7200 id=7200 data-nosnippet>7200</a>                                &lt;T <span class="kw">as </span>SubmitService&gt;::submit_transaction(<span class="kw-2">&amp;</span>inner, request)
+<a href=#7201 id=7201 data-nosnippet>7201</a>                                    .<span class="kw">await
+<a href=#7202 id=7202 data-nosnippet>7202</a>                            </span>};
+<a href=#7203 id=7203 data-nosnippet>7203</a>                            Box::pin(fut)
+<a href=#7204 id=7204 data-nosnippet>7204</a>                        }
+<a href=#7205 id=7205 data-nosnippet>7205</a>                    }
+<a href=#7206 id=7206 data-nosnippet>7206</a>                    <span class="kw">let </span>accept_compression_encodings = <span class="self">self</span>.accept_compression_encodings;
+<a href=#7207 id=7207 data-nosnippet>7207</a>                    <span class="kw">let </span>send_compression_encodings = <span class="self">self</span>.send_compression_encodings;
+<a href=#7208 id=7208 data-nosnippet>7208</a>                    <span class="kw">let </span>max_decoding_message_size = <span class="self">self</span>.max_decoding_message_size;
+<a href=#7209 id=7209 data-nosnippet>7209</a>                    <span class="kw">let </span>max_encoding_message_size = <span class="self">self</span>.max_encoding_message_size;
+<a href=#7210 id=7210 data-nosnippet>7210</a>                    <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
+<a href=#7211 id=7211 data-nosnippet>7211</a>                    <span class="kw">let </span>fut = <span class="kw">async move </span>{
+<a href=#7212 id=7212 data-nosnippet>7212</a>                        <span class="kw">let </span>method = SubmitTransactionSvc(inner);
+<a href=#7213 id=7213 data-nosnippet>7213</a>                        <span class="kw">let </span>codec = tonic_prost::ProstCodec::default();
+<a href=#7214 id=7214 data-nosnippet>7214</a>                        <span class="kw">let </span><span class="kw-2">mut </span>grpc = tonic::server::Grpc::new(codec)
+<a href=#7215 id=7215 data-nosnippet>7215</a>                            .apply_compression_config(
+<a href=#7216 id=7216 data-nosnippet>7216</a>                                accept_compression_encodings,
+<a href=#7217 id=7217 data-nosnippet>7217</a>                                send_compression_encodings,
+<a href=#7218 id=7218 data-nosnippet>7218</a>                            )
+<a href=#7219 id=7219 data-nosnippet>7219</a>                            .apply_max_message_size_config(
+<a href=#7220 id=7220 data-nosnippet>7220</a>                                max_decoding_message_size,
+<a href=#7221 id=7221 data-nosnippet>7221</a>                                max_encoding_message_size,
+<a href=#7222 id=7222 data-nosnippet>7222</a>                            );
+<a href=#7223 id=7223 data-nosnippet>7223</a>                        <span class="kw">let </span>res = grpc.unary(method, req).<span class="kw">await</span>;
+<a href=#7224 id=7224 data-nosnippet>7224</a>                        <span class="prelude-val">Ok</span>(res)
+<a href=#7225 id=7225 data-nosnippet>7225</a>                    };
+<a href=#7226 id=7226 data-nosnippet>7226</a>                    Box::pin(fut)
+<a href=#7227 id=7227 data-nosnippet>7227</a>                }
+<a href=#7228 id=7228 data-nosnippet>7228</a>                <span class="kw">_ </span>=&gt; {
+<a href=#7229 id=7229 data-nosnippet>7229</a>                    Box::pin(<span class="kw">async move </span>{
+<a href=#7230 id=7230 data-nosnippet>7230</a>                        <span class="kw">let </span><span class="kw-2">mut </span>response = http::Response::new(
+<a href=#7231 id=7231 data-nosnippet>7231</a>                            tonic::body::Body::default(),
+<a href=#7232 id=7232 data-nosnippet>7232</a>                        );
+<a href=#7233 id=7233 data-nosnippet>7233</a>                        <span class="kw">let </span>headers = response.headers_mut();
+<a href=#7234 id=7234 data-nosnippet>7234</a>                        headers
+<a href=#7235 id=7235 data-nosnippet>7235</a>                            .insert(
+<a href=#7236 id=7236 data-nosnippet>7236</a>                                tonic::Status::GRPC_STATUS,
+<a href=#7237 id=7237 data-nosnippet>7237</a>                                (tonic::Code::Unimplemented <span class="kw">as </span>i32).into(),
+<a href=#7238 id=7238 data-nosnippet>7238</a>                            );
+<a href=#7239 id=7239 data-nosnippet>7239</a>                        headers
+<a href=#7240 id=7240 data-nosnippet>7240</a>                            .insert(
+<a href=#7241 id=7241 data-nosnippet>7241</a>                                http::header::CONTENT_TYPE,
+<a href=#7242 id=7242 data-nosnippet>7242</a>                                tonic::metadata::GRPC_CONTENT_TYPE,
+<a href=#7243 id=7243 data-nosnippet>7243</a>                            );
+<a href=#7244 id=7244 data-nosnippet>7244</a>                        <span class="prelude-val">Ok</span>(response)
+<a href=#7245 id=7245 data-nosnippet>7245</a>                    })
+<a href=#7246 id=7246 data-nosnippet>7246</a>                }
+<a href=#7247 id=7247 data-nosnippet>7247</a>            }
+<a href=#7248 id=7248 data-nosnippet>7248</a>        }
+<a href=#7249 id=7249 data-nosnippet>7249</a>    }
+<a href=#7250 id=7250 data-nosnippet>7250</a>    <span class="kw">impl</span>&lt;T&gt; Clone <span class="kw">for </span>SubmitServiceServer&lt;T&gt; {
+<a href=#7251 id=7251 data-nosnippet>7251</a>        <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+<a href=#7252 id=7252 data-nosnippet>7252</a>            <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
+<a href=#7253 id=7253 data-nosnippet>7253</a>            <span class="self">Self </span>{
+<a href=#7254 id=7254 data-nosnippet>7254</a>                inner,
+<a href=#7255 id=7255 data-nosnippet>7255</a>                accept_compression_encodings: <span class="self">self</span>.accept_compression_encodings,
+<a href=#7256 id=7256 data-nosnippet>7256</a>                send_compression_encodings: <span class="self">self</span>.send_compression_encodings,
+<a href=#7257 id=7257 data-nosnippet>7257</a>                max_decoding_message_size: <span class="self">self</span>.max_decoding_message_size,
+<a href=#7258 id=7258 data-nosnippet>7258</a>                max_encoding_message_size: <span class="self">self</span>.max_encoding_message_size,
+<a href=#7259 id=7259 data-nosnippet>7259</a>            }
+<a href=#7260 id=7260 data-nosnippet>7260</a>        }
+<a href=#7261 id=7261 data-nosnippet>7261</a>    }
+<a href=#7262 id=7262 data-nosnippet>7262</a>    <span class="doccomment">/// Generated gRPC service name
+<a href=#7263 id=7263 data-nosnippet>7263</a>    </span><span class="kw">pub const </span>SERVICE_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"espresso.api.v2.SubmitService"</span>;
+<a href=#7264 id=7264 data-nosnippet>7264</a>    <span class="kw">impl</span>&lt;T&gt; tonic::server::NamedService <span class="kw">for </span>SubmitServiceServer&lt;T&gt; {
+<a href=#7265 id=7265 data-nosnippet>7265</a>        <span class="kw">const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = SERVICE_NAME;
+<a href=#7266 id=7266 data-nosnippet>7266</a>    }
+<a href=#7267 id=7267 data-nosnippet>7267</a>}
+<a href=#7268 id=7268 data-nosnippet>7268</a><span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7269 id=7269 data-nosnippet>7269</a></span><span class="kw">pub struct </span>GetTotalMintedSupplyRequest {}
+<a href=#7270 id=7270 data-nosnippet>7270</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7271 id=7271 data-nosnippet>7271</a></span><span class="kw">pub struct </span>TotalMintedSupplyResponse {
+<a href=#7272 id=7272 data-nosnippet>7272</a>    <span class="doccomment">/// Total supply of the ESP token minted on Ethereum, in ESP (decimal string);
+<a href=#7273 id=7273 data-nosnippet>7273</a>    /// excludes unclaimed rewards
+<a href=#7274 id=7274 data-nosnippet>7274</a>    </span><span class="attr">#[prost(string, tag = <span class="string">"1"</span>)]
+<a href=#7275 id=7275 data-nosnippet>7275</a>    </span><span class="kw">pub </span>amount: ::prost::alloc::string::String,
+<a href=#7276 id=7276 data-nosnippet>7276</a>}
+<a href=#7277 id=7277 data-nosnippet>7277</a><span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7278 id=7278 data-nosnippet>7278</a></span><span class="kw">pub struct </span>GetCirculatingSupplyRequest {}
+<a href=#7279 id=7279 data-nosnippet>7279</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7280 id=7280 data-nosnippet>7280</a></span><span class="kw">pub struct </span>CirculatingSupplyResponse {
+<a href=#7281 id=7281 data-nosnippet>7281</a>    <span class="doccomment">/// Circulating supply in ESP (decimal string): initial_supply + reward_distributed -
+<a href=#7282 id=7282 data-nosnippet>7282</a>    /// locked, following the mainnet unlock schedule
+<a href=#7283 id=7283 data-nosnippet>7283</a>    </span><span class="attr">#[prost(string, tag = <span class="string">"1"</span>)]
+<a href=#7284 id=7284 data-nosnippet>7284</a>    </span><span class="kw">pub </span>amount: ::prost::alloc::string::String,
+<a href=#7285 id=7285 data-nosnippet>7285</a>}
+<a href=#7286 id=7286 data-nosnippet>7286</a><span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7287 id=7287 data-nosnippet>7287</a></span><span class="kw">pub struct </span>GetCirculatingSupplyEthereumRequest {}
+<a href=#7288 id=7288 data-nosnippet>7288</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7289 id=7289 data-nosnippet>7289</a></span><span class="kw">pub struct </span>CirculatingSupplyEthereumResponse {
+<a href=#7290 id=7290 data-nosnippet>7290</a>    <span class="doccomment">/// Circulating supply of ESP tokens on Ethereum L1, in ESP (decimal string):
+<a href=#7291 id=7291 data-nosnippet>7291</a>    /// total_supply_l1 - locked
+<a href=#7292 id=7292 data-nosnippet>7292</a>    </span><span class="attr">#[prost(string, tag = <span class="string">"1"</span>)]
+<a href=#7293 id=7293 data-nosnippet>7293</a>    </span><span class="kw">pub </span>amount: ::prost::alloc::string::String,
+<a href=#7294 id=7294 data-nosnippet>7294</a>}
+<a href=#7295 id=7295 data-nosnippet>7295</a><span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7296 id=7296 data-nosnippet>7296</a></span><span class="kw">pub struct </span>GetTotalIssuedSupplyRequest {}
+<a href=#7297 id=7297 data-nosnippet>7297</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7298 id=7298 data-nosnippet>7298</a></span><span class="kw">pub struct </span>TotalIssuedSupplyResponse {
+<a href=#7299 id=7299 data-nosnippet>7299</a>    <span class="doccomment">/// Total issued supply in ESP (decimal string): initial_supply +
+<a href=#7300 id=7300 data-nosnippet>7300</a>    /// total_reward_distributed, including rewards not yet claimed on Ethereum
+<a href=#7301 id=7301 data-nosnippet>7301</a>    </span><span class="attr">#[prost(string, tag = <span class="string">"1"</span>)]
+<a href=#7302 id=7302 data-nosnippet>7302</a>    </span><span class="kw">pub </span>amount: ::prost::alloc::string::String,
+<a href=#7303 id=7303 data-nosnippet>7303</a>}
+<a href=#7304 id=7304 data-nosnippet>7304</a><span class="attr">#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7305 id=7305 data-nosnippet>7305</a></span><span class="kw">pub struct </span>GetTotalRewardDistributedRequest {}
+<a href=#7306 id=7306 data-nosnippet>7306</a><span class="attr">#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+<a href=#7307 id=7307 data-nosnippet>7307</a></span><span class="kw">pub struct </span>TotalRewardDistributedResponse {
+<a href=#7308 id=7308 data-nosnippet>7308</a>    <span class="doccomment">/// Total rewards distributed by consensus, in ESP (decimal string), including rewards
+<a href=#7309 id=7309 data-nosnippet>7309</a>    /// not yet claimed on Ethereum
+<a href=#7310 id=7310 data-nosnippet>7310</a>    </span><span class="attr">#[prost(string, tag = <span class="string">"1"</span>)]
+<a href=#7311 id=7311 data-nosnippet>7311</a>    </span><span class="kw">pub </span>amount: ::prost::alloc::string::String,
+<a href=#7312 id=7312 data-nosnippet>7312</a>}
+<a href=#7313 id=7313 data-nosnippet>7313</a><span class="doccomment">/// Generated server implementations.
+<a href=#7314 id=7314 data-nosnippet>7314</a></span><span class="kw">pub mod </span>token_service_server {
+<a href=#7315 id=7315 data-nosnippet>7315</a>    <span class="attr">#![allow(
+<a href=#7316 id=7316 data-nosnippet>7316</a>        unused_variables,
+<a href=#7317 id=7317 data-nosnippet>7317</a>        dead_code,
+<a href=#7318 id=7318 data-nosnippet>7318</a>        missing_docs,
+<a href=#7319 id=7319 data-nosnippet>7319</a>        clippy::wildcard_imports,
+<a href=#7320 id=7320 data-nosnippet>7320</a>        clippy::let_unit_value,
+<a href=#7321 id=7321 data-nosnippet>7321</a>    )]
+<a href=#7322 id=7322 data-nosnippet>7322</a>    </span><span class="kw">use </span>tonic::codegen::<span class="kw-2">*</span>;
+<a href=#7323 id=7323 data-nosnippet>7323</a>    <span class="doccomment">/// Generated trait containing gRPC methods that should be implemented for use with TokenServiceServer.
+<a href=#7324 id=7324 data-nosnippet>7324</a>    </span><span class="attr">#[async_trait]
+<a href=#7325 id=7325 data-nosnippet>7325</a>    </span><span class="kw">pub trait </span>TokenService: std::marker::Send + std::marker::Sync + <span class="lifetime">'static </span>{
+<a href=#7326 id=7326 data-nosnippet>7326</a>        <span class="doccomment">/// Get the total supply of the ESP token minted on Ethereum; excludes unclaimed rewards
+<a href=#7327 id=7327 data-nosnippet>7327</a>        </span><span class="kw">async fn </span>get_total_minted_supply(
+<a href=#7328 id=7328 data-nosnippet>7328</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#7329 id=7329 data-nosnippet>7329</a>            request: tonic::Request&lt;<span class="kw">super</span>::GetTotalMintedSupplyRequest&gt;,
+<a href=#7330 id=7330 data-nosnippet>7330</a>        ) -&gt; std::result::Result&lt;
+<a href=#7331 id=7331 data-nosnippet>7331</a>            tonic::Response&lt;<span class="kw">super</span>::TotalMintedSupplyResponse&gt;,
+<a href=#7332 id=7332 data-nosnippet>7332</a>            tonic::Status,
+<a href=#7333 id=7333 data-nosnippet>7333</a>        &gt;;
+<a href=#7334 id=7334 data-nosnippet>7334</a>        <span class="doccomment">/// Get the circulating supply, following the mainnet unlock schedule
+<a href=#7335 id=7335 data-nosnippet>7335</a>        </span><span class="kw">async fn </span>get_circulating_supply(
+<a href=#7336 id=7336 data-nosnippet>7336</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#7337 id=7337 data-nosnippet>7337</a>            request: tonic::Request&lt;<span class="kw">super</span>::GetCirculatingSupplyRequest&gt;,
+<a href=#7338 id=7338 data-nosnippet>7338</a>        ) -&gt; std::result::Result&lt;
+<a href=#7339 id=7339 data-nosnippet>7339</a>            tonic::Response&lt;<span class="kw">super</span>::CirculatingSupplyResponse&gt;,
+<a href=#7340 id=7340 data-nosnippet>7340</a>            tonic::Status,
+<a href=#7341 id=7341 data-nosnippet>7341</a>        &gt;;
+<a href=#7342 id=7342 data-nosnippet>7342</a>        <span class="doccomment">/// Get the circulating supply of ESP tokens on Ethereum L1
+<a href=#7343 id=7343 data-nosnippet>7343</a>        </span><span class="kw">async fn </span>get_circulating_supply_ethereum(
+<a href=#7344 id=7344 data-nosnippet>7344</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#7345 id=7345 data-nosnippet>7345</a>            request: tonic::Request&lt;<span class="kw">super</span>::GetCirculatingSupplyEthereumRequest&gt;,
+<a href=#7346 id=7346 data-nosnippet>7346</a>        ) -&gt; std::result::Result&lt;
+<a href=#7347 id=7347 data-nosnippet>7347</a>            tonic::Response&lt;<span class="kw">super</span>::CirculatingSupplyEthereumResponse&gt;,
+<a href=#7348 id=7348 data-nosnippet>7348</a>            tonic::Status,
+<a href=#7349 id=7349 data-nosnippet>7349</a>        &gt;;
+<a href=#7350 id=7350 data-nosnippet>7350</a>        <span class="doccomment">/// Get the total issued supply, including rewards not yet claimed on Ethereum
+<a href=#7351 id=7351 data-nosnippet>7351</a>        </span><span class="kw">async fn </span>get_total_issued_supply(
+<a href=#7352 id=7352 data-nosnippet>7352</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#7353 id=7353 data-nosnippet>7353</a>            request: tonic::Request&lt;<span class="kw">super</span>::GetTotalIssuedSupplyRequest&gt;,
+<a href=#7354 id=7354 data-nosnippet>7354</a>        ) -&gt; std::result::Result&lt;
+<a href=#7355 id=7355 data-nosnippet>7355</a>            tonic::Response&lt;<span class="kw">super</span>::TotalIssuedSupplyResponse&gt;,
+<a href=#7356 id=7356 data-nosnippet>7356</a>            tonic::Status,
+<a href=#7357 id=7357 data-nosnippet>7357</a>        &gt;;
+<a href=#7358 id=7358 data-nosnippet>7358</a>        <span class="doccomment">/// Get the total rewards distributed by consensus, including rewards not yet claimed on Ethereum
+<a href=#7359 id=7359 data-nosnippet>7359</a>        </span><span class="kw">async fn </span>get_total_reward_distributed(
+<a href=#7360 id=7360 data-nosnippet>7360</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#7361 id=7361 data-nosnippet>7361</a>            request: tonic::Request&lt;<span class="kw">super</span>::GetTotalRewardDistributedRequest&gt;,
+<a href=#7362 id=7362 data-nosnippet>7362</a>        ) -&gt; std::result::Result&lt;
+<a href=#7363 id=7363 data-nosnippet>7363</a>            tonic::Response&lt;<span class="kw">super</span>::TotalRewardDistributedResponse&gt;,
+<a href=#7364 id=7364 data-nosnippet>7364</a>            tonic::Status,
+<a href=#7365 id=7365 data-nosnippet>7365</a>        &gt;;
+<a href=#7366 id=7366 data-nosnippet>7366</a>    }
+<a href=#7367 id=7367 data-nosnippet>7367</a>    <span class="attr">#[derive(Debug)]
+<a href=#7368 id=7368 data-nosnippet>7368</a>    </span><span class="kw">pub struct </span>TokenServiceServer&lt;T&gt; {
+<a href=#7369 id=7369 data-nosnippet>7369</a>        inner: Arc&lt;T&gt;,
+<a href=#7370 id=7370 data-nosnippet>7370</a>        accept_compression_encodings: EnabledCompressionEncodings,
+<a href=#7371 id=7371 data-nosnippet>7371</a>        send_compression_encodings: EnabledCompressionEncodings,
+<a href=#7372 id=7372 data-nosnippet>7372</a>        max_decoding_message_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#7373 id=7373 data-nosnippet>7373</a>        max_encoding_message_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#7374 id=7374 data-nosnippet>7374</a>    }
+<a href=#7375 id=7375 data-nosnippet>7375</a>    <span class="kw">impl</span>&lt;T&gt; TokenServiceServer&lt;T&gt; {
+<a href=#7376 id=7376 data-nosnippet>7376</a>        <span class="kw">pub fn </span>new(inner: T) -&gt; <span class="self">Self </span>{
+<a href=#7377 id=7377 data-nosnippet>7377</a>            <span class="self">Self</span>::from_arc(Arc::new(inner))
+<a href=#7378 id=7378 data-nosnippet>7378</a>        }
+<a href=#7379 id=7379 data-nosnippet>7379</a>        <span class="kw">pub fn </span>from_arc(inner: Arc&lt;T&gt;) -&gt; <span class="self">Self </span>{
+<a href=#7380 id=7380 data-nosnippet>7380</a>            <span class="self">Self </span>{
+<a href=#7381 id=7381 data-nosnippet>7381</a>                inner,
+<a href=#7382 id=7382 data-nosnippet>7382</a>                accept_compression_encodings: Default::default(),
+<a href=#7383 id=7383 data-nosnippet>7383</a>                send_compression_encodings: Default::default(),
+<a href=#7384 id=7384 data-nosnippet>7384</a>                max_decoding_message_size: <span class="prelude-val">None</span>,
+<a href=#7385 id=7385 data-nosnippet>7385</a>                max_encoding_message_size: <span class="prelude-val">None</span>,
+<a href=#7386 id=7386 data-nosnippet>7386</a>            }
+<a href=#7387 id=7387 data-nosnippet>7387</a>        }
+<a href=#7388 id=7388 data-nosnippet>7388</a>        <span class="kw">pub fn </span>with_interceptor&lt;F&gt;(
+<a href=#7389 id=7389 data-nosnippet>7389</a>            inner: T,
+<a href=#7390 id=7390 data-nosnippet>7390</a>            interceptor: F,
+<a href=#7391 id=7391 data-nosnippet>7391</a>        ) -&gt; InterceptedService&lt;<span class="self">Self</span>, F&gt;
+<a href=#7392 id=7392 data-nosnippet>7392</a>        <span class="kw">where
+<a href=#7393 id=7393 data-nosnippet>7393</a>            </span>F: tonic::service::Interceptor,
+<a href=#7394 id=7394 data-nosnippet>7394</a>        {
+<a href=#7395 id=7395 data-nosnippet>7395</a>            InterceptedService::new(<span class="self">Self</span>::new(inner), interceptor)
+<a href=#7396 id=7396 data-nosnippet>7396</a>        }
+<a href=#7397 id=7397 data-nosnippet>7397</a>        <span class="doccomment">/// Enable decompressing requests with the given encoding.
+<a href=#7398 id=7398 data-nosnippet>7398</a>        </span><span class="attr">#[must_use]
+<a href=#7399 id=7399 data-nosnippet>7399</a>        </span><span class="kw">pub fn </span>accept_compressed(<span class="kw-2">mut </span><span class="self">self</span>, encoding: CompressionEncoding) -&gt; <span class="self">Self </span>{
+<a href=#7400 id=7400 data-nosnippet>7400</a>            <span class="self">self</span>.accept_compression_encodings.enable(encoding);
+<a href=#7401 id=7401 data-nosnippet>7401</a>            <span class="self">self
+<a href=#7402 id=7402 data-nosnippet>7402</a>        </span>}
+<a href=#7403 id=7403 data-nosnippet>7403</a>        <span class="doccomment">/// Compress responses with the given encoding, if the client supports it.
+<a href=#7404 id=7404 data-nosnippet>7404</a>        </span><span class="attr">#[must_use]
+<a href=#7405 id=7405 data-nosnippet>7405</a>        </span><span class="kw">pub fn </span>send_compressed(<span class="kw-2">mut </span><span class="self">self</span>, encoding: CompressionEncoding) -&gt; <span class="self">Self </span>{
+<a href=#7406 id=7406 data-nosnippet>7406</a>            <span class="self">self</span>.send_compression_encodings.enable(encoding);
+<a href=#7407 id=7407 data-nosnippet>7407</a>            <span class="self">self
+<a href=#7408 id=7408 data-nosnippet>7408</a>        </span>}
+<a href=#7409 id=7409 data-nosnippet>7409</a>        <span class="doccomment">/// Limits the maximum size of a decoded message.
+<a href=#7410 id=7410 data-nosnippet>7410</a>        ///
+<a href=#7411 id=7411 data-nosnippet>7411</a>        /// Default: `4MB`
+<a href=#7412 id=7412 data-nosnippet>7412</a>        </span><span class="attr">#[must_use]
+<a href=#7413 id=7413 data-nosnippet>7413</a>        </span><span class="kw">pub fn </span>max_decoding_message_size(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
+<a href=#7414 id=7414 data-nosnippet>7414</a>            <span class="self">self</span>.max_decoding_message_size = <span class="prelude-val">Some</span>(limit);
+<a href=#7415 id=7415 data-nosnippet>7415</a>            <span class="self">self
+<a href=#7416 id=7416 data-nosnippet>7416</a>        </span>}
+<a href=#7417 id=7417 data-nosnippet>7417</a>        <span class="doccomment">/// Limits the maximum size of an encoded message.
+<a href=#7418 id=7418 data-nosnippet>7418</a>        ///
+<a href=#7419 id=7419 data-nosnippet>7419</a>        /// Default: `usize::MAX`
+<a href=#7420 id=7420 data-nosnippet>7420</a>        </span><span class="attr">#[must_use]
+<a href=#7421 id=7421 data-nosnippet>7421</a>        </span><span class="kw">pub fn </span>max_encoding_message_size(<span class="kw-2">mut </span><span class="self">self</span>, limit: usize) -&gt; <span class="self">Self </span>{
+<a href=#7422 id=7422 data-nosnippet>7422</a>            <span class="self">self</span>.max_encoding_message_size = <span class="prelude-val">Some</span>(limit);
+<a href=#7423 id=7423 data-nosnippet>7423</a>            <span class="self">self
+<a href=#7424 id=7424 data-nosnippet>7424</a>        </span>}
+<a href=#7425 id=7425 data-nosnippet>7425</a>    }
+<a href=#7426 id=7426 data-nosnippet>7426</a>    <span class="kw">impl</span>&lt;T, B&gt; tonic::codegen::Service&lt;http::Request&lt;B&gt;&gt; <span class="kw">for </span>TokenServiceServer&lt;T&gt;
+<a href=#7427 id=7427 data-nosnippet>7427</a>    <span class="kw">where
+<a href=#7428 id=7428 data-nosnippet>7428</a>        </span>T: TokenService,
+<a href=#7429 id=7429 data-nosnippet>7429</a>        B: Body + std::marker::Send + <span class="lifetime">'static</span>,
+<a href=#7430 id=7430 data-nosnippet>7430</a>        B::Error: Into&lt;StdError&gt; + std::marker::Send + <span class="lifetime">'static</span>,
+<a href=#7431 id=7431 data-nosnippet>7431</a>    {
+<a href=#7432 id=7432 data-nosnippet>7432</a>        <span class="kw">type </span>Response = http::Response&lt;tonic::body::Body&gt;;
+<a href=#7433 id=7433 data-nosnippet>7433</a>        <span class="kw">type </span>Error = std::convert::Infallible;
+<a href=#7434 id=7434 data-nosnippet>7434</a>        <span class="kw">type </span>Future = BoxFuture&lt;<span class="self">Self</span>::Response, <span class="self">Self</span>::Error&gt;;
+<a href=#7435 id=7435 data-nosnippet>7435</a>        <span class="kw">fn </span>poll_ready(
+<a href=#7436 id=7436 data-nosnippet>7436</a>            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#7437 id=7437 data-nosnippet>7437</a>            _cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;,
+<a href=#7438 id=7438 data-nosnippet>7438</a>        ) -&gt; Poll&lt;std::result::Result&lt;(), <span class="self">Self</span>::Error&gt;&gt; {
+<a href=#7439 id=7439 data-nosnippet>7439</a>            Poll::Ready(<span class="prelude-val">Ok</span>(()))
+<a href=#7440 id=7440 data-nosnippet>7440</a>        }
+<a href=#7441 id=7441 data-nosnippet>7441</a>        <span class="kw">fn </span>call(<span class="kw-2">&amp;mut </span><span class="self">self</span>, req: http::Request&lt;B&gt;) -&gt; <span class="self">Self</span>::Future {
+<a href=#7442 id=7442 data-nosnippet>7442</a>            <span class="kw">match </span>req.uri().path() {
+<a href=#7443 id=7443 data-nosnippet>7443</a>                <span class="string">"/espresso.api.v2.TokenService/GetTotalMintedSupply" </span>=&gt; {
+<a href=#7444 id=7444 data-nosnippet>7444</a>                    <span class="attr">#[allow(non_camel_case_types)]
+<a href=#7445 id=7445 data-nosnippet>7445</a>                    </span><span class="kw">struct </span>GetTotalMintedSupplySvc&lt;T: TokenService&gt;(<span class="kw">pub </span>Arc&lt;T&gt;);
+<a href=#7446 id=7446 data-nosnippet>7446</a>                    <span class="kw">impl</span>&lt;
+<a href=#7447 id=7447 data-nosnippet>7447</a>                        T: TokenService,
+<a href=#7448 id=7448 data-nosnippet>7448</a>                    &gt; tonic::server::UnaryService&lt;<span class="kw">super</span>::GetTotalMintedSupplyRequest&gt;
+<a href=#7449 id=7449 data-nosnippet>7449</a>                    <span class="kw">for </span>GetTotalMintedSupplySvc&lt;T&gt; {
+<a href=#7450 id=7450 data-nosnippet>7450</a>                        <span class="kw">type </span>Response = <span class="kw">super</span>::TotalMintedSupplyResponse;
+<a href=#7451 id=7451 data-nosnippet>7451</a>                        <span class="kw">type </span>Future = BoxFuture&lt;
+<a href=#7452 id=7452 data-nosnippet>7452</a>                            tonic::Response&lt;<span class="self">Self</span>::Response&gt;,
+<a href=#7453 id=7453 data-nosnippet>7453</a>                            tonic::Status,
+<a href=#7454 id=7454 data-nosnippet>7454</a>                        &gt;;
+<a href=#7455 id=7455 data-nosnippet>7455</a>                        <span class="kw">fn </span>call(
+<a href=#7456 id=7456 data-nosnippet>7456</a>                            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#7457 id=7457 data-nosnippet>7457</a>                            request: tonic::Request&lt;<span class="kw">super</span>::GetTotalMintedSupplyRequest&gt;,
 <a href=#7458 id=7458 data-nosnippet>7458</a>                        ) -&gt; <span class="self">Self</span>::Future {
 <a href=#7459 id=7459 data-nosnippet>7459</a>                            <span class="kw">let </span>inner = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>);
 <a href=#7460 id=7460 data-nosnippet>7460</a>                            <span class="kw">let </span>fut = <span class="kw">async move </span>{
-<a href=#7461 id=7461 data-nosnippet>7461</a>                                &lt;T <span class="kw">as </span>TokenService&gt;::get_total_reward_distributed(
+<a href=#7461 id=7461 data-nosnippet>7461</a>                                &lt;T <span class="kw">as </span>TokenService&gt;::get_total_minted_supply(
 <a href=#7462 id=7462 data-nosnippet>7462</a>                                        <span class="kw-2">&amp;</span>inner,
 <a href=#7463 id=7463 data-nosnippet>7463</a>                                        request,
 <a href=#7464 id=7464 data-nosnippet>7464</a>                                    )
@@ -7473,7 +7473,7 @@
 <a href=#7473 id=7473 data-nosnippet>7473</a>                    <span class="kw">let </span>max_encoding_message_size = <span class="self">self</span>.max_encoding_message_size;
 <a href=#7474 id=7474 data-nosnippet>7474</a>                    <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
 <a href=#7475 id=7475 data-nosnippet>7475</a>                    <span class="kw">let </span>fut = <span class="kw">async move </span>{
-<a href=#7476 id=7476 data-nosnippet>7476</a>                        <span class="kw">let </span>method = GetTotalRewardDistributedSvc(inner);
+<a href=#7476 id=7476 data-nosnippet>7476</a>                        <span class="kw">let </span>method = GetTotalMintedSupplySvc(inner);
 <a href=#7477 id=7477 data-nosnippet>7477</a>                        <span class="kw">let </span>codec = tonic_prost::ProstCodec::default();
 <a href=#7478 id=7478 data-nosnippet>7478</a>                        <span class="kw">let </span><span class="kw-2">mut </span>grpc = tonic::server::Grpc::new(codec)
 <a href=#7479 id=7479 data-nosnippet>7479</a>                            .apply_compression_config(
@@ -7489,44 +7489,243 @@
 <a href=#7489 id=7489 data-nosnippet>7489</a>                    };
 <a href=#7490 id=7490 data-nosnippet>7490</a>                    Box::pin(fut)
 <a href=#7491 id=7491 data-nosnippet>7491</a>                }
-<a href=#7492 id=7492 data-nosnippet>7492</a>                <span class="kw">_ </span>=&gt; {
-<a href=#7493 id=7493 data-nosnippet>7493</a>                    Box::pin(<span class="kw">async move </span>{
-<a href=#7494 id=7494 data-nosnippet>7494</a>                        <span class="kw">let </span><span class="kw-2">mut </span>response = http::Response::new(
-<a href=#7495 id=7495 data-nosnippet>7495</a>                            tonic::body::Body::default(),
-<a href=#7496 id=7496 data-nosnippet>7496</a>                        );
-<a href=#7497 id=7497 data-nosnippet>7497</a>                        <span class="kw">let </span>headers = response.headers_mut();
-<a href=#7498 id=7498 data-nosnippet>7498</a>                        headers
-<a href=#7499 id=7499 data-nosnippet>7499</a>                            .insert(
-<a href=#7500 id=7500 data-nosnippet>7500</a>                                tonic::Status::GRPC_STATUS,
-<a href=#7501 id=7501 data-nosnippet>7501</a>                                (tonic::Code::Unimplemented <span class="kw">as </span>i32).into(),
-<a href=#7502 id=7502 data-nosnippet>7502</a>                            );
-<a href=#7503 id=7503 data-nosnippet>7503</a>                        headers
-<a href=#7504 id=7504 data-nosnippet>7504</a>                            .insert(
-<a href=#7505 id=7505 data-nosnippet>7505</a>                                http::header::CONTENT_TYPE,
-<a href=#7506 id=7506 data-nosnippet>7506</a>                                tonic::metadata::GRPC_CONTENT_TYPE,
-<a href=#7507 id=7507 data-nosnippet>7507</a>                            );
-<a href=#7508 id=7508 data-nosnippet>7508</a>                        <span class="prelude-val">Ok</span>(response)
-<a href=#7509 id=7509 data-nosnippet>7509</a>                    })
-<a href=#7510 id=7510 data-nosnippet>7510</a>                }
-<a href=#7511 id=7511 data-nosnippet>7511</a>            }
-<a href=#7512 id=7512 data-nosnippet>7512</a>        }
-<a href=#7513 id=7513 data-nosnippet>7513</a>    }
-<a href=#7514 id=7514 data-nosnippet>7514</a>    <span class="kw">impl</span>&lt;T&gt; Clone <span class="kw">for </span>TokenServiceServer&lt;T&gt; {
-<a href=#7515 id=7515 data-nosnippet>7515</a>        <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
-<a href=#7516 id=7516 data-nosnippet>7516</a>            <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
-<a href=#7517 id=7517 data-nosnippet>7517</a>            <span class="self">Self </span>{
-<a href=#7518 id=7518 data-nosnippet>7518</a>                inner,
-<a href=#7519 id=7519 data-nosnippet>7519</a>                accept_compression_encodings: <span class="self">self</span>.accept_compression_encodings,
-<a href=#7520 id=7520 data-nosnippet>7520</a>                send_compression_encodings: <span class="self">self</span>.send_compression_encodings,
-<a href=#7521 id=7521 data-nosnippet>7521</a>                max_decoding_message_size: <span class="self">self</span>.max_decoding_message_size,
-<a href=#7522 id=7522 data-nosnippet>7522</a>                max_encoding_message_size: <span class="self">self</span>.max_encoding_message_size,
-<a href=#7523 id=7523 data-nosnippet>7523</a>            }
-<a href=#7524 id=7524 data-nosnippet>7524</a>        }
-<a href=#7525 id=7525 data-nosnippet>7525</a>    }
-<a href=#7526 id=7526 data-nosnippet>7526</a>    <span class="doccomment">/// Generated gRPC service name
-<a href=#7527 id=7527 data-nosnippet>7527</a>    </span><span class="kw">pub const </span>SERVICE_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"espresso.api.v2.TokenService"</span>;
-<a href=#7528 id=7528 data-nosnippet>7528</a>    <span class="kw">impl</span>&lt;T&gt; tonic::server::NamedService <span class="kw">for </span>TokenServiceServer&lt;T&gt; {
-<a href=#7529 id=7529 data-nosnippet>7529</a>        <span class="kw">const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = SERVICE_NAME;
-<a href=#7530 id=7530 data-nosnippet>7530</a>    }
-<a href=#7531 id=7531 data-nosnippet>7531</a>}
+<a href=#7492 id=7492 data-nosnippet>7492</a>                <span class="string">"/espresso.api.v2.TokenService/GetCirculatingSupply" </span>=&gt; {
+<a href=#7493 id=7493 data-nosnippet>7493</a>                    <span class="attr">#[allow(non_camel_case_types)]
+<a href=#7494 id=7494 data-nosnippet>7494</a>                    </span><span class="kw">struct </span>GetCirculatingSupplySvc&lt;T: TokenService&gt;(<span class="kw">pub </span>Arc&lt;T&gt;);
+<a href=#7495 id=7495 data-nosnippet>7495</a>                    <span class="kw">impl</span>&lt;
+<a href=#7496 id=7496 data-nosnippet>7496</a>                        T: TokenService,
+<a href=#7497 id=7497 data-nosnippet>7497</a>                    &gt; tonic::server::UnaryService&lt;<span class="kw">super</span>::GetCirculatingSupplyRequest&gt;
+<a href=#7498 id=7498 data-nosnippet>7498</a>                    <span class="kw">for </span>GetCirculatingSupplySvc&lt;T&gt; {
+<a href=#7499 id=7499 data-nosnippet>7499</a>                        <span class="kw">type </span>Response = <span class="kw">super</span>::CirculatingSupplyResponse;
+<a href=#7500 id=7500 data-nosnippet>7500</a>                        <span class="kw">type </span>Future = BoxFuture&lt;
+<a href=#7501 id=7501 data-nosnippet>7501</a>                            tonic::Response&lt;<span class="self">Self</span>::Response&gt;,
+<a href=#7502 id=7502 data-nosnippet>7502</a>                            tonic::Status,
+<a href=#7503 id=7503 data-nosnippet>7503</a>                        &gt;;
+<a href=#7504 id=7504 data-nosnippet>7504</a>                        <span class="kw">fn </span>call(
+<a href=#7505 id=7505 data-nosnippet>7505</a>                            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#7506 id=7506 data-nosnippet>7506</a>                            request: tonic::Request&lt;<span class="kw">super</span>::GetCirculatingSupplyRequest&gt;,
+<a href=#7507 id=7507 data-nosnippet>7507</a>                        ) -&gt; <span class="self">Self</span>::Future {
+<a href=#7508 id=7508 data-nosnippet>7508</a>                            <span class="kw">let </span>inner = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>);
+<a href=#7509 id=7509 data-nosnippet>7509</a>                            <span class="kw">let </span>fut = <span class="kw">async move </span>{
+<a href=#7510 id=7510 data-nosnippet>7510</a>                                &lt;T <span class="kw">as </span>TokenService&gt;::get_circulating_supply(<span class="kw-2">&amp;</span>inner, request)
+<a href=#7511 id=7511 data-nosnippet>7511</a>                                    .<span class="kw">await
+<a href=#7512 id=7512 data-nosnippet>7512</a>                            </span>};
+<a href=#7513 id=7513 data-nosnippet>7513</a>                            Box::pin(fut)
+<a href=#7514 id=7514 data-nosnippet>7514</a>                        }
+<a href=#7515 id=7515 data-nosnippet>7515</a>                    }
+<a href=#7516 id=7516 data-nosnippet>7516</a>                    <span class="kw">let </span>accept_compression_encodings = <span class="self">self</span>.accept_compression_encodings;
+<a href=#7517 id=7517 data-nosnippet>7517</a>                    <span class="kw">let </span>send_compression_encodings = <span class="self">self</span>.send_compression_encodings;
+<a href=#7518 id=7518 data-nosnippet>7518</a>                    <span class="kw">let </span>max_decoding_message_size = <span class="self">self</span>.max_decoding_message_size;
+<a href=#7519 id=7519 data-nosnippet>7519</a>                    <span class="kw">let </span>max_encoding_message_size = <span class="self">self</span>.max_encoding_message_size;
+<a href=#7520 id=7520 data-nosnippet>7520</a>                    <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
+<a href=#7521 id=7521 data-nosnippet>7521</a>                    <span class="kw">let </span>fut = <span class="kw">async move </span>{
+<a href=#7522 id=7522 data-nosnippet>7522</a>                        <span class="kw">let </span>method = GetCirculatingSupplySvc(inner);
+<a href=#7523 id=7523 data-nosnippet>7523</a>                        <span class="kw">let </span>codec = tonic_prost::ProstCodec::default();
+<a href=#7524 id=7524 data-nosnippet>7524</a>                        <span class="kw">let </span><span class="kw-2">mut </span>grpc = tonic::server::Grpc::new(codec)
+<a href=#7525 id=7525 data-nosnippet>7525</a>                            .apply_compression_config(
+<a href=#7526 id=7526 data-nosnippet>7526</a>                                accept_compression_encodings,
+<a href=#7527 id=7527 data-nosnippet>7527</a>                                send_compression_encodings,
+<a href=#7528 id=7528 data-nosnippet>7528</a>                            )
+<a href=#7529 id=7529 data-nosnippet>7529</a>                            .apply_max_message_size_config(
+<a href=#7530 id=7530 data-nosnippet>7530</a>                                max_decoding_message_size,
+<a href=#7531 id=7531 data-nosnippet>7531</a>                                max_encoding_message_size,
+<a href=#7532 id=7532 data-nosnippet>7532</a>                            );
+<a href=#7533 id=7533 data-nosnippet>7533</a>                        <span class="kw">let </span>res = grpc.unary(method, req).<span class="kw">await</span>;
+<a href=#7534 id=7534 data-nosnippet>7534</a>                        <span class="prelude-val">Ok</span>(res)
+<a href=#7535 id=7535 data-nosnippet>7535</a>                    };
+<a href=#7536 id=7536 data-nosnippet>7536</a>                    Box::pin(fut)
+<a href=#7537 id=7537 data-nosnippet>7537</a>                }
+<a href=#7538 id=7538 data-nosnippet>7538</a>                <span class="string">"/espresso.api.v2.TokenService/GetCirculatingSupplyEthereum" </span>=&gt; {
+<a href=#7539 id=7539 data-nosnippet>7539</a>                    <span class="attr">#[allow(non_camel_case_types)]
+<a href=#7540 id=7540 data-nosnippet>7540</a>                    </span><span class="kw">struct </span>GetCirculatingSupplyEthereumSvc&lt;T: TokenService&gt;(<span class="kw">pub </span>Arc&lt;T&gt;);
+<a href=#7541 id=7541 data-nosnippet>7541</a>                    <span class="kw">impl</span>&lt;
+<a href=#7542 id=7542 data-nosnippet>7542</a>                        T: TokenService,
+<a href=#7543 id=7543 data-nosnippet>7543</a>                    &gt; tonic::server::UnaryService&lt;
+<a href=#7544 id=7544 data-nosnippet>7544</a>                        <span class="kw">super</span>::GetCirculatingSupplyEthereumRequest,
+<a href=#7545 id=7545 data-nosnippet>7545</a>                    &gt; <span class="kw">for </span>GetCirculatingSupplyEthereumSvc&lt;T&gt; {
+<a href=#7546 id=7546 data-nosnippet>7546</a>                        <span class="kw">type </span>Response = <span class="kw">super</span>::CirculatingSupplyEthereumResponse;
+<a href=#7547 id=7547 data-nosnippet>7547</a>                        <span class="kw">type </span>Future = BoxFuture&lt;
+<a href=#7548 id=7548 data-nosnippet>7548</a>                            tonic::Response&lt;<span class="self">Self</span>::Response&gt;,
+<a href=#7549 id=7549 data-nosnippet>7549</a>                            tonic::Status,
+<a href=#7550 id=7550 data-nosnippet>7550</a>                        &gt;;
+<a href=#7551 id=7551 data-nosnippet>7551</a>                        <span class="kw">fn </span>call(
+<a href=#7552 id=7552 data-nosnippet>7552</a>                            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#7553 id=7553 data-nosnippet>7553</a>                            request: tonic::Request&lt;
+<a href=#7554 id=7554 data-nosnippet>7554</a>                                <span class="kw">super</span>::GetCirculatingSupplyEthereumRequest,
+<a href=#7555 id=7555 data-nosnippet>7555</a>                            &gt;,
+<a href=#7556 id=7556 data-nosnippet>7556</a>                        ) -&gt; <span class="self">Self</span>::Future {
+<a href=#7557 id=7557 data-nosnippet>7557</a>                            <span class="kw">let </span>inner = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>);
+<a href=#7558 id=7558 data-nosnippet>7558</a>                            <span class="kw">let </span>fut = <span class="kw">async move </span>{
+<a href=#7559 id=7559 data-nosnippet>7559</a>                                &lt;T <span class="kw">as </span>TokenService&gt;::get_circulating_supply_ethereum(
+<a href=#7560 id=7560 data-nosnippet>7560</a>                                        <span class="kw-2">&amp;</span>inner,
+<a href=#7561 id=7561 data-nosnippet>7561</a>                                        request,
+<a href=#7562 id=7562 data-nosnippet>7562</a>                                    )
+<a href=#7563 id=7563 data-nosnippet>7563</a>                                    .<span class="kw">await
+<a href=#7564 id=7564 data-nosnippet>7564</a>                            </span>};
+<a href=#7565 id=7565 data-nosnippet>7565</a>                            Box::pin(fut)
+<a href=#7566 id=7566 data-nosnippet>7566</a>                        }
+<a href=#7567 id=7567 data-nosnippet>7567</a>                    }
+<a href=#7568 id=7568 data-nosnippet>7568</a>                    <span class="kw">let </span>accept_compression_encodings = <span class="self">self</span>.accept_compression_encodings;
+<a href=#7569 id=7569 data-nosnippet>7569</a>                    <span class="kw">let </span>send_compression_encodings = <span class="self">self</span>.send_compression_encodings;
+<a href=#7570 id=7570 data-nosnippet>7570</a>                    <span class="kw">let </span>max_decoding_message_size = <span class="self">self</span>.max_decoding_message_size;
+<a href=#7571 id=7571 data-nosnippet>7571</a>                    <span class="kw">let </span>max_encoding_message_size = <span class="self">self</span>.max_encoding_message_size;
+<a href=#7572 id=7572 data-nosnippet>7572</a>                    <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
+<a href=#7573 id=7573 data-nosnippet>7573</a>                    <span class="kw">let </span>fut = <span class="kw">async move </span>{
+<a href=#7574 id=7574 data-nosnippet>7574</a>                        <span class="kw">let </span>method = GetCirculatingSupplyEthereumSvc(inner);
+<a href=#7575 id=7575 data-nosnippet>7575</a>                        <span class="kw">let </span>codec = tonic_prost::ProstCodec::default();
+<a href=#7576 id=7576 data-nosnippet>7576</a>                        <span class="kw">let </span><span class="kw-2">mut </span>grpc = tonic::server::Grpc::new(codec)
+<a href=#7577 id=7577 data-nosnippet>7577</a>                            .apply_compression_config(
+<a href=#7578 id=7578 data-nosnippet>7578</a>                                accept_compression_encodings,
+<a href=#7579 id=7579 data-nosnippet>7579</a>                                send_compression_encodings,
+<a href=#7580 id=7580 data-nosnippet>7580</a>                            )
+<a href=#7581 id=7581 data-nosnippet>7581</a>                            .apply_max_message_size_config(
+<a href=#7582 id=7582 data-nosnippet>7582</a>                                max_decoding_message_size,
+<a href=#7583 id=7583 data-nosnippet>7583</a>                                max_encoding_message_size,
+<a href=#7584 id=7584 data-nosnippet>7584</a>                            );
+<a href=#7585 id=7585 data-nosnippet>7585</a>                        <span class="kw">let </span>res = grpc.unary(method, req).<span class="kw">await</span>;
+<a href=#7586 id=7586 data-nosnippet>7586</a>                        <span class="prelude-val">Ok</span>(res)
+<a href=#7587 id=7587 data-nosnippet>7587</a>                    };
+<a href=#7588 id=7588 data-nosnippet>7588</a>                    Box::pin(fut)
+<a href=#7589 id=7589 data-nosnippet>7589</a>                }
+<a href=#7590 id=7590 data-nosnippet>7590</a>                <span class="string">"/espresso.api.v2.TokenService/GetTotalIssuedSupply" </span>=&gt; {
+<a href=#7591 id=7591 data-nosnippet>7591</a>                    <span class="attr">#[allow(non_camel_case_types)]
+<a href=#7592 id=7592 data-nosnippet>7592</a>                    </span><span class="kw">struct </span>GetTotalIssuedSupplySvc&lt;T: TokenService&gt;(<span class="kw">pub </span>Arc&lt;T&gt;);
+<a href=#7593 id=7593 data-nosnippet>7593</a>                    <span class="kw">impl</span>&lt;
+<a href=#7594 id=7594 data-nosnippet>7594</a>                        T: TokenService,
+<a href=#7595 id=7595 data-nosnippet>7595</a>                    &gt; tonic::server::UnaryService&lt;<span class="kw">super</span>::GetTotalIssuedSupplyRequest&gt;
+<a href=#7596 id=7596 data-nosnippet>7596</a>                    <span class="kw">for </span>GetTotalIssuedSupplySvc&lt;T&gt; {
+<a href=#7597 id=7597 data-nosnippet>7597</a>                        <span class="kw">type </span>Response = <span class="kw">super</span>::TotalIssuedSupplyResponse;
+<a href=#7598 id=7598 data-nosnippet>7598</a>                        <span class="kw">type </span>Future = BoxFuture&lt;
+<a href=#7599 id=7599 data-nosnippet>7599</a>                            tonic::Response&lt;<span class="self">Self</span>::Response&gt;,
+<a href=#7600 id=7600 data-nosnippet>7600</a>                            tonic::Status,
+<a href=#7601 id=7601 data-nosnippet>7601</a>                        &gt;;
+<a href=#7602 id=7602 data-nosnippet>7602</a>                        <span class="kw">fn </span>call(
+<a href=#7603 id=7603 data-nosnippet>7603</a>                            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#7604 id=7604 data-nosnippet>7604</a>                            request: tonic::Request&lt;<span class="kw">super</span>::GetTotalIssuedSupplyRequest&gt;,
+<a href=#7605 id=7605 data-nosnippet>7605</a>                        ) -&gt; <span class="self">Self</span>::Future {
+<a href=#7606 id=7606 data-nosnippet>7606</a>                            <span class="kw">let </span>inner = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>);
+<a href=#7607 id=7607 data-nosnippet>7607</a>                            <span class="kw">let </span>fut = <span class="kw">async move </span>{
+<a href=#7608 id=7608 data-nosnippet>7608</a>                                &lt;T <span class="kw">as </span>TokenService&gt;::get_total_issued_supply(
+<a href=#7609 id=7609 data-nosnippet>7609</a>                                        <span class="kw-2">&amp;</span>inner,
+<a href=#7610 id=7610 data-nosnippet>7610</a>                                        request,
+<a href=#7611 id=7611 data-nosnippet>7611</a>                                    )
+<a href=#7612 id=7612 data-nosnippet>7612</a>                                    .<span class="kw">await
+<a href=#7613 id=7613 data-nosnippet>7613</a>                            </span>};
+<a href=#7614 id=7614 data-nosnippet>7614</a>                            Box::pin(fut)
+<a href=#7615 id=7615 data-nosnippet>7615</a>                        }
+<a href=#7616 id=7616 data-nosnippet>7616</a>                    }
+<a href=#7617 id=7617 data-nosnippet>7617</a>                    <span class="kw">let </span>accept_compression_encodings = <span class="self">self</span>.accept_compression_encodings;
+<a href=#7618 id=7618 data-nosnippet>7618</a>                    <span class="kw">let </span>send_compression_encodings = <span class="self">self</span>.send_compression_encodings;
+<a href=#7619 id=7619 data-nosnippet>7619</a>                    <span class="kw">let </span>max_decoding_message_size = <span class="self">self</span>.max_decoding_message_size;
+<a href=#7620 id=7620 data-nosnippet>7620</a>                    <span class="kw">let </span>max_encoding_message_size = <span class="self">self</span>.max_encoding_message_size;
+<a href=#7621 id=7621 data-nosnippet>7621</a>                    <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
+<a href=#7622 id=7622 data-nosnippet>7622</a>                    <span class="kw">let </span>fut = <span class="kw">async move </span>{
+<a href=#7623 id=7623 data-nosnippet>7623</a>                        <span class="kw">let </span>method = GetTotalIssuedSupplySvc(inner);
+<a href=#7624 id=7624 data-nosnippet>7624</a>                        <span class="kw">let </span>codec = tonic_prost::ProstCodec::default();
+<a href=#7625 id=7625 data-nosnippet>7625</a>                        <span class="kw">let </span><span class="kw-2">mut </span>grpc = tonic::server::Grpc::new(codec)
+<a href=#7626 id=7626 data-nosnippet>7626</a>                            .apply_compression_config(
+<a href=#7627 id=7627 data-nosnippet>7627</a>                                accept_compression_encodings,
+<a href=#7628 id=7628 data-nosnippet>7628</a>                                send_compression_encodings,
+<a href=#7629 id=7629 data-nosnippet>7629</a>                            )
+<a href=#7630 id=7630 data-nosnippet>7630</a>                            .apply_max_message_size_config(
+<a href=#7631 id=7631 data-nosnippet>7631</a>                                max_decoding_message_size,
+<a href=#7632 id=7632 data-nosnippet>7632</a>                                max_encoding_message_size,
+<a href=#7633 id=7633 data-nosnippet>7633</a>                            );
+<a href=#7634 id=7634 data-nosnippet>7634</a>                        <span class="kw">let </span>res = grpc.unary(method, req).<span class="kw">await</span>;
+<a href=#7635 id=7635 data-nosnippet>7635</a>                        <span class="prelude-val">Ok</span>(res)
+<a href=#7636 id=7636 data-nosnippet>7636</a>                    };
+<a href=#7637 id=7637 data-nosnippet>7637</a>                    Box::pin(fut)
+<a href=#7638 id=7638 data-nosnippet>7638</a>                }
+<a href=#7639 id=7639 data-nosnippet>7639</a>                <span class="string">"/espresso.api.v2.TokenService/GetTotalRewardDistributed" </span>=&gt; {
+<a href=#7640 id=7640 data-nosnippet>7640</a>                    <span class="attr">#[allow(non_camel_case_types)]
+<a href=#7641 id=7641 data-nosnippet>7641</a>                    </span><span class="kw">struct </span>GetTotalRewardDistributedSvc&lt;T: TokenService&gt;(<span class="kw">pub </span>Arc&lt;T&gt;);
+<a href=#7642 id=7642 data-nosnippet>7642</a>                    <span class="kw">impl</span>&lt;
+<a href=#7643 id=7643 data-nosnippet>7643</a>                        T: TokenService,
+<a href=#7644 id=7644 data-nosnippet>7644</a>                    &gt; tonic::server::UnaryService&lt;
+<a href=#7645 id=7645 data-nosnippet>7645</a>                        <span class="kw">super</span>::GetTotalRewardDistributedRequest,
+<a href=#7646 id=7646 data-nosnippet>7646</a>                    &gt; <span class="kw">for </span>GetTotalRewardDistributedSvc&lt;T&gt; {
+<a href=#7647 id=7647 data-nosnippet>7647</a>                        <span class="kw">type </span>Response = <span class="kw">super</span>::TotalRewardDistributedResponse;
+<a href=#7648 id=7648 data-nosnippet>7648</a>                        <span class="kw">type </span>Future = BoxFuture&lt;
+<a href=#7649 id=7649 data-nosnippet>7649</a>                            tonic::Response&lt;<span class="self">Self</span>::Response&gt;,
+<a href=#7650 id=7650 data-nosnippet>7650</a>                            tonic::Status,
+<a href=#7651 id=7651 data-nosnippet>7651</a>                        &gt;;
+<a href=#7652 id=7652 data-nosnippet>7652</a>                        <span class="kw">fn </span>call(
+<a href=#7653 id=7653 data-nosnippet>7653</a>                            <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#7654 id=7654 data-nosnippet>7654</a>                            request: tonic::Request&lt;
+<a href=#7655 id=7655 data-nosnippet>7655</a>                                <span class="kw">super</span>::GetTotalRewardDistributedRequest,
+<a href=#7656 id=7656 data-nosnippet>7656</a>                            &gt;,
+<a href=#7657 id=7657 data-nosnippet>7657</a>                        ) -&gt; <span class="self">Self</span>::Future {
+<a href=#7658 id=7658 data-nosnippet>7658</a>                            <span class="kw">let </span>inner = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0</span>);
+<a href=#7659 id=7659 data-nosnippet>7659</a>                            <span class="kw">let </span>fut = <span class="kw">async move </span>{
+<a href=#7660 id=7660 data-nosnippet>7660</a>                                &lt;T <span class="kw">as </span>TokenService&gt;::get_total_reward_distributed(
+<a href=#7661 id=7661 data-nosnippet>7661</a>                                        <span class="kw-2">&amp;</span>inner,
+<a href=#7662 id=7662 data-nosnippet>7662</a>                                        request,
+<a href=#7663 id=7663 data-nosnippet>7663</a>                                    )
+<a href=#7664 id=7664 data-nosnippet>7664</a>                                    .<span class="kw">await
+<a href=#7665 id=7665 data-nosnippet>7665</a>                            </span>};
+<a href=#7666 id=7666 data-nosnippet>7666</a>                            Box::pin(fut)
+<a href=#7667 id=7667 data-nosnippet>7667</a>                        }
+<a href=#7668 id=7668 data-nosnippet>7668</a>                    }
+<a href=#7669 id=7669 data-nosnippet>7669</a>                    <span class="kw">let </span>accept_compression_encodings = <span class="self">self</span>.accept_compression_encodings;
+<a href=#7670 id=7670 data-nosnippet>7670</a>                    <span class="kw">let </span>send_compression_encodings = <span class="self">self</span>.send_compression_encodings;
+<a href=#7671 id=7671 data-nosnippet>7671</a>                    <span class="kw">let </span>max_decoding_message_size = <span class="self">self</span>.max_decoding_message_size;
+<a href=#7672 id=7672 data-nosnippet>7672</a>                    <span class="kw">let </span>max_encoding_message_size = <span class="self">self</span>.max_encoding_message_size;
+<a href=#7673 id=7673 data-nosnippet>7673</a>                    <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
+<a href=#7674 id=7674 data-nosnippet>7674</a>                    <span class="kw">let </span>fut = <span class="kw">async move </span>{
+<a href=#7675 id=7675 data-nosnippet>7675</a>                        <span class="kw">let </span>method = GetTotalRewardDistributedSvc(inner);
+<a href=#7676 id=7676 data-nosnippet>7676</a>                        <span class="kw">let </span>codec = tonic_prost::ProstCodec::default();
+<a href=#7677 id=7677 data-nosnippet>7677</a>                        <span class="kw">let </span><span class="kw-2">mut </span>grpc = tonic::server::Grpc::new(codec)
+<a href=#7678 id=7678 data-nosnippet>7678</a>                            .apply_compression_config(
+<a href=#7679 id=7679 data-nosnippet>7679</a>                                accept_compression_encodings,
+<a href=#7680 id=7680 data-nosnippet>7680</a>                                send_compression_encodings,
+<a href=#7681 id=7681 data-nosnippet>7681</a>                            )
+<a href=#7682 id=7682 data-nosnippet>7682</a>                            .apply_max_message_size_config(
+<a href=#7683 id=7683 data-nosnippet>7683</a>                                max_decoding_message_size,
+<a href=#7684 id=7684 data-nosnippet>7684</a>                                max_encoding_message_size,
+<a href=#7685 id=7685 data-nosnippet>7685</a>                            );
+<a href=#7686 id=7686 data-nosnippet>7686</a>                        <span class="kw">let </span>res = grpc.unary(method, req).<span class="kw">await</span>;
+<a href=#7687 id=7687 data-nosnippet>7687</a>                        <span class="prelude-val">Ok</span>(res)
+<a href=#7688 id=7688 data-nosnippet>7688</a>                    };
+<a href=#7689 id=7689 data-nosnippet>7689</a>                    Box::pin(fut)
+<a href=#7690 id=7690 data-nosnippet>7690</a>                }
+<a href=#7691 id=7691 data-nosnippet>7691</a>                <span class="kw">_ </span>=&gt; {
+<a href=#7692 id=7692 data-nosnippet>7692</a>                    Box::pin(<span class="kw">async move </span>{
+<a href=#7693 id=7693 data-nosnippet>7693</a>                        <span class="kw">let </span><span class="kw-2">mut </span>response = http::Response::new(
+<a href=#7694 id=7694 data-nosnippet>7694</a>                            tonic::body::Body::default(),
+<a href=#7695 id=7695 data-nosnippet>7695</a>                        );
+<a href=#7696 id=7696 data-nosnippet>7696</a>                        <span class="kw">let </span>headers = response.headers_mut();
+<a href=#7697 id=7697 data-nosnippet>7697</a>                        headers
+<a href=#7698 id=7698 data-nosnippet>7698</a>                            .insert(
+<a href=#7699 id=7699 data-nosnippet>7699</a>                                tonic::Status::GRPC_STATUS,
+<a href=#7700 id=7700 data-nosnippet>7700</a>                                (tonic::Code::Unimplemented <span class="kw">as </span>i32).into(),
+<a href=#7701 id=7701 data-nosnippet>7701</a>                            );
+<a href=#7702 id=7702 data-nosnippet>7702</a>                        headers
+<a href=#7703 id=7703 data-nosnippet>7703</a>                            .insert(
+<a href=#7704 id=7704 data-nosnippet>7704</a>                                http::header::CONTENT_TYPE,
+<a href=#7705 id=7705 data-nosnippet>7705</a>                                tonic::metadata::GRPC_CONTENT_TYPE,
+<a href=#7706 id=7706 data-nosnippet>7706</a>                            );
+<a href=#7707 id=7707 data-nosnippet>7707</a>                        <span class="prelude-val">Ok</span>(response)
+<a href=#7708 id=7708 data-nosnippet>7708</a>                    })
+<a href=#7709 id=7709 data-nosnippet>7709</a>                }
+<a href=#7710 id=7710 data-nosnippet>7710</a>            }
+<a href=#7711 id=7711 data-nosnippet>7711</a>        }
+<a href=#7712 id=7712 data-nosnippet>7712</a>    }
+<a href=#7713 id=7713 data-nosnippet>7713</a>    <span class="kw">impl</span>&lt;T&gt; Clone <span class="kw">for </span>TokenServiceServer&lt;T&gt; {
+<a href=#7714 id=7714 data-nosnippet>7714</a>        <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+<a href=#7715 id=7715 data-nosnippet>7715</a>            <span class="kw">let </span>inner = <span class="self">self</span>.inner.clone();
+<a href=#7716 id=7716 data-nosnippet>7716</a>            <span class="self">Self </span>{
+<a href=#7717 id=7717 data-nosnippet>7717</a>                inner,
+<a href=#7718 id=7718 data-nosnippet>7718</a>                accept_compression_encodings: <span class="self">self</span>.accept_compression_encodings,
+<a href=#7719 id=7719 data-nosnippet>7719</a>                send_compression_encodings: <span class="self">self</span>.send_compression_encodings,
+<a href=#7720 id=7720 data-nosnippet>7720</a>                max_decoding_message_size: <span class="self">self</span>.max_decoding_message_size,
+<a href=#7721 id=7721 data-nosnippet>7721</a>                max_encoding_message_size: <span class="self">self</span>.max_encoding_message_size,
+<a href=#7722 id=7722 data-nosnippet>7722</a>            }
+<a href=#7723 id=7723 data-nosnippet>7723</a>        }
+<a href=#7724 id=7724 data-nosnippet>7724</a>    }
+<a href=#7725 id=7725 data-nosnippet>7725</a>    <span class="doccomment">/// Generated gRPC service name
+<a href=#7726 id=7726 data-nosnippet>7726</a>    </span><span class="kw">pub const </span>SERVICE_NAME: <span class="kw-2">&amp;</span>str = <span class="string">"espresso.api.v2.TokenService"</span>;
+<a href=#7727 id=7727 data-nosnippet>7727</a>    <span class="kw">impl</span>&lt;T&gt; tonic::server::NamedService <span class="kw">for </span>TokenServiceServer&lt;T&gt; {
+<a href=#7728 id=7728 data-nosnippet>7728</a>        <span class="kw">const </span>NAME: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str = SERVICE_NAME;
+<a href=#7729 id=7729 data-nosnippet>7729</a>    }
+<a href=#7730 id=7730 data-nosnippet>7730</a>}
 </code></pre></div></section></main></body></html>
