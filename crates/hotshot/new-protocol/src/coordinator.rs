@@ -838,9 +838,10 @@ where
                 self.on_decide_metrics(&leaves);
                 self.block_builder
                     .on_blocks_decided(leaves.iter().filter_map(|leaf| {
+                        // New-protocol headers always carry a V2 commitment.
                         match leaf.block_header().payload_commitment() {
                             VidCommitment::V2(commit) => Some((leaf.view_number(), commit)),
-                            _ => None,
+                            VidCommitment::V0(_) | VidCommitment::V1(_) => None,
                         }
                     }));
                 if let Some(cert2) = cert2 {
