@@ -53,6 +53,7 @@
 
 use std::{
     cmp::{max, min},
+    collections::BTreeMap,
     fmt::{Debug, Display},
     iter::repeat_with,
     marker::PhantomData,
@@ -385,6 +386,59 @@ where
     /// Build a [`FetchingDataSource`] with these options.
     pub async fn build(self) -> anyhow::Result<FetchingDataSource<Types, S, P>> {
         FetchingDataSource::new(self).await
+    }
+}
+
+/// Maximum number of reconstructed payloads buffered while their decided leaf is not yet stored.
+///
+/// Covers reconstruction finishing a few views ahead of the decide reaching the query service.
+/// Beyond that the node is lagging, and the payload fetch after decide recovers the block.
+pub(crate) const EARLY_PAYLOAD_CAPACITY: usize = 16;
+
+/// Reconstructed payloads whose decided leaf is not yet stored, keyed by height.
+///
+/// Reconstruction also runs on views that are never decided, so a height can hold several
+/// candidates and only the one matching the decided leaf is used. Entries for heights the decide
+/// path skips are dropped once a higher height is decided; the fetcher recovers those blocks.
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""), Default(bound = ""))]
+struct EarlyPayloads<Types: NodeType> {
+    blocks: BTreeMap<u64, Vec<BlockQueryData<Types>>>,
+    len: usize,
+}
+
+impl<Types: NodeType> EarlyPayloads<Types>
+where
+    Header<Types>: QueryableHeader<Types>,
+{
+    /// Buffer `block`, evicting the lowest heights when full.
+    fn insert(&mut self, block: BlockQueryData<Types>) {
+        let candidates = self.blocks.entry(block.height()).or_default();
+        if candidates.iter().any(|b| b.hash() == block.hash()) {
+            return;
+        }
+        candidates.push(block);
+        self.len += 1;
+        while self.len > EARLY_PAYLOAD_CAPACITY {
+            let Some((height, evicted)) = self.blocks.pop_first() else {
+                break;
+            };
+            tracing::debug!(height, "early payload buffer full; evicting");
+            self.len -= evicted.len();
+        }
+    }
+
+    /// Drop payloads at or below `leaf`'s height, returning the one matching `leaf`.
+    fn take_decided(&mut self, leaf: &LeafQueryData<Types>) -> Option<BlockQueryData<Types>> {
+        let height = leaf.height();
+        let block = self.blocks.remove(&height).and_then(|candidates| {
+            candidates
+                .into_iter()
+                .find(|b| b.hash() == leaf.block_hash())
+        });
+        self.blocks.retain(|&h, _| h > height);
+        self.len = self.blocks.values().map(Vec::len).sum();
+        block
     }
 }
 
@@ -884,7 +938,18 @@ where
         // Trigger a fetch of the parent leaf, if we don't already have it.
         leaf::trigger_fetch_for_parent(&self.fetcher, &info.leaf);
 
-        let block = self.fetcher.ready_or_fetch(info.block, height).await;
+        // Locked after storing the leaf so a concurrent `append_payload` either sees the leaf or
+        // buffers its payload before we take it.
+        let early = self
+            .fetcher
+            .early_payloads
+            .lock()
+            .await
+            .take_decided(&info.leaf);
+        let block = self
+            .fetcher
+            .ready_or_fetch(info.block.or(early), height)
+            .await;
         if let Some(block) = &block {
             self.fetcher.store(block).await;
         }
@@ -928,19 +993,22 @@ where
     /// Reconstruction runs on views that are not yet (and may never be)
     /// decided, so the block is only stored if it matches the decided leaf at
     /// the same height. If that leaf hasn't been ingested yet the payload is
-    /// dropped: when the decide arrives, [`append`](Self::append) spawns a
-    /// fetch that back-fills the payload from a peer.
+    /// buffered for [`append`](Self::append) to store with the leaf.
     async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         let height = block.height();
         let leaf = {
+            // Held across the leaf read so `append`, which locks after storing the leaf, either
+            // is seen here or takes the buffered payload.
+            let mut early = self.fetcher.early_payloads.lock().await;
             let mut tx = self.read().await.context("opening read transaction")?;
             match tx.get_leaf(LeafId::Number(height as usize)).await {
                 Ok(leaf) => leaf,
                 Err(QueryError::Missing | QueryError::NotFound) => {
-                    tracing::info!(
+                    tracing::debug!(
                         height,
-                        "dropping reconstructed payload; leaf not yet available"
+                        "buffering reconstructed payload; leaf not yet stored"
                     );
+                    early.insert(block);
                     return Ok(());
                 },
                 Err(err) => {
@@ -1021,6 +1089,7 @@ where
     leaf_only: bool,
     sync_status_metrics: SyncStatusMetrics,
     sync_status: Mutex<CachedSyncStatus>,
+    early_payloads: Mutex<EarlyPayloads<Types>>,
 }
 
 impl<Types, S, P> VersionedDataSource for Fetcher<Types, S, P>
@@ -1128,6 +1197,7 @@ where
             leaf_only,
             sync_status_metrics,
             sync_status: Mutex::new(CachedSyncStatus::new(builder.sync_status_ttl)),
+            early_payloads: Default::default(),
         })
     }
 }
