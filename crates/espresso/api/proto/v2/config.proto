@@ -314,15 +314,12 @@ message LightClientModuleOptions {
 }
 
 message LightClientDbOptions {
-  reserved 3;
-  reserved "num_stake_tables";
-
   uint32 num_connections = 1;
 
   uint32 num_leaves = 2;
 
   // Absent when the light-client database is in a temporary directory
-  optional string lc_path = 4;
+  optional string lc_path = 3;
 }
 
 message QueryModule {
