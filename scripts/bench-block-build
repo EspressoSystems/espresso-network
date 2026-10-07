@@ -42,6 +42,7 @@ import subprocess
 from pathlib import Path
 
 OUT = Path("tmp/bench-block-build")
+BENCH_FILE = "crates/espresso/types/benches/block_build.rs"
 DEFAULT_FILTER = r"^block_build/request_block/(30|50|70)MB_1000KB_t\d+_n10$"
 MALLOC = {"default": {}, "hugetlb": {"GLIBC_TUNABLES": "glibc.malloc.hugetlb=1"}}
 
@@ -57,6 +58,10 @@ def main() -> None:
     }
     for side, ref in (("base", args.base), ("head", args.head)):
         log.info("%s %s = %s", side, ref, shas[side][:10])
+        if not has_bench(shas[side]):
+            raise SystemExit(
+                f"{side} {ref} has no {BENCH_FILE}; use a ref that contains the bench as base"
+            )
     if args.dry_run:
         for side, sha in shas.items():
             state = "cached" if binary_path(sha).exists() else "build in worktree"
@@ -263,6 +268,17 @@ def bench_executable(cargo_json: str) -> Path:
         ):
             return Path(msg["executable"])
     raise SystemExit("cargo did not report a block_build executable")
+
+
+def has_bench(sha: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{sha}:{BENCH_FILE}"],
+            check=False,
+            capture_output=True,
+        ).returncode
+        == 0
+    )
 
 
 def git(*args: str) -> str:
