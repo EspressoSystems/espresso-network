@@ -107,7 +107,7 @@ pub(crate) fn is_vid_disperse(input: &ConsensusInput<TestTypes>) -> bool {
 }
 
 pub(crate) fn is_block_reconstructed(input: &ConsensusInput<TestTypes>) -> bool {
-    matches!(input, ConsensusInput::BlockReconstructed(..))
+    matches!(input, ConsensusInput::BlockReconstructed { .. })
 }
 
 pub(crate) fn is_state_validated(input: &ConsensusInput<TestTypes>) -> bool {

@@ -64,7 +64,14 @@ pub enum ConsensusInput<T: NodeType> {
         metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
         payload_commitment: VidCommitment,
     },
-    BlockReconstructed(ViewNumber, VidCommitment2),
+    /// This node obtained a proposal's payload, by reconstructing it from VID
+    /// shares or fetching it from a peer. Consensus keeps the payload so a
+    /// decide of that view carries it.
+    BlockReconstructed {
+        view: ViewNumber,
+        payload_commitment: VidCommitment2,
+        payload: T::BlockPayload,
+    },
     Certificate1(ValidCert<Certificate1<T>>),
     Certificate2(ValidCert<Certificate2<T>>),
     /// A quorum certificate allows us to advance our view.
@@ -155,9 +162,10 @@ pub enum ConsensusOutput<T: NodeType> {
         payload_commitment: VidCommitment2,
     },
     /// Emitted when a node has reconstructed a block payload from VID shares.
-    /// Notifies downstream consumers (e.g. the query service) so they can store
-    /// the payload even if the corresponding view has already been decided
-    /// without a payload in the decide event.
+    /// A payload obtained before its view decides rides along in
+    /// `LeafDecided`; this event covers the rest, so downstream consumers
+    /// (e.g. the query service) can store a payload that was still missing
+    /// when the view decided.
     BlockPayloadReconstructed {
         view: ViewNumber,
         header: T::BlockHeader,
@@ -207,6 +215,8 @@ pub struct Consensus<T: NodeType> {
     unpaired_vid_shares: UnpairedVidShares<T>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeSet<(ViewNumber, VidCommitment2)>,
+    /// Payloads this node built or obtained, which a decide attaches to its
+    /// leaves. Also gates proposing: the leader's header must have its block.
     blocks: BTreeMap<(ViewNumber, VidCommitment2), T::BlockPayload>,
     certs: BTreeMap<ViewNumber, Certificate1<T>>,
     certs2: BTreeMap<ViewNumber, Certificate2<T>>,
@@ -646,9 +656,14 @@ impl<T: NodeType> Consensus<T> {
                 );
                 self.handle_timeout_certificate(certificate, outbox)
             },
-            ConsensusInput::BlockReconstructed(view, vid_commitment) => {
+            ConsensusInput::BlockReconstructed {
+                view,
+                payload_commitment,
+                payload,
+            } => {
                 debug!(%view, "apply: block reconstructed");
-                self.blocks_reconstructed.insert((view, vid_commitment));
+                self.blocks_reconstructed.insert((view, payload_commitment));
+                self.blocks.insert((view, payload_commitment), payload);
                 // Retry the votable children whose vote1 is gated on this
                 // parent's reconstruction. More than `view + 1` can be
                 // waiting: while a view's payload was missing, every later
@@ -1798,6 +1813,8 @@ impl<T: NodeType> Consensus<T> {
                     "adopting the epoch of a later certificate"
                 );
                 self.timeout_certs.insert(view, certificate.into_cert());
+            } else {
+                debug!(%view, "duplicate timeout certificate; already applied");
             }
             return Protocol::Continue;
         }
@@ -2910,7 +2927,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::DrbResult(epoch, _) => Some(*epoch),
             ConsensusInput::EpochChange(message) => message.cert1.epoch(),
             ConsensusInput::UpgradeCertificateFormed(cert) => Some(cert.epoch()),
-            ConsensusInput::BlockReconstructed(..)
+            ConsensusInput::BlockReconstructed { .. }
             | ConsensusInput::HeaderCreated(..)
             | ConsensusInput::VidShare(..)
             | ConsensusInput::StateValidated(..)
@@ -2923,7 +2940,7 @@ impl<T: NodeType> ConsensusInput<T> {
     pub fn view_number(&self) -> ViewNumber {
         match self {
             ConsensusInput::BlockBuilt { view, .. } => *view,
-            ConsensusInput::BlockReconstructed(view, _) => *view,
+            ConsensusInput::BlockReconstructed { view, .. } => *view,
             ConsensusInput::Certificate1(cert) => cert.view_number(),
             ConsensusInput::Certificate2(cert) => cert.view_number(),
             // We advance from the certificate's view v to v + 1:

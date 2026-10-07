@@ -3436,7 +3436,7 @@ mod api_tests {
 #[cfg(test)]
 mod test {
     use std::{
-        collections::{HashMap, HashSet},
+        collections::{BTreeSet, HashMap, HashSet},
         time::{Duration, Instant},
     };
 
@@ -8780,7 +8780,8 @@ mod test {
                 Options::with_port(port)
                     .query_sql(Default::default(), ds_opts)
                     .submit(Default::default())
-                    .config(Default::default()),
+                    .config(Default::default())
+                    .explorer(Default::default()),
             )
             .network_config(network_config)
             .build();
@@ -8809,8 +8810,8 @@ mod test {
         let last_block = *blocks.last().unwrap();
 
         // The counts come from aggregates a background task fills in after each block is
-        // stored, so wait for them to reach the last submitted transaction first; nothing else
-        // submits, so every number below is stable from then on.
+        // stored, so wait for them to reach the last submitted transaction first. Nothing else
+        // submits before the counts are compared, so they are stable from then on.
         let expected_total: u64 = namespace_counts
             .iter()
             .map(|(_, count)| u64::from(*count))
@@ -9068,8 +9069,8 @@ mod test {
                 .unwrap()
                 .keys()
                 .map(String::as_str)
-                .collect::<std::collections::BTreeSet<_>>(),
-            std::collections::BTreeSet::from([
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
                 "auth_root",
                 "key",
                 "next_stake",
@@ -9123,6 +9124,81 @@ mod test {
             .unwrap_err();
         assert_eq!(v1_err.status, StatusCode::NOT_FOUND);
         assert_eq!(v2_err.status, StatusCode::NOT_FOUND);
+
+        // Waited on rather than just compared, so a handler that returns the commitment without
+        // sequencing anything fails here.
+        let submitted = Transaction::new(NamespaceId::from(103u64), vec![103, 0]);
+        let accepted: espresso_api::proto::SubmitTransactionResponse = client
+            .post("v2/submit/transaction")
+            .body_json(&espresso_api::proto::SubmitTransactionRequest {
+                namespace: Some(103),
+                payload: Some(vec![103, 0]),
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(accepted.hash, submitted.commit().to_string());
+        wait_for_decide_on_handle(&mut events, &submitted).await;
+
+        let oversized = u64::from(network.server.node_state().chain_config.max_block_size) + 1;
+        let oversized = vec![0u8; oversized as usize];
+        let bad_submissions = [
+            (
+                "missing namespace",
+                serde_json::json!({ "payload": "" }),
+                espresso_api::proto::SubmitTransactionRequest {
+                    namespace: None,
+                    payload: Some(vec![]),
+                },
+            ),
+            (
+                "missing payload",
+                serde_json::json!({ "namespace": 104 }),
+                espresso_api::proto::SubmitTransactionRequest {
+                    namespace: Some(104),
+                    payload: None,
+                },
+            ),
+            (
+                "namespace above u32::MAX",
+                serde_json::json!({ "namespace": 1u64 << 32, "payload": "" }),
+                espresso_api::proto::SubmitTransactionRequest {
+                    namespace: Some(1 << 32),
+                    payload: Some(vec![]),
+                },
+            ),
+            (
+                "payload above max_block_size",
+                serde_json::to_value(Transaction::new(
+                    NamespaceId::from(104u64),
+                    oversized.clone(),
+                ))
+                .unwrap(),
+                espresso_api::proto::SubmitTransactionRequest {
+                    namespace: Some(104),
+                    payload: Some(oversized),
+                },
+            ),
+        ];
+        for (case, v1_body, v2_body) in bad_submissions {
+            let v1_err = client
+                .post::<serde_json::Value>("submit/submit")
+                .body_json(&v1_body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            let v2_err = client
+                .post::<serde_json::Value>("v2/submit/transaction")
+                .body_json(&v2_body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(v1_err.status, StatusCode::BAD_REQUEST, "v1, {case}");
+            assert_eq!(v2_err.status, StatusCode::BAD_REQUEST, "v2, {case}");
+        }
 
         // Every decided view moves these, so retry until a pair straddles no view.
         let (v1_votes, v2_votes) = {
@@ -9440,6 +9516,385 @@ mod test {
                 .unwrap_err();
             assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}: {err}");
         }
+
+        // Compared as raw JSON, so the rendered amounts and timestamps are checked against the
+        // bytes v1 serves rather than against the `Display` impls v2 reuses. Each comparison names
+        // its target by height, since the latest block moves with every decide.
+        let strings = |value: &serde_json::Value| {
+            value
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        let keys = |value: &serde_json::Value| {
+            value
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        };
+        let key_set = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<BTreeSet<_>>()
+        };
+
+        let v1_block: serde_json::Value = client
+            .get(&format!("explorer/block/{first_block}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_block: espresso_api::proto::ExplorerBlockDetailResponse = client
+            .get(&format!("v2/explorer/block?height={first_block}"))
+            .send()
+            .await
+            .unwrap();
+        let v1_block = &v1_block["block_detail"];
+        let v2_block = v2_block.block_detail.unwrap();
+        assert_eq!(
+            keys(v1_block),
+            key_set(&[
+                "block_reward",
+                "fee_recipient",
+                "hash",
+                "height",
+                "num_transactions",
+                "proposer_id",
+                "size",
+                "time",
+            ]),
+            "v1 grew a field `ExplorerBlockDetail` does not carry"
+        );
+        assert_eq!(v2_block.hash, v1_block["hash"].as_str().unwrap());
+        assert_eq!(v2_block.height, v1_block["height"].as_u64().unwrap());
+        assert_eq!(v2_block.time, v1_block["time"].as_str().unwrap());
+        assert_eq!(
+            v2_block.num_transactions,
+            v1_block["num_transactions"].as_u64().unwrap()
+        );
+        assert_eq!(v2_block.num_transactions, 1);
+        assert_eq!(v2_block.size, v1_block["size"].as_u64().unwrap());
+        assert_eq!(v2_block.proposer_id, strings(&v1_block["proposer_id"]));
+        assert_eq!(v2_block.fee_recipient, strings(&v1_block["fee_recipient"]));
+        assert_eq!(v2_block.block_reward, strings(&v1_block["block_reward"]));
+        let by_hash: espresso_api::proto::ExplorerBlockDetailResponse = client
+            .get(&format!("v2/explorer/block?hash={}", v2_block.hash))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash.block_detail.as_ref(), Some(&v2_block));
+
+        let assert_block_summary =
+            |v1: &serde_json::Value, v2: &espresso_api::proto::ExplorerBlockSummary| {
+                assert_eq!(
+                    keys(v1),
+                    key_set(&[
+                        "hash",
+                        "height",
+                        "num_transactions",
+                        "proposer_id",
+                        "size",
+                        "time",
+                    ]),
+                    "v1 grew a field `ExplorerBlockSummary` does not carry"
+                );
+                assert_eq!(v2.hash, v1["hash"].as_str().unwrap());
+                assert_eq!(v2.height, v1["height"].as_u64().unwrap());
+                assert_eq!(v2.proposer_id, strings(&v1["proposer_id"]));
+                assert_eq!(
+                    v2.num_transactions,
+                    v1["num_transactions"].as_u64().unwrap()
+                );
+                assert_eq!(v2.size, v1["size"].as_u64().unwrap());
+                assert_eq!(v2.time, v1["time"].as_str().unwrap());
+            };
+        let v1_blocks: serde_json::Value = client
+            .get(&format!("explorer/blocks/{last_block}/3"))
+            .send()
+            .await
+            .unwrap();
+        let v2_blocks: espresso_api::proto::ExplorerBlockSummariesResponse = client
+            .get(&format!("v2/explorer/blocks?height={last_block}&limit=3"))
+            .send()
+            .await
+            .unwrap();
+        let v1_blocks = v1_blocks["block_summaries"].as_array().unwrap();
+        assert_eq!(v2_blocks.block_summaries.len(), v1_blocks.len());
+        assert!(!v1_blocks.is_empty());
+        for (v1, v2) in v1_blocks.iter().zip(&v2_blocks.block_summaries) {
+            assert_block_summary(v1, v2);
+        }
+
+        let assert_transaction_summary =
+            |v1: &serde_json::Value, v2: &espresso_api::proto::ExplorerTransactionSummary| {
+                assert_eq!(
+                    keys(v1),
+                    key_set(&[
+                        "hash",
+                        "height",
+                        "num_transactions",
+                        "offset",
+                        "rollups",
+                        "time",
+                    ]),
+                    "v1 grew a field `ExplorerTransactionSummary` does not carry"
+                );
+                assert_eq!(v2.hash, v1["hash"].as_str().unwrap());
+                assert_eq!(
+                    v2.rollups,
+                    v1["rollups"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|namespace| namespace.as_u64().unwrap())
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(v2.height, v1["height"].as_u64().unwrap());
+                assert_eq!(v2.offset, v1["offset"].as_u64().unwrap());
+                assert_eq!(
+                    v2.num_transactions,
+                    v1["num_transactions"].as_u64().unwrap()
+                );
+                assert_eq!(v2.time, v1["time"].as_str().unwrap());
+            };
+        let mut newest_transaction = None;
+        for (v1_path, v2_path) in [
+            (
+                format!("explorer/transactions/from/{last_block}/0/5"),
+                format!("v2/explorer/transactions?height={last_block}&offset=0&limit=5"),
+            ),
+            (
+                format!("explorer/transactions/from/{last_block}/0/5/namespace/102"),
+                format!(
+                    "v2/explorer/transactions?height={last_block}&offset=0&limit=5&namespace=102"
+                ),
+            ),
+            (
+                format!("explorer/transactions/from/{last_block}/0/5/block/{first_block}"),
+                format!(
+                    "v2/explorer/transactions?height={last_block}&offset=0&limit=5&\
+                     block={first_block}"
+                ),
+            ),
+        ] {
+            let v1: serde_json::Value = client.get(&v1_path).send().await.unwrap();
+            let v2: espresso_api::proto::ExplorerTransactionSummariesResponse =
+                client.get(&v2_path).send().await.unwrap();
+            let v1 = v1["transaction_summaries"].as_array().unwrap();
+            assert_eq!(v2.transaction_summaries.len(), v1.len(), "{v2_path}");
+            assert!(!v1.is_empty(), "{v1_path}");
+            for (v1, v2) in v1.iter().zip(&v2.transaction_summaries) {
+                assert_transaction_summary(v1, v2);
+            }
+            newest_transaction.get_or_insert(v2.transaction_summaries[0].clone());
+        }
+
+        let transaction = newest_transaction.unwrap();
+        let v1_detail: serde_json::Value = client
+            .get(&format!(
+                "explorer/transaction/{}/{}",
+                transaction.height, transaction.offset
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_detail: espresso_api::proto::ExplorerTransactionDetailResponse = client
+            .get(&format!(
+                "v2/explorer/transaction?height={}&offset={}",
+                transaction.height, transaction.offset
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v1_detail = &v1_detail["transaction_detail"];
+        let v1_details = &v1_detail["details"];
+        let v2_details = v2_detail.details.as_ref().unwrap();
+        assert_eq!(
+            keys(v1_details),
+            key_set(&[
+                "block_confirmed",
+                "fee_details",
+                "hash",
+                "height",
+                "num_transactions",
+                "offset",
+                "sequencing_fees",
+                "size",
+                "time",
+            ]),
+            "v1 grew a field `ExplorerTransactionDetail` does not carry"
+        );
+        assert_eq!(v2_details.hash, transaction.hash);
+        assert_eq!(v2_details.hash, v1_details["hash"].as_str().unwrap());
+        assert_eq!(v2_details.height, v1_details["height"].as_u64().unwrap());
+        assert_eq!(
+            v2_details.block_confirmed,
+            v1_details["block_confirmed"].as_bool().unwrap()
+        );
+        assert_eq!(v2_details.offset, v1_details["offset"].as_u64().unwrap());
+        assert_eq!(
+            v2_details.num_transactions,
+            v1_details["num_transactions"].as_u64().unwrap()
+        );
+        assert_eq!(v2_details.size, v1_details["size"].as_u64().unwrap());
+        assert_eq!(v2_details.time, v1_details["time"].as_str().unwrap());
+        assert_eq!(
+            v2_details.sequencing_fees,
+            strings(&v1_details["sequencing_fees"])
+        );
+        assert_eq!(
+            v2_details.fee_details.len(),
+            v1_details["fee_details"].as_array().unwrap().len()
+        );
+        let v1_data: Vec<Transaction> = serde_json::from_value(v1_detail["data"].clone()).unwrap();
+        assert!(!v1_data.is_empty());
+        assert_eq!(
+            v2_detail.data,
+            v1_data
+                .iter()
+                .map(|transaction| espresso_api::proto::Transaction {
+                    namespace: u64::from(transaction.namespace()),
+                    payload: transaction.payload().to_vec(),
+                })
+                .collect::<Vec<_>>()
+        );
+        let by_hash: espresso_api::proto::ExplorerTransactionDetailResponse = client
+            .get(&format!(
+                "v2/explorer/transaction?hash={}",
+                transaction.hash
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash, v2_detail);
+
+        let v1_search: serde_json::Value = client
+            .get(&format!("explorer/search/{}", transaction.hash))
+            .send()
+            .await
+            .unwrap();
+        let v2_search: espresso_api::proto::ExplorerSearchResponse = client
+            .get(&format!("v2/explorer/search?query={}", transaction.hash))
+            .send()
+            .await
+            .unwrap();
+        let v1_found = v1_search["search_results"]["transactions"]
+            .as_array()
+            .unwrap();
+        assert_eq!(v2_search.transactions.len(), v1_found.len());
+        assert!(!v1_found.is_empty());
+        for (v1, v2) in v1_found.iter().zip(&v2_search.transactions) {
+            assert_transaction_summary(v1, v2);
+        }
+
+        // v1 serves the histograms as four parallel arrays, which v2 zips into one point per
+        // block, so this proves the zip lines the four values up with the right height. The two
+        // reads can straddle a decide, so only the heights both windows hold are compared.
+        let v1_summary: serde_json::Value = client
+            .get("explorer/explorer-summary")
+            .send()
+            .await
+            .unwrap();
+        let v2_summary: espresso_api::proto::ExplorerSummaryResponse =
+            client.get("v2/explorer/summary").send().await.unwrap();
+        let v1_histograms = &v1_summary["explorer_summary"]["histograms"];
+        let v1_points: HashMap<u64, usize> = v1_histograms["block_heights"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(i, height)| (height.as_u64().unwrap(), i))
+            .collect();
+        let mut compared = 0;
+        for point in &v2_summary.histograms {
+            let Some(&i) = v1_points.get(&point.height) else {
+                continue;
+            };
+            assert_eq!(point.block_time, v1_histograms["block_time"][i].as_f64());
+            assert_eq!(point.block_size, v1_histograms["block_size"][i].as_u64());
+            assert_eq!(
+                point.block_transactions,
+                v1_histograms["block_transactions"][i].as_u64().unwrap()
+            );
+            compared += 1;
+        }
+        assert!(compared > 0, "the two histogram windows share no height");
+
+        // Two ways of naming the same thing cannot both be given, and half of a height/offset
+        // pair is a mistake rather than a fallback to the latest transaction.
+        for query in [
+            "v2/explorer/block?height=1&hash=BLOCK~aa",
+            "v2/explorer/transaction?height=1",
+            "v2/explorer/transactions?limit=1&block=1&namespace=1",
+            "v2/explorer/transactions?limit=1&namespace=4294967296",
+            "v2/explorer/blocks",
+            "v2/explorer/search",
+        ] {
+            let err = client
+                .get::<serde_json::Value>(query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+
+        let missing_height = u64::from(u32::MAX);
+        let foreign_tag = tagged_base64::TaggedBase64::new("FOO", &[0; 32]).unwrap();
+        for (v1_path, v2_path, status) in [
+            (
+                format!("explorer/block/{missing_height}"),
+                format!("v2/explorer/block?height={missing_height}"),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                format!("explorer/transaction/{missing_height}/0"),
+                format!("v2/explorer/transaction?height={missing_height}&offset=0"),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                format!("explorer/transactions/from/1/{}/1", u64::MAX),
+                format!(
+                    "v2/explorer/transactions?height=1&offset={}&limit=1",
+                    u64::MAX
+                ),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                format!("explorer/search/{foreign_tag}"),
+                format!("v2/explorer/search?query={foreign_tag}"),
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            for path in [&v1_path, &v2_path] {
+                let err = client
+                    .get::<serde_json::Value>(path)
+                    .send()
+                    .await
+                    .unwrap_err();
+                assert_eq!(err.status, status, "{path}");
+            }
+        }
+        let unknown_block = tagged_base64::TaggedBase64::new("BLOCK", &[0; 32]).unwrap();
+        let v1_search: serde_json::Value = client
+            .get(&format!("explorer/search/{unknown_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v1_search["search_results"]["blocks"],
+            serde_json::json!([]),
+            "an unknown block hash is an empty result, as an unknown transaction hash is"
+        );
+        let v2_search: espresso_api::proto::ExplorerSearchResponse = client
+            .get(&format!("v2/explorer/search?query={unknown_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(v2_search.blocks.is_empty());
 
         let v1_config = client
             .get::<espresso_types::config::PublicNetworkConfig>("config/hotshot")

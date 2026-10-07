@@ -32,8 +32,9 @@ pub enum CoordinatorEvent<TYPES: NodeType> {
         data: Vec<u8>,
     },
     /// Emitted when a node has reconstructed a block payload from VID shares.
-    /// Lets downstream consumers (e.g. query service) fill in a payload that
-    /// was missing when the corresponding view was decided.
+    /// A payload obtained before its view decides rides along in `NewDecide`;
+    /// this lets downstream consumers (e.g. the query service) fill in a
+    /// payload that was still missing when the view decided.
     BlockPayloadReconstructed {
         view: ViewNumber,
         header: TYPES::BlockHeader,
