@@ -1,417 +1,419 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["matplotlib", "pandas", "tabulate", "typer"]
+# ///
 r"""A/B the leader's block-build critical path between two git refs.
 
-Runs the `request_block` stages of the `block_build` bench in espresso-types, which mirror the
-build task in crates/hotshot/new-protocol/src/block.rs, for a base and a head ref and prints a
-markdown table of the change.
+Runs the `request_block` benchmarks of the `block_build` bench in espresso-types, which call the
+leader's own code (`from_transactions` and new-protocol's `block_commitments`), for a base and a
+head ref. Prints a markdown table with the whole build and one row per step, and draws a waterfall of
+the steps.
 
-    just bench-block-build                      # origin/main vs HEAD
+    just bench-block-build                      # origin/main vs this checkout, edits included
     just bench-block-build main my-branch
-    scripts/bench-block-build --filter 'request_block/50MB.*_n10$' --repeats 5 main HEAD
-    scripts/bench-block-build --dry-run main HEAD
-    scripts/bench-block-build --chart tmp/bench-block-build/<base>-<head>.json
-
-Steps:
-    The bench times the leader's real code path (`block_commitments` in new-protocol plus
-    `from_transactions`) and records each step's tracing span. When both refs record steps, the
-    table adds one row per step under each benchmark. Steps partly run in parallel, so they do
-    not add up to the total; the slowest parallel step bounds it.
+    scripts/bench-block-build --filter 'request_block/50MB' --repeats 3 main HEAD   # quick check
+    scripts/bench-block-build --malloc default --malloc hugetlb main HEAD
+    scripts/bench-block-build --chart tmp/bench-block-build/<base>-<head>.csv
 
 Method:
     Each ref is built once in a temporary git worktree; binaries are cached by commit in
     tmp/bench-block-build/bin. Each benchmark runs in its own process, because glibc's mmap
     threshold depends on what the process allocated earlier. Base and head alternate. Samples are
     pooled across repeats; the table also lists each run's median, so a noisy run stands out.
+    The change carries one standard error, from the spread of each side's run medians, and is
+    marked as noise when it is within two of them. Chart whiskers show the same error per step.
+    Before each run, while the bench is idle, the script samples /proc/stat for 0.3 s; CPU busy
+    then is other work. It is stored per run as `other_cpu` in the CSV, and the script warns
+    when it exceeds 5%.
+    Steps partly run in parallel, so they do not add up to the total.
 
     Runs use `GLIBC_TUNABLES=glibc.malloc.hugetlb=1` (the AWS bench node setting) by default.
     Without it, glibc maps every buffer of 32 MiB or more (64 MiB on worker threads) fresh per
-    block in 4 KiB pages, and the page faults dominate and vary between runs. `--malloc
-    default,hugetlb` also measures plain glibc.
+    block in 4 KiB pages, and the page faults dominate and vary between runs.
 
-Both refs must contain crates/espresso/types/benches/block_build.rs. Results are written to
-tmp/bench-block-build/<base>-<head>.{json,md,svg}; the SVG is a waterfall of each step's
-median start and duration. `--chart <file>.json` redraws the SVG of a saved run.
+The head defaults to this checkout: with uncommitted edits it is built in place, otherwise its
+commit is used. When both sides are the same commit it is measured once and the table shows
+absolute numbers.
+Both refs must contain crates/espresso/types/benches/block_build.rs. Results go to
+tmp/bench-block-build/<base>-<head>.{csv,md,svg}.
 """
 
-import argparse
-import html
 import json
 import logging
 import os
 import re
 import shutil
-import statistics
 import subprocess
+import time
+from enum import Enum
 from pathlib import Path
+from typing import Annotated
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import typer
 
 OUT = Path("tmp/bench-block-build")
 BENCH_FILE = "crates/espresso/types/benches/block_build.rs"
-DEFAULT_FILTER = r"^block_build/request_block/(30|50|70)MB_1000KB_t\d+_n10$"
-MALLOC = {"default": {}, "hugetlb": {"GLIBC_TUNABLES": "glibc.malloc.hugetlb=1"}}
+WORKTREE = "worktree"
+DEFAULT_FILTER = r"^block_build/request_block/(30|50|70)MB_1000KB_t\d+_n100$"
+# Waterfall lanes top to bottom: the whole build, its sequential prefix, the commitment phase and
+# the steps inside it that run in parallel.
+LANES = {
+    "request_block": "#898781",
+    "from_transactions": "#2a78d6",
+    "block_commitments": "#c3c2b7",
+    "encode": "#e87ba4",
+    "transaction_commitments": "#eb6834",
+    "vid_commitment": "#1baf7a",
+    "builder_commitment": "#eda100",
+}
 
 log = logging.getLogger("bench-block-build")
 
 
-def main() -> None:
-    args = parse_args()
+class Malloc(str, Enum):
+    default = "default"
+    hugetlb = "hugetlb"
+
+
+MALLOC_ENV = {
+    Malloc.default: {},
+    Malloc.hugetlb: {"GLIBC_TUNABLES": "glibc.malloc.hugetlb=1"},
+}
+
+
+def main(
+    base: Annotated[str, typer.Argument()] = "origin/main",
+    head: Annotated[
+        str,
+        typer.Argument(
+            help=f"git ref, or {WORKTREE!r} for the checkout with its edits"
+        ),
+    ] = WORKTREE,
+    bench_filter: Annotated[
+        str, typer.Option("--filter", help="regex over full benchmark ids")
+    ] = DEFAULT_FILTER,
+    repeats: Annotated[int, typer.Option(min=2)] = 10,
+    malloc: Annotated[
+        list[Malloc] | None,
+        typer.Option(help="repeat to measure several; default hugetlb"),
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option(help="resolve refs and show the plan")
+    ] = False,
+    chart: Annotated[
+        Path | None, typer.Option(help="redraw the SVG of a saved .csv")
+    ] = None,
+) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    if args.chart:
-        redraw(args.chart)
+    mallocs = malloc or [Malloc.hugetlb]
+    if chart:
+        waterfall(pd.read_csv(chart), chart.with_suffix(".svg"))
         return
-    shas = {
-        side: git("rev-parse", "--verify", f"{ref}^{{commit}}")
-        for side, ref in (("base", args.base), ("head", args.head))
-    }
-    for side, ref in (("base", args.base), ("head", args.head)):
-        log.info("%s %s = %s", side, ref, shas[side][:10])
-        if not has_bench(shas[side]):
-            raise SystemExit(
-                f"{side} {ref} has no {BENCH_FILE}; use a ref that contains the bench as base"
-            )
-    if args.dry_run:
-        for side, sha in shas.items():
-            state = "cached" if binary_path(sha).exists() else "build in worktree"
-            log.info("%s: %s (%s)", side, binary_path(sha), state)
-        log.info(
-            "filter %s, %d repeats, malloc %s",
-            args.filter,
-            args.repeats,
-            ", ".join(args.malloc),
-        )
+    refs = {"base": base, "head": head}
+    # Each side is a commit sha, or WORKTREE when it is the checkout with uncommitted edits.
+    shas = {side: resolve(ref) for side, ref in refs.items()}
+    for side, sha in shas.items():
+        log.info("%s %s = %s (%s)", side, refs[side], sha[:10], cache_state(sha))
+        if not has_bench(sha):
+            raise SystemExit(f"{side} {refs[side]} has no {BENCH_FILE}")
+    log.info(
+        "filter %s, %d repeats, malloc %s",
+        bench_filter,
+        repeats,
+        [m.value for m in mallocs],
+    )
+    if dry_run:
         return
 
-    if unknown := set(args.malloc) - set(MALLOC):
-        raise SystemExit(f"unknown --malloc {sorted(unknown)}, expected {list(MALLOC)}")
+    # Both refs at one commit: measure it once and report absolute numbers.
+    if shas["base"] == shas["head"]:
+        del shas["base"]
     binaries = {side: build(sha) for side, sha in shas.items()}
-    names = select(list_benches(binaries["head"]), args.filter)
+    names = [n for n in list_benches(binaries["head"]) if re.search(bench_filter, n)]
     if not names:
-        raise SystemExit(f"no benchmark matches {args.filter!r}")
-    samples = measure(binaries, names, args.malloc, args.repeats)
+        raise SystemExit(f"no benchmark matches {bench_filter!r}")
+    labels = {side: f"{side} {refs[side]} {sha[:10]}" for side, sha in shas.items()}
+    runs = measure(binaries, labels, names, mallocs, repeats)
 
-    table = summarize(samples, names, args.malloc)
+    stem = OUT / "-".join(sha[:10] for sha in shas.values())
+    runs.to_csv(stem.with_suffix(".csv"), index=False)
+    table = summarize(runs)
     print(table)
-    stem = OUT / f"{shas['base'][:10]}-{shas['head'][:10]}"
-    refs = {
-        s: f"{ref} {shas[s][:10]}"
-        for s, ref in (("base", args.base), ("head", args.head))
-    }
-    stem.with_suffix(".svg").write_text(waterfall(samples, names, args.malloc, refs))
-    stem.with_suffix(".json").write_text(
-        json.dumps({"base": shas["base"], "head": shas["head"], "samples": samples})
-    )
-    stem.with_suffix(".md").write_text(
-        f"base {args.base} {shas['base'][:10]}, head {args.head} {shas['head'][:10]}\n\n{table}\n"
-    )
-    log.info("wrote %s.{json,md,svg}", stem)
-
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    p.add_argument("base", nargs="?", default="origin/main")
-    p.add_argument("head", nargs="?", default="HEAD")
-    p.add_argument(
-        "--filter",
-        default=DEFAULT_FILTER,
-        help="regex over full benchmark ids (default: %(default)s)",
-    )
-    p.add_argument("--repeats", type=int, default=3)
-    p.add_argument(
-        "--chart",
-        type=Path,
-        metavar="JSON",
-        help="redraw the SVG of a saved <base>-<head>.json run and exit",
-    )
-    p.add_argument(
-        "--malloc",
-        type=lambda v: v.split(","),
-        default=["hugetlb"],
-        help=f"comma-separated glibc settings out of {', '.join(MALLOC)} (default: hugetlb)",
-    )
-    p.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="resolve refs and show the plan, build and run nothing",
-    )
-    return p.parse_args()
-
-
-def redraw(path: Path) -> None:
-    run = json.loads(path.read_text())
-    samples = run["samples"]
-    keys = [key.split("|", 1) for key in samples]
-    variants = list(dict.fromkeys(variant for variant, _ in keys))
-    names = list(dict.fromkeys(name for _, name in keys))
-    refs = {side: run[side][:10] for side in ("base", "head")}
-    out = path.with_suffix(".svg")
-    out.write_text(waterfall(samples, names, variants, refs))
-    log.info("wrote %s", out)
+    stem.with_suffix(".md").write_text(f"{', '.join(labels.values())}\n\n{table}\n")
+    waterfall(runs, stem.with_suffix(".svg"))
+    log.info("wrote %s.{csv,md,svg}", stem)
 
 
 def measure(
-    binaries: dict[str, Path], names: list[str], variants: list[str], repeats: int
-) -> dict[str, dict[str, list[dict[str, list[float]]]]]:
-    """Per-iteration ms by series (`total` and steps), keyed `variant|name` then side, one dict
-    per run."""
-    samples: dict[str, dict[str, list[dict[str, list[float]]]]] = {}
+    binaries: dict[str, Path],
+    labels: dict[str, str],
+    names: list[str],
+    mallocs: list[Malloc],
+    repeats: int,
+) -> pd.DataFrame:
+    """One row per sample: malloc, benchmark, side, label, rep, step, start, duration (ms), and
+    the share of CPU other work used just before the run (`other_cpu`)."""
+    frames = []
     for rep in range(repeats):
-        order = ["base", "head"] if rep % 2 == 0 else ["head", "base"]
-        for variant in variants:
+        order = list(binaries) if rep % 2 == 0 else list(reversed(binaries))
+        for malloc in mallocs:
             for name in names:
                 for side in order:
-                    run = run_one(binaries[side], name, MALLOC[variant])
-                    samples.setdefault(f"{variant}|{name}", {}).setdefault(
-                        side, []
-                    ).append(run)
-                    log.info(
-                        "rep %d %-7s %-4s %s median %.2f ms",
-                        rep,
-                        variant,
-                        side,
-                        name,
-                        statistics.median(run["total"]),
+                    busy = other_cpu()
+                    warn_if_busy(busy, f"before rep {rep} {side} {name}")
+                    run = run_one(binaries[side], name, MALLOC_ENV[malloc])
+                    run = run.assign(
+                        malloc=malloc.value,
+                        benchmark=name,
+                        side=side,
+                        label=labels[side],
+                        rep=rep,
+                        other_cpu=busy,
                     )
-    return samples
+                    frames.append(run)
+                    total = run.loc[run.step == "request_block", "duration"].median()
+                    log.info(
+                        "rep %d %s %s %s %.2f ms", rep, malloc.value, side, name, total
+                    )
+    return pd.concat(frames, ignore_index=True)
 
 
-def summarize(
-    samples: dict[str, dict[str, list[dict[str, list[float]]]]],
-    names: list[str],
-    variants: list[str],
-) -> str:
-    """One row per benchmark total, then one per step both refs recorded. Steps run partly in
-    parallel, so they do not add up to the total."""
-    rows = [
-        "| malloc | benchmark | step | base ms | head ms | change | base run medians | head run medians |",
-        "|---|---|---|---:|---:|---:|---|---|",
-    ]
-    for variant in variants:
-        for name in names:
-            runs = samples[f"{variant}|{name}"]
-            common = set.intersection(
-                *(set(run) for side in runs.values() for run in side)
+def summarize(runs: pd.DataFrame) -> str:
+    """Markdown table: the whole build, then each step both sides recorded, pooled over repeats."""
+    if runs.side.nunique() == 1:
+        return summarize_one(runs)
+    pooled = runs.pivot_table(
+        index=["malloc", "benchmark", "step"],
+        columns="side",
+        values="duration",
+        aggfunc="median",
+    ).dropna()
+    per_run = runs.groupby(
+        ["malloc", "benchmark", "step", "side", "rep"]
+    ).duration.median()
+    by_side = per_run.groupby(level=[0, 1, 2, 3])
+    spread = by_side.agg(lambda v: " ".join(f"{x:.2f}" for x in v))
+    sem = by_side.sem().unstack("side")
+    change = pooled["head"] / pooled["base"] - 1
+    # Standard error of the relative change, from the spread of each side's run medians.
+    ratio = pooled["head"] / pooled["base"]
+    change_se = (sem["head"] ** 2 + ratio**2 * sem["base"] ** 2) ** 0.5 / pooled["base"]
+    table = pooled.assign(
+        change=[
+            f"{c:+.1%} ± {se:.1%}{'' if abs(c) > 2 * se else ' (noise)'}"
+            for c, se in zip(change, change_se.reindex(change.index), strict=True)
+        ],
+        base_runs=spread.xs("base", level="side"),
+        head_runs=spread.xs("head", level="side"),
+    ).reset_index()
+    return order_rows(table).to_markdown(index=False, floatfmt=".2f")
+
+
+def summarize_one(runs: pd.DataFrame) -> str:
+    """Markdown table for a single ref: median, standard error and run medians per step."""
+    keys = ["malloc", "benchmark", "step"]
+    per_run = runs.groupby([*keys, "rep"]).duration.median().groupby(level=keys)
+    table = pd.DataFrame(
+        {
+            "ms": runs.groupby(keys).duration.median(),
+            "± se": per_run.sem(),
+            "runs": per_run.agg(lambda v: " ".join(f"{x:.2f}" for x in v)),
+        }
+    ).reset_index()
+    return order_rows(table).to_markdown(index=False, floatfmt=".2f")
+
+
+def order_rows(table: pd.DataFrame) -> pd.DataFrame:
+    """Shorter benchmark names; per benchmark the whole build first, then steps by name."""
+    table["benchmark"] = table.benchmark.str.removeprefix("block_build/")
+    table["order"] = table.step.ne("request_block")
+    return table.sort_values(["malloc", "benchmark", "order", "step"]).drop(
+        columns="order"
+    )
+
+
+def waterfall(runs: pd.DataFrame, path: Path) -> None:
+    """One panel per malloc, benchmark and side: bars at each step's median start and duration."""
+    steps = runs[runs.step.isin(LANES.keys())]
+    keys = ["malloc", "benchmark", "label", "step"]
+    medians = steps.groupby(keys)[["start", "duration"]].median()
+    # Error bars: standard error of the duration across run medians.
+    sem = steps.groupby([*keys, "rep"]).duration.median().groupby(level=keys).sem()
+    panels = medians.index.droplevel("step").unique()
+    fig, axes = plt.subplots(
+        len(panels), sharex=True, squeeze=False, figsize=(10, 2.2 * len(panels))
+    )
+    for ax, panel in zip(axes[:, 0], panels, strict=True):
+        bars = medians.loc[panel].reindex(list(LANES))
+        errors = sem.loc[panel].reindex(list(LANES)).fillna(0)
+        lanes = range(len(LANES))
+        ax.barh(
+            lanes,
+            bars.duration,
+            left=bars.start,
+            color=list(LANES.values()),
+            height=0.6,
+            xerr=errors,
+            error_kw={"ecolor": "#52514e", "capsize": 3},
+        )
+        for lane, (start, duration), error in zip(
+            lanes, bars.itertuples(index=False), errors, strict=True
+        ):
+            note = "not run" if pd.isna(duration) else f"{duration:.1f} ms"
+            ax.text(
+                0 if pd.isna(start) else start + duration + error,
+                lane,
+                f"  {note}",
+                va="center",
             )
-            steps = sorted(s for s in common - {"total"} if not s.startswith("@"))
-            for series in ["total", *steps]:
-                base, head = (
-                    statistics.median([t for run in runs[s] for t in run[series]])
-                    for s in ("base", "head")
-                )
-                per_run = [
-                    " ".join(f"{statistics.median(run[series]):.2f}" for run in runs[s])
-                    for s in ("base", "head")
-                ]
-                short = name.removeprefix("block_build/")
-                rows.append(
-                    f"| {variant} | {short} | {series} | {base:.2f} | {head:.2f} | {(head / base - 1) * 100:+.1f}% | {per_run[0]} | {per_run[1]} |"
-                )
-    return "\n".join(rows)
-
-
-# Lane order top to bottom: the whole build, its sequential prefix, then the parallel commitments.
-LANES = [
-    ("request_block", "request_block (total)", "frame"),
-    ("from_transactions", "from_transactions", "s1"),
-    ("block_commitments", "block_commitments", "frame"),
-    ("transaction_commitments", "transaction_commitments", "s2"),
-    ("vid_commitment", "vid_commitment", "s3"),
-    ("builder_commitment", "builder_commitment", "s4"),
-]
-
-
-def waterfall(
-    samples: dict[str, dict[str, list[dict[str, list[float]]]]],
-    names: list[str],
-    variants: list[str],
-    refs: dict[str, str],
-) -> str:
-    """Standalone SVG: one waterfall per benchmark and ref, stacked, with bars at each step's
-    median start and median duration on a shared ms axis."""
-
-    def pooled(runs: list[dict[str, list[float]]], key: str) -> float | None:
-        values = [v for run in runs for v in run.get(key, [])]
-        return statistics.median(values) if values else None
-
-    panels = []
-    for variant in variants:
-        for name in names:
-            for side in ("base", "head"):
-                runs = samples[f"{variant}|{name}"][side]
-                bars = {
-                    key: (start, duration)
-                    for key, _, _ in LANES
-                    if (start := pooled(runs, f"@{key}")) is not None
-                    and (duration := pooled(runs, key)) is not None
-                }
-                short = name.removeprefix("block_build/request_block/")
-                panels.append((f"{short} · {variant} · {side} {refs[side]}", bars))
-    scale_ms = max([s + d for _, bars in panels for s, d in bars.values()] or [1.0])
-
-    header = (
-        '<text class="h1" x="16" y="28">Leader block build, step by step</text>'
-        '<text class="note" x="16" y="48">Bars start at the median step start and span the '
-        "median duration. Overlapping bars ran in parallel.</text>"
-        '<text class="note" x="16" y="64">Gray bars are the whole build and the commitment '
-        "phase that contains the parallel steps.</text>"
-    )
-    y, groups = 84, []
-    for title, bars in panels:
-        group, height = panel(title, bars, scale_ms)
-        groups.append(f'<g transform="translate(16 {y})">{group}</g>')
-        y += height + 16
-    width = PANEL_LABEL_W + PANEL_PLOT_W + 100
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {y}" width="{width}" '
-        f'height="{y}" font-family="system-ui, sans-serif">{SVG_STYLE}'
-        f'<rect class="bg" width="100%" height="100%"/>{header}{"".join(groups)}</svg>'
-    )
-
-
-PANEL_LABEL_W, PANEL_PLOT_W, LANE_H, PANEL_TOP = 190, 560, 26, 28
-
-
-def panel(
-    title: str, bars: dict[str, tuple[float, float]], scale_ms: float
-) -> tuple[str, int]:
-    def x(ms: float) -> float:
-        return PANEL_LABEL_W + ms / scale_ms * PANEL_PLOT_W
-
-    step = next(s for s in (1, 2, 5, 10, 20, 50, 100) if scale_ms / s <= 8)
-    height = PANEL_TOP + LANE_H * len(LANES) + 22
-    parts = [f'<text class="title" x="0" y="16">{html.escape(title)}</text>']
-    for t in range(0, int(scale_ms) + 1, step):
-        parts.append(
-            f'<line class="grid" x1="{x(t):.1f}" x2="{x(t):.1f}" y1="{PANEL_TOP - 4}" '
-            f'y2="{height - 20}"/><text class="tick" x="{x(t):.1f}" y="{height - 6}">{t} ms</text>'
+        ax.set_yticks(list(lanes), list(LANES))
+        ax.invert_yaxis()
+        ax.set_title(
+            " · ".join(panel).replace("block_build/request_block/", ""), loc="left"
         )
-    for row, (key, label, color) in enumerate(LANES):
-        y = PANEL_TOP + row * LANE_H
-        parts.append(
-            f'<text class="lane" x="{PANEL_LABEL_W - 10}" y="{y + 15}">{label}</text>'
-        )
-        if key not in bars:
-            parts.append(
-                f'<text class="value" x="{PANEL_LABEL_W}" y="{y + 15}">not run</text>'
-            )
-            continue
-        start, duration = bars[key]
-        width = max(duration / scale_ms * PANEL_PLOT_W, 2)
-        parts.append(
-            f'<rect class="{color}" x="{x(start):.1f}" y="{y + 5}" width="{width:.1f}" height="14" '
-            f'rx="3"><title>{label}: starts {start:.2f} ms, takes {duration:.2f} ms</title></rect>'
-            f'<text class="value" x="{x(start) + width + 6:.1f}" y="{y + 15}">{duration:.1f} ms</text>'
-        )
-    return "".join(parts), height
-
-
-SVG_STYLE = """<style>
-.bg { fill: #fcfcfb } .h1 { fill: #0b0b0b; font-size: 18px; font-weight: 600 }
-.note, .lane { fill: #52514e; font-size: 12px } .lane { text-anchor: end }
-.title { fill: #0b0b0b; font-size: 13px; font-weight: 600 }
-.value, .tick { fill: #898781; font-size: 11px } .tick { text-anchor: middle; font-size: 10px }
-.grid { stroke: #e1e0d9; stroke-width: 1 } .frame { fill: #c3c2b7 }
-.s1 { fill: #2a78d6 } .s2 { fill: #eb6834 } .s3 { fill: #1baf7a } .s4 { fill: #eda100 }
-@media (prefers-color-scheme: dark) {
-  .bg { fill: #1a1a19 } .h1, .title { fill: #ffffff } .note, .lane { fill: #c3c2b7 }
-  .grid { stroke: #2c2c2a } .frame { fill: #383835 }
-  .s1 { fill: #3987e5 } .s2 { fill: #d95926 } .s3 { fill: #199e70 } .s4 { fill: #c98500 }
-}
-</style>"""
-
-
-def select(names: list[str], pattern: str) -> list[str]:
-    regex = re.compile(pattern)
-    return [n for n in names if regex.search(n)]
-
-
-def parse_list(output: str) -> list[str]:
-    return [
-        line.removesuffix(": benchmark")
-        for line in output.splitlines()
-        if line.endswith(": benchmark")
-    ]
-
-
-def list_benches(binary: Path) -> list[str]:
-    return parse_list(
-        subprocess.run(
-            [str(binary), "--bench", "--list"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
+        ax.grid(axis="x", color="#e1e0d9")
+        ax.set_axisbelow(True)
+    end = (medians.start + medians.duration).max()
+    axes[-1, 0].set_xlim(0, end * 1.15)
+    axes[-1, 0].set_xlabel(
+        "ms since the build started; overlapping bars ran in parallel;"
+        " whiskers are one standard error across runs"
     )
+    fig.tight_layout()
+    fig.savefig(path)
 
 
-def run_one(binary: Path, name: str, env: dict[str, str]) -> dict[str, list[float]]:
-    """Per-iteration ms under `total`, plus each step's span durations if the bench records them."""
+# Share of CPU time other work may use while the bench is idle before a run warns.
+BUSY_LIMIT = 0.05
+
+
+def other_cpu(window: float = 0.3) -> float:
+    """Share of CPU time busy over `window` seconds, sampled while no benchmark runs, so all of
+    it is other work."""
+
+    def times() -> tuple[int, int]:
+        fields = [
+            int(x) for x in Path("/proc/stat").read_text().split("\n", 1)[0].split()[1:]
+        ]
+        # user..steal; guest and guest_nice are already counted in user and nice.
+        fields = fields[:8]
+        idle = fields[3] + fields[4]  # idle + iowait
+        return idle, sum(fields)
+
+    idle0, total0 = times()
+    time.sleep(window)
+    idle1, total1 = times()
+    return 1 - (idle1 - idle0) / max(total1 - total0, 1)
+
+
+def warn_if_busy(busy: float, when: str) -> None:
+    if busy > BUSY_LIMIT:
+        log.warning(
+            "warning: other work used %.0f%% of CPU %s; results are skewed, run on an idle machine",
+            busy * 100,
+            when,
+        )
+
+
+def run_one(binary: Path, name: str, env: dict[str, str]) -> pd.DataFrame:
     home = OUT / "criterion"
-    steps = home / name / "steps.json"
-    steps.unlink(missing_ok=True)
+    sample_file, steps_file = (
+        home / name / "new" / "sample.json",
+        home / name / "steps.json",
+    )
+    # A binary without this benchmark exits 0 and writes nothing; never read a previous run.
+    sample_file.unlink(missing_ok=True)
+    steps_file.unlink(missing_ok=True)
     run = subprocess.run(
-        [str(binary), "--bench", "--noplot", f"^{re.escape(name)}$"],
+        [binary, "--bench", "--noplot", f"^{re.escape(name)}$"],
         env={**os.environ, **env, "CRITERION_HOME": str(home.resolve())},
         check=False,
         capture_output=True,
         text=True,
     )
-    if run.returncode:
+    if run.returncode or not sample_file.exists():
         raise SystemExit(f"{binary} {name} failed:\n{run.stderr}")
-    sample = json.loads((home / name / "new" / "sample.json").read_text())
-    series = {
-        "total": [
-            t / i / 1e6 for t, i in zip(sample["times"], sample["iters"], strict=True)
-        ]
-    }
-    for step, runs in (json.loads(steps.read_text()) if steps.exists() else {}).items():
-        # Older benches record durations only; newer ones `[start, duration]`.
-        if runs and isinstance(runs[0], list):
-            series[f"@{step}"] = [start for start, _ in runs]
-            runs = [duration for _, duration in runs]
-        series[step] = runs
-    return series
+    if not steps_file.exists():
+        raise SystemExit(f"{binary} {name} recorded no steps")
+    # Steps start with criterion's warm-up iterations; keep one per measured iteration.
+    measured = int(sum(json.loads(sample_file.read_text())["iters"]))
+    rows = [
+        (step, s, d)
+        for step, spans in json.loads(steps_file.read_text()).items()
+        for s, d in spans[-measured:]
+    ]
+    return pd.DataFrame(rows, columns=["step", "start", "duration"])
 
 
-def binary_path(sha: str) -> Path:
-    return OUT / "bin" / sha
+def list_benches(binary: Path) -> list[str]:
+    out = subprocess.run(
+        [binary, "--bench", "--list"], check=True, capture_output=True, text=True
+    )
+    return [
+        line.removesuffix(": benchmark")
+        for line in out.stdout.splitlines()
+        if line.endswith(": benchmark")
+    ]
+
+
+def resolve(ref: str) -> str:
+    if ref == WORKTREE:
+        if git("status", "--porcelain", "--untracked-files=no"):
+            return WORKTREE
+        ref = "HEAD"
+    return git("rev-parse", "--verify", f"{ref}^{{commit}}")
+
+
+def has_bench(sha: str) -> bool:
+    if sha == WORKTREE:
+        return Path(BENCH_FILE).exists()
+    probe = ["git", "cat-file", "-e", f"{sha}:{BENCH_FILE}"]
+    return subprocess.run(probe, check=False, capture_output=True).returncode == 0
+
+
+def cache_state(sha: str) -> str:
+    if sha == WORKTREE:
+        return "uncommitted edits, build here"
+    return "cached" if (OUT / "bin" / sha).exists() else "build in worktree"
 
 
 def build(sha: str) -> Path:
-    target = binary_path(sha)
+    target = OUT / "bin" / sha
+    if sha == WORKTREE:
+        log.info("building block_build in the working tree")
+        return install(cargo_bench(Path.cwd(), dict(os.environ)), target)
     if target.exists():
-        log.info("cached %s", target)
         return target
     worktree = (OUT / "worktrees" / sha).resolve()
+    # A run killed mid-build leaves its worktree behind.
+    shutil.rmtree(worktree, ignore_errors=True)
+    git("worktree", "prune")
     git("worktree", "add", "--detach", str(worktree), sha)
+    # Share build artifacts between refs unless the caller already picked a target dir.
+    env = {"CARGO_TARGET_DIR": str((OUT / "target").resolve()), **os.environ}
     try:
         log.info("building block_build at %s", sha[:10])
-        out = subprocess.run(
-            [
-                "cargo",
-                "bench",
-                "-p",
-                "espresso-types",
-                "--bench",
-                "block_build",
-                "--no-run",
-                "--message-format=json",
-            ],
-            cwd=worktree,
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-        ).stdout
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(bench_executable(out), target)
+        executable = cargo_bench(worktree, env)
+        return install(executable, target)
     finally:
         git("worktree", "remove", "--force", str(worktree))
-    return target
 
 
-def bench_executable(cargo_json: str) -> Path:
-    for line in cargo_json.splitlines():
-        msg = json.loads(line)
+def cargo_bench(cwd: Path, env: dict[str, str]) -> Path:
+    """Build the bench in `cwd` and return the executable cargo reports."""
+    cargo = ["cargo", "bench", "-p", "espresso-types", "--bench", "block_build"]
+    out = subprocess.run(
+        [*cargo, "--no-run", "--message-format=json"],
+        cwd=cwd,
+        env=env,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout
+    for msg in map(json.loads, out.splitlines()):
         if (
             msg.get("reason") == "compiler-artifact"
             and msg["target"]["name"] == "block_build"
@@ -421,22 +423,21 @@ def bench_executable(cargo_json: str) -> Path:
     raise SystemExit("cargo did not report a block_build executable")
 
 
-def has_bench(sha: str) -> bool:
-    return (
-        subprocess.run(
-            ["git", "cat-file", "-e", f"{sha}:{BENCH_FILE}"],
-            check=False,
-            capture_output=True,
-        ).returncode
-        == 0
-    )
+def install(executable: Path, target: Path) -> Path:
+    """Copy the bench binary into the cache atomically, so an interrupted copy is never used."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_suffix(".partial")
+    shutil.copy2(executable, partial)
+    os.replace(partial, target)
+    return target
 
 
 def git(*args: str) -> str:
-    return subprocess.run(
-        ["git", *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
+    run = subprocess.run(["git", *args], check=False, capture_output=True, text=True)
+    if run.returncode:
+        raise SystemExit(f"git {' '.join(args)} failed:\n{run.stderr.strip()}")
+    return run.stdout.strip()
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)
