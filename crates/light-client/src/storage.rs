@@ -338,6 +338,12 @@ impl LightClientSqliteOptions {
                      LIGHT_CLIENT_DB_PATH to use a persistent location",
                 )?;
                 let path = dir.path().join("lc.db");
+                tracing::warn!(
+                    path = %path.display(),
+                    "LIGHT_CLIENT_DB_PATH is not set, so the light client database is in a \
+                     temporary directory and its leaves and stake tables are lost on restart. Set \
+                     LIGHT_CLIENT_DB_PATH to a persistent location"
+                );
                 (path, Some(Arc::new(dir)))
             },
         };
