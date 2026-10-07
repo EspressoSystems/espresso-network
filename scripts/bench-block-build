@@ -14,7 +14,7 @@ each step, and a waterfall chart.
     scripts/bench-block-build --filter 'request_block/50MB' --repeats 3 main HEAD
     scripts/bench-block-build --chart tmp/bench-block-build/<base>-<head>.csv
 
-Each ref is built in a temporary git worktree, sharing tmp/bench-block-build/target. Each
+Each ref is built in a temporary git worktree into this checkout's target dir. Each
 benchmark runs in its own process, since glibc's mmap threshold depends on earlier allocations,
 with base and head alternating, under glibc.malloc.hugetlb=1 by default (the AWS bench nodes).
 Changes carry one standard error from the spread of run medians and are marked as noise within
@@ -315,7 +315,8 @@ def build(sha: str, tmp: Path) -> Path:
         worktree = tmp / sha
         git("worktree", "prune")
         git("worktree", "add", "--detach", str(worktree), sha)
-        env = {"CARGO_TARGET_DIR": str(OUT / "target"), **os.environ}
+        # Reuse this checkout's target dir: only the workspace crates rebuild at the new path.
+        env = {"CARGO_TARGET_DIR": str(ROOT / "target"), **os.environ}
         try:
             executable = cargo_bench(worktree, env)
         finally:
