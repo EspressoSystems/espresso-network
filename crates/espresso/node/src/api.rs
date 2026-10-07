@@ -2048,6 +2048,15 @@ pub mod test_helpers {
             self
         }
 
+        /// See [`TestConfig::set_genesis_chain_config`]. Call after `network_config`.
+        pub fn genesis_chain_config(mut self, chain_config: ChainConfig) -> Self {
+            self.network_config
+                .as_mut()
+                .expect("network_config is required")
+                .set_genesis_chain_config(chain_config);
+            self
+        }
+
         pub fn contracts(mut self, contracts: Contracts) -> Self {
             self.contracts = Some(contracts);
             self
@@ -4377,7 +4386,7 @@ mod test {
             chain_config: cf.into(),
             ..Default::default()
         };
-        let config = builder.states(states).build();
+        let config = builder.states(states).genesis_chain_config(cf).build();
 
         let mut network = TestNetwork::new(config, TEST_UPGRADE).await;
 
@@ -4390,8 +4399,8 @@ mod test {
             .collect::<Vec<_>>()
             .await;
 
-        for peer in &network.peers {
-            let state = peer.consensus_handle().decided_state().await.unwrap();
+        for node in std::iter::once(&network.server).chain(&network.peers) {
+            let state = node.consensus_handle().decided_state().await.unwrap();
 
             assert_eq!(state.chain_config.resolve().unwrap(), cf)
         }

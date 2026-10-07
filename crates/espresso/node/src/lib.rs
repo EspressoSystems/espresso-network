@@ -1159,8 +1159,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
-        UpgradeMap, UpgradeMode,
+        ChainConfig, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
+        Upgrade, UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -1528,6 +1528,7 @@ pub mod testing {
                 anvil_provider: self.anvil_provider,
                 coordinator_addrs: self.coordinator_addrs,
                 contracts: self.contracts,
+                genesis_chain_config: None,
             }
         }
 
@@ -1667,6 +1668,8 @@ pub mod testing {
         coordinator_addrs: Vec<NetAddr>,
         /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if any.
         contracts: Option<Contracts>,
+        /// See [`Self::set_genesis_chain_config`].
+        genesis_chain_config: Option<ChainConfig>,
     }
 
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
@@ -1757,6 +1760,15 @@ pub mod testing {
         pub fn set_consensus_keys(&mut self, i: usize, bls: BLSPrivKey, state: StateKeyPair) {
             self.priv_keys[i] = bls;
             self.state_key_pairs[i] = state;
+        }
+
+        /// Builds every node's genesis header from `chain_config`, as a real
+        /// network's shared genesis file does. Otherwise a node takes it from
+        /// its own starting state, so nodes that start from only a commitment
+        /// build a different genesis leaf, and the new protocol rejects each
+        /// other's genesis QC.
+        pub fn set_genesis_chain_config(&mut self, chain_config: ChainConfig) {
+            self.genesis_chain_config = Some(chain_config);
         }
 
         /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if
@@ -1928,7 +1940,7 @@ pub mod testing {
             );
 
             let max_block_size = *chain_config.max_block_size;
-            let node_state = NodeState::new(
+            let mut node_state = NodeState::new(
                 i as u64,
                 chain_config,
                 l1_client,
@@ -1942,6 +1954,12 @@ pub mod testing {
             .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades)
             .with_epoch_start_block(config.epoch_start_block);
+            // Only the genesis header: `chain_config` stays what this node resolves from its
+            // state, so a node that starts from a commitment still has to fetch the config.
+            if let Some(genesis_chain_config) = self.genesis_chain_config {
+                node_state.genesis_header.chain_config = genesis_chain_config;
+                node_state.genesis_chain_config = genesis_chain_config;
+            }
 
             tracing::info!(
                 i,
