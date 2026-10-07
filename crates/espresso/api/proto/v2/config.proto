@@ -204,12 +204,21 @@ enum StorageBackend {
   STORAGE_BACKEND_FS = 2;
   // Filesystem storage with default settings, used when no storage flag was given
   STORAGE_BACKEND_FS_DEFAULT = 3;
+  STORAGE_BACKEND_JOURNAL = 4;
 }
 
 message FsStorage {
   string path = 1;
 
   uint64 consensus_view_retention = 2;
+}
+
+message JournalStorage {
+  string path = 1;
+
+  uint64 view_retention = 2;
+
+  uint64 max_bytes = 3;
 }
 
 // Retention policy for the archival tables. Durations are whole milliseconds, rounded down
@@ -290,14 +299,16 @@ message SqlStorage {
   ConsensusPruningConfig consensus_pruning = 21;
 }
 
-// `fs` and `sql` follow `backend`, and both are absent when the default filesystem backend was
-// never given a path
+// `fs`, `sql` and `journal` follow `backend`, and all are absent when the default filesystem
+// backend was never given a path
 message NodeStorage {
   StorageBackend backend = 1;
 
   optional FsStorage fs = 2;
 
   optional SqlStorage sql = 3;
+
+  optional JournalStorage journal = 4;
 }
 
 message HttpModule {

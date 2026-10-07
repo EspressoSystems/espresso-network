@@ -48,6 +48,7 @@ chrono = { workspace = true }
 clap = { workspace = true }
 client = { workspace = true }
 committable = { workspace = true }
+crc32fast = { workspace = true }
 csv = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }

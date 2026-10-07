@@ -111,8 +111,11 @@ Backends:
 - PostgreSQL (`sql.rs`): production DA/archival, merklized, pruning supported
 - Filesystem (`fs.rs`): production non-DA validators, not merklized, limited pruning
 - SQLite (`sql.rs` + `embedded-db`): not yet production, merklized, pruning supported
+- Journal (`persistence/journal.rs`, `storage-journal` module): append-only consensus persistence for non-query nodes,
+  no query module support (`run.rs` refuses `query` and a genesis below `NEW_PROTOCOL_VERSION`). Two write-ahead streams
+  (`wal`, `data`) with group-committed fsyncs and segment-level GC; side `fs::Persistence` for membership/DHT/DRB state.
 
-Migrations (all three backends required when adding storage):
+Migrations (all backends required when adding storage):
 
 - SQL via Refinery. Naming `V{n}__{name}.sql`.
 - Locations: `crates/espresso/node/api/migrations/{postgres,sqlite}/`,
@@ -120,6 +123,8 @@ Migrations (all three backends required when adding storage):
 - hotshot-query-service uses multiples of 100 (V100, V200...) leaving gaps for applications.
 - Filesystem (`crates/espresso/node/src/persistence/fs.rs`): no migration framework. Handle older on-disk formats with
   read-time fallbacks (see `load_stake` and `legacy_anchor_leaf_path`), and keep writes atomic via `Inner::replace`.
+- Journal: no migration framework either. Record format is a single `format = 1`; add fields with try-parse fallbacks
+  rather than bumping it.
 - Update `SequencerPersistence` for all backends; test with `cargo test -p espresso-node persistence`.
 
 Refinery migrations run synchronously at startup before the node joins consensus, so they must be fast and schema-only.
