@@ -2011,11 +2011,10 @@ pub mod testing {
     ) -> (u64, usize) {
         let commitment = submitted_txn.commit();
 
-        // At 0.6 a decide carries the block payload only on the node that
-        // built the block; every other node receives the payload through a
-        // separate `BlockPayloadReconstructed` event, which can arrive before
-        // or after the decide. Pair the two by view so the transaction is
-        // only reported once its block is decided.
+        // At 0.6 a decide carries the block payload if the node built or
+        // reconstructed it by then; otherwise the payload follows in a
+        // separate `BlockPayloadReconstructed` event. Pair the two by view so
+        // the transaction is only reported once its block is decided.
         let mut reconstructed = HashMap::new();
         let mut decided_without_payload = HashSet::new();
 
