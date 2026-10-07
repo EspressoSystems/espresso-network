@@ -32,6 +32,7 @@ tmp/bench-block-build/<base>-<head>.{json,md}.
 """
 
 import argparse
+import html
 import json
 import logging
 import os
@@ -42,6 +43,7 @@ import subprocess
 from pathlib import Path
 
 OUT = Path("tmp/bench-block-build")
+BENCH_FILE = "crates/espresso/types/benches/block_build.rs"
 DEFAULT_FILTER = r"^block_build/request_block/(30|50|70)MB_1000KB_t\d+_n10$"
 MALLOC = {"default": {}, "hugetlb": {"GLIBC_TUNABLES": "glibc.malloc.hugetlb=1"}}
 
@@ -57,6 +59,10 @@ def main() -> None:
     }
     for side, ref in (("base", args.base), ("head", args.head)):
         log.info("%s %s = %s", side, ref, shas[side][:10])
+        if not has_bench(shas[side]):
+            raise SystemExit(
+                f"{side} {ref} has no {BENCH_FILE}; use a ref that contains the bench as base"
+            )
     if args.dry_run:
         for side, sha in shas.items():
             state = "cached" if binary_path(sha).exists() else "build in worktree"
@@ -80,13 +86,18 @@ def main() -> None:
     table = summarize(samples, names, args.malloc)
     print(table)
     stem = OUT / f"{shas['base'][:10]}-{shas['head'][:10]}"
+    refs = {
+        s: f"{ref} {shas[s][:10]}"
+        for s, ref in (("base", args.base), ("head", args.head))
+    }
+    stem.with_suffix(".html").write_text(waterfall(samples, names, args.malloc, refs))
     stem.with_suffix(".json").write_text(
         json.dumps({"base": shas["base"], "head": shas["head"], "samples": samples})
     )
     stem.with_suffix(".md").write_text(
         f"base {args.base} {shas['base'][:10]}, head {args.head} {shas['head'][:10]}\n\n{table}\n"
     )
-    log.info("wrote %s.{json,md}", stem)
+    log.info("wrote %s.{json,md,html}", stem)
 
 
 def parse_args() -> argparse.Namespace:
@@ -158,7 +169,8 @@ def summarize(
             common = set.intersection(
                 *(set(run) for side in runs.values() for run in side)
             )
-            for series in ["total", *sorted(common - {"total"})]:
+            steps = sorted(s for s in common - {"total"} if not s.startswith("@"))
+            for series in ["total", *steps]:
                 base, head = (
                     statistics.median([t for run in runs[s] for t in run[series]])
                     for s in ("base", "head")
@@ -172,6 +184,114 @@ def summarize(
                     f"| {variant} | {short} | {series} | {base:.2f} | {head:.2f} | {(head / base - 1) * 100:+.1f}% | {per_run[0]} | {per_run[1]} |"
                 )
     return "\n".join(rows)
+
+
+# Lane order top to bottom: the whole build, its sequential prefix, then the parallel commitments.
+LANES = [
+    ("request_block", "request_block (total)", "--frame"),
+    ("from_transactions", "from_transactions", "--s1"),
+    ("block_commitments", "block_commitments", "--frame"),
+    ("transaction_commitments", "transaction_commitments", "--s2"),
+    ("vid_commitment", "vid_commitment", "--s3"),
+    ("builder_commitment", "builder_commitment", "--s4"),
+]
+
+
+def waterfall(
+    samples: dict[str, dict[str, list[dict[str, list[float]]]]],
+    names: list[str],
+    variants: list[str],
+    refs: dict[str, str],
+) -> str:
+    """Self-contained HTML: one waterfall per benchmark and ref, bars at each step's median start
+    and median duration, on a shared ms axis."""
+
+    def pooled(runs: list[dict[str, list[float]]], key: str) -> float | None:
+        values = [v for run in runs for v in run.get(key, [])]
+        return statistics.median(values) if values else None
+
+    panels = []
+    for variant in variants:
+        for name in names:
+            for side in ("base", "head"):
+                runs = samples[f"{variant}|{name}"][side]
+                bars = [
+                    (label, var, start, duration)
+                    for key, label, var in LANES
+                    if (start := pooled(runs, f"@{key}")) is not None
+                    and (duration := pooled(runs, key)) is not None
+                ]
+                title = f"{name.removeprefix('block_build/request_block/')} · {variant} · {side} {refs[side]}"
+                panels.append((title, bars))
+    scale_ms = max([s + d for _, bars in panels for _, _, s, d in bars] or [1.0])
+    body = "".join(panel_svg(title, bars, scale_ms) for title, bars in panels)
+    if not any(bars for _, bars in panels):
+        body = "<p>No step start times recorded; both refs need the bench with step timing.</p>"
+    return WATERFALL_PAGE.format(body=body)
+
+
+def panel_svg(
+    title: str, bars: list[tuple[str, str, float, float]], scale_ms: float
+) -> str:
+    label_w, plot_w, lane_h, top = 190, 560, 26, 34
+    x = lambda ms: label_w + ms / scale_ms * plot_w
+    step = next(s for s in (1, 2, 5, 10, 20, 50, 100) if scale_ms / s <= 8)
+    height = top + lane_h * len(LANES) + 26
+    parts = [f'<text class="title" x="0" y="16">{html.escape(title)}</text>']
+    for t in range(0, int(scale_ms) + 1, step):
+        parts.append(
+            f'<line class="grid" x1="{x(t):.1f}" x2="{x(t):.1f}" y1="{top - 6}" y2="{height - 22}"/>'
+            f'<text class="tick" x="{x(t):.1f}" y="{height - 6}">{t} ms</text>'
+        )
+    for row, (_, label, _) in enumerate(LANES):
+        y = top + row * lane_h
+        parts.append(
+            f'<text class="lane" x="{label_w - 10}" y="{y + 15}">{label}</text>'
+        )
+        bar = next((b for b in bars if b[0] == label), None)
+        if bar is None:
+            parts.append(
+                f'<text class="none" x="{label_w}" y="{y + 15}">not run</text>'
+            )
+            continue
+        _, var, start, duration = bar
+        width = max(duration / scale_ms * plot_w, 2)
+        parts.append(
+            f'<rect x="{x(start):.1f}" y="{y + 5}" width="{width:.1f}" height="14" rx="3" '
+            f'fill="var({var})"><title>{label}: starts {start:.2f} ms, takes {duration:.2f} ms</title></rect>'
+            f'<text class="value" x="{x(start) + width + 6:.1f}" y="{y + 15}">{duration:.1f} ms</text>'
+        )
+    width = label_w + plot_w + 70
+    return f'<figure><svg viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(title)}">{"".join(parts)}</svg></figure>'
+
+
+WATERFALL_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Block build waterfall</title>
+<style>
+:root {{ color-scheme: light; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --frame: #c3c2b7; --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; }}
+@media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{ color-scheme: dark;
+  --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --frame: #383835;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; }} }}
+:root[data-theme="dark"] {{ color-scheme: dark; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7;
+  --muted: #898781; --grid: #2c2c2a; --frame: #383835; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; }}
+body {{ margin: 0; padding: 16px; background: var(--surface); color: var(--ink); font: 13px/1.4 system-ui, sans-serif; }}
+h1 {{ font-size: 18px; margin: 0 0 4px; }} p {{ color: var(--ink-2); margin: 0 0 16px; max-width: 760px; }}
+figure {{ margin: 0 0 20px; }} svg {{ width: 100%; max-width: 820px; height: auto; display: block; }}
+.title {{ fill: var(--ink); font-weight: 600; font-size: 13px; }}
+.lane {{ fill: var(--ink-2); text-anchor: end; font-size: 12px; }}
+.value, .none {{ fill: var(--muted); font-size: 11px; }} .tick {{ fill: var(--muted); font-size: 10px; text-anchor: middle; }}
+.grid {{ stroke: var(--grid); stroke-width: 1; }}
+</style></head><body>
+<h1>Leader block build, step by step</h1>
+<p>Each bar starts at the step's median start and spans its median duration, from the step's tracing
+span. Steps on the same time range ran in parallel; gray bars are the whole build and the commitment
+phase that contains the parallel steps. Hover a bar for exact values.</p>
+{body}
+</body></html>
+"""
 
 
 def select(names: list[str], pattern: str) -> list[str]:
@@ -213,8 +333,18 @@ def run_one(binary: Path, name: str, env: dict[str, str]) -> dict[str, list[floa
     if run.returncode:
         raise SystemExit(f"{binary} {name} failed:\n{run.stderr}")
     sample = json.loads((home / name / "new" / "sample.json").read_text())
-    total = [t / i / 1e6 for t, i in zip(sample["times"], sample["iters"], strict=True)]
-    return {"total": total, **(json.loads(steps.read_text()) if steps.exists() else {})}
+    series = {
+        "total": [
+            t / i / 1e6 for t, i in zip(sample["times"], sample["iters"], strict=True)
+        ]
+    }
+    for step, runs in (json.loads(steps.read_text()) if steps.exists() else {}).items():
+        # Older benches record durations only; newer ones `[start, duration]`.
+        if runs and isinstance(runs[0], list):
+            series[f"@{step}"] = [start for start, _ in runs]
+            runs = [duration for _, duration in runs]
+        series[step] = runs
+    return series
 
 
 def binary_path(sha: str) -> Path:
@@ -263,6 +393,17 @@ def bench_executable(cargo_json: str) -> Path:
         ):
             return Path(msg["executable"])
     raise SystemExit("cargo did not report a block_build executable")
+
+
+def has_bench(sha: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{sha}:{BENCH_FILE}"],
+            check=False,
+            capture_output=True,
+        ).returncode
+        == 0
+    )
 
 
 def git(*args: str) -> str:

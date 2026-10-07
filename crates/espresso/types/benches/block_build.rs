@@ -124,22 +124,32 @@ fn request_block(
     txs: &[Transaction],
     weight: usize,
 ) -> (PayloadWithMetadata<SeqTypes>, BlockCommitments<SeqTypes>) {
+    let _span = tracing::debug_span!("request_block").entered();
     let (payload, metadata) = build(txs);
     let payload = PayloadWithMetadata { payload, metadata };
     let commitments = block_commitments(&payload, weight, NEW_PROTOCOL_VERSION);
     (payload, commitments)
 }
 
-/// Durations in ms of closed spans, by span name.
-static STEPS: Mutex<BTreeMap<&'static str, Vec<f64>>> = Mutex::new(BTreeMap::new());
+/// `[start, duration]` in ms of closed spans, by span name; start is relative to the enclosing
+/// `request_block` span.
+static STEPS: Mutex<BTreeMap<&'static str, Vec<[f64; 2]>>> = Mutex::new(BTreeMap::new());
 
-/// Records how long each span lives into [`STEPS`].
+/// Start of the current `request_block` span. Steps on rayon threads have no parent span, and
+/// iterations run one at a time, so this is their common origin.
+static ITERATION_START: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Records when each span starts and how long it lives into [`STEPS`].
 struct StepTimer;
 
 impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StepTimer {
     fn on_new_span(&self, _: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
         let span = ctx.span(id).expect("new span is registered");
-        span.extensions_mut().insert(Instant::now());
+        let now = Instant::now();
+        if span.name() == "request_block" {
+            *ITERATION_START.lock().expect("iteration start lock") = Some(now);
+        }
+        span.extensions_mut().insert(now);
     }
 
     fn on_close(&self, id: span::Id, ctx: Context<'_, S>) {
@@ -148,17 +158,22 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StepTimer {
             .extensions()
             .get::<Instant>()
             .expect("start recorded in on_new_span");
+        let origin = ITERATION_START
+            .lock()
+            .expect("iteration start lock")
+            .unwrap_or(start);
         STEPS
             .lock()
             .expect("steps lock")
             .entry(span.name())
             .or_default()
-            .push(start.elapsed().as_secs_f64() * 1e3);
+            .push([ms(start - origin), ms(start.elapsed())]);
     }
 }
 
 fn install_step_timer() {
     let targets = Targets::new()
+        .with_target("block_build", Level::DEBUG)
         .with_target("hotshot_new_protocol::block", Level::DEBUG)
         .with_target("espresso_types", Level::DEBUG);
     tracing::subscriber::set_global_default(
@@ -167,7 +182,8 @@ fn install_step_timer() {
     .expect("no other subscriber");
 }
 
-/// Prints the median of each step recorded since the last call, and writes all samples to
+/// Prints each step's median start and duration (`@start+duration` ms) recorded since the last
+/// call, and writes all samples to
 /// `$CRITERION_HOME/<id>/steps.json` when `CRITERION_HOME` is set.
 fn report_steps(id: &str) {
     let steps = mem::take(&mut *STEPS.lock().expect("steps lock"));
@@ -177,7 +193,10 @@ fn report_steps(id: &str) {
     }
     let medians: Vec<String> = steps
         .iter()
-        .map(|(name, ms)| format!("{name}={:.2}", median(ms)))
+        .map(|(name, runs)| {
+            let column = |i: usize| median(&runs.iter().map(|r| r[i]).collect::<Vec<_>>());
+            format!("{name}=@{:.2}+{:.2}", column(0), column(1))
+        })
         .collect();
     println!("steps {id}: {} ms", medians.join(" "));
     if let Some(home) = env::var_os("CRITERION_HOME") {
@@ -187,6 +206,10 @@ fn report_steps(id: &str) {
         fs::write(&path, serde_json::to_vec(&steps).expect("serialize steps"))
             .expect("write steps.json");
     }
+}
+
+fn ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1e3
 }
 
 fn median(values: &[f64]) -> f64 {
