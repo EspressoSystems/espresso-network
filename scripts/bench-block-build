@@ -9,6 +9,7 @@ markdown table of the change.
     just bench-block-build main my-branch
     scripts/bench-block-build --filter 'request_block/50MB.*_n10$' --repeats 5 main HEAD
     scripts/bench-block-build --dry-run main HEAD
+    scripts/bench-block-build --chart tmp/bench-block-build/<base>-<head>.json
 
 Steps:
     The bench times the leader's real code path (`block_commitments` in new-protocol plus
@@ -28,7 +29,8 @@ Method:
     default,hugetlb` also measures plain glibc.
 
 Both refs must contain crates/espresso/types/benches/block_build.rs. Results are written to
-tmp/bench-block-build/<base>-<head>.{json,md}.
+tmp/bench-block-build/<base>-<head>.{json,md,svg}; the SVG is a waterfall of each step's
+median start and duration. `--chart <file>.json` redraws the SVG of a saved run.
 """
 
 import argparse
@@ -53,6 +55,9 @@ log = logging.getLogger("bench-block-build")
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if args.chart:
+        redraw(args.chart)
+        return
     shas = {
         side: git("rev-parse", "--verify", f"{ref}^{{commit}}")
         for side, ref in (("base", args.base), ("head", args.head))
@@ -90,14 +95,14 @@ def main() -> None:
         s: f"{ref} {shas[s][:10]}"
         for s, ref in (("base", args.base), ("head", args.head))
     }
-    stem.with_suffix(".html").write_text(waterfall(samples, names, args.malloc, refs))
+    stem.with_suffix(".svg").write_text(waterfall(samples, names, args.malloc, refs))
     stem.with_suffix(".json").write_text(
         json.dumps({"base": shas["base"], "head": shas["head"], "samples": samples})
     )
     stem.with_suffix(".md").write_text(
         f"base {args.base} {shas['base'][:10]}, head {args.head} {shas['head'][:10]}\n\n{table}\n"
     )
-    log.info("wrote %s.{json,md,html}", stem)
+    log.info("wrote %s.{json,md,svg}", stem)
 
 
 def parse_args() -> argparse.Namespace:
@@ -113,6 +118,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument(
+        "--chart",
+        type=Path,
+        metavar="JSON",
+        help="redraw the SVG of a saved <base>-<head>.json run and exit",
+    )
+    p.add_argument(
         "--malloc",
         type=lambda v: v.split(","),
         default=["hugetlb"],
@@ -124,6 +135,18 @@ def parse_args() -> argparse.Namespace:
         help="resolve refs and show the plan, build and run nothing",
     )
     return p.parse_args()
+
+
+def redraw(path: Path) -> None:
+    run = json.loads(path.read_text())
+    samples = run["samples"]
+    keys = [key.split("|", 1) for key in samples]
+    variants = list(dict.fromkeys(variant for variant, _ in keys))
+    names = list(dict.fromkeys(name for _, name in keys))
+    refs = {side: run[side][:10] for side in ("base", "head")}
+    out = path.with_suffix(".svg")
+    out.write_text(waterfall(samples, names, variants, refs))
+    log.info("wrote %s", out)
 
 
 def measure(
@@ -188,12 +211,12 @@ def summarize(
 
 # Lane order top to bottom: the whole build, its sequential prefix, then the parallel commitments.
 LANES = [
-    ("request_block", "request_block (total)", "--frame"),
-    ("from_transactions", "from_transactions", "--s1"),
-    ("block_commitments", "block_commitments", "--frame"),
-    ("transaction_commitments", "transaction_commitments", "--s2"),
-    ("vid_commitment", "vid_commitment", "--s3"),
-    ("builder_commitment", "builder_commitment", "--s4"),
+    ("request_block", "request_block (total)", "frame"),
+    ("from_transactions", "from_transactions", "s1"),
+    ("block_commitments", "block_commitments", "frame"),
+    ("transaction_commitments", "transaction_commitments", "s2"),
+    ("vid_commitment", "vid_commitment", "s3"),
+    ("builder_commitment", "builder_commitment", "s4"),
 ]
 
 
@@ -203,8 +226,8 @@ def waterfall(
     variants: list[str],
     refs: dict[str, str],
 ) -> str:
-    """Self-contained HTML: one waterfall per benchmark and ref, bars at each step's median start
-    and median duration, on a shared ms axis."""
+    """Standalone SVG: one waterfall per benchmark and ref, stacked, with bars at each step's
+    median start and median duration on a shared ms axis."""
 
     def pooled(runs: list[dict[str, list[float]]], key: str) -> float | None:
         values = [v for run in runs for v in run.get(key, [])]
@@ -215,83 +238,86 @@ def waterfall(
         for name in names:
             for side in ("base", "head"):
                 runs = samples[f"{variant}|{name}"][side]
-                bars = [
-                    (label, var, start, duration)
-                    for key, label, var in LANES
+                bars = {
+                    key: (start, duration)
+                    for key, _, _ in LANES
                     if (start := pooled(runs, f"@{key}")) is not None
                     and (duration := pooled(runs, key)) is not None
-                ]
-                title = f"{name.removeprefix('block_build/request_block/')} · {variant} · {side} {refs[side]}"
-                panels.append((title, bars))
-    scale_ms = max([s + d for _, bars in panels for _, _, s, d in bars] or [1.0])
-    body = "".join(panel_svg(title, bars, scale_ms) for title, bars in panels)
-    if not any(bars for _, bars in panels):
-        body = "<p>No step start times recorded; both refs need the bench with step timing.</p>"
-    return WATERFALL_PAGE.format(body=body)
+                }
+                short = name.removeprefix("block_build/request_block/")
+                panels.append((f"{short} · {variant} · {side} {refs[side]}", bars))
+    scale_ms = max([s + d for _, bars in panels for s, d in bars.values()] or [1.0])
+
+    header = (
+        '<text class="h1" x="16" y="28">Leader block build, step by step</text>'
+        '<text class="note" x="16" y="48">Bars start at the median step start and span the '
+        "median duration. Overlapping bars ran in parallel.</text>"
+        '<text class="note" x="16" y="64">Gray bars are the whole build and the commitment '
+        "phase that contains the parallel steps.</text>"
+    )
+    y, groups = 84, []
+    for title, bars in panels:
+        group, height = panel(title, bars, scale_ms)
+        groups.append(f'<g transform="translate(16 {y})">{group}</g>')
+        y += height + 16
+    width = PANEL_LABEL_W + PANEL_PLOT_W + 100
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {y}" width="{width}" '
+        f'height="{y}" font-family="system-ui, sans-serif">{SVG_STYLE}'
+        f'<rect class="bg" width="100%" height="100%"/>{header}{"".join(groups)}</svg>'
+    )
 
 
-def panel_svg(
-    title: str, bars: list[tuple[str, str, float, float]], scale_ms: float
-) -> str:
-    label_w, plot_w, lane_h, top = 190, 560, 26, 34
-    x = lambda ms: label_w + ms / scale_ms * plot_w
+PANEL_LABEL_W, PANEL_PLOT_W, LANE_H, PANEL_TOP = 190, 560, 26, 28
+
+
+def panel(
+    title: str, bars: dict[str, tuple[float, float]], scale_ms: float
+) -> tuple[str, int]:
+    def x(ms: float) -> float:
+        return PANEL_LABEL_W + ms / scale_ms * PANEL_PLOT_W
+
     step = next(s for s in (1, 2, 5, 10, 20, 50, 100) if scale_ms / s <= 8)
-    height = top + lane_h * len(LANES) + 26
+    height = PANEL_TOP + LANE_H * len(LANES) + 22
     parts = [f'<text class="title" x="0" y="16">{html.escape(title)}</text>']
     for t in range(0, int(scale_ms) + 1, step):
         parts.append(
-            f'<line class="grid" x1="{x(t):.1f}" x2="{x(t):.1f}" y1="{top - 6}" y2="{height - 22}"/>'
-            f'<text class="tick" x="{x(t):.1f}" y="{height - 6}">{t} ms</text>'
+            f'<line class="grid" x1="{x(t):.1f}" x2="{x(t):.1f}" y1="{PANEL_TOP - 4}" '
+            f'y2="{height - 20}"/><text class="tick" x="{x(t):.1f}" y="{height - 6}">{t} ms</text>'
         )
-    for row, (_, label, _) in enumerate(LANES):
-        y = top + row * lane_h
+    for row, (key, label, color) in enumerate(LANES):
+        y = PANEL_TOP + row * LANE_H
         parts.append(
-            f'<text class="lane" x="{label_w - 10}" y="{y + 15}">{label}</text>'
+            f'<text class="lane" x="{PANEL_LABEL_W - 10}" y="{y + 15}">{label}</text>'
         )
-        bar = next((b for b in bars if b[0] == label), None)
-        if bar is None:
+        if key not in bars:
             parts.append(
-                f'<text class="none" x="{label_w}" y="{y + 15}">not run</text>'
+                f'<text class="value" x="{PANEL_LABEL_W}" y="{y + 15}">not run</text>'
             )
             continue
-        _, var, start, duration = bar
-        width = max(duration / scale_ms * plot_w, 2)
+        start, duration = bars[key]
+        width = max(duration / scale_ms * PANEL_PLOT_W, 2)
         parts.append(
-            f'<rect x="{x(start):.1f}" y="{y + 5}" width="{width:.1f}" height="14" rx="3" '
-            f'fill="var({var})"><title>{label}: starts {start:.2f} ms, takes {duration:.2f} ms</title></rect>'
+            f'<rect class="{color}" x="{x(start):.1f}" y="{y + 5}" width="{width:.1f}" height="14" '
+            f'rx="3"><title>{label}: starts {start:.2f} ms, takes {duration:.2f} ms</title></rect>'
             f'<text class="value" x="{x(start) + width + 6:.1f}" y="{y + 15}">{duration:.1f} ms</text>'
         )
-    width = label_w + plot_w + 70
-    return f'<figure><svg viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(title)}">{"".join(parts)}</svg></figure>'
+    return "".join(parts), height
 
 
-WATERFALL_PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Block build waterfall</title>
-<style>
-:root {{ color-scheme: light; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
-  --grid: #e1e0d9; --frame: #c3c2b7; --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; }}
-@media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{ color-scheme: dark;
-  --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --frame: #383835;
-  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; }} }}
-:root[data-theme="dark"] {{ color-scheme: dark; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7;
-  --muted: #898781; --grid: #2c2c2a; --frame: #383835; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; }}
-body {{ margin: 0; padding: 16px; background: var(--surface); color: var(--ink); font: 13px/1.4 system-ui, sans-serif; }}
-h1 {{ font-size: 18px; margin: 0 0 4px; }} p {{ color: var(--ink-2); margin: 0 0 16px; max-width: 760px; }}
-figure {{ margin: 0 0 20px; }} svg {{ width: 100%; max-width: 820px; height: auto; display: block; }}
-.title {{ fill: var(--ink); font-weight: 600; font-size: 13px; }}
-.lane {{ fill: var(--ink-2); text-anchor: end; font-size: 12px; }}
-.value, .none {{ fill: var(--muted); font-size: 11px; }} .tick {{ fill: var(--muted); font-size: 10px; text-anchor: middle; }}
-.grid {{ stroke: var(--grid); stroke-width: 1; }}
-</style></head><body>
-<h1>Leader block build, step by step</h1>
-<p>Each bar starts at the step's median start and spans its median duration, from the step's tracing
-span. Steps on the same time range ran in parallel; gray bars are the whole build and the commitment
-phase that contains the parallel steps. Hover a bar for exact values.</p>
-{body}
-</body></html>
-"""
+SVG_STYLE = """<style>
+.bg { fill: #fcfcfb } .h1 { fill: #0b0b0b; font-size: 18px; font-weight: 600 }
+.note, .lane { fill: #52514e; font-size: 12px } .lane { text-anchor: end }
+.title { fill: #0b0b0b; font-size: 13px; font-weight: 600 }
+.value, .tick { fill: #898781; font-size: 11px } .tick { text-anchor: middle; font-size: 10px }
+.grid { stroke: #e1e0d9; stroke-width: 1 } .frame { fill: #c3c2b7 }
+.s1 { fill: #2a78d6 } .s2 { fill: #eb6834 } .s3 { fill: #1baf7a } .s4 { fill: #eda100 }
+@media (prefers-color-scheme: dark) {
+  .bg { fill: #1a1a19 } .h1, .title { fill: #ffffff } .note, .lane { fill: #c3c2b7 }
+  .grid { stroke: #2c2c2a } .frame { fill: #383835 }
+  .s1 { fill: #3987e5 } .s2 { fill: #d95926 } .s3 { fill: #199e70 } .s4 { fill: #c98500 }
+}
+</style>"""
 
 
 def select(names: list[str], pattern: str) -> list[str]:
