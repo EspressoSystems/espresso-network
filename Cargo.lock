@@ -4934,6 +4934,7 @@ dependencies = [
  "toml",
  "tower-service",
  "tracing",
+ "tracing-subscriber 0.3.23",
  "url",
  "vbs",
  "vec1",
