@@ -46,7 +46,7 @@ use super::{
 };
 use crate::{
     SeqTypes, U256,
-    api::{ApiState, LightClientProvider, context::ApiContext},
+    api::{ContextDataSource, LightClientProvider, context::ApiContext},
     persistence,
     state_cert::StateCertFetchError,
 };
@@ -98,7 +98,7 @@ pub type Provider = AnyProvider<SeqTypes>;
 /// Create a provider for fetching missing data from a list of peer query services.
 pub(super) async fn provider<C: ApiContext>(
     peers: impl IntoIterator<Item = Url>,
-    state: &ApiState<C>,
+    state: &ContextDataSource<C>,
     opt: LightClientOptions,
     db_opt: LightClientSqliteOptions,
 ) -> anyhow::Result<Provider> {
@@ -455,7 +455,7 @@ pub(crate) trait DatabaseMetadataSource {
 // Arc delegation implementations
 // ============================================================================
 // These implementations allow Arc<T> to implement the data source traits
-// when T implements them, which is necessary for NodeApiStateImpl to work
+// when T implements them, which is necessary for ApiState to work
 // with Arc-wrapped data sources.
 
 use std::sync::Arc;

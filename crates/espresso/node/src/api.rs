@@ -110,7 +110,7 @@ type BoxLazy<T> = Pin<Arc<Lazy<T, BoxFuture<'static, T>>>>;
 
 #[derive(Derivative)]
 #[derivative(Clone(bound = ""), Debug(bound = ""))]
-struct ApiState<C: ApiContext> {
+struct ContextDataSource<C: ApiContext> {
     // The node context is initialized lazily so we can start the API (and healthcheck endpoints)
     // before consensus has started. Any endpoint that uses consensus state will wait for
     // initialization to finish, but endpoints that do not require a consensus handle can proceed
@@ -122,7 +122,7 @@ struct ApiState<C: ApiContext> {
     token_supply: Cache<(), U256>,
 }
 
-impl<C: ApiContext> ApiState<C> {
+impl<C: ApiContext> ContextDataSource<C> {
     fn new(context_init: impl Future<Output = C> + Send + 'static) -> Self {
         Self {
             context: Arc::pin(Lazy::from_future(context_init.boxed())),
@@ -154,9 +154,9 @@ impl<C: ApiContext> ApiState<C> {
     }
 }
 
-type StorageState<C, D> = ExtensibleDataSource<D, ApiState<C>>;
+type ApiDataSource<C, D> = ExtensibleDataSource<D, ContextDataSource<C>>;
 
-impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C, D> {
+impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for ApiDataSource<C, D> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         self.as_ref().get_initial_supply_l1().await
     }
@@ -170,13 +170,13 @@ impl<C: ApiContext, D: Send + Sync> TokenDataSource<SeqTypes> for StorageState<C
     }
 }
 
-impl<C: ApiContext, D: Send + Sync> SubmitDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Send + Sync> SubmitDataSource for ApiDataSource<C, D> {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         self.as_ref().submit(tx).await
     }
 }
 
-impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for ApiDataSource<C, D> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
@@ -256,7 +256,7 @@ impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for StorageState<C, 
     }
 }
 
-impl<C: ApiContext> TokenDataSource<SeqTypes> for ApiState<C> {
+impl<C: ApiContext> TokenDataSource<SeqTypes> for ContextDataSource<C> {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         let node_state = self.context().await.node_state();
         let fetcher = node_state.coordinator.membership().fetcher().clone();
@@ -297,7 +297,7 @@ impl<C: ApiContext> TokenDataSource<SeqTypes> for ApiState<C> {
     }
 }
 
-impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
+impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ContextDataSource<C> {
     /// Get the stake table for a given epoch
     async fn get_stake_table(
         &self,
@@ -455,7 +455,7 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for ApiDataSource<C, D> {
     async fn request_vid_shares(
         &self,
         block_number: u64,
@@ -469,7 +469,7 @@ impl<C: ApiContext, D: Sync> RequestResponseDataSource<SeqTypes> for StorageStat
 }
 
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> StateCertFetchingDataSource<SeqTypes> for ApiDataSource<C, D> {
     async fn request_state_cert(
         &self,
         epoch: u64,
@@ -479,7 +479,7 @@ impl<C: ApiContext, D: Sync> StateCertFetchingDataSource<SeqTypes> for StorageSt
     }
 }
 
-impl<C: ApiContext> RequestResponseDataSource<SeqTypes> for ApiState<C> {
+impl<C: ApiContext> RequestResponseDataSource<SeqTypes> for ContextDataSource<C> {
     async fn request_vid_shares(
         &self,
         block_number: u64,
@@ -571,7 +571,7 @@ where
 }
 
 #[async_trait]
-impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ApiState<C> {
+impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ContextDataSource<C> {
     async fn request_state_cert(
         &self,
         epoch: u64,
@@ -657,7 +657,7 @@ impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ApiState<C> {
 
 // Thin wrapper implementations that delegate to persistence
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateCertDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> StateCertDataSource for ApiDataSource<C, D> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -675,7 +675,7 @@ impl<C: ApiContext, D: Sync> StateCertDataSource for StorageState<C, D> {
 }
 
 #[async_trait]
-impl<C: ApiContext> StateCertDataSource for ApiState<C> {
+impl<C: ApiContext> StateCertDataSource for ContextDataSource<C> {
     async fn get_state_cert_by_epoch(
         &self,
         epoch: u64,
@@ -694,7 +694,7 @@ impl<C: ApiContext> StateCertDataSource for ApiState<C> {
     }
 }
 
-impl<C: ApiContext> SubmitDataSource for ApiState<C> {
+impl<C: ApiContext> SubmitDataSource for ContextDataSource<C> {
     async fn submit(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         let handle = self.consensus().await;
 
@@ -729,14 +729,14 @@ impl<C: ApiContext> SubmitDataSource for ApiState<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> NodeStateDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> NodeStateDataSource for ApiDataSource<C, D> {
     async fn node_state(&self) -> NodeState {
         self.as_ref().node_state().await
     }
 }
 
 impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::DatabaseMetadataSource
-    for StorageState<C, D>
+    for ApiDataSource<C, D>
 where
     D: data_source::DatabaseMetadataSource + Send + Sync,
 {
@@ -750,7 +750,7 @@ where
 }
 
 impl<C: ApiContext, D: CatchupStorage + Send + Sync> data_source::PruningDataSource
-    for StorageState<C, D>
+    for ApiDataSource<C, D>
 where
     D: data_source::PruningDataSource + Send + Sync,
 {
@@ -769,7 +769,7 @@ where
     }
 }
 
-impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for ApiDataSource<C, D> {
     #[tracing::instrument(skip(self, instance))]
     async fn get_accounts(
         &self,
@@ -971,13 +971,13 @@ impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for Stora
     }
 }
 
-impl<C: ApiContext> NodeStateDataSource for ApiState<C> {
+impl<C: ApiContext> NodeStateDataSource for ContextDataSource<C> {
     async fn node_state(&self) -> NodeState {
         self.context().await.node_state()
     }
 }
 
-impl<C: ApiContext> CatchupDataSource for ApiState<C> {
+impl<C: ApiContext> CatchupDataSource for ContextDataSource<C> {
     #[tracing::instrument(skip(self, _instance))]
     async fn get_accounts(
         &self,
@@ -1121,25 +1121,25 @@ impl<C: ApiContext> CatchupDataSource for ApiState<C> {
     }
 }
 
-impl<C: ApiContext, D: Sync> HotShotConfigDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> HotShotConfigDataSource for ApiDataSource<C, D> {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.as_ref().network_config().await.into()
     }
 }
 
-impl<C: ApiContext> HotShotConfigDataSource for ApiState<C> {
+impl<C: ApiContext> HotShotConfigDataSource for ContextDataSource<C> {
     async fn get_config(&self) -> PublicNetworkConfig {
         self.network_config().await.into()
     }
 }
 
-impl<C: ApiContext, D: Sync> NodeKeysDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> NodeKeysDataSource for ApiDataSource<C, D> {
     async fn node_public_keys(&self) -> Option<NodePublicKeys> {
         self.as_ref().node_public_keys().await
     }
 }
 
-impl<C: ApiContext> NodeKeysDataSource for ApiState<C> {
+impl<C: ApiContext> NodeKeysDataSource for ContextDataSource<C> {
     async fn node_public_keys(&self) -> Option<NodePublicKeys> {
         let ctx = self.context().await;
         let config = ctx.validator_config()?;
@@ -1161,14 +1161,14 @@ impl<C: ApiContext> NodeKeysDataSource for ApiState<C> {
 }
 
 #[async_trait]
-impl<C: ApiContext, D: Sync> StateSignatureDataSource for StorageState<C, D> {
+impl<C: ApiContext, D: Sync> StateSignatureDataSource for ApiDataSource<C, D> {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.as_ref().get_state_signature(height).await
     }
 }
 
 #[async_trait]
-impl<C: ApiContext> StateSignatureDataSource for ApiState<C> {
+impl<C: ApiContext> StateSignatureDataSource for ContextDataSource<C> {
     async fn get_state_signature(&self, height: u64) -> Option<LCV3StateSignatureRequestBody> {
         self.state_signer()
             .await?
@@ -1706,11 +1706,11 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
 /// [`Provider`] implementation wrapping a lazy [`LightClient`].
 ///
 /// The [`LightClient`] requires a genesis to initialize itself, which we can get from the
-/// [`ApiState`]. However, the [`Provider`] instance must be provided to the API data source at
-/// initialization time, while the [`ApiState`] is only initialized lazily. This is a provider
-/// implementation which is itself initialized lazily: [`Provider::fetch`] calls will time out until
-/// the underlying [`ApiState`] is fully initialized, at which point this provider will start
-/// serving fetches using the [`LightClient`].
+/// [`ContextDataSource`]. However, the [`Provider`] instance must be provided to the API data
+/// source at initialization time, while the [`ContextDataSource`] is only initialized lazily. This
+/// is a provider implementation which is itself initialized lazily: [`Provider::fetch`] calls will
+/// time out until the underlying [`ContextDataSource`] is fully initialized, at which point this
+/// provider will start serving fetches using the [`LightClient`].
 ///
 /// A context that already runs a light client ([`ApiContext::light_client`]) shares it, so
 /// fetches reuse its verified cache and no second database is opened on its path. The database
@@ -1720,7 +1720,7 @@ pub(crate) fn light_client_genesis(config: &NetworkConfig<SeqTypes>, chain_id: C
 #[derivative(Debug(bound = ""))]
 struct LightClientProvider<C: ApiContext> {
     light_client: OnceCell<Arc<NodeLightClient>>,
-    state: ApiState<C>,
+    state: ContextDataSource<C>,
     client: FallbackClient<QueryServiceClient>,
     opt: LightClientOptions,
     db_opt: LightClientSqliteOptions,
@@ -1729,7 +1729,7 @@ struct LightClientProvider<C: ApiContext> {
 impl<C: ApiContext> LightClientProvider<C> {
     pub fn new(
         peers: impl IntoIterator<Item = Url>,
-        state: ApiState<C>,
+        state: ContextDataSource<C>,
         opt: LightClientOptions,
         db_opt: LightClientSqliteOptions,
     ) -> anyhow::Result<Self> {
@@ -3241,12 +3241,12 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
-            Arc::new(StorageState::new(
+        let data_source: Arc<ApiDataSource<SequencerContext<network::Memory, NoStorage>, _>> =
+            Arc::new(ApiDataSource::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
                     .unwrap(),
-                ApiState::new(future::pending()),
+                ContextDataSource::new(future::pending()),
             ));
 
         // Create two non-consecutive leaf chains.
@@ -3469,12 +3469,12 @@ mod api_tests {
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
-        let data_source: Arc<StorageState<SequencerContext<network::Memory, NoStorage>, _>> =
-            Arc::new(StorageState::new(
+        let data_source: Arc<ApiDataSource<SequencerContext<network::Memory, NoStorage>, _>> =
+            Arc::new(ApiDataSource::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)
                     .await
                     .unwrap(),
-                ApiState::new(future::pending()),
+                ContextDataSource::new(future::pending()),
             ));
         let consumer = ApiEventConsumer::from(data_source.clone());
 
