@@ -80,8 +80,6 @@ def main() -> None:
         )
         return
 
-    if unknown := set(args.malloc) - set(MALLOC):
-        raise SystemExit(f"unknown --malloc {sorted(unknown)}, expected {list(MALLOC)}")
     binaries = {side: build(sha) for side, sha in shas.items()}
     names = select(list_benches(binaries["head"]), args.filter)
     if not names:
@@ -95,13 +93,13 @@ def main() -> None:
         s: f"{ref} {shas[s][:10]}"
         for s, ref in (("base", args.base), ("head", args.head))
     }
-    stem.with_suffix(".svg").write_text(waterfall(samples, names, args.malloc, refs))
     stem.with_suffix(".json").write_text(
         json.dumps({"base": shas["base"], "head": shas["head"], "samples": samples})
     )
     stem.with_suffix(".md").write_text(
         f"base {args.base} {shas['base'][:10]}, head {args.head} {shas['head'][:10]}\n\n{table}\n"
     )
+    stem.with_suffix(".svg").write_text(waterfall(samples, names, args.malloc, refs))
     log.info("wrote %s.{json,md,svg}", stem)
 
 
@@ -116,7 +114,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_FILTER,
         help="regex over full benchmark ids (default: %(default)s)",
     )
-    p.add_argument("--repeats", type=int, default=3)
+    p.add_argument("--repeats", type=positive_int, default=3)
     p.add_argument(
         "--chart",
         type=Path,
@@ -125,7 +123,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--malloc",
-        type=lambda v: v.split(","),
+        type=malloc_list,
         default=["hugetlb"],
         help=f"comma-separated glibc settings out of {', '.join(MALLOC)} (default: hugetlb)",
     )
@@ -135,6 +133,21 @@ def parse_args() -> argparse.Namespace:
         help="resolve refs and show the plan, build and run nothing",
     )
     return p.parse_args()
+
+
+def malloc_list(value: str) -> list[str]:
+    names = value.split(",")
+    if unknown := set(names) - set(MALLOC):
+        raise argparse.ArgumentTypeError(
+            f"unknown {sorted(unknown)}, expected {list(MALLOC)}"
+        )
+    return names
+
+
+def positive_int(value: str) -> int:
+    if int(value) < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return int(value)
 
 
 def redraw(path: Path) -> None:
@@ -277,7 +290,7 @@ def panel(
     def x(ms: float) -> float:
         return PANEL_LABEL_W + ms / scale_ms * PANEL_PLOT_W
 
-    step = next(s for s in (1, 2, 5, 10, 20, 50, 100) if scale_ms / s <= 8)
+    step = tick_step(scale_ms)
     height = PANEL_TOP + LANE_H * len(LANES) + 22
     parts = [f'<text class="title" x="0" y="16">{html.escape(title)}</text>']
     for t in range(0, int(scale_ms) + 1, step):
@@ -303,6 +316,16 @@ def panel(
             f'<text class="value" x="{x(start) + width + 6:.1f}" y="{y + 15}">{duration:.1f} ms</text>'
         )
     return "".join(parts), height
+
+
+def tick_step(scale_ms: float) -> int:
+    """Smallest 1, 2 or 5 times a power of ten that gives at most 8 ticks."""
+    magnitude = 1
+    while True:
+        for base in (1, 2, 5):
+            if scale_ms / (base * magnitude) <= 8:
+                return base * magnitude
+        magnitude *= 10
 
 
 SVG_STYLE = """<style>
@@ -347,7 +370,10 @@ def list_benches(binary: Path) -> list[str]:
 def run_one(binary: Path, name: str, env: dict[str, str]) -> dict[str, list[float]]:
     """Per-iteration ms under `total`, plus each step's span durations if the bench records them."""
     home = OUT / "criterion"
+    sample_file = home / name / "new" / "sample.json"
     steps = home / name / "steps.json"
+    # A binary without this benchmark exits 0 and writes nothing; never read a previous run.
+    sample_file.unlink(missing_ok=True)
     steps.unlink(missing_ok=True)
     run = subprocess.run(
         [str(binary), "--bench", "--noplot", f"^{re.escape(name)}$"],
@@ -358,18 +384,19 @@ def run_one(binary: Path, name: str, env: dict[str, str]) -> dict[str, list[floa
     )
     if run.returncode:
         raise SystemExit(f"{binary} {name} failed:\n{run.stderr}")
-    sample = json.loads((home / name / "new" / "sample.json").read_text())
+    if not sample_file.exists():
+        raise SystemExit(f"{binary} has no benchmark {name}")
+    sample = json.loads(sample_file.read_text())
     series = {
         "total": [
             t / i / 1e6 for t, i in zip(sample["times"], sample["iters"], strict=True)
         ]
     }
+    # Steps start with criterion's warm-up iterations; keep one per measured iteration.
+    measured = int(sum(sample["iters"]))
     for step, runs in (json.loads(steps.read_text()) if steps.exists() else {}).items():
-        # Older benches record durations only; newer ones `[start, duration]`.
-        if runs and isinstance(runs[0], list):
-            series[f"@{step}"] = [start for start, _ in runs]
-            runs = [duration for _, duration in runs]
-        series[step] = runs
+        series[f"@{step}"] = [start for start, _ in runs[-measured:]]
+        series[step] = [duration for _, duration in runs[-measured:]]
     return series
 
 
@@ -383,7 +410,13 @@ def build(sha: str) -> Path:
         log.info("cached %s", target)
         return target
     worktree = (OUT / "worktrees" / sha).resolve()
+    # A run killed mid-build leaves its worktree behind.
+    if worktree.exists():
+        shutil.rmtree(worktree)
+    git("worktree", "prune")
     git("worktree", "add", "--detach", str(worktree), sha)
+    # Share build artifacts between refs unless the caller already picked a target dir.
+    env = {"CARGO_TARGET_DIR": str((OUT / "target").resolve()), **os.environ}
     try:
         log.info("building block_build at %s", sha[:10])
         out = subprocess.run(
@@ -398,12 +431,15 @@ def build(sha: str) -> Path:
                 "--message-format=json",
             ],
             cwd=worktree,
+            env=env,
             check=True,
             stdout=subprocess.PIPE,
             text=True,
         ).stdout
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(bench_executable(out), target)
+        partial = target.with_suffix(".partial")
+        shutil.copy2(bench_executable(out), partial)
+        os.replace(partial, target)
     finally:
         git("worktree", "remove", "--force", str(worktree))
     return target
@@ -433,9 +469,10 @@ def has_bench(sha: str) -> bool:
 
 
 def git(*args: str) -> str:
-    return subprocess.run(
-        ["git", *args], check=True, capture_output=True, text=True
-    ).stdout.strip()
+    run = subprocess.run(["git", *args], check=False, capture_output=True, text=True)
+    if run.returncode:
+        raise SystemExit(f"git {' '.join(args)} failed:\n{run.stderr.strip()}")
+    return run.stdout.strip()
 
 
 if __name__ == "__main__":
