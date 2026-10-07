@@ -99,8 +99,8 @@ pub fn block_commitments<T: NodeType>(
     version: Version,
 ) -> BlockCommitments<T> {
     let _span = debug_span!("block_commitments").entered();
-    let payload_bytes = debug_span!("encode").in_scope(|| payload.payload.encode());
-    let metadata_bytes = payload.metadata.encode();
+    let (payload_bytes, metadata_bytes) =
+        debug_span!("encode").in_scope(|| (payload.payload.encode(), payload.metadata.encode()));
     // Independent work, run in parallel rather than paid for in turn on the leader's proposal
     // path.
     let (hashes, (payload_commitment, builder_commitment)) = rayon::join(
