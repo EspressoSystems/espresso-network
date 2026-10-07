@@ -48,6 +48,7 @@ use self::proto::{
     availability_service_server::{AvailabilityService, AvailabilityServiceServer},
     config_service_server::{ConfigService, ConfigServiceServer},
     database_service_server::{DatabaseService, DatabaseServiceServer},
+    explorer_service_server::{ExplorerService, ExplorerServiceServer},
     merklized_state_service_server::{MerklizedStateService, MerklizedStateServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
     reward_state_service_server::{RewardStateService, RewardStateServiceServer},
@@ -109,6 +110,7 @@ where
         + RewardStateService
         + StateSignatureService
         + SubmitService
+        + ExplorerService
         + Send
         + Sync
         + 'static,
@@ -158,6 +160,7 @@ where
         + RewardStateService
         + StateSignatureService
         + SubmitService
+        + ExplorerService
         + Send
         + Sync
         + 'static,
@@ -176,6 +179,14 @@ where
         router.merge(axum::router_module_disabled(
             "submit",
             routes::v2::SUBMIT_ROUTES,
+        ))
+    };
+    let router = if modules.explorer {
+        router.merge(rest::explorer_service_rest_router(state.clone()))
+    } else {
+        router.merge(axum::router_module_disabled(
+            "explorer",
+            routes::v2::EXPLORER_ROUTES,
         ))
     };
     let router = if modules.config {
@@ -399,6 +410,7 @@ where
         + RewardStateService
         + StateSignatureService
         + SubmitService
+        + ExplorerService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -426,6 +438,11 @@ where
             SubmitServiceServer::new(state.clone())
                 .max_decoding_message_size(http_wire::MAX_REQUEST_BODY_BYTES)
         }))
+        .add_optional_service(
+            modules
+                .explorer
+                .then(|| ExplorerServiceServer::new(state.clone())),
+        )
         .add_optional_service(modules.config.then(|| ConfigServiceServer::new(state)));
 
     tracing::info!("gRPC server listening on {}", addr);
