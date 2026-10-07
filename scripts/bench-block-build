@@ -12,7 +12,7 @@ the steps.
 
     just bench-block-build                      # origin/main vs HEAD
     just bench-block-build main my-branch
-    scripts/bench-block-build --filter 'request_block/50MB' --repeats 5 main HEAD
+    scripts/bench-block-build --filter 'request_block/50MB' --repeats 3 main HEAD   # quick check
     scripts/bench-block-build --malloc default --malloc hugetlb main HEAD
     scripts/bench-block-build --chart tmp/bench-block-build/<base>-<head>.csv
 
@@ -80,7 +80,7 @@ def main(
     bench_filter: Annotated[
         str, typer.Option("--filter", help="regex over full benchmark ids")
     ] = DEFAULT_FILTER,
-    repeats: Annotated[int, typer.Option(min=1)] = 3,
+    repeats: Annotated[int, typer.Option(min=1)] = 10,
     malloc: Annotated[
         list[Malloc] | None,
         typer.Option(help="repeat to measure several; default hugetlb"),
