@@ -256,6 +256,13 @@ impl Quorum for AlwaysTrueQuorum {
     ) -> Result<()> {
         Ok(())
     }
+
+    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &QuorumCertificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -269,6 +276,13 @@ impl Quorum for AlwaysFalseQuorum {
     async fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
         _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        bail!("always false quorum");
+    }
+
+    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &QuorumCertificate2<SeqTypes>,
     ) -> Result<()> {
         bail!("always false quorum");
     }
@@ -316,6 +330,13 @@ impl Quorum for VersionCheckQuorum {
     ) -> Result<()> {
         Ok(())
     }
+
+    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &QuorumCertificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// A quorum which verifies that epoch change QCs are provided, but does not check signatures.
@@ -344,6 +365,13 @@ impl Quorum for EpochChangeQuorum {
     async fn verify_cert2_static<V: StaticVersionType + 'static>(
         &self,
         _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn verify_leaf_qc_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &QuorumCertificate2<SeqTypes>,
     ) -> Result<()> {
         Ok(())
     }
@@ -398,6 +426,8 @@ struct InnerTestClient {
     fail_leaf_ranges: bool,
     /// If set, fail payload proof ranges requests, like a server that predates the endpoint.
     fail_payload_proof_ranges: bool,
+    /// Heights whose served QC carries another QC's signature.
+    forged_qcs: HashSet<usize>,
 }
 
 impl InnerTestClient {
@@ -678,6 +708,22 @@ impl InnerTestClient {
         self.leaves[height].clone()
     }
 
+    /// The leaf at `height` as served to clients, with a forged QC if requested.
+    async fn served_leaf(&mut self, height: usize, epoch_height: u64) -> LeafQueryData<SeqTypes> {
+        let leaf = self.leaf(height, epoch_height, None).await;
+        if !self.forged_qcs.contains(&height) {
+            return leaf;
+        }
+        let mut qc = leaf.qc().clone();
+        qc.signatures = self
+            .leaf(height + 1, epoch_height, None)
+            .await
+            .qc()
+            .signatures
+            .clone();
+        LeafQueryData::new(leaf.leaf().clone(), qc).unwrap()
+    }
+
     fn leaf_height(&self, req: LeafRequest) -> Result<usize> {
         match req {
             LeafRequest::Leaf(LeafId::Number(h)) | LeafRequest::Header(BlockId::Number(h)) => Ok(h),
@@ -853,6 +899,12 @@ impl TestClient {
         let mut inner = self.inner.lock().await;
         inner.fail_payload_proof_ranges = true;
     }
+
+    /// Serve the leaf at `height` with a QC whose signature is not over the leaf.
+    pub async fn forge_qc(&self, height: usize) {
+        let mut inner = self.inner.lock().await;
+        inner.forged_qcs.insert(height);
+    }
 }
 
 impl Client for TestClient {
@@ -894,7 +946,7 @@ impl Client for TestClient {
             );
         }
 
-        let leaf = inner.leaf(height, self.epoch_height, None).await;
+        let leaf = inner.served_leaf(height, self.epoch_height).await;
 
         let mut proof = LeafProof::default();
         proof.push(leaf.clone());
@@ -990,7 +1042,7 @@ impl Client for TestClient {
         let mut inner = self.inner.lock().await;
         for h in start_height..end_height {
             let height = *inner.swapped_leaves.get(&h).unwrap_or(&h);
-            leaves.push(inner.leaf(height, self.epoch_height, None).await);
+            leaves.push(inner.served_leaf(height, self.epoch_height).await);
         }
         Ok(leaves)
     }
@@ -1010,7 +1062,7 @@ impl Client for TestClient {
                 .swapped_leaves
                 .get(&(height as usize))
                 .unwrap_or(&(height as usize));
-            leaves.push(inner.leaf(height, self.epoch_height, None).await);
+            leaves.push(inner.served_leaf(height, self.epoch_height).await);
         }
         Ok(leaves)
     }

@@ -5,8 +5,12 @@ use committable::Committable;
 use espresso_types::{Certificate2, Leaf2, SeqTypes};
 use hotshot_query_service_types::availability::LeafQueryData;
 use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembership, simple_certificate::QuorumCertificate2,
-    traits::block_contents::BlockHeader, utils::epoch_from_block_number, vote::HasViewNumber,
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembership,
+    simple_certificate::QuorumCertificate2,
+    traits::block_contents::BlockHeader,
+    utils::epoch_from_block_number,
+    vote::HasViewNumber,
 };
 use serde::{Deserialize, Serialize};
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
@@ -203,6 +207,12 @@ impl LeafProof {
                     version >= NEW_PROTOCOL_VERSION,
                     "new protocol finality proof used for pre-new-protocol leaf"
                 );
+                // `is_valid_cert` accepts any genesis-view certificate unchecked, so this check
+                // is load-bearing for cert2 and leaf_qc, whose views are pinned to `curr`'s.
+                ensure!(
+                    curr.view_number() > ViewNumber::genesis(),
+                    "new-protocol certificates must not be at the genesis view"
+                );
                 ensure!(
                     cert2.data.leaf_commit == curr.commit(),
                     "cert2 leaf commitment does not match leaf"
@@ -221,7 +231,34 @@ impl LeafProof {
                     .await
                     .context("verifying cert2 signature")?;
 
-                leaf_qc.as_ref().clone()
+                // `leaf_qc` is returned only for a single-leaf chain; longer chains take the QC
+                // from the next leaf's justify QC, which the leaf chain commits to.
+                match &opt_qc {
+                    Some(qc) => qc.clone(),
+                    None => {
+                        ensure!(
+                            leaf_qc.data.leaf_commit == curr.commit(),
+                            "leaf QC commitment does not match leaf"
+                        );
+                        ensure!(
+                            leaf_qc.view_number() == curr.view_number(),
+                            "leaf QC view number does not match leaf"
+                        );
+                        ensure!(
+                            leaf_qc.data.block_number == Some(curr.block_header().block_number()),
+                            "leaf QC block number does not match leaf"
+                        );
+                        ensure!(
+                            leaf_qc.data.epoch == Some(cert2.data.epoch),
+                            "leaf QC epoch does not match cert2"
+                        );
+                        quorum
+                            .verify_leaf_qc(leaf_qc, version)
+                            .await
+                            .context("verifying leaf QC signature")?;
+                        leaf_qc.as_ref().clone()
+                    },
+                }
             },
             (proof, hint) => {
                 let required = match proof {
@@ -377,13 +414,21 @@ impl LeafProof {
 
 #[cfg(test)]
 mod test {
+    use std::marker::PhantomData;
+
+    use alloy::primitives::U256;
+    use espresso_types::PubKey;
+    use hotshot_types::{simple_vote::Vote2Data, traits::signature_key::SignatureKey};
     use pretty_assertions::assert_eq;
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
 
     use super::*;
-    use crate::testing::{
-        AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION, VersionCheckQuorum, leaf_chain,
-        leaf_chain_with_upgrade,
+    use crate::{
+        consensus::quorum::StakeTable,
+        testing::{
+            AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION, VersionCheckQuorum,
+            custom_leaf_chain, leaf_chain, leaf_chain_with_upgrade,
+        },
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -511,6 +556,96 @@ mod test {
                 .contains("HotStuff2 finality proof used for new-protocol leaf"),
             "{err:#}"
         );
+    }
+
+    /// A proof of `chain`, finalized by an unsigned cert2 on its last leaf.
+    fn new_protocol_proof(
+        chain: &[LeafQueryData<SeqTypes>],
+        leaf_qc: QuorumCertificate2<SeqTypes>,
+    ) -> LeafProof {
+        let leaf = chain.last().unwrap();
+        let data = Vote2Data {
+            leaf_commit: leaf.leaf().commit(),
+            epoch: leaf.qc().data.epoch.unwrap(),
+            block_number: leaf.leaf().height(),
+        };
+        let cert2 = Certificate2::new(
+            data.clone(),
+            data.commit(),
+            leaf.leaf().view_number(),
+            None,
+            PhantomData,
+        );
+        let mut proof = LeafProof::default();
+        for leaf in chain {
+            assert!(!proof.push(leaf.clone()));
+        }
+        proof.add_certificate(Arc::new(cert2), leaf_qc);
+        proof
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_leaf_qc_mismatch() {
+        let leaves = leaf_chain(1..=2, NEW_PROTOCOL_VERSION).await;
+
+        assert_eq!(
+            new_protocol_proof(&leaves[..1], leaves[0].qc().clone())
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+
+        let mut wrong_view = leaves[0].qc().clone();
+        wrong_view.view_number += 1;
+        let mut wrong_commit = leaves[0].qc().clone();
+        wrong_commit.data.leaf_commit = leaves[1].leaf().commit();
+        let mut wrong_height = leaves[0].qc().clone();
+        wrong_height.data.block_number = wrong_height.data.block_number.map(|h| h + 1);
+        let mut wrong_epoch = leaves[0].qc().clone();
+        wrong_epoch.data.epoch = wrong_epoch.data.epoch.map(|e| e + 1);
+        for leaf_qc in [wrong_view, wrong_commit, wrong_height, wrong_epoch] {
+            new_protocol_proof(&leaves[..1], leaf_qc)
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap_err();
+        }
+
+        // With a longer chain the QC comes from the next leaf's justify QC; `leaf_qc` is ignored.
+        let mut wrong_view = leaves[1].qc().clone();
+        wrong_view.view_number += 1;
+        assert_eq!(
+            new_protocol_proof(&leaves, wrong_view)
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_genesis_view_rejected() {
+        let leaves = custom_leaf_chain(Upgrade::trivial(NEW_PROTOCOL_VERSION), 1..=1, |proposal| {
+            proposal.view_number = ViewNumber::genesis();
+        })
+        .await;
+        assert_eq!(leaves[0].leaf().view_number(), ViewNumber::genesis());
+
+        let mut leaf_qc = leaves[0].qc().clone();
+        leaf_qc.view_number = ViewNumber::genesis();
+        leaf_qc.signatures = None;
+        let proof = new_protocol_proof(&leaves, leaf_qc);
+
+        let stake_table = Arc::new(StakeTable::from_iter((0..3).map(|i| {
+            let (key, _) = PubKey::generated_from_seed_indexed(Default::default(), i);
+            key.stake_table_entry(U256::from(1))
+        })));
+        let quorum = StakeTableQuorum::new((stake_table.clone(), stake_table), 10);
+        let err = proof
+            .verify(LeafProofHint::Quorum(&quorum))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("genesis view"), "{err:#}");
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
