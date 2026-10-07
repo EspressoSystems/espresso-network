@@ -10,7 +10,7 @@ use axum::{
     Json,
     extract::{
         DefaultBodyLimit,
-        ws::{Message, WebSocket},
+        ws::{CloseFrame, Message, WebSocket, close_code},
     },
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
@@ -118,12 +118,17 @@ pub fn cors_layer() -> CorsLayer {
 /// is quiet.
 ///
 /// Binary frames are framed with [`WireVersion`], like request and response bodies.
+///
+/// A stream that runs to completion closes with no close code. An item that fails to encode ends
+/// the stream with close code 1011 (internal error), so a client can tell a server-side bug from
+/// end-of-stream.
 pub async fn drive_ws_stream<T: Serialize>(
     mut socket: WebSocket,
     stream: BoxStream<'static, T>,
     format: ContentType,
 ) {
     futures::pin_mut!(stream);
+    let mut close = None;
     loop {
         // Also poll the client side: a disconnect must end this task even while the stream is
         // quiet, or the socket's connection slot and the stream task leak until the next send.
@@ -140,15 +145,27 @@ pub async fn drive_ws_stream<T: Serialize>(
                 .map(|bytes| Message::Binary(bytes.into())),
             ContentType::Json => encode_text_frame(&item).map(|json| Message::Text(json.into())),
         };
-        let Ok(msg) = frame else { break };
+        let msg = match frame {
+            Ok(msg) => msg,
+            Err(err) => {
+                tracing::warn!(%err, "websocket stream item failed to encode, closing stream");
+                // A fixed reason, not the error text: a close frame's reason is capped at 123
+                // bytes and clients reject a longer one as a protocol error.
+                close = Some(CloseFrame {
+                    code: close_code::ERROR,
+                    reason: "failed to encode stream item".into(),
+                });
+                break;
+            },
+        };
         if socket.send(msg).await.is_err() {
             return;
         }
     }
     // Close handshake, like the socket handlers before the axum migration. Without it, dropping
-    // the socket resets the connection and clients see an error instead of end-of-stream; finite
+    // the socket resets the connection and clients see an error instead of end-of-stream. Finite
     // streams rely on a clean close to signal completion.
-    let _ = socket.send(Message::Close(None)).await;
+    _ = socket.send(Message::Close(close)).await;
 }
 
 /// Binds `url`'s host and port (falling back to the scheme's default port) and serves `router`
@@ -187,6 +204,7 @@ fn encode_health<T: Serialize>(headers: &HeaderMap, value: &T) -> Response {
 mod tests {
     use axum::http::HeaderValue;
     use serde::Deserialize;
+    use tokio_tungstenite::tungstenite;
     use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
     use super::*;
@@ -263,6 +281,81 @@ mod tests {
         let decoded: TestError =
             Serializer::<StaticVersion<0, 1>>::deserialize(&body_bytes(resp).await).unwrap();
         assert_eq!(decoded.status, 404);
+    }
+
+    #[derive(Clone)]
+    enum Item {
+        Encodable(u64),
+        Unencodable,
+    }
+
+    impl Serialize for Item {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            match self {
+                Item::Encodable(n) => n.serialize(serializer),
+                Item::Unencodable => Err(serde::ser::Error::custom(
+                    "an error message long enough that it would not fit in a close frame's \
+                     reason, which the protocol caps at 123 bytes",
+                )),
+            }
+        }
+    }
+
+    struct Received {
+        data_frames: usize,
+        close: Option<tungstenite::protocol::CloseFrame>,
+    }
+
+    async fn stream_over_socket(items: Vec<Item>, format: ContentType) -> Received {
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(move |ws: axum::extract::WebSocketUpgrade| async move {
+                let stream = futures::stream::iter(items).boxed();
+                ws.on_upgrade(move |socket| drive_ws_stream(socket, stream, format))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/"))
+            .await
+            .unwrap();
+        let mut data_frames = 0;
+        loop {
+            match ws.next().await.unwrap().unwrap() {
+                tungstenite::Message::Text(_) | tungstenite::Message::Binary(_) => data_frames += 1,
+                tungstenite::Message::Close(close) => return Received { data_frames, close },
+                tungstenite::Message::Ping(_)
+                | tungstenite::Message::Pong(_)
+                | tungstenite::Message::Frame(_) => {},
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn encode_failure_closes_with_internal_error() {
+        for format in [ContentType::Json, ContentType::Binary] {
+            let items = Vec::from([Item::Encodable(1), Item::Unencodable, Item::Encodable(2)]);
+            let Received { data_frames, close } = stream_over_socket(items, format).await;
+            assert_eq!(data_frames, 1, "{format:?}");
+            let close = close.expect("an encode failure must send a close code");
+            assert_eq!(
+                close.code,
+                tungstenite::protocol::frame::coding::CloseCode::Error
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn completed_stream_closes_cleanly() {
+        let items = Vec::from([Item::Encodable(1), Item::Encodable(2)]);
+        let Received { data_frames, close } = stream_over_socket(items, ContentType::Json).await;
+        assert_eq!(data_frames, 2);
+        assert!(close.is_none());
     }
 
     #[test]
