@@ -3136,6 +3136,16 @@ mod tests {
         .await
     }
 
+    // We expect no init data for the second upgrade because the proxy was already initialized
+    #[test_log::test(tokio::test)]
+    async fn test_upgrade_esp_token_v2_twice_multisig_owner() -> Result<()> {
+        test_upgrade_esp_token_v2_multisig_owner_helper(UpgradeTestOptions {
+            is_mock: false,
+            upgrade_count: UpgradeCount::Twice,
+        })
+        .await
+    }
+
     // This test is used to test the upgrade of the EspTokenProxy via the multisig wallet
     // It only tests the upgrade proposal via the typescript script and thus requires the upgrade proposal to be sent to a real network
     // However, the contracts are deployed on anvil, so the test will pass even if the upgrade proposal is not executed
