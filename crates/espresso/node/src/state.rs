@@ -398,42 +398,15 @@ where
     // state pruner in turn never advances to the head, so that snapshot stays readable however
     // far behind the chain the loop has fallen.
     let last_height = storage.get_last_state_height().await?;
-
-    // Check for environment variable override
-    let height = if let Ok(env_height) = std::env::var("ESPRESSO_NODE_STATE_STORAGE_INITIAL_HEIGHT")
-    {
-        match env_height.parse::<usize>() {
-            Ok(override_height) => {
-                tracing::error!(
-                    node_id = instance.node_id,
-                    last_height,
-                    override_height,
-                    "overriding initial state storage height from environment variable"
-                );
-                override_height
-            },
-            Err(e) => {
-                tracing::error!(
-                    "failed to parse ESPRESSO_NODE_STATE_STORAGE_INITIAL_HEIGHT: {e}, using last \
-                     height {last_height}"
-                );
-                last_height
-            },
-        }
-    } else {
-        last_height
-    };
-
     let current_height = storage.block_height().await?;
     tracing::info!(
         node_id = instance.node_id,
         last_height,
-        height,
         current_height,
         "updating state storage"
     );
 
-    let parent_leaf = leaf_at(&storage, &instance, height as u64).await;
+    let parent_leaf = leaf_at(&storage, &instance, last_height as u64).await;
     let mut parent_state = ValidatedState::from_header(parent_leaf.block_header());
 
     // Seed the parent's reward tree from storage.
