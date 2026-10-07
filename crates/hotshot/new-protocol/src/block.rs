@@ -213,6 +213,9 @@ pub struct BlockBuilder<T: NodeType> {
     // Transactions of the blocks this node proposed or reconstructed that have not
     // decided yet. They leave `retry_pending` only once their block decides.
     undecided: BTreeMap<(ViewNumber, VidCommitment2), Vec<Commitment<T::Transaction>>>,
+    // Blocks that decided within the retry TTL, for a reconstruction that completes
+    // after the decide.
+    decided: BTreeSet<(ViewNumber, VidCommitment2)>,
     config: BlockBuilderConfig,
     upgrade_lock: UpgradeLock<T>,
     current_view: ViewNumber,
@@ -252,6 +255,7 @@ impl<T: NodeType> BlockBuilder<T> {
             leader_total_bytes: 0,
             dedups: BTreeMap::new(),
             undecided: BTreeMap::new(),
+            decided: BTreeSet::new(),
             current_view: ViewNumber::genesis(),
             calculations: BTreeMap::new(),
             view_transactions: BTreeMap::new(),
@@ -535,10 +539,7 @@ impl<T: NodeType> BlockBuilder<T> {
             self.remove_pending(&hash);
         }
         self.expire_pooled(view);
-        // A block older than the retry TTL can no longer clear anything from
-        // `retry_pending`, so its record has nothing left to do.
-        self.undecided
-            .retain(|(block_view, _), _| *block_view + self.config.ttl >= view);
+        self.expire_block_records(view);
 
         let batch = self.resend_batch(view);
         if batch.is_empty() {
@@ -605,6 +606,17 @@ impl<T: NodeType> BlockBuilder<T> {
         }
     }
 
+    /// Drops the records of blocks more than `ttl` views behind `view`: everything
+    /// submitted before such a block was built has expired by now, so its record can no
+    /// longer clear anything from `retry_pending`.
+    fn expire_block_records(&mut self, view: ViewNumber) {
+        let ttl = self.config.ttl;
+        self.undecided
+            .retain(|(block_view, _), _| *block_view + ttl >= view);
+        self.decided
+            .retain(|(block_view, _)| *block_view + ttl >= view);
+    }
+
     fn remove_pending(&mut self, hash: &Commitment<T::Transaction>) {
         if let Some(entry) = self.retry_pending.remove(hash) {
             self.retry_order.remove(&(entry.valid_until, *hash));
@@ -634,8 +646,15 @@ impl<T: NodeType> BlockBuilder<T> {
         payload_commitment: VidCommitment2,
         tx_commitments: Vec<Commitment<T::Transaction>>,
     ) {
-        self.undecided
-            .insert((view, payload_commitment), tx_commitments.clone());
+        if self.decided.contains(&(view, payload_commitment)) {
+            // The decide came first, as it can when this node's shares arrive slowly.
+            for hash in &tx_commitments {
+                self.remove_pending(hash);
+            }
+        } else {
+            self.undecided
+                .insert((view, payload_commitment), tx_commitments.clone());
+        }
         self.mark_included(view, tx_commitments);
     }
 
@@ -650,6 +669,7 @@ impl<T: NodeType> BlockBuilder<T> {
             for hash in self.undecided.remove(&key).unwrap_or_default() {
                 self.remove_pending(&hash);
             }
+            self.decided.insert(key);
         }
     }
 

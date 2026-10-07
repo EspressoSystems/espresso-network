@@ -660,3 +660,13 @@ async fn late_decide_of_an_older_view_still_clears_its_transactions() {
         "the gap view decided for real, so its transaction is not sent again"
     );
 }
+
+#[tokio::test]
+async fn block_reconstructed_after_it_decided_clears_its_transactions() {
+    let mut b = builder();
+    b.on_submit_transaction(tx(1)).unwrap();
+    // This node's shares arrive slowly, so the decide lands before the reconstruction.
+    b.on_blocks_decided([(view(1), payload())]);
+    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
+    assert!(b.on_view_changed(view(4)).is_none());
+}
