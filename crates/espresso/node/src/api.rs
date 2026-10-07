@@ -8632,6 +8632,19 @@ mod test {
                 assert_eq!(summary.rollups, vec![ns_id]);
                 assert_eq!(summary.hash, expected.commit());
             }
+
+            // Paging up from the oldest transaction returns the ones above it.
+            let oldest = txs.last().unwrap();
+            let cursor = oldest.num_transactions - 1 - oldest.offset;
+            let newer: TransactionSummariesResponse<SeqTypes> = client
+                .get(&format!(
+                    "explorer/transactions/since/{}/{cursor}/{count}/namespace/{ns_id}",
+                    oldest.height
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(newer.transaction_summaries, txs[..txs.len() - 1]);
         }
     }
 
@@ -12863,11 +12876,24 @@ mod test {
                 )
                 .await?;
                 assert_json_endpoint(&http, api_port, "explorer/transactions/latest/10").await?;
+                assert_json_endpoint(
+                    &http,
+                    api_port,
+                    &format!("explorer/transactions/since/{avail_block}/0/10"),
+                )
+                .await?;
 
                 // Explorer errors keep their status: missing objects are 404 and unsupported
                 // search tags are 400, while a search that finds nothing is an empty result.
                 assert_error_body(&http, api_port, "explorer/block/999999", 404).await?;
                 assert_error_body(&http, api_port, "explorer/transaction/999999/0", 404).await?;
+                assert_error_body(
+                    &http,
+                    api_port,
+                    &format!("explorer/transactions/since/{avail_block}/0/0"),
+                    400,
+                )
+                .await?;
                 assert_error_body(
                     &http,
                     api_port,
