@@ -23,7 +23,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use criterion::{Criterion, SamplingMode};
+use criterion::{BenchmarkId, Criterion, SamplingMode};
 use espresso_types::{ChainConfig, NamespaceId, NsTable, Payload, SeqTypes, Transaction};
 use hotshot_new_protocol::block::{BlockCommitments, block_commitments};
 use hotshot_types::{consensus::PayloadWithMetadata, data::vid_disperse::VID_TARGET_TOTAL_STAKE};
@@ -55,14 +55,14 @@ fn bench_block_build(c: &mut Criterion) {
         .warm_up_time(Duration::from_millis(200))
         .measurement_time(Duration::from_secs(1));
     for block_mb in BLOCK_MB {
-        let id = format!("request_block/{block_mb}MB_1000KB_t{threads}_n{NODES}");
+        let label = format!("{block_mb}MB_1000KB_t{threads}_n{NODES}");
         let txs = OnceLock::new();
         STEPS.lock().expect("steps lock").clear();
-        group.bench_function(&id, |b| {
+        group.bench_function(BenchmarkId::new("request_block", &label), |b| {
             let txs = txs.get_or_init(|| transactions(block_mb));
             b.iter_with_large_drop(|| request_block(txs))
         });
-        write_steps(&format!("block_build/{id}"));
+        write_steps(&format!("block_build/request_block/{label}"));
     }
     group.finish();
 }
