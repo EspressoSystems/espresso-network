@@ -26,6 +26,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tagged-base64 = { workspace = true }
 thiserror = { workspace = true }
+time = { workspace = true, features = ["formatting"] }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }

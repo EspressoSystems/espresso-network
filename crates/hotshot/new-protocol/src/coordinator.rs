@@ -579,15 +579,22 @@ where
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(cert1) = self.cert_verifiers.cert1.next() => {
+                    // The epoch-root collector keeps tallying: its state
+                    // certificate only forms locally, and consensus dedupes
+                    // the cert1 it carries.
+                    self.vote1_collector.mark_completed(cert1.view_number(), cert1.epoch());
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.cert_verifiers.cert2.next() => {
+                    self.vote2_collector.mark_completed(cert2.view_number(), cert2.epoch());
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some(tc) = self.cert_verifiers.timeout.next() => {
+                    self.timeout_collector.mark_completed(tc.view_number(), tc.epoch());
                     return Ok(ConsensusInput::TimeoutCertificate(tc.map(TimeoutEvidence::V2)))
                 }
                 Some(tc) = self.cert_verifiers.timeout3.next() => {
+                    self.timeout3_collector.mark_completed(tc.view_number(), tc.epoch());
                     return Ok(ConsensusInput::TimeoutCertificate(tc.map(TimeoutEvidence::V3)))
                 }
                 Some(cert1) = self.cert_verifiers.advance.next() => {
