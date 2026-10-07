@@ -32,10 +32,14 @@ mod reconstruct;
 pub use disperse::{VidDisperseError, VidDisperseOutput, VidDisperseRequest, VidDisperser};
 pub use fragments::{VidFragmentAccumulator, VidFragmentError};
 use hotshot_types::{
-    data::{EpochNumber, vid_disperse::vid_total_weight},
+    data::{
+        EpochNumber,
+        ns_table::{ns_table_payload_byte_len, parse_ns_table},
+        vid_disperse::vid_total_weight,
+    },
     epoch_membership::EpochMembershipCoordinator,
     traits::node_implementation::NodeType,
-    vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
+    vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, init_avidm_gf2_param},
 };
 pub(crate) use reconstruct::matches_commitment;
 pub use reconstruct::{
@@ -53,4 +57,31 @@ pub fn expected_vid_param<T: NodeType>(
     let membership = membership.stake_table_for_epoch(Some(epoch)).ok()?;
     let total_weight = vid_total_weight::<T, _>(membership.stake_table(), Some(epoch));
     init_avidm_gf2_param(total_weight).ok()
+}
+
+/// Whether `common.ns_lens` are the namespace lengths an honest disperser
+/// derives from the header's namespace table `ns_table` at the payload length
+/// the common claims, which the table must be sized for if it is one.
+///
+/// The commitment binds `ns_commits` but not `ns_lens`, so a leader could
+/// otherwise pair honest namespace commitments with lengths shuffled between
+/// namespaces. Such a block reconstructs and decides, but its stored common
+/// then slices the payload at the wrong namespace boundaries and no namespace
+/// proof for it can be served.
+///
+/// This pins `ns_lens` to the header. Whether the header's table is sized for
+/// the payload is settled by `matches_commitment` at reconstruction, which
+/// sees the recovered bytes.
+pub(crate) fn ns_lens_match_metadata(common: &AvidmGf2Common, ns_table: &[u8]) -> bool {
+    let total = common.payload_byte_len();
+    if ns_table_payload_byte_len(ns_table).is_some_and(|claimed| claimed != total) {
+        return false;
+    }
+    let expected = parse_ns_table(total, ns_table);
+    common.ns_lens.len() == expected.len()
+        && common
+            .ns_lens
+            .iter()
+            .zip(&expected)
+            .all(|(len, range)| *len == range.len())
 }

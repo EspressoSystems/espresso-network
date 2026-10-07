@@ -5,7 +5,9 @@ use hotshot_types::{
     data::{VidCommitment2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::{
-        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
+        block_contents::{BlockHeader, EncodeBytes},
+        node_implementation::NodeType,
+        signature_key::SignatureKey,
     },
     vote::HasViewNumber,
 };
@@ -175,8 +177,13 @@ impl<T: NodeType> Fetcher<T> {
                 let metadata = proposal.block_header.metadata().clone();
 
                 self.tasks.spawn_blocking(move || {
-                    if !matches_commitment::<T>(view, &param, &metadata, &data, &payload_commitment)
-                    {
+                    if !matches_commitment(
+                        view,
+                        &param,
+                        &metadata.encode(),
+                        &data,
+                        &payload_commitment,
+                    ) {
                         return None;
                     }
                     let payload = T::BlockPayload::from_bytes(&data, &metadata);

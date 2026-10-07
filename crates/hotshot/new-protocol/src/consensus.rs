@@ -29,7 +29,7 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
-        block_contents::BlockHeader,
+        block_contents::{BlockHeader, EncodeBytes},
         node_implementation::NodeType,
         signature_key::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
@@ -55,6 +55,7 @@ use crate::{
     outbox::Outbox,
     state::{StateRequest, StateResponse},
     storage::{ActionKind, StorageOutput},
+    vid::ns_lens_match_metadata,
 };
 
 #[derive(Eq, PartialEq, Debug, Clone)]
@@ -1093,6 +1094,18 @@ impl<T: NodeType> Consensus<T> {
         vid_share: VidDisperseShare2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
+        // Refuse the share before `ProposalPaired` persists it and seeds the
+        // reconstructor with its common.
+        if !ns_lens_match_metadata(
+            &vid_share.common,
+            &proposal.proposal.data.block_header.metadata().encode(),
+        ) {
+            warn!(
+                view = %proposal.view_number(), proposer = %KeyPrefix::from(&sender),
+                "VID share namespace lengths disagree with the proposal's namespace table"
+            );
+            return Protocol::Abort;
+        }
         outbox.push_back(ConsensusOutput::ProposalPaired {
             proposal: proposal.proposal.clone(),
             vid_share: vid_share.clone(),
