@@ -86,6 +86,7 @@ impl Payload {
         (Self, <Self as BlockPayload<SeqTypes>>::Metadata),
         <Self as BlockPayload<SeqTypes>>::Error,
     > {
+        let _span = tracing::debug_span!("from_transactions").entered();
         // accounting for block byte length limit
         let max_block_byte_len = u64::from(chain_config.max_block_size);
         let mut block_byte_len = 0;
