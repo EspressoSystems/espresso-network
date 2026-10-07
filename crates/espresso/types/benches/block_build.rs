@@ -3,13 +3,16 @@
 //! Inputs mirror the network-bench load generator: random 1 MB transactions round-robin over
 //! 16 namespaces in 30 to 70 MB blocks, protocol version 0.6 (AvidmGf2). VID total weight is
 //! the node count (stake 1 per node) and the `approximate_weights` result for large equal
-//! stakes (1000 + nodes).
+//! stakes. Each case builds its inputs only when one of its benchmarks runs, so a filtered run
+//! allocates nothing for the others.
 //!
 //! `request_block` runs the leader's build task: `from_transactions` on a copy of the cached
 //! transactions, then `hotshot_new_protocol::block::block_commitments`, the function the leader
 //! calls. Their tracing spans are timed per step; after each `request_block` benchmark the step
 //! medians are printed and, when `CRITERION_HOME` is set, written to `steps.json` next to its
-//! criterion output. Steps in parallel overlap, so they do not add up to the total.
+//! criterion output. Steps in parallel overlap, so they do not add up to the total. Step samples
+//! start with criterion's warm-up iterations; scripts/bench-block-build keeps only the last ones,
+//! one per measured iteration.
 //! `tx_clone` times a full copy of the transactions for comparison.
 //!
 //! `RAYON_NUM_THREADS` is read once per process and recorded in the benchmark id.
@@ -23,8 +26,7 @@ use std::{
     hint::black_box,
     mem,
     path::PathBuf,
-    sync::Mutex,
-    thread,
+    sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -34,7 +36,7 @@ use espresso_types::{ChainConfig, NamespaceId, NsTable, Payload, SeqTypes, Trans
 use hotshot_new_protocol::block::{BlockCommitments, block_commitments};
 use hotshot_types::{
     consensus::PayloadWithMetadata,
-    data::{VidCommitment, vid_commitment},
+    data::{VidCommitment, vid_commitment, vid_disperse::VID_TARGET_TOTAL_STAKE},
     traits::{BlockPayload, EncodeBytes},
     utils::BuilderCommitment,
 };
@@ -53,14 +55,29 @@ use versions::NEW_PROTOCOL_VERSION;
 const MB: usize = 1_000_000;
 const NAMESPACES: u64 = 16;
 const NODES: [usize; 2] = [3, 10];
-/// `approximate_weights` adds 1 per node on top of `VID_TARGET_TOTAL_STAKE`.
-const SCALED_WEIGHT_BASE: usize = 1000;
-/// (block size in MB, tx size in bytes)
-const BLOCKS: [(usize, usize); 5] = [(30, MB), (40, MB), (50, MB), (60, MB), (70, MB)];
+const BLOCK_MB: [usize; 5] = [30, 40, 50, 60, 70];
 
+/// One block size; inputs are built on first use.
 struct Case {
     label: String,
-    txs: Vec<Transaction>,
+    block_mb: usize,
+    txs: OnceLock<Vec<Transaction>>,
+    encoded: OnceLock<Encoded>,
+}
+
+impl Case {
+    fn txs(&self) -> &[Transaction] {
+        self.txs.get_or_init(|| transactions(self.block_mb))
+    }
+
+    fn encoded(&self) -> &Encoded {
+        self.encoded.get_or_init(|| Encoded::new(self.txs()))
+    }
+}
+
+/// `approximate_weights` for `nodes` equal stakes above `VID_TARGET_TOTAL_STAKE`.
+fn scaled_weight(nodes: usize) -> usize {
+    nodes * (VID_TARGET_TOTAL_STAKE as usize / nodes + 1)
 }
 
 struct Encoded {
@@ -97,10 +114,11 @@ impl Encoded {
     }
 }
 
-fn transactions(block_mb: usize, tx_size: usize, rng: &mut ChaCha20Rng) -> Vec<Transaction> {
-    (0..block_mb * MB / tx_size)
+fn transactions(block_mb: usize) -> Vec<Transaction> {
+    let mut rng = ChaCha20Rng::seed_from_u64(block_mb as u64);
+    (0..block_mb)
         .map(|i| {
-            let mut body = vec![0u8; tx_size];
+            let mut body = vec![0u8; MB];
             rng.fill_bytes(&mut body);
             Transaction::new(NamespaceId::from(10_000 + i as u64 % NAMESPACES), body)
         })
@@ -217,21 +235,18 @@ fn ms(duration: Duration) -> f64 {
 fn median(values: &[f64]) -> f64 {
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
-    sorted[sorted.len() / 2]
+    let mid = sorted.len() / 2;
+    if sorted.len().is_multiple_of(2) {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    }
 }
 
 fn bench_tx_stages(group: &mut BenchmarkGroup<WallTime>, case: &Case) {
     let label = format!("{}_n-", case.label);
-    let txs = &case.txs;
-    group.bench_function(BenchmarkId::new("tx_commit_serial", &label), |b| {
-        b.iter(|| {
-            black_box(txs)
-                .iter()
-                .map(Committable::commit)
-                .collect::<Vec<Commitment<_>>>()
-        })
-    });
     group.bench_function(BenchmarkId::new("tx_commit_par", &label), |b| {
+        let txs = case.txs();
         b.iter(|| {
             black_box(txs)
                 .par_iter()
@@ -240,14 +255,15 @@ fn bench_tx_stages(group: &mut BenchmarkGroup<WallTime>, case: &Case) {
         })
     });
     group.bench_function(BenchmarkId::new("tx_clone", &label), |b| {
-        b.iter_with_large_drop(|| black_box(txs).clone())
+        let txs = case.txs();
+        b.iter_with_large_drop(|| black_box(txs).to_vec())
     });
     group.bench_function(BenchmarkId::new("from_transactions", &label), |b| {
+        let txs = case.txs();
         b.iter_with_large_drop(|| build(black_box(txs)))
     });
-
-    let enc = Encoded::new(txs);
     group.bench_function(BenchmarkId::new("encode", &label), |b| {
+        let enc = case.encoded();
         b.iter_with_large_drop(|| {
             (
                 black_box(&enc.payload).encode(),
@@ -256,50 +272,36 @@ fn bench_tx_stages(group: &mut BenchmarkGroup<WallTime>, case: &Case) {
         })
     });
     group.bench_function(BenchmarkId::new("from_bytes", &label), |b| {
+        let enc = case.encoded();
         b.iter_with_large_drop(|| {
             Payload::from_bytes(black_box(&enc.payload_bytes), black_box(&enc.ns_table))
         })
     });
-    let serialized = bincode::serialize(&enc.payload).expect("bincode serialize");
     group.bench_function(BenchmarkId::new("decode", &label), |b| {
+        let serialized = bincode::serialize(&case.encoded().payload).expect("bincode serialize");
         b.iter_with_large_drop(|| {
             bincode::deserialize::<Payload>(black_box(&serialized)).expect("bincode deserialize")
         })
     });
     group.bench_function(BenchmarkId::new("builder_commitment", &label), |b| {
+        let enc = case.encoded();
         b.iter(|| enc.sha())
     });
 }
 
 fn bench_commit_stages(group: &mut BenchmarkGroup<WallTime>, case: &Case, nodes: usize) {
-    let label = format!("{}_n{nodes}", case.label);
-    let enc = Encoded::new(&case.txs);
-
-    group.bench_function(BenchmarkId::new("vid_commitment", &label), |b| {
-        b.iter(|| enc.vid(nodes))
-    });
-    group.bench_function(BenchmarkId::new("commitments_join", &label), |b| {
-        b.iter(|| rayon::join(|| enc.vid(nodes), || enc.sha()))
-    });
-    group.bench_function(BenchmarkId::new("commitments_seq", &label), |b| {
-        b.iter(|| (enc.vid(nodes), enc.sha()))
-    });
-    group.bench_function(BenchmarkId::new("commitments_thread", &label), |b| {
-        b.iter(|| {
-            thread::scope(|s| {
-                let sha = s.spawn(|| enc.sha());
-                (enc.vid(nodes), sha.join().expect("sha thread"))
-            })
-        })
-    });
-    bench_request_block(group, case, &label, nodes);
-
-    let weight = SCALED_WEIGHT_BASE + nodes;
-    let label = format!("{}_n{nodes}w{weight}", case.label);
-    group.bench_function(BenchmarkId::new("vid_commitment", &label), |b| {
-        b.iter(|| enc.vid(weight))
-    });
-    bench_request_block(group, case, &label, weight);
+    for weight in [nodes, scaled_weight(nodes)] {
+        let label = if weight == nodes {
+            format!("{}_n{nodes}", case.label)
+        } else {
+            format!("{}_n{nodes}w{weight}", case.label)
+        };
+        group.bench_function(BenchmarkId::new("vid_commitment", &label), |b| {
+            let enc = case.encoded();
+            b.iter(|| enc.vid(weight))
+        });
+        bench_request_block(group, case, &label, weight);
+    }
 }
 
 fn bench_request_block(
@@ -308,9 +310,11 @@ fn bench_request_block(
     label: &str,
     weight: usize,
 ) {
-    STEPS.lock().expect("steps lock").clear();
     group.bench_function(BenchmarkId::new("request_block", label), |b| {
-        b.iter_with_large_drop(|| request_block(&case.txs, weight))
+        let txs = case.txs();
+        // Steps recorded while building the inputs are not part of the benchmark.
+        STEPS.lock().expect("steps lock").clear();
+        b.iter_with_large_drop(|| request_block(txs, weight))
     });
     report_steps(&format!("block_build/request_block/{label}"));
 }
@@ -318,7 +322,6 @@ fn bench_request_block(
 fn bench_block_build(c: &mut Criterion) {
     install_step_timer();
     let threads = rayon::current_num_threads();
-    let mut rng = ChaCha20Rng::seed_from_u64(42);
     let mut group = c.benchmark_group("block_build");
     group
         .sampling_mode(SamplingMode::Flat)
@@ -326,10 +329,12 @@ fn bench_block_build(c: &mut Criterion) {
         .warm_up_time(Duration::from_millis(200))
         .measurement_time(Duration::from_secs(1));
 
-    for (block_mb, tx_size) in BLOCKS {
+    for block_mb in BLOCK_MB {
         let case = Case {
-            label: format!("{block_mb}MB_{}KB_t{threads}", tx_size / 1000),
-            txs: transactions(block_mb, tx_size, &mut rng),
+            label: format!("{block_mb}MB_1000KB_t{threads}"),
+            block_mb,
+            txs: OnceLock::new(),
+            encoded: OnceLock::new(),
         };
         bench_tx_stages(&mut group, &case);
         for nodes in NODES {
