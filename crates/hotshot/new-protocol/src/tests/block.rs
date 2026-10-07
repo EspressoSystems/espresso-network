@@ -13,6 +13,7 @@ use hotshot_types::{
     traits::signature_key::SignatureKey,
 };
 use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
+use vid::utils::blake3::Blake3Node;
 
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig, forward_budget},
@@ -41,8 +42,11 @@ fn epoch() -> EpochNumber {
     EpochNumber::genesis()
 }
 
-fn payload() -> VidCommitment2 {
-    VidCommitment2::default()
+/// A distinct payload commitment per `n`.
+fn payload(n: u8) -> VidCommitment2 {
+    VidCommitment2 {
+        commit: Blake3Node::new([n; 32]),
+    }
 }
 
 /// The same block size for every protocol version.
@@ -123,8 +127,8 @@ async fn test_retry_buffer() {
     b.on_submit_transaction(t2.clone()).unwrap();
 
     // t1's block reconstructed and decided, so t1 leaves the retry buffer
-    b.on_block_reconstructed(view(1), payload(), vec![t1.commit()]);
-    b.on_blocks_decided([(view(1), payload())]);
+    b.on_block_reconstructed(view(1), payload(1), vec![t1.commit()]);
+    b.on_blocks_decided([(view(1), payload(1))]);
 
     assert_eq!(
         b.on_view_changed(view(4)),
@@ -518,7 +522,7 @@ async fn test_dedup_window() {
 async fn reconstructed_block_drops_its_transactions_from_leader_buffer() {
     let mut b = builder();
     b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
-    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), payload(1), Vec::from([tx(1).commit()]));
     let txns = b.drain(view(2));
     assert_eq!(txns, Vec::from([tx(2)]));
 }
@@ -610,7 +614,7 @@ async fn transactions_larger_than_a_block_are_not_pooled() {
 #[tokio::test]
 async fn reconstructed_block_drops_later_copies_of_its_transactions() {
     let mut b = builder();
-    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), payload(1), Vec::from([tx(1).commit()]));
     b.on_transactions(tx_msg(view(2), Vec::from([tx(1)])));
     let txns = b.drain(view(2));
     assert!(txns.is_empty());
@@ -620,13 +624,13 @@ async fn reconstructed_block_drops_later_copies_of_its_transactions() {
 async fn submitted_transaction_is_forwarded_until_its_block_decides() {
     let mut b = builder();
     b.on_submit_transaction(tx(1)).unwrap();
-    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), payload(1), Vec::from([tx(1).commit()]));
     assert_eq!(
         b.on_view_changed(view(4)),
         Some(tx_msg(view(6), Vec::from([tx(1)]))),
         "a proposed block can still be abandoned, keep forwarding"
     );
-    b.on_blocks_decided([(view(1), payload())]);
+    b.on_blocks_decided([(view(1), payload(1))]);
     assert_eq!(
         b.outstanding_transactions(),
         (0, 0),
@@ -638,9 +642,9 @@ async fn submitted_transaction_is_forwarded_until_its_block_decides() {
 async fn submitted_transaction_in_an_abandoned_block_is_still_forwarded() {
     let mut b = builder();
     b.on_submit_transaction(tx(1)).unwrap();
-    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), payload(1), Vec::from([tx(1).commit()]));
     // View 1 is skipped: a block at view 2 decides instead.
-    b.on_blocks_decided([(view(2), payload())]);
+    b.on_blocks_decided([(view(2), payload(2))]);
     assert_eq!(
         b.on_view_changed(view(4)),
         Some(tx_msg(view(6), Vec::from([tx(1)])))
@@ -651,10 +655,10 @@ async fn submitted_transaction_in_an_abandoned_block_is_still_forwarded() {
 async fn late_decide_of_an_older_view_still_clears_its_transactions() {
     let mut b = builder();
     b.on_submit_transaction(tx(1)).unwrap();
-    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), payload(1), Vec::from([tx(1).commit()]));
     // View 2 decides while view 1 is a gap, then view 1's late Cert2 fills it.
-    b.on_blocks_decided([(view(2), payload())]);
-    b.on_blocks_decided([(view(1), payload())]);
+    b.on_blocks_decided([(view(2), payload(2))]);
+    b.on_blocks_decided([(view(1), payload(1))]);
     assert!(
         b.on_view_changed(view(4)).is_none(),
         "the gap view decided for real, so its transaction is not sent again"
@@ -666,7 +670,37 @@ async fn block_reconstructed_after_it_decided_clears_its_transactions() {
     let mut b = builder();
     b.on_submit_transaction(tx(1)).unwrap();
     // This node's shares arrive slowly, so the decide lands before the reconstruction.
-    b.on_blocks_decided([(view(1), payload())]);
-    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
+    b.on_blocks_decided([(view(1), payload(1))]);
+    b.on_block_reconstructed(view(1), payload(1), Vec::from([tx(1).commit()]));
     assert!(b.on_view_changed(view(4)).is_none());
+}
+
+#[tokio::test]
+async fn two_blocks_for_one_view_are_decided_apart() {
+    let mut b = builder();
+    b.on_submit_transaction(tx(1)).unwrap();
+    b.on_submit_transaction(tx(2)).unwrap();
+    // A leader builds again for a view when a timeout changes the parent, and the
+    // payload can change with it.
+    b.on_block_reconstructed(view(1), payload(1), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), payload(2), Vec::from([tx(2).commit()]));
+    b.on_blocks_decided([(view(1), payload(1))]);
+    assert_eq!(
+        b.on_view_changed(view(4)),
+        Some(tx_msg(view(6), Vec::from([tx(2)]))),
+        "only the block that decided clears its transactions"
+    );
+}
+
+#[tokio::test]
+async fn block_record_expires_with_the_retry_ttl() {
+    let mut b = builder();
+    b.on_block_reconstructed(view(1), payload(1), Vec::from([tx(1).commit()]));
+    b.on_view_changed(view(3));
+    b.on_submit_transaction(tx(1)).unwrap();
+    // The block is more than `ttl` views old at view 7, so its record is gone and this
+    // later submission rides out its own TTL.
+    b.on_view_changed(view(7));
+    b.on_blocks_decided([(view(1), payload(1))]);
+    assert_eq!(b.outstanding_transactions().0, 1);
 }
