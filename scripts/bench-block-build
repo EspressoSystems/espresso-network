@@ -32,6 +32,7 @@ Method:
     Without it, glibc maps every buffer of 32 MiB or more (64 MiB on worker threads) fresh per
     block in 4 KiB pages, and the page faults dominate and vary between runs.
 
+When both refs are the same commit it is measured once and the table shows absolute numbers.
 Both refs must contain crates/espresso/types/benches/block_build.rs. Results go to
 tmp/bench-block-build/<base>-<head>.{csv,md,svg}.
 """
@@ -126,20 +127,21 @@ def main(
     if dry_run:
         return
 
+    # Both refs at one commit: measure it once and report absolute numbers.
+    if shas["base"] == shas["head"]:
+        del shas["base"]
     binaries = {side: build(sha) for side, sha in shas.items()}
     names = [n for n in list_benches(binaries["head"]) if re.search(bench_filter, n)]
     if not names:
         raise SystemExit(f"no benchmark matches {bench_filter!r}")
-    labels = {side: f"{side} {refs[side]} {shas[side][:10]}" for side in refs}
+    labels = {side: f"{side} {refs[side]} {sha[:10]}" for side, sha in shas.items()}
     runs = measure(binaries, labels, names, mallocs, repeats)
 
-    stem = OUT / f"{shas['base'][:10]}-{shas['head'][:10]}"
+    stem = OUT / "-".join(sha[:10] for sha in shas.values())
     runs.to_csv(stem.with_suffix(".csv"), index=False)
     table = summarize(runs)
     print(table)
-    stem.with_suffix(".md").write_text(
-        f"{labels['base']}, {labels['head']}\n\n{table}\n"
-    )
+    stem.with_suffix(".md").write_text(f"{', '.join(labels.values())}\n\n{table}\n")
     waterfall(runs, stem.with_suffix(".svg"))
     log.info("wrote %s.{csv,md,svg}", stem)
 
@@ -155,7 +157,7 @@ def measure(
     the share of CPU other work used just before the run (`other_cpu`)."""
     frames = []
     for rep in range(repeats):
-        order = ["base", "head"] if rep % 2 == 0 else ["head", "base"]
+        order = list(binaries) if rep % 2 == 0 else list(reversed(binaries))
         for malloc in mallocs:
             for name in names:
                 for side in order:
@@ -179,6 +181,8 @@ def measure(
 
 def summarize(runs: pd.DataFrame) -> str:
     """Markdown table: total, then each step both sides recorded, pooled over repeats."""
+    if runs.side.nunique() == 1:
+        return summarize_one(runs)
     pooled = runs.pivot_table(
         index=["malloc", "benchmark", "step"],
         columns="side",
@@ -202,12 +206,30 @@ def summarize(runs: pd.DataFrame) -> str:
         base_runs=spread.xs("base", level="side"),
         head_runs=spread.xs("head", level="side"),
     ).reset_index()
+    return order_rows(table).to_markdown(index=False, floatfmt=".2f")
+
+
+def summarize_one(runs: pd.DataFrame) -> str:
+    """Markdown table for a single ref: median, standard error and run medians per step."""
+    keys = ["malloc", "benchmark", "step"]
+    per_run = runs.groupby([*keys, "rep"]).duration.median().groupby(level=keys)
+    table = pd.DataFrame(
+        {
+            "ms": runs.groupby(keys).duration.median(),
+            "± se": per_run.sem(),
+            "runs": per_run.agg(lambda v: " ".join(f"{x:.2f}" for x in v)),
+        }
+    ).reset_index()
+    return order_rows(table).to_markdown(index=False, floatfmt=".2f")
+
+
+def order_rows(table: pd.DataFrame) -> pd.DataFrame:
+    """Shorter benchmark names; per benchmark the total first, then steps by name."""
     table["benchmark"] = table.benchmark.str.removeprefix("block_build/")
     table["order"] = table.step.ne("total")
-    table = table.sort_values(["malloc", "benchmark", "order", "step"]).drop(
+    return table.sort_values(["malloc", "benchmark", "order", "step"]).drop(
         columns="order"
     )
-    return table.to_markdown(index=False, floatfmt=".2f")
 
 
 def waterfall(runs: pd.DataFrame, path: Path) -> None:
