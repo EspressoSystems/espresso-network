@@ -466,8 +466,10 @@ def test_post_tx_stamps_t_done_when_the_request_fails():
 
     clock = fakes.FakeClock()
     pool = Failing(fakes.FakeNode(clock, include=False), clock)
+    state = netbench.LoadState()
     tx = netbench.Tx(id=0, node=0, t_queued=0.0)
-    assert netbench.post_tx(pool, tx, "http://x", lambda: b"") == 0
+    state.submitted(tx)
+    assert netbench.post_tx(pool, state, tx, "http://x", lambda: b"") == 0
     assert tx.t_done is not None
     assert tx.t_done >= tx.t_submit
 
@@ -815,9 +817,33 @@ def drain(state, heights, timeout_s, clock, **kwargs) -> float | None:
     )
 
 
+def sent_tx(state: netbench.LoadState, tx_id: int, sent: bool) -> netbench.Tx:
+    tx = netbench.Tx(id=tx_id, node=0, t_queued=0.0)
+    if sent:
+        tx.t_submit = 0.5
+    state.submitted(tx)
+    return tx
+
+
+def test_drain_drops_transactions_never_sent():
+    class NoRequests(fakes.FakePool):
+        def request(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("a dropped transaction was sent")
+
+    clock = fakes.FakeClock()
+    state = netbench.LoadState()
+    sent, queued = sent_tx(state, 0, True), sent_tx(state, 1, False)
+    drain(state, heights_at(5, 8), 1.0, clock)
+    assert state.pending == {0: sent}
+    assert state.txs == [sent]
+    pool = NoRequests(fakes.FakeNode(clock, include=False), clock)
+    assert netbench.post_tx(pool, state, queued, "http://x", lambda: b"") is None
+    assert queued.t_submit == math.inf
+
+
 def test_drain_without_pending_ignores_stuck_transactions():
     state = netbench.LoadState()
-    state.submitted(netbench.Tx(id=0, node=0, t_queued=0.0))
+    sent_tx(state, 0, True)
     heights = heights_at(5, 6)
     assert drain(state, heights, 0.3, fakes.FakeClock()) is None
     assert drain(state, heights, 0.3, fakes.FakeClock(), wait_pending=False) is not None

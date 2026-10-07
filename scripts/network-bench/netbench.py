@@ -818,6 +818,8 @@ class LoadState:
         # What `pace` is asked to submit; 0 while nothing is submitted.
         self.rate_mb_s = 0.0
         self.room = asyncio.Event()
+        # Held by `post_tx` to send and by `drop_unsent` to drop: a tx is one or the other.
+        self.lock = threading.Lock()
         self.txs: list[Tx] = []
         self.pending: dict[int, Tx] = {}
         self.max_in_flight = 0
@@ -1390,6 +1392,7 @@ async def drain(
     bytes stopped growing and the query node caught up with a validator height past the one at
     the idle point, so a stalled chain does not count as drained. Seconds that took, or None
     after `timeout_s`."""
+    drop_unsent(state)
     state.rate_mb_s = 0.0
     start, target = clock.time(), None
     while clock.time() - start < timeout_s:
@@ -1401,6 +1404,18 @@ async def drain(
             return clock.time() - start
         await clock.asleep(0.1)
     return None
+
+
+def drop_unsent(state: LoadState) -> None:
+    """Transactions still queued for a submit thread are never sent."""
+    with state.lock:
+        unsent = [tx for tx in state.txs if not math.isfinite(tx.t_submit)]
+        for tx in unsent:
+            del state.pending[tx.id]
+        state.txs = [tx for tx in state.txs if math.isfinite(tx.t_submit)]
+    if unsent:
+        log.info("dropped %d queued transactions", len(unsent))
+        state.room.set()
 
 
 def is_idle(counters: Sequence[Mapping[str, Any]], now: float) -> bool:
@@ -1462,16 +1477,22 @@ async def submit_tx(load: Load, tx: Tx) -> None:
     lo, hi = load.cfg.namespaces
     request = functools.partial(load.bodies.request, tx.id, lo + tx.id % (hi - lo + 1))
     url = load.urls[tx.node] + "/v1/submit/submit"
-    if await load.client.call(post_tx, tx, url, request) != 200:
+    status = await load.client.call(post_tx, load.state, tx, url, request)
+    if status is not None and status != 200:
         load.state.failed(tx)
 
 
-def post_tx(pool: Http, tx: Tx, url: str, build: Callable[[], bytes]) -> int:
-    """HTTP status, 0 if the request failed. Builds the body on this thread, so only as many
-    bodies are alive as there are threads. Stamps `t_submit` as the request goes out, not
-    when it was queued for a thread."""
+def post_tx(
+    pool: Http, state: LoadState, tx: Tx, url: str, build: Callable[[], bytes]
+) -> int | None:
+    """HTTP status, 0 if the request failed, None if `drop_unsent` dropped the tx first.
+    Builds the body on this thread, so only as many bodies are alive as there are threads.
+    Stamps `t_submit` as the request goes out, not when it was queued for a thread."""
+    with state.lock:
+        if tx.id not in state.pending:
+            return None
+        tx.t_submit = pool.clock.time()
     body = build()
-    tx.t_submit = pool.clock.time()
     try:
         status, _ = pool.request("POST", url, body)
     except OSError:
