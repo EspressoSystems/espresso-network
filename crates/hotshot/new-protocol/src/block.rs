@@ -639,23 +639,17 @@ impl<T: NodeType> BlockBuilder<T> {
         self.mark_included(view, tx_commitments);
     }
 
-    /// Call with every decided block. Its transactions leave `retry_pending`, and the
-    /// records of blocks at or before the newest decided view that were not decided
-    /// belong to abandoned branches, so they are dropped and their transactions keep
-    /// being forwarded.
+    /// Call with every decided block. Its transactions leave `retry_pending`. The records
+    /// of older blocks stay: a view that decides after a newer one is a gap fill, not an
+    /// abandoned branch, and records expire with the retry TTL anyway.
     pub fn on_blocks_decided(
         &mut self,
         blocks: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
     ) {
-        let mut newest = None;
         for key in blocks {
-            newest = newest.max(Some(key.0));
             for hash in self.undecided.remove(&key).unwrap_or_default() {
                 self.remove_pending(&hash);
             }
-        }
-        if let Some(newest) = newest {
-            self.undecided.retain(|(view, _), _| *view > newest);
         }
     }
 

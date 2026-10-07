@@ -645,7 +645,18 @@ async fn submitted_transaction_in_an_abandoned_block_is_still_forwarded() {
         b.on_view_changed(view(4)),
         Some(tx_msg(view(6), Vec::from([tx(1)])))
     );
-    // The record for view 1 is gone, so a stale decide for it prunes nothing.
+}
+
+#[tokio::test]
+async fn late_decide_of_an_older_view_still_clears_its_transactions() {
+    let mut b = builder();
+    b.on_submit_transaction(tx(1)).unwrap();
+    b.on_block_reconstructed(view(1), payload(), Vec::from([tx(1).commit()]));
+    // View 2 decides while view 1 is a gap, then view 1's late Cert2 fills it.
+    b.on_blocks_decided([(view(2), payload())]);
     b.on_blocks_decided([(view(1), payload())]);
-    assert_eq!(b.outstanding_transactions().0, 1);
+    assert!(
+        b.on_view_changed(view(4)).is_none(),
+        "the gap view decided for real, so its transaction is not sent again"
+    );
 }
