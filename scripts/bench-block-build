@@ -211,9 +211,9 @@ def summarize(
 
 # Lane order top to bottom: the whole build, its sequential prefix, then the parallel commitments.
 LANES = [
-    ("request_block", "request_block (total)", "frame"),
+    ("request_block", "request_block (total)", "total"),
     ("from_transactions", "from_transactions", "s1"),
-    ("block_commitments", "block_commitments", "frame"),
+    ("block_commitments", "block_commitments", "phase"),
     ("transaction_commitments", "transaction_commitments", "s2"),
     ("vid_commitment", "vid_commitment", "s3"),
     ("builder_commitment", "builder_commitment", "s4"),
@@ -252,8 +252,8 @@ def waterfall(
         '<text class="h1" x="16" y="28">Leader block build, step by step</text>'
         '<text class="note" x="16" y="48">Bars start at the median step start and span the '
         "median duration. Overlapping bars ran in parallel.</text>"
-        '<text class="note" x="16" y="64">Gray bars are the whole build and the commitment '
-        "phase that contains the parallel steps.</text>"
+        '<text class="note" x="16" y="64">Dark gray is the whole build, light gray the '
+        "commitment phase that contains the parallel steps.</text>"
     )
     y, groups = 84, []
     for title, bars in panels:
@@ -310,11 +310,11 @@ SVG_STYLE = """<style>
 .note, .lane { fill: #52514e; font-size: 12px } .lane { text-anchor: end }
 .title { fill: #0b0b0b; font-size: 13px; font-weight: 600 }
 .value, .tick { fill: #898781; font-size: 11px } .tick { text-anchor: middle; font-size: 10px }
-.grid { stroke: #e1e0d9; stroke-width: 1 } .frame { fill: #c3c2b7 }
+.grid { stroke: #e1e0d9; stroke-width: 1 } .total { fill: #898781 } .phase { fill: #c3c2b7 }
 .s1 { fill: #2a78d6 } .s2 { fill: #eb6834 } .s3 { fill: #1baf7a } .s4 { fill: #eda100 }
 @media (prefers-color-scheme: dark) {
   .bg { fill: #1a1a19 } .h1, .title { fill: #ffffff } .note, .lane { fill: #c3c2b7 }
-  .grid { stroke: #2c2c2a } .frame { fill: #383835 }
+  .grid { stroke: #2c2c2a } .total { fill: #898781 } .phase { fill: #4a4a46 }
   .s1 { fill: #3987e5 } .s2 { fill: #d95926 } .s3 { fill: #199e70 } .s4 { fill: #c98500 }
 }
 </style>"""
