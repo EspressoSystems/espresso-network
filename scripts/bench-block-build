@@ -23,7 +23,9 @@ Method:
     pooled across repeats; the table also lists each run's median, so a noisy run stands out.
     The change carries one standard error, from the spread of each side's run medians, and is
     marked as noise when it is within two of them. Chart whiskers show the same error per step.
-    The script warns when the machine is busy at the start or end.
+    Before each run, while the bench is idle, the script samples /proc/stat for 0.3 s; CPU busy
+    then is other work. It is stored per run as `other_cpu` in the CSV, and the script warns
+    when it exceeds 5%.
     Steps partly run in parallel, so they do not add up to the total.
 
     Runs use `GLIBC_TUNABLES=glibc.malloc.hugetlb=1` (the AWS bench node setting) by default.
@@ -40,6 +42,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from enum import Enum
 from pathlib import Path
 from typing import Annotated
@@ -100,7 +103,7 @@ def main(
     if chart:
         waterfall(pd.read_csv(chart), chart.with_suffix(".svg"))
         return
-    warn_if_busy()
+    warn_if_busy(other_cpu(), "at start")
     refs = {"base": base, "head": head}
     shas = {
         side: git("rev-parse", "--verify", f"{ref}^{{commit}}")
@@ -129,7 +132,6 @@ def main(
         raise SystemExit(f"no benchmark matches {bench_filter!r}")
     labels = {side: f"{side} {refs[side]} {shas[side][:10]}" for side in refs}
     runs = measure(binaries, labels, names, mallocs, repeats)
-    warn_if_busy()
 
     stem = OUT / f"{shas['base'][:10]}-{shas['head'][:10]}"
     runs.to_csv(stem.with_suffix(".csv"), index=False)
@@ -149,16 +151,23 @@ def measure(
     mallocs: list[Malloc],
     repeats: int,
 ) -> pd.DataFrame:
-    """One row per sample: malloc, benchmark, side, label, rep, step, start, duration (ms)."""
+    """One row per sample: malloc, benchmark, side, label, rep, step, start, duration (ms), and
+    the share of CPU other work used just before the run (`other_cpu`)."""
     frames = []
     for rep in range(repeats):
         order = ["base", "head"] if rep % 2 == 0 else ["head", "base"]
         for malloc in mallocs:
             for name in names:
                 for side in order:
+                    busy = other_cpu()
+                    warn_if_busy(busy, f"before rep {rep} {side} {name}")
                     run = run_one(binaries[side], name, MALLOC_ENV[malloc])
                     run = run.assign(
-                        malloc=malloc.value, benchmark=name, side=side, rep=rep
+                        malloc=malloc.value,
+                        benchmark=name,
+                        side=side,
+                        rep=rep,
+                        other_cpu=busy,
                     )
                     frames.append(run.assign(label=labels[side]))
                     total = run.loc[run.step == "total", "duration"].median()
@@ -252,14 +261,33 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
     fig.savefig(path)
 
 
-def warn_if_busy() -> None:
-    load, cpus = os.getloadavg()[0], os.cpu_count() or 1
-    if load > max(1.0, 0.05 * cpus):
+# Share of CPU time other work may use while the bench is idle before a run warns.
+BUSY_LIMIT = 0.05
+
+
+def other_cpu(window: float = 0.3) -> float:
+    """Share of CPU time busy over `window` seconds, sampled while no benchmark runs, so all of
+    it is other work."""
+
+    def times() -> tuple[int, int]:
+        fields = [
+            int(x) for x in Path("/proc/stat").read_text().split("\n", 1)[0].split()[1:]
+        ]
+        idle = fields[3] + fields[4]  # idle + iowait
+        return idle, sum(fields)
+
+    idle0, total0 = times()
+    time.sleep(window)
+    idle1, total1 = times()
+    return 1 - (idle1 - idle0) / max(total1 - total0, 1)
+
+
+def warn_if_busy(busy: float, when: str) -> None:
+    if busy > BUSY_LIMIT:
         log.warning(
-            "warning: load average %.1f on %d CPUs; other work skews the results, "
-            "run on an idle machine",
-            load,
-            cpus,
+            "warning: other work used %.0f%% of CPU %s; results are skewed, run on an idle machine",
+            busy * 100,
+            when,
         )
 
 
