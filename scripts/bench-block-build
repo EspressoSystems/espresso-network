@@ -21,6 +21,9 @@ Method:
     tmp/bench-block-build/bin. Each benchmark runs in its own process, because glibc's mmap
     threshold depends on what the process allocated earlier. Base and head alternate. Samples are
     pooled across repeats; the table also lists each run's median, so a noisy run stands out.
+    The change carries one standard error, from the spread of each side's run medians, and is
+    marked as noise when it is within two of them. Chart whiskers show the same error per step.
+    The script warns when the machine is busy at the start or end.
     Steps partly run in parallel, so they do not add up to the total.
 
     Runs use `GLIBC_TUNABLES=glibc.malloc.hugetlb=1` (the AWS bench node setting) by default.
@@ -97,6 +100,7 @@ def main(
     if chart:
         waterfall(pd.read_csv(chart), chart.with_suffix(".svg"))
         return
+    warn_if_busy()
     refs = {"base": base, "head": head}
     shas = {
         side: git("rev-parse", "--verify", f"{ref}^{{commit}}")
@@ -125,6 +129,7 @@ def main(
         raise SystemExit(f"no benchmark matches {bench_filter!r}")
     labels = {side: f"{side} {refs[side]} {shas[side][:10]}" for side in refs}
     runs = measure(binaries, labels, names, mallocs, repeats)
+    warn_if_busy()
 
     stem = OUT / f"{shas['base'][:10]}-{shas['head'][:10]}"
     runs.to_csv(stem.with_suffix(".csv"), index=False)
@@ -174,11 +179,17 @@ def summarize(runs: pd.DataFrame) -> str:
     per_run = runs.groupby(
         ["malloc", "benchmark", "step", "side", "rep"]
     ).duration.median()
-    spread = per_run.groupby(level=[0, 1, 2, 3]).agg(
-        lambda v: " ".join(f"{x:.2f}" for x in v)
-    )
+    by_side = per_run.groupby(level=[0, 1, 2, 3])
+    spread = by_side.agg(lambda v: " ".join(f"{x:.2f}" for x in v))
+    sem = by_side.sem().unstack("side")
+    change = pooled["head"] / pooled["base"] - 1
+    # Standard error of the relative change, from the spread of each side's run medians.
+    change_se = (sem["base"] ** 2 + sem["head"] ** 2) ** 0.5 / pooled["base"]
     table = pooled.assign(
-        change=lambda t: (t["head"] / t["base"] - 1).map("{:+.1%}".format),
+        change=[
+            f"{c:+.1%} ± {se:.1%}{'' if abs(c) > 2 * se else ' (noise)'}"
+            for c, se in zip(change, change_se.reindex(change.index), strict=True)
+        ],
         base_runs=spread.xs("base", level="side"),
         head_runs=spread.xs("head", level="side"),
     ).reset_index()
@@ -193,15 +204,17 @@ def summarize(runs: pd.DataFrame) -> str:
 def waterfall(runs: pd.DataFrame, path: Path) -> None:
     """One panel per malloc, benchmark and side: bars at each step's median start and duration."""
     steps = runs[runs.step.isin(LANES.keys())]
-    medians = steps.groupby(["malloc", "benchmark", "label", "step"])[
-        ["start", "duration"]
-    ].median()
+    keys = ["malloc", "benchmark", "label", "step"]
+    medians = steps.groupby(keys)[["start", "duration"]].median()
+    # Error bars: standard error of the duration across run medians.
+    sem = steps.groupby([*keys, "rep"]).duration.median().groupby(level=keys).sem()
     panels = medians.index.droplevel("step").unique()
     fig, axes = plt.subplots(
         len(panels), sharex=True, squeeze=False, figsize=(10, 2.2 * len(panels))
     )
     for ax, panel in zip(axes[:, 0], panels, strict=True):
         bars = medians.loc[panel].reindex(list(LANES))
+        errors = sem.loc[panel].reindex(list(LANES)).fillna(0)
         lanes = range(len(LANES))
         ax.barh(
             lanes,
@@ -209,13 +222,15 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
             left=bars.start,
             color=list(LANES.values()),
             height=0.6,
+            xerr=errors,
+            error_kw={"ecolor": "#52514e", "capsize": 3},
         )
-        for lane, (start, duration) in zip(
-            lanes, bars.itertuples(index=False), strict=True
+        for lane, (start, duration), error in zip(
+            lanes, bars.itertuples(index=False), errors, strict=True
         ):
             note = "not run" if pd.isna(duration) else f"{duration:.1f} ms"
             ax.text(
-                0 if pd.isna(start) else start + duration,
+                0 if pd.isna(start) else start + duration + error,
                 lane,
                 f"  {note}",
                 va="center",
@@ -230,10 +245,22 @@ def waterfall(runs: pd.DataFrame, path: Path) -> None:
     end = (medians.start + medians.duration).max()
     axes[-1, 0].set_xlim(0, end * 1.15)
     axes[-1, 0].set_xlabel(
-        "ms since the build started; overlapping bars ran in parallel"
+        "ms since the build started; overlapping bars ran in parallel;"
+        " whiskers are one standard error across runs"
     )
     fig.tight_layout()
     fig.savefig(path)
+
+
+def warn_if_busy() -> None:
+    load, cpus = os.getloadavg()[0], os.cpu_count() or 1
+    if load > max(1.0, 0.05 * cpus):
+        log.warning(
+            "warning: load average %.1f on %d CPUs; other work skews the results, "
+            "run on an idle machine",
+            load,
+            cpus,
+        )
 
 
 def run_one(binary: Path, name: str, env: dict[str, str]) -> pd.DataFrame:
