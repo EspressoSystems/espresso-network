@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["NS_ID_BYTE_LEN","NS_OFFSET_BYTE_LEN","NUM_NSS_BYTE_LEN"],"fn":["parse_ns_table"]};
+window.SIDEBAR_ITEMS = {"constant":["NS_ID_BYTE_LEN","NS_OFFSET_BYTE_LEN","NUM_NSS_BYTE_LEN"],"fn":["ns_table_offsets","ns_table_payload_byte_len","parse_ns_table","single_ns_table"]};
