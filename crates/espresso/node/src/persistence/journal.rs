@@ -14,11 +14,7 @@ pub mod lane;
 pub mod state;
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs, io,
-    os::unix::fs::FileExt as _,
-    path::PathBuf,
-    sync::Arc,
+    collections::BTreeMap, fs, io, os::unix::fs::FileExt as _, path::PathBuf, sync::Arc,
     time::Instant,
 };
 
@@ -128,8 +124,10 @@ const DEFAULT_MAX_BYTES: u64 = 100 * (1 << 30);
 /// Default `--view-retention`: about 1 week at a 2s view time.
 const DEFAULT_VIEW_RETENTION: u64 = 302_000;
 /// Most views replayed into the query service in one decide event. Each batch reads its blocks'
-/// payloads and shares into memory, so this bounds replay memory at a few blocks.
+/// shares into memory and copies their payloads, so this bounds replay memory at a few blocks.
 const MAX_REPLAY_VIEWS: usize = 8;
+/// Default `--pending-payload-bytes`: 8 GiB.
+const DEFAULT_PENDING_PAYLOAD_BYTES: u64 = 8 * (1 << 30);
 
 /// Options for the append-only journal, the consensus storage of every node.
 #[derive(Parser, Clone, Debug)]
@@ -154,6 +152,16 @@ pub struct Options {
         default_value_t = DEFAULT_MAX_BYTES
     )]
     pub max_bytes: u64,
+
+    /// Cap on the block payloads a query node holds in memory for its query service, from when
+    /// it obtains them until their decide is replayed. Oldest dropped first once exceeded; the
+    /// query service fetches those blocks from a peer.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_JOURNAL_PENDING_PAYLOAD_BYTES",
+        default_value_t = DEFAULT_PENDING_PAYLOAD_BYTES
+    )]
+    pub pending_payload_bytes: u64,
 
     /// Start even if an existing `storage-sql`/`storage-fs` layout is found at `path`. Without
     /// this, `storage-journal` refuses to start over another backend's data to avoid silently
@@ -191,9 +199,9 @@ impl Options {
 
     /// Back the query service with `query_storage`.
     ///
-    /// Decided leaves, with their payloads and VID shares, are then kept until they have been
-    /// replayed as decide events to the query service, which may lag consensus. Consensus never
-    /// waits on the query service database.
+    /// Decided leaves and their VID shares are then kept until they have been replayed as decide
+    /// events to the query service, which may lag consensus; their payloads wait in memory.
+    /// Consensus never waits on the query service database.
     pub(crate) fn with_query_storage(mut self, query_storage: QueryStorage) -> Options {
         self.query_storage = Some(query_storage);
         self
@@ -261,10 +269,89 @@ struct Inner {
     replay_seconds: f64,
     /// `Some` exactly on a query node, which replays decided blocks into its query service.
     replay_index: Option<DataIndex>,
-    /// Views with a pending payload not yet delivered to the query service, so a decide need not
-    /// scan the whole data index for them.
-    pending_payloads: parking_lot::Mutex<BTreeSet<ViewNumber>>,
+    /// Payloads not yet delivered to the query service. Memory only, see [`PendingPayloads`].
+    pending_payloads: parking_lot::Mutex<PendingPayloads>,
     _lock: std::fs::File,
+}
+
+/// A payload this node obtained for a view, held for the query service.
+struct PendingPayload {
+    header: Header,
+    payload: Arc<Payload>,
+}
+
+/// Obtained payloads a query node has not yet replayed into its query service, by view. Held in
+/// memory, never written: a decide carries the payload of a block obtained before it, so only a
+/// restart loses one, and the query service then fetches that block from a peer. The cap bounds
+/// the backlog while the query service lags; the oldest views go first.
+struct PendingPayloads {
+    by_view: BTreeMap<ViewNumber, PendingPayload>,
+    bytes: u64,
+    max_bytes: u64,
+}
+
+impl PendingPayloads {
+    fn new(max_bytes: u64) -> Self {
+        Self {
+            by_view: BTreeMap::new(),
+            bytes: 0,
+            max_bytes,
+        }
+    }
+
+    /// Hold `payload` for `view`, replacing an earlier one. Returns the oldest views dropped to
+    /// stay under the cap; a lone payload over the cap is kept.
+    fn insert(
+        &mut self,
+        view: ViewNumber,
+        header: Header,
+        payload: Arc<Payload>,
+    ) -> Vec<ViewNumber> {
+        let pending = PendingPayload { header, payload };
+        self.bytes += pending.bytes();
+        if let Some(replaced) = self.by_view.insert(view, pending) {
+            self.bytes -= replaced.bytes();
+        }
+        let mut dropped = Vec::new();
+        while self.bytes > self.max_bytes && self.by_view.len() > 1 {
+            let (view, pending) = self.by_view.pop_first().expect("more than one entry");
+            self.bytes -= pending.bytes();
+            dropped.push(view);
+        }
+        dropped
+    }
+
+    fn holds(&self, view: ViewNumber, header: &Header) -> bool {
+        self.payload_for(view, header).is_some()
+    }
+
+    /// The payload held for `view`, if it is for the block with `header`.
+    fn payload_for(&self, view: ViewNumber, header: &Header) -> Option<Arc<Payload>> {
+        self.by_view
+            .get(&view)
+            .filter(|pending| pending.header == *header)
+            .map(|pending| Arc::clone(&pending.payload))
+    }
+
+    fn remove(&mut self, view: ViewNumber) {
+        if let Some(pending) = self.by_view.remove(&view) {
+            self.bytes -= pending.bytes();
+        }
+    }
+
+    /// Take every payload at or below `view`.
+    fn take_up_to(&mut self, view: ViewNumber) -> Vec<(ViewNumber, PendingPayload)> {
+        let newer = self.by_view.split_off(&(view + 1));
+        let taken = std::mem::replace(&mut self.by_view, newer);
+        self.bytes -= taken.values().map(PendingPayload::bytes).sum::<u64>();
+        taken.into_iter().collect()
+    }
+}
+
+impl PendingPayload {
+    fn bytes(&self) -> u64 {
+        self.payload.byte_len().as_usize() as u64
+    }
 }
 
 struct JoinOnDrop(Vec<std::thread::JoinHandle<()>>);
@@ -426,17 +513,7 @@ impl Persistence {
             ),
             None => None,
         };
-        let pending_payloads = replay_index
-            .iter()
-            .flat_map(|index| {
-                index
-                    .lock()
-                    .keys()
-                    .filter(|(_, kind)| *kind == Kind::PendingPayload)
-                    .map(|(view, _)| ViewNumber::new(*view))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let pending_payloads = PendingPayloads::new(opts.pending_payload_bytes);
 
         let segments = Arc::new(parking_lot::Mutex::new(SegmentSet {
             wal: wal_recovered.segments,
@@ -759,7 +836,7 @@ impl Persistence {
             // Only once the batch is processed: a failed batch is retried and needs its payloads.
             let mut pending = self.inner.pending_payloads.lock();
             for view in attached {
-                pending.remove(&view);
+                pending.remove(view);
             }
         }
         Ok(())
@@ -768,10 +845,13 @@ impl Persistence {
     /// Fill `leaf` with its payload, from a pending payload of the same block, else from a DA
     /// proposal. Returns whether a pending payload was used.
     async fn fill_payload(&self, view: ViewNumber, leaf: &mut Leaf2) -> anyhow::Result<bool> {
-        if let Some((header, payload)) = self.read_pending_payload(view).await?
-            && header == *leaf.block_header()
-        {
-            leaf.fill_block_payload_unchecked(payload);
+        let pending = self
+            .inner
+            .pending_payloads
+            .lock()
+            .payload_for(view, leaf.block_header());
+        if let Some(payload) = pending {
+            leaf.fill_block_payload_unchecked((*payload).clone());
             return Ok(true);
         }
         match self
@@ -793,67 +873,54 @@ impl Persistence {
         Ok(false)
     }
 
-    async fn read_pending_payload(
-        &self,
-        view: ViewNumber,
-    ) -> anyhow::Result<Option<(Header, Payload)>> {
-        Ok(self
-            .read_data::<(Header, Vec<u8>)>(Kind::PendingPayload, view)
-            .await?
-            .map(|(header, bytes)| {
-                let payload = Payload::from_bytes(&bytes, header.metadata());
-                (header, payload)
-            }))
-    }
-
     /// Send every pending payload at or below `cursor` that no replayed leaf took: forks,
-    /// timed-out views, and payloads that arrived after their view was replayed. A restart
-    /// between sending and forgetting one sends it again, which the consumer tolerates since it
+    /// timed-out views, and payloads that arrived after their view was replayed. The consumer
     /// checks every separate payload against the decided chain.
     async fn send_unattached_payloads(
         &self,
         cursor: ViewNumber,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
-        let views = {
-            let mut pending = self.inner.pending_payloads.lock();
-            let newer = pending.split_off(&(cursor + 1));
-            std::mem::replace(&mut *pending, newer)
-        };
-        for view in views {
-            // `None` once GC has unlinked the segment holding it.
-            let Some((header, payload)) = self.read_pending_payload(view).await? else {
-                continue;
-            };
+        let payloads = self.inner.pending_payloads.lock().take_up_to(cursor);
+        for (view, PendingPayload { header, payload }) in payloads {
             let event = CoordinatorEvent::BlockPayload {
                 view,
                 header,
-                payload: Arc::new(payload),
+                payload,
             };
             consumer.handle_event(&event).await?;
         }
         Ok(())
     }
 
-    /// On a query node, keep `payload` for the query service. Durable: the query service is
-    /// replayed from this record, so it must survive a power loss.
-    async fn put_pending_payload(
-        &self,
-        view: ViewNumber,
-        header: &Header,
-        payload: &Payload,
-    ) -> anyhow::Result<()> {
+    /// On a query node, hold `payload` for the query service until `view` is replayed.
+    fn hold_payload(&self, view: ViewNumber, header: &Header, payload: Arc<Payload>) {
         if self.inner.replay_index.is_none() {
-            return Ok(());
+            return;
         }
-        let record = Record::PendingPayload {
-            view,
-            header: header.clone(),
-            payload: payload.clone(),
-        };
-        self.put_data(record, Class::Durable).await?;
-        self.inner.pending_payloads.lock().insert(view);
-        Ok(())
+        let dropped = self
+            .inner
+            .pending_payloads
+            .lock()
+            .insert(view, header.clone(), payload);
+        if !dropped.is_empty() {
+            tracing::warn!(
+                ?dropped,
+                "pending payloads over the memory cap dropped, the query service must fetch these \
+                 blocks"
+            );
+        }
+    }
+
+    /// Hold the payload a decided leaf arrived with, unless the `BlockPayload` event for the
+    /// same block already did. That event precedes the decide, so this only matters when the
+    /// event channel overflowed.
+    fn hold_decided_payload(&self, leaf: &Leaf2, payload: Payload) {
+        let (view, header) = (leaf.view_number(), leaf.block_header());
+        if self.inner.pending_payloads.lock().holds(view, header) {
+            return;
+        }
+        self.hold_payload(view, header, Arc::new(payload));
     }
 
     /// The view the query service is replayed up to, on a query node.
@@ -1010,8 +1077,11 @@ impl SequencerPersistence for Persistence {
             .map(|(info, cert)| (info.leaf.clone(), cert))
             .collect();
         for (mut leaf, cert) in leaf_chain {
-            // The payload arrives as a pending payload, also for a block this node built.
-            leaf.unfill_block_payload();
+            // The wal record carries no payload: a query node holds it in memory until the
+            // replay, any other node has no use for it.
+            if let Some(payload) = leaf.unfill_block_payload() {
+                self.hold_decided_payload(&leaf, payload);
+            }
             let record = Record::Leaf {
                 leaf,
                 qc: cert.qc().clone(),
@@ -1235,7 +1305,8 @@ impl SequencerPersistence for Persistence {
         header: &Header,
         payload: &Arc<Payload>,
     ) -> anyhow::Result<()> {
-        self.put_pending_payload(view, header, payload).await
+        self.hold_payload(view, header, Arc::clone(payload));
+        Ok(())
     }
 
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
@@ -1402,7 +1473,7 @@ impl DhtPersistentStorage for Persistence {
 
 #[cfg(test)]
 mod tests {
-    use espresso_types::{NodeState, ValidatedState};
+    use espresso_types::{NodeState, ValidatedState, traits::NullEventConsumer};
     use hotshot::types::{BLSPubKey, SignatureKey};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::metrics::PrometheusMetrics;
@@ -1410,6 +1481,115 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{testing::TEST_MAX_BLOCK_SIZE, *};
+    use crate::persistence::tests::{TestablePersistence, consecutive_height_chain, decide_range};
+
+    /// A payload the decide carries (built, reconstructed or fetched before it) reaches the
+    /// query service at replay without a `BlockPayload` event, and neither it nor an event's
+    /// payload is written to the journal.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn payloads_are_held_in_memory_not_written() {
+        let tmp = TempDir::new().unwrap();
+        let storage = Persistence::connect(&tmp).await;
+        let consumer = PayloadCollector::default();
+        let mut chain = consecutive_height_chain(3).await;
+
+        let carried = Payload::from_bytes(&[1; 100], chain[1].0.block_header().metadata());
+        chain[1].0.fill_block_payload_unchecked(carried.clone());
+        decide_range(&storage, &chain, 0..2, &consumer).await;
+
+        let obtained = Payload::from_bytes(&[2; 50], chain[2].0.block_header().metadata());
+        let event = CoordinatorEvent::BlockPayload {
+            view: ViewNumber::new(2),
+            header: chain[2].0.block_header().clone(),
+            payload: Arc::new(obtained.clone()),
+        };
+        assert_eq!(
+            storage.persist_event(&event, &NullEventConsumer).await,
+            None
+        );
+        decide_range(&storage, &chain, 2..3, &consumer).await;
+
+        assert_eq!(
+            consumer.take(),
+            vec![(1, Some(carried)), (2, Some(obtained))]
+        );
+        let index = storage.inner.replay_index.as_ref().unwrap().lock();
+        assert!(index.keys().all(|(_, kind)| *kind != Kind::PendingPayload));
+        assert!(storage.inner.pending_payloads.lock().by_view.is_empty());
+    }
+
+    /// The pending payload cap drops the oldest views first and counts a replaced payload once.
+    #[tokio::test]
+    async fn pending_payloads_drop_oldest_over_cap() {
+        let header = genesis_leaf().await.block_header().clone();
+        let payload = |len: usize| Arc::new(Payload::from_bytes(&vec![0; len], header.metadata()));
+        let view = ViewNumber::new;
+        let mut pending = PendingPayloads::new(250);
+
+        assert!(
+            pending
+                .insert(view(1), header.clone(), payload(100))
+                .is_empty()
+        );
+        assert!(
+            pending
+                .insert(view(2), header.clone(), payload(100))
+                .is_empty()
+        );
+        assert_eq!(
+            pending.insert(view(3), header.clone(), payload(100)),
+            vec![view(1)]
+        );
+        assert!(!pending.holds(view(1), &header));
+        assert!(pending.holds(view(2), &header));
+        assert_eq!(pending.bytes, 200);
+
+        assert!(
+            pending
+                .insert(view(3), header.clone(), payload(50))
+                .is_empty()
+        );
+        assert_eq!(pending.bytes, 150);
+
+        // A lone payload over the cap is kept.
+        assert_eq!(
+            pending.insert(view(4), header.clone(), payload(300)),
+            vec![view(2), view(3)]
+        );
+        assert!(pending.holds(view(4), &header));
+
+        assert_eq!(pending.take_up_to(view(4)).len(), 1);
+        assert_eq!(pending.bytes, 0);
+    }
+
+    /// A decided leaf's view and the payload it was delivered with.
+    type DeliveredPayload = (u64, Option<Payload>);
+
+    /// The payload of each decided leaf but genesis, in delivery order.
+    #[derive(Clone, Debug, Default)]
+    struct PayloadCollector(Arc<parking_lot::Mutex<Vec<DeliveredPayload>>>);
+
+    impl PayloadCollector {
+        fn take(&self) -> Vec<DeliveredPayload> {
+            std::mem::take(&mut *self.0.lock())
+        }
+    }
+
+    #[async_trait]
+    impl EventConsumer for PayloadCollector {
+        async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
+            if let CoordinatorEvent::NewDecide { leaf_infos, .. } = event {
+                self.0.lock().extend(
+                    leaf_infos
+                        .iter()
+                        .rev()
+                        .filter(|info| info.leaf.view_number() != ViewNumber::genesis())
+                        .map(|info| (info.leaf.view_number().u64(), info.leaf.block_payload())),
+                );
+            }
+            Ok(())
+        }
+    }
 
     #[test]
     fn record_limits_keep_minimums_for_small_blocks() {
@@ -1523,21 +1703,25 @@ mod tests {
             path: tmp.path().to_path_buf(),
             view_retention: DEFAULT_VIEW_RETENTION,
             max_bytes: DEFAULT_MAX_BYTES,
+            pending_payload_bytes: DEFAULT_PENDING_PAYLOAD_BYTES,
             ignore_existing: false,
             max_block_size: Some(TEST_MAX_BLOCK_SIZE),
             query_storage: None,
         }
     }
 
-    /// A view-1 DA proposal whose payload is `len` bytes.
-    async fn da_record(len: usize) -> Record {
-        let leaf = Leaf2::genesis(
+    async fn genesis_leaf() -> Leaf2 {
+        Leaf2::genesis(
             &ValidatedState::default(),
             &NodeState::mock(),
             TEST_VERSIONS.test.base,
         )
-        .await;
-        let payload = leaf.block_payload().unwrap();
+        .await
+    }
+
+    /// A view-1 DA proposal whose payload is `len` bytes.
+    async fn da_record(len: usize) -> Record {
+        let payload = genesis_leaf().await.block_payload().unwrap();
         let (_, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
         Record::Da(Proposal {
             data: DaProposal2::<SeqTypes> {
@@ -1576,6 +1760,7 @@ mod tests {
             path: tmp.path().to_path_buf(),
             view_retention: DEFAULT_VIEW_RETENTION,
             max_bytes: DEFAULT_MAX_BYTES,
+            pending_payload_bytes: DEFAULT_PENDING_PAYLOAD_BYTES,
             ignore_existing: false,
             max_block_size: Some(TEST_MAX_BLOCK_SIZE),
             query_storage: None,
@@ -1612,6 +1797,7 @@ mod testing {
                 path: storage.path().into(),
                 view_retention: DEFAULT_VIEW_RETENTION,
                 max_bytes: DEFAULT_MAX_BYTES,
+                pending_payload_bytes: DEFAULT_PENDING_PAYLOAD_BYTES,
                 ignore_existing: false,
                 max_block_size: Some(TEST_MAX_BLOCK_SIZE),
                 query_storage: Some(QueryStorage::Fs(side_fs::Options::new(

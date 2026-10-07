@@ -118,7 +118,9 @@ pub enum Record {
         view: ViewNumber,
         height: u64,
     },
-    /// A payload this node obtained for `view`, whether or not `view` is ever decided.
+    /// A payload this node obtained for `view`. No longer written: a query node holds payloads
+    /// in memory until their view is replayed. Still decoded so segments written before that
+    /// recover.
     PendingPayload {
         view: ViewNumber,
         header: Header,
