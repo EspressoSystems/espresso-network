@@ -1042,7 +1042,7 @@ pub(crate) fn select_active_validator_set(
         .map(|(addr, v)| (*addr, v.stake))
         .collect();
 
-    tracing::debug!(
+    tracing::info!(
         count = valid_stakers.len(),
         "Number of validators above minimum stake threshold"
     );
@@ -1060,7 +1060,7 @@ pub(crate) fn select_active_validator_set(
         .filter(|(address, _)| selected_addresses.contains(address))
         .collect();
 
-    tracing::debug!(
+    tracing::info!(
         final_count = selected_validators.len(),
         "Selected active validator set"
     );
