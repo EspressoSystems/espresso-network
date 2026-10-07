@@ -823,6 +823,62 @@ impl PersistenceOptions for Options {
     }
 }
 
+impl Options {
+    /// Delete the merklized state, leaving blocks, leaves, payloads, VID and consensus storage in
+    /// place.
+    ///
+    /// On its next start the node rebuilds the state by replaying every leaf from genesis, so
+    /// state queries return errors until the replay passes the height they ask for. The node must
+    /// not be running: its state loop keeps the parent state in memory and would write deltas on
+    /// top of the emptied tables.
+    pub async fn reset_merklized_state(&self) -> anyhow::Result<()> {
+        // The query service's id for the state pruner's cursor in `pruned_height`.
+        const STATE_PRUNED_HEIGHT_ID: i32 = 2;
+
+        let db = SqlStorage::connect(Config::try_from(self)?, StorageConnectionType::Sequencer)
+            .await
+            .context("failed to connect to storage")?;
+        let mut tx = db.write().await?;
+        // Clearing the legacy tables too leaves the bigint backfills nothing to move, so they mark
+        // themselves complete on the next start.
+        #[cfg(not(feature = "embedded-db"))]
+        query(
+            "TRUNCATE hash, fee_merkle_tree, block_merkle_tree, hash_bigint, \
+             fee_merkle_tree_bigint, block_merkle_tree_bigint, reward_merkle_tree_v2_data, \
+             reward_merkle_tree_v2_proofs",
+        )
+        .execute(tx.as_mut())
+        .await?;
+        #[cfg(feature = "embedded-db")]
+        for table in [
+            "fee_merkle_tree_bigint",
+            "block_merkle_tree_bigint",
+            "hash_bigint",
+            "reward_merkle_tree_v2_data",
+            "reward_merkle_tree_v2_proofs",
+        ] {
+            query(&format!("DELETE FROM {table}"))
+                .execute(tx.as_mut())
+                .await?;
+        }
+        // With no state height the state loop stores the genesis state and replays from height
+        // 1. Any other height would make it look for a parent snapshot that is now gone.
+        query("DELETE FROM last_merklized_state_height")
+            .execute(tx.as_mut())
+            .await?;
+        // The state loop starts above a leftover state pruner cursor, where no parent snapshot is
+        // left to build on.
+        query("DELETE FROM pruned_height WHERE id = $1")
+            .bind(STATE_PRUNED_HEIGHT_ID)
+            .execute(tx.as_mut())
+            .await?;
+        tx.commit()
+            .await
+            .context("failed to commit merklized state reset")?;
+        Ok(())
+    }
+}
+
 /// Postgres-backed persistence.
 #[derive(Clone, Debug)]
 pub struct Persistence {
