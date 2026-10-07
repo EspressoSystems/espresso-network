@@ -17,6 +17,7 @@ use data_source::{
     StateCertDataSource, StateCertFetchingDataSource, SubmitDataSource,
 };
 use derivative::Derivative;
+use espresso_api::error::SubmitError;
 use espresso_types::{
     AccountQueryData, AuthenticatedValidatorMap, BlockMerkleTree, ChainId, FeeAccount,
     FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
@@ -718,7 +719,10 @@ impl<C: ApiContext> SubmitDataSource for ApiState<C> {
 
         // reject transaction bigger than block size
         if txn_size > max_block_size {
-            bail!("transaction size ({txn_size}) is greater than max_block_size ({max_block_size})")
+            return Err(SubmitError::Invalid(format!(
+                "transaction size ({txn_size}) is greater than max_block_size ({max_block_size})"
+            ))
+            .into());
         }
 
         handle.submit_transaction(tx).await
@@ -3432,7 +3436,7 @@ mod api_tests {
 #[cfg(test)]
 mod test {
     use std::{
-        collections::{HashMap, HashSet},
+        collections::{BTreeSet, HashMap, HashSet},
         time::{Duration, Instant},
     };
 
@@ -3487,7 +3491,10 @@ mod test {
         data_source::{
             Transaction as _, VersionedDataSource,
             sql::Config,
-            storage::{SqlStorage, StorageConnectionType, UpdateAvailabilityStorage},
+            storage::{
+                MerklizedStateHeightStorage, SqlStorage, StorageConnectionType,
+                UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
+            },
         },
         explorer::TransactionSummariesResponse,
         node::{NodeDataSource as _, SyncStatus, SyncStatusQueryData},
@@ -3555,13 +3562,18 @@ mod test {
             sleep(Duration::from_secs(3)).await;
         }
     }
+    use espresso_types::{Certificate2, GenesisHeader};
+
     use crate::{
+        CatchupParams, L1Params,
         api::{
             options::Query,
             sql::{impl_testable_data_source::tmp_options, reconstruct_state},
             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
         },
         catchup::{NullStateCatchup, StatePeers},
+        follower::{FollowerContext, FollowerOptions, FollowerParams, init_follower_node},
+        genesis::{Genesis as NodeGenesis, L1Finalized, StakeTableConfig},
         persistence,
         persistence::no_storage,
         testing::{TestConfig, TestConfigBuilder, wait_for_decide_on_handle, wait_for_epochs},
@@ -5866,6 +5878,440 @@ mod test {
         Ok(())
     }
 
+    const FOLLOW_TIMEOUT: Duration = Duration::from_secs(240);
+
+    /// Node 0 is the follower's only upstream. The query service only stores new heights through
+    /// the follow loop, so the follower's archive reaching the validators' tip proves it follows
+    /// live; then the endpoints a staked query node serves are compared with node 0's.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_light_client_follower_query_node() -> anyhow::Result<()> {
+        const NUM_NODES: usize = 5;
+        const EPOCH_HEIGHT: u64 = 10;
+        const EPOCHS_TO_FOLLOW: u64 = 4;
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+        let api_url: Url = format!("http://localhost:{api_port}").parse()?;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let follower_storage = SqlDataSource::create_storage().await;
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default())
+                    .config(Default::default())
+                    .submit(Default::default())
+                    .query_sql(Query::default(), tmp_options(&storage[0])),
+            )
+            .network_config(network_config)
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![api_url.clone()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await?
+            .build();
+
+        let genesis_state = config.states()[0].clone();
+        let network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let api_client: Client<ClientErr, SequencerApiVersion> = Client::new(api_url.clone());
+        assert!(
+            api_client.connect(Some(Duration::from_secs(60))).await,
+            "node 0 query API did not come up"
+        );
+
+        // Let the validators decide the first epoch before the follower bootstraps from them.
+        let mut events = network.server.event_stream();
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, 1).await;
+
+        let genesis = follower_genesis(&network.cfg, &genesis_state, NEW_PROTOCOL);
+        let params = FollowerParams {
+            upstreams: vec![api_url.clone()],
+            config_peers: None,
+            catchup: CatchupParams {
+                state_peers: vec![api_url.clone()],
+                backoff: Default::default(),
+                base_timeout: Duration::from_secs(2),
+                local_timeout: Duration::from_secs(5),
+            },
+            bootstrap_epoch_catchup_timeout: Duration::from_secs(30),
+            options: FollowerOptions {
+                poll_interval: Duration::from_millis(500),
+                max_blocks_per_poll: 10,
+                light_client: Default::default(),
+                light_client_db: Default::default(),
+                light_client_genesis: None,
+            },
+        };
+        let l1_params = || L1Params {
+            urls: vec![network.cfg.l1_url()],
+            options: network.cfg.l1_opt(),
+        };
+        let (mut follower, follower_client) = start_follower(
+            &follower_storage,
+            genesis.clone(),
+            params.clone(),
+            l1_params(),
+        )
+        .await?;
+
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_TO_FOLLOW).await;
+        let tip = network.server.decided_leaf().await.height();
+        assert_follows_to(&follower, &follower_client, tip).await?;
+
+        let finalized_height = latest_cert2_height(&api_client, tip)
+            .await
+            .context("no cert2 stored on a new protocol chain")?;
+        assert_same_chain(&api_client, &follower_client, finalized_height).await?;
+        assert_same_epoch_state(
+            &api_client,
+            &follower_client,
+            epoch_from_block_number(tip, EPOCH_HEIGHT),
+        )
+        .await?;
+        assert_same_merklized_state(
+            &api_client,
+            &follower_client,
+            finalized_height,
+            TestConfig::<NUM_NODES>::builder_key().fee_account(),
+            genesis_state.chain_config.commit(),
+        )
+        .await?;
+        let rewarded: Vec<RewardAccountV2> = network
+            .server
+            .decided_state()
+            .await
+            .unwrap()
+            .reward_merkle_tree_v2
+            .iter()
+            .map(|(account, _)| *account)
+            .collect();
+        assert!(
+            !rewarded.is_empty(),
+            "no rewards distributed after {EPOCHS_TO_FOLLOW} epochs"
+        );
+        assert_same_rewards(&api_client, &follower_client, tip, &rewarded).await?;
+
+        let txn = Transaction::new(NamespaceId::from(1_u32), vec![1, 2, 3]);
+        let hash: Commitment<Transaction> = follower_client
+            .post("submit/submit")
+            .body_binary(&txn)?
+            .send()
+            .await
+            .context("follower did not forward the transaction")?;
+        assert_eq!(hash, txn.commit());
+        wait_for_decide_on_handle(&mut events, &txn).await;
+
+        assert_same_response(&api_client, &follower_client, "config/hotshot").await?;
+        follower_client
+            .get::<LeafProof>(&format!("light-client/leaf/{finalized_height}"))
+            .send()
+            .await
+            .context("follower does not serve light client proofs")?;
+        assert_validator_only_routes_not_found(&follower_client, finalized_height).await;
+
+        // Only one node may write to the database, so the first follower stops before the second
+        // starts.
+        follower.shut_down().await;
+        drop(follower);
+        let (_follower, follower_client) =
+            start_follower(&follower_storage, genesis, params, l1_params()).await?;
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_TO_FOLLOW + 1).await;
+        let tip = network.server.decided_leaf().await.height();
+        timeout(
+            FOLLOW_TIMEOUT,
+            wait_until_block_height(&follower_client, "node/block-height", tip + 1),
+        )
+        .await
+        .context("restarted follower did not catch up with the validators")?;
+
+        Ok(())
+    }
+
+    /// Mirrors what `TestConfig::init_node` gives its validators.
+    fn follower_genesis<const N: usize>(
+        cfg: &TestConfig<N>,
+        genesis_state: &ValidatedState,
+        upgrade: Upgrade,
+    ) -> NodeGenesis {
+        let hotshot = cfg.hotshot_config();
+        let chain_config = genesis_state
+            .chain_config
+            .resolve()
+            .expect("test states carry a full chain config");
+        NodeGenesis {
+            base_version: upgrade.base,
+            upgrade_version: upgrade.target,
+            genesis_version: upgrade.base,
+            epoch_height: Some(hotshot.epoch_height),
+            drb_difficulty: Some(hotshot.drb_difficulty),
+            drb_upgrade_difficulty: Some(hotshot.drb_upgrade_difficulty),
+            epoch_start_block: Some(hotshot.epoch_start_block),
+            stake_table_capacity: Some(hotshot.stake_table_capacity),
+            chain_config,
+            stake_table: StakeTableConfig {
+                capacity: hotshot.stake_table_capacity,
+            },
+            accounts: [(
+                TestConfig::<N>::builder_key().fee_account(),
+                U256::MAX.into(),
+            )]
+            .into_iter()
+            .collect(),
+            l1_finalized: L1Finalized::Number { number: 0 },
+            header: GenesisHeader {
+                chain_config,
+                ..Default::default()
+            },
+            upgrades: cfg.upgrades(),
+            da_committees: None,
+        }
+    }
+
+    async fn start_follower(
+        storage: &<SqlDataSource as TestableSequencerDataSource>::Storage,
+        genesis: NodeGenesis,
+        params: FollowerParams,
+        l1_params: L1Params,
+    ) -> anyhow::Result<(
+        FollowerContext<persistence::sql::Persistence>,
+        Client<ClientErr, SequencerApiVersion>,
+    )> {
+        let port = reserve_tcp_port().expect("No ports free for query service");
+        let mut db = tmp_options(storage);
+        let persistence = db.create().await?;
+        let handle = Options::with_port(port)
+            .query_sql(
+                Query {
+                    peers: params.upstreams.clone(),
+                    ..Default::default()
+                },
+                db,
+            )
+            .catchup(Default::default())
+            .light_client(Default::default())
+            .config(Default::default())
+            .submit(Default::default())
+            .serve(move |metrics, sink, _| {
+                async move {
+                    init_follower_node(genesis, params, metrics, persistence, l1_params, sink).await
+                }
+                .boxed()
+            })
+            .await
+            .context("follower should start")?;
+        let follower = FollowerContext::new(handle);
+
+        let client: Client<ClientErr, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{port}").parse()?);
+        ensure!(
+            client.connect(Some(Duration::from_secs(60))).await,
+            "follower query API did not come up"
+        );
+        Ok((follower, client))
+    }
+
+    async fn assert_follows_to(
+        follower: &FollowerContext<persistence::sql::Persistence>,
+        follower_client: &Client<ClientErr, SequencerApiVersion>,
+        tip: u64,
+    ) -> anyhow::Result<()> {
+        timeout(FOLLOW_TIMEOUT, async {
+            while follower.decided_leaf().await.height() < tip {
+                sleep(Duration::from_secs(1)).await;
+            }
+        })
+        .await
+        .context("follower did not decide up to the validators' tip")?;
+        // `node/block-height` counts blocks, so `tip` is stored at `tip + 1`.
+        timeout(
+            FOLLOW_TIMEOUT,
+            wait_until_block_height(follower_client, "node/block-height", tip + 1),
+        )
+        .await
+        .context("follower's archive did not reach the validators' tip")
+    }
+
+    /// Cert2s are only stored at the heights they finalize.
+    async fn latest_cert2_height(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        tip: u64,
+    ) -> Option<u64> {
+        for height in (1..tip).rev() {
+            if client
+                .get::<Certificate2<SeqTypes>>(&format!("availability/cert2/{height}"))
+                .send()
+                .await
+                .is_ok()
+            {
+                return Some(height);
+            }
+        }
+        None
+    }
+
+    async fn assert_same_chain(
+        api_client: &Client<ClientErr, SequencerApiVersion>,
+        follower_client: &Client<ClientErr, SequencerApiVersion>,
+        height: u64,
+    ) -> anyhow::Result<()> {
+        for path in [
+            format!("availability/leaf/{height}"),
+            format!("availability/header/{height}"),
+            format!("availability/block/{height}"),
+            format!("availability/vid/common/{height}"),
+            format!("availability/cert2/{height}"),
+            format!("catchup/{height}/cert2"),
+        ] {
+            assert_same_response(api_client, follower_client, &path).await?;
+        }
+        Ok(())
+    }
+
+    async fn assert_same_epoch_state(
+        api_client: &Client<ClientErr, SequencerApiVersion>,
+        follower_client: &Client<ClientErr, SequencerApiVersion>,
+        current_epoch: u64,
+    ) -> anyhow::Result<()> {
+        for epoch in 1..=current_epoch {
+            for path in [
+                format!("node/stake-table/{epoch}"),
+                format!("node/validators/{epoch}"),
+                format!("node/block-reward/epoch/{epoch}"),
+            ] {
+                assert_same_response(api_client, follower_client, &path).await?;
+            }
+            let state_cert = format!("availability/state-cert-v2/{epoch}");
+            if api_client
+                .get::<serde_json::Value>(&state_cert)
+                .send()
+                .await
+                .is_ok()
+            {
+                assert_same_response(api_client, follower_client, &state_cert).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn assert_same_merklized_state(
+        api_client: &Client<ClientErr, SequencerApiVersion>,
+        follower_client: &Client<ClientErr, SequencerApiVersion>,
+        height: u64,
+        account: FeeAccount,
+        chain_config: Commitment<ChainConfig>,
+    ) -> anyhow::Result<()> {
+        for client in [api_client, follower_client] {
+            timeout(
+                FOLLOW_TIMEOUT,
+                wait_until_block_height(client, "fee-state/block-height", height + 1),
+            )
+            .await
+            .context("merklized state did not reach the finalized height")?;
+        }
+        let leaf: LeafQueryData<SeqTypes> = api_client
+            .get(&format!("availability/leaf/{height}"))
+            .send()
+            .await?;
+        let view = leaf.leaf().view_number();
+        for path in [
+            format!("fee-state/{height}/{account}"),
+            format!("catchup/{height}/{view}/account/{account}"),
+            format!("catchup/{height}/{view}/blocks"),
+            format!("catchup/chain-config/{chain_config}"),
+        ] {
+            assert_same_response(api_client, follower_client, &path).await?;
+        }
+        Ok(())
+    }
+
+    async fn assert_same_rewards(
+        api_client: &Client<ClientErr, SequencerApiVersion>,
+        follower_client: &Client<ClientErr, SequencerApiVersion>,
+        tip: u64,
+        accounts: &[RewardAccountV2],
+    ) -> anyhow::Result<()> {
+        for client in [api_client, follower_client] {
+            timeout(
+                FOLLOW_TIMEOUT,
+                wait_until_block_height(client, "reward-state-v2/block-height", tip + 1),
+            )
+            .await
+            .context("reward state did not reach the tip")?;
+        }
+        for account in accounts {
+            assert_same_response(
+                api_client,
+                follower_client,
+                &format!("reward-state-v2/reward-claim-input/{tip}/{account}"),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn assert_validator_only_routes_not_found(
+        follower_client: &Client<ClientErr, SequencerApiVersion>,
+        height: u64,
+    ) {
+        for path in [
+            format!("state-signature/block/{height}"),
+            "status/keys".to_string(),
+        ] {
+            let err = follower_client
+                .get::<serde_json::Value>(&path)
+                .send()
+                .await
+                .unwrap_err();
+            assert_matches!(err, ClientErr { status, .. } if status == StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    /// A path both nodes fail on proves nothing about the follower, so node 0 has to succeed.
+    async fn assert_same_response(
+        expected: &Client<ClientErr, SequencerApiVersion>,
+        actual: &Client<ClientErr, SequencerApiVersion>,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        let expected: serde_json::Value = expected
+            .get(path)
+            .send()
+            .await
+            .with_context(|| format!("{path}: node 0 did not answer"))?;
+        let actual = actual
+            .get::<serde_json::Value>(path)
+            .send()
+            .await
+            .map_err(|err| err.status);
+        ensure!(
+            actual.as_ref() == Ok(&expected),
+            "{path}: follower answered {actual:?}, node 0 answered {expected:?}"
+        );
+        Ok(())
+    }
+
     /// A query node whose database is wiped has to rebuild itself from its peer
     /// and rejoin consensus.
     ///
@@ -7205,6 +7651,223 @@ mod test {
         Ok(())
     }
 
+    /// A node that was down for longer than its state retention comes back with its merklized
+    /// state well behind the chain. The state loop can only continue from its newest snapshot, so
+    /// the state pruner must not get ahead of it. Restart a query node behind a pruned height that
+    /// an unbounded pruner run has already stamped past its state head, and check that the loop
+    /// still resumes and reaches the tip, and that every pruner run from then on stamps below the
+    /// state head.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_state_pruner_stays_below_state_head() -> anyhow::Result<()> {
+        const NUM_NODES: usize = 5;
+        // Blocks the chain moves on by while the query node is down, and the margin by which the
+        // loop has to get past the stale pruned height before the check ends.
+        const GAP: u64 = 10;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let api_url: Url = format!("http://localhost:{api_port}").parse().unwrap();
+        // The query node fetches what it missed from the API node, so the API node serves catchup
+        // and light client proofs.
+        let config = TestNetworkConfigBuilder::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default()),
+            ))
+            .network_config(TestConfigBuilder::default().build())
+            .persistences(persistence.clone())
+            .build();
+        let genesis_state = config.states()[0].clone();
+        let mut network = TestNetwork::new(config, MOCK_SEQUENCER_VERSIONS).await;
+
+        // Replace peer 0 with a query node whose state pruner runs every second with zero
+        // retention: left to itself, every run would prune right up to the chain tip. Consensus
+        // data stays out of it: the test genesis has timestamp 0, so any data retention would
+        // delete the genesis leaf the loop's first catchup reads.
+        network.peers[0].shut_down().await;
+        network.peers.remove(0);
+        let query_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let mut db_opt = tmp_options(&storage[1]);
+        db_opt.prune = true;
+        db_opt.pruning = <persistence::sql::PruningOptions as clap::Parser>::parse_from([
+            "pruning",
+            "--target-retention",
+            "4294967295s",
+            "--state-target-retention",
+            "0s",
+            "--interval",
+            "1s",
+        ]);
+        let start_query_node = {
+            let cfg = network.cfg.clone();
+            let node_persistence = persistence[1].clone();
+            let db_opt = db_opt.clone();
+            let api_url = api_url.clone();
+            move || {
+                let cfg = cfg.clone();
+                let genesis_state = genesis_state.clone();
+                let node_persistence = node_persistence.clone();
+                let db_opt = db_opt.clone();
+                let api_url = api_url.clone();
+                async move {
+                    let opt = Options::with_port(query_port).query_sql(
+                        Query {
+                            peers: vec![api_url.clone()],
+                            ..Default::default()
+                        },
+                        db_opt,
+                    );
+                    let ctx = opt
+                        .serve(move |metrics, consumer, storage| {
+                            async move {
+                                Ok(cfg
+                                    .init_node(
+                                        1,
+                                        genesis_state,
+                                        node_persistence,
+                                        Some(StatePeers::<StaticVersion<0, 1>>::from_urls(
+                                            vec![api_url],
+                                            Default::default(),
+                                            Duration::from_secs(2),
+                                            &NoMetrics,
+                                        )),
+                                        storage,
+                                        &*metrics,
+                                        STAKE_TABLE_CAPACITY_FOR_TEST,
+                                        consumer,
+                                        MOCK_SEQUENCER_VERSIONS,
+                                        Default::default(),
+                                    )
+                                    .await)
+                            }
+                            .boxed()
+                        })
+                        .await
+                        .expect("query node should start");
+                    ctx.start_consensus().await;
+                    ctx
+                }
+            }
+        };
+
+        let mut query_node = start_query_node().await;
+        let query_client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{query_port}").parse().unwrap());
+        assert!(query_client.connect(Some(Duration::from_secs(60))).await);
+        let api_client: Client<ClientErr, StaticVersion<0, 1>> = Client::new(api_url.clone());
+        assert!(api_client.connect(Some(Duration::from_secs(60))).await);
+
+        // Let the loop build some state, then take the node down while the chain moves on.
+        wait_until_block_height(&query_client, "block-state/block-height", 5).await;
+        tracing::info!("query node has state; shutting it down");
+        query_node.shut_down().await;
+        drop(query_node);
+        // `shut_down` aborts the server task without waiting for it, so wait for the port before
+        // rebinding it.
+        timeout(Duration::from_secs(30), async {
+            while std::net::TcpListener::bind(("127.0.0.1", query_port)).is_err() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("shut-down query node did not release its port")?;
+        let db =
+            SqlStorage::connect(Config::try_from(&db_opt)?, StorageConnectionType::Query).await?;
+        let (_, head_at_shutdown) = state_heights(&db).await;
+        wait_until_block_height(&api_client, "status/block-height", head_at_shutdown + GAP).await;
+        // `status/block-height` counts blocks, so the tip is one below it.
+        let stale_cursor = api_client.get::<u64>("status/block-height").send().await? - 1;
+        tracing::info!(
+            head_at_shutdown,
+            stale_cursor,
+            "chain moved on; restarting query node"
+        );
+
+        // A pruner from before the state pruner was bounded by the state head could have stamped
+        // past the loop while it was behind. Stamp the tip as such a run would have; id 2 is the
+        // state cursor.
+        {
+            let mut tx = db.write().await?;
+            tx.upsert(
+                "pruned_height",
+                ["id", "last_height"],
+                ["id"],
+                [(2i32, stale_cursor as i64)],
+            )
+            .await?;
+            tx.commit().await?;
+        }
+        ensure!(
+            state_heights(&db).await.0 == Some(stale_cursor),
+            "the stale cursor was not stamped"
+        );
+
+        // The loop has to resume from its head, get past the stale cursor and reach the tip, and
+        // every pruner run from then on has to stamp below the head.
+        let _query_node = start_query_node().await;
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let (pruned, head) = state_heights(&db).await;
+            let pruned = pruned.context("state pruned height is stamped")?;
+            tracing::info!(pruned, head, stale_cursor, "state loop progress");
+            if pruned > stale_cursor {
+                ensure!(
+                    pruned < head,
+                    "state pruner passed the state head: pruned {pruned}, head {head}"
+                );
+                if head > stale_cursor + GAP {
+                    break;
+                }
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "state loop did not get past the stale pruned height {stale_cursor}: pruned \
+                 {pruned}, head {head}"
+            );
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        // The head snapshot is served. The loop and the pruner keep moving, so a head read just
+        // before a pruner run can be below the cursor by the time the query runs; read it again.
+        for attempt in 1.. {
+            let (_, head) = state_heights(&db).await;
+            let frontier = query_client
+                .get::<MerkleProof<Commitment<Header>, u64, Sha3Node, 3>>(&format!(
+                    "block-state/{head}/{}",
+                    head - 1
+                ))
+                .send()
+                .await;
+            match frontier {
+                Ok(_) => break,
+                Err(err) if attempt < 10 => {
+                    tracing::info!(head, %err, "retrying the head frontier query");
+                    sleep(Duration::from_millis(200)).await;
+                },
+                Err(err) => bail!("block frontier at the state head {head} is not served: {err}"),
+            }
+        }
+        Ok(())
+    }
+
+    /// The state pruned height, then the state head. Read in that order: every move of the
+    /// cursor, up by a batch or down by the startup repair, lands below the head, and the head
+    /// only grows, so a head read after the cursor is always above it.
+    async fn state_heights(db: &SqlStorage) -> (Option<u64>, u64) {
+        let mut tx = db.read().await.unwrap();
+        let pruned = tx.load_state_pruned_height().await.unwrap();
+        let head = tx.get_last_state_height().await.unwrap() as u64;
+        (pruned, head)
+    }
+
     #[rstest]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -8099,9 +8762,8 @@ mod test {
         }
     }
 
-    /// The v2 node, config, database and availability endpoints adapt the v1 handlers, so on one
-    /// node both versions must report the same values, with v2's query parameters selecting what
-    /// v1's path parameters do.
+    /// The v2 endpoints adapt the v1 handlers, so on one node both versions must report the same
+    /// values, with v2's query parameters selecting what v1's path parameters do.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_v2_api_agrees_with_v1() {
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
@@ -8118,7 +8780,8 @@ mod test {
                 Options::with_port(port)
                     .query_sql(Default::default(), ds_opts)
                     .submit(Default::default())
-                    .config(Default::default()),
+                    .config(Default::default())
+                    .explorer(Default::default()),
             )
             .network_config(network_config)
             .build();
@@ -8147,8 +8810,8 @@ mod test {
         let last_block = *blocks.last().unwrap();
 
         // The counts come from aggregates a background task fills in after each block is
-        // stored, so wait for them to reach the last submitted transaction first; nothing else
-        // submits, so every number below is stable from then on.
+        // stored, so wait for them to reach the last submitted transaction first. Nothing else
+        // submits before the counts are compared, so they are stable from then on.
         let expected_total: u64 = namespace_counts
             .iter()
             .map(|(_, count)| u64::from(*count))
@@ -8371,6 +9034,171 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(v2_err.status, v1_err.status);
+
+        // The signer covers only the newest leaf of each decide and runs behind the query
+        // storage, so search back from the tip for a height v1 answers rather than naming one.
+        let block_height: u64 = client.get("status/block-height").send().await.unwrap();
+        let (height, v1_signature) = {
+            let mut found = None;
+            for height in (1..block_height).rev().take(50) {
+                // As raw JSON, so the v2 strings are compared against the bytes v1 serves rather
+                // than against a `Display` impl that could disagree with its own serde.
+                match client
+                    .get::<serde_json::Value>(&format!("state-signature/block/{height}"))
+                    .send()
+                    .await
+                {
+                    Ok(body) => {
+                        found = Some((height, body));
+                        break;
+                    },
+                    Err(err) if err.status == StatusCode::NOT_FOUND => {},
+                    Err(err) => panic!("v1 state-signature/block/{height}: {err:?}"),
+                }
+            }
+            found.expect("no recent block carries a state signature")
+        };
+        let v2_signature: espresso_api::proto::StateSignatureResponse = client
+            .get(&format!("v2/state-signature/block?height={height}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v1_signature
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "auth_root",
+                "key",
+                "next_stake",
+                "signature",
+                "state",
+                "v2_signature",
+            ]),
+            "v1 grew a field `StateSignatureResponse` does not carry"
+        );
+        assert_eq!(v2_signature.key, v1_signature["key"].as_str().unwrap());
+        assert_eq!(
+            v2_signature.light_client_state,
+            v1_signature["state"].as_str().unwrap()
+        );
+        assert_eq!(
+            v2_signature.next_stake_table_state,
+            v1_signature["next_stake"].as_str().unwrap()
+        );
+        assert_eq!(
+            v2_signature.auth_root,
+            v1_signature["auth_root"].as_str().unwrap()
+        );
+        assert_eq!(
+            v2_signature.lcv3_signature,
+            v1_signature["signature"].as_str().unwrap()
+        );
+        assert_eq!(
+            v2_signature.lcv2_signature,
+            v1_signature["v2_signature"].as_str().unwrap()
+        );
+
+        // The height is required rather than defaulted to the genesis block.
+        let err = client
+            .get::<serde_json::Value>("v2/state-signature/block")
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+
+        // A height the node never signed is a 404 on both versions.
+        let unsigned = block_height + 1000;
+        let v1_err = client
+            .get::<serde_json::Value>(&format!("state-signature/block/{unsigned}"))
+            .send()
+            .await
+            .unwrap_err();
+        let v2_err = client
+            .get::<serde_json::Value>(&format!("v2/state-signature/block?height={unsigned}"))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(v1_err.status, StatusCode::NOT_FOUND);
+        assert_eq!(v2_err.status, StatusCode::NOT_FOUND);
+
+        // Waited on rather than just compared, so a handler that returns the commitment without
+        // sequencing anything fails here.
+        let submitted = Transaction::new(NamespaceId::from(103u64), vec![103, 0]);
+        let accepted: espresso_api::proto::SubmitTransactionResponse = client
+            .post("v2/submit/transaction")
+            .body_json(&espresso_api::proto::SubmitTransactionRequest {
+                namespace: Some(103),
+                payload: Some(vec![103, 0]),
+            })
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(accepted.hash, submitted.commit().to_string());
+        wait_for_decide_on_handle(&mut events, &submitted).await;
+
+        let oversized = u64::from(network.server.node_state().chain_config.max_block_size) + 1;
+        let oversized = vec![0u8; oversized as usize];
+        let bad_submissions = [
+            (
+                "missing namespace",
+                serde_json::json!({ "payload": "" }),
+                espresso_api::proto::SubmitTransactionRequest {
+                    namespace: None,
+                    payload: Some(vec![]),
+                },
+            ),
+            (
+                "missing payload",
+                serde_json::json!({ "namespace": 104 }),
+                espresso_api::proto::SubmitTransactionRequest {
+                    namespace: Some(104),
+                    payload: None,
+                },
+            ),
+            (
+                "namespace above u32::MAX",
+                serde_json::json!({ "namespace": 1u64 << 32, "payload": "" }),
+                espresso_api::proto::SubmitTransactionRequest {
+                    namespace: Some(1 << 32),
+                    payload: Some(vec![]),
+                },
+            ),
+            (
+                "payload above max_block_size",
+                serde_json::to_value(Transaction::new(
+                    NamespaceId::from(104u64),
+                    oversized.clone(),
+                ))
+                .unwrap(),
+                espresso_api::proto::SubmitTransactionRequest {
+                    namespace: Some(104),
+                    payload: Some(oversized),
+                },
+            ),
+        ];
+        for (case, v1_body, v2_body) in bad_submissions {
+            let v1_err = client
+                .post::<serde_json::Value>("submit/submit")
+                .body_json(&v1_body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            let v2_err = client
+                .post::<serde_json::Value>("v2/submit/transaction")
+                .body_json(&v2_body)
+                .unwrap()
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(v1_err.status, StatusCode::BAD_REQUEST, "v1, {case}");
+            assert_eq!(v2_err.status, StatusCode::BAD_REQUEST, "v2, {case}");
+        }
 
         // Every decided view moves these, so retry until a pair straddles no view.
         let (v1_votes, v2_votes) = {
@@ -8688,6 +9516,385 @@ mod test {
                 .unwrap_err();
             assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}: {err}");
         }
+
+        // Compared as raw JSON, so the rendered amounts and timestamps are checked against the
+        // bytes v1 serves rather than against the `Display` impls v2 reuses. Each comparison names
+        // its target by height, since the latest block moves with every decide.
+        let strings = |value: &serde_json::Value| {
+            value
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry.as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        let keys = |value: &serde_json::Value| {
+            value
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        };
+        let key_set = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<BTreeSet<_>>()
+        };
+
+        let v1_block: serde_json::Value = client
+            .get(&format!("explorer/block/{first_block}"))
+            .send()
+            .await
+            .unwrap();
+        let v2_block: espresso_api::proto::ExplorerBlockDetailResponse = client
+            .get(&format!("v2/explorer/block?height={first_block}"))
+            .send()
+            .await
+            .unwrap();
+        let v1_block = &v1_block["block_detail"];
+        let v2_block = v2_block.block_detail.unwrap();
+        assert_eq!(
+            keys(v1_block),
+            key_set(&[
+                "block_reward",
+                "fee_recipient",
+                "hash",
+                "height",
+                "num_transactions",
+                "proposer_id",
+                "size",
+                "time",
+            ]),
+            "v1 grew a field `ExplorerBlockDetail` does not carry"
+        );
+        assert_eq!(v2_block.hash, v1_block["hash"].as_str().unwrap());
+        assert_eq!(v2_block.height, v1_block["height"].as_u64().unwrap());
+        assert_eq!(v2_block.time, v1_block["time"].as_str().unwrap());
+        assert_eq!(
+            v2_block.num_transactions,
+            v1_block["num_transactions"].as_u64().unwrap()
+        );
+        assert_eq!(v2_block.num_transactions, 1);
+        assert_eq!(v2_block.size, v1_block["size"].as_u64().unwrap());
+        assert_eq!(v2_block.proposer_id, strings(&v1_block["proposer_id"]));
+        assert_eq!(v2_block.fee_recipient, strings(&v1_block["fee_recipient"]));
+        assert_eq!(v2_block.block_reward, strings(&v1_block["block_reward"]));
+        let by_hash: espresso_api::proto::ExplorerBlockDetailResponse = client
+            .get(&format!("v2/explorer/block?hash={}", v2_block.hash))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash.block_detail.as_ref(), Some(&v2_block));
+
+        let assert_block_summary =
+            |v1: &serde_json::Value, v2: &espresso_api::proto::ExplorerBlockSummary| {
+                assert_eq!(
+                    keys(v1),
+                    key_set(&[
+                        "hash",
+                        "height",
+                        "num_transactions",
+                        "proposer_id",
+                        "size",
+                        "time",
+                    ]),
+                    "v1 grew a field `ExplorerBlockSummary` does not carry"
+                );
+                assert_eq!(v2.hash, v1["hash"].as_str().unwrap());
+                assert_eq!(v2.height, v1["height"].as_u64().unwrap());
+                assert_eq!(v2.proposer_id, strings(&v1["proposer_id"]));
+                assert_eq!(
+                    v2.num_transactions,
+                    v1["num_transactions"].as_u64().unwrap()
+                );
+                assert_eq!(v2.size, v1["size"].as_u64().unwrap());
+                assert_eq!(v2.time, v1["time"].as_str().unwrap());
+            };
+        let v1_blocks: serde_json::Value = client
+            .get(&format!("explorer/blocks/{last_block}/3"))
+            .send()
+            .await
+            .unwrap();
+        let v2_blocks: espresso_api::proto::ExplorerBlockSummariesResponse = client
+            .get(&format!("v2/explorer/blocks?height={last_block}&limit=3"))
+            .send()
+            .await
+            .unwrap();
+        let v1_blocks = v1_blocks["block_summaries"].as_array().unwrap();
+        assert_eq!(v2_blocks.block_summaries.len(), v1_blocks.len());
+        assert!(!v1_blocks.is_empty());
+        for (v1, v2) in v1_blocks.iter().zip(&v2_blocks.block_summaries) {
+            assert_block_summary(v1, v2);
+        }
+
+        let assert_transaction_summary =
+            |v1: &serde_json::Value, v2: &espresso_api::proto::ExplorerTransactionSummary| {
+                assert_eq!(
+                    keys(v1),
+                    key_set(&[
+                        "hash",
+                        "height",
+                        "num_transactions",
+                        "offset",
+                        "rollups",
+                        "time",
+                    ]),
+                    "v1 grew a field `ExplorerTransactionSummary` does not carry"
+                );
+                assert_eq!(v2.hash, v1["hash"].as_str().unwrap());
+                assert_eq!(
+                    v2.rollups,
+                    v1["rollups"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|namespace| namespace.as_u64().unwrap())
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(v2.height, v1["height"].as_u64().unwrap());
+                assert_eq!(v2.offset, v1["offset"].as_u64().unwrap());
+                assert_eq!(
+                    v2.num_transactions,
+                    v1["num_transactions"].as_u64().unwrap()
+                );
+                assert_eq!(v2.time, v1["time"].as_str().unwrap());
+            };
+        let mut newest_transaction = None;
+        for (v1_path, v2_path) in [
+            (
+                format!("explorer/transactions/from/{last_block}/0/5"),
+                format!("v2/explorer/transactions?height={last_block}&offset=0&limit=5"),
+            ),
+            (
+                format!("explorer/transactions/from/{last_block}/0/5/namespace/102"),
+                format!(
+                    "v2/explorer/transactions?height={last_block}&offset=0&limit=5&namespace=102"
+                ),
+            ),
+            (
+                format!("explorer/transactions/from/{last_block}/0/5/block/{first_block}"),
+                format!(
+                    "v2/explorer/transactions?height={last_block}&offset=0&limit=5&\
+                     block={first_block}"
+                ),
+            ),
+        ] {
+            let v1: serde_json::Value = client.get(&v1_path).send().await.unwrap();
+            let v2: espresso_api::proto::ExplorerTransactionSummariesResponse =
+                client.get(&v2_path).send().await.unwrap();
+            let v1 = v1["transaction_summaries"].as_array().unwrap();
+            assert_eq!(v2.transaction_summaries.len(), v1.len(), "{v2_path}");
+            assert!(!v1.is_empty(), "{v1_path}");
+            for (v1, v2) in v1.iter().zip(&v2.transaction_summaries) {
+                assert_transaction_summary(v1, v2);
+            }
+            newest_transaction.get_or_insert(v2.transaction_summaries[0].clone());
+        }
+
+        let transaction = newest_transaction.unwrap();
+        let v1_detail: serde_json::Value = client
+            .get(&format!(
+                "explorer/transaction/{}/{}",
+                transaction.height, transaction.offset
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v2_detail: espresso_api::proto::ExplorerTransactionDetailResponse = client
+            .get(&format!(
+                "v2/explorer/transaction?height={}&offset={}",
+                transaction.height, transaction.offset
+            ))
+            .send()
+            .await
+            .unwrap();
+        let v1_detail = &v1_detail["transaction_detail"];
+        let v1_details = &v1_detail["details"];
+        let v2_details = v2_detail.details.as_ref().unwrap();
+        assert_eq!(
+            keys(v1_details),
+            key_set(&[
+                "block_confirmed",
+                "fee_details",
+                "hash",
+                "height",
+                "num_transactions",
+                "offset",
+                "sequencing_fees",
+                "size",
+                "time",
+            ]),
+            "v1 grew a field `ExplorerTransactionDetail` does not carry"
+        );
+        assert_eq!(v2_details.hash, transaction.hash);
+        assert_eq!(v2_details.hash, v1_details["hash"].as_str().unwrap());
+        assert_eq!(v2_details.height, v1_details["height"].as_u64().unwrap());
+        assert_eq!(
+            v2_details.block_confirmed,
+            v1_details["block_confirmed"].as_bool().unwrap()
+        );
+        assert_eq!(v2_details.offset, v1_details["offset"].as_u64().unwrap());
+        assert_eq!(
+            v2_details.num_transactions,
+            v1_details["num_transactions"].as_u64().unwrap()
+        );
+        assert_eq!(v2_details.size, v1_details["size"].as_u64().unwrap());
+        assert_eq!(v2_details.time, v1_details["time"].as_str().unwrap());
+        assert_eq!(
+            v2_details.sequencing_fees,
+            strings(&v1_details["sequencing_fees"])
+        );
+        assert_eq!(
+            v2_details.fee_details.len(),
+            v1_details["fee_details"].as_array().unwrap().len()
+        );
+        let v1_data: Vec<Transaction> = serde_json::from_value(v1_detail["data"].clone()).unwrap();
+        assert!(!v1_data.is_empty());
+        assert_eq!(
+            v2_detail.data,
+            v1_data
+                .iter()
+                .map(|transaction| espresso_api::proto::Transaction {
+                    namespace: u64::from(transaction.namespace()),
+                    payload: transaction.payload().to_vec(),
+                })
+                .collect::<Vec<_>>()
+        );
+        let by_hash: espresso_api::proto::ExplorerTransactionDetailResponse = client
+            .get(&format!(
+                "v2/explorer/transaction?hash={}",
+                transaction.hash
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(by_hash, v2_detail);
+
+        let v1_search: serde_json::Value = client
+            .get(&format!("explorer/search/{}", transaction.hash))
+            .send()
+            .await
+            .unwrap();
+        let v2_search: espresso_api::proto::ExplorerSearchResponse = client
+            .get(&format!("v2/explorer/search?query={}", transaction.hash))
+            .send()
+            .await
+            .unwrap();
+        let v1_found = v1_search["search_results"]["transactions"]
+            .as_array()
+            .unwrap();
+        assert_eq!(v2_search.transactions.len(), v1_found.len());
+        assert!(!v1_found.is_empty());
+        for (v1, v2) in v1_found.iter().zip(&v2_search.transactions) {
+            assert_transaction_summary(v1, v2);
+        }
+
+        // v1 serves the histograms as four parallel arrays, which v2 zips into one point per
+        // block, so this proves the zip lines the four values up with the right height. The two
+        // reads can straddle a decide, so only the heights both windows hold are compared.
+        let v1_summary: serde_json::Value = client
+            .get("explorer/explorer-summary")
+            .send()
+            .await
+            .unwrap();
+        let v2_summary: espresso_api::proto::ExplorerSummaryResponse =
+            client.get("v2/explorer/summary").send().await.unwrap();
+        let v1_histograms = &v1_summary["explorer_summary"]["histograms"];
+        let v1_points: HashMap<u64, usize> = v1_histograms["block_heights"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(i, height)| (height.as_u64().unwrap(), i))
+            .collect();
+        let mut compared = 0;
+        for point in &v2_summary.histograms {
+            let Some(&i) = v1_points.get(&point.height) else {
+                continue;
+            };
+            assert_eq!(point.block_time, v1_histograms["block_time"][i].as_f64());
+            assert_eq!(point.block_size, v1_histograms["block_size"][i].as_u64());
+            assert_eq!(
+                point.block_transactions,
+                v1_histograms["block_transactions"][i].as_u64().unwrap()
+            );
+            compared += 1;
+        }
+        assert!(compared > 0, "the two histogram windows share no height");
+
+        // Two ways of naming the same thing cannot both be given, and half of a height/offset
+        // pair is a mistake rather than a fallback to the latest transaction.
+        for query in [
+            "v2/explorer/block?height=1&hash=BLOCK~aa",
+            "v2/explorer/transaction?height=1",
+            "v2/explorer/transactions?limit=1&block=1&namespace=1",
+            "v2/explorer/transactions?limit=1&namespace=4294967296",
+            "v2/explorer/blocks",
+            "v2/explorer/search",
+        ] {
+            let err = client
+                .get::<serde_json::Value>(query)
+                .send()
+                .await
+                .unwrap_err();
+            assert_eq!(err.status, StatusCode::BAD_REQUEST, "{query}");
+        }
+
+        let missing_height = u64::from(u32::MAX);
+        let foreign_tag = tagged_base64::TaggedBase64::new("FOO", &[0; 32]).unwrap();
+        for (v1_path, v2_path, status) in [
+            (
+                format!("explorer/block/{missing_height}"),
+                format!("v2/explorer/block?height={missing_height}"),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                format!("explorer/transaction/{missing_height}/0"),
+                format!("v2/explorer/transaction?height={missing_height}&offset=0"),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                format!("explorer/transactions/from/1/{}/1", u64::MAX),
+                format!(
+                    "v2/explorer/transactions?height=1&offset={}&limit=1",
+                    u64::MAX
+                ),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                format!("explorer/search/{foreign_tag}"),
+                format!("v2/explorer/search?query={foreign_tag}"),
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            for path in [&v1_path, &v2_path] {
+                let err = client
+                    .get::<serde_json::Value>(path)
+                    .send()
+                    .await
+                    .unwrap_err();
+                assert_eq!(err.status, status, "{path}");
+            }
+        }
+        let unknown_block = tagged_base64::TaggedBase64::new("BLOCK", &[0; 32]).unwrap();
+        let v1_search: serde_json::Value = client
+            .get(&format!("explorer/search/{unknown_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            v1_search["search_results"]["blocks"],
+            serde_json::json!([]),
+            "an unknown block hash is an empty result, as an unknown transaction hash is"
+        );
+        let v2_search: espresso_api::proto::ExplorerSearchResponse = client
+            .get(&format!("v2/explorer/search?query={unknown_block}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(v2_search.blocks.is_empty());
 
         let v1_config = client
             .get::<espresso_types::config::PublicNetworkConfig>("config/hotshot")
@@ -11787,6 +12994,32 @@ mod test {
                 )
                 .await?;
                 assert_json_endpoint(&http, api_port, "explorer/transactions/latest/10").await?;
+
+                // Explorer errors keep their status: missing objects are 404 and unsupported
+                // search tags are 400, while a search that finds nothing is an empty result.
+                assert_error_body(&http, api_port, "explorer/block/999999", 404).await?;
+                assert_error_body(&http, api_port, "explorer/transaction/999999/0", 404).await?;
+                assert_error_body(
+                    &http,
+                    api_port,
+                    &format!("explorer/search/{leaf_hash}"),
+                    400,
+                )
+                .await?;
+                let unknown_block = tagged_base64::TaggedBase64::new("BLOCK", &[0; 32])?;
+                let search: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{api_port}/v1/explorer/search/{unknown_block}"
+                    ))
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json()
+                    .await?;
+                assert_eq!(
+                    search["search_results"],
+                    serde_json::json!({"blocks": [], "transactions": []})
+                );
 
                 // Light-client endpoints. Use the same block we used for availability tests.
                 assert_json_endpoint(&http, api_port, &format!("light-client/leaf/{avail_block}"))

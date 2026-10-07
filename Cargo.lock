@@ -1996,13 +1996,13 @@ checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 
 [[package]]
 name = "async-trait"
-version = "0.1.89"
+version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.118",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -4555,6 +4555,7 @@ dependencies = [
  "serde_urlencoded",
  "tagged-base64",
  "thiserror 2.0.18",
+ "time 0.3.51",
  "tokio",
  "tonic 0.14.6",
  "tonic-prost",
@@ -4915,6 +4916,7 @@ dependencies = [
  "proptest",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
+ "rayon",
  "rstest",
  "rstest_reuse",
  "serde",
@@ -4933,6 +4935,7 @@ dependencies = [
  "toml",
  "tower-service",
  "tracing",
+ "tracing-subscriber 0.3.23",
  "url",
  "vbs",
  "vec1",
@@ -11691,6 +11694,7 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest 0.10.7",
+ "sha2-asm",
 ]
 
 [[package]]
@@ -11702,6 +11706,15 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "digest 0.11.3",
+]
+
+[[package]]
+name = "sha2-asm"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b845214d6175804686b2bd482bcffe96651bb2d1200742b712003504a2dac1ab"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -12538,6 +12551,17 @@ name = "syn"
 version = "2.0.118"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee"
 dependencies = [
  "proc-macro2",
  "quote",

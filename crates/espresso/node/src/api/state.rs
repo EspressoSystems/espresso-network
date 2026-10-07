@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use chrono::SecondsFormat;
 use disco_types::{error::Error as _, status::StatusCode};
 use espresso_api::{
-    error::{AvailabilityError, to_status},
+    error::{AvailabilityError, SubmitError, to_status},
     proto,
     v1::{self, HotShotAvailabilityApi},
 };
@@ -40,9 +40,9 @@ use hotshot_query_service::{
     },
     data_source::{VersionedDataSource as _, storage::AvailabilityStorage as _},
     explorer::{
-        BlockIdentifier, BlockRange, ExplorerDataSource as _, GetBlockSummariesRequest,
-        GetTransactionSummariesRequest, TransactionIdentifier, TransactionRange,
-        TransactionSummaryFilter,
+        BlockIdentifier, BlockRange, Error as ExplorerError, ExplorerDataSource as _,
+        GetBlockSummariesRequest, GetSearchResultsError, GetTransactionSummariesRequest,
+        TransactionIdentifier, TransactionRange, TransactionSummaryFilter,
     },
     merklized_state::{
         MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot as HsSnapshot,
@@ -2557,9 +2557,37 @@ where
 
     async fn submit(&self, tx: Self::Transaction) -> anyhow::Result<Self::TxHash> {
         let ds = &*self.data_source;
-        ds.submit_erased(tx)
+        ds.submit_erased(tx).await.map_err(|err| {
+            // Keep rejections typed for `classify`.
+            if err.is::<SubmitError>() {
+                err
+            } else {
+                anyhow::anyhow!("{err:#}")
+            }
+        })
+    }
+}
+
+#[tonic::async_trait]
+impl<D> proto::submit_service_server::SubmitService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: SubmitDataSourceErased + Send + Sync,
+{
+    async fn submit_transaction(
+        &self,
+        request: tonic::Request<proto::SubmitTransactionRequest>,
+    ) -> Result<tonic::Response<proto::SubmitTransactionResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let namespace = required(namespace_from_query(request.namespace)?, "namespace")?;
+        let payload = required(request.payload, "payload")?;
+        let transaction = espresso_types::Transaction::new(namespace.into(), payload);
+        let hash = v1::SubmitApi::submit(self, transaction)
             .await
-            .map_err(|err| anyhow::anyhow!("{err:#}"))
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::SubmitTransactionResponse {
+            hash: hash.to_string(),
+        }))
     }
 }
 
@@ -2617,6 +2645,24 @@ where
         ds.get_state_signature_erased(height)
             .await
             .ok_or_else(|| not_found("Signature not found."))
+    }
+}
+
+#[tonic::async_trait]
+impl<D> proto::state_signature_service_server::StateSignatureService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: StateSignatureDataSourceErased + Send + Sync,
+{
+    async fn get_state_signature(
+        &self,
+        request: tonic::Request<proto::GetStateSignatureRequest>,
+    ) -> Result<tonic::Response<proto::StateSignatureResponse>, tonic::Status> {
+        let height = required(request.into_inner().height, "height")?;
+        let body = v1::StateSignatureApi::get_state_signature(self, height)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new((&body).into()))
     }
 }
 
@@ -2685,7 +2731,8 @@ where
         ds.get_block_detail(target)
             .await
             .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(ExplorerError::GetBlockDetail)
+            .map_err(explorer_error)
     }
 
     async fn get_block_summaries(
@@ -2710,7 +2757,8 @@ where
         ds.get_block_summaries(GetBlockSummariesRequest(BlockRange { target, num_blocks }))
             .await
             .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(ExplorerError::GetBlockSummaries)
+            .map_err(explorer_error)
     }
 
     async fn get_transaction_detail(
@@ -2731,7 +2779,8 @@ where
         ds.get_transaction_detail(target)
             .await
             .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(ExplorerError::GetTransactionDetail)
+            .map_err(explorer_error)
     }
 
     async fn get_transaction_summaries(
@@ -2748,6 +2797,11 @@ where
         }
         let target = match target {
             v1::TxIdent::HeightAndOffset(h, o) => {
+                // The query binds `limit + offset` as an i64 row count, which a larger offset
+                // would overflow into a negative or wrapped limit.
+                if limit.checked_add(o).is_none_or(|n| n > i64::MAX as u64) {
+                    return Err(bad_request(format!("offset {o} is too large")));
+                }
                 TransactionIdentifier::HeightAndOffset(h as usize, o as usize)
             },
             v1::TxIdent::Hash(h) => TransactionIdentifier::Hash(
@@ -2770,7 +2824,8 @@ where
         })
         .await
         .map(Into::into)
-        .map_err(|err| anyhow::anyhow!("{err}"))
+        .map_err(ExplorerError::GetTransactionSummaries)
+        .map_err(explorer_error)
     }
 
     async fn get_explorer_summary(&self) -> anyhow::Result<Self::ExplorerSummary> {
@@ -2778,7 +2833,8 @@ where
         ds.get_explorer_summary()
             .await
             .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(ExplorerError::GetExplorerSummary)
+            .map_err(explorer_error)
     }
 
     async fn get_search_result(&self, query: String) -> anyhow::Result<Self::SearchResult> {
@@ -2789,7 +2845,156 @@ where
         ds.get_search_results(parsed)
             .await
             .map(Into::into)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+            .map_err(|err| match err {
+                GetSearchResultsError::InvalidQuery(_) => bad_request(format!(
+                    "unsupported search query {query}: expected a BLOCK~ or TX~ hash"
+                )),
+                err => explorer_error(ExplorerError::GetSearchResults(err)),
+            })
+    }
+}
+
+#[tonic::async_trait]
+impl<D> proto::explorer_service_server::ExplorerService for NodeApiStateImpl<D>
+where
+    D: Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::explorer::ExplorerDataSource<SeqTypes> + Send + Sync,
+{
+    async fn get_explorer_block_detail(
+        &self,
+        request: tonic::Request<proto::GetExplorerBlockDetailRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerBlockDetailResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let ident = block_ident(request.height, request.hash)?;
+        let detail = <Self as v1::ExplorerApi>::get_block_detail(self, ident)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(proto::ExplorerBlockDetailResponse {
+            block_detail: Some((&detail.block_detail).into()),
+        }))
+    }
+
+    async fn get_explorer_block_summaries(
+        &self,
+        request: tonic::Request<proto::GetExplorerBlockSummariesRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerBlockSummariesResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let limit = required(request.limit, "limit")?;
+        let ident = block_ident(request.height, request.hash)?;
+        let summaries = <Self as v1::ExplorerApi>::get_block_summaries(self, ident, limit)
+            .await
+            .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::ExplorerBlockSummariesResponse {
+                block_summaries: summaries.block_summaries.iter().map(Into::into).collect(),
+            },
+        ))
+    }
+
+    async fn get_explorer_transaction_detail(
+        &self,
+        request: tonic::Request<proto::GetExplorerTransactionDetailRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerTransactionDetailResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let ident = transaction_ident(request.height, request.offset, request.hash)?;
+        let detail = <Self as v1::ExplorerApi>::get_transaction_detail(self, ident)
+            .await
+            .map_err(to_status)?
+            .transaction_detail;
+        Ok(tonic::Response::new(
+            proto::ExplorerTransactionDetailResponse {
+                details: Some((&detail.details).into()),
+                data: detail.data.iter().map(Into::into).collect(),
+            },
+        ))
+    }
+
+    async fn get_explorer_transaction_summaries(
+        &self,
+        request: tonic::Request<proto::GetExplorerTransactionSummariesRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerTransactionSummariesResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let limit = required(request.limit, "limit")?;
+        let ident = transaction_ident(request.height, request.offset, request.hash)?;
+        let filter = match (request.block, namespace_from_query(request.namespace)?) {
+            (Some(_), Some(_)) => {
+                return Err(tonic::Status::invalid_argument(
+                    "block and namespace are mutually exclusive",
+                ));
+            },
+            (Some(block), None) => v1::TxSummaryFilter::Block(block),
+            (None, Some(namespace)) => v1::TxSummaryFilter::Namespace(namespace.into()),
+            (None, None) => v1::TxSummaryFilter::None,
+        };
+        let summaries =
+            <Self as v1::ExplorerApi>::get_transaction_summaries(self, ident, limit, filter)
+                .await
+                .map_err(to_status)?;
+        Ok(tonic::Response::new(
+            proto::ExplorerTransactionSummariesResponse {
+                transaction_summaries: summaries
+                    .transaction_summaries
+                    .iter()
+                    .map(Into::into)
+                    .collect(),
+            },
+        ))
+    }
+
+    async fn get_explorer_summary(
+        &self,
+        _request: tonic::Request<proto::GetExplorerSummaryRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerSummaryResponse>, tonic::Status> {
+        let summary = <Self as v1::ExplorerApi>::get_explorer_summary(self)
+            .await
+            .map_err(to_status)?
+            .explorer_summary;
+        Ok(tonic::Response::new((&summary).into()))
+    }
+
+    async fn get_explorer_search(
+        &self,
+        request: tonic::Request<proto::GetExplorerSearchRequest>,
+    ) -> Result<tonic::Response<proto::ExplorerSearchResponse>, tonic::Status> {
+        let query = required(request.into_inner().query, "query")?;
+        let results = <Self as v1::ExplorerApi>::get_search_result(self, query)
+            .await
+            .map_err(to_status)?
+            .search_results;
+        Ok(tonic::Response::new((&results).into()))
+    }
+}
+
+/// v1 spells the three ways of naming a block as separate routes, so v2's optional parameters
+/// carry the same choice, with neither given meaning the latest block.
+fn block_ident(height: Option<u64>, hash: Option<String>) -> Result<v1::BlockIdent, tonic::Status> {
+    match (height, hash) {
+        (Some(_), Some(_)) => Err(tonic::Status::invalid_argument(
+            "height and hash are mutually exclusive",
+        )),
+        (Some(height), None) => Ok(v1::BlockIdent::Height(height)),
+        (None, Some(hash)) => Ok(v1::BlockIdent::Hash(hash)),
+        (None, None) => Ok(v1::BlockIdent::Latest),
+    }
+}
+
+/// As [`block_ident`], except that naming a transaction by position takes both `height` and
+/// `offset`, so half of that pair is a bad request rather than a fallback to the latest.
+fn transaction_ident(
+    height: Option<u64>,
+    offset: Option<u64>,
+    hash: Option<String>,
+) -> Result<v1::TxIdent, tonic::Status> {
+    match (height, offset, hash) {
+        (None, None, None) => Ok(v1::TxIdent::Latest),
+        (None, None, Some(hash)) => Ok(v1::TxIdent::Hash(hash)),
+        (Some(height), Some(offset), None) => Ok(v1::TxIdent::HeightAndOffset(height, offset)),
+        (Some(_), None, None) | (None, Some(_), None) => Err(tonic::Status::invalid_argument(
+            "height and offset must be given together",
+        )),
+        _ => Err(tonic::Status::invalid_argument(
+            "hash is exclusive with height and offset",
+        )),
     }
 }
 
@@ -3138,6 +3343,11 @@ pub(crate) fn lc_error(err: hotshot_query_service::Error) -> anyhow::Error {
         StatusCode::BAD_REQUEST => bad_request(err.to_string()),
         _ => anyhow::anyhow!("{err}"),
     }
+}
+
+/// Like [`lc_error`], for explorer data source errors.
+fn explorer_error(err: ExplorerError) -> anyhow::Error {
+    lc_error(hotshot_query_service::Error::Explorer { source: err })
 }
 
 /// Bounds the leaves in a single leaf proof, and so the memory to build and serialize it.
@@ -4165,7 +4375,10 @@ mod tests {
     use base64::Engine as _;
     use committable::Committable as _;
     use espresso_types::{PubKey, v0_3::RegisteredValidator};
-    use hotshot_query_service::node::{ResourceSyncStatus, SyncStatus, SyncStatusRange};
+    use hotshot_query_service::{
+        explorer::errors::BadQuery,
+        node::{ResourceSyncStatus, SyncStatus, SyncStatusRange},
+    };
     use hotshot_types::{
         addr::NetAddr,
         vid::{
@@ -5390,6 +5603,27 @@ mod tests {
     fn lc_error_other_statuses_stay_internal() {
         let err = lc_error(custom(StatusCode::INTERNAL_SERVER_ERROR));
         assert!(err.downcast_ref::<AvailabilityError>().is_none());
+    }
+
+    // Regression: the explorer methods also erased the status, so a missing block was a 500.
+    #[test]
+    fn explorer_error_preserves_not_found() {
+        let err = explorer_error(ExplorerError::GetBlockDetail(QueryError::NotFound.into()));
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn explorer_error_preserves_bad_request() {
+        let err = explorer_error(ExplorerError::GetSearchResults(
+            GetSearchResultsError::InvalidQuery(BadQuery {}),
+        ));
+        assert!(matches!(
+            err.downcast_ref::<AvailabilityError>(),
+            Some(AvailabilityError::BadRequest(_))
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread")]

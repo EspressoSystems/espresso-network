@@ -756,6 +756,49 @@ async fn test_single_view_decide() {
     );
 }
 
+/// A payload this node obtained before the view decides rides along on the
+/// decided leaf, so consumers need not pair the decide with a later
+/// `BlockPayloadReconstructed`.
+#[tokio::test]
+async fn test_decide_carries_obtained_payload() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    for view in &test_data.views[..2] {
+        harness
+            .apply_pair(view.proposal_input_consensus(&node_key))
+            .await;
+        harness.apply(view.block_reconstructed_input()).await;
+    }
+    harness.apply(test_data.views[1].cert1_input()).await;
+    harness.apply(test_data.views[1].cert2_input()).await;
+
+    let decided: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|output| match output {
+            ConsensusOutput::LeafDecided { leaves, .. } => Some(leaves),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(!decided.is_empty(), "cert2 should decide");
+    for leaf in decided {
+        let view = leaf.view_number();
+        let obtained = test_data
+            .views
+            .iter()
+            .find(|v| v.view_number == view)
+            .expect("decided a view the test did not drive");
+        assert_eq!(
+            leaf.block_payload().as_ref(),
+            Some(&obtained.payload),
+            "decided leaf at view {view:?} should carry the payload obtained for it"
+        );
+    }
+}
+
 /// Obtaining a Cert2 broadcasts it once so peers that missed the vote2s can
 /// still decide, and a re-delivered Cert2 for the same view is not re-broadcast.
 #[tokio::test]
