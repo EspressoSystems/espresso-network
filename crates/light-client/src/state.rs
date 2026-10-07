@@ -274,13 +274,14 @@ where
 
         // at this point, we know the end leaf is valid and is finalized
         // now we need to fetch all leaves from start to end - 1 from the server
-        let leaves = self.fetch_leaves_in_range_from_server(start_height, end_height - 1, &known_end_leaf)
+        let leaves = self
+            .fetch_leaves_in_range_from_server(start_height, end_height - 1, &known_end_leaf)
             .await
-        // add the known end leaf to the result
-        .map(|mut leaves| {
-            leaves.push(known_end_leaf);
-            leaves
-        })?;
+            // add the known end leaf to the result
+            .map(|mut leaves| {
+                leaves.push(known_end_leaf);
+                leaves
+            })?;
         Ok(leaves)
     }
 
