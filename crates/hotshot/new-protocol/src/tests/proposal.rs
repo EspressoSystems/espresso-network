@@ -560,6 +560,66 @@ async fn skipping_views_without_evidence_for_the_previous_view_is_rejected() {
     assert!(view_change_evidence_matches_parent(&correct).is_ok_and(|tc| tc.is_some()));
 }
 
+/// A proposal that follows its parent directly may still carry a timeout
+/// certificate, and it is checked like one that skips views: it must be for the
+/// view before, and its signatures must verify.
+///
+/// The certificate is part of the block, so an unchecked one would let a faulty
+/// leader put a forged certificate into the chain.
+#[tokio::test]
+async fn evidence_on_a_proposal_that_follows_its_parent_is_checked() {
+    let data = TestData::new_with_epoch_height(3, EPOCH_HEIGHT).await;
+    let [.., previous, view] = data.views.as_slice() else {
+        panic!("three views");
+    };
+    let with_evidence = |evidence: TimeoutEvidence<TestTypes>| {
+        let mut proposal = view.proposal.clone();
+        proposal.data.view_change_evidence = Some(evidence);
+        let leaf: Leaf2<TestTypes> = proposal.data.clone().into();
+        proposal.signature = BLSPubKey::sign(&view.leader_private_key, leaf.commit().as_ref())
+            .expect("sign the proposal");
+        proposal
+    };
+    // This view's certificate, claiming the view before: the right view, but
+    // signatures over another one.
+    let relabelled = match view.timeout_cert.clone() {
+        TimeoutEvidence::V2(mut tc) => {
+            tc.view_number = previous.view_number;
+            tc.data.view = previous.view_number;
+            TimeoutEvidence::V2(tc)
+        },
+        TimeoutEvidence::V3(mut tc) => {
+            tc.view_number = previous.view_number;
+            tc.data.view = previous.view_number;
+            TimeoutEvidence::V3(tc)
+        },
+    };
+
+    validate_with_genesis_qc(view.proposal.clone(), None)
+        .await
+        .expect("the proposal without evidence is valid");
+    validate_with_genesis_qc(with_evidence(previous.timeout_cert.clone()), None)
+        .await
+        .expect("evidence for the view before is valid");
+
+    let result = validate_with_genesis_qc(with_evidence(view.timeout_cert.clone()), None).await;
+    assert!(
+        matches!(
+            result,
+            Err(ValidationError::Malformed(
+                MalformedProposal::ViewChangeEvidenceView { .. }
+            ))
+        ),
+        "expected ViewChangeEvidenceView, got {result:?}"
+    );
+
+    let result = validate_with_genesis_qc(with_evidence(relabelled), None).await;
+    assert!(
+        matches!(result, Err(ValidationError::InvalidViewChangeEvidence(_))),
+        "expected InvalidViewChangeEvidence, got {result:?}"
+    );
+}
+
 /// Validate `proposal` with a validator that accepts `genesis_qc` at the genesis
 /// view.
 async fn validate_with_genesis_qc(
