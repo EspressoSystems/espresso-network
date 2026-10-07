@@ -338,30 +338,31 @@ impl<
                 })?,
         );
 
-        // Broadcast requests go out once; batched requests are re-sent by a background task
-        // that is aborted when the handle drops with this function
-        let _batched_sending_task = match request_type {
-            RequestType::Broadcast => {
-                trace!("Sending request {request_message:?} to all participants");
-
-                self.sender
-                    .send_broadcast_message(&message)
-                    .await
-                    .map_err(|e| {
-                        RequestError::Other(anyhow::anyhow!(
-                            "failed to send broadcast message: {e}"
-                        ))
-                    })?;
-
-                None
-            },
-            RequestType::Batched => Some(
-                self.spawn_batched_sender(request_message.clone(), message, timeout_duration)
-                    .await?,
-            ),
-        };
-
+        // The deadline covers sending too: both sends can park behind network backpressure
         timeout(timeout_duration, async {
+            // Broadcast requests go out once; batched requests are re-sent by a background task
+            // that is aborted when the handle drops with this function
+            let _batched_sending_task = match request_type {
+                RequestType::Broadcast => {
+                    trace!("Sending request {request_message:?} to all participants");
+
+                    self.sender
+                        .send_broadcast_message(&message)
+                        .await
+                        .map_err(|e| {
+                            RequestError::Other(anyhow::anyhow!(
+                                "failed to send broadcast message: {e}"
+                            ))
+                        })?;
+
+                    None
+                },
+                RequestType::Batched => Some(
+                    self.spawn_batched_sender(request_message.clone(), message, timeout_duration)
+                        .await?,
+                ),
+            };
+
             loop {
                 let body = response_receiver.recv().await.ok_or_else(|| {
                     // Unreachable: the active-requests map holds a sender for as long as
@@ -434,6 +435,13 @@ impl<
 
         let self_clone = Arc::clone(self);
         Ok(AbortOnDropHandle::new(spawn(async move {
+            // Without this the loop below would have no await point and spin until the deadline.
+            // A single-validator network hits it, as the expected responders exclude ourselves
+            if recipients.is_empty() {
+                debug!("No recipients for request {request_message:?}");
+                return;
+            }
+
             // At most `request_batch_size` sends in flight at a time: pushing beyond the queue's
             // capacity evicts (and thereby aborts) the oldest send task
             let mut outgoing_requests = BoundedVecDeque::new(self_clone.config.request_batch_size);
@@ -1087,6 +1095,51 @@ mod tests {
                 (protocol, keypair)
             })
             .collect()
+    }
+
+    /// A recipient source that never returns, standing in for one stuck behind consensus
+    struct StalledRecipientSource;
+
+    #[async_trait]
+    impl RecipientSource<TestRequest, BLSPubKey> for StalledRecipientSource {
+        async fn get_expected_responders(&self, _request: &TestRequest) -> Result<Vec<BLSPubKey>> {
+            std::future::pending().await
+        }
+    }
+
+    /// Test that the request deadline also covers sending, so a stalled send still times out
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_timeout_covers_sending() {
+        let (sender, receiver, (public_key, private_key)) = create_participants(1).remove(0);
+        let protocol = RequestResponse::new(
+            default_protocol_config(),
+            sender,
+            receiver,
+            StalledRecipientSource,
+            TestDataSource {
+                has_data: false,
+                data_available_time: Instant::now(),
+                take_data: false,
+                taken: Arc::new(AtomicBool::new(false)),
+            },
+        );
+
+        let request_message =
+            RequestMessage::new_signed(&public_key, &private_key, &TestRequest(vec![1, 2, 3]))
+                .expect("failed to create request message");
+
+        let result = timeout(
+            Duration::from_secs(5),
+            protocol.request(
+                request_message,
+                RequestType::Batched,
+                Duration::from_millis(250),
+                |_request, response| async move { Ok(response) },
+            ),
+        )
+        .await
+        .expect("request outlived its own timeout");
+        assert!(matches!(result, Err(RequestError::Timeout)));
     }
 
     /// Test that a timed-out request deregisters its waiter (active-requests map leak regression)
