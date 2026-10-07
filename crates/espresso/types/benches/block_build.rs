@@ -6,7 +6,10 @@
 //! stakes (1000 + nodes).
 //!
 //! `request_block` runs the leader's build task: `from_transactions` on the cached
-//! transactions, then transaction, VID and builder commitments in parallel.
+//! transactions, then `hotshot_new_protocol::block::block_commitments`, the function the leader
+//! calls. Their tracing spans are timed per step; after each `request_block` benchmark the step
+//! medians are printed and, when `CRITERION_HOME` is set, written to `steps.json` next to its
+//! criterion output. Steps in parallel overlap, so they do not add up to the total.
 //! `tx_clone` times a full copy of the transactions for comparison.
 //!
 //! `RAYON_NUM_THREADS` is read once per process and recorded in the benchmark id.
@@ -14,12 +17,23 @@
 //! To compare two git refs on the critical path, run `just bench-block-build BASE HEAD`
 //! (scripts/bench-block-build), which isolates each benchmark in its own process.
 
-use std::{hint::black_box, thread, time::Duration};
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    hint::black_box,
+    mem,
+    path::PathBuf,
+    sync::Mutex,
+    thread,
+    time::{Duration, Instant},
+};
 
 use committable::{Commitment, Committable};
 use criterion::{BenchmarkGroup, BenchmarkId, Criterion, SamplingMode, measurement::WallTime};
-use espresso_types::{ChainConfig, NamespaceId, NsTable, Payload, Transaction};
+use espresso_types::{ChainConfig, NamespaceId, NsTable, Payload, SeqTypes, Transaction};
+use hotshot_new_protocol::block::{BlockCommitments, block_commitments};
 use hotshot_types::{
+    consensus::PayloadWithMetadata,
     data::{VidCommitment, vid_commitment},
     traits::{BlockPayload, EncodeBytes},
     utils::BuilderCommitment,
@@ -27,6 +41,13 @@ use hotshot_types::{
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use rayon::prelude::*;
+use tracing::{Level, Subscriber, span};
+use tracing_subscriber::{
+    Layer,
+    filter::Targets,
+    layer::{Context, SubscriberExt},
+    registry::LookupSpan,
+};
 use versions::NEW_PROTOCOL_VERSION;
 
 const MB: usize = 1_000_000;
@@ -36,11 +57,6 @@ const NODES: [usize; 2] = [3, 10];
 const SCALED_WEIGHT_BASE: usize = 1000;
 /// (block size in MB, tx size in bytes)
 const BLOCKS: [(usize, usize); 5] = [(30, MB), (40, MB), (50, MB), (60, MB), (70, MB)];
-
-type Commitments = (
-    Vec<Commitment<Transaction>>,
-    (VidCommitment, BuilderCommitment),
-);
 
 struct Case {
     label: String,
@@ -102,29 +118,81 @@ fn build(txs: &[Transaction]) -> (Payload, NsTable) {
     Payload::from_transactions_sync(txs, chain_config()).expect("payload construction")
 }
 
-/// Same order of operations as the build task in block.rs; outputs are returned so their drop is
-/// untimed.
-fn request_block(txs: &[Transaction], weight: usize) -> (Payload, impl Sized, Commitments) {
-    let (payload, ns_table) = build(txs);
-    let payload_bytes = payload.encode();
-    let metadata_bytes = ns_table.encode();
-    let commitments = rayon::join(
-        || payload.transaction_commitments(&ns_table),
-        || {
-            rayon::join(
-                || {
-                    vid_commitment(
-                        &payload_bytes,
-                        &metadata_bytes,
-                        weight,
-                        NEW_PROTOCOL_VERSION,
-                    )
-                },
-                || payload.builder_commitment(&ns_table),
-            )
-        },
-    );
-    (payload, payload_bytes, commitments)
+/// The leader's build task after the transactions are taken; outputs are returned so their drop
+/// is untimed.
+fn request_block(
+    txs: &[Transaction],
+    weight: usize,
+) -> (PayloadWithMetadata<SeqTypes>, BlockCommitments<SeqTypes>) {
+    let (payload, metadata) = build(txs);
+    let payload = PayloadWithMetadata { payload, metadata };
+    let commitments = block_commitments(&payload, weight, NEW_PROTOCOL_VERSION);
+    (payload, commitments)
+}
+
+/// Durations in ms of closed spans, by span name.
+static STEPS: Mutex<BTreeMap<&'static str, Vec<f64>>> = Mutex::new(BTreeMap::new());
+
+/// Records how long each span lives into [`STEPS`].
+struct StepTimer;
+
+impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for StepTimer {
+    fn on_new_span(&self, _: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
+        let span = ctx.span(id).expect("new span is registered");
+        span.extensions_mut().insert(Instant::now());
+    }
+
+    fn on_close(&self, id: span::Id, ctx: Context<'_, S>) {
+        let span = ctx.span(&id).expect("closing span is registered");
+        let start = *span
+            .extensions()
+            .get::<Instant>()
+            .expect("start recorded in on_new_span");
+        STEPS
+            .lock()
+            .expect("steps lock")
+            .entry(span.name())
+            .or_default()
+            .push(start.elapsed().as_secs_f64() * 1e3);
+    }
+}
+
+fn install_step_timer() {
+    let targets = Targets::new()
+        .with_target("hotshot_new_protocol::block", Level::DEBUG)
+        .with_target("espresso_types", Level::DEBUG);
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::registry().with(StepTimer.with_filter(targets)),
+    )
+    .expect("no other subscriber");
+}
+
+/// Prints the median of each step recorded since the last call, and writes all samples to
+/// `$CRITERION_HOME/<id>/steps.json` when `CRITERION_HOME` is set.
+fn report_steps(id: &str) {
+    let steps = mem::take(&mut *STEPS.lock().expect("steps lock"));
+    // Benchmarks skipped by the command-line filter record nothing.
+    if steps.is_empty() {
+        return;
+    }
+    let medians: Vec<String> = steps
+        .iter()
+        .map(|(name, ms)| format!("{name}={:.2}", median(ms)))
+        .collect();
+    println!("steps {id}: {} ms", medians.join(" "));
+    if let Some(home) = env::var_os("CRITERION_HOME") {
+        let path = PathBuf::from(home).join(id).join("steps.json");
+        fs::create_dir_all(path.parent().expect("steps path has a parent"))
+            .expect("create steps dir");
+        fs::write(&path, serde_json::to_vec(&steps).expect("serialize steps"))
+            .expect("write steps.json");
+    }
+}
+
+fn median(values: &[f64]) -> f64 {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    sorted[sorted.len() / 2]
 }
 
 fn bench_tx_stages(group: &mut BenchmarkGroup<WallTime>, case: &Case) {
@@ -215,12 +283,15 @@ fn bench_request_block(
     label: &str,
     weight: usize,
 ) {
+    STEPS.lock().expect("steps lock").clear();
     group.bench_function(BenchmarkId::new("request_block", label), |b| {
         b.iter_with_large_drop(|| request_block(&case.txs, weight))
     });
+    report_steps(&format!("block_build/request_block/{label}"));
 }
 
 fn bench_block_build(c: &mut Criterion) {
+    install_step_timer();
     let threads = rayon::current_num_threads();
     let mut rng = ChaCha20Rng::seed_from_u64(42);
     let mut group = c.benchmark_group("block_build");

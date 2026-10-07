@@ -10,6 +10,12 @@ markdown table of the change.
     scripts/bench-block-build --filter 'request_block/50MB.*_n10$' --repeats 5 main HEAD
     scripts/bench-block-build --dry-run main HEAD
 
+Steps:
+    The bench times the leader's real code path (`block_commitments` in new-protocol plus
+    `from_transactions`) and records each step's tracing span. When both refs record steps, the
+    table adds one row per step under each benchmark. Steps partly run in parallel, so they do
+    not add up to the total; the slowest parallel step bounds it.
+
 Method:
     Each ref is built once in a temporary git worktree; binaries are cached by commit in
     tmp/bench-block-build/bin. Each benchmark runs in its own process, because glibc's mmap
@@ -111,53 +117,60 @@ def parse_args() -> argparse.Namespace:
 
 def measure(
     binaries: dict[str, Path], names: list[str], variants: list[str], repeats: int
-) -> dict[str, dict[str, list[list[float]]]]:
-    """Per-iteration ms, keyed `variant|name` then side, one list per run."""
-    samples: dict[str, dict[str, list[list[float]]]] = {}
+) -> dict[str, dict[str, list[dict[str, list[float]]]]]:
+    """Per-iteration ms by series (`total` and steps), keyed `variant|name` then side, one dict
+    per run."""
+    samples: dict[str, dict[str, list[dict[str, list[float]]]]] = {}
     for rep in range(repeats):
         order = ["base", "head"] if rep % 2 == 0 else ["head", "base"]
         for variant in variants:
             for name in names:
                 for side in order:
-                    times = run_one(binaries[side], name, MALLOC[variant])
+                    run = run_one(binaries[side], name, MALLOC[variant])
                     samples.setdefault(f"{variant}|{name}", {}).setdefault(
                         side, []
-                    ).append(times)
+                    ).append(run)
                     log.info(
                         "rep %d %-7s %-4s %s median %.2f ms",
                         rep,
                         variant,
                         side,
                         name,
-                        statistics.median(times),
+                        statistics.median(run["total"]),
                     )
     return samples
 
 
 def summarize(
-    samples: dict[str, dict[str, list[list[float]]]],
+    samples: dict[str, dict[str, list[dict[str, list[float]]]]],
     names: list[str],
     variants: list[str],
 ) -> str:
+    """One row per benchmark total, then one per step both refs recorded. Steps run partly in
+    parallel, so they do not add up to the total."""
     rows = [
-        "| malloc | benchmark | base ms | head ms | change | base run medians | head run medians |",
-        "|---|---|---:|---:|---:|---|---|",
+        "| malloc | benchmark | step | base ms | head ms | change | base run medians | head run medians |",
+        "|---|---|---|---:|---:|---:|---|---|",
     ]
     for variant in variants:
         for name in names:
             runs = samples[f"{variant}|{name}"]
-            base, head = (
-                statistics.median([t for run in runs[s] for t in run])
-                for s in ("base", "head")
+            common = set.intersection(
+                *(set(run) for side in runs.values() for run in side)
             )
-            per_run = [
-                " ".join(f"{statistics.median(run):.2f}" for run in runs[s])
-                for s in ("base", "head")
-            ]
-            short = name.removeprefix("block_build/")
-            rows.append(
-                f"| {variant} | {short} | {base:.2f} | {head:.2f} | {(head / base - 1) * 100:+.1f}% | {per_run[0]} | {per_run[1]} |"
-            )
+            for series in ["total", *sorted(common - {"total"})]:
+                base, head = (
+                    statistics.median([t for run in runs[s] for t in run[series]])
+                    for s in ("base", "head")
+                )
+                per_run = [
+                    " ".join(f"{statistics.median(run[series]):.2f}" for run in runs[s])
+                    for s in ("base", "head")
+                ]
+                short = name.removeprefix("block_build/")
+                rows.append(
+                    f"| {variant} | {short} | {series} | {base:.2f} | {head:.2f} | {(head / base - 1) * 100:+.1f}% | {per_run[0]} | {per_run[1]} |"
+                )
     return "\n".join(rows)
 
 
@@ -185,8 +198,11 @@ def list_benches(binary: Path) -> list[str]:
     )
 
 
-def run_one(binary: Path, name: str, env: dict[str, str]) -> list[float]:
+def run_one(binary: Path, name: str, env: dict[str, str]) -> dict[str, list[float]]:
+    """Per-iteration ms under `total`, plus each step's span durations if the bench records them."""
     home = OUT / "criterion"
+    steps = home / name / "steps.json"
+    steps.unlink(missing_ok=True)
     run = subprocess.run(
         [str(binary), "--bench", "--noplot", f"^{re.escape(name)}$"],
         env={**os.environ, **env, "CRITERION_HOME": str(home.resolve())},
@@ -197,7 +213,8 @@ def run_one(binary: Path, name: str, env: dict[str, str]) -> list[float]:
     if run.returncode:
         raise SystemExit(f"{binary} {name} failed:\n{run.stderr}")
     sample = json.loads((home / name / "new" / "sample.json").read_text())
-    return [t / i / 1e6 for t, i in zip(sample["times"], sample["iters"], strict=True)]
+    total = [t / i / 1e6 for t, i in zip(sample["times"], sample["iters"], strict=True)]
+    return {"total": total, **(json.loads(steps.read_text()) if steps.exists() else {})}
 
 
 def binary_path(sha: str) -> Path:

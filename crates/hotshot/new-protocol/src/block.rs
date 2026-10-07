@@ -28,7 +28,7 @@ use tokio::{
     task::{AbortHandle, JoinSet, spawn_blocking},
     time::sleep,
 };
-use tracing::{error, warn};
+use tracing::{debug_span, error, warn};
 use versions::Version;
 
 use crate::{
@@ -81,6 +81,58 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub builder_fee: BuilderFee<T>,
     pub payload_commitment: VidCommitment,
     pub manifest: DedupManifest<T>,
+}
+
+/// Commitments the leader computes for a block it built.
+pub struct BlockCommitments<T: NodeType> {
+    pub block_size: u64,
+    pub payload_commitment: VidCommitment,
+    pub builder_commitment: BuilderCommitment,
+    pub hashes: Vec<Commitment<T::Transaction>>,
+}
+
+/// The leader's commitment work for a built block, on the proposal's critical path. The
+/// `block_build` bench in espresso-types calls this; its spans time each step.
+pub fn block_commitments<T: NodeType>(
+    payload: &PayloadWithMetadata<T>,
+    total_weight: usize,
+    version: Version,
+) -> BlockCommitments<T> {
+    let _span = debug_span!("block_commitments").entered();
+    let payload_bytes = debug_span!("encode").in_scope(|| payload.payload.encode());
+    let metadata_bytes = payload.metadata.encode();
+    // Independent work, run in parallel rather than paid for in turn on the leader's proposal
+    // path.
+    let (hashes, (payload_commitment, builder_commitment)) = rayon::join(
+        || {
+            debug_span!("transaction_commitments")
+                .in_scope(|| payload.payload.transaction_commitments(&payload.metadata))
+        },
+        || {
+            rayon::join(
+                || {
+                    debug_span!("vid_commitment").in_scope(|| {
+                        vid_commitment(
+                            payload_bytes.as_ref(),
+                            metadata_bytes.as_ref(),
+                            total_weight,
+                            version,
+                        )
+                    })
+                },
+                || {
+                    debug_span!("builder_commitment")
+                        .in_scope(|| payload.payload.builder_commitment(&payload.metadata))
+                },
+            )
+        },
+    );
+    BlockCommitments {
+        block_size: payload_bytes.len() as u64,
+        payload_commitment,
+        builder_commitment,
+        hashes,
+    }
 }
 
 /// Room in a forwarded message for everything but the transactions.
@@ -242,41 +294,22 @@ impl<T: NodeType> BlockBuilder<T> {
                 vid_total_weight(target_mem.stake_table(), Some(epoch))
             };
             let commitments = spawn_blocking(move || {
-                let payload_bytes = payload.payload.encode();
-                let metadata_bytes = payload.metadata.encode();
-                // Independent work, run in parallel rather than paid for in
-                // turn on the leader's proposal path.
-                let (hashes, (payload_commitment, builder_commitment)) = rayon::join(
-                    || payload.payload.transaction_commitments(&payload.metadata),
-                    || {
-                        rayon::join(
-                            || {
-                                vid_commitment(
-                                    payload_bytes.as_ref(),
-                                    metadata_bytes.as_ref(),
-                                    total_weight,
-                                    version,
-                                )
-                            },
-                            || payload.payload.builder_commitment(&payload.metadata),
-                        )
-                    },
-                );
-                let block_size = payload_bytes.len() as u64;
-                (
-                    payload,
+                let commitments = block_commitments(&payload, total_weight, version);
+                (payload, commitments)
+            });
+            let (
+                payload,
+                BlockCommitments {
                     block_size,
                     payload_commitment,
                     builder_commitment,
                     hashes,
-                )
-            });
-            let (payload, block_size, payload_commitment, builder_commitment, hashes) =
-                match commitments.await {
-                    Ok(out) => out,
-                    Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
-                    Err(_) => return Err(BlockError::Cancelled),
-                };
+                },
+            ) = match commitments.await {
+                Ok(out) => out,
+                Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
+                Err(_) => return Err(BlockError::Cancelled),
+            };
             let manifest = DedupManifest {
                 view,
                 epoch,
