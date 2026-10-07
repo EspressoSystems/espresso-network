@@ -8,11 +8,10 @@
 //! criterion's warm-up iterations; scripts/bench-block-build keeps one per measured iteration,
 //! which assumes every recorded span opens exactly once per iteration.
 //!
-//! Inputs mirror the network-bench load generator: random 1 MB transactions round-robin over
-//! 16 namespaces in 30 to 70 MB blocks, protocol version 0.6 (AvidmGf2), 100 nodes. Real stakes
+//! Inputs mirror the network-bench load generator: random 1 MiB transactions round-robin over
+//! 16 namespaces in 30 to 70 MiB blocks, protocol version 0.6 (AvidmGf2), 100 nodes. Real stakes
 //! are large, so the VID total weight is the `approximate_weights` result for 100 equal stakes
-//! (1100). Each benchmark builds its inputs only when it runs, so a filtered run allocates
-//! nothing for the others.
+//! (1100).
 //!
 //! To compare two git refs, run `just bench-block-build BASE HEAD` (scripts/bench-block-build).
 
@@ -20,7 +19,7 @@ use std::{
     collections::BTreeMap,
     env, fs, mem,
     path::PathBuf,
-    sync::{Mutex, OnceLock},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -39,10 +38,10 @@ use tracing_subscriber::{
 };
 use versions::NEW_PROTOCOL_VERSION;
 
-const MB: usize = 1_000_000;
+const MIB: usize = 1 << 20;
 const NAMESPACES: u64 = 16;
 const NODES: usize = 100;
-const BLOCK_MB: [usize; 5] = [30, 40, 50, 60, 70];
+const BLOCK_MIB: [usize; 5] = [30, 40, 50, 60, 70];
 /// `approximate_weights` total for `NODES` equal stakes above `VID_TARGET_TOTAL_STAKE`.
 const VID_WEIGHT: usize = NODES * (VID_TARGET_TOTAL_STAKE as usize / NODES + 1);
 
@@ -55,12 +54,11 @@ fn bench_block_build(c: &mut Criterion) {
         .sample_size(10)
         .warm_up_time(Duration::from_millis(200))
         .measurement_time(Duration::from_secs(1));
-    for block_mb in BLOCK_MB {
-        let label = format!("{block_mb}MB_1000KB_t{threads}_n{NODES}");
-        let txs = OnceLock::new();
+    for block_mib in BLOCK_MIB {
+        let label = format!("{block_mib}MiB_t{threads}_n{NODES}");
+        let txs = transactions(block_mib);
         group.bench_function(BenchmarkId::new("request_block", &label), |b| {
-            let txs = txs.get_or_init(|| transactions(block_mb));
-            b.iter_with_large_drop(|| request_block(txs))
+            b.iter_with_large_drop(|| request_block(&txs))
         });
         write_steps(&format!("block_build/request_block/{label}"));
     }
@@ -83,11 +81,11 @@ fn request_block(
     (payload, commitments)
 }
 
-fn transactions(block_mb: usize) -> Vec<Transaction> {
-    let mut rng = ChaCha20Rng::seed_from_u64(block_mb as u64);
-    (0..block_mb)
+fn transactions(block_mib: usize) -> Vec<Transaction> {
+    let mut rng = ChaCha20Rng::seed_from_u64(block_mib as u64);
+    (0..block_mib)
         .map(|i| {
-            let mut body = vec![0u8; MB];
+            let mut body = vec![0u8; MIB];
             rng.fill_bytes(&mut body);
             Transaction::new(NamespaceId::from(10_000 + i as u64 % NAMESPACES), body)
         })

@@ -11,7 +11,7 @@ each step, and a waterfall chart.
 
     just bench-block-build                      # origin/main vs this checkout, edits included
     just bench-block-build main my-branch
-    scripts/bench-block-build --filter 'request_block/50MB' --repeats 3 main HEAD
+    scripts/bench-block-build --filter 'request_block/50MiB' --repeats 3 main HEAD
     scripts/bench-block-build --chart tmp/bench-block-build/<base>-<head>.csv
 
 Each ref is built in a temporary git worktree into this checkout's target dir. Each
@@ -43,7 +43,7 @@ ROOT = Path(
 OUT = ROOT / "tmp/bench-block-build"
 BENCH_FILE = "crates/espresso/types/benches/block_build.rs"
 WORKTREE = "worktree"
-DEFAULT_FILTER = r"^block_build/request_block/(30|50|70)MB_1000KB_t\d+_n100$"
+DEFAULT_FILTER = r"^block_build/request_block/(30|50|70)MiB_t\d+_n100$"
 BUSY_LIMIT = 0.05
 LANES = {
     "request_block": "#898781",
