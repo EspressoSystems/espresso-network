@@ -22,9 +22,10 @@
 //! `#` comment naming what went — visible in the trace rather than silent, because
 //! a dropped input can make the machine look behind us for a reason that is not a
 //! bug. A proposal not yet paired with our share, and a fetched block, are
-//! recorded as a `proposal` without a share: what the node then holds is the proposal alone. Light-client certification has no
-//! counterpart either: an epoch root's state certificate is left out, and only
-//! the `Cert1` it arrives with is recorded.
+//! recorded as a `proposal` without a share: what the node then holds is the
+//! proposal alone. Light-client certification has no counterpart either: an
+//! epoch root's state certificate is left out, and only the `Cert1` it arrives
+//! with is recorded.
 //!
 //! One dropped input is worth watching for, since it makes the machine look
 //! *ahead* of us rather than behind — which the comparison reports but tolerates:
@@ -67,6 +68,23 @@ use crate::{
 /// Where traces are written, if anywhere.
 const TRACE_DIR: &str = "NP_TRACE_DIR";
 
+/// The note saying a run had timeouts that sign no lock.
+///
+/// The model's timeout votes and certificates carry the lock their signers
+/// held, which ours do not yet sign. A checker leaves such a run out rather
+/// than reading a lock that is not there.
+const UNSIGNED_LOCKS: &str = "# timeouts sign no lock";
+
+/// How a timeout vote or certificate shows up in a written trace: as a step's
+/// input, an output, a proposal's evidence or catch-up evidence.
+const TIMEOUT_TAGS: [&str; 5] = [
+    "\"timeoutVote\":",
+    "\"timeoutCertificate\":",
+    "\"timeoutCert\":",
+    "\"timeoutEvidence\":{",
+    "\"timeout\":{\"cert\"",
+];
+
 /// Distinguishes recorders sharing a label.
 ///
 /// A test may build several nodes, and the model is a specification of *one*, so
@@ -97,8 +115,8 @@ pub struct Recorder {
     ///
     /// See [`Recorder::record`] for why they wait rather than being dropped.
     pending: Vec<String>,
-    /// Views whose leader has been written; see [`Recorder::leader`].
-    led: BTreeMap<ViewNumber, String>,
+    /// Epochs and views whose leader has been written; see [`Recorder::leader`].
+    led: BTreeMap<(EpochNumber, ViewNumber), String>,
     /// Steps written so far, which is the index the next one will have.
     ///
     /// A dropped input is noted with this number, so a replay can tell whether
@@ -268,18 +286,34 @@ impl Recorder {
     /// the same conclusion by the same ignorance — but silence would not say
     /// whether the leader was unknown or merely unrecorded.
     ///
+    /// The leader is named per epoch: at a boundary the outgoing committee's
+    /// leader may ask for a re-vote in the view the incoming committee's leader
+    /// proposes in. An `unknown` is written again once the leader is known.
+    ///
     /// Written on the comment channel, like the identity line, so a reader that
     /// only knows about steps skips it.
-    pub fn leader<T: NodeType>(&mut self, view: ViewNumber, leader: Option<&T::SignatureKey>) {
-        if self.path.is_none() || self.led.contains_key(&view) {
+    pub fn leader<T: NodeType>(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        leader: Option<&T::SignatureKey>,
+    ) {
+        let known = self
+            .led
+            .get(&(epoch, view))
+            .is_some_and(|named| named != "unknown");
+        if self.path.is_none() || known {
             return;
         }
         let named = match leader {
             Some(key) => ident(key),
             None => "unknown".to_string(),
         };
-        self.lines.push(format!("# leader {view} {named}"));
-        self.led.insert(view, named);
+        if self.led.get(&(epoch, view)) == Some(&named) {
+            return;
+        }
+        self.lines.push(format!("# leader {view} {epoch} {named}"));
+        self.led.insert((epoch, view), named);
     }
 
     /// Record one step: the input taken, and what it drew.
@@ -297,14 +331,37 @@ impl Recorder {
         // The model takes a proposal already paired with our share, and pairs
         // nothing itself. Rather than reassemble the pair here — where a bug
         // would look like a divergence — take it from the output that reports
-        // the pairing, as a step of its own.
+        // the pairing, as a step of its own. The parent's `Cert1`, the timeout
+        // certificate and the `Cert2` a proposal opening an epoch comes with
+        // are kept on pairing, so each is received just before: the model
+        // holds only the certificates it received.
         for output in &outputs {
             if let ConsensusOutput::ProposalPaired {
                 proposal,
                 vid_share,
             } = output
             {
-                let sender = self.led.get(&proposal.data.view_number).cloned();
+                let carried =
+                    std::iter::once(tagged(
+                        "certificate1",
+                        obj(&[("c", cert1_json_raw(&proposal.data.justify_qc))]),
+                    ))
+                    .chain(proposal.data.view_change_evidence.as_ref().map(|tc| {
+                        tagged(
+                            "timeoutCertificate",
+                            obj(&[("c", timeout_cert_json_raw(tc))]),
+                        )
+                    }))
+                    .chain(
+                        proposal.data.next_epoch_justify_qc.as_ref().map(|cert2| {
+                            tagged("certificate2", obj(&[("c", cert2_json_raw(cert2))]))
+                        }),
+                    );
+                lines.extend(carried.map(|json| step(json, &[])));
+                let sender = self
+                    .led
+                    .get(&(proposal.data.epoch, proposal.data.view_number))
+                    .cloned();
                 lines.push(step(
                     paired_proposal_json(&proposal.data, vid_share, sender),
                     &[],
@@ -375,6 +432,11 @@ impl Drop for Recorder {
                 "# {held} outputs had no later step to ride on: {}",
                 self.pending.join(", ")
             ));
+        }
+        let times_out = |line: &String| TIMEOUT_TAGS.iter().any(|tag| line.contains(tag));
+        if self.lines.iter().any(times_out) {
+            self.lines
+                .insert(1.min(self.lines.len()), UNSIGNED_LOCKS.to_string());
         }
         let mut text = self.lines.join("\n");
         text.push('\n');
@@ -463,7 +525,7 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
             "blockReconstructed",
             obj(&[("v", view_json(*view)), ("c", ident(commit))]),
         ),
-        ConsensusInput::Certificate1(cert) => {
+        ConsensusInput::Certificate1(cert) | ConsensusInput::AdvanceView(cert) => {
             tagged("certificate1", obj(&[("c", cert1_json_raw(cert))]))
         },
         // The pairing is epoch machinery, but the certificate is an ordinary
@@ -474,9 +536,6 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
         },
         ConsensusInput::Certificate2(cert) => {
             tagged("certificate2", obj(&[("c", cert2_json_raw(cert))]))
-        },
-        ConsensusInput::AdvanceView(cert) => {
-            tagged("advanceView", obj(&[("c", cert1_json_raw(cert))]))
         },
         ConsensusInput::HeaderCreated(view, parent, header) => tagged(
             "headerBuilt",

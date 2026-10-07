@@ -65,7 +65,11 @@ def replayOne (path : System.FilePath) : IO (Verdict × String × Nat × Nat) :=
     | some reason => return (.outOfScope reason, s!"cannot be read: {reason}", 0, steps.length)
     | none => return (.malformed, Divergence.describe (.malformed e), 0, steps.length)
   | .ok events =>
-    let events := withHeld events ((heldOutputs text).toOption.getD [])
+  -- Held outputs are actions the node took; dropping them could let a trace pass.
+  match heldOutputs text with
+  | .error e => return (.malformed, Divergence.describe (.malformed s!"held outputs: {e}"), 0, steps.length)
+  | .ok held =>
+    let events := withHeld events held
     let leader := leaderIn (readLeaders text)
     let h := historyOf events
     let cfg := said.configFor h

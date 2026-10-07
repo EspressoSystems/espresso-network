@@ -77,7 +77,10 @@ def checkOne (path : System.FilePath) : IO Finding := do
     match parseTrace text with
     | .error e => return .unreadable e
     | .ok events =>
-      let held := (heldOutputs text).toOption.getD []
+    -- Held outputs are actions the node took; dropping them could let a trace pass.
+    match heldOutputs text with
+    | .error e => return .unreadable s!"held outputs: {e}"
+    | .ok held =>
       let h := historyOf (withHeld events held)
       let broken := (checkRules (said.configFor h) ⟨said.node⟩ h).filterMap fun (name, ok) =>
         if ok then none else some name

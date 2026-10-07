@@ -1747,5 +1747,5 @@ pub(crate) fn record_leader(
         .epoch()
         .or_else(|| consensus.current_epoch())
         .unwrap_or_else(EpochNumber::genesis);
-    trace.leader::<TestTypes>(view, consensus.leader_of(view, epoch).as_ref());
+    trace.leader::<TestTypes>(view, epoch, consensus.leader_of(view, epoch).as_ref());
 }
