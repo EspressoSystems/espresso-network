@@ -839,8 +839,6 @@ class LoadState:
 
     def __init__(self) -> None:
         self.cap = 1
-        # What `pace` is asked to submit; 0 while nothing is submitted.
-        self.rate_mb_s = 0.0
         self.room = asyncio.Event()
         # Held by `post_tx` to send and by `drop_unsent` to drop: a tx is one or the other.
         self.lock = threading.Lock()
@@ -1487,7 +1485,6 @@ async def drain(
     for pending transactions. Seconds that took, or None if no validator height appeared for
     DRAIN_STALL_S or after `max_s`."""
     drop_unsent(state)
-    state.rate_mb_s = 0.0
     start = clock.time()
     state.phase = Phase("drain", None, start, max_s)
     drained = await wait_drained(counters, heights, clock, max_s)
@@ -1571,7 +1568,6 @@ async def pace(
     the step's cap in flight. A pacer woken late sends every tx that came due meanwhile, up
     to CATCHUP_S of load, so a slow wake does not lower the rate."""
     state = load.state
-    state.rate_mb_s = rate_mb_s
     state.cap = step_cap(load.cfg, rate_mb_s)
     state.room.set()
     interval = tx_interval_s(load.cfg.tx_size, rate_mb_s)
