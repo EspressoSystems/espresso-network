@@ -699,6 +699,8 @@ class FakeRunner:
             return completed(stdout=json.dumps(self.states[index]))
         if "date +%s.%N" in command:
             return completed(stdout="1000.5\n")
+        if ".State.Status" in command:
+            return completed(stdout="running 0\n")
         if "docker inspect -f" in command:
             return completed(stdout="2026-09-29T15:00:00.100000000Z\n")
         if "ping -c" in command:

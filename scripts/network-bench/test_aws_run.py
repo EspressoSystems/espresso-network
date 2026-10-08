@@ -161,6 +161,19 @@ def test_agent_error_collects_reports_failure_and_exits_3(run_harness: RunHarnes
     assert runner.ran("tofu", "destroy")
 
 
+def test_dead_node_fails_the_run_but_still_collects_and_destroys(
+    run_harness: RunHarness,
+):
+    runner = FakeRunner(states=[LOADING], describe=DESCRIBE)
+    runner.respond(".State.Status", lambda _: completed(stdout="exited 2\n"))
+    runner.respond("docker logs --tail 20", lambda _: completed(stdout="boom\n"))
+    assert run_harness.run(runner) == awsb.EXIT_FAILED
+    summary = (run_harness.run_dir / "summary.md").read_text()
+    assert "node0 espresso-node exited 2" in summary
+    assert runner.ran('docker logs "$c"')
+    assert runner.ran("tofu", "destroy")
+
+
 def run_signalled(run_harness: RunHarness, signals: int) -> tuple[FakeRunner, int]:
     """`cmd_run` receiving `signals` SIGINTs on the second agent poll."""
 
@@ -617,6 +630,7 @@ def test_freeze_command_ignores_only_a_missing_container(
 
 
 def poll(runner: Scripted, tmp: Path, clock: FakeClock) -> Any:
+    runner.answers.setdefault(".State.Status", [completed(stdout="running 0\n")])
     cfg = awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
     return awsb.poll_agent(
         remote(runner, tmp), tmp, cfg, awsb.Interrupts(clock, no_children)
@@ -736,6 +750,7 @@ def poll_state(**overrides) -> Any:
         begin=BEGIN,
         deadline=BEGIN + 1000,
         next_sync=BEGIN + awsb.OUT_RSYNC_S,
+        next_node_check=BEGIN + awsb.NODE_CHECK_S,
         unreachable=0,
         state=None,
     )
@@ -766,6 +781,56 @@ def test_no_state_file_after_the_grace_is_an_error():
     assert awsb.poll_step(poll_state(), 0, "", None, grace)["error"] is None
     after = awsb.poll_step(poll_state(), 0, "", None, grace + 1)
     assert after["error"] == "agent wrote no state file"
+
+
+def test_node_check_is_due_at_the_interval_and_not_before():
+    before = awsb.poll_step(poll_state(), 0, "", LOADING, BEGIN + awsb.NODE_CHECK_S - 1)
+    at = awsb.poll_step(poll_state(), 0, "", LOADING, BEGIN + awsb.NODE_CHECK_S)
+    assert not before["node_check"]
+    assert at["node_check"]
+    assert at["state"]["next_node_check"] == BEGIN + 2 * awsb.NODE_CHECK_S
+
+
+def test_node_check_is_never_due_on_a_done_or_error_step():
+    now = BEGIN + 5000
+    done = awsb.poll_step(poll_state(), 0, "", DONE_STATE, now)
+    failed = awsb.poll_step(poll_state(), 1, "odd", None, now)
+    assert not done["node_check"] and not failed["node_check"]
+
+
+def test_dead_nodes_are_the_ones_not_running():
+    statuses = {
+        "node0": ("running", 0),
+        "node1": ("exited", 2),
+        "node2": ("created", 0),
+        "node3": None,
+    }
+    assert awsb.dead_nodes(statuses) == {"node1": 2, "node2": 0}
+
+
+def test_node_status_parses_and_tolerates_only_ssh_failure():
+    assert awsb.node_status(completed(stdout="exited 137\n")) == ("exited", 137)
+    assert awsb.node_status(completed(returncode=255, stderr="down")) is None
+    with pytest.raises(awsb.RemoteError, match="exited 1"):
+        awsb.node_status(completed(returncode=1, stderr="No such object"))
+    with pytest.raises(awsb.RemoteError, match="unparsable"):
+        awsb.node_status(completed(stdout=""))
+
+
+def test_poll_agent_raises_with_the_log_tail_of_a_dead_node(
+    isolated: Path, clock: FakeClock
+):
+    runner = Scripted(
+        {
+            ".State.Status": [completed(stdout="exited 2\n")],
+            "docker logs --tail 20": [completed(stdout="line a\npanicked\n")],
+            "agent-state.json": [agent_state(LOADING)],
+        }
+    )
+    with pytest.raises(awsb.RemoteError, match=r"node0 espresso-node exited 2") as err:
+        poll(runner, isolated, clock)
+    assert "also node1 exit 2" in str(err.value)
+    assert "panicked" in str(err.value)
 
 
 # TEST:retry-verdict-ok

@@ -506,6 +506,7 @@ FAILURE_LOG_LINES = 10
 CHECKIP_URL = "https://checkip.amazonaws.com"
 AGENT_POLL_S = 5.0
 OUT_RSYNC_S = 60.0
+NODE_CHECK_S = 30.0
 # Per remote command of stop, freeze and collect: above the docker stop grace of every
 # container on one host and well below COLLECT_MAX_S, so a hung docker call cannot block teardown.
 COLLECT_HOST_TIMEOUT_S = 180.0
@@ -5251,18 +5252,20 @@ class PollState(TypedDict):
     begin: float
     deadline: float
     next_sync: float
+    next_node_check: float
     unreachable: int
     state: AgentState | None
 
 
 class PollStep(TypedDict):
     """What `poll_agent` does after one probe: `error` raises, `done` returns `state["state"]`,
-    `retry` warns that ctl was unreachable, `rsync` is due; then it sleeps."""
+    `retry` warns that ctl was unreachable, `rsync` and `node_check` are due; then it sleeps."""
 
     state: PollState
     done: bool
     error: str | None
     rsync: bool
+    node_check: bool
     retry: bool
 
 
@@ -5272,9 +5275,17 @@ def poll_result(
     done: bool = False,
     error: str | None = None,
     rsync: bool = False,
+    node_check: bool = False,
     retry: bool = False,
 ) -> PollStep:
-    return PollStep(state=state, done=done, error=error, rsync=rsync, retry=retry)
+    return PollStep(
+        state=state,
+        done=done,
+        error=error,
+        rsync=rsync,
+        node_check=node_check,
+        retry=retry,
+    )
 
 
 def poll_step(
@@ -5287,7 +5298,7 @@ def poll_step(
     """One decision of `poll_agent`. `probe_rc` and `probe_stderr` are of `systemctl is-active`
     on ctl; `agent` is the state file just read, None when absent or not read. Rules apply in
     order: unreachable ctl, unexpected rc, done, agent error, inactive unit, no state file,
-    deadline, then rsync due."""
+    deadline, then rsync and node check due."""
     if probe_rc == SSH_FAILED_RC:
         unreachable = state["unreachable"] + 1
         state = {**state, "unreachable": unreachable}
@@ -5320,7 +5331,58 @@ def poll_step(
     rsync_due = now >= state["next_sync"]
     if rsync_due:
         state = {**state, "next_sync": now + OUT_RSYNC_S}
-    return poll_result(state, rsync=rsync_due)
+    check_due = now >= state["next_node_check"]
+    if check_due:
+        state = {**state, "next_node_check": now + NODE_CHECK_S}
+    return poll_result(state, rsync=rsync_due, node_check=check_due)
+
+
+NODE_STATUS_COMMAND = (
+    "sudo docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' espresso-node"
+)
+
+
+def node_status(result: subprocess.CompletedProcess[str]) -> tuple[str, int] | None:
+    """`(status, exit code)` of an `espresso-node` container from `NODE_STATUS_COMMAND`; None
+    when ssh failed, which the next check retries."""
+    if result.returncode == SSH_FAILED_RC:
+        return None
+    if result.returncode != 0:
+        raise RemoteError(
+            f"docker inspect exited {result.returncode}: {result.stderr.strip()}"
+        )
+    status, _, code = result.stdout.strip().partition(" ")
+    if not code.isdigit():
+        raise RemoteError(f"unparsable docker inspect output: {result.stdout!r}")
+    return status, int(code)
+
+
+def dead_nodes(statuses: dict[str, tuple[str, int] | None]) -> dict[str, int]:
+    """Exit code per node whose container is not running; unreachable nodes are skipped."""
+    return {
+        name: status[1]
+        for name, status in statuses.items()
+        if status is not None and status[0] != "running"
+    }
+
+
+def check_nodes(remote: Remote) -> None:
+    """Raises when an `espresso-node` container is not running, with the log tail of the
+    first such node."""
+    names = [info["name"] for info in node_hosts(remote.hosts)]
+    statuses = remote.parallel(
+        lambda name: node_status(remote.ssh(name, NODE_STATUS_COMMAND, check=False)),
+        names,
+    )
+    dead = dead_nodes(statuses)
+    if not dead:
+        return
+    first, *others = dead
+    tail = remote.ssh(first, "sudo docker logs --tail 20 espresso-node 2>&1").stdout
+    also = "".join(f" (also {name} exit {dead[name]})" for name in others)
+    raise RemoteError(
+        f"{first} espresso-node exited {dead[first]}{also}: {tail.strip()}"
+    )
 
 
 def poll_agent(
@@ -5337,6 +5399,7 @@ def poll_agent(
         + load_seconds(cfg.load, cfg.search, worst=True)
         + AGENT_SLACK_S,
         next_sync=begin + OUT_RSYNC_S,
+        next_node_check=begin + NODE_CHECK_S,
         unreachable=0,
         state=None,
     )
@@ -5366,6 +5429,8 @@ def poll_agent(
             return latest
         if step["retry"]:
             log.warning("ctl unreachable, retrying: %s", probe.stderr.strip())
+        if step["node_check"]:
+            check_nodes(remote)
         if step["rsync"]:
             best_effort(
                 "partial rsync",
