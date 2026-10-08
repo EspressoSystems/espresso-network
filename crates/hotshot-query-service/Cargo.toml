@@ -77,7 +77,6 @@ hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-new-protocol = { workspace = true }
 hotshot-query-service-types = { workspace = true, features = ["sqlx", "web"] }
-hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 http-client = { workspace = true }
 
@@ -105,9 +104,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 trait-variant = { workspace = true }
-url = { workspace = true }
 vbs = { workspace = true }
-vec1 = { workspace = true }
 versions = { workspace = true }
 
 # Dependencies enabled by feature "backtrace-on-stack-overflow".

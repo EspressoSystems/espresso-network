@@ -245,8 +245,7 @@ impl MockChain {
     }
 }
 
-/// Storage nodes the chain disperses VID to, matching the node count of
-/// [`MockNetwork`](super::consensus::MockNetwork).
+/// Storage nodes the chain disperses VID to.
 pub const NUM_NODES: usize = 2;
 
 pub const EPOCH_HEIGHT: u64 = 10;
