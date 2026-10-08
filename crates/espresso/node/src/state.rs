@@ -561,6 +561,10 @@ where
         if let Ok(leaf) = timeout(PRUNED_LEAF_CHECK_INTERVAL, local).await {
             return leaf.leaf().clone();
         }
+        tracing::info!(
+            height,
+            "leaf is not in local storage yet; still waiting for it"
+        );
     }
 }
 
