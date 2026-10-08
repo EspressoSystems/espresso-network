@@ -6,7 +6,7 @@ use jf_merkle_tree::MerkleTreeScheme;
 use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::{AvidmGf2Commit, AvidmGf2Share};
+use super::{AvidmGf2Commit, AvidmGf2Encoding, AvidmGf2Share};
 use crate::{
     VidError, VidResult, VidScheme,
     avidm_gf2::{AvidmGf2Scheme, MerkleTree},
@@ -122,6 +122,31 @@ impl NsAvidmGf2Scheme {
         Ok((commit, common))
     }
 
+    /// Erasure-code every namespace of `payload` under `param`. Returns the
+    /// commitment [`NsAvidmGf2Scheme::commit`] computes and one encoding per
+    /// namespace, in namespace-table order, for
+    /// [`NsAvidmGf2Scheme::ns_disperse_encoded`].
+    /// WARN: it assumes that the namespace table is well formed, i.e. ranges
+    /// are non-overlapping and cover the whole payload.
+    pub fn encode(
+        param: &NsAvidmGf2Param,
+        payload: &[u8],
+        ns_table: impl IntoIterator<Item = Range<usize>>,
+    ) -> VidResult<(NsAvidmGf2Commit, Vec<AvidmGf2Encoding>)> {
+        let ns_encodings = ns_table
+            .into_iter()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .map(|ns_range| AvidmGf2Scheme::encode(param, &payload[ns_range]))
+            .collect::<VidResult<Vec<_>>>()?;
+        let ns_commits = ns_encodings
+            .iter()
+            .map(AvidmGf2Encoding::commit)
+            .collect::<Vec<_>>();
+        let commit = NsAvidmGf2Scheme::aggregate_commit(&ns_commits)?;
+        Ok((commit, ns_encodings))
+    }
+
     /// Aggregate per-namespace commitments into the top-level namespaced
     /// commitment (the Merkle root over the namespace commits).
     ///
@@ -192,8 +217,23 @@ impl NsAvidmGf2Scheme {
         ns_payload: &[u8],
         ns_index: usize,
     ) -> VidResult<NsDispersal> {
-        let payload_byte_len = ns_payload.len();
-        let (commit, shares) = AvidmGf2Scheme::disperse(param, distribution, ns_payload)?;
+        NsAvidmGf2Scheme::ns_disperse_encoded(
+            distribution,
+            AvidmGf2Scheme::encode(param, ns_payload)?,
+            ns_index,
+        )
+    }
+
+    /// Disperse a single namespace from its [`NsAvidmGf2Scheme::encode`]
+    /// encoding. The result is what [`NsAvidmGf2Scheme::ns_disperse_one`]
+    /// returns for the same namespace and parameters.
+    pub fn ns_disperse_encoded(
+        distribution: &[u32],
+        encoding: AvidmGf2Encoding,
+        ns_index: usize,
+    ) -> VidResult<NsDispersal> {
+        let payload_byte_len = encoding.payload_byte_len();
+        let (commit, shares) = AvidmGf2Scheme::disperse_encoded(distribution, encoding)?;
         Ok(NsDispersal {
             ns_index,
             payload_byte_len,
@@ -347,7 +387,7 @@ pub struct NsDispersal {
 pub mod tests {
     use rand::{RngCore, seq::SliceRandom};
 
-    use crate::avidm_gf2::namespaced::NsAvidmGf2Scheme;
+    use crate::avidm_gf2::namespaced::{NsAvidmGf2Scheme, NsDispersal};
 
     fn disperse_with_payload(
         payload: &[u8],
@@ -543,5 +583,48 @@ pub mod tests {
         let (expected, _) =
             NsAvidmGf2Scheme::commit(&params, &payload, ns_table.iter().cloned()).unwrap();
         assert_eq!(aggregated, expected);
+    }
+
+    #[test]
+    fn dispersing_an_encoding_matches_dispersing_the_payload() {
+        let ns_table = [(0usize..15), (15..48), (48..49)];
+        let weights = Vec::from([1u32, 2, 1, 1, 3, 1, 1, 2, 1]);
+        let params = NsAvidmGf2Scheme::setup(5, weights.iter().sum::<u32>() as usize).unwrap();
+        let payload = (0..49).map(|i| i as u8).collect::<Vec<_>>();
+
+        let (commit, encodings) =
+            NsAvidmGf2Scheme::encode(&params, &payload, ns_table.iter().cloned()).unwrap();
+        let (expected_commit, _) =
+            NsAvidmGf2Scheme::commit(&params, &payload, ns_table.iter().cloned()).unwrap();
+        assert_eq!(commit, expected_commit);
+
+        for (ns_index, encoding) in encodings.into_iter().enumerate() {
+            let range = ns_table[ns_index].clone();
+            let encoded =
+                NsAvidmGf2Scheme::ns_disperse_encoded(&weights, encoding, ns_index).unwrap();
+            let direct =
+                NsAvidmGf2Scheme::ns_disperse_one(&params, &weights, &payload[range], ns_index)
+                    .unwrap();
+            let NsDispersal {
+                ns_index,
+                payload_byte_len,
+                commit,
+                shares,
+            } = encoded;
+            assert_eq!(ns_index, direct.ns_index);
+            assert_eq!(payload_byte_len, direct.payload_byte_len);
+            assert_eq!(commit, direct.commit);
+            assert_eq!(shares, direct.shares);
+        }
+    }
+
+    #[test]
+    fn dispersing_an_encoding_rejects_a_distribution_for_other_weights() {
+        let params = NsAvidmGf2Scheme::setup(3, 9).unwrap();
+        let payload = (0..49).map(|i| i as u8).collect::<Vec<_>>();
+        let (_, mut encodings) = NsAvidmGf2Scheme::encode(&params, &payload, Some(0..49)).unwrap();
+
+        let ten_nodes = Vec::from([1u32; 10]);
+        assert!(NsAvidmGf2Scheme::ns_disperse_encoded(&ten_nodes, encodings.remove(0), 0).is_err());
     }
 }
