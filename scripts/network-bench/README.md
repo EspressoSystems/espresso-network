@@ -97,9 +97,12 @@ scripts/network-bench/
   else `slow submit responses`. Diagnostic only, no verdict uses it; runs recorded before these timestamps show them
   empty.
 - `--allocator NAME` (`jemalloc`, `mimalloc`, `snmalloc`, `tcmalloc`; per run, also `run --fleet`): espresso-node from
-  `espresso-node-alloc:<tag>-<allocator>`, built by `build-allocators.yml`
-  (`gh workflow run build-allocators.yml --ref <branch>`): the `espresso-node:main` image with the branch's binaries, so
-  its revision label is main's. The other images stay `--tag`'s.
+  `espresso-node-alloc:<tag>-<allocator>`; the other images stay `--tag`'s. `build-allocators.yml` builds these images
+  only for release tags (`MAJOR.MINOR.PHASE.PATCH`), PRs that change the allocator build itself, and manual runs, not
+  for branches or `main`. Build a branch's images (all four allocators, ~30-60 min) with
+  `gh workflow run build-allocators.yml --repo EspressoSystems/espresso-network --ref <branch>`; the tag is then
+  `<branch>-<allocator>`. Each image is `espresso-node:main` with the branch's two binaries, so its revision label is
+  main's.
 - `--node-env KEY=VALUE` (repeatable; not an `up` flag, pass it to `run --fleet`): added to every node's environment,
   overriding the harness's own value; taken verbatim, not for secrets; listed in the summary's deployment block and part
   of the config hash.
