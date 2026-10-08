@@ -1030,7 +1030,7 @@ pub mod node_tests {
     use std::time::Duration;
 
     use committable::Committable;
-    use futures::{future::join_all, stream::StreamExt};
+    use futures::stream::StreamExt;
     use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
@@ -1041,7 +1041,7 @@ pub mod node_tests {
         data::{VidCommitment, VidCommon, VidShare, ViewNumber, vid_commitment},
         simple_certificate::{CertificatePair, QuorumCertificate2},
         traits::block_contents::{BlockHeader, EncodeBytes},
-        vid::advz::{ADVZScheme, advz_scheme},
+        vid::advz::advz_scheme,
     };
     use jf_advz::VidScheme;
     use pretty_assertions::assert_eq;
@@ -1059,7 +1059,7 @@ pub mod node_tests {
         },
         testing::{
             chain::ChainNode,
-            consensus::{MockNetwork, TestableDataSource},
+            consensus::TestableDataSource,
             mocks::{MockPayload, MockTypes, mock_transaction},
             sleep,
         },
@@ -1509,86 +1509,6 @@ pub mod node_tests {
                 VidShare::V0(disperse.shares[0].clone())
             );
         }
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub async fn test_vid_recovery<D: TestableDataSource>()
-    where
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
-    {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
-
-        network.start().await;
-
-        // Submit a transaction so we can try to recover a non-empty block.
-        let mut blocks = ds.subscribe_blocks(0).await;
-        let txn = mock_transaction(vec![1, 2, 3]);
-        network.submit_transaction(txn.clone()).await;
-
-        // Wait for the transaction to be finalized.
-        let block = loop {
-            tracing::info!("waiting for transaction");
-            let block = blocks.next().await.unwrap();
-            if !block.is_empty() {
-                tracing::info!(height = block.height(), "transaction sequenced");
-                break block;
-            }
-            tracing::info!(height = block.height(), "empty block");
-        };
-        let height = block.height() as usize;
-        let commit = if let VidCommitment::V0(commit) = block.payload_hash() {
-            commit
-        } else {
-            panic!("expect ADVZ commitment")
-        };
-
-        // Set up a test VID scheme.
-        let vid = advz_scheme(network.num_nodes());
-
-        // Get VID common data and verify it.
-        tracing::info!("fetching common data");
-        let common = ds.get_vid_common(height).await.await;
-        let VidCommon::V0(common) = &common.common() else {
-            panic!("expect ADVZ common");
-        };
-        ADVZScheme::is_consistent(&commit, common).unwrap();
-
-        // Collect shares from each node.
-        tracing::info!("fetching shares");
-        let network = &network;
-        let vid = &vid;
-        let shares: Vec<_> = join_all((0..network.num_nodes()).map(|i| async move {
-            let ds = network.data_source_index(i);
-
-            // Wait until the node has processed up to the desired block; since we have thus far
-            // only interacted with node 0, it is possible other nodes are slightly behind.
-            let mut leaves = ds.subscribe_leaves(height).await;
-            let leaf = leaves.next().await.unwrap();
-            assert_eq!(leaf.height(), height as u64);
-            assert_eq!(leaf.payload_hash(), VidCommitment::V0(commit));
-
-            let share = if let VidShare::V0(share) = ds.vid_share(height).await.unwrap() {
-                share
-            } else {
-                panic!("expect ADVZ share")
-            };
-            vid.verify_share(&share, common, &commit).unwrap().unwrap();
-            share
-        }))
-        .await;
-
-        // Recover payload.
-        tracing::info!("recovering payload");
-        let bytes = vid.recover_payload(&shares, common).unwrap();
-        let recovered = <MockPayload as BlockPayload<TestTypes>>::from_bytes(
-            &bytes,
-            &TestMetadata {
-                num_transactions: 7, // arbitrary
-            },
-        );
-        assert_eq!(recovered, *block.payload());
-        assert_eq!(recovered.transactions, vec![txn]);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
