@@ -1151,11 +1151,24 @@ theorem sync : Synchrony (net hv) 28 3 25 where
     simp only [Vote.mk.injEq, TimeoutData.mk.injEq] at heq
     obtain ⟨⟨rfl, -⟩, rfl, -⟩ := heq
     exact by_within hv (n := 7) (by omega) hjt ⟨TC, rfl, rfl, recv_tc (by omega)⟩
-  timeoutCertSpread tc _ _ n hin _ _ _ := by
-    refine Kit.by_imp (P := fun hist => hist.Received (.timeoutCertificate tc))
-      (fun _ h => ⟨tc, rfl, rfl, h⟩) (Kit.by_slower ?_)
-    obtain ⟨rfl, hlt⟩ := received_tc hin
-    exact by_within hv (j := n) (n := 7) (by omega) (Nat.le_refl _) (recv_tc (by omega))
+  timeoutOneHonest e q v t hq hvotes k hk _ := by
+    obtain ⟨k0, hq0, -, hk0⟩ := C.intersect _ q q hq hq
+    obtain ⟨L, hs⟩ := hvotes k0 hq0 hk0
+    obtain ⟨j, hjt, hj⟩ := sentBy hv hs
+    obtain ⟨rfl, heq⟩ := sent_timeout hj
+    simp only [Vote.mk.injEq] at heq
+    obtain ⟨-, rfl, -⟩ := heq
+    exact Kit.by_imp (P := fun hist => hist.Received (.timeoutCertificate TC))
+      (fun _ h => Or.inr (Or.inl ⟨TC.view + 1, Or.inr (Or.inl ⟨TC, h, rfl⟩), by decide⟩))
+      (by_within hv (j := 5) (n := 7) (by omega) hjt (recv_tc (by omega)))
+  timeoutCertForward tc k hk n hin _ _ k' hk' _ := by
+    obtain ⟨rfl, hlt⟩ := received_tc (hin ▸ Trace.received_self _ n : (H k (n + 1)).Received _)
+    exact Kit.by_imp (P := fun hist => hist.Received (.timeoutCertificate TC))
+      (fun _ h => ⟨TC.view + 1, Or.inr (Or.inl ⟨TC, h, rfl⟩), by decide⟩)
+      (by_within hv (j := n) (n := 7) (by omega) (Nat.le_refl _) (recv_tc (by omega)))
+  timeoutCatchUp k hk v hrep :=
+    (Kit.catchUp_vacuous (N := net hv) (tm := tm) (fun _ _ => rfl) (fun _ _ _ => rfl) tm_mono 5
+      (fun m vote hout _ => Nat.le_of_eq (sent_timeout hout).1) hrep).elim
   timeoutLockSpread tc _ _ n hin k' _ _ _ := by
     -- The lock `c` lacked when it signed: it can lock on it within `Δ` of GST.
     obtain ⟨rfl, hlt⟩ := received_tc hin

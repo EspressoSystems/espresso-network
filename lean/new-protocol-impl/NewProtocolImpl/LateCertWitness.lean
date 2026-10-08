@@ -2218,13 +2218,32 @@ theorem sync : Synchrony (net hv) 33 4 33 where
       obtain ⟨⟨rfl, -⟩, rfl, -⟩ := heq
       exact by_soon hv 14 (fun i hi => ⟨T3, rfl, rfl, recv_T3 hi⟩) (show 13 ≤ 14 by omega) (by omega)
         (by omega) (by omega) (by omega)
-  timeoutCertSpread tc k hk n hin k' hk' _ := by
+  timeoutOneHonest e q v t hq hvotes k hk _ := by
+    obtain ⟨k0, hq0, -, hk0⟩ := C.intersect _ q q hq hq
+    obtain ⟨L, hs⟩ := hvotes k0 hq0 hk0
+    obtain ⟨j, hjt, hj⟩ := sentBy hv hs
+    have h6 := tm_facts 6; have h14 := tm_facts 14
+    rcases sent_timeout hj with ⟨rfl, heq⟩ | ⟨rfl, heq⟩ <;> simp only [Vote.mk.injEq] at heq <;>
+      obtain ⟨-, rfl, -⟩ := heq
+    · have h4 := tm_facts 4
+      exact Kit.by_imp (P := fun hist => hist.Received (.timeoutCertificate T1))
+        (fun _ h => Or.inr (Or.inl ⟨T1.view + 1, Or.inr (Or.inl ⟨T1, h, rfl⟩), by decide⟩))
+        (by_at hv (m := 7) (fun _ => by show tm 6 ≤ _; omega) (recv_T1 (by omega)))
+    · have h13 := tm_facts 13
+      exact Kit.by_imp (P := fun hist => hist.Received (.timeoutCertificate T3))
+        (fun _ h => Or.inr (Or.inl ⟨T3.view + 1, Or.inr (Or.inl ⟨T3, h, rfl⟩), by decide⟩))
+        (by_at hv (m := 15) (fun _ => by show tm 14 ≤ _; omega) (recv_T3 (by omega)))
+  timeoutCertForward tc k hk n hin _ _ k' hk' _ := by
     refine Kit.by_imp (P := fun hist => hist.Received (.timeoutCertificate tc))
-      (fun _ h => ⟨tc, rfl, rfl, h⟩) (Kit.by_slower ?_)
+      (fun _ h => ⟨tc.view + 1, Or.inr (Or.inl ⟨tc, h, rfl⟩),
+        show tc.view.toNat < tc.view.toNat + 1 by omega⟩) ?_
     simp only [net_time hv]
-    rcases received_tc hin with ⟨rfl, h6⟩ | ⟨rfl, h14⟩
+    rcases received_tc (hin ▸ Trace.received_self _ n : (H k (n + 1)).Received _) with ⟨rfl, h6⟩ | ⟨rfl, h14⟩
     · exact by_same hv 6 (fun m hm => recv_T1 hm) (Or.inl h6)
     · exact by_same hv 14 (fun m hm => recv_T3 hm) (Or.inl h14)
+  timeoutCatchUp k hk v hrep :=
+    (Kit.catchUp_vacuous (N := net hv) (tm := tm) (fun _ _ => rfl) (fun _ _ _ => rfl) tm_succ 13
+      (fun m vote hout _ => by rcases sent_timeout hout with ⟨rfl, -⟩ | ⟨rfl, -⟩ <;> omega) hrep).elim
   timeoutLockSpread tc k hk n hin k' hk' hm _ := by
     simp only [net_time hv]
     rcases received_tc hin with ⟨rfl, -⟩ | ⟨rfl, h14⟩

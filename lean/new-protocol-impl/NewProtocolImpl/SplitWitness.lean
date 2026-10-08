@@ -1894,12 +1894,36 @@ theorem sync : Synchrony (net hv) 36 4 33 where
     have := (tm_facts 13).2.2 (by omega)
     refine by_step hv 13 (by omega) ⟨T, ?_, rfl, recv_first 13 (by omega) (by omega)⟩
     rw [he, hea]; rfl
-  timeoutCertSpread tc k hk n hin k' hk' _ := by
+  timeoutOneHonest e q v t hq hvotes k hk _ := by
+    obtain ⟨k0, hq0, -, hk0⟩ := C.intersect _ q q hq hq
+    obtain ⟨L, hs⟩ := hvotes k0 hq0 hk0
+    obtain ⟨j, hjt, hj⟩ := sentBy hv hs
+    obtain ⟨hj', heq⟩ := sent_timeout hj
+    simp only [Vote.mk.injEq] at heq
+    obtain ⟨-, rfl, -⟩ := heq
+    -- Every honest node timed view two out at step 7, no later than any vote.
+    have h7 := tm_facts 7
+    have htj : tm 7 ≤ t := Nat.le_trans (tm_mono (by omega)) hjt
+    have hin7 : (H k 7).InView cfg ⟨2⟩ := by
+      have := inView (k := k) 7
+      rwa [(vAt_first (by omega)).2 (by omega)] at this
+    have hinput : (tr k 7).input = .timeout ⟨2⟩ := by
+      rw [Kit.tr_step]; show input k 7 = _; rw [input_first (by omega)]; rfl
+    obtain ⟨e', L', -, hout⟩ := (Kit.protocol input hv k 8).timeoutAnswered 7 _ ⟨2⟩ (Kit.getElem_H 7)
+      (Or.inl ⟨hinput, by rw [Kit.upTo_H]; exact hin7⟩) (fun _ _ => ⟨trivial, trivial⟩)
+    obtain ⟨_, hke⟩ := hk
+    exact by_at hv (m := 8) (fun _ => by show tm 7 ≤ _; omega)
+      (Or.inr (Or.inr ⟨_, Kit.sent_iff.mpr ⟨7, by omega, hout⟩, rfl, hke⟩))
+  timeoutCertForward tc k hk n hin _ _ k' hk' _ := by
     refine Kit.by_imp (P := fun hist => hist.Received (.timeoutCertificate tc))
-      (fun _ h => ⟨tc, rfl, rfl, h⟩) (Kit.by_slower ?_)
+      (fun _ h => ⟨tc.view + 1, Or.inr (Or.inl ⟨tc, h, rfl⟩),
+        show tc.view.toNat < tc.view.toNat + 1 by omega⟩) ?_
     simp only [net_time hv]
-    obtain ⟨rfl, hu⟩ := received_tc hin
+    obtain ⟨rfl, hu⟩ := received_tc (hin ▸ Trace.received_self _ n : (H k (n + 1)).Received _)
     exact by_same hv 13 (fun m hm => recv_first 13 (by omega) hm) (Or.inl hu)
+  timeoutCatchUp k hk v hrep :=
+    (Kit.catchUp_vacuous (N := net hv) (tm := tm) (fun _ _ => rfl) (fun _ _ _ => rfl) tm_succ 12
+      (fun m vote hout _ => by rcases (sent_timeout hout).1 with rfl | rfl | rfl <;> omega) hrep).elim
   timeoutLockSpread tc k hk n hin k' hk' hm _ := by
     simp only [net_time hv]
     obtain ⟨rfl, hu⟩ := received_tc hin

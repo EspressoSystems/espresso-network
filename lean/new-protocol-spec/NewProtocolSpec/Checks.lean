@@ -117,7 +117,7 @@ run_meta (checkFields `NewProtocol.TimedNetwork
 /-! What is assumed of timing and delivery after GST. -/
 run_meta (checkFields `NewProtocol.Synchrony
   [`proposal, `revote, `cert1, `cert2, `cert2Spread, `certSpread, `lockSpread, `blockSpread,
-   `timeoutCert, `timeoutCertSpread, `timeoutLockSpread, `epochChange,
+   `timeoutCert, `timeoutOneHonest, `timeoutCertForward, `timeoutCatchUp, `timeoutLockSpread, `epochChange,
    `proposalValid, `validatedSound, `validated, `header, `timeUnbounded, `timerNotEarly,
    `timerFires])
 

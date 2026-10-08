@@ -76,6 +76,17 @@ theorem protocol (hv : ∀ b, BlockValid b) (k : PubKey) (n : Nat) :
   rw [← hpre]; exact historyOf_protocol (fun _ _ _ _ b _ => hv b) n
 
 variable (input) in
+/-- A timeout vote is sent in the step its view's timer or one-honest indication arrives. -/
+theorem timeout_vote_input (hv : ∀ b, BlockValid b) {j : Nat} {vote : TimeoutVote}
+    (hx : Output.send (.timeoutVote vote) ∈ (tr cfg leader input k j).output) :
+    input k j = .timeout vote.view ∨ input k j = .timeoutOneHonest vote.view := by
+  obtain ⟨-, -, -, hcase⟩ := (protocol input hv k (j + 1)).timeoutJustified j _ vote (getElem_H j) hx trivial
+  have hin : (tr cfg leader input k j).input = input k j := by rw [tr_step]; rfl
+  rcases hcase with ⟨h, -⟩ | ⟨h, -⟩
+  · exact Or.inl (hin ▸ h)
+  · exact Or.inr (hin ▸ h)
+
+variable (input) in
 /-- A view the node decided is after the anchor's, and that of a block whose proposal it holds. -/
 theorem decided_proposal (hv : ∀ b, BlockValid b) {n : Nat} {w : ViewNumber}
     (hd : (H cfg leader input k n).DecidedView w) :
@@ -160,6 +171,23 @@ theorem by_at (htr : ∀ k hk, N.trace k hk = tr cfg leader input k) (htm : ∀ 
     (hm : 0 < m → tm (m - 1) ≤ T) (hp : P (H cfg leader input k m)) : N.By k hk T P :=
   ⟨m, fun i hi => by rw [htm]; exact Nat.le_trans (mono_of_succ hs (show i ≤ m - 1 by omega)) (hm (by omega)),
     by rw [htr]; exact hp⟩
+
+/--
+A node that sends timeout votes for `v` only up to step `B` does not keep timing `v`
+out, so `Synchrony.timeoutCatchUp` asks nothing of it.
+-/
+theorem catchUp_vacuous (htr : ∀ k hk, N.trace k hk = tr cfg leader input k)
+    (htm : ∀ k hk n, N.time k hk n = tm n) (hs : ∀ n, tm n ≤ tm (n + 1)) {hk : C.Honest k}
+    {v : ViewNumber} (B : Nat)
+    (hb : ∀ m (vote : TimeoutVote), Output.send (.timeoutVote vote) ∈ (tr cfg leader input k m).output →
+      vote.view = v → m ≤ B)
+    (hrep : ∀ T, ∃ m vote, T < N.time k hk m ∧ vote.view = v
+      ∧ Output.send (.timeoutVote vote) ∈ (N.trace k hk m).output) : False := by
+  obtain ⟨m, vote, hT, hvv, hout⟩ := hrep (tm B)
+  rw [htr] at hout
+  rw [htm] at hT
+  have := mono_of_succ hs (hb m vote hout hvv)
+  omega
 
 /-- What the node sent by time `t`, it sent at a step no later than `t`. -/
 theorem sentBy (htr : ∀ k hk, N.trace k hk = tr cfg leader input k) (htm : ∀ k hk n, N.time k hk n = tm n)

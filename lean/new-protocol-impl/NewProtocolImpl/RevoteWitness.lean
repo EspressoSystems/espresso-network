@@ -1820,14 +1820,35 @@ theorem sync : Synchrony (net hv) 0 4 33 where
     have hmax := Nat.le_max_left t 0
     exact by_at hv (m := 15 * u + 14) (fun _ => by show tm (15 * u + 13) ≤ _; omega)
       ⟨T u, rfl, rfl, recv_at (k := k) u 13 (by omega) (by omega)⟩
-  timeoutCertSpread tc k hk n hin k' hk' _ := by
+  timeoutOneHonest e q v t hq hvotes k hk _ := by
+    obtain ⟨k0, hq0, -, hk0⟩ := C.intersect _ q q hq hq
+    obtain ⟨L, hs⟩ := hvotes k0 hq0 hk0
+    obtain ⟨j, hjt, hj⟩ := sentBy hv hs
+    obtain ⟨u, rfl, heq⟩ := sent_timeout hj
+    simp only [Vote.mk.injEq] at heq
+    obtain ⟨-, rfl, -⟩ := heq
+    have h12 := (tm_facts u 12 (by omega)).2 (by omega)
+    have h13 := (tm_facts u 13 (by omega)).2 (by omega)
+    refine Kit.by_imp (P := fun hist => hist.Received (.timeoutCertificate (T u)))
+      (fun _ h => Or.inr (Or.inl ⟨(T u).view + 1, Or.inr (Or.inl ⟨T u, h, rfl⟩),
+        show 3 * u + 3 < 3 * u + 3 + 1 by omega⟩))
+      (by_at hv (m := 15 * u + 14) (fun _ => by rw [show 15 * u + 14 - 1 = 15 * u + 13 by omega]; omega)
+        (recv_at (k := k) u 13 (by omega) (by omega)))
+  timeoutCertForward tc k hk n hin _ _ k' hk' _ := by
     refine Kit.by_imp (P := fun hist => hist.Received (.timeoutCertificate tc))
-      (fun _ h => ⟨tc, rfl, rfl, h⟩) (Kit.by_slower ?_)
+      (fun _ h => ⟨tc.view + 1, Or.inr (Or.inl ⟨tc, h, rfl⟩),
+        show tc.view.toNat < tc.view.toNat + 1 by omega⟩) ?_
     simp only [net_time hv]
-    obtain ⟨u, rfl, hu⟩ := received_tc hin
+    obtain ⟨u, rfl, hu⟩ := received_tc (hin ▸ Trace.received_self _ n : (H k (n + 1)).Received _)
     have hmax := Nat.le_max_left (tm n) 0
     exact by_at hv (m := n + 1) (fun _ => by simp only [Nat.add_sub_cancel]; omega)
       (recv_at (k := k') u 13 (by omega) hu)
+  timeoutCatchUp k hk v hrep := by
+    refine (Kit.catchUp_vacuous (N := net hv) (tm := tm) (fun _ _ => rfl) (fun _ _ _ => rfl) tm_succ
+      (15 * v.toNat + 12) (fun m vote hout hvv => ?_) hrep).elim
+    obtain ⟨u, rfl, rfl⟩ := sent_timeout hout
+    have : v.toNat = 3 * u + 3 := (congrArg ViewNumber.toNat hvv).symm
+    omega
   timeoutLockSpread tc k hk n hin k' hk' hm _ := by
     simp only [net_time hv]
     obtain ⟨u, rfl, hu⟩ := received_tc hin

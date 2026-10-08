@@ -50,9 +50,14 @@ timeout votes for a view from enough nodes that one of them is honest (the
 _one-honest indication_) times the view out too. A quorum of timeout votes is a
 {name NewProtocol.TimeoutCert}`TimeoutCert`, whose lock is the latest of its votes' locks. The next view starts
 on it, and its leader must build on a block no earlier than the certificate's lock.
-A node that receives a timeout certificate sends it on to every node: at an epoch
-boundary, the one-honest indication alone can leave nodes waiting for ever
-({name NewProtocol.Synchrony.timeoutCertSpread}`Synchrony.timeoutCertSpread`).
+Timeout votes go to every node, so the honest signers of a certificate draw every
+other node's vote through the one-honest indication, and the certificate forms
+everywhere without being sent on
+({name NewProtocol.Synchrony.timeoutOneHonest}`Synchrony.timeoutOneHonest`). Only a node handed a certificate
+without having voted for its view sends it on
+({name NewProtocol.Synchrony.timeoutCertForward}`Synchrony.timeoutCertForward`), and a node that keeps timing a
+view out after others left it is answered with what took them past it
+({name NewProtocol.Synchrony.timeoutCatchUp}`Synchrony.timeoutCatchUp`).
 
 Blocks are grouped into epochs of a fixed number of blocks, and each epoch has its
 own committee. The last block of an epoch must be committed by its own committee
@@ -1536,8 +1541,7 @@ end Spec.Prompt
 
 {includeDocstring NewProtocol.Prompt}
 
-The synchrony assumptions say what the network delivers within `Δ` after GST (a
-timeout certificate within `2Δ`),
+The synchrony assumptions say what the network delivers within `Δ` after GST,
 what a node's own modules deliver within the same bound (the builder's headers and
 the validity reports), and how time and the view timer of length `τ` behave.
 
@@ -1930,12 +1934,18 @@ the epoch's last block with a {name NewProtocol.Cert2}`Cert2`.
 In `E` every view is reached. Otherwise the honest nodes come to rest in
 the latest view any of them reaches, and time it out again until their timeout
 votes, now all naming the stable epoch, form a certificate that takes them past it.
+A member left in an earlier view keeps timing that one out, and is answered.
+
+{docstring NewProtocol.Liveness.member_reaches}
 
 {docstring NewProtocol.Liveness.views_unbounded}
 
 Finally, take a view `w` of `E` with a leader honest in `E`, later than anything
 reached at `t0`. Every honest node reaches it within `2Δ` of the
-first. The leader proposes on its lock, opens the epoch on the previous epoch's last
+first, without any certificate being sent on in the usual case.
+
+{docstring NewProtocol.Liveness.reach_spread}
+ The leader proposes on its lock, opens the epoch on the previous epoch's last
 block, or asks for a re-vote, within `4Δ + δ`.
 
 {docstring NewProtocol.Liveness.leader_acts}

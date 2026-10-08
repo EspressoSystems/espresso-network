@@ -515,14 +515,70 @@ theorem times_out_late {k : PubKey} {hk : C.Honest k} {y : ViewNumber}
 variable {E : EpochNumber} {t0 : Nat} (hst : Stable N GST E t0)
 include hst
 
+omit hcfg in
+/--
+A member of `E` reaches a view an honest node reached, when no honest node ever has
+grounds for a later one.
+
+Otherwise it comes to rest in an earlier view and times it out again and again,
+after `t0` and so in `E`, while an honest node has grounds past it: it gets grounds
+past it too (`Synchrony.timeoutCatchUp`).
+-/
+theorem member_reaches {y : ViewNumber}
+    (hcap : ∀ k (hk : C.Honest k) n v, ((N.trace k hk).history n).ViewGround cfg v → v.toNat ≤ y.toNat)
+    {j : PubKey} {hj : C.Honest j} {n : Nat} (hr : Reached N j hj n y)
+    {k : PubKey} (hkE : C.members E k ∧ C.honest E k) : ∃ n, Reached N k (.of hkE.2) n y := by
+  have hk : C.Honest k := .of hkE.2
+  have hu := hs.timeUnbounded
+  refine Classical.byContradiction fun hno => ?_
+  -- The latest view `k` ever reaches, `y - d`.
+  have hex : ∃ d, ∃ n, Reached N k hk n ⟨y.toNat - d⟩ :=
+    ⟨y.toNat, 0, cfg.anchorCert.view + 1, Or.inl ⟨cfg.anchorCert, Or.inl rfl, rfl⟩,
+      by show y.toNat - y.toNat ≤ cfg.anchorCert.view.toNat + 1; omega⟩
+  obtain ⟨d, hd⟩ : ∃ d, d = least _ hex := ⟨_, rfl⟩
+  obtain ⟨n0, hr0⟩ : ∃ n, Reached N k hk n ⟨y.toNat - d⟩ := hd ▸ least_spec hex
+  have hd0 : d ≠ 0 := fun h => hno ⟨n0, by
+    have : (⟨y.toNat - d⟩ : ViewNumber) = y := ViewNumber.ext (by show y.toNat - d = y.toNat; omega)
+    rw [this] at hr0; exact hr0⟩
+  have hcapk : ∀ n v, ((N.trace k hk).history n).ViewGround cfg v → v.toNat ≤ y.toNat - d := fun n v hv => by
+    refine Nat.le_of_not_lt fun hlt => ?_
+    have hvy := hcap k hk n v hv
+    have hlt' : y.toNat - v.toNat < least _ hex := by rw [← hd]; omega
+    have hmin := least_min hex hlt'
+    exact hmin ⟨n, v, hv, by show y.toNat - (y.toNat - v.toNat) ≤ v.toNat; omega⟩
+  -- It times that view out again and again, after `t0`, in `E`.
+  have hrep : ∀ T, ∃ m vote, T < N.time k hk m ∧ vote.view = ⟨y.toNat - d⟩
+      ∧ Output.send (.timeoutVote vote) ∈ (N.trace k hk m).output := by
+    intro T
+    obtain ⟨m, hmT, htm, hinm⟩ := times_out_late hs hcapk hr0 (max T t0)
+    have hE := stable_inEpoch hst hu (.of hkE.2) (cut_le_of_lt hu (show t0 < N.time k hk m by omega))
+    obtain ⟨e, L, -, hout⟩ := (N.protocol k hk (m + 1)).timeoutAnswered m _ _
+      (Trace.history_getElem? _ (Nat.lt_succ_self m))
+      (Or.inl ⟨htm, by rw [Trace.history_upTo _ (Nat.le_succ m)]; exact hinm⟩)
+      (fun e' he' => by
+        rw [Trace.history_upTo _ (Nat.le_succ m)] at he'
+        rw [inEpoch_unique he' hE]; exact ⟨hkE.2, hkE.1⟩)
+    exact ⟨m, _, by omega, rfl, hout⟩
+  obtain ⟨v, hv, hyv⟩ := hr
+  have hyv' : y.toNat ≤ v.toNat := hyv
+  have hv1 : 1 ≤ v.toNat := by
+    rcases hv with ⟨c, -, rfl⟩ | ⟨tc, -, rfl⟩ | ⟨c1, c2, p, -, rfl⟩ <;> exact Nat.le_add_left 1 _
+  obtain ⟨n', u', hu', hlt⟩ := hs.timeoutCatchUp k hk _ hrep j hj n v hv
+    (show y.toNat - d < v.toNat by omega)
+  have := hcapk n' u' hu'
+  have : y.toNat - d < u'.toNat := hlt
+  omega
+
+omit hcfg in
 /--
 **Every view is reached** in a stable epoch.
 
-Otherwise honest nodes come to rest in the last view any of them reaches. Each
-member of `E` times it out again after `t0`, when it is in `E`, so the votes name
-one epoch, and their timeout certificate takes them past it.
+Otherwise honest nodes come to rest in the last view any of them reaches. Every
+member of `E` reaches it (`Liveness.member_reaches`) and times it out again after
+`t0`, when it is in `E`, so the votes name one epoch, and their timeout
+certificate takes them past it.
 -/
-theorem views_unbounded (hcf : CollisionFree) (x : ViewNumber) : ∃ T, ReachedBy N T x := by
+theorem views_unbounded (x : ViewNumber) : ∃ T, ReachedBy N T x := by
   have hu := hs.timeUnbounded
   refine Classical.byContradiction fun hx => ?_
   have hex : ∃ n, ¬ ∃ T, ReachedBy N T ⟨n⟩ := ⟨x.toNat, hx⟩
@@ -548,7 +604,7 @@ theorem views_unbounded (hcf : CollisionFree) (x : ViewNumber) : ∃ T, ReachedB
     (fun _ _ _ hle h he => let ⟨L, hL⟩ := h he; ⟨L, by_later hle hL⟩)
     (fun k hk => by
       by_cases hkE : C.members E k ∧ C.honest E k
-      · have hrk := reached_spread hcfg hcf hs hst (reached_mono (Nat.le_succ n) hr) k hk (.of hkE.2)
+      · obtain ⟨nk, hrk⟩ := member_reaches hs hst hcap hr hkE
         obtain ⟨m, hmT, htm, hinm⟩ := times_out_late hs (hcap k hk) hrk t0
         have hE := stable_inEpoch hst hu (.of hkE.2) (cut_le_of_lt hu hmT)
         obtain ⟨e, L, hep, hout⟩ := (N.protocol k hk (m + 1)).timeoutAnswered m _ y
@@ -594,7 +650,7 @@ theorem not_stable (hcf : CollisionFree) {δ : Nat} (hp : Prompt N δ) (hτ : 8 
     obtain ⟨w, hwge, l, hlead, hl, hlm⟩ := hrot E ⟨X + B + cfg.anchorView.toNat + 3⟩
     have hwge' : X + B + cfg.anchorView.toNat + 3 ≤ w.toNat := hwge
     obtain ⟨j, hj, n, c2, q, hq, hc2, hcq, hce, hwc⟩ := late_cert2 hcfg hcf hs hst
-      (hlateOf _ (by show B ≤ w.toNat - 1; omega)) hp (by omega) (views_unbounded hcfg hs hst hcf w) hτ
+      (hlateOf _ (by show B ≤ w.toNat - 1; omega)) hp (by omega) (views_unbounded hs hst w) hτ
       hl hlead hlm
     have : w.toNat ≤ c2.view.toNat := hwc
     exact ⟨j, hj, n, c2, q, hq, hc2, hcq, hce, by omega⟩
@@ -668,7 +724,7 @@ theorem stable_decides {GST Δ δ τ : Nat} (hcfg : ConfigCoherent cfg) (hcf : C
     have := hB j hj n hn v hv
     have : w.toNat - 1 ≤ v.toNat := hwv
     omega
-  have hex := views_unbounded hcfg hs hst hcf w
+  have hex := views_unbounded hs hst w
   obtain ⟨n, v, hwv, hdec⟩ := late_decide hcfg hcf hs hst hlate hp hw3 hex hτ hl hlead hlm d hd
   have := hV n v hdec
   have : w.toNat ≤ v.toNat := hwv

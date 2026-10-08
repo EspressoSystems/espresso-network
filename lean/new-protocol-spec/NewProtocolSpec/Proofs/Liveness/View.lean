@@ -359,43 +359,6 @@ theorem lockable_epoch_le {h : History} (hh : ∃ j, ∃ hj : C.Honest j, ∃ n,
   · rw [ha]; exact stable_anchor hst
   · exact stable_no_later hcfg hcf hs hst hb
 
-/--
-Within `2Δ` of an honest node reaching `y`, after GST, every node honest in `E` or
-later has.
-
-A certificate and an epoch change spread as they are within `Δ`, and a timeout
-certificate for the view within `2Δ`: each is of `E` or earlier.
--/
-theorem reached_spread {y : ViewNumber} {j : PubKey} {hj : C.Honest j} {n : Nat} (hr : Reached N j hj (n + 1) y)
-    (k : PubKey) (hk : C.Honest k) (hkE : C.HonestFrom E k) :
-    Reached N k hk (cut N hs.timeUnbounded k hk (max (N.time j hj n) GST + 2 * Δ)) y := by
-  obtain ⟨v, hv, hwv⟩ := hr
-  rcases hv with ⟨c, hc, rfl⟩ | ⟨tc, htc, rfl⟩ | ⟨c1, c2, p, htook, rfl⟩
-  · have hce : c.data.epoch.toNat ≤ E.toNat := by
-      rcases cert1_held_backed N.toNetwork hc with ha | hb
-      · rw [ha]; exact stable_anchor hst
-      · exact stable_no_later hcfg hcf hs hst hb
-    have hheld := by_cut N hs.timeUnbounded
-      (fun a b hab h => hasCert1_grows (received_grows _ hab) h) (hs.certSpread c j hj n hc k hk (hkE.mono hce))
-    exact reached_mono (cut_mono N hs.timeUnbounded (by omega)) ⟨c.view + 1, Or.inl ⟨c, hheld, rfl⟩, hwv⟩
-  · have htce : tc.data.epoch.toNat ≤ E.toNat := hst.bound j hj (n + 1) _ (Or.inr (Or.inr (Or.inl ⟨tc, htc, rfl⟩)))
-    obtain ⟨i, hi, hin⟩ := (Trace.received_history _).mp htc
-    have hti : N.time j hj i ≤ N.time j hj n := time_mono N j hj (Nat.le_of_lt_succ hi)
-    have := Nat.max_le.mpr ⟨Nat.le_trans hti (Nat.le_max_left (N.time j hj n) GST),
-      Nat.le_max_right (N.time j hj n) GST⟩
-    obtain ⟨tc', hv', -, hrec⟩ := by_cut N hs.timeUnbounded
-      (fun a b hab ⟨t, h1, h2, h3⟩ => ⟨t, h1, h2, received_grows _ hab _ h3⟩)
-      (by_later (show max (N.time j hj i) GST + 2 * Δ ≤ max (N.time j hj n) GST + 2 * Δ by omega)
-        (hs.timeoutCertSpread tc j hj i
-          ((Trace.received_history _).mpr ⟨i, Nat.lt_succ_self _, hin⟩) k hk (hkE.mono htce)))
-    exact ⟨tc.view + 1, Or.inr (Or.inl ⟨tc', hrec, by rw [hv']⟩), hwv⟩
-  · have hc2e : c2.data.epoch.toNat + 1 ≤ E.toNat := hst.bound j hj (n + 1) _ (Or.inr (Or.inl ⟨c1, c2, p, htook, rfl⟩))
-    obtain ⟨c1', htook'⟩ := by_cut N hs.timeUnbounded
-      (fun a b hab ⟨c1', ⟨hr, hw⟩⟩ => ⟨c1', ⟨received_grows _ hab _ hr, hw⟩⟩)
-      (tookEpochChange_spread hs htook k hk (hkE.mono (by omega)))
-    exact reached_mono (cut_mono N hs.timeUnbounded (by omega))
-      ⟨c2.view + 1, Or.inr (Or.inr ⟨c1', c2, p, htook', rfl⟩), hwv⟩
-
 omit hcfg hcf hst in
 /--
 Within `Δ` of an honest node holding a certificate, after GST, every member of its
@@ -414,21 +377,280 @@ theorem lock_of_held {j : PubKey} {hj : C.Honest j} {k : PubKey} {hk : C.Honest 
   exact by_cut N hs.timeUnbounded (fun a b hab h => lockable_grows (received_grows _ hab) h)
     (by_later (by omega) (hs.lockSpread c j hj n' hc k hk hm hkf))
 
+omit hcfg hcf hs hst in
+theorem inEpoch_unique {h : History} {e e' : EpochNumber} (he : h.InEpoch cfg e)
+    (he' : h.InEpoch cfg e') : e = e' :=
+  EpochNumber.ext (Nat.le_antisymm (he'.2 e he.1) (he.2 e' he'.1))
+
+omit hcfg hcf hs in
+/-- From `t0` on, epoch `E` is no earlier than the epoch of any node honest in `E` or later. -/
+theorem stable_notBehind (hu : ∀ k (hk : C.Honest k) T, ∃ n, T < N.time k hk n) {j : PubKey}
+    {hj : C.Honest j} (hjE : C.HonestFrom E j) {n : Nat} (hn : cut N hu j hj t0 ≤ n) :
+    NotBehind cfg ((N.trace j hj).history n) E :=
+  fun e' he' => by rw [inEpoch_unique he' (stable_inEpoch hst hu hjE hn)]; exact Nat.le_refl _
+
+omit hcfg hcf hs hst in
+/-- A history is behind no epoch it is in. -/
+theorem notBehind_of_inEpoch {h : History} {e : EpochNumber} (he : h.InEpoch cfg e) : NotBehind cfg h e :=
+  fun e' he' => by rw [inEpoch_unique he' he]; exact Nat.le_refl _
+
+omit hcf in
+/-- A timeout certificate an honest node receives for a late view is of epoch `E`. -/
+theorem late_tc_epoch {k : PubKey} {hk : C.Honest k} {n : Nat} {tc : TimeoutCert}
+    (hin : (N.trace k hk n).input = .timeoutCertificate tc) (htw : cfg.anchorView.toNat + 2 ≤ tc.view.toNat)
+    (hl : Late N t0 tc.view) : tc.data.epoch = E := by
+  have hu := hs.timeUnbounded
+  have hex : ∃ T, ReachedBy N T tc.view := ⟨N.time k hk n, k, hk, n + 1,
+    fun i hi => time_mono N k hk (Nat.le_of_lt_succ hi),
+    tc.view + 1, Or.inr (Or.inl ⟨tc, hin ▸ Trace.received_self _ n, rfl⟩),
+    Nat.le_succ _⟩
+  obtain ⟨q, hq, hvotes⟩ := N.timeoutCertCausal k hk n tc hin
+  obtain ⟨k', hqk, -, hk'e⟩ := C.intersect _ q q hq hq
+  obtain ⟨m, vote, ⟨-, hvv, hve, -⟩, hm, -⟩ := hvotes k' hqk hk'e
+  have hk' : C.Honest k' := .of hk'e
+  have hvh : C.honest vote.data.epoch k' := by rw [hve]; exact hk'e
+  have hlate := timeout_late hcfg hs htw hex hvh hm (by rw [hvv]; exact Nat.le_refl _)
+  have ht0 : t0 < firstReach N hex := Nat.lt_of_not_le fun hle => hl
+    (let ⟨j, hj, n', hn', hr⟩ := least_spec hex; ⟨j, hj, n', fun i hi => Nat.le_trans (hn' i hi) hle, hr⟩)
+  obtain ⟨-, hep, -⟩ := (N.protocol k' hk' (m + 1)).timeoutJustified m (N.trace k' hk' m) vote
+    (Trace.history_getElem? _ (Nat.lt_succ_self m)) hm hvh
+  rw [Trace.history_upTo _ (Nat.le_succ m)] at hep
+  have hcut : cut N hu k' hk' t0 ≤ m := cut_le_of_lt hu (show t0 < N.time k' hk' m by omega)
+  -- A retired signer would be past the epoch it names.
+  have hk'E : C.HonestFrom E k' := Classical.byContradiction fun hk'E =>
+    stable_retired hst hu hk'E hcut hvh (notBehind_of_inEpoch hep)
+  have hEm := stable_inEpoch hst hu hk'E hcut
+  rw [← hve]
+  exact inEpoch_unique hep hEm
+
 variable {w : ViewNumber} (hw : cfg.anchorView.toNat + 2 ≤ w.toNat) (hex : ∃ T, ReachedBy N T w) (hl : Late N t0 (w - 1))
 include hw hl
 
-omit hl in
-/-- Within `2Δ` of the first node reaching `w`, every node honest in `E` or later has. -/
-theorem reach_spread (hgst : GST ≤ firstReach N hex) (k : PubKey) (hk : C.Honest k) (hkE : C.HonestFrom E k) :
+omit hcf hs hst hl in
+/-- A node that reaches `w` reaches it in some step: no history starts there. -/
+theorem reach_step {m : PubKey} {hm : C.Honest m} {n : Nat} (hr : Reached N m hm n w) :
+    ∃ s, s < n ∧ ¬ Reached N m hm s w ∧ Reached N m hm (s + 1) w := by
+  have hex' : ∃ i, Reached N m hm i w := ⟨n, hr⟩
+  have hl0 := least_spec hex'
+  have hle : least _ hex' ≤ n := least_le hex' hr
+  have h0 : least _ hex' ≠ 0 := fun h => not_reached_nil hcfg hw (h ▸ hl0)
+  obtain ⟨s, hs'⟩ : ∃ s, least _ hex' = s + 1 := ⟨least _ hex' - 1, by omega⟩
+  exact ⟨s, by omega, least_min hex' (by omega), hs' ▸ hl0⟩
+
+omit hw hl in
+/--
+What first takes an honest node to `w` or later: a certificate or an epoch change,
+which reaches every node honest in `E` or later within `Δ`, or a timeout
+certificate it is handed in that step.
+-/
+theorem first_ground {m : PubKey} {hm : C.Honest m} {s : Nat} (hr : Reached N m hm (s + 1) w)
+    (hnot : ¬ Reached N m hm s w) :
+    (∀ k (hk : C.Honest k), C.HonestFrom E k →
+        N.By k hk (max (N.time m hm s) GST + Δ) fun h => ∃ u, h.ViewGround cfg u ∧ w ≤ u)
+      ∨ ∃ tc, (N.trace m hm s).input = .timeoutCertificate tc ∧ w ≤ tc.view + 1 := by
+  obtain ⟨v, hv, hwv⟩ := hr
+  rcases hv with ⟨c, hc, rfl⟩ | ⟨tc, htc, rfl⟩ | ⟨c1, c2, p, htook, rfl⟩
+  · left
+    intro k hk hkE
+    have hce : c.data.epoch.toNat ≤ E.toNat := by
+      rcases cert1_held_backed N.toNetwork hc with ha | hb
+      · rw [ha]; exact stable_anchor hst
+      · exact stable_no_later hcfg hcf hs hst hb
+    obtain ⟨n2, hn2, hc2⟩ := hs.certSpread c m hm s hc k hk (hkE.mono hce)
+    exact ⟨n2, hn2, c.view + 1, Or.inl ⟨c, hc2, rfl⟩, hwv⟩
+  · right
+    obtain ⟨i, hi, hin⟩ := (Trace.received_history _).mp htc
+    refine ⟨tc, ?_, hwv⟩
+    rcases Nat.lt_succ_iff_lt_or_eq.mp hi with hlt | rfl
+    · exact absurd ⟨tc.view + 1, Or.inr (Or.inl ⟨tc, (Trace.received_history _).mpr ⟨i, hlt, hin⟩, rfl⟩),
+        hwv⟩ hnot
+    · exact hin
+  · left
+    intro k hk hkE
+    have hc2e : c2.data.epoch.toNat + 1 ≤ E.toNat :=
+      hst.bound m hm (s + 1) _ (Or.inr (Or.inl ⟨c1, c2, p, htook, rfl⟩))
+    obtain ⟨n2, hn2, c1', htook'⟩ := tookEpochChange_spread hs htook k hk (hkE.mono (by omega))
+    exact ⟨n2, hn2, c2.view + 1, Or.inr (Or.inr ⟨c1', c2, p, htook', rfl⟩), hwv⟩
+
+omit hcfg hcf hw hl in
+/--
+A timeout certificate that first takes an honest node to `w`, handed to it without
+a timeout vote of its own for the certificate's view and epoch, takes every node
+honest in `E` or later to `w` within `Δ`.
+-/
+theorem forward_push {m : PubKey} {hm : C.Honest m} {s : Nat} {tc : TimeoutCert}
+    (hin : (N.trace m hm s).input = .timeoutCertificate tc) (hnot : ¬ Reached N m hm s w)
+    (hwt : w ≤ tc.view + 1)
+    (hnv : ¬ ∃ vote : TimeoutVote, ((N.trace m hm).history (s + 1)).Sent (.timeoutVote vote)
+      ∧ vote.view = tc.view ∧ vote.data.epoch = tc.data.epoch)
+    (k : PubKey) (hk : C.Honest k) (hkE : C.HonestFrom E k) :
+    N.By k hk (max (N.time m hm s) GST + Δ) fun h => ∃ u, h.ViewGround cfg u ∧ w ≤ u := by
+  have htce : tc.data.epoch.toNat ≤ E.toNat :=
+    hst.bound m hm (s + 1) _ (Or.inr (Or.inr (Or.inl ⟨tc, hin ▸ Trace.received_self _ s, rfl⟩)))
+  have hwt' : w.toNat ≤ tc.view.toNat + 1 := hwt
+  have hcap : ∀ u, ((N.trace m hm).history s).ViewGround cfg u → u.toNat ≤ tc.view.toNat := fun u hu => by
+    have h2 : ¬ w.toNat ≤ u.toNat := fun h => hnot ⟨u, hu, h⟩
+    omega
+  obtain ⟨n2, hn2, u, hu, hlt⟩ := hs.timeoutCertForward tc m hm s hin hcap hnv k hk (hkE.mono htce)
+  have hlt' : tc.view.toNat < u.toNat := hlt
+  exact ⟨n2, hn2, u, hu, show w.toNat ≤ u.toNat by omega⟩
+
+/--
+Within `2Δ` of the first node reaching `w`, every node honest in `E` or later has.
+
+What took the first node there is a certificate or an epoch change, which reach
+every node within `Δ`, or a timeout certificate for the view before `w`, of `E`.
+Its honest signers' timeout votes give every node the one-honest indication within
+`Δ`, and a member of `E` still in an earlier view answers with its own vote. If
+every member of `E` has voted by then, the votes form a certificate everywhere
+within another `Δ`. A member that has not voted was taken to `w` already: by a
+certificate or an epoch change, or by a timeout certificate it was handed without
+having voted, which it sends on (`Synchrony.timeoutCertForward`).
+-/
+theorem reach_spread (hgst : GST ≤ firstReach N hex) (hΔτ : Δ < τ) (k : PubKey) (hk : C.Honest k)
+    (hkE : C.HonestFrom E k) :
     Reached N k hk (cut N hs.timeUnbounded k hk (firstReach N hex + Δ + Δ)) w := by
+  have hu := hs.timeUnbounded
+  suffices hall : ∀ k (hk : C.Honest k), C.HonestFrom E k →
+      N.By k hk (firstReach N hex + Δ + Δ) fun h => ∃ u, h.ViewGround cfg u ∧ w ≤ u by
+    exact by_cut N hu (fun _ _ hab ⟨u, hg, hle⟩ => ⟨u, viewGround_grows (received_grows _ hab) hg, hle⟩)
+      (hall k hk hkE)
+  intro k hk hkE
+  -- `w - 1` is late, so later than the first view.
+  have hw1 : cfg.anchorView.toNat + 2 ≤ (w - 1).toNat := by
+    refine Nat.le_of_not_lt fun hlt => hl ⟨k, hk, 0, fun _ hi => absurd hi (Nat.not_lt_zero _),
+      cfg.anchorCert.view + 1, Or.inl ⟨cfg.anchorCert, Or.inl rfl, rfl⟩, ?_⟩
+    show (w - 1).toNat ≤ cfg.anchorCert.view.toNat + 1
+    rw [hcfg.anchorCertView]; omega
   obtain ⟨j, hj, n, hn, hr⟩ := least_spec hex
-  have hn0 : n ≠ 0 := by
-    rintro rfl
-    exact not_reached_nil hcfg hw hr
-  obtain ⟨n', rfl⟩ : ∃ n', n = n' + 1 := ⟨n - 1, by omega⟩
-  have htn : N.time j hj n' ≤ firstReach N hex := hn n' (Nat.lt_succ_self n')
-  have := Nat.max_le.mpr ⟨htn, hgst⟩
-  exact reached_mono (cut_mono N hs.timeUnbounded (by omega)) (reached_spread hcfg hcf hs hst hr k hk hkE)
+  obtain ⟨s, hsn, hnot, hrs⟩ := reach_step hcfg hw hr
+  have hts : N.time j hj s ≤ firstReach N hex := hn s hsn
+  rcases first_ground hcfg hcf hs hst hrs hnot with hpush | ⟨tc, hin, hwt⟩
+  · exact by_later (by omega) (hpush k hk hkE)
+  -- A timeout certificate for `w` or later comes only after `τ` (`Liveness.timeoutCert_late`).
+  have hview : ∀ {m : PubKey} {hm : C.Honest m} {i : Nat} {tc' : TimeoutCert},
+      (N.trace m hm i).input = .timeoutCertificate tc' → N.time m hm i ≤ firstReach N hex + Δ →
+      w ≤ tc'.view + 1 → tc'.view = w - 1 := fun {m} {hm} {i} {tc'} hin' hti hwt' => by
+    have hwt'' : w.toNat ≤ tc'.view.toNat + 1 := hwt'
+    refine ViewNumber.ext (show tc'.view.toNat = w.toNat - 1 from ?_)
+    refine Nat.le_antisymm ?_ (by omega)
+    refine Nat.le_of_not_lt fun hlt => ?_
+    have := timeoutCert_late hcfg hs hw hex hin' (show w.toNat ≤ tc'.view.toNat by omega)
+    omega
+  have htw1 : tc.view = w - 1 := hview hin (by omega) hwt
+  have hlate : Late N t0 tc.view := htw1 ▸ hl
+  have htE : tc.data.epoch = E := late_tc_epoch hcfg hs hst hin (htw1 ▸ hw1) hlate
+  have hex1 : ∃ T, ReachedBy N T tc.view := by
+    obtain ⟨v, hv, hwv⟩ := hrs
+    exact ⟨N.time j hj s, j, hj, s + 1, fun i hi => time_mono N j hj (Nat.le_of_lt_succ hi), v, hv,
+      by rw [htw1]; show w.toNat - 1 ≤ v.toNat; have : w.toNat ≤ v.toNat := hwv; omega⟩
+  have hF1 : t0 < firstReach N hex1 := late_firstReach hlate hex1
+  have hmax : max (firstReach N hex) GST = firstReach N hex := Nat.max_eq_left hgst
+  by_cases hvoted : ∀ m (hmE : C.members E m ∧ C.honest E m), ∃ L,
+      N.SentByTime m (.of hmE.2) (firstReach N hex + Δ) (.timeoutVote ⟨⟨E, L⟩, tc.view, m⟩)
+  · -- Every member of `E` voted: their votes form the certificate everywhere.
+    obtain ⟨n2, hn2, tc', -, htv', hrec⟩ := hs.timeoutCert E _ tc.view (firstReach N hex + Δ)
+      (N.honestQuorum E) (fun m ⟨hm, hmh⟩ => ⟨hmh, hvoted m ⟨hm, hmh⟩⟩) k hk hkE
+    refine by_later (by omega) ⟨n2, hn2, tc'.view + 1, Or.inr (Or.inl ⟨tc', hrec, rfl⟩), ?_⟩
+    show w.toNat ≤ tc'.view.toNat + 1
+    rw [htv', htw1]; show w.toNat ≤ w.toNat - 1 + 1; omega
+  obtain ⟨m, hmE, hmv⟩ : ∃ m, ∃ hmE : C.members E m ∧ C.honest E m, ¬ ∃ L,
+      N.SentByTime m (.of hmE.2) (firstReach N hex + Δ) (.timeoutVote ⟨⟨E, L⟩, tc.view, m⟩) :=
+    Classical.byContradiction fun hne => hvoted fun m hmE =>
+      Classical.byContradiction fun h => hne ⟨m, hmE, h⟩
+  have hm : C.Honest m := .of hmE.2
+  -- A vote of `m` for the certificate's view and epoch would be one it was not to have.
+  have hnv : ∀ s2, N.time m hm s2 ≤ firstReach N hex + Δ → ¬ ∃ vote : TimeoutVote,
+      ((N.trace m hm).history (s2 + 1)).Sent (.timeoutVote vote)
+        ∧ vote.view = tc.view ∧ vote.data.epoch = tc.data.epoch := by
+    rintro s2 hts2 ⟨vote, hsent, hvv, hve⟩
+    obtain ⟨i, hi, hiout⟩ := (Trace.sent_history _).mp hsent
+    have hveE : vote.data.epoch = E := hve.trans htE
+    obtain ⟨hsig, -⟩ := (N.protocol m hm (i + 1)).timeoutJustified i _ vote
+      (Trace.history_getElem? _ (Nat.lt_succ_self i)) hiout (by rw [hveE]; exact hmE.2)
+    obtain ⟨⟨ve, vl⟩, vv, vs⟩ := vote
+    simp only at hsig hvv hveE
+    rw [hsig, hvv, hveE] at hiout
+    exact hmv ⟨vl, i + 1, fun i' hi' => Nat.le_trans (time_mono N m hm (by omega)) hts2,
+      (Trace.sent_history _).mpr ⟨i, Nat.lt_succ_self _, hiout⟩⟩
+  -- `m` at `w` by `F + Δ` without such a vote: what took it there reaches everyone.
+  have hpushm : ∀ n3, (∀ i, i < n3 → N.time m hm i ≤ firstReach N hex + Δ) → Reached N m hm n3 w →
+      N.By k hk (firstReach N hex + Δ + Δ) fun h => ∃ u, h.ViewGround cfg u ∧ w ≤ u := by
+    intro n3 hn3 hr3
+    obtain ⟨s2, hs2n, hnot2, hr2⟩ := reach_step hcfg hw hr3
+    have hts2 := hn3 s2 hs2n
+    rcases first_ground hcfg hcf hs hst hr2 hnot2 with hp | ⟨tc2, hin2, hwt2⟩
+    · exact by_later (by omega) (hp k hk hkE)
+    · have htw2 : tc2.view = tc.view := (hview hin2 hts2 hwt2).trans htw1.symm
+      have htE2 : tc2.data.epoch = E := late_tc_epoch hcfg hs hst hin2 (by rw [htw2, htw1]; exact hw1)
+        (htw2 ▸ hlate)
+      exact by_later (by omega) (forward_push hs hst hin2 hnot2 hwt2
+        (by rw [htw2, htE2, ← htE]; exact hnv s2 hts2) k hk hkE)
+  -- The honest signers' votes reach `m` as the indication, unless it is past the view.
+  obtain ⟨q, hq, hvotes⟩ := N.timeoutCertCausal j hj s tc hin
+  obtain ⟨n2, hn2, hP⟩ := hs.timeoutOneHonest E q tc.view (firstReach N hex) (htE ▸ hq)
+    (fun k' hqk hk' => by
+      obtain ⟨m', vote, ⟨hsig, hvv, hve, -⟩, hout, htm⟩ := hvotes k' hqk (htE ▸ hk')
+      refine ⟨vote.data.lock, m' + 1, fun i hi => Nat.le_trans (time_mono N k' _ (Nat.le_of_lt_succ hi))
+        (by omega), (Trace.sent_history _).mpr ⟨m', Nat.lt_succ_self _, ?_⟩⟩
+      obtain ⟨⟨ve, vl⟩, vv, vs⟩ := vote
+      simp only at hsig hvv hve
+      rw [htE] at hve
+      rw [hsig, hvv, hve] at hout
+      exact hout)
+    m hm (.of hmE.2)
+  rw [hmax] at hn2
+  -- A timeout vote for the view, of an epoch `m` is honest in, is of `E`: it comes after `t0`.
+  have hvoteE : ∀ i (vote : TimeoutVote), Output.send (.timeoutVote vote) ∈ (N.trace m hm i).output →
+      vote.view = tc.view → C.honest vote.data.epoch m →
+      vote = ⟨⟨E, vote.data.lock⟩, tc.view, m⟩ := fun i vote hiout hvv hve => by
+    have hlate' := timeout_late hcfg hs (htw1 ▸ hw1) hex1 hve hiout (by rw [hvv]; exact Nat.le_refl _)
+    obtain ⟨hsig, hep, -⟩ := (N.protocol m hm (i + 1)).timeoutJustified i _ vote
+      (Trace.history_getElem? _ (Nat.lt_succ_self i)) hiout hve
+    rw [Trace.history_upTo _ (Nat.le_succ i)] at hep
+    have hinE' : ((N.trace m hm).history i).InEpoch cfg E :=
+      stable_inEpoch hst hu (.of hmE.2) (cut_le_of_lt hu (show t0 < N.time m hm i by omega))
+    have hveE : vote.data.epoch = E := inEpoch_unique hep hinE'
+    obtain ⟨⟨ve, vl⟩, vv, vs⟩ := vote
+    simp only at hsig hvv hveE
+    rw [hsig, hvv, hveE]
+  rcases hP with hrec | ⟨u, hgu, hlt⟩ | ⟨vote, hsent, hvv, hve⟩
+  · obtain ⟨s3, hs3, hin3⟩ := (Trace.received_history _).mp hrec
+    have hts3 : N.time m hm s3 ≤ firstReach N hex + Δ := hn2 s3 hs3
+    by_cases hR : Reached N m hm s3 w
+    · exact hpushm s3 (fun i hi => Nat.le_trans (time_mono N m hm (Nat.le_of_lt hi)) hts3) hR
+    -- Still before `w`, `m` answers the indication with a vote of `E`.
+    exfalso
+    obtain ⟨k', e, hk', m', vote, hve, hout, hvv, htm⟩ := N.oneHonestCausal m hm s3 tc.view hin3
+    have hlate' := timeout_late hcfg hs (htw1 ▸ hw1) hex1 (hk := .of hk') (by rw [hve]; exact hk') hout
+      (by rw [hvv]; exact Nat.le_refl _)
+    have ht0 : t0 < N.time m hm s3 := by omega
+    have hinE : ((N.trace m hm).history s3).InEpoch cfg E :=
+      stable_inEpoch hst hu (.of hmE.2) (cut_le_of_lt hu ht0)
+    have hinV := inView_viewOf (cfg := cfg) (h := (N.trace m hm).history s3)
+    have hvle : viewOf cfg ((N.trace m hm).history s3) ≤ tc.view := by
+      have h2 : ¬ w.toNat ≤ (viewOf cfg ((N.trace m hm).history s3)).toNat := fun h => hR ⟨_, hinV.1, h⟩
+      rw [htw1]; show (viewOf cfg ((N.trace m hm).history s3)).toNat ≤ w.toNat - 1; omega
+    obtain ⟨e', L, hep, hout'⟩ := (N.protocol m hm (s3 + 1)).timeoutAnswered s3 _ tc.view
+      (Trace.history_getElem? _ (Nat.lt_succ_self s3))
+      (Or.inr ⟨hin3, by rw [Trace.history_upTo _ (Nat.le_succ s3)]; exact ⟨_, hinV, hvle⟩⟩)
+      (fun e'' he'' => by
+        rw [Trace.history_upTo _ (Nat.le_succ s3)] at he''
+        rw [inEpoch_unique he'' hinE]; exact ⟨hmE.2, hmE.1⟩)
+    rw [Trace.history_upTo _ (Nat.le_succ s3)] at hep
+    obtain rfl : e' = E := inEpoch_unique hep hinE
+    exact hmv ⟨L, s3 + 1, fun i hi => Nat.le_trans (time_mono N m hm (Nat.le_of_lt_succ hi)) hts3,
+      (Trace.sent_history _).mpr ⟨s3, Nat.lt_succ_self _, hout'⟩⟩
+  · exact hpushm n2 hn2 ⟨u, hgu, by
+      have h1 : tc.view.toNat < u.toNat := hlt
+      have h2 : tc.view.toNat = w.toNat - 1 := congrArg ViewNumber.toNat htw1
+      show w.toNat ≤ u.toNat; omega⟩
+  · exfalso
+    obtain ⟨i, hi, hiout⟩ := (Trace.sent_history _).mp hsent
+    have heq := hvoteE i vote hiout hvv hve
+    rw [heq] at hiout
+    exact hmv ⟨vote.data.lock, i + 1, fun i' hi' => Nat.le_trans (time_mono N m hm (by omega)) (hn2 i hi),
+      (Trace.sent_history _).mpr ⟨i, Nat.lt_succ_self _, hiout⟩⟩
 
 /--
 If no honest node holds a certificate at `w` or later by `T`, with `T` before anyone
@@ -439,7 +661,7 @@ An epoch change into a later view than `w` would need a `Cert2` at `w` or later
 over an epoch's last block, which a stable epoch rules out at a late view
 (`Liveness.late_commit`).
 -/
-theorem view_is_w {T : Nat} (hT : T < firstReach N hex + τ)
+theorem view_is_w {T : Nat} (hT2 : firstReach N hex + Δ + Δ ≤ T) (hT : T < firstReach N hex + τ)
     (hno : ∀ j (hj : C.Honest j) c,
       ((N.trace j hj).history (cut N hs.timeUnbounded j hj T)).HasCert1 cfg c → c.view < w)
     (k : PubKey) (hk : C.Honest k) (hkE : C.HonestFrom E k) {n : Nat}
@@ -448,7 +670,7 @@ theorem view_is_w {T : Nat} (hT : T < firstReach N hex + τ)
     ((N.trace k hk).history n).InView cfg w := by
   have hgst : GST ≤ firstReach N hex := Nat.le_trans hst.gst
     (Nat.le_of_lt (late_firstReach (late_mono hl (by show w.toNat - 1 ≤ w.toNat; omega)) hex))
-  have hreach := reached_mono hlo (reach_spread hcfg hcf hs hst hw hex hgst k hk hkE)
+  have hreach := reached_mono hlo (reach_spread hcfg hcf hs hst hw hex hl hgst (by omega) k hk hkE)
   have hle : ∀ v, ((N.trace k hk).history n).ViewGround cfg v → v ≤ w := by
     intro v hv
     rcases hv with ⟨c, hc, rfl⟩ | ⟨tc, htc, rfl⟩ | ⟨c1, c2, p, htook, rfl⟩
@@ -505,52 +727,6 @@ section Leader
 variable (hcfg : ConfigCoherent cfg) (hcf : CollisionFree) {GST Δ τ : Nat}
   (hs : Synchrony N GST Δ τ) {E : EpochNumber} {t0 : Nat} (hst : Stable N GST E t0)
 include hcfg hcf hs hst
-
-omit hcfg hcf hs hst in
-theorem inEpoch_unique {h : History} {e e' : EpochNumber} (he : h.InEpoch cfg e)
-    (he' : h.InEpoch cfg e') : e = e' :=
-  EpochNumber.ext (Nat.le_antisymm (he'.2 e he.1) (he.2 e' he'.1))
-
-omit hcfg hcf hs in
-/-- From `t0` on, epoch `E` is no earlier than the epoch of any node honest in `E` or later. -/
-theorem stable_notBehind (hu : ∀ k (hk : C.Honest k) T, ∃ n, T < N.time k hk n) {j : PubKey}
-    {hj : C.Honest j} (hjE : C.HonestFrom E j) {n : Nat} (hn : cut N hu j hj t0 ≤ n) :
-    NotBehind cfg ((N.trace j hj).history n) E :=
-  fun e' he' => by rw [inEpoch_unique he' (stable_inEpoch hst hu hjE hn)]; exact Nat.le_refl _
-
-omit hcfg hcf hs hst in
-/-- A history is behind no epoch it is in. -/
-theorem notBehind_of_inEpoch {h : History} {e : EpochNumber} (he : h.InEpoch cfg e) : NotBehind cfg h e :=
-  fun e' he' => by rw [inEpoch_unique he' he]; exact Nat.le_refl _
-
-omit hcf in
-/-- A timeout certificate an honest node receives for a late view is of epoch `E`. -/
-theorem late_tc_epoch {k : PubKey} {hk : C.Honest k} {n : Nat} {tc : TimeoutCert}
-    (hin : (N.trace k hk n).input = .timeoutCertificate tc) (htw : cfg.anchorView.toNat + 2 ≤ tc.view.toNat)
-    (hl : Late N t0 tc.view) : tc.data.epoch = E := by
-  have hu := hs.timeUnbounded
-  have hex : ∃ T, ReachedBy N T tc.view := ⟨N.time k hk n, k, hk, n + 1,
-    fun i hi => time_mono N k hk (Nat.le_of_lt_succ hi),
-    tc.view + 1, Or.inr (Or.inl ⟨tc, hin ▸ Trace.received_self _ n, rfl⟩),
-    Nat.le_succ _⟩
-  obtain ⟨q, hq, hvotes⟩ := N.timeoutCertCausal k hk n tc hin
-  obtain ⟨k', hqk, -, hk'e⟩ := C.intersect _ q q hq hq
-  obtain ⟨m, vote, ⟨-, hvv, hve, -⟩, hm, -⟩ := hvotes k' hqk hk'e
-  have hk' : C.Honest k' := .of hk'e
-  have hvh : C.honest vote.data.epoch k' := by rw [hve]; exact hk'e
-  have hlate := timeout_late hcfg hs htw hex hvh hm (by rw [hvv]; exact Nat.le_refl _)
-  have ht0 : t0 < firstReach N hex := Nat.lt_of_not_le fun hle => hl
-    (let ⟨j, hj, n', hn', hr⟩ := least_spec hex; ⟨j, hj, n', fun i hi => Nat.le_trans (hn' i hi) hle, hr⟩)
-  obtain ⟨-, hep, -⟩ := (N.protocol k' hk' (m + 1)).timeoutJustified m (N.trace k' hk' m) vote
-    (Trace.history_getElem? _ (Nat.lt_succ_self m)) hm hvh
-  rw [Trace.history_upTo _ (Nat.le_succ m)] at hep
-  have hcut : cut N hu k' hk' t0 ≤ m := cut_le_of_lt hu (show t0 < N.time k' hk' m by omega)
-  -- A retired signer would be past the epoch it names.
-  have hk'E : C.HonestFrom E k' := Classical.byContradiction fun hk'E =>
-    stable_retired hst hu hk'E hcut hvh (notBehind_of_inEpoch hep)
-  have hEm := stable_inEpoch hst hu hk'E hcut
-  rw [← hve]
-  exact inEpoch_unique hep hEm
 
 omit hcfg hcf hs hst in
 /-- A block is in the epoch its parent's height leads to. -/
@@ -926,11 +1102,11 @@ theorem leader_acts {δ : Nat} (hp : Prompt N δ) (hw3 : cfg.anchorView.toNat + 
   have hc23 : cut N hu l hl' (firstReach N hex + Δ + 2 * Δ) ≤ cut N hu l hl' (firstReach N hex + Δ + 3 * Δ) :=
     cut_mono N hu (by omega)
   have hc2T : cut N hu l hl' (firstReach N hex + Δ + 2 * Δ) ≤ cut N hu l hl' T := cut_mono N hu (by omega)
-  have hin1 := view_is_w hcfg hcf hs hst hw hex hl hT hno l hl' (.of hlE) (Nat.le_refl _)
+  have hin1 := view_is_w hcfg hcf hs hst hw hex hl (by omega) hT hno l hl' (.of hlE) (Nat.le_refl _)
     (Nat.le_trans hc12 hc2T)
-  have hin2 := view_is_w hcfg hcf hs hst hw hex hl hT hno l hl' (.of hlE) hc12 hc2T
+  have hin2 := view_is_w hcfg hcf hs hst hw hex hl (by omega) hT hno l hl' (.of hlE) hc12 hc2T
   have hn2 : cut N hu l hl' (firstReach N hex + Δ + 2 * Δ) ≠ 0 := fun h => by
-    have hr := reach_spread hcfg hcf hs hst hw hex hgst l hl' (.of hlE)
+    have hr := reach_spread hcfg hcf hs hst hw hex hl hgst (by omega) l hl' (.of hlE)
     rw [show cut N hu l hl' (firstReach N hex + Δ + Δ) = 0 by omega] at hr
     exact not_reached_nil hcfg hw hr
   have htc : ∀ tc, ((N.trace l hl').history (cut N hu l hl' (firstReach N hex + Δ + Δ))).Received
@@ -985,7 +1161,7 @@ theorem leader_acts {δ : Nat} (hp : Prompt N δ) (hw3 : cfg.anchorView.toNat + 
         (hs.header l hl' n2' _ hlE' (hn2' ▸ hin2) (hn2' ▸ hready0))
       obtain ⟨hdr, hnum, hrec⟩ := by_cut N hu
         (fun a b hab ⟨hdr, h1, h2⟩ => ⟨hdr, h1, received_grows _ hab _ h2⟩) hhdr
-      have hin3 := view_is_w hcfg hcf hs hst hw hex hl hT hno l hl' (.of hlE) (Nat.le_trans hc12 hc23)
+      have hin3 := view_is_w hcfg hcf hs hst hw hex hl (by omega) hT hno l hl' (.of hlE) (Nat.le_trans hc12 hc23)
         (cut_mono N hu (by omega))
       obtain ⟨ev, hready⟩ := ready_of_tuple hc23 hrd hlt hbd (hdr := hdr) hnum
         (by rw [hpe]; exact hnbE _ hc23) ⟨w, hin3.1, Nat.le_refl _⟩
@@ -1016,7 +1192,7 @@ theorem leader_acts {δ : Nat} (hp : Prompt N δ) (hw3 : cfg.anchorView.toNat + 
       (Or.inl ht)
     have := time_mono N l hl' (Nat.le_of_lt_succ hi)
     omega
-  · exact view_is_w hcfg hcf hs hst hw hex hl hT hno l hl' (.of hlE) (Nat.le_trans (Nat.le_trans hc12 hc23) hle)
+  · exact view_is_w hcfg hcf hs hst hw hex hl (by omega) hT hno l hl' (.of hlE) (Nat.le_trans (Nat.le_trans hc12 hc23) hle)
       hmT
 
 end Leader
@@ -1468,7 +1644,7 @@ theorem members_vote1 {δ : Nat} (hp : Prompt N δ) (hex : ∃ T, ReachedBy N T 
     have hvote := vote1_at_proposal hcfg hcf hs hst hw hl hlE hlead hsend hpw hep hiout hev (hvw.trans hpw)
     exact hneg ⟨m + 1, hbefore, (Trace.sent_history _).mpr ⟨i, hi, hvote ▸ hiout⟩⟩
   · rw [hpw]
-    exact view_is_w hcfg hcf hs hst hw hex hl hT hno k hk (.of hkE)
+    exact view_is_w hcfg hcf hs hst hw hex hl (by omega) hT hno k hk (.of hkE)
       (Nat.le_trans (cut_mono N hu (by omega)) hle) hmT
 
 /--
@@ -1553,7 +1729,7 @@ theorem members_vote1_revote {δ : Nat} (hp : Prompt N δ) (hex : ∃ T, Reached
     have hvote := vote1_at_revote hcfg hcf hs hst hw hl hlE hlead hsend hrw hre hiout hev (hvw.trans hrw)
     exact hneg ⟨m + 1, hbefore, (Trace.sent_history _).mpr ⟨i, hi, hvote ▸ hiout⟩⟩
   · rw [hrw]
-    exact view_is_w hcfg hcf hs hst hw hex hl hT hno k hk (.of hkE)
+    exact view_is_w hcfg hcf hs hst hw hex hl (by omega) hT hno k hk (.of hkE)
       (Nat.le_trans (cut_mono N hu (by omega)) hle) hmT
 
 end Members

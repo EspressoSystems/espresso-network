@@ -1020,7 +1020,21 @@ theorem sync : Synchrony (net hv) 0 4 33 where
     obtain ⟨_hka, L, hsent⟩ := hvotes a (quorum_a hq fun k hk => .of (hvotes k hk).1)
     obtain ⟨j, -, hj⟩ := sentBy hv hsent
     exact absurd hj no_timeoutVote
-  timeoutCertSpread tc k hk n hin := absurd hin no_tc
+  timeoutOneHonest e q v t hq hvotes _ _ _ := by
+    exfalso
+    obtain ⟨k0, hq0, -, hk0⟩ := C.intersect _ q q hq hq
+    obtain ⟨L, hs⟩ := hvotes k0 hq0 hk0
+    obtain ⟨j, -, hj⟩ := sentBy hv hs
+    rcases Kit.timeout_vote_input input hv hj with h | h
+    · exact input_quiet.1 _ h
+    · exact input_quiet.2.1 _ h
+  timeoutCertForward tc k hk n hin := absurd (hin ▸ Trace.received_self _ n) no_tc
+  timeoutCatchUp k hk v hrep := by
+    exfalso
+    obtain ⟨m, vote, -, -, hout⟩ := hrep 0
+    rcases Kit.timeout_vote_input input hv hout with h | h
+    · exact input_quiet.1 _ h
+    · exact input_quiet.2.1 _ h
   timeoutLockSpread tc k hk n hin := absurd hin no_tc
   epochChange c2 b hcm hlast k hk n hbc k' hk' _ := by
     obtain ⟨hb, hc2⟩ := hbc

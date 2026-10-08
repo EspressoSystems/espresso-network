@@ -142,7 +142,8 @@ fields are of these kinds:
 
 * what the network delivers within `Δ`: `proposal`, `revote`, `cert1`, `cert2`,
   `cert2Spread`, `certSpread`, `lockSpread`, `blockSpread`, `timeoutCert`,
-  `timeoutLockSpread` and `epochChange`, and within `2Δ`, `timeoutCertSpread`;
+  `timeoutOneHonest`, `timeoutCertForward`, `timeoutLockSpread` and `epochChange`,
+  and eventually, `timeoutCatchUp`;
 * what a node's own modules deliver: the builder's blocks and headers, and the
   validity reports (`proposalValid`, `validatedSound`, `validated`, `header`). The same bound `Δ`
   covers the delays of these modules, so `Δ` is the larger of the network's bound
@@ -243,26 +244,59 @@ structure Synchrony (N : TimedNetwork cfg leader C) (GST Δ τ : Nat) : Prop whe
       ∃ tc, tc.data.epoch = e ∧ tc.view = v ∧ hist.Received (.timeoutCertificate tc)
 
   /--
-  A timeout certificate one honest node holds, every node honest in its epoch or
-  later holds one for the same view and epoch, within `2Δ`.
+  Timeout votes for view `v` from every member of a quorum of epoch `e` that is
+  honest in `e` become the one-honest indication for `v` at every node honest in
+  `e` or later, unless the node has grounds for a later view by then, or has sent a
+  timeout vote for `v` itself.
 
-  It is grounds for the view after it. Any certificate for the view and epoch is,
-  whatever lock it names; what the lock asks of the network is `timeoutLockSpread`.
-
-  A node meets this by sending a timeout certificate on to every node when it first
-  receives it. Within one epoch the one-honest indication would do without: the
-  honest signers' timeout votes reach every node within `Δ`, and a node answers the
-  indication with its own timeout vote, so the votes form a certificate everywhere
-  within another `Δ`. At an epoch boundary it does not. A node answers only in its
-  own epoch, and votes of two epochs never form one certificate, so a node already
-  in the next epoch adds nothing towards a certificate of the epoch before. A node
-  that formed such a certificate and moved past its view then times out only later
-  views. The nodes behind it can be one vote short in each epoch, and wait for ever
-  unless the certificate itself reaches them.
+  The honest members of a quorum hold more than the faulty nodes can, so their
+  votes are enough for the indication. An implementation meets it by sending its
+  timeout votes to every node. A node answers the indication with its own timeout
+  vote (`ProtocolHistory.timeoutAnswered`), so within an epoch a timeout
+  certificate that some honest node holds forms everywhere without being sent on:
+  the votes of its honest signers draw everyone else's.
   -/
-  timeoutCertSpread : ∀ tc, N.Propagates GST (2 * Δ) tc.data.epoch
-    (fun hist => hist.Received (.timeoutCertificate tc)) fun hist =>
-      ∃ tc', tc'.view = tc.view ∧ tc'.data.epoch = tc.data.epoch ∧ hist.Received (.timeoutCertificate tc')
+  timeoutOneHonest : ∀ e q v t, C.Quorum e q →
+    (∀ k, q k → ∀ hk : C.honest e k, ∃ L, N.SentByTime k (.of hk) t (.timeoutVote ⟨⟨e, L⟩, v, k⟩)) →
+    ∀ k hk, C.HonestFrom e k → N.By k hk (max t GST + Δ) fun hist =>
+      hist.Received (.timeoutOneHonest v) ∨ (∃ u, hist.ViewGround cfg u ∧ v < u)
+        ∨ ∃ vote : TimeoutVote, hist.Sent (.timeoutVote vote) ∧ vote.view = v ∧ C.honest vote.data.epoch k
+
+  /--
+  A timeout certificate a node is handed while in its view or an earlier one, and
+  without having sent a timeout vote for its view and epoch, takes every node
+  honest in its epoch or later past that view within `Δ`.
+
+  An implementation meets it by sending such a certificate on to every node. A node
+  that assembles a certificate from votes has normally voted itself, on the
+  one-honest indication, and need not. A node that did not, because the
+  certificate came inside a proposal or as an answer, may be the only honest node
+  holding it: the nodes still in the view then lack its vote, and wait for ever
+  unless the certificate reaches them.
+  -/
+  timeoutCertForward : ∀ tc k hk n, (N.trace k hk n).input = .timeoutCertificate tc →
+    (∀ u, ((N.trace k hk).history n).ViewGround cfg u → u.toNat ≤ tc.view.toNat) →
+    (¬ ∃ vote : TimeoutVote, ((N.trace k hk).history (n + 1)).Sent (.timeoutVote vote)
+      ∧ vote.view = tc.view ∧ vote.data.epoch = tc.data.epoch) →
+    ∀ k' hk', C.HonestFrom tc.data.epoch k' → N.By k' hk' (max (N.time k hk n) GST + Δ) fun hist =>
+      ∃ u, hist.ViewGround cfg u ∧ tc.view < u
+
+  /--
+  A node that keeps timing out view `v` while an honest node has grounds for a later
+  view gets grounds for a later view.
+
+  An implementation meets it by answering a timeout vote for a view the receiver has
+  left with its grounds for a later one: a certificate, or the epoch change that
+  ended the sender's epoch. Each repeated vote asks again, so this holds whatever
+  was lost before GST. It is needed for nodes left in different views before an
+  epoch became stable, when their timeout votes named different epochs and formed
+  no certificate. Once the epoch is stable their votes name one epoch, but a node
+  already past the view does not vote for it again.
+  -/
+  timeoutCatchUp : ∀ k hk v, (∀ T, ∃ m vote, T < N.time k hk m ∧ vote.view = v
+      ∧ Output.send (.timeoutVote vote) ∈ (N.trace k hk m).output) →
+    ∀ j hj n u, ((N.trace j hj).history n).ViewGround cfg u → v < u →
+      ∃ n' u', ((N.trace k hk).history n').ViewGround cfg u' ∧ v < u'
 
   /--
   Within `Δ` of an honest node receiving a timeout certificate, every member of the
