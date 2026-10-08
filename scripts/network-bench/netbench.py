@@ -1394,8 +1394,9 @@ def next_probe(
     """The next probe after `steps`, or the reason to stop, from the steps alone. Climbs from
     the start rate until a probe fails, bisects the bracket to the resolution, then confirms
     its lower end for two steps. A collapsed probe is followed by a recovery probe at the
-    highest pass: a failing recovery ends the search. The budgets stop it before a probe that
-    would exceed them."""
+    highest pass below it. A failing recovery fails that rate, so the next one steps down to the
+    pass below; the search ends once no pass is left below. The budgets stop it before a probe
+    that would exceed them."""
     chosen = pick_probe(steps, search, cfg, side)
     if isinstance(chosen, str):
         return chosen
@@ -1425,9 +1426,10 @@ def pick_probe(
     if side == "consensus" and last["cap_waits"] and last["query_fails"]:
         return "generator throttled"
     lo, hi = bracket(steps, side)
-    if last["kind"] == "recovery" and side_fails(last, side):
+    if last["kind"] == "recovery" and side_fails(last, side) and lo is None:
         if any(not side_fails(s, side) for s in steps):
-            return f"degraded after overload at {fmt_num(steps[-2]['rate_mb_s'])}"
+            overload = next(s for s in reversed(steps) if s["kind"] != "recovery")
+            return f"degraded after overload at {fmt_num(overload['rate_mb_s'])}"
         return "below start"
     if collapsed(last):
         return probe(search.start_mb_s if lo is None else lo, "recovery")

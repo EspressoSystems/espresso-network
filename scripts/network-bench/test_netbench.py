@@ -1610,7 +1610,17 @@ def test_next_probe_recovers_after_a_collapse():
     ok = [*steps, probe_step(125.0, "recovery")]
     assert as_tuple(probe(ok)) == (140.625, "bisect", 60)
     bad = [*steps, probe_step(125.0, "recovery", 0.9, SOFT)]
-    assert probe(bad) == "degraded after overload at 156"
+    assert as_tuple(probe(bad)) == (112.5, "bisect", 60)
+
+
+def test_a_collapsed_recovery_steps_down_to_the_next_lower_pass():
+    """Run lulu-20261008-092203: 293 passed at its edge, its recovery collapsed; 234 below it
+    was never retried."""
+    steps = [*passes(150.0, 188.0, 234.0, 293.0), collapse(366.0)]
+    steps.append(collapse(293.0, "recovery"))
+    assert as_tuple(probe(steps)) == (234.0, "recovery", 60)
+    steps.append(probe_step(234.0, "recovery"))
+    assert as_tuple(probe(steps)) == (263.5, "bisect", 60)
 
 
 def test_a_collapsed_first_probe_is_retried_at_start():

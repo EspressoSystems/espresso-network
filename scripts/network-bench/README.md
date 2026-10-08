@@ -269,7 +269,9 @@ just bench aws run --tag release-x --nodes 3 --search --max-usd 30
 
 - A probe is one `--step-s` step judged by the step rules. `--step-s`, `--cap-s`, `--tx-timeout-s` default to 60.
 - Climb x1.25 until a probe fails, bisect to the resolution, confirm the result for `2 x step_s`.
-- A collapsed probe (decided < 0.5 x submitted) is followed by a re-run at the last pass; a failing re-run stops.
+- A collapsed probe (decided < 0.5 x submitted) is followed by a re-run at the highest pass below it. A failing re-run
+  fails that rate: a collapsed one is re-run at the next lower pass, a soft fail is bisected; no pass left below stops
+  the search (`degraded after overload`).
 - Query-bound with consensus unbounded: a second search on the consensus side (a lower bound, tied to query lag).
 - Stop reasons: `resolved`, `probe budget`, `disk budget`, `drain timeout`, `degraded after overload`, `below start`,
   `generator throttled`; in `load-meta.json`, `result.json` and the summary (`search: resolved after 9 probes`).
