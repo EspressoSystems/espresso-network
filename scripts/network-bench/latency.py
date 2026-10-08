@@ -37,6 +37,27 @@ TCP_SYSCTLS: tuple[tuple[str, str], ...] = (
 # Validators on the internet see a 1500 byte path; the VPC default of 9001 is not honest.
 MTU = 1500
 TC_CLEAR = 'if tc qdisc show dev "$IFACE" | grep -q "htb 1:"; then tc qdisc del dev "$IFACE" root; fi'
+# Sysctls and MTU outlive the qdisc until a reboot, which a fleet never gets between runs. The
+# first shaping after a reset saves the host's values here, and the reset replays them.
+BASELINE = "/var/lib/aws-bench-net-baseline.sh"
+SAVE_BASELINE = "\n".join(
+    [
+        f"if [ ! -e {BASELINE} ]; then",
+        "{",
+        *(
+            f'echo "sysctl -q -w {key}=\\"$(sysctl -n {key})\\""'
+            for key, _ in TCP_SYSCTLS
+        ),
+        (
+            'echo "ip link set dev $IFACE mtu'
+            ' $(ip -o link show dev "$IFACE" | sed -n \'s/.* mtu \\([0-9]*\\).*/\\1/p\')"'
+        ),
+        f"}} > {BASELINE}.tmp",
+        f"mv {BASELINE}.tmp {BASELINE}",
+        "fi",
+    ]
+)
+RESTORE_BASELINE = f"if [ -e {BASELINE} ]; then bash {BASELINE}; rm {BASELINE}; fi"
 PROFILES = ("off", "decaf-2025", "mainnet")
 DECAF_SPLIT: tuple[tuple[str, int], ...] = (
     ("eu-central-1", 38),
@@ -222,10 +243,11 @@ def tc_script(
 ) -> str:
     lines = [
         "set -eu",
-        "modprobe tcp_bbr",
-        *(f'sysctl -q -w {key}="{value}"' for key, value in TCP_SYSCTLS),
         TC_IFACE,
         'test -n "$IFACE"',
+        SAVE_BASELINE,
+        "modprobe tcp_bbr",
+        *(f'sysctl -q -w {key}="{value}"' for key, value in TCP_SYSCTLS),
         f'ip link set dev "$IFACE" mtu {MTU}',
         TC_CLEAR,
         'tc qdisc add dev "$IFACE" root handle 1: htb default 1',

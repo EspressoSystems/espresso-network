@@ -4273,7 +4273,7 @@ def reset_script(role: str, pg_store: str = "") -> str:
         f'if [ -n "$ids" ]; then docker stop -t {int(FREEZE_STOP_TIMEOUT_S)} $ids; '
         "docker rm -f $ids; fi\n"
         "find /data/journal -mindepth 1 -delete\n"
-        f"{latency.TC_IFACE}\n{latency.TC_CLEAR}\n"
+        f"{latency.TC_IFACE}\n{latency.TC_CLEAR}\n{latency.RESTORE_BASELINE}\n"
         f"find {BENCH_DIR} -mindepth 1 -maxdepth 1 {keep} -exec rm -rf {{}} +\n"
     )
     if role == "query":

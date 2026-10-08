@@ -554,7 +554,8 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> [shaping] -> services 
 - Postgres settings come from `pg_tuning`. `pg-settings.json` is checked against them.
 - Postgres memory settings (`shared_buffers`, `effective_cache_size`, `maintenance_work_mem`, `autovacuum_work_mem`)
   scale with node0's memory, read by preflight. rds keeps fixed 32 GiB values.
-- `run --fleet` clears any previous qdisc during reset, so a run without `--latency` measures an unshaped fleet.
+- `run --fleet` clears any previous qdisc during reset and restores the TCP sysctls and MTU that shaping changed, so a
+  run without `--latency` measures an unshaped fleet.
 - Cost bound: rate x (TTL + destroy + rds delete).
 
 ### Latency model
