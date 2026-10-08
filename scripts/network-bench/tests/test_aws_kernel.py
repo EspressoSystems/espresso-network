@@ -131,3 +131,13 @@ def test_default_single_shot_installs_no_kernel(
     runner = FakeRunner(states=[DONE_STATE], describe=DESCRIBE)
     assert awsb.cmd_run(harness.single_shot_args(), FakeSystem(run=runner)) == 0
     assert not runner.ran("xanmod")
+
+
+def test_xanmod_script_carries_the_archive_key(isolated: Path):
+    """dl.xanmod.org redirects to gitlab.com, which served no key to the hosts."""
+    runner = kernel_runner()
+    fleet, ssh = xanmod_fleet(isolated, runner)
+    awsb.install_xanmod(fleet, ssh)
+    script = next(c[-1] for c in runner.calls if "linux-xanmod-x64v3" in c[-1])
+    assert "BEGIN PGP PUBLIC KEY BLOCK" in script
+    assert "dl.xanmod.org" not in script

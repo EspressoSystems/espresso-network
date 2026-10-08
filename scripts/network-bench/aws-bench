@@ -109,10 +109,14 @@ DESTROY_S = 180.0
 # `--tcp-cc bbr3`: install the XanMod kernel and reboot every node host.
 KERNEL_EXPECTED_S = 300.0
 XANMOD_INSTALL_TIMEOUT_S = 900
+# Vendored: dl.xanmod.org redirects to gitlab.com, which served the hosts no key.
+# Fingerprint D38D7D1DA1349567ADED882D86F7D09EE734E623.
+XANMOD_KEY = "xanmod-archive.key"
 XANMOD_SCRIPT = """set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 keyring=/etc/apt/keyrings/xanmod-archive-keyring.gpg
-wget -qO - https://dl.xanmod.org/archive.key | gpg --dearmor --yes -o $keyring
+gpg --dearmor --yes -o $keyring <<'KEY'
+{key}KEY
 echo "deb [signed-by=$keyring] http://deb.xanmod.org $(lsb_release -sc) main" \\
   > /etc/apt/sources.list.d/xanmod-release.list
 apt-get update -y -o DPkg::Lock::Timeout=300
@@ -4951,11 +4955,12 @@ def install_xanmod(fleet: FleetState, remote: Remote) -> None:
     """XanMod carries BBR v3 as `tcp_bbr`. Node hosts only; the ctl host keeps its kernel."""
     names = _node_names(remote.hosts)
     log.info("kernel: XanMod on %d node hosts", len(names))
+    script = XANMOD_SCRIPT.format(key=(SCRIPT_DIR / "aws" / XANMOD_KEY).read_text())
 
     def install(host: str) -> None:
         remote.ssh(
             host,
-            f"sudo timeout {XANMOD_INSTALL_TIMEOUT_S} bash -c {shlex.quote(XANMOD_SCRIPT)}",
+            f"sudo timeout {XANMOD_INSTALL_TIMEOUT_S} bash -c {shlex.quote(script)}",
         )
         reboot(remote, host, fleet.interrupts)
         release = remote.ssh(host, "uname -r").stdout.strip()
