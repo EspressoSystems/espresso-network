@@ -303,11 +303,15 @@ def build_flaky_issue(
     out: list[str] = [
         FLAKY_ISSUE_MARKER,
         "",
-        f"Flaky and failing tests on `main`, aggregated from recent CI runs per "
-        f"workflow. Updated {timestamp}.",
+        (
+            f"Flaky and failing tests on `main`, aggregated from recent CI runs per "
+            f"workflow. Updated {timestamp}."
+        ),
         "",
-        "Each row is one test's recent run history, oldest to newest: "
-        "⬜ passed, 🟨 flaky (failed then passed on retry), 🟥 failed.",
+        (
+            "Each row is one test's recent run history, oldest to newest: "
+            "⬜ passed, 🟨 flaky (failed then passed on retry), 🟥 failed."
+        ),
         "",
     ]
     out.extend(_source_blocks(sources, min_occurrences))
@@ -594,7 +598,7 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
             ]
         )
         if not isinstance(runs_data, dict):
-            raise RuntimeError(f"unexpected runs response: {runs_data!r}")
+            raise TypeError(f"unexpected runs response: {runs_data!r}")
         workflow_runs = runs_data.get("workflow_runs", [])
         # Defend against GitHub not guaranteeing newest-first ordering.
         workflow_runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
@@ -631,6 +635,7 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
         subprocess.CalledProcessError,
         json.JSONDecodeError,
         RuntimeError,
+        TypeError,
         OSError,
     ) as e:
         log.warning("fetch failed, continuing with empty history: %s", e, exc_info=True)
