@@ -296,6 +296,23 @@ CGROUP_ROOT = Path("/sys/fs/cgroup")
 # Matches bench.sample_host, so host_stats/process_stats coverage math is unchanged.
 HOST_SAMPLE_S = 2.0
 PG_SAMPLE_S = 5.0
+# Validator sockets (cliquenet) per second, and the netem queues every QDISC_EVERY samples:
+# separates a sender-side backlog (notsent, Send-Q) from TCP state (cwnd, bbr bw, pacing).
+SOCKET_SAMPLE_S = 1.0
+QDISC_EVERY = 5
+# Cumulative counters of /proc/net/snmp and /proc/net/netstat sampled with the sockets.
+TCP_COUNTERS = {
+    "Tcp": ("InSegs", "OutSegs", "RetransSegs", "CurrEstab"),
+    "TcpExt": (
+        "TCPTimeouts",
+        "TCPLossProbes",
+        "TCPMTUPFail",
+        "TCPMemoryPressures",
+        "PruneCalled",
+        "TCPRcvQDrop",
+        "TCPBacklogDrop",
+    ),
+}
 # Endpoint of the query database, written next to the run's other host files; agent-host and the
 # collect and gate scripts read it, so psql runs natively against any placement.
 PG_JSON = f"{BENCH_DIR}/pg.json"
@@ -7792,6 +7809,66 @@ def host_sample(
     }
 
 
+def parse_ss(text: str) -> list[dict[str, Any]]:
+    """`ss -tinmOH` lines of established sockets: queues, endpoints, and the info fields
+    (cwnd, bbr, pacing_rate, delivery_rate, notsent, retrans, skmem, ...) verbatim."""
+    sockets = []
+    for line in text.splitlines():
+        fields = line.split(maxsplit=5)
+        if len(fields) < 5 or fields[0] != "ESTAB":
+            continue
+        sockets.append(
+            {
+                "recv_q": int(fields[1]),
+                "send_q": int(fields[2]),
+                "local": fields[3],
+                "peer": fields[4],
+                "info": fields[5] if len(fields) > 5 else "",
+            }
+        )
+    return sockets
+
+
+def proc_counters(text: str, wanted: dict[str, tuple[str, ...]]) -> dict[str, int]:
+    """The `wanted` counters of /proc/net/snmp or /proc/net/netstat, whose sections are a
+    `Prefix: names` line followed by a `Prefix: values` line."""
+    lines = text.splitlines()
+    found = {}
+    for names, values in zip(lines[::2], lines[1::2]):
+        prefix, _, keys = names.partition(":")
+        if prefix not in wanted:
+            continue
+        row = dict(zip(keys.split(), values.partition(":")[2].split()))
+        found |= {key: int(row[key]) for key in wanted[prefix]}
+    return found
+
+
+def socket_sample(system: System, qdisc: bool) -> dict[str, Any]:
+    """A failing `ss` or `tc` is recorded in the sample: the host samples go on."""
+    port = f"( sport = :{CLIQUENET_PORT} or dport = :{CLIQUENET_PORT} )"
+    ss = system.run(["ss", "-tinmOH", port])
+    counters = proc_counters(Path("/proc/net/snmp").read_text(), TCP_COUNTERS)
+    counters |= proc_counters(Path("/proc/net/netstat").read_text(), TCP_COUNTERS)
+    sample: dict[str, Any] = {"ts": system.clock.time(), "tcp": counters}
+    if ss.returncode == 0:
+        sample["sockets"] = parse_ss(ss.stdout)
+    else:
+        sample["error"] = f"ss exited {ss.returncode}: {ss.stderr.strip()}"
+    if qdisc:
+        tc = system.run(["tc", "-s", "qdisc", "show"])
+        sample["qdisc"] = tc.stdout if tc.returncode == 0 else f"error: {tc.stderr}"
+    return sample
+
+
+def sample_sockets(out: Path, stop: threading.Event, system: System) -> None:
+    with out.open("a", buffering=1) as f:
+        for n in itertools.count():
+            if stop.is_set():
+                return
+            f.write(json.dumps(socket_sample(system, n % QDISC_EVERY == 0)) + "\n")
+            system.clock.wait(stop, SOCKET_SAMPLE_S)
+
+
 def pg_sample_sql() -> str:
     """One json object of cumulative counters."""
     backends = (
@@ -7852,19 +7929,27 @@ def cmd_agent_host(args: argparse.Namespace, system: System) -> int:
         raise Refused("agent-host --role query needs --pg")
     stop = threading.Event()
     system.trap((signal.SIGINT, signal.SIGTERM), lambda *_: stop.set())
-    pg_thread = None
+    threads = []
     if args.role == "query":
         pg_out = args.out.with_name("pg-stats.jsonl")
         pg = cast(PgEndpoint, json.loads(args.pg.read_text()))
-        pg_thread = threading.Thread(target=sample_pg, args=(pg_out, stop, pg, system))
-        pg_thread.start()
+        threads.append(
+            threading.Thread(target=sample_pg, args=(pg_out, stop, pg, system))
+        )
+    if args.role != "ctl":
+        sockets_out = args.out.with_name("sockets.jsonl")
+        threads.append(
+            threading.Thread(target=sample_sockets, args=(sockets_out, stop, system))
+        )
+    for thread in threads:
+        thread.start()
     with args.out.open("a", buffering=1) as f:
         while not stop.is_set():
             sample = host_sample(load_containers(containers_path), system.clock)
             f.write(json.dumps(sample) + "\n")
             system.clock.wait(stop, HOST_SAMPLE_S)
-    if pg_thread is not None:
-        pg_thread.join()
+    for thread in threads:
+        thread.join()
     return EXIT_OK
 
 

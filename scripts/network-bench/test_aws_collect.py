@@ -103,6 +103,53 @@ def test_sample_pg_writes_lines_and_skips_failed_ticks(tmp_path: Path) -> None:
     assert "ts" in line
 
 
+SS_OUT = (
+    "ESTAB 0 0 172.31.17.158:9000 172.31.25.59:41234 skmem:(r0,rb131072,t0,tb87040,f0,w0,o0,bl0,d0)"
+    " bbr cwnd:120 bbr:(bw:1.2Gbps,mrtt:158.1) pacing_rate 1.4Gbps notsent:4096\n"
+    "LISTEN 0 4096 0.0.0.0:9000 0.0.0.0:*\n"
+    "ESTAB 12 30 172.31.17.158:52000 172.31.31.90:9000\n"
+)
+
+
+def test_parse_ss_keeps_established_sockets_with_their_info():
+    first, second = awsb.parse_ss(SS_OUT)
+    assert first["peer"] == "172.31.25.59:41234"
+    assert "notsent:4096" in first["info"]
+    assert (second["recv_q"], second["send_q"], second["info"]) == (12, 30, "")
+
+
+def test_proc_counters_pick_the_wanted_keys():
+    snmp = "Ip: Forwarding\nIp: 1\nTcp: InSegs OutSegs RetransSegs CurrEstab ActiveOpens\nTcp: 10 20 3 8 200\n"
+    netstat = "TcpExt: TCPTimeouts PruneCalled X\nTcpExt: 4 0 9\n"
+    wanted = {"Tcp": ("RetransSegs", "CurrEstab"), "TcpExt": ("TCPTimeouts",)}
+    assert awsb.proc_counters(snmp, wanted) == {"RetransSegs": 3, "CurrEstab": 8}
+    assert awsb.proc_counters(netstat, wanted) == {"TCPTimeouts": 4}
+
+
+def test_socket_sampler_records_ss_failures_and_samples_qdisc_every_few(tmp_path: Path):
+    stop = threading.Event()
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], env: dict | None = None) -> Any:
+        calls.append(argv)
+        if len([c for c in calls if c[0] == "ss"]) == awsb.QDISC_EVERY + 1:
+            stop.set()
+        if argv[0] == "ss" and len(calls) == 1:
+            return completed(returncode=1, stderr="no ss")
+        return completed(stdout=SS_OUT if argv[0] == "ss" else "qdisc netem")
+
+    out = tmp_path / "sockets.jsonl"
+    awsb.sample_sockets(out, stop, FakeSystem(run=run, clock=FakeClock()))
+    samples = list(netbench.read_jsonl(out))
+    assert len(samples) == awsb.QDISC_EVERY + 1
+    assert samples[0]["error"] == "ss exited 1: no ss"
+    assert [("qdisc" in s) for s in samples] == [True] + [False] * (
+        awsb.QDISC_EVERY - 1
+    ) + [True]
+    assert len(samples[1]["sockets"]) == 2
+    assert "RetransSegs" in samples[1]["tcp"]
+
+
 def test_agent_host_role_query_starts_pg_sampler(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

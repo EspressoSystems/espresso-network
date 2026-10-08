@@ -468,6 +468,9 @@ Each step is judged over its second half. A step stopped early is judged over it
 
 - Per node: CPU, RSS, tokio busy, top ops from `/v1/status/metrics` (`consensus_`, `journal_`, `sql`, `storage`, ...).
 - Per host (AWS): CPU, steal, memory, disk and net rates, per-container CPU and memory (cgroups).
+- Per node host (AWS), `sockets.jsonl`: every 1 s the established cliquenet sockets from `ss -tinmO` (Send-Q, Recv-Q,
+  cwnd, bbr, pacing and delivery rate, notsent, retrans, skmem verbatim) and TCP counters (retransmits, timeouts, memory
+  pressure, drops); `tc -s qdisc` (netem queues) every 5 s. Not analyzed yet; read with a script.
 - Query node: `pg_stat_database`, checkpointer, wal and activity every 5 s; `pg_stat_statements` and settings at
   collect; statements > 200 ms in the postgres log.
 
@@ -617,7 +620,8 @@ runs/01-run/             one measurement
   manifest.json          fleet.json copy plus fleet, start_spread_s, config_hash, latency (profile, probes)
   genesis.toml topology.json config.json
   hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz, collect-<k>/ (`collect`),
-                         cloud-init-output.log, chrony.txt, host.jsonl, ena-allowance.txt, trace/ (--leader-trace)
+                         cloud-init-output.log, chrony.txt, host.jsonl, sockets.jsonl (nodes), ena-allowance.txt,
+                         trace/ (--leader-trace)
                          pg-stats.json pg-stats.jsonl pg-statements.json pg-settings.json du-payload.txt (node0)
   cloudwatch/            ec2-node0.json (EBS balance, every run); rds.json (rds runs)
   rds-logs/              postgres logs of the run window (rds runs)
