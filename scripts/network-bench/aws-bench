@@ -4487,6 +4487,7 @@ def render_run(
     append_event(run_dir, "planned", "manifest-written", None)
     (run_dir / "genesis.toml").write_bytes(genesis)
     nb.write_json(run_dir / "config.json", dataclasses.asdict(cfg.load))
+    log.info("run dir %s", run_dir)
     return run_dir
 
 
