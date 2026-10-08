@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use hotshot::types::BLSPubKey;
+use hotshot::{traits::BlockPayload, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -32,7 +32,6 @@ use hotshot_types::{
     message::UpgradeLock,
     traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
     upgrade_config::UpgradeConfig,
-    utils::BuilderCommitment,
     x25519::Keypair,
 };
 use tokio::{select, task::JoinSet};
@@ -267,10 +266,6 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         // runs, every other node is waiting on this node's proposal, so no
         // consensus input arrives to drive a poll. The coordinator's own select
         // does the same for the production builder (`block_builder.next()`).
-        // A finished build must be able to wake this loop on its own: while it
-        // runs, every other node is waiting on this node's proposal, so no
-        // consensus input arrives to drive a poll. The coordinator's own select
-        // does the same for the production builder (`block_builder.next()`).
         select! {
             // Biased: a finished build gates the proposal, so collect it before
             // servicing more input. Without this the arms are chosen at random,
@@ -279,30 +274,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
 
             Some(done) = builds.join_next(), if !builds.is_empty() => {
                 let (pending, block) = done?;
-                let header = TestBlockHeader::new::<TestTypes>(
-                    &pending.parent_leaf,
-                    block.payload_commitment,
-                    // `TestBlockPayload::builder_commitment` is a serial SHA-256
-                    // over the whole payload, and nothing on this path reads it
-                    // back: no validator recomputes or compares it. The
-                    // placeholder matches `utils.rs`.
-                    BuilderCommitment::from_bytes([]),
-                    block.metadata,
-                    bench_upgrade_lock().version_infallible(pending.view),
-                );
-                let header_input =
-                    ConsensusInput::HeaderCreated(pending.view, pending.parent_commitment, header);
-                metrics.on_input(&header_input);
-                coordinator.apply_consensus(header_input);
-                let block_input = ConsensusInput::BlockBuilt {
-                    view: pending.view,
-                    epoch: pending.epoch,
-                    payload: block.block,
-                    metadata: block.metadata,
-                    payload_commitment: block.payload_commitment,
-                };
-                metrics.on_input(&block_input);
-                coordinator.apply_consensus(block_input);
+                inject_block(&mut coordinator, &mut metrics, pending, block);
             },
             input = coordinator.next_consensus_input() => match input {
                 Ok(input) => {
@@ -371,6 +343,35 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
     }
 }
 
+/// Hand a finished build to consensus as its header and block.
+fn inject_block(
+    coordinator: &mut BenchCoordinator,
+    metrics: &mut MetricsCollector,
+    pending: PendingBuild,
+    block: TestBlock,
+) {
+    let header = TestBlockHeader::new::<TestTypes>(
+        &pending.parent_leaf,
+        block.payload_commitment,
+        block.builder_commitment,
+        block.metadata,
+        bench_upgrade_lock().version_infallible(pending.view),
+    );
+    let header_input =
+        ConsensusInput::HeaderCreated(pending.view, pending.parent_commitment, header);
+    metrics.on_input(&header_input);
+    coordinator.apply_consensus(header_input);
+    let block_input = ConsensusInput::BlockBuilt {
+        view: pending.view,
+        epoch: pending.epoch,
+        payload: block.block,
+        metadata: block.metadata,
+        payload_commitment: block.payload_commitment,
+    };
+    metrics.on_input(&block_input);
+    coordinator.apply_consensus(block_input);
+}
+
 /// What a spawned block build needs to hand back so the header can be formed
 /// once it lands.
 struct PendingBuild {
@@ -391,6 +392,7 @@ struct TestBlock {
     block: TestBlockPayload,
     metadata: TestMetadata,
     payload_commitment: hotshot_types::data::VidCommitment,
+    builder_commitment: hotshot_types::utils::BuilderCommitment,
 }
 
 /// Build a test block of `size` bytes, split into `BENCH_TX_BYTES` transactions.
@@ -413,10 +415,13 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
         num_nodes,
         versions::NEW_PROTOCOL_VERSION,
     );
+    let builder_commitment =
+        <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
     TestBlock {
         block,
         metadata,
         payload_commitment,
+        builder_commitment,
     }
 }
 
