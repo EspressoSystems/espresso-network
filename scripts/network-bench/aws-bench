@@ -107,7 +107,17 @@ COLLECT_EXPECTED_S = 300.0
 COLLECT_MAX_S = 600.0
 DESTROY_S = 180.0
 # `--tcp-cc bbr3`: install the XanMod kernel and reboot every node host.
-KERNEL_S = 300.0
+KERNEL_EXPECTED_S = 300.0
+XANMOD_INSTALL_TIMEOUT_S = 900
+XANMOD_SCRIPT = """set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+keyring=/etc/apt/keyrings/xanmod-archive-keyring.gpg
+wget -qO - https://dl.xanmod.org/archive.key | gpg --dearmor --yes -o $keyring
+echo "deb [signed-by=$keyring] http://deb.xanmod.org $(lsb_release -sc) main" \\
+  > /etc/apt/sources.list.d/xanmod-release.list
+apt-get update -y -o DPkg::Lock::Timeout=300
+apt-get install -y -o DPkg::Lock::Timeout=300 linux-xanmod-x64v3
+"""
 # Operator reaction time if the laptop is unattended, e.g. a 2am run.
 TTL_MARGIN_S = 900.0
 # Instance boot before cloud-init arms the shutdown timer; billing starts at launch.
@@ -443,16 +453,6 @@ SOCKET_PATH_MAX = 103
 # The plan's "ssh reachable with backoff up to 5 min".
 SSH_READY_TIMEOUT_S = 300.0
 SSH_RETRY_S = 5.0
-XANMOD_INSTALL_TIMEOUT_S = 900
-XANMOD_SCRIPT = """set -eu
-export DEBIAN_FRONTEND=noninteractive
-keyring=/etc/apt/keyrings/xanmod-archive-keyring.gpg
-wget -qO - https://dl.xanmod.org/archive.key | gpg --dearmor --yes -o $keyring
-echo "deb [signed-by=$keyring] http://deb.xanmod.org $(lsb_release -sc) main" \\
-  > /etc/apt/sources.list.d/xanmod-release.list
-apt-get update -y
-apt-get install -y -o DPkg::Lock::Timeout=300 linux-xanmod-x64v3
-"""
 SSH_RETRY_MAX_S = 30.0
 # user-data pulls every image before cloud-init finishes; the ready timeout does not cover it.
 CLOUD_INIT_TIMEOUT_S = 900
@@ -1256,8 +1256,8 @@ def shot_seconds(cfg: RunConfig) -> tuple[float, float]:
     expected_s += PROVISION_S + DESTROY_S
     worst_s += PROVISION_S + DESTROY_S
     if cfg.tcp_cc == "bbr3":
-        expected_s += KERNEL_S
-        worst_s += KERNEL_S
+        expected_s += KERNEL_EXPECTED_S
+        worst_s += XANMOD_INSTALL_TIMEOUT_S + SSH_READY_TIMEOUT_S
     if "rds" in cfg.db_modes:
         expected_s += RDS_CREATE_S
         worst_s += RDS_CREATE_MAX_S

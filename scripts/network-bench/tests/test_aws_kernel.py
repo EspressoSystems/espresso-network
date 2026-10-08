@@ -118,7 +118,10 @@ def test_bbr3_adds_the_kernel_step_to_the_estimate():
     bbr3 = awsb.shot_seconds(
         awsb.RunConfig(tag="x", latency="decaf-2025", tcp_cc="bbr3")
     )
-    assert bbr3 == (plain[0] + awsb.KERNEL_S, plain[1] + awsb.KERNEL_S)
+    assert bbr3 == (
+        plain[0] + awsb.KERNEL_EXPECTED_S,
+        plain[1] + awsb.XANMOD_INSTALL_TIMEOUT_S + awsb.SSH_READY_TIMEOUT_S,
+    )
 
 
 def test_default_single_shot_installs_no_kernel(
