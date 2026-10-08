@@ -201,7 +201,7 @@ just bench aws run --fleet --latency mainnet
 ```
 just bench aws run --tag release-x --allocator mimalloc
 just bench aws run --tag release-x --max-block-size 30mb
-just bench aws run --tag release-x --nodes 4 --node-env NP_NO_TX_FORWARDING=1
+just bench aws run --tag release-x --node-env ESPRESSO_NODE_EMPTY_BLOCK_DELAY=50ms
 just bench aws run --tag release-x --node-type c8i.4xlarge --ctl-type c8i.2xlarge   # Intel: amd64 AMI and images
 just bench aws run --tag release-x --leader-trace
 ```
@@ -221,9 +221,6 @@ just bench aws run --tag release-x --leader-trace
   verbatim and listed in the summary, so not for secrets. Part of the config hash.
 - `--submit-nodes N`: nodes receiving txs, validators first, then `node0`. Default: all nodes, `node0` included;
   `nodes - 1` keeps txs off the query node.
-  - `NP_NO_TX_FORWARDING=1` keeps a tx on the node that received it.
-  - `NP_NO_TX_FORWARDING` is read only by images built from `release-test-journal-query-replay` (commit 9dac6e29f87, new
-    protocol only).
   - With `node0` submitting, query lag, the query-node rule and `node0` CPU are not comparable across `--submit-nodes`
     values.
 - `--node-type`, `--ctl-type`: both types share one architecture. Preflight picks the Ubuntu AMI and image platform to
