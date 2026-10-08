@@ -7510,7 +7510,8 @@ def legacy_index_row(run_dir: Path) -> dict[str, str]:
 
 def git_run(system: System, repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     """Aborts a stalled transfer after 30 s, never prompts for credentials and does not sign:
-    a signing agent waiting for approval would hang the publish."""
+    a signing agent waiting for approval would hang the publish. No auto gc or maintenance: a
+    detached one writes into the temporary clone while it is being removed."""
     argv = [
         "git",
         "-c",
@@ -7519,6 +7520,10 @@ def git_run(system: System, repo: Path, *args: str) -> subprocess.CompletedProce
         "http.lowSpeedTime=30",
         "-c",
         "commit.gpgsign=false",
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "maintenance.auto=false",
     ]
     return system.run([*argv, "-C", str(repo), *args], {"GIT_TERMINAL_PROMPT": "0"})
 
