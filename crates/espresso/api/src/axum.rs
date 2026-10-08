@@ -4996,6 +4996,15 @@ mod tests {
             "/v2/catchup/reward-account-v2",
             "/v2/catchup/reward-merkle-tree-v2",
             "/v2/catchup/state-cert",
+            "/v2/light-client/leaf",
+            "/v2/light-client/header",
+            "/v2/light-client/stake-table",
+            "/v2/light-client/payload",
+            "/v2/light-client/payload-range",
+            "/v2/light-client/payload-ranges",
+            "/v2/light-client/namespace",
+            "/v2/light-client/namespace-range",
+            "/v2/light-client/namespaces-range",
         ]
         .into_iter()
         .collect();
@@ -5547,6 +5556,89 @@ mod tests {
     }
 
     #[tonic::async_trait]
+    impl crate::proto::light_client_service_server::LightClientService for MockV2State {
+        async fn get_light_client_leaf_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientLeafProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::LightClientLeafProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_header_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientHeaderProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::LightClientHeaderProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_stake_table(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientStakeTableRequest>,
+        ) -> Result<tonic::Response<crate::proto::LightClientStakeTableResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_payload_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientPayloadProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::LightClientPayloadProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_payload_proof_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientPayloadProofRangeRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::LightClientPayloadProofRangeResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_payload_proof_ranges(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientPayloadProofRangesRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::LightClientPayloadProofRangeResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_namespace_proof(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientNamespaceProofRequest>,
+        ) -> Result<tonic::Response<crate::proto::LightClientNamespaceProofResponse>, tonic::Status>
+        {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_namespace_proof_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientNamespaceProofRangeRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::LightClientNamespaceProofRangeResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+
+        async fn get_light_client_namespaces_proof_range(
+            &self,
+            _request: tonic::Request<crate::proto::GetLightClientNamespacesProofRangeRequest>,
+        ) -> Result<
+            tonic::Response<crate::proto::LightClientNamespacesProofRangeResponse>,
+            tonic::Status,
+        > {
+            Err(tonic::Status::internal("mock"))
+        }
+    }
+
+    #[tonic::async_trait]
     impl crate::proto::catchup_service_server::CatchupService for MockV2State {
         async fn get_catchup_fee_account(
             &self,
@@ -5707,6 +5799,7 @@ mod tests {
                 config: true,
                 submit: true,
                 explorer: true,
+                light_client: true,
                 ..Default::default()
             },
         );
@@ -5810,6 +5903,7 @@ mod tests {
             ("/v2/config/", routes::v2::CONFIG_ROUTES),
             ("/v2/submit/", routes::v2::SUBMIT_ROUTES),
             ("/v2/explorer/", routes::v2::EXPLORER_ROUTES),
+            ("/v2/light-client/", routes::v2::LIGHT_CLIENT_ROUTES),
         ] {
             let mut documented: Vec<&str> = paths
                 .keys()

@@ -27,10 +27,10 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
 ### What is served today
 
 `StatusService`, `TokenService`, `NodeService`, `ConfigService`, `DatabaseService`, `AvailabilityService`,
-`MerklizedStateService`, `RewardStateService`, `StateSignatureService`, `SubmitService`, `ExplorerService` and
-`CatchupService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`, `/v2/config/...`, `/v2/database/...`,
-`/v2/availability/...`, `/v2/merklized-state/...`, `/v2/state-signature/...`, `/v2/submit/...`, `/v2/explorer/...` and
-`/v2/catchup/...`.
+`MerklizedStateService`, `RewardStateService`, `StateSignatureService`, `SubmitService`, `ExplorerService`,
+`CatchupService` and `LightClientService`, served under `/v2/status/...`, `/v2/token/...`, `/v2/node/...`,
+`/v2/config/...`, `/v2/database/...`, `/v2/availability/...`, `/v2/merklized-state/...`, `/v2/state-signature/...`,
+`/v2/submit/...`, `/v2/explorer/...`, `/v2/catchup/...` and `/v2/light-client/...`.
 
 - `NodeService` carries over every v1 `node` endpoint except `oldest-block` and `oldest-leaf`. Where v1 has a route per
   epoch and a `current` route, v2 has one route with an optional `epoch` parameter, as it does for the block reward;
@@ -96,6 +96,18 @@ descriptor set is exported as `espresso_api::FILE_DESCRIPTOR_SET`).
   bytes the `merklized-state` reward tree route serves. v1's `reward-accounts-v2` and `reward-amounts` are not carried
   over: both answer every request with a deprecation 404. The fee balance is a decimal string here as it is on the
   reward routes, where v1 serves it as `0x`-prefixed hex.
+- `LightClientService` serves the proofs a light client checks against state it already trusts. Where v1 has a route per
+  way of naming a leaf or header, v2 has one request with alternative fields, and a known-finalized height is an
+  optional field rather than a second route. Every proof is typed, built from the messages `availability` and
+  `merklized-state` already publish, so a leaf proof is its leaf chain plus a `FinalityProof` whose arm names the commit
+  rule. Stake table events carry the contract's fields under their proto names (`bls_vk`, so `blsVk` in JSON, where the
+  contract writes `blsVK`), with curve coordinates as `0x`-prefixed hex, amounts and timestamps as decimal strings, and
+  signature and key bytes as `bytes`, base64 in JSON, where v1 writes `0x` hex. The multi-namespace route takes its
+  namespace list in a body rather than v1's TaggedBase64 path segment, so it caps the list at 100 distinct namespaces
+  where v1 is capped by the URL length. v1's batch `payload/ranges` is `POST /v2/light-client/payload-ranges`. A range
+  of payloads or namespace proofs is one response message, so a large one can exceed a gRPC client's default 4 MB decode
+  limit. Like the v1 module it is mounted only when the node enables `light-client`, and a disabled node answers its
+  routes with a 404 in the v2 error envelope.
 
 Everything else a client needs is still on v1. Every route in the OpenAPI document is a route `serve_axum` mounts: the
 tests in `crates/espresso/api/src/axum.rs` pin the documented set to a reviewed route list and probe each documented

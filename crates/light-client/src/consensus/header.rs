@@ -22,6 +22,16 @@ impl HeaderProof {
         Self { header, proof }
     }
 
+    /// Inspect the header without verifying it.
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
+
+    /// Inspect the Merkle inclusion proof without verifying it.
+    pub fn proof(&self) -> &<BlockMerkleTree as MerkleTreeScheme>::MembershipProof {
+        &self.proof
+    }
+
     /// Verify a [`HeaderProof`] and get the verified header if valid.
     pub fn verify(self, root: <BlockMerkleTree as MerkleTreeScheme>::Commitment) -> Result<Header> {
         self.verify_proof(root)?;

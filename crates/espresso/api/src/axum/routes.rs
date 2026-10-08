@@ -1002,4 +1002,16 @@ pub mod v2 {
         "/v2/explorer/summary",
         "/v2/explorer/search",
     ];
+    /// What the generated `light_client_service_rest_router` mounts, pinned to it by a test.
+    pub const LIGHT_CLIENT_ROUTES: &[&str] = &[
+        "/v2/light-client/leaf",
+        "/v2/light-client/header",
+        "/v2/light-client/stake-table",
+        "/v2/light-client/payload",
+        "/v2/light-client/payload-range",
+        "/v2/light-client/payload-ranges",
+        "/v2/light-client/namespace",
+        "/v2/light-client/namespace-range",
+        "/v2/light-client/namespaces-range",
+    ];
 }
