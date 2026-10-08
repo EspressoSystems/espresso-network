@@ -106,6 +106,8 @@ READY_EXPECTED_S = 180.0
 COLLECT_EXPECTED_S = 300.0
 COLLECT_MAX_S = 600.0
 DESTROY_S = 180.0
+# `--tcp-cc bbr3`: install the XanMod kernel and reboot every node host.
+KERNEL_S = 300.0
 # Operator reaction time if the laptop is unattended, e.g. a 2am run.
 TTL_MARGIN_S = 900.0
 # Instance boot before cloud-init arms the shutdown timer; billing starts at launch.
@@ -441,6 +443,16 @@ SOCKET_PATH_MAX = 103
 # The plan's "ssh reachable with backoff up to 5 min".
 SSH_READY_TIMEOUT_S = 300.0
 SSH_RETRY_S = 5.0
+XANMOD_INSTALL_TIMEOUT_S = 900
+XANMOD_SCRIPT = """set -eu
+export DEBIAN_FRONTEND=noninteractive
+keyring=/etc/apt/keyrings/xanmod-archive-keyring.gpg
+wget -qO - https://dl.xanmod.org/archive.key | gpg --dearmor --yes -o $keyring
+echo "deb [signed-by=$keyring] http://deb.xanmod.org $(lsb_release -sc) main" \\
+  > /etc/apt/sources.list.d/xanmod-release.list
+apt-get update -y
+apt-get install -y -o DPkg::Lock::Timeout=300 linux-xanmod-x64v3
+"""
 SSH_RETRY_MAX_S = 30.0
 # user-data pulls every image before cloud-init finishes; the ready timeout does not cover it.
 CLOUD_INIT_TIMEOUT_S = 900
@@ -1243,6 +1255,9 @@ def shot_seconds(cfg: RunConfig) -> tuple[float, float]:
     expected_s, worst_s = _measure_seconds(cfg)
     expected_s += PROVISION_S + DESTROY_S
     worst_s += PROVISION_S + DESTROY_S
+    if cfg.tcp_cc == "bbr3":
+        expected_s += KERNEL_S
+        worst_s += KERNEL_S
     if "rds" in cfg.db_modes:
         expected_s += RDS_CREATE_S
         worst_s += RDS_CREATE_MAX_S
@@ -1911,6 +1926,8 @@ def preflight(system: System, cfg: RunConfig, hosts: list[HostSpec]) -> Prefligh
     account = caller_account(run, cfg.region)
     types = {h["instance_type"] for h in hosts}
     arch, memory_mib = instance_specs(run, cfg.region, types)
+    if cfg.tcp_cc == "bbr3" and arch != "amd64":
+        raise Refused("--tcp-cc bbr3 needs the XanMod kernel, which is x86_64 only")
     prices = fetch_prices(run, cfg.region, types)
     az = capable_az(run, cfg.region, types)
     ami_id = resolve_ami(run, cfg.region, arch)
@@ -3381,6 +3398,8 @@ def up_fleet(fleet: FleetState) -> None:
         f"ssh and cloud-init on {len(remote.hosts)} hosts",
     )
     wait_hosts(remote, fleet.manifest, fleet.fleet_dir, fleet.interrupts)
+    if fleet.cfg.tcp_cc == "bbr3":
+        install_xanmod(fleet, remote)
     prepare_stores(fleet)
     if "rds_spec" in fleet.manifest:
         enter_phase(
@@ -4926,6 +4945,49 @@ def wait_ssh(remote: Remote, host: str, interrupts: Interrupts) -> None:
             )
         interrupts.sleep(delay)
         delay = min(delay * 1.5, SSH_RETRY_MAX_S)
+
+
+def install_xanmod(fleet: FleetState, remote: Remote) -> None:
+    """XanMod carries BBR v3 as `tcp_bbr`. Node hosts only; the ctl host keeps its kernel."""
+    names = _node_names(remote.hosts)
+    log.info("kernel: XanMod on %d node hosts", len(names))
+
+    def install(host: str) -> None:
+        remote.ssh(
+            host,
+            f"sudo timeout {XANMOD_INSTALL_TIMEOUT_S} bash -c {shlex.quote(XANMOD_SCRIPT)}",
+        )
+        reboot(remote, host, fleet.interrupts)
+        release = remote.ssh(host, "uname -r").stdout.strip()
+        if "xanmod" not in release:
+            raise RemoteError(f"{host}: kernel {release!r} after reboot is not XanMod")
+        # The reboot cancelled user-data's `shutdown -P`.
+        expires = datetime.fromisoformat(fleet.manifest["expires_at"])
+        left_s = (expires - utc_now(fleet.system.clock)).total_seconds()
+        remote.ssh(host, f"sudo shutdown -P +{max(1, math.ceil(left_s / 60))}")
+
+    remote.parallel(install, names)
+
+
+def reboot(remote: Remote, host: str, interrupts: Interrupts) -> None:
+    """Returns once the host answers ssh with another boot id; ssh may still reach the old boot
+    for a moment after the reboot command."""
+    boot_id = "cat /proc/sys/kernel/random/boot_id"
+    before = remote.ssh(host, boot_id).stdout
+    remote.ssh(host, "sudo systemctl reboot", check=False)
+    deadline = interrupts.clock.monotonic() + SSH_READY_TIMEOUT_S
+    while True:
+        result = remote.ssh(host, boot_id, check=False)
+        up = result.returncode == 0 and result.stdout != before
+        verdict = retry_verdict(up, interrupts.clock.monotonic(), deadline)
+        if verdict == "ok":
+            return
+        if verdict == "timeout":
+            raise RemoteError(
+                f"{host}: not rebooted after {SSH_READY_TIMEOUT_S:.0f} s: "
+                f"{result.stderr.strip()}"
+            )
+        interrupts.sleep(SSH_RETRY_S)
 
 
 def wait_hosts(

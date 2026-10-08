@@ -28,7 +28,9 @@ TC_IFACE = "IFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -1)
 # 3-5x slower for the rest of the run (run lulu-20261008-110417).
 # bbr_hold: BBR held in STARTUP, built on the node by aws/bbr-hold.sh; an experiment, not a
 # stock congestion control.
-TCP_CCS = ("cubic", "bbr", "bbr_hold")
+# bbr3: BBR v3 of the XanMod kernel (x86_64 only), installed on the nodes by aws-bench.
+TCP_CCS = ("cubic", "bbr", "bbr_hold", "bbr3")
+XANMOD_GUARD = 'grep -q xanmod /proc/version || { echo "bbr3 needs the XanMod kernel" >&2; exit 1; }'
 # On the node next to the shipped scripts.
 BBR_HOLD_SCRIPT = "/opt/bench/bbr-hold.sh"
 # Host TCP settings an operator can set. 256 MB buffers give a 128 MB window, enough for a
@@ -46,7 +48,7 @@ BASE_TCP_SYSCTLS: tuple[tuple[str, str], ...] = (
 def tcp_sysctls(tcp_cc: str) -> tuple[tuple[str, str], ...]:
     qdisc = "fq_codel" if tcp_cc == "cubic" else "fq"
     return (
-        ("net.ipv4.tcp_congestion_control", tcp_cc),
+        ("net.ipv4.tcp_congestion_control", "bbr" if tcp_cc == "bbr3" else tcp_cc),
         ("net.core.default_qdisc", qdisc),
         *BASE_TCP_SYSCTLS,
     )
@@ -297,9 +299,11 @@ def tc_script(
         'test -n "$IFACE"',
         SAVE_BASELINE,
         *(
-            {"bbr": ["modprobe tcp_bbr"], "bbr_hold": [f"bash {BBR_HOLD_SCRIPT}"]}.get(
-                tcp_cc, []
-            )
+            {
+                "bbr": ["modprobe tcp_bbr"],
+                "bbr_hold": [f"bash {BBR_HOLD_SCRIPT}"],
+                "bbr3": [XANMOD_GUARD],
+            }.get(tcp_cc, [])
         ),
         *(f'sysctl -q -w {key}="{value}"' for key, value in tcp_sysctls(tcp_cc)),
         *mtu_lines(mtu),

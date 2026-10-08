@@ -17,4 +17,4 @@
 - `--mtu 9001` is needed for very high throughput, but only traffic inside one VPC gets it; real inter-region paths
   carry 1500, so results overstate a WAN deployment.
 - `--tcp-cc bbr` (default) is needed for good throughput. `--tcp-cc bbr_hold` (experimental) keeps throughput stable
-  after an overload.
+  after an overload. `--tcp-cc bbr3` runs BBR v3 on the XanMod kernel (x86_64 only).
