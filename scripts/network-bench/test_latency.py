@@ -90,7 +90,7 @@ def test_apportion_bad_n_fails(n):
 def test_apportion_small_n():
     profile = decaf()
     assert latency.assign(2, profile) == ["eu-central-1", "ap-southeast-1"]
-    meta = latency.shaping("decaf-2025", 2, True).meta()
+    meta = latency.shaping("decaf-2025", 2, True, "cubic").meta()
     assert meta["nodes"] == {"eu-central-1": 1, "ap-southeast-1": 1}
 
 
@@ -208,7 +208,7 @@ def test_tc_script_four_peers():
     profile = decaf()
     delays = latency.delays_ms(latency.assign(5, profile), profile, intra=True)
     peers = {i: f"10.0.0.{i + 10}" for i in range(5)}
-    script = latency.tc_script(0, peers, delays)
+    script = latency.tc_script(0, peers, delays, "bbr")
     assert script.startswith("set -eu\n")
     assert script.endswith("\n")
     assert script.count(" netem ") == 4
@@ -222,11 +222,24 @@ def test_tc_script_four_peers():
     assert "tcp_adv_win_scale" not in script
 
 
+@pytest.mark.parametrize(
+    ("tcp_cc", "qdisc", "modprobe"), [("cubic", "fq_codel", False), ("bbr", "fq", True)]
+)
+def test_tc_script_sets_the_congestion_control(tcp_cc, qdisc, modprobe):
+    profile = decaf()
+    delays = latency.delays_ms(latency.assign(5, profile), profile, intra=True)
+    peers = {i: f"10.0.0.{i + 10}" for i in range(5)}
+    script = latency.tc_script(0, peers, delays, tcp_cc)
+    assert f'net.ipv4.tcp_congestion_control="{tcp_cc}"' in script
+    assert f'net.core.default_qdisc="{qdisc}"' in script
+    assert ("modprobe tcp_bbr" in script) == modprobe
+
+
 def test_tc_script_skips_peers_without_delay():
     profile = decaf()
     delays = latency.delays_ms(latency.assign(5, profile), profile, intra=False)
     peers = {i: f"10.0.0.{i + 10}" for i in range(5)}
-    script = latency.tc_script(0, peers, delays)
+    script = latency.tc_script(0, peers, delays, "bbr")
     assert script.count(" netem ") == 3
     assert "10.0.0.11/32" not in script
 
@@ -236,7 +249,7 @@ def test_tc_script_hundred_peers_unique_minors():
     profile = decaf()
     delays = latency.delays_ms(latency.assign(100, profile), profile, intra=True)
     peers = {i: f"10.0.1.{i}" for i in range(100)}
-    script = latency.tc_script(0, peers, delays)
+    script = latency.tc_script(0, peers, delays, "bbr")
     minors = re.findall(r"classid 1:([0-9a-f]+) htb", script)
     assert len(minors) == 100
     assert len(set(minors)) == 100
@@ -295,7 +308,7 @@ def test_matrix_sha256_stable():
 
 
 def test_shaping_meta_shape():
-    shaping = latency.shaping("decaf-2025", 5, intra=True)
+    shaping = latency.shaping("decaf-2025", 5, intra=True, tcp_cc="cubic")
     assert shaping.meta() == {
         "profile": "decaf-2025",
         "intra": True,
@@ -308,7 +321,7 @@ def test_shaping_meta_shape():
             "node4": "us-east-1",
         },
         "matrix_sha256": DECAF5_SHA256,
-        "sysctls": dict(latency.TCP_SYSCTLS),
+        "sysctls": dict(latency.tcp_sysctls("cubic")),
         "mtu": 1500,
         "probes": [],
     }

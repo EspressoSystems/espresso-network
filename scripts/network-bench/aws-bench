@@ -878,6 +878,8 @@ class RunConfig:
     # `latency.PROFILES` name; `off` shapes nothing. `intra_latency` adds the same-location delay.
     latency: str = "off"
     intra_latency: bool = True
+    # `latency.TCP_CCS` name, set on the nodes with the latency shaping.
+    tcp_cc: str = "cubic"
     ttl_min: str = "auto"
     fleet: Path | None = None
     force: bool = False
@@ -2500,11 +2502,19 @@ def add_latency_flags(parser: argparse.ArgumentParser) -> None:
         action="store_false",
         help="with --latency: no delay between nodes of the same location",
     )
+    parser.add_argument(
+        "--tcp-cc",
+        choices=latency.TCP_CCS,
+        default=RunConfig.tcp_cc,
+        help="with --latency: TCP congestion control of the nodes",
+    )
 
 
-def check_latency_flags(profile: str, intra: bool) -> None:
+def check_latency_flags(profile: str, intra: bool, tcp_cc: str) -> None:
     if profile == "off" and not intra:
         raise Refused("--no-intra-latency needs --latency decaf-2025 or mainnet")
+    if profile == "off" and tcp_cc != RunConfig.tcp_cc:
+        raise Refused("--tcp-cc needs --latency decaf-2025 or mainnet")
 
 
 def add_node_env_flag(parser: argparse.ArgumentParser) -> None:
@@ -2577,7 +2587,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     for key in keys:
         if keys.count(key) > 1:
             raise Refused(f"--node-env repeats {key}")
-    check_latency_flags(args.latency, args.intra_latency)
+    check_latency_flags(args.latency, args.intra_latency, args.tcp_cc)
     search = search_from_args(args)
     load = load_from_args(args, search)
     return RunConfig(
@@ -2592,6 +2602,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         leader_trace=args.leader_trace,
         latency=args.latency,
         intra_latency=args.intra_latency,
+        tcp_cc=args.tcp_cc,
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
@@ -2762,6 +2773,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         leader_trace=defaults.leader_trace,
         latency=defaults.latency,
         intra_latency=defaults.intra_latency,
+        tcp_cc=defaults.tcp_cc,
         submit_nodes=None,
         fleet=None,
         force=False,
@@ -3947,6 +3959,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         leader_trace=cli.leader_trace,
         latency=cli.latency,
         intra_latency=cli.intra_latency,
+        tcp_cc=cli.tcp_cc,
         fleet=cli.fleet,
         force=cli.force,
         search=cli.search,
@@ -4494,7 +4507,7 @@ def render_run(
 def latency_shaping(cfg: RunConfig, node_count: int) -> latency.Shaping:
     """Data problems (missing CSV pair, unknown location) are refused before any AWS write."""
     try:
-        return latency.shaping(cfg.latency, node_count, cfg.intra_latency)
+        return latency.shaping(cfg.latency, node_count, cfg.intra_latency, cfg.tcp_cc)
     except (KeyError, ValueError, OSError) as exc:
         raise Refused(f"latency {cfg.latency}: {type(exc).__name__}: {exc}") from exc
 
@@ -4503,11 +4516,12 @@ def latency_meta(cfg: RunConfig, hosts: list[HostSpec]) -> nb.LatencyMeta:
     shaping = latency_shaping(cfg, sum(host["role"] != "ctl" for host in hosts))
     meta = cast(nb.LatencyMeta, shaping.meta())
     log.info(
-        "latency %s: %s; intra %g ms %s",
+        "latency %s: %s; intra %g ms %s; tcp %s",
         meta["profile"],
         ", ".join(f"{label} {count}" for label, count in meta["nodes"].items()),
         shaping.profile.intra_ms[shaping.assignment[0]],
         "on" if cfg.intra_latency else "off",
+        shaping.tcp_cc,
     )
     return meta
 
@@ -4913,7 +4927,7 @@ def shape_nodes(remote: Remote, shaping: latency.Shaping) -> None:
     names = _node_names(remote.hosts)
     peer_ips = {i: remote.hosts[name]["private_ip"] for i, name in enumerate(names)}
     scripts = {
-        name: latency.tc_script(i, peer_ips, shaping.delays)
+        name: latency.tc_script(i, peer_ips, shaping.delays, shaping.tcp_cc)
         for i, name in enumerate(names)
     }
     remote.parallel(lambda name: remote.ssh(name, bounded(scripts[name])), names)

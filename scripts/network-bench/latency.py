@@ -22,18 +22,32 @@ SAME_CITY_RTT_MS = 1.0
 INTRA_REGION_RTT_MS = 10.0
 NETEM_LIMIT = 300000
 TC_IFACE = "IFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -1)"
+# Congestion control of the shaped nodes. cubic, the Linux default, sends a burst as fast as its
+# window allows. bbr paces at its bandwidth estimate: bursty validator traffic keeps it in
+# STARTUP (pacing gain 2.89) until the first overload, after which cross-region sockets pace
+# 3-5x slower for the rest of the run (run lulu-20261008-110417).
+TCP_CCS = ("cubic", "bbr")
 # Host TCP settings an operator can set. 256 MB buffers give a 128 MB window, enough for a
 # 100 MB proposal or the 5 Gbps x 330 ms bandwidth-delay product; Ubuntu's 4 MB cap holds one
-# flow near 25 MB/s at 158 ms. fq matters only where no HTB root is installed.
-TCP_SYSCTLS: tuple[tuple[str, str], ...] = (
-    ("net.ipv4.tcp_congestion_control", "bbr"),
-    ("net.core.default_qdisc", "fq"),
+# flow near 25 MB/s at 158 ms. The qdisc matters only where no HTB root is installed.
+BASE_TCP_SYSCTLS: tuple[tuple[str, str], ...] = (
     ("net.ipv4.tcp_rmem", "4096 131072 268435456"),
     ("net.ipv4.tcp_wmem", "4096 16384 268435456"),
     ("net.ipv4.tcp_notsent_lowat", "131072"),
     ("net.ipv4.tcp_slow_start_after_idle", "0"),
     ("net.ipv4.tcp_mtu_probing", "1"),
 )
+
+
+def tcp_sysctls(tcp_cc: str) -> tuple[tuple[str, str], ...]:
+    qdisc = "fq" if tcp_cc == "bbr" else "fq_codel"
+    return (
+        ("net.ipv4.tcp_congestion_control", tcp_cc),
+        ("net.core.default_qdisc", qdisc),
+        *BASE_TCP_SYSCTLS,
+    )
+
+
 # Validators on the internet see a 1500 byte path; the VPC default of 9001 is not honest.
 MTU = 1500
 TC_CLEAR = 'if tc qdisc show dev "$IFACE" | grep -q "htb 1:"; then tc qdisc del dev "$IFACE" root; fi'
@@ -71,6 +85,7 @@ class Shaping:
     assignment: list[str]
     delays: dict[tuple[int, int], float]
     intra: bool
+    tcp_cc: str
 
     def meta(self) -> dict:
         return {
@@ -85,7 +100,7 @@ class Shaping:
                 f"node{i}": label for i, label in enumerate(self.assignment)
             },
             "matrix_sha256": matrix_sha256(self.delays),
-            "sysctls": dict(TCP_SYSCTLS),
+            "sysctls": dict(tcp_sysctls(self.tcp_cc)),
             "mtu": MTU,
             "probes": [],
         }
@@ -107,10 +122,11 @@ def load_profile(name: str) -> Profile:
     raise ValueError(f"no latency profile {name!r}; expected one of {PROFILES[1:]}")
 
 
-def shaping(name: str, n: int, intra: bool) -> Shaping:
+def shaping(name: str, n: int, intra: bool, tcp_cc: str) -> Shaping:
     profile = load_profile(name)
     assignment = assign(n, profile)
-    return Shaping(profile, assignment, delays_ms(assignment, profile, intra), intra)
+    delays = delays_ms(assignment, profile, intra)
+    return Shaping(profile, assignment, delays, intra, tcp_cc)
 
 
 def read_matrix(text: str) -> dict[tuple[str, str], float]:
@@ -218,12 +234,15 @@ def matrix_sha256(delays: dict[tuple[int, int], float]) -> str:
 
 
 def tc_script(
-    node: int, peer_ips: dict[int, str], delays: dict[tuple[int, int], float]
+    node: int,
+    peer_ips: dict[int, str],
+    delays: dict[tuple[int, int], float],
+    tcp_cc: str,
 ) -> str:
     lines = [
         "set -eu",
-        "modprobe tcp_bbr",
-        *(f'sysctl -q -w {key}="{value}"' for key, value in TCP_SYSCTLS),
+        *(["modprobe tcp_bbr"] if tcp_cc == "bbr" else []),
+        *(f'sysctl -q -w {key}="{value}"' for key, value in tcp_sysctls(tcp_cc)),
         TC_IFACE,
         'test -n "$IFACE"',
         f'ip link set dev "$IFACE" mtu {MTU}',

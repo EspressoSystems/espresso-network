@@ -80,6 +80,21 @@ def test_no_intra_latency_needs_a_profile():
         awsb.config_from_args(plan_args("--no-intra-latency"))
 
 
+def test_tcp_cc_needs_a_profile_and_defaults_to_cubic():
+    with pytest.raises(awsb.Refused, match="--tcp-cc"):
+        awsb.config_from_args(plan_args("--tcp-cc", "bbr"))
+    cfg = awsb.config_from_args(plan_args("--latency", "decaf-2025"))
+    assert cfg.tcp_cc == "cubic"
+    assert (
+        awsb.latency_meta(cfg, awsb.plan_hosts(cfg))["sysctls"][
+            "net.ipv4.tcp_congestion_control"
+        ]
+        == "cubic"
+    )
+    bbr = awsb.config_from_args(plan_args("--latency", "decaf-2025", "--tcp-cc", "bbr"))
+    assert bbr.tcp_cc == "bbr"
+
+
 # TEST:hash-four-distinct-ok
 def test_hash_differs_per_profile_and_matches_the_old_value_for_off():
     base = awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
@@ -276,9 +291,9 @@ def test_reset_deletes_an_htb_root_only_when_present():
 
 
 def test_tc_script_is_valid_bash():
-    shaping = latency.shaping("decaf-2025", 5, intra=True)
+    shaping = latency.shaping("decaf-2025", 5, intra=True, tcp_cc="cubic")
     peers = {i: f"10.0.0.{i + 10}" for i in range(5)}
-    script = latency.tc_script(0, peers, shaping.delays)
+    script = latency.tc_script(0, peers, shaping.delays, shaping.tcp_cc)
     subprocess.run(["bash", "-n"], input=script, text=True, check=True)
 
 
