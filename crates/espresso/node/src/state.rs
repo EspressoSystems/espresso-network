@@ -555,11 +555,7 @@ where
             );
             return fetch_pruned_leaf(instance, height, None).await;
         }
-        let local = async {
-            AvailabilityDataSource::get_leaf(&**storage, height as usize)
-                .await
-                .await
-        };
+        let local = AvailabilityDataSource::get_leaf(&**storage, height as usize).await;
         // On a timeout the data pruner may have passed this height in the meantime, so check
         // again before waiting further.
         if let Ok(leaf) = timeout(PRUNED_LEAF_CHECK_INTERVAL, local).await {
