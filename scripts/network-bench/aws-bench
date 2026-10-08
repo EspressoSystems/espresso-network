@@ -7961,6 +7961,10 @@ def main() -> int:
     if args.command in ("status", "list", "destroy", "down", "prune", "publish"):
         logging.basicConfig(level=logging.INFO, format="%(message)s")
     try:
+        # `OUT_ROOT` is relative so ssh ControlPaths fit the socket limit, and only the repo
+        # root's `bench-state/` is git-ignored. Host agents run from /opt/bench.
+        if not args.command.startswith("agent-") and Path.cwd() != REPO_ROOT:
+            raise Refused(f"run from the repo root {REPO_ROOT}, not {Path.cwd()}")
         command: Command = args.func
         return command(args, system)
     except (Refused, TfFailed) as exc:
