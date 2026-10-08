@@ -7,8 +7,8 @@ use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_types::{
-    BlockMerkleTree, ChainConfig, FeeAccount, FeeMerkleTree, Leaf2, NodeState, ValidatedState,
-    get_l1_deposits,
+    BlockMerkleCommitment, BlockMerkleTree, ChainConfig, FeeAccount, FeeMerkleCommitment,
+    FeeMerkleTree, Leaf2, NodeState, ValidatedState, get_l1_deposits,
     v0_1::IterableFeeInfo,
     v0_3::{
         REWARD_MERKLE_TREE_V1_HEIGHT, RewardAccountProofV1, RewardAccountQueryDataV1,
@@ -783,6 +783,18 @@ impl CatchupStorage for SqlStorage {
         }
     }
 
+    async fn get_accounts_at(
+        &self,
+        height: u64,
+        root: FeeMerkleCommitment,
+        accounts: &[FeeAccount],
+    ) -> anyhow::Result<FeeMerkleTree> {
+        let mut tx = self.read().await.context(format!(
+            "opening transaction to fetch account {accounts:?}; height {height}"
+        ))?;
+        load_accounts_at(&mut tx, height, root, accounts).await
+    }
+
     async fn get_frontier(
         &self,
         instance: &NodeState,
@@ -822,6 +834,17 @@ impl CatchupStorage for SqlStorage {
                 },
             }
         }
+    }
+
+    async fn get_frontier_at(
+        &self,
+        height: u64,
+        root: BlockMerkleCommitment,
+    ) -> anyhow::Result<BlocksFrontier> {
+        let mut tx = self.read().await.context(format!(
+            "opening transaction to fetch frontier at height {height}"
+        ))?;
+        load_frontier_at(&mut tx, height, root).await
     }
 
     async fn get_chain_config(
@@ -1331,6 +1354,24 @@ async fn load_frontier<Mode: TransactionMode>(
     .context(format!("fetching frontier at height {height}"))
 }
 
+/// Load the frontier from the snapshot at `height` whose root is `root`, without reading the header
+/// at `height`.
+async fn load_frontier_at<Mode: TransactionMode>(
+    tx: &mut Transaction<Mode>,
+    height: u64,
+    root: BlockMerkleCommitment,
+) -> anyhow::Result<BlocksFrontier> {
+    tx.get_path_at::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>(
+        height,
+        root,
+        height
+            .checked_sub(1)
+            .ok_or(anyhow::anyhow!("Subtract with overflow ({height})!"))?,
+    )
+    .await
+    .context(format!("fetching frontier at height {height}"))
+}
+
 async fn load_v1_reward_accounts(
     db: &SqlStorage,
     height: u64,
@@ -1470,24 +1511,29 @@ async fn load_accounts<Mode: TransactionMode>(
         .await
         .context(format!("leaf {height} not available"))?;
     let header = leaf.header();
+    let snapshot =
+        load_accounts_at(tx, header.height(), header.fee_merkle_tree_root(), accounts).await?;
+    Ok((snapshot, leaf.leaf().clone()))
+}
 
-    let mut snapshot = FeeMerkleTree::from_commitment(header.fee_merkle_tree_root());
+/// Load `accounts` from the snapshot at `height` whose root is `root`, without reading the leaf or
+/// header at `height`.
+async fn load_accounts_at<Mode: TransactionMode>(
+    tx: &mut Transaction<Mode>,
+    height: u64,
+    root: FeeMerkleCommitment,
+    accounts: &[FeeAccount],
+) -> anyhow::Result<FeeMerkleTree> {
+    let mut snapshot = FeeMerkleTree::from_commitment(root);
     for account in accounts {
         let proof = tx
-            .get_path(
-                Snapshot::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::Index(
-                    header.height(),
-                ),
-                *account,
+            .get_path_at::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>(
+                height, root, *account,
             )
             .await
-            .context(format!(
-                "fetching account {account}; height {}",
-                header.height()
-            ))?;
+            .context(format!("fetching account {account}; height {height}"))?;
         match proof.proof.first().context(format!(
-            "empty proof for account {account}; height {}",
-            header.height()
+            "empty proof for account {account}; height {height}"
         ))? {
             MerkleNode::Leaf { pos, elem, .. } => {
                 snapshot.remember(*pos, *elem, proof)?;
@@ -1501,7 +1547,7 @@ async fn load_accounts<Mode: TransactionMode>(
         }
     }
 
-    Ok((snapshot, leaf.leaf().clone()))
+    Ok(snapshot)
 }
 
 async fn load_chain_config<Mode: TransactionMode>(
@@ -1907,9 +1953,13 @@ pub(crate) mod impl_testable_data_source {
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::Address;
+    use std::sync::Arc;
+
+    use alloy::primitives::{Address, U256};
     use espresso_types::{
-        FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAmount, FeeMerkleTree,
+        BLOCK_MERKLE_TREE_HEIGHT, BackoffParams, BlockMerkleTree, FEE_MERKLE_TREE_HEIGHT,
+        FeeAccount, FeeAmount, FeeMerkleTree, NodeState,
+        v0::traits::StateCatchup,
         v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
     };
     use hotshot_query_service::{
@@ -1927,14 +1977,16 @@ mod tests {
         },
         merklized_state::{MerklizedState, UpdateStateData},
     };
+    use hotshot_types::data::ViewNumber;
     use jf_merkle_tree_compat::{
-        LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+        AppendableMerkleTreeScheme, ForgetableMerkleTreeScheme, LookupResult, MerkleTreeScheme,
+        ToTraversalPath, UniversalMerkleTreeScheme,
     };
     use light_client::testing::{leaf_chain, leaf_chain_with_upgrade};
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
 
     use super::{ArchiveStateGc, SeqTypes, impl_testable_data_source::tmp_options, query_as};
-    use crate::api::RewardMerkleTreeDataSource;
+    use crate::{api::RewardMerkleTreeDataSource, catchup::SqlStateCatchup};
 
     async fn write_fee_state(storage: &SqlStorage, account: FeeAccount, balance: u64, height: u64) {
         let mut tree = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT);
@@ -2006,6 +2058,76 @@ mod tests {
         let mut tx = storage.read().await.unwrap();
         assert_eq!(tx.load_state_pruned_height().await.unwrap(), Some(2));
         assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+    }
+
+    /// The data pruner deletes the leaf and header at the state head, but the state pruner keeps
+    /// the head's snapshot. The local catchup still reads that snapshot, by the root it is given.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_catchup_reads_snapshot_without_header() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(
+            Config::try_from(&tmp_options(&db)).unwrap(),
+            StorageConnectionType::Query,
+        )
+        .await
+        .unwrap();
+
+        // A head snapshot with no leaf or header rows, as the data pruner leaves it.
+        let height = 3;
+        let account = FeeAccount::from(Address::repeat_byte(0x42));
+        let absent = FeeAccount::from(Address::repeat_byte(0x43));
+        write_fee_state(&storage, account, 100, height).await;
+        let mut fee_tree = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT);
+        fee_tree.update(account, FeeAmount::from(100)).unwrap();
+        let fee_root = fee_tree.commitment();
+
+        let mut block_tree = BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT);
+        for leaf in leaf_chain(0..height, DRB_AND_HEADER_UPGRADE_VERSION).await {
+            block_tree.push(leaf.block_hash()).unwrap();
+        }
+        let frontier = block_tree.lookup(height - 1).expect_ok().unwrap().1;
+        let mut tx = storage.write().await.unwrap();
+        UpdateStateData::<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>::insert_merkle_nodes(
+            &mut tx,
+            frontier,
+            ToTraversalPath::<{ BlockMerkleTree::ARITY }>::to_traversal_path(
+                &(height - 1),
+                BLOCK_MERKLE_TREE_HEIGHT,
+            ),
+            height,
+        )
+        .await
+        .unwrap();
+        Transaction::commit(tx).await.unwrap();
+
+        let catchup = SqlStateCatchup::new(Arc::new(storage), BackoffParams::disabled());
+        let instance = NodeState::mock();
+        let view = ViewNumber::new(height);
+
+        let proofs = catchup
+            .try_fetch_accounts(0, &instance, height, view, fee_root, &[account, absent])
+            .await
+            .unwrap();
+        let balances = proofs
+            .iter()
+            .map(|proof| proof.verify(&fee_root).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(balances, [U256::from(100), U256::ZERO]);
+
+        let mut block_tree_from_root = BlockMerkleTree::from_commitment(block_tree.commitment());
+        catchup
+            .try_remember_blocks_merkle_tree(0, &instance, height, view, &mut block_tree_from_root)
+            .await
+            .unwrap();
+        assert!(block_tree_from_root.lookup(height - 1).expect_ok().is_ok());
+
+        // A root the snapshot does not have is rejected, not trusted.
+        let wrong_root = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT).commitment();
+        catchup
+            .try_fetch_accounts(0, &instance, height, view, wrong_root, &[account])
+            .await
+            .unwrap_err();
     }
 
     async fn insert_test_header(

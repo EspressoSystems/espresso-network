@@ -65,6 +65,26 @@ where
 }
 
 impl<Mode: TransactionMode> Transaction<Mode> {
+    /// Retrieves the Merkle path to `key` from the snapshot created at `height`, for a caller that
+    /// already has the snapshot's root. Unlike [`get_path`](MerklizedStateStorage::get_path), this
+    /// does not read the header at `height`, so it still works after the data pruner deleted the
+    /// header while the state pruner kept the snapshot.
+    pub async fn get_path_at<Types, State, const ARITY: usize>(
+        &mut self,
+        height: u64,
+        commit: State::Commit,
+        key: State::Key,
+    ) -> QueryResult<MerkleProof<State::Entry, State::Key, State::T, ARITY>>
+    where
+        Types: NodeType,
+        State: MerklizedState<Types, ARITY> + 'static,
+    {
+        let created = height as i64;
+        self.check_snapshot(created).await?;
+        self.path_at::<Types, State, ARITY>(created, commit, key)
+            .await
+    }
+
     /// Retrieves the Merkle path to `key` from the snapshot created at `created` with root
     /// `merkle_commitment`. The caller checks that the snapshot is readable.
     async fn path_at<Types, State, const ARITY: usize>(
