@@ -58,12 +58,30 @@ where
         snapshot: Snapshot<Types, State, ARITY>,
         key: State::Key,
     ) -> QueryResult<MerkleProof<State::Entry, State::Key, State::T, ARITY>> {
+        let (created, merkle_commitment) = self.snapshot_info(snapshot).await?;
+        self.path_at::<Types, State, ARITY>(created, merkle_commitment, key)
+            .await
+    }
+}
+
+impl<Mode: TransactionMode> Transaction<Mode> {
+    /// Retrieves the Merkle path to `key` from the snapshot created at `created` with root
+    /// `merkle_commitment`. The caller checks that the snapshot is readable.
+    async fn path_at<Types, State, const ARITY: usize>(
+        &mut self,
+        created: i64,
+        merkle_commitment: State::Commit,
+        key: State::Key,
+    ) -> QueryResult<MerkleProof<State::Entry, State::Key, State::T, ARITY>>
+    where
+        Types: NodeType,
+        State: MerklizedState<Types, ARITY> + 'static,
+    {
         let state_type = State::state_type();
         let tree_height = State::tree_height();
 
         // Get the traversal path of the index
         let traversal_path = State::Key::to_traversal_path(&key, tree_height);
-        let (created, merkle_commitment) = self.snapshot_info(snapshot).await?;
 
         // Get all the nodes in the path to the index.
         // Order by pos DESC is to return nodes from the leaf to the root
@@ -338,7 +356,12 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             },
         };
 
-        // Make sure the requested snapshot is up to date.
+        self.check_snapshot(created).await?;
+        Ok((created, commit))
+    }
+
+    /// Make sure the snapshot created at `created` is up to date and has not been pruned.
+    async fn check_snapshot(&mut self, created: i64) -> QueryResult<()> {
         let height = self.get_last_state_height().await?;
 
         if height < (created as usize) {
@@ -353,7 +376,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
         // below it when it connects. A database that an earlier, unbounded run pruned past the
         // head while a crash had left nodes above it may still be missing some here.
         if (created as usize) == height {
-            return Ok((created, commit));
+            return Ok(());
         }
 
         let pruned_height =
@@ -367,7 +390,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             return Err(QueryError::NotFound);
         }
 
-        Ok((created, commit))
+        Ok(())
     }
 }
 
