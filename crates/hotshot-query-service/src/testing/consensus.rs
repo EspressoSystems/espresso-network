@@ -21,7 +21,7 @@ use futures::{
 use hotshot::{
     HotShotInitializer, SystemContext,
     traits::implementations::{MasterMap, MemoryNetwork},
-    types::{Event, SystemContextHandle},
+    types::SystemContextHandle,
 };
 use hotshot_example_types::{
     membership::TestableMembership, state_types::TestInstanceState, storage_types::TestStorage,
@@ -34,6 +34,7 @@ use hotshot_types::{
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
+    new_protocol::CoordinatorEvent,
     signature_key::BLSPubKey,
     storage_metrics::StorageMetricsValue,
     traits::{election::Membership, network::Topic, signature_key::SignatureKey as _},
@@ -319,7 +320,7 @@ impl<D: DataSourceLifeCycle> MockNetwork<D> {
                     while let Some(event) = events.next().await {
                         tracing::info!(node = i, event = ?event.event, "EVENT");
                         {
-                            ds.handle_event(&event).await;
+                            ds.handle_event(&CoordinatorEvent::LegacyEvent(event)).await;
                         }
                         yield_now().await;
                     }
@@ -365,7 +366,7 @@ pub trait DataSourceLifeCycle: Clone + Send + Sync + Sized + 'static {
         + FnOnce(Builder<MockTypes, Self::S, Self::P>) -> Builder<MockTypes, Self::S, Self::P>,
     ) -> Self;
     async fn reset(storage: &Self::Storage) -> Self;
-    async fn handle_event(&self, event: &Event<MockTypes>);
+    async fn handle_event(&self, event: &CoordinatorEvent<MockTypes>);
 
     async fn connect(storage: &Self::Storage) -> Self {
         Self::build(storage, |builder| builder).await

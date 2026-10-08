@@ -302,7 +302,6 @@ where
 #[cfg(any(test, feature = "testing"))]
 mod impl_testable_data_source {
     use async_trait::async_trait;
-    use hotshot::types::Event;
     use hotshot_types::new_protocol::CoordinatorEvent;
     use tempfile::TempDir;
 
@@ -342,9 +341,8 @@ mod impl_testable_data_source {
                 .unwrap()
         }
 
-        async fn handle_event(&self, event: &Event<MockTypes>) {
-            let event = CoordinatorEvent::LegacyEvent(event.clone());
-            self.update(&event).await.unwrap();
+        async fn handle_event(&self, event: &CoordinatorEvent<MockTypes>) {
+            self.update(event).await.unwrap();
         }
     }
 }

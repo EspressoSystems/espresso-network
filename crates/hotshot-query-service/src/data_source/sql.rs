@@ -320,7 +320,6 @@ where
 #[cfg(all(any(test, feature = "testing"), not(target_os = "windows")))]
 pub mod testing {
     use async_trait::async_trait;
-    use hotshot::types::Event;
     use hotshot_types::new_protocol::CoordinatorEvent;
     pub use sql::testing::TmpDb;
 
@@ -361,9 +360,8 @@ pub mod testing {
                 .unwrap()
         }
 
-        async fn handle_event(&self, event: &Event<MockTypes>) {
-            let event = CoordinatorEvent::LegacyEvent(event.clone());
-            self.update(&event).await.unwrap();
+        async fn handle_event(&self, event: &CoordinatorEvent<MockTypes>) {
+            self.update(event).await.unwrap();
         }
     }
 }

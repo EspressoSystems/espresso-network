@@ -83,7 +83,7 @@ impl StatusDataSource for MetricsDataSource {
 
 #[cfg(any(test, feature = "testing"))]
 mod impl_testable_data_source {
-    use hotshot::types::Event;
+    use hotshot_types::new_protocol::CoordinatorEvent;
 
     use super::*;
     use crate::{
@@ -116,7 +116,7 @@ mod impl_testable_data_source {
             }
         }
 
-        async fn handle_event(&self, _event: &Event<MockTypes>) {}
+        async fn handle_event(&self, _event: &CoordinatorEvent<MockTypes>) {}
     }
 }
 
