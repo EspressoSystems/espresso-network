@@ -11,6 +11,7 @@ import math
 import statistics
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
 
@@ -354,7 +355,7 @@ def test_closing_the_pool_stops_retries(caplog: pytest.LogCaptureFixture):
 def test_not_found_is_not_retried():
     clock = fakes.FakeClock()
     pool = ScriptedPool(clock, (404, b""), (500, b""))
-    assert netbench.block_payload(pool, "http://x", 3) is None
+    assert netbench.block_payload(pool, ["http://x"], 3) is None
     assert pool.calls == 1
 
 
@@ -396,7 +397,14 @@ def run_load(
     config = netbench.BenchConfig(**defaults | kwargs)
     urls = [node.url] * nodes
     load = netbench.generate_load(
-        config, urls, node.url, [node.url] * 2, out, clock, node.connect, search=search
+        config,
+        urls,
+        [node.url],
+        [node.url] * 2,
+        out,
+        clock,
+        node.connect,
+        search=search,
     )
     clock.run(load)
     return Load(
@@ -469,7 +477,7 @@ def test_post_tx_stamps_t_done_when_the_request_fails():
     state = netbench.LoadState()
     tx = netbench.Tx(id=0, node=0, t_queued=0.0)
     state.submitted(tx)
-    assert netbench.post_tx(pool, state, tx, "http://x", lambda: b"") == 0
+    assert netbench.post_tx(pool, state, tx, ["http://x"], lambda: b"") == 0
     assert tx.t_done is not None
     assert tx.t_done >= tx.t_submit
 
@@ -672,7 +680,7 @@ def test_writes_stake_table_and_final_metrics(tmp_path: Path):
     node = fakes.FakeNode(clock, True)
     topo: netbench.Topology = {
         "nodes": {"node0": node.url, "node1": node.url},
-        "roles": {"node0": "validator, sqlite", "node1": "validator, sqlite"},
+        "roles": {"node0": "validator, query, sqlite", "node1": "validator, sqlite"},
         "query_node": "node0",
     }
     fast: dict[str, Any] = {
@@ -1046,7 +1054,7 @@ def test_a_missing_payload_in_a_scan_batch_is_retried_and_included_later():
 
 def test_window_without_samples_has_zero_heights():
     series: dict[str, list[Any]] = {node: [] for node in TOPOLOGY["nodes"]}
-    assert netbench.window(series, TOPOLOGY["query_node"], 1.0, 2.0) == {
+    assert netbench.window(series, ["node0"], 1.0, 2.0) == {
         "t0": 1.0,
         "t1": 2.0,
         "height_start": 0,
@@ -1081,11 +1089,13 @@ def test_idle_allows_heartbeat_bytes():
 
 
 class BeatPool:
-    """Records heartbeat bodies; sets `stop` after `beats` requests, fails every `fail_every`."""
+    """Records heartbeat bodies; sets `stop` after `beats` requests, refuses those to `down`."""
 
-    def __init__(self, beats: int, stop: threading.Event, fail_every: int = 0) -> None:
+    def __init__(
+        self, beats: int, stop: threading.Event, down: tuple[str, ...] = ()
+    ) -> None:
         self.clock = fakes.FakeClock()
-        self.beats, self.stop, self.fail_every = beats, stop, fail_every
+        self.beats, self.stop, self.down = beats, stop, down
         self.sent: list[tuple[float, str, bytes]] = []
 
     def request(
@@ -1095,18 +1105,18 @@ class BeatPool:
         self.sent.append((self.clock.time(), url, body))
         if len(self.sent) == self.beats:
             self.stop.set()
-        if self.fail_every and len(self.sent) % self.fail_every == 0:
+        if url.startswith(self.down):
             raise OSError("refused")
         return 200, b""
 
 
 def test_heartbeat_sends_distinct_small_transactions_round_robin():
     stop = threading.Event()
-    pool = BeatPool(6, stop, fail_every=3)
+    pool = BeatPool(6, stop)
     failed = netbench.heartbeat(
         cast("Any", pool), ["http://a", "http://b"], 7, 50.0, stop
     )
-    assert failed == 2
+    assert failed == 0
     times = [t for t, _, _ in pool.sent]
     assert times == pytest.approx([i * 0.02 for i in range(6)])
     assert [url for _, url, _ in pool.sent] == [
@@ -1775,7 +1785,7 @@ def test_search_writes_steps_json_after_every_probe(tmp_path: Path):
         netbench.generate_load(
             cfg,
             [node.url],
-            node.url,
+            [node.url],
             [node.url] * 2,
             tmp_path,
             clock,
@@ -1953,3 +1963,428 @@ def test_step_table_renders_steps_from_before_kind():
     current["steps"][1]["refine"] = True
     table = "\n".join(netbench.step_table(current, None))
     assert "| 6 (refine) |" in table
+
+
+def test_query_nodes_come_from_the_roles():
+    assert netbench.query_nodes(TOPOLOGY) == ["node0"]
+    roles = {"a": "validator, query, sqlite", "b": "validator", "c": "validator, query"}
+    topo: netbench.Topology = {
+        "nodes": dict.fromkeys(roles, "http://x"),
+        "roles": roles,
+        "query_node": "a",
+    }
+    assert netbench.query_nodes(topo) == ["a", "c"]
+
+
+@dataclasses.dataclass
+class ClusterLoad:
+    cluster: fakes.FakeCluster
+    load: Load
+
+
+def run_cluster_load(
+    out: Path,
+    duration: float,
+    names: list[str],
+    query: set[str],
+    on_advance: Callable[[fakes.FakeCluster, float], None] | None = None,
+    **cluster_kwargs: Any,
+) -> ClusterLoad:
+    """5 txs/s of 1000 bytes for `duration` clock seconds, submitted to every node of a
+    `FakeCluster`; the clock waits on threads, so a downed node's readers can retry."""
+    holder: list[fakes.FakeCluster] = []
+
+    def advance(now: float) -> None:
+        if on_advance is not None and holder:
+            on_advance(holder[0], now)
+
+    clock = fakes.FakeClock(threaded=True, on_advance=advance)
+    cluster = fakes.FakeCluster(clock, names, query, **cluster_kwargs)
+    holder.append(cluster)
+    topo = cluster.topology()
+    queries = netbench.query_nodes(topo)
+    cfg = netbench.BenchConfig(
+        tx_size=1000,
+        workers=3,
+        steps=(0.005,),
+        step_s=int(duration),
+        warmup_s=0,
+        cap_s=200.0,
+        tx_timeout_s=5,
+        submit_nodes=len(names),
+    )
+    urls = [topo["nodes"][n] for n in names]
+    load = netbench.generate_load(
+        cfg,
+        urls,
+        [topo["nodes"][n] for n in queries],
+        [url for n, url in topo["nodes"].items() if n not in queries],
+        out,
+        clock,
+        cluster.connect,
+    )
+    clock.run(load)
+    return ClusterLoad(
+        cluster,
+        Load(
+            fakes.FakeNode(clock, False),
+            list(netbench.read_jsonl(out / "load.jsonl")),
+            netbench.read_json(out / "load-meta.json"),
+            netbench.read_json(out / "steps.json"),
+            list(netbench.read_jsonl(out / "heights.jsonl")),
+        ),
+    )
+
+
+def test_a_submit_to_a_stopped_node_goes_to_the_next(tmp_path: Path):
+    def stop_node1(cluster: fakes.FakeCluster, now: float) -> None:
+        if cluster.members["node1"].running and now > 0:
+            cluster.kill("node1")
+
+    run = run_cluster_load(
+        tmp_path, 4.0, ["node0", "node1", "node2"], {"node0"}, stop_node1
+    )
+    assert run.load.txs
+    assert included(run.load.txs)
+    assert run.load.meta["submit_failovers"] > 0
+    assert run.load.meta["submit_errors"] == 0
+    assert run.cluster.members["node1"].submits == []
+    assert 1 not in {tx["node"] for tx in run.load.txs[3:]}
+
+
+def cluster_load_parts(
+    names: list[str], query: set[str]
+) -> tuple[fakes.FakeClock, fakes.FakeCluster, netbench.Load]:
+    clock = fakes.FakeClock(threaded=True)
+    cluster = fakes.FakeCluster(clock, names, query)
+    cfg = netbench.BenchConfig(tx_size=1000, workers=1, submit_nodes=len(names))
+    marker = b"m" * 16
+    load = netbench.Load(
+        cfg,
+        netbench.LoadState(),
+        netbench.Client(cluster.connect(clock), ThreadPoolExecutor(1)),
+        list(cluster.urls.values()),
+        netbench.TxBodies(cfg, marker),
+        clock,
+    )
+    return clock, cluster, load
+
+
+def test_a_tx_no_node_takes_is_one_submit_error_and_dropped():
+    clock, cluster, load = cluster_load_parts(["node0", "node1"], {"node0"})
+    for name in cluster.members:
+        cluster.kill(name)
+    tx = netbench.Tx(id=0, node=1, t_queued=0.0)
+    load.state.submitted(tx)
+    clock.run(netbench.submit_tx(load, tx))
+    assert load.state.submit_errors == 1
+    assert load.state.txs == []
+    assert load.state.pending == {}
+
+
+def test_a_failed_over_tx_stays_pending_and_records_where_it_landed():
+    clock, cluster, load = cluster_load_parts(["node0", "node1", "node2"], {"node0"})
+    cluster.kill("node1")
+    tx = netbench.Tx(id=1, node=1, t_queued=0.0)
+    load.state.submitted(tx)
+    clock.run(netbench.submit_tx(load, tx))
+    assert (tx.node, load.state.failovers, load.state.submit_errors) == (2, 1, 0)
+    assert list(load.state.pending) == [1]
+    assert len(cluster.members["node2"].submits) == 1
+
+
+def test_a_post_tries_each_url_once():
+    clock, cluster, _ = cluster_load_parts(["node0", "node1", "node2"], {"node0"})
+    for name in cluster.members:
+        cluster.kill(name)
+    pool = cluster.connect(clock)
+    urls = list(cluster.urls.values())
+    assert netbench.post_failover(pool, urls, 1, b"{}")[:2] == (0, 0)
+
+
+def test_the_heartbeat_fails_over_to_the_next_url():
+    stop = threading.Event()
+    pool = BeatPool(4, stop, down=("http://a",))
+    failed = netbench.heartbeat(
+        cast("Any", pool), ["http://a", "http://b"], 7, 50.0, stop
+    )
+    assert failed == 0
+    assert {url for _, url, _ in pool.sent[1:]} == {
+        "http://a/v1/submit/submit",
+        "http://b/v1/submit/submit",
+    }
+
+
+def test_a_heartbeat_no_url_takes_counts_as_failed():
+    stop = threading.Event()
+    pool = BeatPool(4, stop, down=("http://",))
+    failed = netbench.heartbeat(
+        cast("Any", pool), ["http://a", "http://b"], 7, 50.0, stop
+    )
+    assert failed == 2
+
+
+def test_a_payload_comes_from_the_next_query_node_on_404_or_refusal():
+    clock = fakes.FakeClock()
+    cluster = fakes.FakeCluster(clock, ["node0", "node1", "node2"], {"node0", "node1"})
+    clock.advance(2.0)
+    pool = cluster.connect(clock)
+    urls = [cluster.urls["node0"], cluster.urls["node1"]]
+    cluster.wipe("node0")
+    cluster.start("node0")
+    assert netbench.block_payload(pool, urls, 10) == b""
+    cluster.kill("node0")
+    assert netbench.block_payload(pool, urls, 10) == b""
+    assert netbench.block_payload(pool, urls, 10_000) is None
+    cluster.kill("node1")
+    assert netbench.block_payload(pool, urls, 10) is None
+
+
+def test_scan_block_finds_ids_on_the_second_query_node():
+    clock = fakes.FakeClock()
+    cluster = fakes.FakeCluster(clock, ["node0", "node1", "node2"], {"node0", "node1"})
+    marker = b"m" * 16
+    body = json.dumps(
+        {
+            "namespace": 1,
+            "payload": base64.b64encode(marker + (7).to_bytes(8, "big")).decode(),
+        }
+    ).encode()
+    pool = cluster.connect(clock)
+    pool.request("POST", cluster.urls["node2"] + "/v1/submit/submit", body)
+    clock.advance(0.2)
+    cluster.wipe("node0")
+    cluster.start("node0")
+    urls = [cluster.urls["node0"], cluster.urls["node1"]]
+    found = [netbench.scan_block(pool, urls, marker, h) for h in range(1, 4)]
+    assert [7] in found
+    assert None not in found
+
+
+def test_a_height_poller_survives_an_outage_and_resumes():
+    def outage(now: float) -> None:
+        if now >= 5.0 and cluster.members["node1"].running and now < 45.0:
+            cluster.kill("node1")
+        elif now >= 45.0 and not cluster.members["node1"].running:
+            cluster.start("node1")
+
+    clock = fakes.FakeClock(threaded=True, on_advance=outage)
+    cluster = fakes.FakeCluster(clock, ["node0", "node1"], {"node0"})
+    heights = netbench.Heights(0)
+
+    async def main() -> None:
+        client = netbench.Client(cluster.connect(clock), ThreadPoolExecutor(2))
+        task = asyncio.create_task(
+            netbench.poll_heights(
+                client, cluster.urls["node1"], heights, "validator", clock
+            )
+        )
+        await clock.asleep(80.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    clock.run(main())
+    seen = sorted(heights.seen["validator"].values())
+    assert seen[0] < 5.0
+    assert seen[-1] > 70.0
+    assert not [t for t in seen if 6.0 < t < 44.0]
+
+
+def run_counters(
+    on_advance: Callable[[fakes.FakeCluster, float], None], seconds: float
+) -> list[dict[str, Any]]:
+    holder: list[fakes.FakeCluster] = []
+    clock = fakes.FakeClock(on_advance=lambda now: on_advance(holder[0], now))
+    cluster = fakes.FakeCluster(clock, ["node0", "node1", "node2", "node3"], {"node3"})
+    holder.append(cluster)
+    counters: list[dict[str, Any]] = []
+    urls = [cluster.urls[n] for n in ("node0", "node1", "node2")]
+    tx = json.dumps({"namespace": 1, "payload": base64.b64encode(b"x" * 100).decode()})
+
+    async def main() -> None:
+        client = netbench.Client(cluster.connect(clock), ThreadPoolExecutor(3))
+        task = asyncio.create_task(
+            netbench.poll_counters(client, urls, counters, clock)
+        )
+        for _ in range(int(seconds)):
+            cluster.request(
+                "POST", cluster.urls["node3"] + "/v1/submit/submit", tx.encode()
+            )
+            await clock.asleep(1.0)
+        task.cancel()
+
+    clock.run(main())
+    return counters
+
+
+def test_decided_bytes_never_decrease_across_a_validator_restart():
+    def restart(cluster: fakes.FakeCluster, now: float) -> None:
+        for name, at in (("node0", 10.0), ("node1", 15.0)):
+            member = cluster.members[name]
+            if now >= at and member.started_at < at:
+                cluster.restart(name)
+
+    counters = run_counters(restart, 25)
+    decided = [c["decided_bytes"] for c in counters]
+    assert len(decided) >= 20
+    assert decided == sorted(decided)
+    assert decided[-1] > 0
+
+
+def test_a_counters_sweep_nobody_answers_writes_no_sample():
+    def outage(cluster: fakes.FakeCluster, now: float) -> None:
+        for name in ("node0", "node1", "node2"):
+            member = cluster.members[name]
+            if 5.0 <= now < 10.0 and member.running:
+                cluster.kill(name)
+            elif now >= 10.0 and not member.running:
+                cluster.start(name)
+
+    counters = run_counters(outage, 15)
+    stamps = [c["ts"] for c in counters]
+    assert not [t for t in stamps if 5.5 < t < 9.5]
+    assert stamps[0] < 5.0
+    assert stamps[-1] > 10.0
+
+
+def test_query_heights_keep_advancing_with_one_query_node_down(tmp_path: Path):
+    def stop_node0(cluster: fakes.FakeCluster, now: float) -> None:
+        if cluster.members["node0"].running and now > 0:
+            cluster.kill("node0")
+
+    run = run_cluster_load(
+        tmp_path, 40.0, ["node0", "node1", "node2"], {"node0", "node1"}, stop_node0
+    )
+    seen = [h["query"] for h in run.load.heights if h["query"] is not None]
+    assert len(seen) > 5
+    assert max(seen) > 30.0
+
+
+def test_the_window_takes_the_highest_query_node():
+    key = "consensus_last_synced_block_height"
+    series: dict[str, list[netbench.Sample]] = {
+        "node0": [(0.0, {key: 100.0}), (10.0, {key: 10.0})],
+        "node1": [(0.0, {key: 90.0}), (10.0, {key: 200.0})],
+        "node2": [(0.0, {key: 500.0}), (10.0, {key: 900.0})],
+    }
+    assert netbench.window(series, ["node0", "node1"], 0.0, 10.0) == {
+        "t0": 0.0,
+        "t1": 10.0,
+        "height_start": 100,
+        "height_end": 200,
+    }
+
+
+def test_drive_load_splits_validators_from_query_nodes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    clock = fakes.FakeClock()
+    cluster = fakes.FakeCluster(
+        clock, ["node0", "node1", "node2", "node3"], {"node0", "node1"}
+    )
+    seen: list[Any] = []
+
+    async def spy(*args: Any) -> tuple[float, float]:
+        seen.extend(args[1:4])
+        return 0.0, 1.0
+
+    monkeypatch.setattr(netbench, "generate_load", spy)
+    netbench.drive_load(
+        netbench.BenchConfig(), cluster.topology(), tmp_path, lambda: True, clock,
+        cluster.connect,
+    )  # fmt: skip
+    urls = cluster.urls
+    assert seen == [
+        [urls["node2"], urls["node3"], urls["node0"], urls["node1"]],
+        [urls["node0"], urls["node1"]],
+        [urls["node2"], urls["node3"]],
+    ]
+
+
+def test_a_node_down_at_the_end_has_no_final_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    clock = fakes.FakeClock()
+    cluster = fakes.FakeCluster(clock, ["node0", "node1", "node2"], {"node0"})
+    cluster.kill("node2")
+
+    async def done(*_: Any) -> tuple[float, float]:
+        return 0.0, 1.0
+
+    monkeypatch.setattr(netbench, "generate_load", done)
+    netbench.drive_load(
+        netbench.BenchConfig(), cluster.topology(), tmp_path, lambda: True, clock,
+        cluster.connect,
+    )  # fmt: skip
+    assert sorted(p.name for p in tmp_path.glob("final-*")) == [
+        "final-node0.prom",
+        "final-node1.prom",
+    ]
+
+
+def test_a_tx_included_twice_after_a_failover_resolves_once():
+    state = netbench.LoadState()
+    tx = netbench.Tx(id=3, node=0, t_queued=0.0, t_submit=0.0)
+    state.submitted(tx)
+    state.include(3, 10, 1.0)
+    state.include(3, 12, 2.0)
+    assert (tx.height, tx.t_included, tx.status) == (10, 1.0, "included")
+    assert state.timeouts == 0
+
+
+def test_faulted_nodes_are_exempt_from_coverage_and_decided_blocks():
+    result = edited({"nodes.node2.decided_blocks": -5})
+    coverage = ALL_ANSWERED | {"node1": 0.6}
+    strict = netbench.check_validity(result, coverage)
+    assert not strict["valid"]
+    exempt = netbench.check_validity(result, coverage, frozenset({"node1", "node2"}))
+    assert exempt["valid"]
+    assert not any("node1" in r or "node2" in r for r in exempt["reasons"])
+    only_one = netbench.check_validity(result, coverage, frozenset({"node1"}))
+    assert any("node2 decided no blocks" in r for r in only_one["reasons"])
+
+
+def test_load_stats_carry_the_failovers(tmp_path: Path):
+    state = netbench.LoadState()
+    state.failovers = 4
+    write_load_files(tmp_path, state)
+    assert netbench.load_stats(tmp_path, [], [], 0.0, 1.0)["submit_failovers"] == 4
+    meta = netbench.read_json(tmp_path / "load-meta.json")
+    del meta["submit_failovers"]
+    (tmp_path / "load-meta.json").write_text(json.dumps(meta))
+    assert netbench.load_stats(tmp_path, [], [], 0.0, 1.0)["submit_failovers"] == 0
+
+
+def test_load_under_faults_end_to_end(tmp_path: Path):
+    """Node0, a query node, dies for good at 20 s, validator node3 restarts at 40 s and query
+    node1 is wiped at 60 s: no tx is lost and no payload goes missing."""
+    events = {"node0": 20.0, "node3": 40.0, "node1": 60.0}
+    done: set[str] = set()
+
+    def faults(cluster: fakes.FakeCluster, now: float) -> None:
+        for name, at in events.items():
+            if now >= at and name not in done:
+                done.add(name)
+                {
+                    "node0": cluster.kill,
+                    "node3": cluster.restart,
+                    "node1": cluster.wipe,
+                }[name](name)
+                if name == "node1":
+                    cluster.start(name)
+
+    run = run_cluster_load(
+        tmp_path,
+        80.0,
+        [f"node{i}" for i in range(6)],
+        {"node0", "node1"},
+        faults,
+        catchup_blocks_s=500.0,
+    )
+    assert done == set(events)
+    assert run.load.txs
+    assert included(run.load.txs)
+    assert run.load.meta["submit_failovers"] > 0
+    assert run.load.meta["submit_errors"] == 0
+    assert run.load.meta["missing_payloads"] == []

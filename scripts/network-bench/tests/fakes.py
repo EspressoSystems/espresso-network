@@ -514,6 +514,220 @@ class FakeNode:
             self.made.append(self.made[-1] + BLOCK_S)
 
 
+@dataclass
+class FakeMember:
+    """One node of a `FakeCluster`. While running, its height closes on the chain tip at the
+    cluster's `catchup_blocks_s` from `base`, the height it started at; a wipe makes that 0.
+    `saved` is the height it stopped at.
+    Voted view and query height equal the height. `decided` restarts at 0 with each start, as
+    `consensus_finalized_bytes_sum` does with the process."""
+
+    name: str
+    query: bool
+    running: bool = True
+    removed: bool = False
+    started_at: float = 0.0
+    base: int = 0
+    saved: int = 0
+    submits: list[float] = field(default_factory=list)
+
+
+class FakeClusterPool:
+    """One client's view of a `FakeCluster`, with the `closed` flag of its own."""
+
+    def __init__(self, cluster: "FakeCluster", clock: netbench.Clock) -> None:
+        self.cluster = cluster
+        self.clock = clock
+        self.closed = threading.Event()
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+    ) -> tuple[int, bytes]:
+        return self.cluster.request(method, url, body)
+
+    def close(self) -> None:
+        self.closed.set()
+
+
+class FakeCluster:
+    """Nodes behind the HTTP and docker surfaces the harness uses. One shared chain makes a
+    block every BLOCK_S clock seconds, when a request finds it due, from every submit any
+    running node took. A stopped node refuses connections; a started one lags the tip until it
+    caught up at `catchup_blocks_s`. Only `query` nodes serve the query API, and payloads above
+    their height answer 404. `kill`, `start`, `restart` and `wipe` change a node;
+    `docker(name, command)` does the same for the docker commands the AWS bench runs."""
+
+    def __init__(
+        self,
+        clock: netbench.Clock,
+        names: list[str],
+        query: set[str],
+        catchup_blocks_s: float = 100.0,
+    ) -> None:
+        self.clock = clock
+        self.catchup_blocks_s = catchup_blocks_s
+        self.lock = threading.RLock()
+        self.urls = {name: f"http://{name}" for name in names}
+        self.members = {
+            name: FakeMember(name, name in query, started_at=clock.time())
+            for name in names
+        }
+        self.pending: list[bytes] = []
+        self.blocks = [b""]
+        self.sizes = [0]
+        self.made = [clock.time()]
+
+    def connect(self, clock: netbench.Clock) -> FakeClusterPool:
+        return FakeClusterPool(self, clock)
+
+    def topology(self) -> netbench.Topology:
+        roles = {
+            name: "validator, query, sqlite" if m.query else "validator"
+            for name, m in self.members.items()
+        }
+        first = next(name for name, m in self.members.items() if m.query)
+        return {"nodes": dict(self.urls), "roles": roles, "query_node": first}
+
+    def peers(self) -> dict[str, list[str]]:
+        """Three validators per node: the first ones for a query node, the next in the cycle
+        for a validator."""
+        validators = [name for name, m in self.members.items() if not m.query]
+        out: dict[str, list[str]] = {}
+        for name, m in self.members.items():
+            if m.query:
+                out[name] = validators[:3]
+                continue
+            i = validators.index(name)
+            n = len(validators)
+            out[name] = [validators[(i + j) % n] for j in range(1, min(3, n - 1) + 1)]
+        return out
+
+    def height(self, name: str) -> int:
+        """Newest block the node decided; its last one while stopped."""
+        with self.lock:
+            return self.height_of(self.members[name])
+
+    def height_of(self, m: FakeMember) -> int:
+        if not m.running:
+            return m.saved
+        self.produce()
+        climbed = m.base + int(
+            (self.clock.time() - m.started_at) * self.catchup_blocks_s
+        )
+        return min(len(self.blocks) - 1, climbed)
+
+    def decided(self, name: str) -> int:
+        m = self.members[name]
+        with self.lock:
+            return sum(self.sizes[m.base + 1 : self.height_of(m) + 1])
+
+    def kill(self, name: str) -> None:
+        with self.lock:
+            m = self.members[name]
+            m.saved = self.height_of(m)
+            m.running = False
+
+    def start(self, name: str) -> None:
+        with self.lock:
+            m = self.members[name]
+            m.running = True
+            m.started_at = self.clock.time()
+            m.base = m.saved
+
+    def restart(self, name: str) -> None:
+        self.kill(name)
+        self.start(name)
+
+    def wipe(self, name: str) -> None:
+        """Loses the database and the journal; the node starts from block 0."""
+        with self.lock:
+            self.kill(name)
+            self.members[name].saved = 0
+
+    def docker(self, name: str, command: str) -> subprocess.CompletedProcess:
+        """Runs the docker commands, `find ... -delete` and `recreate.sh` lines of `command`
+        in order on the node."""
+        m = self.members[name]
+        for line in command.splitlines():
+            if "docker kill" in line:
+                self.kill(name)
+            elif "docker rm -f" in line:
+                self.kill(name)
+                m.removed = True
+            elif "docker restart" in line:
+                self.restart(name)
+            elif "docker start" in line:
+                if m.removed:
+                    return completed(returncode=1, stderr="No such container")
+                self.start(name)
+            elif "find /data/journal" in line:
+                m.saved = 0
+            elif "recreate.sh" in line:
+                m.removed = False
+            elif "docker inspect" in line:
+                return completed("running 0" if m.running else "exited 137")
+        return completed()
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None
+    ) -> tuple[int, bytes]:
+        parts = urlsplit(url)
+        m = self.members[parts.netloc]
+        if not m.running:
+            raise OSError(f"{method} {url}: connection refused")
+        with self.lock:
+            if method == "POST" and parts.path == "/v1/submit/submit":
+                assert body is not None
+                return self.submit(m, body)
+            if method == "GET":
+                return self.get(m, parts.path)
+        raise ValueError(f"FakeCluster: unexpected {method} {parts.path}")
+
+    def submit(self, m: FakeMember, body: bytes) -> tuple[int, bytes]:
+        self.produce()
+        self.pending.append(base64.b64decode(json.loads(body)["payload"]))
+        m.submits.append(self.clock.time())
+        return 200, json.dumps("TX~fake").encode()
+
+    def get(self, m: FakeMember, path: str) -> tuple[int, bytes]:
+        height = self.height_of(m)
+        if path == "/v1/status/block-height":
+            return 200, json.dumps(height).encode()
+        if path == "/v1/status/metrics":
+            lines = (
+                f"consensus_finalized_bytes_sum {self.decided(m.name)}",
+                "consensus_number_of_timeouts 0",
+                f"consensus_last_voted_view {height}",
+                f"consensus_last_decided_view {height}",
+                f"consensus_last_synced_block_height {height}",
+            )
+            return 200, "\n".join(lines).encode()
+        if not m.query:
+            return 404, json.dumps("not found").encode()
+        if path == "/v1/node/block-height":
+            return 200, json.dumps(height + 1).encode()
+        if path == "/v1/node/sync-status":
+            synced = height == len(self.blocks) - 1
+            return 200, json.dumps({"is_fully_synced": synced}).encode()
+        if path == "/v1/node/stake-table/current":
+            return 200, json.dumps({"stake_table": []}).encode()
+        prefix = "/v1/availability/payload/"
+        at = int(path.removeprefix(prefix))
+        if at > height:
+            return 404, json.dumps("not found").encode()
+        raw = base64.b64encode(self.blocks[at]).decode()
+        payload = {"data": {"raw_payload": raw, "ns_table": {"bytes": ""}}}
+        return 200, json.dumps(payload).encode()
+
+    def produce(self) -> None:
+        """Makes the blocks due since the last request. Callers hold `lock`."""
+        while self.made[-1] + BLOCK_S <= self.clock.time():
+            taken, self.pending = self.pending, []
+            self.blocks.append(b"".join(taken))
+            self.sizes.append(len(self.blocks[-1]))
+            self.made.append(self.made[-1] + BLOCK_S)
+
+
 def completed(
     stdout: str = "", returncode: int = 0, stderr: str = ""
 ) -> subprocess.CompletedProcess:
@@ -838,7 +1052,7 @@ TOPOLOGY: netbench.Topology = {
         "node2": "http://localhost:24002",
     },
     "roles": {
-        "node0": "validator, sqlite",
+        "node0": "validator, query, sqlite",
         "node1": "validator, sqlite",
         "node2": "validator, sqlite",
     },
@@ -994,6 +1208,7 @@ def make_result(
             "included": 990,
             "timeouts": 10,
             "submit_errors": 0,
+            "submit_failovers": 0,
             "max_in_flight": 48,
             "cap_waits": 0,
             "missing_payloads": [],

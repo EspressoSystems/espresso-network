@@ -128,6 +128,11 @@ class Topology(TypedDict):
     query_node: str
 
 
+def query_nodes(topo: Topology) -> list[str]:
+    """Names of the nodes whose role says they serve the query API."""
+    return [node for node, role in topo["roles"].items() if "query" in role]
+
+
 class Calibration(TypedDict):
     sha256_1t_mb_s: float
     sha256_mt_mb_s: float
@@ -225,6 +230,8 @@ class LoadStats(TypedDict):
     included: int
     timeouts: int
     submit_errors: int
+    # Submits that went to another node after their own failed.
+    submit_failovers: int
     max_in_flight: int
     cap_waits: int
     missing_payloads: list[int]
@@ -653,8 +660,9 @@ def drive_load(
         raise NetworkError("network process exited before load")
     pool = http(clock)
     try:
-        query_url = topo["nodes"][topo["query_node"]]
-        stake_table = get_ok(pool, query_url + "/v1/node/stake-table/current")
+        queries = query_nodes(topo)
+        query_urls = [topo["nodes"][node] for node in queries]
+        stake_table = get_ok(pool, query_urls[0] + "/v1/node/stake-table/current")
         (out / "stake-table.json").write_bytes(stake_table)
         if search:
             log.info(
@@ -670,15 +678,13 @@ def drive_load(
                 cfg.step_s,
                 ", ".join(map(fmt_num, cfg.steps)),
             )
-        validators = [
-            url for node, url in topo["nodes"].items() if node != topo["query_node"]
-        ]
-        submit_urls = [*validators, query_url]
+        validators = [url for node, url in topo["nodes"].items() if node not in queries]
+        submit_urls = [*validators, *query_urls]
         t0, t1 = clock.run(
             generate_load(
                 cfg,
                 submit_urls,
-                query_url,
+                query_urls,
                 validators,
                 out,
                 clock,
@@ -688,7 +694,16 @@ def drive_load(
             )
         )
         for node, url in topo["nodes"].items():
-            prom = get_ok(pool, url + "/v1/status/metrics")
+            try:
+                status, prom = pool.request(
+                    "GET", url + "/v1/status/metrics", timeout=5
+                )
+            except OSError as err:
+                log.warning("no final metrics of %s: %s", node, err)
+                continue
+            if status != 200:
+                log.warning("no final metrics of %s: HTTP %d", node, status)
+                continue
             (out / f"final-{node}.prom").write_bytes(prom)
     finally:
         pool.close()
@@ -762,15 +777,21 @@ def block_count(pool: Http, url: str, source: "HeightSource") -> int:
     return int(get_ok(pool, url + path)) + extra
 
 
-def block_payload(pool: Http, query_url: str, height: int) -> bytes | None:
-    """Raw payload bytes of block `height`, or None if the query node does not have it yet."""
-    url = f"{query_url}/v1/availability/payload/{height}"
-    status, body = read(pool, url)
-    if status == 404:
-        return None
-    if status != 200:
-        raise NetworkError(f"payload {height} from query node: HTTP {status}")
-    return base64.b64decode(json.loads(body)["data"]["raw_payload"])
+def block_payload(pool: Http, query_urls: Sequence[str], height: int) -> bytes | None:
+    """Raw payload bytes of block `height` from the first query node that has it. A node that
+    refuses, fails or answers 404 (still syncing) is skipped; None if none has it yet."""
+    for query_url in query_urls:
+        url = f"{query_url}/v1/availability/payload/{height}"
+        try:
+            status, body = pool.request("GET", url)
+        except OSError as err:
+            log.debug("%s, trying the next query node", err)
+            continue
+        if status == 200:
+            return base64.b64decode(json.loads(body)["data"]["raw_payload"])
+        if status != 404 and status < 500:
+            raise NetworkError(f"payload {height} from query node: HTTP {status}")
+    return None
 
 
 def find_tx_ids(raw: bytes, marker: bytes) -> list[int]:
@@ -779,11 +800,11 @@ def find_tx_ids(raw: bytes, marker: bytes) -> list[int]:
 
 
 def scan_block(
-    pool: Http, query_url: str, marker: bytes, height: int
+    pool: Http, query_urls: Sequence[str], marker: bytes, height: int
 ) -> list[int] | None:
-    """Ids of our transactions in block `height`, None if the query node does not have it
-    yet. Pure of the load's state, so it can run in another process."""
-    raw = block_payload(pool, query_url, height)
+    """Ids of our transactions in block `height`, None if no query node has it yet. Pure of
+    the load's state, so it can run in another process."""
+    raw = block_payload(pool, query_urls, height)
     return None if raw is None else find_tx_ids(raw, marker)
 
 
@@ -801,8 +822,10 @@ def configure_scan_logging(level: int) -> None:
     )
 
 
-def scan_block_remote(query_url: str, marker: bytes, height: int) -> list[int] | None:
-    return scan_block(scan_http(), query_url, marker, height)
+def scan_block_remote(
+    query_urls: Sequence[str], marker: bytes, height: int
+) -> list[int] | None:
+    return scan_block(scan_http(), query_urls, marker, height)
 
 
 # Fetches and scans one block: `Scan(height)`.
@@ -810,10 +833,10 @@ Scan = Callable[[int], Awaitable[list[int] | None]]
 
 
 async def scan_in_processes(
-    procs: ProcessPoolExecutor, query_url: str, marker: bytes, height: int
+    procs: ProcessPoolExecutor, query_urls: Sequence[str], marker: bytes, height: int
 ) -> list[int] | None:
     return await asyncio.get_running_loop().run_in_executor(
-        procs, scan_block_remote, query_url, marker, height
+        procs, scan_block_remote, query_urls, marker, height
     )
 
 
@@ -874,6 +897,7 @@ class LoadState:
         self.timeouts = 0
         self.phase = Phase("starting", None, 0.0, 0.0)
         self.submit_errors = 0
+        self.failovers = 0
         self.heartbeat_errors = 0
         self.missing_payloads: list[int] = []
 
@@ -923,7 +947,7 @@ class LoadState:
 async def generate_load(
     cfg: BenchConfig,
     submit_urls: list[str],
-    query_url: str,
+    query_urls: list[str],
     validator_urls: list[str],
     out: Path,
     clock: Clock,
@@ -933,7 +957,7 @@ async def generate_load(
 ) -> tuple[float, float]:
     """The load staircase, then up to `tx_timeout_s` for the stragglers. Returns when the
     steps started and ended. Writes one line per transaction to load.jsonl, per block height
-    to heights.jsonl, per consensus counter sample of the first validator to
+    to heights.jsonl, per consensus counter sample (the highest over the validators) to
     consensus.jsonl, per step to steps.json, and the counters to load-meta.json. Payload scans
     run in `scan_processes` processes, or on a thread of this one if 0."""
     state = LoadState()
@@ -952,11 +976,14 @@ async def generate_load(
         else None
     )
     scan: Scan = (
-        functools.partial(tracking.call, scan_block, query_url, marker)
+        functools.partial(tracking.call, scan_block, query_urls, marker)
         if scan_procs is None
-        else functools.partial(scan_in_processes, scan_procs, query_url, marker)
+        else functools.partial(scan_in_processes, scan_procs, query_urls, marker)
     )
-    polling = Client(http(clock), ThreadPoolExecutor(2 + len(validator_urls)))
+    # A height poller waiting out a downed node holds its thread; the counters sweep needs
+    # a thread per validator besides.
+    n_nodes = len(query_urls) + len(validator_urls)
+    polling = Client(http(clock), ThreadPoolExecutor(2 * n_nodes + 1))
     beating = Client(http(clock), ThreadPoolExecutor(1))
     beat_stop = threading.Event()
     done = asyncio.Event()
@@ -969,11 +996,14 @@ async def generate_load(
         "stop_reason": "interrupted",
     }
     try:
-        heights = Heights(await tracking.call(block_count, query_url, "query"))
+        heights = Heights(await tracking.call(block_count, query_urls[0], "query"))
         async with asyncio.TaskGroup() as group:
             pollers = [
-                group.create_task(
-                    poll_heights(polling, query_url, heights, "query", clock)
+                *(
+                    group.create_task(
+                        poll_heights(polling, url, heights, "query", clock)
+                    )
+                    for url in query_urls
                 ),
                 *(
                     group.create_task(
@@ -982,7 +1012,7 @@ async def generate_load(
                     for url in validator_urls
                 ),
                 group.create_task(
-                    poll_counters(polling, validator_urls[0], counters, clock)
+                    poll_counters(polling, validator_urls, counters, clock)
                 ),
             ]
             tracker = group.create_task(
@@ -1066,6 +1096,7 @@ def write_load_files(
             "max_in_flight": state.max_in_flight,
             "cap_waits": state.cap_waits,
             "submit_errors": state.submit_errors,
+            "submit_failovers": state.failovers,
             "heartbeat_errors": state.heartbeat_errors,
             "missing_payloads": state.missing_payloads,
             "drain_s": end["drain_s"],
@@ -1656,8 +1687,7 @@ async def submit_tx(load: Load, tx: Tx) -> None:
     arrives."""
     lo, hi = load.cfg.namespaces
     request = functools.partial(load.bodies.request, tx.id, lo + tx.id % (hi - lo + 1))
-    url = load.urls[tx.node] + "/v1/submit/submit"
-    status = await load.client.call(post_tx, load.state, tx, url, request)
+    status = await load.client.call(post_tx, load.state, tx, load.urls, request)
     if status is not None and status != 200:
         load.state.failed(tx)
 
@@ -1672,7 +1702,8 @@ def heartbeat(
     """Until `stop`: an 8-byte transaction every 1 / `rate_tx_s` s, round robin over `urls`.
     A counter keeps them distinct, so mempool deduplication keeps every one; without the bench
     marker the scans skip them. A slow submit drops the beats it delayed instead of bursting
-    them. Returns the number of failed submits; the first failure is logged."""
+    them. A beat goes to the next url when its own fails. Returns the number of beats no url
+    took; the first is logged."""
     clock = pool.clock
     interval = 1 / rate_tx_s
     n = failed = 0
@@ -1680,37 +1711,60 @@ def heartbeat(
     while not clock.wait(stop, max(0.0, due - clock.time())):
         payload = base64.b64encode(n.to_bytes(8, "big"))
         body = b'{"namespace":%d,"payload":"%s"}' % (namespace, payload)
-        url = urls[n % len(urls)] + "/v1/submit/submit"
-        try:
-            status, reply = pool.request("POST", url, body)
-        except OSError as err:
-            status, reply = 0, str(err).encode()
+        status, _, reply = post_failover(pool, urls, n % len(urls), body)
         if status != 200:
             if not failed:
-                log.warning("heartbeat submit failed: %d %r", status, reply[:200])
+                log.warning("heartbeat submit failed: %d %s", status, reply[:200])
             failed += 1
         n += 1
         due = max(due + interval, clock.time())
     return failed
 
 
+def post_failover(
+    pool: Http, urls: Sequence[str], start: int, body: bytes
+) -> tuple[int, int, str]:
+    """POSTs `body` to the submit API of `urls[start]`, then of the following urls cyclically
+    until one answers 200, at most once each. Returns the last status, 0 if the request
+    failed, the index of the url that gave it, and the reply body or error text. A url that
+    hangs costs its request timeout before the next is tried."""
+    for attempt in range(len(urls)):
+        index = (start + attempt) % len(urls)
+        try:
+            status, reply = pool.request(
+                "POST", urls[index] + "/v1/submit/submit", body
+            )
+            detail = reply.decode(errors="replace")
+        except OSError as err:
+            status, detail = 0, str(err)
+        if status == 200:
+            break
+    return status, index, detail
+
+
 def post_tx(
-    pool: Http, state: LoadState, tx: Tx, url: str, build: Callable[[], bytes]
+    pool: Http,
+    state: LoadState,
+    tx: Tx,
+    urls: Sequence[str],
+    build: Callable[[], bytes],
 ) -> int | None:
-    """HTTP status, 0 if the request failed, None if `drop_unsent` dropped the tx first.
-    Builds the body on this thread, so only as many bodies are alive as there are threads.
-    Stamps `t_submit` as the request goes out, not when it was queued for a thread."""
+    """HTTP status of the last attempt (see `post_failover`), 0 if the request failed, None if
+    `drop_unsent` dropped the tx first. `tx.node` ends as the url that took it. Builds the
+    body on this thread, so only as many bodies are alive as there are threads. Stamps
+    `t_submit` as the first request goes out, not when it was queued for a thread."""
     body = build()
     with state.lock:
         if tx.id not in state.pending:
             return None
         tx.t_submit = pool.clock.time()
     try:
-        status, _ = pool.request("POST", url, body)
-    except OSError:
-        return 0
+        status, index, _ = post_failover(pool, urls, tx.node, body)
     finally:
         tx.t_done = pool.clock.time()
+    with state.lock:
+        state.failovers += (index - tx.node) % len(urls)
+    tx.node = index
     return status
 
 
@@ -1758,24 +1812,48 @@ async def poll_heights(
     source: HeightSource,
     clock: Clock,
 ) -> None:
-    """On its own thread, so block times never wait for payload scans."""
+    """On its own thread, so block times never wait for payload scans. A node that stays down
+    past `read`'s deadline is polled again until it returns."""
     while True:
-        heights.saw(source, await client.call(block_count, url, source), clock.time())
+        try:
+            count = await client.call(block_count, url, source)
+        except NetworkError as err:
+            log.debug("height poll of %s: %s", url, err)
+        else:
+            heights.saw(source, count, clock.time())
         await clock.asleep(HEIGHT_POLL_S)
 
 
 async def poll_counters(
-    client: Client, url: str, counters: list[dict[str, Any]], clock: Clock
+    client: Client, urls: Sequence[str], counters: list[dict[str, Any]], clock: Clock
 ) -> None:
-    """Decided payload bytes and view timeouts of one validator, every COUNTER_POLL_S."""
+    """Every COUNTER_POLL_S, decided payload bytes and view timeouts: the highest over the
+    validators that answer. A restarted validator's counters start from 0 and fall under
+    the others'. A sweep nobody answers writes no sample."""
     while True:
-        m = await client.call(consensus_counters, url)
-        counters.append({"ts": clock.time(), **m})
+        answers = await asyncio.gather(
+            *(client.call(try_counters, url) for url in urls)
+        )
+        if ms := [m for m in answers if m is not None]:
+            counters.append(
+                {"ts": clock.time()}
+                | {
+                    key: max(m[key] for m in ms)
+                    for key in ("decided_bytes", "timeouts")
+                }
+            )
         await clock.asleep(COUNTER_POLL_S)
 
 
-def consensus_counters(pool: Http, url: str) -> dict[str, float]:
-    m = parse_prom(get_ok(pool, url + "/v1/status/metrics").decode())
+def try_counters(pool: Http, url: str) -> dict[str, float] | None:
+    """One request; None if the node does not answer 200."""
+    try:
+        status, body = pool.request("GET", url + "/v1/status/metrics", timeout=2)
+    except OSError:
+        return None
+    if status != 200:
+        return None
+    m = parse_prom(body.decode())
     # Both appear only once the first block is decided or view timed out.
     return {
         "decided_bytes": m.get("consensus_finalized_bytes_sum", 0.0),
@@ -1794,7 +1872,7 @@ async def track_inclusion(
 ) -> None:
     """Scan every new block's payload for our marker; time out transactions that never show.
     A transaction counts as included when its block's header appeared on the query node. A
-    payload the query node lacks is retried after each scan until MISSING_PAYLOAD_S."""
+    payload no query node has is retried after each scan until MISSING_PAYLOAD_S."""
     deadline = None
     report = clock.time() + PROGRESS_S
     reported_timeouts = 0
@@ -1854,7 +1932,7 @@ async def retry_missing(
             continue
         del missing[height]
         if ids is None:
-            log.warning("payload %d missing on the query node, skipping", height)
+            log.warning("payload %d missing on every query node, skipping", height)
             state.missing_payloads.append(height)
         else:
             record_inclusions(state, ids, heights, height, at)
@@ -2253,9 +2331,15 @@ def meminfo() -> dict[str, int]:
 Sample = tuple[float, dict[str, float]]
 
 
-def analyze(out: Path, cfg: BenchConfig, topo: Topology) -> BenchResult:
+def analyze(
+    out: Path,
+    cfg: BenchConfig,
+    topo: Topology,
+    faulted: frozenset[str] = frozenset(),
+) -> BenchResult:
     """`window`, `nodes`, `processes`, `host` and `load` cover all steps; each step's own
-    metrics cover its measured half."""
+    metrics cover its measured half. `faulted` nodes were taken down on purpose; see
+    `check_validity`."""
     nodes = list(topo["nodes"])
     run = read_json(out / "run.json")
     t0, t1 = run["t0"], run["t1"]
@@ -2279,7 +2363,7 @@ def analyze(out: Path, cfg: BenchConfig, topo: Topology) -> BenchResult:
         },
         "config": dataclasses.asdict(cfg),
         "config_hash": run["config_hash"],
-        "window": window(series, topo["query_node"], t0, t1),
+        "window": window(series, query_nodes(topo), t0, t1),
         "steps": steps,
         "capacity": capacity(steps),
         "nodes": {
@@ -2293,7 +2377,7 @@ def analyze(out: Path, cfg: BenchConfig, topo: Topology) -> BenchResult:
         "validity": {"valid": True, "noisy": False, "reasons": []},
     }
     result["validity"] = check_validity(
-        result, scrape_coverage(out / "metrics.jsonl", nodes, t0, t1)
+        result, scrape_coverage(out / "metrics.jsonl", nodes, t0, t1), faulted
     )
     return result
 
@@ -2363,15 +2447,21 @@ def step_result(
     return result
 
 
-def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
+def check_validity(
+    result: BenchResult,
+    coverage: dict[str, float],
+    faulted: frozenset[str] = frozenset(),
+) -> Validity:
+    """Nodes in `faulted` are exempt from the per-node scrape coverage and decided blocks
+    rules: a restart resets their counters and their downtime lowers coverage."""
     n_nodes = len(result["nodes"])
     invalid: list[str] = []
     noisy: list[str] = []
     for node, frac in coverage.items():
-        if frac < SCRAPE_OK_MIN:
+        if frac < SCRAPE_OK_MIN and node not in faulted:
             invalid.append(f"{node} metrics answered for only {frac:.0%} of the window")
     for node, stats in result["nodes"].items():
-        if stats["decided_blocks"] <= 0:
+        if stats["decided_blocks"] <= 0 and node not in faulted:
             invalid.append(f"{node} decided no blocks in the window")
     # A collapsed probe may decide nothing; only a run with no decided step is broken.
     if result["steps"] and not any(step["decided_mb_s"] for step in result["steps"]):
@@ -2591,16 +2681,21 @@ def histogram_quantiles(
 
 
 def window(
-    series: dict[str, list[Sample]], query_node: str, t0: float, t1: float
+    series: dict[str, list[Sample]], query_nodes: list[str], t0: float, t1: float
 ) -> Window:
-    samples = series[query_node]
+    """Heights are the highest over the query nodes, so one catching up after a wipe does not
+    lower them."""
     key = "consensus_last_synced_block_height"
-    return {
-        "t0": t0,
-        "t1": t1,
-        "height_start": int(at(samples, t0)[1].get(key, 0)) if samples else 0,
-        "height_end": int(at(samples, t1)[1].get(key, 0)) if samples else 0,
-    }
+
+    def height(t: float) -> int:
+        return int(
+            max(
+                (at(series[n], t)[1].get(key, 0) for n in query_nodes if series[n]),
+                default=0,
+            )
+        )
+
+    return {"t0": t0, "t1": t1, "height_start": height(t0), "height_end": height(t1)}
 
 
 def process_stats(
@@ -2665,6 +2760,8 @@ def load_stats(
         "included": sum(1 for tx in txs if tx["status"] == "included"),
         "timeouts": sum(1 for tx in txs if tx["status"] == "timeout"),
         "submit_errors": meta["submit_errors"],
+        # Absent from load-meta.json of runs before it was recorded.
+        "submit_failovers": meta.get("submit_failovers", 0),
         "max_in_flight": meta["max_in_flight"],
         "cap_waits": meta["cap_waits"],
         "missing_payloads": meta["missing_payloads"],
