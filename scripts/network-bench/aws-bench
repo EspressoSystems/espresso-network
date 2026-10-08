@@ -1470,14 +1470,17 @@ def format_search_summary(cfg: RunConfig) -> str:
 def format_node_summary(cfg: RunConfig) -> list[str]:
     """Run settings that shape the nodes and Postgres and appear in no other preamble line."""
 
-    def storage(role: Literal["validator", "query"]) -> str:
+    def storage(role: Literal["validator", "query"]) -> list[str]:
         modules = NODE_MODULES[cfg.consensus_storage, role]
-        return "+".join(m for m in modules if m.startswith("storage-"))
+        return [m for m in modules if m.startswith("storage-")]
 
+    # node0's first storage module backs consensus, its last the query service.
+    node0 = storage("query")
     return [
+        f"storage validators: consensus {storage('validator')[0]}",
         (
-            f"storage: {cfg.consensus_storage}; validators {storage('validator')}; "
-            f"node0 {storage('query')}, query-db {cfg.query_db}"
+            f"storage node0:      consensus {node0[0]}, query {node0[-1]} "
+            f"({cfg.query_db})"
         ),
         (
             f"nodes: max block {cfg.max_block_size}; submit {cfg.load.submit_nodes} nodes; "
