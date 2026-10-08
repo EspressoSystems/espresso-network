@@ -1401,26 +1401,68 @@ def test_window_rate_counts_transactions_in_the_window():
     assert netbench.window_mb_s(times, 1_500_000, 70.0, 100.0) == pytest.approx(0.1)
 
 
-def test_progress_line_shows_the_submitted_offered_and_query_rates(
+def progress_line(
+    caplog: pytest.LogCaptureFixture,
+    phase: netbench.Phase,
+    txs: int,
+    height: int,
+    now: float = 100.0,
+    block_mb: float | None = None,
+) -> str:
+    """`txs` 1 MB txs submitted 6 s before `now`, a third of them in a block at `height` that
+    validators showed 5 s and the query node 4.5 s before `now`, scanned at `now`. The block
+    holds `block_mb`, default half the txs."""
+    state = netbench.LoadState()
+    state.phase = phase
+    for i in range(txs):
+        state.submitted(netbench.Tx(id=i, node=0, t_queued=0.0, t_submit=now - 6))
+    for i in range(txs // 3):
+        state.include(i, height=height, at=now - 4.5)
+    heights = netbench.Heights(height)
+    heights.saw("validator", height + 1, now - 5)
+    heights.saw("query", height + 1, now - 4.5)
+    heights.scanned[height] = now
+    counters = [
+        {"ts": now - 10, "decided_bytes": 0, "timeouts": 0},
+        {"ts": now, "decided_bytes": (block_mb or txs / 2) * 1e6, "timeouts": 1},
+    ]
+    caplog.clear()
+    with caplog.at_level(logging.INFO, netbench.log.name):
+        netbench.log_progress(state, heights, counters, now, 1_000_000, 2)
+    (line,) = caplog.messages
+    return line
+
+
+def test_progress_line(caplog: pytest.LogCaptureFixture):
+    line = progress_line(
+        caplog, netbench.Phase("probe 2 climb", 60.0, 80.0, 60.0), 90, 0
+    )
+    assert line == (
+        "probe 2 climb      60.0 MB/s     20/60s"
+        " | sub   9.0 MB/s pend     60 to     2"
+        " | cns   4.5 MB/s  50% h       0 blk 10.00s  45.0MB lat   1000ms"
+        " | qry   3.0 MB/s h       0 lag    500ms | vto 1"
+    )
+
+
+def test_progress_columns_align_across_phases_and_magnitudes(
     caplog: pytest.LogCaptureFixture,
 ):
-    state = netbench.LoadState()
-    state.rate_mb_s = 60.0
-    for i in range(90):
-        state.submitted(netbench.Tx(id=i, node=0, t_queued=0.0, t_submit=99.0))
-    for i in range(30):
-        state.include(i, height=0, at=99.5)
-    heights = netbench.Heights(0)
-    heights.saw("validator", 1, 95.0)
-    heights.saw("query", 1, 95.5)
-    counters = [{"ts": 80.0, "decided_bytes": 0}, {"ts": 100.0, "decided_bytes": 50e6}]
-    with caplog.at_level(logging.INFO, netbench.log.name):
-        netbench.log_progress(state, heights, counters, 100.0, 1_000_000)
-    (line,) = caplog.messages
-    assert "(lag 500 ms), block 30 s, 50 MB;" in line
-    assert (
-        "submitting 3 of 60 MB/s, decided 2.5 MB/s, query 1 MB/s; 90 submitted" in line
-    )
+    lines = [
+        progress_line(caplog, netbench.Phase("probe 2 climb", 0.5, 80.0, 60.0), 9, 0),
+        progress_line(caplog, netbench.Phase("drain", None, 1.0, 300.0), 0, 5),
+        progress_line(
+            caplog,
+            netbench.Phase("probe 12 recovery", 9999.0, 0.0, 1800.0),
+            99_990,
+            9_999_998,
+            1800.0,
+            999.9,
+        ),
+        progress_line(caplog, netbench.Phase("starting", None, 0.0, 0.0), 0, 0),
+    ]
+    columns = {tuple(i for i, c in enumerate(line) if c == "|") for line in lines}
+    assert len(columns) == 1, "\n".join(lines)
 
 
 SEARCH = netbench.SearchConfig(

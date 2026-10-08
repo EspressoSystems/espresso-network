@@ -61,7 +61,7 @@ DRIFT_NOISY_PCT = 10.0
 TRACKER_LAG_NOISY_MS = 1000.0
 SCRAPE_OK_MIN = 0.9
 MIN_READY_HEIGHT = 5
-PROGRESS_S = 30
+PROGRESS_S = 10
 # Decided bytes flat this long mean consensus is idle: a block under a backlog can take 2.5 s.
 DRAIN_IDLE_S = 5.0
 # Empty blocks the query node must show after consensus went idle.
@@ -823,6 +823,16 @@ class Client:
         self.pool.close()
 
 
+@dataclass(frozen=True)
+class Phase:
+    """What the load does, for the progress line: `rate_mb_s` None while nothing is offered."""
+
+    label: str
+    rate_mb_s: float | None
+    start: float
+    length_s: float
+
+
 class LoadState:
     """Transactions of one run. At most `cap` are pending: submitted but neither included nor
     timed out."""
@@ -838,6 +848,8 @@ class LoadState:
         self.pending: dict[int, Tx] = {}
         self.max_in_flight = 0
         self.cap_waits = 0
+        self.timeouts = 0
+        self.phase = Phase("starting", None, 0.0, 0.0)
         self.submit_errors = 0
         self.missing_payloads: list[int] = []
 
@@ -873,6 +885,8 @@ class LoadState:
         tx.status = status
         if status == "included":
             tx.t_included = now
+        elif status == "timeout":
+            self.timeouts += 1
         self.room.set()
 
     def include(self, tx_id: int, height: int, at: float) -> None:
@@ -1097,7 +1111,9 @@ async def run_staircase(
     cfg = load.cfg
     warmup_mb_s = search.start_mb_s if search else cfg.steps[0]
     async with asyncio.TaskGroup() as submits:
-        await pace(load, submits, warmup_mb_s, load.clock.time() + cfg.warmup_s)
+        start = load.clock.time()
+        load.state.phase = Phase("warmup", warmup_mb_s, start, cfg.warmup_s)
+        await pace(load, submits, warmup_mb_s, start + cfg.warmup_s)
         if search:
             return await search_probes(
                 load, submits, heights, counters, steps, out, search
@@ -1135,6 +1151,7 @@ async def ramp_steps(
             rate,
             cfg.step_s,
             "refine" if refine else "ramp",
+            f"step {len(steps) + 1}" + (" refine" if refine else ""),
         )
         passed.append(not side_fails(judged, "overall"))
         steps.append(judged)
@@ -1204,6 +1221,7 @@ async def search_probes(
             found["rate_mb_s"],
             found["duration_s"],
             found["kind"],
+            f"probe {len(steps) + 1} {found['kind']}",
             label,
         )
         steps.append(judged)
@@ -1220,6 +1238,7 @@ async def run_probe(
     rate: float,
     duration_s: float,
     kind: ProbeKind,
+    name: str,
     label: str | None = None,
 ) -> dict[str, Any]:
     """One step at `rate` for `duration_s`, measured over its second half, and its verdict.
@@ -1227,6 +1246,7 @@ async def run_probe(
     BEHIND_WINDOW_S."""
     start = load.clock.time()
     cap_waits = load.state.cap_waits
+    load.state.phase = Phase(name, rate, start, duration_s)
     until = start + duration_s
     if load.cfg.keep_going:
         await pace(load, submits, rate, until)
@@ -1469,6 +1489,7 @@ async def drain(
     drop_unsent(state)
     state.rate_mb_s = 0.0
     start = clock.time()
+    state.phase = Phase("drain", None, start, max_s)
     drained = await wait_drained(counters, heights, clock, max_s)
     if drained:
         grace = clock.time() + DRAIN_GRACE_S
@@ -1688,18 +1709,29 @@ async def track_inclusion(
     payload the query node lacks is retried after each scan until MISSING_PAYLOAD_S."""
     deadline = None
     report = clock.time() + PROGRESS_S
+    reported_timeouts = 0
     height = heights.start
     missing: dict[int, float] = {}
     while True:
         now = clock.time()
         if now >= report:
-            log_progress(state, heights, counters, now, cfg.tx_size)
-            report = now + PROGRESS_S
+            log_progress(
+                state,
+                heights,
+                counters,
+                now,
+                cfg.tx_size,
+                state.timeouts - reported_timeouts,
+            )
+            report, reported_timeouts = now + PROGRESS_S, state.timeouts
         if done.is_set():
-            deadline = deadline or now + cfg.tx_timeout_s
+            if deadline is None:
+                deadline = now + cfg.tx_timeout_s
+                state.phase = Phase("done", None, now, cfg.tx_timeout_s)
             if not state.pending or (now > deadline and not missing):
                 for tx_id in list(state.pending):
                     state.resolve(tx_id, "timeout", now)
+                log_totals(state)
                 return
         for tx in [
             tx for tx in state.pending.values() if now - tx.t_submit > cfg.tx_timeout_s
@@ -1773,55 +1805,91 @@ def log_progress(
     counters: Sequence[Mapping[str, Any]],
     now: float,
     tx_size: int,
+    timeouts: int,
 ) -> None:
-    """Last height on each source, query lag, and mean block time and size over the last
-    PROGRESS_S."""
-    validator, query = heights.top("validator"), heights.top("query")
-    behind = max(validator - query, 0)
-    if behind:
-        seen = heights.seen["validator"][query]
-        lag = f"{behind} blk / {fmt_num(now - seen)} s behind"
-    elif validator > heights.start:
-        last = validator - 1
-        lag_ms = (heights.seen["query"][last] - heights.seen["validator"][last]) * 1000
-        lag = f"lag {fmt_num(lag_ms)} ms"
-    else:
-        lag = "no lag yet"
-    blocks = sum(1 for t in heights.seen["validator"].values() if t >= now - PROGRESS_S)
-    inside = [c for c in counters if c["ts"] >= now - PROGRESS_S]
-    block_mb = decided_mb_s = None
-    if len(inside) > 1:
-        decided = inside[-1]["decided_bytes"] - inside[0]["decided_bytes"]
-        decided_mb_s = decided / (inside[-1]["ts"] - inside[0]["ts"]) / 1e6
-        block_mb = decided / blocks / 1e6 if blocks else None
-    included = sum(1 for tx in state.txs if tx.status == "included")
-    timeouts = sum(1 for tx in state.txs if tx.status == "timeout")
+    """One fixed-width line over the last PROGRESS_S: the phase, then the load (`sub`), the
+    validators (`cns`) and the query node (`qry`). `timeouts` timed out in the window."""
     t0 = now - PROGRESS_S
-    # `t_included` is when the block appeared on the query node, so this is the rate the query
-    # node makes transactions available, which falls behind `decided` once it lags.
-    query_mb_s = window_mb_s(
-        (tx.t_included for tx in state.txs if tx.t_included is not None),
-        tx_size,
-        t0,
-        now,
+    phase = state.phase
+    rate = f"{fmt_rate(phase.rate_mb_s)} MB/s" if phase.rate_mb_s is not None else ""
+    elapsed = f"{now - phase.start:.0f}/{phase.length_s:.0f}s" if phase.length_s else ""
+    submitted = window_mb_s((tx.t_submit for tx in state.txs), tx_size, t0, now)
+    validator, query = heights.top("validator"), heights.top("query")
+    seen = heights.seen["validator"]
+    blocks = sum(1 for t in seen.values() if t >= t0)
+    inside = [c for c in counters if c["ts"] >= t0]
+    decided = block_mb = None
+    view_timeouts = 0
+    if len(inside) > 1:
+        first, last = inside[0], inside[-1]
+        decided_bytes = last["decided_bytes"] - first["decided_bytes"]
+        decided = decided_bytes / (last["ts"] - first["ts"]) / 1e6
+        spanned = sum(1 for t in seen.values() if first["ts"] <= t <= last["ts"])
+        block_mb = decided_bytes / spanned / 1e6 if spanned else None
+        view_timeouts = int(last["timeouts"] - first["timeouts"])
+    share = (
+        f"{min(decided / submitted, 9.99):4.0%}"
+        if decided is not None and submitted
+        else ""
     )
+    # By scan time: `t_included` is set only once the block is scanned, after the window
+    # it falls in may already have been reported.
+    scanned = [
+        (h, tx.t_submit)
+        for tx in state.txs
+        if (h := tx.height) is not None and heights.scanned.get(h, -math.inf) >= t0
+    ]
+    latency = [(seen[h] - t) * 1000 for h, t in scanned if h in seen]
+    line = (
+        f"{phase.label:<17} {rate:>10} {elapsed:>10}"
+        f" | sub {fmt_rate(submitted)} MB/s pend {len(state.pending):6d} to {timeouts:5d}"
+        f" | cns {fmt_rate(decided)} MB/s {share:>4} h {fmt_height(validator, heights)}"
+        f" blk {fmt_fixed(PROGRESS_S / blocks if blocks else None, 5, 2)}s"
+        f" {fmt_fixed(block_mb, 5, 1)}MB"
+        f" lat {fmt_fixed(statistics.median(latency) if latency else None, 6, 0)}ms"
+        f" | qry {fmt_rate(len(scanned) * tx_size / PROGRESS_S / 1e6)} MB/s"
+        f" h {fmt_height(query, heights)}"
+        f" lag {fmt_fixed(query_lag_ms(heights, now), 6, 0)}ms"
+    )
+    if view_timeouts > 0:
+        line += f" | vto {view_timeouts}"
+    log.info("%s", line)
+
+
+def query_lag_ms(heights: Heights, now: float) -> float | None:
+    """Since a validator showed the first block the query node lacks, or the last block's lag
+    once the query node caught up."""
+    validator, query = heights.top("validator"), heights.top("query")
+    if validator > query:
+        return (now - heights.seen["validator"][query]) * 1000
+    if validator > heights.start:
+        last = validator - 1
+        return (heights.seen["query"][last] - heights.seen["validator"][last]) * 1000
+    return None
+
+
+def fmt_fixed(value: float | None, width: int, decimals: int) -> str:
+    return "-".rjust(width) if value is None else f"{value:{width}.{decimals}f}"
+
+
+def fmt_rate(mb_s: float | None) -> str:
+    """Five wide: one decimal below 100 MB/s, whole MB/s above."""
+    return fmt_fixed(mb_s, 5, 1 if mb_s is not None and mb_s < 100 else 0)
+
+
+def fmt_height(top: int, heights: Heights) -> str:
+    return fmt_fixed(top - 1 if top > heights.start else None, 7, 0)
+
+
+def log_totals(state: LoadState) -> None:
+    included = sum(1 for tx in state.txs if tx.status == "included")
     log.info(
-        "height v=%s q=%s (%s), block %s s, %s MB; submitting %s of %s MB/s, decided %s "
-        "MB/s, query %s MB/s; %d submitted, %d included, %d pending, %d timed out, "
+        "load done: %d submitted, %d included, %d timed out, peak %d in flight, "
         "%d waited for the cap",
-        fmt_num(validator - 1 if validator > heights.start else None) or "-",
-        fmt_num(query - 1 if query > heights.start else None) or "-",
-        lag,
-        fmt_num(PROGRESS_S / blocks if blocks else None) or "-",
-        fmt_num(block_mb) or "-",
-        fmt_num(window_mb_s((tx.t_submit for tx in state.txs), tx_size, t0, now)),
-        fmt_num(state.rate_mb_s),
-        fmt_num(decided_mb_s) or "-",
-        fmt_num(query_mb_s),
         len(state.txs),
         included,
-        len(state.pending),
-        timeouts,
+        state.timeouts,
+        state.max_in_flight,
         state.cap_waits,
     )
 
