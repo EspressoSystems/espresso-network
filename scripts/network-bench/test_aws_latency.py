@@ -82,17 +82,17 @@ def test_no_intra_latency_needs_a_profile():
         awsb.config_from_args(plan_args("--no-intra-latency"))
 
 
-def test_tcp_cc_and_mtu_need_a_profile_and_default_to_bbr_and_jumbo():
-    for flag, value in (("--tcp-cc", "cubic"), ("--mtu", "1500")):
+def test_tcp_cc_and_mtu_need_a_profile_and_default_to_bbr_and_1500():
+    for flag, value in (("--tcp-cc", "cubic"), ("--mtu", "9001")):
         with pytest.raises(awsb.Refused, match=flag):
             awsb.config_from_args(plan_args(flag, value))
     cfg = awsb.config_from_args(plan_args("--latency", "decaf-2025"))
-    assert (cfg.tcp_cc, cfg.mtu) == ("bbr", 9001)
+    assert (cfg.tcp_cc, cfg.mtu) == ("bbr", 1500)
     meta = awsb.latency_meta(cfg, awsb.plan_hosts(cfg))
     assert meta["sysctls"]["net.ipv4.tcp_congestion_control"] == "bbr"
-    assert meta["mtu"] == 9001
-    flags = ("--latency", "decaf-2025", "--tcp-cc", "cubic", "--mtu", "1500")
-    assert awsb.config_from_args(plan_args(*flags)).mtu == 1500
+    assert meta["mtu"] == 1500
+    flags = ("--latency", "decaf-2025", "--tcp-cc", "cubic", "--mtu", "9001")
+    assert awsb.config_from_args(plan_args(*flags)).mtu == 9001
 
 
 # TEST:hash-four-distinct-ok

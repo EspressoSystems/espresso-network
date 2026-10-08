@@ -48,9 +48,10 @@ def tcp_sysctls(tcp_cc: str) -> tuple[tuple[str, str], ...]:
     )
 
 
-# AWS instances in one VPC use jumbo frames (9001); internet paths carry 1500. `--mtu` sets the
-# interface MTU, default leaves 9001.
-AWS_MTU = 9001
+# Traffic between AWS regions, over inter-region peering or an internet gateway carries at most
+# 1500 bytes; only traffic inside one VPC gets jumbo frames (9001). `--mtu` sets the interface MTU.
+# https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/network_mtu.html
+INTERNET_MTU = 1500
 TC_CLEAR = 'if tc qdisc show dev "$IFACE" | grep -q "htb 1:"; then tc qdisc del dev "$IFACE" root; fi'
 PROFILES = ("off", "decaf-2025", "mainnet")
 DECAF_SPLIT: tuple[tuple[str, int], ...] = (

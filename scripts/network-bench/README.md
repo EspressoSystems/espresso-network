@@ -192,7 +192,7 @@ just bench aws run --fleet --query-db volume --node-env ESPRESSO_QUERY_PAYLOAD_D
 just bench aws run --tag release-x --nodes 5 --latency decaf-2025
 just bench aws run --tag release-x --nodes 5 --latency decaf-2025 --no-intra-latency   # cross-region delay only
 just bench aws run --fleet --latency mainnet
-just bench aws run --tag release-x --latency decaf-2025 --tcp-cc cubic --mtu 1500   # Linux defaults, internet MTU
+just bench aws run --tag release-x --latency decaf-2025 --tcp-cc cubic   # cubic instead of bbr
 ```
 
 - Shaped: node-to-node traffic, including catchup on 8080.
@@ -200,8 +200,8 @@ just bench aws run --tag release-x --latency decaf-2025 --tcp-cc cubic --mtu 150
   - bbr stays in its startup mode while traffic is bursty and leaves it for good at the first overload; cross-region
     sockets then send 3-5x slower for the rest of the run.
   - cubic keeps small windows on the 158 ms links and backs off on rare losses: a 70 MB block run failed 150 MB/s.
-- `--mtu` (default 9001, AWS jumbo frames within a VPC): interface MTU of the nodes; 1500 matches internet paths.
-  Checked on every node after shaping.
+- `--mtu` (default 1500): interface MTU of the nodes. Traffic between AWS regions or over the internet carries at most
+  1500 bytes; only one VPC gets jumbo frames (9001). Checked on every node after shaping.
   [AWS: network MTU](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/network_mtu.html).
 - Never shaped: `ctl` traffic (orchestrator, L1, relay, submit, metrics), RDS, ssh.
 - Model and profiles: [Latency model](#latency-model).
@@ -348,7 +348,7 @@ Where:
 | `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `mainnet`                                                                |
 | `--no-intra-latency`                  | off                            | per run      | with `--latency`: no same-location delay                                                      |
 | `--tcp-cc`                            | bbr                            | per run      | with `--latency`: TCP congestion control, `bbr` or `cubic`                                    |
-| `--mtu`                               | 9001                           | per run      | with `--latency`: interface MTU of the nodes                                                  |
+| `--mtu`                               | 1500                           | per run      | with `--latency`: interface MTU of the nodes                                                  |
 | `--consensus-storage`                 | `fs`                           | per run      | `fs`, `journal` (experimental, not in `main` images); query node uses `storage-sql` with `fs` |
 | `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                                  |
 | `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`                                                                  |

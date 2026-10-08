@@ -870,7 +870,7 @@ class Ec2Balance(TypedDict):
 
 
 # The class body's `latency` field shadows the module inside it.
-AWS_MTU = latency.AWS_MTU
+INTERNET_MTU = latency.INTERNET_MTU
 
 @dataclass(frozen=True)
 class RunConfig:
@@ -898,7 +898,7 @@ class RunConfig:
     intra_latency: bool = True
     # `latency.TCP_CCS` name and interface MTU, set on the nodes with the latency shaping.
     tcp_cc: str = "bbr"
-    mtu: int = AWS_MTU
+    mtu: int = INTERNET_MTU
     ttl_min: str = "auto"
     fleet: Path | None = None
     force: bool = False
