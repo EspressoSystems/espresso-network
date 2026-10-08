@@ -1608,7 +1608,17 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
             f"leader-trace {'on' if cfg.leader_trace else 'off'}"
         ),
         f"node-env: {' '.join(cfg.node_env) or 'none'}",
+        *([format_chaos_summary(cfg.chaos, cfg.nodes)] if cfg.chaos else []),
     ]
+
+
+def format_chaos_summary(chaos: ChaosConfig, nodes: int) -> str:
+    return (
+        f"chaos: {chaos.minutes} min at {chaos.rate_mb_s:g} MB/s; "
+        f"kinds {','.join(chaos.kinds)}; seed {chaos.seed}; "
+        f"at most {fault_budget(nodes)} faulty; gap {chaos.gap_s:g} s; "
+        f"kill down {chaos.kill_down_s:g} s; recover timeout {chaos.recover_timeout_s:g} s"
+    )
 
 
 def format_fleet_summary(estimate: Estimate, max_usd: float, expires: datetime) -> str:

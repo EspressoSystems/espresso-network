@@ -1430,6 +1430,16 @@ def test_node_summary_names_the_storage_modules_and_every_run_setting():
     ]
     assert fs[2].endswith("leader-trace off")
     assert fs[3] == "node-env: none"
+    assert len(fs) == 4
+
+
+def test_format_node_summary_chaos() -> None:
+    chaos = awsb.ChaosConfig(minutes=3, kinds=("restart", "kill"))
+    fs = awsb.format_node_summary(small_cfg(22, chaos=chaos))
+    assert fs[-1] == (
+        "chaos: 3 min at 4 MB/s; kinds restart,kill; seed 42; at most 6 faulty; gap 45 s; "
+        "kill down 60 s; recover timeout 300 s"
+    )
 
 
 def test_fs_validator_start_sh_uses_storage_fs_only():
