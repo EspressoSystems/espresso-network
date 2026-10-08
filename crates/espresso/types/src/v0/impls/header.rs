@@ -1006,6 +1006,9 @@ impl Header {
         if let Some(header_root) = header_root
             && calculated_root != header_root
         {
+            // The result came from an unfinalized boundary proposal's leader counts, so the
+            // next application must not reuse it.
+            reward_calculator.discard(prev_epoch);
             bail!(
                 "reward merkle tree root mismatch, using new merkle tree. Header root: \
                  {header_root}, Calculated root: {calculated_root}"

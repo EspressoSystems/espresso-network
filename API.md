@@ -175,7 +175,13 @@ A service gated on an `OptionalModules` flag, as `ConfigService` is on `config`:
 ### Rules and caveats
 
 - Field and rpc numbers are frozen once released. Only make additive changes: new fields, new rpcs, new messages. Never
-  renumber, reuse, or change the type of an existing field.
+  renumber, reuse, or change the type of an existing field. `just proto-check` enforces this on every PR: it checks the
+  protos' formatting with `buf format`, and when a proto changed it runs `buf breaking` with the `PACKAGE` rules
+  (`crates/espresso/api/proto/buf.yaml`) against the merge base with the PR's base branch, so deleting an rpc or a
+  service fails it as well as changing a field. Run it locally as `just proto-check`, and fix formatting with
+  `buf format -w crates/espresso/api/proto`. The rules compare a field's message type by name, so renaming a message a
+  field refers to counts as a break even though the wire bytes are unchanged. buf does not read the `google.api.http`
+  annotation, so a changed route is not caught by it.
 - An rpc is a GET, or a POST when it changes state or its input cannot be flat. A POST binds the whole request message
   as its protoJSON body (`body: "*"`) and refuses a query string with a 400.
 - v2 addresses resources with flat query parameters, not v1-style path parameters: one static route per rpc, with every

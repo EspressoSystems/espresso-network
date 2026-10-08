@@ -68,6 +68,9 @@ const MAX_FINALIZED_HINT_DISTANCE: u64 = 500;
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientOptions {
     /// Maximum number of stake tables to cache in memory at any given time.
+    ///
+    /// The light client database keeps every stake table, so one evicted from memory is reloaded
+    /// from disk rather than rebuilt from peers.
     #[cfg_attr(
         feature = "clap",
         clap(

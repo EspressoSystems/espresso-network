@@ -84,6 +84,7 @@ pub struct TestView {
     pub leader_private_key: <BLSPubKey as SignatureKey>::PrivateKey,
     pub proposal: SignedProposal<TestTypes, Proposal<TestTypes>>,
     pub leaf: Leaf2<TestTypes>,
+    pub payload: TestBlockPayload,
     pub vid_disperse: VidDisperse2<TestTypes>,
     pub vid_shares: Vec<VidDisperseShare2<TestTypes>>,
     pub cert1: Certificate1<TestTypes>,
@@ -171,7 +172,11 @@ impl TestView {
 
     /// Build an Event for block reconstructed.
     pub fn block_reconstructed_input(&self) -> ConsensusInput<TestTypes> {
-        ConsensusInput::BlockReconstructed(self.view_number, self.vid_commitment())
+        ConsensusInput::BlockReconstructed {
+            view: self.view_number,
+            payload_commitment: self.vid_commitment(),
+            payload: self.payload.clone(),
+        }
     }
 
     /// Build an Event for Certificate1.
@@ -182,6 +187,32 @@ impl TestView {
     /// Build an Event for Certificate2.
     pub fn cert2_input(&self) -> ConsensusInput<TestTypes> {
         ConsensusInput::Certificate2(ValidCert::new(self.cert2.clone(), self.epoch_number))
+    }
+
+    /// Build a network Message carrying this view's Certificate1, as a peer
+    /// sends it once the certificate forms.
+    pub fn cert1_message(&self, node_index: u64) -> Message<TestTypes, Validated> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
+                self.cert1.clone(),
+                pub_key,
+            )),
+        }
+    }
+
+    /// Build a network Message carrying this view's Certificate2, as a peer
+    /// relays it when applying the certificate.
+    pub fn cert2_message(&self, node_index: u64) -> Message<TestTypes, Validated> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::Certificate2(
+                self.cert2.clone(),
+                pub_key,
+            )),
+        }
     }
 
     /// Build a Vote1 Event from a specific validator, carrying that validator's
@@ -299,6 +330,20 @@ impl TestView {
             message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
                 TimeoutVoteMessage { vote, evidence },
             )),
+        }
+    }
+
+    /// Build a network Message carrying this view's timeout certificate,
+    /// as a peer rebroadcasts it when applying the certificate.
+    pub fn timeout_cert_message(&self, node_index: u64) -> Message<TestTypes, Validated> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let message = match self.timeout_cert.clone() {
+            TimeoutEvidence::V2(tc) => ConsensusMessage::TimeoutCertificate(tc),
+            TimeoutEvidence::V3(tc) => ConsensusMessage::TimeoutCertificate3(tc),
+        };
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(message),
         }
     }
 
@@ -472,6 +517,10 @@ impl TestData {
                 .expect("Leader key not found in key map");
 
             let (mut vid_disperse, mut vid_shares) = extract_vid_disperse(gen_view);
+            let payload = gen_view
+                .leaf
+                .block_payload()
+                .expect("the generator fills the leaf's payload");
             let block_number = BlockHeader::<TestTypes>::block_number(&proposal.block_header);
 
             // Compute epoch from block number (generator doesn't know about
@@ -652,6 +701,7 @@ impl TestData {
                 leader_private_key: leader_private_key.clone(),
                 proposal: signed_proposal,
                 leaf,
+                payload,
                 vid_disperse,
                 vid_shares,
                 cert1,

@@ -24,8 +24,8 @@ use hotshot_types::{
     event::HotShotAction,
     message::Proposal,
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
-        UpgradeCertificate,
+        Certificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
+        QuorumCertificate2, UpgradeCertificate,
     },
     traits::{node_implementation::NodeType, storage::Storage},
     vote::HasViewNumber,
@@ -62,6 +62,7 @@ pub struct TestStorageState<TYPES: NodeType> {
     epoch_roots: BTreeMap<EpochNumber, TYPES::BlockHeader>,
     restart_view: ViewNumber,
     anchor_leaf: Option<(Leaf2<TYPES>, QuorumCertificate2<TYPES>)>,
+    cert2s: BTreeMap<ViewNumber, Certificate2<TYPES>>,
 }
 
 impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
@@ -86,6 +87,7 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             epoch_roots: BTreeMap::new(),
             restart_view: ViewNumber::genesis(),
             anchor_leaf: None,
+            cert2s: BTreeMap::new(),
         }
     }
 }
@@ -169,6 +171,14 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
 
     pub async fn anchor_leaf(&self) -> Option<(Leaf2<TYPES>, QuorumCertificate2<TYPES>)> {
         self.inner.read().await.anchor_leaf.clone()
+    }
+
+    pub async fn insert_cert2(&self, view: ViewNumber, cert2: Certificate2<TYPES>) {
+        self.inner.write().await.cert2s.insert(view, cert2);
+    }
+
+    pub async fn cert2(&self, view: ViewNumber) -> Option<Certificate2<TYPES>> {
+        self.inner.read().await.cert2s.get(&view).cloned()
     }
 
     pub async fn last_actioned_epoch(&self) -> Option<EpochNumber> {
