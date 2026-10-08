@@ -63,18 +63,6 @@ pub type IncomingRequests<K> = NamedSemaphore<K>;
 /// in-flight request pins its own buffer
 const RESPONSE_BUFFER_SIZE: usize = 16;
 
-/// The type of request to make
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub enum RequestType {
-    /// A request that can be satisfied by a single participant,
-    /// and as such will be batched to a few participants at a time
-    /// until one succeeds
-    Batched,
-    /// A request that needs most or all participants to respond,
-    /// and as such will be broadcasted to all participants
-    Broadcast,
-}
-
 /// The errors that can occur when making a request for data
 #[derive(thiserror::Error, Debug)]
 pub enum RequestError {
@@ -256,8 +244,6 @@ impl<
         self: &Arc<Self>,
         public_key: &K,
         private_key: &K::PrivateKey,
-        // The type of request to make
-        request_type: RequestType,
         // The estimated TTL of other participants. This is used to decide when to
         // stop making requests and sign a new one
         estimated_request_ttl: Duration,
@@ -284,7 +270,6 @@ impl<
             match self
                 .request(
                     request_message,
-                    request_type,
                     estimated_request_ttl,
                     response_validation_fn.clone(),
                 )
@@ -308,7 +293,6 @@ impl<
     pub async fn request<F, Fut, O>(
         self: &Arc<Self>,
         request_message: RequestMessage<Req, K>,
-        request_type: RequestType,
         timeout_duration: Duration,
         response_validation_fn: F,
     ) -> std::result::Result<O, RequestError>
@@ -338,30 +322,13 @@ impl<
                 })?,
         );
 
-        // The deadline covers sending too: both sends can park behind network backpressure
+        // The deadline covers sending too: looking up recipients and sending can both park
         timeout(timeout_duration, async {
-            // Broadcast requests go out once; batched requests are re-sent by a background task
-            // that is aborted when the handle drops with this function
-            let _batched_sending_task = match request_type {
-                RequestType::Broadcast => {
-                    trace!("Sending request {request_message:?} to all participants");
-
-                    self.sender
-                        .send_broadcast_message(&message)
-                        .await
-                        .map_err(|e| {
-                            RequestError::Other(anyhow::anyhow!(
-                                "failed to send broadcast message: {e}"
-                            ))
-                        })?;
-
-                    None
-                },
-                RequestType::Batched => Some(
-                    self.spawn_batched_sender(request_message.clone(), message, timeout_duration)
-                        .await?,
-                ),
-            };
+            // The request is re-sent by a background task that is aborted when the handle drops
+            // with this function
+            let _batched_sending_task = self
+                .spawn_batched_sender(request_message.clone(), message, timeout_duration)
+                .await?;
 
             loop {
                 let body = response_receiver.recv().await.ok_or_else(|| {
@@ -709,16 +676,6 @@ mod tests {
 
             Ok(())
         }
-
-        async fn send_broadcast_message(&self, message: &Bytes) -> Result<()> {
-            for sender in self.network.values() {
-                sender
-                    .send(Arc::clone(message))
-                    .await
-                    .map_err(|_| anyhow::anyhow!("failed to send message"))?;
-            }
-            Ok(())
-        }
     }
 
     // Implement the [`RecipientSource`] trait for the [`TestSender`] type
@@ -913,7 +870,6 @@ mod tests {
                 let response = protocol
                     .request(
                         request,
-                        RequestType::Batched,
                         config.request_timeout,
                         |_request, response| async move { Ok(response) },
                     )
@@ -1050,7 +1006,6 @@ mod tests {
                     .0
                     .request(
                         request_message,
-                        RequestType::Batched,
                         Duration::from_secs(20),
                         |_request, response| async move { Ok(response) },
                     )
@@ -1138,7 +1093,6 @@ mod tests {
             Duration::from_secs(5),
             protocol.request(
                 request_message,
-                RequestType::Batched,
                 Duration::from_millis(250),
                 |_request, response| async move { Ok(response) },
             ),
@@ -1162,7 +1116,6 @@ mod tests {
         let result = protocol
             .request(
                 request_message,
-                RequestType::Batched,
                 Duration::from_millis(250),
                 |_request, response| async move { Ok(response) },
             )
@@ -1193,13 +1146,11 @@ mod tests {
         let (bytes, length) = tokio::join!(
             requester.request(
                 request_message_1,
-                RequestType::Batched,
                 Duration::from_secs(20),
                 |_request, response| async move { Ok(response) },
             ),
             requester.request(
                 request_message_2,
-                RequestType::Batched,
                 Duration::from_secs(20),
                 |_request, response| async move { Ok(response.len()) },
             )
@@ -1232,12 +1183,7 @@ mod tests {
         let request_message = RequestMessage::new_signed(public_key, private_key, &request)
             .expect("failed to create request message");
         let response = requester
-            .request(
-                request_message,
-                RequestType::Batched,
-                Duration::from_secs(20),
-                validation_fn,
-            )
+            .request(request_message, Duration::from_secs(20), validation_fn)
             .await
             .expect("request failed");
 
@@ -1278,7 +1224,6 @@ mod tests {
         let response = requester
             .request(
                 request_message,
-                RequestType::Batched,
                 Duration::from_secs(20),
                 |_request, response| async move { Ok(response) },
             )

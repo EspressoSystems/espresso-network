@@ -59,7 +59,6 @@ use itertools::Itertools;
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use moka::future::Cache;
 use rand::Rng;
-use request_response::RequestType;
 use serde::{Deserialize, Serialize};
 use tokio::{sync::OnceCell, time::timeout};
 use url::Url;
@@ -528,7 +527,6 @@ where
             duration,
             request_response_protocol.request_indefinitely::<_, _, _>(
                 Request::VidShare(block_number, request_id),
-                RequestType::Batched,
                 move |_request, response| {
                     let avidm_param = avidm_param.clone();
                     let received_shares = received_shares_clone.clone();
