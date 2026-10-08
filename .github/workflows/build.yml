@@ -222,7 +222,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
-            --paginate --jq '.[].filename' | grep -qE '^(scripts/network-bench/|\.github/workflows/network-bench)'; then
+            --paginate --jq '.[].filename' \
+            | grep -vE '^scripts/network-bench/(aws/|aws-bench|test_aws_bench\.py|test_aws_fleet\.py|README\.md)' \
+            | grep -qE '^(scripts/network-bench/|\.github/workflows/network-bench)'; then
             echo "bench=true" >> "$GITHUB_OUTPUT"
           else
             echo "bench=false" >> "$GITHUB_OUTPUT"

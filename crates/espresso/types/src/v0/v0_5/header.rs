@@ -15,7 +15,7 @@ use crate::{
     v0_5::{LeaderCounts, MAX_VALIDATORS},
 };
 
-mod leader_counts_serde {
+pub(crate) mod leader_counts_serde {
     use super::*;
 
     pub fn serialize<S>(counts: &LeaderCounts, serializer: S) -> Result<S::Ok, S::Error>

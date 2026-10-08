@@ -70,6 +70,7 @@ use crate::{
     state::StateResponse,
     storage::StorageOutput,
     trace,
+    upgrade::expected_upgrade_data,
 };
 
 /// DRB result used by `TestData` for epoch transition proposals.
@@ -186,6 +187,32 @@ impl TestView {
     /// Build an Event for Certificate2.
     pub fn cert2_input(&self) -> ConsensusInput<TestTypes> {
         ConsensusInput::Certificate2(ValidCert::new(self.cert2.clone(), self.epoch_number))
+    }
+
+    /// Build a network Message carrying this view's Certificate1, as a peer
+    /// sends it once the certificate forms.
+    pub fn cert1_message(&self, node_index: u64) -> Message<TestTypes, Validated> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
+                self.cert1.clone(),
+                pub_key,
+            )),
+        }
+    }
+
+    /// Build a network Message carrying this view's Certificate2, as a peer
+    /// relays it when applying the certificate.
+    pub fn cert2_message(&self, node_index: u64) -> Message<TestTypes, Validated> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::Certificate2(
+                self.cert2.clone(),
+                pub_key,
+            )),
+        }
     }
 
     /// Build a Vote1 Event from a specific validator, carrying that validator's
@@ -306,6 +333,20 @@ impl TestView {
         }
     }
 
+    /// Build a network Message carrying this view's timeout certificate,
+    /// as a peer rebroadcasts it when applying the certificate.
+    pub fn timeout_cert_message(&self, node_index: u64) -> Message<TestTypes, Validated> {
+        let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let message = match self.timeout_cert.clone() {
+            TimeoutEvidence::V2(tc) => ConsensusMessage::TimeoutCertificate(tc),
+            TimeoutEvidence::V3(tc) => ConsensusMessage::TimeoutCertificate3(tc),
+        };
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(message),
+        }
+    }
+
     /// Build an epoch binding timeout vote from a specific validator, for a
     /// node running under [`test_timeout_epoch_lock`].
     pub fn timeout_vote3_input(
@@ -341,6 +382,31 @@ impl TestView {
             message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote3(
                 TimeoutVoteMessage3 { vote, evidence },
             )),
+        }
+    }
+
+    /// An upgrade vote from a specific validator binding `epoch`, for the
+    /// checks that bound which epochs a vote may name.
+    pub fn upgrade_vote_input_for_epoch(
+        &self,
+        node_index: u64,
+        epoch: EpochNumber,
+    ) -> Message<TestTypes, Validated> {
+        let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+        let upgrade = test_upgrade_lock::<TestTypes>().upgrade();
+        let data = expected_upgrade_data(&upgrade, self.view_number, epoch)
+            .expect("test views are far from overflowing");
+        let vote = hotshot_types::simple_vote::SimpleVote::create_signed_vote(
+            data,
+            self.view_number,
+            &pub_key,
+            &priv_key,
+            &test_upgrade_lock(),
+        )
+        .expect("Failed to sign UpgradeVote2");
+        Message {
+            sender: pub_key,
+            message_type: MessageType::Consensus(ConsensusMessage::UpgradeVote(vote)),
         }
     }
 

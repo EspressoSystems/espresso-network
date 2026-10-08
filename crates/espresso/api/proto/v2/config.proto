@@ -329,10 +329,8 @@ message LightClientDbOptions {
 
   uint32 num_leaves = 2;
 
-  uint32 num_stake_tables = 3;
-
-  // Absent when the light-client database is in memory
-  optional string lc_path = 4;
+  // Absent when the light-client database is in a temporary directory
+  optional string lc_path = 3;
 }
 
 message QueryModule {
