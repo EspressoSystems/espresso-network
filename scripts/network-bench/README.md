@@ -96,6 +96,10 @@ scripts/network-bench/
   the pacer found the cap full, else `pacer late (controller CPU)`; `submit workers busy` (queue wait p50 > 100 ms),
   else `slow submit responses`. Diagnostic only, no verdict uses it; runs recorded before these timestamps show them
   empty.
+- `--allocator NAME` (`jemalloc`, `mimalloc`, `snmalloc`, `tcmalloc`; per run, also `run --fleet`): espresso-node from
+  `espresso-node-alloc:<tag>-<allocator>`, built by `build-allocators.yml`
+  (`gh workflow run build-allocators.yml --ref <branch>`): the `espresso-node:main` image with the branch's binaries, so
+  its revision label is main's. The other images stay `--tag`'s.
 - `--node-env KEY=VALUE` (repeatable; not an `up` flag, pass it to `run --fleet`): added to every node's environment,
   overriding the harness's own value; taken verbatim, not for secrets; listed in the summary's deployment block and part
   of the config hash.

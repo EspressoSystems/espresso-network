@@ -341,6 +341,20 @@ def test_run_refusals_before_any_call(harness, argv, pattern):
     assert runner.calls == []
 
 
+def test_allocator_belongs_to_one_run_and_retags_the_fleet(harness, runner):
+    manifest = harness.fleet()
+    plain = awsb.fleet_run_config(harness.run_args(), manifest)
+    assert plain.allocator is None
+    assert not awsb.tag_changed(manifest, plain)
+    cfg = awsb.fleet_run_config(harness.run_args("--allocator", "tcmalloc"), manifest)
+    assert awsb.tag_changed(manifest, cfg)
+    images = awsb.image_refs(cfg)
+    assert images["espresso-node"] == (f"{awsb.ALLOC_REPOSITORY}:{cfg.tag}-tcmalloc")
+    assert images["deploy"] == f"{awsb.GHCR_ORG}/deploy:{cfg.tag}"
+    with pytest.raises(SystemExit):
+        harness.run_args("--allocator", "glibc")
+
+
 def test_node_env_belongs_to_one_run(harness, runner):
     manifest = harness.fleet()
     assert awsb.fleet_run_config(harness.run_args(), manifest).node_env == ()

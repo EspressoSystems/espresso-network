@@ -213,6 +213,10 @@ UBUNTU_OWNER_ID = "099720109477"  # Canonical
 GHCR_ORG = "ghcr.io/espressosystems/espresso-network"
 # Rebuilt from --tag; these are the only components the tag under test controls.
 IMAGE_COMPONENTS = ("espresso-node", "orchestrator", "state-relay-server", "deploy")
+# `--allocator`: espresso-node images of `.github/workflows/build-allocators.yml`, tagged
+# `<tag>-<allocator>`: the published `espresso-node:main` image with the branch's binaries.
+ALLOCATORS = ("jemalloc", "mimalloc", "snmalloc", "tcmalloc")
+ALLOC_REPOSITORY = f"{GHCR_ORG}/espresso-node-alloc"
 # Fixed refs, independent of --tag.
 SUPPORT_IMAGES = {
     "postgres": "docker.io/library/postgres:18",
@@ -858,6 +862,8 @@ class RunConfig:
     fleet: Path | None = None
     force: bool = False
     search: nb.SearchConfig | None = None
+    # `ALLOCATORS` name: espresso-node from `ALLOC_REPOSITORY`; None for the regular image.
+    allocator: str | None = None
 
 
 # Callers need the return code and stderr, unlike scripts/release's Runner, to report a
@@ -1265,8 +1271,15 @@ def estimate_rate(estimate: Estimate) -> float:
     return usd / (estimate["expected_s"] / 3600)
 
 
+def image_label(cfg: RunConfig) -> str:
+    return cfg.tag if cfg.allocator is None else f"{cfg.tag} ({cfg.allocator})"
+
+
 def tag_changed(manifest: FleetManifest, cfg: RunConfig) -> bool:
-    return cfg.tag != manifest["config"]["tag"]
+    """`--tag` or `--allocator` differ from the fleet's; manifests from before `--allocator`
+    lack it."""
+    saved = manifest["config"]
+    return cfg.tag != saved["tag"] or cfg.allocator != saved.get("allocator")
 
 
 def estimate_run(manifest: FleetManifest, cfg: RunConfig) -> RunEstimate:
@@ -1676,6 +1689,8 @@ def image_refs(cfg: RunConfig, postgres_tag: str | None = None) -> dict[str, str
     """`postgres_tag` pins the container to the minor RDS runs, so both placements run the
     same one."""
     images = {c: f"{GHCR_ORG}/{c}:{cfg.tag}" for c in IMAGE_COMPONENTS}
+    if cfg.allocator is not None:
+        images["espresso-node"] = f"{ALLOC_REPOSITORY}:{cfg.tag}-{cfg.allocator}"
     images.update(SUPPORT_IMAGES)
     if postgres_tag is not None:
         repository = SUPPORT_IMAGES["postgres"].rpartition(":")[0]
@@ -2351,6 +2366,11 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     parser.add_argument(
         "--tag", required=tag_required, help="ghcr tag pushed by CI, no default"
     )
+    parser.add_argument(
+        "--allocator",
+        choices=ALLOCATORS,
+        help="espresso-node built with this allocator, espresso-node-alloc:<tag>-<allocator>",
+    )
     parser.add_argument("--nodes", type=int, default=defaults.nodes)
     parser.add_argument("--node-type", default=defaults.node_type)
     parser.add_argument("--ctl-type", default=defaults.ctl_type)
@@ -2527,6 +2547,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     load = load_from_args(args, search)
     return RunConfig(
         tag=args.tag,
+        allocator=args.allocator,
         nodes=args.nodes,
         node_type=args.node_type,
         ctl_type=args.ctl_type,
@@ -3871,13 +3892,14 @@ def fleet_config_from_args(args: argparse.Namespace) -> RunConfig:
 
 
 def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfig:
-    """The fleet's own config with the flags that belong to one run: image tag, load, database mode, node env."""
+    """The fleet's own config with the flags that belong to one run: image tag and allocator, load, database mode, node env."""
     base = config_from_manifest(saved["config"])
     cli = fleet_config_from_args(args)
     load = dataclasses.replace(cli.load, submit_nodes=submit_nodes(args, base.nodes))
     cfg = dataclasses.replace(
         base,
         tag=base.tag if cli.tag is None else cli.tag,
+        allocator=cli.allocator,
         load=load,
         yes=cli.yes,
         query_db=cli.query_db,
@@ -4030,7 +4052,7 @@ def pull_tag(run: Run) -> None:
         fleet,
         run.manifest_path,
         "pulling",
-        f"tag {run.cfg.tag} by digest on {len(fleet.remote.hosts)} hosts",
+        f"tag {image_label(run.cfg)} by digest on {len(fleet.remote.hosts)} hosts",
     )
     pull_images(fleet.remote, images, fleet.fleet_dir)
     saved = fleet.manifest
@@ -4038,7 +4060,7 @@ def pull_tag(run: Run) -> None:
         fleet.manifest_path,
         saved["phase"],
         images=images,
-        config={**saved["config"], "tag": run.cfg.tag},
+        config={**saved["config"], "tag": run.cfg.tag, "allocator": run.cfg.allocator},
     )
 
 
@@ -4313,7 +4335,7 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
         pre["arch"],
     )
     images = ", ".join(f"{n}@{i['digest'][:15]}" for n, i in pre["images"].items())
-    log.info("images %s: %s", cfg.tag, images)
+    log.info("images %s: %s", image_label(cfg), images)
     types = {h["role"]: h["instance_type"] for h in hosts}
     log.info(
         "hosts: ctl %s; %d x %s (node0 validator+query, postgres)",
