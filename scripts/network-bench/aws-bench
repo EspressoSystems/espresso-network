@@ -271,33 +271,17 @@ DEPLOY_FLAGS = (
 ConsensusStorage = Literal["fs", "journal"]
 # Runs from before --consensus-storage all used the journal.
 LEGACY_CONSENSUS_STORAGE: ConsensusStorage = "journal"
-# storage-fs does not support the query service, so the query node takes storage-sql there.
-NODE_MODULES: dict[
-    tuple[ConsensusStorage, Literal["validator", "query"]], tuple[str, ...]
-] = {
-    ("journal", "validator"): (
-        *("storage-journal", "http", "status", "submit", "catchup", "config"),
-    ),
-    ("journal", "query"): (
-        *(
-            "storage-journal",
-            "storage-sql",
-            "http",
-            "query",
-            "submit",
-            "catchup",
-            "config",
-        ),
-    ),
-    ("fs", "validator"): (
-        "storage-fs",
-        "http",
-        "status",
-        "submit",
-        "catchup",
-        "config",
-    ),
-    ("fs", "query"): ("storage-sql", "http", "query", "submit", "catchup", "config"),
+NodeRole = Literal["validator", "query"]
+# storage-fs does not support the query service; storage-sql backs node0's consensus there.
+STORAGE_MODULES: dict[tuple[ConsensusStorage, NodeRole], tuple[str, ...]] = {
+    ("journal", "validator"): ("storage-journal",),
+    ("journal", "query"): ("storage-journal", "storage-sql"),
+    ("fs", "validator"): ("storage-fs",),
+    ("fs", "query"): ("storage-sql",),
+}
+API_MODULES: dict[NodeRole, tuple[str, ...]] = {
+    "validator": ("http", "status", "submit", "catchup", "config"),
+    "query": ("http", "query", "submit", "catchup", "config"),
 }
 # Headroom below the usable disk so the journal's own retention GCs data before the volume
 # fills.
@@ -1470,14 +1454,11 @@ def format_search_summary(cfg: RunConfig) -> str:
 def format_node_summary(cfg: RunConfig) -> list[str]:
     """Run settings that shape the nodes and Postgres and appear in no other preamble line."""
 
-    def storage(role: Literal["validator", "query"]) -> list[str]:
-        modules = NODE_MODULES[cfg.consensus_storage, role]
-        return [m for m in modules if m.startswith("storage-")]
-
+    validators = STORAGE_MODULES[cfg.consensus_storage, "validator"]
     # node0's first storage module backs consensus, its last the query service.
-    node0 = storage("query")
+    node0 = STORAGE_MODULES[cfg.consensus_storage, "query"]
     return [
-        f"storage validators: consensus {storage('validator')[0]}",
+        f"storage validators: consensus {validators[0]}",
         (
             f"storage node0:      consensus {node0[0]}, query {node0[-1]} "
             f"({cfg.query_db})"
@@ -2407,9 +2388,8 @@ def render_start_sh(
             ],
         )
     node = images["espresso-node"]
-    modules = NODE_MODULES[
-        consensus_storage, "query" if host["role"] == "query" else "validator"
-    ]
+    role: NodeRole = "query" if host["role"] == "query" else "validator"
+    modules = (*STORAGE_MODULES[consensus_storage, role], *API_MODULES[role])
     argv = [
         "--env-file",
         f"{BENCH_DIR}/node.env",
