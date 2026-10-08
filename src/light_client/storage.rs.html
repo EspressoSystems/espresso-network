@@ -511,7 +511,7 @@
 <a href=#511 id=511 data-nosnippet>511</a>                        </span>.context(<span class="string">"counting leaves"</span>)<span class="question-mark">?</span>;
 <a href=#512 id=512 data-nosnippet>512</a>                    <span class="kw">let </span>to_delete = num_leaves.saturating_sub(<span class="self">self</span>.num_leaves);
 <a href=#513 id=513 data-nosnippet>513</a>                    <span class="kw">if </span>to_delete &gt; <span class="number">0 </span>{
-<a href=#514 id=514 data-nosnippet>514</a>                        <span class="macro">tracing::info!</span>(<span class="string">"garbage collecting {to_delete} leaves"</span>);
+<a href=#514 id=514 data-nosnippet>514</a>                        <span class="macro">tracing::debug!</span>(<span class="string">"garbage collecting {to_delete} leaves"</span>);
 <a href=#515 id=515 data-nosnippet>515</a>                        <span class="kw">let </span>res = query(
 <a href=#516 id=516 data-nosnippet>516</a>                            <span class="string">"DELETE FROM leaf WHERE height IN (SELECT height FROM leaf ORDER BY \
 <a href=#517 id=517 data-nosnippet>517</a>                             last_used ASC, height ASC LIMIT $1)"</span>,
@@ -520,7 +520,7 @@
 <a href=#520 id=520 data-nosnippet>520</a>                        .execute(tx.as_mut())
 <a href=#521 id=521 data-nosnippet>521</a>                        .<span class="kw">await
 <a href=#522 id=522 data-nosnippet>522</a>                        </span>.context(<span class="string">"deleting old leaves"</span>)<span class="question-mark">?</span>;
-<a href=#523 id=523 data-nosnippet>523</a>                        <span class="macro">tracing::info!</span>(<span class="string">"deleted {} leaves"</span>, res.rows_affected());
+<a href=#523 id=523 data-nosnippet>523</a>                        <span class="macro">tracing::debug!</span>(<span class="string">"deleted {} leaves"</span>, res.rows_affected());
 <a href=#524 id=524 data-nosnippet>524</a>                    }
 <a href=#525 id=525 data-nosnippet>525</a>
 <a href=#526 id=526 data-nosnippet>526</a>                    tx.commit().<span class="kw">await</span><span class="question-mark">?</span>;
