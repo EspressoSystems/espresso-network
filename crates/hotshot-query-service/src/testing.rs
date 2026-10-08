@@ -13,6 +13,7 @@
 // see <https://www.gnu.org/licenses/>.
 use std::time::Duration;
 
+pub mod chain;
 pub mod consensus;
 pub mod mocks;
 
