@@ -229,6 +229,10 @@ just bench aws run --tag release-x --leader-trace
   match. Type choice: [instance-types.md](instance-types.md).
 - `--leader-trace`: nodes get `ESPRESSO_NODE_LEADER_TRACE_DIR=/trace` (host `/opt/bench/trace`).
   - Collected: `hosts/<name>/trace/leader_trace_node*.csv`.
+  - `node_id` in the file name and rows is the orchestrator-assigned node index, not the host number; the host is the
+    directory it was collected from. Per-view plots name both.
+  - `parent Cert1 wait` (header created until the leaf commitment): `maybe_propose` waits for the parent's Cert1, not
+    leader-local work.
   - `trace-plots RUN_DIR` (uv script, matplotlib; also run by `render`) writes `trace/leader_path.png`,
     `trace/leader_path_typical.png`, `trace/leader_path_worst.png`, `trace/finality.png`, `trace/stats.json`,
     `trace/leader_path.md` (segment medians per load step).

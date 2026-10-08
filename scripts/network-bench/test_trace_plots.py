@@ -121,7 +121,7 @@ def test_main_writes_per_step_stats_and_table(tmp_path: Path):
     assert lines[2].startswith("| 120 MB/s | 10 | 2.0 | 2.0 | 1.0 |")
     assert lines[2].endswith("| 13.0 | 40.0 |")
     assert lines[3].startswith("| 155 MB/s (refine) | 10 |")
-    assert lines[4] == "| 200 MB/s | 0 | " + " | ".join(["-"] * 13) + " |"
+    assert lines[4] == "| 200 MB/s | 0 | " + " | ".join(["-"] * (len(names) + 1)) + " |"
     assert len(lines) == 5
 
 
@@ -143,7 +143,7 @@ def test_table_without_steps_has_one_row_for_all_views(tmp_path: Path):
 
 
 def test_step_stats_bin_views_by_t0_in_the_measured_half():
-    path = {2: [9.0] * 12, 3: [1.0] * 12, 4: [3.0] * 12, 5: [9.0] * 12}
+    path = {2: [9.0] * 13, 3: [1.0] * 13, 4: [3.0] * 13, 5: [9.0] * 13}
     times = {1: 10.0, 2: 20.0, 3: 30.0, 4: 40.0, 5: 50.0}
     steps = [
         {
@@ -157,7 +157,7 @@ def test_step_stats_bin_views_by_t0_in_the_measured_half():
     (step,) = plots.step_stats(path, times, steps)
     assert step["views"] == 2
     assert set(step["segments"].values()) == {2.0}
-    assert step["total"] == 24.0
+    assert step["total"] == 26.0
 
 
 def test_pick_views_takes_the_median_and_the_maximum():
@@ -192,3 +192,11 @@ def test_stats_report_finality_skips_by_reason(tmp_path: Path):
     csv.write_text(csv.read_text() + "500,1,leaf_decided,1\n")
     plots.main([str(tmp_path)])
     assert read_stats(tmp_path)["finality"]["skipped"] == {"no leader": 1}
+
+
+def test_trace_hosts_maps_trace_node_ids_to_the_host_dirs():
+    paths = [
+        Path("run/hosts/node0/trace/leader_trace_node4.csv"),
+        Path("run/hosts/node2/trace/leader_trace_node0.csv"),
+    ]
+    assert plots.trace_hosts(paths) == {4: "node0", 0: "node2"}

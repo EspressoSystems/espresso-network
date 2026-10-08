@@ -34,6 +34,7 @@ COLORS = (
     "#9e9e9e",
     "#6baed6",
     "#2171b5",
+    "#d9d9d9",
     "#08306b",
     "#fdae6b",
     "#d62728",
@@ -83,10 +84,13 @@ def main(argv: list[str]) -> None:
     data = np.array(list(path.values()))
     plot_aggregate(views, data, stats, len(trace), skipped, out / "leader_path.png")
     leaders = leadertrace.leaders(trace)
+    hosts = trace_hosts(paths)
     rows = dict(zip(path, data, strict=True))
     picked = pick_views({view: float(row.sum()) for view, row in rows.items()})
     for name, view in picked.items():
-        plot_view(view, leaders[view][0], rows[view], out / f"leader_path_{name}.png")
+        node = leaders[view][0]
+        leader = f"{hosts[node]} (trace node {node})"
+        plot_view(view, leader, rows[view], out / f"leader_path_{name}.png")
     plot_finality(list(finality.values()), stats["finality"], out / "finality.png")
     (out / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
     (out / "leader_path.md").write_text(leader_path_table(stats))
@@ -287,7 +291,15 @@ def plot_aggregate(
     plt.close(fig)
 
 
-def plot_view(view: int, node: int, durations: np.ndarray, path: Path) -> None:
+def trace_hosts(paths: list[Path]) -> dict[int, str]:
+    """Trace node id (the consensus index, not the host number) to the host dir the file was
+    collected from: `hosts/<host>/trace/leader_trace_node<id>.csv`."""
+    return {
+        int(p.stem.removeprefix("leader_trace_node")): p.parents[1].name for p in paths
+    }
+
+
+def plot_view(view: int, leader: str, durations: np.ndarray, path: Path) -> None:
     fig, ax = plt.subplots(figsize=(18, 8), facecolor="white")
     total = durations.sum()
     waterfall(
@@ -297,7 +309,7 @@ def plot_view(view: int, node: int, durations: np.ndarray, path: Path) -> None:
         f"t0 -> decided: {total:.1f} ms",
     )
     ax.set_title(
-        f"Leader critical path, view {view}, leader node {node}, total {total:.1f} ms",
+        f"Leader critical path, view {view}, leader {leader}, total {total:.1f} ms",
         fontsize=16,
     )
     fig.tight_layout()

@@ -20,6 +20,9 @@ LEADER_PATH = (
     ("wait to propose", "request_block_header_queued"),
     ("block build", "block_built_applied"),
     ("header", "header_created_applied"),
+    # The leaf commitment needs the parent's Cert1: this segment waits on the votes of V - 1,
+    # it is not leader-local work.
+    ("parent Cert1 wait", "leaf2_commit_computed"),
     ("commit + sign", "proposal_queued"),
     ("outbox wait", "proposal_broadcast_start"),
     ("proposal broadcast", "proposal_broadcast_end"),

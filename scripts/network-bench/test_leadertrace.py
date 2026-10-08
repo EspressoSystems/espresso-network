@@ -20,6 +20,7 @@ PATH_EVENTS = (
     ("request_block_header_queued", 2),
     ("block_built_applied", 4),
     ("header_created_applied", 5),
+    ("leaf2_commit_computed", 8),
     ("proposal_queued", 10),
     ("proposal_broadcast_start", 11),
     ("proposal_broadcast_end", 13),
@@ -30,7 +31,7 @@ PATH_EVENTS = (
     ("cert2_v_minus_1_input_dispatched", 27),
     ("leaf_decided", 40),
 )
-PATH_DURATIONS = [2, 2, 1, 5, 1, 2, 2, 1, 4, 2, 5, 13]
+PATH_DURATIONS = [2, 2, 1, 3, 2, 1, 2, 2, 1, 4, 2, 5, 13]
 
 
 def leader_rows(view: int) -> list[tuple[int, str, int]]:
