@@ -1261,7 +1261,8 @@ async def run_probe(
     }
     if stopped is not None:
         step["t_mid"], step["t_end"] = stopped - BEHIND_WINDOW_S, stopped
-    txs = [dataclasses.asdict(tx) for tx in load.state.txs]
+    # Only what the judge reads: copying every tx of the run stalls the pacer as the run grows.
+    txs = [vars(tx).copy() for tx in load.state.txs if tx.t_submit >= step["t_mid"]]
     judged = judge_step(
         step, load.cfg, txs, list(heights.records()), counters, load.clock.time()
     )
