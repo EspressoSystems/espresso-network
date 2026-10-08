@@ -137,7 +137,6 @@ pub mod availability_tests {
     use hotshot_types::{
         data::{Leaf2, vid_commitment},
         traits::block_contents::EncodeBytes,
-        vote::HasViewNumber,
     };
 
     use super::test_helpers::*;
@@ -151,8 +150,8 @@ pub mod availability_tests {
         },
         node::NodeDataSource,
         testing::{
-            chain::ChainNode,
-            consensus::{MockNetwork, TestableDataSource},
+            chain::{ChainNode, EPOCH_HEIGHT, MockChain, NUM_NODES},
+            consensus::TestableDataSource,
             mocks::{MockTypes, mock_transaction},
         },
         types::HeightIndexed,
@@ -306,21 +305,20 @@ pub mod availability_tests {
             }
         }
 
-        // Validate consistency of latest QC chain (only available after epoch upgrade).
+        // The newest leaf is finalized by the cert2 its decide carried.
         {
             let mut tx = ds.read().await.unwrap();
             let block_height = NodeStorage::block_height(&mut tx).await.unwrap();
             let last_leaf = tx.get_leaf((block_height - 1).into()).await.unwrap();
+            drop(tx);
 
-            if last_leaf.qc().data.epoch.is_some() {
-                tracing::info!(block_height, "checking QC chain");
-                let qc_chain = tx.latest_qc_chain().await.unwrap().unwrap();
-
-                assert_eq!(last_leaf.height(), (block_height - 1) as u64);
-                assert_eq!(qc_chain[0].view_number(), last_leaf.leaf().view_number());
-                assert_eq!(qc_chain[0].leaf_commit(), last_leaf.hash());
-                assert_eq!(qc_chain[1].view_number(), qc_chain[0].view_number() + 1);
-            }
+            let cert2 = ds
+                .get_cert2(last_leaf.height())
+                .await
+                .try_resolve()
+                .unwrap_or_else(|_| panic!("newest leaf has no cert2"));
+            assert_eq!(cert2.data.leaf_commit, last_leaf.hash());
+            assert_eq!(cert2.data.block_number, last_leaf.height());
         }
     }
 
@@ -329,32 +327,38 @@ pub mod availability_tests {
     where
         for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes> + NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
 
-        network.start().await;
+        // Genesis is decided on its own, without a VID share.
+        ds.handle_event(&chain.decide_event(0..=0, 0)).await;
         assert_eq!(get_non_empty_blocks(&ds).await, vec![]);
+        validate(&ds).await;
 
-        // Submit a few blocks and make sure each one gets reflected in the query service and
-        // preserves the consistency of the data and indices.
-        let mut blocks = ds.subscribe_blocks(0).await.enumerate();
+        // Decide each transaction in a batch after an empty block, so the older leaf is certified
+        // by the newer one's justify QC rather than by the event's cert1. Each decide must be
+        // reflected in the query service and preserve the consistency of the data and indices.
         for nonce in 0..3 {
-            let txn = mock_transaction(vec![nonce]);
-            network.submit_transaction(txn).await;
+            chain.push_empty(1).await;
+            let height = chain.push([mock_transaction(vec![nonce])]).await.height() as usize;
+            ds.handle_event(&chain.decide_event(height - 1..=height, 0))
+                .await;
 
-            // Wait for the transaction to be finalized.
-            let (i, block) = loop {
-                tracing::info!("waiting for tx {nonce}");
-                let (i, block) = blocks.next().await.unwrap();
-                if !block.is_empty() {
-                    break (i, block);
-                }
-                tracing::info!("block {i} is empty");
-            };
-
-            tracing::info!("got tx {nonce} in block {i}");
-            assert_eq!(ds.get_block(i).await.await, block);
+            assert_eq!(
+                ds.get_block(height).await.await,
+                chain.blocks()[height].block
+            );
             validate(&ds).await;
+        }
+
+        // Everything the event carried is stored as the chain built it.
+        for block in chain.blocks() {
+            let height = block.height() as usize;
+            assert_eq!(ds.get_leaf(height).await.await, block.leaf);
+            assert_eq!(ds.get_block(height).await.await, block.block);
+            assert_eq!(ds.get_vid_common(height).await.await, block.vid_common);
+            assert_eq!(ds.vid_share(height).await.unwrap(), block.vid_shares[0]);
         }
 
         // Check that all the updates have been committed to storage, not simply held in memory: we
@@ -362,7 +366,7 @@ pub mod availability_tests {
         // underlying storage.
         {
             tracing::info!("checking persisted storage");
-            let storage = D::connect(network.storage()).await;
+            let storage = D::connect(&storage).await;
 
             // Ensure we have the same data in both data sources (if data was missing from the
             // original it is of course allowed to be missing from persistent storage and thus from

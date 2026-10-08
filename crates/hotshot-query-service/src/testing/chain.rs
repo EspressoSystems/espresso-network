@@ -13,19 +13,24 @@
 //! A synthetic chain of decided new-protocol blocks, for tests that need stored data but not live
 //! consensus.
 
-use std::marker::PhantomData;
+use std::{marker::PhantomData, ops::RangeInclusive, sync::Arc};
 
 use committable::Committable;
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment, VidCommon,
-        VidShare, ViewNumber, ns_table::parse_ns_table,
+        VidDisperseShare, VidShare, ViewNumber, ns_table::parse_ns_table,
+        vid_disperse::AvidmGf2DisperseShare,
     },
-    simple_certificate::QuorumCertificate2,
-    simple_vote::QuorumData2,
+    event::LeafInfo,
+    new_protocol::CoordinatorEvent,
+    signature_key::BLSPubKey,
+    simple_certificate::{Certificate2, QuorumCertificate2},
+    simple_vote::{QuorumData2, Vote2Data},
     traits::{
         BlockPayload,
         block_contents::{EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
+        signature_key::SignatureKey,
     },
     utils::epoch_from_block_number,
     vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
@@ -163,6 +168,66 @@ impl MockChain {
         for _ in 0..n {
             self.push([]).await;
         }
+    }
+
+    /// The event consensus sends node `node` when the blocks at `heights` are decided together.
+    ///
+    /// As the coordinator sends it, leaves are newest first and carry their payloads, `cert1`
+    /// certifies the newest leaf and `cert2` finalizes it. Genesis carries no VID share, since
+    /// consensus does not disperse it.
+    pub fn decide_event(
+        &self,
+        heights: RangeInclusive<usize>,
+        node: usize,
+    ) -> CoordinatorEvent<MockTypes> {
+        let blocks = &self.blocks[heights];
+        let newest = blocks.last().expect("decide at least one block");
+        let leaf_infos = blocks
+            .iter()
+            .rev()
+            .map(|block| {
+                let vid_share = (block.height() > 0).then(|| self.vid_disperse_share(block, node));
+                let mut leaf = block.leaf.leaf().clone();
+                leaf.fill_block_payload_unchecked(block.block.payload().clone());
+                LeafInfo::new(leaf, Arc::new(Default::default()), None, vid_share, None)
+            })
+            .collect();
+        CoordinatorEvent::NewDecide {
+            leaf_infos,
+            cert1: newest.leaf.qc().clone(),
+            cert2: Some(self.cert2_for(newest.leaf.leaf())),
+        }
+    }
+
+    fn vid_disperse_share(&self, block: &MockBlock, node: usize) -> VidDisperseShare<MockTypes> {
+        let (VidCommitment::V2(payload_commitment), VidCommon::V2(common), VidShare::V2(share)) = (
+            block.leaf.payload_hash(),
+            block.vid_common.common().clone(),
+            block.vid_shares[node].clone(),
+        ) else {
+            panic!("chain disperses with AvidmGf2");
+        };
+        let epoch = Some(self.epoch(block.height()));
+        VidDisperseShare::V2(AvidmGf2DisperseShare {
+            view_number: block.leaf.leaf().view_number(),
+            epoch,
+            target_epoch: epoch,
+            payload_commitment,
+            share,
+            recipient_key: BLSPubKey::generated_from_seed_indexed([0; 32], node as u64).0,
+            common,
+        })
+    }
+
+    fn cert2_for(&self, leaf: &Leaf2<MockTypes>) -> Certificate2<MockTypes> {
+        let height = leaf.block_header().block_number;
+        let data = Vote2Data {
+            leaf_commit: leaf.commit(),
+            epoch: self.epoch(height),
+            block_number: height,
+        };
+        let commit = data.commit();
+        Certificate2::new(data, commit, leaf.view_number(), None, PhantomData)
     }
 
     fn epoch(&self, height: u64) -> EpochNumber {
