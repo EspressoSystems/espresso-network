@@ -24,7 +24,8 @@ use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_api::error::SubmitError;
 use espresso_types::{
-    ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
+    Certificate2, ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction,
+    ValidatedState,
     traits::MembershipPersistence,
     v0::traits::{SequencerPersistence, StateCatchup},
     v0_1::ChainId,
@@ -253,7 +254,7 @@ where
         .await
         .context("reading the height the query database has reached")?;
     let follower = Follower {
-        light_client: light_client.clone(),
+        source: light_client.clone(),
         sink: Arc::new(sink),
         persistence: persistence.clone(),
         coordinator,
@@ -507,7 +508,7 @@ impl ConsensusSource for FollowerConsensus {
 }
 
 struct Follower<P> {
-    light_client: Arc<NodeLightClient>,
+    source: Arc<dyn ChainSource>,
     sink: Arc<dyn DecideSink>,
     persistence: Arc<P>,
     coordinator: EpochMembershipCoordinator<SeqTypes>,
@@ -521,10 +522,22 @@ struct Follower<P> {
     next: u64,
 }
 
-struct VerifiedBlock {
-    leaf: LeafQueryData<SeqTypes>,
-    block: BlockQueryData<SeqTypes>,
-    vid_common: VidCommonQueryData<SeqTypes>,
+/// Where a follower reads the chain from.
+#[async_trait]
+pub(crate) trait ChainSource: Send + Sync {
+    async fn block_height(&self) -> anyhow::Result<u64>;
+
+    /// The blocks at heights `from..to`, in order.
+    async fn fetch_range(&self, from: u64, to: u64) -> anyhow::Result<Vec<VerifiedBlock>>;
+
+    /// The cert2 that finalized `header` directly, if any.
+    async fn fetch_cert2(&self, header: &Header) -> anyhow::Result<Option<Certificate2<SeqTypes>>>;
+}
+
+pub(crate) struct VerifiedBlock {
+    pub(crate) leaf: LeafQueryData<SeqTypes>,
+    pub(crate) block: BlockQueryData<SeqTypes>,
+    pub(crate) vid_common: VidCommonQueryData<SeqTypes>,
 }
 
 impl<P: SequencerPersistence> Follower<P> {
@@ -544,7 +557,7 @@ impl<P: SequencerPersistence> Follower<P> {
 
     async fn poll(&mut self) -> anyhow::Result<()> {
         let tip = self
-            .light_client
+            .source
             .block_height()
             .await
             .context("fetching the chain height")?;
@@ -565,7 +578,7 @@ impl<P: SequencerPersistence> Follower<P> {
             self.catch_up_skipped_epochs(self.next..from).await?;
             self.next = from;
         }
-        for block in self.fetch_range(from, tip).await? {
+        for block in self.source.fetch_range(from, tip).await? {
             let height = block.leaf.height();
             ensure!(
                 height == self.next,
@@ -580,37 +593,6 @@ impl<P: SequencerPersistence> Follower<P> {
         Ok(())
     }
 
-    /// One finality proof and one payload proof request cover the whole range.
-    async fn fetch_range(&self, from: u64, to: u64) -> anyhow::Result<Vec<VerifiedBlock>> {
-        let (from, to) = (from as usize, to as usize);
-        let leaves = self
-            .light_client
-            .fetch_leaves_in_range(from, to)
-            .await
-            .context("fetching leaves")?;
-        let blocks = self
-            .light_client
-            .fetch_blocks_and_vid_common_in_range(from, to)
-            .await
-            .context("fetching payloads")?;
-        ensure!(
-            leaves.len() == to - from && blocks.len() == to - from,
-            "the light client returned {} leaves and {} payloads for {} blocks",
-            leaves.len(),
-            blocks.len(),
-            to - from
-        );
-        Ok(leaves
-            .into_iter()
-            .zip(blocks)
-            .map(|(leaf, (block, vid_common))| VerifiedBlock {
-                leaf,
-                block,
-                vid_common,
-            })
-            .collect())
-    }
-
     async fn follow(&self, block: VerifiedBlock) -> anyhow::Result<()> {
         let VerifiedBlock {
             leaf,
@@ -622,8 +604,8 @@ impl<P: SequencerPersistence> Follower<P> {
         // are `None`; asking at every height is what keeps the follower serving the same cert2s.
         if leaf.header().version() >= NEW_PROTOCOL_VERSION
             && let Some(cert2) = self
-                .light_client
-                .fetch_certificate2_for_header(leaf.header())
+                .source
+                .fetch_cert2(leaf.header())
                 .await
                 .context("fetching cert2")?
         {
@@ -757,6 +739,46 @@ impl<P: SequencerPersistence> Follower<P> {
                 "cannot resolve the chain config: {err:#}"
             ),
         }
+    }
+}
+
+#[async_trait]
+impl ChainSource for NodeLightClient {
+    async fn block_height(&self) -> anyhow::Result<u64> {
+        Ok(NodeLightClient::block_height(self).await?)
+    }
+
+    /// One finality proof and one payload proof request cover the whole range.
+    async fn fetch_range(&self, from: u64, to: u64) -> anyhow::Result<Vec<VerifiedBlock>> {
+        let (from, to) = (from as usize, to as usize);
+        let leaves = self
+            .fetch_leaves_in_range(from, to)
+            .await
+            .context("fetching leaves")?;
+        let blocks = self
+            .fetch_blocks_and_vid_common_in_range(from, to)
+            .await
+            .context("fetching payloads")?;
+        ensure!(
+            leaves.len() == to - from && blocks.len() == to - from,
+            "the light client returned {} leaves and {} payloads for {} blocks",
+            leaves.len(),
+            blocks.len(),
+            to - from
+        );
+        Ok(leaves
+            .into_iter()
+            .zip(blocks)
+            .map(|(leaf, (block, vid_common))| VerifiedBlock {
+                leaf,
+                block,
+                vid_common,
+            })
+            .collect())
+    }
+
+    async fn fetch_cert2(&self, header: &Header) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+        Ok(self.fetch_certificate2_for_header(header).await?)
     }
 }
 
