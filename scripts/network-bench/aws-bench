@@ -13,6 +13,8 @@ measurements: `run --fleet FLEET` measures on it (`fleet.lock` admits one run at
 reset wipes the chain between runs), and `down FLEET` destroys it. The query service's Postgres
 runs in a container on node0, on the root volume (`--query-db colocated`) or an extra volume
 (`volume`), or on an RDS instance (`rds`); `up --db-modes` provisions the stores, a run picks one.
+`--query-engine sqlite` runs node0's query service on embedded SQLite instead, with no Postgres:
+on the root volume (`--query-db colocated`) or in RAM (`tmpfs`); neither needs provisioning.
 
 `status` shows one fleet (phase, instances, agent progress, cost so far) or, with `--all`, every
 tagged resource in the region. `destroy --orphans` sweeps runs
@@ -175,7 +177,14 @@ PUSH_ATTEMPTS = 3
 INDEX_ROW_JSON = "index-row.json"
 MANIFEST_JSON = "manifest.json"
 PUBLISH_REQUIRED = ("summary.md",)
-PUBLISH_MANIFEST_KEYS = ("fleet", "created_at", "git_rev", "query_db", "images")
+PUBLISH_MANIFEST_KEYS = (
+    "fleet",
+    "created_at",
+    "git_rev",
+    "query_engine",
+    "query_db",
+    "images",
+)
 # Absent from manifests written before the run command was recorded.
 PUBLISH_MANIFEST_OPTIONAL = ("argv", "fleet_argv")
 # Left out of a recorded command: a remote URL can carry credentials, the others only
@@ -309,6 +318,7 @@ RESERVED_GB = 20
 # of the usable disk there so Postgres has room too.
 QUERY_JOURNAL_FRACTION = 0.5
 
+SQLITE_CONTAINER_DIR = "/store/espresso/sqlite"
 BENCH_DIR = "/opt/bench"
 AGENT_PYTHON = (
     "--setenv=UV_PYTHON_INSTALL_DIR=/opt/uv/python "
@@ -649,8 +659,18 @@ class Interrupted(Exception):
     runs a bounded collection and a destroy prompt instead of an abrupt exit."""
 
 
-DbMode = Literal["colocated", "volume", "rds"]
+# Where the query store lives. `tmpfs` (SQLite only) is RAM and needs nothing provisioned.
+DbMode = Literal["colocated", "volume", "rds", "tmpfs"]
+# Placements `up` provisions.
 DB_MODES: tuple[DbMode, ...] = ("colocated", "volume", "rds")
+QueryEngine = Literal["postgres", "sqlite"]
+QUERY_ENGINES: tuple[QueryEngine, ...] = ("postgres", "sqlite")
+QUERY_PLACEMENTS: dict[QueryEngine, tuple[DbMode, ...]] = {
+    "postgres": DB_MODES,
+    "sqlite": ("colocated", "tmpfs"),
+}
+# node0's SQLite directory in RAM. 457 MB after 15 min, with payloads kept out of SQLite.
+SQLITE_TMPFS_GB = 8
 # Ubuntu AMI names and OCI platforms share these names.
 Arch = Literal["amd64", "arm64"]
 # `ProcessorInfo.SupportedArchitectures` of `describe-instance-types` -> Arch.
@@ -798,6 +818,7 @@ class Manifest(FleetManifest):
 
     fleet: str
     index: int
+    query_engine: QueryEngine
     query_db: DbMode
     # `argv` is the invocation of this run; `fleet_argv` the `up` that created the fleet,
     # only for `run --fleet`.
@@ -903,6 +924,7 @@ class RunConfig:
     max_usd: float = 10.0
     yes: bool = False
     db_modes: tuple[DbMode, ...] = ("colocated",)
+    query_engine: QueryEngine = "postgres"
     query_db: DbMode = "colocated"
     # `KEY=VALUE` written last into every node's node.env, so it also overrides.
     node_env: tuple[str, ...] = ()
@@ -1485,7 +1507,7 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
         f"storage validators: consensus {validators[0]}",
         (
             f"storage node0:      consensus {node0[0]}, query {node0[-1]} "
-            f"({cfg.query_db})"
+            f"({cfg.query_engine}, {cfg.query_db})"
         ),
         (
             f"nodes: max block {cfg.max_block_size}; submit {cfg.load.submit_nodes} nodes; "
@@ -1624,6 +1646,7 @@ def build_run_manifest(
         "phase": "planned",
         "fleet": fleet["name"],
         "index": index,
+        "query_engine": cfg.query_engine,
         "query_db": cfg.query_db,
         "config_hash": config_hash,
         "argv": sanitize_argv(argv),
@@ -2161,6 +2184,7 @@ def render_node_env(
     pg: PgEndpoint | None,
     node_env: Iterable[str] = (),
     consensus_storage: ConsensusStorage = "fs",
+    query_engine: QueryEngine = "postgres",
 ) -> str:
     self_info = hosts[host["name"]]
     ctl_info = hosts["ctl"]
@@ -2194,7 +2218,14 @@ def render_node_env(
     # A required value left empty risks a clap parse error; omit rather than pass "".
     if peer_urls:
         env["ESPRESSO_NODE_STATE_PEERS"] = ",".join(peer_urls)
-    if host["role"] == "query":
+    if host["role"] == "query" and query_engine == "sqlite":
+        # The entrypoint then execs espresso-node-sqlite, which prepends storage-sql itself.
+        env["ESPRESSO_NODE_EMBEDDED_DB"] = "true"
+        if consensus_storage == "journal":
+            # The journal refuses to open next to an existing sqlite database until its first
+            # segment exists, e.g. after a restart before that.
+            env["ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING"] = "true"
+    elif host["role"] == "query":
         if pg is None:
             raise ValueError(
                 f"{host['name']} runs the query service and needs a PgEndpoint"
@@ -2345,10 +2376,11 @@ def render_start_sh(
     query_db: DbMode = "colocated",
     leader_trace: bool = False,
     consensus_storage: ConsensusStorage = "fs",
+    query_engine: QueryEngine = "postgres",
 ) -> str:
     """Deviates from the plan signature (drops unused `hosts`, `cfg`): every value start.sh
     needs is already in `host`, `images` and the host's `memory_mib`, or in ctl.env/node.env
-    rendered separately. With `query_db` rds there is no postgres container."""
+    rendered separately. With `query_db` rds or `query_engine` sqlite there is no postgres container."""
     script = (
         "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n"
         f"echo '{{}}' > {BENCH_DIR}/containers.json\n\n"
@@ -2392,7 +2424,7 @@ def render_start_sh(
                 argv += list(DEPLOY_FLAGS)
             script += _docker_create(name, argv)
         return script
-    if host["role"] == "query" and query_db != "rds":
+    if host["role"] == "query" and query_engine == "postgres" and query_db != "rds":
         pg = images["postgres"]
         endpoint = pg_endpoint()
         script += _docker_create(
@@ -2415,7 +2447,10 @@ def render_start_sh(
         )
     node = images["espresso-node"]
     role: NodeRole = "query" if host["role"] == "query" else "validator"
-    modules = (*STORAGE_MODULES[consensus_storage, role], *API_MODULES[role])
+    storage = STORAGE_MODULES[consensus_storage, role]
+    if query_engine == "sqlite" and role == "query":
+        storage = tuple(m for m in storage if m != "storage-sql")
+    modules = (*storage, *API_MODULES[role])
     argv = [
         "--env-file",
         f"{BENCH_DIR}/node.env",
@@ -2428,6 +2463,8 @@ def render_start_sh(
         # After reset_script wiped /data/pg and pg_store_script mounted the run's placement.
         script += f"mkdir -p {PAYLOAD_HOST_DIR}\n\n"
         argv += ["-v", f"{PAYLOAD_HOST_DIR}:{PAYLOAD_CONTAINER_DIR}"]
+        if query_db == "tmpfs":
+            argv += ["--tmpfs", f"{SQLITE_CONTAINER_DIR}:size={SQLITE_TMPFS_GB}g"]
     if leader_trace:
         script += f"mkdir -p {TRACE_HOST_DIR}\n\n"
         argv += ["-v", f"{TRACE_HOST_DIR}:{TRACE_CONTAINER_DIR}"]
@@ -2866,6 +2903,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         submit_nodes=None,
         fleet=None,
         force=False,
+        query_engine=defaults.query_engine,
         query_db=defaults.query_db,
         max_usd=UP_MAX_USD,
         ttl_min=UP_TTL_MIN,
@@ -2892,7 +2930,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         const=PICK,
         help="fleet from `up`, by name or dir; without a value the only selectable one",
     )
-    run_p.add_argument("--query-db", choices=DB_MODES, default=defaults.query_db)
+    run_p.add_argument(
+        "--query-engine", choices=QUERY_ENGINES, default=defaults.query_engine
+    )
+    run_p.add_argument(
+        "--query-db", choices=get_args(DbMode), default=defaults.query_db
+    )
     run_p.add_argument(
         "--force",
         action="store_true",
@@ -2972,7 +3015,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--role", required=True, choices=("ctl", "query", "validator")
     )
     agent_host_p.add_argument(
-        "--pg", type=Path, help="pg.json; required for --role query"
+        "--pg", type=Path, help="pg.json; sample Postgres when given"
     )
     agent_host_p.set_defaults(func=cmd_agent_host)
 
@@ -3223,7 +3266,7 @@ class Run:
 
     @property
     def manifest(self) -> Manifest:
-        return nb.read_json(self.manifest_path)
+        return read_manifest(self.run_dir)
 
 
 def cmd_run(args: argparse.Namespace, system: System) -> int:
@@ -3460,7 +3503,7 @@ def measure_run(run: Run) -> None:
         )
         update_manifest(run.manifest_path, "shipping", git_rev=git_rev, **volume)
         ship(remote, run.run_dir)
-        start_hostmon(remote)
+        start_hostmon(remote, run.cfg.query_engine)
         create_containers(remote)
         if run.cfg.latency != "off":
             enter_phase(
@@ -3473,10 +3516,14 @@ def measure_run(run: Run) -> None:
             fleet,
             run.manifest_path,
             "services",
-            "anvil, deploy, orchestrator, relay, postgres",
+            f"anvil, deploy, orchestrator, relay, {run.cfg.query_engine}",
         )
         start_support(
-            remote, genesis_contracts(run.run_dir), fleet.interrupts, run.cfg.query_db
+            remote,
+            genesis_contracts(run.run_dir),
+            fleet.interrupts,
+            run.cfg.query_db,
+            run.cfg.query_engine,
         )
         enter_phase(fleet, run.manifest_path, "nodes", "synchronized docker start")
         at = fleet_time(remote) + DOCKER_START_LEAD_S
@@ -3557,7 +3604,12 @@ def finish_run(run: Run, cloudwatch: bool) -> None:
             "freeze": ("freeze", lambda: freeze(remote)),
             "collect_hosts": (
                 "collect",
-                lambda: collect_hosts(remote, list(remote.hosts.values()), run.run_dir),
+                lambda: collect_hosts(
+                    remote,
+                    list(remote.hosts.values()),
+                    run.run_dir,
+                    run.cfg.query_engine,
+                ),
             ),
             "rsync_out": (
                 "final rsync",
@@ -4012,7 +4064,7 @@ def cmd_run_fleet(args: argparse.Namespace, system: System) -> int:
                 fleet,
                 bench_run.manifest_path,
                 "resetting",
-                "stop containers, wipe journal and postgres data",
+                f"stop containers, wipe journal and {cfg.query_engine} data",
             )
             assert fleet.remote is not None
             reset_chain(fleet.remote, cfg.query_db, manifest, interrupts)
@@ -4027,10 +4079,29 @@ def cmd_run_fleet(args: argparse.Namespace, system: System) -> int:
         return EXIT_FAILED
 
 
+def check_query_store(
+    engine: QueryEngine, placement: DbMode, node_env: Iterable[str]
+) -> None:
+    if placement not in QUERY_PLACEMENTS[engine]:
+        raise Refused(
+            f"--query-engine {engine} does not support --query-db {placement}; "
+            f"choose from {', '.join(QUERY_PLACEMENTS[engine])}"
+        )
+    if placement == "tmpfs" and not any(
+        pair.startswith("ESPRESSO_QUERY_PAYLOAD_DIR=") for pair in node_env
+    ):
+        raise Refused(
+            "--query-db tmpfs needs --node-env ESPRESSO_QUERY_PAYLOAD_DIR=...: "
+            "payloads in SQLite would fill the tmpfs"
+        )
+
+
 def fleet_config_from_args(args: argparse.Namespace) -> RunConfig:
+    check_query_store(args.query_engine, args.query_db, args.node_env)
     return dataclasses.replace(
         config_from_args(args),
         db_modes=args.db_modes,
+        query_engine=args.query_engine,
         query_db=args.query_db,
         ttl_min=args.ttl_min,
         fleet=args.fleet,
@@ -4049,6 +4120,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         allocator=cli.allocator,
         load=load,
         yes=cli.yes,
+        query_engine=cli.query_engine,
         query_db=cli.query_db,
         node_env=cli.node_env,
         max_block_size=cli.max_block_size,
@@ -4085,11 +4157,20 @@ def admit_run(
 ) -> tuple[Path, RunEstimate]:
     """Takes the lock, checks that the fleet can take the run and creates its dir. Any refusal
     releases the lock again and has issued no ssh command."""
-    take_fleet_lock(system, fleet_dir, cfg.query_db, cfg.force)
+    take_fleet_lock(
+        system, fleet_dir, store_label(cfg.query_engine, cfg.query_db), cfg.force
+    )
     try:
         estimate = check_run_allowed(manifest, cfg, utc_now(system.clock))
         fleet = retagged(system.http_get, manifest, cfg)
-        run_dir = render_run(fleet_dir, fleet, cfg, cfg.query_db, argv, estimate)
+        run_dir = render_run(
+            fleet_dir,
+            fleet,
+            cfg,
+            store_label(cfg.query_engine, cfg.query_db),
+            argv,
+            estimate,
+        )
         return run_dir, estimate
     except BaseException:
         release_fleet_lock(fleet_dir)
@@ -4160,6 +4241,11 @@ def describe_lock(lock: FleetLock, alive: bool) -> str:
     )
 
 
+def store_label(engine: QueryEngine, placement: DbMode) -> str:
+    """Names the run dir and lock; also the index `db` cell."""
+    return placement if engine == "postgres" else f"{engine}-{placement}"
+
+
 def check_run_allowed(
     manifest: FleetManifest, cfg: RunConfig, now: datetime
 ) -> RunEstimate:
@@ -4169,7 +4255,7 @@ def check_run_allowed(
     name, phase = manifest["name"], manifest["phase"]
     if phase not in (LIVE_PHASES if cfg.force else ("idle",)):
         raise Refused(f"fleet {name} is {phase}, not idle")
-    if cfg.query_db not in manifest["db_modes"]:
+    if cfg.query_db != "tmpfs" and cfg.query_db not in manifest["db_modes"]:
         raise Refused(
             f"--query-db {cfg.query_db} was not provisioned: fleet {name} has "
             f"{', '.join(manifest['db_modes'])}"
@@ -4340,7 +4426,7 @@ def format_pg_volume_script(volume_id: str) -> str:
 def pg_store_script(mode: DbMode, manifest: FleetManifest) -> str:
     """Runs on the query host after its containers are gone and before /data/pg is wiped:
     `colocated` must not inherit a volume mounted by an earlier run."""
-    if mode == "colocated":
+    if mode in ("colocated", "tmpfs"):
         return "if mountpoint -q /data/pg; then umount /data/pg; fi\n"
     if mode == "volume":
         if "pg_volume_id" not in manifest:
@@ -4644,6 +4730,8 @@ def run_config_hash(
             json.dumps(digests).encode(),
             json.dumps(hosts, sort_keys=True).encode(),
             cfg.query_db.encode(),
+            # Absent for postgres, which older runs used, to keep their hashes.
+            *([b"query-engine=sqlite"] if cfg.query_engine == "sqlite" else []),
             *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
             *([b"leader-trace"] if cfg.leader_trace else []),
             # Absent for journal, which older runs used, to keep their hashes.
@@ -4833,18 +4921,22 @@ def rds_endpoint(fleet_dir: Path) -> PgEndpoint:
     }
 
 
-def query_endpoint(cfg: RunConfig, run_dir: Path) -> PgEndpoint:
-    """Where node0's query service finds Postgres for this run."""
+def query_endpoint(cfg: RunConfig, run_dir: Path) -> PgEndpoint | None:
+    """Where node0's query service finds Postgres for this run; None with SQLite."""
+    if cfg.query_engine == "sqlite":
+        return None
     return rds_endpoint(fleet_of(run_dir)) if cfg.query_db == "rds" else pg_endpoint()
 
 
-def topology(hosts: dict[str, HostInfo]) -> nb.Topology:
+def topology(hosts: dict[str, HostInfo], query_engine: QueryEngine) -> nb.Topology:
     """Private URLs: the load runs on ctl, inside the VPC."""
     names = _node_names(hosts)
     return {
         "nodes": {name: _node_url(hosts[name]) for name in names},
         "roles": {
-            name: "validator, query, postgres" if name == "node0" else "validator"
+            name: f"validator, query, {query_engine}"
+            if name == "node0"
+            else "validator"
             for name in names
         },
         "query_node": "node0",
@@ -4878,6 +4970,7 @@ def render_host_files(
                 query_db=cfg.query_db,
                 leader_trace=cfg.leader_trace,
                 consensus_storage=cfg.consensus_storage,
+                query_engine=cfg.query_engine,
             )
         )
         if spec["role"] == "ctl":
@@ -4895,11 +4988,12 @@ def render_host_files(
                     pg,
                     (*trace_env(cfg), *cfg.node_env),
                     cfg.consensus_storage,
+                    cfg.query_engine,
                 )
             )
             if pg is not None:
                 write_private_json(host_dir / "pg.json", pg)
-    topo = topology(hosts)
+    topo = topology(hosts, cfg.query_engine)
     nb.write_json(run_dir / "topology.json", topo)
     nb.write_json(
         run_dir / "hosts" / "ctl" / "agent.json",
@@ -5069,10 +5163,11 @@ def ship(remote: Remote, run_dir: Path) -> None:
     remote.parallel(send, remote.hosts)
 
 
-def start_hostmon(remote: Remote) -> None:
+def start_hostmon(remote: Remote, query_engine: QueryEngine) -> None:
     def start(host: str) -> None:
         role = remote.hosts[host]["role"]
-        pg = f" --pg {PG_JSON}" if role == "query" else ""
+        postgres = role == "query" and query_engine == "postgres"
+        pg = f" --pg {PG_JSON}" if postgres else ""
         remote.ssh(
             host,
             f"sudo systemd-run --unit bench-host --collect -p TimeoutStopSec=3 {AGENT_PYTHON} {BENCH_DIR}/aws-bench "
@@ -5214,9 +5309,11 @@ class DeployStart(TypedDict):
 SupportStart = GateStart | DeployStart
 
 
-def support_plan(query_db: DbMode, contracts: list[str]) -> list[SupportStart]:
+def support_plan(
+    query_db: DbMode, contracts: list[str], query_engine: QueryEngine = "postgres"
+) -> list[SupportStart]:
     """The support services in start order, each with the check that gates the next. The rds
-    instance is only checked: it is already running."""
+    instance is only checked: it is already running. SQLite has no database service."""
     plan: list[SupportStart] = [
         GateStart(
             kind="gate",
@@ -5263,6 +5360,10 @@ def support_plan(query_db: DbMode, contracts: list[str]) -> list[SupportStart]:
             gate_cmd=f"curl -sf http://localhost:{env_port('ESPRESSO_STATE_RELAY_SERVER_PORT')}/healthcheck",
             timeout_s=GATE_TIMEOUT_S,
         ),
+    ]
+    if query_engine == "sqlite":
+        return plan
+    plan += [
         GateStart(
             kind="gate",
             host="node0",
@@ -5297,10 +5398,12 @@ def start_support(
     contracts: list[str],
     interrupts: Interrupts,
     query_db: DbMode = "colocated",
+    query_engine: QueryEngine = "postgres",
 ) -> None:
     """On ctl, in order and each gated on a check: anvil, contract deployment, orchestrator,
-    relay; then Postgres on node0 (the rds instance is only gated, it is already running)."""
-    for step in support_plan(query_db, contracts):
+    relay; then Postgres on node0 (the rds instance is only gated, it is already running;
+    SQLite has no such step)."""
+    for step in support_plan(query_db, contracts, query_engine):
         host = step["host"]
         if step["container"] is not None:
             remote.ssh(host, f"sudo docker start {step['container']}")
@@ -5654,7 +5757,9 @@ COLLECT_SCRIPT = (
     "docker inspect $(docker ps -aq) > inspect.json\n"
     "chronyc tracking > chrony.txt\n"
     "df -B1 / /data > df.txt\n"
-    "du -sb /data/journal > du-journal.txt\n"
+    "du -sb --exclude=/data/journal/espresso/sqlite /data/journal > du-journal.txt\n"
+    "if [ -d /data/journal/espresso/sqlite ]; then "
+    "du -sb /data/journal/espresso/sqlite > du-sqlite.txt; fi\n"
     f"if [ -d {PAYLOAD_HOST_DIR} ]; then du -sb {PAYLOAD_HOST_DIR} > du-payload.txt; fi\n"
     "lscpu > lscpu.txt\n"
     "uname -r > uname.txt\n"
@@ -5727,17 +5832,21 @@ COLLECT_EXCLUDES = (
 
 
 def collect_hosts(
-    remote: Remote, hosts: list[HostInfo], out: Path, subdir: str = ""
+    remote: Remote,
+    hosts: list[HostInfo],
+    out: Path,
+    query_engine: QueryEngine,
+    subdir: str = "",
 ) -> None:
     """Logs, inspect, chrony, disk and journal sizes, host samples and (node0) Postgres
-    statistics into `out/hosts/<name>/<subdir>`. Best effort per host: one that cannot be
-    reached is reported and the rest are still collected."""
+    statistics, except with SQLite, into `out/hosts/<name>/<subdir>`. Best effort per host: one
+    that cannot be reached is reported and the rest are still collected."""
 
     def collect(name: str) -> None:
         role = remote.hosts[name]["role"]
-        script = (
-            COLLECT_SCRIPT + (PG_STATS_SCRIPT if role == "query" else "") + "true\n"
-        )
+        postgres = role == "query" and query_engine == "postgres"
+        pg_stats = PG_STATS_SCRIPT if postgres else ""
+        script = COLLECT_SCRIPT + pg_stats + "true\n"
         # The copy runs even when the script failed or timed out: files already on the
         # host (host.jsonl) are still wanted.
         try:
@@ -5896,7 +6005,8 @@ def cmd_collect(args: argparse.Namespace, system: System) -> int:
     setup_logging(fleet_dir)
     remote = Remote(system.run, fleet_dir, ssh_key_path(fleet_dir), hosts)
     subdir = f"collect-{next_collect_index(run_dir)}"
-    collect_hosts(remote, list(hosts.values()), run_dir, subdir)
+    engine = read_manifest(run_dir)["query_engine"]
+    collect_hosts(remote, list(hosts.values()), run_dir, engine, subdir)
     missing = [
         name for name in hosts if not any((run_dir / "hosts" / name / subdir).glob("*"))
     ]
@@ -5912,7 +6022,7 @@ def cmd_render(args: argparse.Namespace, system: System) -> int:
     run_dir: Path = args.dir
     agent = finished_agent_state(run_dir)
     if not (run_dir / "run.json").exists() and agent is not None:
-        manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+        manifest = read_manifest(run_dir)
         started = datetime.fromisoformat(manifest["created_at"]).timestamp()
         nb.write_json(
             run_dir / "run.json",
@@ -5942,7 +6052,7 @@ def refresh_index_row(run_dir: Path, result: nb.BenchResult) -> None:
     row = nb.read_json(path)
     cost_path = run_dir / "cost.json"
     cost = nb.read_json(cost_path) if cost_path.exists() else None
-    manifest: Manifest = nb.read_json(run_dir / MANIFEST_JSON)
+    manifest = read_manifest(run_dir)
     cells = index_cells(manifest, run_dir.name, result, int(row["exit"]), cost)
     nb.write_json(path, {**cells, "user": row["user"]})
 
@@ -6295,10 +6405,27 @@ def manifest_region(manifest: FleetManifest) -> str:
     return config_from_manifest(manifest["config"]).region
 
 
+def with_query_engine(saved: dict[str, Any]) -> dict[str, Any]:
+    """Dirs from before `--query-engine` used Postgres, except those with `query_db` sqlite,
+    which meant SQLite on the root volume."""
+    if saved.get("query_db") != "sqlite":
+        return {"query_engine": "postgres", **saved}
+    legacy = {**saved, "query_engine": "sqlite", "query_db": "colocated"}
+    if "db_modes" in saved:
+        legacy["db_modes"] = ["colocated"]
+    return legacy
+
+
+def read_manifest(run_dir: Path) -> Manifest:
+    """`manifest.json` with `query_engine` filled in for dirs that predate it."""
+    saved = with_query_engine(nb.read_json(run_dir / MANIFEST_JSON))
+    return cast(Manifest, {**saved, "config": with_query_engine(saved["config"])})
+
+
 def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     """Inverse of `config_to_json`."""
     fields: dict[str, Any] = {
-        **saved,
+        **with_query_engine(saved),
         "load": nb.load_config(dict(saved["load"])),
         "db_modes": tuple(saved["db_modes"]),
         "fleet": None if saved["fleet"] is None else Path(saved["fleet"]),
@@ -6580,7 +6707,7 @@ def finished_agent_state(run_dir: Path) -> AgentState | None:
 def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.BenchResult:
     """Analyzes a collected run dir into `result.json` and `summary.md`; the same inputs give
     the same output, so `render` can call it again offline."""
-    manifest: Manifest = nb.read_json(run_dir / "manifest.json")
+    manifest = read_manifest(run_dir)
     cfg = nb.load_config(nb.read_json(run_dir / "config.json"))
     prepare_analysis(run_dir, manifest)
     result = nb.analyze(run_dir, cfg, nb.read_json(run_dir / "topology.json"))
@@ -7079,11 +7206,15 @@ def rds_identifier(fleet_name: str) -> str:
 
 
 def query_db_meta(manifest: Manifest, evidence: Evidence) -> nb.QueryDbMeta:
-    """Where node0's Postgres ran. `tls` is whether every backend negotiated TLS during the
+    """Where node0's query database ran. `tls` is whether every backend negotiated TLS during the
     load; no backend counts as off."""
     mode = manifest["query_db"]
     tls = "ssl_backends" in evidence and pg_tls(evidence["ssl_backends"]) is True
-    tuning = {key: conf for key, (conf, _) in run_pg_tuning(manifest).items()}
+    tuning = (
+        {}
+        if manifest["query_engine"] == "sqlite"
+        else {key: conf for key, (conf, _) in run_pg_tuning(manifest).items()}
+    )
     engine, store = db_store(manifest)
     meta: nb.QueryDbMeta = {
         "mode": mode,
@@ -7097,21 +7228,35 @@ def query_db_meta(manifest: Manifest, evidence: Evidence) -> nb.QueryDbMeta:
     return meta
 
 
+def postgres_tag(manifest: Manifest) -> str:
+    return manifest["images"]["postgres"]["ref"].rpartition(":")[2]
+
+
+def node0_root_store(manifest: Manifest) -> dict[str, Any]:
+    node0 = next(h for h in manifest["hosts"] if h["name"] == "node0")
+    return {
+        "type": "root",
+        "gb": node0["root_gb"],
+        "iops": node0["root_iops"],
+        "mbps": node0["root_mbps"],
+    }
+
+
 def db_store(manifest: Manifest) -> tuple[str, dict[str, Any]]:
-    """The engine and backing store of node0's Postgres."""
+    """The engine and backing store of node0's query database."""
     mode = manifest["query_db"]
-    tag = manifest["images"]["postgres"]["ref"].rpartition(":")[2]
+    if manifest["query_engine"] == "sqlite":
+        store = (
+            {"type": "tmpfs", "gb": SQLITE_TMPFS_GB}
+            if mode == "tmpfs"
+            else node0_root_store(manifest)
+        )
+        return "sqlite", store
     match mode:
         case "colocated":
-            node0 = next(h for h in manifest["hosts"] if h["name"] == "node0")
-            return f"postgres {tag}", {
-                "type": "root",
-                "gb": node0["root_gb"],
-                "iops": node0["root_iops"],
-                "mbps": node0["root_mbps"],
-            }
+            return f"postgres {postgres_tag(manifest)}", node0_root_store(manifest)
         case "volume":
-            return f"postgres {tag}", {
+            return f"postgres {postgres_tag(manifest)}", {
                 "type": "ebs",
                 "volume_id": manifest["pg_volume_id"],
                 **manifest["pg_volume"],
@@ -7650,7 +7795,7 @@ def index_cells(
         "git": manifest["git_rev"][:10],
         "tag": f"{manifest['config']['tag']}@{revision}",
         "nodes": str(manifest["config"]["nodes"]),
-        "db": manifest["query_db"],
+        "db": store_label(manifest["query_engine"], manifest["query_db"]),
         "storage": manifest_storage(manifest["config"]),
         "latency": latency_cell(manifest["config"]),
         "node_type": manifest["config"]["node_type"],
@@ -7762,8 +7907,8 @@ def published_manifest(run_dir: Path) -> dict[str, Any]:
     """Explicit field allowlist: `hosts_info`, `rds_*` and `ssh_public_key` stay local.
     `node_env` and `argv` are public: `--node-env` is documented as not for secrets, and
     `argv` is sanitized."""
-    manifest = nb.read_json(run_dir / MANIFEST_JSON)
-    reduced = {key: manifest[key] for key in PUBLISH_MANIFEST_KEYS}
+    manifest = read_manifest(run_dir)
+    reduced: dict[str, Any] = {key: manifest[key] for key in PUBLISH_MANIFEST_KEYS}
     reduced |= {
         k: sanitize_argv(manifest[k])
         for k in PUBLISH_MANIFEST_OPTIONAL
@@ -8185,12 +8330,10 @@ def sample_pg(out: Path, stop: threading.Event, pg: PgEndpoint, system: System) 
 
 def cmd_agent_host(args: argparse.Namespace, system: System) -> int:
     containers_path = Path(BENCH_DIR) / "containers.json"
-    if args.role == "query" and args.pg is None:
-        raise Refused("agent-host --role query needs --pg")
     stop = threading.Event()
     system.trap((signal.SIGINT, signal.SIGTERM), lambda *_: stop.set())
     threads = []
-    if args.role == "query":
+    if args.pg is not None:
         pg_out = args.out.with_name("pg-stats.jsonl")
         pg = cast(PgEndpoint, json.loads(args.pg.read_text()))
         threads.append(

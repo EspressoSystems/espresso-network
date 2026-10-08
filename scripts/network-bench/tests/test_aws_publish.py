@@ -174,11 +174,13 @@ def test_published_manifest_is_an_allowlist(tmp_path: Path):
         "fleet": "run1",
         "created_at": MANIFEST["created_at"],
         "git_rev": MANIFEST["git_rev"],
+        "query_engine": "postgres",
         "query_db": "colocated",
         "images": MANIFEST["images"],
         "argv": ["run", "--tag", "t", "--fleet"],
         "fleet_argv": ["up", "--tag", "t"],
         "config": {
+            "query_engine": "postgres",
             "tag": "t",
             "nodes": 3,
             "node_type": "c8g.4xlarge",

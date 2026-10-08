@@ -632,6 +632,9 @@ def test_the_volume_reset_mounts_and_wipes_without_reformatting():
 
 # TEST:querydb-mode-switch-ok
 def test_colocated_unmounts_after_the_containers_and_before_the_wipe():
+    assert awsb.pg_store_script("tmpfs", PG_MANIFEST) == awsb.pg_store_script(
+        "colocated", PG_MANIFEST
+    )
     store = awsb.pg_store_script("colocated", PG_MANIFEST)
     script = awsb.reset_script("query", store)
     assert "mount -t" not in script
@@ -771,6 +774,8 @@ def test_status_shows_the_time_left_and_the_lock_holder(harness, runner, capsys)
 def test_db_modes_dedupe_and_refuse_an_unknown_mode():
     assert awsb.parse_db_modes("colocated") == ("colocated",)
     assert awsb.parse_db_modes("colocated,colocated") == ("colocated",)
+    with pytest.raises(argparse.ArgumentTypeError, match="sqlite"):
+        awsb.parse_db_modes("sqlite")
     with pytest.raises(argparse.ArgumentTypeError, match="unknown db mode"):
         awsb.parse_db_modes("colocated,nonsense")
 

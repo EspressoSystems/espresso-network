@@ -82,7 +82,9 @@ def test_collect_without_a_dir_takes_the_last_run(harness, runner, monkeypatch):
     harness.run(runner)
     collected: list[Path] = []
 
-    def fake_collect(remote, hosts, run_dir: Path, subdir: str) -> None:
+    def fake_collect(
+        remote, hosts, run_dir: Path, query_engine: str, subdir: str
+    ) -> None:
         collected.append(run_dir)
         for host in hosts:
             out = run_dir / "hosts" / host["name"] / subdir
@@ -478,6 +480,6 @@ def test_a_host_agent_runs_outside_the_repo_root(
     monkeypatch.setattr(
         "sys.argv", ["aws-bench", "agent-host", "host.jsonl", "--role", "query"]
     )
-    assert awsb.main() == awsb.EXIT_REFUSED
-    assert "needs --pg" in caplog.text
+    monkeypatch.setattr(awsb, "cmd_agent_host", lambda args, system: awsb.EXIT_OK)
+    assert awsb.main() == awsb.EXIT_OK
     assert "repo root" not in caplog.text

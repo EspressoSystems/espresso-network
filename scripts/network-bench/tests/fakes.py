@@ -1479,6 +1479,7 @@ def aws_manifest() -> dict:
         "name": "run1",
         "fleet": "run1",
         "config": awsb.config_to_json(cfg),
+        "query_engine": "postgres",
         "query_db": "colocated",
         "hosts": awsb.plan_hosts(cfg),
         "images": fake_images(),
@@ -1540,6 +1541,7 @@ def write_collected_run(run_dir: Path) -> dict:
     manifest = {
         "name": "run1",
         "fleet": "run1",
+        "query_engine": "postgres",
         "query_db": "colocated",
         "config": awsb.config_to_json(cfg),
         "hosts": hosts,
@@ -2016,6 +2018,7 @@ def index_manifest() -> dict:
             "consensus_storage": "fs",
         },
         "fleet": "run1",
+        "query_engine": "postgres",
         "query_db": "colocated",
         "images": {"espresso-node": {"revision": "bd2ad6e1dc7abc"}},
     }

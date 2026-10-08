@@ -167,18 +167,26 @@ just bench aws down lulu-20261001-074612 --yes          # --yes needs FLEET
 
 ### Query database
 
-| `--query-db` | Postgres                            | Store of `/data/pg`                                                             |
-| ------------ | ----------------------------------- | ------------------------------------------------------------------------------- |
-| `colocated`  | container on node0                  | root gp3 (`--pg-iops`, `--pg-mbps`)                                             |
-| `volume`     | container on node0                  | extra gp3 400 GiB (`--pg-iops`, `--pg-mbps`), ext4 by-id mount, dies with node0 |
-| `rds`        | RDS PostgreSQL db.m8g.4xlarge, 18.x | gp3 400 GiB or more, 12000 IOPS, 500 MB/s                                       |
+`--query-engine` picks the query service's database, `--query-db` where it lives.
+
+| `--query-engine` | `--query-db` | Database                            | Store                                                                           |
+| ---------------- | ------------ | ----------------------------------- | ------------------------------------------------------------------------------- |
+| `postgres`       | `colocated`  | container on node0                  | `/data/pg` on root gp3 (`--pg-iops`, `--pg-mbps`)                               |
+| `postgres`       | `volume`     | container on node0                  | extra gp3 400 GiB (`--pg-iops`, `--pg-mbps`), ext4 by-id mount, dies with node0 |
+| `postgres`       | `rds`        | RDS PostgreSQL db.m8g.4xlarge, 18.x | gp3 400 GiB or more, 12000 IOPS, 500 MB/s                                       |
+| `sqlite`         | `colocated`  | embedded SQLite in the node         | `/data/journal/espresso/sqlite` on root gp3                                     |
+| `sqlite`         | `tmpfs`      | embedded SQLite in the node         | 8 GiB tmpfs (RAM) at `/store/espresso/sqlite`, lost when the container stops    |
+
+Other combinations are refused. The default is `postgres` on `colocated`.
 
 ```
 just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --yes
 just bench aws run --fleet --query-db volume --node-env ESPRESSO_QUERY_PAYLOAD_DIR=/payload
 ```
 
-- `--db-modes` (`plan`, `up`) lists the stores a fleet prepares. `--query-db` (`run`) picks one.
+- `--db-modes` (`plan`, `up`) lists the placements a fleet prepares. `--query-db` (`run`) picks one; `tmpfs` needs no
+  preparation and runs on any fleet; it requires `--node-env ESPRESSO_QUERY_PAYLOAD_DIR=...` so payloads stay out of the
+  tmpfs.
 - A fleet with `rds` refuses `--pg-iops` and `--pg-mbps` values other than the defaults.
 - `rds` needs IAM rights `iam:CreateRole`, `iam:PutRolePolicy`, `iam:PassRole`, `scheduler:CreateSchedule`. Without them
   apply fails, the fleet is destroyed, exit 3.
@@ -356,7 +364,8 @@ Where:
 | `--mtu`                               | 1500                           | per run      | with `--latency`: interface MTU of the nodes                                                  |
 | `--consensus-storage`                 | `fs`                           | per run      | `fs`, `journal` (experimental, not in `main` images); query node uses `storage-sql` with `fs` |
 | `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                                  |
-| `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`                                                                  |
+| `--query-engine`                      | `postgres`                     | run          | `postgres`, `sqlite`                                                                          |
+| `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`, `tmpfs` (sqlite: `colocated`, `tmpfs`)                          |
 | `--force`                             | off                            | run          | with `--fleet`: reset a dirty fleet, replace a stale lock                                     |
 | `--yes`                               | off                            | run          | skip the prompt, required without a tty; also on `up`, `down`, `destroy`, `prune`             |
 | `--no-publish`                        | off                            | run          | skip publishing                                                                               |

@@ -425,16 +425,6 @@ def test_pg_json_is_written_0600_for_the_query_host_only(tmp_path: Path) -> None
         assert "\nA=1\n" in (tmp_path / "hosts" / node / "node.env").read_text()
 
 
-def test_agent_host_query_role_without_endpoint_is_refused(
-    system: FakeSystem,
-) -> None:
-    """Refused before installing signal handlers, which would outlive the call."""
-    args = awsb.parse_args(["agent-host", "host.jsonl", "--role", "query"])
-    with pytest.raises(awsb.Refused, match="--pg"):
-        awsb.cmd_agent_host(args, system)
-    assert system.handlers == {}
-
-
 @pytest.mark.slow
 def test_every_node_waits_concurrently_whatever_the_pool_size(
     isolated: Path, monkeypatch: pytest.MonkeyPatch
@@ -567,6 +557,91 @@ def test_pg_settings_gate_refuses_a_manifest_without_memory() -> None:
 def test_query_db_meta_reports_the_rendered_tuning() -> None:
     meta = awsb.query_db_meta(small_node0_manifest(), clean_evidence())
     assert meta["tuning"]["shared_buffers"] == "4GB"
+
+
+def test_query_db_meta_for_sqlite_has_no_postgres_tuning() -> None:
+    manifest = {**small_node0_manifest(), "query_engine": "sqlite"}
+    meta = awsb.query_db_meta(manifest, clean_evidence())
+    assert (meta["mode"], meta["engine"], meta["tuning"]) == (
+        "colocated",
+        "sqlite",
+        {},
+    )
+    assert meta["store"]["type"] == "root"
+    tmpfs = awsb.query_db_meta({**manifest, "query_db": "tmpfs"}, clean_evidence())
+    assert tmpfs["store"] == {"type": "tmpfs", "gb": awsb.SQLITE_TMPFS_GB}
+
+
+def test_sqlite_is_excluded_from_the_journal_size_and_measured_apart() -> None:
+    lines = awsb.COLLECT_SCRIPT.splitlines()
+    assert (
+        "du -sb --exclude=/data/journal/espresso/sqlite /data/journal > du-journal.txt"
+        in lines
+    )
+    assert any("> du-sqlite.txt" in line for line in lines)
+
+
+def test_query_db_line_omits_tls_for_sqlite() -> None:
+    manifest = {
+        **small_node0_manifest(),
+        "query_engine": "sqlite",
+        "query_db": "tmpfs",
+    }
+    line = netbench.query_db_line(awsb.query_db_meta(manifest, clean_evidence()))
+    assert line == "- Query DB: sqlite, tmpfs, tmpfs 8 GB"
+    postgres = netbench.query_db_line(
+        awsb.query_db_meta(small_node0_manifest(), clean_evidence())
+    )
+    assert postgres.startswith("- Query DB: postgres ") and "TLS" in postgres
+
+
+@pytest.mark.parametrize(
+    ("engine", "placement", "ok"),
+    [
+        ("postgres", "colocated", True),
+        ("postgres", "volume", True),
+        ("postgres", "rds", True),
+        ("postgres", "tmpfs", False),
+        ("sqlite", "colocated", True),
+        ("sqlite", "tmpfs", True),
+        ("sqlite", "volume", False),
+        ("sqlite", "rds", False),
+    ],
+)
+def test_query_store_combinations(engine: str, placement: str, ok: bool) -> None:
+    env = ["ESPRESSO_QUERY_PAYLOAD_DIR=/payload"]
+    if ok:
+        awsb.check_query_store(engine, placement, env)
+    else:
+        with pytest.raises(awsb.Refused, match="does not support"):
+            awsb.check_query_store(engine, placement, env)
+
+
+def test_tmpfs_needs_the_payload_dir_outside_sqlite() -> None:
+    with pytest.raises(awsb.Refused, match="ESPRESSO_QUERY_PAYLOAD_DIR"):
+        awsb.check_query_store("sqlite", "tmpfs", ["RUST_LOG=debug"])
+    awsb.check_query_store("sqlite", "colocated", [])
+
+
+def test_a_run_dir_with_the_legacy_sqlite_query_db_reads_as_sqlite_colocated(
+    tmp_path: Path,
+) -> None:
+    legacy = {**small_node0_manifest(), "query_db": "sqlite"}
+    del legacy["query_engine"]
+    legacy["config"] = {**legacy["config"], "query_db": "sqlite"}
+    netbench.write_json(tmp_path / "manifest.json", legacy)
+    manifest = awsb.read_manifest(tmp_path)
+    assert (manifest["query_engine"], manifest["query_db"]) == ("sqlite", "colocated")
+    assert manifest["config"]["query_engine"] == "sqlite"
+    assert manifest["config"]["query_db"] == "colocated"
+    assert awsb.query_db_meta(manifest, clean_evidence())["engine"] == "sqlite"
+
+
+def test_a_run_dir_without_query_engine_reads_as_postgres(tmp_path: Path) -> None:
+    old = small_node0_manifest()
+    del old["query_engine"]
+    netbench.write_json(tmp_path / "manifest.json", old)
+    assert awsb.read_manifest(tmp_path)["query_engine"] == "postgres"
 
 
 def test_parse_clock_offset_ms() -> None:
@@ -1181,6 +1256,6 @@ def test_the_trace_dir_is_collected_and_wiped_by_a_reset(isolated: Path) -> None
     assert "trace" not in awsb.RESET_KEEP
     runner = Scripted({})
     hosts = remote(runner, isolated)
-    awsb.collect_hosts(hosts, [hosts.hosts["node0"]], isolated)
+    awsb.collect_hosts(hosts, [hosts.hosts["node0"]], isolated, "postgres")
     (rsync,) = [c for c in runner.calls if c[0] == "rsync"]
     assert not [a for a in rsync if a.startswith("--exclude") and "trace" in a]

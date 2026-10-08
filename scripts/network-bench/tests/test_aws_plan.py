@@ -989,6 +989,25 @@ def test_journal_max_bytes_is_set_only_for_journal_storage():
     assert env["fs"]["ESPRESSO_NODE_STORAGE_PATH"] == "/store/espresso"
 
 
+def test_sqlite_node0_env_selects_the_embedded_db_and_has_no_postgres():
+    spec = next(h for h in awsb.plan_hosts(small_cfg()) if h["name"] == "node0")
+    env = parse_env(awsb.render_node_env(spec, fleet(2), None, query_engine="sqlite"))
+    assert env["ESPRESSO_NODE_EMBEDDED_DB"] == "true"
+    assert not [key for key in env if "POSTGRES" in key]
+    assert "ESPRESSO_NODE_EMBEDDED_DB" not in node_env("node0")
+    assert "ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING" not in env
+    journal = parse_env(
+        awsb.render_node_env(
+            spec,
+            fleet(2),
+            None,
+            consensus_storage="journal",
+            query_engine="sqlite",
+        )
+    )
+    assert journal["ESPRESSO_NODE_JOURNAL_IGNORE_EXISTING"] == "true"
+
+
 def test_node_env_streams_l1_heads_over_websocket():
     env = node_env("node1")
     http = env["ESPRESSO_L1_PROVIDER"]
@@ -1213,6 +1232,7 @@ def test_query_start_sh_mounts_payload_dir_from_pg_volume():
             "--name espresso-node"
         )
         assert "-v /data/pg/payload:/payload" in script
+        assert "--tmpfs" not in script
 
 
 def test_validators_get_provisioned_root_disks():
@@ -1242,14 +1262,14 @@ def test_node_summary_names_the_storage_modules_and_every_run_setting():
     )
     assert awsb.format_node_summary(cfg) == [
         "storage validators: consensus storage-journal",
-        "storage node0:      consensus storage-journal, query storage-sql (volume)",
+        "storage node0:      consensus storage-journal, query storage-sql (postgres, volume)",
         "nodes: max block 20mb; submit 1 nodes; leader-trace on",
         "node-env: A=1 B=2",
     ]
     fs = awsb.format_node_summary(small_cfg())
     assert fs[:2] == [
         "storage validators: consensus storage-fs",
-        "storage node0:      consensus storage-sql, query storage-sql (colocated)",
+        "storage node0:      consensus storage-sql, query storage-sql (postgres, colocated)",
     ]
     assert fs[2].endswith("leader-trace off")
     assert fs[3] == "node-env: none"
@@ -1260,6 +1280,46 @@ def test_fs_validator_start_sh_uses_storage_fs_only():
     assert "-- storage-fs -- http" in script
     assert "storage-journal" not in script
     assert "storage-sql" not in script
+
+
+def test_sqlite_query_start_sh_leaves_storage_sql_to_the_entrypoint():
+    for storage, modules in (
+        ("journal", "-- storage-journal -- http -- query"),
+        ("fs", "/bin/espresso-node -- http -- query"),
+    ):
+        script = awsb.render_start_sh(
+            host("node0", "query"),
+            fake_images(),
+            32768,
+            consensus_storage=storage,
+            query_engine="sqlite",
+        )
+        assert modules in script
+        assert "storage-sql" not in script
+        assert "--name postgres" not in script
+        assert "/data/pg:/var/lib/postgresql" not in script
+        assert "-v /data/pg/payload:/payload" in script
+        assert "--tmpfs" not in script
+
+
+def test_sqlite_tmpfs_mounts_ram_over_the_database_directory():
+    script = awsb.render_start_sh(
+        host("node0", "query"),
+        fake_images(),
+        32768,
+        "tmpfs",
+        query_engine="sqlite",
+    )
+    assert "--tmpfs /store/espresso/sqlite:size=8g" in script
+    assert script.index("--tmpfs") < script.index("@sha256")
+    validator = awsb.render_start_sh(host("node1", "validator"), fake_images(), 32768)
+    assert "--tmpfs" not in validator
+
+
+def test_sqlite_topology_names_no_postgres():
+    roles = awsb.topology(fleet(2), "sqlite")["roles"]
+    assert roles["node0"] == "validator, query, sqlite"
+    assert awsb.topology(fleet(2), "postgres")["roles"]["node0"].endswith("postgres")
 
 
 def test_fs_query_start_sh_uses_storage_sql_only():

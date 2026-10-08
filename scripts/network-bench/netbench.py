@@ -320,12 +320,13 @@ class CalibrationPair(TypedDict):
     drift_pct: float
 
 
-DbMode = Literal["colocated", "volume", "rds"]
+DbMode = Literal["colocated", "volume", "rds", "tmpfs"]
 
 
 class QueryDbMeta(TypedDict):
-    """Where the query node's Postgres ran. `store` is the backing volume, `{type, gb, iops,
-    mbps}` plus `volume_id` (ebs) or `identifier` (rds-gp3); `tuning` is the applied settings."""
+    """Where the query node's database ran. `store` is the backing volume, `{type, gb, iops,
+    mbps}` (no iops or mbps for tmpfs) plus `volume_id` (ebs) or `identifier` (rds-gp3); `mode` is
+    the placement; `tuning` is the applied settings."""
 
     mode: DbMode
     engine: str
@@ -3123,10 +3124,11 @@ def query_db_line(q: QueryDbMeta) -> str:
     store = q["store"]
     ident = f" {store['identifier']}" if "identifier" in store else ""
     cls = f" on {q['instance_class']}" if "instance_class" in q else ""
+    speed = f" {store['iops']} IOPS {store['mbps']} MB/s" if "iops" in store else ""
+    tls = "" if q["engine"] == "sqlite" else f", TLS {'on' if q['tls'] else 'off'}"
     return (
-        f"- Query DB: {q['mode']}, {q['engine']}{cls}, {store['type']}{ident} "
-        f"{store['gb']} GB {store['iops']} IOPS {store['mbps']} MB/s, "
-        f"TLS {'on' if q['tls'] else 'off'}"
+        f"- Query DB: {q['engine']}, {q['mode']}{cls}, {store['type']}{ident} "
+        f"{store['gb']} GB{speed}{tls}"
     )
 
 
