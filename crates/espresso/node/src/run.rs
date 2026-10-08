@@ -416,7 +416,7 @@ mod test {
     use tempfile::TempDir;
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
-    use vbs::version::Version;
+    use versions::{LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION};
 
     use super::*;
     use crate::{
@@ -443,10 +443,8 @@ mod test {
             accounts: Default::default(),
             l1_finalized: L1Finalized::Number { number: 0 },
             header: Default::default(),
-            // `validate_fee_contract` would reject this upgrade (no fee_contract); the test
-            // never reaches validation because startup blocks at the orchestrator first.
             upgrades: [(
-                Version { major: 0, minor: 2 },
+                LARGE_BLOCK_VERSION,
                 Upgrade {
                     mode: UpgradeMode::View(ViewBasedUpgrade {
                         start_proposing_view: 100,
@@ -454,21 +452,21 @@ mod test {
                         start_voting_view: None,
                         stop_voting_view: None,
                     }),
-                    upgrade_type: UpgradeType::Fee {
+                    upgrade_type: UpgradeType::LargeBlock {
                         chain_config: Default::default(),
                     },
                 },
             )]
             .into_iter()
             .collect(),
-            base_version: Version { major: 0, minor: 1 },
-            upgrade_version: Version { major: 0, minor: 2 },
-            epoch_height: None,
+            base_version: NEW_PROTOCOL_VERSION,
+            upgrade_version: LARGE_BLOCK_VERSION,
+            epoch_height: Some(10),
             drb_difficulty: None,
             drb_upgrade_difficulty: None,
             epoch_start_block: None,
             stake_table_capacity: None,
-            genesis_version: Version { major: 0, minor: 1 },
+            genesis_version: NEW_PROTOCOL_VERSION,
             da_committees: None,
         };
         genesis.to_file(&genesis_file).unwrap();
@@ -495,6 +493,8 @@ mod test {
                 .expect("valid key")
                 .to_string(),
             "--cliquenet-bind-address",
+            &format!("127.0.0.1:{port2}"),
+            "--cliquenet-advertise-address",
             &format!("127.0.0.1:{port2}"),
             // Never bound: this test blocks at orchestrator before libp2p starts. Port 0 is a
             // placeholder to satisfy the orchestrator-bootstrap requirement on the advertise
@@ -580,15 +580,15 @@ mod test {
             "expected testing in features: {lines:#?}"
         );
         let genesis_line = concat!(
-            r#"consensus_genesis{base_version="0.1",genesis_version="0.1","#,
-            r#"upgrade_version="0.2"} 1"#
+            r#"consensus_genesis{base_version="0.6",genesis_version="0.6","#,
+            r#"upgrade_version="0.7"} 1"#
         );
         assert!(
             lines.contains(&genesis_line),
             "missing consensus_genesis metric: {lines:#?}"
         );
         assert!(
-            lines.contains(&r#"consensus_genesis_upgrade{version="0.2"} 1"#),
+            lines.contains(&r#"consensus_genesis_upgrade{version="0.7"} 1"#),
             "missing consensus_genesis_upgrade metric: {lines:#?}"
         );
 
@@ -631,12 +631,12 @@ mod test {
         }
         assert_eq!(
             node_cfg["genesis"]["base_version"],
-            serde_json::Value::String("0.1".into()),
+            serde_json::Value::String("0.6".into()),
             "genesis.base_version mismatch: {node_cfg}"
         );
         assert_eq!(
             node_cfg["genesis"]["upgrade"][0]["version"],
-            serde_json::Value::String("0.2".into()),
+            serde_json::Value::String("0.7".into()),
             "genesis.upgrade[0].version mismatch: {node_cfg}"
         );
         assert_eq!(
