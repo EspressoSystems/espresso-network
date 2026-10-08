@@ -545,7 +545,8 @@ class Raised(Exception):
     pass
 
 
-# Without the kill, leaving `Popen` waits out the `sleep 30`.
+# Without the kill, leaving `Popen` waits out the `sleep 30`. The child signals after 0.5 s:
+# signalled at once, it can beat `_run` registering it (seen on a CI runner).
 @pytest.mark.timeout(5)
 def test_run_kills_and_forgets_the_child_when_the_wait_raises():
     children = awsb.Children(os.killpg)
@@ -558,7 +559,9 @@ def test_run_kills_and_forgets_the_child_when_the_wait_raises():
     previous = signal.signal(signal.SIGUSR1, on_usr1)
     try:
         with pytest.raises(Raised):
-            awsb._run(children, ["sh", "-c", f"kill -USR1 {os.getpid()}; sleep 30"])
+            awsb._run(
+                children, ["sh", "-c", f"sleep 0.5; kill -USR1 {os.getpid()}; sleep 30"]
+            )
     finally:
         signal.signal(signal.SIGUSR1, previous)
     assert len(seen) == 1
