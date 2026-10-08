@@ -4,8 +4,8 @@ use std::{borrow::Borrow, collections::HashMap};
 
 use ark_serialize::CanonicalSerialize;
 use espresso_types::{
-    BuilderSignature, FeeInfo, Header, L1BlockInfo, NamespaceProofQueryData, NsProof, Payload,
-    PubKey, SeqTypes, Transaction, TxProof,
+    BuilderSignature, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceProofQueryData, NsProof,
+    Payload, PubKey, SeqTypes, Transaction, TxProof,
     config::PublicNetworkConfig,
     v0_3::{
         AvidMIncorrectEncodingNsProof, AvidMNsProof, RegisteredValidator, ResolvableChainConfig,
@@ -21,6 +21,7 @@ use hotshot_query_service_types::{
         BlockQueryData, BlockSummaryQueryData, LeafQueryData, PayloadQueryData,
         TransactionQueryData, TransactionWithProofQueryData, VidCommonQueryData,
     },
+    explorer,
     node::{
         Limits as NodeLimits, ResourceSyncStatus, SyncStatus, SyncStatusQueryData,
         TimeWindowQueryData,
@@ -29,6 +30,7 @@ use hotshot_query_service_types::{
 use hotshot_types::{
     HotShotConfig, PeerConfig,
     data::{Leaf2, VidCommon, VidShare, ViewChangeEvidence2},
+    light_client::LCV3StateSignatureRequestBody,
     network::BuilderType,
     simple_certificate::{
         Certificate2, SimpleCertificate, SuccessThreshold, Threshold, TimeoutCertificate2,
@@ -122,6 +124,14 @@ impl From<&Header> for proto::HeaderResponse {
     }
 }
 
+/// Empty from 0.7, when the header stopped carrying a builder commitment but kept the 0.5 shape.
+fn builder_commitment(header: &Header) -> String {
+    header
+        .builder_commitment()
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
 impl From<&Header> for proto::HeaderV1 {
     fn from(header: &Header) -> Self {
         proto::HeaderV1 {
@@ -131,7 +141,7 @@ impl From<&Header> for proto::HeaderV1 {
             l1_head: header.l1_head(),
             l1_finalized: header.l1_finalized().map(Into::into),
             payload_commitment: header.payload_commitment().to_string(),
-            builder_commitment: header.builder_commitment().to_string(),
+            builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
                 bytes: header.ns_table().encode().to_vec(),
             }),
@@ -153,7 +163,7 @@ impl From<&Header> for proto::HeaderV3 {
             l1_head: header.l1_head(),
             l1_finalized: header.l1_finalized().map(Into::into),
             payload_commitment: header.payload_commitment().to_string(),
-            builder_commitment: header.builder_commitment().to_string(),
+            builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
                 bytes: header.ns_table().encode().to_vec(),
             }),
@@ -178,7 +188,7 @@ fn header_v4(header: &Header) -> proto::HeaderV4 {
         l1_head: header.l1_head(),
         l1_finalized: header.l1_finalized().map(Into::into),
         payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
+        builder_commitment: builder_commitment(header),
         ns_table: Some(proto::NsTable {
             bytes: header.ns_table().encode().to_vec(),
         }),
@@ -205,7 +215,7 @@ fn header_v5(header: &Header) -> proto::HeaderV5 {
         l1_head: header.l1_head(),
         l1_finalized: header.l1_finalized().map(Into::into),
         payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
+        builder_commitment: builder_commitment(header),
         ns_table: Some(proto::NsTable {
             bytes: header.ns_table().encode().to_vec(),
         }),
@@ -1235,4 +1245,155 @@ impl From<&StateCertQueryDataV2<SeqTypes>> for proto::StateCertV2Response {
             auth_root: format!("{:#x}", cert.auth_root),
         }
     }
+}
+
+impl From<&LCV3StateSignatureRequestBody> for proto::StateSignatureResponse {
+    fn from(body: &LCV3StateSignatureRequestBody) -> Self {
+        proto::StateSignatureResponse {
+            key: body.key.to_string(),
+            light_client_state: body.state.to_string(),
+            next_stake_table_state: body.next_stake.to_string(),
+            auth_root: format!("{:#x}", body.auth_root),
+            lcv3_signature: body.signature.to_string(),
+            lcv2_signature: body.v2_signature.to_string(),
+        }
+    }
+}
+
+impl From<&explorer::BlockDetail<SeqTypes>> for proto::ExplorerBlockDetail {
+    fn from(block: &explorer::BlockDetail<SeqTypes>) -> Self {
+        proto::ExplorerBlockDetail {
+            hash: block.hash.to_string(),
+            height: block.height,
+            time: explorer_time(block.time),
+            num_transactions: block.num_transactions,
+            proposer_id: explorer_accounts(&block.proposer_id),
+            fee_recipient: explorer_accounts(&block.fee_recipient),
+            size: block.size,
+            // `MonetaryValue`'s `Serialize` writes its `Display`.
+            block_reward: block.block_reward.iter().map(ToString::to_string).collect(),
+        }
+    }
+}
+
+impl From<&explorer::BlockSummary<SeqTypes>> for proto::ExplorerBlockSummary {
+    fn from(block: &explorer::BlockSummary<SeqTypes>) -> Self {
+        proto::ExplorerBlockSummary {
+            hash: block.hash.to_string(),
+            height: block.height,
+            proposer_id: explorer_accounts(&block.proposer_id),
+            num_transactions: block.num_transactions,
+            size: block.size,
+            time: explorer_time(block.time),
+        }
+    }
+}
+
+impl From<&explorer::TransactionSummary<SeqTypes>> for proto::ExplorerTransactionSummary {
+    fn from(transaction: &explorer::TransactionSummary<SeqTypes>) -> Self {
+        proto::ExplorerTransactionSummary {
+            hash: transaction.hash.to_string(),
+            rollups: transaction
+                .rollups
+                .iter()
+                .map(|namespace| u64::from(*namespace))
+                .collect(),
+            height: transaction.height,
+            offset: transaction.offset,
+            num_transactions: transaction.num_transactions,
+            time: explorer_time(transaction.time),
+        }
+    }
+}
+
+impl From<&explorer::TransactionDetail<SeqTypes>> for proto::ExplorerTransactionDetail {
+    fn from(details: &explorer::TransactionDetail<SeqTypes>) -> Self {
+        proto::ExplorerTransactionDetail {
+            hash: details.hash.to_string(),
+            height: details.height,
+            block_confirmed: details.block_confirmed,
+            offset: details.offset,
+            num_transactions: details.num_transactions,
+            size: details.size,
+            time: explorer_time(details.time),
+            sequencing_fees: details
+                .sequencing_fees
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            fee_details: details.fee_details.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&explorer::FeeAttribution> for proto::ExplorerFeeAttribution {
+    fn from(attribution: &explorer::FeeAttribution) -> Self {
+        proto::ExplorerFeeAttribution {
+            target: attribution.target.clone(),
+            fees: attribution.fees.iter().map(ToString::to_string).collect(),
+        }
+    }
+}
+
+impl From<&explorer::ExplorerSummary<SeqTypes>> for proto::ExplorerSummaryResponse {
+    fn from(summary: &explorer::ExplorerSummary<SeqTypes>) -> Self {
+        let explorer::GenesisOverview {
+            rollups,
+            transactions,
+            blocks,
+        } = summary.genesis_overview;
+        // v1's four histogram arrays are parallel, built and trimmed together, so they zip into
+        // one point per block.
+        let histograms = &summary.histograms;
+        let histograms = histograms
+            .block_heights
+            .iter()
+            .zip(&histograms.block_time)
+            .zip(&histograms.block_size)
+            .zip(&histograms.block_transactions)
+            .map(|(((height, block_time), block_size), block_transactions)| {
+                proto::ExplorerHistogramPoint {
+                    height: *height,
+                    block_time: *block_time,
+                    block_size: *block_size,
+                    block_transactions: *block_transactions,
+                }
+            })
+            .collect();
+        proto::ExplorerSummaryResponse {
+            latest_block: Some((&summary.latest_block).into()),
+            genesis_overview: Some(proto::ExplorerGenesisOverview {
+                rollups,
+                transactions,
+                blocks,
+            }),
+            latest_blocks: summary.latest_blocks.iter().map(Into::into).collect(),
+            latest_transactions: summary.latest_transactions.iter().map(Into::into).collect(),
+            histograms,
+        }
+    }
+}
+
+impl From<&explorer::SearchResult<SeqTypes>> for proto::ExplorerSearchResponse {
+    fn from(results: &explorer::SearchResult<SeqTypes>) -> Self {
+        proto::ExplorerSearchResponse {
+            blocks: results.blocks.iter().map(Into::into).collect(),
+            transactions: results.transactions.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// The same `Rfc3339` format `Timestamp`'s own `Serialize` uses, so v1 and v2 agree on the string.
+fn explorer_time(time: explorer::Timestamp) -> String {
+    time.0
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("a Timestamp is built from a unix time inside RFC 3339's year range")
+}
+
+/// `FeeAccount`'s `Display` drops the `0x` that its serde writes.
+fn explorer_accounts(accounts: &[FeeAccount]) -> Vec<String> {
+    accounts
+        .iter()
+        .map(|account| format!("{:#x}", account.0))
+        .collect()
 }

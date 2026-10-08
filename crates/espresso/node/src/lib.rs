@@ -82,7 +82,6 @@ use hotshot_types::{
         node_implementation::{NodeImplementation, NodeType},
         storage::Storage,
     },
-    utils::BuilderCommitment,
     x25519,
 };
 use libp2p::Multiaddr;
@@ -1023,10 +1022,6 @@ where
     })
 }
 
-pub fn empty_builder_commitment() -> BuilderCommitment {
-    BuilderCommitment::from_bytes([])
-}
-
 /// Scans the whole L1 contract history when nothing is persisted yet, keeping every
 /// `bootstrap_epoch_window` step bounded to one epoch instead of loading that scan onto
 /// the first step, which silently downgrades the node to a stale epoch window when it
@@ -1161,8 +1156,8 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
-        UpgradeMap, UpgradeMode,
+        ChainConfig, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
+        Upgrade, UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -1530,6 +1525,7 @@ pub mod testing {
                 anvil_provider: self.anvil_provider,
                 coordinator_addrs: self.coordinator_addrs,
                 contracts: self.contracts,
+                genesis_chain_config: None,
             }
         }
 
@@ -1669,6 +1665,8 @@ pub mod testing {
         coordinator_addrs: Vec<NetAddr>,
         /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if any.
         contracts: Option<Contracts>,
+        /// See [`Self::set_genesis_chain_config`].
+        genesis_chain_config: Option<ChainConfig>,
     }
 
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
@@ -1694,6 +1692,10 @@ pub mod testing {
 
         pub fn l1_url(&self) -> Url {
             self.l1_url.clone()
+        }
+
+        pub fn l1_opt(&self) -> L1ClientOptions {
+            self.l1_opt.clone()
         }
 
         pub fn anvil(&self) -> Option<&AnvilFillProvider> {
@@ -1755,6 +1757,15 @@ pub mod testing {
         pub fn set_consensus_keys(&mut self, i: usize, bls: BLSPrivKey, state: StateKeyPair) {
             self.priv_keys[i] = bls;
             self.state_key_pairs[i] = state;
+        }
+
+        /// Builds every node's genesis header from `chain_config`, as a real
+        /// network's shared genesis file does. Otherwise a node takes it from
+        /// its own starting state, so nodes that start from only a commitment
+        /// build a different genesis leaf, and the new protocol rejects each
+        /// other's genesis QC.
+        pub fn set_genesis_chain_config(&mut self, chain_config: ChainConfig) {
+            self.genesis_chain_config = Some(chain_config);
         }
 
         /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if
@@ -1926,7 +1937,7 @@ pub mod testing {
             );
 
             let max_block_size = *chain_config.max_block_size;
-            let node_state = NodeState::new(
+            let mut node_state = NodeState::new(
                 i as u64,
                 chain_config,
                 l1_client,
@@ -1940,6 +1951,12 @@ pub mod testing {
             .with_epoch_height(config.epoch_height)
             .with_upgrades(upgrades)
             .with_epoch_start_block(config.epoch_start_block);
+            // Only the genesis header: `chain_config` stays what this node resolves from its
+            // state, so a node that starts from a commitment still has to fetch the config.
+            if let Some(genesis_chain_config) = self.genesis_chain_config {
+                node_state.genesis_header.chain_config = genesis_chain_config;
+                node_state.genesis_chain_config = genesis_chain_config;
+            }
 
             tracing::info!(
                 i,
@@ -2004,6 +2021,19 @@ pub mod testing {
 
     // Wait for the submitted transaction to be sequenced in a decided block. Return the block
     // number containing the transaction and the block payload size.
+    /// The leaves a decide event finalizes, newest first. Decides arrive as
+    /// `LegacyEvent` before the new protocol and as `NewDecide` after.
+    pub fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
+        match event {
+            CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) => Some(leaf_chain),
+            CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos),
+            _ => None,
+        }
+    }
+
     pub async fn wait_for_decide_on_handle(
         events: &mut (impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin),
         submitted_txn: &Transaction,
@@ -2041,15 +2071,8 @@ pub mod testing {
                     continue;
                 }
 
-                // Decides arrive as `LegacyEvent` before the new protocol and
-                // as `NewDecide` after.
-                let leaf_chain: &[LeafInfo<SeqTypes>] = match &event {
-                    CoordinatorEvent::LegacyEvent(Event {
-                        event: EventType::Decide { leaf_chain, .. },
-                        ..
-                    }) => leaf_chain,
-                    CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos,
-                    _ => continue,
+                let Some(leaf_chain) = decided_leaves(&event) else {
+                    continue;
                 };
                 for LeafInfo { leaf, .. } in leaf_chain {
                     let Some(payload) = leaf.block_payload() else {
@@ -2121,22 +2144,21 @@ mod test {
         signers::local::coins_bip39::{English, Mnemonic},
     };
     use espresso_keyset::KeySet;
-    use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction};
+    use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, TEST_UPGRADE, Transaction};
     use futures::StreamExt;
-    use hotshot::types::{Event, EventType};
-    use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
-        PeerConnectInfo,
-        addr::NetAddr,
-        event::LeafInfo,
-        new_protocol::CoordinatorEvent,
-        traits::block_contents::{BlockHeader, BlockPayload},
+        PeerConnectInfo, addr::NetAddr, event::LeafInfo, traits::block_contents::BlockHeader,
         x25519,
     };
-    use testing::{TestConfigBuilder, wait_for_decide_on_handle};
+    use test_utils::reserve_tcp_port;
+    use testing::{TestConfigBuilder, decided_leaves, wait_for_decide_on_handle};
     use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
     use super::{local_validator_config, orchestrator_registration};
+    use crate::api::{
+        Options,
+        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+    };
 
     fn test_keys() -> KeySet {
         let mnemonic = Mnemonic::<English>::new_from_phrase(
@@ -2331,61 +2353,22 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_header_invariants() {
         let success_height = 30;
-        // Assign `config` so it isn't dropped early.
-        let anvil = Anvil::new().spawn();
-        let url = anvil.endpoint_url();
-        const NUM_NODES: usize = 5;
-        let mut config = TestConfigBuilder::<NUM_NODES>::default()
-            .l1_url(url)
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(Options::with_port(port))
+            .network_config(TestConfigBuilder::default().build())
             .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let mut events = network.server.event_stream();
 
-        let (builder_task, builder_url) = run_test_builder::<NUM_NODES>(None).await;
-
-        config.set_builder_urls(vec1::vec1![builder_url]);
-        let handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).await;
-
-        let handle_0 = &handles[0];
-
-        let mut events = handle_0.event_stream();
-
-        // Hook the builder up to the event stream from the first node
-        builder_task.start(Box::new(
-            handle_0
-                .consensus_handle()
-                .legacy_consensus()
-                .read()
-                .await
-                .event_stream(),
-        ));
-
-        for handle in handles.iter() {
-            handle.start_consensus().await;
-        }
-
-        let mut parent = {
-            // TODO refactor repeated code from other tests
-            let (genesis_payload, genesis_ns_table) =
-                Payload::from_transactions(&[], &ValidatedState::default(), &NodeState::mock())
-                    .await
-                    .unwrap();
-
-            let genesis_state = NodeState::mock();
-            Header::genesis(
-                &genesis_state,
-                genesis_payload,
-                &genesis_ns_table,
-                TEST_VERSIONS.test.base,
-            )
-        };
+        // The network is already running, so start from the first header it
+        // decides after we subscribe.
+        let mut parent: Option<Header> = None;
 
         loop {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
-            let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            else {
+            let Some(leaf_chain) = decided_leaves(&event) else {
                 continue;
             };
             tracing::info!("Got decide {leaf_chain:?}");
@@ -2394,18 +2377,19 @@ mod test {
             // the fields which should be monotonic are.
             for LeafInfo { leaf, .. } in leaf_chain.iter().rev() {
                 let header = leaf.block_header().clone();
-                if header.height() == 0 {
-                    parent = header;
-                    continue;
+                if let Some(parent) = &parent {
+                    assert_eq!(header.height(), parent.height() + 1);
+                    assert!(header.timestamp() >= parent.timestamp());
+                    assert!(header.l1_head() >= parent.l1_head());
+                    assert!(header.l1_finalized() >= parent.l1_finalized());
                 }
-                assert_eq!(header.height(), parent.height() + 1);
-                assert!(header.timestamp() >= parent.timestamp());
-                assert!(header.l1_head() >= parent.l1_head());
-                assert!(header.l1_finalized() >= parent.l1_finalized());
-                parent = header;
+                parent = Some(header);
             }
 
-            if parent.height() >= success_height {
+            if parent
+                .as_ref()
+                .is_some_and(|p| p.height() >= success_height)
+            {
                 break;
             }
         }

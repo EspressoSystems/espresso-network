@@ -116,6 +116,17 @@ impl AvidmGf2Share {
     pub fn validate(&self) -> bool {
         self.payload.len() == self.range.len() && self.mt_proofs.len() == self.range.len()
     }
+
+    /// The size every shard of this share has, or `None` if the share is
+    /// empty or its shards disagree. A dispersal gives all its shards the
+    /// size [`AvidmGf2Scheme::shard_bytes`] computes for its payload.
+    pub fn shard_bytes(&self) -> Option<usize> {
+        let first = self.payload.first()?.len();
+        self.payload
+            .iter()
+            .all(|shard| shard.len() == first)
+            .then_some(first)
+    }
 }
 
 /// VID Commitment type
@@ -159,10 +170,27 @@ impl AvidmGf2Scheme {
         AvidmGf2Param::new(recovery_threshold, total_weights)
     }
 
-    /// Shard size in bytes: even, and large enough for the payload plus the pad byte.
-    fn shard_bytes(param: &AvidmGf2Param, payload_len: usize) -> usize {
-        let shard_bytes = (payload_len + 1).div_ceil(param.recovery_threshold);
-        shard_bytes + shard_bytes % 2
+    /// Size in bytes of every shard of a `payload_byte_len`-byte payload
+    /// dispersed into `original_count` original shards: the fewest bytes that
+    /// hold the payload plus its pad byte, rounded up to the even size
+    /// `reed_solomon_simd` requires.
+    ///
+    /// `None` if `original_count` is zero or the size overflows, so a verifier
+    /// can evaluate it on an untrusted length without panicking.
+    pub fn shard_bytes(payload_byte_len: usize, original_count: usize) -> Option<usize> {
+        if original_count == 0 {
+            return None;
+        }
+        payload_byte_len
+            .checked_add(1)?
+            .div_ceil(original_count)
+            .checked_next_multiple_of(2)
+    }
+
+    fn payload_shard_bytes(param: &AvidmGf2Param, payload_len: usize) -> VidResult<usize> {
+        Self::shard_bytes(payload_len, param.recovery_threshold).ok_or_else(|| {
+            VidError::Argument("Payload length is too large to disperse".to_string())
+        })
     }
 
     /// Build the `original_count` original shards from `payload`, applying
@@ -233,7 +261,7 @@ impl AvidmGf2Scheme {
     fn raw_commit(param: &AvidmGf2Param, payload: &[u8]) -> VidResult<MerkleTree> {
         let original_count = param.recovery_threshold;
         let recovery_count = param.total_weights - original_count;
-        let shard_bytes = Self::shard_bytes(param, payload.len());
+        let shard_bytes = Self::payload_shard_bytes(param, payload.len())?;
         let original = Self::chunk_and_pad(payload, shard_bytes, original_count)?;
         if recovery_count == 0 {
             return Self::merkle_tree(&original);
@@ -255,7 +283,7 @@ impl AvidmGf2Scheme {
         param: &AvidmGf2Param,
         payload: &[u8],
     ) -> VidResult<(MerkleTree, Vec<Vec<u8>>)> {
-        let shard_bytes = Self::shard_bytes(param, payload.len());
+        let shard_bytes = Self::payload_shard_bytes(param, payload.len())?;
         let original = Self::chunk_and_pad(payload, shard_bytes, param.recovery_threshold)?;
         let recovery = Self::encode_recovery(param, &original)?;
 
@@ -680,6 +708,41 @@ pub mod tests {
                 assert_eq!(payload_recovered, payload);
             }
         }
+    }
+
+    /// `shard_bytes` is what dispersal actually produces, for every shard of
+    /// every share, across payload lengths on both sides of a shard boundary
+    /// and on both sides of the even rounding.
+    #[test]
+    fn shard_bytes_matches_dispersal() {
+        let total_weights = 10usize;
+        let recovery_threshold = 4;
+        let params = AvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+        let weights = vec![2u32; 5];
+
+        for payload_byte_len in [0usize, 1, 3, 4, 7, 8, 31, 32, 100, 101] {
+            let payload = vec![1u8; payload_byte_len];
+            let expected =
+                AvidmGf2Scheme::shard_bytes(payload_byte_len, recovery_threshold).unwrap();
+            assert_eq!(expected % 2, 0, "{payload_byte_len}");
+            assert!(
+                expected * recovery_threshold > payload_byte_len,
+                "{payload_byte_len}: shards must hold the payload and its pad byte"
+            );
+            assert!(
+                (expected - 2) * recovery_threshold <= payload_byte_len,
+                "{payload_byte_len}: shards must not be larger than needed"
+            );
+            let (_, shares) = AvidmGf2Scheme::disperse(&params, &weights, &payload).unwrap();
+            for share in &shares {
+                assert_eq!(share.shard_bytes(), Some(expected), "{payload_byte_len}");
+            }
+        }
+
+        // Total on inputs dispersal never sees.
+        assert_eq!(AvidmGf2Scheme::shard_bytes(100, 0), None);
+        assert_eq!(AvidmGf2Scheme::shard_bytes(usize::MAX, 1), None);
+        assert_eq!(AvidmGf2Scheme::shard_bytes(usize::MAX - 1, 1), None);
     }
 
     #[test]

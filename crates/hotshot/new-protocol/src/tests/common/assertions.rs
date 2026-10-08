@@ -33,6 +33,10 @@ pub(crate) fn decides_view(output: &ConsensusOutput<TestTypes>, view: u64) -> bo
     )
 }
 
+pub(crate) fn is_proposal_paired(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::ProposalPaired { .. })
+}
+
 pub(crate) fn is_request_state(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::RequestState(_))
 }
@@ -124,6 +128,10 @@ pub(crate) fn is_timeout_one_honest(input: &ConsensusInput<TestTypes>) -> bool {
 
 pub(crate) fn is_timeout_cert(input: &ConsensusInput<TestTypes>) -> bool {
     matches!(input, ConsensusInput::TimeoutCertificate(_))
+}
+
+pub(crate) fn is_upgrade_cert_formed(input: &ConsensusInput<TestTypes>) -> bool {
+    matches!(input, ConsensusInput::UpgradeCertificateFormed(_))
 }
 
 pub(crate) fn is_drb_result(input: &ConsensusInput<TestTypes>) -> bool {

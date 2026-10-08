@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Context;
-use hotshot_types::traits::{BlockPayload, block_contents::BlockHeader as _};
+use hotshot_types::traits::BlockPayload;
 use serde_json::Value;
 use sqlx::{ColumnIndex, prelude::*, types::Json};
 

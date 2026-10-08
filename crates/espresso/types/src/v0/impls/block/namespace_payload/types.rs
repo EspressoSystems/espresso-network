@@ -352,11 +352,16 @@ impl<'a> NsPayloadBuilder<'a> {
         header.copy_from_slice(&num_txs.to_payload_bytes());
         let (entries, bodies) = rest.split_at_mut(self.txs.len() * TX_OFFSET_BYTE_LEN);
         let mut end = 0;
-        for (entry, tx) in entries.chunks_exact_mut(TX_OFFSET_BYTE_LEN).zip(&self.txs) {
+        for (entry, tx) in entries
+            .as_chunks_mut::<TX_OFFSET_BYTE_LEN>()
+            .0
+            .iter_mut()
+            .zip(&self.txs)
+        {
             let body = tx.payload();
             bodies[end..end + body.len()].copy_from_slice(body);
             end += body.len();
-            entry.copy_from_slice(&usize_to_bytes::<TX_OFFSET_BYTE_LEN>(end));
+            *entry = usize_to_bytes::<TX_OFFSET_BYTE_LEN>(end);
         }
         debug_assert_eq!(end, self.bodies_len);
         Ok(len)
