@@ -22,26 +22,23 @@
 <a href=#22 id=22 data-nosnippet>22</a></span><span class="kw">pub trait </span>Sender&lt;K: SignatureKey + <span class="lifetime">'static</span>&gt;: Send + Sync + <span class="lifetime">'static </span>+ Clone {
 <a href=#23 id=23 data-nosnippet>23</a>    <span class="doccomment">/// Send a message to a specific recipient
 <a href=#24 id=24 data-nosnippet>24</a>    </span><span class="kw">async fn </span>send_direct_message(<span class="kw-2">&amp;</span><span class="self">self</span>, message: <span class="kw-2">&amp;</span>Bytes, recipient: K) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
-<a href=#25 id=25 data-nosnippet>25</a>
-<a href=#26 id=26 data-nosnippet>26</a>    <span class="doccomment">/// Send a message to all recipients
-<a href=#27 id=27 data-nosnippet>27</a>    </span><span class="kw">async fn </span>send_broadcast_message(<span class="kw-2">&amp;</span><span class="self">self</span>, message: <span class="kw-2">&amp;</span>Bytes) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt;;
-<a href=#28 id=28 data-nosnippet>28</a>}
-<a href=#29 id=29 data-nosnippet>29</a>
-<a href=#30 id=30 data-nosnippet>30</a><span class="doccomment">/// The [`Receiver`] trait is used to allow the [`RequestResponseProtocol`] to receive messages from a network
-<a href=#31 id=31 data-nosnippet>31</a>/// or other source.
-<a href=#32 id=32 data-nosnippet>32</a></span><span class="attr">#[async_trait]
-<a href=#33 id=33 data-nosnippet>33</a></span><span class="kw">pub trait </span>Receiver: Send + Sync + <span class="lifetime">'static </span>{
-<a href=#34 id=34 data-nosnippet>34</a>    <span class="doccomment">/// Receive a message. Returning an error here means the receiver will _NEVER_ receive any more messages
-<a href=#35 id=35 data-nosnippet>35</a>    </span><span class="kw">async fn </span>receive_message(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Bytes&gt;;
-<a href=#36 id=36 data-nosnippet>36</a>}
-<a href=#37 id=37 data-nosnippet>37</a>
-<a href=#38 id=38 data-nosnippet>38</a><span class="doccomment">/// An implementation of the [`Receiver`] trait for the [`mpsc::Receiver`] type. Allows us to send messages
-<a href=#39 id=39 data-nosnippet>39</a>/// to a channel and have the protocol receive them.
-<a href=#40 id=40 data-nosnippet>40</a></span><span class="attr">#[async_trait]
-<a href=#41 id=41 data-nosnippet>41</a></span><span class="kw">impl </span>Receiver <span class="kw">for </span>mpsc::Receiver&lt;Bytes&gt; {
-<a href=#42 id=42 data-nosnippet>42</a>    <span class="kw">async fn </span>receive_message(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Bytes&gt; {
-<a href=#43 id=43 data-nosnippet>43</a>        <span class="comment">//  Just receive a message from the channel
-<a href=#44 id=44 data-nosnippet>44</a>        </span><span class="self">self</span>.recv().<span class="kw">await</span>.ok_or(<span class="macro">anyhow::anyhow!</span>(<span class="string">"channel closed"</span>))
-<a href=#45 id=45 data-nosnippet>45</a>    }
-<a href=#46 id=46 data-nosnippet>46</a>}
+<a href=#25 id=25 data-nosnippet>25</a>}
+<a href=#26 id=26 data-nosnippet>26</a>
+<a href=#27 id=27 data-nosnippet>27</a><span class="doccomment">/// The [`Receiver`] trait is used to allow the [`RequestResponseProtocol`] to receive messages from a network
+<a href=#28 id=28 data-nosnippet>28</a>/// or other source.
+<a href=#29 id=29 data-nosnippet>29</a></span><span class="attr">#[async_trait]
+<a href=#30 id=30 data-nosnippet>30</a></span><span class="kw">pub trait </span>Receiver: Send + Sync + <span class="lifetime">'static </span>{
+<a href=#31 id=31 data-nosnippet>31</a>    <span class="doccomment">/// Receive a message. Returning an error here means the receiver will _NEVER_ receive any more messages
+<a href=#32 id=32 data-nosnippet>32</a>    </span><span class="kw">async fn </span>receive_message(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Bytes&gt;;
+<a href=#33 id=33 data-nosnippet>33</a>}
+<a href=#34 id=34 data-nosnippet>34</a>
+<a href=#35 id=35 data-nosnippet>35</a><span class="doccomment">/// An implementation of the [`Receiver`] trait for the [`mpsc::Receiver`] type. Allows us to send messages
+<a href=#36 id=36 data-nosnippet>36</a>/// to a channel and have the protocol receive them.
+<a href=#37 id=37 data-nosnippet>37</a></span><span class="attr">#[async_trait]
+<a href=#38 id=38 data-nosnippet>38</a></span><span class="kw">impl </span>Receiver <span class="kw">for </span>mpsc::Receiver&lt;Bytes&gt; {
+<a href=#39 id=39 data-nosnippet>39</a>    <span class="kw">async fn </span>receive_message(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Bytes&gt; {
+<a href=#40 id=40 data-nosnippet>40</a>        <span class="comment">//  Just receive a message from the channel
+<a href=#41 id=41 data-nosnippet>41</a>        </span><span class="self">self</span>.recv().<span class="kw">await</span>.ok_or(<span class="macro">anyhow::anyhow!</span>(<span class="string">"channel closed"</span>))
+<a href=#42 id=42 data-nosnippet>42</a>    }
+<a href=#43 id=43 data-nosnippet>43</a>}
 </code></pre></div></section></main></body></html>

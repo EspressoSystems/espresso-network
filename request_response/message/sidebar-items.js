@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Message"],"fn":["read_length_prefixed","read_to_end","write_length_prefixed"],"struct":["RequestMessage","ResponseMessage"]};
+window.SIDEBAR_ITEMS = {"constant":["REQUEST_TAG","RESPONSE_TAG"],"enum":["Message","MessageFrame"],"fn":["read_length_prefixed","read_to_end","split_request_hash","write_length_prefixed"],"struct":["RequestMessage","ResponseMessage"]};
