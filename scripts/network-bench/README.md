@@ -257,8 +257,9 @@ just bench aws run --tag release-x --leader-trace
   - Payload files (`ESPRESSO_QUERY_PAYLOAD_DIR`) are not pruned: the node keeps them after their rows go.
   - Scan or reader lag beyond RETENTION shows as missing payloads (noisy run) and missing reader ranges.
   - The summary lists the retention and the `pruner_data_height` and `pruner_state_height` gauges at the window end.
-- `--clients N`: N light-client readers per namespace (default 0, none), threads of one extra process on `ctl`. Part of
-  the config hash when above 0. `2` models a sequencer and a follower per rollup.
+- `--clients N`: N light-client readers per namespace (default 2, a stack chain's sequencer and follower; 0 for none),
+  threads of one extra process on `ctl`. Part of the config hash when above 0. `2` models a sequencer and a follower per
+  rollup.
   - Each reader polls `/v1/node/block-height` every 0.5 s. For new blocks, in ranges of at most 100, it requests
     `/v1/light-client/leaf/{last}`, `/v1/availability/leaf/{start}/{last}` and
     `/v1/light-client/namespaces/{start}/{end}/NS~...` for its namespace. Proofs are not verified; the node's load is
@@ -370,7 +371,7 @@ Where:
 | `--cap-s`                             | 5; `--search` 60               | all          | in-flight cap, in seconds of the step's load                                                  |
 | `--tx-timeout-s`                      | 30; `--search` 60              | all          | tx timeout                                                                                    |
 | `--warmup-s`                          | 60                             | all          | warmup at the first step's rate; `--prune` adds its retention                                 |
-| `--clients`                           | 0                              | all          | light-client readers per namespace, on `ctl`; part of the config hash when above 0            |
+| `--clients`                           | 2                              | all          | light-client readers per namespace, on `ctl`                                                  |
 | `--submit-workers`                    | 32                             | all          | submit threads; part of the config hash                                                       |
 | `--namespaces`                        | 16                             | all          | namespaces the load spreads over, round robin from 10000; part of the config hash             |
 | `--heartbeat-tx-s`                    | 50                             | all          | 8-byte txs per second for the whole run, 0 for none                                           |

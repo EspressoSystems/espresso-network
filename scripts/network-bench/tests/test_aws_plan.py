@@ -1113,9 +1113,9 @@ def test_manifest_config_without_prune_loads_as_off():
     assert awsb.config_from_manifest(saved).prune is None
 
 
-def test_clients_flag_defaults_to_none_and_counts_readers_per_namespace():
-    assert node_env_config().load.clients == 0
-    assert node_env_config("--clients", "2").load.clients == 2
+def test_clients_flag_defaults_to_a_sequencer_and_a_follower_per_namespace():
+    assert node_env_config().load.clients == 2
+    assert node_env_config("--clients", "0").load.clients == 0
     with pytest.raises(SystemExit):
         node_env_config("--clients", "-1")
 

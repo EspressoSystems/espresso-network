@@ -2584,9 +2584,11 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     parser.add_argument(
         "--clients",
         type=non_negative_int,
-        default=load.clients,
-        help="light-client readers per namespace, on ctl; each follows the chain like a "
-        "rollup's reader (2 models a sequencer and a follower)",
+        # A stack chain's sequencer and follower each read their namespace; the local `bench`
+        # keeps 0 since its nodes serve no light-client module.
+        default=2,
+        help="light-client readers per namespace, on ctl; each follows the chain like an "
+        "espresso-stack node's reader (2 models a sequencer and a follower)",
     )
     parser.add_argument(
         "--keep-going",
