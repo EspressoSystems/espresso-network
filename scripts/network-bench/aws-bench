@@ -1465,21 +1465,24 @@ def format_search_summary(cfg: RunConfig) -> str:
     )
 
 
-def format_node_summary(cfg: RunConfig) -> str:
+def format_node_summary(cfg: RunConfig) -> list[str]:
     """Run settings that shape the nodes and Postgres and appear in no other preamble line."""
 
     def storage(role: Literal["validator", "query"]) -> str:
         modules = NODE_MODULES[cfg.consensus_storage, role]
         return "+".join(m for m in modules if m.startswith("storage-"))
 
-    return (
-        f"nodes: consensus-storage {cfg.consensus_storage} "
-        f"(validators {storage('validator')}; node0 {storage('query')}, "
-        f"query-db {cfg.query_db}); max block {cfg.max_block_size}; "
-        f"submit {cfg.load.submit_nodes} nodes; "
-        f"leader-trace {'on' if cfg.leader_trace else 'off'}; "
-        f"node-env {','.join(cfg.node_env) or 'none'}"
-    )
+    return [
+        (
+            f"storage: {cfg.consensus_storage}; validators {storage('validator')}; "
+            f"node0 {storage('query')}, query-db {cfg.query_db}"
+        ),
+        (
+            f"nodes: max block {cfg.max_block_size}; submit {cfg.load.submit_nodes} nodes; "
+            f"leader-trace {'on' if cfg.leader_trace else 'off'}"
+        ),
+        f"node-env: {' '.join(cfg.node_env) or 'none'}",
+    ]
 
 
 def format_fleet_summary(estimate: Estimate, max_usd: float, expires: datetime) -> str:
@@ -2989,7 +2992,8 @@ def estimate_or_refuse(
             hosts, cfg, rds, *shot_seconds(cfg), instance_prices=instance_prices
         )
         log.info(format_estimate_summary(estimate, cfg.max_usd))
-        log.info(format_node_summary(cfg))
+        for line in format_node_summary(cfg):
+            log.info(line)
         if cfg.search:
             log.info(format_search_summary(cfg))
     for line in format_estimate_lines(estimate):
@@ -3975,7 +3979,8 @@ def cmd_run_fleet(args: argparse.Namespace, system: System) -> int:
         estimate["worst_s"] / 60,
         minutes_left(manifest, utc_now(system.clock)),
     )
-    log.info(format_node_summary(cfg))
+    for line in format_node_summary(cfg):
+        log.info(line)
     try:
         with recording(bench_run):
             if tag_changed(manifest, cfg):

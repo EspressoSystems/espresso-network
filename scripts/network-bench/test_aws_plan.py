@@ -1240,14 +1240,21 @@ def test_node_summary_names_the_storage_modules_and_every_run_setting():
         leader_trace=True,
         node_env=("A=1", "B=2"),
     )
-    assert awsb.format_node_summary(cfg) == (
-        "nodes: consensus-storage journal (validators storage-journal; "
-        "node0 storage-journal+storage-sql, query-db volume); max block 20mb; "
-        "submit 1 nodes; leader-trace on; node-env A=1,B=2"
-    )
+    assert awsb.format_node_summary(cfg) == [
+        (
+            "storage: journal; validators storage-journal; "
+            "node0 storage-journal+storage-sql, query-db volume"
+        ),
+        "nodes: max block 20mb; submit 1 nodes; leader-trace on",
+        "node-env: A=1 B=2",
+    ]
     fs = awsb.format_node_summary(small_cfg())
-    assert "(validators storage-fs; node0 storage-sql, query-db colocated)" in fs
-    assert fs.endswith("leader-trace off; node-env none")
+    assert (
+        fs[0]
+        == "storage: fs; validators storage-fs; node0 storage-sql, query-db colocated"
+    )
+    assert fs[1].endswith("leader-trace off")
+    assert fs[2] == "node-env: none"
 
 
 def test_fs_validator_start_sh_uses_storage_fs_only():
@@ -1547,8 +1554,8 @@ def test_estimate_logs_the_search_summary(caplog):
     summary = awsb.format_search_summary(cfg)
     messages = [r.getMessage() for r in caplog.records]
     assert messages[-1] == summary
-    assert messages[-2] == awsb.format_node_summary(cfg)
-    assert messages[-3].startswith("cost: expected")
+    assert messages[-4:-1] == awsb.format_node_summary(cfg)
+    assert messages[-5].startswith("cost: expected")
 
 
 # TEST:aws-config-hash-ok
