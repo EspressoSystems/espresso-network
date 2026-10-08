@@ -218,6 +218,8 @@ just bench aws run --tag release-x --node-type c8i.4xlarge --ctl-type c8i.2xlarg
 just bench aws run --tag release-x --leader-trace
 ```
 
+- Recommended settings and the branches that support them: [tuning.md](tuning.md).
+
 - `--allocator NAME`: espresso-node from `espresso-node-alloc:<tag>-<allocator>`; other images stay `--tag`'s.
   - `build-allocators.yml` builds these images for release tags (`MAJOR.MINOR.PHASE.PATCH`), PRs that change the
     allocator build, and manual runs. Branches and `main` get none.
