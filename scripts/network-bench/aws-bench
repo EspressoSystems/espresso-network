@@ -911,6 +911,7 @@ class Ec2Balance(TypedDict):
 # The class body's `latency` field shadows the module inside it.
 INTERNET_MTU = latency.INTERNET_MTU
 
+
 @dataclass(frozen=True)
 class RunConfig:
     tag: str
@@ -5248,7 +5249,11 @@ def mtu_mismatches(remote: Remote, names: list[str], mtu: int) -> list[str]:
         ).stdout.strip()
         for name in names
     }
-    return [f"{name}: mtu {got or '?'}, expected {mtu}" for name, got in found.items() if got != str(mtu)]
+    return [
+        f"{name}: mtu {got or '?'}, expected {mtu}"
+        for name, got in found.items()
+        if got != str(mtu)
+    ]
 
 
 def create_containers(remote: Remote) -> None:
