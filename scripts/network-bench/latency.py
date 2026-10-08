@@ -48,8 +48,9 @@ def tcp_sysctls(tcp_cc: str) -> tuple[tuple[str, str], ...]:
     )
 
 
-# Validators on the internet see a 1500 byte path; the VPC default of 9001 is not honest.
-MTU = 1500
+# AWS instances in one VPC use jumbo frames (9001); internet paths carry 1500. `--mtu` sets the
+# interface MTU, default leaves 9001.
+AWS_MTU = 9001
 TC_CLEAR = 'if tc qdisc show dev "$IFACE" | grep -q "htb 1:"; then tc qdisc del dev "$IFACE" root; fi'
 PROFILES = ("off", "decaf-2025", "mainnet")
 DECAF_SPLIT: tuple[tuple[str, int], ...] = (
@@ -86,6 +87,7 @@ class Shaping:
     delays: dict[tuple[int, int], float]
     intra: bool
     tcp_cc: str
+    mtu: int
 
     def meta(self) -> dict:
         return {
@@ -101,7 +103,7 @@ class Shaping:
             },
             "matrix_sha256": matrix_sha256(self.delays),
             "sysctls": dict(tcp_sysctls(self.tcp_cc)),
-            "mtu": MTU,
+            "mtu": self.mtu,
             "probes": [],
         }
 
@@ -122,11 +124,11 @@ def load_profile(name: str) -> Profile:
     raise ValueError(f"no latency profile {name!r}; expected one of {PROFILES[1:]}")
 
 
-def shaping(name: str, n: int, intra: bool, tcp_cc: str) -> Shaping:
+def shaping(name: str, n: int, intra: bool, tcp_cc: str, mtu: int) -> Shaping:
     profile = load_profile(name)
     assignment = assign(n, profile)
     delays = delays_ms(assignment, profile, intra)
-    return Shaping(profile, assignment, delays, intra, tcp_cc)
+    return Shaping(profile, assignment, delays, intra, tcp_cc, mtu)
 
 
 def read_matrix(text: str) -> dict[tuple[str, str], float]:
@@ -238,6 +240,7 @@ def tc_script(
     peer_ips: dict[int, str],
     delays: dict[tuple[int, int], float],
     tcp_cc: str,
+    mtu: int,
 ) -> str:
     lines = [
         "set -eu",
@@ -245,7 +248,7 @@ def tc_script(
         *(f'sysctl -q -w {key}="{value}"' for key, value in tcp_sysctls(tcp_cc)),
         TC_IFACE,
         'test -n "$IFACE"',
-        f'ip link set dev "$IFACE" mtu {MTU}',
+        f'ip link set dev "$IFACE" mtu {mtu}',
         TC_CLEAR,
         'tc qdisc add dev "$IFACE" root handle 1: htb default 1',
         'tc class add dev "$IFACE" parent 1: classid 1:1 htb rate 100gbit',

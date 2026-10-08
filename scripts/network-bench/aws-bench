@@ -869,6 +869,9 @@ class Ec2Balance(TypedDict):
     metrics: dict[str, MetricSeries]
 
 
+# The class body's `latency` field shadows the module inside it.
+AWS_MTU = latency.AWS_MTU
+
 @dataclass(frozen=True)
 class RunConfig:
     tag: str
@@ -893,8 +896,9 @@ class RunConfig:
     # `latency.PROFILES` name; `off` shapes nothing. `intra_latency` adds the same-location delay.
     latency: str = "off"
     intra_latency: bool = True
-    # `latency.TCP_CCS` name, set on the nodes with the latency shaping.
-    tcp_cc: str = "cubic"
+    # `latency.TCP_CCS` name and interface MTU, set on the nodes with the latency shaping.
+    tcp_cc: str = "bbr"
+    mtu: int = AWS_MTU
     ttl_min: str = "auto"
     fleet: Path | None = None
     force: bool = False
@@ -2549,6 +2553,12 @@ def add_latency_flags(parser: argparse.ArgumentParser) -> None:
         default=RunConfig.tcp_cc,
         help="with --latency: TCP congestion control of the nodes",
     )
+    parser.add_argument(
+        "--mtu",
+        type=positive_int,
+        default=RunConfig.mtu,
+        help="with --latency: interface MTU of the nodes; 1500 for internet-sized packets",
+    )
 
 
 def add_consensus_storage_flag(parser: argparse.ArgumentParser) -> None:
@@ -2560,11 +2570,13 @@ def add_consensus_storage_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def check_latency_flags(profile: str, intra: bool, tcp_cc: str) -> None:
+def check_latency_flags(profile: str, intra: bool, tcp_cc: str, mtu: int) -> None:
     if profile == "off" and not intra:
         raise Refused("--no-intra-latency needs --latency decaf-2025 or mainnet")
     if profile == "off" and tcp_cc != RunConfig.tcp_cc:
         raise Refused("--tcp-cc needs --latency decaf-2025 or mainnet")
+    if profile == "off" and mtu != RunConfig.mtu:
+        raise Refused("--mtu needs --latency decaf-2025 or mainnet")
 
 
 def add_node_env_flag(parser: argparse.ArgumentParser) -> None:
@@ -2637,7 +2649,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     for key in keys:
         if keys.count(key) > 1:
             raise Refused(f"--node-env repeats {key}")
-    check_latency_flags(args.latency, args.intra_latency, args.tcp_cc)
+    check_latency_flags(args.latency, args.intra_latency, args.tcp_cc, args.mtu)
     search = search_from_args(args)
     load = load_from_args(args, search)
     return RunConfig(
@@ -2653,6 +2665,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         latency=args.latency,
         intra_latency=args.intra_latency,
         tcp_cc=args.tcp_cc,
+        mtu=args.mtu,
         consensus_storage=args.consensus_storage,
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
@@ -2826,6 +2839,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         latency=defaults.latency,
         intra_latency=defaults.intra_latency,
         tcp_cc=defaults.tcp_cc,
+        mtu=defaults.mtu,
         consensus_storage=defaults.consensus_storage,
         submit_nodes=None,
         fleet=None,
@@ -4018,6 +4032,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         latency=cli.latency,
         intra_latency=cli.intra_latency,
         tcp_cc=cli.tcp_cc,
+        mtu=cli.mtu,
         consensus_storage=cli.consensus_storage,
         fleet=cli.fleet,
         force=cli.force,
@@ -4566,7 +4581,9 @@ def render_run(
 def latency_shaping(cfg: RunConfig, node_count: int) -> latency.Shaping:
     """Data problems (missing CSV pair, unknown location) are refused before any AWS write."""
     try:
-        return latency.shaping(cfg.latency, node_count, cfg.intra_latency, cfg.tcp_cc)
+        return latency.shaping(
+            cfg.latency, node_count, cfg.intra_latency, cfg.tcp_cc, cfg.mtu
+        )
     except (KeyError, ValueError, OSError) as exc:
         raise Refused(f"latency {cfg.latency}: {type(exc).__name__}: {exc}") from exc
 
@@ -4575,12 +4592,13 @@ def latency_meta(cfg: RunConfig, hosts: list[HostSpec]) -> nb.LatencyMeta:
     shaping = latency_shaping(cfg, sum(host["role"] != "ctl" for host in hosts))
     meta = cast(nb.LatencyMeta, shaping.meta())
     log.info(
-        "latency %s: %s; intra %g ms %s; tcp %s",
+        "latency %s: %s; intra %g ms %s; tcp %s; mtu %d",
         meta["profile"],
         ", ".join(f"{label} {count}" for label, count in meta["nodes"].items()),
         shaping.profile.intra_ms[shaping.assignment[0]],
         "on" if cfg.intra_latency else "off",
         shaping.tcp_cc,
+        shaping.mtu,
     )
     return meta
 
@@ -4999,7 +5017,9 @@ def shape_nodes(remote: Remote, shaping: latency.Shaping) -> None:
     names = _node_names(remote.hosts)
     peer_ips = {i: remote.hosts[name]["private_ip"] for i, name in enumerate(names)}
     scripts = {
-        name: latency.tc_script(i, peer_ips, shaping.delays, shaping.tcp_cc)
+        name: latency.tc_script(
+            i, peer_ips, shaping.delays, shaping.tcp_cc, shaping.mtu
+        )
         for i, name in enumerate(names)
     }
     remote.parallel(lambda name: remote.ssh(name, bounded(scripts[name])), names)
@@ -5045,10 +5065,22 @@ def verify_shaping(
         probes.append(
             {**dataclasses.asdict(probe), "measured_ms": measured, "ok": error is None}
         )
+    failures += mtu_mismatches(remote, names, shaping.mtu)
     meta = {**shaping.meta(), "probes": probes}
     update_manifest(manifest_path, "shaping", latency=meta)
     if failures:
         raise ShapingMismatch("; ".join(failures))
+
+
+def mtu_mismatches(remote: Remote, names: list[str], mtu: int) -> list[str]:
+    """The default-route interface MTU of every node, against the one shaping set."""
+    found = {
+        name: remote.ssh(
+            name, f'{latency.TC_IFACE}; cat "/sys/class/net/$IFACE/mtu"', check=False
+        ).stdout.strip()
+        for name in names
+    }
+    return [f"{name}: mtu {got or '?'}, expected {mtu}" for name, got in found.items() if got != str(mtu)]
 
 
 def create_containers(remote: Remote) -> None:
@@ -5546,6 +5578,7 @@ def freeze(remote: Remote) -> None:
 
 COLLECT_SCRIPT = (
     f"cd {BENCH_DIR}\n"
+    "ip -o link show > ip-link.txt\n"
     "systemctl stop bench-host\n"
     "for c in $(docker ps -a --format '{{.Names}}'); do "
     'docker logs "$c" 2>&1 | gzip > "$c.log.gz"; done\n'

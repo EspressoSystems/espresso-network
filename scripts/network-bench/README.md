@@ -192,13 +192,17 @@ just bench aws run --fleet --query-db volume --node-env ESPRESSO_QUERY_PAYLOAD_D
 just bench aws run --tag release-x --nodes 5 --latency decaf-2025
 just bench aws run --tag release-x --nodes 5 --latency decaf-2025 --no-intra-latency   # cross-region delay only
 just bench aws run --fleet --latency mainnet
-just bench aws run --tag release-x --latency decaf-2025 --tcp-cc bbr   # BBR instead of cubic
+just bench aws run --tag release-x --latency decaf-2025 --tcp-cc cubic --mtu 1500   # Linux defaults, internet MTU
 ```
 
 - Shaped: node-to-node traffic, including catchup on 8080.
-- `--tcp-cc` (default `cubic`, the Linux default; or `bbr`): congestion control of the nodes. BBR stays in its startup
-  mode while traffic is bursty and leaves it for good at the first overload; cross-region sockets then send 3-5x slower
-  for the rest of the run.
+- `--tcp-cc` (default `bbr`, or `cubic`): congestion control of the nodes.
+  - bbr stays in its startup mode while traffic is bursty and leaves it for good at the first overload; cross-region
+    sockets then send 3-5x slower for the rest of the run.
+  - cubic keeps small windows on the 158 ms links and backs off on rare losses: a 70 MB block run failed 150 MB/s.
+- `--mtu` (default 9001, AWS jumbo frames within a VPC): interface MTU of the nodes; 1500 matches internet paths.
+  Checked on every node after shaping.
+  [AWS: network MTU](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/network_mtu.html).
 - Never shaped: `ctl` traffic (orchestrator, L1, relay, submit, metrics), RDS, ssh.
 - Model and profiles: [Latency model](#latency-model).
 
@@ -343,7 +347,8 @@ Where:
 | `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                                 |
 | `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `mainnet`                                                                |
 | `--no-intra-latency`                  | off                            | per run      | with `--latency`: no same-location delay                                                      |
-| `--tcp-cc`                            | cubic                          | per run      | with `--latency`: TCP congestion control, `cubic` or `bbr`                                    |
+| `--tcp-cc`                            | bbr                            | per run      | with `--latency`: TCP congestion control, `bbr` or `cubic`                                    |
+| `--mtu`                               | 9001                           | per run      | with `--latency`: interface MTU of the nodes                                                  |
 | `--consensus-storage`                 | `fs`                           | per run      | `fs`, `journal` (experimental, not in `main` images); query node uses `storage-sql` with `fs` |
 | `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                                  |
 | `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`                                                                  |
@@ -590,8 +595,8 @@ real-world RTT. Without it, nodes see about 0.1 ms (one AZ).
 - Placement: nodes fill locations in profile order by largest remainder. 5 nodes on `decaf-2025`: eu-central-1 2,
   ap-southeast-1 2, us-east-1 1.
 - Host settings applied with shaping: `--tcp-cc` (cubic with `fq_codel`, or bbr with `fq`), `tcp_rmem` and `tcp_wmem`
-  max 256 MB, `tcp_notsent_lowat=131072`, `tcp_slow_start_after_idle=0`, `tcp_mtu_probing=1`, MTU 1500 instead of the
-  VPC's 9001. A 128 MB window covers a 100 MB proposal or 5 Gbps x 330 ms. Ubuntu's 4 MB cap holds one flow near 25 MB/s
+  max 256 MB, `tcp_notsent_lowat=131072`, `tcp_slow_start_after_idle=0`, `tcp_mtu_probing=1`, `--mtu` on the default
+  interface. A 128 MB window covers a 100 MB proposal or 5 Gbps x 330 ms. Ubuntu's 4 MB cap holds one flow near 25 MB/s
   at 158 ms.
 - Recorded: `deployment.latency` in `manifest.json` and `result.json` (profile, intra, nodes per location, assignment,
   matrix sha256, probes, `sysctls`, `mtu`), a `- latency:` bullet in `summary.md`, the matrix sha256 in `config_hash`.

@@ -697,6 +697,8 @@ class FakeRunner:
             if self.on_poll:
                 self.on_poll(self.polls)
             return completed(stdout=json.dumps(self.states[index]))
+        if "/sys/class/net/" in command:
+            return completed(stdout=f"{awsb.AWS_MTU}\n")
         if "date +%s.%N" in command:
             return completed(stdout="1000.5\n")
         if ".State.Status" in command:

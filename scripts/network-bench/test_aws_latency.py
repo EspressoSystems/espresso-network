@@ -12,10 +12,12 @@ from fakes import (
     FakeSystem,
     FleetHarness,
     RunHarness,
+    Scripted,
     awsb,
     completed,
     host_info,
     plan_args,
+    remote,
     ssh_calls,
     write_collected_run,
 )
@@ -80,19 +82,17 @@ def test_no_intra_latency_needs_a_profile():
         awsb.config_from_args(plan_args("--no-intra-latency"))
 
 
-def test_tcp_cc_needs_a_profile_and_defaults_to_cubic():
-    with pytest.raises(awsb.Refused, match="--tcp-cc"):
-        awsb.config_from_args(plan_args("--tcp-cc", "bbr"))
+def test_tcp_cc_and_mtu_need_a_profile_and_default_to_bbr_and_jumbo():
+    for flag, value in (("--tcp-cc", "cubic"), ("--mtu", "1500")):
+        with pytest.raises(awsb.Refused, match=flag):
+            awsb.config_from_args(plan_args(flag, value))
     cfg = awsb.config_from_args(plan_args("--latency", "decaf-2025"))
-    assert cfg.tcp_cc == "cubic"
-    assert (
-        awsb.latency_meta(cfg, awsb.plan_hosts(cfg))["sysctls"][
-            "net.ipv4.tcp_congestion_control"
-        ]
-        == "cubic"
-    )
-    bbr = awsb.config_from_args(plan_args("--latency", "decaf-2025", "--tcp-cc", "bbr"))
-    assert bbr.tcp_cc == "bbr"
+    assert (cfg.tcp_cc, cfg.mtu) == ("bbr", 9001)
+    meta = awsb.latency_meta(cfg, awsb.plan_hosts(cfg))
+    assert meta["sysctls"]["net.ipv4.tcp_congestion_control"] == "bbr"
+    assert meta["mtu"] == 9001
+    flags = ("--latency", "decaf-2025", "--tcp-cc", "cubic", "--mtu", "1500")
+    assert awsb.config_from_args(plan_args(*flags)).mtu == 1500
 
 
 # TEST:hash-four-distinct-ok
@@ -296,9 +296,9 @@ def test_reset_deletes_an_htb_root_only_when_present():
 
 
 def test_tc_script_is_valid_bash():
-    shaping = latency.shaping("decaf-2025", 5, intra=True, tcp_cc="cubic")
+    shaping = latency.shaping("decaf-2025", 5, intra=True, tcp_cc="cubic", mtu=1500)
     peers = {i: f"10.0.0.{i + 10}" for i in range(5)}
-    script = latency.tc_script(0, peers, shaping.delays, shaping.tcp_cc)
+    script = latency.tc_script(0, peers, shaping.delays, shaping.tcp_cc, shaping.mtu)
     subprocess.run(["bash", "-n"], input=script, text=True, check=True)
 
 
@@ -455,3 +455,11 @@ def test_publish_does_not_sign(tmp_path: Path):
     runner.respond("commit", lambda argv: completed())
     awsb.git_run(FakeSystem(run=runner), tmp_path, "commit", "-m", "x")
     assert runner.ran("commit.gpgsign=false", "commit -m x")
+
+
+def test_mtu_mismatches_name_each_node_whose_interface_differs(isolated: Path):
+    runner = Scripted(
+        {"/sys/class/net/": [completed(stdout="9001\n"), completed(stdout="1500\n")]}
+    )
+    found = awsb.mtu_mismatches(remote(runner, isolated), ["node0", "node1"], 1500)
+    assert found == ["node0: mtu 9001, expected 1500"]
