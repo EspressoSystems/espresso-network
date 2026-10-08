@@ -304,10 +304,15 @@ STORAGE_MODULES: dict[tuple[ConsensusStorage, NodeRole], tuple[str, ...]] = {
     ("fs", "validator"): ("storage-fs",),
     ("fs", "query"): ("storage-sql",),
 }
+# `light-client` serves the readers of `--clients`; it adds routes only.
 API_MODULES: dict[NodeRole, tuple[str, ...]] = {
     "validator": ("http", "status", "submit", "catchup", "config"),
-    "query": ("http", "query", "submit", "catchup", "config"),
+    "query": ("http", "query", "submit", "catchup", "config", "light-client"),
 }
+# `--prune` runs node0's pruner this often; a run deletes everything past the retention.
+PRUNE_INTERVAL = "30s"
+PRUNE_RETENTION_S = 60
+RETENTION_UNITS = {"s": 1, "m": 60, "h": 3600}
 # Headroom below the usable disk so the journal's own retention GCs data before the volume
 # fills.
 JOURNAL_MAX_BYTES_FRACTION = 0.8
@@ -948,6 +953,8 @@ class RunConfig:
     allocator: str | None = None
     # `journal` is experimental and absent from images built from `main`.
     consensus_storage: ConsensusStorage = "fs"
+    # node0 prunes its data and state older than this many seconds; None for no pruning.
+    prune: int | None = None
 
 
 # Callers need the return code and stderr, unlike scripts/release's Runner, to report a
@@ -1516,6 +1523,11 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
             f"leader-trace {'on' if cfg.leader_trace else 'off'}"
         ),
         f"node-env: {' '.join(cfg.node_env) or 'none'}",
+        *(
+            [f"prune: data and state older than {cfg.prune}s, every {PRUNE_INTERVAL}"]
+            if cfg.prune
+            else []
+        ),
     ]
 
 
@@ -2187,6 +2199,7 @@ def render_node_env(
     node_env: Iterable[str] = (),
     consensus_storage: ConsensusStorage = "fs",
     query_engine: QueryEngine = "postgres",
+    prune: int | None = None,
 ) -> str:
     self_info = hosts[host["name"]]
     ctl_info = hosts["ctl"]
@@ -2241,10 +2254,29 @@ def render_node_env(
                 "ESPRESSO_NODE_POSTGRES_DATABASE": pg["database"],
             }
         )
+    if host["role"] == "query" and prune is not None:
+        env.update(prune_env(prune))
     for pair in node_env:
         key, _, value = pair.partition("=")
         env[key] = value
     return "".join(f"{key}={value}\n" for key, value in env.items())
+
+
+def prune_env(retention_s: int) -> dict[str, str]:
+    """The pruner settings of node0: data and state older than `retention_s` go every
+    PRUNE_INTERVAL, whatever the disk usage."""
+    retention = f"{retention_s}s"
+    return {
+        "ESPRESSO_NODE_DATABASE_PRUNE": "true",
+        "ESPRESSO_NODE_PRUNER_TARGET_RETENTION": retention,
+        "ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION": retention,
+        "ESPRESSO_NODE_PRUNER_INTERVAL": PRUNE_INTERVAL,
+    }
+
+
+def prune_warmup_s(base_s: int, prune: int | None) -> int:
+    """The warmup, plus the retention so that the pruner is deleting before measurement."""
+    return base_s + (prune or 0)
 
 
 def pg_endpoint() -> PgEndpoint:
@@ -2550,6 +2582,13 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
     )
     parser.add_argument("--warmup-s", type=int, default=load.warmup_s)
     parser.add_argument(
+        "--clients",
+        type=non_negative_int,
+        default=load.clients,
+        help="light-client readers per namespace, on ctl; each follows the chain like a "
+        "rollup's reader (2 models a sequencer and a follower)",
+    )
+    parser.add_argument(
         "--keep-going",
         action="store_true",
         help="run every step whatever its verdict, then wait for the query node to catch up",
@@ -2643,6 +2682,27 @@ def check_latency_flags(profile: str, intra: bool, tcp_cc: str, mtu: int) -> Non
         raise Refused("--mtu needs --latency decaf-2025 or mainnet")
 
 
+def retention(text: str) -> int:
+    """Seconds of `90s`, `5m` or `2h`; named for argparse's error message."""
+    match = re.fullmatch(r"(\d+)([smh])", text)
+    if match is None or not int(match[1]):
+        raise ValueError(text)
+    return int(match[1]) * RETENTION_UNITS[match[2]]
+
+
+def add_prune_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--prune",
+        nargs="?",
+        const=PRUNE_RETENTION_S,
+        type=retention,
+        metavar="RETENTION",
+        help=f"node0 deletes query data and state older than RETENTION (like 90s, 2m; bare: "
+        f"{PRUNE_RETENTION_S // 60}m) every {PRUNE_INTERVAL}; the warmup grows by RETENTION so "
+        "that pruning runs before measurement",
+    )
+
+
 def add_node_env_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--node-env",
@@ -2731,6 +2791,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         tcp_cc=args.tcp_cc,
         mtu=args.mtu,
         consensus_storage=args.consensus_storage,
+        prune=args.prune,
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
@@ -2785,9 +2846,10 @@ def load_from_args(
         ),
         cap_s=cap_s if args.cap_s is None else args.cap_s,
         tx_timeout_s=tx_timeout_s if args.tx_timeout_s is None else args.tx_timeout_s,
-        warmup_s=args.warmup_s,
+        warmup_s=prune_warmup_s(args.warmup_s, args.prune),
         keep_going=args.keep_going,
         heartbeat_tx_s=args.heartbeat_tx_s,
+        clients=args.clients,
     )
 
 
@@ -2799,6 +2861,12 @@ def positive_float(text: str) -> float:
     if not value > 0:
         raise argparse.ArgumentTypeError(f"expected a positive number: {text}")
     return value
+
+
+def non_negative_int(text: str) -> int:
+    if not text.isdigit():
+        raise argparse.ArgumentTypeError(f"expected a non-negative integer: {text}")
+    return int(text)
 
 
 def positive_int(text: str) -> int:
@@ -2881,6 +2949,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_leader_trace_flag(plan_p)
     add_latency_flags(plan_p)
     add_consensus_storage_flag(plan_p)
+    add_prune_flag(plan_p)
     add_submit_nodes_flag(plan_p)
     add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
@@ -2905,6 +2974,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         tcp_cc=defaults.tcp_cc,
         mtu=defaults.mtu,
         consensus_storage=defaults.consensus_storage,
+        prune=defaults.prune,
         submit_nodes=None,
         fleet=None,
         force=False,
@@ -2927,6 +2997,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_leader_trace_flag(run_p)
     add_latency_flags(run_p)
     add_consensus_storage_flag(run_p)
+    add_prune_flag(run_p)
     add_submit_nodes_flag(run_p)
     add_ttl_flag(run_p)
     run_p.add_argument(
@@ -4135,6 +4206,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         tcp_cc=cli.tcp_cc,
         mtu=cli.mtu,
         consensus_storage=cli.consensus_storage,
+        prune=cli.prune,
         fleet=cli.fleet,
         force=cli.force,
         search=cli.search,
@@ -4735,10 +4807,10 @@ def run_config_hash(
             json.dumps(digests).encode(),
             json.dumps(hosts, sort_keys=True).encode(),
             cfg.query_db.encode(),
-            # Absent for postgres, which older runs used, to keep their hashes.
-            *([b"query-engine=sqlite"] if cfg.query_engine == "sqlite" else []),
+            cfg.query_engine.encode(),
             *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
             *([b"leader-trace"] if cfg.leader_trace else []),
+            f"prune={cfg.prune}".encode(),
             # Absent for journal, which older runs used, to keep their hashes.
             *(
                 [f"consensus-storage={cfg.consensus_storage}".encode()]
@@ -4994,6 +5066,7 @@ def render_host_files(
                     (*trace_env(cfg), *cfg.node_env),
                     cfg.consensus_storage,
                     cfg.query_engine,
+                    cfg.prune,
                 )
             )
             if pg is not None:
@@ -7208,6 +7281,7 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
             if "max_block_size" in config
             else {}
         ),
+        **({"prune": f"{config['prune']} s"} if config.get("prune") else {}),
     }
 
 
