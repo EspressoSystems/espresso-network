@@ -1896,7 +1896,9 @@ mod tests {
 
     /// A chain of `n` V6 mock leaves at views `0..n` with real, consecutive block heights (the
     /// other mock chains in this module reuse the genesis header, so every leaf has height 0).
-    async fn consecutive_height_chain(n: u64) -> Vec<(Leaf2, QuorumCertificate2<SeqTypes>)> {
+    pub(crate) async fn consecutive_height_chain(
+        n: u64,
+    ) -> Vec<(Leaf2, QuorumCertificate2<SeqTypes>)> {
         let node_state = NodeState::mock().with_genesis_version(versions::NEW_PROTOCOL_VERSION);
         let genesis_leaf = Leaf2::genesis(
             &ValidatedState::default(),
@@ -1942,7 +1944,7 @@ mod tests {
     }
 
     /// Decide the leaves of `chain` at indices (== views) `range`.
-    async fn decide_range<P: TestablePersistence>(
+    pub(crate) async fn decide_range<P: TestablePersistence>(
         storage: &P,
         chain: &[(Leaf2, QuorumCertificate2<SeqTypes>)],
         range: std::ops::Range<usize>,

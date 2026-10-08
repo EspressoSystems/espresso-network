@@ -2124,7 +2124,7 @@ impl SequencerPersistence for Persistence {
         &self,
         view: ViewNumber,
         header: &Header,
-        payload: &Payload,
+        payload: &Arc<Payload>,
     ) -> anyhow::Result<()> {
         if self.consensus_only {
             return Ok(());
@@ -3794,7 +3794,11 @@ mod test {
 
         // Add to database.
         storage
-            .append_pending_payload(leaf.view_number(), leaf.block_header(), &leaf_payload)
+            .append_pending_payload(
+                leaf.view_number(),
+                leaf.block_header(),
+                &Arc::new(leaf_payload.clone()),
+            )
             .await
             .unwrap();
         storage.append_vid(&vid_share).await.unwrap();

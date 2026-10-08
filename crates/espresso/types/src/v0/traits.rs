@@ -1021,12 +1021,12 @@ pub trait SequencerPersistence:
         vid_commit: VidCommitment,
     ) -> anyhow::Result<()>;
 
-    /// Persist the payload obtained for `view`, whether or not `view` is ever decided.
+    /// Keep the payload obtained for `view`, whether or not `view` is ever decided.
     ///
-    /// [`process_decided_events`](Self::process_decided_events) attaches a stored payload to the
-    /// decided leaf of the same view and header. It sends every other stored payload at or below
+    /// [`process_decided_events`](Self::process_decided_events) attaches a kept payload to the
+    /// decided leaf of the same view and header. It sends every other kept payload at or below
     /// the newest decided view to its consumer as a separate
-    /// [`CoordinatorEvent::BlockPayload`], then deletes them all. A payload stored
+    /// [`CoordinatorEvent::BlockPayload`], then forgets them all. A payload kept
     /// for a view that was already processed goes out with the next decide. The consumer must
     /// check separate payloads against the decided leaf, since forks and timed-out views are sent
     /// too.
@@ -1036,7 +1036,7 @@ pub trait SequencerPersistence:
         &self,
         _view: ViewNumber,
         _header: &Header,
-        _payload: &Payload,
+        _payload: &Arc<Payload>,
     ) -> anyhow::Result<()> {
         Ok(())
     }
