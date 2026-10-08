@@ -7,6 +7,7 @@ by the AWS driver and its agents.
 import argparse
 import asyncio
 import base64
+import contextlib
 import dataclasses
 import functools
 import hashlib
@@ -102,6 +103,8 @@ HEIGHT_POLL_S = 0.1
 COUNTER_POLL_S = 1.0
 METRICS_EVERY_S = 1.0
 KEEP_UP_RATIO = 0.8
+# A step stops early once decided stays under KEEP_UP_RATIO of submitted over this long.
+BEHIND_WINDOW_S = 10.0
 # A step submitting less than this fraction of its rate gets a cause line in the summary.
 SUBMIT_SHORT_RATIO = 0.95
 # Median wait for a submit thread above which the threads, not the pacer, held submission back.
@@ -1219,10 +1222,17 @@ async def run_probe(
     kind: ProbeKind,
     label: str | None = None,
 ) -> dict[str, Any]:
-    """One step at `rate` for `duration_s`, measured over its second half, and its verdict."""
+    """One step at `rate` for `duration_s`, measured over its second half, and its verdict.
+    Without `keep_going` a step falling behind stops early and is measured over its last
+    BEHIND_WINDOW_S."""
     start = load.clock.time()
     cap_waits = load.state.cap_waits
-    await pace(load, submits, rate, start + duration_s)
+    until = start + duration_s
+    if load.cfg.keep_going:
+        await pace(load, submits, rate, until)
+        stopped = None
+    else:
+        stopped = await pace_while_keeping_up(load, submits, counters, rate, until)
     step: StepWindow = {
         "rate_mb_s": rate,
         "refine": kind == "refine",
@@ -1231,6 +1241,8 @@ async def run_probe(
         "t_mid": start + duration_s / 2,
         "t_end": load.clock.time(),
     }
+    if stopped is not None:
+        step["t_mid"], step["t_end"] = stopped - BEHIND_WINDOW_S, stopped
     txs = [dataclasses.asdict(tx) for tx in load.state.txs]
     judged = judge_step(
         step, load.cfg, txs, list(heights.records()), counters, load.clock.time()
@@ -1238,6 +1250,66 @@ async def run_probe(
     judged["cap_waits"] = load.state.cap_waits - cap_waits
     log_step(judged, side_fails(judged, "overall"), label)
     return judged
+
+
+async def pace_while_keeping_up(
+    load: Load,
+    submits: asyncio.TaskGroup,
+    counters: list[dict[str, Any]],
+    rate: float,
+    until: float,
+) -> float | None:
+    """`pace` until `until`, stopped once decided falls behind (see `keep_up`) over the last
+    BEHIND_WINDOW_S; the time of that check, or None if it never stopped."""
+    clock, state = load.clock, load.state
+    start, first = clock.time(), len(state.txs)
+    pacer = asyncio.create_task(pace(load, submits, rate, until))
+    try:
+        while True:
+            try:
+                await clock.wait_for(asyncio.shield(pacer), COUNTER_POLL_S)
+                return None
+            except TimeoutError:
+                pass
+            now = clock.time()
+            if now - start < BEHIND_WINDOW_S:
+                continue
+            ratio = keep_up(
+                state.txs[first:],
+                counters,
+                load.cfg.tx_size,
+                now - BEHIND_WINDOW_S,
+                now,
+            )
+            if ratio is not None and ratio < KEEP_UP_RATIO:
+                log.warning(
+                    "decided %.0f%% of submitted over the last %.0f s, stopping the step",
+                    ratio * 100,
+                    BEHIND_WINDOW_S,
+                )
+                return now
+    finally:
+        if not pacer.done():
+            pacer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pacer
+
+
+def keep_up(
+    txs: Sequence[Tx],
+    counters: Sequence[Mapping[str, Any]],
+    tx_size: int,
+    t0: float,
+    t1: float,
+) -> float | None:
+    """Decided over submitted MB/s in `[t0, t1]`; None without a decided rate or submits."""
+    decided = theil_sen(
+        [(c["ts"], c["decided_bytes"] / 1e6) for c in counters if t0 <= c["ts"] <= t1]
+    )
+    submitted = window_mb_s((tx.t_submit for tx in txs), tx_size, t0, t1)
+    if decided is None or not submitted:
+        return None
+    return decided / submitted
 
 
 async def cooldown(

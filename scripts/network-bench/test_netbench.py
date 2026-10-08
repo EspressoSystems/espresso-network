@@ -587,6 +587,23 @@ def test_keep_going_runs_every_step_then_waits_for_the_backlog(staircase):
     assert not run.meta["refine_skipped"]
 
 
+@pytest.mark.parametrize(("keep_going", "length_s"), [(False, 10.0), (True, 30.0)])
+def test_a_step_falling_behind_stops_early(staircase, keep_going, length_s):
+    """0.16 MB/s against 0.08 of capacity: decided is half of submitted from the start."""
+    run = staircase(steps=(0.16,), step_s=30, tx_timeout_s=60, keep_going=keep_going)
+    (step,) = run.steps
+    assert step["t_end"] - step["t_start"] == pytest.approx(length_s, abs=1.1)
+    assert step["consensus_fails"][0].startswith("decided")
+
+
+def test_keep_up():
+    txs = [netbench.Tx(id=i, node=0, t_queued=i, t_submit=i) for i in range(10)]
+    counters = [{"ts": t, "decided_bytes": t * 500.0} for t in range(10)]
+    assert netbench.keep_up(txs, counters, 1000, 0.0, 10.0) == pytest.approx(0.5)
+    assert netbench.keep_up(txs, counters[:1], 1000, 0.0, 9.0) is None
+    assert netbench.keep_up([], counters, 1000, 0.0, 9.0) is None
+
+
 @pytest.mark.parametrize(
     ("steps", "keep_going", "refine_skipped"),
     [((0.02, 0.16), False, True), ((0.1, 0.12), True, False)],

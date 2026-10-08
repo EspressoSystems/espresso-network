@@ -101,7 +101,7 @@ scripts/network-bench/
   `steps.json`, plots and stats cover only the views in the measured halves.
 - Query node: pg_stat_database/checkpointer/wal/activity every 5 s, pg_stat_statements and settings at collect, slow
   statements (>200 ms) in the postgres log.
-- Per step, second half judged:
+- Per step, second half judged (a step stopped early: its last 10 s):
 
 | Rule              | Source                                                       | Fails when                |
 | ----------------- | ------------------------------------------------------------ | ------------------------- |
@@ -110,6 +110,8 @@ scripts/network-bench/
 | consensus latency | submit until header on a validator                           | p50 > 1000 ms             |
 | query lag         | header on query node minus header on a validator             | p50 > 1000 ms, or growing |
 
+- Early stop (not with `--keep-going`): from 10 s into a step, decided under 80% of submitted over the last 10 s stops
+  the step; judged over those 10 s, it fails on the decided rule.
 - Capacity: highest passing rate; overall, consensus-only rules, query-node-only rules.
 - Per node: CPU, RSS, tokio busy, top ops from `/v1/status/metrics` (`consensus_`, `journal_`, `sql`, `storage`, ...).
 - Per host (AWS): CPU, steal, memory, disk and net rates, per-container CPU and memory (cgroups).
