@@ -124,6 +124,14 @@ impl From<&Header> for proto::HeaderResponse {
     }
 }
 
+/// Empty from 0.7, when the header stopped carrying a builder commitment but kept the 0.5 shape.
+fn builder_commitment(header: &Header) -> String {
+    header
+        .builder_commitment()
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
 impl From<&Header> for proto::HeaderV1 {
     fn from(header: &Header) -> Self {
         proto::HeaderV1 {
@@ -133,7 +141,7 @@ impl From<&Header> for proto::HeaderV1 {
             l1_head: header.l1_head(),
             l1_finalized: header.l1_finalized().map(Into::into),
             payload_commitment: header.payload_commitment().to_string(),
-            builder_commitment: header.builder_commitment().to_string(),
+            builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
                 bytes: header.ns_table().encode().to_vec(),
             }),
@@ -155,7 +163,7 @@ impl From<&Header> for proto::HeaderV3 {
             l1_head: header.l1_head(),
             l1_finalized: header.l1_finalized().map(Into::into),
             payload_commitment: header.payload_commitment().to_string(),
-            builder_commitment: header.builder_commitment().to_string(),
+            builder_commitment: builder_commitment(header),
             ns_table: Some(proto::NsTable {
                 bytes: header.ns_table().encode().to_vec(),
             }),
@@ -180,7 +188,7 @@ fn header_v4(header: &Header) -> proto::HeaderV4 {
         l1_head: header.l1_head(),
         l1_finalized: header.l1_finalized().map(Into::into),
         payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
+        builder_commitment: builder_commitment(header),
         ns_table: Some(proto::NsTable {
             bytes: header.ns_table().encode().to_vec(),
         }),
@@ -207,7 +215,7 @@ fn header_v5(header: &Header) -> proto::HeaderV5 {
         l1_head: header.l1_head(),
         l1_finalized: header.l1_finalized().map(Into::into),
         payload_commitment: header.payload_commitment().to_string(),
-        builder_commitment: header.builder_commitment().to_string(),
+        builder_commitment: builder_commitment(header),
         ns_table: Some(proto::NsTable {
             bytes: header.ns_table().encode().to_vec(),
         }),

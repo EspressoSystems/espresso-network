@@ -242,6 +242,8 @@
             lazydocker # a docker compose TUI
             keydb
             postgresql_18
+            opentofu # scripts/network-bench/aws
+            awscli2 # scripts/network-bench/aws
 
             # Figures
             graphviz
