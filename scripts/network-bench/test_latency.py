@@ -223,16 +223,26 @@ def test_tc_script_four_peers():
 
 
 @pytest.mark.parametrize(
-    ("tcp_cc", "qdisc", "modprobe"), [("cubic", "fq_codel", False), ("bbr", "fq", True)]
+    ("tcp_cc", "qdisc", "setup"),
+    [
+        ("cubic", "fq_codel", None),
+        ("bbr", "fq", "modprobe tcp_bbr"),
+        ("bbr_hold", "fq", "bash /opt/bench/bbr-hold.sh"),
+    ],
 )
-def test_tc_script_sets_the_congestion_control(tcp_cc, qdisc, modprobe):
+def test_tc_script_sets_the_congestion_control(tcp_cc, qdisc, setup):
     profile = decaf()
     delays = latency.delays_ms(latency.assign(5, profile), profile, intra=True)
     peers = {i: f"10.0.0.{i + 10}" for i in range(5)}
     script = latency.tc_script(0, peers, delays, tcp_cc, 9001)
     assert f'net.ipv4.tcp_congestion_control="{tcp_cc}"' in script
     assert f'net.core.default_qdisc="{qdisc}"' in script
-    assert ("modprobe tcp_bbr" in script) == modprobe
+    setups = [
+        line for line in script.splitlines() if line.startswith(("modprobe", "bash "))
+    ]
+    assert setups == ([] if setup is None else [setup])
+    if setup is not None:
+        assert script.index(setup) < script.index("tcp_congestion_control")
 
 
 def test_tc_script_skips_peers_without_delay():

@@ -493,6 +493,7 @@ RESET_KEEP = (
     "netbench.py",
     "latency.py",
     "aws-bench",
+    "bbr-hold.sh",
     "ready.json",
     "digests.json",
     "chrony.txt",
@@ -4977,12 +4978,13 @@ def digest_mismatches(
 
 
 def ship_agents(remote: Remote) -> str:
-    """The laptop's current `aws-bench`, `netbench.py` and `latency.py` to every host, whatever
+    """The laptop's current `aws-bench`, `netbench.py`, `latency.py` and `bbr-hold.sh` to every host, whatever
     `up` put there. Returns the git revision they were shipped from."""
     files = [
         SCRIPT_DIR / "netbench.py",
         SCRIPT_DIR / "latency.py",
         SCRIPT_DIR / "aws-bench",
+        SCRIPT_DIR / "aws" / "bbr-hold.sh",
     ]
     remote.parallel(
         lambda host: remote.rsync_to(host, files, f"{BENCH_DIR}/"), remote.hosts
@@ -5652,6 +5654,7 @@ COLLECT_EXCLUDES = (
     "--exclude=/aws-bench",
     "--exclude=/netbench.py",
     "--exclude=/latency.py",
+    "--exclude=/bbr-hold.sh",
     "--exclude=/pg.json",
 )
 

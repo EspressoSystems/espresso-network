@@ -200,6 +200,8 @@ just bench aws run --tag release-x --latency decaf-2025 --tcp-cc cubic   # cubic
   - bbr stays in its startup mode while traffic is bursty and leaves it for good at the first overload; cross-region
     sockets then send 3-5x slower for the rest of the run.
   - cubic keeps small windows on the 158 ms links and backs off on rare losses: a 70 MB block run failed 150 MB/s.
+  - `bbr_hold` (experiment): BBR held in its startup mode, built and loaded on each node by `aws/bbr-hold.sh` (kernel
+    headers, mainline `tcp_bbr.c` of the kernel's version, ~1 min). Not a stock congestion control.
 - `--mtu` (default 1500): interface MTU of the nodes. Traffic between AWS regions or over the internet carries at most
   1500 bytes; only one VPC gets jumbo frames (9001). Checked on every node after shaping.
   [AWS: network MTU](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/network_mtu.html).
@@ -347,7 +349,7 @@ Where:
 | `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                                 |
 | `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `mainnet`                                                                |
 | `--no-intra-latency`                  | off                            | per run      | with `--latency`: no same-location delay                                                      |
-| `--tcp-cc`                            | bbr                            | per run      | with `--latency`: TCP congestion control, `bbr` or `cubic`                                    |
+| `--tcp-cc`                            | bbr                            | per run      | with `--latency`: TCP congestion control, `bbr`, `cubic` or `bbr_hold`                        |
 | `--mtu`                               | 1500                           | per run      | with `--latency`: interface MTU of the nodes                                                  |
 | `--consensus-storage`                 | `fs`                           | per run      | `fs`, `journal` (experimental, not in `main` images); query node uses `storage-sql` with `fs` |
 | `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                                  |

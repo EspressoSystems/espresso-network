@@ -26,7 +26,11 @@ TC_IFACE = "IFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -1)
 # window allows. bbr paces at its bandwidth estimate: bursty validator traffic keeps it in
 # STARTUP (pacing gain 2.89) until the first overload, after which cross-region sockets pace
 # 3-5x slower for the rest of the run (run lulu-20261008-110417).
-TCP_CCS = ("cubic", "bbr")
+# bbr_hold: BBR held in STARTUP, built on the node by aws/bbr-hold.sh; an experiment, not a
+# stock congestion control.
+TCP_CCS = ("cubic", "bbr", "bbr_hold")
+# On the node next to the shipped scripts.
+BBR_HOLD_SCRIPT = "/opt/bench/bbr-hold.sh"
 # Host TCP settings an operator can set. 256 MB buffers give a 128 MB window, enough for a
 # 100 MB proposal or the 5 Gbps x 330 ms bandwidth-delay product; Ubuntu's 4 MB cap holds one
 # flow near 25 MB/s at 158 ms. The qdisc matters only where no HTB root is installed.
@@ -40,7 +44,7 @@ BASE_TCP_SYSCTLS: tuple[tuple[str, str], ...] = (
 
 
 def tcp_sysctls(tcp_cc: str) -> tuple[tuple[str, str], ...]:
-    qdisc = "fq" if tcp_cc == "bbr" else "fq_codel"
+    qdisc = "fq_codel" if tcp_cc == "cubic" else "fq"
     return (
         ("net.ipv4.tcp_congestion_control", tcp_cc),
         ("net.core.default_qdisc", qdisc),
@@ -245,7 +249,11 @@ def tc_script(
 ) -> str:
     lines = [
         "set -eu",
-        *(["modprobe tcp_bbr"] if tcp_cc == "bbr" else []),
+        *(
+            {"bbr": ["modprobe tcp_bbr"], "bbr_hold": [f"bash {BBR_HOLD_SCRIPT}"]}.get(
+                tcp_cc, []
+            )
+        ),
         *(f'sysctl -q -w {key}="{value}"' for key, value in tcp_sysctls(tcp_cc)),
         TC_IFACE,
         'test -n "$IFACE"',
