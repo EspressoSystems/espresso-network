@@ -1801,27 +1801,29 @@ pub mod node_tests {
 #[cfg(any(test, feature = "testing"))]
 #[espresso_macros::generic_tests]
 pub mod status_tests {
-    use std::time::Duration;
+    use hotshot_types::consensus::ConsensusMetricsValue;
 
     use crate::{
-        status::StatusDataSource,
+        status::{StatusDataSource, UpdateStatusData},
         testing::{
-            consensus::{DataSourceLifeCycle, MockNetwork},
+            chain::{EPOCH_HEIGHT, MockChain, NUM_NODES},
+            consensus::DataSourceLifeCycle,
             mocks::mock_transaction,
-            sleep,
         },
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_metrics<D: DataSourceLifeCycle + StatusDataSource>() {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+        // Consensus records its metrics under the data source's, as a node wires them up.
+        let metrics = ConsensusMetricsValue::new(&*ds.populate_metrics());
 
         {
             // Check that block height is initially zero.
             assert_eq!(ds.block_height().await.unwrap(), 0);
-            // With consensus paused, check that the success rate returns NAN (since the block
-            // height, the numerator, is 0, and the view number, the denominator, is 0).
+            // Before any view, check that the success rate returns NAN (since the block height,
+            // the numerator, is 0, and the view number, the denominator, is 0).
             assert!(ds.success_rate().await.unwrap().is_nan());
             // Since there is no block produced, "last_decided_time" metric is 0.
             // Therefore, the elapsed time since the last block should be close to the time elapsed since the Unix epoch.
@@ -1834,40 +1836,30 @@ pub mod status_tests {
             );
         }
 
-        // Submit a transaction
-        let txn = mock_transaction(vec![1, 2, 3]);
-        network.submit_transaction(txn.clone()).await;
-
-        // Start consensus and wait for the transaction to be finalized.
-        network.start().await;
-
-        // Now wait for at least one non-genesis block to be finalized.
-        loop {
-            let height = ds.block_height().await.unwrap();
-            if height > 1 {
-                break;
-            }
-            tracing::info!(height, "waiting for a block to be finalized");
-            sleep(Duration::from_secs(1)).await;
-        }
+        // Decide genesis and a block with a transaction, recording what the coordinator records
+        // on decide. The decide happened 3 seconds ago.
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
+        chain.push([mock_transaction(vec![1, 2, 3])]).await;
+        ds.handle_event(&chain.decide_event(0..=1, 0)).await;
+        let tip = chain.tip().leaf.leaf();
+        metrics.current_view.set(*tip.view_number() as usize + 1);
+        metrics.last_decided_view.set(*tip.view_number() as usize);
+        metrics
+            .last_synced_block_height
+            .set(tip.block_header().block_number as usize);
+        metrics
+            .last_decided_time
+            .set(chrono::Utc::now().timestamp() as usize - 3);
 
         {
-            // Check that the success rate has been updated. Note that we can only check if success
-            // rate is positive. We don't know exactly what it is because we can't know how many
-            // views have elapsed without race conditions.
+            // Check that the success rate has been updated.
             let success_rate = ds.success_rate().await.unwrap();
             assert!(success_rate.is_finite(), "{success_rate}");
             assert!(success_rate > 0.0, "{success_rate}");
         }
 
-        {
-            // Shutting down the consensus to halt block production
-            // Introducing a delay of 3 seconds to ensure that elapsed time since last block is atleast 3seconds
-            network.shut_down().await;
-            sleep(Duration::from_secs(3)).await;
-            // Asserting that the elapsed time since the last block is at least 3 seconds
-            assert!(ds.elapsed_time_since_last_decide().await.unwrap() >= 3);
-        }
+        // Asserting that the elapsed time since the last block is at least 3 seconds
+        assert!(ds.elapsed_time_since_last_decide().await.unwrap() >= 3);
     }
 }
 
