@@ -220,7 +220,7 @@ def test_tc_script_four_peers():
     assert script.index("sysctl") < script.index("tc qdisc add")
     assert 'ip link set dev "$IFACE" mtu 1500' in script
     assert "MTUBytes=1500" in script and "UseMTU=no" in script
-    assert script.index("networkctl reload") < script.index("ip link set")
+    assert script.index("networkctl reload") < script.index('ip link set dev "$IFACE"')
     assert "tcp_adv_win_scale" not in script
 
 
@@ -244,7 +244,7 @@ def test_tc_script_sets_the_congestion_control(tcp_cc, qdisc, setup):
     ]
     assert setups == ([] if setup is None else [setup])
     if setup is not None:
-        assert script.index(setup) < script.index("tcp_congestion_control")
+        assert script.index(setup) < script.index(f'tcp_congestion_control="{tcp_cc}"')
 
 
 def test_tc_script_skips_peers_without_delay():

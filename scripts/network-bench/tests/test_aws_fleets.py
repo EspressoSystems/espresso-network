@@ -461,3 +461,23 @@ def test_search_run_needs_the_fleet_disks_to_hold_the_offered_gb(harness, runner
     awsb.fleet_run_config(
         harness.run_args("--search", "150"), with_disks(manifest, 1200)
     )
+
+
+def test_a_laptop_command_outside_the_repo_root_is_refused(
+    isolated: Path, monkeypatch: pytest.MonkeyPatch, caplog
+):
+    monkeypatch.setattr("sys.argv", ["aws-bench", "list"])
+    assert awsb.main() == awsb.EXIT_REFUSED
+    assert "run from the repo root" in caplog.text
+    assert not (isolated / "bench-state").exists()
+
+
+def test_a_host_agent_runs_outside_the_repo_root(
+    isolated: Path, monkeypatch: pytest.MonkeyPatch, caplog
+):
+    monkeypatch.setattr(
+        "sys.argv", ["aws-bench", "agent-host", "host.jsonl", "--role", "query"]
+    )
+    assert awsb.main() == awsb.EXIT_REFUSED
+    assert "needs --pg" in caplog.text
+    assert "repo root" not in caplog.text

@@ -432,6 +432,12 @@ class BenchConfig:
             )
 
 
+def load_config(saved: dict[str, Any]) -> BenchConfig:
+    saved["namespaces"] = tuple(saved["namespaces"])
+    saved["steps"] = tuple(saved["steps"])
+    return BenchConfig(**saved)
+
+
 @dataclass(frozen=True)
 class SearchConfig:
     """Capacity search in place of the ramp: climb from `start_mb_s`, bisect to

@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -293,6 +294,88 @@ def test_reset_deletes_an_htb_root_only_when_present():
     assert latency.TC_CLEAR in script
     assert 'grep -q "htb 1:"' in script
     subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+
+
+# Stand-ins for the host commands shaping calls; settings live as files under $FAKE_HOST.
+FAKE_COMMANDS = {
+    "sysctl": """if [ "$1" = -n ]; then cat "$FAKE_HOST/$2"; exit; fi
+printf '%s' "${3#*=}" > "$FAKE_HOST/${3%%=*}"
+""",
+    "ip": """case "$*" in
+"-o -4 route show to default") echo "default via 10.0.0.1 dev eth0 proto dhcp" ;;
+"link set dev eth0 mtu "*) printf '%s' "$6" > "$FAKE_HOST/mtu" ;;
+"-o link show dev eth0") echo "2: eth0: <UP> mtu $(cat "$FAKE_HOST/mtu") qdisc mq" ;;
+*) echo "unexpected: ip $*" >&2; exit 1 ;;
+esac
+""",
+    "tc": "",
+    "modprobe": "",
+    "networkctl": """case "$*" in
+"status eth0") echo "Network File: /run/systemd/network/10-netplan-eth0.network" ;;
+reload) ;;
+*) echo "unexpected: networkctl $*" >&2; exit 1 ;;
+esac
+""",
+}
+UBUNTU_DEFAULTS = {
+    "net.ipv4.tcp_congestion_control": "cubic",
+    "net.core.default_qdisc": "fq_codel",
+    "net.ipv4.tcp_rmem": "4096\t131072\t6291456",
+    "net.ipv4.tcp_wmem": "4096\t16384\t4194304",
+    "net.ipv4.tcp_notsent_lowat": "4294967295",
+    "net.ipv4.tcp_slow_start_after_idle": "1",
+    "net.ipv4.tcp_mtu_probing": "0",
+    "mtu": "9001",
+}
+
+
+def fake_host(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    host, bin_dir = tmp_path / "host", tmp_path / "bin"
+    host.mkdir()
+    bin_dir.mkdir()
+    for name, value in UBUNTU_DEFAULTS.items():
+        (host / name).write_text(value)
+    for name, body in FAKE_COMMANDS.items():
+        (bin_dir / name).write_text("#!/usr/bin/env bash\n" + body)
+        (bin_dir / name).chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "FAKE_HOST": str(host),
+    }
+    return host, env
+
+
+def run_on(script: str, tmp_path: Path, env: dict[str, str]) -> None:
+    script = (
+        script.replace(latency.BASELINE, str(tmp_path / "baseline.sh"))
+        .replace(latency.NETWORKD_DIR, str(tmp_path / "networkd"))
+        .replace("/sys/class/net/$IFACE/mtu", "$FAKE_HOST/mtu")
+    )
+    subprocess.run(["bash", "-c", script], env=env, check=True)
+
+
+def settings(host: Path) -> dict[str, str]:
+    return {path.name: path.read_text() for path in host.iterdir()}
+
+
+def test_reset_restores_the_tcp_settings_and_mtu_shaping_changed(tmp_path: Path):
+    host, env = fake_host(tmp_path)
+    shaping = latency.shaping("decaf-2025", 2, intra=False, tcp_cc="bbr", mtu=1500)
+    shape = latency.tc_script(
+        0, {0: "10.0.0.2", 1: "10.0.0.3"}, shaping.delays, shaping.tcp_cc, shaping.mtu
+    )
+    restore = f"{latency.TC_IFACE}\n{latency.RESTORE_BASELINE}\n"
+    assert latency.RESTORE_BASELINE in awsb.reset_script("validator")
+    for _ in range(2):
+        run_on(shape, tmp_path, env)
+        run_on(shape, tmp_path, env)
+        assert settings(host)["mtu"] == "1500"
+        assert settings(host)["net.ipv4.tcp_congestion_control"] == "bbr"
+        run_on(restore, tmp_path, env)
+        assert settings(host) == UBUNTU_DEFAULTS
+        assert not list((tmp_path / "networkd").glob(f"*.d/{latency.MTU_DROPIN}"))
+        assert not (tmp_path / "baseline.sh").exists()
 
 
 def test_tc_script_is_valid_bash():

@@ -344,10 +344,7 @@ def cmd_sysinfo(args: argparse.Namespace) -> int:
 
 
 def write_report(out: Path, baseline: nb.Baseline | None) -> int:
-    saved = nb.read_json(out / "config.json")
-    saved["namespaces"] = tuple(saved["namespaces"])
-    saved["steps"] = tuple(saved["steps"])
-    cfg = nb.BenchConfig(**saved)
+    cfg = nb.load_config(nb.read_json(out / "config.json"))
     result = nb.analyze(out, cfg, LOCAL_TOPOLOGY)
     nb.write_json(out / "result.json", result)
     comparison = nb.compare(result, baseline) if baseline else None

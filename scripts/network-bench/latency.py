@@ -57,6 +57,34 @@ def tcp_sysctls(tcp_cc: str) -> tuple[tuple[str, str], ...]:
 # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/network_mtu.html
 INTERNET_MTU = 1500
 TC_CLEAR = 'if tc qdisc show dev "$IFACE" | grep -q "htb 1:"; then tc qdisc del dev "$IFACE" root; fi'
+# Sysctls and MTU outlive the qdisc until a reboot, which a fleet never gets between runs. The
+# first shaping after a reset saves the host's values here, and the reset replays them.
+BASELINE = "/var/lib/aws-bench-net-baseline.sh"
+SAVE_BASELINE = "\n".join(
+    [
+        f"if [ ! -e {BASELINE} ]; then",
+        "{",
+        *(
+            f'echo "sysctl -q -w {key}=\\"$(sysctl -n {key})\\""'
+            # Every --tcp-cc sets the same keys.
+            for key, _ in tcp_sysctls("cubic")
+        ),
+        (
+            'echo "ip link set dev $IFACE mtu'
+            ' $(ip -o link show dev "$IFACE" | sed -n \'s/.* mtu \\([0-9]*\\).*/\\1/p\')"'
+        ),
+        f"}} > {BASELINE}.tmp",
+        f"mv {BASELINE}.tmp {BASELINE}",
+        "fi",
+    ]
+)
+# networkd re-applies a drop-in MTU on every link reset, so it goes before the baseline MTU.
+NETWORKD_DIR = "/etc/systemd/network"
+MTU_DROPIN = "bench-mtu.conf"
+RESTORE_BASELINE = (
+    f"if [ -e {BASELINE} ]; then rm -f {NETWORKD_DIR}/*.d/{MTU_DROPIN}; networkctl reload; "
+    f"bash {BASELINE}; rm {BASELINE}; fi"
+)
 PROFILES = ("off", "decaf-2025", "mainnet")
 DECAF_SPLIT: tuple[tuple[str, int], ...] = (
     ("eu-central-1", 38),
@@ -247,9 +275,9 @@ def mtu_lines(mtu: int) -> list[str]:
     return [
         "unit=$(networkctl status \"$IFACE\" | awk '/Network File:/ {print $3}')",
         'test -n "$unit"',
-        'dropin="/etc/systemd/network/$(basename "$unit").d"',
+        f'dropin="{NETWORKD_DIR}/$(basename "$unit").d"',
         'mkdir -p "$dropin"',
-        f"printf '[Link]\\nMTUBytes={mtu}\\n[DHCPv4]\\nUseMTU=no\\n' > \"$dropin/bench-mtu.conf\"",
+        f"printf '[Link]\\nMTUBytes={mtu}\\n[DHCPv4]\\nUseMTU=no\\n' > \"$dropin/{MTU_DROPIN}\"",
         "networkctl reload",
         f'ip link set dev "$IFACE" mtu {mtu}',
         f'for _ in $(seq 50); do [ "$(cat /sys/class/net/$IFACE/mtu)" = {mtu} ] && break; sleep 0.2; done',
@@ -265,14 +293,15 @@ def tc_script(
 ) -> str:
     lines = [
         "set -eu",
+        TC_IFACE,
+        'test -n "$IFACE"',
+        SAVE_BASELINE,
         *(
             {"bbr": ["modprobe tcp_bbr"], "bbr_hold": [f"bash {BBR_HOLD_SCRIPT}"]}.get(
                 tcp_cc, []
             )
         ),
         *(f'sysctl -q -w {key}="{value}"' for key, value in tcp_sysctls(tcp_cc)),
-        TC_IFACE,
-        'test -n "$IFACE"',
         *mtu_lines(mtu),
         TC_CLEAR,
         'tc qdisc add dev "$IFACE" root handle 1: htb default 1',
