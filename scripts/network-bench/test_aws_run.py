@@ -689,6 +689,45 @@ def test_a_failed_partial_rsync_does_not_fail_the_poll(
     assert any(c[0] == "rsync" for c in runner.calls)
 
 
+def test_agent_log_lines_keep_a_partial_line_for_the_next_read():
+    chunk = (
+        "2026-10-08 09:07:04,762 WARNING decided 78% of submitted, stopping the step\n"
+        "Traceback (most recent call last):\n"
+        "2026-10-08 09:07:04,816 INFO probe 3 cl"
+    )
+    lines, read = awsb.agent_log_lines(chunk)
+    assert lines == [
+        (logging.WARNING, "decided 78% of submitted, stopping the step"),
+        (logging.INFO, "Traceback (most recent call last):"),
+    ]
+    assert chunk[read:] == "2026-10-08 09:07:04,816 INFO probe 3 cl"
+
+
+def test_poll_prints_every_new_agent_log_line_once(
+    isolated: Path, clock: FakeClock, caplog: pytest.LogCaptureFixture
+):
+    first = "2026-10-08 09:00:00,000 INFO one\n2026-10-08 09:00:10,000 INFO tw"
+    rest = "2026-10-08 09:00:10,000 INFO two\n2026-10-08 09:00:11,000 WARNING three\n"
+    runner = Scripted(
+        {
+            "agent-state.json": [agent_state(LOADING)] * 2 + [agent_state(DONE_STATE)],
+            "agent.log": [completed(stdout=first), completed(stdout=rest), completed()],
+        }
+    )
+    with caplog.at_level(logging.INFO, awsb.log.name):
+        poll(runner, isolated, clock)
+    printed = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().endswith(("one", "two", "three"))
+    ]
+    assert printed == ["loading: one", "loading: two", "loading: three"]
+    tails = [c[-1] for c in runner.calls if "agent.log" in c[-1]]
+    assert tails[0].startswith("tail -c +1 ")
+    first_line = len("2026-10-08 09:00:00,000 INFO one\n")
+    assert tails[1].startswith(f"tail -c +{first_line + 1} ")
+
+
 BEGIN = 100.0
 
 
@@ -696,7 +735,6 @@ def poll_state(**overrides) -> Any:
     state = awsb.PollState(
         begin=BEGIN,
         deadline=BEGIN + 1000,
-        next_log=BEGIN + awsb.AGENT_LOG_S,
         next_sync=BEGIN + awsb.OUT_RSYNC_S,
         unreachable=0,
         state=None,

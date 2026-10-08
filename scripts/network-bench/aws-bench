@@ -484,7 +484,6 @@ DOCKER_START_LEAD_S = 15.0
 FAILURE_LOG_LINES = 10
 CHECKIP_URL = "https://checkip.amazonaws.com"
 AGENT_POLL_S = 5.0
-AGENT_LOG_S = 30.0
 OUT_RSYNC_S = 60.0
 # Per remote command of stop, freeze and collect: above the docker stop grace of every
 # container on one host and well below COLLECT_MAX_S, so a hung docker call cannot block teardown.
@@ -5137,6 +5136,33 @@ def stop_agent(remote: Remote) -> None:
     remote.ssh("ctl", bounded("systemctl stop bench-agent"), check=False)
 
 
+def read_agent_log(remote: Remote, offset: int) -> str:
+    """`agent.log` from byte `offset` on; empty before the agent created it."""
+    result = remote.ssh(
+        "ctl", f"tail -c +{offset + 1} {BENCH_DIR}/out/agent.log", check=False
+    )
+    return result.stdout if result.returncode == 0 else ""
+
+
+AGENT_LOG_LINE = re.compile(r"^\S+ \S+ (?P<level>[A-Z]+) (?P<message>.*)$")
+
+
+def agent_log_lines(chunk: str) -> tuple[list[tuple[int, str]], int]:
+    """The complete lines of an `agent.log` chunk as (level, message), and the bytes they span;
+    a trailing partial line waits for the next read. A line not in the agent's format, such as
+    a traceback, keeps its text at INFO."""
+    whole = chunk[: chunk.rfind("\n") + 1]
+    lines = []
+    for line in whole.splitlines():
+        match = AGENT_LOG_LINE.match(line)
+        if match is None:
+            lines.append((logging.INFO, line))
+        else:
+            level = logging.getLevelNamesMapping()[match["level"]]
+            lines.append((level, match["message"]))
+    return lines, len(whole.encode())
+
+
 def read_agent_state(remote: Remote) -> AgentState | None:
     result = remote.ssh("ctl", f"cat {BENCH_DIR}/out/agent-state.json", check=False)
     return json.loads(result.stdout) if result.returncode == 0 else None
@@ -5148,7 +5174,6 @@ class PollState(TypedDict):
 
     begin: float
     deadline: float
-    next_log: float
     next_sync: float
     unreachable: int
     state: AgentState | None
@@ -5156,12 +5181,11 @@ class PollState(TypedDict):
 
 class PollStep(TypedDict):
     """What `poll_agent` does after one probe: `error` raises, `done` returns `state["state"]`,
-    `retry` warns that ctl was unreachable, `log` and `rsync` are due; then it sleeps."""
+    `retry` warns that ctl was unreachable, `rsync` is due; then it sleeps."""
 
     state: PollState
     done: bool
     error: str | None
-    log: bool
     rsync: bool
     retry: bool
 
@@ -5171,13 +5195,10 @@ def poll_result(
     *,
     done: bool = False,
     error: str | None = None,
-    log: bool = False,
     rsync: bool = False,
     retry: bool = False,
 ) -> PollStep:
-    return PollStep(
-        state=state, done=done, error=error, log=log, rsync=rsync, retry=retry
-    )
+    return PollStep(state=state, done=done, error=error, rsync=rsync, retry=retry)
 
 
 def poll_step(
@@ -5190,7 +5211,7 @@ def poll_step(
     """One decision of `poll_agent`. `probe_rc` and `probe_stderr` are of `systemctl is-active`
     on ctl; `agent` is the state file just read, None when absent or not read. Rules apply in
     order: unreachable ctl, unexpected rc, done, agent error, inactive unit, no state file,
-    deadline, then log and rsync due."""
+    deadline, then rsync due."""
     if probe_rc == SSH_FAILED_RC:
         unreachable = state["unreachable"] + 1
         state = {**state, "unreachable": unreachable}
@@ -5220,20 +5241,17 @@ def poll_step(
         return poll_result(state, error="agent wrote no state file")
     if now > state["deadline"]:
         return poll_result(state, error="agent did not finish within the expected time")
-    log_due = latest is not None and now >= state["next_log"]
     rsync_due = now >= state["next_sync"]
-    if log_due:
-        state = {**state, "next_log": now + AGENT_LOG_S}
     if rsync_due:
         state = {**state, "next_sync": now + OUT_RSYNC_S}
-    return poll_result(state, log=log_due, rsync=rsync_due)
+    return poll_result(state, rsync=rsync_due)
 
 
 def poll_agent(
     remote: Remote, run_dir: Path, cfg: RunConfig, interrupts: Interrupts
 ) -> AgentState:
-    """Until the agent reports `done`: reads its state every AGENT_POLL_S, logs its progress
-    every AGENT_LOG_S and rsyncs its output every OUT_RSYNC_S."""
+    """Until the agent reports `done`: reads its state every AGENT_POLL_S, logs each new line of
+    its `agent.log` and each new phase, and rsyncs its output every OUT_RSYNC_S."""
     clock = interrupts.clock
     begin = clock.monotonic()
     poll = PollState(
@@ -5242,11 +5260,11 @@ def poll_agent(
         + READY_TIMEOUT_S
         + load_seconds(cfg.load, cfg.search, worst=True)
         + AGENT_SLACK_S,
-        next_log=begin + AGENT_LOG_S,
         next_sync=begin + OUT_RSYNC_S,
         unreachable=0,
         state=None,
     )
+    offset, shown = 0, None
     while True:
         interrupts.check()
         probe = remote.ssh(
@@ -5257,19 +5275,21 @@ def poll_agent(
         )
         step = poll_step(poll, probe.returncode, probe.stderr, agent, clock.monotonic())
         poll = step["state"]
+        latest = poll["state"]
+        if latest is not None and (latest["phase"], latest["detail"]) != shown:
+            shown = latest["phase"], latest["detail"]
+            log.info("%s: %s", *shown)
+        lines, read = agent_log_lines(read_agent_log(remote, offset))
+        offset += read
+        for level, message in lines:
+            log.log(level, "%s: %s", latest["phase"] if latest else "waiting", message)
         if step["error"] is not None:
             raise RemoteError(step["error"])
-        latest = poll["state"]
         if step["done"]:
             assert latest is not None
             return latest
         if step["retry"]:
             log.warning("ctl unreachable, retrying: %s", probe.stderr.strip())
-        if step["log"]:
-            assert latest is not None
-            log.info(
-                "%s: %s", latest["phase"], latest.get("progress", latest["detail"])
-            )
         if step["rsync"]:
             best_effort(
                 "partial rsync",
