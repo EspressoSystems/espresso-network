@@ -637,7 +637,7 @@ where
                     }
                 },
                 Some(item) = self.block_builder.next() => match item {
-                    Ok(mut block) => {
+                    Ok(block) => {
                         self.state_manager.request_header(HeaderRequest::from(&block));
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
@@ -651,9 +651,6 @@ where
                                     metadata: block.payload.metadata.clone(),
                                 },
                             );
-                            if let Some(encoding) = block.vid_encoding.take() {
-                                self.vid_disperser.retain_encoding(block.view, commit, encoding);
-                            }
                         } else {
                             warn!(view = %block.view, "block payload commitment is not V2");
                         }

@@ -152,122 +152,10 @@ impl AsRef<[u8; 32]> for AvidmGf2Commit {
     }
 }
 
-/// A payload erasure-coded under one [`AvidmGf2Param`], kept so it can be
-/// dispersed without coding it again.
-pub struct AvidmGf2Encoding {
-    param: AvidmGf2Param,
-    payload_byte_len: usize,
-    mt: MerkleTree,
-    shards: Vec<Vec<u8>>,
-}
-
-impl AvidmGf2Encoding {
-    /// The parameters the payload was coded under. A dispersal can only use
-    /// this encoding under the same parameters.
-    pub fn param(&self) -> &AvidmGf2Param {
-        &self.param
-    }
-
-    /// Byte length of the payload that was coded.
-    pub fn payload_byte_len(&self) -> usize {
-        self.payload_byte_len
-    }
-
-    /// The commitment [`AvidmGf2Scheme::commit`] computes for the same payload.
-    pub fn commit(&self) -> AvidmGf2Commit {
-        AvidmGf2Commit {
-            commit: self.mt.commitment(),
-        }
-    }
-}
-
 impl AvidmGf2Scheme {
     /// Setup an instance for AVID-M scheme
     pub fn setup(recovery_threshold: usize, total_weights: usize) -> VidResult<AvidmGf2Param> {
         AvidmGf2Param::new(recovery_threshold, total_weights)
-    }
-
-    /// Erasure-code `payload` under `param` without splitting it among storage
-    /// nodes. [`AvidmGf2Scheme::disperse_encoded`] does the split.
-    pub fn encode(param: &AvidmGf2Param, payload: &[u8]) -> VidResult<AvidmGf2Encoding> {
-        let (mt, shards) = AvidmGf2Scheme::raw_disperse(param, payload)?;
-        Ok(AvidmGf2Encoding {
-            param: param.clone(),
-            payload_byte_len: payload.len(),
-            mt,
-            shards,
-        })
-    }
-
-    /// Split an encoded payload among storage nodes by `distribution`. The
-    /// result is what [`VidScheme::disperse`] returns for the same payload and
-    /// parameters.
-    pub fn disperse_encoded(
-        distribution: &[u32],
-        encoding: AvidmGf2Encoding,
-    ) -> VidResult<(AvidmGf2Commit, Vec<AvidmGf2Share>)> {
-        let AvidmGf2Encoding {
-            param,
-            payload_byte_len: _,
-            mt,
-            shards: shares,
-        } = encoding;
-        let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
-        if total_weights != param.total_weights {
-            return Err(VidError::Argument(
-                "Weight distribution is inconsistent with the given param".to_string(),
-            ));
-        }
-        if distribution.contains(&0u32) {
-            return Err(VidError::Argument("Weight cannot be zero".to_string()));
-        }
-        let commit = AvidmGf2Commit {
-            commit: mt.commitment(),
-        };
-
-        let ranges: Vec<_> = distribution
-            .iter()
-            .scan(0usize, |sum, w| {
-                let prefix_sum = *sum;
-                *sum += *w as usize;
-                Some(prefix_sum..*sum)
-            })
-            .collect();
-        // Ranges partition `shares` and `proofs` in order. Consume both via
-        // owning iterators instead of `shares[range].to_vec()` /
-        // `proofs[range].to_vec()`, which would heap-clone every Vec<u8>
-        // payload and every per-leaf proof at high num_ns × total_weights.
-        //
-        // `mt.collect_leaves_with_proofs()` returns leaves in ascending
-        // position order (DFS over children 0..ARITY), so we can drain the
-        // iterator directly without an indexed placeholder Vec.
-        let mut shares_iter = shares.into_iter();
-        let payloads: Vec<Vec<Vec<u8>>> = ranges
-            .iter()
-            .map(|range| shares_iter.by_ref().take(range.len()).collect())
-            .collect();
-        let mut proofs_iter = mt
-            .collect_leaves_with_proofs()
-            .into_iter()
-            .map(|(_, _, proof)| proof);
-        let proof_groups: Vec<Vec<MerkleProof>> = ranges
-            .iter()
-            .map(|range| proofs_iter.by_ref().take(range.len()).collect())
-            .collect();
-        // The map body is just a struct construction over already-prepared
-        // owned components, sub-µs per item, smaller than rayon's
-        // per-item scheduling overhead. Stay sequential.
-        let shares: Vec<_> = ranges
-            .into_iter()
-            .zip(payloads)
-            .zip(proof_groups)
-            .map(|((range, payload), mt_proofs)| AvidmGf2Share {
-                range,
-                payload,
-                mt_proofs,
-            })
-            .collect();
-        Ok((commit, shares))
     }
 
     /// Build the `original_count` original shards directly from `payload`,
@@ -434,7 +322,63 @@ impl VidScheme for AvidmGf2Scheme {
         distribution: &[u32],
         payload: &[u8],
     ) -> VidResult<(Self::Commit, Vec<Self::Share>)> {
-        AvidmGf2Scheme::disperse_encoded(distribution, AvidmGf2Scheme::encode(param, payload)?)
+        let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
+        if total_weights != param.total_weights {
+            return Err(VidError::Argument(
+                "Weight distribution is inconsistent with the given param".to_string(),
+            ));
+        }
+        if distribution.contains(&0u32) {
+            return Err(VidError::Argument("Weight cannot be zero".to_string()));
+        }
+        let (mt, shares) = Self::raw_disperse(param, payload)?;
+        let commit = AvidmGf2Commit {
+            commit: mt.commitment(),
+        };
+
+        let ranges: Vec<_> = distribution
+            .iter()
+            .scan(0usize, |sum, w| {
+                let prefix_sum = *sum;
+                *sum += *w as usize;
+                Some(prefix_sum..*sum)
+            })
+            .collect();
+        // Ranges partition `shares` and `proofs` in order. Consume both via
+        // owning iterators instead of `shares[range].to_vec()` /
+        // `proofs[range].to_vec()`, which would heap-clone every Vec<u8>
+        // payload and every per-leaf proof at high num_ns × total_weights.
+        //
+        // `mt.collect_leaves_with_proofs()` returns leaves in ascending
+        // position order (DFS over children 0..ARITY), so we can drain the
+        // iterator directly without an indexed placeholder Vec.
+        let mut shares_iter = shares.into_iter();
+        let payloads: Vec<Vec<Vec<u8>>> = ranges
+            .iter()
+            .map(|range| shares_iter.by_ref().take(range.len()).collect())
+            .collect();
+        let mut proofs_iter = mt
+            .collect_leaves_with_proofs()
+            .into_iter()
+            .map(|(_, _, proof)| proof);
+        let proof_groups: Vec<Vec<MerkleProof>> = ranges
+            .iter()
+            .map(|range| proofs_iter.by_ref().take(range.len()).collect())
+            .collect();
+        // The map body is just a struct construction over already-prepared
+        // owned components — sub-µs per item, smaller than rayon's
+        // per-item scheduling overhead. Stay sequential.
+        let shares: Vec<_> = ranges
+            .into_iter()
+            .zip(payloads)
+            .zip(proof_groups)
+            .map(|((range, payload), mt_proofs)| AvidmGf2Share {
+                range,
+                payload,
+                mt_proofs,
+            })
+            .collect();
+        Ok((commit, shares))
     }
 
     fn verify_share(

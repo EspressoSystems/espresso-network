@@ -11,7 +11,7 @@ use hotshot::traits::{BlockPayload, ValidatedState as _};
 use hotshot_types::{
     consensus::PayloadWithMetadata,
     data::{
-        EpochNumber, Leaf2, VidCommitment, ViewNumber, ns_table::parse_ns_table, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, ViewNumber, vid_commitment,
         vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -23,7 +23,6 @@ use hotshot_types::{
         signature_key::BuilderSignatureKey,
     },
     utils::BuilderCommitment,
-    vid::avidm_gf2::{AvidmGf2Encoding, AvidmGf2Scheme, init_avidm_gf2_param},
 };
 use rayon::prelude::{IntoParallelRefIterator as _, ParallelIterator as _};
 use tokio::{
@@ -31,7 +30,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{error, warn};
-use versions::{NEW_PROTOCOL_VERSION, Version};
+use versions::Version;
 
 use crate::{
     consensus::ConsensusInput,
@@ -83,27 +82,6 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub builder_fee: BuilderFee<T>,
     pub payload_commitment: VidCommitment,
     pub manifest: DedupManifest<T>,
-    pub vid_encoding: Option<Vec<AvidmGf2Encoding>>,
-}
-
-fn vid_commitment_and_encoding(
-    payload: &[u8],
-    metadata: &[u8],
-    total_weight: usize,
-    version: Version,
-) -> (VidCommitment, Option<Vec<AvidmGf2Encoding>>) {
-    if version < NEW_PROTOCOL_VERSION {
-        return (
-            vid_commitment(payload, metadata, total_weight, version),
-            None,
-        );
-    }
-    let param = init_avidm_gf2_param(total_weight)
-        .unwrap_or_else(|err| panic!("failed to set up VID for weight {total_weight}: {err}"));
-    let ns_table = parse_ns_table(payload.len(), metadata);
-    let (commit, encoding) = AvidmGf2Scheme::encode(&param, payload, ns_table)
-        .unwrap_or_else(|err| panic!("failed to encode a {}-byte payload: {err}", payload.len()));
-    (VidCommitment::V2(commit), Some(encoding))
 }
 
 /// Room in a forwarded message for everything but the transactions.
@@ -268,15 +246,15 @@ impl<T: NodeType> BlockBuilder<T> {
                 let payload_bytes = payload.payload.encode();
                 let metadata_bytes = payload.metadata.encode();
                 // The two commitments are independent, and neither can be split:
-                // `vid_commitment_and_encoding` erasure-codes the payload (parallel over
+                // `vid_commitment` erasure-codes the payload (parallel over
                 // namespaces internally) and `builder_commitment` is a serial
                 // SHA-256 over every transaction. Running them sequentially made the
                 // leader pay both in turn on the path that gates its proposal, so
                 // the hash rides alongside the erasure code instead, occupying one
                 // worker for its duration rather than adding its full wall time.
-                let ((payload_commitment, vid_encoding), builder_commitment) = rayon::join(
+                let (payload_commitment, builder_commitment) = rayon::join(
                     || {
-                        vid_commitment_and_encoding(
+                        vid_commitment(
                             payload_bytes.as_ref(),
                             metadata_bytes.as_ref(),
                             total_weight,
@@ -286,15 +264,9 @@ impl<T: NodeType> BlockBuilder<T> {
                     || payload.payload.builder_commitment(&payload.metadata),
                 );
                 let block_size = payload_bytes.len() as u64;
-                (
-                    payload,
-                    block_size,
-                    payload_commitment,
-                    builder_commitment,
-                    vid_encoding,
-                )
+                (payload, block_size, payload_commitment, builder_commitment)
             });
-            let (payload, block_size, payload_commitment, builder_commitment, vid_encoding) =
+            let (payload, block_size, payload_commitment, builder_commitment) =
                 match commitments.await {
                     Ok(out) => out,
                     Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
@@ -322,7 +294,6 @@ impl<T: NodeType> BlockBuilder<T> {
                 builder_fee,
                 payload_commitment,
                 manifest,
-                vid_encoding,
             })
         });
         self.calculations.insert((view, parent_commitment), handle);

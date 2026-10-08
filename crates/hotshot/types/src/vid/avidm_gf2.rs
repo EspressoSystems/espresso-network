@@ -13,7 +13,6 @@ pub type AvidmGf2Param = vid::avidm_gf2::namespaced::NsAvidmGf2Param;
 pub type AvidmGf2Commitment = vid::avidm_gf2::namespaced::NsAvidmGf2Commit;
 pub type AvidmGf2Share = vid::avidm_gf2::namespaced::NsAvidmGf2Share;
 pub type AvidmGf2Common = vid::avidm_gf2::namespaced::NsAvidmGf2Common;
-pub type AvidmGf2Encoding = vid::avidm_gf2::AvidmGf2Encoding;
 
 pub fn init_avidm_gf2_param(total_weight: usize) -> Result<AvidmGf2Param> {
     let recovery_threshold = total_weight.div_ceil(3);
