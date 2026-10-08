@@ -833,6 +833,23 @@ def test_poll_agent_raises_with_the_log_tail_of_a_dead_node(
     assert "panicked" in str(err.value)
 
 
+def test_poll_agent_names_the_dead_node_when_its_logs_are_unreachable(
+    isolated: Path, clock: FakeClock
+):
+    runner = Scripted(
+        {
+            ".State.Status": [completed(stdout="exited 2\n")],
+            "docker logs --tail 20": [
+                completed(returncode=awsb.SSH_FAILED_RC, stderr="Connection reset")
+            ],
+            "agent-state.json": [agent_state(LOADING)],
+        }
+    )
+    with pytest.raises(awsb.RemoteError, match=r"node0 espresso-node exited 2") as err:
+        poll(runner, isolated, clock)
+    assert "Connection reset" in str(err.value)
+
+
 # TEST:retry-verdict-ok
 # TEST:retry-verdict-timeout-fails
 @pytest.mark.parametrize(

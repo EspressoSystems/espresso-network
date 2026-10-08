@@ -418,6 +418,23 @@ def test_render_refreshes_the_index_row(tmp_path: Path):
     assert list(row) == [*awsb.INDEX_COLUMNS, "user"]
 
 
+def test_render_refreshes_the_index_row_of_a_run_without_consensus_storage(
+    tmp_path: Path,
+):
+    write_collected_run(tmp_path)
+    manifest_path = tmp_path / awsb.MANIFEST_JSON
+    manifest = netbench.read_json(manifest_path)
+    manifest["config"].pop("consensus_storage")
+    manifest |= {"created_at": "2026-10-05T10:00:00+00:00", "git_rev": "abcdef0123"}
+    netbench.write_json(manifest_path, manifest)
+    netbench.write_json(
+        tmp_path / awsb.INDEX_ROW_JSON,
+        {**{key: "-" for key in awsb.INDEX_COLUMNS}, "exit": "1", "user": "lulu"},
+    )
+    awsb.refresh_index_row(tmp_path, awsb.write_report(tmp_path))
+    assert netbench.read_json(tmp_path / awsb.INDEX_ROW_JSON)["storage"] == "journal"
+
+
 def test_latency_line_before_host_tuning():
     meta: netbench.LatencyMeta = {
         "profile": "decaf-2025",

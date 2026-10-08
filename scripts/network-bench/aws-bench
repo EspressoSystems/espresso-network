@@ -269,6 +269,8 @@ DEPLOY_FLAGS = (
     "--upgrade-stake-table-v3",
 )
 ConsensusStorage = Literal["fs", "journal"]
+# Runs from before --consensus-storage all used the journal.
+LEGACY_CONSENSUS_STORAGE: ConsensusStorage = "journal"
 # storage-fs does not support the query service, so the query node takes storage-sql there.
 NODE_MODULES: dict[
     tuple[ConsensusStorage, Literal["validator", "query"]], tuple[str, ...]
@@ -5452,6 +5454,10 @@ def dead_nodes(statuses: dict[str, tuple[str, int] | None]) -> dict[str, int]:
     }
 
 
+def manifest_storage(config: dict[str, Any]) -> ConsensusStorage:
+    return config.get("consensus_storage", LEGACY_CONSENSUS_STORAGE)
+
+
 def check_nodes(remote: Remote) -> None:
     """Raises when an `espresso-node` container is not running, with the log tail of the
     first such node."""
@@ -5464,7 +5470,10 @@ def check_nodes(remote: Remote) -> None:
     if not dead:
         return
     first, *others = dead
-    tail = remote.ssh(first, "sudo docker logs --tail 20 espresso-node 2>&1").stdout
+    logs = remote.ssh(
+        first, "sudo docker logs --tail 20 espresso-node 2>&1", check=False
+    )
+    tail = logs.stdout if logs.returncode == 0 else logs.stderr
     also = "".join(f" (also {name} exit {dead[name]})" for name in others)
     raise RemoteError(
         f"{first} espresso-node exited {dead[first]}{also}: {tail.strip()}"
@@ -6214,7 +6223,7 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     if "node_env" in saved:
         fields["node_env"] = tuple(saved["node_env"])
     fields.setdefault("region", LEGACY_REGION)
-    fields.setdefault("consensus_storage", "journal")
+    fields.setdefault("consensus_storage", LEGACY_CONSENSUS_STORAGE)
     fields["search"] = search_config(saved.get("search"))
     return RunConfig(**fields)
 
@@ -7086,7 +7095,7 @@ def check_validity_aws(
     if "ssl_backends" in evidence and pg_tls(evidence["ssl_backends"]) is False:
         noisy.append("node0 postgres backends connected without TLS")
     specs = {h["name"]: h for h in manifest["hosts"]}
-    if manifest["config"].get("consensus_storage", "journal") == "journal":
+    if manifest_storage(manifest["config"]) == "journal":
         for name, size in evidence["journal_bytes"].items():
             limit = _journal_max_bytes(specs[name])
             if size > JOURNAL_NOISY_FRACTION * limit:
@@ -7562,7 +7571,7 @@ def index_cells(
         "tag": f"{manifest['config']['tag']}@{revision}",
         "nodes": str(manifest["config"]["nodes"]),
         "db": manifest["query_db"],
-        "storage": manifest["config"]["consensus_storage"],
+        "storage": manifest_storage(manifest["config"]),
         "latency": latency_cell(manifest["config"]),
         "node_type": manifest["config"]["node_type"],
         "rate": rate,
@@ -7711,7 +7720,7 @@ def complete_index_row(run_dir: Path, row: dict[str, str]) -> dict[str, str]:
     config = nb.read_json(run_dir / MANIFEST_JSON)["config"]
     result_path = run_dir / "result.json"
     derived = {
-        "storage": lambda: config.get("consensus_storage", "journal"),
+        "storage": lambda: manifest_storage(config),
         "latency": lambda: latency_cell(config),
         "node_type": lambda: config["node_type"],
         "bound": lambda: (
