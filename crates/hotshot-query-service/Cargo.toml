@@ -72,7 +72,6 @@ either = { workspace = true }
 # Dependencies enabled by feature "testing".
 espresso-macros = { workspace = true, optional = true }
 futures = { workspace = true }
-hotshot = { workspace = true }
 
 hotshot-example-types = { workspace = true }
 hotshot-new-protocol = { workspace = true }

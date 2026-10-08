@@ -11,7 +11,7 @@
 // see <https://www.gnu.org/licenses/>.
 
 //! The HotShot Query Service is a minimal, generic query service that can be integrated into any
-//! decentralized application running on the [hotshot] consensus layer. It provides all the features
+//! decentralized application running on the HotShot consensus layer. It provides all the features
 //! that HotShot itself expects of a query service (such as providing consensus-related data for
 //! catchup and synchronization) as well as some application-level features that deal only with
 //! consensus-related or application-agnostic data. In addition, the query service is provided as an

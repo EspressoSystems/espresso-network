@@ -129,14 +129,13 @@ pub mod availability_tests {
 
     use committable::Committable;
     use futures::stream::StreamExt;
-    use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         block_types::TestBlockPayload,
         node_types::{TEST_VERSIONS, TestTypes},
     };
     use hotshot_types::{
         data::{Leaf2, vid_commitment},
-        traits::block_contents::EncodeBytes,
+        traits::{BlockPayload, block_contents::EncodeBytes},
     };
 
     use super::test_helpers::*;
@@ -707,7 +706,6 @@ pub mod availability_tests {
 #[espresso_macros::generic_tests]
 pub mod persistence_tests {
     use committable::Committable;
-    use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
@@ -715,7 +713,7 @@ pub mod persistence_tests {
     use hotshot_types::{
         data::{VidCommitment, VidCommon},
         simple_certificate::QuorumCertificate2,
-        traits::block_contents::EncodeBytes,
+        traits::{BlockPayload, block_contents::EncodeBytes},
         vid::advz::advz_scheme,
     };
     use jf_advz::VidScheme;
@@ -1035,7 +1033,6 @@ pub mod node_tests {
 
     use committable::Committable;
     use futures::stream::StreamExt;
-    use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
         node_types::{TEST_VERSIONS, TestTypes},
@@ -1044,7 +1041,10 @@ pub mod node_tests {
     use hotshot_types::{
         data::{VidCommitment, VidCommon, VidShare, ViewNumber, vid_commitment},
         simple_certificate::{CertificatePair, QuorumCertificate2},
-        traits::block_contents::{BlockHeader, EncodeBytes},
+        traits::{
+            BlockPayload,
+            block_contents::{BlockHeader, EncodeBytes},
+        },
         vid::advz::advz_scheme,
     };
     use jf_advz::VidScheme;

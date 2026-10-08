@@ -6255,7 +6255,6 @@ dependencies = [
  "espresso-macros",
  "futures",
  "generic-array 0.14.7",
- "hotshot",
  "hotshot-example-types",
  "hotshot-new-protocol",
  "hotshot-query-service",
