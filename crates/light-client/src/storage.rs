@@ -511,7 +511,7 @@ impl Storage for SqliteStorage {
                         .context("counting leaves")?;
                     let to_delete = num_leaves.saturating_sub(self.num_leaves);
                     if to_delete > 0 {
-                        tracing::info!("garbage collecting {to_delete} leaves");
+                        tracing::debug!("garbage collecting {to_delete} leaves");
                         let res = query(
                             "DELETE FROM leaf WHERE height IN (SELECT height FROM leaf ORDER BY \
                              last_used ASC, height ASC LIMIT $1)",
@@ -520,7 +520,7 @@ impl Storage for SqliteStorage {
                         .execute(tx.as_mut())
                         .await
                         .context("deleting old leaves")?;
-                        tracing::info!("deleted {} leaves", res.rows_affected());
+                        tracing::debug!("deleted {} leaves", res.rows_affected());
                     }
 
                     tx.commit().await?;
