@@ -20,41 +20,29 @@
 //! # Basic usage
 //!
 //! ```
-//! # use hotshot::types::SystemContextHandle;
-//! # use hotshot_query_service::testing::mocks::{
-//! #   MockNodeImpl as AppNodeImpl, MockTypes as AppTypes, MockVersions as AppVersions,
-//! # };
-//! # use hotshot_example_types::node_types::TestVersions;
-//! # use hotshot_types::consensus::ConsensusMetricsValue;
-//! # use std::path::Path;
-//! # async fn doc(storage_path: &std::path::Path) -> anyhow::Result<()> {
+//! # use futures::{Stream, StreamExt};
+//! # use hotshot_query_service::testing::mocks::MockTypes as AppTypes;
+//! # use hotshot_types::new_protocol::CoordinatorEvent;
+//! # async fn doc(
+//! #     storage_path: &std::path::Path,
+//! #     mut events: impl Stream<Item = CoordinatorEvent<AppTypes>> + Unpin,
+//! # ) -> anyhow::Result<()> {
 //! use hotshot_query_service::{
 //!     data_source::{FileSystemDataSource, UpdateDataSource},
 //!     fetching::provider::NoFetching,
 //!     status::UpdateStatusData,
 //! };
-//!
-//! use futures::StreamExt;
-//! use hotshot::SystemContext;
-//! use hotshot_types::new_protocol::CoordinatorEvent;
+//! use hotshot_types::consensus::ConsensusMetricsValue;
 //!
 //! // Create or open a data source.
 //! let data_source = FileSystemDataSource::<AppTypes, NoFetching>::create(storage_path, NoFetching)
 //!     .await?;
 //!
-//! // Create hotshot, giving it a handle to the status metrics.
-//! let hotshot = SystemContext::<AppTypes, AppNodeImpl, AppVersions>::init(
-//! #   panic!(), panic!(), panic!(), panic!(), panic!(), panic!(), panic!(),
-//!     ConsensusMetricsValue::new(&*data_source.populate_metrics()), panic!(),
-//!     panic!()
-//!     // Other fields omitted
-//! ).await?.0;
+//! // Give consensus a handle to the status metrics when creating it.
+//! let consensus_metrics = ConsensusMetricsValue::new(&*data_source.populate_metrics());
 //!
-//! // Update query data using HotShot events.
-//! let mut events = hotshot.event_stream();
+//! // Update query data from the events consensus emits.
 //! while let Some(event) = events.next().await {
-//!     // Update the query data based on this event.
-//!     let event = CoordinatorEvent::LegacyEvent(event);
 //!     data_source.update(&event).await.ok();
 //! }
 //! # Ok(())

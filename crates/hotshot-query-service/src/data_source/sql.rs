@@ -242,16 +242,13 @@ impl Config {
 /// the steps in [custom migrations](#custom-migrations) to accommodate this.
 ///
 /// ```
-/// # use futures::StreamExt;
-/// # use hotshot::types::SystemContextHandle;
+/// # use futures::{Stream, StreamExt};
 /// # use hotshot_query_service::data_source::{
 /// #   sql::Config, Transaction, SqlDataSource, UpdateDataSource, VersionedDataSource,
 /// # };
 /// # use hotshot_query_service::fetching::provider::NoFetching;
-/// # use hotshot_query_service::testing::mocks::{
-/// #   MockNodeImpl as AppNodeImpl, MockTypes as AppTypes, MockVersions as AppVersions
-/// # };
-/// # use hotshot_example_types::node_types::TestVersions;
+/// # use hotshot_query_service::testing::mocks::MockTypes as AppTypes;
+/// # use hotshot_types::new_protocol::CoordinatorEvent;
 /// # use std::sync::Arc;
 /// # use tokio::spawn;
 /// struct AppState {
@@ -261,7 +258,7 @@ impl Config {
 ///
 /// async fn init_state(
 ///     config: Config,
-///     hotshot: SystemContextHandle<AppTypes, AppNodeImpl, AppVersions>,
+///     mut events: impl Stream<Item = CoordinatorEvent<AppTypes>> + Send + Unpin + 'static,
 /// ) -> anyhow::Result<Arc<AppState>> {
 ///     let mut hotshot_qs = config.connect(NoFetching).await?;
 ///     // Initialize storage for other modules, using `hotshot_qs` to access the database.
@@ -277,7 +274,6 @@ impl Config {
 ///     spawn({
 ///         let state = state.clone();
 ///         async move {
-///             let mut events = hotshot.event_stream();
 ///             while let Some(event) = events.next().await {
 ///                 if state.hotshot_qs.update(&event).await.is_err() {
 ///                     continue;
