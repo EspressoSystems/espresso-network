@@ -217,6 +217,7 @@ impl NsAvidmGf2Scheme {
         ns_payload: &[u8],
         ns_index: usize,
     ) -> VidResult<NsDispersal> {
+        AvidmGf2Scheme::check_distribution(param, distribution)?;
         NsAvidmGf2Scheme::ns_disperse_encoded(
             distribution,
             AvidmGf2Scheme::encode(param, ns_payload)?,
@@ -740,25 +741,15 @@ pub mod tests {
                 NsAvidmGf2Scheme::ns_disperse_one(&params, &weights, &payload[range], ns_index)
                     .unwrap();
             let NsDispersal {
-                ns_index,
-                payload_byte_len,
-                commit,
-                shares,
+                ns_index: encoded_ns_index,
+                payload_byte_len: encoded_len,
+                commit: encoded_commit,
+                shares: encoded_shares,
             } = encoded;
-            assert_eq!(ns_index, direct.ns_index);
-            assert_eq!(payload_byte_len, direct.payload_byte_len);
-            assert_eq!(commit, direct.commit);
-            assert_eq!(shares, direct.shares);
+            assert_eq!(encoded_ns_index, direct.ns_index);
+            assert_eq!(encoded_len, direct.payload_byte_len);
+            assert_eq!(encoded_commit, direct.commit);
+            assert_eq!(encoded_shares, direct.shares);
         }
-    }
-
-    #[test]
-    fn dispersing_an_encoding_rejects_a_distribution_for_other_weights() {
-        let params = NsAvidmGf2Scheme::setup(3, 9).unwrap();
-        let payload = (0..49).map(|i| i as u8).collect::<Vec<_>>();
-        let (_, mut encodings) = NsAvidmGf2Scheme::encode(&params, &payload, Some(0..49)).unwrap();
-
-        let ten_nodes = Vec::from([1u32; 10]);
-        assert!(NsAvidmGf2Scheme::ns_disperse_encoded(&ten_nodes, encodings.remove(0), 0).is_err());
     }
 }

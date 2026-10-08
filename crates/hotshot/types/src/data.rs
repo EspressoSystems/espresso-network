@@ -57,7 +57,7 @@ use crate::{
     vid::{
         advz::{ADVZScheme, advz_scheme},
         avidm::{AvidMScheme, init_avidm_param},
-        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+        avidm_gf2::{AvidmGf2Encoding, AvidmGf2Scheme, init_avidm_gf2_param},
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -422,6 +422,31 @@ pub fn vid_commitment(
         .map(|(comm, _)| VidCommitment::V2(comm))
         .unwrap()
     }
+}
+
+/// [`vid_commitment`], plus each namespace's erasure-coded shards from
+/// [`NEW_PROTOCOL_VERSION`] on, so the leader can disperse the block without
+/// coding it again. The shards are `None` before that version.
+/// # Panics
+/// If the VID computation fails.
+#[must_use]
+pub fn vid_commitment_and_encoding(
+    encoded_transactions: &[u8],
+    metadata: &[u8],
+    total_weight: usize,
+    version: Version,
+) -> (VidCommitment, Option<Vec<AvidmGf2Encoding>>) {
+    if version < NEW_PROTOCOL_VERSION {
+        return (
+            vid_commitment(encoded_transactions, metadata, total_weight, version),
+            None,
+        );
+    }
+    let param = init_avidm_gf2_param(total_weight).unwrap();
+    let ns_table = ns_table::parse_ns_table(encoded_transactions.len(), metadata);
+    let (commit, encoding) =
+        AvidmGf2Scheme::encode(&param, encoded_transactions, ns_table).unwrap();
+    (VidCommitment::V2(commit), Some(encoding))
 }
 
 /// Type aliases for different versions of VID commons

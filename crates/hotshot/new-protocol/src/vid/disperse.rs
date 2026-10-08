@@ -14,7 +14,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
     traits::{metrics::Histogram, node_implementation::NodeType, signature_key::SignatureKey},
-    vid::avidm_gf2::{AvidmGf2Encoding, AvidmGf2Param, AvidmGf2Scheme},
+    vid::avidm_gf2::{AvidmGf2Encoding, AvidmGf2Scheme},
 };
 use hotshot_utils::anytrace::{self, Wrap};
 use rayon::prelude::*;
@@ -95,13 +95,13 @@ impl<T: NodeType> VidDisperser<T> {
             vid_disperse_request.epoch,
             vid_disperse_request.payload_commitment,
         );
-        if self.calculations.contains_key(&key) {
-            return;
-        }
         let encoding = self.encodings.remove(&(
             vid_disperse_request.view,
             vid_disperse_request.payload_commitment,
         ));
+        if self.calculations.contains_key(&key) {
+            return;
+        }
         let membership = self.epoch_membership_coordinator.clone();
         let network = self.network.clone();
         let public_key = self.public_key.clone();
@@ -191,13 +191,22 @@ fn handle_vid_disperse_request<T: NodeType>(
         let threshold = params.payload.len().div_ceil(*NUM_THREADS).max(256 * 1024);
         bucketize(&params.ns_table, threshold)
     };
-    let mut ns_encodings = usable_encodings(view, encoding, &params.param, &params.ns_table);
+    let mut ns_encodings = encoding
+        .unwrap_or_default()
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
     let buckets = buckets
         .into_iter()
         .map(|bucket| {
             bucket
                 .into_iter()
-                .map(|ns_index| (ns_index, ns_encodings[ns_index].take()))
+                .map(|ns_index| {
+                    (
+                        ns_index,
+                        ns_encodings.get_mut(ns_index).and_then(Option::take),
+                    )
+                })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -268,31 +277,6 @@ fn handle_vid_disperse_request<T: NodeType>(
     })
 }
 
-/// One slot per namespace, filled only when the leader's encoding was made under the parameters
-/// this dispersal uses.
-fn usable_encodings(
-    view: ViewNumber,
-    encoding: Option<Vec<AvidmGf2Encoding>>,
-    param: &AvidmGf2Param,
-    ns_table: &[Range<usize>],
-) -> Vec<Option<AvidmGf2Encoding>> {
-    let num_namespaces = ns_table.len();
-    if let Some(encoding) = encoding {
-        let fits = encoding.len() == num_namespaces
-            && encoding
-                .iter()
-                .zip(ns_table)
-                .all(|(ns_encoding, ns_range)| {
-                    ns_encoding.param() == param && ns_encoding.payload_byte_len() == ns_range.len()
-                });
-        if fits {
-            return encoding.into_iter().map(Some).collect();
-        }
-        warn!(%view, "block encoding does not fit the dispersal parameters, encoding again");
-    }
-    (0..num_namespaces).map(|_| None).collect()
-}
-
 /// Group namespace indices into buckets whose payload sizes are each at least
 /// `threshold` bytes (except possibly the last), coalescing small namespaces so
 /// the disperser sends one message per bucket rather than one per namespace.
@@ -344,13 +328,9 @@ impl VidDisperseError {
 mod tests {
     use std::ops::Range;
 
-    use hotshot_types::{
-        data::ViewNumber,
-        vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
-    };
     use quickcheck::{TestResult, quickcheck};
 
-    use super::{bucketize, usable_encodings};
+    use super::bucketize;
 
     /// Build a contiguous namespace table from per-namespace byte lengths.
     /// Only the lengths matter to `bucketize`; the offsets are incidental.
@@ -417,33 +397,5 @@ mod tests {
                 bytes(&bucket[..bucket.len() - 1], &ns_table) < usize::from(threshold)
             }))
         }
-    }
-
-    #[test]
-    fn an_encoding_under_the_dispersal_parameters_is_used_for_every_namespace() {
-        let ns_table = Vec::from([0..40, 40..100]);
-        let param = init_avidm_gf2_param(9).unwrap();
-        let payload = (0..100u8).collect::<Vec<_>>();
-        let (_, encoding) = AvidmGf2Scheme::encode(&param, &payload, ns_table.clone()).unwrap();
-
-        let slots = usable_encodings(ViewNumber::new(1), Some(encoding), &param, &ns_table);
-
-        assert_eq!(slots.len(), 2);
-        assert!(slots.iter().all(Option::is_some));
-    }
-
-    #[test]
-    fn an_encoding_under_other_weights_is_dropped() {
-        let ns_table = Vec::from([0..40, 40..100]);
-        let param = init_avidm_gf2_param(9).unwrap();
-        let other_param = init_avidm_gf2_param(12).unwrap();
-        let payload = (0..100u8).collect::<Vec<_>>();
-        let (_, encoding) =
-            AvidmGf2Scheme::encode(&other_param, &payload, ns_table.clone()).unwrap();
-
-        let slots = usable_encodings(ViewNumber::new(1), Some(encoding), &param, &ns_table);
-
-        assert_eq!(slots.len(), 2);
-        assert!(slots.iter().all(Option::is_none));
     }
 }

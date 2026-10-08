@@ -11,7 +11,7 @@ use hotshot::traits::{BlockPayload, ValidatedState as _};
 use hotshot_types::{
     consensus::PayloadWithMetadata,
     data::{
-        EpochNumber, Leaf2, VidCommitment, ViewNumber, ns_table::parse_ns_table, vid_commitment,
+        EpochNumber, Leaf2, VidCommitment, ViewNumber, vid_commitment_and_encoding,
         vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
@@ -23,14 +23,14 @@ use hotshot_types::{
         signature_key::BuilderSignatureKey,
     },
     utils::BuilderCommitment,
-    vid::avidm_gf2::{AvidmGf2Encoding, AvidmGf2Scheme, init_avidm_gf2_param},
+    vid::avidm_gf2::AvidmGf2Encoding,
 };
 use tokio::{
     task::{AbortHandle, JoinSet, spawn_blocking},
     time::sleep,
 };
 use tracing::{debug_span, error, warn};
-use versions::{NEW_PROTOCOL_VERSION, Version};
+use versions::Version;
 
 use crate::{
     consensus::ConsensusInput,
@@ -139,26 +139,6 @@ pub fn block_commitments<T: NodeType>(
         hashes,
         vid_encoding,
     }
-}
-
-fn vid_commitment_and_encoding(
-    payload: &[u8],
-    metadata: &[u8],
-    total_weight: usize,
-    version: Version,
-) -> (VidCommitment, Option<Vec<AvidmGf2Encoding>>) {
-    if version < NEW_PROTOCOL_VERSION {
-        return (
-            vid_commitment(payload, metadata, total_weight, version),
-            None,
-        );
-    }
-    let param = init_avidm_gf2_param(total_weight)
-        .unwrap_or_else(|err| panic!("failed to set up VID for weight {total_weight}: {err}"));
-    let ns_table = parse_ns_table(payload.len(), metadata);
-    let (commit, encoding) = AvidmGf2Scheme::encode(&param, payload, ns_table)
-        .unwrap_or_else(|err| panic!("failed to encode a {}-byte payload: {err}", payload.len()));
-    (VidCommitment::V2(commit), Some(encoding))
 }
 
 /// Room in a forwarded message for everything but the transactions.
