@@ -97,12 +97,8 @@ where
     for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
     let requested = requested_leaf.height() as usize;
-    // Grab the endpoint and the final QC chain in the same transaction, to ensure that
-    // the QC chain actually corresponds to the endpoint block (and is not subject to
-    // concurrent updates).
     let mut tx = state.read().await.map_err(internal)?;
     let latest_height = NodeStorage::block_height(&mut tx).await.map_err(internal)?;
-    let qc_chain = tx.latest_qc_chain().await.map_err(internal)?;
     drop(tx);
 
     let mut leaves = state.get_leaf_range(requested + 1..latest_height).await;
@@ -140,15 +136,9 @@ where
         }
     }
 
-    // We reached the end of the range of interest without encountering a 3-chain. Thus, if the last
-    // leaf in the chain is not already assumed finalized by the client, we must prove it finalized
-    // by appending two more QCs.
-    let Some([committing_qc, deciding_qc]) = qc_chain else {
-        return Err(not_found("missing QC 2-chain to prove finality"));
-    };
-    proof.add_qc_chain(Arc::new(committing_qc), Arc::new(deciding_qc));
-
-    Ok(proof)
+    // Every legacy leaf is followed by a HotStuff chain or, at the cutover, a cert2. Running out of
+    // leaves first means the chain here does not yet reach either.
+    Err(not_found("not enough leaves to prove finality"))
 }
 
 /// Build a leaf proof for the new protocol using certificate2 finality.
@@ -611,18 +601,15 @@ mod test {
         fetching::provider::TrustedQueryServiceProvider,
         merklized_state::UpdateStateData,
     };
-    use hotshot_types::{
-        data::ViewNumber, simple_certificate::CertificatePair, simple_vote::Vote2Data,
-    };
+    use hotshot_types::{data::ViewNumber, simple_vote::Vote2Data};
     use http_wire::{ServerError, respond};
     use itertools::Itertools;
     use jf_merkle_tree_compat::{AppendableMerkleTreeScheme, ToTraversalPath};
     use light_client::{
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
-            AlwaysTrueQuorum, ENABLE_EPOCHS, LEGACY_VERSION, TestClient, VersionCheckQuorum,
-            custom_leaf_chain_with_upgrade, custom_leaf_chain_with_upgrades, leaf_chain,
-            leaf_chain_with_upgrade,
+            AlwaysTrueQuorum, TestClient, VersionCheckQuorum, custom_leaf_chain_with_upgrade,
+            custom_leaf_chain_with_upgrades, leaf_chain, leaf_chain_with_upgrade,
         },
     };
     use tokio::{
@@ -1483,90 +1470,6 @@ mod test {
         .await
         .unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_final_qcs() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
-
-        // Insert a single leaf, plus an extra QC chain proving it finalized.
-        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
-        let qcs = [
-            CertificatePair::for_parent(leaves[1].leaf()),
-            CertificatePair::for_parent(leaves[2].leaf()),
-        ];
-        {
-            let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(&leaves[0], Some(qcs.clone()))
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-        }
-
-        let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
-                .await
-                .unwrap();
-        assert_eq!(
-            proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
-                .await
-                .unwrap(),
-            leaves[0]
-        );
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_upgrade_to_epochs() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
-
-        // Upgrade to epochs (and enabling HotStuff2) in the middle of a leaf chain, so that the
-        // last leaf in the chain only requires 2 QCs to verify, even though at the start of the
-        // chain we would have required 3.
-        let leaves = leaf_chain_with_upgrade(1..=4, 2, ENABLE_EPOCHS).await;
-        assert_eq!(leaves[0].header().version(), LEGACY_VERSION);
-        assert_eq!(leaves[1].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
-        let qcs = [
-            CertificatePair::for_parent(leaves[2].leaf()),
-            CertificatePair::for_parent(leaves[3].leaf()),
-        ];
-        {
-            let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf(&leaves[0]).await.unwrap();
-            tx.insert_leaf_with_qc_chain(&leaves[1], Some(qcs.clone()))
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-        }
-
-        let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
-                .await
-                .unwrap();
-        assert_eq!(
-            proof
-                .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
-                    leaves.iter().map(|leaf| leaf.leaf().clone())
-                )))
-                .await
-                .unwrap(),
-            leaves[0]
-        );
-        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }))
     }
 
     #[tokio::test]
