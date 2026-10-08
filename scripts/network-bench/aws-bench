@@ -494,6 +494,9 @@ OUT_RSYNC_S = 60.0
 COLLECT_HOST_TIMEOUT_S = 180.0
 # rsync's idle I/O timeout; a stalled transfer fails instead of hanging.
 RSYNC_IO_TIMEOUT_S = 60
+# Attempts per registry GET: a dropped SYN stalls a connect for seconds, and preflight makes
+# dozens of requests, so one lost connection must not abort the run.
+REGISTRY_GET_ATTEMPTS = 3
 # docker stop's grace period before SIGKILL, long enough for a clean journal fsync.
 FREEZE_STOP_TIMEOUT_S = 30.0
 DESTROY_RETRIES = 3
@@ -1748,14 +1751,22 @@ def parse_ref(ref: str) -> tuple[str, str, str]:
 
 
 def _http_get(url: str, headers: dict[str, str]) -> HttpReply:
-    request = urllib.request.Request(url, headers=headers, method="GET")
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            reply_headers = cast(Mapping[str, str], response.headers)
-            return response.status, reply_headers, response.read()
-    except urllib.error.HTTPError as exc:
-        with exc:
-            return exc.code, cast(Mapping[str, str], exc.headers), exc.read()
+    def once() -> HttpReply:
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                reply_headers = cast(Mapping[str, str], response.headers)
+                return response.status, reply_headers, response.read()
+        except urllib.error.HTTPError as exc:
+            with exc:
+                return exc.code, cast(Mapping[str, str], exc.headers), exc.read()
+
+    for _ in range(REGISTRY_GET_ATTEMPTS - 1):
+        try:
+            return once()
+        except (urllib.error.URLError, TimeoutError) as exc:
+            log.warning("GET %s failed (%s), retrying", url, exc)
+    return once()
 
 
 def _bearer_token(http_get: HttpGet, www_authenticate: str, ref: str) -> str:

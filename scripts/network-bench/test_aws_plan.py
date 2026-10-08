@@ -5,6 +5,8 @@ import re
 import shutil
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 from collections.abc import Iterator
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -805,6 +807,36 @@ def test_http_get_returns_body(served, registry):
     status, _, body = awsb._http_get(url, {})
     assert status == 200
     assert json.loads(body)["architecture"] == "arm64"
+
+
+@pytest.mark.slow
+def test_http_get_retries_a_failed_connection(served, registry, monkeypatch):
+    urlopen = urllib.request.urlopen
+    calls = []
+
+    def flaky(request, timeout):
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise urllib.error.URLError(TimeoutError("timed out"))
+        return urlopen(request, timeout=timeout)
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky)
+    url = f"{served}/v2/test/image/blobs/{registry.config_digest}"
+    status, _, _ = awsb._http_get(url, {})
+    assert (status, len(calls)) == (200, 2)
+
+
+def test_http_get_gives_up_after_its_attempts(monkeypatch):
+    calls = []
+
+    def down(request, timeout):
+        calls.append(request.full_url)
+        raise urllib.error.URLError(TimeoutError("timed out"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", down)
+    with pytest.raises(urllib.error.URLError):
+        awsb._http_get("https://registry.invalid/v2/", {})
+    assert len(calls) == awsb.REGISTRY_GET_ATTEMPTS
 
 
 @pytest.mark.slow
