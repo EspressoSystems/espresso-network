@@ -448,7 +448,8 @@ where
             .context("storing genesis state")?;
     }
 
-    follow_leaves(&storage, &instance, parent_leaf, parent_state).await
+    follow_leaves(&storage, &instance, parent_leaf, parent_state).await;
+    Ok(())
 }
 
 /// Apply every leaf above `parent_leaf` as it arrives. Leaves come from the local stream, except
@@ -460,8 +461,7 @@ async fn follow_leaves<T>(
     instance: &NodeState,
     mut parent_leaf: Leaf2,
     mut parent_state: ValidatedState,
-) -> anyhow::Result<()>
-where
+) where
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
 {
@@ -511,7 +511,7 @@ where
                     )
                     .await;
                 },
-                Ok(None) => return Ok(()),
+                Ok(None) => return,
                 // Still waiting. If the data pruner has passed this height in the meantime, the
                 // stream will never deliver it.
                 Err(_) => {
