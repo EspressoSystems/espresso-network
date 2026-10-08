@@ -6268,11 +6268,8 @@ def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.Bench
     result["validity"] = check_validity_aws(result, manifest, evidence)
     nb.write_json(run_dir / "result.json", result)
     comparison = nb.compare(result, baseline) if baseline else None
-    summary = (
-        nb.render(result, comparison)
-        + reproduce_section(manifest)
-        + throughput_section(run_dir)
-    )
+    chart = throughput_chart(run_dir)
+    summary = nb.render(result, comparison, chart) + reproduce_section(manifest)
     (run_dir / "summary.md").write_text(summary)
     return result
 
@@ -6334,10 +6331,10 @@ def reproduce_section(manifest: Manifest) -> str:
     return "\n".join(["", "", "### Reproduce", "", "```", *lines, "```", ""])
 
 
-def throughput_section(run_dir: Path) -> str:
+def throughput_chart(run_dir: Path) -> str:
     if not (run_dir / "throughput.png").is_file():
         return ""
-    return "\n![decided and query node MB/s](throughput.png)\n"
+    return "![throughput, blocks and latency](throughput.png)"
 
 
 def search_config(saved: dict[str, Any] | None) -> nb.SearchConfig | None:

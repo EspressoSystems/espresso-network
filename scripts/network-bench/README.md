@@ -374,10 +374,11 @@ runs/01-run/             one measurement
 ### Publishing results
 
 - `run` (single-shot and `--fleet`) pushes the run's `summary.md`, `result.json`, `cost.json`, `throughput.png` (decided
-  and query node MB/s, linked from `summary.md`), `trace/*.png`, `trace/leader_path.md`, `trace/stats.json`,
-  `index-row.json` and a reduced `manifest.json` to `runs/<fleet>/<run>/` of the shared results repo
-  (`EspressoSystems/espresso-network-bench-results`); a workflow there rebuilds its `INDEX.md` and `README.md`
-  (leaderboard, recent runs, totals). Other files stay local; symlinks are refused.
+  and query node MB/s, block size and interval, consensus latency and txs in flight; at the top of `summary.md`),
+  `trace/*.png`, `trace/leader_path.md`, `trace/stats.json`, `index-row.json` and a reduced `manifest.json` to
+  `runs/<fleet>/<run>/` of the shared results repo (`EspressoSystems/espresso-network-bench-results`); a workflow there
+  rebuilds its `INDEX.md` and `README.md` (leaderboard, recent runs, totals). Other files stay local; symlinks are
+  refused.
 - The published `manifest.json` keeps `fleet`, `created_at`, `git_rev`, `query_db`, `images`, `config` without
   `node_env`, and each host's name, role and instance type. `summary.md` is published as written, so it still lists
   `--node-env` values.

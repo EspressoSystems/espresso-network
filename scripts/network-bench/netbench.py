@@ -2941,7 +2941,8 @@ def load_baseline(path: Path) -> Baseline:
             )
 
 
-def render(result: BenchResult, comparison: Comparison | None) -> str:
+def render(result: BenchResult, comparison: Comparison | None, chart: str = "") -> str:
+    """The summary; `chart`, a markdown image, goes right below the headline."""
     lines = [
         "## Network benchmark",
         "",
@@ -2950,6 +2951,7 @@ def render(result: BenchResult, comparison: Comparison | None) -> str:
         *search_lines(result),
         f"- {baseline_line(comparison)}",
         "",
+        *([chart, ""] if chart else []),
         *capacity_table(result, comparison),
         "### Load steps",
         "",
