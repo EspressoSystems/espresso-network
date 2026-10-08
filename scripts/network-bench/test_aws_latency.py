@@ -97,7 +97,12 @@ def test_tcp_cc_needs_a_profile_and_defaults_to_cubic():
 
 # TEST:hash-four-distinct-ok
 def test_hash_differs_per_profile_and_matches_the_old_value_for_off():
-    base = awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
+    base = awsb.RunConfig(
+        tag="x",
+        nodes=2,
+        load=netbench.BenchConfig(submit_nodes=1),
+        consensus_storage="journal",
+    )
     hosts = awsb.plan_hosts(base)
     images = {}
     variants = [

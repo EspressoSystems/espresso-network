@@ -976,6 +976,19 @@ def node_env(name: str, nodes: int = 5) -> dict[str, str]:
     return parse_env(awsb.render_node_env(spec, fleet(nodes), awsb.pg_endpoint()))
 
 
+def test_journal_max_bytes_is_set_only_for_journal_storage():
+    spec = next(h for h in awsb.plan_hosts(small_cfg()) if h["name"] == "node1")
+    env = {
+        storage: parse_env(
+            awsb.render_node_env(spec, fleet(2), None, consensus_storage=storage)
+        )
+        for storage in ("fs", "journal")
+    }
+    assert "ESPRESSO_NODE_JOURNAL_MAX_BYTES" not in env["fs"]
+    assert int(env["journal"]["ESPRESSO_NODE_JOURNAL_MAX_BYTES"]) > 0
+    assert env["fs"]["ESPRESSO_NODE_STORAGE_PATH"] == "/store/espresso"
+
+
 def test_node_env_streams_l1_heads_over_websocket():
     env = node_env("node1")
     http = env["ESPRESSO_L1_PROVIDER"]
@@ -1006,6 +1019,37 @@ def test_node_env_flag():
     assert node_env_config(*flags).node_env == ("A=1", "B=")
     with pytest.raises(awsb.Refused, match="repeats A"):
         node_env_config("--node-env", "A=1", "--node-env", "A=2")
+
+
+def test_consensus_storage_flag_defaults_to_fs_and_rejects_other_values():
+    assert node_env_config().consensus_storage == "fs"
+    assert node_env_config("--consensus-storage", "journal").consensus_storage == (
+        "journal"
+    )
+    with pytest.raises(SystemExit):
+        node_env_config("--consensus-storage", "rocksdb")
+
+
+def test_consensus_storage_differs_in_the_config_hash_only_when_not_journal():
+    hosts = awsb.plan_hosts(small_cfg())
+
+    def digest(storage: str) -> str:
+        cfg = small_cfg(consensus_storage=storage)
+        return awsb.run_config_hash(cfg, hosts, {}, b"genesis")
+
+    assert digest("fs") != digest("journal")
+    assert digest("journal") == awsb.run_config_hash(
+        dataclasses.replace(small_cfg(), consensus_storage="journal"),
+        hosts,
+        {},
+        b"genesis",
+    )
+
+
+def test_manifest_config_without_consensus_storage_loads_as_journal():
+    saved = awsb.config_to_json(small_cfg())
+    del saved["consensus_storage"]
+    assert awsb.config_from_manifest(saved).consensus_storage == "journal"
 
 
 def test_submit_workers_flag_reaches_the_load_config():
@@ -1150,7 +1194,9 @@ def test_anvil_uses_entrypoint_and_binds_every_interface():
 
 
 def test_validator_start_sh_uses_storage_journal_only():
-    script = awsb.render_start_sh(host("node1", "validator"), fake_images(), 32768)
+    script = awsb.render_start_sh(
+        host("node1", "validator"), fake_images(), 32768, consensus_storage="journal"
+    )
     assert "-- storage-journal -- http" in script
     assert "storage-sql" not in script
     assert "--name postgres" not in script
@@ -1177,11 +1223,28 @@ def test_validators_get_provisioned_root_disks():
 
 
 def test_query_start_sh_adds_storage_sql_and_postgres():
-    script = awsb.render_start_sh(host("node0", "query"), fake_images(), 32768)
+    script = awsb.render_start_sh(
+        host("node0", "query"), fake_images(), 32768, consensus_storage="journal"
+    )
     assert "-- storage-journal -- storage-sql" in script
     assert "--name postgres" in script
     assert script.index("shared_preload_libraries") > script.index("@sha256")
     assert "-c shared_buffers=8GB" in script
+
+
+def test_fs_validator_start_sh_uses_storage_fs_only():
+    script = awsb.render_start_sh(host("node1", "validator"), fake_images(), 32768)
+    assert "-- storage-fs -- http" in script
+    assert "storage-journal" not in script
+    assert "storage-sql" not in script
+
+
+def test_fs_query_start_sh_uses_storage_sql_only():
+    script = awsb.render_start_sh(host("node0", "query"), fake_images(), 32768)
+    assert "-- storage-sql -- http -- query" in script
+    assert "storage-fs" not in script
+    assert "storage-journal" not in script
+    assert "--name postgres" in script
 
 
 def test_query_start_sh_scales_postgres_with_the_host_memory():
@@ -1480,7 +1543,7 @@ def test_search_changes_the_run_config_hash():
 
 
 def test_the_ramp_run_config_hash_ignores_the_search_field():
-    cfg = awsb.RunConfig(tag="x")
+    cfg = awsb.RunConfig(tag="x", consensus_storage="journal")
     assert awsb.run_config_hash(cfg, [], {}, b"") == netbench.config_hash(
         cfg.load, [b"", b"{}", b"[]", b"colocated"]
     )

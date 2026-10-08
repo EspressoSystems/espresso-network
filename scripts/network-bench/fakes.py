@@ -1467,10 +1467,16 @@ def pg_settings(**overrides) -> dict:
 
 
 def aws_manifest() -> dict:
-    cfg = awsb.RunConfig(tag="x", nodes=2, load=netbench.BenchConfig(submit_nodes=1))
+    cfg = awsb.RunConfig(
+        tag="x",
+        nodes=2,
+        load=netbench.BenchConfig(submit_nodes=1),
+        consensus_storage="journal",
+    )
     return {
         "name": "run1",
         "fleet": "run1",
+        "config": awsb.config_to_json(cfg),
         "query_db": "colocated",
         "hosts": awsb.plan_hosts(cfg),
         "images": fake_images(),
@@ -2001,7 +2007,12 @@ def index_manifest() -> dict:
         "name": "run1",
         "created_at": "2026-09-29T15:00:00+00:00",
         "git_rev": "a" * 40,
-        "config": {"tag": "release-x", "nodes": 5, "node_type": "c8g.4xlarge"},
+        "config": {
+            "tag": "release-x",
+            "nodes": 5,
+            "node_type": "c8g.4xlarge",
+            "consensus_storage": "fs",
+        },
         "fleet": "run1",
         "query_db": "colocated",
         "images": {"espresso-node": {"revision": "bd2ad6e1dc7abc"}},

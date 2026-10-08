@@ -73,7 +73,16 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import cache, partial
 from pathlib import Path
-from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar, cast
+from typing import (
+    Any,
+    Literal,
+    NotRequired,
+    Protocol,
+    TypedDict,
+    TypeVar,
+    cast,
+    get_args,
+)
 
 import latency
 import netbench as nb
@@ -259,16 +268,35 @@ DEPLOY_FLAGS = (
     "--upgrade-stake-table-v2",
     "--upgrade-stake-table-v3",
 )
-VALIDATOR_MODULES = ("storage-journal", "http", "status", "submit", "catchup", "config")
-QUERY_MODULES = (
-    "storage-journal",
-    "storage-sql",
-    "http",
-    "query",
-    "submit",
-    "catchup",
-    "config",
-)
+ConsensusStorage = Literal["fs", "journal"]
+# storage-fs does not support the query service, so the query node takes storage-sql there.
+NODE_MODULES: dict[
+    tuple[ConsensusStorage, Literal["validator", "query"]], tuple[str, ...]
+] = {
+    ("journal", "validator"): (
+        *("storage-journal", "http", "status", "submit", "catchup", "config"),
+    ),
+    ("journal", "query"): (
+        *(
+            "storage-journal",
+            "storage-sql",
+            "http",
+            "query",
+            "submit",
+            "catchup",
+            "config",
+        ),
+    ),
+    ("fs", "validator"): (
+        "storage-fs",
+        "http",
+        "status",
+        "submit",
+        "catchup",
+        "config",
+    ),
+    ("fs", "query"): ("storage-sql", "http", "query", "submit", "catchup", "config"),
+}
 # Headroom below the usable disk so the journal's own retention GCs data before the volume
 # fills.
 JOURNAL_MAX_BYTES_FRACTION = 0.8
@@ -887,6 +915,8 @@ class RunConfig:
     search: nb.SearchConfig | None = None
     # `ALLOCATORS` name: espresso-node from `ALLOC_REPOSITORY`; None for the regular image.
     allocator: str | None = None
+    # `journal` is experimental and absent from images built from `main`.
+    consensus_storage: ConsensusStorage = "fs"
 
 
 # Callers need the return code and stderr, unlike scripts/release's Runner, to report a
@@ -2098,6 +2128,7 @@ def render_node_env(
     hosts: dict[str, HostInfo],
     pg: PgEndpoint | None,
     node_env: Iterable[str] = (),
+    consensus_storage: ConsensusStorage = "fs",
 ) -> str:
     self_info = hosts[host["name"]]
     ctl_info = hosts["ctl"]
@@ -2124,9 +2155,10 @@ def render_node_env(
         "RUST_LOG": "info,libp2p=off",
         "RUST_LOG_FORMAT": "json",
         "ESPRESSO_NODE_STORAGE_PATH": "/store/espresso",
-        "ESPRESSO_NODE_JOURNAL_MAX_BYTES": str(_journal_max_bytes(host)),
         "ESPRESSO_NODE_IDENTITY_NODE_NAME": host["name"],
     }
+    if consensus_storage == "journal":
+        env["ESPRESSO_NODE_JOURNAL_MAX_BYTES"] = str(_journal_max_bytes(host))
     # A required value left empty risks a clap parse error; omit rather than pass "".
     if peer_urls:
         env["ESPRESSO_NODE_STATE_PEERS"] = ",".join(peer_urls)
@@ -2280,6 +2312,7 @@ def render_start_sh(
     memory_mib: int,
     query_db: DbMode = "colocated",
     leader_trace: bool = False,
+    consensus_storage: ConsensusStorage = "fs",
 ) -> str:
     """Deviates from the plan signature (drops unused `hosts`, `cfg`): every value start.sh
     needs is already in `host`, `images` and the host's `memory_mib`, or in ctl.env/node.env
@@ -2349,7 +2382,9 @@ def render_start_sh(
             ],
         )
     node = images["espresso-node"]
-    modules = QUERY_MODULES if host["role"] == "query" else VALIDATOR_MODULES
+    modules = NODE_MODULES[
+        consensus_storage, "query" if host["role"] == "query" else "validator"
+    ]
     argv = [
         "--env-file",
         f"{BENCH_DIR}/node.env",
@@ -2511,6 +2546,15 @@ def add_latency_flags(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_consensus_storage_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--consensus-storage",
+        choices=get_args(ConsensusStorage),
+        default=RunConfig.consensus_storage,
+        help="consensus storage of the nodes; the query node uses storage-sql with fs",
+    )
+
+
 def check_latency_flags(profile: str, intra: bool, tcp_cc: str) -> None:
     if profile == "off" and not intra:
         raise Refused("--no-intra-latency needs --latency decaf-2025 or mainnet")
@@ -2604,6 +2648,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         latency=args.latency,
         intra_latency=args.intra_latency,
         tcp_cc=args.tcp_cc,
+        consensus_storage=args.consensus_storage,
         root_gb=args.root_gb,
         pg_iops=args.pg_iops,
         pg_mbps=args.pg_mbps,
@@ -2753,6 +2798,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_block_size_flag(plan_p)
     add_leader_trace_flag(plan_p)
     add_latency_flags(plan_p)
+    add_consensus_storage_flag(plan_p)
     add_submit_nodes_flag(plan_p)
     add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
@@ -2775,6 +2821,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         latency=defaults.latency,
         intra_latency=defaults.intra_latency,
         tcp_cc=defaults.tcp_cc,
+        consensus_storage=defaults.consensus_storage,
         submit_nodes=None,
         fleet=None,
         force=False,
@@ -2795,6 +2842,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_block_size_flag(run_p)
     add_leader_trace_flag(run_p)
     add_latency_flags(run_p)
+    add_consensus_storage_flag(run_p)
     add_submit_nodes_flag(run_p)
     add_ttl_flag(run_p)
     run_p.add_argument(
@@ -3961,6 +4009,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         latency=cli.latency,
         intra_latency=cli.intra_latency,
         tcp_cc=cli.tcp_cc,
+        consensus_storage=cli.consensus_storage,
         fleet=cli.fleet,
         force=cli.force,
         search=cli.search,
@@ -4546,6 +4595,12 @@ def run_config_hash(
             cfg.query_db.encode(),
             *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
             *([b"leader-trace"] if cfg.leader_trace else []),
+            # Absent for journal, which older runs used, to keep their hashes.
+            *(
+                [f"consensus-storage={cfg.consensus_storage}".encode()]
+                if cfg.consensus_storage != "journal"
+                else []
+            ),
             *(
                 [json.dumps(dataclasses.asdict(cfg.search), sort_keys=True).encode()]
                 if cfg.search
@@ -4771,6 +4826,7 @@ def render_host_files(
                 manifest["memory_mib"][spec["instance_type"]],
                 query_db=cfg.query_db,
                 leader_trace=cfg.leader_trace,
+                consensus_storage=cfg.consensus_storage,
             )
         )
         if spec["role"] == "ctl":
@@ -4782,7 +4838,13 @@ def render_host_files(
                 node_env.touch(mode=0o600)
                 node_env.chmod(0o600)
             node_env.write_text(
-                render_node_env(spec, hosts, pg, (*trace_env(cfg), *cfg.node_env))
+                render_node_env(
+                    spec,
+                    hosts,
+                    pg,
+                    (*trace_env(cfg), *cfg.node_env),
+                    cfg.consensus_storage,
+                )
             )
             if pg is not None:
                 write_private_json(host_dir / "pg.json", pg)
@@ -6128,6 +6190,7 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     if "node_env" in saved:
         fields["node_env"] = tuple(saved["node_env"])
     fields.setdefault("region", LEGACY_REGION)
+    fields.setdefault("consensus_storage", "journal")
     fields["search"] = search_config(saved.get("search"))
     return RunConfig(**fields)
 
@@ -6999,12 +7062,13 @@ def check_validity_aws(
     if "ssl_backends" in evidence and pg_tls(evidence["ssl_backends"]) is False:
         noisy.append("node0 postgres backends connected without TLS")
     specs = {h["name"]: h for h in manifest["hosts"]}
-    for name, size in evidence["journal_bytes"].items():
-        limit = _journal_max_bytes(specs[name])
-        if size > JOURNAL_NOISY_FRACTION * limit:
-            noisy.append(
-                f"{name} journal {size / 1e9:.1f} GB near its {limit / 1e9:.1f} GB limit"
-            )
+    if manifest["config"].get("consensus_storage", "journal") == "journal":
+        for name, size in evidence["journal_bytes"].items():
+            limit = _journal_max_bytes(specs[name])
+            if size > JOURNAL_NOISY_FRACTION * limit:
+                noisy.append(
+                    f"{name} journal {size / 1e9:.1f} GB near its {limit / 1e9:.1f} GB limit"
+                )
     noisy += ebs_balance_reasons(evidence["ebs_balance_min"])
     if "rds_min" in evidence:
         noisy += rds_reasons(evidence["rds_min"])
@@ -7397,6 +7461,7 @@ INDEX_COLUMNS = {
     "tag": "tag@rev",
     "nodes": "N",
     "db": "db",
+    "storage": "storage",
     "latency": "latency",
     "node_type": "node",
     "rate": "rate MB/s",
@@ -7473,6 +7538,7 @@ def index_cells(
         "tag": f"{manifest['config']['tag']}@{revision}",
         "nodes": str(manifest["config"]["nodes"]),
         "db": manifest["query_db"],
+        "storage": manifest["config"]["consensus_storage"],
         "latency": latency_cell(manifest["config"]),
         "node_type": manifest["config"]["node_type"],
         "rate": rate,
@@ -7621,6 +7687,7 @@ def complete_index_row(run_dir: Path, row: dict[str, str]) -> dict[str, str]:
     config = nb.read_json(run_dir / MANIFEST_JSON)["config"]
     result_path = run_dir / "result.json"
     derived = {
+        "storage": lambda: config.get("consensus_storage", "journal"),
         "latency": lambda: latency_cell(config),
         "node_type": lambda: config["node_type"],
         "bound": lambda: (

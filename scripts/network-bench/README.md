@@ -81,11 +81,13 @@ laptop                       EC2, one AZ, private IPs
                              +-------------------------------------------------+
 ```
 
-| Host      | Runs                                                                                                     |
-| --------- | -------------------------------------------------------------------------------------------------------- |
-| `ctl`     | anvil, `deploy`, orchestrator, state-relay-server, `agent-drive`, `agent-host`                           |
-| `node0`   | espresso-node `-- storage-journal -- storage-sql -- http -- query ...`, postgres container, `agent-host` |
-| `node1..` | espresso-node `-- storage-journal -- http -- status -- submit -- catchup -- config`, `agent-host`        |
+| Host      | Runs                                                                                         |
+| --------- | -------------------------------------------------------------------------------------------- |
+| `ctl`     | anvil, `deploy`, orchestrator, state-relay-server, `agent-drive`, `agent-host`               |
+| `node0`   | espresso-node `-- storage-sql -- http -- query ...`, postgres container, `agent-host`        |
+| `node1..` | espresso-node `-- storage-fs -- http -- status -- submit -- catchup -- config`, `agent-host` |
+
+Modules shown are for `--consensus-storage fs` (default). With `journal`, both roles also get `storage-journal` first.
 
 ## Requirements
 
@@ -313,41 +315,42 @@ Where:
 - **per run**: `plan`, `run`, `run --fleet`; refused by `up`.
 - **run**: `run` only.
 
-| Flag                                  | Default                        | Where        | Meaning                                                                            |
-| ------------------------------------- | ------------------------------ | ------------ | ---------------------------------------------------------------------------------- |
-| `--tag`                               | required; fleet's on `--fleet` | all          | ghcr image tag pushed by CI                                                        |
-| `--allocator`                         | none                           | all          | `jemalloc`, `mimalloc`, `snmalloc`, `tcmalloc`                                     |
-| `--nodes`                             | 5                              | provision    | validator count, `node0` included                                                  |
-| `--node-type`                         | `c8g.4xlarge`                  | provision    | node instance type                                                                 |
-| `--ctl-type`                          | `c8g.2xlarge`                  | provision    | `ctl` instance type                                                                |
-| `--root-gb`                           | `auto`                         | provision    | root volume GB; `auto` sizes from the ramp, or from `--offered-gb` with `--search` |
-| `--pg-iops`, `--pg-mbps`              | 12000, 500                     | provision    | node0 root volume and `volume` store                                               |
-| `--region`                            | eu-west-1                      | provision    | AWS region                                                                         |
-| `--max-usd`                           | `run` 10; `plan`, `up` 60      | provision    | refuse when the cost bound exceeds it                                              |
-| `--ttl-min`                           | `plan`, `run` auto; `up` 180   | provision    | minutes until hosts terminate; `auto`: worst case plus margin                      |
-| `--db-modes`                          | `colocated`                    | `plan`, `up` | stores the fleet prepares                                                          |
-| `--steps`                             | x1.5 from 4 to 200             | all          | MB/s per step, increasing                                                          |
-| `--step-s`                            | 30; `--search` 60              | all          | seconds per step                                                                   |
-| `--cap-s`                             | 5; `--search` 60               | all          | in-flight cap, in seconds of the step's load                                       |
-| `--tx-timeout-s`                      | 30; `--search` 60              | all          | tx timeout                                                                         |
-| `--warmup-s`                          | 60                             | all          | warmup at the first step's rate                                                    |
-| `--submit-workers`                    | 32                             | all          | submit threads; part of the config hash                                            |
-| `--namespaces`                        | 16                             | all          | namespaces the load spreads over, round robin from 10000; part of the config hash  |
-| `--heartbeat-tx-s`                    | 50                             | all          | 8-byte txs per second for the whole run, 0 for none                                |
-| `--keep-going`                        | off                            | all          | run every step, then drain                                                         |
-| `--max-block-size`                    | `50mb`                         | per run      | genesis `max_block_size`                                                           |
-| `--node-env KEY=VALUE`                | none                           | per run      | repeatable; node environment                                                       |
-| `--leader-trace`, `--no-leader-trace` | off                            | per run      | leader trace CSVs and plots                                                        |
-| `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                      |
-| `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `mainnet`                                                     |
-| `--no-intra-latency`                  | off                            | per run      | with `--latency`: no same-location delay                                           |
-| `--tcp-cc`                            | cubic                          | per run      | with `--latency`: TCP congestion control, `cubic` or `bbr`                         |
-| `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                       |
-| `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`                                                       |
-| `--force`                             | off                            | run          | with `--fleet`: reset a dirty fleet, replace a stale lock                          |
-| `--yes`                               | off                            | run          | skip the prompt, required without a tty; also on `up`, `down`, `destroy`, `prune`  |
-| `--no-publish`                        | off                            | run          | skip publishing                                                                    |
-| `--results-remote`                    | results repo                   | run          | git remote, also on `publish`; env `BENCH_RESULTS_REMOTE`                          |
+| Flag                                  | Default                        | Where        | Meaning                                                                                       |
+| ------------------------------------- | ------------------------------ | ------------ | --------------------------------------------------------------------------------------------- |
+| `--tag`                               | required; fleet's on `--fleet` | all          | ghcr image tag pushed by CI                                                                   |
+| `--allocator`                         | none                           | all          | `jemalloc`, `mimalloc`, `snmalloc`, `tcmalloc`                                                |
+| `--nodes`                             | 5                              | provision    | validator count, `node0` included                                                             |
+| `--node-type`                         | `c8g.4xlarge`                  | provision    | node instance type                                                                            |
+| `--ctl-type`                          | `c8g.2xlarge`                  | provision    | `ctl` instance type                                                                           |
+| `--root-gb`                           | `auto`                         | provision    | root volume GB; `auto` sizes from the ramp, or from `--offered-gb` with `--search`            |
+| `--pg-iops`, `--pg-mbps`              | 12000, 500                     | provision    | node0 root volume and `volume` store                                                          |
+| `--region`                            | eu-west-1                      | provision    | AWS region                                                                                    |
+| `--max-usd`                           | `run` 10; `plan`, `up` 60      | provision    | refuse when the cost bound exceeds it                                                         |
+| `--ttl-min`                           | `plan`, `run` auto; `up` 180   | provision    | minutes until hosts terminate; `auto`: worst case plus margin                                 |
+| `--db-modes`                          | `colocated`                    | `plan`, `up` | stores the fleet prepares                                                                     |
+| `--steps`                             | x1.5 from 4 to 200             | all          | MB/s per step, increasing                                                                     |
+| `--step-s`                            | 30; `--search` 60              | all          | seconds per step                                                                              |
+| `--cap-s`                             | 5; `--search` 60               | all          | in-flight cap, in seconds of the step's load                                                  |
+| `--tx-timeout-s`                      | 30; `--search` 60              | all          | tx timeout                                                                                    |
+| `--warmup-s`                          | 60                             | all          | warmup at the first step's rate                                                               |
+| `--submit-workers`                    | 32                             | all          | submit threads; part of the config hash                                                       |
+| `--namespaces`                        | 16                             | all          | namespaces the load spreads over, round robin from 10000; part of the config hash             |
+| `--heartbeat-tx-s`                    | 50                             | all          | 8-byte txs per second for the whole run, 0 for none                                           |
+| `--keep-going`                        | off                            | all          | run every step, then drain                                                                    |
+| `--max-block-size`                    | `50mb`                         | per run      | genesis `max_block_size`                                                                      |
+| `--node-env KEY=VALUE`                | none                           | per run      | repeatable; node environment                                                                  |
+| `--leader-trace`, `--no-leader-trace` | off                            | per run      | leader trace CSVs and plots                                                                   |
+| `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                                 |
+| `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `mainnet`                                                                |
+| `--no-intra-latency`                  | off                            | per run      | with `--latency`: no same-location delay                                                      |
+| `--tcp-cc`                            | cubic                          | per run      | with `--latency`: TCP congestion control, `cubic` or `bbr`                                    |
+| `--consensus-storage`                 | `fs`                           | per run      | `fs`, `journal` (experimental, not in `main` images); query node uses `storage-sql` with `fs` |
+| `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                                  |
+| `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`                                                                  |
+| `--force`                             | off                            | run          | with `--fleet`: reset a dirty fleet, replace a stale lock                                     |
+| `--yes`                               | off                            | run          | skip the prompt, required without a tty; also on `up`, `down`, `destroy`, `prune`             |
+| `--no-publish`                        | off                            | run          | skip publishing                                                                               |
+| `--results-remote`                    | results repo                   | run          | git remote, also on `publish`; env `BENCH_RESULTS_REMOTE`                                     |
 
 ### Search flags
 

@@ -207,6 +207,11 @@ def test_index_row_json_holds_the_cells_and_the_user(run_harness: RunHarness):
     )
 
 
+def test_index_cells_name_the_consensus_storage():
+    cells = awsb.index_cells(index_manifest(), "01-run", None, 3, None)
+    assert cells["storage"] == "fs"
+
+
 def test_index_cells_of_a_failed_run():
     cells = awsb.index_cells(index_manifest(), "01-run", None, 3, {"usd": 0.5})
     assert cells["status"] == "failed"
@@ -233,6 +238,7 @@ def test_published_row_without_new_cells_derives_them(tmp_path: Path):
     )
     row = awsb.read_index_row(run_dir)
     assert list(row) == [*awsb.INDEX_COLUMNS, "user"]
+    assert row["storage"] == "journal"
     assert (row["latency"], row["node_type"], row["bound"]) == (
         "decaf-2025",
         "c8g.4xlarge",
@@ -242,10 +248,14 @@ def test_published_row_without_new_cells_derives_them(tmp_path: Path):
 
 def test_published_row_keeps_cells_it_has(tmp_path: Path):
     run_dir = make_run_dir(tmp_path, with_row=False)
-    row = {**OLD_ROW, "latency": "off", "node_type": "x", "bound": "both"}
+    row = {**OLD_ROW, "storage": "fs", "node_type": "x", "bound": "both"}
     netbench.write_json(run_dir / "index-row.json", row)
     filled = awsb.read_index_row(run_dir)
-    assert (filled["node_type"], filled["bound"]) == ("x", "both")
+    assert (filled["node_type"], filled["bound"], filled["storage"]) == (
+        "x",
+        "both",
+        "fs",
+    )
 
 
 def test_row_of_a_run_without_result_has_no_bound(tmp_path: Path):

@@ -474,6 +474,14 @@ def near_journal_limit() -> int:
     return int(awsb._journal_max_bytes(spec) * 0.95)
 
 
+def test_journal_size_is_not_judged_for_fs_storage() -> None:
+    manifest = aws_manifest()
+    manifest["config"]["consensus_storage"] = "fs"
+    evidence = {"journal_bytes": {"node1": near_journal_limit()}}
+    got = check_aws(clean_result(), manifest, **evidence)
+    assert got["reasons"] == []
+
+
 def cover(node0: float) -> dict:
     return {"ctl": 1.0, "node0": node0, "node1": 1.0}
 

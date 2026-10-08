@@ -364,6 +364,15 @@ def test_node_env_belongs_to_one_run(harness, runner):
         harness.up_args("--node-env", "A=1")
 
 
+def test_consensus_storage_belongs_to_one_run(harness, runner):
+    manifest = harness.fleet()
+    assert awsb.fleet_run_config(harness.run_args(), manifest).consensus_storage == "fs"
+    cfg = awsb.fleet_run_config(
+        harness.run_args("--consensus-storage", "journal"), manifest
+    )
+    assert cfg.consensus_storage == "journal"
+
+
 def test_max_block_size_belongs_to_one_run(harness, runner):
     manifest = harness.fleet()
     assert awsb.fleet_run_config(harness.run_args(), manifest).max_block_size == "50mb"
