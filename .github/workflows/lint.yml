@@ -99,6 +99,32 @@ jobs:
       - name: Run the script tests
         run: just py::test
 
+  protos:
+    name: protos
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The compatibility check diffs against the merge base with the PR's base branch.
+          fetch-depth: 0
+      # Pinned by commit: a third-party action's tag can be moved.
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          # Keep in step with the `buf` the nix dev shell provides, so `buf format` agrees
+          # locally and in CI.
+          version: 1.72.0
+          setup_only: true
+      - uses: taiki-e/install-action@just
+
+      # A changed proto must keep the wire and protoJSON encoding of what it replaces.
+      - name: Check the v2 protos' formatting and backward compatibility
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: just proto-check "$BASE"
+
   allocator-patches:
     name: allocator patches
     runs-on: ubuntu-latest

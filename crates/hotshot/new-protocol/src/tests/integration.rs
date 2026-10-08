@@ -13,14 +13,15 @@ use hotshot_types::{
     traits::signature_key::SignatureKey,
     vote::HasViewNumber,
 };
+use tokio::time::timeout;
 
 use super::common::{
     harness::TestHarness,
-    utils::{TestData, build_cert1, build_cert2, build_timeout_cert3},
+    utils::{TestData, TestView, build_cert1, build_cert2, build_timeout_cert3},
 };
 use crate::{
     consensus::{ConsensusInput, ConsensusOutput},
-    coordinator::EPOCH_CHANGE_LOOKAHEAD,
+    coordinator::{EPOCH_CHANGE_LOOKAHEAD, error::Severity},
     helpers::test_timeout_epoch_lock,
     message::{
         CatchupEvidence, Certificate1, ConsensusMessage, EpochChangeMessage, Message, MessageType,
@@ -31,13 +32,16 @@ use crate::{
         is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
         is_proposal_for_view, is_request_block_and_header, is_request_vid_disperse, is_send_cert1,
         is_send_epoch_change, is_send_timeout_vote, is_state_validated, is_timeout,
-        is_timeout_cert, is_timeout_one_honest, is_vid_disperse, is_view_changed, is_vote1,
-        is_vote2, node_index_for_key,
+        is_timeout_cert, is_timeout_one_honest, is_upgrade_cert_formed, is_vid_disperse,
+        is_view_changed, is_vote1, is_vote2, node_index_for_key,
     },
 };
 
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
 const THRESHOLD: u64 = 7;
+
+/// Upgrade threshold for 10 nodes of stake 1: max((10*9)/10, 7) = 9.
+const UPGRADE_THRESHOLD: u64 = 9;
 
 /// Send a proposal and enough Vote1 messages to form Certificate1.
 ///
@@ -192,6 +196,41 @@ async fn test_timeout_votes_from_an_inadmissible_epoch_are_not_tallied() {
     }
     harness
         .process_until(|inputs| any(inputs, is_timeout_cert))
+        .await;
+}
+
+/// Upgrade votes that bind an epoch outside the admissible window are not
+/// tallied, as for every other vote. The epoch is signed but the sender picks
+/// it, so without the check each fabricated epoch would park its votes and
+/// start a stake table catchup for it.
+#[tokio::test]
+async fn test_upgrade_votes_from_an_inadmissible_epoch_are_not_tallied() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut harness = TestHarness::new(0).await;
+
+    // The node is in the genesis epoch, so this is past the lookahead. It is
+    // registered, so the votes binding it resolve a committee and only the
+    // window check stands between them and a certificate.
+    let far = view.epoch_number + (EPOCH_CHANGE_LOOKAHEAD + 1);
+    harness
+        .membership()
+        .membership()
+        .register_epoch(far, [0u8; 32]);
+    for i in 0..UPGRADE_THRESHOLD {
+        harness.message(view.upgrade_vote_input_for_epoch(i, far));
+    }
+    let inputs = harness.process_for(NO_CERT_WINDOW).await;
+    assert!(
+        !any(&inputs, is_upgrade_cert_formed),
+        "upgrade votes binding an epoch outside the window must not form a certificate"
+    );
+
+    for i in 0..UPGRADE_THRESHOLD {
+        harness.message(view.upgrade_vote_input_for_epoch(i, view.epoch_number));
+    }
+    harness
+        .process_until(|inputs| any(inputs, is_upgrade_cert_formed))
         .await;
 }
 
@@ -920,6 +959,110 @@ async fn test_timeout_votes_form_tc() {
         any(harness.outputs(), is_view_changed),
         "View should advance after timeout certificate"
     );
+}
+
+/// Drain `next_consensus_input` without applying until `pred` matches, or
+/// `wait` elapses. `process_until` applies everything it collects; applying
+/// a certificate advances the view and the late votes would then be dropped
+/// as stale before ever reaching the collector.
+async fn next_input_matching(
+    harness: &mut TestHarness,
+    wait: Duration,
+    pred: fn(&ConsensusInput<TestTypes>) -> bool,
+) -> Option<ConsensusInput<TestTypes>> {
+    timeout(wait, async {
+        loop {
+            match harness.coordinator_mut().next_consensus_input().await {
+                Ok(input) if pred(&input) => break input,
+                Ok(_) => {},
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("critical coordinator error: {err}")
+                },
+                Err(_) => {},
+            }
+        }
+    })
+    .await
+    .ok()
+}
+
+/// Once a network-received certificate for a view has been returned by the
+/// coordinator, `THRESHOLD` late votes for that view must not form a second
+/// one through the local vote collector.
+async fn assert_network_cert_suppresses_local_collector(
+    test_view: &TestView,
+    cert_message: Message<TestTypes, Validated>,
+    vote_message: impl Fn(u64) -> Message<TestTypes, Validated>,
+    is_cert: fn(&ConsensusInput<TestTypes>) -> bool,
+) {
+    let mut harness = TestHarness::new(0).await;
+    let view = test_view.view_number;
+
+    harness.message(cert_message);
+    let first = next_input_matching(&mut harness, Duration::from_secs(30), is_cert)
+        .await
+        .expect("network certificate should be verified and returned");
+    // `ConsensusInput::view_number` reports the view a TC advances to, so
+    // read the certificate's own view.
+    let cert_view = match &first {
+        ConsensusInput::Certificate1(cert) => cert.view_number(),
+        ConsensusInput::Certificate2(cert) => cert.view_number(),
+        ConsensusInput::TimeoutCertificate(cert) => cert.view_number(),
+        other => panic!("not a certificate: {other:?}"),
+    };
+    assert_eq!(cert_view, view);
+
+    for i in 0..THRESHOLD {
+        harness.message(vote_message(i));
+    }
+    let second = next_input_matching(&mut harness, Duration::from_secs(2), is_cert).await;
+    assert!(
+        second.is_none(),
+        "certificate for view {view} was produced twice: {second:?}"
+    );
+}
+
+/// Regression test for duplicate timeout-certificate applies: a peer's TC
+/// wins the race against the local timeout-vote collector.
+#[tokio::test]
+async fn test_network_tc_suppresses_local_timeout_collector() {
+    let test_data = TestData::new(2).await;
+    let test_view = &test_data.views[0];
+    assert_network_cert_suppresses_local_collector(
+        test_view,
+        test_view.timeout_cert_message(1),
+        |i| test_view.timeout_vote_input(i, None),
+        is_timeout_cert,
+    )
+    .await;
+}
+
+/// A peer's Certificate1 wins the race against the local vote1 collector.
+#[tokio::test]
+async fn test_network_cert1_suppresses_local_vote1_collector() {
+    let test_data = TestData::new(2).await;
+    let test_view = &test_data.views[0];
+    assert_network_cert_suppresses_local_collector(
+        test_view,
+        test_view.cert1_message(1),
+        |i| test_view.vote1_input(i),
+        is_cert1,
+    )
+    .await;
+}
+
+/// A peer's Certificate2 wins the race against the local vote2 collector.
+#[tokio::test]
+async fn test_network_cert2_suppresses_local_vote2_collector() {
+    let test_data = TestData::new(2).await;
+    let test_view = &test_data.views[0];
+    assert_network_cert_suppresses_local_collector(
+        test_view,
+        test_view.cert2_message(1),
+        |i| test_view.vote2_input(i),
+        is_cert2,
+    )
+    .await;
 }
 
 /// Full leader path after timeout: establish lock → timer fires for

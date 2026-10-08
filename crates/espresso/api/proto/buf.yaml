@@ -1,0 +1,9 @@
+version: v2
+breaking:
+  # Wire and protoJSON compatibility plus the package's rpcs and services, so deleting an endpoint
+  # is a break too. Moving a message between files of the package is not.
+  use:
+    - PACKAGE
+  ignore:
+    # Vendored annotation definitions, read only by protoc at build time.
+    - google

@@ -217,6 +217,7 @@
             openssl
             curl
             protobuf # protoc, for the espresso-api v2 codegen
+            buf # just proto-check
             stableToolchain
             jq
 

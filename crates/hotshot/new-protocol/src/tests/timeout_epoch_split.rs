@@ -23,7 +23,7 @@ use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     message::UpgradeLock,
-    simple_certificate::{TimeoutCertificate2, TimeoutCertificate3},
+    simple_certificate::SuccessThreshold,
     simple_vote::{TimeoutVote2, TimeoutVote3},
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
     utils::is_epoch_transition,
@@ -69,8 +69,8 @@ fn epoch(e: u64) -> EpochNumber {
 /// Run one node through views 1..=10 under `lock`, optionally deliver the
 /// `EpochChange` for view 10, then time out view 11.
 ///
-/// Returns the epoch the node holds for that view (the last `ViewChanged`
-/// it emitted) and the timeout vote it broadcasts.
+/// Returns the epoch the node holds for that view when its timer fires and
+/// the timeout vote it broadcasts.
 async fn boundary_timeout_vote(
     node_index: u64,
     test_data: &TestData,
@@ -124,15 +124,12 @@ async fn boundary_timeout_vote(
         ViewNumber::new(NEXT_VIEW),
         "node {node_index} should be in the view after the boundary"
     );
+    // Not the last `ViewChanged`: an `EpochChange` that arrives after Cert1
+    // moved the node into the view relabels it without emitting another one.
     let label = harness
-        .outputs()
-        .iter()
-        .filter_map(|o| match o {
-            ConsensusOutput::ViewChanged(view, e) if **view == NEXT_VIEW => Some(*e),
-            _ => None,
-        })
-        .last()
-        .expect("a ViewChanged into the view after the boundary");
+        .consensus
+        .current_epoch()
+        .expect("the node holds an epoch past the boundary");
 
     harness
         .apply(ConsensusInput::Timeout(ViewNumber::new(NEXT_VIEW)))
@@ -192,14 +189,10 @@ fn v2_votes(votes: Vec<TimeoutVote<TestTypes>>) -> Vec<TimeoutVote2<TestTypes>> 
         .collect()
 }
 
-type TimeoutCollector3 = VoteCollector<
-    TestTypes,
-    SimpleTally<TestTypes, TimeoutVote3<TestTypes>, TimeoutCertificate3<TestTypes>>,
->;
-type TimeoutCollector2 = VoteCollector<
-    TestTypes,
-    SimpleTally<TestTypes, TimeoutVote2<TestTypes>, TimeoutCertificate2<TestTypes>>,
->;
+type TimeoutCollector3 =
+    VoteCollector<TestTypes, SimpleTally<TestTypes, TimeoutVote3<TestTypes>, SuccessThreshold>>;
+type TimeoutCollector2 =
+    VoteCollector<TestTypes, SimpleTally<TestTypes, TimeoutVote2<TestTypes>, SuccessThreshold>>;
 
 /// Honest nodes on both sides of the boundary sign different commitments
 /// for the same view, and the coordinator's V3 timeout collector cannot
