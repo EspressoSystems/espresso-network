@@ -508,6 +508,25 @@ def test_queued_submits(load, duration, accept_delay, cap_txs, tx_timeout_s, lat
     assert run.meta["max_in_flight"] <= cap_txs
 
 
+def test_heartbeat_runs_alongside_the_load_and_stays_out_of_its_records(load):
+    run = load(
+        2.0,
+        include=True,
+        accept_delay=0.0,
+        heartbeat_tx_s=20.0,
+        tx_size=10_000,
+        rate=0.05,
+        tx_timeout_s=5,
+    )
+    assert included(run.txs)
+    assert len(run.node.submits) - len(run.txs) >= 40
+
+
+def test_a_heartbeat_too_large_for_the_drain_is_refused():
+    with pytest.raises(ValueError, match="heartbeat"):
+        netbench.BenchConfig(tx_size=1000, heartbeat_tx_s=20.0)
+
+
 def test_slow_payloads_do_not_delay_block_times(load):
     run = load(0.5, include=True, payload_delay=0.1, cap_txs=100, tx_timeout_s=10)
     assert len(run.txs) > 5
@@ -831,7 +850,8 @@ def heights_at(validator: int, query: int | None) -> netbench.Heights:
 def drain(
     state, heights, clock, decided=lambda ts: 1, max_s=netbench.DRAIN_MAX_S
 ) -> float | None:
-    """Counters are sampled every second as the clock advances; `decided(ts)` is the value."""
+    """Counters are sampled every second as the clock advances; `decided(ts)` is the value.
+    Transactions of 2 bytes: a growth of 1 byte is consensus at work."""
     counters = idle_counters()
     chained = clock.on_advance
 
@@ -843,7 +863,7 @@ def drain(
             chained(now)
 
     clock.on_advance = advance
-    return clock.run(netbench.drain(state, counters, heights, clock, max_s))
+    return clock.run(netbench.drain(state, counters, heights, clock, 2, max_s))
 
 
 def sent_tx(state: netbench.LoadState, tx_id: int, sent: bool) -> netbench.Tx:
@@ -1044,15 +1064,62 @@ def test_keep_going_changes_the_config_hash():
 def test_idle_needs_decided_bytes_flat_for_longer_than_a_slow_block():
     """Blocks of 2.5 s under a backlog leave two equal samples 1 s apart while consensus is
     busy (run lulu-20260930-1758 reported "drained in 0.0 s")."""
-    assert netbench.is_idle(idle_counters(), 0.0)
+    assert netbench.is_idle(idle_counters(), 0.0, 2)
     short = [c for c in idle_counters() if c["ts"] >= -2.0]
-    assert not netbench.is_idle(short, 0.0)
+    assert not netbench.is_idle(short, 0.0, 2)
     busy = [{**c, "decided_bytes": 1 + (c["ts"] > -3.0)} for c in idle_counters()]
-    assert not netbench.is_idle(busy, 0.0)
-    assert not netbench.is_idle([], 0.0)
+    assert not netbench.is_idle(busy, 0.0, 2)
+    assert not netbench.is_idle([], 0.0, 2)
 
 
-def test_drain_waits_for_the_query_node_to_show_the_empty_blocks():
+def test_idle_allows_heartbeat_bytes():
+    """50 heartbeats a second of 8 bytes plus a 4-byte tx table entry, 1 MB transactions."""
+    beating = [{**c, "decided_bytes": 600 * (c["ts"] + 10)} for c in idle_counters()]
+    assert netbench.is_idle(beating, 0.0, 1_000_000)
+    one_tx = [{**c, "decided_bytes": 1e6 * (c["ts"] > -3.0)} for c in idle_counters()]
+    assert not netbench.is_idle(one_tx, 0.0, 1_000_000)
+
+
+class BeatPool:
+    """Records heartbeat bodies; sets `stop` after `beats` requests, fails every `fail_every`."""
+
+    def __init__(self, beats: int, stop: threading.Event, fail_every: int = 0) -> None:
+        self.clock = fakes.FakeClock()
+        self.beats, self.stop, self.fail_every = beats, stop, fail_every
+        self.sent: list[tuple[float, str, bytes]] = []
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None
+    ) -> tuple[int, bytes]:
+        assert method == "POST" and body is not None
+        self.sent.append((self.clock.time(), url, body))
+        if len(self.sent) == self.beats:
+            self.stop.set()
+        if self.fail_every and len(self.sent) % self.fail_every == 0:
+            raise OSError("refused")
+        return 200, b""
+
+
+def test_heartbeat_sends_distinct_small_transactions_round_robin():
+    stop = threading.Event()
+    pool = BeatPool(6, stop, fail_every=3)
+    failed = netbench.heartbeat(
+        cast("Any", pool), ["http://a", "http://b"], 7, 50.0, stop
+    )
+    assert failed == 2
+    times = [t for t, _, _ in pool.sent]
+    assert times == pytest.approx([i * 0.02 for i in range(6)])
+    assert [url for _, url, _ in pool.sent] == [
+        "http://a/v1/submit/submit",
+        "http://b/v1/submit/submit",
+    ] * 3
+    payloads = [json.loads(body)["payload"] for _, _, body in pool.sent]
+    assert len(set(payloads)) == 6
+    assert {len(base64.b64decode(p)) for p in payloads} == {8}
+    assert {json.loads(body)["namespace"] for _, _, body in pool.sent} == {7}
+
+
+def test_drain_waits_for_the_query_node_to_show_the_idle_blocks():
     heights = heights_at(5, 7)
 
     def catch_up(now: float) -> None:
@@ -1065,7 +1132,7 @@ def test_drain_waits_for_the_query_node_to_show_the_empty_blocks():
     )
 
 
-def test_drain_needs_a_counter_sample_after_the_empty_blocks(caplog):
+def test_drain_needs_a_counter_sample_after_the_idle_blocks(caplog):
     """Counters are polled every second: samples from before the last empty block say nothing
     about it. Here decided bytes grow in the first sample after the query node caught up."""
     heights = heights_at(5, 7)
@@ -1808,6 +1875,11 @@ def test_compare_uses_the_stored_resolution():
 
 def test_legacy_config_hash_keeps_its_value():
     assert netbench.config_hash(netbench.BenchConfig(), []) == "bdf88113f497"
+
+
+def test_heartbeat_changes_the_config_hash():
+    beating = netbench.BenchConfig(heartbeat_tx_s=50.0)
+    assert netbench.config_hash(beating, []) != "bdf88113f497"
 
 
 def test_legacy_staircase_reports_why_it_stopped(staircase):

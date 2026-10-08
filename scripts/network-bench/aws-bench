@@ -125,12 +125,15 @@ SEARCH_TX_TIMEOUT_S = 60
 # drain after each of three failing probes.
 SEARCH_EXPECTED_PROBES = 11
 SEARCH_EXPECTED_DRAINS = 3
-# A drain's idle window and grace, plus the empty blocks and the backlog of a typical probe.
+# A drain's idle window and grace, plus the blocks after it and the backlog of a typical probe.
 DRAIN_EXPECTED_S = nb.DRAIN_IDLE_S + nb.DRAIN_GRACE_S + 5
 # Share of the Postgres volume `--offered-gb` may fill.
 PG_FILL_MAX = 0.9
 # Submit threads: a 1 MB POST takes tens of ms on the private network; 200 tx/s needs this many.
 SUBMIT_WORKERS = 32
+# Heartbeat transactions per second, above the block rate (~5/s) so a leader's buffer is not
+# empty after a drain; see `nb.heartbeat`.
+HEARTBEAT_TX_S = 50.0
 NODE_TYPE = "c8g.4xlarge"
 CTL_TYPE = "c8g.2xlarge"
 REGION = "eu-west-1"  # default of `--region`
@@ -2339,6 +2342,7 @@ def aws_load() -> nb.BenchConfig:
     return nb.BenchConfig(
         steps=geometric_steps(STEP_START_MB_S, STEP_FACTOR, STEP_TOP_MB_S),
         workers=SUBMIT_WORKERS,
+        heartbeat_tx_s=HEARTBEAT_TX_S,
     )
 
 
@@ -2373,6 +2377,12 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         help=f"default {load.tx_timeout_s}, with --search {SEARCH_TX_TIMEOUT_S}",
     )
     parser.add_argument("--submit-workers", type=positive_int, default=load.workers)
+    parser.add_argument(
+        "--heartbeat-tx-s",
+        type=float,
+        default=load.heartbeat_tx_s,
+        help="8-byte transactions per second for the whole run, 0 for none",
+    )
     parser.add_argument("--warmup-s", type=int, default=load.warmup_s)
     parser.add_argument(
         "--keep-going",
@@ -2579,6 +2589,7 @@ def load_from_args(
         tx_timeout_s=tx_timeout_s if args.tx_timeout_s is None else args.tx_timeout_s,
         warmup_s=args.warmup_s,
         keep_going=args.keep_going,
+        heartbeat_tx_s=args.heartbeat_tx_s,
     )
 
 

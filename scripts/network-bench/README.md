@@ -67,11 +67,22 @@ scripts/network-bench/
   of a lost payload stay pending until `--tx-timeout-s`, which the end of the run waits for. Not for the CI job: its
   step timeout is 15 min.
 - Drain (before a refine step or search probe, and after a `--keep-going` run): transactions still queued for a submit
-  thread are dropped, nothing new is submitted. Drained once decided bytes are flat for 5 s and the query node shows 3
-  empty blocks past that point and a counter sample taken after them is still flat, then up to 10 s for pending
-  transactions. Gives up after 30 s without a new validator height or 300 s in total (`drain timeout`); the cap of the
-  final drain of a `--keep-going` run is `max(300 s, --tx-timeout-s)`. Sent transactions still pending at the end of a
-  drain carry into the next probe until their timeout.
+  thread are dropped, nothing new is submitted. Drained once less than half a transaction is decided over 5 s (the
+  heartbeat's bytes stay below that) and the query node shows 3 blocks past that point and a counter sample taken after
+  them is still idle, then up to 10 s for pending transactions. Gives up after 30 s without a new validator height or
+  300 s in total (`drain timeout`); the cap of the final drain of a `--keep-going` run is `max(300 s, --tx-timeout-s)`.
+  Sent transactions still pending at the end of a drain carry into the next probe until their timeout.
+- `--heartbeat-tx-s N` (AWS `run` default 50, `bench` default 0): a thread submits N 8-byte transactions per second
+  without the marker, round robin over the submit nodes, for the whole run. A leader whose buffer is empty sleeps
+  `empty_block_delay` (default 500 ms) before building; the backlog of that sleep fills the next blocks and can tip a
+  probe that starts after a drain into collapse below the warm capacity. The scans skip heartbeat transactions; they add
+  about 600 B/s to decided bytes (payload and tx table entry), and a config refuses a heartbeat whose bytes over a
+  drain's idle window reach a quarter of `tx_size`. The first failed heartbeat submit is logged, the count goes to
+  `load-meta.json` as `heartbeat_errors`. Part of the config hash when on.
+- Progress, every 10 s: one fixed-width line of the phase (warmup, step or probe, drain, done; rate, elapsed/length),
+  then `sub` (submitted MB/s, pending, timed out in the window), `cns` (decided MB/s and its share of submitted,
+  validator height, block interval and size, p50 submit until header on a validator), `qry` (MB/s scanned from the query
+  node, its height, lag behind the validators), and `| vto N` after view timeouts. Totals once at the end.
 - `--max-block-size SIZE` (`plan` and `run`, also `run --fleet`; not an `up` flag; default `50mb`): genesis
   `max_block_size` of both chain configs, e.g. `30mb`, `100mb`; part of the config hash through the genesis and shown in
   the summary's deployment block. On 5 x c8g.4xlarge the block interval grows superlinearly above about 60 MB blocks,
@@ -97,8 +108,8 @@ scripts/network-bench/
 - Output of `--leader-trace`, also by `render`: `hosts/<name>/trace/leader_trace_node*.csv`, and from
   `trace-plots RUN_DIR` (uv script, needs matplotlib) `trace/leader_path.png`, `trace/leader_path_typical.png`,
   `trace/leader_path_worst.png`, `trace/leader_path.md` (segment medians per load step, over the views whose t0 lies in
-  the measured half `t_mid`..`t_end` of the step in `steps.json`), `trace/finality.png`, `trace/stats.json`. With
-  `steps.json`, plots and stats cover only the views in the measured halves.
+  the measured window `t_mid`..`t_end` of the step in `steps.json`), `trace/finality.png`, `trace/stats.json`. With
+  `steps.json`, plots and stats cover only the views in the measured windows.
 - Query node: pg_stat_database/checkpointer/wal/activity every 5 s, pg_stat_statements and settings at collect, slow
   statements (>200 ms) in the postgres log.
 - Per step, second half judged (a step stopped early: its last 10 s):

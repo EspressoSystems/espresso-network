@@ -62,10 +62,13 @@ TRACKER_LAG_NOISY_MS = 1000.0
 SCRAPE_OK_MIN = 0.9
 MIN_READY_HEIGHT = 5
 PROGRESS_S = 10
-# Decided bytes flat this long mean consensus is idle: a block under a backlog can take 2.5 s.
+# Under half a transaction decided this long means consensus is idle: a block under a backlog
+# can take 2.5 s.
 DRAIN_IDLE_S = 5.0
-# Empty blocks the query node must show after consensus went idle.
-EMPTY_BLOCKS = 3
+# Blocks the query node must show after consensus went idle.
+IDLE_BLOCKS = 3
+# Decided bytes per heartbeat: an 8-byte payload plus its 4-byte offset in the tx table.
+HEARTBEAT_TX_BYTES = 12
 # After that, the wait for sent transactions to resolve; the tracker scans a block behind.
 DRAIN_GRACE_S = 10.0
 # A drain gives up after this long without a new validator height, or in total.
@@ -282,6 +285,8 @@ class StepResult(StepWindow, StepMeasures):
     consensus_fails: list[str]
     query_fails: list[str]
     passed: bool
+    # Present only on a step that `pace_while_keeping_up` stopped.
+    stopped_early: NotRequired[bool]
 
 
 class Limit(TypedDict):
@@ -412,6 +417,19 @@ class BenchConfig:
     # Every step runs whatever its verdict, no refine step; then the backlog drains, see
     # run_staircase. In flight and tx timeouts stay bound by `cap_s` and `tx_timeout_s`.
     keep_going: bool = False
+    # Unmarked 8-byte transactions per second for the whole run, so a leader never builds from
+    # an empty buffer and sleeps its empty block delay, as after a drain; 0 for none.
+    heartbeat_tx_s: float = 0.0
+
+    def __post_init__(self) -> None:
+        # The drain's idle rule allows half a transaction over DRAIN_IDLE_S (see `is_idle`).
+        beat_bytes = self.heartbeat_tx_s * HEARTBEAT_TX_BYTES * DRAIN_IDLE_S
+        if beat_bytes >= self.tx_size / 4:
+            raise ValueError(
+                f"heartbeat of {self.heartbeat_tx_s:g} tx/s decides {beat_bytes:.0f} B per "
+                f"{DRAIN_IDLE_S:g} s, too close to half a {self.tx_size} B transaction for "
+                "drains to see consensus idle"
+            )
 
 
 @dataclass(frozen=True)
@@ -849,6 +867,7 @@ class LoadState:
         self.timeouts = 0
         self.phase = Phase("starting", None, 0.0, 0.0)
         self.submit_errors = 0
+        self.heartbeat_errors = 0
         self.missing_payloads: list[int] = []
 
     def submitted(self, tx: Tx) -> None:
@@ -931,6 +950,8 @@ async def generate_load(
         else functools.partial(scan_in_processes, scan_procs, query_url, marker)
     )
     polling = Client(http(clock), ThreadPoolExecutor(2 + len(validator_urls)))
+    beating = Client(http(clock), ThreadPoolExecutor(1))
+    beat_stop = threading.Event()
     done = asyncio.Event()
     counters: list[dict[str, Any]] = []
     heights: Heights | None = None
@@ -976,15 +997,34 @@ async def generate_load(
                 bodies,
                 clock,
             )
+            beat = (
+                group.create_task(
+                    beating.call(
+                        heartbeat,
+                        load.urls,
+                        cfg.namespaces[0],
+                        cfg.heartbeat_tx_s,
+                        beat_stop,
+                    )
+                )
+                if cfg.heartbeat_tx_s
+                else None
+            )
             end = await run_staircase(load, heights, counters, steps, out, search)
             done.set()
             await tracker
+            beat_stop.set()
+            if beat is not None and (failed := await beat):
+                state.heartbeat_errors = failed
+                log.warning("%d heartbeat submits failed", failed)
             for poller in pollers:
                 poller.cancel()
     except* (NetworkError, OSError) as group:
         end["stop_reason"] = "network error"
         raise NetworkError(f"load generator: {innermost(group)}") from group
     finally:
+        beat_stop.set()
+        beating.close()
         submitter.close()
         tracking.close()
         if scan_procs is not None:
@@ -1019,6 +1059,7 @@ def write_load_files(
             "max_in_flight": state.max_in_flight,
             "cap_waits": state.cap_waits,
             "submit_errors": state.submit_errors,
+            "heartbeat_errors": state.heartbeat_errors,
             "missing_payloads": state.missing_payloads,
             "drain_s": end["drain_s"],
             "refine_skipped": end["refine_skipped"],
@@ -1160,6 +1201,7 @@ async def ramp_steps(
             counters,
             heights,
             load.clock,
+            cfg.tx_size,
             final_drain_max_s(cfg.tx_timeout_s),
         )
         if drained is None:
@@ -1267,6 +1309,8 @@ async def run_probe(
         step, load.cfg, txs, list(heights.records()), counters, load.clock.time()
     )
     judged["cap_waits"] = load.state.cap_waits - cap_waits
+    if stopped is not None:
+        judged["stopped_early"] = True
     log_step(judged, side_fails(judged, "overall"), label)
     return judged
 
@@ -1335,7 +1379,7 @@ async def cooldown(
     load: Load, heights: "Heights", counters: list[dict[str, Any]]
 ) -> float | None:
     """Drain after a failed step; None if it timed out."""
-    drained = await drain(load.state, counters, heights, load.clock)
+    drained = await drain(load.state, counters, heights, load.clock, load.cfg.tx_size)
     if drained is not None:
         log.info("backlog drained in %.1f s", drained)
     return drained
@@ -1478,17 +1522,18 @@ async def drain(
     counters: list[dict[str, Any]],
     heights: "Heights",
     clock: Clock,
+    tx_size: int,
     max_s: float = DRAIN_MAX_S,
 ) -> float | None:
-    """Drops the transactions never sent and submits nothing more. Drained once decided bytes
-    stopped growing and the query node shows EMPTY_BLOCKS validator heights past the idle
+    """Drops the transactions never sent and submits nothing more. Drained once consensus is
+    idle (see `is_idle`) and the query node shows IDLE_BLOCKS validator heights past the idle
     point, with a counter sample taken after the last of them; then waits up to DRAIN_GRACE_S
     for pending transactions. Seconds that took, or None if no validator height appeared for
     DRAIN_STALL_S or after `max_s`."""
     drop_unsent(state)
     start = clock.time()
     state.phase = Phase("drain", None, start, max_s)
-    drained = await wait_drained(counters, heights, clock, max_s)
+    drained = await wait_drained(counters, heights, clock, tx_size, max_s)
     if drained:
         grace = clock.time() + DRAIN_GRACE_S
         while state.pending and clock.time() < grace:
@@ -1499,9 +1544,13 @@ async def drain(
 
 
 async def wait_drained(
-    counters: list[dict[str, Any]], heights: "Heights", clock: Clock, max_s: float
+    counters: list[dict[str, Any]],
+    heights: "Heights",
+    clock: Clock,
+    tx_size: int,
+    max_s: float,
 ) -> bool:
-    """Whether consensus went idle and the query node showed the empty blocks."""
+    """Whether consensus went idle and the query node showed IDLE_BLOCKS more blocks."""
     start = clock.time()
     top, moved, target = heights.top("validator"), start, None
     while (now := clock.time()) - start < max_s:
@@ -1512,10 +1561,10 @@ async def wait_drained(
                 "drain gave up: validator height %d stalled %.0f s", top, now - moved
             )
             return False
-        if not is_idle(counters, now):
+        if not is_idle(counters, now, tx_size):
             target = None
         elif target is None:
-            target = top + EMPTY_BLOCKS
+            target = top + IDLE_BLOCKS
         if (
             target is not None
             and heights.top("query") >= target
@@ -1540,12 +1589,13 @@ def drop_unsent(state: LoadState) -> None:
         log.info("dropped %d queued transactions", len(unsent))
 
 
-def is_idle(counters: Sequence[Mapping[str, Any]], now: float) -> bool:
-    """Decided bytes unchanged over the whole of the last DRAIN_IDLE_S."""
+def is_idle(counters: Sequence[Mapping[str, Any]], now: float, tx_size: int) -> bool:
+    """Under half a transaction of `tx_size` decided over the whole of the last DRAIN_IDLE_S:
+    the heartbeat's transactions alone keep decided bytes growing."""
     recent = [c for c in counters if c["ts"] >= now - DRAIN_IDLE_S]
     if not recent or now - recent[0]["ts"] < DRAIN_IDLE_S - COUNTER_POLL_S:
         return False
-    return len({c["decided_bytes"] for c in recent}) == 1
+    return recent[-1]["decided_bytes"] - recent[0]["decided_bytes"] < tx_size / 2
 
 
 def log_step(m: dict[str, Any], fails: list[str], label: str | None = None) -> None:
@@ -1601,6 +1651,38 @@ async def submit_tx(load: Load, tx: Tx) -> None:
     status = await load.client.call(post_tx, load.state, tx, url, request)
     if status is not None and status != 200:
         load.state.failed(tx)
+
+
+def heartbeat(
+    pool: Http,
+    urls: Sequence[str],
+    namespace: int,
+    rate_tx_s: float,
+    stop: threading.Event,
+) -> int:
+    """Until `stop`: an 8-byte transaction every 1 / `rate_tx_s` s, round robin over `urls`.
+    A counter keeps them distinct, so mempool deduplication keeps every one; without the bench
+    marker the scans skip them. A slow submit drops the beats it delayed instead of bursting
+    them. Returns the number of failed submits; the first failure is logged."""
+    clock = pool.clock
+    interval = 1 / rate_tx_s
+    n = failed = 0
+    due = clock.time()
+    while not clock.wait(stop, max(0.0, due - clock.time())):
+        payload = base64.b64encode(n.to_bytes(8, "big"))
+        body = b'{"namespace":%d,"payload":"%s"}' % (namespace, payload)
+        url = urls[n % len(urls)] + "/v1/submit/submit"
+        try:
+            status, reply = pool.request("POST", url, body)
+        except OSError as err:
+            status, reply = 0, str(err).encode()
+        if status != 200:
+            if not failed:
+                log.warning("heartbeat submit failed: %d %r", status, reply[:200])
+            failed += 1
+        n += 1
+        due = max(due + interval, clock.time())
+    return failed
 
 
 def post_tx(
@@ -2232,7 +2314,7 @@ def step_result(
     decided = judged["decided_mb_s"]
     procs = process_stats(host, t0, t1)
     fails = judged["consensus_fails"] + judged["query_fails"]
-    return {
+    result: StepResult = {
         "rate_mb_s": judged["rate_mb_s"],
         "refine": judged["refine"],
         "kind": step_kind(judged),
@@ -2267,6 +2349,9 @@ def step_result(
         "query_fails": judged["query_fails"],
         "passed": not fails,
     }
+    if "stopped_early" in judged:
+        result["stopped_early"] = True
+    return result
 
 
 def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
@@ -2339,9 +2424,11 @@ def run_meta(run: dict[str, Any]) -> RunMeta:
 
 
 def config_hash(cfg: BenchConfig, extra: list[bytes]) -> str:
-    digest = hashlib.sha256(
-        json.dumps(dataclasses.asdict(cfg), sort_keys=True).encode()
-    )
+    fields = dataclasses.asdict(cfg)
+    # Added later: left out while off, so the hashes of earlier runs hold.
+    if not cfg.heartbeat_tx_s:
+        del fields["heartbeat_tx_s"]
+    digest = hashlib.sha256(json.dumps(fields, sort_keys=True).encode())
     for chunk in extra:
         digest.update(chunk)
     return digest.hexdigest()[:12]
@@ -3288,12 +3375,22 @@ def process_table(result: BenchResult) -> list[str]:
     return lines
 
 
+def early_stop_note(steps: Sequence[StepResult]) -> str:
+    stopped = sum(1 for s in steps if "stopped_early" in s)
+    if not stopped:
+        return ""
+    return (
+        f" ({stopped} stopped early: decided under {KEEP_UP_RATIO:.0%} of submitted over "
+        f"{BEHIND_WINDOW_S:g} s, measured over that window)"
+    )
+
+
 def load_lines(result: BenchResult) -> list[str]:
     load, cfg = result["load"], result["config"]
     return [
         (
             f"- steps: {', '.join(map(fmt_num, cfg['steps']))} MB/s, {cfg['step_s']} s each, "
-            f"second half measured, after {cfg['warmup_s']} s warmup; "
+            f"second half measured{early_stop_note(result['steps'])}, after {cfg['warmup_s']} s warmup; "
             f"{fmt_bytes(cfg['tx_size'])} txs to {cfg['submit_nodes']} nodes, "
             f"{cfg['workers']} submit threads, in flight capped at {fmt_num(cfg['cap_s'])} s "
             "of load"
