@@ -807,7 +807,7 @@ def test_render_host_files_writes_env_start_topology_and_agent_config(
     config = netbench.read_json(tmp_path / "hosts/ctl/agent.json")
     assert config["topology"] == topo
     assert config["cfg"]["submit_nodes"] == 1
-    assert awsb.load_config(config["cfg"]) == cfg.load
+    assert netbench.load_config(config["cfg"]) == cfg.load
 
 
 def test_parse_hosts_output_takes_role_from_the_spec() -> None:

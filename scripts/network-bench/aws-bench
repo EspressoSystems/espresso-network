@@ -6038,7 +6038,7 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     """Inverse of `config_to_json`."""
     fields: dict[str, Any] = {
         **saved,
-        "load": load_config(dict(saved["load"])),
+        "load": nb.load_config(dict(saved["load"])),
         "db_modes": tuple(saved["db_modes"]),
         "fleet": None if saved["fleet"] is None else Path(saved["fleet"]),
         "node_type": saved["node_type"],
@@ -6319,7 +6319,7 @@ def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.Bench
     """Analyzes a collected run dir into `result.json` and `summary.md`; the same inputs give
     the same output, so `render` can call it again offline."""
     manifest: Manifest = nb.read_json(run_dir / "manifest.json")
-    cfg = load_config(nb.read_json(run_dir / "config.json"))
+    cfg = nb.load_config(nb.read_json(run_dir / "config.json"))
     prepare_analysis(run_dir, manifest)
     result = nb.analyze(run_dir, cfg, nb.read_json(run_dir / "topology.json"))
     run = nb.read_json(run_dir / "run.json")
@@ -6400,12 +6400,6 @@ def throughput_chart(run_dir: Path) -> str:
 
 def search_config(saved: dict[str, Any] | None) -> nb.SearchConfig | None:
     return None if saved is None else nb.SearchConfig(**saved)
-
-
-def load_config(saved: dict[str, Any]) -> nb.BenchConfig:
-    saved["namespaces"] = tuple(saved["namespaces"])
-    saved["steps"] = tuple(saved["steps"])
-    return nb.BenchConfig(**saved)
 
 
 def prepare_analysis(run_dir: Path, manifest: Manifest) -> None:
@@ -7646,7 +7640,7 @@ def cmd_agent_drive(args: argparse.Namespace, system: System) -> int:
     """Runs on ctl under systemd-run: waits for the nodes, then `netbench.drive_load` against
     their private URLs. SIGTERM unwinds like Ctrl-C so `drive_load` flushes its output."""
     agent = nb.read_json(args.config)
-    cfg = load_config(agent["cfg"])
+    cfg = nb.load_config(agent["cfg"])
     search = search_config(agent["search"])
     topo: nb.Topology = agent["topology"]
     args.out.mkdir(parents=True, exist_ok=True)
