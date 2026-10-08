@@ -375,10 +375,7 @@ mod test {
         availability::{AvailabilityDataSource, UpdateAvailabilityData},
         data_source::storage::sql::testing::TmpDb,
         fetching::provider::{NoFetching, TrustedQueryServiceProvider, test_fixtures},
-        testing::{
-            consensus::{MockDataSource, MockNetwork},
-            mocks::MockTypes,
-        },
+        testing::{chain::ChainNode, consensus::MockDataSource, mocks::MockTypes},
         types::HeightIndexed,
     };
 
@@ -386,8 +383,9 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_first_provider_fails() {
-        // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
+        // Create a peer that has already decided some blocks.
+        let mut network = ChainNode::<MockDataSource>::new().await;
+        network.push_empty(3).await;
 
         // Start a web server that the non-consensus node can use to fetch blocks.
         let (port, _server) = test_fixtures::serve_availability(network.data_source()).await;
@@ -398,9 +396,6 @@ mod test {
             TrustedQueryServiceProvider::new(format!("http://localhost:{port}").parse().unwrap()),
         );
         let data_source = db.config().connect(provider.clone()).await.unwrap();
-
-        // Start consensus.
-        network.start().await;
 
         // Wait until the block height reaches 4. This gives us the genesis block, one additional
         // block at the end, and then one block each for fetching a leaf and a payload.

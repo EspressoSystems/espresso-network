@@ -151,6 +151,7 @@ pub mod availability_tests {
         },
         node::NodeDataSource,
         testing::{
+            chain::ChainNode,
             consensus::{MockNetwork, TestableDataSource},
             mocks::{MockTypes, mock_transaction},
         },
@@ -401,9 +402,9 @@ pub mod availability_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
-        network.start().await;
+        let mut node = ChainNode::<D>::new().await;
+        node.push_empty(3).await;
+        let ds = node.data_source();
 
         // Wait for there to be at least 3 blocks.
         let block_height = loop {
@@ -497,9 +498,9 @@ pub mod availability_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
-        network.start().await;
+        let mut node = ChainNode::<D>::new().await;
+        node.push_empty(5).await;
+        let ds = node.data_source();
 
         // Wait for there to be at least 5 blocks.
         ds.subscribe_leaves(5).await.next().await.unwrap();
@@ -1057,6 +1058,7 @@ pub mod node_tests {
             SyncStatusRange, TimeWindowQueryData, WindowStart,
         },
         testing::{
+            chain::ChainNode,
             consensus::{MockNetwork, TestableDataSource},
             mocks::{MockPayload, MockTypes, mock_transaction},
             sleep,
@@ -1435,10 +1437,9 @@ pub mod node_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
-
-        network.start().await;
+        let mut node = ChainNode::<D>::new().await;
+        node.push_empty(2).await;
+        let ds = node.data_source();
 
         // Check VID shares for a few blocks.
         let mut leaves = ds.subscribe_leaves(0).await.take(3);
@@ -1592,10 +1593,12 @@ pub mod node_tests {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_timestamp_window<D: TestableDataSource>() {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
-
-        network.start().await;
+        // Decide pairs of blocks sharing a timestamp, after genesis at timestamp 0.
+        let mut node = ChainNode::<D>::new().await;
+        for timestamp in [1, 1, 2, 2, 3, 3] {
+            node.push_at([], timestamp).await;
+        }
+        let ds = node.data_source();
 
         // Wait for blocks with at least three different timestamps to be sequenced. This lets us
         // test all the edge cases.

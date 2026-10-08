@@ -42,15 +42,7 @@ mod test {
     use std::time::Duration;
 
     use committable::Committable;
-    use futures::StreamExt;
-    use hotshot_types::{
-        data::{VidDisperseShare, VidShare},
-        event::{EventType, LeafInfo},
-        traits::{
-            EncodeBytes,
-            block_contents::{BlockHeader, BlockPayload},
-        },
-    };
+    use hotshot_types::traits::EncodeBytes;
     use tokio::time::sleep;
 
     use super::*;
@@ -58,7 +50,8 @@ mod test {
         Header, QueryError,
         availability::BlockId,
         testing::{
-            consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
+            chain::{ChainNode, NUM_NODES},
+            consensus::{MockDataSource, MockSqlDataSource},
             mocks::{MockTypes, mock_transaction},
         },
     };
@@ -67,81 +60,50 @@ mod test {
     async fn test_api() {
         let window_limit = 78;
 
-        // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
-        let mut events = network.handle().event_stream();
-        network.start().await;
+        let mut node = ChainNode::<MockDataSource>::new().await;
+        node.push_empty(NUM_NODES + 2).await;
 
-        let ds = network.data_source();
-
-        // Wait until a few blocks have been sequenced.
-        let block_height = loop {
-            let block_height = ds.block_height().await.unwrap();
-            if block_height > network.num_nodes() {
-                break block_height;
-            }
-            sleep(Duration::from_secs(1)).await;
-        };
+        let ds = node.data_source();
+        let block_height = ds.block_height().await.unwrap();
 
         // We test these counters with non-trivial values in `data_source.rs`, here we just want to
         // make sure the queries are working, so a response of 0 is fine.
         assert_eq!(ds.count_transactions().await.unwrap(), 0);
         assert_eq!(ds.payload_size().await.unwrap(), 0);
 
-        let mut headers = vec![];
-
-        // Get VID share for each block.
+        // Get VID share for each block but the tip, which is left to be the `next` of the header
+        // window below.
         tracing::info!(block_height, "checking VID shares");
-        'outer: while let Some(event) = events.next().await {
-            let EventType::Decide { leaf_chain, .. } = event.event else {
-                continue;
-            };
-            for LeafInfo {
-                leaf, vid_share, ..
-            } in leaf_chain.iter().rev()
-            {
-                headers.push(leaf.block_header().clone());
-                if leaf.block_header().block_number >= block_height as u64 {
-                    break 'outer;
-                }
-                tracing::info!(height = leaf.block_header().block_number, "checking share");
+        let (_tip, blocks) = node.chain().blocks().split_last().unwrap();
+        let mut headers = vec![];
+        for block in blocks {
+            let header = block.leaf.header().clone();
+            tracing::info!(height = header.block_number, "checking share");
 
-                let share = ds
-                    .vid_share(BlockId::<MockTypes>::Number(
-                        leaf.block_header().block_number as usize,
-                    ))
-                    .await
-                    .unwrap();
-                if let Some(vid_share) = vid_share.as_ref() {
-                    let VidDisperseShare::V0(new_share) = vid_share else {
-                        panic!("VID share is not V0");
-                    };
-                    assert_eq!(share, VidShare::V0(new_share.share.clone()));
-                }
+            let share = ds
+                .vid_share(BlockId::<MockTypes>::Number(header.block_number as usize))
+                .await
+                .unwrap();
+            assert_eq!(share, block.vid_shares[0]);
 
-                // Query various other ways.
-                assert_eq!(
-                    share,
-                    ds.vid_share(BlockId::<MockTypes>::Hash(leaf.block_header().commit()))
-                        .await
-                        .unwrap()
-                );
-                assert_eq!(
-                    share,
-                    ds.vid_share(BlockId::<MockTypes>::PayloadHash(
-                        leaf.block_header().payload_commitment
-                    ))
+            // Query various other ways.
+            assert_eq!(
+                share,
+                ds.vid_share(BlockId::<MockTypes>::Hash(header.commit()))
                     .await
                     .unwrap()
-                );
-            }
+            );
+            assert_eq!(
+                share,
+                ds.vid_share(BlockId::<MockTypes>::PayloadHash(header.payload_commitment))
+                    .await
+                    .unwrap()
+            );
+            headers.push(header);
         }
 
         // Check time window queries. The various edge cases are thoroughly tested for each
-        // individual data source. In this test, we just smoketest parameter handling. Sleep 2
-        // seconds to ensure a new header is produced with a timestamp after the latest one in
-        // `headers`
-        sleep(Duration::from_secs(2)).await;
+        // individual data source. In this test, we just smoketest parameter handling.
         let first_header = &headers[0];
         let last_header = &headers.last().unwrap();
         let window: TimeWindowQueryData<Header<MockTypes>> = ds
@@ -181,50 +143,21 @@ mod test {
         // In this simple test, the node should be fully synchronized.
         let sync_status = ds.sync_status().await.unwrap();
         assert!(sync_status.is_fully_synced(), "{sync_status:#?}");
-
-        network.shut_down().await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_aggregate_ranges() {
-        // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
-        let mut events = network.handle().event_stream();
-        network.start().await;
+        let mut node = ChainNode::<MockSqlDataSource>::new().await;
+        let ds = node.data_source();
 
-        let ds = network.data_source();
-
-        // Wait until a few transactions have been sequenced.
+        // Decide two transactions, each in its own block after some empty ones.
         let mut tx_heights = vec![];
         let mut tx_sizes = vec![];
         for i in [1, 2] {
-            let txn = mock_transaction(vec![0; i]);
-            let hash = txn.commit();
-
-            network.submit_transaction(txn).await;
-
-            let leaf = 'outer: loop {
-                let EventType::Decide { leaf_chain, .. } = events.next().await.unwrap().event
-                else {
-                    continue;
-                };
-                for info in leaf_chain.iter().rev() {
-                    let leaf = &info.leaf;
-                    if BlockPayload::<MockTypes>::transaction_commitments(
-                        &leaf.block_payload().unwrap(),
-                        BlockHeader::<MockTypes>::metadata(leaf.block_header()),
-                    )
-                    .contains(&hash)
-                    {
-                        break 'outer leaf.clone();
-                    }
-                }
-
-                tracing::info!("waiting for tx {i}");
-                sleep(Duration::from_secs(1)).await;
-            };
-            tx_heights.push(leaf.height() as usize);
-            tx_sizes.push(leaf.block_payload().unwrap().encode().len());
+            node.push_empty(2).await;
+            let block = node.push([mock_transaction(vec![0; i])]).await;
+            tx_heights.push(block.height() as usize);
+            tx_sizes.push(block.block.payload().encode().len());
         }
         tracing::info!(?tx_heights, ?tx_sizes, "transactions sequenced");
 
@@ -280,7 +213,5 @@ mod test {
         // All transactions
         assert_eq!(2, ds.count_transactions().await.unwrap());
         assert_eq!(tx_sizes[0] + tx_sizes[1], ds.payload_size().await.unwrap());
-
-        network.shut_down().await;
     }
 }
