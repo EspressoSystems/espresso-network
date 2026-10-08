@@ -2396,6 +2396,13 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         help=f"default {load.tx_timeout_s}, with --search {SEARCH_TX_TIMEOUT_S}",
     )
     parser.add_argument("--submit-workers", type=positive_int, default=load.workers)
+    first_ns, last_ns = load.namespaces
+    parser.add_argument(
+        "--namespaces",
+        type=positive_int,
+        default=last_ns - first_ns + 1,
+        help=f"namespaces the load spreads over, round robin from {first_ns}",
+    )
     parser.add_argument(
         "--heartbeat-tx-s",
         type=float,
@@ -2605,6 +2612,10 @@ def load_from_args(
         step_s=step_s if args.step_s is None else args.step_s,
         submit_nodes=submit_nodes(args, args.nodes),
         workers=args.submit_workers,
+        namespaces=(
+            defaults.namespaces[0],
+            defaults.namespaces[0] + args.namespaces - 1,
+        ),
         cap_s=cap_s if args.cap_s is None else args.cap_s,
         tx_timeout_s=tx_timeout_s if args.tx_timeout_s is None else args.tx_timeout_s,
         warmup_s=args.warmup_s,

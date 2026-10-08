@@ -987,6 +987,18 @@ def test_submit_workers_flag_rejects_non_positive(bad):
         node_env_config("--submit-workers", bad)
 
 
+def test_namespaces_flag_reaches_the_load_config():
+    assert node_env_config().load.namespaces == (10000, 10015)
+    assert node_env_config("--namespaces", "80").load.namespaces == (10000, 10079)
+    assert node_env_config("--namespaces", "1").load.namespaces == (10000, 10000)
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "x"])
+def test_namespaces_flag_rejects_non_positive(bad):
+    with pytest.raises(SystemExit):
+        node_env_config("--namespaces", bad)
+
+
 @pytest.mark.parametrize("bad", ["A", "=1", "1A=2", "A B=1"])
 def test_node_env_flag_rejects_malformed(bad):
     with pytest.raises(SystemExit):

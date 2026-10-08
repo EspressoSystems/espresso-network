@@ -326,6 +326,7 @@ Where:
 | `--tx-timeout-s`                      | 30; `--search` 60              | all          | tx timeout                                                                         |
 | `--warmup-s`                          | 60                             | all          | warmup at the first step's rate                                                    |
 | `--submit-workers`                    | 32                             | all          | submit threads; part of the config hash                                            |
+| `--namespaces`                        | 16                             | all          | namespaces the load spreads over, round robin from 10000; part of the config hash  |
 | `--heartbeat-tx-s`                    | 50                             | all          | 8-byte txs per second for the whole run, 0 for none                                |
 | `--keep-going`                        | off                            | all          | run every step, then drain                                                         |
 | `--max-block-size`                    | `50mb`                         | per run      | genesis `max_block_size`                                                           |
