@@ -939,6 +939,78 @@ class FakeRunner:
         return completed()
 
 
+class ClusterRunner(FakeRunner):
+    """A fleet runner whose node hosts are the members of a `FakeCluster`: an ssh to a node
+    answers the docker and status commands from the member, an ssh to ctl answers the chaos
+    probe from the cluster. `states` are the agent states, as for `FakeRunner`."""
+
+    def __init__(
+        self,
+        cluster: FakeCluster,
+        query_nodes: int,
+        states: list[dict],
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(states=states, **kwargs)
+        self.cluster = cluster
+        self.hosts = fleet(len(cluster.members), query_nodes)
+        self.names = {h["public_ip"]: name for name, h in self.hosts.items()}
+
+    def tofu(self, verb: str) -> subprocess.CompletedProcess:
+        if verb == "output":
+            return completed(stdout=json.dumps({"hosts": {"value": self.hosts}}))
+        return super().tofu(verb)
+
+    def default(self, argv: list[str]) -> subprocess.CompletedProcess:
+        if argv[0] == "ssh":
+            target = self.names[argv[-2].partition("@")[2]]
+            command = argv[-1]
+            if target == "ctl" and "consensus_last_voted_view" in command:
+                return completed(stdout=self.probe())
+            if target == "ctl" and "date +%s.%N" in command:
+                return completed(stdout=f"{self.cluster.clock.time()}\n")
+            if target != "ctl" and any(key in command for key in NODE_COMMANDS):
+                return self.cluster.docker(target, command)
+        return super().default(argv)
+
+    def probe(self) -> str:
+        """`probe_command` output: `-` for a field the node does not answer."""
+
+        def get(m: FakeMember, path: str) -> str:
+            try:
+                status, body = self.cluster.request("GET", f"http://{m.name}{path}")
+            except OSError:
+                return "-"
+            return body.decode() if status == 200 else "-"
+
+        lines = []
+        for name, m in self.cluster.members.items():
+            metrics = get(m, "/v1/status/metrics")
+            view = re.search(r"consensus_last_voted_view (\d+)", metrics)
+            fields = [get(m, "/v1/status/block-height"), view[1] if view else "-"]
+            if m.query:
+                sync = get(m, "/v1/node/sync-status")
+                fields += [
+                    get(m, "/v1/node/block-height"),
+                    "-"
+                    if sync == "-"
+                    else str(json.loads(sync)["is_fully_synced"]).lower(),
+                ]
+            lines.append(f"{name} {' '.join(fields)}")
+        return "\n".join(lines) + "\n"
+
+
+# What a node host runs that `FakeCluster.docker` answers.
+NODE_COMMANDS = (
+    "docker kill",
+    "docker restart",
+    "docker rm -f",
+    "docker start",
+    "recreate.sh",
+    ".State.Status",
+)
+
+
 def no_children(signum: int) -> list[str]:
     return []
 
@@ -1385,9 +1457,7 @@ awsb: Any = load_script("aws-bench")
 
 def parse_plan_args(argv: list[str]) -> argparse.Namespace:
     full = ["plan", *argv]
-    args = awsb.parse_args(full)
-    args.argv = full
-    return args
+    return awsb.parse_args(full)
 
 
 def sts_response(account: str) -> subprocess.CompletedProcess:
@@ -1456,6 +1526,7 @@ def fake_images() -> dict:
 
 # `MemoryInfo.SizeInMiB` of `describe-instance-types` for every type of the fake price table.
 MEMORY_MIB = {
+    "c8g.xlarge": 8192,
     "c8g.2xlarge": 16384,
     "c8g.4xlarge": 32768,
     "c8g.8xlarge": 65536,
@@ -1470,6 +1541,7 @@ MEMORY_MIB = {
 
 # On-demand Linux USD per hour in eu-west-1, as the Pricing API listed them.
 INSTANCE_PRICES = {
+    "c8g.xlarge": 0.17056,
     "c8g.2xlarge": 0.34112,
     "c8g.4xlarge": 0.68224,
     "c8g.8xlarge": 1.36448,
@@ -1617,14 +1689,13 @@ class RunHarness:
         monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight())
         monkeypatch.setattr(awsb, "dotenv", lambda: awsb.parse_dotenv(DOTENV_TEXT))
 
-    def args(self, *extra: str) -> argparse.Namespace:
-        argv = ["run", "--tag", "t", "--nodes", "2", "--yes", *extra]
-        args = awsb.parse_args(argv)
-        args.argv = argv
-        return args
+    def args(self, *extra: str, nodes: int = 2) -> argparse.Namespace:
+        return awsb.parse_args(
+            ["run", "--tag", "t", "--nodes", str(nodes), "--yes", *extra]
+        )
 
-    def run(self, runner: FakeRunner, *extra: str) -> int:
-        return awsb.cmd_run(self.args(*extra), FakeSystem(run=runner))
+    def run(self, runner: FakeRunner, *extra: str, nodes: int = 2) -> int:
+        return awsb.cmd_run(self.args(*extra, nodes=nodes), FakeSystem(run=runner))
 
     def down(self, runner: FakeRunner, *extra: str) -> int:
         args = awsb.parse_args(["down", str(self.fleet_dir), *extra])
@@ -1945,9 +2016,7 @@ class FleetHarness:
         monkeypatch.setattr(awsb, "dotenv", lambda: awsb.parse_dotenv(DOTENV_TEXT))
 
     def parse(self, *argv: str) -> argparse.Namespace:
-        args = awsb.parse_args(list(argv))
-        args.argv = list(argv)
-        return args
+        return awsb.parse_args(list(argv))
 
     def fleet_flags(self) -> list[str]:
         return [

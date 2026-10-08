@@ -218,6 +218,40 @@ just bench aws run --tag release-x --latency decaf-2025 --tcp-cc cubic   # cubic
 - Never shaped: `ctl` traffic (orchestrator, L1, relay, submit, metrics), RDS, ssh.
 - Model and profiles: [Latency model](#latency-model).
 
+### Chaos
+
+```
+just bench aws run --tag release-x --chaos
+just bench aws run --tag release-x --chaos --chaos-min 10 --chaos-rate 4 --chaos-seed 7 --chaos-kinds restart,kill
+just bench aws up --tag release-x --nodes 22 --query-nodes 4 --node-type c8g.xlarge --ctl-type c8g.xlarge --ttl-min 180
+just bench aws run --fleet --chaos --query-engine sqlite
+```
+
+- `--chaos` restarts, kills and wipes nodes, any node, while the load runs at a constant rate. Flags not given take the
+  chaos shape: 22 nodes, 4 query nodes, `sqlite` colocated, `c8g.xlarge` nodes and `ctl`, `--chaos-min` steps of 60 s at
+  `--chaos-rate` MB/s, `--keep-going`. `--nodes`, `--query-nodes`, `--node-type`, `--ctl-type`, `--submit-nodes` and
+  `--query-engine` given on the command line are kept.
+- Refused: `--steps`, `--step-s`, `--search`, `--keep-going` and `--warmup-s` (set by the chaos config); fewer than 7
+  nodes; 2 or fewer query nodes; `--query-engine postgres`; `--query-db` other than `colocated`.
+- Faults start after the warmup, one per 45 s, and stop 120 s before the load ends. Kinds are used in turn from
+  `--chaos-kinds` (default `restart,kill,wipe`) on nodes in the order `--chaos-seed` shuffles them to.
+  - `restart`: `docker restart`. `kill`: `docker kill`, `docker start` after 60 s. `wipe`: container logs saved to
+    `/opt/bench/espresso-node.wiped.log.gz`, container removed, journal and payload dir emptied, container recreated
+    from `node-rejoin.env` (`recreate.sh`), started.
+- A fault is issued only while faulty nodes stay at most `(n-1)//3 - 1` (6 of 22), at least 2 query nodes are up and the
+  target has 2 up peers; otherwise it waits for a recovery.
+- Recovery gates, 2 consecutive 5 s ticks: a node rejoined when its height and voted view are near the tip of the up
+  nodes; a query node then caught up when its height is near the up query nodes' tip and `sync-status` is fully synced.
+- The load driver submits to the next node when one is down; `submit_failovers` in `load-meta.json` counts the switches,
+  `submit_errors` stays 0 unless every node refused a tx.
+- A node not recovered within 300 s writes a `timeout` event and fails the run: exit 3, `summary.md` keeps the reason,
+  the run is invalid. A node that crashes without a fault fails the run the same way.
+- Output: `chaos.jsonl` (`fault`, `started`, `rejoined`, `caught_up`, `timeout`, `restored`; `ts` on ctl's clock), a
+  `### Chaos` section in `summary.md` with one row per fault and a totals line, `chaos:` lines in `driver.log`. Faulted
+  nodes are exempt from the per-node scrape coverage and decided-blocks rules.
+- Cost: about $5.4/h for the default fleet, about 40 min per single shot. `render` recomputes the Chaos section offline.
+- Check `rss_peak_bytes` in `result.json` after the first run: `c8g.xlarge` has 8 GiB.
+
 ### Node build and config
 
 ```
@@ -338,6 +372,7 @@ Where:
 | `--tag`                               | required; fleet's on `--fleet` | all          | ghcr image tag pushed by CI                                                                   |
 | `--allocator`                         | none                           | all          | `jemalloc`, `mimalloc`, `snmalloc`, `tcmalloc`                                                |
 | `--nodes`                             | 5                              | provision    | validator count, `node0` included                                                             |
+| `--query-nodes`                       | 1                              | provision    | query service nodes, the first `K` nodes; above 1 needs `--query-db colocated`                |
 | `--node-type`                         | `c8g.4xlarge`                  | provision    | node instance type                                                                            |
 | `--ctl-type`                          | `c8g.2xlarge`                  | provision    | `ctl` instance type                                                                           |
 | `--root-gb`                           | `auto`                         | provision    | root volume GB; `auto` sizes from the ramp, or from `--offered-gb` with `--search`            |
@@ -355,6 +390,11 @@ Where:
 | `--namespaces`                        | 16                             | all          | namespaces the load spreads over, round robin from 10000; part of the config hash             |
 | `--heartbeat-tx-s`                    | 50                             | all          | 8-byte txs per second for the whole run, 0 for none                                           |
 | `--keep-going`                        | off                            | all          | run every step, then drain                                                                    |
+| `--chaos`                             | off                            | per run      | fault nodes during the load; see [Chaos](#chaos)                                              |
+| `--chaos-min`                         | 10                             | per run      | minutes of load, one 60 s step each                                                           |
+| `--chaos-rate`                        | 4                              | per run      | MB/s of every step                                                                            |
+| `--chaos-seed`                        | 42                             | per run      | seed of the order nodes are faulted in                                                        |
+| `--chaos-kinds`                       | `restart,kill,wipe`            | per run      | comma separated, used in turn                                                                 |
 | `--max-block-size`                    | `50mb`                         | per run      | genesis `max_block_size`                                                                      |
 | `--node-env KEY=VALUE`                | none                           | per run      | repeatable; node environment                                                                  |
 | `--leader-trace`, `--no-leader-trace` | off                            | per run      | leader trace CSVs and plots                                                                   |
@@ -653,13 +693,15 @@ runs/01-run/             one measurement
   genesis.toml topology.json config.json
   hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz, collect-<k>/ (`collect`),
                          cloud-init-output.log, chrony.txt, host.jsonl, sockets.jsonl (nodes), ena-allowance.txt,
+                         node-rejoin.env, recreate.sh (--chaos), espresso-node.wiped.log.gz (wiped nodes)
                          trace/ (--leader-trace)
                          pg-stats.json pg-stats.jsonl pg-statements.json pg-settings.json du-payload.txt (node0)
   cloudwatch/            ec2-node0.json (EBS balance, every run); rds.json (rds runs)
   rds-logs/              postgres logs of the run window (rds runs)
   metrics.jsonl heights.jsonl consensus.jsonl load.jsonl steps.json
-  load-meta.json         start_height, max_in_flight, cap_waits, submit_errors, heartbeat_errors,
+  load-meta.json         start_height, max_in_flight, cap_waits, submit_errors, submit_failovers, heartbeat_errors,
                          missing_payloads, drain_s, refine_skipped, stop_reason, marker
+  chaos.jsonl            --chaos: one record per fault, start, rejoin, catch-up, timeout and restore
   stake-table.json final-<node>.prom
   run.json agent-state.json agent.log result.json summary.md throughput.png
   trace/                 trace-plots output (--leader-trace)
