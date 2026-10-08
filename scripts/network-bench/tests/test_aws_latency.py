@@ -132,6 +132,7 @@ def test_hash_differs_per_profile_and_matches_the_old_value_for_off():
             json.dumps({}).encode(),
             json.dumps(hosts, sort_keys=True).encode(),
             base.query_db.encode(),
+            b"query-nodes=1",
         ],
     )
     assert hashes[0] == old

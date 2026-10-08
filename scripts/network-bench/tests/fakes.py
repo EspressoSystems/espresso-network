@@ -1417,10 +1417,10 @@ def plan_args(*extra: str, nodes: str = "2") -> argparse.Namespace:
     return parse_plan_args(["--tag", "x", "--nodes", nodes, *extra])
 
 
-def fleet(n: int) -> dict:
+def fleet(n: int, query_nodes: int = 1) -> dict:
     hosts = {"ctl": host_info("ctl", "ctl", 1)}
     for i in range(n):
-        role = "query" if i == 0 else "validator"
+        role = "query" if i < query_nodes else "validator"
         hosts[f"node{i}"] = host_info(f"node{i}", role, i + 2)
     return hosts
 

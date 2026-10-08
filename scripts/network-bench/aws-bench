@@ -10,10 +10,10 @@ and region, replacing manual `espresso-deploy` runs for this purpose. `plan` ren
 and prints a cost estimate without writing anything to AWS; `run` additionally provisions,
 measures, collects and destroys. `up` provisions a fleet that stays idle for several
 measurements: `run --fleet FLEET` measures on it (`fleet.lock` admits one run at a time and a
-reset wipes the chain between runs), and `down FLEET` destroys it. The query service's Postgres
-runs in a container on node0, on the root volume (`--query-db colocated`) or an extra volume
+reset wipes the chain between runs), and `down FLEET` destroys it. The query service runs on the
+first `--query-nodes` nodes (node0 by default). Its Postgres runs in a container on node0, on the root volume (`--query-db colocated`) or an extra volume
 (`volume`), or on an RDS instance (`rds`); `up --db-modes` provisions the stores, a run picks one.
-`--query-engine sqlite` runs node0's query service on embedded SQLite instead, with no Postgres:
+`--query-engine sqlite` runs the query service on embedded SQLite instead, with no Postgres:
 on the root volume (`--query-db colocated`) or in RAM (`tmpfs`); neither needs provisioning.
 
 `status` shows one fleet (phase, instances, agent progress, cost so far) or, with `--all`, every
@@ -68,7 +68,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -529,6 +529,7 @@ RESET_KEEP = (
 # Flags that shape the fleet, refused by `run --fleet` (the values are in fleet.json).
 FLEET_ONLY_FLAGS = (
     "--nodes",
+    "--query-nodes",
     "--node-type",
     "--ctl-type",
     "--root-gb",
@@ -916,6 +917,8 @@ INTERNET_MTU = latency.INTERNET_MTU
 class RunConfig:
     tag: str
     nodes: int = 5
+    # The first `query_nodes` nodes run the query service; the rest are validators.
+    query_nodes: int = 1
     node_type: str = NODE_TYPE
     ctl_type: str = CTL_TYPE
     load: nb.BenchConfig = field(default_factory=lambda: aws_load())
@@ -1201,6 +1204,18 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
     check_submit_nodes(cfg)
+    if not 1 <= cfg.query_nodes <= cfg.nodes - 1:
+        raise Refused(
+            f"--query-nodes must be between 1 and nodes - 1 ({cfg.nodes - 1}): "
+            f"{cfg.query_nodes}"
+        )
+    if cfg.query_nodes > 1 and (
+        cfg.query_db != "colocated" or set(cfg.db_modes) != {"colocated"}
+    ):
+        raise Refused(
+            "--query-nodes above 1 needs --query-db colocated: volume and rds serve one host, "
+            "tmpfs turns every restart into a wipe"
+        )
     hosts: list[HostSpec] = [
         {
             "name": "ctl",
@@ -1212,7 +1227,7 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
         }
     ]
     for i in range(cfg.nodes):
-        query = i == 0
+        query = i < cfg.query_nodes
         hosts.append(
             {
                 "name": f"node{i}",
@@ -1226,24 +1241,26 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     return hosts
 
 
-def peers(i: int, n: int) -> list[int]:
-    """Up to 3 other validators for node i's `STATE_PEERS`, never itself. node0 gets the first
-    `min(3, n - 1)` validators, so it can catch up on state it lacks instead of skewing query
-    lag; other nodes get the next `min(3, n - 2)` validators after i in the fixed cycle
-    `1, .., n-1`, wrapping around, excluding node0 (query load).
+def peers(i: int, n: int, k: int = 1) -> list[int]:
+    """Up to 3 other validators for node i's `STATE_PEERS`, never itself. The query nodes
+    `0..k-1` get the first `min(3, n - k)` validators, so they can catch up on state they lack
+    instead of skewing query lag; validators get the next `min(3, n - k - 1)` validators after
+    i in the fixed cycle `k, .., n-1`, wrapping around, never a query node (query load).
     """
-    if i == 0:
-        return list(range(1, min(3, n - 1) + 1))
-    if n <= 2:
+    validators = n - k
+    if i < k:
+        return list(range(k, k + min(3, validators)))
+    if validators <= 1:
         return []
-    count = min(3, n - 2)
-    return [(i - 1 + k) % (n - 1) + 1 for k in range(1, count + 1)]
+    count = min(3, validators - 1)
+    return [(i - k + j) % validators + k for j in range(1, count + 1)]
 
 
 def plan_peers(hosts: list[HostSpec]) -> dict[str, list[str]]:
     nodes = [h["name"] for h in hosts if h["role"] != "ctl"]
+    k = sum(h["role"] == "query" for h in hosts)
     return {
-        nodes[i]: [nodes[j] for j in peers(i, len(nodes))] for i in range(len(nodes))
+        nodes[i]: [nodes[j] for j in peers(i, len(nodes), k)] for i in range(len(nodes))
     }
 
 
@@ -1508,11 +1525,12 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
     return [
         f"storage validators: consensus {validators[0]}",
         (
-            f"storage node0:      consensus {node0[0]}, query {node0[-1]} "
+            f"storage query:      consensus {node0[0]}, query {node0[-1]} "
             f"({cfg.query_engine}, {cfg.query_db})"
         ),
         (
-            f"nodes: max block {cfg.max_block_size}; submit {cfg.load.submit_nodes} nodes; "
+            f"nodes: {cfg.nodes} ({cfg.query_nodes} query); max block {cfg.max_block_size}; "
+            f"submit {cfg.load.submit_nodes} nodes; "
             f"leader-trace {'on' if cfg.leader_trace else 'off'}"
         ),
         f"node-env: {' '.join(cfg.node_env) or 'none'}",
@@ -2159,6 +2177,10 @@ def env_port(key: str) -> int:
     return int(dotenv()[key])
 
 
+def _query_names(hosts: dict[str, HostInfo]) -> list[str]:
+    return [name for name in _node_names(hosts) if hosts[name]["role"] == "query"]
+
+
 def _node_names(hosts: dict[str, HostInfo]) -> list[str]:
     return sorted(
         (name for name in hosts if name != "ctl"),
@@ -2192,7 +2214,10 @@ def render_node_env(
     ctl_info = hosts["ctl"]
     node_names = _node_names(hosts)
     i = node_names.index(host["name"])
-    peer_urls = [_node_url(hosts[node_names[j]]) for j in peers(i, len(node_names))]
+    peer_urls = [
+        _node_url(hosts[node_names[j]])
+        for j in peers(i, len(node_names), len(_query_names(hosts)))
+    ]
     env = {
         "ESPRESSO_NODE_KEY_MNEMONIC": BENCH_MNEMONIC,
         "ESPRESSO_NODE_KEY_INDEX": str(KEY_INDEX_BASE + i),
@@ -2536,6 +2561,7 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         help="espresso-node built with this allocator, espresso-node-alloc:<tag>-<allocator>",
     )
     parser.add_argument("--nodes", type=int, default=defaults.nodes)
+    parser.add_argument("--query-nodes", type=int, default=defaults.query_nodes)
     parser.add_argument("--node-type", default=defaults.node_type)
     parser.add_argument("--ctl-type", default=defaults.ctl_type)
     steps = ", ".join(f"{rate:g}" for rate in load.steps)
@@ -2745,6 +2771,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         tag=args.tag,
         allocator=args.allocator,
         nodes=args.nodes,
+        query_nodes=args.query_nodes,
         node_type=args.node_type,
         ctl_type=args.ctl_type,
         load=load,
@@ -3554,6 +3581,7 @@ def measure_run(run: Run) -> None:
             fleet.interrupts,
             run.cfg.query_db,
             run.cfg.query_engine,
+            _query_names(remote.hosts),
         )
         enter_phase(fleet, run.manifest_path, "nodes", "synchronized docker start")
         at = fleet_time(remote) + DOCKER_START_LEAD_S
@@ -4604,10 +4632,12 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
     log.info("images %s: %s", image_label(cfg), images)
     types = {h["role"]: h["instance_type"] for h in hosts}
     log.info(
-        "hosts: ctl %s; %d x %s (node0 validator+query, postgres)",
+        "hosts: ctl %s; %d x %s (%d query, %s)",
         types["ctl"],
         len(hosts) - 1,
         types["query"],
+        cfg.query_nodes,
+        cfg.query_engine,
     )
     if "rds" in cfg.db_modes:
         log.info(
@@ -4760,6 +4790,7 @@ def run_config_hash(
             json.dumps(digests).encode(),
             json.dumps(hosts, sort_keys=True).encode(),
             cfg.query_db.encode(),
+            f"query-nodes={cfg.query_nodes}".encode(),
             # Absent for postgres, which older runs used, to keep their hashes.
             *([b"query-engine=sqlite"] if cfg.query_engine == "sqlite" else []),
             *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
@@ -4959,13 +4990,13 @@ def query_endpoint(cfg: RunConfig, run_dir: Path) -> PgEndpoint | None:
 
 
 def topology(hosts: dict[str, HostInfo], query_engine: QueryEngine) -> nb.Topology:
-    """Private URLs: the load runs on ctl, inside the VPC."""
+    """Private URLs: the load runs on ctl, inside the VPC. `query_node` is the first query node."""
     names = _node_names(hosts)
     return {
         "nodes": {name: _node_url(hosts[name]) for name in names},
         "roles": {
             name: f"validator, query, {query_engine}"
-            if name == "node0"
+            if hosts[name]["role"] == "query"
             else "validator"
             for name in names
         },
@@ -5344,7 +5375,10 @@ SupportStart = GateStart | DeployStart
 
 
 def support_plan(
-    query_db: DbMode, contracts: list[str], query_engine: QueryEngine = "postgres"
+    query_db: DbMode,
+    contracts: list[str],
+    query_engine: QueryEngine = "postgres",
+    query_hosts: Sequence[str] = ("node0",),
 ) -> list[SupportStart]:
     """The support services in start order, each with the check that gates the next. The rds
     instance is only checked: it is already running. SQLite has no database service."""
@@ -5397,33 +5431,34 @@ def support_plan(
     ]
     if query_engine == "sqlite":
         return plan
-    plan += [
-        GateStart(
-            kind="gate",
-            host="node0",
-            container=None if query_db == "rds" else "postgres",
-            what="pg_isready",
-            gate_cmd=pg_shell("pg_isready"),
-            timeout_s=GATE_TIMEOUT_S,
-        ),
-    ]
-    for what, sql in (
-        ("pg_stat_statements", PG_EXTENSION_SQL),
-        (
-            "pg stats reset",
-            "CHECKPOINT; SELECT pg_stat_reset_shared(NULL); SELECT pg_stat_statements_reset()",
-        ),
-    ):
-        plan.append(
+    for host in query_hosts:
+        plan += [
             GateStart(
                 kind="gate",
-                host="node0",
-                container=None,
-                what=what,
-                gate_cmd=pg_shell(f"psql -c {shlex.quote(sql)}"),
+                host=host,
+                container=None if query_db == "rds" else "postgres",
+                what="pg_isready",
+                gate_cmd=pg_shell("pg_isready"),
                 timeout_s=GATE_TIMEOUT_S,
+            ),
+        ]
+        for what, sql in (
+            ("pg_stat_statements", PG_EXTENSION_SQL),
+            (
+                "pg stats reset",
+                "CHECKPOINT; SELECT pg_stat_reset_shared(NULL); SELECT pg_stat_statements_reset()",
+            ),
+        ):
+            plan.append(
+                GateStart(
+                    kind="gate",
+                    host=host,
+                    container=None,
+                    what=what,
+                    gate_cmd=pg_shell(f"psql -c {shlex.quote(sql)}"),
+                    timeout_s=GATE_TIMEOUT_S,
+                )
             )
-        )
     return plan
 
 
@@ -5433,11 +5468,12 @@ def start_support(
     interrupts: Interrupts,
     query_db: DbMode = "colocated",
     query_engine: QueryEngine = "postgres",
+    query_hosts: Sequence[str] = ("node0",),
 ) -> None:
     """On ctl, in order and each gated on a check: anvil, contract deployment, orchestrator,
-    relay; then Postgres on node0 (the rds instance is only gated, it is already running;
-    SQLite has no such step)."""
-    for step in support_plan(query_db, contracts, query_engine):
+    relay; then Postgres on each query host (the rds instance is only gated, it is already
+    running; SQLite has no such step)."""
+    for step in support_plan(query_db, contracts, query_engine, query_hosts):
         host = step["host"]
         if step["container"] is not None:
             remote.ssh(host, f"sudo docker start {step['container']}")

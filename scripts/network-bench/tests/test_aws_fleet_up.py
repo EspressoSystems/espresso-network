@@ -310,6 +310,7 @@ def expires_in(minutes: int) -> dict:
         # EDGE:fleet-ttl-expired
         (expires_in(-5), (), r"expired at .*status.*destroy --orphans"),
         ({}, ("--nodes", "3"), "shape the fleet"),
+        ({}, ("--query-nodes", "2"), "shape the fleet"),
         ({}, ("--max-usd=5",), "shape the fleet"),
         ({}, ("--ttl-min", "10"), "shape the fleet"),
         ({}, ("--node-type", "c8i.4xlarge"), "shape the fleet"),
@@ -339,6 +340,13 @@ def test_run_refusals_before_any_call(harness, argv, pattern):
     with pytest.raises(awsb.Refused, match=pattern):
         awsb.cmd_run(harness.parse(*argv), FakeSystem(run=runner))
     assert runner.calls == []
+
+
+# TEST:fleet-query-nodes-from-manifest-ok
+def test_run_on_a_fleet_takes_query_nodes_from_the_manifest(harness, runner):
+    manifest = harness.fleet()
+    manifest["config"]["query_nodes"] = 3
+    assert awsb.fleet_run_config(harness.run_args(), manifest).query_nodes == 3
 
 
 def test_allocator_belongs_to_one_run_and_retags_the_fleet(harness, runner):

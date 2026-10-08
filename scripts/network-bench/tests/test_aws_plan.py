@@ -89,6 +89,134 @@ def test_peers_exclude_self_and_node0():
             assert len(result) == min(3, n - 2)
 
 
+# REQ:awsbench-query-nodes
+@pytest.mark.parametrize("n", range(7, 23))
+@pytest.mark.parametrize("k", range(1, 5))
+def test_peers_skip_query_nodes(n, k):
+    for i in range(n):
+        result = awsb.peers(i, n, k)
+        assert i not in result
+        assert len(result) == len(set(result))
+        assert all(k <= j < n for j in result)
+        assert len(result) == min(3, n - k - (i >= k))
+
+
+def old_peers(i: int, n: int) -> list[int]:
+    if i == 0:
+        return list(range(1, min(3, n - 1) + 1))
+    if n <= 2:
+        return []
+    count = min(3, n - 2)
+    return [(i - 1 + k) % (n - 1) + 1 for k in range(1, count + 1)]
+
+
+def test_peers_with_one_query_node_match_the_default():
+    for n in range(2, 24):
+        for i in range(n):
+            assert awsb.peers(i, n, 1) == old_peers(i, n)
+    assert awsb.peers(0, 22, 1) == [1, 2, 3]
+    assert awsb.peers(5, 22, 1) == [6, 7, 8]
+    assert awsb.peers(21, 22, 1) == [1, 2, 3]
+
+
+def test_plan_hosts_gives_the_first_query_nodes_the_query_role():
+    hosts = awsb.plan_hosts(small_cfg(nodes=8, query_nodes=4))
+    roles = {h["name"]: h["role"] for h in hosts}
+    assert [n for n, r in roles.items() if r == "query"] == [
+        "node0",
+        "node1",
+        "node2",
+        "node3",
+    ]
+    assert roles == {
+        "ctl": "ctl",
+        **{f"node{i}": "query" if i < 4 else "validator" for i in range(8)},
+    }
+    peers = awsb.plan_peers(hosts)
+    assert all(
+        p not in {"node0", "node1", "node2", "node3"}
+        for i in range(4, 8)
+        for p in peers[f"node{i}"]
+    )
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"query_db": "volume"},
+        {"query_db": "rds"},
+        {"query_db": "tmpfs"},
+        {"db_modes": ("colocated", "volume")},
+    ],
+)
+def test_plan_hosts_refuses_several_query_nodes_off_colocated(kw):
+    with pytest.raises(awsb.Refused, match="--query-db colocated"):
+        awsb.plan_hosts(small_cfg(nodes=4, query_nodes=2, **kw))
+
+
+@pytest.mark.parametrize("query_nodes", [0, 4])
+def test_plan_hosts_refuses_query_nodes_outside_one_to_nodes_minus_one(query_nodes):
+    with pytest.raises(awsb.Refused, match="--query-nodes"):
+        awsb.plan_hosts(small_cfg(nodes=4, query_nodes=query_nodes))
+
+
+def test_query_nodes_flag_reaches_the_config_and_the_hash():
+    cfg = awsb.config_from_args(
+        awsb.parse_args(["plan", "--tag", "x", "--query-nodes", "3"])
+    )
+    assert cfg.query_nodes == 3
+    assert (
+        awsb.config_from_args(awsb.parse_args(["plan", "--tag", "x"])).query_nodes == 1
+    )
+    hosts = awsb.plan_hosts(cfg)
+    other = replace(cfg, query_nodes=2)
+    assert awsb.run_config_hash(
+        cfg, hosts, fake_images(), b"g"
+    ) != awsb.run_config_hash(other, hosts, fake_images(), b"g")
+
+
+def test_state_peers_of_a_validator_exclude_every_query_node():
+    hosts = fleet(8, query_nodes=3)
+    text = awsb.render_node_env(host("node5", "validator"), hosts, None)
+    urls = parse_env(text)["ESPRESSO_NODE_STATE_PEERS"].split(",")
+    queries = {awsb._node_url(hosts[f"node{j}"]) for j in range(3)}
+    assert urls and not queries & set(urls)
+
+
+def test_topology_marks_every_query_node():
+    topo = awsb.topology(fleet(6, query_nodes=4), "sqlite")
+    roles = topo["roles"]
+    assert [n for n, r in roles.items() if "query" in r] == [
+        f"node{i}" for i in range(4)
+    ]
+    assert roles["node3"] == "validator, query, sqlite"
+    assert roles["node4"] == "validator"
+    assert topo["query_node"] == "node0"
+
+
+def test_support_plan_gates_postgres_on_every_query_host():
+    plan = awsb.support_plan("colocated", [], "postgres", ["node0", "node1"])
+    hosts = [s["host"] for s in plan if s["host"] != "ctl"]
+    assert hosts == ["node0"] * 3 + ["node1"] * 3
+    assert awsb.support_plan("colocated", [], "sqlite", ["node0", "node1"]) == (
+        awsb.support_plan("colocated", [], "sqlite")
+    )
+
+
+def test_node_summary_prints_the_query_node_count():
+    assert any(
+        "4 query" in line
+        for line in awsb.format_node_summary(small_cfg(8, query_nodes=4))
+    )
+
+
+# EDGE:old-manifest-no-chaos
+def test_manifest_config_without_query_nodes_loads_as_one():
+    saved = json.loads(json.dumps(awsb.config_to_json(small_cfg())))
+    del saved["query_nodes"]
+    assert awsb.config_from_manifest(saved).query_nodes == 1
+
+
 # EDGE:awsbench-two-nodes
 def test_two_nodes_one_validator_has_no_peers():
     assert awsb.peers(1, 2) == []
@@ -1291,14 +1419,14 @@ def test_node_summary_names_the_storage_modules_and_every_run_setting():
     )
     assert awsb.format_node_summary(cfg) == [
         "storage validators: consensus storage-journal",
-        "storage node0:      consensus storage-journal, query storage-sql (postgres, volume)",
-        "nodes: max block 20mb; submit 1 nodes; leader-trace on",
+        "storage query:      consensus storage-journal, query storage-sql (postgres, volume)",
+        "nodes: 2 (1 query); max block 20mb; submit 1 nodes; leader-trace on",
         "node-env: A=1 B=2",
     ]
     fs = awsb.format_node_summary(small_cfg())
     assert fs[:2] == [
         "storage validators: consensus storage-fs",
-        "storage node0:      consensus storage-sql, query storage-sql (postgres, colocated)",
+        "storage query:      consensus storage-sql, query storage-sql (postgres, colocated)",
     ]
     assert fs[2].endswith("leader-trace off")
     assert fs[3] == "node-env: none"
@@ -1673,7 +1801,7 @@ def test_search_changes_the_run_config_hash():
 def test_the_ramp_run_config_hash_ignores_the_search_field():
     cfg = awsb.RunConfig(tag="x", consensus_storage="journal")
     assert awsb.run_config_hash(cfg, [], {}, b"") == netbench.config_hash(
-        cfg.load, [b"", b"{}", b"[]", b"colocated"]
+        cfg.load, [b"", b"{}", b"[]", b"colocated", b"query-nodes=1"]
     )
 
 
