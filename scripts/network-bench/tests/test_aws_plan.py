@@ -39,7 +39,7 @@ from fakes import (
     sts_response,
 )
 
-HERE = Path(__file__).parent
+HERE = Path(__file__).parents[1]
 TF_DIR = Path("/bench-state/aws/run1/terraform")
 
 

@@ -819,7 +819,7 @@ def test_parse_hosts_output_takes_role_from_the_spec() -> None:
 
 
 def test_genesis_contracts_are_deduplicated(tmp_path: Path) -> None:
-    genesis = Path(__file__).with_name("genesis.toml").read_text()
+    genesis = Path(__file__).parents[1].joinpath("genesis.toml").read_text()
     (tmp_path / "genesis.toml").write_text(genesis)
     assert awsb.genesis_contracts(tmp_path) == [
         "0x8ce361602b935680e8dec218b820ff5056beb7af",

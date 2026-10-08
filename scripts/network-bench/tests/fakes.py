@@ -1149,7 +1149,7 @@ def write_run_dir(out):
         (out / name).write_text(json.dumps(data))
 
 
-def load_script(name: str, directory: Path = Path(__file__).parent) -> ModuleType:
+def load_script(name: str, directory: Path = Path(__file__).parents[1]) -> ModuleType:
     """Imports the extensionless script `name` from `directory` as a module."""
     path = directory / name
     loader = SourceFileLoader(name.replace("-", "_"), str(path))
@@ -1160,7 +1160,7 @@ def load_script(name: str, directory: Path = Path(__file__).parent) -> ModuleTyp
     return module
 
 
-SCRIPT = Path(__file__).with_name("aws-bench")
+SCRIPT = Path(__file__).parents[1] / "aws-bench"
 awsb: Any = load_script("aws-bench")
 
 

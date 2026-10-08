@@ -690,7 +690,7 @@ scripts/network-bench/
   justfile               `just bench <recipe>`; `aws` forwards to aws-bench
   aws/user-data.sh       cloud-init template, every host
   aws/terraform/         key pair, security group, instances, pg volume, rds instance, delete schedule
-  test_*.py fakes.py     just py::test
+  tests/                 just py::test
 ```
 
 - Scripts `import netbench` as a sibling file. On hosts the same file sits in `/opt/bench`, run by system python3.
