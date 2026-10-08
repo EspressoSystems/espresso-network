@@ -240,6 +240,22 @@ def matrix_sha256(delays: dict[tuple[int, int], float]) -> str:
     ).hexdigest()
 
 
+def mtu_lines(mtu: int) -> list[str]:
+    """Sets the MTU where systemd-networkd keeps it: an MTU change resets the ENA link, and on
+    link-up networkd re-applies the 9001 of the DHCP lease (seen in run lulu-20261008-121303).
+    Waits up to 10 s for the link to report it."""
+    return [
+        "unit=$(networkctl status \"$IFACE\" | awk '/Network File:/ {print $3}')",
+        'test -n "$unit"',
+        'dropin="/etc/systemd/network/$(basename "$unit").d"',
+        'mkdir -p "$dropin"',
+        f"printf '[Link]\\nMTUBytes={mtu}\\n[DHCPv4]\\nUseMTU=no\\n' > \"$dropin/bench-mtu.conf\"",
+        "networkctl reload",
+        f'ip link set dev "$IFACE" mtu {mtu}',
+        f'for _ in $(seq 50); do [ "$(cat /sys/class/net/$IFACE/mtu)" = {mtu} ] && break; sleep 0.2; done',
+    ]
+
+
 def tc_script(
     node: int,
     peer_ips: dict[int, str],
@@ -257,7 +273,7 @@ def tc_script(
         *(f'sysctl -q -w {key}="{value}"' for key, value in tcp_sysctls(tcp_cc)),
         TC_IFACE,
         'test -n "$IFACE"',
-        f'ip link set dev "$IFACE" mtu {mtu}',
+        *mtu_lines(mtu),
         TC_CLEAR,
         'tc qdisc add dev "$IFACE" root handle 1: htb default 1',
         'tc class add dev "$IFACE" parent 1: classid 1:1 htb rate 100gbit',

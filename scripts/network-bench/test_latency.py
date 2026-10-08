@@ -219,6 +219,8 @@ def test_tc_script_four_peers():
     assert 'sysctl -q -w net.ipv4.tcp_rmem="4096 131072 268435456"' in script
     assert script.index("sysctl") < script.index("tc qdisc add")
     assert 'ip link set dev "$IFACE" mtu 1500' in script
+    assert "MTUBytes=1500" in script and "UseMTU=no" in script
+    assert script.index("networkctl reload") < script.index("ip link set")
     assert "tcp_adv_win_scale" not in script
 
 
