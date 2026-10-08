@@ -472,16 +472,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 return Ok(());
             };
             let node_id = context.node_id();
-            let next_view_timeout = {
-                context
-                    .consensus_handle()
-                    .legacy_consensus()
-                    .read()
-                    .await
-                    .hotshot
-                    .config
-                    .next_view_timeout
-            };
+            let next_view_timeout = context.network_config().config.next_view_timeout;
             // Enough time for every node to propose with every view timing out.
             let timeout_duration = self.progress_timeout_factor
                 * Duration::from_millis(next_view_timeout)
@@ -500,16 +491,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             return Ok(());
         };
 
-        let num_nodes = {
-            context
-                .consensus_handle()
-                .legacy_consensus()
-                .read()
-                .await
-                .hotshot
-                .config
-                .num_nodes_with_stake
-        };
+        let num_nodes = context.network_config().config.num_nodes_with_stake;
         let node_id = context.node_id();
         tracing::info!(node_id, num_nodes, "waiting for progress from node");
 
