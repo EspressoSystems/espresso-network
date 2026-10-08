@@ -53,6 +53,7 @@ import json
 import logging
 import math
 import os
+import random
 import re
 import secrets
 import shlex
@@ -548,6 +549,20 @@ DOCKER_START_LEAD_S = 15.0
 FAILURE_LOG_LINES = 10
 CHECKIP_URL = "https://checkip.amazonaws.com"
 AGENT_POLL_S = 5.0
+CHAOS_NODES = 22
+CHAOS_QUERY_NODES = 4
+CHAOS_NODE_TYPE = "c8g.xlarge"
+CHAOS_CTL_TYPE = "c8g.xlarge"
+CHAOS_MIN_NODES = 7
+# Up query nodes kept at every fault: one serves scans and heights while another catches up.
+CHAOS_QUERY_FLOOR = 2
+CHAOS_STEP_S = 60
+# No faults in the last seconds of the load, so recoveries finish before it ends.
+CHAOS_TAIL_S = 120.0
+CHAOS_LAG_BLOCKS = 2
+CHAOS_LAG_VIEWS = 3
+CHAOS_GATE_TICKS = 2
+CHAOS_DRAIN_EXPECTED_S = 60.0
 OUT_RSYNC_S = 60.0
 NODE_CHECK_S = 30.0
 # Per remote command of stop, freeze and collect: above the docker stop grace of every
@@ -2209,6 +2224,7 @@ def render_node_env(
     node_env: Iterable[str] = (),
     consensus_storage: ConsensusStorage = "fs",
     query_engine: QueryEngine = "postgres",
+    config_peers: bool = False,
 ) -> str:
     self_info = hosts[host["name"]]
     ctl_info = hosts["ctl"]
@@ -2245,6 +2261,10 @@ def render_node_env(
     # A required value left empty risks a clap parse error; omit rather than pass "".
     if peer_urls:
         env["ESPRESSO_NODE_STATE_PEERS"] = ",".join(peer_urls)
+        if config_peers:
+            # A wiped node has no persisted config; with this it fetches it from peers instead
+            # of waiting on the orchestrator.
+            env["ESPRESSO_NODE_CONFIG_PEERS"] = env["ESPRESSO_NODE_STATE_PEERS"]
     if host["role"] == "query" and query_engine == "sqlite":
         # The entrypoint then execs espresso-node-sqlite, which prepends storage-sql itself.
         env["ESPRESSO_NODE_EMBEDDED_DB"] = "true"
@@ -2529,6 +2549,354 @@ def node_create_argv(
     for module in modules:
         argv += ["--", module]
     return argv
+
+
+def render_recreate_sh(
+    host: HostSpec,
+    images: dict[str, ImageInfo],
+    query_db: DbMode = "colocated",
+    leader_trace: bool = False,
+    consensus_storage: ConsensusStorage = "fs",
+    query_engine: QueryEngine = "postgres",
+) -> str:
+    """Recreates the espresso-node container from `node-rejoin.env`; same arguments as start.sh
+    otherwise."""
+    argv = node_create_argv(
+        host,
+        images,
+        query_db,
+        leader_trace,
+        consensus_storage,
+        query_engine,
+        f"{BENCH_DIR}/node-rejoin.env",
+    )
+    return "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n" + _docker_create(
+        "espresso-node", argv
+    )
+
+
+ChaosKind = Literal["restart", "kill", "wipe"]
+NodeHealth = Literal["up", "down", "recovering", "catching_up"]
+
+
+@dataclass(frozen=True)
+class ChaosConfig:
+    minutes: int = 10
+    rate_mb_s: float = 4.0
+    seed: int = 42
+    kinds: tuple[ChaosKind, ...] = ("restart", "kill", "wipe")
+    gap_s: float = 45.0
+    kill_down_s: float = 60.0
+    recover_timeout_s: float = 300.0
+
+
+class NodeState(TypedDict):
+    """`since` is the fault time: gates and timeouts measure from it."""
+
+    health: NodeHealth
+    kind: ChaosKind | None
+    since: float
+    streak: int
+
+
+class ChaosState(TypedDict):
+    nodes: dict[str, NodeState]
+    order: list[str]
+    cursor: int
+    faults: int
+    next_fault_at: float
+    stop_at: float
+
+
+class ChaosObservation(TypedDict):
+    """`None`: the probe got no answer. `query_height` and `synced` only have the query nodes."""
+
+    height: dict[str, int | None]
+    voted_view: dict[str, int | None]
+    query_height: dict[str, int | None]
+    synced: dict[str, bool | None]
+
+
+ChaosEventKind = Literal[
+    "fault", "started", "rejoined", "caught_up", "timeout", "restored"
+]
+
+
+class ChaosAction(TypedDict):
+    node: str
+    op: Literal["restart", "kill", "start", "wipe"]
+
+
+class ChaosEvent(TypedDict):
+    ts: float
+    iso: str
+    event: ChaosEventKind
+    node: str
+    kind: ChaosKind | None
+    height: int | None
+    after_s: float | None
+
+
+class ChaosStep(TypedDict):
+    state: ChaosState
+    actions: list[ChaosAction]
+    events: list[ChaosEvent]
+    error: str | None
+
+
+def fault_budget(n: int) -> int:
+    """Most nodes faulty at once with faulty stake strictly below f = (n-1)//3."""
+    return max(0, (n - 1) // 3 - 1)
+
+
+def chaos_init(
+    cfg: ChaosConfig,
+    topo: nb.Topology,
+    t_load: float,
+    warmup_s: float,
+    load_s: float,
+) -> ChaosState:
+    order = list(topo["nodes"])
+    random.Random(cfg.seed).shuffle(order)
+    first = t_load + warmup_s
+    return ChaosState(
+        nodes={
+            name: NodeState(health="up", kind=None, since=t_load, streak=0)
+            for name in topo["nodes"]
+        },
+        order=order,
+        cursor=0,
+        faults=0,
+        next_fault_at=first,
+        stop_at=first + load_s - CHAOS_TAIL_S,
+    )
+
+
+def chaos_step(
+    state: ChaosState,
+    cfg: ChaosConfig,
+    topo: nb.Topology,
+    peers: dict[str, list[str]],
+    obs: ChaosObservation,
+    now: float,
+) -> ChaosStep:
+    """One controller tick. Pure: `state` is not modified, `now` is in the ctl epoch."""
+    nodes = {name: s.copy() for name, s in state["nodes"].items()}
+    queries = set(nb.query_nodes(topo))
+    events: list[ChaosEvent] = []
+    actions: list[ChaosAction] = []
+
+    def emit(event: ChaosEventKind, name: str, after_s: float | None = None) -> None:
+        events.append(
+            _chaos_event(
+                now, event, name, nodes[name]["kind"], obs["height"][name], after_s
+            )
+        )
+
+    up = [name for name, s in nodes.items() if s["health"] == "up"]
+    tip = _tip(obs["height"], up)
+    tip_view = _tip(obs["voted_view"], up)
+    query_tip = _tip(obs["query_height"], [name for name in up if name in queries])
+    if tip is not None:
+        for name, s in nodes.items():
+            after_s = now - s["since"]
+            if s["health"] == "down" and now >= s["since"] + cfg.kill_down_s:
+                actions.append({"node": name, "op": "start"})
+                s.update(health="recovering", streak=0)
+                emit("started", name, after_s)
+            elif s["health"] == "recovering":
+                good = _near(obs["height"][name], tip, CHAOS_LAG_BLOCKS) and _near(
+                    obs["voted_view"][name], tip_view, CHAOS_LAG_VIEWS
+                )
+                s["streak"] = s["streak"] + 1 if good else 0
+                if s["streak"] >= CHAOS_GATE_TICKS:
+                    nxt: NodeHealth = "catching_up" if name in queries else "up"
+                    emit("rejoined", name, after_s)
+                    s.update(
+                        health=nxt, kind=None if nxt == "up" else s["kind"], streak=0
+                    )
+            elif s["health"] == "catching_up" and query_tip is not None:
+                good = (
+                    _near(obs["query_height"][name], query_tip, CHAOS_LAG_BLOCKS)
+                    and obs["synced"][name] is True
+                )
+                s["streak"] = s["streak"] + 1 if good else 0
+                if s["streak"] >= CHAOS_GATE_TICKS:
+                    emit("caught_up", name, after_s)
+                    s.update(health="up", kind=None, streak=0)
+
+    error = None
+    for name, s in nodes.items():
+        if s["health"] != "up" and now >= s["since"] + cfg.recover_timeout_s:
+            emit("timeout", name, now - s["since"])
+            error = (
+                f"{name} ({s['kind']}) not recovered within "
+                f"{cfg.recover_timeout_s:.0f} s, health {s['health']}"
+            )
+
+    cursor, faults, next_fault_at = (
+        state["cursor"],
+        state["faults"],
+        state["next_fault_at"],
+    )
+    if (
+        tip is not None
+        and error is None
+        and next_fault_at <= now < state["stop_at"]
+        and (i := _fault_target(state["order"], cursor, nodes, queries, peers))
+        is not None
+    ):
+        name = state["order"][i]
+        kind = cfg.kinds[faults % len(cfg.kinds)]
+        nodes[name].update(
+            health="down" if kind == "kill" else "recovering",
+            kind=kind,
+            since=now,
+            streak=0,
+        )
+        actions.append({"node": name, "op": kind})
+        emit("fault", name)
+        cursor, faults, next_fault_at = (
+            (i + 1) % len(state["order"]),
+            faults + 1,
+            now + cfg.gap_s,
+        )
+
+    return ChaosStep(
+        state=ChaosState(
+            nodes=nodes,
+            order=state["order"],
+            cursor=cursor,
+            faults=faults,
+            next_fault_at=next_fault_at,
+            stop_at=state["stop_at"],
+        ),
+        actions=actions,
+        events=events,
+        error=error,
+    )
+
+
+def _tip(values: Mapping[str, int | None], names: Iterable[str]) -> int | None:
+    seen = [v for name in names if (v := values[name]) is not None]
+    return max(seen, default=None)
+
+
+def _near(value: int | None, tip: int | None, lag: int) -> bool:
+    return value is not None and tip is not None and value >= tip - lag
+
+
+def _fault_target(
+    order: list[str],
+    cursor: int,
+    nodes: dict[str, NodeState],
+    queries: set[str],
+    peers: dict[str, list[str]],
+) -> int | None:
+    """Index in `order` of the first node from `cursor` on whose fault keeps the budget, the up
+    query floor and 2 up peers; `None` when there is none."""
+    faulty = sum(s["health"] != "up" for s in nodes.values())
+    if faulty + 1 > fault_budget(len(nodes)):
+        return None
+    up_queries = sum(nodes[q]["health"] == "up" for q in queries)
+    for step in range(len(order)):
+        i = (cursor + step) % len(order)
+        name = order[i]
+        if nodes[name]["health"] != "up":
+            continue
+        if up_queries - (name in queries) < CHAOS_QUERY_FLOOR:
+            continue
+        if sum(nodes[p]["health"] == "up" for p in peers[name]) < 2:
+            continue
+        return i
+    return None
+
+
+def _chaos_event(
+    ts: float,
+    event: ChaosEventKind,
+    node: str,
+    kind: ChaosKind | None,
+    height: int | None,
+    after_s: float | None,
+) -> ChaosEvent:
+    return ChaosEvent(
+        ts=ts,
+        iso=datetime.fromtimestamp(ts, UTC).isoformat(),
+        event=event,
+        node=node,
+        kind=kind,
+        height=height,
+        after_s=after_s,
+    )
+
+
+# `is_fully_synced` is a method of `SyncStatusQueryData`, not a serialized field.
+SYNCED_JQ = "[.blocks, .leaves, .vid_common] | all(.missing == 0)"
+
+
+def probe_command(topo: nb.Topology) -> str:
+    """Shell run on ctl: one background job per node printing `<node> <height> <voted view>`,
+    plus `<query height> <synced>` for query nodes; `-` for a field that did not answer.
+    Nodes run in parallel so a hung node costs one curl timeout, not one per field."""
+    queries = set(nb.query_nodes(topo))
+    lines = []
+    for name, url in topo["nodes"].items():
+        base = shlex.quote(url)
+        height = f"$(curl -sf -m 2 {base}/v1/status/block-height)"
+        view = (
+            f"$(curl -sf -m 2 {base}/v1/status/metrics | "
+            "awk '$1==\"consensus_last_voted_view\"{print $2}')"
+        )
+        fields = ["${h:--}", "${v:--}"]
+        script = f"h={height}; v={view}; "
+        if name in queries:
+            script += (
+                f"q=$(curl -sf -m 2 {base}/v1/node/block-height); "
+                f"s=$(curl -sf -m 2 {base}/v1/node/sync-status | jq -r {shlex.quote(SYNCED_JQ)}); "
+            )
+            fields += ["${q:--}", "${s:--}"]
+        lines.append(f'({script}echo "{name} {" ".join(fields)}") &')
+    return "\n".join([*lines, "wait"])
+
+
+def parse_probe(stdout: str, topo: nb.Topology) -> ChaosObservation:
+    """Raises `ValueError` for a node without a line or with missing fields."""
+    rows = {
+        line.split()[0]: line.split() for line in stdout.splitlines() if line.strip()
+    }
+    queries = set(nb.query_nodes(topo))
+    obs = ChaosObservation(height={}, voted_view={}, query_height={}, synced={})
+    for name in topo["nodes"]:
+        fields = rows.get(name)
+        if fields is None or len(fields) != (5 if name in queries else 3):
+            raise ValueError(
+                f"probe output has no complete line for {name}: {stdout!r}"
+            )
+        obs["height"][name] = _probe_int(fields[1])
+        obs["voted_view"][name] = _probe_int(fields[2])
+        if name in queries:
+            obs["query_height"][name] = _probe_int(fields[3])
+            obs["synced"][name] = None if fields[4] == "-" else fields[4] == "true"
+    return obs
+
+
+def _probe_int(field: str) -> int | None:
+    return None if field == "-" else int(float(field))
+
+
+def wipe_script(query: bool) -> str:
+    """Run as root through `bounded`. Safe to rerun: `rm -f` and `find` accept what is gone."""
+    lines = [
+        "set -eu",
+        f"docker logs espresso-node 2>&1 | gzip >> {BENCH_DIR}/espresso-node.wiped.log.gz",
+        "docker rm -f espresso-node",
+        "find /data/journal -mindepth 1 -delete",
+    ]
+    if query:
+        lines.append(f"find {PAYLOAD_HOST_DIR} -mindepth 1 -delete")
+    lines += [f"bash {BENCH_DIR}/recreate.sh", "docker start espresso-node"]
+    return "\n".join(lines) + "\n"
 
 
 def geometric_steps(start: float, factor: float, top: float) -> tuple[float, ...]:
