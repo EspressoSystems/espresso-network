@@ -1,146 +1,68 @@
 # Network benchmark
 
-Load staircase of 1 MB transactions against an espresso-node network. Output: capacity in MB/s, split into the consensus
+Sends a rising load of 1 MB transactions to an espresso-node network. Reports capacity in MB/s, split into the consensus
 limit and the query-node limit.
 
-Related repos:
-
-- [espresso-network-bench-results](https://github.com/EspressoSystems/espresso-network-bench-results): results of this
-  benchmark
-- [espresso-deploy](https://github.com/EspressoSystems/espresso-deploy): cross-region 100-node AWS benchmark
-- [network-deploy](https://github.com/EspressoSystems/network-deploy): deployment of all Espresso networks, has a load
-  generator
-- [espresso-stack-benchmarks](https://github.com/EspressoSystems/espresso-stack-benchmarks): Espresso Stack chain
-  benchmarks
-- [vid-bench](https://github.com/EspressoSystems/vid-bench): VID benchmarks
-- [allocator-benchmarks](https://github.com/EspressoSystems/allocator-benchmarks)
-
-| Driver      | Network                                              | Command              |
+| Driver      | Network                                              | Entry point          |
 | ----------- | ---------------------------------------------------- | -------------------- |
 | `bench`     | 3 nodes on this machine, `process-compose.yaml` (CI) | `just bench run`     |
-| `aws-bench` | N nodes + controller on EC2, one AZ                  | `just bench aws run` |
+| `aws-bench` | N nodes plus a `ctl` host on EC2, one AZ             | `just bench aws run` |
 
-## Layout
+<!-- regenerate: npx markdown-toc --maxdepth 2 --bullets - -i README.md -->
+
+<!-- toc -->
+
+- [Quick start](#quick-start)
+- [Topology](#topology)
+- [Requirements](#requirements)
+- [Usage](#usage)
+- [Options](#options)
+- [Output](#output)
+- [Measurement](#measurement)
+- [AWS harness](#aws-harness)
+- [Files](#files)
+- [Related repos](#related-repos)
+
+<!-- tocstop -->
+
+## Quick start
+
+`release-x`: a `release-*` branch with CI-built images. All commands run from the repo root.
+
+**Capacity search (AWS)**
 
 ```
-scripts/network-bench/
-  netbench.py           shared core: config, staircase, height polling, inclusion tracking,
-                        metrics scrape, analysis, validity, compare, summary
-  bench                 local driver: preflight, process-compose, host sampling
-  aws-bench             AWS driver (laptop) + host agents (agent-drive, agent-host)
-  latency.py            --latency profiles: node placement, RTT matrix, per-node tc script, probes
-  latency-matrix.csv    56 measured AWS region pairs (espresso-deploy 34b35f6)
-  mainnet-locations     regenerates mainnet-locations.json from the mainnet stake table
-  mainnet-locations.json mainnet validator cities: nodes, stake share, lat/lon (no IPs)
-  genesis.toml          0.6, 100 MB blocks, 1 wei base fee
-  process-compose.yaml  local 3-node network
-  justfile              recipe `aws` forwards to aws-bench: just bench aws <verb>
-  aws/user-data.sh      cloud-init template, every host
-  aws/terraform/        key pair, security group, instances, pg volume, rds instance, delete schedule
-  test_*.py             just py::test
+just bench aws run --tag release-x --latency decaf-2025 --search --max-usd 30
+just bench aws run --tag release-x --latency decaf-2025 --search 150 --max-usd 30   # start rate in MB/s
 ```
 
-- `import netbench` as a sibling file; on hosts the same file sits in `/opt/bench`, system python3.
-- Same `result.json` schema and `summary.md` from both drivers; `bench compare` works on either.
+**Fixed steps (AWS)**
 
-## Measurement
+```
+just bench aws run --tag release-x --latency decaf-2025 --steps 50,60,80 --keep-going --max-usd 30
+```
 
-- Load: rates from `--steps` (MB/s), each held `--step-s`, round-robin over validators; per-run marker in every payload,
-  inclusion found by scanning the query node's blocks.
-- Tx content: each payload is the 16 B marker, the 8 B id and `tx_size - 24` bytes cut at a random offset from one
-  random pool of 256 txs' size (seeded, base64-encoded once), so txs differ except for a rare overlap. A request is
-  built from slices of the encoded pool, with no per-tx encoding.
-- Pacer: a tx every `tx_size / rate`. A pacer woken late sends every tx that came due, up to 1 s of load at once
-  (`CATCHUP_S`); schedule lost beyond that stays lost. The in-flight cap still applies. Txs are sent only before the
-  step's end, so a catch-up never spills into the next step.
-- Payload scans (fetch, JSON, base64, marker search) run in 4 processes (`SCAN_PROCESSES`), so they do not compete with
-  the pacer for the GIL; stdlib only, no extra dependencies.
-- `just bench selftest --rate 250`: the load driver against a local null server that accepts submits and serves blocks
-  of the received txs; prints achieved submitted MB/s, queue wait and the CPU of the driver, its scan processes and the
-  server. The driver's ceiling, not the network's.
-- Default ramp: CI linear 4..16 MB/s; AWS x1.5 per step from 4 to 200 MB/s (the target), stops at the first failing
-  step, then one refine step halfway back. `--search` replaces it, see [Search](#search).
-- `--keep-going`: every step runs whatever its verdict, no refine step; then the load stops until drained (see Drain
-  below; cap `max(300 s, --tx-timeout-s)`), reported as the backlog drain time. Set `--cap-s` and `--tx-timeout-s` above
-  the expected lag (e.g. 600): inclusion is read from the query node, so a lag above `--cap-s` throttles the load and
-  one above `--tx-timeout-s` times transactions out. Consensus latency of a lagging step is not reliable. Transactions
-  of a lost payload stay pending until `--tx-timeout-s`, which the end of the run waits for. Not for the CI job: its
-  step timeout is 15 min.
-- Drain (before a refine step or search probe, and after a `--keep-going` run): transactions still queued for a submit
-  thread are dropped, nothing new is submitted. Drained once less than half a transaction is decided over 5 s (the
-  heartbeat's bytes stay below that) and the query node shows 3 blocks past that point and a counter sample taken after
-  them is still idle, then up to 10 s for pending transactions. Gives up after 30 s without a new validator height or
-  300 s in total (`drain timeout`); the cap of the final drain of a `--keep-going` run is `max(300 s, --tx-timeout-s)`.
-  Sent transactions still pending at the end of a drain carry into the next probe until their timeout.
-- `--heartbeat-tx-s N` (AWS `run` default 50, `bench` default 0): a thread submits N 8-byte transactions per second
-  without the marker, round robin over the submit nodes, for the whole run. A leader whose buffer is empty sleeps
-  `empty_block_delay` (default 500 ms) before building; the backlog of that sleep fills the next blocks and can tip a
-  probe that starts after a drain into collapse below the warm capacity. The scans skip heartbeat transactions; they add
-  about 600 B/s to decided bytes (payload and tx table entry), and a config refuses a heartbeat whose bytes over a
-  drain's idle window reach a quarter of `tx_size`. The first failed heartbeat submit is logged, the count goes to
-  `load-meta.json` as `heartbeat_errors`. Part of the config hash when on.
-- Progress, every 10 s: one fixed-width line of the phase (warmup, step or probe, drain, done; rate, elapsed/length),
-  then `sub` (submitted MB/s, pending, timed out in the window), `cns` (decided MB/s and its share of submitted,
-  validator height, block interval and size, p50 submit until header on a validator), `qry` (MB/s scanned from the query
-  node, its height, lag behind the validators), and `| vto N` after view timeouts. Totals once at the end.
-- AWS `run` prints every line of the agent's `agent.log` once, prefixed with the agent's phase, read from ctl every 5 s;
-  and each new phase with its detail.
-- `--max-block-size SIZE` (`plan` and `run`, also `run --fleet`; not an `up` flag; default `50mb`): genesis
-  `max_block_size` of both chain configs, e.g. `30mb`, `100mb`; part of the config hash through the genesis and shown in
-  the summary's deployment block. On 5 x c8g.4xlarge the block interval grows superlinearly above about 60 MB blocks,
-  and blocks at the 100 MB cap decide at about 93 MB/s against about 160 MB/s for 45 to 60 MB blocks. Mainnet uses
-  `10mb`. `genesis.toml` stays at `100mb` for the local `bench`.
-- `--submit-workers N` (AWS `run`, default 32): submit threads of the load generator; part of the config hash.
-- Step details report `queued` (pacer output, MB/s), `queue wait` (queued until a thread sends) and `submit rtt` (send
-  until response). A step submitting < 95% of its rate gets a cause line: with queued < 95%, `in-flight cap reached` if
-  the pacer found the cap full, else `pacer late (controller CPU)`; `submit workers busy` (queue wait p50 > 100 ms),
-  else `slow submit responses`. Diagnostic only, no verdict uses it; runs recorded before these timestamps show them
-  empty.
-- `--allocator NAME` (`jemalloc`, `mimalloc`, `snmalloc`, `tcmalloc`; per run, also `run --fleet`): espresso-node from
-  `espresso-node-alloc:<tag>-<allocator>`; the other images stay `--tag`'s. `build-allocators.yml` builds these images
-  only for release tags (`MAJOR.MINOR.PHASE.PATCH`), PRs that change the allocator build itself, and manual runs, not
-  for branches or `main`. Build a branch's images (all four allocators, ~30-60 min) with
-  `gh workflow run build-allocators.yml --repo EspressoSystems/espresso-network --ref <branch>`; the tag is then
-  `<branch>-<allocator>`. Each image is `espresso-node:main` with the branch's two binaries, so its revision label is
-  main's.
-- `--node-env KEY=VALUE` (repeatable; not an `up` flag, pass it to `run --fleet`): added to every node's environment,
-  overriding the harness's own value; taken verbatim, not for secrets; listed in the summary's deployment block and part
-  of the config hash.
-- `--leader-trace` (`plan` and `run`, also `run --fleet`; not an `up` flag; default off): nodes get
-  `ESPRESSO_NODE_LEADER_TRACE_DIR=/trace` (host `/opt/bench/trace`); part of the config hash when on.
-- `--submit-nodes N` (`plan` and `run`, also `run --fleet`; not an `up` flag; default `nodes - 1`, range 1..nodes):
-  nodes receiving txs, validators first, then `node0`; `N = nodes` includes `node0`. Use `--submit-nodes <nodes>` with
-  `--node-env NP_NO_TX_FORWARDING=1`, which keeps a tx on the node that received it; read only by espresso-node images
-  built from `release-test-journal-query-replay` (commit 9dac6e29f87, new protocol only). Part of the config hash.
-- With `--submit-nodes` = nodes, `node0` also serves submit HTTP: query lag, the query-node limit rule and `node0` CPU
-  are not comparable across different `--submit-nodes` values.
-- Output of `--leader-trace`, also by `render`: `hosts/<name>/trace/leader_trace_node*.csv`, and from
-  `trace-plots RUN_DIR` (uv script, needs matplotlib) `trace/leader_path.png`, `trace/leader_path_typical.png`,
-  `trace/leader_path_worst.png`, `trace/leader_path.md` (segment medians per load step, over the views whose t0 lies in
-  the measured window `t_mid`..`t_end` of the step in `steps.json`), `trace/finality.png`, `trace/stats.json`. With
-  `steps.json`, plots and stats cover only the views in the measured windows.
-- Query node: pg_stat_database/checkpointer/wal/activity every 5 s, pg_stat_statements and settings at collect, slow
-  statements (>200 ms) in the postgres log.
-- Per step, second half judged (a step stopped early: its last 10 s):
+**Local (3 nodes, this machine)**
 
-| Rule              | Source                                                       | Fails when                |
-| ----------------- | ------------------------------------------------------------ | ------------------------- |
-| decided MB/s      | validators' `consensus_finalized_bytes_sum`, Theil-Sen slope | < 80% of submitted        |
-| view timeouts     | `consensus_number_of_timeouts`                               | > 0                       |
-| consensus latency | submit until header on a validator                           | p50 > 1000 ms             |
-| query lag         | header on query node minus header on a validator             | p50 > 1000 ms, or growing |
+```
+just bench build
+just bench run
+just bench run --steps 4,8,12,16 --keep-going
+```
 
-- Early stop (not with `--keep-going`): from 10 s into a step, decided under 80% of submitted over the last 10 s stops
-  the step; judged over those 10 s, it fails on the decided rule.
-- Capacity: highest passing rate; overall, consensus-only rules, query-node-only rules.
-- Per node: CPU, RSS, tokio busy, top ops from `/v1/status/metrics` (`consensus_`, `journal_`, `sql`, `storage`, ...).
-- Per host (AWS): CPU, steal, memory, disk and net rates, per-container CPU and memory (cgroups).
-- `invalid`: not ready, low scrape coverage, a node decided nothing, host digest mismatch, clock off > 1 s.
-- `noisy`: steal, calibration drift, start spread >= 2 s, clock off > 50 ms, busy controller. Kept, never a baseline.
+- `--latency decaf-2025` is the reference geography for comparable AWS runs. Without `--latency` all nodes share one AZ
+  with no added delay, an upper bound far above a geo-distributed network. Profiles: [Latency model](#latency-model).
+- `plan` takes the same flags as `run`: cost estimate and fleet dir, no AWS writes. `plan` checks against 60 USD unless
+  `--max-usd` is given; pass the same `--max-usd` as the intended `run`.
+- `run` prints the cost estimate and prompts; `--yes` skips the prompt (required without a tty).
+- Results: `bench-state/aws/<fleet>/runs/<nn>-<name>/summary.md` (AWS), `bench-out/summary.md` (local).
+- Exit codes: 0 valid, 1 invalid, 2 refused with nothing created, 3 failed (single-shot: destroyed; `run --fleet`: fleet
+  left up), 4 resources may remain.
+- Flags per command: `just bench aws <cmd> -h`, `just bench run -h`. Recipes: `just bench` or `just --list bench`.
+- Several runs on one fleet: [Fleets](#fleets).
+- Prerequisites: [Requirements](#requirements).
 
-## AWS harness
-
-### Fleet
+## Topology
 
 ```
 laptop                       EC2, one AZ, private IPs
@@ -159,27 +81,423 @@ laptop                       EC2, one AZ, private IPs
                              +-------------------------------------------------+
 ```
 
-| Host      | Type          | Runs                                                                                                     |
-| --------- | ------------- | -------------------------------------------------------------------------------------------------------- |
-| `ctl`     | `c8g.2xlarge` | anvil, `deploy`, orchestrator, state-relay-server, `agent-drive`, `agent-host`                           |
-| `node0`   | `c8g.4xlarge` | espresso-node `-- storage-journal -- storage-sql -- http -- query ...`, postgres container, `agent-host` |
-| `node1..` | `c8g.4xlarge` | espresso-node `-- storage-journal -- http -- status -- submit -- catchup -- config`, `agent-host`        |
+| Host      | Runs                                                                                                     |
+| --------- | -------------------------------------------------------------------------------------------------------- |
+| `ctl`     | anvil, `deploy`, orchestrator, state-relay-server, `agent-drive`, `agent-host`                           |
+| `node0`   | espresso-node `-- storage-journal -- storage-sql -- http -- query ...`, postgres container, `agent-host` |
+| `node1..` | espresso-node `-- storage-journal -- http -- status -- submit -- catchup -- config`, `agent-host`        |
 
-- Types: the table's are the defaults; `--node-type` (node0..) and `--ctl-type` (`ctl`) on `plan`, `up` and single-shot
-  `run`; `run --fleet` refuses them. Preflight reads each type's on-demand Linux price in the run's region (`--region`,
-  default eu-west-1) from the AWS Pricing API (`pricing get-products`, endpoint us-east-1); a type with no single
-  matching price is refused. Both types must share one architecture; preflight reads it from `describe-instance-types`
-  and picks the Ubuntu AMI and image platform (`linux/arm64` or `linux/amd64`) to match. Recorded as `arch` in the
-  manifest.
-- vCPUs: an Intel vCPU is a hyperthread (c8i.4xlarge: 16 vCPU = 8 cores); a Graviton vCPU is a physical core
+## Requirements
+
+- nix devShell (opentofu, awscli2).
+- AWS profile `timeboost-dev` (account 027574771971). Region eu-west-1 unless `--region` is given. Constants live in
+  `aws-bench` and `aws/terraform/main.tf`.
+- `ssh-keygen`.
+- The rev is pushed as a `release-*` branch, so CI publishes the ghcr images.
+- Local runs need `just bench build` first.
+
+## Usage
+
+### Capacity search
+
+```
+just bench aws plan --tag release-x --nodes 4 --db-modes colocated,volume --search --max-usd 30
+just bench aws run --tag release-x --nodes 3 --search 120 --resolution-mb-s 2 --max-probes 16
+```
+
+- Output: a `Capacity` line with `+-resolution`, and `search: resolved after N probes`.
+- `plan` and `run` refuse a search that the disks, the pg volume, the TTL or `--max-usd` cannot cover in the worst case.
+  `--offered-gb` sets the byte budget and the disk size.
+- `--search` refuses `--keep-going` and ignores `--steps`; more than one `--steps` value is refused.
+- Algorithm: [Search](#search).
+
+### Fixed steps
+
+```
+# default ramp, stops at the first failing step, then one refine step halfway back
+just bench aws run --tag release-x
+```
+
+- `--keep-going` runs every step with no refine step, then stops the load and drains for up to
+  `max(300 s, --tx-timeout-s)`. The summary reports this as the backlog drain time.
+- Inclusion is read from the query node. A query lag above `--cap-s` throttles the load. A lag above `--tx-timeout-s`
+  times transactions out. Both need to exceed the expected lag (e.g. 600).
+- Consensus latency of a step with query lag above `--cap-s` is not comparable across runs.
+- A long `--tx-timeout-s` raises the TTL bound; raise `--max-usd` when `plan` reports it over 10.
+- Transactions of a lost payload stay pending until `--tx-timeout-s`, and the end of the run waits for them.
+- The CI job does not fit this mode: its step timeout is 15 min.
+
+### Local
+
+```
+just bench selftest --rate 250                          # driver ceiling against a null server, no network
+just bench sysinfo                                      # runner info and CPU calibration only
+just bench clean                                        # remove bench-out/ and storage of an interrupted run
+```
+
+- `selftest` runs the load driver against `nullserver.py`, which accepts submits and serves blocks of the received txs.
+  It prints submitted MB/s, queue wait and the CPU of the driver, its scan processes and the server.
+- Defaults differ from AWS: [Local bench flags](#local-bench-flags).
+
+### Fleets
+
+```
+just bench aws up --tag release-x --nodes 4 --db-modes colocated,volume,rds --ttl-min 240 --max-usd 60
+just bench aws run --fleet --query-db volume --search
+just bench aws run --fleet --query-db colocated --steps 50,60,80 --keep-going
+# named fleet, other image tag
+just bench aws run --fleet lulu-20261001-074612 --query-db colocated --tag release-y
+just bench aws run --fleet lulu-20261001-074612 --query-db rds --tag release-y --steps 50,60,80 --keep-going
+# reset a dirty fleet or replace a stale lock, then measure
+just bench aws run --fleet lulu-20261001-074612 --force
+just bench aws down
+just bench aws down lulu-20261001-074612 --yes          # --yes needs FLEET
+```
+
+- `run --fleet` locks the fleet, ships the agents, wipes journals, containers and the database, measures, collects into
+  `runs/<nn>-<name>/` and returns the fleet to `idle`. Every run starts at height 0.
+- `run --fleet` refuses with exit 2, nothing sent to the hosts, when: the phase is not `idle`, the lock is held, MODE is
+  not in `--db-modes`, the TTL left is below the run's worst case plus lock-out, or a fleet flag is given.
+- `--tag` differing from the fleet's makes the hosts pull those images by digest.
+- `FLEET`: a name under `bench-state/aws/`, or a path when it contains `/`. Omitted: the only fleet in phase `idle`,
+  `running`, `dirty`, `left-running`, `destroying` or `destroyed`, expired or not. Several or none are refused with the
+  list. Applies to `run --fleet`, `down`, `status`, and to `collect` without `RUN_DIR` (that fleet's last run).
+
+### Query database
+
+| `--query-db` | Postgres                            | Store of `/data/pg`                                                             |
+| ------------ | ----------------------------------- | ------------------------------------------------------------------------------- |
+| `colocated`  | container on node0                  | root gp3 (`--pg-iops`, `--pg-mbps`)                                             |
+| `volume`     | container on node0                  | extra gp3 400 GiB (`--pg-iops`, `--pg-mbps`), ext4 by-id mount, dies with node0 |
+| `rds`        | RDS PostgreSQL db.m8g.4xlarge, 18.x | gp3 400 GiB or more, 12000 IOPS, 500 MB/s                                       |
+
+```
+just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --yes
+just bench aws run --fleet --query-db volume --node-env ESPRESSO_QUERY_PAYLOAD_DIR=/payload
+```
+
+- `--db-modes` (`plan`, `up`) lists the stores a fleet prepares. `--query-db` (`run`) picks one.
+- A fleet with `rds` refuses `--pg-iops` and `--pg-mbps` values other than the defaults.
+- `rds` needs IAM rights `iam:CreateRole`, `iam:PutRolePolicy`, `iam:PassRole`, `scheduler:CreateSchedule`. Without them
+  apply fails, the fleet is destroyed, exit 3.
+- The query node mounts `/data/pg/payload` as `/payload`. `ESPRESSO_QUERY_PAYLOAD_DIR=/payload` (experimental image
+  feature, off by default) puts payload and VID share files there: on the `volume` store in `volume` mode, on node0's
+  root disk otherwise. Size collected as `du-payload.txt`.
+
+### Latency
+
+```
+just bench aws run --tag release-x --nodes 5 --latency decaf-2025
+just bench aws run --tag release-x --nodes 5 --latency decaf-2025 --no-intra-latency   # cross-region delay only
+just bench aws run --fleet --latency mainnet
+```
+
+- Shaped: node-to-node traffic, including catchup on 8080.
+- Never shaped: `ctl` traffic (orchestrator, L1, relay, submit, metrics), RDS, ssh.
+- Model and profiles: [Latency model](#latency-model).
+
+### Node build and config
+
+```
+just bench aws run --tag release-x --allocator mimalloc
+just bench aws run --tag release-x --max-block-size 30mb
+just bench aws run --tag release-x --nodes 4 --submit-nodes 4 --node-env NP_NO_TX_FORWARDING=1
+just bench aws run --tag release-x --node-type c8i.4xlarge --ctl-type c8i.2xlarge   # Intel: amd64 AMI and images
+just bench aws run --tag release-x --leader-trace
+```
+
+- `--allocator NAME`: espresso-node from `espresso-node-alloc:<tag>-<allocator>`; other images stay `--tag`'s.
+  - `build-allocators.yml` builds these images for release tags (`MAJOR.MINOR.PHASE.PATCH`), PRs that change the
+    allocator build, and manual runs. Branches and `main` get none.
+  - Branch images (all four allocators, ~30-60 min):
+    `gh workflow run build-allocators.yml --repo EspressoSystems/espresso-network --ref <branch>`. The tag is then
+    `<branch>-<allocator>`.
+  - Each image is `espresso-node:main` with the branch's two binaries, so its revision label is main's.
+- `--max-block-size`: genesis `max_block_size` of both chain configs; part of the config hash, shown in the summary.
+  - Mainnet uses `10mb`. Local `genesis.toml` uses `100mb`.
+  - On 5 x c8g.4xlarge the block interval grows superlinearly above about 60 MB blocks. Blocks at a 100 MB cap decide at
+    about 93 MB/s, 45 to 60 MB blocks at about 160 MB/s.
+- `--node-env KEY=VALUE`: repeatable; added last to every node's environment, overriding the harness's value. Taken
+  verbatim and listed in the summary, so not for secrets. Part of the config hash.
+- `--submit-nodes N`: nodes receiving txs, validators first, then `node0`.
+  - `N = nodes` includes `node0`. Pair it with `NP_NO_TX_FORWARDING=1`, which keeps a tx on the node that received it.
+  - `NP_NO_TX_FORWARDING` is read only by images built from `release-test-journal-query-replay` (commit 9dac6e29f87, new
+    protocol only).
+  - With `node0` submitting, query lag, the query-node rule and `node0` CPU are not comparable across `--submit-nodes`
+    values.
+- `--node-type`, `--ctl-type`: both types share one architecture. Preflight picks the Ubuntu AMI and image platform to
+  match. Type choice: [instance-types.md](instance-types.md).
+- `--leader-trace`: nodes get `ESPRESSO_NODE_LEADER_TRACE_DIR=/trace` (host `/opt/bench/trace`).
+  - Collected: `hosts/<name>/trace/leader_trace_node*.csv`.
+  - `trace-plots RUN_DIR` (uv script, matplotlib; also run by `render`) writes `trace/leader_path.png`,
+    `trace/leader_path_typical.png`, `trace/leader_path_worst.png`, `trace/finality.png`, `trace/stats.json`,
+    `trace/leader_path.md` (segment medians per load step).
+  - With `steps.json`, plots and stats cover only views whose t0 lies in a step's measured window `t_mid`..`t_end`.
+
+### Baselines
+
+```
+just bench aws render bench-state/aws/<fleet>/runs/02-volume --baseline bench-state/aws/<fleet>/runs/01-volume/result.json
+just bench render bench-out --baseline main-network-bench.json
+just bench compare bench-out/result.json main-network-bench.json
+```
+
+- `render` re-analyzes a run dir and rewrites `result.json` and `summary.md`.
+- A baseline is a `result.json` or `nextest-ci stats-fetch` output.
+- Both drivers write the same `result.json` schema, so `compare` works across them.
+- A `noisy` run never serves as a baseline.
+
+### Status and cleanup
+
+```
+just bench aws status lulu-20261001-074612   # phase, time left, runs, lock holder, instances, pg volume, rds, cost
+just bench aws status --all                  # tagged resources per fleet, latest expiry, orphan reason
+just bench aws list                          # local fleet dirs, newest first; no AWS calls
+just bench aws collect                       # re-collect into the last run of the only selectable fleet
+just bench aws collect bench-state/aws/<fleet>/runs/02-volume
+just bench aws destroy --orphans             # list orphans by tag, confirm, sweep
+just bench aws prune --older-than 14         # delete old local fleet dirs that hold no AWS resources
+```
+
+- `--region` applies to `status`, `destroy` and `prune`. Fleet commands read the region from the fleet's manifest.
+- `collect RUN_DIR` takes only the fleet's last run, with the fleet `idle` or `left-running`.
+- After the laptop dies: `render RUN_DIR` on the rsynced files, then `down` or `destroy --orphans`. `collect` needs the
+  fleet `idle` or `left-running`. Details: [Failure paths](#failure-paths).
+
+### Publishing
+
+```
+just bench aws publish bench-state/aws/<fleet>/runs/01-run   # retry, or backfill older runs
+```
+
+- `run` (single-shot and `--fleet`) publishes automatically. `--no-publish` skips it.
+- Destination: `runs/<fleet>/<run>/` of
+  [espresso-network-bench-results](https://github.com/EspressoSystems/espresso-network-bench-results).
+  `--results-remote` or env `BENCH_RESULTS_REMOTE` replaces the remote.
+- Auth: plain `git` over https with the ambient credential helper, never prompting. Commit signing and `user.name` /
+  `user.email` come from the user's git config.
+- Published files: [Artifacts](#published-files).
+
+## Options
+
+### aws-bench commands
+
+| Command   | Action                                                                                                     | AWS writes |
+| --------- | ---------------------------------------------------------------------------------------------------------- | ---------- |
+| `plan`    | render the fleet dir, print the cost estimate                                                              | n          |
+| `up`      | plan, confirm, provision a fleet, leave it `idle`                                                          | y          |
+| `run`     | plan, confirm, provision, measure, collect, publish, destroy; with `--fleet`: measure on a fleet from `up` | y          |
+| `down`    | destroy a fleet (`tofu destroy` x3, tag sweep, fleet `cost.json`); exit 0 / 4                              | y          |
+| `status`  | one fleet's progress, or `--all` tagged resources                                                          | n          |
+| `list`    | local fleet dirs, newest first                                                                             | n          |
+| `collect` | re-collect logs and samples from live hosts                                                                | n          |
+| `render`  | re-analyze a run dir, rewrite its summary; `--baseline`                                                    | n          |
+| `publish` | push run dirs to the results repo                                                                          | n          |
+| `destroy` | `--orphans`: sweep orphaned fleets                                                                         | y          |
+| `prune`   | `--older-than DAYS`: delete old local fleet dirs                                                           | n          |
+
+`agent-drive` (`ctl`: load driver) and `agent-host` (every host: `/proc` and cgroup sampler) run on the hosts only.
+
+### Run flags
+
+Where:
+
+- **all**: `plan`, `up`, `run`, `run --fleet`.
+- **provision**: `plan`, `up`, `run`; refused by `run --fleet` (taken from the fleet).
+- **per run**: `plan`, `run`, `run --fleet`; refused by `up`.
+- **run**: `run` only.
+
+| Flag                                  | Default                        | Where        | Meaning                                                                            |
+| ------------------------------------- | ------------------------------ | ------------ | ---------------------------------------------------------------------------------- |
+| `--tag`                               | required; fleet's on `--fleet` | all          | ghcr image tag pushed by CI                                                        |
+| `--allocator`                         | none                           | all          | `jemalloc`, `mimalloc`, `snmalloc`, `tcmalloc`                                     |
+| `--nodes`                             | 5                              | provision    | validator count, `node0` included                                                  |
+| `--node-type`                         | `c8g.4xlarge`                  | provision    | node instance type                                                                 |
+| `--ctl-type`                          | `c8g.2xlarge`                  | provision    | `ctl` instance type                                                                |
+| `--root-gb`                           | `auto`                         | provision    | root volume GB; `auto` sizes from the ramp, or from `--offered-gb` with `--search` |
+| `--pg-iops`, `--pg-mbps`              | 12000, 500                     | provision    | node0 root volume and `volume` store                                               |
+| `--region`                            | eu-west-1                      | provision    | AWS region                                                                         |
+| `--max-usd`                           | `run` 10; `plan`, `up` 60      | provision    | refuse when the cost bound exceeds it                                              |
+| `--ttl-min`                           | `plan`, `run` auto; `up` 180   | provision    | minutes until hosts terminate; `auto`: worst case plus margin                      |
+| `--db-modes`                          | `colocated`                    | `plan`, `up` | stores the fleet prepares                                                          |
+| `--steps`                             | x1.5 from 4 to 200             | all          | MB/s per step, increasing                                                          |
+| `--step-s`                            | 30; `--search` 60              | all          | seconds per step                                                                   |
+| `--cap-s`                             | 5; `--search` 60               | all          | in-flight cap, in seconds of the step's load                                       |
+| `--tx-timeout-s`                      | 30; `--search` 60              | all          | tx timeout                                                                         |
+| `--warmup-s`                          | 60                             | all          | warmup at the first step's rate                                                    |
+| `--submit-workers`                    | 32                             | all          | submit threads; part of the config hash                                            |
+| `--heartbeat-tx-s`                    | 50                             | all          | 8-byte txs per second for the whole run, 0 for none                                |
+| `--keep-going`                        | off                            | all          | run every step, then drain                                                         |
+| `--max-block-size`                    | `50mb`                         | per run      | genesis `max_block_size`                                                           |
+| `--node-env KEY=VALUE`                | none                           | per run      | repeatable; node environment                                                       |
+| `--leader-trace`, `--no-leader-trace` | off                            | per run      | leader trace CSVs and plots                                                        |
+| `--submit-nodes`                      | nodes - 1                      | per run      | nodes receiving txs, 1..nodes                                                      |
+| `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `mainnet`                                                     |
+| `--no-intra-latency`                  | off                            | per run      | with `--latency`: no same-location delay                                           |
+| `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                       |
+| `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`                                                       |
+| `--force`                             | off                            | run          | with `--fleet`: reset a dirty fleet, replace a stale lock                          |
+| `--yes`                               | off                            | run          | skip the prompt, required without a tty; also on `up`, `down`, `destroy`, `prune`  |
+| `--no-publish`                        | off                            | run          | skip publishing                                                                    |
+| `--results-remote`                    | results repo                   | run          | git remote, also on `publish`; env `BENCH_RESULTS_REMOTE`                          |
+
+### Search flags
+
+Where: all. Each flag other than `--search` is refused without `--search`.
+
+| Flag                | Default | Meaning                                                  |
+| ------------------- | ------- | -------------------------------------------------------- |
+| `--search [START]`  | 100     | first probe in MB/s; ~0.8x a known capacity saves probes |
+| `--resolution-mb-s` | 5       | stop when `failed_at - capacity` is at most this         |
+| `--max-probes`      | 12      | probe budget                                             |
+| `--offered-gb`      | 150     | offered-bytes budget; also sizes the disks               |
+
+### Local bench flags
+
+| Flag                    | Default           | Meaning                             |
+| ----------------------- | ----------------- | ----------------------------------- |
+| `--steps`               | 4,6,8,10,12,14,16 | MB/s per step                       |
+| `--step-s`              | 30                | seconds per step                    |
+| `--submit-nodes`        | 3                 | nodes receiving txs                 |
+| `--workers`             | 6                 | submit threads                      |
+| `--cap-s`               | 5                 | in-flight cap, in seconds of load   |
+| `--tx-timeout-s`        | 30                | tx timeout                          |
+| `--warmup-s`            | 60                | warmup at the first step's rate     |
+| `--seed`                | 42                | tx pool seed                        |
+| `--latency-target-ms`   | 1000              | consensus latency rule              |
+| `--query-lag-target-ms` | 1000              | query lag rule                      |
+| `--keep-going`          | off               | run every step, then drain          |
+| `--heartbeat-tx-s`      | 0                 | 8-byte txs per second               |
+| `--tx-size`             | 1000000           | bytes per tx                        |
+| `--baseline`            | none              | `result.json` or stats-fetch output |
+| `--pr`                  | none              | PR number recorded in the result    |
+| `--ready-timeout`       | 420               | seconds to wait for the network     |
+
+- `selftest`: `--rate` 250 MB/s, `--step-s` 20, `--submit-workers` 32, `--out` keeps `load.jsonl` and `steps.json`.
+- `--out`, `--storage-root`, `--bin-dir` are set by the recipe from the justfile env: `BENCH_OUT` (`bench-out`),
+  `BENCH_STORAGE_ROOT` (`/tmp`), `BENCH_BIN_DIR` (`$CARGO_TARGET_DIR/release`, else `target/release`).
+- `--keep-going` has a `--no-keep-going` form.
+
+## Output
+
+Progress: one fixed-width line every 10 s, totals at the end.
+
+| Field   | Content                                                                                                 |
+| ------- | ------------------------------------------------------------------------------------------------------- |
+| phase   | warmup, step or probe, drain, done; rate, elapsed/length                                                |
+| `sub`   | submitted MB/s, pending, timed out in the window                                                        |
+| `cns`   | decided MB/s and share of submitted, validator height, block interval and size, p50 submit until header |
+| `qry`   | MB/s scanned from the query node, its height, lag behind the validators                                 |
+| `vto N` | view timeouts, shown only when nonzero                                                                  |
+
+- AWS `run` prints each new phase with its detail, and every line of `agent.log` prefixed with the agent's phase, read
+  from `ctl` every 5 s.
+- Step details report `queued` (pacer output, MB/s), `queue wait` (queued until a thread sends) and `submit rtt` (send
+  until response).
+- A step submitting < 95% of its rate gets a cause line. Diagnostic only, no verdict uses it.
+  - queued < 95%: `in-flight cap reached` if the pacer found the cap full, else `pacer late (controller CPU)`.
+  - otherwise: `submit workers busy` (queue wait p50 > 100 ms), else `slow submit responses`.
+- Capacity line: `Capacity **190 MB/s** (+-7.5, confirmed): ...`. The value is the highest passing rate below the lowest
+  failing one (`< F` when none passed, `>= R` when none failed), overall and per side: consensus-only rules,
+  query-node-only rules. `+-N` is `failed_at - capacity`. `confirmed` appears after a passing `--search` confirm probe.
+- `steps.json` is rewritten after every probe, so a run cut short by the TTL keeps its probes.
+
+## Measurement
+
+### Load
+
+- Rates from `--steps` (MB/s), each held `--step-s`, round-robin over the submit nodes.
+- Each payload: a 16 B per-run marker, an 8 B id, and `tx_size - 24` bytes cut at a random offset from a seeded pool of
+  256 txs' size, base64-encoded once. Requests are built from slices of the encoded pool.
+- Inclusion: scans of the query node's blocks for the marker. Scans (fetch, JSON, base64, marker search) run in 4
+  processes (`SCAN_PROCESSES`), stdlib only.
+- Namespaces 10000 and 10015: the leader disperses a block's namespaces in parallel.
+- Pacer: one tx every `tx_size / rate`. A late pacer sends every tx that came due, up to 1 s of load (`CATCHUP_S`);
+  schedule lost beyond that stays lost. The in-flight cap applies. Txs are sent only before the step's end.
+
+### Step rules
+
+Each step is judged over its second half. A step stopped early is judged over its last 10 s.
+
+| Rule              | Source                                                       | Fails when                          |
+| ----------------- | ------------------------------------------------------------ | ----------------------------------- |
+| decided MB/s      | validators' `consensus_finalized_bytes_sum`, Theil-Sen slope | < 80% of submitted                  |
+| view timeouts     | `consensus_number_of_timeouts`                               | > 0                                 |
+| consensus latency | submit until header on a validator                           | p50 > 1000 ms                       |
+| query lag         | header on query node minus header on a validator             | p50 > 1000 ms, or growing > 50 ms/s |
+
+- Early stop (not with `--keep-going`): from 10 s into a step, decided < 80% of submitted over the last 10 s stops the
+  step, which fails on the decided rule.
+- Without `--keep-going` the ramp stops at the first failing step, then runs one refine step halfway back.
+
+### Drain
+
+- Runs after a failing step before the refine step, after a failing search probe before the next probe, and after a
+  `--keep-going` run.
+- Queued transactions not yet sent are dropped. Nothing new is submitted.
+- Done when: < 0.5 tx decided over 5 s, the query node shows 3 blocks past that point, and a counter sample after them
+  is still idle. Then up to 10 s for pending transactions.
+- Gives up (`drain timeout`) after 30 s without a new validator height or 300 s in total. The final drain of a
+  `--keep-going` run caps at `max(300 s, --tx-timeout-s)`.
+- Transactions still pending carry into the next probe until their timeout.
+
+### Heartbeat
+
+- A thread submits `--heartbeat-tx-s` 8-byte unmarked transactions per second, round-robin over the submit nodes, for
+  the whole run.
+- Purpose: a leader with an empty buffer sleeps `empty_block_delay` (500 ms) before building. After a drain the backlog
+  of that sleep fills the next blocks and can collapse a probe below the warm capacity.
+- Adds about 600 B/s to decided bytes. Scans skip heartbeat transactions.
+- The config refuses a heartbeat whose bytes over a drain's idle window reach a quarter of `tx_size`.
+- The first failed heartbeat submit is logged; the count goes to `load-meta.json` as `heartbeat_errors`.
+- Part of the config hash when on.
+
+### Search
+
+- A probe is one `--step-s` step judged by the step rules.
+- Climb x1.25 from START until a probe fails, bisect to `--resolution-mb-s`, confirm the result over `2 x step_s`.
+- A collapsed probe (decided < 0.5 x submitted) is followed by a re-run at the highest pass below it, or at START when
+  none passed. A failing re-run fails that rate: a collapsed re-run moves to the next lower pass, a soft fail is
+  bisected. No pass left below stops the search (`degraded after overload at <rate>`).
+- Query-bound with consensus unbounded: a second search on the consensus side, a lower bound tied to query lag.
+- Stop reasons: `resolved`, `probe budget`, `disk budget`, `drain timeout`, `degraded after overload`, `below start`,
+  `generator throttled`. Recorded in `load-meta.json`, `result.json` and the summary.
+
+### Samples
+
+- Per node: CPU, RSS, tokio busy, top ops from `/v1/status/metrics` (`consensus_`, `journal_`, `sql`, `storage`, ...).
+- Per host (AWS): CPU, steal, memory, disk and net rates, per-container CPU and memory (cgroups).
+- Query node: `pg_stat_database`, checkpointer, wal and activity every 5 s; `pg_stat_statements` and settings at
+  collect; statements > 200 ms in the postgres log.
+
+### Validity
+
+| Verdict   | Condition                                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------------------------- |
+| `invalid` | not ready (height < 5), scrape coverage < 90%, a node decided nothing, host digest mismatch, clock offset > 1 s     |
+| `noisy`   | steal > 5%, calibration drift > 10%, start spread >= 2 s, clock offset > 50 ms, busy controller, pg settings differ |
+
+- A `noisy` run is kept and never serves as a baseline.
+
+## AWS harness
+
+### Fleet
+
+- Price: preflight reads each type's on-demand Linux price in the region from the AWS Pricing API
+  (`pricing get-products`, endpoint us-east-1). A type without a single matching price is refused.
+- Arch: preflight reads it from `describe-instance-types` and picks the AMI and image platform (`linux/arm64` or
+  `linux/amd64`). Recorded as `arch` in the manifest.
+- vCPUs: an Intel vCPU is a hyperthread (c8i.4xlarge: 16 vCPU = 8 cores). A Graviton vCPU is a physical core
   (c8g.4xlarge: 16 cores).
-- Choosing a type: [instance-types.md](instance-types.md) compares leader block-build time and cost per block.
-- Stake: equal, orchestrator self-registration; 5 nodes → quorum 4, lagging `node0` never stalls consensus.
+- Stake: equal, orchestrator self-registration. 5 nodes give quorum 4, so a lagging `node0` never stalls consensus.
 - Peers: `node0` has state peers like every node and no API peers.
 - Keys: test mnemonic, index 20 + i. No `keygen`, no `stake-for-demo`.
-- Network: cliquenet over private IPs, libp2p over private DNS; SG allows ssh from this machine's IP only (checkip).
-- Images: `ghcr.io/espressosystems/espresso-network/<component>:<--tag>` (CI, `release-*` branch) + foundry + postgres;
-  preflight resolves digests, hosts pull by digest, manifest records them.
+- Network: cliquenet over private IPs, libp2p over private DNS. The security group allows ssh from this machine's IP
+  only (checkip).
+- Images: `ghcr.io/espressosystems/espresso-network/<component>:<--tag>` plus foundry and postgres. Preflight resolves
+  digests, hosts pull by digest, the manifest records them.
+- ssh: every fleet gets an ed25519 key in `<fleet>/ssh/`. The private half is deleted after destroy and kept after a
+  failed destroy.
 
 ### Run phases
 
@@ -192,160 +510,97 @@ preflight -> plan -> confirm $ -> apply -> provisioned -> [shaping] -> services 
                         exit 0/1, or 3 (failed, destroyed), or 4 (resources remain)
 ```
 
-| Phase       | Does                                                                                                                                               | Gate                                                   |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| preflight   | tools, `sts` account, type arch + price + offered, image digests + arch                                                                            | any miss: exit 2                                       |
-| plan        | render run dir, `tofu init/plan`, estimate at the Pricing API instance prices and the `PRICES` constants (eu-west-1 on-demand)                     | over `--max-usd`, declined, no tty w/o `--yes`: exit 2 |
-| apply       | `tofu apply`, local state in run dir; instances terminate on shutdown, cloud-init arms `shutdown -P +TTL` first                                    | last tf stderr line, destroy, exit 3                   |
-| provisioned | ssh + `cloud-init status --wait`, digests == manifest, render env/start.sh (need private IPs), rsync `/opt/bench`, start `agent-host`              |                                                        |
-| shaping     | `--latency` only: one tc netem leaf per peer on every node, then ping probes against the expected RTT                                              | probe off by > max(2 ms, 10 %): collect, exit 3        |
-| services    | anvil (`eth_chainId`), deploy (code at genesis addresses), orchestrator + relay (`/healthcheck`), postgres (`pg_isready`)                          |                                                        |
-| nodes       | `docker create` all, `docker start` at one wall-clock instant, record spread                                                                       | spread >= 2 s: noisy                                   |
-| measuring   | `agent-drive` under `systemd-run`: wait heights, `netbench.drive_load`; laptop polls state, rsyncs every 60 s                                      | agent error: collect, exit 3                           |
-| collecting  | stop agent, `docker stop`, per host logs.gz / inspect / cloud-init log / chrony / du / host.jsonl, pg stats, final rsync; every step under timeout |                                                        |
-| report      | `netbench.analyze` + AWS validity → `result.json`, `summary.md`                                                                                    |                                                        |
-| destroying  | `tofu destroy` x3, then tag sweep; `cost.json` from launch/terminate times; `INDEX.md` row                                                         | leftovers: exit 4                                      |
-
-Exit: 0 valid, 1 invalid, 2 refused (nothing created), 3 failed then destroyed, 4 resources may remain.
+| Phase       | Does                                                                                                                                         | Gate                                                   |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| preflight   | tools, `sts` account, type arch, price and offered, image digests and arch                                                                   | any miss: exit 2                                       |
+| plan        | render run dir, `tofu init/plan`, estimate at Pricing API instance prices and the `PRICES` constants (eu-west-1 on-demand)                   | over `--max-usd`, declined, no tty w/o `--yes`: exit 2 |
+| apply       | `tofu apply`, local state in run dir; instances terminate on shutdown, cloud-init arms `shutdown -P +TTL` first                              | last tf stderr line, destroy, exit 3                   |
+| provisioned | ssh and `cloud-init status --wait`, digests == manifest, render env/start.sh, rsync `/opt/bench`, start `agent-host`                         |                                                        |
+| shaping     | `--latency` only: one tc netem leaf per peer on every node, then ping probes against the expected RTT                                        | probe off by > max(2 ms, 10 %): collect, exit 3        |
+| services    | anvil (`eth_chainId`), deploy (code at genesis addresses), orchestrator and relay (`/healthcheck`), postgres (`pg_isready`)                  |                                                        |
+| nodes       | `docker create` all, `docker start` at one wall-clock instant, record spread                                                                 | spread >= 2 s: noisy                                   |
+| measuring   | `agent-drive` under `systemd-run`: wait heights, `netbench.drive_load`; laptop polls state, rsyncs every 60 s                                | agent error: collect, exit 3                           |
+| collecting  | stop agent, `docker stop`, per host logs.gz, inspect, cloud-init log, chrony, du, host.jsonl, pg stats, final rsync; each step under timeout |                                                        |
+| report      | `netbench.analyze` and AWS validity: `result.json`, `summary.md`                                                                             |                                                        |
+| destroying  | `tofu destroy` x3, then tag sweep; `cost.json` from launch/terminate times; `INDEX.md` row                                                   | leftovers: exit 4                                      |
 
 ### Failure paths
 
-| Event                          | Handling                                                                                                               |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `tofu apply` fails             | log the `Error:` block on one line (else the last stderr line), destroy, exit 3                                        |
-| node never ready / agent error | collect all, failure summary with last log lines, destroy, exit 3                                                      |
-| Ctrl-C                         | finish current phase, bounded collect, destroy, exit 3 or 4                                                            |
-| Ctrl-C again                   | SIGINT to a `tofu` command in flight (stops and writes state; a further one exits it); third skips the collection      |
-| destroy fails x3               | sweep by tag `espresso-bench-run=<name>`; leftovers → exit 4, `status --all` lists them                                |
-| laptop dies                    | agents keep running, TTL ends instances (and the pg volume), a schedule deletes the rds instance 5 min before the TTL; |
-|                                | `status/down FLEET`, `collect/render RUN_DIR` recover; `run --fleet --force` replaces a stale lock                     |
-| reset fails on a fleet         | fleet phase `dirty`, lock kept; `run --fleet [FLEET] --force` resets again, or `down [FLEET]`                          |
-| state lost                     | `destroy --orphans`: list by tag (owner, launch, expiry), confirm, sweep; never another owner's live run               |
+| Event                          | Handling                                                                                                                               |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `tofu apply` fails             | log the `Error:` block on one line (else the last stderr line), destroy, exit 3                                                        |
+| node never ready / agent error | collect all, failure summary with last log lines, destroy (`run --fleet`: fleet left up), exit 3                                       |
+| Ctrl-C                         | finish current phase, bounded collect, destroy, exit 3 or 4                                                                            |
+| Ctrl-C again                   | SIGINT to a `tofu` command in flight (stops and writes state; a further one exits it); third skips the collection                      |
+| destroy fails x3               | sweep by tag `espresso-bench-run=<name>`; leftovers: exit 4, `status --all` lists them                                                 |
+| laptop dies                    | agents keep running; TTL ends instances and the pg volume; a schedule deletes the rds instance 5 min before the TTL                    |
+| laptop dies, recovery          | `status/down FLEET`, `render RUN_DIR`; `collect` needs the fleet `idle` or `left-running`; `run --fleet --force` replaces a stale lock |
+| reset fails on a fleet         | fleet phase `dirty`, lock kept; `run --fleet [FLEET] --force` resets again, or `down [FLEET]`                                          |
+| state lost                     | `destroy --orphans`: list by tag (owner, launch, expiry), confirm, sweep; never another owner's live run                               |
 
-### Fleets and query databases
+### Fleet state
 
-`up` provisions a fleet that stays idle; `run --fleet` measures on it as often as the TTL allows. `run` without
-`--fleet` is `up`, one measurement, `down`.
+- Phases: `idle`, `running`, `dirty` (reset failed), then `done`. `planned` after `plan`, `left-running` after a failed
+  destroy.
+- `fleet.lock` holds pid, hostname and run name while a run holds the fleet. `status [FLEET]` shows whether the holder
+  is alive.
+- Validator root volumes: gp3 6000 IOPS, 500 MB/s; validators write about 1 byte per decided byte.
+- Postgres settings come from `pg_tuning`. `pg-settings.json` is checked against them.
+- Postgres memory settings (`shared_buffers`, `effective_cache_size`, `maintenance_work_mem`, `autovacuum_work_mem`)
+  scale with node0's memory, read by preflight. rds keeps fixed 32 GiB values.
+- `run --fleet` clears any previous qdisc during reset, so a run without `--latency` measures an unshaped fleet.
+- Cost bound: rate x (TTL + destroy + rds delete).
 
-| Command                               | Does                                                                                                     |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `up --db-modes colocated,volume,rds`  | preflight, cost bound at `--ttl-min` (default 180), confirm, apply, prepare stores, phase `idle`, exit 0 |
-| `run --fleet [FLEET] --query-db MODE` | lock, ship agents, reset chain and database, measure, collect into `runs/<nn>-<name>/`, back to `idle`   |
-| `down [FLEET]`                        | `tofu destroy` x3, tag sweep, fleet `cost.json`; exit 0 or 4                                             |
+### Latency model
 
-- `run --fleet` refuses: phase not `idle`, lock held, MODE not in `--db-modes`, TTL left below the run's worst case plus
-  lock-out, fleet flags given. Exit 2, nothing sent to the hosts. `--tag` differing from the fleet's pulls by digest.
-- Each run wipes journals, containers and the database; every run starts at height 0.
-- `fleet.lock` holds pid and hostname; `status [FLEET]` shows whether the holder is alive. Phases: `idle`, `running`,
-  `dirty` (reset failed), then `done`; `planned` after `plan`, `left-running` after a failed destroy.
-
-| `--query-db` | Postgres                            | Store of `/data/pg`                                                             |
-| ------------ | ----------------------------------- | ------------------------------------------------------------------------------- |
-| `colocated`  | container on node0                  | root gp3 (`--pg-iops`, `--pg-mbps`)                                             |
-| `volume`     | container on node0                  | extra gp3 400 GiB (`--pg-iops`, `--pg-mbps`), ext4 by-id mount, dies with node0 |
-| `rds`        | RDS PostgreSQL db.m8g.4xlarge, 18.x | gp3 400 GiB or more, 12000 IOPS, 500 MB/s                                       |
-
-- The query node mounts `/data/pg/payload` as `/payload`. `--node-env ESPRESSO_QUERY_PAYLOAD_DIR=/payload` (experimental
-  image feature, off by default) puts payload and VID share files there: on the `volume` store in `volume` mode, on
-  node0's root disk otherwise. Size collected as `du-payload.txt`.
-- Validator root volumes: gp3 6000 IOPS, 500 MB/s (validators write about 1 byte per decided byte); node0 and `volume`
-  store as below.
-- `--pg-iops`/`--pg-mbps` apply to node0's root volume and the `volume` store; a fleet with `rds` refuses values other
-  than the defaults (12000, 500).
-- Postgres settings come from `pg_tuning`; `pg-settings.json` is checked against them (`noisy` on a difference).
-- Memory settings (`shared_buffers`, `effective_cache_size`, `maintenance_work_mem`, `autovacuum_work_mem`) scale with
-  node0's memory, read by preflight; rds keeps the fixed 32 GiB values.
-- rds needs IAM rights `iam:CreateRole`, `iam:PutRolePolicy`, `iam:PassRole`, `scheduler:CreateSchedule`; without them
-  apply fails, the fleet is destroyed, exit 3.
-- Cost: the fleet bound is rate x (TTL + destroy + rds delete).
-
-### Search
-
-`--search [START]` replaces the ramp with an unattended capacity search on one fleet:
-
-```
-just bench aws run --tag release-x --nodes 3 --search --max-usd 30
-```
-
-| flag                | default  | meaning                                            |
-| ------------------- | -------- | -------------------------------------------------- |
-| `--search [START]`  | 100 MB/s | first probe; ~0.8x a known capacity saves climbing |
-| `--resolution-mb-s` | 5        | stop when `failed_at - capacity` is at most this   |
-| `--max-probes`      | 12       | probe budget                                       |
-| `--offered-gb`      | 150      | offered-bytes budget; sizes the disks              |
-
-- A probe is one `--step-s` step judged by the step rules. `--step-s`, `--cap-s`, `--tx-timeout-s` default to 60.
-- Climb x1.25 until a probe fails, bisect to the resolution, confirm the result for `2 x step_s`.
-- A collapsed probe (decided < 0.5 x submitted) is followed by a re-run at the highest pass below it. A failing re-run
-  fails that rate: a collapsed one is re-run at the next lower pass, a soft fail is bisected; no pass left below stops
-  the search (`degraded after overload`).
-- Query-bound with consensus unbounded: a second search on the consensus side (a lower bound, tied to query lag).
-- Stop reasons: `resolved`, `probe budget`, `disk budget`, `drain timeout`, `degraded after overload`, `below start`,
-  `generator throttled`; in `load-meta.json`, `result.json` and the summary (`search: resolved after 9 probes`).
-- Capacity line gains the resolution: `Capacity **190 MB/s** (+-7.5, confirmed): ...`.
-- `steps.json` is rewritten after every probe, so a run cut short by the TTL keeps its probes.
-- The plan refuses a search the disks, the pg volume, the TTL or `--max-usd` cannot cover in the worst case.
-
-### Latency simulation
-
-All hosts share one AZ (about 0.1 ms between nodes). `--latency <profile>` gives every node a virtual location and
-shapes node-to-node egress with tc netem so each pair sees its real-world RTT: HTB root with an unshaped default class,
-one class + netem leaf + u32 filter per peer keyed on the peer's private IP, half the directed RTT on each side. ctl
-traffic (orchestrator, L1, relay, submit, metrics), RDS and ssh are never shaped, so a run is not a full WAN simulation.
-Node-to-node catchup on 8080 is shaped like consensus.
+`--latency <profile>` gives every node a virtual location and shapes node-to-node egress so each pair sees its
+real-world RTT. Without it, nodes see about 0.1 ms (one AZ).
 
 | Profile      | Locations                                                                            | Cross RTT                            | Intra RTT |
 | ------------ | ------------------------------------------------------------------------------------ | ------------------------------------ | --------- |
-| `off`        | none (default)                                                                       |                                      |           |
+| `off`        | none                                                                                 |                                      |           |
 | `decaf-2025` | 38:28:22:8:4 over eu-central-1, ap-southeast-1, us-east-1, ap-southeast-2, sa-east-1 | measured, `latency-matrix.csv`       | 10 ms     |
 | `mainnet`    | mainnet validator cities by node count, `mainnet-locations.json`                     | `max(1 ms, 0.0157 ms/km x distance)` | 1 ms      |
 
+- Shaping: HTB root with an unshaped default class; per peer one class, netem leaf and u32 filter keyed on the peer's
+  private IP; half the directed RTT on each side.
 - `decaf-2025`: the split of the 2025 benchmark network that emulated Decaf (robnet, espresso-deploy, gitbook benchmarks
-  page); how the counts were derived is not recorded, and decaf today is 69 % Europe.
-- `mainnet`: 92 validators on 2026-10-05, Europe 74 nodes (70 % stake), North America 15, Asia 3. Regenerate with
-  `uv run --script scripts/network-bench/mainnet-locations` (fetches the stake table, sends validator IPs to ip-api.com;
-  the file holds only city, country, lat/lon, node count, stake share).
-- Model: 0.0157 ms/km is the least-squares fit through the origin over the 56 measured AWS pairs (RMSE 33 ms; fibre at
-  2/3 c is 0.0100 ms/km, so 1.57x path stretch). Measured pairs always win; the model is used for city pairs only.
-- Intra RTT applies between nodes sharing a location; `--no-intra-latency` drops it (cross shaping stays) to remove that
-  variable. 10 ms is the low end of the 5 to 45 ms band measured between European mainnet nodes.
-- Nodes fill locations in profile order by largest remainder: 5 nodes on `decaf-2025` are eu-central-1 2, ap-southeast-1
-  2, us-east-1 1.
-- Recorded: `manifest.json` and `result.json` `deployment.latency` (profile, intra, nodes per location, assignment,
-  matrix sha256, probes), a `- latency:` bullet in `summary.md`, and the matrix sha256 in `config_hash`.
-- `run --fleet` clears any previous qdisc during reset, so a run without `--latency` measures a clean fleet.
-- The shaping step also sets what an operator on the internet would set: bbr, `fq` as default qdisc, `tcp_rmem` and
-  `tcp_wmem` to 256 MB (a 128 MB window covers a 100 MB proposal or 5 Gbps x 330 ms; Ubuntu's 4 MB cap holds one flow
-  near 25 MB/s at 158 ms), `tcp_notsent_lowat=131072`, `tcp_slow_start_after_idle=0`, `tcp_mtu_probing=1`, and MTU 1500
-  instead of the VPC's 9001. Recorded in `deployment.latency.sysctls` and `mtu`. `ena-allowance.txt` per host shows
-  whether AWS dropped packets at the instance bandwidth cap.
+  page). The derivation of the counts is not recorded. Decaf in 2026 is 69 % Europe.
+- `mainnet`: 92 validators on 2026-10-05; Europe 74 nodes (70 % stake), North America 15, Asia 3. Regenerate with
+  `uv run --script scripts/network-bench/mainnet-locations`, which sends validator IPs to ip-api.com. The file holds
+  only city, country, lat/lon, node count and stake share.
+- 0.0157 ms/km: least-squares fit through the origin over the 56 measured AWS pairs (RMSE 33 ms). Fibre at 2/3 c is
+  0.0100 ms/km, so 1.57x path stretch. Measured pairs take precedence over the model. The model covers city pairs only.
+- Intra RTT applies between nodes sharing a location. 10 ms is the low end of the 5 to 45 ms band measured between
+  European mainnet nodes.
+- Placement: nodes fill locations in profile order by largest remainder. 5 nodes on `decaf-2025`: eu-central-1 2,
+  ap-southeast-1 2, us-east-1 1.
+- Host settings applied with shaping: bbr, `fq` default qdisc, `tcp_rmem` and `tcp_wmem` max 256 MB,
+  `tcp_notsent_lowat=131072`, `tcp_slow_start_after_idle=0`, `tcp_mtu_probing=1`, MTU 1500 instead of the VPC's 9001. A
+  128 MB window covers a 100 MB proposal or 5 Gbps x 330 ms. Ubuntu's 4 MB cap holds one flow near 25 MB/s at 158 ms.
+- Recorded: `deployment.latency` in `manifest.json` and `result.json` (profile, intra, nodes per location, assignment,
+  matrix sha256, probes, `sysctls`, `mtu`), a `- latency:` bullet in `summary.md`, the matrix sha256 in `config_hash`.
+- `ena-allowance.txt` per host shows whether AWS dropped packets at the instance bandwidth cap.
 
-### Cleanup
+### Cleanup and tags
 
-Every resource carries `espresso-bench-run=<fleet>`, `-owner` and `-expires`. Hosts and the pg volume terminate at the
-TTL. An EventBridge one-shot schedule deletes the rds instance 5 min earlier.
-
-| Command             | Covers                                                                                                        |
-| ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `status [FLEET]`    | phase, time left, runs, lock holder (alive or dead), instances, pg volume, rds state, cost                    |
-| `status --all`      | tagged resources per fleet (count per kind), latest expiry, orphan reason                                     |
-| `destroy --orphans` | fleets past expiry, in a terminal phase, or of this owner without `fleet.json`; never a live fleet with state |
-| `list`              | local fleet dirs, newest first: phase, created, expires, time left, cost, runs, last run; no AWS calls        |
-| `prune`             | deletes local fleet dirs older than `--older-than DAYS`; see below                                            |
-
+- Every resource carries `espresso-bench-run=<fleet>`, `-owner` and `-expires`.
+- Hosts and the pg volume terminate at the TTL. An EventBridge one-shot schedule deletes the rds instance 5 min earlier.
+- `destroy --orphans` covers fleets past expiry, in a terminal phase, or of this owner without `fleet.json`. It never
+  touches a live fleet with state.
 - Sweep order: delete schedule group, instances, rds instance (waits), its subnet and parameter groups, volumes,
   security group, key pair, scheduler IAM role (path `/espresso-bench/`).
-- The IAM role is not in the tag API: `status --all` lists roles by path and shows one whose fleet has no other resource
-  as `role without resources`. Without `iam:ListRoles` roles are not listed (warning).
-- A fleet whose `fleet.json` was renamed or deleted is `no local state` for its owner; `destroy --orphans` sweeps it.
-- `prune` deletes a whole fleet dir, results included, only when it is older than `DAYS` (>= 1), in phase `planned`,
-  `done` or `swept`, has no `fleet.lock`, and AWS lists no resource or scheduler role tagged with its name. It needs AWS
-  credentials. Every other old dir is kept and listed with the reason. The prompt states the dir and run count;
-  `INDEX.md` keeps the rows.
+- The IAM role is not in the tag API. `status --all` lists roles by path and shows a role whose fleet has no other
+  resource as `role without resources`. Without `iam:ListRoles` roles are not listed (warning).
+- A fleet whose `fleet.json` was renamed or deleted is `no local state` for its owner. `destroy --orphans` sweeps it.
+- `prune` deletes a fleet dir, results included, only when: older than `DAYS` (>= 1), phase `planned`, `done` or
+  `swept`, no `fleet.lock`, and AWS lists no resource or scheduler role tagged with its name. It needs AWS credentials.
+  Other old dirs are kept and listed with the reason. The prompt states the dir and run count. `INDEX.md` keeps the
+  rows.
 
 ### Artifacts
 
-`bench-state/aws/<owner>-<yyyymmdd-hhmmss>/` (the fleet dir), deleted only by `prune`:
+Fleet dir `bench-state/aws/<owner>-<yyyymmdd-hhmmss>/`, deleted only by `prune`:
 
 ```
 fleet.json               argv, config, git rev, account, AZ, arch, AMI, digests, estimate, phase, hosts_info
@@ -353,6 +608,7 @@ events.jsonl driver.log  phase transitions, DEBUG log
 terraform/               module copy, tfvars, plan.txt, terraform.tfstate
 hosts.json               role, public/private IP, private DNS per host
 hosts/<host>/            user-data.sh, ready.json
+ssh/                     fleet ed25519 key
 fleet.lock               pid, hostname, run name; present while a run holds the fleet
 rds.json (0600)          rds fleets: endpoint, identifier, password
 cost.json                expected, bound, actual USD of the fleet (instances, volume, rds)
@@ -360,133 +616,85 @@ runs/01-run/             one measurement
   manifest.json          fleet.json copy plus fleet, start_spread_s, config_hash, latency (profile, probes)
   genesis.toml topology.json config.json
   hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz, collect-<k>/ (`collect`),
-                         cloud-init-output.log, chrony.txt, host.jsonl, pg-stats.json (node0)
-                         pg-stats.jsonl pg-statements.json pg-settings.json (node0)
+                         cloud-init-output.log, chrony.txt, host.jsonl, ena-allowance.txt, trace/ (--leader-trace)
+                         pg-stats.json pg-stats.jsonl pg-statements.json pg-settings.json du-payload.txt (node0)
   cloudwatch/            ec2-node0.json (EBS balance, every run); rds.json (rds runs)
   rds-logs/              postgres logs of the run window (rds runs)
-  metrics.jsonl heights.jsonl consensus.jsonl load.jsonl load-meta.json steps.json
+  metrics.jsonl heights.jsonl consensus.jsonl load.jsonl steps.json
+  load-meta.json         start_height, max_in_flight, cap_waits, submit_errors, heartbeat_errors,
+                         missing_payloads, drain_s, refine_skipped, stop_reason, marker
   stake-table.json final-<node>.prom
   run.json agent-state.json agent.log result.json summary.md throughput.png
+  trace/                 trace-plots output (--leader-trace)
 ```
 
-`bench-state/aws/INDEX.md`: one row per run (fleet/run, rev, tag, N, db, latency, capacity, validity, exit, run cost).
-
-- `bench-state/` is git-ignored and per worktree: tfstate and the ssh key of a fleet exist only in the worktree that ran
+- `bench-state/aws/INDEX.md`: one row per run (fleet/run, rev, tag, N, db, latency, capacity, validity, exit, run cost).
+- `throughput.png` (`throughput-plot RUN_DIR`): decided and query node MB/s, block size and interval, consensus latency
+  and txs in flight. Shown at the top of `summary.md`.
+- `bench-state/` is git-ignored and per worktree. tfstate and the ssh key of a fleet exist only in the worktree that ran
   `up`. `status --all` and `destroy --orphans` see every fleet through AWS tags.
 - `destroy --orphans` in another worktree offers a live fleet as `no local state`.
-- `git worktree remove` and `git clean -x` delete `bench-state/`. Run `down` first; if the state is already lost,
+- `git worktree remove` and `git clean -x` delete `bench-state/`. `down` comes first; with the state already lost,
   `destroy --orphans` sweeps the fleet.
-- Migration from `tmp/aws-bench/`: run `status --all`, then `down` each live fleet from its old `tmp/aws-bench/<fleet>`
-  path. Move only terminal fleet dirs (`mv tmp/aws-bench/<fleet> bench-state/aws/`); a live fleet dir cannot move
-  because its user-data paths are absolute.
 
-### Publishing results
+#### Migrating tmp/aws-bench/
 
-- `run` (single-shot and `--fleet`) pushes the run's `summary.md`, `result.json`, `cost.json`, `throughput.png` (decided
-  and query node MB/s, block size and interval, consensus latency and txs in flight; at the top of `summary.md`),
-  `trace/*.png`, `trace/leader_path.md`, `trace/stats.json`, `index-row.json` and a reduced `manifest.json` to
-  `runs/<fleet>/<run>/` of the shared results repo (`EspressoSystems/espresso-network-bench-results`); a workflow there
-  rebuilds its `INDEX.md` and `README.md` (leaderboard, recent runs, totals). Other files stay local; symlinks are
-  refused.
-- The published `manifest.json` keeps `fleet`, `created_at`, `git_rev`, `query_db`, `images`, `config` without
-  `node_env`, and each host's name, role and instance type. `summary.md` is published as written, so it still lists
-  `--node-env` values.
-- `--no-publish` skips it. `--results-remote URL` or env `BENCH_RESULTS_REMOTE` replaces the remote.
-- A failed publish logs a warning with the retry command; the exit code is the run's.
-- `just bench aws publish RUN_DIR...`: retry or backfill; a run dir without `index-row.json` takes its row from
-  `bench-state/aws/INDEX.md`, none there is an error. Publishing unchanged content commits nothing; every dir is tried,
-  exit non-zero if any failed.
-- Auth: plain `git` over https with the ambient credential helper, never prompting. Commit signing and `user.name` /
-  `user.email` come from the user's git config.
+- `status --all`, then `down` each live fleet from its `tmp/aws-bench/<fleet>` path.
+- Only terminal fleet dirs move (`mv tmp/aws-bench/<fleet> bench-state/aws/`); a live fleet dir has absolute user-data
+  paths.
 
-### Commands
+#### Published files
 
-AWS (`scripts/network-bench/aws-bench`, flags per `just bench aws <cmd> -h`):
-
-```
-# render the fleet dir (terraform, host files) and print the cost estimate; no AWS writes
-just bench aws plan --tag release-x --nodes 4 --db-modes colocated,volume
-# single shot: provision, measure on the volume store, collect, destroy; no prompt
-just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --max-usd 10 --yes
-# single shot, fixed load steps, every step run, query node lag up to 600 s tolerated
-just bench aws run --tag release-x --steps 50,60,80 --keep-going --cap-s 600 --tx-timeout-s 600
-# single shot, unattended capacity search
-just bench aws run --tag release-x --nodes 3 --search --max-usd 30
-# single shot with simulated geography, 10 ms between same-region nodes
-just bench aws run --tag release-x --nodes 5 --latency decaf-2025
-# same, cross-region latency only
-just bench aws run --tag release-x --nodes 5 --latency decaf-2025 --no-intra-latency
-# mainnet-like city distribution on an idle fleet
-just bench aws run --fleet --latency mainnet
-# single shot on Intel hosts (amd64 AMI and images)
-just bench aws run --tag release-x --node-type c8i.4xlarge --ctl-type c8i.2xlarge
-# single shot, txs to every node including node0, no tx forwarding
-just bench aws run --tag release-x --nodes 4 --submit-nodes 4 --node-env NP_NO_TX_FORWARDING=1
-# provision an idle fleet with all three stores for 4 h
-just bench aws up --tag release-x --nodes 4 --db-modes colocated,volume,rds --ttl-min 240 --max-usd 60
-# measure on the only selectable fleet, payload and VID share files on the query DB store
-just bench aws run --fleet --query-db volume --node-env ESPRESSO_QUERY_PAYLOAD_DIR=/payload
-# measure on a named fleet with another image tag and a fixed staircase
-just bench aws run --fleet lulu-20261001-074612 --query-db rds --tag release-y --steps 50,60,80 --keep-going
-# reset a dirty fleet, or replace a stale lock, then measure
-just bench aws run --fleet lulu-20261001-074612 --query-db colocated --force
-# destroy the only selectable fleet, after a prompt
-just bench aws down
-# destroy a named fleet without a prompt (--yes needs FLEET)
-just bench aws down lulu-20261001-074612 --yes
-# phase, time left, runs, lock holder, instances, cost of one fleet
-just bench aws status lulu-20261001-074612
-# every tagged resource in the region, per fleet, with orphan reasons
-just bench aws status --all
-# local fleet dirs, newest first; no AWS calls
-just bench aws list
-# collect again from the hosts into the last run of the only selectable fleet
-just bench aws collect
-# collect again into a named run (the fleet's last, fleet idle or left-running)
-just bench aws collect bench-state/aws/lulu-20261001-074612/runs/02-volume
-# re-analyze a run dir and rewrite result.json and summary.md
-just bench aws render bench-state/aws/lulu-20261001-074612/runs/01-volume
-# same, compared against another run's result.json
-just bench aws render bench-state/aws/lulu-20261001-074612/runs/02-volume --baseline bench-state/aws/lulu-20261001-074612/runs/01-volume/result.json
-# push run dirs to the results repo again, or backfill older ones
-just bench aws publish bench-state/aws/lulu-20261001-074612/runs/01-run
-# list orphaned fleets by tag, confirm, sweep
-just bench aws destroy --orphans
-# delete local fleet dirs older than 14 days that hold no AWS resources, after a prompt
-just bench aws prune --older-than 14
-```
-
-Local (`scripts/network-bench/bench`, output in `bench-out/`):
-
-```
-# release binaries for the local network
-just bench build
-# 3-node network on this machine, default staircase, result in bench-out/
-just bench run
-# custom staircase, every step run
-just bench run --steps 4,8,12,16 --step-s 30 --keep-going
-# re-analyze bench-out/ against a baseline
-just bench render bench-out --baseline main-network-bench.json
-# compare a result.json with a baseline (result.json or `nextest-ci stats-fetch` output)
-just bench compare bench-out/result.json main-network-bench.json
-# runner info and CPU calibration only
-just bench sysinfo
-# remove bench-out/ and storage left by an interrupted run
-just bench clean
-```
-
-- `FLEET`: a name under `bench-state/aws/`, or a path when it contains `/`. Omitted: the only fleet in phase `idle`,
-  `running`, `dirty`, `left-running`, `destroying` or `destroyed`, expired or not; several or none is refused with the
-  list. `collect` without `RUN_DIR` takes that fleet's last run.
-
-- Needs: nix devShell (opentofu, awscli2), AWS profile `timeboost-dev` (account 027574771971; region eu-west-1 unless
-  `--region`; constants in `aws-bench` and `aws/terraform/main.tf`), `ssh-keygen`, rev pushed as `release-*` so CI
-  publishes images.
-- Every fleet gets an ed25519 key in `<fleet>/ssh/`; the private half is deleted after destroy (kept after a failed
-  destroy).
+- Pushed: `summary.md`, `result.json`, `cost.json`, `throughput.png`, `trace/*.png`, `trace/leader_path.md`,
+  `trace/stats.json`, `index-row.json`, a reduced `manifest.json`. Other files stay local. Symlinks are refused.
+- A workflow in the results repo rebuilds its `INDEX.md` and `README.md` (leaderboard, recent runs, totals).
+- The reduced `manifest.json` keeps `fleet`, `created_at`, `git_rev`, `query_db`, `images`, `config` without `node_env`,
+  and each host's name, role and instance type. `summary.md` is published as written and lists `--node-env` values.
+- A failed publish logs a warning with the retry command. The exit code stays the run's.
+- `publish`: a run dir without `index-row.json` takes its row from `bench-state/aws/INDEX.md`; none there is an error.
+  Unchanged content commits nothing. Every dir is tried; exit non-zero if any failed.
 
 ### 100 nodes
 
 - `--nodes 100` grows: host map, orchestrator node count, genesis capacity, peer lists (3 per node).
 - Open: vCPU quota (100 x 16 + 8), capacity in one AZ, `--max-usd` ~ 80, ghcr pull storm (mirror on `ctl`), parallel
   metrics scrape, `metrics.jsonl` size.
+
+## Files
+
+```
+scripts/network-bench/
+  netbench.py            shared core: config, staircase, search, height polling, inclusion tracking,
+                         metrics scrape, analysis, validity, compare, summary
+  bench                  local driver: preflight, process-compose, host sampling, selftest
+  aws-bench              AWS driver (laptop) and host agents (agent-drive, agent-host)
+  nullserver.py          null node for `selftest`
+  latency.py             --latency profiles: node placement, RTT matrix, per-node tc script, probes
+  latency-matrix.csv     56 measured AWS region pairs (espresso-deploy 34b35f6)
+  mainnet-locations      regenerates mainnet-locations.json from the mainnet stake table
+  mainnet-locations.json mainnet validator cities: nodes, stake share, lat/lon (no IPs)
+  throughput-plot        throughput.png of a run dir (uv script)
+  trace-plots            leader trace plots of a run dir (uv script)
+  leadertrace.py         leader critical-path breakdown used by trace-plots
+  instance-types.md      leader block-build time and cost per block per instance type
+  genesis.toml           0.6, 100 MB blocks, 1 wei base fee
+  process-compose.yaml   local 3-node network
+  justfile               `just bench <recipe>`; `aws` forwards to aws-bench
+  aws/user-data.sh       cloud-init template, every host
+  aws/terraform/         key pair, security group, instances, pg volume, rds instance, delete schedule
+  test_*.py fakes.py     just py::test
+```
+
+- Scripts `import netbench` as a sibling file. On hosts the same file sits in `/opt/bench`, run by system python3.
+
+## Related repos
+
+- [espresso-network-bench-results](https://github.com/EspressoSystems/espresso-network-bench-results): results of this
+  benchmark
+- [espresso-deploy](https://github.com/EspressoSystems/espresso-deploy): cross-region 100-node AWS benchmark
+- [network-deploy](https://github.com/EspressoSystems/network-deploy): deployment of all Espresso networks, has a load
+  generator
+- [espresso-stack-benchmarks](https://github.com/EspressoSystems/espresso-stack-benchmarks): Espresso Stack chain
+  benchmarks
+- [vid-bench](https://github.com/EspressoSystems/vid-bench): VID benchmarks
+- [allocator-benchmarks](https://github.com/EspressoSystems/allocator-benchmarks)
