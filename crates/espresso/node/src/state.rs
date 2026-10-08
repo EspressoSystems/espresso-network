@@ -476,8 +476,7 @@ where
                     "leaves are at or below the data pruned height; fetching them from peers"
                 );
             }
-            let leaf =
-                fetch_pruned_leaf(storage, instance, next_height, Some(parent_leaf.commit())).await;
+            let leaf = fetch_pruned_leaf(instance, next_height, Some(parent_leaf.commit())).await;
             apply_leaf(storage, instance, &mut parent_leaf, &mut parent_state, leaf).await;
             next_height += 1;
             fetched += 1;
@@ -554,7 +553,7 @@ where
                 pruned,
                 "leaf is at or below the data pruned height; fetching it from peers"
             );
-            return fetch_pruned_leaf(storage, instance, height, None).await;
+            return fetch_pruned_leaf(instance, height, None).await;
         }
         let local = async {
             AvailabilityDataSource::get_leaf(&**storage, height as usize)
@@ -570,46 +569,31 @@ where
 }
 
 /// Fetch the leaf at `height`, which the data pruned height says is gone, retrying until it
-/// arrives. The marker only stops the availability layer from fetching: a leaf the pruner has
-/// stamped but not yet deleted, or failed to delete, is still here and is taken from this database
-/// without a round trip. Otherwise peers serve it. They keep leaves for their own retention, and
-/// the node already depends on them for the epoch roots of the same stretch of chain. A leaf from
-/// peers is not stored, since the loop needs it once and the pruner would only delete it again,
-/// and when `parent` is given its parent link has to match; a leaf that fails that check is
-/// retried like a failed fetch rather than applied.
-async fn fetch_pruned_leaf<T>(
-    storage: &Arc<T>,
+/// arrives. The node's catchup reads this database first, which still has the leaf when the pruner
+/// has stamped the height but not deleted it yet, and otherwise asks peers. They keep leaves for
+/// their own retention, and the node already depends on them for the epoch roots of the same
+/// stretch of chain. A fetched leaf is not stored, since the loop needs it once and the pruner
+/// would only delete it again, and when `parent` is given its parent link has to match; a leaf
+/// that fails that check is retried like a failed fetch rather than applied.
+async fn fetch_pruned_leaf(
     instance: &NodeState,
     height: u64,
     parent: Option<Commitment<Leaf2>>,
-) -> Leaf2
-where
-    T: SequencerStateDataSource,
-{
+) -> Leaf2 {
     tracing::debug!(height, "fetching leaf below the data pruned height");
     let catchup = instance.state_catchup.clone();
     let coordinator = instance.coordinator.clone();
     loop {
         let fetched = BackoffParams::default()
             .retry((), |_, retry| {
-                let storage = storage.clone();
                 let catchup = catchup.clone();
                 let coordinator = coordinator.clone();
                 async move {
-                    // `try_resolve` takes what is here without waiting for a fetch that the
-                    // marker rules out anyway.
-                    if let Ok(local) = AvailabilityDataSource::get_leaf(&*storage, height as usize)
-                        .await
-                        .try_resolve()
-                    {
-                        return Ok(local.leaf().clone());
-                    }
                     let leaf = catchup.try_fetch_leaf(retry, coordinator, height).await?;
                     if let Some(parent) = parent {
                         ensure!(
                             leaf.parent_commitment() == parent,
-                            "leaf {height} from peers has parent {} but the loop's parent is \
-                             {parent}",
+                            "fetched leaf {height} has parent {} but the loop's parent is {parent}",
                             leaf.parent_commitment()
                         );
                     }
