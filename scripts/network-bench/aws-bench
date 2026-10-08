@@ -319,6 +319,7 @@ RESERVED_GB = 20
 QUERY_JOURNAL_FRACTION = 0.5
 
 SQLITE_CONTAINER_DIR = "/store/espresso/sqlite"
+SQLITE_VOLUME_DIR = "/data/pg/sqlite"
 BENCH_DIR = "/opt/bench"
 AGENT_PYTHON = (
     "--setenv=UV_PYTHON_INSTALL_DIR=/opt/uv/python "
@@ -667,7 +668,7 @@ QueryEngine = Literal["postgres", "sqlite"]
 QUERY_ENGINES: tuple[QueryEngine, ...] = ("postgres", "sqlite")
 QUERY_PLACEMENTS: dict[QueryEngine, tuple[DbMode, ...]] = {
     "postgres": DB_MODES,
-    "sqlite": ("colocated", "tmpfs"),
+    "sqlite": ("colocated", "volume", "tmpfs"),
 }
 # node0's SQLite directory in RAM. 457 MB after 15 min, with payloads kept out of SQLite.
 SQLITE_TMPFS_GB = 8
@@ -2463,6 +2464,9 @@ def render_start_sh(
         # After reset_script wiped /data/pg and pg_store_script mounted the run's placement.
         script += f"mkdir -p {PAYLOAD_HOST_DIR}\n\n"
         argv += ["-v", f"{PAYLOAD_HOST_DIR}:{PAYLOAD_CONTAINER_DIR}"]
+        if query_engine == "sqlite" and query_db == "volume":
+            script += f"mkdir -p {SQLITE_VOLUME_DIR}\n\n"
+            argv += ["-v", f"{SQLITE_VOLUME_DIR}:{SQLITE_CONTAINER_DIR}"]
         if query_db == "tmpfs":
             argv += ["--tmpfs", f"{SQLITE_CONTAINER_DIR}:size={SQLITE_TMPFS_GB}g"]
     if leader_trace:
@@ -5760,6 +5764,7 @@ COLLECT_SCRIPT = (
     "du -sb --exclude=/data/journal/espresso/sqlite /data/journal > du-journal.txt\n"
     "if [ -d /data/journal/espresso/sqlite ]; then "
     "du -sb /data/journal/espresso/sqlite > du-sqlite.txt; fi\n"
+    f"if [ -d {SQLITE_VOLUME_DIR} ]; then du -sb {SQLITE_VOLUME_DIR} > du-sqlite.txt; fi\n"
     f"if [ -d {PAYLOAD_HOST_DIR} ]; then du -sb {PAYLOAD_HOST_DIR} > du-payload.txt; fi\n"
     "lscpu > lscpu.txt\n"
     "uname -r > uname.txt\n"
@@ -7242,25 +7247,30 @@ def node0_root_store(manifest: Manifest) -> dict[str, Any]:
     }
 
 
+def volume_store(manifest: Manifest) -> dict[str, Any]:
+    return {
+        "type": "ebs",
+        "volume_id": manifest["pg_volume_id"],
+        **manifest["pg_volume"],
+    }
+
+
 def db_store(manifest: Manifest) -> tuple[str, dict[str, Any]]:
     """The engine and backing store of node0's query database."""
     mode = manifest["query_db"]
     if manifest["query_engine"] == "sqlite":
-        store = (
-            {"type": "tmpfs", "gb": SQLITE_TMPFS_GB}
-            if mode == "tmpfs"
-            else node0_root_store(manifest)
-        )
-        return "sqlite", store
+        match mode:
+            case "tmpfs":
+                return "sqlite", {"type": "tmpfs", "gb": SQLITE_TMPFS_GB}
+            case "volume":
+                return "sqlite", volume_store(manifest)
+            case _:
+                return "sqlite", node0_root_store(manifest)
     match mode:
         case "colocated":
             return f"postgres {postgres_tag(manifest)}", node0_root_store(manifest)
         case "volume":
-            return f"postgres {postgres_tag(manifest)}", {
-                "type": "ebs",
-                "volume_id": manifest["pg_volume_id"],
-                **manifest["pg_volume"],
-            }
+            return f"postgres {postgres_tag(manifest)}", volume_store(manifest)
         case "rds":
             rds = manifest["rds_spec"]
             return f"postgres {rds['engine_version']}", {

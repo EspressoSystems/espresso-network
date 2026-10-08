@@ -604,7 +604,7 @@ def test_query_db_line_omits_tls_for_sqlite() -> None:
         ("postgres", "tmpfs", False),
         ("sqlite", "colocated", True),
         ("sqlite", "tmpfs", True),
-        ("sqlite", "volume", False),
+        ("sqlite", "volume", True),
         ("sqlite", "rds", False),
     ],
 )
@@ -615,6 +615,21 @@ def test_query_store_combinations(engine: str, placement: str, ok: bool) -> None
     else:
         with pytest.raises(awsb.Refused, match="does not support"):
             awsb.check_query_store(engine, placement, env)
+
+
+def test_sqlite_on_a_volume_reports_the_volume_store() -> None:
+    manifest = {
+        **small_node0_manifest(),
+        "query_engine": "sqlite",
+        "query_db": "volume",
+        "pg_volume_id": "vol-1",
+        "pg_volume": {"gb": 400, "iops": 12000, "mbps": 500},
+    }
+    meta = awsb.query_db_meta(manifest, clean_evidence())
+    assert (meta["mode"], meta["engine"]) == ("volume", "sqlite")
+    assert meta["store"]["type"] == "ebs" and meta["store"]["volume_id"] == "vol-1"
+    line = netbench.query_db_line(meta)
+    assert line.startswith("- Query DB: sqlite, volume, ebs") and "TLS" not in line
 
 
 def test_tmpfs_needs_the_payload_dir_outside_sqlite() -> None:

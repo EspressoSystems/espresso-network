@@ -1316,6 +1316,21 @@ def test_sqlite_tmpfs_mounts_ram_over_the_database_directory():
     assert "--tmpfs" not in validator
 
 
+def test_sqlite_volume_mounts_the_volume_directory_after_it_is_created():
+    script = awsb.render_start_sh(
+        host("node0", "query"),
+        fake_images(),
+        32768,
+        "volume",
+        query_engine="sqlite",
+    )
+    assert "--tmpfs" not in script and "--name postgres" not in script
+    assert "-v /data/pg/sqlite:/store/espresso/sqlite" in script
+    assert script.index("mkdir -p /data/pg/sqlite") < script.index(
+        "--name espresso-node"
+    )
+
+
 def test_sqlite_topology_names_no_postgres():
     roles = awsb.topology(fleet(2), "sqlite")["roles"]
     assert roles["node0"] == "validator, query, sqlite"

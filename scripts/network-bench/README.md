@@ -175,6 +175,7 @@ just bench aws down lulu-20261001-074612 --yes          # --yes needs FLEET
 | `postgres`       | `volume`     | container on node0                  | extra gp3 400 GiB (`--pg-iops`, `--pg-mbps`), ext4 by-id mount, dies with node0 |
 | `postgres`       | `rds`        | RDS PostgreSQL db.m8g.4xlarge, 18.x | gp3 400 GiB or more, 12000 IOPS, 500 MB/s                                       |
 | `sqlite`         | `colocated`  | embedded SQLite in the node         | `/data/journal/espresso/sqlite` on root gp3                                     |
+| `sqlite`         | `volume`     | embedded SQLite in the node         | `/data/pg/sqlite` on the extra gp3 400 GiB volume (`--pg-iops`, `--pg-mbps`)    |
 | `sqlite`         | `tmpfs`      | embedded SQLite in the node         | 8 GiB tmpfs (RAM) at `/store/espresso/sqlite`, lost when the container stops    |
 
 Other combinations are refused. The default is `postgres` on `colocated`.
@@ -365,7 +366,7 @@ Where:
 | `--consensus-storage`                 | `fs`                           | per run      | `fs`, `journal` (experimental, not in `main` images); query node uses `storage-sql` with `fs` |
 | `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                                  |
 | `--query-engine`                      | `postgres`                     | run          | `postgres`, `sqlite`                                                                          |
-| `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`, `tmpfs` (sqlite: `colocated`, `tmpfs`)                          |
+| `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`, `tmpfs` (sqlite: not `rds`)                                     |
 | `--force`                             | off                            | run          | with `--fleet`: reset a dirty fleet, replace a stale lock                                     |
 | `--yes`                               | off                            | run          | skip the prompt, required without a tty; also on `up`, `down`, `destroy`, `prune`             |
 | `--no-publish`                        | off                            | run          | skip publishing                                                                               |

@@ -934,6 +934,11 @@ def test_sqlite_has_no_database_step_after_the_relay():
     assert all("pg" not in step["what"] for step in plan)
 
 
+def test_the_sqlite_size_is_taken_on_the_root_disk_or_the_volume():
+    assert "du -sb /data/journal/espresso/sqlite > du-sqlite.txt" in awsb.COLLECT_SCRIPT
+    assert "du -sb /data/pg/sqlite > du-sqlite.txt" in awsb.COLLECT_SCRIPT
+
+
 def test_hostmon_samples_postgres_unless_sqlite(isolated: Path):
     sample = {}
     for engine in ("postgres", "sqlite"):
