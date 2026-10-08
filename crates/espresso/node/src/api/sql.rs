@@ -617,6 +617,12 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 proof_height = tree_height;
             }
 
+            // The state loop stores the tree when it processes `tree_height`, so a loop replaying
+            // history below the L1-finalized height has nothing to load yet.
+            if height < tree_height {
+                return Ok(());
+            }
+
             if self.proof_exists(proof_height).await {
                 return Ok(());
             }
