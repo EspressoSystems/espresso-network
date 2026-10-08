@@ -2447,6 +2447,36 @@ def render_start_sh(
                 *render_postgres_args(memory_mib),
             ],
         )
+    if host["role"] == "query":
+        # After reset_script wiped /data/pg and pg_store_script mounted the run's placement.
+        script += f"mkdir -p {PAYLOAD_HOST_DIR}\n\n"
+        if query_engine == "sqlite" and query_db == "volume":
+            script += f"mkdir -p {SQLITE_VOLUME_DIR}\n\n"
+    if leader_trace:
+        script += f"mkdir -p {TRACE_HOST_DIR}\n\n"
+    argv = node_create_argv(
+        host,
+        images,
+        query_db,
+        leader_trace,
+        consensus_storage,
+        query_engine,
+        f"{BENCH_DIR}/node.env",
+    )
+    script += _docker_create("espresso-node", argv)
+    return script
+
+
+def node_create_argv(
+    host: HostSpec,
+    images: dict[str, ImageInfo],
+    query_db: DbMode,
+    leader_trace: bool,
+    consensus_storage: ConsensusStorage,
+    query_engine: QueryEngine,
+    env_file: str,
+) -> list[str]:
+    """`docker create` arguments of the espresso-node container."""
     node = images["espresso-node"]
     role: NodeRole = "query" if host["role"] == "query" else "validator"
     storage = STORAGE_MODULES[consensus_storage, role]
@@ -2455,30 +2485,25 @@ def render_start_sh(
     modules = (*storage, *API_MODULES[role])
     argv = [
         "--env-file",
-        f"{BENCH_DIR}/node.env",
+        env_file,
         "-v",
         "/data/journal:/store",
         "-v",
         f"{BENCH_DIR}/genesis.toml:{BENCH_DIR}/genesis.toml:ro",
     ]
     if host["role"] == "query":
-        # After reset_script wiped /data/pg and pg_store_script mounted the run's placement.
-        script += f"mkdir -p {PAYLOAD_HOST_DIR}\n\n"
         argv += ["-v", f"{PAYLOAD_HOST_DIR}:{PAYLOAD_CONTAINER_DIR}"]
         if query_engine == "sqlite" and query_db == "volume":
-            script += f"mkdir -p {SQLITE_VOLUME_DIR}\n\n"
             argv += ["-v", f"{SQLITE_VOLUME_DIR}:{SQLITE_CONTAINER_DIR}"]
         if query_db == "tmpfs":
             argv += ["--tmpfs", f"{SQLITE_CONTAINER_DIR}:size={SQLITE_TMPFS_GB}g"]
     if leader_trace:
-        script += f"mkdir -p {TRACE_HOST_DIR}\n\n"
         argv += ["-v", f"{TRACE_HOST_DIR}:{TRACE_CONTAINER_DIR}"]
     argv.append(f"{node['ref']}@{node['digest']}")
     argv.append("/bin/espresso-node")
     for module in modules:
         argv += ["--", module]
-    script += _docker_create("espresso-node", argv)
-    return script
+    return argv
 
 
 def geometric_steps(start: float, factor: float, top: float) -> tuple[float, ...]:

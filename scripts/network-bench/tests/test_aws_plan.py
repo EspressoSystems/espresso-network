@@ -1212,6 +1212,35 @@ def test_anvil_uses_entrypoint_and_binds_every_interface():
     assert "--host 0.0.0.0" in script
 
 
+START_SH_GOLDEN_DIR = Path(__file__).parent / "golden"
+START_SH_GOLDEN_CASES = {
+    "ctl": (host("ctl", "ctl"), {}),
+    "validator": (host("node1", "validator"), {}),
+    "validator-journal": (host("node1", "validator"), {"consensus_storage": "journal"}),
+    "validator-trace": (host("node1", "validator"), {"leader_trace": True}),
+    "query-postgres": (host("node0", "query"), {}),
+    "query-rds": (host("node0", "query"), {"query_db": "rds"}),
+    "query-sqlite": (host("node0", "query"), {"query_engine": "sqlite"}),
+    "query-sqlite-volume": (
+        host("node0", "query"),
+        {"query_engine": "sqlite", "query_db": "volume"},
+    ),
+    "query-sqlite-tmpfs": (
+        host("node0", "query"),
+        {"query_engine": "sqlite", "query_db": "tmpfs", "leader_trace": True},
+    ),
+}
+
+
+# REQ:awsbench-start-sh-golden
+# TEST:start-sh-golden-ok
+@pytest.mark.parametrize("case", START_SH_GOLDEN_CASES)
+def test_start_sh_matches_golden(case):
+    spec, kwargs = START_SH_GOLDEN_CASES[case]
+    script = awsb.render_start_sh(spec, fake_images(), 32768, **kwargs)
+    assert script == (START_SH_GOLDEN_DIR / f"start-{case}.sh").read_text()
+
+
 def test_validator_start_sh_uses_storage_journal_only():
     script = awsb.render_start_sh(
         host("node1", "validator"), fake_images(), 32768, consensus_storage="journal"
