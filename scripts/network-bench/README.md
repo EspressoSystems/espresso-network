@@ -83,6 +83,8 @@ scripts/network-bench/
   then `sub` (submitted MB/s, pending, timed out in the window), `cns` (decided MB/s and its share of submitted,
   validator height, block interval and size, p50 submit until header on a validator), `qry` (MB/s scanned from the query
   node, its height, lag behind the validators), and `| vto N` after view timeouts. Totals once at the end.
+- AWS `run` prints every line of the agent's `agent.log` once, prefixed with the agent's phase, read from ctl every 5 s;
+  and each new phase with its detail.
 - `--max-block-size SIZE` (`plan` and `run`, also `run --fleet`; not an `up` flag; default `50mb`): genesis
   `max_block_size` of both chain configs, e.g. `30mb`, `100mb`; part of the config hash through the genesis and shown in
   the summary's deployment block. On 5 x c8g.4xlarge the block interval grows superlinearly above about 60 MB blocks,
