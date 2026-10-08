@@ -1232,6 +1232,24 @@ def test_query_start_sh_adds_storage_sql_and_postgres():
     assert "-c shared_buffers=8GB" in script
 
 
+def test_node_summary_names_the_storage_modules_and_every_run_setting():
+    cfg = small_cfg(
+        consensus_storage="journal",
+        query_db="volume",
+        max_block_size="20mb",
+        leader_trace=True,
+        node_env=("A=1", "B=2"),
+    )
+    assert awsb.format_node_summary(cfg) == (
+        "nodes: consensus-storage journal (validators storage-journal; "
+        "node0 storage-journal+storage-sql, query-db volume); max block 20mb; "
+        "submit 1 nodes; leader-trace on; node-env A=1,B=2"
+    )
+    fs = awsb.format_node_summary(small_cfg())
+    assert "(validators storage-fs; node0 storage-sql, query-db colocated)" in fs
+    assert fs.endswith("leader-trace off; node-env none")
+
+
 def test_fs_validator_start_sh_uses_storage_fs_only():
     script = awsb.render_start_sh(host("node1", "validator"), fake_images(), 32768)
     assert "-- storage-fs -- http" in script
@@ -1529,7 +1547,8 @@ def test_estimate_logs_the_search_summary(caplog):
     summary = awsb.format_search_summary(cfg)
     messages = [r.getMessage() for r in caplog.records]
     assert messages[-1] == summary
-    assert messages[-2].startswith("cost: expected")
+    assert messages[-2] == awsb.format_node_summary(cfg)
+    assert messages[-3].startswith("cost: expected")
 
 
 # TEST:aws-config-hash-ok
