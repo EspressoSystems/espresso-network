@@ -34,6 +34,7 @@ use hotshot_types::{
     upgrade_config::UpgradeConfig,
     x25519::Keypair,
 };
+use tokio::{select, task::JoinSet};
 use tracing::{error, info, warn};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
@@ -252,6 +253,7 @@ async fn build_coordinator(
 async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -> Result<()> {
     let mut metrics = MetricsCollector::new(cfg.node_id);
     let output_path = PathBuf::from(&cfg.output_file);
+    let mut builds: JoinSet<(PendingBuild, TestBlock)> = JoinSet::new();
 
     info!(
         node_id = cfg.node_id,
@@ -260,57 +262,60 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
     );
 
     loop {
-        match coordinator.next_consensus_input().await {
-            Ok(input) => {
-                metrics.on_input(&input);
-                coordinator.apply_consensus(input);
+        // A finished build must be able to wake this loop on its own: while it
+        // runs, every other node is waiting on this node's proposal, so no
+        // consensus input arrives to drive a poll. The coordinator's own select
+        // does the same for the production builder (`block_builder.next()`).
+        select! {
+            // Biased: a finished build gates the proposal, so collect it before
+            // servicing more input. Without this the arms are chosen at random,
+            // and under heavy input traffic a completed block sits uncollected.
+            biased;
+
+            Some(done) = builds.join_next(), if !builds.is_empty() => {
+                let (pending, block) = done?;
+                inject_block(&mut coordinator, &mut metrics, pending, block);
             },
-            Err(err)
-                if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical =>
-            {
-                error!(%err, "critical error in consensus input");
-                metrics.write_csv(&output_path)?;
-                return Err(anyhow::anyhow!("{err}"));
-            },
-            Err(err) => {
-                warn!(%err, "recoverable error in consensus input");
-                continue;
+            input = coordinator.next_consensus_input() => match input {
+                Ok(input) => {
+                    metrics.on_input(&input);
+                    coordinator.apply_consensus(input);
+                },
+                Err(err)
+                    if err.severity
+                        == hotshot_new_protocol::coordinator::error::Severity::Critical =>
+                {
+                    error!(%err, "critical error in consensus input");
+                    metrics.write_csv(&output_path)?;
+                    return Err(anyhow::anyhow!("{err}"));
+                },
+                Err(err) => {
+                    warn!(%err, "recoverable error in consensus input");
+                    continue;
+                },
             },
         }
 
         while let Some(output) = coordinator.outbox_mut().pop_front() {
             metrics.on_output(&output);
 
-            // Intercept block requests and inject test block (bypassing BlockBuilder).
+            // Intercept block requests and inject a test block, bypassing
+            // `BlockBuilder`. Production builds on a spawned task
+            // (`BlockBuilder::request_block`) and collects the result later, so
+            // this does the same: building inline would stall the coordinator for
+            // the whole build, starving the share and vote traffic this node is
+            // handling as a replica of the previous view.
             if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
                 && cfg.block_size > 0
             {
-                let block = build_test_block(cfg.block_size, cfg.total_nodes);
-                let parent_leaf = req.parent_proposal.clone().into();
-                let version = bench_upgrade_lock().version_infallible(req.view);
-                let header = TestBlockHeader::new::<TestTypes>(
-                    &parent_leaf,
-                    block.payload_commitment,
-                    block.builder_commitment,
-                    block.metadata,
-                    version,
-                );
-                let header_input = ConsensusInput::HeaderCreated(
-                    req.view,
-                    proposal_commitment(&req.parent_proposal),
-                    header,
-                );
-                metrics.on_input(&header_input);
-                coordinator.apply_consensus(header_input);
-                let block_input = ConsensusInput::BlockBuilt {
+                let pending = PendingBuild {
                     view: req.view,
                     epoch: req.epoch,
-                    payload: block.block,
-                    metadata: block.metadata,
-                    payload_commitment: block.payload_commitment,
+                    parent_leaf: req.parent_proposal.clone().into(),
+                    parent_commitment: proposal_commitment(&req.parent_proposal),
                 };
-                metrics.on_input(&block_input);
-                coordinator.apply_consensus(block_input);
+                let (size, num_nodes) = (cfg.block_size, cfg.total_nodes);
+                builds.spawn_blocking(move || (pending, build_test_block(size, num_nodes)));
                 continue; // skip process_consensus_output for this one
             }
 
@@ -338,7 +343,51 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
     }
 }
 
-/// Build a test block with a single transaction of the given size.
+/// Hand a finished build to consensus as its header and block.
+fn inject_block(
+    coordinator: &mut BenchCoordinator,
+    metrics: &mut MetricsCollector,
+    pending: PendingBuild,
+    block: TestBlock,
+) {
+    let header = TestBlockHeader::new::<TestTypes>(
+        &pending.parent_leaf,
+        block.payload_commitment,
+        block.builder_commitment,
+        block.metadata,
+        bench_upgrade_lock().version_infallible(pending.view),
+    );
+    let header_input =
+        ConsensusInput::HeaderCreated(pending.view, pending.parent_commitment, header);
+    metrics.on_input(&header_input);
+    coordinator.apply_consensus(header_input);
+    let block_input = ConsensusInput::BlockBuilt {
+        view: pending.view,
+        epoch: pending.epoch,
+        payload: block.block,
+        metadata: block.metadata,
+        payload_commitment: block.payload_commitment,
+    };
+    metrics.on_input(&block_input);
+    coordinator.apply_consensus(block_input);
+}
+
+/// What a spawned block build needs to hand back so the header can be formed
+/// once it lands.
+struct PendingBuild {
+    view: ViewNumber,
+    epoch: EpochNumber,
+    parent_leaf: Leaf2<TestTypes>,
+    parent_commitment: committable::Commitment<Leaf2<TestTypes>>,
+}
+
+/// Size of each synthetic transaction in a bench block.
+///
+/// Recovery's `transaction_commitments` is a Keccak256 per transaction, so many
+/// small transactions spread that cost over the rayon pool instead of running
+/// one giant single-threaded hash over the whole payload.
+const BENCH_TX_BYTES: usize = 1024;
+
 struct TestBlock {
     block: TestBlockPayload,
     metadata: TestMetadata,
@@ -346,15 +395,17 @@ struct TestBlock {
     builder_commitment: hotshot_types::utils::BuilderCommitment,
 }
 
+/// Build a test block of `size` bytes, split into `BENCH_TX_BYTES` transactions.
 fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
     use hotshot_types::traits::EncodeBytes;
 
-    let tx = TestTransaction::new(vec![0u8; size]);
+    // At least one transaction, so a tiny `--block-size` still yields a valid payload.
+    let num_txs = size.div_ceil(BENCH_TX_BYTES).max(1);
     let block = TestBlockPayload {
-        transactions: vec![tx],
+        transactions: vec![TestTransaction::new(vec![0u8; BENCH_TX_BYTES]); num_txs],
     };
     let metadata = TestMetadata {
-        num_transactions: 1,
+        num_transactions: num_txs as u64,
     };
     // Use the actual committee size so the commitment matches what
     // VidDisperse::calculate_vid_disperse will produce.
