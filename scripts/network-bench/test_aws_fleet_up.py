@@ -814,20 +814,20 @@ def test_leader_trace_belongs_to_one_run(harness, runner):
         harness.up_args("--leader-trace")
 
 
-def test_submit_nodes_on_a_fleet_run_defaults_to_the_validators(harness, runner):
+def test_submit_nodes_on_a_fleet_run_defaults_to_every_node(harness, runner):
     manifest = harness.fleet()
     nodes = awsb.config_from_manifest(manifest["config"]).nodes
     cfg = awsb.fleet_run_config(harness.run_args(), manifest)
-    assert cfg.load.submit_nodes == nodes - 1
+    assert cfg.load.submit_nodes == nodes
 
 
-def test_submit_nodes_on_a_fleet_run_may_include_the_query_node(harness, runner):
+def test_submit_nodes_on_a_fleet_run_may_exclude_the_query_node(harness, runner):
     manifest = harness.fleet()
     nodes = awsb.config_from_manifest(manifest["config"]).nodes
     cfg = awsb.fleet_run_config(
-        harness.run_args("--submit-nodes", str(nodes)), manifest
+        harness.run_args("--submit-nodes", str(nodes - 1)), manifest
     )
-    assert cfg.load.submit_nodes == nodes
+    assert cfg.load.submit_nodes == nodes - 1
 
 
 def test_submit_nodes_above_the_fleet_size_is_refused(harness, runner):

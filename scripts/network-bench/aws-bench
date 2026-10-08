@@ -2544,12 +2544,12 @@ def add_submit_nodes_flag(parser: argparse.ArgumentParser) -> None:
         "--submit-nodes",
         type=positive_int,
         help="nodes receiving txs, validators first, then the query node (1..nodes); "
-        "default nodes - 1; all nodes for NP_NO_TX_FORWARDING=1",
+        "default all nodes; nodes - 1 keeps txs off the query node",
     )
 
 
 def submit_nodes(args: argparse.Namespace, nodes: int) -> int:
-    return nodes - 1 if args.submit_nodes is None else args.submit_nodes
+    return nodes if args.submit_nodes is None else args.submit_nodes
 
 
 def check_submit_nodes(cfg: RunConfig) -> None:

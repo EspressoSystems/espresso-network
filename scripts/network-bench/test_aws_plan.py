@@ -1276,9 +1276,9 @@ def test_leader_trace_start_sh_leaves_ctl_alone():
     assert "trace" not in script
 
 
-def test_submit_nodes_defaults_to_the_validators():
-    assert node_env_config().load.submit_nodes == 4
-    assert node_env_config("--nodes", "7").load.submit_nodes == 6
+def test_submit_nodes_defaults_to_every_node():
+    assert node_env_config().load.submit_nodes == 5
+    assert node_env_config("--nodes", "7").load.submit_nodes == 7
 
 
 def test_submit_nodes_flag_reaches_the_load_config():
