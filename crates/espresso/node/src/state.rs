@@ -32,7 +32,7 @@ use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSI
 use crate::{
     NodeState, SeqTypes,
     api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
-    catchup::{CatchupStorage, SqlStateCatchup},
+    catchup::CatchupStorage,
     persistence::ChainConfigPersistence,
 };
 
@@ -361,16 +361,6 @@ const PRUNED_LEAF_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 /// How many leaves fetched from peers go by between progress log lines.
 const PRUNED_LEAF_PROGRESS_EVERY: u64 = 1000;
 
-/// Where the loop reads the parent snapshot from. Snapshot reads need the header at the parent's
-/// height for the state commitment. This database has it, as it always had, until the data
-/// pruner deletes it; from then on only peers can answer, and the node's catchup asks them. Both
-/// have retries off, so a failed read comes back to [`apply_leaf`], which decides again where the
-/// next attempt goes.
-struct LoopCatchup {
-    local: Arc<dyn StateCatchup>,
-    node: Arc<dyn StateCatchup>,
-}
-
 #[tracing::instrument(skip_all)]
 pub(crate) async fn update_state_storage_loop<T>(
     storage: Arc<T>,
@@ -384,13 +374,6 @@ where
     // Use a separate rewards calculator for the state loop so it doesn't
     // interfere with consensus, which may be on a very different epoch.
     instance.epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
-    let catchup = LoopCatchup {
-        local: Arc::new(SqlStateCatchup::new(
-            storage.clone(),
-            BackoffParams::disabled(),
-        )),
-        node: instance.state_catchup.clone(),
-    };
 
     // Resume from the newest snapshot in storage. The loop cannot start anywhere else:
     // `from_header` gives it a bare state, and its catchup fills in the block frontier and any fee
@@ -465,7 +448,7 @@ where
             .context("storing genesis state")?;
     }
 
-    follow_leaves(&storage, &instance, &catchup, parent_leaf, parent_state).await
+    follow_leaves(&storage, &instance, parent_leaf, parent_state).await
 }
 
 /// Apply every leaf above `parent_leaf` as it arrives. Leaves come from the local stream, except
@@ -475,7 +458,6 @@ where
 async fn follow_leaves<T>(
     storage: &Arc<T>,
     instance: &NodeState,
-    catchup: &LoopCatchup,
     mut parent_leaf: Leaf2,
     mut parent_state: ValidatedState,
 ) -> anyhow::Result<()>
@@ -496,15 +478,7 @@ where
             }
             let leaf =
                 fetch_pruned_leaf(storage, instance, next_height, Some(parent_leaf.commit())).await;
-            apply_leaf(
-                storage,
-                instance,
-                catchup,
-                &mut parent_leaf,
-                &mut parent_state,
-                leaf,
-            )
-            .await;
+            apply_leaf(storage, instance, &mut parent_leaf, &mut parent_state, leaf).await;
             next_height += 1;
             fetched += 1;
             if fetched.is_multiple_of(PRUNED_LEAF_PROGRESS_EVERY) {
@@ -532,7 +506,6 @@ where
                     apply_leaf(
                         storage,
                         instance,
-                        catchup,
                         &mut parent_leaf,
                         &mut parent_state,
                         leaf.leaf().clone(),
@@ -660,7 +633,6 @@ where
 async fn apply_leaf<T>(
     storage: &Arc<T>,
     instance: &NodeState,
-    catchup: &LoopCatchup,
     parent_leaf: &mut Leaf2,
     parent_state: &mut ValidatedState,
     leaf: Leaf2,
@@ -675,21 +647,17 @@ async fn apply_leaf<T>(
             ?leaf,
             "updating persistent merklized state"
         );
-        // The pruner may have deleted the parent's header since the last attempt, so decide per
-        // attempt.
-        let peers = if pruned_past(&**storage, parent_leaf.height())
-            .await
-            .is_some()
-        {
-            tracing::debug!(
-                parent = parent_leaf.height(),
-                "parent header is pruned; reading its snapshot through peers"
-            );
-            &catchup.node
-        } else {
-            &catchup.local
-        };
-        match update_state_storage(parent_state, storage, instance, peers, parent_leaf, &leaf).await
+        // The node's catchup reads the parent snapshot from this database first. Once the data
+        // pruner has deleted the parent's header, which that read needs, it asks peers.
+        match update_state_storage(
+            parent_state,
+            storage,
+            instance,
+            &instance.state_catchup,
+            parent_leaf,
+            &leaf,
+        )
+        .await
         {
             Ok(state) => {
                 *parent_leaf = leaf;
