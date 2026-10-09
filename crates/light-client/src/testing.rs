@@ -14,9 +14,9 @@ use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
-    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, Certificate2, EpochVersion, Leaf2, NamespaceId,
-    NodeState, NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash,
-    StakeTableState, Transaction,
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, Certificate2, EpochVersion, Header, Leaf2,
+    NamespaceId, NodeState, NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes,
+    StakeTableHash, StakeTableState, Transaction,
     v0_3::{AuthenticatedValidator, RegisteredValidator, StakeTableEvent},
 };
 use hotshot_contract_adapter::sol_types::StakeTableV3::{Delegated, ValidatorRegistered};
@@ -112,46 +112,87 @@ pub async fn custom_leaf_chain_with_upgrade(
     upgrade: Upgrade,
     map: impl Fn(&mut QuorumProposal2<SeqTypes>),
 ) -> Vec<LeafQueryData<SeqTypes>> {
-    let upgrade_leaf: Leaf2 = Leaf2::genesis(
-        &Default::default(),
-        &NodeState::mock()
-            .with_genesis_version(upgrade.target)
-            .with_current_version(upgrade.target),
+    custom_leaf_chain_with_upgrades(
+        range,
         upgrade.base,
+        &[(upgrade_height, upgrade.target)],
+        map,
     )
-    .await;
-    let upgrade_data = UpgradeProposalData {
-        old_version: upgrade.base,
-        new_version: upgrade.target,
-        new_version_hash: Default::default(),
-        old_version_last_view: ViewNumber::new(upgrade_height - 1),
-        new_version_first_view: ViewNumber::new(upgrade_height),
-        decide_by: ViewNumber::new(upgrade_height),
-    };
-    let upgrade_commit = upgrade_data.commit();
-    let upgrade_cert = UpgradeCertificate::new(
-        upgrade_data,
-        upgrade_commit,
-        ViewNumber::new(upgrade_height),
-        Default::default(),
-        Default::default(),
-    );
+    .await
+}
 
-    custom_leaf_chain(upgrade, range, |proposal| {
+/// Construct a customized leaf chain which starts at `base` and takes each `(height, version)`
+/// upgrade in turn, as a live network's history does.
+///
+/// Every leaf before an upgrade carries the certificate announcing it.
+pub async fn custom_leaf_chain_with_upgrades(
+    range: impl IntoIterator<Item = u64>,
+    base: Version,
+    upgrades: &[(u64, Version)],
+    map: impl Fn(&mut QuorumProposal2<SeqTypes>),
+) -> Vec<LeafQueryData<SeqTypes>> {
+    let mut steps = vec![];
+    let mut old_version = base;
+    for &(upgrade_height, new_version) in upgrades {
+        steps.push(UpgradeStep::new(old_version, new_version, upgrade_height).await);
+        old_version = new_version;
+    }
+
+    custom_leaf_chain(Upgrade::new(base, old_version), range, |proposal| {
         let height = proposal.block_header.height();
-        if height < upgrade_height {
-            // All views leading up to the upgrade get a certificate indicating the coming upgrade.
-            proposal.upgrade_certificate = Some(upgrade_cert.clone());
-        } else {
-            // After the upgrade takes effect we stop attaching the upgrade certificate, and we use
-            // the upgraded header version.
-            proposal.upgrade_certificate = None;
-            proposal.block_header = upgrade_leaf.block_header().clone();
+        // After an upgrade takes effect we use the upgraded header version.
+        if let Some(step) = steps.iter().rfind(|step| step.height <= height) {
+            proposal.block_header = step.header.clone();
             *proposal.block_header.height_mut() = height;
         }
+        // All views leading up to an upgrade get a certificate indicating the coming upgrade.
+        proposal.upgrade_certificate = steps
+            .iter()
+            .find(|step| height < step.height)
+            .map(|step| step.cert.clone());
         map(proposal);
     })
     .await
+}
+
+struct UpgradeStep {
+    height: u64,
+    header: Header,
+    cert: UpgradeCertificate<SeqTypes>,
+}
+
+impl UpgradeStep {
+    async fn new(old_version: Version, new_version: Version, height: u64) -> Self {
+        let upgrade_leaf: Leaf2 = Leaf2::genesis(
+            &Default::default(),
+            &NodeState::mock()
+                .with_genesis_version(new_version)
+                .with_current_version(new_version),
+            old_version,
+        )
+        .await;
+        let upgrade_data = UpgradeProposalData {
+            old_version,
+            new_version,
+            new_version_hash: Default::default(),
+            old_version_last_view: ViewNumber::new(height - 1),
+            new_version_first_view: ViewNumber::new(height),
+            decide_by: ViewNumber::new(height),
+        };
+        let upgrade_commit = upgrade_data.commit();
+        let cert = UpgradeCertificate::new(
+            upgrade_data,
+            upgrade_commit,
+            ViewNumber::new(height),
+            Default::default(),
+            Default::default(),
+        );
+        Self {
+            height,
+            header: upgrade_leaf.block_header().clone(),
+            cert,
+        }
+    }
 }
 
 /// Construct a customized leaf chain for the given height range.
@@ -193,10 +234,13 @@ pub async fn custom_leaf_chain(
         map(&mut quorum_proposal.proposal);
         let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
 
-        qc.view_number = ViewNumber::new(height);
+        qc.view_number = leaf.view_number();
         qc.data.leaf_commit = Committable::commit(&leaf);
         if leaf.block_header().version() >= EPOCH_VERSION {
             qc.data.block_number = Some(height);
+            // A chain which upgrades into epochs starts from a genesis QC with no epoch. Give it
+            // epoch 1 and never advance it: these chains are indexed by view, not by epoch.
+            qc.data.epoch.get_or_insert(EpochNumber::new(1));
         }
 
         block_merkle_tree
