@@ -996,7 +996,7 @@ def test_node_env_streams_l1_heads_over_websocket():
 
 
 def test_node_env_overrides_reach_every_node():
-    extra = ("ESPRESSO_QUERY_PAYLOAD_DIR=/payload", "RUST_LOG=debug,a=b")
+    extra = ("ESPRESSO_NODE_BLOB_DIR=/payload", "RUST_LOG=debug,a=b")
     hosts = fleet(5)
     for spec in awsb.plan_hosts(small_cfg(nodes=5, submit=4)):
         if spec["role"] == "ctl":
@@ -1004,7 +1004,7 @@ def test_node_env_overrides_reach_every_node():
         pg = awsb.pg_endpoint() if spec["role"] == "query" else None
         text = awsb.render_node_env(spec, hosts, pg, extra)
         env = parse_env(text)
-        assert env["ESPRESSO_QUERY_PAYLOAD_DIR"] == "/payload"
+        assert env["ESPRESSO_NODE_BLOB_DIR"] == "/payload"
         assert env["RUST_LOG"] == "debug,a=b"
         assert text.count("RUST_LOG=") == 1
 
@@ -1095,14 +1095,14 @@ def test_storage_vars_by_role():
 
 
 def test_payload_dir_is_opt_in_through_node_env():
-    assert "ESPRESSO_QUERY_PAYLOAD_DIR" not in node_env("node0")
+    assert "ESPRESSO_NODE_BLOB_DIR" not in node_env("node0")
     text = awsb.render_node_env(
         host("node0", "query"),
         fleet(5),
         awsb.pg_endpoint(),
-        (f"ESPRESSO_QUERY_PAYLOAD_DIR={awsb.PAYLOAD_CONTAINER_DIR}",),
+        (f"ESPRESSO_NODE_BLOB_DIR={awsb.PAYLOAD_CONTAINER_DIR}",),
     )
-    assert parse_env(text)["ESPRESSO_QUERY_PAYLOAD_DIR"] == "/payload"
+    assert parse_env(text)["ESPRESSO_NODE_BLOB_DIR"] == "/payload"
 
 
 @pytest.mark.parametrize("index", [0, 1])

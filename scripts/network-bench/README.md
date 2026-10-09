@@ -175,15 +175,15 @@ just bench aws down lulu-20261001-074612 --yes          # --yes needs FLEET
 
 ```
 just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --yes
-just bench aws run --fleet --query-db volume --node-env ESPRESSO_QUERY_PAYLOAD_DIR=/payload
+just bench aws run --fleet --query-db volume --node-env ESPRESSO_NODE_BLOB_DIR=/payload
 ```
 
 - `--db-modes` (`plan`, `up`) lists the stores a fleet prepares. `--query-db` (`run`) picks one.
 - A fleet with `rds` refuses `--pg-iops` and `--pg-mbps` values other than the defaults.
 - `rds` needs IAM rights `iam:CreateRole`, `iam:PutRolePolicy`, `iam:PassRole`, `scheduler:CreateSchedule`. Without them
   apply fails, the fleet is destroyed, exit 3.
-- The query node mounts `/data/pg/payload` as `/payload`. `ESPRESSO_QUERY_PAYLOAD_DIR=/payload` (experimental image
-  feature, off by default) puts payload and VID share files there: on the `volume` store in `volume` mode, on node0's
+- The query node mounts `/data/pg/payload` as `/payload`. `ESPRESSO_NODE_BLOB_DIR=/payload` (experimental image feature,
+  off by default) puts payload and VID share journal segments there: on the `volume` store in `volume` mode, on node0's
   root disk otherwise. Size collected as `du-payload.txt`.
 
 ### Latency

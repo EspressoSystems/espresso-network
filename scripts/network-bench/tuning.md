@@ -7,7 +7,7 @@
 | Setting                                 | Needs                        |
 | --------------------------------------- | ---------------------------- |
 | `--consensus-storage journal`           | bench                        |
-| `ESPRESSO_QUERY_PAYLOAD_DIR=/payload`   | bench                        |
+| `ESPRESSO_NODE_BLOB_DIR=/payload`       | bench                        |
 | `ESPRESSO_BENCH_BLAKE3_TX_HASH=1`       | bench                        |
 | `GLIBC_TUNABLES=glibc.malloc.hugetlb=1` | main                         |
 | `--allocator NAME`                      | `build-allocators.yml` image |

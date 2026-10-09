@@ -332,8 +332,8 @@ TCP_COUNTERS = {
 PG_JSON = f"{BENCH_DIR}/pg.json"
 # Self-signed cert made by user-data on the query role, mounted read-only into the container.
 PG_TLS_DIR = "/data/pg-tls"
-# Query payloads and VID shares of the query node live next to the Postgres data so they use the
-# same volume; node image reads ESPRESSO_QUERY_PAYLOAD_DIR, which `--node-env` sets to
+# Query payloads and VID shares (blob segments) of the query node live next to the Postgres data so they use the
+# same volume; node image reads ESPRESSO_NODE_BLOB_DIR, which `--node-env` sets to
 # PAYLOAD_CONTAINER_DIR (experimental, so not a default).
 PAYLOAD_HOST_DIR = "/data/pg/payload"
 TRACE_HOST_DIR = f"{BENCH_DIR}/trace"
