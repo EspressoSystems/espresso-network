@@ -8588,7 +8588,19 @@ mod test {
                 v2_header.timestamp,
                 v1_header["timestamp"].as_u64().unwrap()
             );
+            assert_eq!(
+                v2_header.timestamp_millis,
+                v1_header["timestamp_millis"].as_u64().unwrap()
+            );
             assert_eq!(v2_header.l1_head, v1_header["l1_head"].as_u64().unwrap());
+            assert_eq!(
+                v2_header.reward_merkle_tree_root,
+                v1_header["reward_merkle_tree_root"].as_str().unwrap()
+            );
+            assert_eq!(
+                v2_header.total_reward_distributed,
+                v1_header["total_reward_distributed"].as_str().unwrap()
+            );
             let v2_fee = v2_header.fee_info.as_ref().unwrap();
             assert_eq!(
                 v2_fee.account,

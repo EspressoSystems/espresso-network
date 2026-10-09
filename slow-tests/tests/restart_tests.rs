@@ -49,7 +49,7 @@ use hotshot_orchestrator::run_orchestrator;
 use hotshot_types::{
     PeerConfig,
     data::EpochNumber,
-    event::{Event, EventType, LeafInfo},
+    event::LeafInfo,
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     new_protocol::CoordinatorEvent,
@@ -77,10 +77,6 @@ const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
 /// Extract the decided leaf chain from a consensus event, or `None` if it isn't a decide.
 fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
     match event {
-        CoordinatorEvent::LegacyEvent(Event {
-            event: EventType::Decide { leaf_chain, .. },
-            ..
-        }) => Some(leaf_chain),
         CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos),
         _ => None,
     }
@@ -89,10 +85,6 @@ fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTy
 /// Epoch of the certificate committing a decide event, or `None` if it isn't a decide.
 fn decided_epoch(event: &CoordinatorEvent<SeqTypes>) -> Option<EpochNumber> {
     match event {
-        CoordinatorEvent::LegacyEvent(Event {
-            event: EventType::Decide { committing_qc, .. },
-            ..
-        }) => committing_qc.epoch(),
         CoordinatorEvent::NewDecide { cert1, .. } => cert1.epoch(),
         _ => None,
     }
@@ -472,16 +464,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 return Ok(());
             };
             let node_id = context.node_id();
-            let next_view_timeout = {
-                context
-                    .consensus_handle()
-                    .legacy_consensus()
-                    .read()
-                    .await
-                    .hotshot
-                    .config
-                    .next_view_timeout
-            };
+            let next_view_timeout = context.network_config().config.next_view_timeout;
             // Enough time for every node to propose with every view timing out.
             let timeout_duration = self.progress_timeout_factor
                 * Duration::from_millis(next_view_timeout)
@@ -500,16 +483,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             return Ok(());
         };
 
-        let num_nodes = {
-            context
-                .consensus_handle()
-                .legacy_consensus()
-                .read()
-                .await
-                .hotshot
-                .config
-                .num_nodes_with_stake
-        };
+        let num_nodes = context.network_config().config.num_nodes_with_stake;
         let node_id = context.node_id();
         tracing::info!(node_id, num_nodes, "waiting for progress from node");
 
