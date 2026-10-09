@@ -214,7 +214,8 @@ mod tests {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
+        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, TEST_UPGRADE,
+        ValidatedState,
         traits::{
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
@@ -259,7 +260,7 @@ mod tests {
     use test_utils::reserve_tcp_port;
     use tokio::{spawn, time::sleep};
     use vbs::version::Version;
-    use versions::{Upgrade, version};
+    use versions::Upgrade;
 
     use crate::{
         RECENT_STAKE_TABLES_LIMIT, SequencerApiVersion,
@@ -2284,12 +2285,6 @@ mod tests {
     // ensuring that persisted data matches the on-chain events and that event fetcher work correctly.
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_stake_table_fetching_from_persistence<P: TestablePersistence>(
-        #[values(
-            StakeTableContractVersion::V1,
-            StakeTableContractVersion::V2,
-            StakeTableContractVersion::V3
-        )]
-        stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
         let epoch_height = 20;
@@ -2316,26 +2311,16 @@ mod tests {
 
         let persistence = persistence_options[0].clone().create().await.unwrap();
 
-        // Build the config with PoS hook
         let l1_url = network_config.l1_url();
-
-        let upgrade = Upgrade::trivial(version(0, 3));
 
         let testnet_config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(query_api_options)
             .network_config(network_config.clone())
             .persistences(persistence_options.clone())
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                stake_table_version,
-                upgrade,
-            )
-            .await
-            .expect("Pos deployment failed")
             .build();
 
         //start the network
-        let test_network = TestNetwork::new(testnet_config, upgrade).await;
+        let test_network = TestNetwork::new(testnet_config, TEST_UPGRADE).await;
 
         let client: Client<ClientErr, SequencerApiVersion> = Client::new(
             format!("http://localhost:{query_service_port}")
@@ -2356,11 +2341,7 @@ mod tests {
             .await
             .unwrap();
         // Load initial persisted events and validate they exist.
-        let membership_coordinator = test_network
-            .server
-            .consensus_handle()
-            .membership_coordinator()
-            .await;
+        let membership_coordinator = test_network.server.node_state().coordinator;
 
         let l1_client = L1Client::new(vec![l1_url]).unwrap();
         let node_state = test_network.server.node_state();

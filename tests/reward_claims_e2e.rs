@@ -18,7 +18,7 @@ use espresso_node::{
     state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
     testing::{TestConfigBuilder, wait_for_epochs},
 };
-use espresso_types::{L1ClientOptions, SeqTypes};
+use espresso_types::{L1ClientOptions, SeqTypes, TEST_UPGRADE};
 use hotshot_contract_adapter::{
     reward::RewardClaimInput,
     sol_types::{EspTokenV2, LightClientV3, RewardClaim},
@@ -35,7 +35,6 @@ use test_utils::reserve_tcp_port;
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
 
 const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
 const BLOCKS_PER_EPOCH: u64 = 7;
@@ -90,13 +89,13 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .pos_hook(
             DelegationConfig::default(),
             StakeTableContractVersion::V3,
-            Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
+            TEST_UPGRADE,
         )
         .await?
         .build();
 
     println!("Starting Espresso TestNetwork with {} nodes...", NUM_NODES);
-    let network = TestNetwork::new(config, Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION)).await;
+    let network = TestNetwork::new(config, TEST_UPGRADE).await;
     println!("TestNetwork started successfully");
 
     let contracts = network.contracts.unwrap();
@@ -152,9 +151,11 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         max_gas_price: None,
     };
 
-    println!("Waiting for 3 epochs to elapse to ensure rewards accrue...");
+    // Rewards for an epoch are applied at the last block of the next one, so the first reward
+    // lands at the end of epoch 4.
+    println!("Waiting for 4 epochs to elapse to ensure rewards accrue...");
     let mut events = network.peers[0].event_stream();
-    wait_for_epochs(&mut events, BLOCKS_PER_EPOCH, 3).await;
+    wait_for_epochs(&mut events, BLOCKS_PER_EPOCH, 4).await;
 
     // Now run the prover once to generate and submit a proof for the current state
     println!("Running prover once to generate proof...");

@@ -2136,12 +2136,9 @@ pub mod testing {
 
 #[cfg(test)]
 mod test {
-    use alloy::{
-        node_bindings::Anvil,
-        signers::local::coins_bip39::{English, Mnemonic},
-    };
+    use alloy::signers::local::coins_bip39::{English, Mnemonic};
     use espresso_keyset::KeySet;
-    use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, TEST_UPGRADE, Transaction};
+    use espresso_types::{Header, NamespaceId, TEST_UPGRADE, Transaction};
     use futures::StreamExt;
     use hotshot_types::{
         PeerConnectInfo, addr::NetAddr, event::LeafInfo, traits::block_contents::BlockHeader,
@@ -2299,46 +2296,21 @@ mod test {
         assert_eq!(config.config.stake_table_capacity, 50);
     }
 
-    use self::testing::run_test_builder;
     use super::*;
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_skeleton_instantiation() {
-        // Assign `config` so it isn't dropped early.
-        let anvil = Anvil::new().spawn();
-        let url = anvil.endpoint_url();
-        const NUM_NODES: usize = 5;
-        let mut config = TestConfigBuilder::<NUM_NODES>::default()
-            .l1_url(url)
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(Options::with_port(port))
+            .network_config(TestConfigBuilder::default().build())
             .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+        let mut events = network.server.event_stream();
 
-        let (builder_task, builder_url) = run_test_builder::<NUM_NODES>(None).await;
-
-        config.set_builder_urls(vec1::vec1![builder_url]);
-
-        let handles = config.init_nodes(MOCK_SEQUENCER_VERSIONS).await;
-
-        let handle_0 = &handles[0];
-
-        // Hook the builder up to the event stream from the first node
-        builder_task.start(Box::new(
-            handle_0
-                .consensus_handle()
-                .legacy_consensus()
-                .read()
-                .await
-                .event_stream(),
-        ));
-
-        let mut events = handle_0.event_stream();
-
-        for handle in handles.iter() {
-            handle.start_consensus().await;
-        }
-
-        // Submit target transaction to handle
         let txn = Transaction::new(NamespaceId::from(1_u32), vec![1, 2, 3]);
-        handles[0]
+        network
+            .server
             .submit_transaction(txn.clone())
             .await
             .expect("Failed to submit transaction");
