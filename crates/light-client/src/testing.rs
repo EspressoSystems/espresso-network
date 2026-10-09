@@ -238,7 +238,8 @@ pub async fn custom_leaf_chain(
         qc.data.leaf_commit = Committable::commit(&leaf);
         if leaf.block_header().version() >= EPOCH_VERSION {
             qc.data.block_number = Some(height);
-            // A chain which upgrades into epochs starts from a genesis QC with no epoch.
+            // A chain which upgrades into epochs starts from a genesis QC with no epoch. Give it
+            // epoch 1 and never advance it: these chains are indexed by view, not by epoch.
             qc.data.epoch.get_or_insert(EpochNumber::new(1));
         }
 
