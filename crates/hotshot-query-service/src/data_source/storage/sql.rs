@@ -62,6 +62,8 @@ pub use sqlx::{Database, Sqlite};
 
 mod db;
 mod migrate;
+#[cfg(all(test, not(target_os = "windows")))]
+mod payload_loc_test;
 mod queries;
 mod transaction;
 
@@ -721,7 +723,11 @@ impl SqlStorage {
 
         let pruner_cfg = config.pruner_cfg;
         let serializable_retry_config = config.serializable_retry_config;
+        let blob_dir_unset = config.blob.is_none();
         let blobs = open_blobs(config.blob.take(), &connection_type).await?;
+        if let Some(blobs) = &blobs {
+            blobs.install_metrics(&metrics);
+        }
 
         // Only reuse the same pool if we're using sqlite
         if cfg!(feature = "embedded-db") || connection_type == StorageConnectionType::Sequencer {
@@ -825,6 +831,17 @@ impl SqlStorage {
                 .bind(Transaction::<Write>::PRUNED_HEIGHT_ID)
                 .execute(conn.as_mut())
                 .await?;
+        }
+
+        if blob_dir_unset && connection_type == StorageConnectionType::Query {
+            let located = query("SELECT 1 FROM payload_loc LIMIT 1")
+                .fetch_optional(conn.as_mut())
+                .await?;
+            if located.is_some() {
+                return Err(Error::msg(
+                    "payload_loc rows present but ESPRESSO_NODE_BLOB_DIR unset",
+                ));
+            }
         }
 
         conn.close().await?;
@@ -1759,7 +1776,7 @@ pub mod testing {
     use test_utils::reserve_tcp_port;
     use tokio::time::timeout;
 
-    use super::Config;
+    use super::{BlobCfg, Config};
     use crate::testing::sleep;
     #[derive(Debug)]
     pub struct TmpDb {
@@ -1775,6 +1792,7 @@ pub mod testing {
         db_path: std::path::PathBuf,
         #[allow(dead_code)]
         persistent: bool,
+        blob_dir: Option<tempfile::TempDir>,
     }
     impl TmpDb {
         #[cfg(feature = "embedded-db")]
@@ -1790,6 +1808,7 @@ pub mod testing {
             Self {
                 db_path,
                 persistent,
+                blob_dir: None,
             }
         }
         pub async fn init() -> Self {
@@ -1836,6 +1855,7 @@ pub mod testing {
                 data_dir,
                 postgres: None,
                 persistent,
+                blob_dir: None,
             };
 
             db.start_postgres().await;
@@ -1857,6 +1877,16 @@ pub mod testing {
             self.db_path.clone()
         }
 
+        /// Store payloads of data sources connected to this database in a temporary blob dir.
+        pub fn with_blobs(mut self) -> Self {
+            self.blob_dir = Some(tempfile::tempdir().unwrap());
+            self
+        }
+
+        pub fn blob_dir(&self) -> Option<&std::path::Path> {
+            self.blob_dir.as_ref().map(|dir| dir.path())
+        }
+
         pub fn config(&self) -> Config {
             #[cfg(feature = "embedded-db")]
             let mut cfg = Config::default().db_path(self.db_path.clone());
@@ -1875,6 +1905,13 @@ pub mod testing {
                 )
                 .unwrap(),
             ]);
+
+            if let Some(dir) = self.blob_dir() {
+                cfg = cfg.blob(BlobCfg {
+                    dir: dir.to_path_buf(),
+                    share_retention: Duration::from_secs(7 * 24 * 3600),
+                });
+            }
 
             cfg
         }

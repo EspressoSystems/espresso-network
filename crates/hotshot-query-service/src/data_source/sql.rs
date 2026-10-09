@@ -380,6 +380,82 @@ mod generic_test {
     instantiate_data_source_tests!(SqlDataSource<MockTypes, NoFetching>);
 }
 
+/// The availability suite on a SQL data source that stores payloads in a blob directory.
+#[cfg(all(test, not(target_os = "windows")))]
+mod blob_generic_test {
+    use async_trait::async_trait;
+    use hotshot::types::Event;
+    use hotshot_types::new_protocol::CoordinatorEvent;
+
+    use super::{SqlDataSource, sql::testing::TmpDb};
+    use crate::{
+        data_source::{
+            ExtensibleDataSource, UpdateDataSource, availability_tests, fetching::Builder,
+        },
+        fetching::provider::NoFetching,
+        testing::{consensus::DataSourceLifeCycle, mocks::MockTypes},
+    };
+
+    /// Not `Default`, which keeps the lifecycle below apart from the generic one for
+    /// `ExtensibleDataSource`.
+    #[derive(Clone, Copy, Debug)]
+    struct WithBlobs;
+
+    type BlobDataSource = ExtensibleDataSource<SqlDataSource<MockTypes, NoFetching>, WithBlobs>;
+
+    #[async_trait]
+    impl DataSourceLifeCycle for BlobDataSource {
+        type Storage = TmpDb;
+        type S = <SqlDataSource<MockTypes, NoFetching> as DataSourceLifeCycle>::S;
+        type P = NoFetching;
+
+        async fn create(node_id: usize) -> Self::Storage {
+            SqlDataSource::<MockTypes, NoFetching>::create(node_id)
+                .await
+                .with_blobs()
+        }
+
+        async fn build(
+            storage: &Self::Storage,
+            opt: impl Send
+            + FnOnce(
+                Builder<MockTypes, Self::S, Self::P>,
+            ) -> Builder<MockTypes, Self::S, Self::P>,
+        ) -> Self {
+            let ds = SqlDataSource::<MockTypes, NoFetching>::build(storage, opt).await;
+            Self::new(ds, WithBlobs)
+        }
+
+        async fn reset(storage: &Self::Storage) -> Self {
+            let ds = SqlDataSource::<MockTypes, NoFetching>::reset(storage).await;
+            Self::new(ds, WithBlobs)
+        }
+
+        async fn handle_event(&self, event: &Event<MockTypes>) {
+            let event = CoordinatorEvent::LegacyEvent(event.clone());
+            self.update(&event).await.unwrap();
+        }
+    }
+
+    // `test_update` is left out: it opens a second data source on the same storage, and the blob
+    // directory admits one store.
+    macro_rules! availability_test {
+        ($($name:ident),*) => {$(
+            #[test_log::test(tokio::test(flavor = "multi_thread"))]
+            async fn $name() {
+                availability_tests::$name::<BlobDataSource>().await
+            }
+        )*};
+    }
+
+    availability_test!(
+        test_range,
+        test_range_rev,
+        test_insert_consecutive_identical_blocks,
+        test_append_payload_verification
+    );
+}
+
 #[cfg(all(test, not(target_os = "windows")))]
 mod test {
     use futures::StreamExt;

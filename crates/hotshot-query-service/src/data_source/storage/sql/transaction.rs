@@ -502,7 +502,23 @@ impl Transaction<Write> {
             .iter()
             .map(|col| format!("{col} = excluded.{col}"))
             .join(",");
+        self.upsert_set(table, columns, pk, rows, &set_columns)
+            .await
+    }
 
+    /// [`upsert`](Self::upsert) with a custom `DO UPDATE SET` clause.
+    async fn upsert_set<'p, const N: usize, R>(
+        &mut self,
+        table: &str,
+        columns: [&str; N],
+        pk: impl IntoIterator<Item = &str>,
+        rows: R,
+        set_columns: &str,
+    ) -> anyhow::Result<()>
+    where
+        R: IntoIterator,
+        R::Item: 'p + FixedLengthParams<'p, N>,
+    {
         let columns_str = columns.iter().map(|col| format!("\"{col}\"")).join(",");
 
         let pk = pk.into_iter().join(",");
@@ -860,16 +876,27 @@ where
 
         // Ignore blocks below the pruned height.
         let pruned_height = self.load_pruned_height().await?;
-        let blocks = blocks.skip_while(|block| pruned_height.is_some_and(|h| block.height() <= h));
+        let blocks = blocks
+            .skip_while(|block| pruned_height.is_some_and(|h| block.height() <= h))
+            .collect::<Vec<_>>();
+
+        let locs = self.payload_locators(&blocks).await?;
+        let inline = self.blobs.is_none();
 
         let (payload_rows, tx_rows): (Vec<_>, Vec<_>) = blocks
+            .iter()
             .map(|block| {
+                let data = if inline {
+                    block.payload.encode().as_ref().to_vec()
+                } else {
+                    vec![]
+                };
                 let payload_row = (
                     block.payload_hash().to_string(),
                     block.header().ns_table(),
                     block.size() as i32,
                     block.num_transactions() as i32,
-                    block.payload.encode().as_ref().to_vec(),
+                    data,
                 );
 
                 let tx_rows = block.enumerate().map(|(txn_ix, txn)| {
@@ -890,32 +917,26 @@ where
 
         // Multiple blocks in the range might have the same payload. We must filter out such
         // duplicates, because SQL does not allow conflicting rows in a single upsert statement.
-        let mut payload_rows = payload_rows
+        let payload_rows = payload_rows
             .into_iter()
             .unique_by(|(hash, ns_table, ..)| (hash.clone(), ns_table.clone()))
             .collect::<Vec<_>>();
-        if let Some(dir) = payload_dir() {
-            for row in &mut payload_rows {
-                // Write then rename so concurrent readers never see a partial file.
-                let path = dir.join(&row.0);
-                let tmp = path.with_extension("tmp");
-                tokio::fs::write(&tmp, std::mem::take(&mut row.4))
-                    .await
-                    .with_context(|| format!("writing payload file {}", tmp.display()))?;
-                tokio::fs::rename(&tmp, &path)
-                    .await
-                    .with_context(|| format!("renaming payload file {}", path.display()))?;
-            }
-        }
 
-        self.upsert(
+        self.upsert_set(
             "payload",
             ["hash", "ns_table", "size", "num_transactions", "data"],
             ["hash", "ns_table"],
             payload_rows,
+            PAYLOAD_SET_KEEPING_INLINE,
         )
         .await
         .context("inserting payloads")?;
+
+        if !locs.is_empty() {
+            self.upsert("payload_loc", ["height", "loc"], ["height"], locs)
+                .await
+                .context("inserting payload locators")?;
+        }
 
         // Index the transactions and namespaces in the block.
         if !tx_rows.is_empty() {
@@ -1006,6 +1027,45 @@ where
 
     fn attach_blobs(&mut self, staged: StagedBlobs) {
         self.staged.extend(staged);
+    }
+}
+
+/// `DO UPDATE SET` clause for `payload` rows. Payloads with a locator are written with empty
+/// `data`, which must not blank the inline bytes of a row stored before the blob store was enabled.
+const PAYLOAD_SET_KEEPING_INLINE: &str = "size = excluded.size, num_transactions = \
+                                          excluded.num_transactions, data = CASE WHEN \
+                                          length(payload.data) > 0 AND length(excluded.data) = 0 \
+                                          THEN payload.data ELSE excluded.data END";
+
+impl Transaction<Write> {
+    /// Locators of the non-empty payloads in `blocks`, as `(height, locator)` rows.
+    ///
+    /// Takes the staged locator of each height, or appends the payload now.
+    async fn payload_locators<Types>(
+        &self,
+        blocks: &[&BlockQueryData<Types>],
+    ) -> anyhow::Result<Vec<(i64, String)>>
+    where
+        Types: NodeType,
+        Payload<Types>: QueryablePayload<Types>,
+        Header<Types>: QueryableHeader<Types>,
+    {
+        let Some(blobs) = &self.blobs else {
+            return Ok(vec![]);
+        };
+        let mut locs = vec![];
+        for block in blocks.iter().filter(|block| block.size() != 0) {
+            let height = block.height();
+            let loc = match self.staged_blob(height) {
+                Some(loc) => *loc,
+                None => {
+                    let body = block.payload.encode().as_ref().to_vec();
+                    blobs.append_payload_in_tx(height, body).await?
+                },
+            };
+            locs.push((height as i64, loc.to_string()));
+        }
+        Ok(locs)
     }
 }
 

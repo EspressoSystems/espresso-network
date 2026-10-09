@@ -19,7 +19,7 @@ use std::{
 };
 
 use anyhow::{Context, ensure};
-use hotshot_types::traits::metrics::Metrics;
+use hotshot_types::traits::metrics::{Counter, Metrics, NoMetrics};
 use journal_lane::{
     format::{Class, Kind, SegmentHeader, Stream},
     lane::{
@@ -121,6 +121,10 @@ pub struct BlobStore<F: JournalFs = StdFs> {
     share: Arc<BlobLane>,
     /// Concurrent `append_payload` calls per height; the last one out removes the index entry.
     appending: Mutex<HashMap<u64, u32>>,
+    /// Payload records a reader needed and could not read.
+    missing: Mutex<Box<dyn Counter>>,
+    /// Payloads appended inside a write transaction because the caller did not stage them.
+    staged_in_tx: Mutex<Box<dyn Counter>>,
     // Field order matters: the writer threads exit once the lanes above are dropped, and the
     // directory stays locked until they have.
     _threads: JoinOnDrop,
@@ -145,6 +149,18 @@ impl<F: JournalFs> BlobStore<F> {
         for lane in [&self.payload, &self.share] {
             lane.lane.set_total_bytes(lane.segments.lock().bytes());
         }
+        *self.missing.lock() = metrics.create_counter("blob_missing".into(), None);
+        *self.staged_in_tx.lock() = metrics.create_counter("blob_staged_in_tx".into(), None);
+    }
+
+    /// `append_payload` for a caller inside a write transaction, which should have staged.
+    pub async fn append_payload_in_tx(
+        &self,
+        height: u64,
+        body: Vec<u8>,
+    ) -> anyhow::Result<BlobLoc> {
+        self.staged_in_tx.lock().add(1);
+        self.append_payload(height, body).await
     }
 
     /// Returns once the record is fsynced, so a committed locator never points at lost bytes.
@@ -177,7 +193,11 @@ impl<F: JournalFs> BlobStore<F> {
 
     /// `None` when the record is gone: unlinked segment, short read or bad checksum.
     pub async fn read_payload(&self, loc: BlobLoc) -> anyhow::Result<Option<Vec<u8>>> {
-        self.read(&self.payload, loc.into()).await
+        let bytes = self.read(&self.payload, loc.into()).await?;
+        if bytes.is_none() {
+            self.missing.lock().add(1);
+        }
+        Ok(bytes)
     }
 
     pub async fn read_share(&self, height: u64) -> anyhow::Result<Option<Vec<u8>>> {
@@ -242,6 +262,8 @@ impl<F: JournalFs> BlobStore<F> {
             payload: Arc::new(payload),
             share: Arc::new(share),
             appending: Mutex::default(),
+            missing: Mutex::new(NoMetrics.create_counter(String::new(), None)),
+            staged_in_tx: Mutex::new(NoMetrics.create_counter(String::new(), None)),
             _threads: JoinOnDrop(vec![payload_thread, share_thread]),
             _lock: lock,
         });

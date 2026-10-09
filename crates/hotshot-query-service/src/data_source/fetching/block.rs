@@ -16,8 +16,10 @@ use std::{cmp::Ordering, future::IntoFuture, iter::once, ops::RangeBounds, sync:
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use futures::future::{BoxFuture, FutureExt, join_all};
-use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
+use futures::future::{BoxFuture, FutureExt, join_all, try_join_all};
+use hotshot_types::traits::{
+    EncodeBytes, block_contents::BlockHeader, node_implementation::NodeType,
+};
 
 use super::{
     AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights, Notifiers, RangedFetchable,
@@ -35,6 +37,7 @@ use crate::{
         fetching::{header::fetch_header_range_and_then, leaf::RangeRequest},
         storage::{
             AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            blob::{BlobStore, StagedBlobs},
             pruning::PrunedHeightStorage,
         },
     },
@@ -145,6 +148,14 @@ where
         notifiers.block.notify(self).await;
     }
 
+    async fn stage(
+        &self,
+        blobs: Option<&BlobStore>,
+        leaf_only: bool,
+    ) -> anyhow::Result<StagedBlobs> {
+        stage_payloads(blobs, leaf_only, [self]).await
+    }
+
     async fn store(
         &self,
         storage: &mut impl UpdateAvailabilityStorage<Types>,
@@ -156,6 +167,29 @@ where
 
         storage.insert_block(self).await
     }
+}
+
+/// Appends the non-empty payloads of `blocks` to the payload lane, concurrently so that they
+/// share fsyncs. Empty payloads are stored inline.
+async fn stage_payloads<'a, Types: NodeType>(
+    blobs: Option<&BlobStore>,
+    leaf_only: bool,
+    blocks: impl IntoIterator<Item = &'a BlockQueryData<Types>>,
+) -> anyhow::Result<StagedBlobs> {
+    let Some(blobs) = blobs.filter(|_| !leaf_only) else {
+        return Ok(StagedBlobs::new());
+    };
+    try_join_all(
+        blocks
+            .into_iter()
+            .filter(|block| block.size() != 0)
+            .map(|block| async move {
+                let body = block.payload.encode().as_ref().to_vec();
+                let loc = blobs.append_payload(block.height(), body).await?;
+                Ok((block.height(), loc))
+            }),
+    )
+    .await
 }
 
 pub(super) fn fetch_block_with_header<Types, S, P>(
@@ -464,6 +498,14 @@ where
         for block in self {
             notifiers.block.notify(block).await;
         }
+    }
+
+    async fn stage(
+        &self,
+        blobs: Option<&BlobStore>,
+        leaf_only: bool,
+    ) -> anyhow::Result<StagedBlobs> {
+        stage_payloads(blobs, leaf_only, self).await
     }
 
     async fn store(

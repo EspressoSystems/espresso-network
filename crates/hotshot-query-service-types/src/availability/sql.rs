@@ -22,8 +22,7 @@ static PAYLOAD_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
     Some(dir)
 });
 
-/// Directory holding payload bytes (named by payload hash) and VID shares (`<height>.share`), if
-/// configured.
+/// Directory holding VID shares (`<height>.share`), if configured.
 pub fn payload_dir() -> Option<&'static Path> {
     PAYLOAD_DIR.as_deref()
 }
@@ -51,8 +50,10 @@ where
 }
 
 /// Columns which must be selected for `BlockRow::from_row` to work.
-pub const BLOCK_COLUMNS: &str =
-    "h.hash AS hash, h.data AS header_data, p.size AS payload_size, p.data AS payload_data";
+///
+/// The query must also `LEFT JOIN payload_loc AS pl ON pl.height = h.height`.
+pub const BLOCK_COLUMNS: &str = "h.hash AS hash, h.data AS header_data, p.size AS payload_size, \
+                                 p.data AS payload_data, pl.loc AS payload_loc";
 
 /// A block row as stored, before the payload bytes are loaded.
 ///
@@ -68,7 +69,7 @@ pub struct BlockRow<Types: NodeType> {
 /// Where the payload bytes of a [`BlockRow`] live.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum PayloadSource {
-    /// The `payload.data` column is empty.
+    /// The payload has no bytes.
     #[default]
     Empty,
     /// The bytes are in the `payload.data` column.
@@ -111,10 +112,13 @@ where
     fn from_row(row: &'r R) -> sqlx::Result<Self> {
         let size = row.try_get::<i32, _>("payload_size")? as u64;
         let data = row.try_get::<Vec<u8>, _>("payload_data")?;
-        let payload = if data.is_empty() {
-            PayloadSource::Empty
-        } else {
-            PayloadSource::Inline(data)
+        let loc = row.try_get::<Option<String>, _>("payload_loc")?;
+        // Locator, then inline bytes, then empty. A non-empty payload with none of these is lost.
+        let payload = match loc {
+            Some(loc) => PayloadSource::Blob(loc),
+            None if !data.is_empty() => PayloadSource::Inline(data),
+            None if size == 0 => PayloadSource::Empty,
+            None => PayloadSource::Missing,
         };
 
         let header_data = row.try_get("header_data")?;

@@ -15,7 +15,6 @@
 use std::{
     fmt::Display,
     ops::{Range, RangeBounds},
-    path::Path,
 };
 
 use async_trait::async_trait;
@@ -34,7 +33,7 @@ use crate::{
     availability::{
         BlockId, BlockQueryData, Certificate2, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
-        sql::{BlockRow, PayloadSource, payload_dir},
+        sql::{BlockRow, PayloadSource},
     },
     data_source::storage::{
         AvailabilityStorage, PayloadMetadata, VidCommonMetadata, blob::BlobLoc, sql::sqlx::Row,
@@ -76,6 +75,7 @@ where
             "SELECT {BLOCK_COLUMNS}
               FROM header AS h
               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+              LEFT JOIN payload_loc AS pl ON pl.height = h.height
               WHERE {where_clause}
               LIMIT 1"
         );
@@ -94,6 +94,7 @@ where
             "SELECT {PAYLOAD_COLUMNS}
               FROM header AS h
               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+              LEFT JOIN payload_loc AS pl ON pl.height = h.height
               WHERE {where_clause}
               LIMIT 1"
         );
@@ -197,6 +198,7 @@ where
             "SELECT {BLOCK_COLUMNS}
               FROM header AS h
               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+              LEFT JOIN payload_loc AS pl ON pl.height = h.height
               {where_clause}
               ORDER BY h.height"
         );
@@ -247,6 +249,7 @@ where
             "SELECT {PAYLOAD_COLUMNS}
               FROM header AS h
               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+              LEFT JOIN payload_loc AS pl ON pl.height = h.height
               {where_clause}
               ORDER BY h.height"
         );
@@ -359,6 +362,7 @@ where
             "SELECT {BLOCK_COLUMNS}
               FROM header AS h
               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+              LEFT JOIN payload_loc AS pl ON pl.height = h.height
               {where_clause}
               ORDER BY h.height"
         );
@@ -435,6 +439,7 @@ where
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
                 JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+                LEFT JOIN payload_loc AS pl ON pl.height = h.height
                 JOIN transactions AS t ON t.block_height = h.height
                 WHERE t.hash = {hash_param}
                 ORDER BY t.block_height, t.ns_id, t.position
@@ -472,7 +477,9 @@ where
         Payload<Types>: QueryablePayload<Types>,
     {
         let source = std::mem::take(&mut row.payload);
-        let bytes = self.payload_bytes::<Types>(&row.header, source).await?;
+        let bytes = self
+            .payload_bytes(row.header.block_number(), source)
+            .await?;
         Ok(row.into_block(&bytes))
     }
 
@@ -493,30 +500,20 @@ where
             .await
     }
 
-    async fn payload_bytes<Types>(
-        &self,
-        header: &Header<Types>,
-        source: PayloadSource,
-    ) -> QueryResult<Vec<u8>>
-    where
-        Types: NodeType,
-    {
+    async fn payload_bytes(&self, height: u64, source: PayloadSource) -> QueryResult<Vec<u8>> {
         match source {
             PayloadSource::Inline(bytes) => Ok(bytes),
-            PayloadSource::Empty => match payload_dir() {
-                Some(dir) => read_payload_file(dir, header.payload_commitment().to_string()).await,
-                None => Ok(vec![]),
-            },
+            PayloadSource::Empty => Ok(vec![]),
             PayloadSource::Blob(loc) => {
                 let blobs = self
                     .blob_store()
                     .ok_or_else(|| query_error("payload locator present but no blob store"))?;
                 let loc = loc.parse::<BlobLoc>().map_err(query_error)?;
-                blobs
-                    .read_payload(loc)
-                    .await
-                    .map_err(query_error)?
-                    .ok_or(QueryError::Missing)
+                let bytes = blobs.read_payload(loc).await.map_err(query_error)?;
+                bytes.ok_or_else(|| {
+                    tracing::warn!(height, %loc, "payload record unreadable");
+                    QueryError::Missing
+                })
             },
             PayloadSource::Missing => Err(QueryError::Missing),
         }
@@ -560,13 +557,6 @@ where
         .await?;
         Ok(map)
     }
-}
-
-async fn read_payload_file(dir: &Path, name: String) -> QueryResult<Vec<u8>> {
-    let path = dir.join(name);
-    tokio::fs::read(&path)
-        .await
-        .map_err(|err| query_error(format!("reading payload file {}: {err}", path.display())))
 }
 
 fn query_error(err: impl Display) -> QueryError {
