@@ -204,9 +204,14 @@ impl NodeState {
         if let Some(finalized) = self.l1_client.snapshot().await.finalized {
             return Some(finalized.number);
         }
+        // The returned info is for block 0, so read the snapshot it has since filled in.
         tokio::time::timeout(L1_FINALITY_WAIT, self.l1_client.wait_for_finalized_block(0))
             .await
-            .ok()
+            .ok()?;
+        self.l1_client
+            .snapshot()
+            .await
+            .finalized
             .map(|block| block.number)
     }
 

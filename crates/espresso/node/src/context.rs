@@ -41,7 +41,6 @@ use hotshot_types::{
     },
     upgrade_config::UpgradeConfig,
 };
-use light_client::client::QueryServiceClient;
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
 use tokio::{
@@ -65,7 +64,9 @@ use crate::{
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
     },
-    startup_catchup::{BootstrapMetrics, BootstrapParams, bootstrap_epoch_window, fetch_l1_anchor},
+    startup_catchup::{
+        BootstrapMetrics, BootstrapParams, bootstrap_epoch_window, fetch_l1_anchor, query_clients,
+    },
     state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
 pub(crate) type ConsensusNode<N, P> = Node<N, P>;
@@ -204,15 +205,11 @@ where
         // Only the new protocol (cliquenet) needs this
         let max_configured_version = std::cmp::max(upgrade.base, upgrade.target);
         if max_configured_version >= NEW_PROTOCOL_VERSION {
-            let peers = state_peers
-                .into_iter()
-                .map(QueryServiceClient::new)
-                .collect::<Vec<_>>();
-            let anchor = fetch_l1_anchor(&instance_state).await;
+            let peers = query_clients(&state_peers);
             let current_epoch = bootstrap_epoch_window(
                 &membership_coordinator,
                 epoch_height,
-                anchor,
+                async || fetch_l1_anchor(&instance_state).await,
                 &peers,
                 &bootstrap_params,
                 &BootstrapMetrics::new(metrics),

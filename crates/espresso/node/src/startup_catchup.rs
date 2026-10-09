@@ -15,7 +15,7 @@
 
 use std::{ops::RangeInclusive, time::Duration};
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, anyhow, bail, ensure};
 use clap::ValueEnum;
 use espresso_types::{Header, NodeState, SeqTypes};
 use hotshot_contract_adapter::{sol_types::LightClientStateSol, u256_to_field};
@@ -31,18 +31,15 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, root_block_in_epoch},
 };
-use light_client::client::Client;
+use light_client::client::{Client, QueryServiceClient, is_not_found};
 use serde::Serialize;
 use tokio::time::{Instant, sleep, timeout};
+use url::Url;
 
 const TARGET: &str = "announce::bootstrap";
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
-
-/// Largest number of epochs between the anchor and the known window for which a failed skip still
-/// lets the walk run at deadline.
-const MAX_WALKABLE_GAP: u64 = 2;
 
 /// Whether to skip the walk using the L1 anchor.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize)]
@@ -63,7 +60,7 @@ pub struct BootstrapParams {
 
 /// A finalized HotShot block as the L1 light-client contract commits to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct L1Anchor {
+pub(crate) struct L1Anchor {
     pub height: u64,
     pub block_comm_root: CircuitField,
 }
@@ -77,7 +74,7 @@ impl From<LightClientStateSol> for L1Anchor {
     }
 }
 
-pub struct BootstrapMetrics {
+pub(crate) struct BootstrapMetrics {
     window_epoch: Box<dyn Gauge>,
     l1_anchor_epoch: Box<dyn Gauge>,
 }
@@ -91,31 +88,18 @@ impl BootstrapMetrics {
     }
 }
 
-/// The anchor at the L1 finalized block, or `None` when unavailable. A failed read must not make
-/// startup worse than the walk alone.
-pub async fn fetch_l1_anchor(node_state: &NodeState) -> Option<L1Anchor> {
-    match node_state.finalized_light_client_state().await {
-        Ok(state) => state.map(L1Anchor::from),
-        Err(err) => {
-            tracing::warn!(
-                err = %format!("{err:#}"),
-                "bootstrap: cannot read the L1 light client state; walking"
-            );
-            None
-        },
-    }
-}
-
 /// Populate the membership with stake tables for every epoch up through `N+1` (where `N` is the
 /// current epoch). Returns `N`.
 ///
+/// `fetch_anchor` runs only when the skip is enabled, so `SkipMode::Off` makes no L1 calls.
+///
 /// Preconditions: `reload_stake` should have run before this: it populates the membership from
 /// local persistence so the walk skips epochs we already know.
-pub async fn bootstrap_epoch_window<C: Client>(
+pub(crate) async fn bootstrap_epoch_window<C: Client>(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     epoch_height: u64,
-    anchor: Option<L1Anchor>,
-    peers: &[C],
+    fetch_anchor: impl AsyncFnOnce() -> Option<L1Anchor>,
+    peers: &[(Url, C)],
     params: &BootstrapParams,
     metrics: &BootstrapMetrics,
 ) -> anyhow::Result<EpochNumber> {
@@ -130,43 +114,23 @@ pub async fn bootstrap_epoch_window<C: Client>(
     let first_epoch = membership
         .first_epoch()
         .context("first_epoch not seeded; genesis stake table missing")?;
-    let known = membership.highest_known_epoch();
-    if let Some(anchor) = &anchor {
-        let epoch = epoch_from_block_number(anchor.height, epoch_height);
-        metrics.l1_anchor_epoch.set(epoch as usize);
-    }
 
-    let skipped = match plan_skip(
-        params.skip,
-        anchor,
-        peers.len(),
-        epoch_height,
-        first_epoch,
-        known,
-    ) {
-        SkipPlan::Run(anchor, range) => {
-            tracing::info!(
-                target: TARGET,
-                finalized_height = anchor.height,
-                epochs = ?(range.start().u64()..=range.end().u64()),
-                highest_known = ?known.map(|e| e.u64()),
-                "skipping to L1 anchor",
-            );
-            skip_with_retry(
+    let skipped = match params.skip {
+        SkipMode::Off => {
+            tracing::info!(target: TARGET, reason = "off", "skip disabled or not applicable; walking");
+            false
+        },
+        SkipMode::Auto => {
+            let args = SkipArgs {
                 coordinator,
                 peers,
-                anchor,
-                &range,
                 epoch_height,
+                first_epoch,
+                known: membership.highest_known_epoch(),
                 params,
-                known,
-            )
-            .await?;
-            true
-        },
-        SkipPlan::Walk(reason) => {
-            tracing::info!(target: TARGET, reason, "skip disabled or not applicable; walking");
-            false
+                metrics,
+            };
+            try_skip(&args, fetch_anchor().await).await?
         },
     };
 
@@ -182,12 +146,112 @@ pub async fn bootstrap_epoch_window<C: Client>(
     Ok(current)
 }
 
+pub(crate) fn query_clients(urls: &[Url]) -> Vec<(Url, QueryServiceClient)> {
+    urls.iter()
+        .map(|url| (url.clone(), QueryServiceClient::new(url.clone())))
+        .collect()
+}
+
+/// The anchor at the L1 finalized block, or `None` when unavailable. A failed read must not make
+/// startup worse than the walk alone.
+pub(crate) async fn fetch_l1_anchor(node_state: &NodeState) -> Option<L1Anchor> {
+    match node_state.finalized_light_client_state().await {
+        Ok(state) => state.map(L1Anchor::from),
+        Err(err) => {
+            tracing::warn!(
+                err = %format!("{err:#}"),
+                "bootstrap: cannot read the L1 light client state; walking"
+            );
+            None
+        },
+    }
+}
+
+struct SkipArgs<'a, C> {
+    coordinator: &'a EpochMembershipCoordinator<SeqTypes>,
+    peers: &'a [(Url, C)],
+    epoch_height: u64,
+    first_epoch: EpochNumber,
+    known: Option<EpochNumber>,
+    params: &'a BootstrapParams,
+    metrics: &'a BootstrapMetrics,
+}
+
+/// Whether the stake tables were installed from the anchor.
+async fn try_skip<C: Client>(
+    args: &SkipArgs<'_, C>,
+    anchor: Option<L1Anchor>,
+) -> anyhow::Result<bool> {
+    let Some(anchor) = anchor else {
+        let reason = "no light client anchor";
+        tracing::info!(target: TARGET, reason, "skip disabled or not applicable; walking");
+        return Ok(false);
+    };
+    let anchor_epoch = epoch_from_block_number(anchor.height, args.epoch_height);
+    args.metrics.l1_anchor_epoch.set(anchor_epoch as usize);
+
+    let plan = plan_skip(
+        &anchor,
+        args.peers.len(),
+        args.epoch_height,
+        args.first_epoch,
+        args.known,
+    );
+    let range = match plan {
+        SkipPlan::Run(range) => range,
+        SkipPlan::Walk(reason) => {
+            tracing::info!(target: TARGET, reason, "skip disabled or not applicable; walking");
+            return Ok(false);
+        },
+    };
+    tracing::info!(
+        target: TARGET,
+        finalized_height = anchor.height,
+        epochs = ?(range.start().u64()..=range.end().u64()),
+        highest_known = ?args.known.map(|e| e.u64()),
+        "skipping to L1 anchor",
+    );
+    match skip_with_retry(args, &anchor, &range).await? {
+        SkipOutcome::Installed => Ok(true),
+        SkipOutcome::Unsupported => {
+            tracing::warn!("bootstrap: peers do not serve light-client proofs; walking");
+            Ok(false)
+        },
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SkipPlan {
+    Run(RangeInclusive<EpochNumber>),
+    Walk(&'static str),
+}
+
+/// Skip only when the known stake tables fall short of the install range.
+fn plan_skip(
+    anchor: &L1Anchor,
+    peer_count: usize,
+    epoch_height: u64,
+    first_epoch: EpochNumber,
+    known: Option<EpochNumber>,
+) -> SkipPlan {
+    if peer_count == 0 {
+        return SkipPlan::Walk("no state peers");
+    }
+    let Some(range) = install_range(anchor.height, epoch_height, first_epoch) else {
+        return SkipPlan::Walk("anchor too early for epochs");
+    };
+    if known.is_some_and(|known| known >= *range.start()) {
+        return SkipPlan::Walk("near tip");
+    }
+    SkipPlan::Run(range)
+}
+
 /// The epochs whose stake tables the skip installs: `n-3 ..= n+1` for `n = epoch(F)`.
 ///
 /// `block_reward(n)` and `block_reward(n+1)` need the stake table of three epochs earlier, and the
 /// rest is the window. `None` when `n-3` is within the epochs seeded from genesis, where the walk
 /// is short anyway.
-pub fn install_range(
+fn install_range(
     anchor_height: u64,
     epoch_height: u64,
     first_epoch: EpochNumber,
@@ -200,39 +264,76 @@ pub fn install_range(
     Some(EpochNumber::new(start)..=EpochNumber::new(n + 1))
 }
 
-/// Whether the known stake tables fall short of the install range.
-pub fn should_skip(
-    highest_known: Option<EpochNumber>,
-    range: &RangeInclusive<EpochNumber>,
-    mode: SkipMode,
-) -> bool {
-    mode == SkipMode::Auto && highest_known.is_none_or(|highest| highest < *range.start())
+#[derive(Debug, PartialEq, Eq)]
+enum SkipOutcome {
+    Installed,
+    /// Every peer lacks the light-client endpoints.
+    Unsupported,
 }
 
-/// Accept `header` only if it is the block the contract finalized.
+/// Try the peers in rotation, backing off after each full pass, until the deadline.
 ///
-/// The view number does not enter `block_comm_root`, so any view serves.
-pub fn verify_anchor_header(header: &Header, anchor: &L1Anchor) -> anyhow::Result<()> {
-    ensure!(
-        header.height() == anchor.height,
-        "anchor header has height {}, expected {}",
-        header.height(),
-        anchor.height
-    );
-    let state = header.get_light_client_state(ViewNumber::genesis())?;
-    ensure!(
-        state.block_comm_root == anchor.block_comm_root,
-        "anchor header at height {} does not match the L1 block commitment root",
-        anchor.height
-    );
-    Ok(())
+/// A pass in which every peer answers NOT_FOUND ends the skip: peers without the opt-in
+/// light-client module cannot serve it, and the walk works without it.
+async fn skip_with_retry<C: Client>(
+    args: &SkipArgs<'_, C>,
+    anchor: &L1Anchor,
+    range: &RangeInclusive<EpochNumber>,
+) -> anyhow::Result<SkipOutcome> {
+    let deadline = Instant::now() + args.params.deadline;
+    let peer_count = args.peers.len();
+    let mut backoff = INITIAL_BACKOFF;
+    let mut attempt = 0usize;
+    let mut pass_not_found = true;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            tracing::error!(attempt, "bootstrap: deadline exceeded");
+            bail!(
+                "bootstrap skip did not finish within {:?}",
+                args.params.deadline
+            );
+        }
+
+        let (url, peer) = &args.peers[attempt % peer_count];
+        let result = timeout(
+            remaining,
+            skip_to_l1_anchor(args.coordinator, peer, anchor, range, args.epoch_height),
+        )
+        .await;
+        let err = match result {
+            Ok(Ok(())) => return Ok(SkipOutcome::Installed),
+            Ok(Err(err)) => err,
+            Err(_) => anyhow!("attempt timed out"),
+        };
+        pass_not_found &= is_not_found(&err);
+        attempt += 1;
+        if attempt.is_power_of_two() {
+            tracing::warn!(
+                attempt,
+                %url,
+                err = %format!("{err:#}"),
+                "bootstrap: skip attempt failed; retrying"
+            );
+        }
+
+        if attempt.is_multiple_of(peer_count) {
+            if pass_not_found {
+                return Ok(SkipOutcome::Unsupported);
+            }
+            pass_not_found = true;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            sleep(backoff.min(remaining)).await;
+            backoff = (backoff * 2).min(MAX_BACKOFF);
+        }
+    }
 }
 
 /// Fetch the epoch roots of `range` from one `peer` and install them in ascending order.
 ///
 /// Every header is verified against header `F` of the anchor, which is itself verified against
 /// the contract's commitment, so a lying peer fails here and installs nothing it cannot prove.
-pub async fn skip_to_l1_anchor<C: Client>(
+async fn skip_to_l1_anchor<C: Client>(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     peer: &C,
     anchor: &L1Anchor,
@@ -264,106 +365,26 @@ pub async fn skip_to_l1_anchor<C: Client>(
         coordinator
             .add_epoch_root(header)
             .await
-            .map_err(|err| anyhow::anyhow!("installing the epoch root at {height}: {err}"))?;
+            .map_err(|err| anyhow!("installing the epoch root at {height}: {err}"))?;
     }
     Ok(())
 }
 
-enum SkipPlan {
-    Run(L1Anchor, RangeInclusive<EpochNumber>),
-    Walk(&'static str),
-}
-
-fn plan_skip(
-    mode: SkipMode,
-    anchor: Option<L1Anchor>,
-    peer_count: usize,
-    epoch_height: u64,
-    first_epoch: EpochNumber,
-    known: Option<EpochNumber>,
-) -> SkipPlan {
-    if mode == SkipMode::Off {
-        return SkipPlan::Walk("off");
-    }
-    let Some(anchor) = anchor else {
-        return SkipPlan::Walk("no light client anchor");
-    };
-    if peer_count == 0 {
-        return SkipPlan::Walk("no state peers");
-    }
-    let Some(range) = install_range(anchor.height, epoch_height, first_epoch) else {
-        return SkipPlan::Walk("anchor too early for epochs");
-    };
-    if !should_skip(known, &range, mode) {
-        return SkipPlan::Walk("near tip");
-    }
-    SkipPlan::Run(anchor, range)
-}
-
-/// Try the peers in rotation, backing off after each full pass, until the deadline.
+/// Accept `header` only if it is the block the contract finalized.
 ///
-/// At the deadline, a node still far from the anchor gives up; one near it falls back to the walk.
-async fn skip_with_retry<C: Client>(
-    coordinator: &EpochMembershipCoordinator<SeqTypes>,
-    peers: &[C],
-    anchor: L1Anchor,
-    range: &RangeInclusive<EpochNumber>,
-    epoch_height: u64,
-    params: &BootstrapParams,
-    known: Option<EpochNumber>,
-) -> anyhow::Result<()> {
-    let deadline = Instant::now() + params.deadline;
-    let mut backoff = INITIAL_BACKOFF;
-    let mut attempt = 0usize;
-    loop {
-        let peer = attempt % peers.len();
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let result = timeout(
-            remaining,
-            skip_to_l1_anchor(coordinator, &peers[peer], &anchor, range, epoch_height),
-        )
-        .await;
-        let err = match result {
-            Ok(Ok(())) => return Ok(()),
-            Ok(Err(err)) => format!("{err:#}"),
-            Err(_) => "attempt timed out".into(),
-        };
-        attempt += 1;
-        if attempt.is_power_of_two() {
-            tracing::warn!(
-                attempt,
-                peer,
-                err,
-                "bootstrap: skip attempt failed; retrying"
-            );
-        }
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return deadline_exceeded(range, known, params.deadline);
-        }
-        if attempt.is_multiple_of(peers.len()) {
-            sleep(backoff.min(remaining)).await;
-            backoff = (backoff * 2).min(MAX_BACKOFF);
-        }
-    }
-}
-
-fn deadline_exceeded(
-    range: &RangeInclusive<EpochNumber>,
-    known: Option<EpochNumber>,
-    deadline: Duration,
-) -> anyhow::Result<()> {
-    let n = range.end().u64() - 1;
-    let gap = n.saturating_sub(known.map_or(0, |known| known.u64()));
-    if gap > MAX_WALKABLE_GAP {
-        tracing::error!(?deadline, gap, "bootstrap: deadline exceeded");
-        bail!("bootstrap skip did not finish within {deadline:?}; {gap} epochs behind the anchor");
-    }
-    tracing::warn!(
-        ?deadline,
-        gap,
-        "bootstrap: deadline exceeded near the tip; walking"
+/// The view number does not enter `block_comm_root`, so any view serves.
+fn verify_anchor_header(header: &Header, anchor: &L1Anchor) -> anyhow::Result<()> {
+    ensure!(
+        header.height() == anchor.height,
+        "anchor header has height {}, expected {}",
+        header.height(),
+        anchor.height
+    );
+    let state = header.get_light_client_state(ViewNumber::genesis())?;
+    ensure!(
+        state.block_comm_root == anchor.block_comm_root,
+        "anchor header at height {} does not match the L1 block commitment root",
+        anchor.height
     );
     Ok(())
 }
@@ -385,14 +406,14 @@ async fn walk_to_tip(
     tracing::info!(
         %first_epoch,
         starting_from = %highest,
-        "bootstrap_epoch_window: walking forward",
+        "bootstrap: walking forward",
     );
 
     loop {
         let target = highest + 1;
         match timeout(step_timeout, coordinator.wait_for_stake_table(target)).await {
             Ok(Ok(_)) => {
-                tracing::info!(%target, "bootstrap_epoch_window: derived stake table");
+                tracing::info!(%target, "bootstrap: derived stake table");
                 highest = target;
             },
             Ok(Err(err)) => {
@@ -400,7 +421,7 @@ async fn walk_to_tip(
                     target: TARGET,
                     %target,
                     %err,
-                    "bootstrap_epoch_window: catchup failed; treating as live tip",
+                    "bootstrap: catchup failed; treating as live tip",
                 );
                 break;
             },
@@ -408,8 +429,7 @@ async fn walk_to_tip(
                 tracing::warn!(
                     %target,
                     timeout_secs = step_timeout.as_secs(),
-                    "bootstrap_epoch_window: catchup timed out; proceeding with a possibly \
-                     stale epoch window",
+                    "bootstrap: catchup timed out; proceeding with a possibly stale epoch window",
                 );
                 break;
             },
@@ -435,7 +455,7 @@ async fn walk_to_tip(
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use alloy::primitives::Address;
+    use alloy::primitives::{Address, U256};
     use async_lock::Mutex as AsyncMutex;
     use async_trait::async_trait;
     use espresso_types::{
@@ -514,34 +534,49 @@ mod tests {
     }
 
     #[rstest]
-    #[case::empty(None, SkipMode::Auto, true)]
-    #[case::below(Some(4), SkipMode::Auto, true)]
-    #[case::at_start(Some(5), SkipMode::Auto, false)]
-    #[case::inside(Some(7), SkipMode::Auto, false)]
-    #[case::above(Some(12), SkipMode::Auto, false)]
-    #[case::off(None, SkipMode::Off, false)]
-    fn should_skip_cases(
-        #[case] highest: Option<u64>,
-        #[case] mode: SkipMode,
-        #[case] expected: bool,
-    ) {
-        let range = EpochNumber::new(5)..=EpochNumber::new(9);
+    #[case::empty(None, true)]
+    #[case::below(Some(4), true)]
+    #[case::at_start(Some(5), false)]
+    #[case::inside(Some(7), false)]
+    #[case::above(Some(12), false)]
+    fn plan_skip_by_known_epoch(#[case] known: Option<u64>, #[case] runs: bool) {
+        let anchor = L1Anchor {
+            height: ANCHOR_HEIGHT,
+            block_comm_root: CircuitField::from(0u64),
+        };
+        let plan = plan_skip(
+            &anchor,
+            1,
+            EPOCH_HEIGHT,
+            EpochNumber::new(FIRST_EPOCH),
+            known.map(EpochNumber::new),
+        );
+        let range = EpochNumber::new(N - 3)..=EpochNumber::new(N + 1);
         assert_eq!(
-            should_skip(highest.map(EpochNumber::new), &range, mode),
-            expected
+            plan,
+            if runs {
+                SkipPlan::Run(range)
+            } else {
+                SkipPlan::Walk("near tip")
+            }
         );
     }
 
     #[test]
-    fn deadline_policy() {
-        let range = EpochNumber::new(5)..=EpochNumber::new(9);
-        let at =
-            |known: u64| deadline_exceeded(&range, Some(EpochNumber::new(known)), PARAMS.deadline);
-        assert!(at(4).is_err());
-        assert!(at(5).is_err());
-        assert!(at(6).is_ok(), "gap of 2 walks");
-        assert!(at(8).is_ok());
-        assert!(deadline_exceeded(&range, None, PARAMS.deadline).is_err());
+    fn plan_skip_walks_without_peers_or_early_anchor() {
+        let at = |height| L1Anchor {
+            height,
+            block_comm_root: CircuitField::from(0u64),
+        };
+        let first = EpochNumber::new(FIRST_EPOCH);
+        assert_eq!(
+            plan_skip(&at(ANCHOR_HEIGHT), 0, EPOCH_HEIGHT, first, None),
+            SkipPlan::Walk("no state peers")
+        );
+        assert_eq!(
+            plan_skip(&at(EPOCH_HEIGHT), 1, EPOCH_HEIGHT, first, None),
+            SkipPlan::Walk("anchor too early for epochs")
+        );
     }
 
     /// Test chain of `ANCHOR_HEIGHT + 1` blocks and the anchor over it.
@@ -695,7 +730,7 @@ mod tests {
                 ValidatorConfig::<SeqTypes>::generated_from_seed_indexed(
                     [42u8; 32],
                     i,
-                    alloy::primitives::U256::from(100),
+                    U256::from(100),
                     true,
                 )
                 .public_config()
@@ -715,6 +750,11 @@ mod tests {
         coordinator(SeededStore::for_chain(client, (N - 3)..=(N + 1)).await)
     }
 
+    fn peer_list(clients: &[TestClient]) -> Vec<(Url, TestClient)> {
+        let url: Url = "http://peer.invalid".parse().unwrap();
+        clients.iter().map(|c| (url.clone(), c.clone())).collect()
+    }
+
     async fn bootstrap(
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
         anchor: Option<L1Anchor>,
@@ -722,7 +762,15 @@ mod tests {
         params: BootstrapParams,
     ) -> anyhow::Result<EpochNumber> {
         let metrics = BootstrapMetrics::new(&NoMetrics);
-        bootstrap_epoch_window(coordinator, EPOCH_HEIGHT, anchor, peers, &params, &metrics).await
+        bootstrap_epoch_window(
+            coordinator,
+            EPOCH_HEIGHT,
+            async || anchor,
+            &peer_list(peers),
+            &params,
+            &metrics,
+        )
+        .await
     }
 
     fn has_table(coordinator: &EpochMembershipCoordinator<SeqTypes>, epoch: u64) -> bool {
@@ -767,13 +815,13 @@ mod tests {
     }
 
     #[test_log::test(tokio::test)]
-    async fn invalid_proof_installs_nothing() {
+    async fn invalid_proof_at_first_epoch_installs_nothing() {
         let (client, anchor) = chain().await;
         let coordinator = fresh_coordinator(&client).await;
         let range = install_range(anchor.height, EPOCH_HEIGHT, EpochNumber::new(FIRST_EPOCH));
         let range = range.unwrap();
-        let bad_root = root_block_in_epoch(range.end().u64() - 2, EPOCH_HEIGHT);
-        client.return_invalid_proof(bad_root as usize).await;
+        let first_root = root_block_in_epoch(range.start().u64() - 2, EPOCH_HEIGHT);
+        client.return_invalid_proof(first_root as usize).await;
 
         let err = skip_to_l1_anchor(&coordinator, &client, &anchor, &range, EPOCH_HEIGHT)
             .await
@@ -783,7 +831,33 @@ mod tests {
             format!("{err:#}").contains("verifying the epoch root"),
             "{err:#}"
         );
-        assert!(!has_table(&coordinator, N + 1));
+        assert!(!has_table(&coordinator, N - 3));
+    }
+
+    /// A verification failure is retried, not read as the tip, and the retry installs the window.
+    #[test_log::test(tokio::test)]
+    async fn invalid_proof_is_retried() {
+        let (client, anchor) = chain().await;
+        let coordinator = fresh_coordinator(&client).await;
+        let root = root_block_in_epoch(N - 1, EPOCH_HEIGHT) as usize;
+        client.return_invalid_proof(root).await;
+        let heal = client.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            heal.remember_leaf(root).await;
+        });
+
+        let current = bootstrap(
+            &coordinator,
+            Some(anchor),
+            &[client.clone(), client],
+            PARAMS,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(current, EpochNumber::new(N));
+        assert!(has_table(&coordinator, N + 1));
     }
 
     #[test_log::test(tokio::test)]
@@ -871,21 +945,57 @@ mod tests {
         assert!(!has_table(&coordinator, N + 1));
     }
 
-    #[rstest]
-    #[case::skip_off(SkipMode::Off, true)]
-    #[case::no_anchor(SkipMode::Auto, false)]
+    /// `Off` walks without fetching the anchor, so it makes no L1 calls.
     #[test_log::test(tokio::test)]
-    async fn walks_without_skip(#[case] skip: SkipMode, #[case] with_anchor: bool) {
+    async fn skip_off_fetches_no_anchor() {
+        let (client, _) = chain().await;
+        let coordinator = fresh_coordinator(&client).await;
+        let params = BootstrapParams {
+            skip: SkipMode::Off,
+            ..PARAMS
+        };
+        let metrics = BootstrapMetrics::new(&NoMetrics);
+
+        let current = bootstrap_epoch_window(
+            &coordinator,
+            EPOCH_HEIGHT,
+            async || -> Option<L1Anchor> { panic!("anchor fetched with the skip off") },
+            &peer_list(&[client]),
+            &params,
+            &metrics,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(current, EpochNumber::new(FIRST_EPOCH));
+        assert!(!has_table(&coordinator, N - 3));
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn no_anchor_walks() {
+        let (client, _) = chain().await;
+        let coordinator = fresh_coordinator(&client).await;
+
+        let current = bootstrap(&coordinator, None, &[client], PARAMS)
+            .await
+            .unwrap();
+
+        assert_eq!(current, EpochNumber::new(FIRST_EPOCH));
+        assert!(!has_table(&coordinator, N - 3));
+    }
+
+    /// Peers without the light-client module answer NOT_FOUND; the node walks instead of aborting.
+    #[test_log::test(tokio::test)]
+    async fn peers_without_light_client_walk() {
         let (client, anchor) = chain().await;
         let coordinator = fresh_coordinator(&client).await;
-        // Any contact with the peer would install tables.
-        let params = BootstrapParams { skip, ..PARAMS };
+        client.return_header_not_found().await;
 
         let current = bootstrap(
             &coordinator,
-            with_anchor.then_some(anchor),
-            &[client],
-            params,
+            Some(anchor),
+            &[client.clone(), client],
+            PARAMS,
         )
         .await
         .unwrap();

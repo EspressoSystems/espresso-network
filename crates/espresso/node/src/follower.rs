@@ -68,7 +68,10 @@ use crate::{
     apply_genesis_overrides,
     context::TaskList,
     init_node_state, load_or_fetch_network_config,
-    startup_catchup::{BootstrapMetrics, BootstrapParams, bootstrap_epoch_window, fetch_l1_anchor},
+    startup_catchup::{
+        BootstrapMetrics, BootstrapParams, SkipMode, bootstrap_epoch_window, fetch_l1_anchor,
+        query_clients,
+    },
     state_signature::StateSignatureMemStorage,
 };
 
@@ -217,7 +220,7 @@ where
     let current_epoch = bootstrap_epoch_window(
         &coordinator,
         epoch_height,
-        fetch_l1_anchor(&node_state).await,
+        async || fetch_l1_anchor(&node_state).await,
         &peers,
         &params.bootstrap,
         &bootstrap_metrics,
@@ -268,9 +271,11 @@ where
         upgrade_lock,
         epoch_height,
         options: params.options,
-        node_state: node_state.clone(),
-        peers,
-        bootstrap: params.bootstrap,
+        // Mid-run catchup keeps the plain walk: the skip can block for its whole deadline.
+        bootstrap: BootstrapParams {
+            skip: SkipMode::Off,
+            ..params.bootstrap
+        },
         bootstrap_metrics,
         next,
     };
@@ -514,6 +519,8 @@ impl ConsensusSource for FollowerConsensus {
     }
 }
 
+const NO_PEERS: [(Url, QueryServiceClient); 0] = [];
+
 struct Follower<P> {
     light_client: Arc<NodeLightClient>,
     sink: Arc<dyn DecideSink>,
@@ -525,8 +532,6 @@ struct Follower<P> {
     upgrade_lock: UpgradeLock<SeqTypes>,
     epoch_height: u64,
     options: FollowerOptions,
-    node_state: NodeState,
-    peers: Vec<QueryServiceClient>,
     bootstrap: BootstrapParams,
     bootstrap_metrics: BootstrapMetrics,
     next: u64,
@@ -728,8 +733,8 @@ impl<P: SequencerPersistence> Follower<P> {
         let current_epoch = bootstrap_epoch_window(
             &self.coordinator,
             self.epoch_height,
-            fetch_l1_anchor(&self.node_state).await,
-            &self.peers,
+            async || None,
+            &NO_PEERS,
             &self.bootstrap,
             &self.bootstrap_metrics,
         )
@@ -786,10 +791,6 @@ fn seed_first_epoch(
         .set_first_epoch(first_epoch, INITIAL_DRB_RESULT);
 }
 
-fn query_clients(urls: &[Url]) -> Vec<QueryServiceClient> {
-    urls.iter().cloned().map(QueryServiceClient::new).collect()
-}
-
 async fn connect_light_client(
     options: &FollowerOptions,
     upstreams: &[Url],
@@ -803,7 +804,13 @@ async fn connect_light_client(
         .connect()
         .await
         .context("opening the light client database")?;
-    let client = FallbackClient::new(query_clients(upstreams))?;
+    let client = FallbackClient::new(
+        upstreams
+            .iter()
+            .cloned()
+            .map(QueryServiceClient::new)
+            .collect(),
+    )?;
     let genesis = match options.light_client_genesis.clone() {
         Some(genesis) => genesis,
         None => {

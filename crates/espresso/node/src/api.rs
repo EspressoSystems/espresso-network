@@ -3640,7 +3640,11 @@ mod test {
         data::{EpochNumber, ViewNumber},
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
-        traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
+        traits::{
+            block_contents::BlockHeader,
+            election::Membership,
+            metrics::{Metrics as _, NoMetrics},
+        },
         utils::epoch_from_block_number,
         x25519,
     };
@@ -6329,7 +6333,7 @@ mod test {
                     &NoMetrics,
                 )),
                 None,
-                &metrics,
+                &*metrics.subgroup("consensus".into()),
                 test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
                 NullEventConsumer,
                 NEW_PROTOCOL,
@@ -6349,11 +6353,28 @@ mod test {
             membership.snapshot(EpochNumber::new(3)).is_none(),
             "epoch 3 was walked despite the anchor"
         );
-        assert_eq!(
-            metrics.get_gauge("bootstrap_l1_anchor_epoch")?.get() as u64,
-            anchor_epoch
+        for epoch in [anchor_epoch, anchor_epoch + 1] {
+            assert!(
+                membership
+                    .epoch_block_reward(EpochNumber::new(epoch))
+                    .is_some(),
+                "no block reward for epoch {epoch}"
+            );
+        }
+        let exported = metrics.export()?;
+        assert!(
+            exported.contains(&format!(
+                "consensus_bootstrap_l1_anchor_epoch {anchor_epoch}"
+            )),
+            "{exported}"
         );
-        assert!(metrics.get_gauge("bootstrap_window_epoch")?.get() as u64 >= anchor_epoch);
+        // The walk above the anchor may advance the window past it.
+        let window_epoch: u64 = exported
+            .lines()
+            .find_map(|line| line.strip_prefix("consensus_bootstrap_window_epoch "))
+            .context("window epoch gauge not exported")?
+            .parse()?;
+        assert!(window_epoch >= anchor_epoch, "{exported}");
 
         node.start_consensus().await;
 

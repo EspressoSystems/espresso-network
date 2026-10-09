@@ -2,7 +2,7 @@ mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
-pub mod startup_catchup;
+mod startup_catchup;
 
 pub mod api;
 pub mod catchup;
@@ -92,7 +92,7 @@ pub use options::Options;
 use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
 use serde::{Deserialize, Serialize};
-use startup_catchup::{BootstrapParams, SkipMode};
+pub use startup_catchup::{BootstrapParams, SkipMode};
 use tokio::select;
 use tracing::info;
 use url::Url;
@@ -1668,7 +1668,7 @@ pub mod testing {
         contracts: Option<Contracts>,
         /// See [`Self::set_genesis_chain_config`].
         genesis_chain_config: Option<ChainConfig>,
-        /// State peers the startup stake-table skip fetches from. None skips nothing.
+        /// State peers the startup stake-table skip fetches from. Empty disables the skip.
         bootstrap_peers: Vec<Url>,
     }
 
