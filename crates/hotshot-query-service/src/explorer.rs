@@ -149,18 +149,19 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::{cmp::min, num::NonZeroUsize};
+    use std::{cmp::min, num::NonZeroUsize, time::Duration};
 
     use committable::Commitment;
-    use futures::StreamExt;
     use tagged_base64::{Tagged, TaggedBase64};
 
     use super::*;
     use crate::{
-        availability::AvailabilityDataSource,
+        node::NodeDataSource,
         testing::{
-            consensus::{MockNetwork, MockSqlDataSource},
+            chain::ChainNode,
+            consensus::MockSqlDataSource,
             mocks::{MockTypes, mock_transaction},
+            sleep,
         },
     };
 
@@ -567,32 +568,25 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api() {
-        // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
-        network.start().await;
-
-        let ds = network.data_source();
-        let mut blocks = ds.subscribe_blocks(0).await;
+        let mut node = ChainNode::<MockSqlDataSource>::new().await;
 
         let n_blocks = num_blocks();
         let n_txns = num_txns_per_block();
         for b in 0..n_blocks {
-            for t in 0..n_txns {
-                let nonce = b * n_txns + t;
-                network
-                    .submit_transaction(mock_transaction(vec![nonce as u8]))
-                    .await;
-            }
-
-            // Wait for the transactions to be finalized.
-            for _ in 0..10 {
-                if !blocks.next().await.unwrap().is_empty() {
-                    break;
-                }
-            }
+            node.push((0..n_txns).map(|t| mock_transaction(vec![(b * n_txns + t) as u8])))
+                .await;
         }
 
+        // The explorer's totals come from the aggregator, which catches up in the background.
+        let ds = node.data_source();
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while ds.count_transactions().await.unwrap_or(0) < n_blocks * n_txns {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("aggregator did not count every transaction");
+
         validate(&ds).await;
-        network.shut_down().await;
     }
 }

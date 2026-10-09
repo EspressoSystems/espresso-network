@@ -6255,12 +6255,10 @@ dependencies = [
  "espresso-macros",
  "futures",
  "generic-array 0.14.7",
- "hotshot",
  "hotshot-example-types",
  "hotshot-new-protocol",
  "hotshot-query-service",
  "hotshot-query-service-types",
- "hotshot-testing",
  "hotshot-types",
  "http-client 0.1.0",
  "http-wire",
@@ -6288,9 +6286,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
  "trait-variant",
- "url",
  "vbs",
- "vec1",
  "versions",
 ]
 

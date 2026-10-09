@@ -10,7 +10,6 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use hotshot::traits::{NodeImplementation, implementations::MemoryNetwork};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
@@ -178,19 +177,8 @@ pub type MockBase = StaticVersion<0, 1>;
 
 pub type MockMembership = StrictMembership<MockTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>;
 pub type MockQuorumProposal = QuorumProposal<MockTypes>;
-pub type MockNetwork = MemoryNetwork<BLSPubKey>;
 
 pub type MockStorage = TestStorage<MockTypes>;
-
-#[derive(
-    Copy, Clone, Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
-pub struct MockNodeImpl;
-
-impl NodeImplementation<MockTypes> for MockNodeImpl {
-    type Network = MockNetwork;
-    type Storage = MockStorage;
-}
 
 pub type MockMerkleTree = UniversalMerkleTree<usize, Sha3Digest, usize, 8, Sha3Node>;
 

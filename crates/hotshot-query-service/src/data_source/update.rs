@@ -17,13 +17,12 @@ use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use committable::Committable;
 use futures::future::Future;
-use hotshot::types::EventType;
 use hotshot_types::{
     data::{
         Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare, ViewNumber,
         ns_table::parse_ns_table,
     },
-    event::LeafInfo,
+    event::{EventType, LeafInfo},
     new_protocol::CoordinatorEvent,
     traits::{
         block_contents::{BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
@@ -53,10 +52,9 @@ use crate::{
 /// [UpdateStatusData](crate::status::UpdateStatusData), then it can be fully kept up to date
 /// through two interfaces:
 /// * [populate_metrics](crate::status::UpdateStatusData::populate_metrics), to get a handle for
-///   populating the status metrics, which should be used when initializing a
-///   [SystemContextHandle](hotshot::types::SystemContextHandle)
-/// * [update](Self::update), provided by this extension trait, to update the query state when a new
-///   HotShot event is emitted
+///   populating the status metrics, which should be used when initializing consensus
+/// * [update](Self::update), provided by this extension trait, to update the query state when
+///   consensus emits a new event
 #[async_trait]
 pub trait UpdateDataSource<Types: NodeType>: UpdateAvailabilityData<Types> {
     /// Update query state based on consensus event.

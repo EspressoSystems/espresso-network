@@ -129,15 +129,13 @@ pub mod availability_tests {
 
     use committable::Committable;
     use futures::stream::StreamExt;
-    use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         block_types::TestBlockPayload,
         node_types::{TEST_VERSIONS, TestTypes},
     };
     use hotshot_types::{
         data::{Leaf2, vid_commitment},
-        traits::block_contents::EncodeBytes,
-        vote::HasViewNumber,
+        traits::{BlockPayload, block_contents::EncodeBytes},
     };
 
     use super::test_helpers::*;
@@ -151,7 +149,8 @@ pub mod availability_tests {
         },
         node::NodeDataSource,
         testing::{
-            consensus::{MockNetwork, TestableDataSource},
+            chain::{ChainNode, EPOCH_HEIGHT, MockChain, NUM_NODES},
+            consensus::TestableDataSource,
             mocks::{MockTypes, mock_transaction},
         },
         types::HeightIndexed,
@@ -305,21 +304,21 @@ pub mod availability_tests {
             }
         }
 
-        // Validate consistency of latest QC chain (only available after epoch upgrade).
-        {
+        // The newest leaf is finalized by the cert2 its decide carried, unless it is genesis,
+        // which consensus decides without one.
+        let last_leaf = {
             let mut tx = ds.read().await.unwrap();
             let block_height = NodeStorage::block_height(&mut tx).await.unwrap();
-            let last_leaf = tx.get_leaf((block_height - 1).into()).await.unwrap();
-
-            if last_leaf.qc().data.epoch.is_some() {
-                tracing::info!(block_height, "checking QC chain");
-                let qc_chain = tx.latest_qc_chain().await.unwrap().unwrap();
-
-                assert_eq!(last_leaf.height(), (block_height - 1) as u64);
-                assert_eq!(qc_chain[0].view_number(), last_leaf.leaf().view_number());
-                assert_eq!(qc_chain[0].leaf_commit(), last_leaf.hash());
-                assert_eq!(qc_chain[1].view_number(), qc_chain[0].view_number() + 1);
-            }
+            tx.get_leaf((block_height - 1).into()).await.unwrap()
+        };
+        if last_leaf.height() > 0 {
+            let cert2 = ds
+                .get_cert2(last_leaf.height())
+                .await
+                .try_resolve()
+                .unwrap_or_else(|_| panic!("newest leaf has no cert2"));
+            assert_eq!(cert2.data.leaf_commit, last_leaf.hash());
+            assert_eq!(cert2.data.block_number, last_leaf.height());
         }
     }
 
@@ -328,32 +327,38 @@ pub mod availability_tests {
     where
         for<'a> D::ReadOnly<'a>: AvailabilityStorage<MockTypes> + NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
 
-        network.start().await;
+        // Genesis is decided on its own, without a VID share.
+        ds.handle_event(&chain.decide_event(0..=0, 0)).await;
         assert_eq!(get_non_empty_blocks(&ds).await, vec![]);
+        validate(&ds).await;
 
-        // Submit a few blocks and make sure each one gets reflected in the query service and
-        // preserves the consistency of the data and indices.
-        let mut blocks = ds.subscribe_blocks(0).await.enumerate();
+        // Decide each transaction in a batch after an empty block, so the older leaf is certified
+        // by the newer one's justify QC rather than by the event's cert1. Each decide must be
+        // reflected in the query service and preserve the consistency of the data and indices.
         for nonce in 0..3 {
-            let txn = mock_transaction(vec![nonce]);
-            network.submit_transaction(txn).await;
+            chain.push_empty(1).await;
+            let height = chain.push([mock_transaction(vec![nonce])]).await.height() as usize;
+            ds.handle_event(&chain.decide_event(height - 1..=height, 0))
+                .await;
 
-            // Wait for the transaction to be finalized.
-            let (i, block) = loop {
-                tracing::info!("waiting for tx {nonce}");
-                let (i, block) = blocks.next().await.unwrap();
-                if !block.is_empty() {
-                    break (i, block);
-                }
-                tracing::info!("block {i} is empty");
-            };
-
-            tracing::info!("got tx {nonce} in block {i}");
-            assert_eq!(ds.get_block(i).await.await, block);
+            assert_eq!(
+                ds.get_block(height).await.await,
+                chain.blocks()[height].block
+            );
             validate(&ds).await;
+        }
+
+        // Everything the event carried is stored as the chain built it.
+        for block in chain.blocks() {
+            let height = block.height() as usize;
+            assert_eq!(ds.get_leaf(height).await.await, block.leaf);
+            assert_eq!(ds.get_block(height).await.await, block.block);
+            assert_eq!(ds.get_vid_common(height).await.await, block.vid_common);
+            assert_eq!(ds.vid_share(height).await.unwrap(), block.vid_shares[0]);
         }
 
         // Check that all the updates have been committed to storage, not simply held in memory: we
@@ -361,7 +366,7 @@ pub mod availability_tests {
         // underlying storage.
         {
             tracing::info!("checking persisted storage");
-            let storage = D::connect(network.storage()).await;
+            let storage = D::connect(&storage).await;
 
             // Ensure we have the same data in both data sources (if data was missing from the
             // original it is of course allowed to be missing from persistent storage and thus from
@@ -401,9 +406,9 @@ pub mod availability_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
-        network.start().await;
+        let mut node = ChainNode::<D>::new().await;
+        node.push_empty(3).await;
+        let ds = node.data_source();
 
         // Wait for there to be at least 3 blocks.
         let block_height = loop {
@@ -497,9 +502,9 @@ pub mod availability_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
-        network.start().await;
+        let mut node = ChainNode::<D>::new().await;
+        node.push_empty(5).await;
+        let ds = node.data_source();
 
         // Wait for there to be at least 5 blocks.
         ds.subscribe_leaves(5).await.next().await.unwrap();
@@ -702,7 +707,6 @@ pub mod availability_tests {
 #[espresso_macros::generic_tests]
 pub mod persistence_tests {
     use committable::Committable;
-    use hotshot::traits::BlockPayload;
     use hotshot_example_types::{
         node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
@@ -710,7 +714,7 @@ pub mod persistence_tests {
     use hotshot_types::{
         data::{VidCommitment, VidCommon},
         simple_certificate::QuorumCertificate2,
-        traits::block_contents::EncodeBytes,
+        traits::{BlockPayload, block_contents::EncodeBytes},
         vid::advz::advz_scheme,
     };
     use jf_advz::VidScheme;
@@ -1029,8 +1033,7 @@ pub mod node_tests {
     use std::time::Duration;
 
     use committable::Committable;
-    use futures::{future::join_all, stream::StreamExt};
-    use hotshot::traits::BlockPayload;
+    use futures::stream::StreamExt;
     use hotshot_example_types::{
         block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
         node_types::{TEST_VERSIONS, TestTypes},
@@ -1039,8 +1042,11 @@ pub mod node_tests {
     use hotshot_types::{
         data::{VidCommitment, VidCommon, VidShare, ViewNumber, vid_commitment},
         simple_certificate::{CertificatePair, QuorumCertificate2},
-        traits::block_contents::{BlockHeader, EncodeBytes},
-        vid::advz::{ADVZScheme, advz_scheme},
+        traits::{
+            BlockPayload,
+            block_contents::{BlockHeader, EncodeBytes},
+        },
+        vid::{advz::advz_scheme, avidm_gf2::AvidmGf2Scheme},
     };
     use jf_advz::VidScheme;
     use pretty_assertions::assert_eq;
@@ -1057,7 +1063,8 @@ pub mod node_tests {
             SyncStatusRange, TimeWindowQueryData, WindowStart,
         },
         testing::{
-            consensus::{MockNetwork, TestableDataSource},
+            chain::{ChainNode, EPOCH_HEIGHT, MockChain, NUM_NODES},
+            consensus::TestableDataSource,
             mocks::{MockPayload, MockTypes, mock_transaction},
             sleep,
         },
@@ -1435,10 +1442,9 @@ pub mod node_tests {
     where
         for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
     {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
-
-        network.start().await;
+        let mut node = ChainNode::<D>::new().await;
+        node.push_empty(2).await;
+        let ds = node.data_source();
 
         // Check VID shares for a few blocks.
         let mut leaves = ds.subscribe_leaves(0).await.take(3);
@@ -1510,92 +1516,56 @@ pub mod node_tests {
         }
     }
 
+    /// Recover a payload from the AvidmGf2 shares the storage nodes keep for a block.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    pub async fn test_vid_recovery<D: TestableDataSource>()
-    where
-        for<'a> D::ReadOnly<'a>: NodeStorage<MockTypes>,
-    {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
-
-        network.start().await;
-
-        // Submit a transaction so we can try to recover a non-empty block.
-        let mut blocks = ds.subscribe_blocks(0).await;
-        let txn = mock_transaction(vec![1, 2, 3]);
-        network.submit_transaction(txn.clone()).await;
-
-        // Wait for the transaction to be finalized.
-        let block = loop {
-            tracing::info!("waiting for transaction");
-            let block = blocks.next().await.unwrap();
-            if !block.is_empty() {
-                tracing::info!(height = block.height(), "transaction sequenced");
-                break block;
-            }
-            tracing::info!(height = block.height(), "empty block");
-        };
+    pub async fn test_vid_recovery<D: TestableDataSource>() {
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
+        let block = chain.push([mock_transaction(vec![1, 2, 3])]).await.clone();
         let height = block.height() as usize;
-        let commit = if let VidCommitment::V0(commit) = block.payload_hash() {
-            commit
-        } else {
-            panic!("expect ADVZ commitment")
+
+        // Each storage node keeps only its own share of every block.
+        let mut nodes = Vec::new();
+        for node in 0..NUM_NODES {
+            let storage = D::create(node).await;
+            let ds = D::connect(&storage).await;
+            for block in chain.blocks() {
+                ds.append(block.block_info(node)).await.unwrap();
+            }
+            nodes.push((storage, ds));
+        }
+
+        let VidCommitment::V2(commit) = block.leaf.payload_hash() else {
+            panic!("chain disperses with AvidmGf2");
         };
-
-        // Set up a test VID scheme.
-        let vid = advz_scheme(network.num_nodes());
-
-        // Get VID common data and verify it.
-        tracing::info!("fetching common data");
-        let common = ds.get_vid_common(height).await.await;
-        let VidCommon::V0(common) = &common.common() else {
-            panic!("expect ADVZ common");
+        let common = nodes[0].1.get_vid_common(height).await.await;
+        let VidCommon::V2(common) = common.common() else {
+            panic!("expect AvidmGf2 common");
         };
-        ADVZScheme::is_consistent(&commit, common).unwrap();
+        assert!(AvidmGf2Scheme::is_consistent(&commit, common));
 
-        // Collect shares from each node.
-        tracing::info!("fetching shares");
-        let network = &network;
-        let vid = &vid;
-        let shares: Vec<_> = join_all((0..network.num_nodes()).map(|i| async move {
-            let ds = network.data_source_index(i);
-
-            // Wait until the node has processed up to the desired block; since we have thus far
-            // only interacted with node 0, it is possible other nodes are slightly behind.
-            let mut leaves = ds.subscribe_leaves(height).await;
-            let leaf = leaves.next().await.unwrap();
-            assert_eq!(leaf.height(), height as u64);
-            assert_eq!(leaf.payload_hash(), VidCommitment::V0(commit));
-
-            let share = if let VidShare::V0(share) = ds.vid_share(height).await.unwrap() {
-                share
-            } else {
-                panic!("expect ADVZ share")
+        // Verify each node's share against the commitment, then recover the payload from them.
+        let mut shares = Vec::new();
+        for (_, ds) in &nodes {
+            let VidShare::V2(share) = ds.vid_share(height).await.unwrap() else {
+                panic!("expect AvidmGf2 share");
             };
-            vid.verify_share(&share, common, &commit).unwrap().unwrap();
-            share
-        }))
-        .await;
-
-        // Recover payload.
-        tracing::info!("recovering payload");
-        let bytes = vid.recover_payload(&shares, common).unwrap();
-        let recovered = <MockPayload as BlockPayload<TestTypes>>::from_bytes(
-            &bytes,
-            &TestMetadata {
-                num_transactions: 7, // arbitrary
-            },
-        );
-        assert_eq!(recovered, *block.payload());
-        assert_eq!(recovered.transactions, vec![txn]);
+            AvidmGf2Scheme::verify_share(&commit, common, &share)
+                .unwrap()
+                .unwrap();
+            shares.push(share);
+        }
+        let bytes = AvidmGf2Scheme::recover(common, &shares).unwrap();
+        assert_eq!(&bytes[..], &block.block.payload().encode()[..]);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_timestamp_window<D: TestableDataSource>() {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
-
-        network.start().await;
+        // Decide pairs of blocks sharing a timestamp, after genesis at timestamp 0.
+        let mut node = ChainNode::<D>::new().await;
+        for timestamp in [1, 1, 2, 2, 3, 3] {
+            node.push_at([], timestamp).await;
+        }
+        let ds = node.data_source();
 
         // Wait for blocks with at least three different timestamps to be sequenced. This lets us
         // test all the edge cases.
@@ -1874,27 +1844,29 @@ pub mod node_tests {
 #[cfg(any(test, feature = "testing"))]
 #[espresso_macros::generic_tests]
 pub mod status_tests {
-    use std::time::Duration;
+    use hotshot_types::consensus::ConsensusMetricsValue;
 
     use crate::{
-        status::StatusDataSource,
+        status::{StatusDataSource, UpdateStatusData},
         testing::{
-            consensus::{DataSourceLifeCycle, MockNetwork},
+            chain::{EPOCH_HEIGHT, MockChain, NUM_NODES},
+            consensus::DataSourceLifeCycle,
             mocks::mock_transaction,
-            sleep,
         },
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub async fn test_metrics<D: DataSourceLifeCycle + StatusDataSource>() {
-        let mut network = MockNetwork::<D>::init().await;
-        let ds = network.data_source();
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+        // Consensus records its metrics under the data source's, as a node wires them up.
+        let metrics = ConsensusMetricsValue::new(&*ds.populate_metrics());
 
         {
             // Check that block height is initially zero.
             assert_eq!(ds.block_height().await.unwrap(), 0);
-            // With consensus paused, check that the success rate returns NAN (since the block
-            // height, the numerator, is 0, and the view number, the denominator, is 0).
+            // Before any view, check that the success rate returns NAN (since the block height,
+            // the numerator, is 0, and the view number, the denominator, is 0).
             assert!(ds.success_rate().await.unwrap().is_nan());
             // Since there is no block produced, "last_decided_time" metric is 0.
             // Therefore, the elapsed time since the last block should be close to the time elapsed since the Unix epoch.
@@ -1907,40 +1879,30 @@ pub mod status_tests {
             );
         }
 
-        // Submit a transaction
-        let txn = mock_transaction(vec![1, 2, 3]);
-        network.submit_transaction(txn.clone()).await;
-
-        // Start consensus and wait for the transaction to be finalized.
-        network.start().await;
-
-        // Now wait for at least one non-genesis block to be finalized.
-        loop {
-            let height = ds.block_height().await.unwrap();
-            if height > 1 {
-                break;
-            }
-            tracing::info!(height, "waiting for a block to be finalized");
-            sleep(Duration::from_secs(1)).await;
-        }
+        // Decide genesis and a block with a transaction, recording what the coordinator records
+        // on decide. The decide happened 3 seconds ago.
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
+        chain.push([mock_transaction(vec![1, 2, 3])]).await;
+        ds.handle_event(&chain.decide_event(0..=1, 0)).await;
+        let tip = chain.tip().leaf.leaf();
+        metrics.current_view.set(*tip.view_number() as usize + 1);
+        metrics.last_decided_view.set(*tip.view_number() as usize);
+        metrics
+            .last_synced_block_height
+            .set(tip.block_header().block_number as usize);
+        metrics
+            .last_decided_time
+            .set(chrono::Utc::now().timestamp() as usize - 3);
 
         {
-            // Check that the success rate has been updated. Note that we can only check if success
-            // rate is positive. We don't know exactly what it is because we can't know how many
-            // views have elapsed without race conditions.
+            // Check that the success rate has been updated.
             let success_rate = ds.success_rate().await.unwrap();
             assert!(success_rate.is_finite(), "{success_rate}");
             assert!(success_rate > 0.0, "{success_rate}");
         }
 
-        {
-            // Shutting down the consensus to halt block production
-            // Introducing a delay of 3 seconds to ensure that elapsed time since last block is atleast 3seconds
-            network.shut_down().await;
-            sleep(Duration::from_secs(3)).await;
-            // Asserting that the elapsed time since the last block is at least 3 seconds
-            assert!(ds.elapsed_time_since_last_decide().await.unwrap() >= 3);
-        }
+        // Asserting that the elapsed time since the last block is at least 3 seconds
+        assert!(ds.elapsed_time_since_last_decide().await.unwrap() >= 3);
     }
 }
 

@@ -109,7 +109,8 @@ mod test {
         data_source::{VersionedDataSource, storage::AvailabilityStorage},
         status::StatusDataSource,
         testing::{
-            consensus::{MockDataSource, MockNetwork, MockSqlDataSource},
+            chain::{ChainNode, EPOCH_HEIGHT},
+            consensus::{MockDataSource, MockSqlDataSource},
             mocks::MockTypes,
         },
         types::HeightIndexed,
@@ -117,31 +118,26 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_api_epochs() {
-        // Create the consensus network.
-        let mut network = MockNetwork::<MockDataSource>::init().await;
-        let epoch_height = network.epoch_height();
-        network.start().await;
+        // Decide blocks through several epoch boundaries.
+        let mut node = ChainNode::<MockDataSource>::new().await;
+        node.push_empty(3 * EPOCH_HEIGHT as usize).await;
 
-        // Watch consensus progress through several epoch boundaries via the data source.
-        let mut headers = network.data_source().subscribe_headers(0).await.enumerate();
+        let mut headers = node.data_source().subscribe_headers(0).await.enumerate();
         loop {
             let (i, header) = headers.next().await.unwrap();
             assert_eq!(header.height(), i as u64);
-            if header.height() >= 3 * epoch_height {
+            if header.height() >= 3 * EPOCH_HEIGHT {
                 break;
             }
         }
-
-        network.shut_down().await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_header_endpoint() {
-        // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init().await;
-        network.start().await;
+        let mut node = ChainNode::<MockSqlDataSource>::new().await;
+        node.push_empty(5).await;
 
-        let ds = network.data_source();
+        let ds = node.data_source();
 
         // Get the current block height and fetch header for some later block height
         // This fetch will only resolve when we receive a leaf or block for that block height
@@ -151,21 +147,20 @@ mod test {
             .await;
 
         assert!(fetch.is_pending());
+        // `block_height` counts genesis, so it is the height of the next block.
+        node.push_empty(26).await;
         let header = fetch.await;
         assert_eq!(header.height() as usize, block_height + 25);
-
-        network.shut_down().await;
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_leaf_only_ds() {
-        // Create the consensus network.
-        let mut network = MockNetwork::<MockSqlDataSource>::init_with_leaf_ds().await;
-        network.start().await;
+        let mut node = ChainNode::<MockSqlDataSource>::leaf_only().await;
+        node.push_empty(10).await;
 
-        let ds = network.data_source();
+        let ds = node.data_source();
 
-        // Wait for some headers and leaves to be produced.
+        // Check some headers and leaves were stored.
         ds.subscribe_headers(0)
             .await
             .take(5)
@@ -187,6 +182,8 @@ mod test {
             .await;
 
         assert!(fetch.is_pending());
+        // `block_height` counts genesis, so it is the height of the next block.
+        node.push_empty(21).await;
         let block = fetch.await;
         assert_eq!(block.height() as usize, target_block_height);
 
@@ -195,7 +192,5 @@ mod test {
             .await
             .unwrap_err();
         drop(tx);
-
-        network.shut_down().await;
     }
 }
