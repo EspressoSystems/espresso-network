@@ -70,7 +70,7 @@ structure EpochChangeWellFormed (c1 : Cert1) (c2 : Cert2) (p : Proposal) : Prop 
   /-- The `Cert1` is at the block's view: it is the block's own. -/
   cert1View : p.viewNumber = c1.view
 
-  /-- The block is well formed. -/
+  /-- The proposal is well formed. -/
   wellFormed : ProposalWellFormed cfg p
 
   /-- The block is the last of its epoch. -/
