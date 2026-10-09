@@ -64,7 +64,7 @@ use crate::{
     Header, Payload, QueryError, QueryResult,
     availability::{
         BlockQueryData, Certificate2, LeafQueryData, QueryableHeader, QueryablePayload,
-        VidCommonQueryData, sql::payload_dir,
+        VidCommonQueryData,
     },
     data_source::{
         storage::{
@@ -976,7 +976,7 @@ where
                 let share_row = if let Some(share) = share {
                     let share_data =
                         bincode::serialize(&share).context("failed to serialize VID share")?;
-                    Some((common.height() as i64, share_data))
+                    Some((common.height(), share_data))
                 } else {
                     None
                 };
@@ -994,22 +994,14 @@ where
             .await
             .context("inserting VID common")?;
 
-        if let Some(dir) = payload_dir() {
+        if let Some(blobs) = &self.blobs {
             for (height, share) in share_rows {
-                // Write then rename so concurrent readers never see a partial file.
-                let path = dir.join(format!("{height}.share"));
-                let tmp = path.with_extension("tmp");
-                tokio::fs::write(&tmp, share)
-                    .await
-                    .with_context(|| format!("writing VID share file {}", tmp.display()))?;
-                tokio::fs::rename(&tmp, &path)
-                    .await
-                    .with_context(|| format!("renaming VID share file {}", path.display()))?;
+                blobs.append_share(height, share);
             }
         } else if !share_rows.is_empty() {
             let mut q = QueryBuilder::new("WITH rows (height, share) AS (");
             q.push_values(share_rows, |mut q, (height, share)| {
-                q.push_bind(height).push_bind(share);
+                q.push_bind(height as i64).push_bind(share);
             });
             q.push(
                 ") UPDATE header SET vid_share = rows.share

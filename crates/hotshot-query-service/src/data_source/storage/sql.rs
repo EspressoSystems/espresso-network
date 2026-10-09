@@ -66,6 +66,8 @@ mod migrate;
 mod payload_loc_test;
 mod queries;
 mod transaction;
+#[cfg(all(test, not(target_os = "windows")))]
+mod vid_share_test;
 
 pub use anyhow::Error;
 pub use db::*;

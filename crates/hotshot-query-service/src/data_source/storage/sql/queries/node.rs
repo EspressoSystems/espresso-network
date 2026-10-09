@@ -12,10 +12,7 @@
 
 //! Node storage implementation for a database query engine.
 
-use std::{
-    io::ErrorKind,
-    ops::{Bound, RangeBounds},
-};
+use std::ops::{Bound, RangeBounds};
 
 use alloy::primitives::map::HashMap;
 use anyhow::anyhow;
@@ -34,7 +31,7 @@ use super::{
 };
 use crate::{
     Header, MissingSnafu, QueryError, QueryResult,
-    availability::{Certificate2, NamespaceId, QueryableHeader, sql::payload_dir},
+    availability::{Certificate2, NamespaceId, QueryableHeader},
     data_source::storage::{
         Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
     },
@@ -137,8 +134,19 @@ where
     where
         ID: Into<BlockId<Types>> + Send + Sync,
     {
+        let id = id.into();
+        let by_height = match id {
+            BlockId::Number(height) => Some(height as u64),
+            _ => None,
+        };
+        if let Some(height) = by_height
+            && let Some(data) = self.read_blob_share(height).await?
+        {
+            return decode_share(&data);
+        }
+
         let mut query = QueryBuilder::default();
-        let where_clause = query.header_where_clause(id.into())?;
+        let where_clause = query.header_where_clause(id)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
@@ -147,27 +155,18 @@ where
               ORDER BY h.height
               LIMIT 1"
         );
-        let (height, share_data) = query
+        let (height, inline) = query
             .query_as::<(i64, Option<Vec<u8>>)>(&sql)
             .fetch_one(self.as_mut())
             .await?;
-        let share_data = match (share_data, payload_dir()) {
-            (Some(data), _) => data,
-            (None, Some(dir)) => {
-                let path = dir.join(format!("{height}.share"));
-                match tokio::fs::read(&path).await {
-                    Err(err) if err.kind() == ErrorKind::NotFound => {
-                        return MissingSnafu.fail();
-                    },
-                    res => {
-                        res.decode_error(format!("reading VID share file {}", path.display()))?
-                    },
-                }
-            },
-            (None, None) => return MissingSnafu.fail(),
+        let blob = match by_height {
+            Some(_) => None,
+            None => self.read_blob_share(height as u64).await?,
         };
-        let share = bincode::deserialize(&share_data).decode_error("malformed VID share")?;
-        Ok(share)
+        match blob.or(inline) {
+            Some(data) => decode_share(&data),
+            None => MissingSnafu.fail(),
+        }
     }
 
     async fn sync_status_for_range(
@@ -537,6 +536,23 @@ where
 
         Ok(ResourceSyncStatus { missing, ranges })
     }
+
+    /// The share record of `height`, if a blob store is configured and holds one.
+    async fn read_blob_share(&self, height: u64) -> QueryResult<Option<Vec<u8>>> {
+        let Some(blobs) = self.blob_store() else {
+            return Ok(None);
+        };
+        blobs
+            .read_share(height)
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("reading VID share record: {err:#}"),
+            })
+    }
+}
+
+fn decode_share(data: &[u8]) -> QueryResult<VidShare> {
+    Ok(bincode::deserialize(data).decode_error("malformed VID share")?)
 }
 
 impl<Types, Mode: TransactionMode> AggregatesStorage<Types> for Transaction<Mode>

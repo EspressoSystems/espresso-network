@@ -1,11 +1,7 @@
 #![cfg(feature = "sqlx")]
 //! Mappings between availability types and SQL types.
 
-use std::{
-    fmt::Display,
-    path::{Path, PathBuf},
-    sync::LazyLock,
-};
+use std::fmt::Display;
 
 use anyhow::Context;
 use hotshot_types::traits::BlockPayload;
@@ -14,18 +10,6 @@ use sqlx::{ColumnIndex, prelude::*, types::Json};
 
 use super::*;
 use crate::QueryError;
-
-static PAYLOAD_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    let dir = PathBuf::from(std::env::var_os("ESPRESSO_QUERY_PAYLOAD_DIR")?);
-    std::fs::create_dir_all(&dir).expect("creating ESPRESSO_QUERY_PAYLOAD_DIR");
-    tracing::info!(dir = %dir.display(), "storing query payloads in files");
-    Some(dir)
-});
-
-/// Directory holding VID shares (`<height>.share`), if configured.
-pub fn payload_dir() -> Option<&'static Path> {
-    PAYLOAD_DIR.as_deref()
-}
 
 /// Columns which must be selected for `LeafQueryData::from_row` to work.
 pub const LEAF_COLUMNS: &str = "leaf, qc";
