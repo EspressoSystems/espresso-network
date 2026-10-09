@@ -3,7 +3,6 @@ use std::{
     ops::Range,
 };
 
-use committable::Commitment;
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
@@ -15,8 +14,10 @@ use hotshot_types::{
 };
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::{error, warn};
+use versions::Version;
 
 use super::ns_lens_match_metadata;
+use crate::digest::{TxDigest, block_digests};
 
 pub(crate) type Metadata<T> = <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata;
 
@@ -34,7 +35,7 @@ pub struct ObtainedPayload<T: NodeType> {
     pub payload_commitment: VidCommitment2,
     pub payload: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-    pub tx_commitments: Vec<Commitment<T::Transaction>>,
+    pub tx_digests: Vec<TxDigest>,
 }
 
 /// Why a reconstruction attempt failed.
@@ -81,6 +82,7 @@ pub(crate) struct VidShareAccumulator<T: NodeType> {
     /// The payload commitment claimed by the view's validated proposal.
     payload_commitment: VidCommitment2,
     metadata: Metadata<T>,
+    version: Version,
     epoch: EpochNumber,
     /// The VID erasure parameters the committee fixes for this view, used to
     /// reject shares carrying a forged `common.param` (see [`Self::accept`]).
@@ -113,13 +115,14 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
-    /// Pin `view` to its validated proposal's payload commitment and
-    /// metadata, and admit any shares that arrived before the proposal.
+    /// Pin `view` to its validated proposal's payload commitment, metadata
+    /// and header version, and admit any shares that arrived before the proposal.
     pub(crate) fn handle_proposal(
         &mut self,
         view: ViewNumber,
         payload_commitment: VidCommitment2,
         metadata: Metadata<T>,
+        version: Version,
         epoch: EpochNumber,
         expected_param: Option<AvidmGf2Param>,
     ) {
@@ -138,6 +141,7 @@ impl<T: NodeType> VidReconstructor<T> {
             Entry::Vacant(slot) => slot.insert(VidShareAccumulator::new(
                 payload_commitment,
                 metadata,
+                version,
                 epoch,
                 expected_param,
             )),
@@ -242,6 +246,7 @@ impl<T: NodeType> VidReconstructor<T> {
         };
         let payload_commitment = accumulator.payload_commitment;
         let metadata = accumulator.metadata.clone();
+        let version = accumulator.version;
         let shares: Vec<(T::SignatureKey, AvidmGf2Share)> = accumulator
             .shares
             .iter()
@@ -249,7 +254,15 @@ impl<T: NodeType> VidReconstructor<T> {
             .collect();
         let epoch = accumulator.epoch;
         let task = self.tasks.spawn_blocking(move || {
-            reconstruct::<T>(view, epoch, payload_commitment, common, shares, metadata)
+            reconstruct::<T>(
+                view,
+                epoch,
+                payload_commitment,
+                common,
+                shares,
+                metadata,
+                version,
+            )
         });
         self.calculations.insert(view, task);
     }
@@ -285,12 +298,14 @@ impl<T: NodeType> VidShareAccumulator<T> {
     fn new(
         payload_commitment: VidCommitment2,
         metadata: Metadata<T>,
+        version: Version,
         epoch: EpochNumber,
         expected_param: Option<AvidmGf2Param>,
     ) -> Self {
         Self {
             payload_commitment,
             metadata,
+            version,
             epoch,
             expected_param,
             common: None,
@@ -451,20 +466,21 @@ fn reconstruct<T: NodeType>(
     common: AvidmGf2Common,
     shares: Vec<(T::SignatureKey, AvidmGf2Share)>,
     metadata: Metadata<T>,
+    version: Version,
 ) -> ReconstructResult<T> {
     let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
     if let Some(bytes) =
         decode_and_recommit::<T>(view, &common, &shares, &payload_commitment, &metadata)
     {
         let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
-        let tx_commitments = payload.transaction_commitments(&metadata);
+        let tx_digests = block_digests::<T>(&payload, &metadata, version);
         let output = ObtainedPayload {
             view,
             epoch,
             payload_commitment,
             payload,
             metadata,
-            tx_commitments,
+            tx_digests,
         };
         return Ok(output);
     }

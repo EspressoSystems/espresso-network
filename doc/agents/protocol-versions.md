@@ -25,7 +25,12 @@
   two epochs and neither may reach a threshold. The view times out again and the votes converge as the nodes do. Before
   V0_7 they are pooled instead, since the epoch is then covered by no signature and names no committee. The same upgrade
   carries the `LargeBlock` chain-config change raising `max_block_size`; it is the first upgrade run by the new
-  protocol's own upgrade sub-protocol (`crates/hotshot/new-protocol/src/upgrade.rs`).
+  protocol's own upgrade sub-protocol (`crates/hotshot/new-protocol/src/upgrade.rs`). `TX_DIGEST_VERSION` is the same
+  version: the block builder identifies transactions of 0.7 blocks by a BLAKE3 digest instead of the Keccak commitment,
+  which stays the hash users and rollups see. Leaders send the appended `BlockMessage::DedupManifest2` for 0.7 views and
+  the old `DedupManifest` before them. From the decided upgrade until `ttl + dedup_window_size` views past it, builders
+  key every pooled transaction by both digests (`KeyMode::Dual` in `crates/hotshot/new-protocol/src/block.rs`), so
+  manifests and blocks of either side still dedup.
 
 What a network runs: `base_version` and `upgrade_version` in `data/genesis/<network>.toml`. Live confirmation is
 `consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see `doc/agents/live-chains.md`.

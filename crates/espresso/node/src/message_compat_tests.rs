@@ -31,13 +31,16 @@ use espresso_types::{
 };
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorage};
-use hotshot_new_protocol::message::{
-    BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
-    EpochChangeMessage, Message as NewProtocolMessage, MessageType, ProposalFetchMessage,
-    ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage, TimeoutVoteMessage3,
-    TransactionMessage, Unchecked, Validated, Vote1,
-    fetch::{Request, Response},
-    payload::{PayloadFetchMessage, PayloadRequestBody, PayloadResponseBody},
+use hotshot_new_protocol::{
+    digest,
+    message::{
+        BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
+        DedupManifest2, EpochChangeMessage, Message as NewProtocolMessage, MessageType,
+        ProposalFetchMessage, ProposalFetchRequest, ProposalMessage, TimeoutVoteMessage,
+        TimeoutVoteMessage3, TransactionMessage, Unchecked, Validated, Vote1,
+        fetch::{Request, Response},
+        payload::{PayloadFetchMessage, PayloadRequestBody, PayloadResponseBody},
+    },
 };
 use hotshot_types::{
     PeerConfig,
@@ -79,7 +82,7 @@ use pretty_assertions::assert_eq;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
-use versions::TIMEOUT_EPOCH_VERSION;
+use versions::{TIMEOUT_EPOCH_VERSION, TX_DIGEST_VERSION};
 
 /// Compare `messages` against the vectors committed at `data/v{minor}/{name}.{json,bin}`.
 ///
@@ -774,7 +777,14 @@ async fn reference_new_protocol_messages(
             // External payloads bypass this envelope on the wire, so this entry pins only the
             // encoding of the variant itself.
             MessageType::External(vec![1, 2, 3]),
-        ]);
+        ])
+        .chain((version >= TX_DIGEST_VERSION).then(|| {
+            MessageType::Block(BlockMessage::DedupManifest2(DedupManifest2 {
+                view,
+                epoch,
+                hashes: vec![digest::blake3(&transaction)],
+            }))
+        }));
 
     message_types
         .map(|message_type| NewProtocolMessage {

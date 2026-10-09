@@ -16,6 +16,7 @@ use tracing::{debug, error, warn};
 
 use crate::{
     consensus::Consensus,
+    digest::block_digests,
     message::{
         Message, MessageType, Validated,
         fetch::Request,
@@ -175,6 +176,7 @@ impl<T: NodeType> Fetcher<T> {
 
                 let epoch = proposal.epoch;
                 let metadata = proposal.block_header.metadata().clone();
+                let version = proposal.block_header.version();
 
                 self.tasks.spawn_blocking(move || {
                     if !matches_commitment(
@@ -187,14 +189,14 @@ impl<T: NodeType> Fetcher<T> {
                         return None;
                     }
                     let payload = T::BlockPayload::from_bytes(&data, &metadata);
-                    let tx_commitments = payload.transaction_commitments(&metadata);
+                    let tx_digests = block_digests::<T>(&payload, &metadata, version);
                     Some(ObtainedPayload {
                         view,
                         epoch,
                         payload_commitment,
                         payload,
                         metadata,
-                        tx_commitments,
+                        tx_digests,
                     })
                 });
 

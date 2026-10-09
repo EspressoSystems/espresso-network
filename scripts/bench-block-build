@@ -51,6 +51,7 @@ LANES = {
     "block_commitments": "#c3c2b7",
     "encode": "#e87ba4",
     "transaction_commitments": "#eb6834",
+    "transaction_digests": "#9b5de5",
     "vid_commitment": "#1baf7a",
     "builder_commitment": "#eda100",
 }

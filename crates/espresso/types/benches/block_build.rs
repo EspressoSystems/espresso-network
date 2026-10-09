@@ -9,9 +9,9 @@
 //! which assumes every recorded span opens exactly once per iteration.
 //!
 //! Inputs mirror the network-bench load generator: random 1 MiB transactions round-robin over
-//! 16 namespaces in 30 to 70 MiB blocks, protocol version 0.6 (AvidmGf2), 100 nodes. Real stakes
-//! are large, so the VID total weight is the `approximate_weights` result for 100 equal stakes
-//! (1100).
+//! 16 namespaces in 30 to 70 MiB blocks, protocol version 0.7 (AvidmGf2, BLAKE3 transaction
+//! digests), 100 nodes. Real stakes are large, so the VID total weight is the
+//! `approximate_weights` result for 100 equal stakes (1100).
 //!
 //! To compare two git refs, run `just bench-block-build BASE HEAD` (scripts/bench-block-build).
 
@@ -36,7 +36,7 @@ use tracing_subscriber::{
     layer::{Context, SubscriberExt},
     registry::LookupSpan,
 };
-use versions::NEW_PROTOCOL_VERSION;
+use versions::TX_DIGEST_VERSION;
 
 const MIB: usize = 1 << 20;
 const NAMESPACES: u64 = 16;
@@ -67,9 +67,7 @@ fn bench_block_build(c: &mut Criterion) {
 
 /// The leader's build task after the transactions are taken; outputs are returned so their drop
 /// is untimed.
-fn request_block(
-    txs: &[Transaction],
-) -> (PayloadWithMetadata<SeqTypes>, BlockCommitments<SeqTypes>) {
+fn request_block(txs: &[Transaction]) -> (PayloadWithMetadata<SeqTypes>, BlockCommitments) {
     let _span = tracing::debug_span!("request_block").entered();
     // `from_transactions` takes owned transactions, so the leader clones its cached ones
     // (`transactions_for` in block.rs).
@@ -77,7 +75,7 @@ fn request_block(
         Payload::from_transactions_sync(txs.to_vec(), chain_config())
             .expect("payload construction");
     let payload = PayloadWithMetadata { payload, metadata };
-    let commitments = block_commitments(&payload, VID_WEIGHT, NEW_PROTOCOL_VERSION);
+    let commitments = block_commitments(&payload, VID_WEIGHT, TX_DIGEST_VERSION);
     (payload, commitments)
 }
 

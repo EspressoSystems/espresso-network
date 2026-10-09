@@ -12,12 +12,13 @@ use hotshot_types::{
     simple_vote::UpgradeProposalData,
     traits::signature_key::SignatureKey,
 };
-use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade, Version};
+use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, TX_DIGEST_VERSION, Upgrade, Version};
 
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig, forward_budget},
-    helpers::test_upgrade_lock,
-    message::{BlockMessage, DedupManifest, Message, MessageType, TransactionMessage, Validated},
+    digest::{TxDigest, blake3, keccak},
+    helpers::{test_timeout_epoch_lock, test_upgrade_lock},
+    message::{BlockMessage, DedupManifest2, Message, MessageType, TransactionMessage, Validated},
     network::{MIN_MESSAGE_LIMIT, message_limit},
     tests::common::utils::mock_membership,
 };
@@ -118,7 +119,7 @@ async fn test_retry_buffer() {
     b.on_submit_transaction(t1.clone()).unwrap();
     b.on_submit_transaction(t2.clone()).unwrap();
 
-    b.on_block_reconstructed(view(1), vec![t1.commit()]);
+    b.on_block_reconstructed(view(1), Vec::from([keccak(&t1)]));
 
     assert_eq!(
         b.on_view_changed(view(4)),
@@ -158,20 +159,9 @@ async fn test_forward_batch_stops_at_one_block() {
 
 /// An upgrade from `NEW_PROTOCOL_VERSION` to `TIMEOUT_EPOCH_VERSION` taking effect at `first_view`.
 fn upgrading_at(first_view: u64) -> UpgradeLock<TestTypes> {
-    let first_view = view(first_view);
-    let data = UpgradeProposalData {
-        old_version: NEW_PROTOCOL_VERSION,
-        new_version: TIMEOUT_EPOCH_VERSION,
-        decide_by: first_view,
-        new_version_hash: Vec::new(),
-        old_version_last_view: first_view - 1,
-        new_version_first_view: first_view,
-    };
-    let commitment = data.commit();
-    let cert = UpgradeCertificate::new(data, commitment, first_view, None, PhantomData);
     UpgradeLock::from_certificate(
         Upgrade::new(NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION),
-        &Some(cert),
+        &Some(upgrade_cert(first_view)),
     )
 }
 
@@ -436,7 +426,7 @@ async fn test_request_block_same_view_reuses_transactions() {
     assert_eq!(outputs[0].payload_commitment, outputs[1].payload_commitment);
     let mut hashes = outputs[1].manifest.hashes.clone();
     hashes.sort();
-    let mut expected = vec![tx(1).commit(), tx(2).commit()];
+    let mut expected = Vec::from([keccak(&tx(1)), keccak(&tx(2))]);
     expected.sort();
     assert_eq!(hashes, expected);
 
@@ -479,10 +469,10 @@ async fn test_dedup_window() {
     );
     let t = tx(1);
 
-    b.on_dedup_manifest(DedupManifest {
+    b.on_dedup_manifest(DedupManifest2 {
         view: view(1),
         epoch: epoch(),
-        hashes: vec![t.commit()],
+        hashes: Vec::from([keccak(&t)]),
     });
     b.on_transactions(tx_msg(view(1), vec![t.clone()]));
     let txns = b.drain(view(1));
@@ -493,7 +483,7 @@ async fn test_dedup_window() {
 
     // Advance past the threshold: current_view - view(1) > window_size(2)
     b.on_view_changed(view(4));
-    b.on_dedup_manifest(DedupManifest {
+    b.on_dedup_manifest(DedupManifest2 {
         view: view(4),
         epoch: epoch(),
         hashes: vec![],
@@ -512,7 +502,7 @@ async fn test_dedup_window() {
 async fn reconstructed_block_drops_its_transactions_from_leader_buffer() {
     let mut b = builder();
     b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
-    b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), Vec::from([keccak(&tx(1))]));
     let txns = b.drain(view(2));
     assert_eq!(txns, Vec::from([tx(2)]));
 }
@@ -604,8 +594,146 @@ async fn transactions_larger_than_a_block_are_not_pooled() {
 #[tokio::test]
 async fn reconstructed_block_drops_later_copies_of_its_transactions() {
     let mut b = builder();
-    b.on_block_reconstructed(view(1), Vec::from([tx(1).commit()]));
+    b.on_block_reconstructed(view(1), Vec::from([keccak(&tx(1))]));
     b.on_transactions(tx_msg(view(2), Vec::from([tx(1)])));
     let txns = b.drain(view(2));
     assert!(txns.is_empty());
+}
+
+fn upgrade_cert(first_view: u64) -> UpgradeCertificate<TestTypes> {
+    let first_view = view(first_view);
+    let data = UpgradeProposalData {
+        old_version: NEW_PROTOCOL_VERSION,
+        new_version: TIMEOUT_EPOCH_VERSION,
+        decide_by: first_view,
+        new_version_hash: Vec::new(),
+        old_version_last_view: first_view - 1,
+        new_version_first_view: first_view,
+    };
+    let commitment = data.commit();
+    UpgradeCertificate::new(data, commitment, first_view, None, PhantomData)
+}
+
+fn builder_with_lock(lock: UpgradeLock<TestTypes>) -> BlockBuilder<TestTypes> {
+    BlockBuilder::new(
+        Arc::new(TestInstanceState::default()),
+        mock_membership(),
+        small_config(),
+        lock,
+    )
+}
+
+fn manifest(v: u64, hashes: Vec<TxDigest>) -> DedupManifest2 {
+    DedupManifest2 {
+        view: view(v),
+        epoch: epoch(),
+        hashes,
+    }
+}
+
+#[tokio::test]
+async fn pooled_transactions_are_found_by_either_digest_while_upgrading() {
+    let mut b = builder_with_lock(upgrading_at(20));
+    b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2), tx(3)])));
+
+    b.on_dedup_manifest(manifest(1, Vec::from([keccak(&tx(1))])));
+    b.on_block_reconstructed(view(2), Vec::from([blake3(&tx(2))]));
+
+    assert_eq!(b.drain(view(3)), Vec::from([tx(3)]));
+}
+
+#[tokio::test]
+async fn forwarded_transactions_are_deduped_by_either_digest_while_upgrading() {
+    let mut b = builder_with_lock(upgrading_at(20));
+    b.on_dedup_manifest(manifest(1, Vec::from([keccak(&tx(1))])));
+    b.on_dedup_manifest(manifest(2, Vec::from([blake3(&tx(2))])));
+
+    b.on_transactions(tx_msg(view(2), Vec::from([tx(1), tx(2), tx(3)])));
+
+    assert_eq!(b.drain(view(3)), Vec::from([tx(3)]));
+}
+
+#[tokio::test]
+async fn pending_transactions_are_confirmed_by_either_digest_while_upgrading() {
+    let mut b = builder_with_lock(upgrading_at(20));
+    b.on_submit_transaction(tx(1)).unwrap();
+    b.on_submit_transaction(tx(2)).unwrap();
+
+    b.on_block_reconstructed(view(1), Vec::from([keccak(&tx(1))]));
+    b.on_block_reconstructed(view(2), Vec::from([blake3(&tx(2))]));
+
+    assert_eq!(b.outstanding_transactions().0, 0);
+}
+
+/// A node that decides the upgrade late can already hold a manifest of the new scheme for a
+/// transaction it pooled under the old one.
+#[tokio::test]
+async fn deciding_the_upgrade_drops_pooled_transactions_a_new_manifest_named() {
+    let lock = UpgradeLock::new(Upgrade::new(NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION));
+    let mut b = builder_with_lock(lock.clone());
+    b.on_view_changed(view(1));
+    b.on_transactions(tx_msg(view(1), Vec::from([tx(1), tx(2)])));
+    b.on_dedup_manifest(manifest(2, Vec::from([blake3(&tx(1))])));
+
+    lock.set_decided_upgrade_cert(upgrade_cert(2));
+    b.on_view_changed(view(2));
+
+    assert_eq!(b.drain(view(3)), Vec::from([tx(2)]));
+}
+
+#[tokio::test]
+async fn pooled_transactions_keep_their_blake3_key_once_the_upgrade_settles() {
+    let mut b = builder_with_lock(upgrading_at(5));
+    b.on_view_changed(view(10));
+    b.on_transactions(tx_msg(view(10), Vec::from([tx(1), tx(2)])));
+
+    // `ttl` and `dedup_window_size` views past the upgrade, only BLAKE3 blocks can arrive.
+    b.on_view_changed(view(13));
+    b.on_dedup_manifest(manifest(13, Vec::from([blake3(&tx(1))])));
+
+    assert_eq!(b.drain(view(14)), Vec::from([tx(2)]));
+}
+
+#[tokio::test]
+async fn built_block_manifest_uses_the_scheme_of_its_view() {
+    use crate::{block::BlockAndHeaderRequest, tests::common::utils::TestData};
+
+    let test_data = TestData::new(1).await;
+    for (lock, digest) in [
+        (
+            test_upgrade_lock(),
+            keccak::<TestTransaction> as fn(&TestTransaction) -> TxDigest,
+        ),
+        (test_timeout_epoch_lock(), blake3::<TestTransaction>),
+    ] {
+        let mut b = builder_with_lock(lock);
+        b.on_transactions(tx_msg(view(4), Vec::from([tx(1)])));
+        b.request_block(BlockAndHeaderRequest {
+            view: view(5),
+            epoch: epoch(),
+            parent_proposal: test_data.views[0].proposal.data.clone(),
+        });
+        let Some(Ok(output)) = b.next().await else {
+            panic!("expected an Ok block builder output");
+        };
+        assert_eq!(output.manifest.hashes, Vec::from([digest(&tx(1))]));
+    }
+}
+
+#[test]
+fn manifests_before_the_upgrade_keep_the_old_message() {
+    let hashes = Vec::from([keccak(&tx(1))]);
+
+    let old = BlockMessage::<TestTypes>::dedup_manifest(
+        manifest(1, hashes.clone()),
+        NEW_PROTOCOL_VERSION,
+    );
+    let BlockMessage::DedupManifest(old) = old else {
+        panic!("expected the pre-upgrade manifest, got {old:?}");
+    };
+    assert_eq!(DedupManifest2::from(old), manifest(1, hashes.clone()));
+
+    let new =
+        BlockMessage::<TestTypes>::dedup_manifest(manifest(1, hashes.clone()), TX_DIGEST_VERSION);
+    assert_eq!(new, BlockMessage::DedupManifest2(manifest(1, hashes)));
 }

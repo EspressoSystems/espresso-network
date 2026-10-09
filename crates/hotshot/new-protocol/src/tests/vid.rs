@@ -129,6 +129,7 @@ fn handle_proposal(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestV
         view.view_number,
         view.vid_shares[0].payload_commitment,
         view.proposal.data.block_header.metadata,
+        view.proposal.data.block_header.version,
         view.proposal.data.epoch,
         // The committee-fixed param the coordinator derives; equals the honest
         // shares' `common.param`.
@@ -395,6 +396,7 @@ async fn test_non_codeword_payload_is_unrecoverable() {
         view.view_number,
         payload_commitment,
         view.proposal.data.block_header.metadata,
+        view.proposal.data.block_header.version,
         view.proposal.data.epoch,
         Some(shares[0].common.param.clone()),
     );

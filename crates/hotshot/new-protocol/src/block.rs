@@ -1,6 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    iter, mem,
     num::{NonZeroU64, NonZeroUsize},
+    ops::Index,
     panic::resume_unwind,
     sync::Arc,
     time::Duration,
@@ -24,6 +26,8 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
+use rayon::prelude::*;
+use serde::Serialize;
 use tokio::{
     task::{AbortHandle, JoinSet, spawn_blocking},
     time::sleep,
@@ -33,8 +37,9 @@ use versions::Version;
 
 use crate::{
     consensus::ConsensusInput,
+    digest::{self, TxDigest, block_digests, uses_blake3},
     helpers::proposal_commitment,
-    message::{DedupManifest, Proposal, TransactionMessage},
+    message::{DedupManifest2, Proposal, TransactionMessage},
     network::message_limit,
     state::HeaderRequest,
 };
@@ -80,15 +85,17 @@ pub struct BlockBuilderOutput<T: NodeType> {
     pub builder_commitment: BuilderCommitment,
     pub builder_fee: BuilderFee<T>,
     pub payload_commitment: VidCommitment,
-    pub manifest: DedupManifest<T>,
+    pub manifest: DedupManifest2,
+    /// The version of `view`, which the manifest's digests are in the scheme of.
+    pub version: Version,
 }
 
 /// Commitments the leader computes for a block it built.
-pub struct BlockCommitments<T: NodeType> {
+pub struct BlockCommitments {
     pub block_size: u64,
     pub payload_commitment: VidCommitment,
     pub builder_commitment: BuilderCommitment,
-    pub hashes: Vec<Commitment<T::Transaction>>,
+    pub hashes: Vec<TxDigest>,
 }
 
 /// The leader's commitment work for a built block, on the proposal's critical path. The
@@ -97,7 +104,7 @@ pub fn block_commitments<T: NodeType>(
     payload: &PayloadWithMetadata<T>,
     total_weight: usize,
     version: Version,
-) -> BlockCommitments<T> {
+) -> BlockCommitments {
     let _span = debug_span!("block_commitments").entered();
     let (payload_bytes, metadata_bytes) =
         debug_span!("encode").in_scope(|| (payload.payload.encode(), payload.metadata.encode()));
@@ -105,8 +112,8 @@ pub fn block_commitments<T: NodeType>(
     // path.
     let (hashes, (payload_commitment, builder_commitment)) = rayon::join(
         || {
-            debug_span!("transaction_commitments")
-                .in_scope(|| payload.payload.transaction_commitments(&payload.metadata))
+            debug_span!("transaction_digests")
+                .in_scope(|| block_digests::<T>(&payload.payload, &payload.metadata, version))
         },
         || {
             rayon::join(
@@ -195,21 +202,25 @@ struct PoolEntry<T: NodeType> {
 /// Memory charged per retry entry on top of its block size, so tiny
 /// transactions cannot outgrow `max_retry_bytes`. Doubled for table slack.
 const fn retry_entry_overhead<T: NodeType>() -> u64 {
-    let map = size_of::<(Commitment<T::Transaction>, RetryEntry<T>)>();
-    let order = size_of::<(ViewNumber, Commitment<T::Transaction>)>();
-    2 * (map + order) as u64
+    let map = size_of::<(TxDigest, Keyed<RetryEntry<T>>)>();
+    let alias = size_of::<(TxDigest, TxDigest)>();
+    let order = size_of::<(ViewNumber, TxDigest)>();
+    2 * (map + alias + order) as u64
 }
 
 pub struct BlockBuilder<T: NodeType> {
     instance: Arc<T::InstanceState>,
     membership: EpochMembershipCoordinator<T>,
-    retry_pending: HashMap<Commitment<T::Transaction>, RetryEntry<T>>,
-    retry_order: BTreeSet<(ViewNumber, Commitment<T::Transaction>)>,
+    retry_pending: TxMap<RetryEntry<T>>,
+    retry_order: BTreeSet<(ViewNumber, TxDigest)>,
     retry_total_bytes: u64,
-    leader_buffer: HashMap<Commitment<T::Transaction>, PoolEntry<T>>,
-    leader_order: BTreeSet<(ViewNumber, Commitment<T::Transaction>)>,
+    leader_buffer: TxMap<PoolEntry<T>>,
+    leader_order: BTreeSet<(ViewNumber, TxDigest)>,
     leader_total_bytes: u64,
-    dedups: BTreeMap<ViewNumber, HashSet<Commitment<T::Transaction>>>,
+    /// Each view's digests are in the scheme of that view, whatever `key_mode` is.
+    dedups: BTreeMap<ViewNumber, HashSet<TxDigest>>,
+    /// The scheme `retry_pending` and `leader_buffer` are keyed by.
+    key_mode: KeyMode,
     config: BlockBuilderConfig,
     upgrade_lock: UpgradeLock<T>,
     current_view: ViewNumber,
@@ -241,13 +252,14 @@ impl<T: NodeType> BlockBuilder<T> {
             membership,
             config,
             upgrade_lock,
-            retry_pending: HashMap::new(),
+            retry_pending: TxMap::new(),
             retry_order: BTreeSet::new(),
             retry_total_bytes: 0,
-            leader_buffer: HashMap::new(),
+            leader_buffer: TxMap::new(),
             leader_order: BTreeSet::new(),
             leader_total_bytes: 0,
             dedups: BTreeMap::new(),
+            key_mode: KeyMode::Keccak,
             current_view: ViewNumber::genesis(),
             calculations: BTreeMap::new(),
             view_transactions: BTreeMap::new(),
@@ -265,6 +277,7 @@ impl<T: NodeType> BlockBuilder<T> {
             warn!(%view, "unsupported version");
             return;
         };
+        self.sync_key_mode();
         let epoch = request.epoch;
         let txs = self.transactions_for(view);
         let instance = self.instance.clone();
@@ -310,7 +323,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 Err(e) if e.is_panic() => resume_unwind(e.into_panic()),
                 Err(_) => return Err(BlockError::Cancelled),
             };
-            let manifest = DedupManifest {
+            let manifest = DedupManifest2 {
                 view,
                 epoch,
                 hashes,
@@ -337,6 +350,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 builder_fee,
                 payload_commitment,
                 manifest,
+                version,
             })
         });
         self.calculations.insert((view, parent_commitment), handle);
@@ -373,9 +387,9 @@ impl<T: NodeType> BlockBuilder<T> {
             .collect()
     }
 
-    fn remove_pooled(&mut self, hash: &Commitment<T::Transaction>) -> Option<T::Transaction> {
-        let entry = self.leader_buffer.remove(hash)?;
-        self.leader_order.remove(&(entry.view, *hash));
+    fn remove_pooled(&mut self, hash: &TxDigest) -> Option<T::Transaction> {
+        let (primary, entry) = self.leader_buffer.remove(hash)?;
+        self.leader_order.remove(&(entry.view, primary));
         self.leader_total_bytes -= entry.tx.minimum_block_size();
         Some(entry.tx)
     }
@@ -428,7 +442,9 @@ impl<T: NodeType> BlockBuilder<T> {
         &mut self,
         tx: T::Transaction,
     ) -> Result<Option<TransactionMessage<T>>, SubmitError> {
-        let hash = tx.commit();
+        self.sync_key_mode();
+        let keys = self.key_mode.keys(&tx);
+        let hash = keys.primary;
 
         if self.retry_pending.contains_key(&hash) {
             return Ok(None);
@@ -470,7 +486,7 @@ impl<T: NodeType> BlockBuilder<T> {
         self.retry_total_bytes += charge;
         self.retry_order.insert((valid_until, hash));
         self.retry_pending.insert(
-            hash,
+            keys,
             RetryEntry {
                 tx,
                 valid_until,
@@ -483,19 +499,20 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     pub fn on_transactions(&mut self, msg: TransactionMessage<T>) {
+        self.sync_key_mode();
         // A sender behind this node may name a view that has passed. Pooling it as of now keeps
         // it from expiring before it can be built.
         let view = msg.view.max(self.current_view);
         let block_size = self.block_size(view);
         let max_bytes = block_size.saturating_mul(self.config.fanout.get() + 1);
         for tx in msg.transactions {
-            let hash = tx.commit();
+            let keys = self.key_mode.keys(&tx);
 
-            if self.dedups.values().any(|hs| hs.contains(&hash)) {
+            if self.is_deduped(keys) {
                 continue;
             }
 
-            if self.leader_buffer.contains_key(&hash) {
+            if self.leader_buffer.contains_key(&keys.primary) {
                 continue;
             }
 
@@ -509,13 +526,18 @@ impl<T: NodeType> BlockBuilder<T> {
             }
 
             self.leader_total_bytes += size;
-            self.leader_order.insert((view, hash));
-            self.leader_buffer.insert(hash, PoolEntry { tx, view });
+            self.leader_order.insert((view, keys.primary));
+            self.leader_buffer.insert(keys, PoolEntry { tx, view });
         }
     }
 
-    pub fn on_dedup_manifest(&mut self, manifest: DedupManifest<T>) {
-        let DedupManifest { view, hashes, .. } = manifest;
+    pub fn on_dedup_manifest(&mut self, manifest: DedupManifest2) {
+        self.sync_key_mode();
+        let DedupManifest2 {
+            view,
+            epoch: _,
+            hashes,
+        } = manifest;
         self.mark_included(view, hashes);
     }
 
@@ -524,6 +546,7 @@ impl<T: NodeType> BlockBuilder<T> {
     /// leader it went to has had its turn without including it.
     pub fn on_view_changed(&mut self, view: ViewNumber) -> Option<TransactionMessage<T>> {
         self.current_view = view;
+        self.sync_key_mode();
         while let Some(&(valid_until, hash)) = self.retry_order.first() {
             if valid_until >= view {
                 break;
@@ -597,9 +620,9 @@ impl<T: NodeType> BlockBuilder<T> {
         }
     }
 
-    fn remove_pending(&mut self, hash: &Commitment<T::Transaction>) {
-        if let Some(entry) = self.retry_pending.remove(hash) {
-            self.retry_order.remove(&(entry.valid_until, *hash));
+    fn remove_pending(&mut self, hash: &TxDigest) {
+        if let Some((primary, entry)) = self.retry_pending.remove(hash) {
+            self.retry_order.remove(&(entry.valid_until, primary));
             self.retry_total_bytes -= entry.size + retry_entry_overhead::<T>();
         }
     }
@@ -618,18 +641,15 @@ impl<T: NodeType> BlockBuilder<T> {
 
     /// Call for every block this node proposes or reconstructs, so it stops forwarding the
     /// block's transactions and drops copies that reach it later.
-    pub fn on_block_reconstructed(
-        &mut self,
-        view: ViewNumber,
-        tx_commitments: Vec<Commitment<T::Transaction>>,
-    ) {
-        for hash in &tx_commitments {
+    pub fn on_block_reconstructed(&mut self, view: ViewNumber, tx_digests: Vec<TxDigest>) {
+        self.sync_key_mode();
+        for hash in &tx_digests {
             self.remove_pending(hash);
         }
-        self.mark_included(view, tx_commitments);
+        self.mark_included(view, tx_digests);
     }
 
-    fn mark_included(&mut self, view: ViewNumber, hashes: Vec<Commitment<T::Transaction>>) {
+    fn mark_included(&mut self, view: ViewNumber, hashes: Vec<TxDigest>) {
         for hash in &hashes {
             self.remove_pooled(hash);
         }
@@ -646,9 +666,193 @@ impl<T: NodeType> BlockBuilder<T> {
         self.dedups = self.dedups.split_off(&lower_bound);
     }
 
+    fn is_deduped(&self, keys: TxKeys) -> bool {
+        keys.iter()
+            .any(|key| self.dedups.values().any(|hs| hs.contains(&key)))
+    }
+
+    fn sync_key_mode(&mut self) {
+        let mode = self.target_key_mode();
+        if mode != self.key_mode {
+            self.rekey(mode);
+        }
+    }
+
+    fn target_key_mode(&self) -> KeyMode {
+        // Pooled and pending transactions expire after `ttl` views and the dedup window forgets
+        // a block after `dedup_window_size`, so past both no block from before the upgrade can
+        // match anything here.
+        let lifetime = self.config.ttl + self.config.dedup_window_size;
+        let settled: ViewNumber = self.current_view.saturating_sub(lifetime).into();
+        if uses_blake3(self.upgrade_lock.version_infallible(settled)) {
+            return KeyMode::Blake3;
+        }
+        let upgrading = self
+            .upgrade_lock
+            .upgrade_view()
+            .is_some_and(|first| uses_blake3(self.upgrade_lock.version_infallible(first)));
+        if upgrading {
+            KeyMode::Dual
+        } else {
+            KeyMode::Keccak
+        }
+    }
+
+    fn rekey(&mut self, mode: KeyMode) {
+        self.key_mode = mode;
+
+        let pooled = mem::take(&mut self.leader_buffer).into_entries();
+        self.leader_order.clear();
+        for (keys, entry) in rekeyed(mode, pooled, |entry| &entry.tx) {
+            // A node that decides the upgrade late can already hold BLAKE3 digests of blocks
+            // that include transactions it pooled under Keccak. Keeping them would build them
+            // into a block again.
+            if self.is_deduped(keys) {
+                self.leader_total_bytes -= entry.tx.minimum_block_size();
+                continue;
+            }
+            self.leader_order.insert((entry.view, keys.primary));
+            self.leader_buffer.insert(keys, entry);
+        }
+
+        let pending = mem::take(&mut self.retry_pending).into_entries();
+        self.retry_order.clear();
+        for (keys, entry) in rekeyed(mode, pending, |entry| &entry.tx) {
+            self.retry_order.insert((entry.valid_until, keys.primary));
+            self.retry_pending.insert(keys, entry);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn drain(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
         self.take_block(view)
+    }
+}
+
+/// The digest scheme the pool and retry buffer are keyed by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyMode {
+    Keccak,
+    /// An upgrade to BLAKE3 is decided and blocks of both schemes can still arrive, so entries
+    /// are keyed by BLAKE3 and also found by Keccak.
+    Dual,
+    Blake3,
+}
+
+impl KeyMode {
+    fn keys<Tx>(self, tx: &Tx) -> TxKeys
+    where
+        Tx: Committable + Serialize,
+    {
+        match self {
+            KeyMode::Keccak => TxKeys {
+                primary: digest::keccak(tx),
+                alias: None,
+            },
+            KeyMode::Dual => TxKeys {
+                primary: digest::blake3(tx),
+                alias: Some(digest::keccak(tx)),
+            },
+            KeyMode::Blake3 => TxKeys {
+                primary: digest::blake3(tx),
+                alias: None,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TxKeys {
+    primary: TxDigest,
+    alias: Option<TxDigest>,
+}
+
+impl TxKeys {
+    fn iter(self) -> impl Iterator<Item = TxDigest> {
+        iter::once(self.primary).chain(self.alias)
+    }
+}
+
+fn rekeyed<E, Tx>(mode: KeyMode, entries: Vec<E>, tx: impl Fn(&E) -> &Tx + Sync) -> Vec<(TxKeys, E)>
+where
+    E: Sync,
+    Tx: Committable + Serialize,
+{
+    let keys = entries
+        .par_iter()
+        .map(|entry| mode.keys(tx(entry)))
+        .collect::<Vec<_>>();
+    keys.into_iter().zip(entries).collect()
+}
+
+/// Entries keyed by a primary digest and also found by their alias, if they have one.
+struct TxMap<E> {
+    entries: HashMap<TxDigest, Keyed<E>>,
+    aliases: HashMap<TxDigest, TxDigest>,
+}
+
+struct Keyed<E> {
+    alias: Option<TxDigest>,
+    entry: E,
+}
+
+impl<E> TxMap<E> {
+    fn new() -> TxMap<E> {
+        TxMap {
+            entries: HashMap::new(),
+            aliases: HashMap::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn contains_key(&self, primary: &TxDigest) -> bool {
+        self.entries.contains_key(primary)
+    }
+
+    fn get_mut(&mut self, primary: &TxDigest) -> Option<&mut E> {
+        self.entries.get_mut(primary).map(|keyed| &mut keyed.entry)
+    }
+
+    fn insert(&mut self, keys: TxKeys, entry: E) {
+        let TxKeys { primary, alias } = keys;
+        if let Some(alias) = alias {
+            self.aliases.insert(alias, primary);
+        }
+        self.entries.insert(primary, Keyed { alias, entry });
+    }
+
+    /// Removes the entry `digest` is either key of, and returns it with its primary key.
+    fn remove(&mut self, digest: &TxDigest) -> Option<(TxDigest, E)> {
+        let primary = self.aliases.get(digest).copied().unwrap_or(*digest);
+        let Keyed { alias, entry } = self.entries.remove(&primary)?;
+        if let Some(alias) = alias {
+            self.aliases.remove(&alias);
+        }
+        Some((primary, entry))
+    }
+
+    fn into_entries(self) -> Vec<E> {
+        self.entries
+            .into_values()
+            .map(|keyed| keyed.entry)
+            .collect()
+    }
+}
+
+impl<E> Default for TxMap<E> {
+    fn default() -> TxMap<E> {
+        TxMap::new()
+    }
+}
+
+impl<E> Index<&TxDigest> for TxMap<E> {
+    type Output = E;
+
+    fn index(&self, primary: &TxDigest) -> &E {
+        &self.entries[primary].entry
     }
 }
 

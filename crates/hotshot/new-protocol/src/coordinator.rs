@@ -43,14 +43,16 @@ use crate::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
     },
+    digest::TxDigest,
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
     helpers::{proposal_commitment, validated_state_cert},
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
-        MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
-        TransactionMessage, Unchecked, Validated, Vote2, payload::PayloadFetchMessage,
+        self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage,
+        DedupManifest2, Message, MessageType, OpaqueMessage, Proposal, ProposalFetchMessage,
+        ProposalMessage, TimeoutVote, TransactionMessage, Unchecked, Validated, Vote2,
+        payload::PayloadFetchMessage,
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -673,7 +675,7 @@ where
                         for (_, leader) in holders {
                             self.unicast_block(
                                 &leader,
-                                BlockMessage::DedupManifest(manifest.clone()),
+                                BlockMessage::dedup_manifest(manifest.clone(), block.version),
                             )?;
                         }
                         return Ok(block.into())
@@ -743,7 +745,7 @@ where
         self.payload_txn_bytes
             .insert(out.view, out.payload.txn_bytes());
         self.block_builder
-            .on_block_reconstructed(out.view, out.tx_commitments);
+            .on_block_reconstructed(out.view, out.tx_digests);
         self.storage.append_da(
             out.view,
             out.epoch,
@@ -943,6 +945,7 @@ where
                     view,
                     vid_share.payload_commitment,
                     proposal.data.block_header.metadata().clone(),
+                    proposal.data.block_header.version(),
                     proposal.data.epoch,
                     expected_param,
                 );
@@ -1587,19 +1590,10 @@ where
                         }
                     },
                     BlockMessage::DedupManifest(manifest) => {
-                        debug!(
-                            %node, %sender,
-                            view = %manifest.view,
-                            epoch = %manifest.epoch,
-                            hashes = manifest.hashes.len(),
-                            "recv dedup manifest"
-                        );
-                        if !self.is_view_too_far_ahead(manifest.view)
-                            && let Some(view_leader) = self.leader(manifest.view, manifest.epoch)
-                            && view_leader == message.sender
-                        {
-                            self.block_builder.on_dedup_manifest(manifest)
-                        }
+                        self.on_dedup_manifest(&message.sender, manifest.into())
+                    },
+                    BlockMessage::DedupManifest2(manifest) => {
+                        self.on_dedup_manifest(&message.sender, manifest)
                     },
                 }
                 None
@@ -2132,6 +2126,23 @@ where
     }
 
     /// We ignore votes more than `MAX_VIEWS_AHEAD` ahead of ours.
+    fn on_dedup_manifest(&mut self, sender: &T::SignatureKey, manifest: DedupManifest2) {
+        debug!(
+            node = %self.node_id,
+            sender = %KeyPrefix::from(sender),
+            view = %manifest.view,
+            epoch = %manifest.epoch,
+            hashes = manifest.hashes.len(),
+            "recv dedup manifest"
+        );
+        if !self.is_view_too_far_ahead(manifest.view)
+            && let Some(view_leader) = self.leader(manifest.view, manifest.epoch)
+            && view_leader == *sender
+        {
+            self.block_builder.on_dedup_manifest(manifest)
+        }
+    }
+
     fn is_view_too_far_ahead(&self, v: ViewNumber) -> bool {
         v > self.consensus.current_view() + *MAX_VIEWS_AHEAD
     }
@@ -2360,7 +2371,7 @@ struct PendingDa<T: NodeType> {
     epoch: EpochNumber,
     payload: T::BlockPayload,
     metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-    hashes: Vec<Commitment<T::Transaction>>,
+    hashes: Vec<TxDigest>,
 }
 
 type ProposalFetchResponseSender<T> =

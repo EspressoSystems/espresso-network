@@ -27,8 +27,10 @@ pub use hotshot_types::{
     simple_certificate::{Certificate1, Certificate2},
 };
 use serde::{Deserialize, Serialize};
+use versions::Version;
 
 use crate::{
+    digest::{TxDigest, uses_blake3},
     helpers::proposal_commitment,
     message::payload::PayloadFetchMessage,
     proposal::{
@@ -469,12 +471,39 @@ impl<T: NodeType> HasViewNumber for ProposalFetchMessage<T> {
     }
 }
 
+/// The transactions of the block a leader built for a view before [`TX_DIGEST_VERSION`].
+///
+/// [`TX_DIGEST_VERSION`]: versions::TX_DIGEST_VERSION
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct DedupManifest<T: NodeType> {
     pub view: ViewNumber,
     pub epoch: EpochNumber,
     pub hashes: Vec<Commitment<T::Transaction>>,
+}
+
+/// The transactions of the block a leader built for `view`, by the [`TxDigest`] scheme of that
+/// view.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+pub struct DedupManifest2 {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub hashes: Vec<TxDigest>,
+}
+
+impl<T: NodeType> From<DedupManifest<T>> for DedupManifest2 {
+    fn from(manifest: DedupManifest<T>) -> DedupManifest2 {
+        let DedupManifest {
+            view,
+            epoch,
+            hashes,
+        } = manifest;
+        DedupManifest2 {
+            view,
+            epoch,
+            hashes: hashes.into_iter().map(TxDigest::from).collect(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -489,6 +518,35 @@ pub struct TransactionMessage<T: NodeType> {
 pub enum BlockMessage<T: NodeType> {
     Transactions(TransactionMessage<T>),
     DedupManifest(DedupManifest<T>),
+    // Appended so the earlier variants keep their encoding for nodes before the upgrade.
+    DedupManifest2(DedupManifest2),
+}
+
+impl<T: NodeType> BlockMessage<T> {
+    /// The manifest message for a block of a view running `version`.
+    ///
+    /// Nodes that predate [`DedupManifest2`] cannot decode it, so it is only sent for views
+    /// running [`TX_DIGEST_VERSION`] or later, which those nodes cannot take part in.
+    ///
+    /// [`TX_DIGEST_VERSION`]: versions::TX_DIGEST_VERSION
+    pub fn dedup_manifest(manifest: DedupManifest2, version: Version) -> BlockMessage<T> {
+        if uses_blake3(version) {
+            return BlockMessage::DedupManifest2(manifest);
+        }
+        let DedupManifest2 {
+            view,
+            epoch,
+            hashes,
+        } = manifest;
+        BlockMessage::DedupManifest(DedupManifest {
+            view,
+            epoch,
+            hashes: hashes
+                .into_iter()
+                .map(|TxDigest(bytes)| Commitment::from_raw(bytes))
+                .collect(),
+        })
+    }
 }
 
 impl<T: NodeType> HasViewNumber for BlockMessage<T> {
@@ -496,6 +554,7 @@ impl<T: NodeType> HasViewNumber for BlockMessage<T> {
         match self {
             BlockMessage::Transactions(msg) => msg.view,
             BlockMessage::DedupManifest(msg) => msg.view,
+            BlockMessage::DedupManifest2(msg) => msg.view,
         }
     }
 }

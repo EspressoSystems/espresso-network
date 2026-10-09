@@ -1509,5 +1509,52 @@
       ]
     },
     "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
+  },
+  {
+    "message_type": {
+      "Block": {
+        "DedupManifest2": {
+          "epoch": 1,
+          "hashes": [
+            [
+              133,
+              213,
+              227,
+              189,
+              102,
+              252,
+              64,
+              108,
+              87,
+              126,
+              4,
+              124,
+              224,
+              50,
+              102,
+              245,
+              171,
+              105,
+              14,
+              187,
+              255,
+              77,
+              46,
+              195,
+              31,
+              24,
+              239,
+              241,
+              112,
+              112,
+              120,
+              44
+            ]
+          ],
+          "view": 0
+        }
+      }
+    },
+    "sender": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U"
   }
 ]
