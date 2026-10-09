@@ -45,7 +45,7 @@ use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
 use tokio::{
     spawn,
-    sync::{mpsc::channel, watch},
+    sync::{broadcast, mpsc::channel, watch},
     task::JoinHandle,
 };
 use tracing::{Instrument, Level, info};
@@ -407,7 +407,7 @@ where
             ),
         );
 
-        let (signer_tx, signer_rx) = watch::channel(None);
+        let (signer_tx, signer_rx) = broadcast::channel(SIGNER_QUEUE_CAPACITY);
         ctx.spawn(
             "state signer",
             sign_decided_leaves(ctx.consensus_handle.clone(), state_signer, signer_rx),
@@ -637,7 +637,7 @@ async fn handle_events<P, C>(
     node_id: u64,
     mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
     persistence: Arc<P>,
-    signer_tx: watch::Sender<Option<DecidedLeaf>>,
+    signer_tx: broadcast::Sender<DecidedLeaf>,
     external_event_handler: ExternalEventHandler,
     event_consumer: Arc<C>,
     decide_tx: watch::Sender<DecideSignal>,
@@ -674,15 +674,7 @@ async fn handle_events<P, C>(
         }
 
         if let Some(leaf) = DecidedLeaf::from_event(&event) {
-            // A gap-fill decide carries an older leaf and must not replace a newer one the
-            // signer has not taken yet.
-            signer_tx.send_if_modified(|current| match current {
-                Some(newest) if newest.view >= leaf.view => false,
-                _ => {
-                    *current = Some(leaf);
-                    true
-                },
-            });
+            let _ = signer_tx.send(leaf);
         }
 
         // Critical path: only persist the decided leaves, then signal the background processor.
@@ -701,24 +693,33 @@ async fn handle_events<P, C>(
     }
 }
 
-/// Signs and relays the newest decided leaf, off the event loop, because a relay post can take
-/// as long as its HTTP timeout. Leaves decided while a post is in flight are skipped: the relay
-/// drops signatures at or below its latest complete height, so only the newest one is useful.
+/// Decides the signer may fall behind by before it drops the oldest ones.
+const SIGNER_QUEUE_CAPACITY: usize = 128;
+
+/// Signs and relays the newest leaf of every decide, in order, off the event loop, because a
+/// relay post can take as long as its HTTP timeout. The relay needs a threshold of signatures on
+/// one height, so every node must sign the same heights. Signing every decide keeps that while
+/// posts fall behind, and dropping only the oldest once the queue is full keeps it as well.
 async fn sign_decided_leaves<N, P>(
     consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
     mut state_signer: StateSigner<SequencerApiVersion>,
-    mut leaves: watch::Receiver<Option<DecidedLeaf>>,
+    mut leaves: broadcast::Receiver<DecidedLeaf>,
 ) where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    while leaves.changed().await.is_ok() {
-        let Some(leaf) = leaves.borrow_and_update().clone() else {
-            continue;
-        };
-        state_signer
-            .handle_decide(&leaf, consensus_handle.as_ref())
-            .await;
+    loop {
+        match leaves.recv().await {
+            Ok(leaf) => {
+                state_signer
+                    .handle_decide(&leaf, consensus_handle.as_ref())
+                    .await;
+            },
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                tracing::warn!(skipped, "state signer fell behind, dropped oldest decides");
+            },
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
     }
 }
 

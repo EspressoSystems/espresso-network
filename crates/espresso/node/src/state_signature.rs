@@ -257,12 +257,12 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
     }
 }
 
-/// The parts of the latest decided leaf that the state signer needs, without the block payload
+/// The parts of a decide's newest leaf that the state signer needs, without the block payload
 /// a leader's leaf still carries.
 #[derive(Clone, Debug)]
 pub(crate) struct DecidedLeaf {
     header: Header,
-    pub(crate) view: ViewNumber,
+    view: ViewNumber,
     with_epoch: bool,
 }
 
