@@ -285,6 +285,20 @@ just bench aws run --fleet --chaos --query-engine sqlite
 - `INDEX.md` has a `chaos` column, `F faults, T timeouts` (`-` without chaos). `rate` is the chaos rate, `decided` the
   mean decided, `bound` is `-`.
 
+#### Not covered
+
+- Stake table changes: no delegation, undelegation, validator registration or exit during the run.
+- Epoch transitions under faults: runs do not span a stake table epoch change.
+- L1 faults: anvil on ctl never stalls, reorgs or drops RPC.
+- Network faults: no partitions, packet loss or latency spikes; `--latency` shaping is static.
+- ctl services: orchestrator, state-relay-server, anvil and the load driver are never faulted.
+- Host faults: no instance reboot, disk full, disk stalls or clock skew.
+- Byzantine behaviour: faulted nodes stop or lose state, they never equivocate or send bad data.
+- Faults at or above `f`: the scheduler stays below the fault budget, so liveness loss is not exercised.
+- Postgres query nodes: wipe needs `--query-engine sqlite`; `volume`, `rds` and `tmpfs` query storage are refused.
+- Upgrades: no binary or protocol version upgrade during the run.
+- Load shape: constant rate only; no bursts or capacity search under faults.
+
 ### Node build and config
 
 ```
