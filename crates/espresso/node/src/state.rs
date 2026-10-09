@@ -32,7 +32,7 @@ use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSI
 use crate::{
     NodeState, SeqTypes,
     api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
-    catchup::CatchupStorage,
+    catchup::{CatchupStorage, SqlStateCatchup},
     persistence::ChainConfigPersistence,
 };
 
@@ -377,9 +377,9 @@ where
 
     // Resume from the newest snapshot in storage. The loop cannot start anywhere else:
     // `from_header` gives it a bare state, and its catchup fills in the block frontier and any fee
-    // account it has not seen from the parent's snapshot, which exists only up to the head. The
-    // state pruner in turn never advances to the head, so that snapshot stays readable however
-    // far behind the chain the loop has fallen.
+    // account it has not seen from the parent's snapshot in this database, which exists only up to
+    // the head. The state pruner in turn never advances to the head, so that snapshot stays
+    // readable however far behind the chain the loop has fallen.
     let last_height = storage.get_last_state_height().await?;
     let current_height = storage.block_height().await?;
     tracing::info!(
@@ -620,6 +620,12 @@ async fn apply_leaf<T>(
     T: SequencerStateDataSource,
     for<'a> T::Transaction<'a>: SequencerStateUpdate,
 {
+    // The parent snapshot is the state head, which this database always keeps, so read it from
+    // here only: peers may have pruned it. When the data pruner has deleted the parent's leaf and
+    // header, the catchup reads the snapshot by the roots in the parent state. Reward accounts do
+    // not use this catchup; `apply_header` reads them through the node's catchup. Retries are off
+    // because the loop below retries.
+    let catchup = SqlStateCatchup::new(storage.clone(), BackoffParams::disabled());
     loop {
         tracing::debug!(
             height = leaf.height(),
@@ -627,15 +633,11 @@ async fn apply_leaf<T>(
             ?leaf,
             "updating persistent merklized state"
         );
-        // The node's catchup reads the parent snapshot from this database first. When the data
-        // pruner has deleted the parent's leaf and header, it reads the fee and block snapshots by
-        // the parent's roots, which the parent state carries. It asks peers if that read fails
-        // too, and for V1 reward accounts, whose read still needs the parent's leaf.
         match update_state_storage(
             parent_state,
             storage,
             instance,
-            &instance.state_catchup,
+            &catchup,
             parent_leaf,
             &leaf,
         )
