@@ -20,7 +20,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use anyhow::Context;
+use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use backon::{BackoffBuilder, ExponentialBuilder};
 use chrono::Utc;
@@ -734,7 +734,6 @@ impl SqlStorage {
 
         let pruner_cfg = config.pruner_cfg;
         let serializable_retry_config = config.serializable_retry_config;
-        let blob_dir_unset = config.blob.is_none();
         let blobs = open_blobs(config.blob.take(), &connection_type).await?;
         if let Some(blobs) = &blobs {
             blobs.install_metrics(&metrics);
@@ -744,6 +743,7 @@ impl SqlStorage {
         if cfg!(feature = "embedded-db") || connection_type == StorageConnectionType::Sequencer {
             // re-use the same pool if present and return early
             if let Some(pool) = config.pool {
+                check_blob_binding(&pool, blobs.as_deref(), &connection_type).await?;
                 let storage = Self {
                     metrics,
                     pool_metrics,
@@ -846,18 +846,8 @@ impl SqlStorage {
                 .await?;
         }
 
-        if blob_dir_unset && connection_type == StorageConnectionType::Query {
-            let located = query("SELECT 1 FROM payload_loc LIMIT 1")
-                .fetch_optional(conn.as_mut())
-                .await?;
-            if located.is_some() {
-                return Err(Error::msg(
-                    "payload_loc rows present but ESPRESSO_NODE_BLOB_DIR unset",
-                ));
-            }
-        }
-
         conn.close().await?;
+        check_blob_binding(&pool, blobs.as_deref(), &connection_type).await?;
 
         let storage = Self {
             pool,
@@ -886,6 +876,57 @@ async fn open_blobs(
         },
         _ => Ok(None),
     }
+}
+
+/// Refuses a query connection whose database and blob directory do not belong together: locators
+/// without a directory, or a directory written for another database.
+async fn check_blob_binding(
+    pool: &Pool<Db>,
+    blobs: Option<&BlobStore>,
+    connection_type: &StorageConnectionType,
+) -> anyhow::Result<()> {
+    if *connection_type != StorageConnectionType::Query {
+        return Ok(());
+    }
+    let Some(blobs) = blobs else {
+        let located = query("SELECT 1 FROM payload_loc LIMIT 1")
+            .fetch_optional(pool)
+            .await?;
+        ensure!(
+            located.is_none(),
+            "payload_loc rows present but ESPRESSO_NODE_BLOB_DIR unset"
+        );
+        return Ok(());
+    };
+
+    // Stale records of another database would be served as this one's: reads by height find
+    // them, and their heights hold back unlinking. A directory without an id was lost or is new,
+    // and holds nothing to confuse.
+    let recorded = query_as::<(String,)>("SELECT store_id FROM blob_store WHERE id = 1")
+        .fetch_optional(pool)
+        .await?
+        .map(|(id,)| id);
+    match (blobs.read_id()?, recorded) {
+        (Some(dir), Some(db)) => ensure!(
+            dir == db,
+            "blob directory {} belongs to a different database",
+            blobs.dir().display()
+        ),
+        (Some(_), None) => bail!(
+            "blob directory {} belongs to a different database",
+            blobs.dir().display()
+        ),
+        (None, Some(db)) => blobs.write_id(&db)?,
+        (None, None) => {
+            let id = format!("{:032x}", rand::random::<u128>());
+            query("INSERT INTO blob_store (id, store_id) VALUES (1, $1)")
+                .bind(&id)
+                .execute(pool)
+                .await?;
+            blobs.write_id(&id)?;
+        },
+    }
+    Ok(())
 }
 
 /// Retry policy for transactions aborted by PostgreSQL serialization conflicts (SQLSTATE 40001).
@@ -1324,8 +1365,8 @@ impl SqlStorage {
         Transaction::new(&self.pool, self.pool_metrics.clone(), self.blobs.clone()).await
     }
 
-    /// Reclaims blob segments left behind by a run that stopped between the commit of a prune
-    /// batch and its `gc_payload_below`, and share segments past their retention.
+    /// Finishes a prune batch that a run left between the commit of its pruned height and its
+    /// `gc_payload_below`, and unlinks share segments past their retention.
     async fn gc_blobs(&self) -> anyhow::Result<()> {
         let Some(blobs) = &self.blobs else {
             return Ok(());
@@ -1339,6 +1380,14 @@ impl SqlStorage {
                 .await?
         };
         if let Some(pruned) = pruned {
+            // The pruned height commits before its delete batch. Segments may only go once the
+            // locators below it do.
+            let mut tx = self
+                .prune_write()
+                .await
+                .context("opening pruning transaction")?;
+            tx.delete_batch(pruned).await?;
+            tx.commit().await.context("committing deleted batch")?;
             blobs
                 .gc_payload_below(pruned)
                 .await
@@ -1643,7 +1692,10 @@ impl SqlStorage {
 
         let row = tx.fetch_one(query).await.context("getting disk usage")?;
         let size: i64 = row.get(0);
-        let blob_bytes = self.blobs.as_ref().map_or(0, |blobs| blobs.payload_bytes());
+        let blob_bytes = self
+            .blobs
+            .as_ref()
+            .map_or(0, |blobs| blobs.sealed_payload_bytes());
 
         Ok(size as u64 + blob_bytes)
     }

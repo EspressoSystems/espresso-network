@@ -132,6 +132,7 @@ hotshot-query-service = { path = ".", features = ["testing"] }
 http-wire = { workspace = true, features = ["server"] }
 journal-lane = { workspace = true, features = ["testing"] }
 test-log = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

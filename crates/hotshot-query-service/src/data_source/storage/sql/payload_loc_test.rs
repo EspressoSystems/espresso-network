@@ -8,7 +8,7 @@ use super::{testing::TmpDb, *};
 use crate::{
     availability::{BlockQueryData, LeafQueryData, PayloadQueryData},
     data_source::storage::{
-        AvailabilityStorage, ExplorerStorage, UpdateAvailabilityStorage, blob::BlobLoc,
+        AvailabilityStorage, ExplorerStorage, NodeStorage, UpdateAvailabilityStorage, blob::BlobLoc,
     },
     explorer::{BlockDetail, BlockIdentifier},
     node::BlockId,
@@ -265,6 +265,76 @@ async fn test_connect_refuses_locators_without_blob_dir() {
     );
 
     connect(&db).await;
+}
+
+#[cfg(feature = "embedded-db")]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_connect_refuses_locators_without_blob_dir_on_a_reused_pool() {
+    let db = TmpDb::init().await.with_blobs();
+    let storage = connect(&db).await;
+    let (leaf, block) = block_at(1, 1, &[&[1]]).await;
+    store(&storage, &leaf, &block).await;
+
+    let mut plain = db.config().pool(storage.pool());
+    plain.blob = None;
+    let err = SqlStorage::connect(plain, StorageConnectionType::Query)
+        .await
+        .expect_err("connect must fail");
+    assert_eq!(
+        err.to_string(),
+        "payload_loc rows present but ESPRESSO_NODE_BLOB_DIR unset"
+    );
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_connect_refuses_the_blob_dir_of_another_database() {
+    let first = TmpDb::init().await.with_blobs();
+    connect(&first).await;
+
+    let second = TmpDb::init().await;
+    let cfg = second.config().blob(BlobCfg {
+        dir: first.blob_dir().unwrap().to_path_buf(),
+        share_retention: Duration::from_secs(60),
+    });
+    let err = SqlStorage::connect(cfg, StorageConnectionType::Query)
+        .await
+        .expect_err("connect must fail");
+    assert!(
+        format!("{err:#}").contains("belongs to a different database"),
+        "{err:#}"
+    );
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_connect_restores_the_id_of_a_replaced_blob_dir() {
+    let db = TmpDb::init().await.with_blobs();
+    drop(connect(&db).await);
+    let id_path = db.blob_dir().unwrap().join("ID");
+    let id = std::fs::read_to_string(&id_path).unwrap();
+    assert!(!id.is_empty());
+
+    std::fs::remove_file(&id_path).unwrap();
+    drop(connect(&db).await);
+
+    assert_eq!(std::fs::read_to_string(&id_path).unwrap(), id);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_shared_payload_without_its_own_locator_is_missing_in_sync_status() {
+    let db = TmpDb::init().await.with_blobs();
+    let storage = connect(&db).await;
+    let (leaf1, block1) = block_at(1, 7, &[&[9, 9]]).await;
+    let (leaf2, _) = block_at(2, 7, &[&[9, 9]]).await;
+    store(&storage, &leaf1, &block1).await;
+    let mut tx = storage.write().await.unwrap();
+    tx.insert_leaf(&leaf2).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = storage.read().await.unwrap();
+    let status = NodeStorage::<MockTypes>::sync_status_for_range(&mut tx, 1, 3)
+        .await
+        .unwrap();
+    assert_eq!(status.blocks.missing, 1);
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]

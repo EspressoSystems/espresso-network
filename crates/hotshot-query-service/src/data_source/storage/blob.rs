@@ -13,7 +13,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Weak},
+    sync::Arc,
     thread::JoinHandle,
     time::{Duration, Instant, SystemTime},
 };
@@ -36,6 +36,8 @@ const SEGMENT_BYTES: u64 = 1 << 30;
 const MAX_BATCH_BYTES: usize = 64 << 20;
 const IN_FLIGHT_BYTES: usize = 128 << 20;
 const SHARE_SYNC_INTERVAL: Duration = Duration::from_secs(1);
+const SHARE_GC_INTERVAL: Duration = Duration::from_secs(60);
+const ID_FILE: &str = "ID";
 
 #[derive(Clone, Debug)]
 pub struct BlobCfg {
@@ -116,6 +118,7 @@ pub type StagedBlobs = Vec<(u64, BlobLoc)>;
 
 pub struct BlobStore<F: JournalFs = StdFs> {
     fs: Arc<F>,
+    dir: PathBuf,
     share_retention: Duration,
     payload: Arc<BlobLane>,
     share: Arc<BlobLane>,
@@ -254,8 +257,43 @@ impl<F: JournalFs> BlobStore<F> {
         self.payload.segments.lock().bytes()
     }
 
+    /// Payload bytes that pruning can free: everything but the active segment.
+    pub fn sealed_payload_bytes(&self) -> u64 {
+        self.payload
+            .segments
+            .lock()
+            .sealed()
+            .iter()
+            .map(|meta| meta.bytes)
+            .sum()
+    }
+
     pub fn share_bytes(&self) -> u64 {
         self.share.segments.lock().bytes()
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// The id of the database this directory belongs to, if one was written.
+    pub fn read_id(&self) -> anyhow::Result<Option<String>> {
+        match std::fs::read_to_string(self.dir.join(ID_FILE)) {
+            Ok(id) => Ok(Some(id)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err).context("reading blob directory ID"),
+        }
+    }
+
+    /// Durably writes the id of the database this directory belongs to.
+    pub fn write_id(&self, id: &str) -> anyhow::Result<()> {
+        let path = self.dir.join(ID_FILE);
+        let tmp = self.dir.join("ID.tmp");
+        std::fs::write(&tmp, id).context("writing blob directory ID")?;
+        File::open(&tmp)?.sync_all()?;
+        std::fs::rename(&tmp, &path)?;
+        self.fs.sync_dir(&self.dir)?;
+        Ok(())
     }
 
     /// `open` with a chosen segment size, so tests can seal segments without gigabytes of data.
@@ -276,6 +314,7 @@ impl<F: JournalFs> BlobStore<F> {
         let (share, share_thread) = share;
         let store = Arc::new(Self {
             fs,
+            dir: cfg.dir,
             share_retention: cfg.share_retention,
             payload: Arc::new(payload),
             share: Arc::new(share),
@@ -286,7 +325,7 @@ impl<F: JournalFs> BlobStore<F> {
             _threads: JoinOnDrop(vec![payload_thread, share_thread]),
             _lock: lock,
         });
-        spawn_share_sync(Arc::downgrade(&store.share));
+        spawn_share_tasks(&store);
         Ok(store)
     }
 
@@ -604,15 +643,31 @@ fn expired<F: JournalFs>(
     Ok(old)
 }
 
-fn spawn_share_sync(share: Weak<BlobLane>) {
+/// Syncs the share lane every `SHARE_SYNC_INTERVAL` and unlinks expired share segments every
+/// `SHARE_GC_INTERVAL`, until the store is dropped.
+fn spawn_share_tasks<F: JournalFs>(store: &Arc<BlobStore<F>>) {
+    let lane = Arc::downgrade(&store.share);
+    let store = Arc::downgrade(store);
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(SHARE_SYNC_INTERVAL);
-        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut sync = tokio::time::interval(SHARE_SYNC_INTERVAL);
+        sync.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let start = tokio::time::Instant::now() + SHARE_GC_INTERVAL;
+        let mut gc = tokio::time::interval_at(start, SHARE_GC_INTERVAL);
+        gc.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
-            tick.tick().await;
-            // Ends once the store is dropped, so the lane's writer thread can exit.
-            let Some(lane) = share.upgrade() else { break };
-            lane.lane.request_sync();
+            // Each arm exits once the store is dropped, so the lane's writer thread can exit.
+            tokio::select! {
+                _ = sync.tick() => {
+                    let Some(lane) = lane.upgrade() else { break };
+                    lane.lane.request_sync();
+                },
+                _ = gc.tick() => {
+                    let Some(store) = store.upgrade() else { break };
+                    if let Err(err) = store.gc_shares_older_than(SystemTime::now()).await {
+                        tracing::warn!("blob store: share gc failed: {err:#}");
+                    }
+                },
+            }
         }
     });
 }
@@ -1118,5 +1173,44 @@ mod tests {
         for loc in &locs {
             assert!(env.fs.file_len(&env.payload_segment(loc.seq)) > 0);
         }
+    }
+
+    #[tokio::test]
+    async fn sealed_payload_bytes_exclude_the_active_segment() {
+        let env = Env::new();
+        let store = env.open(SEGMENT_BYTES).await;
+        store.append_payload(1, body(1)).await.unwrap();
+        assert_eq!(store.sealed_payload_bytes(), 0);
+        assert!(store.payload_bytes() > 0);
+        drop(store);
+
+        let env = Env::new();
+        let store = env.open(ROLL_EACH).await;
+        append_payloads(&store, &[1, 2]).await;
+        let segment = (SegmentHeader::LEN + format::FRAME_HEADER_LEN + body(1).len()) as u64;
+        assert!(store.sealed_payload_bytes() >= 2 * segment);
+        assert!(store.payload_bytes() > store.sealed_payload_bytes());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_share_segments_are_unlinked_without_a_pruner() {
+        let env = Env::new();
+        let store = env.open(ROLL_EACH).await;
+        for height in 1..=2 {
+            append_share_synced(&store, height, height as u8, height).await;
+        }
+        env.fs
+            .set_modified(&env.share_segment(1), SystemTime::now() - 2 * RETENTION);
+
+        let mut gone = false;
+        for _ in 0..2 * SHARE_GC_INTERVAL.as_secs() {
+            tokio::time::sleep(SHARE_SYNC_INTERVAL).await;
+            if store.read_share(1).await.unwrap().is_none() {
+                gone = true;
+                break;
+            }
+        }
+        assert!(gone, "share segment was never unlinked");
+        assert_eq!(store.read_share(2).await.unwrap(), Some(body(2)));
     }
 }

@@ -214,19 +214,30 @@ async fn test_pruning_gc_at_connect_reclaims_segments_after_a_crash() {
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn test_pruning_disk_usage_counts_payload_bytes() {
+async fn test_pruning_disk_usage_counts_sealed_payload_bytes() {
+    let db = TmpDb::init().await;
+    let (storage, _dir) = connect_small(&db, Duration::from_secs(3600)).await;
+    let before = storage.get_disk_usage().await.unwrap();
+    let blobs = storage.blob_store().unwrap();
+
+    blobs.append_payload(1, vec![0; 100_000]).await.unwrap();
+    seal_segments(&storage).await;
+
+    assert!(storage.get_disk_usage().await.unwrap() >= before + 100_000);
+}
+
+/// The active segment cannot be unlinked, so counting it would keep threshold pruning running
+/// past what pruning can free.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_pruning_disk_usage_ignores_the_active_payload_segment() {
     let db = TmpDb::init().await.with_blobs();
     let storage = connect(&db).await;
     let before = storage.get_disk_usage().await.unwrap();
 
-    storage
-        .blob_store()
-        .unwrap()
-        .append_payload(1, vec![0; 100_000])
-        .await
-        .unwrap();
+    let blobs = storage.blob_store().unwrap();
+    blobs.append_payload(1, vec![0; 100_000]).await.unwrap();
 
-    assert!(storage.get_disk_usage().await.unwrap() >= before + 100_000);
+    assert!(storage.get_disk_usage().await.unwrap() < before + 100_000);
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -271,4 +282,25 @@ async fn test_pruning_gc_at_connect_unlinks_expired_share_segments() {
         storage.blob_store().unwrap().read_share(1).await.unwrap(),
         None
     );
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_pruning_gc_at_connect_finishes_the_delete_before_unlinking() {
+    let db = TmpDb::init().await.with_blobs();
+    let storage = connect(&db).await;
+    let locs = store_blocks(&storage, &[1, 2]).await;
+    drop(storage);
+
+    // The process stops after the pruned height commits and before the delete batch.
+    let storage = connect(&db).await;
+    let mut tx = storage.write().await.unwrap();
+    tx.save_pruned_height(2).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(count(&storage, "SELECT count(*) FROM payload_loc").await, 2);
+    drop(storage);
+
+    let storage = connect(&db).await;
+    assert_eq!(count(&storage, "SELECT count(*) FROM payload_loc").await, 0);
+    assert_eq!(count(&storage, "SELECT count(*) FROM header").await, 0);
+    assert_eq!(readable(&storage, &locs).await, [false, false]);
 }

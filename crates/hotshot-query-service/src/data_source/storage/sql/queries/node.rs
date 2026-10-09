@@ -134,19 +134,8 @@ where
     where
         ID: Into<BlockId<Types>> + Send + Sync,
     {
-        let id = id.into();
-        let by_height = match id {
-            BlockId::Number(height) => Some(height as u64),
-            _ => None,
-        };
-        if let Some(height) = by_height
-            && let Some(data) = self.read_blob_share(height).await?
-        {
-            return decode_share(&data);
-        }
-
         let mut query = QueryBuilder::default();
-        let where_clause = query.header_where_clause(id)?;
+        let where_clause = query.header_where_clause(id.into())?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
@@ -159,11 +148,9 @@ where
             .query_as::<(i64, Option<Vec<u8>>)>(&sql)
             .fetch_one(self.as_mut())
             .await?;
-        let blob = match by_height {
-            Some(_) => None,
-            None => self.read_blob_share(height as u64).await?,
-        };
-        match blob.or(inline) {
+        // Only a height with a header row has a share; the lane may hold records of heights that
+        // were pruned or whose transaction did not commit.
+        match self.read_blob_share(height as u64).await?.or(inline) {
             Some(data) => decode_share(&data),
             None => MissingSnafu.fail(),
         }
@@ -175,11 +162,16 @@ where
         to: usize,
     ) -> QueryResult<SyncStatusQueryData> {
         // A block can be missing if its corresponding header is missing or if the block's pyaload
-        // information is missing.
+        // information is missing. A non-empty payload is only there if its bytes are inline or
+        // this height has a locator: the payload row is shared by every height with the same
+        // payload, and a locator is per height.
         let blocks = self
             .sync_status_ranges(
-                "header AS h JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, \
-                 p.ns_table)",
+                "(SELECT h.height AS height
+                    FROM header AS h
+                    JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
+                    LEFT JOIN payload_loc AS pl ON pl.height = h.height
+                   WHERE p.size = 0 OR length(p.data) > 0 OR pl.loc IS NOT NULL) AS present",
                 "height",
                 from,
                 to,

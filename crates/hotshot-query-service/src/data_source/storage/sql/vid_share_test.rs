@@ -129,3 +129,22 @@ async fn test_share_is_inline_without_blobs() {
     assert_eq!(inline_shares(&storage).await, 1);
     assert_eq!(share(&storage, BlockId::Number(1)).await.unwrap(), vid.2);
 }
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_share_without_a_header_row_is_not_served() {
+    let db = TmpDb::init().await.with_blobs();
+    let storage = connect(&db).await;
+    let (_, _, orphan) = vid_at(5, &[1, 2, 3]).await;
+
+    // As left by a write transaction that did not commit.
+    let blobs = storage.blob_store().unwrap();
+    blobs.append_share(5, bincode::serialize(&orphan).unwrap());
+    while blobs.read_share(5).await.unwrap().is_none() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert!(matches!(
+        share(&storage, BlockId::Number(5)).await.unwrap_err(),
+        QueryError::NotFound
+    ));
+}
