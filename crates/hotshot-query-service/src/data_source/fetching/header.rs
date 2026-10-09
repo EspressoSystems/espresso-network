@@ -287,6 +287,7 @@ where
     // header and leaf.
     match req {
         BlockId::Number(n) => {
+            let callbacks = callbacks.chain(leaf_derived(&fetcher));
             fetch_leaf_with_callbacks(
                 fetcher,
                 n.into(),
@@ -356,8 +357,26 @@ where
     }
 
     // Fetch the headers (in fact, the entire leaves) first, then fetch the remaining payload data.
+    let callbacks = callbacks.chain(leaf_derived(&fetcher));
     fetch_leaf_range_with_callbacks(fetcher, req, callbacks.map(Into::into).collect::<Vec<_>>())
         .await?;
 
     Ok(())
+}
+
+/// Callbacks for the data derived from a leaf, which is missing whenever the leaf is.
+fn leaf_derived<Types, S, P>(
+    fetcher: &Arc<Fetcher<Types, S, P>>,
+) -> [HeaderCallback<Types, S, P>; 2]
+where
+    Types: NodeType,
+{
+    [
+        HeaderCallback::Payload {
+            fetcher: fetcher.clone(),
+        },
+        HeaderCallback::VidCommon {
+            fetcher: fetcher.clone(),
+        },
+    ]
 }

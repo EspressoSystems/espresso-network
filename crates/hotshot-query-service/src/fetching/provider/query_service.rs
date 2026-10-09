@@ -887,6 +887,69 @@ mod test {
         assert_eq!(leaf.header(), block.header());
     }
 
+    /// Blocks fetched in height order, as the aggregator does after a storage loss, store each
+    /// parent leaf before the child asks for it, so the parent fetch never requests VID common.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_fetch_block_backfills_vid_common() {
+        let mut network = MockNetwork::<MockDataSource>::init().await;
+        let (port, _server) = serve_availability(network.data_source()).await;
+        let db = TmpDb::init().await;
+        let provider = Provider::new(trusted_provider(port));
+        let data_source = data_source(&db, &provider).await;
+
+        network.start().await;
+
+        // Distinct payloads, so one VID common row cannot cover several heights.
+        let mut heights = Vec::new();
+        for i in 0..3u8 {
+            let tx = mock_transaction(vec![i; 3]);
+            network.submit_transaction(tx.clone()).await;
+            let height = network
+                .data_source()
+                .get_block_containing_transaction(tx.commit())
+                .await
+                .await
+                .block
+                .height();
+            tracing::info!(height, "transaction sequenced");
+            heights.push(height);
+        }
+        let end = heights.last().unwrap() + 1;
+        let truth = network.data_source();
+
+        // Learn the block height without `append`, whose parent fetch would walk back the chain.
+        let mut tx = data_source.write().await.unwrap();
+        tx.insert_leaf(&truth.get_leaf(end as usize).await.await)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        for h in 1..end {
+            data_source.get_block(h as usize).await.await;
+        }
+        let later = truth.get_leaf(end as usize + 1).await.await;
+        data_source.append(later.into()).await.unwrap();
+
+        for h in heights {
+            timeout(Duration::from_secs(10), async {
+                loop {
+                    let mut tx = data_source.read().await.unwrap();
+                    if tx
+                        .get_vid_common(BlockId::<MockTypes>::Number(h as usize))
+                        .await
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    drop(tx);
+                    sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("VID common for block {h} was never fetched"));
+        }
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_fetch_different_blocks_same_payload() {
         // Create the consensus network.
