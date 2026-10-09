@@ -105,7 +105,7 @@ impl<E: ClientError, VER: StaticVersionType> SocketRequest<E, VER> {
                     .and_then(|header| header.to_str().ok())
             {
                 tracing::info!(from = %self.url, to = %location, "WS handshake following redirect");
-                self.url.set_path(location);
+                self.follow_redirect(location)?;
                 continue;
             }
             return Err(match err {
@@ -135,6 +135,31 @@ impl<E: ClientError, VER: StaticVersionType> SocketRequest<E, VER> {
         self,
     ) -> Result<Connection<FromServer, Unsupported, E, VER>, E> {
         self.connect().await
+    }
+
+    /// Point the request at the redirect target named by `location`.
+    ///
+    /// `Location` is a URL reference (RFC 3986 4.1), not a path: it can be relative (`target`,
+    /// `../target`), root-relative (`/ws`) or absolute (`https://other.example/ws`). Resolving it
+    /// against the current URL is what turns each of those into the right next request URL.
+    fn follow_redirect(&mut self, location: &str) -> Result<(), E> {
+        let mut url = self.url.join(location).map_err(|err| {
+            E::catch_all(
+                reqwest::StatusCode::BAD_REQUEST,
+                format!("invalid redirect location {location}: {err}"),
+            )
+        })?;
+        // An absolute location carries its own scheme, usually http/https, but the target is
+        // still a WebSocket endpoint.
+        let scheme = socket_scheme(url.scheme());
+        url.set_scheme(&scheme).map_err(|()| {
+            E::catch_all(
+                reqwest::StatusCode::BAD_REQUEST,
+                format!("cannot redirect to {url} as {scheme}"),
+            )
+        })?;
+        self.url = url;
+        Ok(())
     }
 }
 
