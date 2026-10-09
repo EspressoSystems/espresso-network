@@ -334,8 +334,21 @@ pub fn prune<F: JournalFs>(
     Ok(Some(segments.lock().bytes()))
 }
 
+/// How a lane uses its records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaneMode {
+    /// Every segment starts with a `Kind::SNAPSHOT` frame. Recovery returns the newest segment's
+    /// records and drops a newest segment that holds none.
+    Snapshot,
+    /// Independent records, read back through an index or a scan.
+    Append,
+}
+
 pub struct LaneConfig {
     pub stream: Stream,
+    pub mode: LaneMode,
+    /// Whether a frame's kind tag is recognized. An unrecognized tag ends a scan like a torn tail.
+    pub known_kind: fn(u8) -> bool,
     pub segment_bytes: u64,
     pub max_key_span: u64,
     pub max_batch_bytes: usize,
@@ -525,13 +538,14 @@ fn read_up_to(r: &mut dyn Read, buf: &mut [u8]) -> io::Result<usize> {
 
 /// Scans one segment frame by frame over a stream instead of loading it whole, so a (possibly
 /// gigabyte-sized) data segment's recovery scan holds at most one frame in memory at a time.
-/// `format::decode_frame` still does the actual crc/lsn/kind validation, on a per-frame buffer
-/// reused (cleared and resized) across iterations.
+/// `format::decode_frame` still does the actual crc/lsn validation, on a per-frame buffer reused
+/// (cleared and resized) across iterations; `known_kind` rejects unrecognized tags.
 fn read_segment<F: JournalFs>(
     fs: &F,
     path: &Path,
     seq: u64,
     stream: Stream,
+    known_kind: fn(u8) -> bool,
     collect_records: bool,
 ) -> anyhow::Result<SegmentRead> {
     let file_len = fs.len(path)?;
@@ -583,7 +597,7 @@ fn read_segment<F: JournalFs>(
         }
 
         match format::decode_frame(&frame_buf, expect_lsn) {
-            Ok((frame_header, body, total)) => {
+            Ok((frame_header, body, total)) if known_kind(frame_header.kind.0) => {
                 if collect_records {
                     records.push((frame_header, body.to_vec()));
                 }
@@ -600,7 +614,7 @@ fn read_segment<F: JournalFs>(
                 expect_lsn = frame_header.lsn + 1;
                 consumed += total as u64;
             },
-            Err(_) => break ScanEnd::Torn(consumed),
+            _ => break ScanEnd::Torn(consumed),
         }
     };
 
@@ -621,8 +635,9 @@ pub(crate) fn frame_locations<F: JournalFs>(
     dir: &Path,
     stream: Stream,
     seq: u64,
+    known_kind: fn(u8) -> bool,
 ) -> anyhow::Result<Vec<(FrameHeader, Location)>> {
-    Ok(read_segment(fs, &segment_path(dir, seq), seq, stream, false)?.locations)
+    Ok(read_segment(fs, &segment_path(dir, seq), seq, stream, known_kind, false)?.locations)
 }
 
 /// True only for a segment that was created but never durably written to: shorter than a header,
@@ -637,16 +652,23 @@ fn is_unwritten_segment<F: JournalFs>(fs: &F, path: &Path) -> anyhow::Result<boo
     Ok(fs.read_header(path)?.iter().all(|&b| b == 0))
 }
 
-/// Recovers one stream's segments: validates headers, truncates a torn newest segment, and (wal
-/// only) returns the records to replay `State` from.
+/// Recovers one stream's segments: validates headers, truncates a torn newest segment, and (in
+/// `LaneMode::Snapshot` only) returns the records to replay `State` from.
 ///
-/// The newest segment must contain at least one acked record, i.e. (wal only) start with a
-/// `Snapshot`; if it was never written to (see `is_unwritten_segment`) or, for wal, is a valid
-/// header with zero parseable records (a torn snapshot write), nothing in it was ever acked, so it
-/// is a candidate to unlink and retry with the segment behind it. Nothing is actually unlinked
-/// until a keepable segment is found: an error validating the fallback must not leave a segment
-/// deleted with no replacement.
-pub fn recover<F: JournalFs>(fs: &F, dir: &Path, stream: Stream) -> anyhow::Result<Recovered> {
+/// The newest segment must contain at least one acked record, i.e. (snapshot mode only) start with
+/// a `Snapshot`; if it was never written to (see `is_unwritten_segment`) or, in snapshot mode, is a
+/// valid header with zero parseable records (a torn snapshot write), nothing in it was ever acked,
+/// so it is a candidate to unlink and retry with the segment behind it. Nothing is actually
+/// unlinked until a keepable segment is found: an error validating the fallback must not leave a
+/// segment deleted with no replacement.
+pub fn recover<F: JournalFs>(
+    fs: &F,
+    dir: &Path,
+    stream: Stream,
+    mode: LaneMode,
+    known_kind: fn(u8) -> bool,
+) -> anyhow::Result<Recovered> {
+    let snapshots = mode == LaneMode::Snapshot;
     let mut paths: Vec<(u64, PathBuf)> = fs
         .list(dir)?
         .into_iter()
@@ -699,7 +721,7 @@ pub fn recover<F: JournalFs>(fs: &F, dir: &Path, stream: Stream) -> anyhow::Resu
             continue;
         }
 
-        let read = read_segment(fs, &path, seq, stream, stream == Stream::Wal)?;
+        let read = read_segment(fs, &path, seq, stream, known_kind, snapshots)?;
 
         if let Some(expected) = expect_next_lsn {
             anyhow::ensure!(
@@ -710,18 +732,22 @@ pub fn recover<F: JournalFs>(fs: &F, dir: &Path, stream: Stream) -> anyhow::Resu
             );
         }
 
-        if stream == Stream::Wal && read.records.is_empty() {
-            tracing::warn!(seq, "journal: dropping newest wal segment: no snapshot");
+        if snapshots && read.records.is_empty() {
+            tracing::warn!(
+                ?stream,
+                seq,
+                "journal: dropping newest segment: no snapshot"
+            );
             expect_next_lsn = Some(read.header.first_lsn);
             to_remove.push(path);
             paths.pop();
             continue;
         }
 
-        if stream == Stream::Wal {
+        if snapshots {
             anyhow::ensure!(
-                read.records[0].0.kind == Kind::Snapshot,
-                "wal segment {seq} has records but the first is {:?}, not Snapshot",
+                read.records[0].0.kind == Kind::SNAPSHOT,
+                "{stream:?} segment {seq} has records but the first is {:?}, not Snapshot",
                 read.records[0].0.kind
             );
         }
@@ -780,11 +806,7 @@ pub fn recover<F: JournalFs>(fs: &F, dir: &Path, stream: Stream) -> anyhow::Resu
         segments,
         next_seq: newest_seq + 1,
         next_lsn: read.next_lsn,
-        wal_records: if stream == Stream::Wal {
-            read.records
-        } else {
-            vec![]
-        },
+        wal_records: read.records,
     })
 }
 
@@ -891,7 +913,7 @@ pub(crate) fn spawn_lane<F: JournalFs>(
     if let Some(body) = seed {
         check_snapshot_size(cfg.stream, &body, cfg.max_snapshot_bytes);
         let mut frame = Vec::new();
-        format::encode_frame(&mut frame, next_lsn, 0, Kind::Snapshot, &body);
+        format::encode_frame(&mut frame, next_lsn, 0, Kind::SNAPSHOT, &body);
         active
             .file
             .write_all_at(active.offset, &frame)
@@ -1066,7 +1088,7 @@ impl<F: JournalFs> Writer<F> {
 
             let over_bytes = self.active.offset.saturating_sub(self.active.snapshot_end)
                 >= self.cfg.segment_bytes;
-            let over_keys = self.cfg.stream == Stream::Wal
+            let over_keys = self.cfg.mode == LaneMode::Snapshot
                 && self
                     .active
                     .max_key
@@ -1163,7 +1185,7 @@ impl<F: JournalFs> Writer<F> {
         if let Some(body) = snapshot {
             check_snapshot_size(stream, &body, max_snapshot_bytes);
             let mut frame = Vec::new();
-            format::encode_frame(&mut frame, new_first_lsn, 0, Kind::Snapshot, &body);
+            format::encode_frame(&mut frame, new_first_lsn, 0, Kind::SNAPSHOT, &body);
             if new_active
                 .file
                 .write_all_at(new_active.offset, &frame)
@@ -1370,6 +1392,24 @@ mod tests {
 
     use super::{mem::MemFs, *};
 
+    const ACTION: Kind = Kind(2);
+    const VID: Kind = Kind(11);
+
+    fn known(kind: u8) -> bool {
+        matches!(kind, 1 | 2 | 11)
+    }
+
+    fn mode(stream: Stream) -> LaneMode {
+        match stream {
+            Stream::Wal => LaneMode::Snapshot,
+            Stream::Data => LaneMode::Append,
+        }
+    }
+
+    fn recover<F: JournalFs>(fs: &F, dir: &Path, stream: Stream) -> anyhow::Result<Recovered> {
+        super::recover(fs, dir, stream, mode(stream), known)
+    }
+
     fn meta(stream: Stream, seq: u64, bytes: u64, max_key: u64) -> SegmentMeta {
         SegmentMeta {
             stream,
@@ -1455,6 +1495,8 @@ mod tests {
     fn cfg(stream: Stream) -> LaneConfig {
         LaneConfig {
             stream,
+            mode: mode(stream),
+            known_kind: known,
             segment_bytes: 10_000,
             max_key_span: 10_000,
             max_batch_bytes: 4096,
@@ -1489,7 +1531,7 @@ mod tests {
         )
         .unwrap();
 
-        let lsn = lane.enqueue(1, Kind::Vid, b"hello".to_vec(), Class::Durable, None);
+        let lsn = lane.enqueue(1, VID, b"hello".to_vec(), Class::Durable, None);
         lane.wait_durable(lsn).await.unwrap();
 
         // Simulate a crash: nothing unsynced should exist, since the ack implies fsync happened.
@@ -1519,7 +1561,7 @@ mod tests {
         .unwrap();
 
         for key in 1..=2000u64 {
-            let lsn = lane.enqueue(key, Kind::Vid, vec![0u8; 4], Class::Durable, None);
+            let lsn = lane.enqueue(key, VID, vec![0u8; 4], Class::Durable, None);
             lane.wait_durable(lsn).await.unwrap();
             let max_key = segments
                 .lock()
@@ -1571,7 +1613,7 @@ mod tests {
         )
         .unwrap();
         for i in 0..5u64 {
-            let lsn = lane.enqueue(i, Kind::Vid, vec![i as u8; 4], Class::Durable, None);
+            let lsn = lane.enqueue(i, VID, vec![i as u8; 4], Class::Durable, None);
             lane.wait_durable(lsn).await.unwrap();
         }
         let recovered = recover(&*fs, &dir, Stream::Data).unwrap();
@@ -1626,7 +1668,7 @@ mod tests {
                 *n += 1;
                 lane.enqueue(
                     key,
-                    Kind::Action,
+                    ACTION,
                     key.to_le_bytes().to_vec(),
                     Class::Durable,
                     None,
@@ -1639,7 +1681,7 @@ mod tests {
         let recovered = recover(&*fs, &dir, Stream::Wal).unwrap();
         assert_eq!(
             recovered.wal_records.first().map(|(h, _)| h.kind),
-            Some(Kind::Snapshot)
+            Some(Kind::SNAPSHOT)
         );
         // `scan` already enforces lsn-consecutiveness; the count check is a sanity check on top.
         assert_eq!(
@@ -1741,8 +1783,8 @@ mod tests {
         let dir = std::path::PathBuf::from("/wal4");
 
         let mut seg1 = Vec::new();
-        format::encode_frame(&mut seg1, 1, 0, Kind::Snapshot, b"snap");
-        format::encode_frame(&mut seg1, 2, 7, Kind::Action, b"a");
+        format::encode_frame(&mut seg1, 1, 0, Kind::SNAPSHOT, b"snap");
+        format::encode_frame(&mut seg1, 2, 7, ACTION, b"a");
         write_segment(
             &fs,
             &dir,
@@ -1793,9 +1835,9 @@ mod tests {
         let dir = std::path::PathBuf::from("/wal5");
 
         let mut seg = Vec::new();
-        format::encode_frame(&mut seg, 1, 0, Kind::Snapshot, b"snap");
+        format::encode_frame(&mut seg, 1, 0, Kind::SNAPSHOT, b"snap");
         let clean_end = seg.len();
-        format::encode_frame(&mut seg, 2, 7, Kind::Action, b"torn-record");
+        format::encode_frame(&mut seg, 2, 7, ACTION, b"torn-record");
         seg.truncate(seg.len() - 3); // torn tail: the second frame's crc no longer matches.
 
         write_segment(
@@ -1813,7 +1855,7 @@ mod tests {
         let recovered = recover(&fs, &dir, Stream::Wal).unwrap();
         assert_eq!(
             recovered.wal_records.first().map(|(h, _)| h.kind),
-            Some(Kind::Snapshot)
+            Some(Kind::SNAPSHOT)
         );
         assert_eq!(recovered.wal_records.len(), 1);
         assert_eq!(recovered.next_lsn, 2);
@@ -1837,9 +1879,9 @@ mod tests {
         };
 
         let mut seg = Vec::new();
-        format::encode_frame(&mut seg, 1, 0, Kind::Snapshot, b"snap");
+        format::encode_frame(&mut seg, 1, 0, Kind::SNAPSHOT, b"snap");
         let clean_end = seg.len();
-        format::encode_frame(&mut seg, 2, 7, Kind::Action, b"x");
+        format::encode_frame(&mut seg, 2, 7, ACTION, b"x");
 
         // A final frame whose length exactly fills the file is valid.
         let exact = std::path::PathBuf::from("/wal6-exact");

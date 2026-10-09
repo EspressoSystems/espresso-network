@@ -57,12 +57,12 @@ use crate::{
     persistence::{
         fs as side_fs,
         journal::{
-            format::{Class, Kind, ScanEnd, SegmentHeader, Stream},
+            format::{Class, ScanEnd, SegmentHeader, Stream},
             lane::{
-                DataIndex, JournalFs, Lane, LaneConfig, LaneMetrics, SegmentMeta, Segments,
-                SnapshotHook, StdFs,
+                DataIndex, JournalFs, Lane, LaneConfig, LaneMetrics, LaneMode, SegmentMeta,
+                Segments, SnapshotHook, StdFs,
             },
-            state::{Record, Replay, ReplayLeaf, State},
+            state::{Kind, Record, Replay, ReplayLeaf, State},
         },
         persistence_metrics::PersistenceMetricsValue,
         sql::{self, DecidedLeaf, decide_events_from_chain, within_gap_fill_horizon},
@@ -455,17 +455,21 @@ impl Persistence {
         let (wal_recovered, data_recovered) = {
             let fs = std_fs.clone();
             let dir = wal_dir.clone();
-            let wal = tokio::task::spawn_blocking(move || lane::recover(&*fs, &dir, Stream::Wal))
-                .await
-                .context("wal recovery task panicked")?
-                .context("recovering wal stream")?;
+            let wal = tokio::task::spawn_blocking(move || {
+                lane::recover(&*fs, &dir, Stream::Wal, LaneMode::Snapshot, Kind::is_known)
+            })
+            .await
+            .context("wal recovery task panicked")?
+            .context("recovering wal stream")?;
 
             let fs = std_fs.clone();
             let dir = data_dir.clone();
-            let data = tokio::task::spawn_blocking(move || lane::recover(&*fs, &dir, Stream::Data))
-                .await
-                .context("data recovery task panicked")?
-                .context("recovering data stream")?;
+            let data = tokio::task::spawn_blocking(move || {
+                lane::recover(&*fs, &dir, Stream::Data, LaneMode::Append, Kind::is_known)
+            })
+            .await
+            .context("data recovery task panicked")?
+            .context("recovering data stream")?;
             (wal, data)
         };
 
@@ -475,7 +479,8 @@ impl Persistence {
         let replay_started = Instant::now();
         let mut state = State::default();
         for (header, body) in &wal_recovered.wal_records {
-            let record = Record::decode(header.kind, header.key, body)
+            let kind = Kind::from_u8(header.kind.0).context("unknown wal record kind")?;
+            let record = Record::decode(kind, header.key, body)
                 .context("decoding wal record during replay")?;
             match record {
                 Record::Snapshot(snapshot) => state = *snapshot,
@@ -530,6 +535,8 @@ impl Persistence {
             wal_dir.clone(),
             LaneConfig {
                 stream: Stream::Wal,
+                mode: LaneMode::Snapshot,
+                known_kind: Kind::is_known,
                 segment_bytes: WAL_SEGMENT_BYTES,
                 max_key_span: WAL_MAX_VIEW_SPAN,
                 max_batch_bytes: WAL_MAX_BATCH_BYTES,
@@ -548,6 +555,8 @@ impl Persistence {
             data_dir.clone(),
             LaneConfig {
                 stream: Stream::Data,
+                mode: LaneMode::Append,
+                known_kind: Kind::is_known,
                 segment_bytes: DATA_SEGMENT_BYTES,
                 max_key_span: u64::MAX,
                 max_batch_bytes: DATA_MAX_BATCH_BYTES,
@@ -603,7 +612,7 @@ impl Persistence {
         let (lsn, finalized) = {
             let mut state = self.inner.state.lock();
             let finalized = state.apply(&rec);
-            let lsn = self.inner.wal.enqueue(view, kind, body, class, None);
+            let lsn = self.inner.wal.enqueue(view, kind.into(), body, class, None);
             (lsn, finalized)
         };
         if let Some(finalized) = finalized {
@@ -636,7 +645,7 @@ impl Persistence {
         let lsn = self
             .inner
             .data
-            .enqueue(view, kind, body, class, Some(permit));
+            .enqueue(view, kind.into(), body, class, Some(permit));
         if class == Class::Durable {
             self.inner.data.wait_durable(lsn).await?;
         }
@@ -734,7 +743,7 @@ impl Persistence {
         let Some(index) = &self.inner.replay_index else {
             return self.scan_for(Stream::Data, kind, view).await;
         };
-        let Some(location) = index.lock().get(&(view.u64(), kind)).copied() else {
+        let Some(location) = index.lock().get(&(view.u64(), kind.into())).copied() else {
             return Ok(None);
         };
         let path = lane::segment_path(&self.inner.data_dir, location.seq);
@@ -989,13 +998,19 @@ fn find_in_segment(
         "segment shorter than its header"
     );
     let header = SegmentHeader::decode(bytes).context("corrupt segment header")?;
+    let kind = format::Kind::from(kind);
     let mut found = None;
-    let (end, ..) = format::scan(&bytes[SegmentHeader::LEN..], header.first_lsn, |h, body| {
-        if h.kind == kind && h.key == key {
-            found = Some(body.to_vec());
-        }
-        Ok(())
-    })?;
+    let (end, ..) = format::scan(
+        &bytes[SegmentHeader::LEN..],
+        header.first_lsn,
+        Kind::is_known,
+        |h, body| {
+            if h.kind == kind && h.key == key {
+                found = Some(body.to_vec());
+            }
+            Ok(())
+        },
+    )?;
     if let ScanEnd::Torn(offset) = end {
         ensure!(!sealed, "sealed segment corrupt at frame offset {offset}");
     }
@@ -1021,7 +1036,13 @@ async fn index_unreplayed(
     let frames = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<_>> {
         let mut frames = Vec::new();
         for seq in seqs {
-            frames.extend(lane::frame_locations(&*fs, &dir, Stream::Data, seq)?);
+            frames.extend(lane::frame_locations(
+                &*fs,
+                &dir,
+                Stream::Data,
+                seq,
+                Kind::is_known,
+            )?);
         }
         Ok(frames)
     })
@@ -1625,7 +1646,11 @@ mod tests {
             vec![(1, Some(carried)), (2, Some(obtained))]
         );
         let index = storage.inner.replay_index.as_ref().unwrap().lock();
-        assert!(index.keys().all(|(_, kind)| *kind != Kind::PendingPayload));
+        assert!(
+            index
+                .keys()
+                .all(|(_, kind)| *kind != Kind::PendingPayload.into())
+        );
         assert!(storage.inner.pending_payloads.lock().by_view.is_empty());
     }
 
@@ -1783,8 +1808,8 @@ mod tests {
             prev_max_key: 0,
         };
         let mut seg = header.encode().to_vec();
-        format::encode_frame(&mut seg, 1, 5, Kind::Da, b"five");
-        format::encode_frame(&mut seg, 2, 6, Kind::Da, b"six");
+        format::encode_frame(&mut seg, 1, 5, Kind::Da.into(), b"five");
+        format::encode_frame(&mut seg, 2, 6, Kind::Da.into(), b"six");
         let last = seg.len() - 1;
         seg[last] ^= 0xff;
 

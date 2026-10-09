@@ -31,47 +31,14 @@ pub enum Class {
     Enqueue,
 }
 
-/// Tag identifying which `Record` variant a frame's payload decodes to. See the record-kind
-/// mapping table in the design doc for the trait method that produces each one.
-#[repr(u8)]
+/// Opaque record tag stored in each frame header. The lane layer never interprets it, except for
+/// `Kind::SNAPSHOT` on `LaneMode::Snapshot` lanes. `journal/state.rs` maps it to record types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Kind {
-    Snapshot = 1,
-    Action = 2,
-    HighQc2 = 3,
-    Proposal = 4,
-    Leaf = 5,
-    Cert2 = 6,
-    StateCert = 7,
-    Upgrade = 8,
-    Eqc = 9,
-    NextEpochQc = 10,
-    Vid = 11,
-    Da = 12,
-    Processed = 13,
-    PendingPayload = 14,
-}
+pub struct Kind(pub u8);
 
 impl Kind {
-    fn from_u8(b: u8) -> Option<Self> {
-        Some(match b {
-            1 => Self::Snapshot,
-            2 => Self::Action,
-            3 => Self::HighQc2,
-            4 => Self::Proposal,
-            5 => Self::Leaf,
-            6 => Self::Cert2,
-            7 => Self::StateCert,
-            8 => Self::Upgrade,
-            9 => Self::Eqc,
-            10 => Self::NextEpochQc,
-            11 => Self::Vid,
-            12 => Self::Da,
-            13 => Self::Processed,
-            14 => Self::PendingPayload,
-            _ => return None,
-        })
-    }
+    /// Full-state record that starts every segment of a `LaneMode::Snapshot` lane.
+    pub const SNAPSHOT: Self = Self(1);
 }
 
 const SEGMENT_MAGIC: u32 = u32::from_le_bytes(*b"ESPJ");
@@ -161,7 +128,7 @@ pub fn encode_frame(out: &mut Vec<u8>, lsn: Lsn, key: u64, kind: Kind, body: &[u
     out.extend_from_slice(&(body.len() as u32).to_le_bytes());
     out.extend_from_slice(&lsn.to_le_bytes());
     out.extend_from_slice(&key.to_le_bytes());
-    out.push(kind as u8);
+    out.push(kind.0);
     out.extend_from_slice(&[0u8; 7]);
     out.extend_from_slice(body);
     let crc = crc32fast::hash(&out[start + 4..]);
@@ -192,10 +159,7 @@ pub fn decode_frame(
     }
     let lsn = u64::from_le_bytes(buf[8..16].try_into().unwrap());
     let key = u64::from_le_bytes(buf[16..24].try_into().unwrap());
-    let Some(kind) = Kind::from_u8(buf[24]) else {
-        // crc passed but the kind tag is unrecognized: treat as corruption, not a new format.
-        return Err(FrameError::Crc);
-    };
+    let kind = Kind(buf[24]);
     if lsn != expect_lsn {
         return Err(FrameError::Lsn {
             expected: expect_lsn,
@@ -223,11 +187,13 @@ pub enum ScanEnd {
 }
 
 /// Scans consecutive frames starting at `first_lsn`, calling `f` on each valid one in order. Never
-/// reads past the first invalid frame. Returns the scan end, the lsn the next frame must have, and
+/// reads past the first invalid frame; a frame whose kind tag fails `known_kind` is invalid (crc
+/// passed but the tag is unrecognized: corruption, not a new format). Returns the scan end, the lsn the next frame must have, and
 /// the max `key` seen.
 pub fn scan(
     buf: &[u8],
     first_lsn: Lsn,
+    known_kind: fn(u8) -> bool,
     mut f: impl FnMut(&FrameHeader, &[u8]) -> anyhow::Result<()>,
 ) -> anyhow::Result<(ScanEnd, Lsn, u64)> {
     let mut offset = 0usize;
@@ -238,13 +204,13 @@ pub fn scan(
             return Ok((ScanEnd::Clean(offset as u64), expect_lsn, max_key));
         }
         match decode_frame(&buf[offset..], expect_lsn) {
-            Ok((header, body, consumed)) => {
+            Ok((header, body, consumed)) if known_kind(header.kind.0) => {
                 f(&header, body)?;
                 max_key = max_key.max(header.key);
                 expect_lsn = header.lsn + 1;
                 offset += consumed;
             },
-            Err(_) => return Ok((ScanEnd::Torn(offset as u64), expect_lsn, max_key)),
+            _ => return Ok((ScanEnd::Torn(offset as u64), expect_lsn, max_key)),
         }
     }
 }
@@ -252,6 +218,12 @@ pub fn scan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ACTION: Kind = Kind(2);
+
+    fn known(kind: u8) -> bool {
+        kind == ACTION.0
+    }
 
     fn frame(lsn: Lsn, key: u64, kind: Kind, body: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
@@ -261,21 +233,21 @@ mod tests {
 
     #[test]
     fn decode_roundtrip() {
-        let buf = frame(3, 7, Kind::Action, b"hello");
+        let buf = frame(3, 7, ACTION, b"hello");
         let (header, body, consumed) = decode_frame(&buf, 3).unwrap();
         assert_eq!(header.lsn, 3);
         assert_eq!(header.key, 7);
-        assert_eq!(header.kind, Kind::Action);
+        assert_eq!(header.kind, ACTION);
         assert_eq!(body, b"hello");
         assert_eq!(consumed, buf.len());
     }
 
     #[test]
     fn scan_stops_on_lsn_gap() {
-        let mut buf = frame(1, 0, Kind::Action, b"a");
-        buf.extend(frame(3, 0, Kind::Action, b"b")); // lsn 2 missing
+        let mut buf = frame(1, 0, ACTION, b"a");
+        buf.extend(frame(3, 0, ACTION, b"b")); // lsn 2 missing
         let mut seen = vec![];
-        let (end, next_lsn, _) = scan(&buf, 1, |h, b| {
+        let (end, next_lsn, _) = scan(&buf, 1, known, |h, b| {
             seen.push((h.lsn, b.to_vec()));
             Ok(())
         })
@@ -283,28 +255,38 @@ mod tests {
         assert_eq!(seen, vec![(1, b"a".to_vec())]);
         assert_eq!(next_lsn, 2);
         assert!(
-            matches!(end, ScanEnd::Torn(n) if n == buf.len() as u64 - frame(3,0,Kind::Action,b"b").len() as u64)
+            matches!(end, ScanEnd::Torn(n) if n == buf.len() as u64 - frame(3,0,ACTION,b"b").len() as u64)
         );
     }
 
     #[test]
+    fn scan_stops_at_unknown_kind() {
+        let mut buf = frame(1, 0, ACTION, b"a");
+        let boundary = buf.len() as u64;
+        buf.extend(frame(2, 0, Kind(99), b"b"));
+        let (end, next_lsn, _) = scan(&buf, 1, known, |_, _| Ok(())).unwrap();
+        assert!(matches!(end, ScanEnd::Torn(n) if n == boundary));
+        assert_eq!(next_lsn, 2);
+    }
+
+    #[test]
     fn scan_clean_at_exact_end() {
-        let buf = frame(1, 0, Kind::Action, b"a");
-        let (end, next_lsn, _) = scan(&buf, 1, |_, _| Ok(())).unwrap();
+        let buf = frame(1, 0, ACTION, b"a");
+        let (end, next_lsn, _) = scan(&buf, 1, known, |_, _| Ok(())).unwrap();
         assert!(matches!(end, ScanEnd::Clean(n) if n == buf.len() as u64));
         assert_eq!(next_lsn, 2);
     }
 
     #[test]
     fn scan_torn_tail_at_every_truncation() {
-        let mut full = frame(1, 0, Kind::Action, b"a");
-        full.extend(frame(2, 0, Kind::Action, b"bcdef"));
-        let boundary = frame(1, 0, Kind::Action, b"a").len() as u64;
+        let mut full = frame(1, 0, ACTION, b"a");
+        full.extend(frame(2, 0, ACTION, b"bcdef"));
+        let boundary = frame(1, 0, ACTION, b"a").len() as u64;
 
         for len in 0..full.len() {
             let truncated = &full[..len];
             let mut seen = vec![];
-            let (end, ..) = scan(truncated, 1, |h, b| {
+            let (end, ..) = scan(truncated, 1, known, |h, b| {
                 seen.push((h.lsn, b.to_vec()));
                 Ok(())
             })
@@ -329,8 +311,8 @@ mod tests {
 
     #[test]
     fn scan_rejects_every_bit_flip_in_last_frame() {
-        let first = frame(1, 0, Kind::Action, b"a");
-        let second = frame(2, 0, Kind::Action, b"bc");
+        let first = frame(1, 0, ACTION, b"a");
+        let second = frame(2, 0, ACTION, b"bc");
         let boundary = first.len();
 
         for bit in 0..second.len() * 8 {
@@ -340,7 +322,7 @@ mod tests {
             buf.extend(corrupt);
 
             let mut seen = vec![];
-            let (end, ..) = scan(&buf, 1, |h, b| {
+            let (end, ..) = scan(&buf, 1, known, |h, b| {
                 seen.push((h.lsn, b.to_vec()));
                 Ok(())
             })
@@ -357,7 +339,7 @@ mod tests {
     fn oversize_len_stops_scan_without_reading_body() {
         let mut buf = vec![0u8; FRAME_HEADER_LEN];
         buf[4..8].copy_from_slice(&(u32::MAX).to_le_bytes());
-        let (end, next_lsn, max_key) = scan(&buf, 5, |_, _| Ok(())).unwrap();
+        let (end, next_lsn, max_key) = scan(&buf, 5, known, |_, _| Ok(())).unwrap();
         assert!(matches!(end, ScanEnd::Torn(0)));
         assert_eq!(next_lsn, 5);
         assert_eq!(max_key, 0);

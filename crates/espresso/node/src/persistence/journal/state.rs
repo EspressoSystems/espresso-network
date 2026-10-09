@@ -22,7 +22,7 @@ use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{ViewNumber, persistence::journal::format::Kind};
+use crate::{ViewNumber, persistence::journal::format};
 
 /// Gap-fill decides can finalize a state cert whose leaf view is behind the current anchor
 /// (matches `sql.rs` `DECIDE_GAP_FILL_HORIZON`); pending certs older than this many views behind
@@ -126,6 +126,63 @@ pub enum Record {
         header: Header,
         payload: Payload,
     },
+}
+
+/// Tag identifying which `Record` variant a frame's payload decodes to. Discriminants are the
+/// on-disk frame tags.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Kind {
+    Snapshot = 1,
+    Action = 2,
+    HighQc2 = 3,
+    Proposal = 4,
+    Leaf = 5,
+    Cert2 = 6,
+    StateCert = 7,
+    Upgrade = 8,
+    Eqc = 9,
+    NextEpochQc = 10,
+    Vid = 11,
+    Da = 12,
+    Processed = 13,
+    PendingPayload = 14,
+}
+
+// The lane layer recognizes snapshot frames by this tag.
+const _: () = assert!(Kind::Snapshot as u8 == format::Kind::SNAPSHOT.0);
+
+impl Kind {
+    pub fn from_u8(b: u8) -> Option<Self> {
+        Some(match b {
+            1 => Self::Snapshot,
+            2 => Self::Action,
+            3 => Self::HighQc2,
+            4 => Self::Proposal,
+            5 => Self::Leaf,
+            6 => Self::Cert2,
+            7 => Self::StateCert,
+            8 => Self::Upgrade,
+            9 => Self::Eqc,
+            10 => Self::NextEpochQc,
+            11 => Self::Vid,
+            12 => Self::Da,
+            13 => Self::Processed,
+            14 => Self::PendingPayload,
+            _ => return None,
+        })
+    }
+
+    /// `LaneConfig::known_kind` for the consensus journal lanes.
+    pub fn is_known(b: u8) -> bool {
+        Self::from_u8(b).is_some()
+    }
+}
+
+impl From<Kind> for format::Kind {
+    fn from(kind: Kind) -> Self {
+        Self(kind as u8)
+    }
 }
 
 impl Record {
