@@ -4945,15 +4945,23 @@ mod test {
 
         let mut expected = HashMap::<Address, U256>::new();
         let mut total_distributed = U256::ZERO;
+        let mut validators_by_epoch = HashMap::<u64, AuthenticatedValidatorMap>::new();
         for recorded in &chain.blocks[1..] {
             let leaf = recorded.leaf.leaf();
             let header = leaf.block_header();
             let height = header.height();
             let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
-            let validators: AuthenticatedValidatorMap = client
-                .get(&format!("node/validators/{epoch}"))
-                .send()
-                .await?;
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                validators_by_epoch.entry(*epoch)
+            {
+                entry.insert(
+                    client
+                        .get(&format!("node/validators/{epoch}"))
+                        .send()
+                        .await?,
+                );
+            }
+            let validators = &validators_by_epoch[&*epoch];
 
             match membership.epoch_block_reward(epoch) {
                 None => ensure!(*epoch <= 2, "epoch {epoch} pays no block reward"),
@@ -4973,7 +4981,7 @@ mod test {
                 header.total_reward_distributed().unwrap().0 == total_distributed,
                 "total_reward_distributed at {height}"
             );
-            assert_stakers_balances(client, height, &validators, &expected).await?;
+            assert_stakers_balances(client, height, validators, &expected).await?;
         }
         ensure!(!total_distributed.is_zero(), "the chain paid no rewards");
         Ok(())
@@ -12897,8 +12905,8 @@ mod test {
     }
 
     /// Rollups still fetch their namespaces from mainnet blocks before 0.6, proven with ADVZ
-    /// before 0.3 and AvidM after. Every namespace of replayed blocks of each version must prove
-    /// its transactions, and none of those blocks has a cert2.
+    /// before 0.3 and AvidM after. The first blocks of each version of a replayed chain must
+    /// prove each namespace's transactions, and no legacy block has a cert2.
     #[rstest]
     #[case::v2_v3("v2-v3")]
     #[case::v4("v4")]
@@ -12907,15 +12915,21 @@ mod test {
     async fn test_legacy_namespace_proofs(#[case] chain: &str) -> anyhow::Result<()> {
         let chain = LegacyChain::load(chain)?;
         let replay = chain.replay().await?;
-        let mut proven = HashSet::new();
+        let versions = chain.blocks[1..]
+            .iter()
+            .map(|block| block.leaf.header().version())
+            .collect::<HashSet<_>>();
         // Proving every block of the long upgrade chain takes too long; the first blocks of each
         // version cover each scheme.
-        let mut sampled = HashMap::<Version, usize>::new();
-        for recorded in chain.blocks.iter().filter(|block| {
-            let count = sampled.entry(block.leaf.header().version()).or_default();
-            *count += 1;
-            *count <= 25
-        }) {
+        let sampled = versions.iter().flat_map(|version| {
+            chain
+                .blocks
+                .iter()
+                .filter(move |block| block.leaf.header().version() == *version)
+                .take(25)
+        });
+        let mut proven = HashSet::new();
+        for recorded in sampled {
             let header = recorded.leaf.header();
             let height = header.height();
             for ns in [101u64, 102].map(NamespaceId::from) {
@@ -12939,7 +12953,10 @@ mod test {
                         recorded.vid_common.common(),
                     )
                     .with_context(|| format!("namespace {ns} of block {height}"))?;
-                ensure!(proven_ns == ns && !txs.is_empty() && txs == res.transactions);
+                ensure!(
+                    proven_ns == ns && !txs.is_empty() && txs == res.transactions,
+                    "namespace {ns} of block {height} proves its transactions"
+                );
                 proven.insert(header.version());
             }
 
@@ -12953,10 +12970,6 @@ mod test {
                 "legacy block {height} has a cert2: {cert2:?}"
             );
         }
-        let versions = chain.blocks[1..]
-            .iter()
-            .map(|block| block.leaf.header().version())
-            .collect::<HashSet<_>>();
         ensure!(proven == versions, "proved {proven:?} of {versions:?}");
         Ok(())
     }
