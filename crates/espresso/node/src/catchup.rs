@@ -844,11 +844,15 @@ where
             .await
         {
             Ok((tree, _)) => tree,
-            Err(err) => self
-                .db
-                .get_accounts_at(block_height, fee_merkle_tree_root, accounts)
-                .await
-                .with_context(|| format!("failed to get fee accounts from DB: {err:#}"))?,
+            Err(err) => {
+                let tree = self
+                    .db
+                    .get_accounts_at(block_height, fee_merkle_tree_root, accounts)
+                    .await
+                    .with_context(|| format!("failed to get fee accounts from DB: {err:#}"))?;
+                tracing::debug!("get_accounts failed, read the accounts by root instead: {err:#}");
+                tree
+            },
         };
 
         // Verify the accounts
@@ -881,11 +885,15 @@ where
         // As for accounts, read the snapshot by root if the header `get_frontier` reads is gone.
         let proof = match self.db.get_frontier(instance, bh, view).await {
             Ok(proof) => proof,
-            Err(err) => self
-                .db
-                .get_frontier_at(bh, mt.commitment())
-                .await
-                .with_context(|| format!("failed to get frontier from DB: {err:#}"))?,
+            Err(err) => {
+                let proof = self
+                    .db
+                    .get_frontier_at(bh, mt.commitment())
+                    .await
+                    .with_context(|| format!("failed to get frontier from DB: {err:#}"))?;
+                tracing::debug!("get_frontier failed, read the frontier by root instead: {err:#}");
+                proof
+            },
         };
         match proof
             .proof

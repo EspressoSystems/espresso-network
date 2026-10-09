@@ -632,8 +632,9 @@ async fn apply_leaf<T>(
             "updating persistent merklized state"
         );
         // The node's catchup reads the parent snapshot from this database first. When the data
-        // pruner has deleted the parent's leaf and header, it reads the snapshot by the parent's
-        // roots, which the parent state carries. It asks peers only if that read fails too.
+        // pruner has deleted the parent's leaf and header, it reads the fee and block snapshots by
+        // the parent's roots, which the parent state carries. It asks peers if that read fails
+        // too, and for V1 reward accounts, whose read still needs the parent's leaf.
         match update_state_storage(
             parent_state,
             storage,
