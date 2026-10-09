@@ -562,6 +562,7 @@ AGENT_POLL_S = 5.0
 CHAOS_NODES = 22
 CHAOS_NODE_TYPE = "c8g.xlarge"
 CHAOS_CTL_TYPE = "c8g.xlarge"
+CHAOS_LATENCY = "decaf-2025"
 CHAOS_FLAGS = ("--chaos-min", "--chaos-rate", "--chaos-seed", "--chaos-kinds")
 # The load shape is the chaos config's.
 CHAOS_LOAD_FLAGS = ("--steps", "--step-s", "--search", "--keep-going", "--warmup-s")
@@ -1613,13 +1614,17 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
             f"leader-trace {'on' if cfg.leader_trace else 'off'}"
         ),
         f"node-env: {' '.join(cfg.node_env) or 'none'}",
-        *([format_chaos_summary(cfg.chaos, cfg.nodes)] if cfg.chaos else []),
+        *(
+            [format_chaos_summary(cfg.chaos, cfg.nodes, cfg.latency)]
+            if cfg.chaos
+            else []
+        ),
     ]
 
 
-def format_chaos_summary(chaos: ChaosConfig, nodes: int) -> str:
+def format_chaos_summary(chaos: ChaosConfig, nodes: int, latency: str) -> str:
     return (
-        f"chaos: {chaos.minutes} min at {chaos.rate_mb_s:g} MB/s; "
+        f"chaos: {chaos.minutes} min at {chaos.rate_mb_s:g} MB/s; latency {latency}; "
         f"kinds {','.join(chaos.kinds)}; seed {chaos.seed}; "
         f"at most {fault_budget(nodes)} faulty; gap {chaos.gap_s:g} s; "
         f"kill down {chaos.kill_down_s:g} s; recover timeout {chaos.recover_timeout_s:g} s"
@@ -2672,15 +2677,21 @@ def render_recreate_sh(
 NodeHealth = Literal["up", "down", "recovering", "catching_up"]
 
 
+# Missing blocks, leaves and vid_common of a query node's `sync-status`.
+Missing = tuple[int, int, int]
+MISSING_NAMES = ("blocks", "leaves", "vid_common")
+
+
 class NodeState(TypedDict):
     """`since` is the fault time: gates and timeouts measure from it. `rejoined` is the time of
-    the `rejoined` event."""
+    the `rejoined` event. `last_missing` is the last `Missing` answered since the fault."""
 
     health: NodeHealth
     kind: ChaosKind | None
     since: float
     streak: int
     rejoined: float
+    last_missing: Missing | None
 
 
 class ChaosState(TypedDict):
@@ -2693,12 +2704,12 @@ class ChaosState(TypedDict):
 
 
 class ChaosObservation(TypedDict):
-    """`None`: the probe got no answer. `query_height` and `synced` only have the query nodes."""
+    """`None`: the probe got no answer. `query_height` and `missing` only have the query nodes."""
 
     height: dict[str, int | None]
     voted_view: dict[str, int | None]
     query_height: dict[str, int | None]
-    synced: dict[str, bool | None]
+    missing: dict[str, Missing | None]
 
 
 ChaosEventKind = Literal[
@@ -2719,6 +2730,7 @@ class ChaosEvent(TypedDict):
     kind: ChaosKind | None
     height: int | None
     after_s: float | None
+    missing: NotRequired[Missing]
 
 
 class ChaosStep(TypedDict):
@@ -2746,7 +2758,12 @@ def chaos_init(
     return ChaosState(
         nodes={
             name: NodeState(
-                health="up", kind=None, since=t_load, streak=0, rejoined=t_load
+                health="up",
+                kind=None,
+                since=t_load,
+                streak=0,
+                rejoined=t_load,
+                last_missing=None,
             )
             for name in topo["nodes"]
         },
@@ -2772,12 +2789,27 @@ def chaos_step(
     events: list[ChaosEvent] = []
     actions: list[ChaosAction] = []
 
-    def emit(event: ChaosEventKind, name: str, after_s: float | None = None) -> None:
+    def emit(
+        event: ChaosEventKind,
+        name: str,
+        after_s: float | None = None,
+        missing: Missing | None = None,
+    ) -> None:
         events.append(
             _chaos_event(
-                now, event, name, nodes[name]["kind"], obs["height"][name], after_s
+                now,
+                event,
+                name,
+                nodes[name]["kind"],
+                obs["height"][name],
+                after_s,
+                missing,
             )
         )
+
+    for name in queries:
+        if (seen := obs["missing"][name]) is not None:
+            nodes[name]["last_missing"] = seen
 
     up = [name for name, s in nodes.items() if s["health"] == "up"]
     tip = _tip(obs["height"], up)
@@ -2808,17 +2840,17 @@ def chaos_step(
                 good = (
                     now >= s["rejoined"] + CHAOS_SYNC_SETTLE_S
                     and _near(obs["query_height"][name], query_tip, CHAOS_LAG_BLOCKS)
-                    and obs["synced"][name] is True
+                    and obs["missing"][name] == (0, 0, 0)
                 )
                 s["streak"] = s["streak"] + 1 if good else 0
                 if s["streak"] >= CHAOS_GATE_TICKS:
-                    emit("caught_up", name, after_s)
+                    emit("caught_up", name, after_s, obs["missing"][name])
                     s.update(health="up", kind=None, streak=0)
 
     error = None
     for name, s in nodes.items():
         if s["health"] != "up" and now >= s["since"] + cfg.recover_timeout_s:
-            emit("timeout", name, now - s["since"])
+            emit("timeout", name, now - s["since"], s["last_missing"])
             error = (
                 f"{name} ({s['kind']}) not recovered within "
                 f"{cfg.recover_timeout_s:.0f} s, health {s['health']}"
@@ -2843,6 +2875,7 @@ def chaos_step(
             kind=kind,
             since=now,
             streak=0,
+            last_missing=None,
         )
         actions.append({"node": name, "op": kind})
         emit("fault", name)
@@ -2909,8 +2942,9 @@ def _chaos_event(
     kind: ChaosKind | None,
     height: int | None,
     after_s: float | None,
+    missing: Missing | None = None,
 ) -> ChaosEvent:
-    return ChaosEvent(
+    event_ = ChaosEvent(
         ts=ts,
         iso=datetime.fromtimestamp(ts, UTC).isoformat(),
         event=event,
@@ -2919,15 +2953,20 @@ def _chaos_event(
         height=height,
         after_s=after_s,
     )
+    if missing is not None:
+        event_["missing"] = missing
+    return event_
 
 
-# `is_fully_synced` is a method of `SyncStatusQueryData`, not a serialized field.
-SYNCED_JQ = "[.blocks, .leaves, .vid_common] | all(.missing == 0)"
+# `is_fully_synced` is a method of `SyncStatusQueryData`, not a serialized field: it holds when
+# all three counts are 0.
+MISSING_JQ = '"' + ",".join(rf"\(.{name}.missing)" for name in MISSING_NAMES) + '"'
 
 
 def probe_command(topo: nb.Topology) -> str:
     """Shell run on ctl: one background job per node printing `<node> <height> <voted view>`,
-    plus `<query height> <synced>` for query nodes; `-` for a field that did not answer.
+    plus `<query height> <blocks,leaves,vid_common missing>` for query nodes; `-` for a field
+    that did not answer.
     Nodes run in parallel so a hung node costs one curl timeout, not one per field."""
     queries = set(nb.query_nodes(topo))
     lines = []
@@ -2943,7 +2982,7 @@ def probe_command(topo: nb.Topology) -> str:
         if name in queries:
             script += (
                 f"q=$(curl -sf -m 2 {base}/v1/node/block-height); "
-                f"s=$(curl -sf -m 2 {base}/v1/node/sync-status | jq -r {shlex.quote(SYNCED_JQ)}); "
+                f"s=$(curl -sf -m 2 {base}/v1/node/sync-status | jq -r {shlex.quote(MISSING_JQ)}); "
             )
             fields += ["${q:--}", "${s:--}"]
         lines.append(f'({script}echo "{name} {" ".join(fields)}") &')
@@ -2956,7 +2995,7 @@ def parse_probe(stdout: str, topo: nb.Topology) -> ChaosObservation:
         line.split()[0]: line.split() for line in stdout.splitlines() if line.strip()
     }
     queries = set(nb.query_nodes(topo))
-    obs = ChaosObservation(height={}, voted_view={}, query_height={}, synced={})
+    obs = ChaosObservation(height={}, voted_view={}, query_height={}, missing={})
     for name in topo["nodes"]:
         fields = rows.get(name)
         if fields is None or len(fields) != (5 if name in queries else 3):
@@ -2967,8 +3006,15 @@ def parse_probe(stdout: str, topo: nb.Topology) -> ChaosObservation:
         obs["voted_view"][name] = _probe_int(fields[2])
         if name in queries:
             obs["query_height"][name] = _probe_int(fields[3])
-            obs["synced"][name] = None if fields[4] == "-" else fields[4] == "true"
+            obs["missing"][name] = _probe_missing(fields[4])
     return obs
+
+
+def _probe_missing(field: str) -> Missing | None:
+    if field == "-":
+        return None
+    blocks, leaves, vid_common = map(int, field.split(","))
+    return blocks, leaves, vid_common
 
 
 def _probe_int(field: str) -> int | None:
@@ -3121,7 +3167,7 @@ def add_chaos_flags(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help=f"restart, kill and wipe nodes during the load; flags not given take the chaos "
         f"shape ({CHAOS_NODES} nodes, all of them query nodes, sqlite, "
-        f"{CHAOS_NODE_TYPE}) and the load is {chaos.minutes} steps of {CHAOS_STEP_S} s",
+        f"{CHAOS_NODE_TYPE}, --latency {CHAOS_LATENCY}) and the load is {chaos.minutes} steps of {CHAOS_STEP_S} s",
     )
     parser.add_argument(
         "--chaos-min",
@@ -3305,7 +3351,8 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     for key in keys:
         if keys.count(key) > 1:
             raise Refused(f"--node-env repeats {key}")
-    check_latency_flags(args.latency, args.intra_latency, args.tcp_cc, args.mtu)
+    profile = chaos_default(args, "--latency", CHAOS_LATENCY)
+    check_latency_flags(profile, args.intra_latency, args.tcp_cc, args.mtu)
     chaos = chaos_from_args(args)
     nodes = chaos_default(args, "--nodes", CHAOS_NODES)
     search = search_from_args(args)
@@ -3324,7 +3371,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         node_env=tuple(args.node_env),
         max_block_size=args.max_block_size,
         leader_trace=args.leader_trace,
-        latency=args.latency,
+        latency=profile,
         intra_latency=args.intra_latency,
         tcp_cc=args.tcp_cc,
         mtu=args.mtu,
@@ -6332,7 +6379,14 @@ def chaos_log_line(event: ChaosEvent) -> str:
         case "caught_up":
             return f"{node} caught up after {after_s:.0f} s"
         case "timeout":
-            return f"{node} not recovered after {after_s:.0f} s"
+            line = f"{node} not recovered after {after_s:.0f} s"
+            if "missing" in event:
+                counts = ", ".join(
+                    f"{n} {c}"
+                    for n, c in zip(MISSING_NAMES, event["missing"], strict=True)
+                )
+                line += f" (missing {counts})"
+            return line
         case "restored":
             return f"{node} restored"
 
@@ -6415,15 +6469,17 @@ class ChaosRunner:
     def _advance(self, ts: float) -> None:
         assert self.state is not None
         out = self.remote.ssh("ctl", probe_command(self.topo)).stdout
-        step = chaos_step(
-            self.state,
-            self.chaos,
-            self.topo,
-            self.peers,
-            parse_probe(out, self.topo),
-            ts,
-        )
+        obs = parse_probe(out, self.topo)
+        step = chaos_step(self.state, self.chaos, self.topo, self.peers, obs, ts)
         self.state = step["state"]
+        for name, s in self.state["nodes"].items():
+            if s["health"] == "catching_up":
+                log.debug(
+                    "chaos: %s catching up, query height %s, missing %s",
+                    name,
+                    obs["query_height"][name],
+                    s["last_missing"],
+                )
         self._record(step["events"])
         queries = set(nb.query_nodes(self.topo))
         actions = {action["node"]: action["op"] for action in step["actions"]}

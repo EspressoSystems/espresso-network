@@ -228,9 +228,11 @@ just bench aws run --fleet --chaos --query-engine sqlite
 ```
 
 - `--chaos` restarts, kills and wipes nodes, any node, while the load runs at a constant rate. Flags not given take the
-  chaos shape: 22 nodes, every node a query node, `sqlite` colocated, `c8g.xlarge` nodes and `ctl`, `--chaos-min` steps
-  of 60 s at `--chaos-rate` MB/s, `--keep-going`. `--nodes`, `--query-nodes`, `--node-type`, `--ctl-type`,
-  `--submit-nodes` and `--query-engine` given on the command line are kept; `--nodes N` alone gives N query nodes.
+  chaos shape: 22 nodes, every node a query node, `sqlite` colocated, `c8g.xlarge` nodes and `ctl`,
+  `--latency decaf-2025`, `--chaos-min` steps of 60 s at `--chaos-rate` MB/s, `--keep-going`. `--nodes`,
+  `--query-nodes`, `--node-type`, `--ctl-type`, `--latency` (`off`, `mainnet` or `decaf-2025`), `--submit-nodes` and
+  `--query-engine` given on the command line are kept; `--latency` is per run, `up` does not take it; `--nodes N` alone
+  gives N query nodes.
 - Refused: `--steps`, `--step-s`, `--search`, `--keep-going` and `--warmup-s` (set by the chaos config); fewer than 7
   nodes; 2 or fewer query nodes; `--query-engine postgres`; `--query-db` other than `colocated`.
 - Faults start after the warmup, one per 45 s, and stop 120 s before the load ends. Kinds are used in turn from
@@ -243,16 +245,18 @@ just bench aws run --fleet --chaos --query-engine sqlite
 - Query nodes get `ESPRESSO_NODE_SYNC_STATUS_TTL=5s` in `node.env` and `node-rejoin.env`; the default 5 min cache would
   report a wiped node as synced from its empty database.
 - Recovery gates, 2 consecutive 5 s ticks: a node rejoined when its height and voted view are near the tip of the up
-  nodes; a query node then caught up when its height is near the up query nodes' tip and `sync-status` is fully synced,
-  counted only from 10 s after its `rejoined` event.
+  nodes; a query node then caught up when its height is near the up query nodes' tip and `sync-status` is fully synced
+  (`missing` of blocks, leaves and vid_common all 0), counted only from 10 s after its `rejoined` event.
 - `summary.md` and `driver.log` omit the capacity verdict under `--chaos`: steps with a dead leader do not measure it.
 - The load driver submits to the next node when one is down; `submit_failovers` in `load-meta.json` counts the switches,
   `submit_errors` stays 0 unless every node refused a tx.
 - A node not recovered within 300 s writes a `timeout` event and fails the run: exit 3, `summary.md` keeps the reason,
   the run is invalid. A node that crashes without a fault fails the run the same way.
-- Output: `chaos.jsonl` (`fault`, `started`, `rejoined`, `caught_up`, `timeout`, `restored`; `ts` on ctl's clock), a
-  `### Chaos` section in `summary.md` with one row per fault and a totals line, `chaos:` lines in `driver.log`. Faulted
-  nodes are exempt from the per-node scrape coverage and decided-blocks rules.
+- Output: `chaos.jsonl` (`fault`, `started`, `rejoined`, `caught_up`, `timeout`, `restored`; `ts` on ctl's clock;
+  `caught_up` carries `missing` as [blocks, leaves, vid_common]; a query node's `timeout` carries `missing` when
+  sync-status answered since the fault), a `### Chaos` section in `summary.md` with one row per fault and a totals line,
+  `chaos:` lines in `driver.log` (a timeout line lists the last `missing` counts). Faulted nodes are exempt from the
+  per-node scrape coverage and decided-blocks rules.
 - Cost: about $5.4/h for the default fleet, about 40 min per single shot. `render` recomputes the Chaos section offline.
 - Check `rss_peak_bytes` in `result.json` after the first run: `c8g.xlarge` has 8 GiB.
 
@@ -403,7 +407,7 @@ Where:
 | `--node-env KEY=VALUE`                | none                           | per run      | repeatable; node environment                                                                  |
 | `--leader-trace`, `--no-leader-trace` | off                            | per run      | leader trace CSVs and plots                                                                   |
 | `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                                 |
-| `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `mainnet`                                                                |
+| `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `mainnet`; `decaf-2025` with `--chaos`                                   |
 | `--no-intra-latency`                  | off                            | per run      | with `--latency`: no same-location delay                                                      |
 | `--tcp-cc`                            | bbr                            | per run      | with `--latency`: TCP congestion control, `bbr`, `cubic`, `bbr_hold` or `bbr3`                |
 | `--mtu`                               | 1500                           | per run      | with `--latency`: interface MTU of the nodes                                                  |

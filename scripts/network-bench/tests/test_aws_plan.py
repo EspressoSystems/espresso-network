@@ -1506,7 +1506,7 @@ def test_format_node_summary_chaos() -> None:
     chaos = awsb.ChaosConfig(minutes=3, kinds=("restart", "kill"))
     fs = awsb.format_node_summary(small_cfg(22, chaos=chaos))
     assert fs[-1] == (
-        "chaos: 3 min at 4 MB/s; kinds restart,kill; seed 42; at most 6 faulty; gap 45 s; "
+        "chaos: 3 min at 4 MB/s; latency off; kinds restart,kill; seed 42; at most 6 faulty; gap 45 s; "
         "kill down 60 s; recover timeout 300 s"
     )
 

@@ -707,8 +707,9 @@ class FakeCluster:
         if path == "/v1/node/block-height":
             return 200, json.dumps(height + 1).encode()
         if path == "/v1/node/sync-status":
-            synced = height == len(self.blocks) - 1
-            return 200, json.dumps({"is_fully_synced": synced}).encode()
+            missing = {"missing": max(0, len(self.blocks) - 1 - height)}
+            doc = {"blocks": missing, "leaves": missing, "vid_common": missing}
+            return 200, json.dumps(doc).encode()
         if path == "/v1/node/stake-table/current":
             return 200, json.dumps({"stake_table": []}).encode()
         prefix = "/v1/availability/payload/"
@@ -994,7 +995,10 @@ class ClusterRunner(FakeRunner):
                     get(m, "/v1/node/block-height"),
                     "-"
                     if sync == "-"
-                    else str(json.loads(sync)["is_fully_synced"]).lower(),
+                    else ",".join(
+                        str(json.loads(sync)[key]["missing"])
+                        for key in awsb.MISSING_NAMES
+                    ),
                 ]
             lines.append(f"{name} {' '.join(fields)}")
         return "\n".join(lines) + "\n"

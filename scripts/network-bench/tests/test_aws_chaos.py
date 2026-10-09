@@ -49,22 +49,22 @@ def init(cfg=CFG, topo=None, load_s: float = 6000.0) -> Any:
 
 
 def observe(
-    topo, state=None, tip=100, view=100, query_tip=None, synced=True, **override
+    topo, state=None, tip=100, view=100, query_tip=None, missing=(0, 0, 0), **override
 ) -> Any:
     """Every node shows the tip unless its health in `state` is not `up` or `override[name]`
-    is `None` (a failed probe) or a `(height, view, query height, synced)` tuple."""
+    is `None` (a failed probe) or a `(height, view, query height, missing)` tuple."""
     query_tip = tip if query_tip is None else query_tip
     queries = set(awsb.nb.query_nodes(topo))
-    obs = {"height": {}, "voted_view": {}, "query_height": {}, "synced": {}}
+    obs = {"height": {}, "voted_view": {}, "query_height": {}, "missing": {}}
     for name in topo["nodes"]:
-        h, v, q, s = tip, view, query_tip, synced
+        h, v, q, s = tip, view, query_tip, missing
         if name in override:
             h, v, q, s = override[name] or (None, None, None, None)
         obs["height"][name] = h
         obs["voted_view"][name] = v
         if name in queries:
             obs["query_height"][name] = q
-            obs["synced"][name] = s
+            obs["missing"][name] = s
     return obs
 
 
@@ -134,7 +134,9 @@ def test_budget_never_exceeded(n):
 def test_query_floor_kept():
     topo = topo_of(13, 4)
     state = with_health(init(topo=topo), node0="catching_up", node1="catching_up")
-    lagging = observe(topo, node0=(100, 100, 0, False), node1=(100, 100, 0, False))
+    lagging = observe(
+        topo, node0=(100, 100, 0, (5, 0, 7)), node1=(100, 100, 0, (5, 0, 7))
+    )
     state["order"] = ["node2", "node3", "node4", "node5"]
     state["next_fault_at"] = 0.0
     result = step(state, lagging, 100.0, topo=topo, peers=peers_of(13, 4))
@@ -176,7 +178,7 @@ def test_rejoin_needs_streak():
     state = with_health(init(topo=topo), node5="recovering")
     state["next_fault_at"] = 1e9
     good = observe(topo)
-    bad = observe(topo, node5=(10, 10, 0, True))
+    bad = observe(topo, node5=(10, 10, 0, (0, 0, 0)))
     first = step(state, good, 100.0)
     assert first["state"]["nodes"]["node5"]["health"] == "recovering"
     assert first["state"]["nodes"]["node5"]["streak"] == 1
@@ -192,7 +194,7 @@ def test_rejoin_needs_streak():
 def test_rejoin_needs_vote():
     topo = topo_of()
     state = with_health(init(topo=topo), node5="recovering")
-    obs = observe(topo, node5=(100, 50, 0, True))
+    obs = observe(topo, node5=(100, 50, 0, (0, 0, 0)))
     for now in (100.0, 105.0, 110.0):
         result = step(state, obs, now)
         state = result["state"]
@@ -203,11 +205,11 @@ def test_rejoin_needs_vote():
 def test_query_catchup_needs_sync():
     topo = topo_of()
     state = with_health(init(topo=topo), node1="catching_up")
-    obs = observe(topo, node1=(100, 100, 100, False))
+    obs = observe(topo, node1=(100, 100, 100, (5, 0, 7)))
     for now in (100.0, 105.0, 110.0):
         state = step(state, obs, now)["state"]
     assert state["nodes"]["node1"]["health"] == "catching_up"
-    obs = observe(topo, node1=(100, 100, 100, True))
+    obs = observe(topo, node1=(100, 100, 100, (0, 0, 0)))
     state = step(state, obs, 115.0)["state"]
     result = step(state, obs, 120.0)
     assert result["state"]["nodes"]["node1"]["health"] == "up"
@@ -219,7 +221,7 @@ def test_catch_up_ignores_a_synced_answer_before_the_settle_time():
     topo = topo_of()
     state = with_health(init(topo=topo), node1="recovering")
     state["next_fault_at"] = 1e9
-    obs = observe(topo, node1=(100, 100, 100, True))
+    obs = observe(topo, node1=(100, 100, 100, (0, 0, 0)))
     state = step(state, obs, 100.0)["state"]
     state = step(state, obs, 105.0)["state"]
     assert state["nodes"]["node1"]["rejoined"] == 105.0
@@ -231,12 +233,49 @@ def test_catch_up_ignores_a_synced_answer_before_the_settle_time():
     assert state["nodes"]["node1"]["streak"] == 0
 
 
+def test_caught_up_event_has_zero_counts_and_timeout_the_last_counts():
+    topo = topo_of()
+    state = with_health(init(topo=topo), node1="catching_up")
+    state["next_fault_at"] = 1e9
+    state["nodes"]["node1"].update(since=100.0, kind="wipe")
+    lagging = observe(topo, node1=(100, 100, 100, (12, 0, 340)))
+    state = step(state, lagging, 200.0)["state"]
+    assert state["nodes"]["node1"]["last_missing"] == (12, 0, 340)
+    # a failed probe keeps the last counts
+    state = step(state, observe(topo, node1=None), 250.0)["state"]
+    assert state["nodes"]["node1"]["last_missing"] == (12, 0, 340)
+    result = step(state, lagging, 100.0 + CFG.recover_timeout_s)
+    (event,) = [e for e in result["events"] if e["event"] == "timeout"]
+    assert event["missing"] == (12, 0, 340)
+    assert awsb.chaos_log_line(event).endswith(
+        "(missing blocks 12, leaves 0, vid_common 340)"
+    )
+    good = observe(topo, node1=(100, 100, 100, (0, 0, 0)))
+    events = []
+    for now in (300.0, 305.0, 310.0):
+        result = step(state, good, now)
+        state = result["state"]
+        events += result["events"]
+    (event,) = [e for e in events if e["event"] == "caught_up"]
+    assert event["missing"] == (0, 0, 0)
+
+
+def test_timeout_of_a_validator_has_no_counts():
+    topo = topo_of()
+    state = with_health(init(topo=topo), node5="recovering")
+    state["nodes"]["node5"].update(since=100.0, kind="kill")
+    result = step(state, observe(topo, node5=None), 100.0 + CFG.recover_timeout_s)
+    (event,) = [e for e in result["events"] if e["event"] == "timeout"]
+    assert "missing" not in event
+    assert awsb.chaos_log_line(event).endswith("s")
+
+
 # TEST:synced-after-settle-passes-ok
 def test_catch_up_passes_on_synced_ticks_after_the_settle_time():
     topo = topo_of()
     state = with_health(init(topo=topo), node1="recovering")
     state["next_fault_at"] = 1e9
-    obs = observe(topo, node1=(100, 100, 100, True))
+    obs = observe(topo, node1=(100, 100, 100, (0, 0, 0)))
     state = step(state, obs, 100.0)["state"]
     state = step(state, obs, 105.0)["state"]
     settle = 105.0 + awsb.CHAOS_SYNC_SETTLE_S
@@ -319,7 +358,7 @@ def test_timeout_counts_from_fault():
     state = step(state, good, 200.0)["state"]
     state = step(state, good, 205.0)["state"]
     assert state["nodes"]["node1"]["health"] == "catching_up"
-    lagging = observe(topo, node1=(100, 100, 0, False))
+    lagging = observe(topo, node1=(100, 100, 0, (5, 0, 7)))
     ok = step(state, lagging, 100.0 + CFG.recover_timeout_s - 1)
     assert ok["error"] is None
     result = step(state, lagging, 100.0 + CFG.recover_timeout_s)
@@ -352,7 +391,7 @@ def test_tip_ignores_faulty():
     topo = topo_of()
     state = with_health(init(topo=topo), node6="down", node5="recovering")
     state["next_fault_at"] = 1e9
-    obs = observe(topo, node6=(10_000, 10_000, 0, True))
+    obs = observe(topo, node6=(10_000, 10_000, 0, (0, 0, 0)))
     state = step(state, obs, 100.0)["state"]
     result = step(state, obs, 105.0)
     assert result["state"]["nodes"]["node5"]["health"] == "up"
@@ -474,24 +513,21 @@ def test_event_fields():
 # TEST:probe-dash-is-none-ok
 def test_probe_dash_is_none():
     topo = topo_of(4, 2)
-    out = "node0 10 20 9 true\nnode1 - - - -\nnode2 5 6\nnode3 - 7\n"
+    out = "node0 10 20 9 0,1,2\nnode1 - - - -\nnode2 5 6\nnode3 - 7\n"
     obs = awsb.parse_probe(out, topo)
     assert obs["height"] == {"node0": 10, "node1": None, "node2": 5, "node3": None}
     assert obs["voted_view"]["node3"] == 7
     assert obs["query_height"] == {"node0": 9, "node1": None}
-    assert obs["synced"] == {"node0": True, "node1": None}
-    assert (
-        awsb.parse_probe(out.replace("true", "false"), topo)["synced"]["node0"] is False
-    )
+    assert obs["missing"] == {"node0": (0, 1, 2), "node1": None}
 
 
 # TEST:probe-missing-line-fails
 def test_probe_missing_line_fails():
     topo = topo_of(4, 2)
     with pytest.raises(ValueError, match="node3"):
-        awsb.parse_probe("node0 1 2 3 true\nnode1 1 2 3 true\nnode2 1 2\n", topo)
+        awsb.parse_probe("node0 1 2 3 0,0,0\nnode1 1 2 3 0,0,0\nnode2 1 2\n", topo)
     with pytest.raises(ValueError, match="node1"):
-        awsb.parse_probe("node0 1 2 3 true\nnode1 1 2\nnode2 1 2\nnode3 1 2\n", topo)
+        awsb.parse_probe("node0 1 2 3 0,0,0\nnode1 1 2\nnode2 1 2\nnode3 1 2\n", topo)
 
 
 def test_probe_command_covers_every_node():
@@ -563,8 +599,8 @@ def test_recreate_sh_same_argv(role):
     assert "containers.json" in recreate
 
 
-def test_synced_filter_matches_rust_method():
-    def synced(missing: tuple[int, int, int]) -> str:
+def test_missing_filter_prints_the_three_counts():
+    def counts(missing: tuple[int, int, int]) -> str:
         blocks, leaves, vid = ({"missing": m, "ranges": []} for m in missing)
         doc = {
             "blocks": blocks,
@@ -573,7 +609,7 @@ def test_synced_filter_matches_rust_method():
             "pruned_height": 0,
         }
         out = subprocess.run(
-            ["jq", "-r", awsb.SYNCED_JQ],
+            ["jq", "-r", awsb.MISSING_JQ],
             input=json.dumps(doc),
             text=True,
             capture_output=True,
@@ -581,9 +617,9 @@ def test_synced_filter_matches_rust_method():
         )
         return out.stdout.strip()
 
-    assert synced((0, 0, 0)) == "true"
-    assert synced((0, 1, 0)) == "false"
-    assert shlex.quote(awsb.SYNCED_JQ) in awsb.probe_command(topo_of(4, 2))
+    assert counts((0, 0, 0)) == "0,0,0"
+    assert counts((12, 0, 340)) == "12,0,340"
+    assert shlex.quote(awsb.MISSING_JQ) in awsb.probe_command(topo_of(4, 2))
 
 
 LOADING = {"phase": "loading", "detail": "x"}
@@ -606,6 +642,41 @@ def test_chaos_shape_defaults():
     assert cfg.load.keep_going
     assert cfg.load.submit_nodes == 22
     assert awsb.fleet_config_from_args(parse("--chaos")).query_engine == "sqlite"
+
+
+def test_chaos_defaults_the_latency_profile():
+    assert awsb.config_from_args(parse("--chaos")).latency == "decaf-2025"
+    assert awsb.fleet_config_from_args(parse("--chaos")).latency == "decaf-2025"
+
+
+@pytest.mark.parametrize("profile", ("off", "mainnet"))
+def test_explicit_latency_wins_under_chaos(profile):
+    assert (
+        awsb.config_from_args(parse("--chaos", "--latency", profile)).latency == profile
+    )
+    cfg = awsb.config_from_args(parse("--chaos", f"--latency={profile}"))
+    assert cfg.latency == profile
+
+
+def test_chaos_accepts_latency_flags_valid_for_the_resolved_profile():
+    cfg = awsb.config_from_args(
+        parse("--chaos", "--tcp-cc", "cubic", "--no-intra-latency", "--mtu", "9000")
+    )
+    assert cfg.latency == "decaf-2025"
+
+
+def test_chaos_latency_off_refuses_latency_flags():
+    with pytest.raises(awsb.Refused, match="--mtu"):
+        awsb.config_from_args(parse("--chaos", "--latency", "off", "--mtu", "9000"))
+
+
+def test_latency_stays_off_without_chaos():
+    assert awsb.config_from_args(parse()).latency == "off"
+
+
+def test_chaos_summary_has_the_latency_profile():
+    cfg = awsb.config_from_args(parse("--chaos"))
+    assert "latency decaf-2025;" in awsb.format_node_summary(cfg)[-1]
 
 
 def test_chaos_nodes_without_query_nodes_makes_every_node_a_query_node():
@@ -1008,6 +1079,8 @@ def test_chaos_run_end_to_end(run_harness: RunHarness):
     runner = ClusterRunner(cluster, 3, states, describe=DESCRIBE)
     args = run_harness.args(
         "--chaos",
+        "--latency",
+        "off",
         "--chaos-min",
         "6",
         "--chaos-seed",
@@ -1078,7 +1151,7 @@ def test_ctl_ssh_failure_while_loading_is_retried_under_chaos(
     )
     runner = CtlDropsOnce(cluster, 3, [LOADING] * 80 + [DONE_STATE], describe=DESCRIBE)
     args = run_harness.args(
-        "--chaos", "--chaos-min", "6", "--query-nodes", "3", nodes=7
+        "--chaos", "--latency", "off", "--chaos-min", "6", "--query-nodes", "3", nodes=7
     )
     assert awsb.cmd_run(args, FakeSystem(run=runner, clock=clock)) == awsb.EXIT_OK
     assert runner.dropped
@@ -1107,7 +1180,7 @@ def test_interrupt_mid_chaos_restores_killed_nodes(run_harness: RunHarness):
     )
     system.run = runner
     args = run_harness.args(
-        "--chaos", "--chaos-min", "6", "--query-nodes", "3", nodes=7
+        "--chaos", "--latency", "off", "--chaos-min", "6", "--query-nodes", "3", nodes=7
     )
     assert awsb.cmd_run(args, system) == awsb.EXIT_FAILED
     assert runner.ran("tofu", "destroy")
