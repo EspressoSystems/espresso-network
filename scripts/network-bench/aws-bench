@@ -4334,6 +4334,12 @@ def check_run_allowed(
     name, phase = manifest["name"], manifest["phase"]
     if phase not in (LIVE_PHASES if cfg.force else ("idle",)):
         raise Refused(f"fleet {name} is {phase}, not idle")
+    fleet_cc = manifest["config"]["tcp_cc"]
+    # XanMod comes from `up --tcp-cc bbr3`; its `bbr` module is BBR v3.
+    if (cfg.tcp_cc == "bbr3") != (fleet_cc == "bbr3"):
+        raise Refused(
+            f"--tcp-cc {cfg.tcp_cc} does not match fleet {name}, set up with --tcp-cc {fleet_cc}"
+        )
     if cfg.query_db != "tmpfs" and cfg.query_db not in manifest["db_modes"]:
         raise Refused(
             f"--query-db {cfg.query_db} was not provisioned: fleet {name} has "
