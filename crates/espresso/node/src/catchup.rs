@@ -12,8 +12,9 @@ use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use espresso_api::routes::v1 as paths;
 use espresso_types::{
-    BackoffParams, BlockMerkleTree, Certificate2, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    FeeMerkleTree, Leaf2, NodeState, SeqTypes, ValidatedState,
+    BackoffParams, BlockMerkleCommitment, BlockMerkleTree, Certificate2, FeeAccount,
+    FeeAccountProof, FeeMerkleCommitment, FeeMerkleTree, Leaf2, NodeState, SeqTypes,
+    ValidatedState,
     config::PublicNetworkConfig,
     v0::traits::StateCatchup,
     v0_3::{
@@ -578,6 +579,23 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 
+    /// Get the state of the requested `accounts` from the snapshot at `height` whose root is
+    /// `root`.
+    ///
+    /// Unlike [`get_accounts`](Self::get_accounts), this does not read the leaf or header at
+    /// `height`, so it works after the data pruner deleted them, as long as the snapshot is
+    /// stored.
+    fn get_accounts_at(
+        &self,
+        _height: u64,
+        _root: FeeMerkleCommitment,
+        _accounts: &[FeeAccount],
+    ) -> impl Send + Future<Output = anyhow::Result<FeeMerkleTree>> {
+        async {
+            bail!("merklized state catchup is not supported for this data source");
+        }
+    }
+
     fn get_reward_accounts_v1(
         &self,
         _instance: &NodeState,
@@ -618,6 +636,20 @@ pub(crate) trait CatchupStorage: Sync {
         // state storage. This default implementation is overridden for those that do. Otherwise,
         // catchup can still be provided by fetching undecided merklized state from consensus
         // memory.
+        async {
+            bail!("merklized state catchup is not supported for this data source");
+        }
+    }
+
+    /// Get the blocks Merkle tree frontier from the snapshot at `height` whose root is `root`.
+    ///
+    /// Unlike [`get_frontier`](Self::get_frontier), this does not read the header at `height`, so
+    /// it works after the data pruner deleted it, as long as the snapshot is stored.
+    fn get_frontier_at(
+        &self,
+        _height: u64,
+        _root: BlockMerkleCommitment,
+    ) -> impl Send + Future<Output = anyhow::Result<BlocksFrontier>> {
         async {
             bail!("merklized state catchup is not supported for this data source");
         }
@@ -686,6 +718,15 @@ where
             .await
     }
 
+    async fn get_accounts_at(
+        &self,
+        height: u64,
+        root: FeeMerkleCommitment,
+        accounts: &[FeeAccount],
+    ) -> anyhow::Result<FeeMerkleTree> {
+        self.inner().get_accounts_at(height, root, accounts).await
+    }
+
     async fn get_reward_accounts_v2(
         &self,
         instance: &NodeState,
@@ -717,6 +758,14 @@ where
         view: ViewNumber,
     ) -> anyhow::Result<BlocksFrontier> {
         self.inner().get_frontier(instance, height, view).await
+    }
+
+    async fn get_frontier_at(
+        &self,
+        height: u64,
+        root: BlockMerkleCommitment,
+    ) -> anyhow::Result<BlocksFrontier> {
+        self.inner().get_frontier_at(height, root).await
     }
 
     async fn get_chain_config(
@@ -787,12 +836,24 @@ where
         fee_merkle_tree_root: FeeMerkleCommitment,
         accounts: &[FeeAccount],
     ) -> anyhow::Result<Vec<FeeAccountProof>> {
-        // Get the accounts
-        let (fee_merkle_tree_from_db, _) = self
+        // Get the accounts. If the data pruner has deleted the leaf and header that `get_accounts`
+        // reads, the snapshot can still be stored, so read it by the root we were given.
+        let fee_merkle_tree_from_db = match self
             .db
             .get_accounts(instance, block_height, view, accounts)
             .await
-            .with_context(|| "failed to get fee accounts from DB")?;
+        {
+            Ok((tree, _)) => tree,
+            Err(err) => {
+                let tree = self
+                    .db
+                    .get_accounts_at(block_height, fee_merkle_tree_root, accounts)
+                    .await
+                    .with_context(|| format!("failed to get fee accounts from DB: {err:#}"))?;
+                tracing::debug!("get_accounts failed, read the accounts by root instead: {err:#}");
+                tree
+            },
+        };
 
         // Verify the accounts
         let mut proofs = Vec::new();
@@ -821,7 +882,19 @@ where
             return Ok(());
         }
 
-        let proof = self.db.get_frontier(instance, bh, view).await?;
+        // As for accounts, read the snapshot by root if the header `get_frontier` reads is gone.
+        let proof = match self.db.get_frontier(instance, bh, view).await {
+            Ok(proof) => proof,
+            Err(err) => {
+                let proof = self
+                    .db
+                    .get_frontier_at(bh, mt.commitment())
+                    .await
+                    .with_context(|| format!("failed to get frontier from DB: {err:#}"))?;
+                tracing::debug!("get_frontier failed, read the frontier by root instead: {err:#}");
+                proof
+            },
+        };
         match proof
             .proof
             .first()
