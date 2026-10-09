@@ -1472,6 +1472,61 @@ mod test {
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
     }
 
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_chain_ends_before_finality() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        // A legacy chain whose tip is legacy too: the leaf after the requested one chains onto it,
+        // but no deciding QC has arrived and no cert2 ever will. Replayed pre-0.6 chains end like
+        // this, and so did every node before the 0.6 cutover.
+        let leaves = leaf_chain(1..=3, EPOCH_REWARD_VERSION).await;
+        {
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let err = get_leaf_proof_with_qc_chain(
+            &ds,
+            leaves[0].clone(),
+            Duration::from_secs(1),
+            CHAIN_LIMIT,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert!(
+            matches!(&err, hotshot_query_service::Error::Custom { message, .. } if message.contains("not enough leaves")),
+            "{err}"
+        );
+
+        // Once the leaf carrying the deciding QC is stored, the same request succeeds.
+        {
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf(&leaves[2]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let proof =
+            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap();
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+    }
+
     #[tokio::test]
     #[test_log::test]
     async fn test_header_proof() {
