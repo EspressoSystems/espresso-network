@@ -236,29 +236,38 @@ just bench aws run --fleet --chaos --query-engine sqlite
   gives N query nodes.
 - Refused: `--steps`, `--step-s`, `--search`, `--keep-going` and `--warmup-s` (set by the chaos config); fewer than 7
   nodes; 2 or fewer query nodes; `--query-engine postgres`; `--query-db` other than `colocated`.
-- Faults start after the warmup, one per 45 s, and stop 120 s before the load ends. Kinds are used in turn from
-  `--chaos-kinds` (default `restart,kill,wipe`) on nodes in the order `--chaos-seed` shuffles them to.
+- Faults start after the warmup, one per 45 s, and stop the kill down time plus 120 s (180 s) before the load ends, so a
+  late kill recovers under load; `--chaos-min 3` or less gives no faults. Kinds are used in turn from `--chaos-kinds`
+  (default `restart,kill,wipe`) on nodes in the order `--chaos-seed` shuffles them to.
   - `restart`: `docker restart`. `kill`: `docker kill`, `docker start` after 60 s. `wipe`: container logs saved to
     `/opt/bench/espresso-node.wiped.log.gz`, container removed, journal and payload dir emptied, container recreated
     from `node-rejoin.env` (`recreate.sh`), started.
 - A fault is issued only while faulty nodes stay at most `(n-1)//3 - 1` (6 of 22), at least 2 query nodes are up and the
-  target has 2 up peers; otherwise it waits for a recovery.
+  target and every faulty node keep 2 up peers; otherwise it waits for a recovery. Faulty counts stuck nodes and up
+  nodes whose probe failed or is more than 2 blocks behind the tip; those are never targets.
 - Query nodes get `ESPRESSO_NODE_SYNC_STATUS_TTL=5s` in `node.env` and `node-rejoin.env`; the default 5 min cache would
   report a wiped node as synced from its empty database.
 - Recovery gates, 2 consecutive 5 s ticks: a node rejoined when its height and voted view are near the tip of the up
   nodes; a query node then caught up when its height is near the up query nodes' tip and `sync-status` is fully synced
-  (`missing` of blocks, leaves and vid_common all 0), counted only from 10 s after its `rejoined` event.
+  (`missing` of blocks, leaves and vid_common all 0), counted only from 10 s after the node first answered after its
+  fault or start. `rejoined` and `caught_up` carry the time of the first tick of the 2.
 - `summary.md` and `driver.log` omit the capacity verdict, the search line and the baseline under `--chaos`: steps with
   a dead leader do not measure capacity.
 - The load driver submits to the next node when one is down; `submit_failovers` in `load-meta.json` counts the switches,
   `submit_errors` stays 0 unless every node refused a tx.
-- A node not recovered within 300 s writes a `timeout` event and fails the run: exit 3, `summary.md` keeps the reason,
-  the run is invalid. A node that crashes without a fault fails the run the same way.
-- Output: `chaos.jsonl` (`fault`, `started`, `rejoined`, `caught_up`, `timeout`, `restored`; `ts` on ctl's clock;
-  `caught_up` carries `missing` as [blocks, leaves, vid_common]; a query node's `timeout` carries `missing` when
-  sync-status answered since the fault), a chaos report leading `summary.md` (see [Chaos report](#chaos-report)),
-  `chaos:` lines in `driver.log` (a timeout line lists the last `missing` counts). Faulted nodes are exempt from the
-  per-node scrape coverage and decided-blocks rules.
+- A node not recovered within 300 s writes one `timeout` event and turns `stuck`: it keeps its slot in the fault budget,
+  is no longer gated or faulted, and the load runs on; the final drain waits only for the other faults. The run then
+  fails: exit 3, `summary.md` keeps the reason, the run is invalid. A node that crashes without a fault fails the run at
+  once.
+- A failed probe or fault ssh skips the tick, and the fault is retried on the next one; 5 such ticks in a row fail the
+  run.
+- Ctrl-C or an error ends the faults still open with an `interrupted` event; the verdict names them, it does not count
+  them as failures.
+- Output: `chaos.jsonl` (`fault`, `started`, `rejoined`, `caught_up`, `timeout`, `restored`, `interrupted`; `ts` on
+  ctl's clock; `after_s` from the fault, from `started` for a kill; `caught_up` carries `missing` as [blocks, leaves,
+  vid_common]; a query node's `timeout` carries `missing` when sync-status answered since the fault), a chaos report
+  leading `summary.md` (see [Chaos report](#chaos-report)), `chaos:` lines in `driver.log` (a timeout line lists the
+  last `missing` counts). Faulted nodes are exempt from the per-node scrape coverage and decided-blocks rules.
 - Cost: about $5.4/h for the default fleet, about 40 min per single shot. `render` recomputes the chaos report offline,
   also for a run that failed.
 - Check `rss_peak_bytes` in `result.json` after the first run: `c8g.xlarge` has 8 GiB.
@@ -267,11 +276,12 @@ just bench aws run --fleet --chaos --query-engine sqlite
 
 `summary.md` of a `--chaos` run leads with `## Chaos test`, built from `chaos.jsonl`, `load-meta.json` and `steps.json`:
 
-- Verdict: `pass` when every fault rejoined and nothing timed out, else `fail` with the reasons.
+- Verdict: `fail` on a timeout or a failed run, with the reasons, else `pass`; interrupted faults are listed, not
+  blamed.
 - Setup, and totals: faults per kind, max concurrent faulty against the fault budget, timeouts, lost payloads, submit
   failovers, txs submitted, included and timed out.
-- Recovery table per kind: count, rejoin p50 and max, caught-up p50 and max (seconds from the fault; query nodes only
-  catch up).
+- Recovery table per kind: count, rejoin p50 and max, caught-up p50 and max (seconds from the fault, from the start for
+  a kill, as the `from` column says; query nodes only catch up).
 - Throughput: mean decided against offered, the lowest step, and the mean over steps with an active fault against steps
   without. A fault is active from its start to its `rejoined` event.
 - `throughput.png`, then the per-fault table (a `missing` column when a timeout carries counts), then one row per step
@@ -279,9 +289,9 @@ just bench aws run --fleet --chaos --query-engine sqlite
 - In the step details a node restarted during the step shows `-` for its CPU, as its counter reset.
 - `throughput.png` has a top panel with one lane per faulted node: down, recovering and catching up in distinct colors,
   a marker per event, a red x at a timeout. The other panels shade each fault's down and recovering window.
-- A run that fails (a recovery timeout) is collected and reported the same way from the files it has: no `result.json`,
-  `run.json` or consensus counters, so no decided figures and the load starts at the first step. The log tail is that of
-  the nodes that timed out.
+- A run that ends early (an error or Ctrl-C) is collected and reported the same way from the files it has: no
+  `result.json`, `run.json` or consensus counters, so no decided figures and the load starts at the first step. The log
+  tail is that of the nodes that timed out.
 - `INDEX.md` has a `chaos` column, `F faults, T timeouts` (`-` without chaos). `rate` is the chaos rate, `decided` the
   mean decided, `bound` is `-`.
 

@@ -576,6 +576,8 @@ CHAOS_FLAGS = ("--chaos-min", "--chaos-rate", "--chaos-seed", "--chaos-kinds")
 # The load shape is the chaos config's.
 CHAOS_LOAD_FLAGS = ("--steps", "--step-s", "--search", "--keep-going", "--warmup-s")
 CHAOS_MIN_NODES = 7
+# Consecutive chaos ticks with a failed probe or fault ssh before the run fails.
+CHAOS_SSH_FAILURES = 5
 CHAOS_STEP_S = 60
 CHAOS_DRAIN_EXPECTED_S = 60.0
 OUT_RSYNC_S = 60.0
@@ -3908,6 +3910,11 @@ def measure_run(run: Run) -> None:
         finally:
             if chaos is not None:
                 chaos.restore()
+        if chaos is not None and (stuck := chaos.stuck()):
+            raise RemoteError(
+                f"chaos: {', '.join(stuck)} not recovered within "
+                f"{chaos.chaos.recover_timeout_s:.0f} s"
+            )
 
 
 def connect(fleet: FleetState) -> Remote:
@@ -6102,6 +6109,7 @@ class ChaosRunner:
         self.path = run_dir / "chaos.jsonl"
         self.offset = fleet_time(remote) - clock.time()
         self.state: ch.ChaosState | None = None
+        self.failures = 0
 
     def tick(self, agent: AgentState | None) -> None:
         """Nothing before the agent loads; the first `loading` state starts the schedule."""
@@ -6122,43 +6130,70 @@ class ChaosRunner:
             name for name, s in self.state["nodes"].items() if s["health"] != "up"
         )
 
+    def stuck(self) -> list[str]:
+        return [] if self.state is None else ch.stuck_nodes(self.state)
+
     def drain(self, interrupts: Interrupts) -> None:
-        """Ticks until every node is up again; a node past its timeout raises."""
-        while self.expected_down():
+        """Ticks until every fault recovered or got stuck."""
+        while self.state is not None and ch.open_faults(self.state):
             interrupts.sleep(AGENT_POLL_S)
             self._advance(self.clock.time() + self.offset)
 
     def restore(self) -> None:
-        """Starts the nodes still killed, so that collection finds their containers running."""
+        """Starts the nodes still killed, so that collection finds their containers running,
+        and marks every open fault `interrupted`."""
         if self.state is None:
             return
-        for name, s in self.state["nodes"].items():
-            if s["health"] == "down":
-                best_effort(
-                    f"restore {name}",
-                    lambda name=name: self.remote.ssh(
-                        name, DOCKER_NODE_COMMANDS["start"]
-                    ),
-                )
-                self._record(
-                    [
-                        ch.chaos_event(
-                            self.clock.time() + self.offset,
-                            "restored",
-                            name,
-                            s["kind"],
-                            None,
-                            None,
-                        )
-                    ]
-                )
+        nodes = self.state["nodes"]
+        open_ = ch.open_faults(self.state)
+        down = [name for name in open_ if nodes[name]["health"] == "down"]
+        for name in down:
+            best_effort(
+                f"restore {name}",
+                lambda name=name: self.remote.ssh(name, DOCKER_NODE_COMMANDS["start"]),
+            )
+        ts = self.clock.time() + self.offset
+        self._record(
+            [
+                *(
+                    ch.chaos_event(
+                        ts, "restored", name, nodes[name]["kind"], None, None
+                    )
+                    for name in down
+                ),
+                *(
+                    ch.chaos_event(
+                        ts, "interrupted", name, nodes[name]["kind"], None, None
+                    )
+                    for name in open_
+                ),
+            ]
+        )
 
     def _advance(self, ts: float) -> None:
+        """A failed probe skips the tick and a failed action is retried on the next one; the
+        run fails after CHAOS_SSH_FAILURES such ticks in a row."""
         assert self.state is not None
         command = ch.probe_command(self.topo["nodes"], self.queries)
-        out = self.remote.ssh("ctl", command).stdout
-        obs = ch.parse_probe(out, self.topo["nodes"], self.queries)
-        step = ch.chaos_step(self.state, self.chaos, self.queries, self.peers, obs, ts)
+        probe = self.remote.ssh("ctl", command, check=False)
+        if probe.returncode != 0:
+            self._failed(f"probe exited {probe.returncode}: {probe.stderr.strip()}")
+            return
+        obs = ch.parse_probe(probe.stdout, self.topo["nodes"], self.queries)
+        prev = self.state
+        step = ch.chaos_step(prev, self.chaos, self.queries, self.peers, obs, ts)
+        actions = {action["node"]: action["op"] for action in step["actions"]}
+
+        def act(name: str) -> subprocess.CompletedProcess[str]:
+            if actions[name] == "wipe":
+                script = bounded(wipe_script(name in self.queries))
+            else:
+                script = DOCKER_NODE_COMMANDS[actions[name]]
+            return self.remote.ssh(name, script, check=False)
+
+        done = self.remote.parallel(act, actions)
+        failed = {name for name, out in done.items() if out.returncode != 0}
+        step = ch.revert_failed(prev, step, failed)
         self.state = step["state"]
         for name, s in self.state["nodes"].items():
             if s["health"] == "catching_up":
@@ -6169,17 +6204,24 @@ class ChaosRunner:
                     s["last_missing"],
                 )
         self._record(step["events"])
-        actions = {action["node"]: action["op"] for action in step["actions"]}
+        if failed:
+            self._failed(
+                "; ".join(
+                    f"{name} {actions[name]} exited {done[name].returncode}: "
+                    f"{done[name].stderr.strip()}"
+                    for name in sorted(failed)
+                )
+            )
+        else:
+            self.failures = 0
 
-        def act(name: str) -> None:
-            if actions[name] == "wipe":
-                self.remote.ssh(name, bounded(wipe_script(name in self.queries)))
-            else:
-                self.remote.ssh(name, DOCKER_NODE_COMMANDS[actions[name]])
-
-        self.remote.parallel(act, actions)
-        if step["error"] is not None:
-            raise RemoteError(step["error"])
+    def _failed(self, what: str) -> None:
+        self.failures += 1
+        if self.failures >= CHAOS_SSH_FAILURES:
+            raise RemoteError(
+                f"chaos: {self.failures} consecutive ssh failures, last: {what}"
+            )
+        log.warning("chaos: tick failed (%d in a row): %s", self.failures, what)
 
     def _record(self, events: list[ch.ChaosEvent]) -> None:
         with self.path.open("a") as f:

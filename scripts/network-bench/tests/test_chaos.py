@@ -53,7 +53,7 @@ def with_health(state, **health) -> Any:
     for name, h in health.items():
         nodes[name].update(health=h)
         if h == "catching_up":
-            nodes[name].update(rejoined=0.0)
+            nodes[name].update(up_at=0.0)
     return {**state, "nodes": nodes}
 
 
@@ -139,14 +139,41 @@ def test_peers_down_defers():
     target = "node5"
     down = peers[target][:2]
     state = with_health(init(topo=topo), **dict.fromkeys(down, "recovering"))
-    state["order"] = [target, "node9"]
-    other = "node9"
+    # Not a peer of the down nodes: node9 would leave node6 one up peer.
+    other = "node11"
+    state["order"] = [target, other]
     state["next_fault_at"] = 0.0
     result = step(state, observe(topo), 100.0, topo=topo, peers=peers)
     assert [e["node"] for e in faults([result])] == [other]
     state = with_health(state, **{down[0]: "up"})
     result = step(state, observe(topo), 100.0, topo=topo, peers=peers)
     assert [e["node"] for e in faults([result])] == [target]
+
+
+def test_fault_keeps_two_up_peers_for_every_faulty_node():
+    topo, peers = topo_of(13, 3), peers_of(13, 3)
+    assert peers["node9"] == ["node10", "node11", "node12"]
+    state = with_health(init(topo=topo), node9="recovering", node12="recovering")
+    state["order"] = ["node10", "node6"]
+    state["next_fault_at"] = 0.0
+    result = step(state, observe(topo), 100.0, topo=topo, peers=peers)
+    assert [e["node"] for e in faults([result])] == ["node6"]
+
+
+def test_up_node_without_answer_or_behind_the_tip_counts_as_faulty():
+    topo = topo_of()
+    assert ch.fault_budget(10) == 2
+    state = init(topo=topo)
+    state["order"] = ["node3", "node4"]
+    state["next_fault_at"] = 0.0
+    silent = step(state, observe(topo, node3=None), 100.0)
+    assert [e["node"] for e in faults([silent])] == ["node4"]
+    lagging = (100 - ch.LAG_BLOCKS - 1, 100, 0, (0, 0, 0))
+    full = step(state, observe(topo, node3=None, node5=lagging), 100.0)
+    assert faults([full]) == []
+    near = (100 - ch.LAG_BLOCKS, 100, 0, (0, 0, 0))
+    room = step(state, observe(topo, node3=None, node5=near), 100.0)
+    assert [e["node"] for e in faults([room])] == ["node4"]
 
 
 # REQ:awsbench-chaos-gates
@@ -165,7 +192,8 @@ def test_rejoin_needs_streak():
     again = step(reset["state"], good, 110.0)
     second = step(again["state"], good, 115.0)
     assert second["state"]["nodes"]["node5"]["health"] == "up"
-    assert [e["event"] for e in second["events"]] == ["rejoined"]
+    (event,) = second["events"]
+    assert (event["event"], event["ts"], event["after_s"]) == ("rejoined", 110.0, 110.0)
 
 
 # TEST:rejoin-needs-vote-ok
@@ -191,24 +219,54 @@ def test_query_catchup_needs_sync():
     state = step(state, obs, 115.0)["state"]
     result = step(state, obs, 120.0)
     assert result["state"]["nodes"]["node1"]["health"] == "up"
-    assert [e["event"] for e in result["events"]] == ["caught_up"]
+    (event,) = result["events"]
+    assert (event["event"], event["ts"], event["after_s"]) == (
+        "caught_up",
+        115.0,
+        115.0,
+    )
+
+
+def wiped(at: float = 100.0) -> Any:
+    """node1 wiped at `at`."""
+    state = with_health(init(), node1="recovering")
+    state["next_fault_at"] = 1e9
+    state["nodes"]["node1"].update(kind="wipe", since=at, started=at)
+    return state
 
 
 # TEST:stale-synced-after-rejoin-fails
 def test_catch_up_ignores_a_synced_answer_before_the_settle_time():
     topo = topo_of()
-    state = with_health(init(topo=topo), node1="recovering")
-    state["next_fault_at"] = 1e9
+    state = wiped()
     obs = observe(topo, node1=(100, 100, 100, (0, 0, 0)))
-    state = step(state, obs, 100.0)["state"]
-    state = step(state, obs, 105.0)["state"]
-    assert state["nodes"]["node1"]["rejoined"] == 105.0
-    for now in (110.0, 114.9):
+    events = []
+    for now in (105.0, 110.0, 114.9):
         result = step(state, obs, now)
         state = result["state"]
-        assert state["nodes"]["node1"]["health"] == "catching_up"
-        assert result["events"] == []
+        events += result["events"]
+    assert state["nodes"]["node1"]["up_at"] == 105.0
+    assert [e["event"] for e in events] == ["rejoined"]
+    assert state["nodes"]["node1"]["health"] == "catching_up"
     assert state["nodes"]["node1"]["streak"] == 0
+
+
+def test_settle_counts_from_the_first_answer_after_the_fault():
+    topo = topo_of()
+    state = wiped()
+    silent = observe(topo, node1=None)
+    state = step(state, silent, 105.0)["state"]
+    assert state["nodes"]["node1"]["up_at"] is None
+    synced = observe(topo, node1=(100, 100, 100, (0, 0, 0)))
+    events = []
+    for now in (108.0, 113.0, 118.0, 123.0):
+        result = step(state, synced, now)
+        state = result["state"]
+        events += result["events"]
+    assert [(e["event"], e["ts"], e["after_s"]) for e in events] == [
+        ("rejoined", 108.0, 8.0),
+        ("caught_up", 118.0, 18.0),
+    ]
 
 
 def test_caught_up_event_has_zero_counts_and_timeout_the_last_counts():
@@ -251,18 +309,17 @@ def test_timeout_of_a_validator_has_no_counts():
 # TEST:synced-after-settle-passes-ok
 def test_catch_up_passes_on_synced_ticks_after_the_settle_time():
     topo = topo_of()
-    state = with_health(init(topo=topo), node1="recovering")
-    state["next_fault_at"] = 1e9
+    state = wiped()
     obs = observe(topo, node1=(100, 100, 100, (0, 0, 0)))
-    state = step(state, obs, 100.0)["state"]
     state = step(state, obs, 105.0)["state"]
+    state = step(state, obs, 110.0)["state"]
     settle = 105.0 + ch.SYNC_SETTLE_S
-    state = step(state, obs, settle - 5.0)["state"]
     state = step(state, obs, settle)["state"]
     assert state["nodes"]["node1"]["health"] == "catching_up"
     result = step(state, obs, settle + 5.0)
     assert result["state"]["nodes"]["node1"]["health"] == "up"
-    assert [e["event"] for e in result["events"]] == ["caught_up"]
+    (event,) = result["events"]
+    assert (event["event"], event["ts"]) == ("caught_up", settle)
 
 
 # TEST:rejoining-query-node-catches-up-ok
@@ -306,24 +363,75 @@ def test_kill_starts_after_delay():
     assert late["state"]["nodes"][fault["node"]]["health"] == "recovering"
     started = [e for e in late["events"] if e["event"] == "started"]
     assert started[0]["after_s"] == 60.0
+    assert late["state"]["nodes"][fault["node"]]["started"] == 120.0
+
+
+def test_kill_recovery_counts_from_the_start():
+    topo = topo_of()
+    cfg = ch.ChaosConfig(kinds=("kill",))
+    state = with_health(init(cfg, topo), node5="recovering")
+    state["nodes"]["node5"].update(kind="kill", since=100.0, started=160.0)
+    state["next_fault_at"] = 1e9
+    state = step(state, observe(topo), 170.0, cfg)["state"]
+    (event,) = step(state, observe(topo), 175.0, cfg)["events"]
+    assert (event["event"], event["ts"], event["after_s"]) == ("rejoined", 170.0, 10.0)
+
+
+def timeouts(result) -> list[str]:
+    return [e["node"] for e in result["events"] if e["event"] == "timeout"]
 
 
 # REQ:awsbench-chaos-timeout
 # TEST:recover-timeout-fails
 # TEST:crashed-recovering-times-out-fails
-def test_recover_timeout_fails():
+def test_recover_timeout_marks_the_node_stuck_once():
     topo = topo_of()
     state = with_health(init(topo=topo), node5="recovering")
     state["nodes"]["node5"].update(since=100.0, kind="restart")
+    state["next_fault_at"] = 1e9
     obs = observe(topo, node5=None)
     ok = step(state, obs, 100.0 + CFG.recover_timeout_s - 1)
-    assert ok["error"] is None
+    assert timeouts(ok) == []
+    assert "error" not in ok
     result = step(state, obs, 100.0 + CFG.recover_timeout_s)
-    assert "node5" in result["error"]
     (event,) = [e for e in result["events"] if e["event"] == "timeout"]
     assert event["node"] == "node5"
     assert event["after_s"] == CFG.recover_timeout_s
+    state = result["state"]
+    assert state["nodes"]["node5"]["health"] == "stuck"
+    for now in (500.0, 505.0, 510.0):
+        result = step(state, observe(topo), now)
+        state = result["state"]
+        assert result["events"] == []
+    assert state["nodes"]["node5"]["health"] == "stuck"
+    assert ch.open_faults(state) == []
+
+
+def test_stuck_node_keeps_its_budget_slot_and_is_never_targeted():
+    n = 7
+    topo, peers = topo_of(n, 3), peers_of(n, 3)
+    assert ch.fault_budget(n) == 1
+    state = with_health(init(topo=topo), node5="stuck")
+    state["next_fault_at"] = 0.0
+    state["order"] = ["node5", "node4"]
+    result = step(state, observe(topo), 100.0, topo=topo, peers=peers)
     assert faults([result]) == []
+    roomy = with_health(init(), node5="stuck")
+    roomy["next_fault_at"] = 0.0
+    roomy["order"] = ["node5", "node4"]
+    assert [e["node"] for e in faults([step(roomy, observe(topo_of()), 100.0)])] == [
+        "node4"
+    ]
+
+
+def test_killed_node_past_its_timeout_is_started_and_stuck():
+    topo = topo_of()
+    state = with_health(init(topo=topo), node5="down")
+    state["nodes"]["node5"].update(since=100.0, kind="kill")
+    obs = observe(topo, **{n: None for n in topo["nodes"]})
+    result = step(state, obs, 100.0 + CFG.recover_timeout_s)
+    assert result["actions"] == [{"node": "node5", "op": "start"}]
+    assert result["state"]["nodes"]["node5"]["health"] == "stuck"
 
 
 # TEST:timeout-counts-from-fault-ok
@@ -338,9 +446,9 @@ def test_timeout_counts_from_fault():
     assert state["nodes"]["node1"]["health"] == "catching_up"
     lagging = observe(topo, node1=(100, 100, 0, (5, 0, 7)))
     ok = step(state, lagging, 100.0 + CFG.recover_timeout_s - 1)
-    assert ok["error"] is None
+    assert timeouts(ok) == []
     result = step(state, lagging, 100.0 + CFG.recover_timeout_s)
-    assert "node1" in result["error"]
+    assert timeouts(result) == ["node1"]
 
 
 # EDGE:tip-from-up-nodes
@@ -352,7 +460,6 @@ def test_all_probes_fail_skips():
     obs = observe(topo, **{n: None for n in topo["nodes"]})
     result = step(state, obs, 100.0)
     assert result["actions"] == [] and result["events"] == []
-    assert result["error"] is None
     assert result["state"] == state
 
 
@@ -361,7 +468,7 @@ def test_timeout_runs_without_tip():
     state = with_health(init(topo=topo), node5="recovering")
     obs = observe(topo, **{n: None for n in topo["nodes"]})
     result = step(state, obs, CFG.recover_timeout_s)
-    assert result["error"]
+    assert timeouts(result) == ["node5"]
 
 
 # TEST:tip-ignores-faulty-ok
@@ -405,7 +512,7 @@ def test_late_tick_gates_by_now():
     state["next_fault_at"] = 1e9
     result = step(state, observe(topo, node5=None), 400.0 - 1, cfg)
     assert result["actions"] == [{"node": "node5", "op": "start"}]
-    assert result["error"] is None
+    assert timeouts(result) == []
 
 
 # REQ:awsbench-chaos-schedule
@@ -425,13 +532,47 @@ def test_gap_respected():
 
 
 # TEST:stops-before-tail-ok
-def test_stops_before_tail():
+def test_stops_so_that_a_late_kill_recovers_under_load():
     steps = run(seconds=1500, load_s=600.0)
-    stop_at = 60.0 + 600.0 - ch.TAIL_S
+    stop_at = 60.0 + 600.0 - CFG.kill_down_s - ch.RECOVERY_ALLOWANCE_S
     times = [e["ts"] for e in faults(steps)]
-    assert times and max(times) < stop_at
-    state = init(load_s=600.0)
-    assert state["stop_at"] == stop_at
+    assert len(times) >= 8 and max(times) < stop_at
+    assert init(load_s=600.0)["stop_at"] == stop_at
+
+
+@pytest.mark.parametrize("load_s", [60.0, 120.0, 180.0])
+def test_short_load_has_no_faults(load_s):
+    assert faults(run(seconds=600, load_s=load_s)) == []
+
+
+def test_failed_fault_is_not_applied_and_retried_next_tick():
+    topo = topo_of()
+    state = init(topo=topo)
+    first = step(state, observe(topo), 60.0)
+    ((fault,),) = [first["actions"]]
+    undone = ch.revert_failed(state, first, {fault["node"]})
+    after = undone["state"]
+    assert after["nodes"][fault["node"]] == state["nodes"][fault["node"]]
+    schedule = ("cursor", "faults", "next_fault_at")
+    assert [after[k] for k in schedule] == [state[k] for k in schedule]
+    assert undone["actions"] == [] and undone["events"] == []
+    retry = step(undone["state"], observe(topo), 65.0)
+    assert retry["actions"] == [fault]
+
+
+def test_failed_start_keeps_the_node_down_until_a_start_works():
+    topo = topo_of()
+    state = with_health(init(topo=topo), node5="down", node6="recovering")
+    state["nodes"]["node5"].update(kind="kill", since=100.0)
+    state["next_fault_at"] = 1e9
+    good = observe(topo, node5=None)
+    result = step(state, good, 160.0)
+    undone = ch.revert_failed(state, result, {"node5"})
+    assert undone["state"]["nodes"]["node5"] == state["nodes"]["node5"]
+    assert undone["state"]["nodes"]["node6"]["streak"] == 1
+    assert [e["event"] for e in undone["events"]] == []
+    again = step(undone["state"], good, 165.0)
+    assert {"node": "node5", "op": "start"} in again["actions"]
 
 
 # TEST:same-seed-same-order-ok
@@ -603,15 +744,35 @@ def test_fault_table_adds_the_missing_column_only_for_a_timeout_with_counts():
     assert ch.fault_table([], T0) == []
 
 
-def test_verdict_passes_only_when_every_fault_recovered():
+def test_verdict_fails_only_on_timeouts():
     rows = ch.fault_rows(EVENTS)
     assert ch.chaos_verdict(rows, EVENTS, None, False).startswith("- Verdict: **pass**")
     open_ = EVENTS[:-1]
-    verdict = ch.chaos_verdict(ch.fault_rows(open_), open_, None, False)
-    assert verdict == "- Verdict: **fail**: node5 (kill) did not rejoin"
     timed_out = [*open_, ev(400, "timeout", "node5", "kill")]
-    verdict = ch.chaos_verdict(ch.fault_rows(timed_out), timed_out, None, True)
+    verdict = ch.chaos_verdict(ch.fault_rows(timed_out), timed_out, None, False)
     assert verdict == "- Verdict: **fail**: node5 (kill) not recovered after 5 s"
+
+
+def test_verdict_names_interrupted_faults_without_blaming_them():
+    aborted = [
+        *EVENTS[:-1],
+        ev(155, "interrupted", "node5", "kill"),
+        ev(160, "fault", "node1", "wipe"),
+        ev(170, "rejoined", "node1", "wipe"),
+        ev(175, "interrupted", "node1", "wipe"),
+    ]
+    rows = ch.fault_rows(aborted)
+    assert [r.interrupted for r in rows] == [None, T0 + 155, T0 + 175]
+    verdict = ch.chaos_verdict(rows, aborted, "interrupted", True)
+    assert verdict == (
+        "- Verdict: **fail**: interrupted; interrupted faults: node5 (kill), node1 (wipe)"
+    )
+    verdict = ch.chaos_verdict(rows, aborted, None, False)
+    assert verdict == (
+        "- Verdict: **pass**: no timeout; interrupted faults: node5 (kill), node1 (wipe)"
+    )
+    line = ch.chaos_log_line(aborted[-1])
+    assert line == "node1 interrupted"
 
 
 @pytest.mark.parametrize(("error", "reason"), [("boom", "boom"), (None, "no result")])
@@ -628,10 +789,11 @@ def test_recovery_table_has_median_and_max_per_kind():
         ev(230, "rejoined", "node1", "restart"),
     ]
     table = ch.recovery_table(ch.fault_rows(events), KINDS)
+    assert "| from |" in table[0]
     assert table[2:] == [
-        "| restart | 2 | 22 | 30 | 30 | 30 |",
-        "| kill | 1 | 80 | 80 | - | - |",
-        "| wipe | 0 | - | - | - | - |",
+        "| restart | 2 | fault | 22 | 30 | 30 | 30 |",
+        "| kill | 1 | start | 20 | 20 | - | - |",
+        "| wipe | 0 | fault | - | - | - | - |",
     ]
 
 

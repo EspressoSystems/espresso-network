@@ -17,12 +17,11 @@ from typing import Literal, NotRequired, TypedDict
 
 # Up query nodes kept at every fault: one serves scans and heights while another catches up.
 QUERY_FLOOR = 2
-# No faults in the last seconds of the load, so recoveries finish before it ends.
-TAIL_S = 120.0
+# No faults in the last `kill_down_s` plus this of the load, so a late kill recovers under load.
+RECOVERY_ALLOWANCE_S = 120.0
 LAG_BLOCKS = 2
 LAG_VIEWS = 3
 GATE_TICKS = 2
-# Longer than SYNC_STATUS_TTL: a cached sync-status from before the rejoin has expired.
 SYNC_STATUS_TTL_S = 5.0
 SYNC_SETTLE_S = 2 * SYNC_STATUS_TTL_S
 
@@ -45,7 +44,7 @@ class ChaosConfig:
 
 
 ChaosEventKind = Literal[
-    "fault", "started", "rejoined", "caught_up", "timeout", "restored"
+    "fault", "started", "rejoined", "caught_up", "timeout", "restored", "interrupted"
 ]
 
 
@@ -115,20 +114,28 @@ def chaos_log_line(event: ChaosEvent) -> str:
             return line
         case "restored":
             return f"{node} restored"
+        case "interrupted":
+            return f"{node} interrupted"
 
 
-NodeHealth = Literal["up", "down", "recovering", "catching_up"]
+# `stuck`: past its recover timeout; still faulty, no longer gated.
+NodeHealth = Literal["up", "down", "recovering", "catching_up", "stuck"]
+OPEN: tuple[NodeHealth, ...] = ("down", "recovering", "catching_up")
 
 
 class NodeState(TypedDict):
-    """`since` is the fault time: gates and timeouts measure from it. `rejoined` is the time of
-    the `rejoined` event. `last_missing` is the last `Missing` answered since the fault."""
+    """`since` is the fault time: timeouts measure from it. `started` is the fault time, or the
+    start of a killed node: recoveries measure from it. `up_at` is the first tick the node
+    answered after it. `streak_at` is the first tick of the passing streak. `last_missing` is
+    the last `Missing` answered since the fault."""
 
     health: NodeHealth
     kind: ChaosKind | None
     since: float
+    started: float
+    up_at: float | None
     streak: int
-    rejoined: float
+    streak_at: float
     last_missing: Missing | None
 
 
@@ -159,7 +166,6 @@ class ChaosStep(TypedDict):
     state: ChaosState
     actions: list[ChaosAction]
     events: list[ChaosEvent]
-    error: str | None
 
 
 def fault_budget(n: int) -> int:
@@ -183,8 +189,10 @@ def chaos_init(
                 health="up",
                 kind=None,
                 since=t_load,
+                started=t_load,
+                up_at=None,
                 streak=0,
-                rejoined=t_load,
+                streak_at=t_load,
                 last_missing=None,
             )
             for name in nodes
@@ -193,8 +201,17 @@ def chaos_init(
         cursor=0,
         faults=0,
         next_fault_at=first,
-        stop_at=first + load_s - TAIL_S,
+        stop_at=first + load_s - cfg.kill_down_s - RECOVERY_ALLOWANCE_S,
     )
+
+
+def open_faults(state: ChaosState) -> list[str]:
+    """Nodes still recovering from a fault; a stuck node is no longer one."""
+    return [name for name, s in state["nodes"].items() if s["health"] in OPEN]
+
+
+def stuck_nodes(state: ChaosState) -> list[str]:
+    return [name for name, s in state["nodes"].items() if s["health"] == "stuck"]
 
 
 def chaos_step(
@@ -215,10 +232,11 @@ def chaos_step(
         name: str,
         after_s: float | None = None,
         missing: Missing | None = None,
+        ts: float = now,
     ) -> None:
         events.append(
             chaos_event(
-                now,
+                ts,
                 event,
                 name,
                 nodes[name]["kind"],
@@ -238,44 +256,52 @@ def chaos_step(
     query_tip = _tip(obs["query_height"], [name for name in up if name in queries])
     if tip is not None:
         for name, s in nodes.items():
-            after_s = now - s["since"]
             if s["health"] == "down" and now >= s["since"] + cfg.kill_down_s:
                 actions.append({"node": name, "op": "start"})
-                s.update(health="recovering", streak=0)
-                emit("started", name, after_s)
+                s.update(health="recovering", started=now, streak=0)
+                emit("started", name, now - s["since"])
             elif s["health"] == "recovering":
+                # The fault or start action ran before this tick: the answer is the new process.
+                if s["up_at"] is None and obs["height"][name] is not None:
+                    s["up_at"] = now
                 good = _near(obs["height"][name], tip, LAG_BLOCKS) and _near(
                     obs["voted_view"][name], tip_view, LAG_VIEWS
                 )
-                s["streak"] = s["streak"] + 1 if good else 0
-                if s["streak"] >= GATE_TICKS:
+                if _passed(s, good, now):
                     nxt: NodeHealth = "catching_up" if name in queries else "up"
-                    emit("rejoined", name, after_s)
-                    s.update(
-                        health=nxt,
-                        kind=None if nxt == "up" else s["kind"],
-                        streak=0,
-                        rejoined=now,
+                    emit(
+                        "rejoined",
+                        name,
+                        s["streak_at"] - s["started"],
+                        ts=s["streak_at"],
                     )
+                    s.update(health=nxt, kind=None if nxt == "up" else s["kind"])
             elif s["health"] == "catching_up" and query_tip is not None:
+                # SYNC_SETTLE_S > SYNC_STATUS_TTL_S after the node came up: a sync-status
+                # cached from its empty database has expired.
                 good = (
-                    now >= s["rejoined"] + SYNC_SETTLE_S
+                    s["up_at"] is not None
+                    and now >= s["up_at"] + SYNC_SETTLE_S
                     and _near(obs["query_height"][name], query_tip, LAG_BLOCKS)
                     and obs["missing"][name] == (0, 0, 0)
                 )
-                s["streak"] = s["streak"] + 1 if good else 0
-                if s["streak"] >= GATE_TICKS:
-                    emit("caught_up", name, after_s, obs["missing"][name])
-                    s.update(health="up", kind=None, streak=0)
+                if _passed(s, good, now):
+                    emit(
+                        "caught_up",
+                        name,
+                        s["streak_at"] - s["started"],
+                        obs["missing"][name],
+                        ts=s["streak_at"],
+                    )
+                    s.update(health="up", kind=None)
 
-    error = None
     for name, s in nodes.items():
-        if s["health"] != "up" and now >= s["since"] + cfg.recover_timeout_s:
+        if s["health"] in OPEN and now >= s["since"] + cfg.recover_timeout_s:
             emit("timeout", name, now - s["since"], s["last_missing"])
-            error = (
-                f"{name} ({s['kind']}) not recovered within "
-                f"{cfg.recover_timeout_s:.0f} s, health {s['health']}"
-            )
+            if s["health"] == "down":
+                # Running for the collection, as `restore` only starts open faults.
+                actions.append({"node": name, "op": "start"})
+            s.update(health="stuck", streak=0)
 
     cursor, faults, next_fault_at = (
         state["cursor"],
@@ -284,9 +310,12 @@ def chaos_step(
     )
     if (
         tip is not None
-        and error is None
         and next_fault_at <= now < state["stop_at"]
-        and (i := _fault_target(state["order"], cursor, nodes, queries, peers))
+        and (
+            i := _fault_target(
+                state["order"], cursor, nodes, _lagging(nodes, obs, tip), queries, peers
+            )
+        )
         is not None
     ):
         name = state["order"][i]
@@ -295,6 +324,8 @@ def chaos_step(
             health="down" if kind == "kill" else "recovering",
             kind=kind,
             since=now,
+            started=now,
+            up_at=None,
             streak=0,
             last_missing=None,
         )
@@ -317,8 +348,60 @@ def chaos_step(
         ),
         actions=actions,
         events=events,
-        error=error,
     )
+
+
+def revert_failed(
+    prev: ChaosState, step: ChaosStep, failed: Collection[str]
+) -> ChaosStep:
+    """`step` without the actions of the `failed` nodes: their state and events as before it,
+    and the schedule too when a fault failed, so that the next tick retries them."""
+    if not failed:
+        return step
+    state = step["state"]
+    faulted = any(a["node"] in failed and a["op"] != "start" for a in step["actions"])
+    schedule = prev if faulted else state
+    return ChaosStep(
+        state=ChaosState(
+            nodes={
+                name: prev["nodes"][name] if name in failed else s
+                for name, s in state["nodes"].items()
+            },
+            order=state["order"],
+            cursor=schedule["cursor"],
+            faults=schedule["faults"],
+            next_fault_at=schedule["next_fault_at"],
+            stop_at=state["stop_at"],
+        ),
+        actions=[a for a in step["actions"] if a["node"] not in failed],
+        events=[e for e in step["events"] if e["node"] not in failed],
+    )
+
+
+def _passed(s: NodeState, good: bool, now: float) -> bool:
+    """Advances the passing streak of `s`; True, with the streak reset, once it is long
+    enough."""
+    if not good:
+        s["streak"] = 0
+        return False
+    if s["streak"] == 0:
+        s["streak_at"] = now
+    s["streak"] += 1
+    if s["streak"] < GATE_TICKS:
+        return False
+    s["streak"] = 0
+    return True
+
+
+def _lagging(
+    nodes: Mapping[str, NodeState], obs: ChaosObservation, tip: int
+) -> set[str]:
+    """Up nodes that did not answer or are behind `tip`."""
+    return {
+        name
+        for name, s in nodes.items()
+        if s["health"] == "up" and not _near(obs["height"][name], tip, LAG_BLOCKS)
+    }
 
 
 def _tip(values: Mapping[str, int | None], names: Iterable[str]) -> int | None:
@@ -334,23 +417,33 @@ def _fault_target(
     order: list[str],
     cursor: int,
     nodes: dict[str, NodeState],
+    lagging: Collection[str],
     queries: Collection[str],
     peers: dict[str, list[str]],
 ) -> int | None:
     """Index in `order` of the first node from `cursor` on whose fault keeps the budget, the up
-    query floor and 2 up peers; `None` when there is none."""
-    faulty = sum(s["health"] != "up" for s in nodes.values())
-    if faulty + 1 > fault_budget(len(nodes)):
+    query floor and 2 up peers for itself and for every faulty node; `None` when there is
+    none. A `lagging` node counts as faulty and is never a target."""
+    up = {name for name, s in nodes.items() if s["health"] == "up"}
+    if len(nodes) - len(up) + len(lagging) + 1 > fault_budget(len(nodes)):
         return None
-    up_queries = sum(nodes[q]["health"] == "up" for q in queries)
+    up_queries = sum(q in up for q in queries)
+
+    def up_peers(name: str, without: str) -> int:
+        return sum(p in up and p != without for p in peers[name])
+
     for step in range(len(order)):
         i = (cursor + step) % len(order)
         name = order[i]
-        if nodes[name]["health"] != "up":
+        if name not in up or name in lagging:
             continue
         if up_queries - (name in queries) < QUERY_FLOOR:
             continue
-        if sum(nodes[p]["health"] == "up" for p in peers[name]) < 2:
+        if up_peers(name, name) < 2:
+            continue
+        if any(
+            up_peers(m, name) < 2 for m in nodes if m not in up and name in peers[m]
+        ):
             continue
         return i
     return None
@@ -432,6 +525,7 @@ class FaultRow:
     caught_up: float | None = None
     timeout: float | None = None
     restored: float | None = None
+    interrupted: float | None = None
     missing: Missing | None = None
 
 
@@ -458,6 +552,8 @@ def fault_rows(events: Iterable[ChaosEvent]) -> list[FaultRow]:
                 row.timeout = ts
             case "restored":
                 row.restored = ts
+            case "interrupted":
+                row.interrupted = ts
         if "missing" in e:
             row.missing = e["missing"]
     return rows
@@ -554,26 +650,29 @@ def chaos_verdict(
     error: str | None,
     failed: bool,
 ) -> str:
+    """Fails on a timeout or a failed run; a fault the run's end interrupted is named, not
+    blamed."""
     reasons = [
         f"{e['node']} ({e['kind']}) not recovered after {e['after_s']:.0f} s"
         for e in events
         if e["event"] == "timeout"
     ]
-    reasons += [
-        f"{r.node} ({r.kind}) did not rejoin"
-        for r in rows
-        if r.rejoined is None and r.timeout is None
-    ]
     if not reasons and failed:
         reasons.append(error or "the run produced no result")
+    interrupted = ", ".join(
+        f"{r.node} ({r.kind})" for r in rows if r.interrupted is not None
+    )
+    tail = f"; interrupted faults: {interrupted}" if interrupted else ""
     if reasons:
-        return f"- Verdict: **fail**: {'; '.join(reasons)}"
+        return f"- Verdict: **fail**: {'; '.join(reasons)}{tail}"
+    if interrupted:
+        return f"- Verdict: **pass**: no timeout{tail}"
     return "- Verdict: **pass**: every fault recovered, no timeout"
 
 
 def recovery_table(rows: list[FaultRow], kinds: Sequence[str]) -> list[str]:
-    """Seconds from the fault to the `rejoined` and `caught_up` events, per kind; only query
-    nodes catch up."""
+    """Seconds to the `rejoined` and `caught_up` events per kind, from the fault, or from the
+    start of a killed node; only query nodes catch up."""
 
     def spread(took: list[float]) -> tuple[str, str]:
         if not took:
@@ -581,18 +680,29 @@ def recovery_table(rows: list[FaultRow], kinds: Sequence[str]) -> list[str]:
         return f"{statistics.median(took):.0f}", f"{max(took):.0f}"
 
     lines = [
-        "| kind | faults | rejoin p50 (s) | rejoin max (s) | caught up p50 (s) | caught up max (s) |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| kind | faults | from | rejoin p50 (s) | rejoin max (s) | caught up p50 (s) | caught up max (s) |",
+        "|---|---:|---|---:|---:|---:|---:|",
     ]
     for kind in kinds:
         of_kind = [r for r in rows if r.kind == kind]
         rejoin = spread(
-            [r.rejoined - r.fault for r in of_kind if r.rejoined is not None]
+            [
+                r.rejoined - _first(r.started, r.fault)
+                for r in of_kind
+                if r.rejoined is not None
+            ]
         )
         caught = spread(
-            [r.caught_up - r.fault for r in of_kind if r.caught_up is not None]
+            [
+                r.caught_up - _first(r.started, r.fault)
+                for r in of_kind
+                if r.caught_up is not None
+            ]
         )
-        lines.append(f"| {kind} | {len(of_kind)} | {' | '.join((*rejoin, *caught))} |")
+        origin = "start" if kind == "kill" else "fault"
+        lines.append(
+            f"| {kind} | {len(of_kind)} | {origin} | {' | '.join((*rejoin, *caught))} |"
+        )
     return lines
 
 

@@ -378,7 +378,19 @@ def test_restore_starts_down_nodes(isolated: Path):
     assert [(e["event"], e["node"]) for e in events] == [
         ("restored", "node4"),
         ("restored", "node5"),
+        ("interrupted", "node4"),
+        ("interrupted", "node5"),
+        ("interrupted", "node6"),
     ]
+
+
+def test_restore_leaves_stuck_nodes_alone(isolated: Path):
+    ctrl, runner = scripted_controller(isolated)
+    state = ch.chaos_init(ch.ChaosConfig(), list(ctrl.topo["nodes"]), 0.0, 60.0, 600.0)
+    ctrl.state = with_health(state, node4="stuck")
+    ctrl.restore()
+    assert not [c for c in runner.calls if "docker start" in c[-1]]
+    assert ch.read_events(isolated) == []
 
 
 # TEST:tick-waiting-noop-ok
@@ -392,11 +404,31 @@ def test_tick_before_loading_does_nothing(isolated: Path, agent):
     assert ch.read_events(isolated) == []
 
 
-def cluster_controller(isolated: Path, **chaos: Any) -> tuple[Any, Any, Any]:
+class FlakyRunner(ClusterRunner):
+    """The first `probes` chaos probes and `restarts` docker restarts fail over ssh."""
+
+    probes = 0
+    restarts = 0
+
+    def default(self, argv: list[str]) -> Any:
+        command = argv[-1] if argv[0] == "ssh" else ""
+        if self.probes and "consensus_last_voted_view" in command:
+            self.probes -= 1
+            return completed(returncode=awsb.SSH_FAILED_RC, stderr="Connection reset")
+        if self.restarts and "docker restart" in command:
+            self.restarts -= 1
+            return completed(returncode=awsb.SSH_FAILED_RC, stderr="Connection reset")
+        return super().default(argv)
+
+
+def cluster_controller(
+    isolated: Path, probes: int = 0, restarts: int = 0, **chaos: Any
+) -> tuple[Any, Any, Any]:
     clock = FakeClock(start=FAKE_EPOCH, limit_s=7200)
     names = [f"node{i}" for i in range(7)]
     cluster = FakeCluster(clock, names, {"node0", "node1", "node2"})
-    runner = ClusterRunner(cluster, 3, [LOADING])
+    runner = FlakyRunner(cluster, 3, [LOADING])
+    runner.probes, runner.restarts = probes, restarts
     cfg = dataclasses.replace(chaos_cfg(), chaos=ch.ChaosConfig(**chaos))
     ctrl = make_controller(isolated, runner, runner.hosts, clock, cfg)
     ctrl.state = ch.chaos_init(
@@ -423,11 +455,36 @@ def test_drain_waits_for_the_recovery(isolated: Path):
 
 
 # TEST:drain-timeout-fails
-def test_drain_timeout_fails(isolated: Path):
+def test_drain_returns_past_a_stuck_node(isolated: Path):
     ctrl, _, clock = cluster_controller(isolated, kill_down_s=1e9, recover_timeout_s=60)
-    with pytest.raises(awsb.RemoteError, match="node4"):
-        ctrl.drain(interrupts_of(clock))
+    ctrl.drain(interrupts_of(clock))
     assert [e["event"] for e in ch.read_events(isolated)] == ["timeout"]
+    assert ctrl.expected_down() == frozenset({"node4"})
+    assert ctrl.stuck() == ["node4"]
+
+
+def test_failed_probes_skip_ticks_until_the_limit(isolated: Path):
+    ctrl, _, clock = cluster_controller(isolated, probes=awsb.CHAOS_SSH_FAILURES - 1)
+    ctrl.drain(interrupts_of(clock))
+    assert [e["event"] for e in ch.read_events(isolated)] == ["started", "rejoined"]
+    ctrl, _, clock = cluster_controller(isolated, probes=awsb.CHAOS_SSH_FAILURES)
+    with pytest.raises(awsb.RemoteError, match="consecutive"):
+        ctrl.drain(interrupts_of(clock))
+
+
+def test_failed_fault_is_retried_on_the_next_tick(isolated: Path):
+    ctrl, cluster, clock = cluster_controller(isolated, restarts=1, kinds=("restart",))
+    cluster.start("node4")
+    ctrl.state = ch.chaos_init(
+        ctrl.chaos, list(ctrl.topo["nodes"]), clock.time(), 0.0, 3600.0
+    )
+    ctrl.tick(LOADING)
+    assert ctrl.remote.run.restarts == 0
+    assert ch.read_events(isolated) == []
+    assert ctrl.expected_down() == frozenset()
+    clock.sleep(awsb.AGENT_POLL_S)
+    ctrl.tick(LOADING)
+    assert [e["event"] for e in ch.read_events(isolated)] == ["fault"]
 
 
 # TEST:timeout-event-invalid-ok
@@ -554,6 +611,42 @@ def seed_faulting_a_query_node() -> int:
         if order[0] in queries:
             return seed
     raise AssertionError("no seed")
+
+
+class NoStart(ClusterRunner):
+    """`docker start` answers 0 without starting the node: a killed node never comes back."""
+
+    def default(self, argv: list[str]) -> Any:
+        if argv[0] == "ssh" and argv[-1] == awsb.DOCKER_NODE_COMMANDS["start"]:
+            return completed()
+        return super().default(argv)
+
+
+@pytest.mark.usefixtures("valid")
+def test_stuck_node_lets_the_load_finish_and_fails_the_run(run_harness: RunHarness):
+    clock = FakeClock(start=FAKE_EPOCH, limit_s=20000)
+    cluster = FakeCluster(
+        clock, [f"node{i}" for i in range(7)], {"node0", "node1", "node2"}
+    )
+    runner = NoStart(cluster, 3, [LOADING] * 80 + [DONE_STATE], describe=DESCRIBE)
+    args = run_harness.args(
+        "--chaos",
+        "--latency",
+        "off",
+        "--chaos-min",
+        "6",
+        "--chaos-kinds",
+        "kill",
+        "--query-nodes",
+        "3",
+        nodes=7,
+    )
+    assert awsb.cmd_run(args, FakeSystem(run=runner, clock=clock)) == awsb.EXIT_FAILED
+    events = ch.read_events(run_harness.run_dir)
+    assert [e["event"] for e in events] == ["fault", "started", "timeout"]
+    # Written from the agent's final state: the load ran to its end.
+    assert (run_harness.run_dir / "run.json").exists()
+    assert "not recovered within 300 s" in run_harness.log()
 
 
 class CtlDropsOnce(ClusterRunner):
