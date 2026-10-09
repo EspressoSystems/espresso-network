@@ -25,7 +25,7 @@ use crate::{
     message::Proposal,
 };
 
-const STATE_GC_MARGIN: u64 = 64;
+const STATE_GC_MARGIN: u64 = 8;
 
 pub struct UpdateLeaf<T: NodeType> {
     pub view: ViewNumber,

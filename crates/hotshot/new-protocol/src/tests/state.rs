@@ -577,21 +577,21 @@ async fn test_gc_aborts_stale_validation_without_dependents() {
     );
 }
 
-/// gc keeps validated states up to 64 views below the decided view and drops stubs below it.
+/// gc keeps validated states up to 8 views below the decided view and drops stubs below it.
 #[tokio::test]
 async fn test_gc_retains_validated_states_within_margin() {
     let mut manager = new_manager().await;
-    let test_data = TestData::new(80).await;
-    let decided = &test_data.views[70];
-    let at = |below: u64| test_data.views[70 - below as usize].view_number;
+    let test_data = TestData::new(20).await;
+    let decided = &test_data.views[10];
+    let at = |below: u64| test_data.views[10 - below as usize].view_number;
 
-    manager.update_state(leaf_update(&test_data.views[70 - 64], true));
-    manager.update_state(leaf_update(&test_data.views[70 - 65], true));
-    manager.seed_from_header(test_data.views[69].proposal.data.clone());
+    manager.update_state(leaf_update(&test_data.views[10 - 8], true));
+    manager.update_state(leaf_update(&test_data.views[10 - 9], true));
+    manager.seed_from_header(test_data.views[9].proposal.data.clone());
     manager.gc(decided.view_number);
 
-    assert!(manager.validated_contains_view(at(64)));
-    assert!(!manager.validated_contains_view(at(65)));
+    assert!(manager.validated_contains_view(at(8)));
+    assert!(!manager.validated_contains_view(at(9)));
     assert!(
         !manager.validated_contains_view(at(1)),
         "stubs are not retained"
