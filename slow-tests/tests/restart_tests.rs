@@ -49,7 +49,7 @@ use hotshot_orchestrator::run_orchestrator;
 use hotshot_types::{
     PeerConfig,
     data::EpochNumber,
-    event::{Event, EventType, LeafInfo},
+    event::LeafInfo,
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     new_protocol::CoordinatorEvent,
@@ -77,10 +77,6 @@ const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
 /// Extract the decided leaf chain from a consensus event, or `None` if it isn't a decide.
 fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
     match event {
-        CoordinatorEvent::LegacyEvent(Event {
-            event: EventType::Decide { leaf_chain, .. },
-            ..
-        }) => Some(leaf_chain),
         CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos),
         _ => None,
     }
@@ -89,10 +85,6 @@ fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTy
 /// Epoch of the certificate committing a decide event, or `None` if it isn't a decide.
 fn decided_epoch(event: &CoordinatorEvent<SeqTypes>) -> Option<EpochNumber> {
     match event {
-        CoordinatorEvent::LegacyEvent(Event {
-            event: EventType::Decide { committing_qc, .. },
-            ..
-        }) => committing_qc.epoch(),
         CoordinatorEvent::NewDecide { cert1, .. } => cert1.epoch(),
         _ => None,
     }
