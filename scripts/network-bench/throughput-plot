@@ -31,10 +31,11 @@ import argparse
 import json
 import math
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
+import chaos as ch
 import matplotlib
-import netbench as nb
 import numpy as np
 import tomllib
 
@@ -165,41 +166,25 @@ def max_block_mb(genesis: Path) -> float:
     return float(match[1]) * SIZE_UNITS[match[2]] / 1e6
 
 
-def phase_segments(row: dict, end: float) -> list[tuple[str, float, float]]:
-    """(phase, start, stop) of a fault: down until the node starts (a kill only), recovering
-    until it rejoins, catching up until its query service is synced (a query node only). A
-    phase still open at the timeout, else at `end`, runs to there."""
-    stop = row.get("timeout", end)
-    recovering = row.get("started", row["fault"])
-    rejoined = row.get("rejoined")
-    segments = []
-    if "started" in row:
-        segments.append(("down", row["fault"], row["started"]))
-    segments.append(("recovering", recovering, rejoined or stop))
-    if rejoined is not None and "caught_up" in row:
-        segments.append(("catching up", rejoined, row["caught_up"]))
-    elif rejoined is not None and "timeout" in row:
-        segments.append(("catching up", rejoined, stop))
-    return segments
-
-
-def draw_lanes(lanes_ax: plt.Axes, rows: list[dict], end: float, minutes) -> None:
+def draw_lanes(
+    lanes_ax: plt.Axes, rows: list[ch.FaultRow], end: float, minutes
+) -> None:
     """One lane per faulted node, in the order of its first fault."""
-    nodes = list(dict.fromkeys(r["node"] for r in rows))
+    nodes = list(dict.fromkeys(r.node for r in rows))
     for row in rows:
-        y = nodes.index(row["node"])
-        for phase, start, stop in phase_segments(row, end):
+        y = nodes.index(row.node)
+        for phase, start, stop in ch.phase_segments(row, end):
             lanes_ax.hlines(
                 y, minutes(start), minutes(stop), color=PHASE_COLOR[phase], lw=6
             )
-        marks = {k: row[k] for k in EVENT_MARKERS if k in row}
+        marks = {k: ts for k in EVENT_MARKERS if (ts := getattr(row, k)) is not None}
         for event, ts in marks.items():
             lanes_ax.plot(
                 minutes(ts), y, EVENT_MARKERS[event], color=INK, ms=4, zorder=3
             )
-        if "timeout" in row:
+        if row.timeout is not None:
             lanes_ax.plot(
-                minutes(row["timeout"]),
+                minutes(row.timeout),
                 y,
                 "x",
                 color=BAND_FAILED_INK,
@@ -208,9 +193,9 @@ def draw_lanes(lanes_ax: plt.Axes, rows: list[dict], end: float, minutes) -> Non
                 clip_on=False,
             )
         lanes_ax.text(
-            minutes(row["fault"]),
+            minutes(row.fault),
             y - 0.45,
-            row["kind"],
+            row.kind,
             fontsize=6,
             color=MUTED,
             va="bottom",
@@ -236,7 +221,9 @@ def draw_lanes(lanes_ax: plt.Axes, rows: list[dict], end: float, minutes) -> Non
     )
 
 
-def last_time(steps: list[dict], txs: list[dict], events: list[dict]) -> float:
+def last_time(
+    steps: list[dict], txs: list[dict], events: Sequence[ch.ChaosEvent]
+) -> float:
     """The end of a run without counter samples: its last step, submit or chaos event."""
     return max(
         [s["t_end"] for s in steps]
@@ -261,8 +248,7 @@ def main(argv: list[str] | None = None) -> None:
     counters = read_jsonl(run_dir / "consensus.jsonl")
     txs = read_jsonl(run_dir / "load.jsonl")
     heights = read_jsonl(run_dir / "heights.jsonl")
-    chaos_path = run_dir / "chaos.jsonl"
-    events = read_jsonl(chaos_path) if chaos_path.exists() else []
+    events = ch.read_events(run_dir)
     clients_file = run_dir / "clients.jsonl"
     clients = read_jsonl(clients_file) if clients_file.exists() else []
     run_path = run_dir / "run.json"
@@ -299,12 +285,12 @@ def main(argv: list[str] | None = None) -> None:
         for tx in txs
     ]
     flight = in_flight(np.array([tx["t_submit"] for tx in txs]), np.array(ends), grid)
-    rows = nb.fault_rows(events)
+    rows = ch.fault_rows(events)
 
     def minutes[T: (np.ndarray, float)](t: T) -> T:
         return (t - t0) / 60
 
-    lane_count = len({r["node"] for r in rows})
+    lane_count = len({r.node for r in rows})
     lane_ratio = (max(1.0, 0.3 * lane_count),) if rows else ()
     client_ratio = (1,) if clients else ()
     fig, panels = plt.subplots(
@@ -324,7 +310,7 @@ def main(argv: list[str] | None = None) -> None:
         panel.grid(alpha=0.3)
     if rows:
         draw_lanes(lane_panel[0], rows, t1, minutes)
-        for _, _, start, stop in nb.fault_windows(rows, t1):
+        for _, _, start, stop in ch.fault_windows(rows, t1):
             for panel in data_panels:
                 panel.axvspan(
                     minutes(start), minutes(stop), color=FAULT_SPAN, alpha=0.1, lw=0

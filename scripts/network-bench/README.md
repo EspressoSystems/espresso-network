@@ -823,6 +823,7 @@ scripts/network-bench/
                          metrics scrape, analysis, validity, compare, summary
   bench                  local driver: preflight, process-compose, host sampling, selftest
   aws-bench              AWS driver (laptop) and host agents (agent-drive, agent-host)
+  chaos.py               --chaos: event schema, fault scheduler and probe, fault rows, chaos report
   nullserver.py          null node for `selftest`
   latency.py             --latency profiles: node placement, RTT matrix, per-node tc script, probes
   latency-matrix.csv     56 measured AWS region pairs (espresso-deploy 34b35f6)

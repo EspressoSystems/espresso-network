@@ -40,6 +40,8 @@ from pathlib import Path
 from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar
 from urllib.parse import urlsplit
 
+import chaos as ch
+
 log = logging.getLogger("netbench")
 T = TypeVar("T")
 
@@ -3309,56 +3311,11 @@ def load_baseline(path: Path) -> Baseline:
             )
 
 
-class StepChaos(TypedDict):
-    """What the faults did to one load step."""
-
-    start_s: float
-    # Faults active during the step, as "node kind".
-    faults: str
-    # Nodes whose process was stopped or started during the step: their CPU counter reset.
-    restarted: frozenset[str]
-
-
-class ChaosView(TypedDict):
-    """The chaos report of `render`: `lead` replaces the headline, `faults` follows the chart,
-    `steps` has one entry per step of the result."""
-
-    lead: list[str]
-    faults: list[str]
-    steps: list[StepChaos]
-
-
-def fault_rows(events: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """One row per fault with the time of each later event of its node."""
-    rows: list[dict[str, Any]] = []
-    latest: dict[str, dict[str, Any]] = {}
-    for e in events:
-        if e["event"] == "fault":
-            latest[e["node"]] = {"node": e["node"], "kind": e["kind"], "fault": e["ts"]}
-            rows.append(latest[e["node"]])
-        elif e["event"] in ("started", "rejoined", "caught_up", "timeout"):
-            latest[e["node"]][e["event"]] = e["ts"]
-            if "missing" in e:
-                latest[e["node"]]["missing"] = e["missing"]
-    return rows
-
-
-def fault_windows(
-    rows: Iterable[Mapping[str, Any]], end: float
-) -> list[tuple[str, str, float, float]]:
-    """(node, kind, start, stop) per fault: from the fault to the rejoin, else to the timeout,
-    else to `end`."""
-    return [
-        (r["node"], r["kind"], r["fault"], r.get("rejoined", r.get("timeout", end)))
-        for r in rows
-    ]
-
-
 def render(
     result: BenchResult,
     comparison: Comparison | None,
     chart: str = "",
-    chaos: ChaosView | None = None,
+    chaos: ch.ChaosView | None = None,
 ) -> str:
     """The summary; `chart`, a markdown image, goes right below the headline. A `chaos` run
     leads with its report and lists every step instead of every rate."""
@@ -3666,7 +3623,7 @@ def step_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
 
 
 def chaos_step_table(
-    steps: Sequence[StepResult], chaos_steps: Sequence[StepChaos]
+    steps: Sequence[StepResult], chaos_steps: Sequence[ch.StepChaos]
 ) -> list[str]:
     """One row per step, as every step runs the same rate."""
     lines = [
@@ -3718,7 +3675,7 @@ def fail_code(rule: str) -> str:
 
 
 def step_details(
-    result: BenchResult, chaos_steps: Sequence[StepChaos] | None = None
+    result: BenchResult, chaos_steps: Sequence[ch.StepChaos] | None = None
 ) -> list[str]:
     """With `chaos_steps`, a node restarted during a step shows `-` in place of its CPU."""
     resets = (

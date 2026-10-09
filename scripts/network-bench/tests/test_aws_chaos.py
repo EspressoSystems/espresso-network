@@ -1,12 +1,10 @@
 import dataclasses
 import json
-import shlex
 import signal
-import subprocess
-from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+import chaos as ch
 import netbench
 import pytest
 from fakes import (
@@ -32,514 +30,7 @@ from fakes import (
     make_result,
     write_collected_run,
 )
-
-CFG = awsb.ChaosConfig()
-
-
-def topo_of(n: int = 10, k: int = 3) -> Any:
-    return awsb.topology(fleet(n, k), "sqlite")
-
-
-def peers_of(n: int = 10, k: int = 3) -> dict[str, list[str]]:
-    return {f"node{i}": [f"node{j}" for j in awsb.peers(i, n, k)] for i in range(n)}
-
-
-def init(cfg=CFG, topo=None, load_s: float = 6000.0) -> Any:
-    return awsb.chaos_init(cfg, topo or topo_of(), 0.0, 60.0, load_s)
-
-
-def observe(
-    topo, state=None, tip=100, view=100, query_tip=None, missing=(0, 0, 0), **override
-) -> Any:
-    """Every node shows the tip unless its health in `state` is not `up` or `override[name]`
-    is `None` (a failed probe) or a `(height, view, query height, missing)` tuple."""
-    query_tip = tip if query_tip is None else query_tip
-    queries = set(awsb.nb.query_nodes(topo))
-    obs = {"height": {}, "voted_view": {}, "query_height": {}, "missing": {}}
-    for name in topo["nodes"]:
-        h, v, q, s = tip, view, query_tip, missing
-        if name in override:
-            h, v, q, s = override[name] or (None, None, None, None)
-        obs["height"][name] = h
-        obs["voted_view"][name] = v
-        if name in queries:
-            obs["query_height"][name] = q
-            obs["missing"][name] = s
-    return obs
-
-
-def with_health(state, **health) -> Any:
-    nodes = {n: s.copy() for n, s in state["nodes"].items()}
-    for name, h in health.items():
-        nodes[name].update(health=h)
-        if h == "catching_up":
-            nodes[name].update(rejoined=0.0)
-    return {**state, "nodes": nodes}
-
-
-def step(state, obs, now, cfg=CFG, topo=None, peers=None) -> Any:
-    topo = topo or topo_of()
-    return awsb.chaos_step(state, cfg, topo, peers or peers_of(), obs, now)
-
-
-def run(cfg=CFG, n=10, k=3, seconds=2000.0, tick=5.0, recover=True, load_s=6000.0):
-    """Ticks the controller; observations follow the state: a not up node shows the tip when
-    `recover`, else answers nothing."""
-    topo, peers = topo_of(n, k), peers_of(n, k)
-    state = awsb.chaos_init(cfg, topo, 0.0, 60.0, load_s)
-    now, steps = 0.0, []
-    while now < seconds:
-        now += tick
-        override = (
-            {}
-            if recover
-            else {m: None for m, s in state["nodes"].items() if s["health"] != "up"}
-        )
-        result = awsb.chaos_step(
-            state, cfg, topo, peers, observe(topo, **override), now
-        )
-        state = result["state"]
-        steps.append(result)
-    return steps
-
-
-def faults(steps) -> list[dict]:
-    return [e for s in steps for e in s["events"] if e["event"] == "fault"]
-
-
-# REQ:awsbench-chaos-budget
-# TEST:fault-budget-table-ok
-def test_fault_budget_table():
-    for n in range(4, 26):
-        assert awsb.fault_budget(n) == max(0, (n - 1) // 3 - 1)
-    assert awsb.fault_budget(22) == 6
-    assert awsb.fault_budget(awsb.CHAOS_MIN_NODES) == 1
-
-
-# REQ:awsbench-chaos-invariants
-# TEST:budget-never-exceeded-ok
-@pytest.mark.parametrize("n", range(7, 23))
-def test_budget_never_exceeded(n):
-    k = min(3, n - 4)
-    for seed in range(3):
-        cfg = awsb.ChaosConfig(seed=seed, recover_timeout_s=1e9)
-        for result in run(cfg, n, k, seconds=1500, recover=False):
-            faulty = [
-                s for s in result["state"]["nodes"].values() if s["health"] != "up"
-            ]
-            assert len(faulty) <= awsb.fault_budget(n)
-
-
-# TEST:query-floor-kept-ok
-def test_query_floor_kept():
-    topo = topo_of(13, 4)
-    state = with_health(init(topo=topo), node0="catching_up", node1="catching_up")
-    lagging = observe(
-        topo, node0=(100, 100, 0, (5, 0, 7)), node1=(100, 100, 0, (5, 0, 7))
-    )
-    state["order"] = ["node2", "node3", "node4", "node5"]
-    state["next_fault_at"] = 0.0
-    result = step(state, lagging, 100.0, topo=topo, peers=peers_of(13, 4))
-    assert [e["node"] for e in faults([result])] == ["node4"]
-    assert [result["state"]["nodes"][n]["health"] for n in ("node2", "node3")] == [
-        "up",
-        "up",
-    ]
-
-
-# TEST:every-node-is-a-target-ok
-def test_every_node_is_a_target():
-    steps = run(seconds=2000, tick=5.0)
-    targets = {e["node"] for e in faults(steps)}
-    assert len(faults(steps)) > 30
-    assert targets == {f"node{i}" for i in range(10)}
-
-
-# TEST:peers-down-defers-ok
-def test_peers_down_defers():
-    topo, peers = topo_of(13, 3), peers_of(13, 3)
-    target = "node5"
-    down = peers[target][:2]
-    state = with_health(init(topo=topo), **dict.fromkeys(down, "recovering"))
-    state["order"] = [target, "node9"]
-    other = "node9"
-    state["next_fault_at"] = 0.0
-    result = step(state, observe(topo), 100.0, topo=topo, peers=peers)
-    assert [e["node"] for e in faults([result])] == [other]
-    state = with_health(state, **{down[0]: "up"})
-    result = step(state, observe(topo), 100.0, topo=topo, peers=peers)
-    assert [e["node"] for e in faults([result])] == [target]
-
-
-# REQ:awsbench-chaos-gates
-# TEST:rejoin-needs-streak-ok
-def test_rejoin_needs_streak():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node5="recovering")
-    state["next_fault_at"] = 1e9
-    good = observe(topo)
-    bad = observe(topo, node5=(10, 10, 0, (0, 0, 0)))
-    first = step(state, good, 100.0)
-    assert first["state"]["nodes"]["node5"]["health"] == "recovering"
-    assert first["state"]["nodes"]["node5"]["streak"] == 1
-    reset = step(first["state"], bad, 105.0)
-    assert reset["state"]["nodes"]["node5"]["streak"] == 0
-    again = step(reset["state"], good, 110.0)
-    second = step(again["state"], good, 115.0)
-    assert second["state"]["nodes"]["node5"]["health"] == "up"
-    assert [e["event"] for e in second["events"]] == ["rejoined"]
-
-
-# TEST:rejoin-needs-vote-ok
-def test_rejoin_needs_vote():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node5="recovering")
-    obs = observe(topo, node5=(100, 50, 0, (0, 0, 0)))
-    for now in (100.0, 105.0, 110.0):
-        result = step(state, obs, now)
-        state = result["state"]
-    assert state["nodes"]["node5"]["health"] == "recovering"
-
-
-# TEST:query-catchup-needs-sync-ok
-def test_query_catchup_needs_sync():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node1="catching_up")
-    obs = observe(topo, node1=(100, 100, 100, (5, 0, 7)))
-    for now in (100.0, 105.0, 110.0):
-        state = step(state, obs, now)["state"]
-    assert state["nodes"]["node1"]["health"] == "catching_up"
-    obs = observe(topo, node1=(100, 100, 100, (0, 0, 0)))
-    state = step(state, obs, 115.0)["state"]
-    result = step(state, obs, 120.0)
-    assert result["state"]["nodes"]["node1"]["health"] == "up"
-    assert [e["event"] for e in result["events"]] == ["caught_up"]
-
-
-# TEST:stale-synced-after-rejoin-fails
-def test_catch_up_ignores_a_synced_answer_before_the_settle_time():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node1="recovering")
-    state["next_fault_at"] = 1e9
-    obs = observe(topo, node1=(100, 100, 100, (0, 0, 0)))
-    state = step(state, obs, 100.0)["state"]
-    state = step(state, obs, 105.0)["state"]
-    assert state["nodes"]["node1"]["rejoined"] == 105.0
-    for now in (110.0, 114.9):
-        result = step(state, obs, now)
-        state = result["state"]
-        assert state["nodes"]["node1"]["health"] == "catching_up"
-        assert result["events"] == []
-    assert state["nodes"]["node1"]["streak"] == 0
-
-
-def test_caught_up_event_has_zero_counts_and_timeout_the_last_counts():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node1="catching_up")
-    state["next_fault_at"] = 1e9
-    state["nodes"]["node1"].update(since=100.0, kind="wipe")
-    lagging = observe(topo, node1=(100, 100, 100, (12, 0, 340)))
-    state = step(state, lagging, 200.0)["state"]
-    assert state["nodes"]["node1"]["last_missing"] == (12, 0, 340)
-    # a failed probe keeps the last counts
-    state = step(state, observe(topo, node1=None), 250.0)["state"]
-    assert state["nodes"]["node1"]["last_missing"] == (12, 0, 340)
-    result = step(state, lagging, 100.0 + CFG.recover_timeout_s)
-    (event,) = [e for e in result["events"] if e["event"] == "timeout"]
-    assert event["missing"] == (12, 0, 340)
-    assert awsb.chaos_log_line(event).endswith(
-        "(missing blocks 12, leaves 0, vid_common 340)"
-    )
-    good = observe(topo, node1=(100, 100, 100, (0, 0, 0)))
-    events = []
-    for now in (300.0, 305.0, 310.0):
-        result = step(state, good, now)
-        state = result["state"]
-        events += result["events"]
-    (event,) = [e for e in events if e["event"] == "caught_up"]
-    assert event["missing"] == (0, 0, 0)
-
-
-def test_timeout_of_a_validator_has_no_counts():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node5="recovering")
-    state["nodes"]["node5"].update(since=100.0, kind="kill")
-    result = step(state, observe(topo, node5=None), 100.0 + CFG.recover_timeout_s)
-    (event,) = [e for e in result["events"] if e["event"] == "timeout"]
-    assert "missing" not in event
-    assert awsb.chaos_log_line(event).endswith("s")
-
-
-# TEST:synced-after-settle-passes-ok
-def test_catch_up_passes_on_synced_ticks_after_the_settle_time():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node1="recovering")
-    state["next_fault_at"] = 1e9
-    obs = observe(topo, node1=(100, 100, 100, (0, 0, 0)))
-    state = step(state, obs, 100.0)["state"]
-    state = step(state, obs, 105.0)["state"]
-    settle = 105.0 + awsb.CHAOS_SYNC_SETTLE_S
-    state = step(state, obs, settle - 5.0)["state"]
-    state = step(state, obs, settle)["state"]
-    assert state["nodes"]["node1"]["health"] == "catching_up"
-    result = step(state, obs, settle + 5.0)
-    assert result["state"]["nodes"]["node1"]["health"] == "up"
-    assert [e["event"] for e in result["events"]] == ["caught_up"]
-
-
-# TEST:rejoining-query-node-catches-up-ok
-def test_rejoined_query_node_catches_up_before_up():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node1="recovering")
-    state = step(state, observe(topo), 100.0)["state"]
-    result = step(state, observe(topo), 105.0)
-    assert result["state"]["nodes"]["node1"]["health"] == "catching_up"
-
-
-# TEST:tips-without-node0-ok
-def test_tips_without_node0():
-    topo = topo_of()
-    state = with_health(
-        init(topo=topo), node0="down", node1="catching_up", node5="recovering"
-    )
-    state["next_fault_at"] = 1e9
-    state["nodes"]["node0"].update(since=100.0, kind="kill")
-    obs = observe(topo, tip=500, node0=None)
-    state = step(state, obs, 100.0)["state"]
-    result = step(state, obs, 105.0)
-    assert result["state"]["nodes"]["node5"]["health"] == "up"
-    assert result["state"]["nodes"]["node1"]["health"] == "up"
-    assert result["state"]["nodes"]["node0"]["health"] == "down"
-
-
-# TEST:kill-starts-after-delay-ok
-def test_kill_starts_after_delay():
-    topo = topo_of()
-    state = init(awsb.ChaosConfig(kinds=("kill",)), topo)
-    result = step(state, observe(topo), 60.0, awsb.ChaosConfig(kinds=("kill",)))
-    (fault,) = result["actions"]
-    assert fault["op"] == "kill"
-    state = result["state"]
-    obs = observe(topo, **{fault["node"]: None})
-    early = step(state, obs, 60.0 + 59.0, awsb.ChaosConfig(kinds=("kill",)))
-    assert [a for a in early["actions"] if a["op"] == "start"] == []
-    late = step(state, obs, 60.0 + 60.0, awsb.ChaosConfig(kinds=("kill",)))
-    assert {"node": fault["node"], "op": "start"} in late["actions"]
-    assert late["state"]["nodes"][fault["node"]]["health"] == "recovering"
-    started = [e for e in late["events"] if e["event"] == "started"]
-    assert started[0]["after_s"] == 60.0
-
-
-# REQ:awsbench-chaos-timeout
-# TEST:recover-timeout-fails
-# TEST:crashed-recovering-times-out-fails
-def test_recover_timeout_fails():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node5="recovering")
-    state["nodes"]["node5"].update(since=100.0, kind="restart")
-    obs = observe(topo, node5=None)
-    ok = step(state, obs, 100.0 + CFG.recover_timeout_s - 1)
-    assert ok["error"] is None
-    result = step(state, obs, 100.0 + CFG.recover_timeout_s)
-    assert "node5" in result["error"]
-    (event,) = [e for e in result["events"] if e["event"] == "timeout"]
-    assert event["node"] == "node5"
-    assert event["after_s"] == CFG.recover_timeout_s
-    assert faults([result]) == []
-
-
-# TEST:timeout-counts-from-fault-ok
-def test_timeout_counts_from_fault():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node1="recovering")
-    state["nodes"]["node1"].update(since=100.0, kind="wipe")
-    state["next_fault_at"] = 1e9
-    good = observe(topo)
-    state = step(state, good, 200.0)["state"]
-    state = step(state, good, 205.0)["state"]
-    assert state["nodes"]["node1"]["health"] == "catching_up"
-    lagging = observe(topo, node1=(100, 100, 0, (5, 0, 7)))
-    ok = step(state, lagging, 100.0 + CFG.recover_timeout_s - 1)
-    assert ok["error"] is None
-    result = step(state, lagging, 100.0 + CFG.recover_timeout_s)
-    assert "node1" in result["error"]
-
-
-# EDGE:tip-from-up-nodes
-# TEST:all-probes-fail-skips-ok
-def test_all_probes_fail_skips():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node5="recovering")
-    state["next_fault_at"] = 0.0
-    obs = observe(topo, **{n: None for n in topo["nodes"]})
-    result = step(state, obs, 100.0)
-    assert result["actions"] == [] and result["events"] == []
-    assert result["error"] is None
-    assert result["state"] == state
-
-
-def test_timeout_runs_without_tip():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node5="recovering")
-    obs = observe(topo, **{n: None for n in topo["nodes"]})
-    result = step(state, obs, CFG.recover_timeout_s)
-    assert result["error"]
-
-
-# TEST:tip-ignores-faulty-ok
-def test_tip_ignores_faulty():
-    topo = topo_of()
-    state = with_health(init(topo=topo), node6="down", node5="recovering")
-    state["next_fault_at"] = 1e9
-    obs = observe(topo, node6=(10_000, 10_000, 0, (0, 0, 0)))
-    state = step(state, obs, 100.0)["state"]
-    result = step(state, obs, 105.0)
-    assert result["state"]["nodes"]["node5"]["health"] == "up"
-
-
-# TEST:no-up-query-node-skips-query-gates-ok
-def test_no_up_query_node_skips_query_gates():
-    topo = topo_of()
-    state = with_health(
-        init(topo=topo),
-        node0="catching_up",
-        node1="down",
-        node2="down",
-        node5="recovering",
-    )
-    state["next_fault_at"] = 1e9
-    obs = observe(topo, node1=None, node2=None)
-    state = step(state, obs, 100.0)["state"]
-    result = step(state, obs, 105.0)
-    nodes = result["state"]["nodes"]
-    assert nodes["node0"]["health"] == "catching_up"
-    assert nodes["node0"]["streak"] == 0
-    assert nodes["node5"]["health"] == "up"
-
-
-# EDGE:restart-blocks-tick
-# TEST:late-tick-gates-by-now-ok
-def test_late_tick_gates_by_now():
-    topo = topo_of()
-    cfg = awsb.ChaosConfig(kinds=("kill",))
-    state = with_health(init(cfg, topo), node5="down")
-    state["nodes"]["node5"].update(since=100.0, kind="kill")
-    state["next_fault_at"] = 1e9
-    result = step(state, observe(topo, node5=None), 400.0 - 1, cfg)
-    assert result["actions"] == [{"node": "node5", "op": "start"}]
-    assert result["error"] is None
-
-
-# REQ:awsbench-chaos-schedule
-# TEST:kinds-cycle-ok
-def test_kinds_cycle():
-    steps = run(seconds=400)
-    assert [e["kind"] for e in faults(steps)][:3] == ["restart", "kill", "wipe"]
-    ops = [a["op"] for s in steps for a in s["actions"] if a["op"] != "start"]
-    assert ops[:3] == ["restart", "kill", "wipe"]
-
-
-# TEST:gap-respected-ok
-def test_gap_respected():
-    times = [e["ts"] for e in faults(run(seconds=1500))]
-    assert times[0] == 60.0
-    assert all(b - a >= CFG.gap_s for a, b in pairwise(times))
-
-
-# TEST:stops-before-tail-ok
-def test_stops_before_tail():
-    steps = run(seconds=1500, load_s=600.0)
-    stop_at = 60.0 + 600.0 - awsb.CHAOS_TAIL_S
-    times = [e["ts"] for e in faults(steps)]
-    assert times and max(times) < stop_at
-    state = init(load_s=600.0)
-    assert state["stop_at"] == stop_at
-
-
-# TEST:same-seed-same-order-ok
-def test_same_seed_same_order():
-    def targets(seed):
-        cfg = awsb.ChaosConfig(seed=seed)
-        return [e["node"] for e in faults(run(cfg, seconds=1000))]
-
-    assert targets(7) == targets(7)
-    assert targets(7) != targets(8)
-
-
-# TEST:round-robin-order-ok
-def test_round_robin_order():
-    cfg = awsb.ChaosConfig(kinds=("restart",))
-    targets = [e["node"] for e in faults(run(cfg, seconds=1500))]
-    order = init(cfg)["order"]
-    assert len(targets) > 20
-    assert targets == [order[i % len(order)] for i in range(len(targets))]
-
-
-# EDGE:deferred-fault-budget-full
-# TEST:deferred-fault-issued-later-ok
-def test_deferred_fault_issued_later():
-    n = 7
-    topo, peers = topo_of(n, 3), peers_of(n, 3)
-    state = init(topo=topo)
-    state["next_fault_at"] = 60.0
-    first = step(state, observe(topo), 60.0, topo=topo, peers=peers)
-    (fault,) = faults([first])
-    full = first["state"]
-    assert full["next_fault_at"] == 60.0 + CFG.gap_s
-    blocked = step(full, observe(topo), 200.0, topo=topo, peers=peers)
-    assert faults([blocked]) == []
-    assert blocked["state"]["next_fault_at"] == full["next_fault_at"]
-    healed = with_health(blocked["state"], **{fault["node"]: "up"})
-    later = step(healed, observe(topo), 205.0, topo=topo, peers=peers)
-    assert len(faults([later])) == 1
-
-
-# REQ:awsbench-chaos-events
-# TEST:event-fields-ok
-def test_event_fields():
-    events = [e for s in run(seconds=800) for e in s["events"]]
-    kinds = {e["event"] for e in events}
-    assert {"fault", "rejoined"} <= kinds
-    for e in events:
-        assert {"ts", "iso", "event", "node"} <= e.keys()
-        assert e["iso"].startswith("1970-01-01T")
-        if e["event"] in ("rejoined", "caught_up"):
-            assert e["after_s"] is not None
-        if e["event"] == "fault":
-            assert e["height"] == 100
-
-
-# EDGE:probe-partial-output
-# TEST:probe-dash-is-none-ok
-def test_probe_dash_is_none():
-    topo = topo_of(4, 2)
-    out = "node0 10 20 9 0,1,2\nnode1 - - - -\nnode2 5 6\nnode3 - 7\n"
-    obs = awsb.parse_probe(out, topo)
-    assert obs["height"] == {"node0": 10, "node1": None, "node2": 5, "node3": None}
-    assert obs["voted_view"]["node3"] == 7
-    assert obs["query_height"] == {"node0": 9, "node1": None}
-    assert obs["missing"] == {"node0": (0, 1, 2), "node1": None}
-
-
-# TEST:probe-missing-line-fails
-def test_probe_missing_line_fails():
-    topo = topo_of(4, 2)
-    with pytest.raises(ValueError, match="node3"):
-        awsb.parse_probe("node0 1 2 3 0,0,0\nnode1 1 2 3 0,0,0\nnode2 1 2\n", topo)
-    with pytest.raises(ValueError, match="node1"):
-        awsb.parse_probe("node0 1 2 3 0,0,0\nnode1 1 2\nnode2 1 2\nnode3 1 2\n", topo)
-
-
-def test_probe_command_covers_every_node():
-    topo = topo_of(4, 2)
-    *lines, last = awsb.probe_command(topo).splitlines()
-    assert last == "wait"
-    assert len(lines) == 4
-    assert "/v1/node/sync-status" in lines[0] and "/v1/node/sync-status" not in lines[2]
-    assert "consensus_last_voted_view" in lines[2]
-    assert all(topo["nodes"][f"node{i}"] in lines[i] for i in range(4))
-    for line in lines:
-        shlex.split(line)
+from test_chaos import peers_of, topo_of, with_health
 
 
 # REQ:awsbench-chaos-wipe
@@ -599,29 +90,6 @@ def test_recreate_sh_same_argv(role):
     assert "containers.json" in recreate
 
 
-def test_missing_filter_prints_the_three_counts():
-    def counts(missing: tuple[int, int, int]) -> str:
-        blocks, leaves, vid = ({"missing": m, "ranges": []} for m in missing)
-        doc = {
-            "blocks": blocks,
-            "leaves": leaves,
-            "vid_common": vid,
-            "pruned_height": 0,
-        }
-        out = subprocess.run(
-            ["jq", "-r", awsb.MISSING_JQ],
-            input=json.dumps(doc),
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        return out.stdout.strip()
-
-    assert counts((0, 0, 0)) == "0,0,0"
-    assert counts((12, 0, 340)) == "12,0,340"
-    assert shlex.quote(awsb.MISSING_JQ) in awsb.probe_command(topo_of(4, 2))
-
-
 LOADING = {"phase": "loading", "detail": "x"}
 
 
@@ -636,7 +104,7 @@ def test_chaos_shape_defaults():
     assert (cfg.nodes, cfg.query_nodes) == (22, 22)
     assert (cfg.node_type, cfg.ctl_type) == ("c8g.xlarge", "c8g.xlarge")
     assert cfg.query_engine == "sqlite"
-    assert cfg.chaos == awsb.ChaosConfig()
+    assert cfg.chaos == ch.ChaosConfig()
     assert cfg.load.steps == (4.0,) * 10
     assert cfg.load.step_s == awsb.CHAOS_STEP_S
     assert cfg.load.keep_going
@@ -822,7 +290,7 @@ def test_old_manifest_defaults():
 
 
 def test_manifest_config_round_trips_chaos():
-    chaos = awsb.ChaosConfig(minutes=3, seed=7, kinds=("kill", "wipe"))
+    chaos = ch.ChaosConfig(minutes=3, seed=7, kinds=("kill", "wipe"))
     cfg = awsb.RunConfig(tag="x", nodes=9, query_nodes=3, chaos=chaos)
     saved = json.loads(json.dumps(awsb.config_to_json(cfg)))
     assert awsb.config_from_manifest(saved).chaos == chaos
@@ -835,7 +303,7 @@ def chaos_cfg(**kw: Any) -> Any:
         nodes=7,
         query_nodes=3,
         query_engine="sqlite",
-        chaos=awsb.ChaosConfig(),
+        chaos=ch.ChaosConfig(),
         load=netbench.BenchConfig(submit_nodes=7),
         **kw,
     )
@@ -901,12 +369,12 @@ def scripted_controller(isolated: Path) -> tuple[Any, Any]:
 # TEST:restore-starts-down-ok
 def test_restore_starts_down_nodes(isolated: Path):
     ctrl, runner = scripted_controller(isolated)
-    state = awsb.chaos_init(awsb.ChaosConfig(), ctrl.topo, 0.0, 60.0, 600.0)
+    state = ch.chaos_init(ch.ChaosConfig(), list(ctrl.topo["nodes"]), 0.0, 60.0, 600.0)
     ctrl.state = with_health(state, node4="down", node5="down", node6="recovering")
     ctrl.restore()
     starts = [c[-1] for c in runner.calls if "docker start" in c[-1]]
     assert starts == ["sudo docker start espresso-node"] * 2
-    events = awsb.chaos_events(isolated)
+    events = ch.read_events(isolated)
     assert [(e["event"], e["node"]) for e in events] == [
         ("restored", "node4"),
         ("restored", "node5"),
@@ -921,7 +389,7 @@ def test_tick_before_loading_does_nothing(isolated: Path, agent):
     ctrl.tick(agent)
     assert ctrl.state is None and ctrl.expected_down() == frozenset()
     assert len(runner.calls) == calls
-    assert awsb.chaos_events(isolated) == []
+    assert ch.read_events(isolated) == []
 
 
 def cluster_controller(isolated: Path, **chaos: Any) -> tuple[Any, Any, Any]:
@@ -929,9 +397,11 @@ def cluster_controller(isolated: Path, **chaos: Any) -> tuple[Any, Any, Any]:
     names = [f"node{i}" for i in range(7)]
     cluster = FakeCluster(clock, names, {"node0", "node1", "node2"})
     runner = ClusterRunner(cluster, 3, [LOADING])
-    cfg = dataclasses.replace(chaos_cfg(), chaos=awsb.ChaosConfig(**chaos))
+    cfg = dataclasses.replace(chaos_cfg(), chaos=ch.ChaosConfig(**chaos))
     ctrl = make_controller(isolated, runner, runner.hosts, clock, cfg)
-    ctrl.state = awsb.chaos_init(cfg.chaos, ctrl.topo, clock.time(), 60.0, 0.0)
+    ctrl.state = ch.chaos_init(
+        cfg.chaos, list(ctrl.topo["nodes"]), clock.time(), 60.0, 0.0
+    )
     cluster.kill("node4")
     ctrl.state = with_health(ctrl.state, node4="down")
     ctrl.state["nodes"]["node4"].update(kind="kill", since=clock.time())
@@ -948,8 +418,8 @@ def test_drain_waits_for_the_recovery(isolated: Path):
     ctrl.drain(interrupts_of(clock))
     assert ctrl.expected_down() == frozenset()
     assert cluster.members["node4"].running
-    assert [e["event"] for e in awsb.chaos_events(isolated)] == ["started", "rejoined"]
-    assert clock.time() - FAKE_EPOCH >= awsb.ChaosConfig().kill_down_s
+    assert [e["event"] for e in ch.read_events(isolated)] == ["started", "rejoined"]
+    assert clock.time() - FAKE_EPOCH >= ch.ChaosConfig().kill_down_s
 
 
 # TEST:drain-timeout-fails
@@ -957,12 +427,12 @@ def test_drain_timeout_fails(isolated: Path):
     ctrl, _, clock = cluster_controller(isolated, kill_down_s=1e9, recover_timeout_s=60)
     with pytest.raises(awsb.RemoteError, match="node4"):
         ctrl.drain(interrupts_of(clock))
-    assert [e["event"] for e in awsb.chaos_events(isolated)] == ["timeout"]
+    assert [e["event"] for e in ch.read_events(isolated)] == ["timeout"]
 
 
 # TEST:timeout-event-invalid-ok
 def test_timeout_event_makes_the_run_invalid():
-    event = awsb._chaos_event(300.0, "timeout", "node4", "kill", None, 300.0)
+    event = ch.chaos_event(300.0, "timeout", "node4", "kill", None, 300.0)
     args = (clean_result(), aws_manifest(), clean_evidence())
     assert awsb.check_validity_aws(*args)["valid"]
     verdict = awsb.check_validity_aws(*args, [event])
@@ -979,13 +449,13 @@ def test_write_report_has_the_chaos_section_and_exempts_faulted_nodes(tmp_path: 
     netbench.write_jsonl(tmp_path / "metrics.jsonl", degraded)
     manifest["config"] = {
         **manifest["config"],
-        "chaos": dataclasses.asdict(awsb.ChaosConfig()),
+        "chaos": dataclasses.asdict(ch.ChaosConfig()),
     }
     netbench.write_json(tmp_path / "manifest.json", manifest)
     meta = netbench.read_json(tmp_path / "load-meta.json")
     netbench.write_json(tmp_path / "load-meta.json", {**meta, "submit_failovers": 5})
     run = netbench.read_json(tmp_path / "run.json")
-    ev = awsb._chaos_event
+    ev = ch.chaos_event
     events = [
         ev(run["t0"] + 5, "fault", "node1", "restart", 9, None),
         ev(run["t0"] + 20, "rejoined", "node1", "restart", None, 15.0),
@@ -1023,8 +493,8 @@ def test_hash_includes_chaos_and_query_nodes():
 
     hashes = {
         digest(base),
-        digest(dataclasses.replace(base, chaos=awsb.ChaosConfig(seed=7))),
-        digest(dataclasses.replace(base, chaos=awsb.ChaosConfig(rate_mb_s=2.0))),
+        digest(dataclasses.replace(base, chaos=ch.ChaosConfig(seed=7))),
+        digest(dataclasses.replace(base, chaos=ch.ChaosConfig(rate_mb_s=2.0))),
         digest(dataclasses.replace(base, query_nodes=4)),
         digest(dataclasses.replace(base, chaos=None)),
     }
@@ -1056,7 +526,7 @@ def test_chaos_run_end_to_end(run_harness: RunHarness):
         nodes=7,
     )
     assert awsb.cmd_run(args, FakeSystem(run=runner, clock=clock)) == awsb.EXIT_OK
-    events = awsb.chaos_events(run_harness.run_dir)
+    events = ch.read_events(run_harness.run_dir)
     kinds = {e["event"] for e in events}
     assert {"fault", "started", "rejoined", "caught_up"} <= kinds
     fault_kinds = [e["kind"] for e in events if e["event"] == "fault"]
@@ -1078,9 +548,9 @@ def seed_faulting_a_query_node() -> int:
     topo = topo_of(7, 3)
     queries = set(awsb.nb.query_nodes(topo))
     for seed in range(100):
-        order = awsb.chaos_init(awsb.ChaosConfig(seed=seed), topo, 0.0, 0.0, 0.0)[
-            "order"
-        ]
+        order = ch.chaos_init(
+            ch.ChaosConfig(seed=seed), list(topo["nodes"]), 0.0, 0.0, 0.0
+        )["order"]
         if order[0] in queries:
             return seed
     raise AssertionError("no seed")
@@ -1151,4 +621,4 @@ def test_interrupt_mid_chaos_restores_killed_nodes(run_harness: RunHarness):
     assert awsb.cmd_run(args, system) == awsb.EXIT_FAILED
     assert runner.ran("tofu", "destroy")
     assert all(m.running for m in cluster.members.values())
-    assert "restored" in {e["event"] for e in awsb.chaos_events(run_harness.run_dir)}
+    assert "restored" in {e["event"] for e in ch.read_events(run_harness.run_dir)}

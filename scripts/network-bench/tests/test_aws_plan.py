@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
+import chaos as ch
 import netbench
 import pytest
 from fakes import (
@@ -1596,7 +1597,7 @@ def test_node_summary_names_the_storage_modules_and_every_run_setting():
 
 
 def test_format_node_summary_chaos() -> None:
-    chaos = awsb.ChaosConfig(minutes=3, kinds=("restart", "kill"))
+    chaos = ch.ChaosConfig(minutes=3, kinds=("restart", "kill"))
     fs = awsb.format_node_summary(small_cfg(22, chaos=chaos))
     assert fs[-1] == (
         "chaos: 3 min at 4 MB/s; latency off; kinds restart,kill; seed 42; at most 6 faulty; gap 45 s; "

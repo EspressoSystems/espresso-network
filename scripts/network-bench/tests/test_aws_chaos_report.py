@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import chaos as ch
 import netbench
 import pytest
 from fakes import (
@@ -15,9 +16,8 @@ from fakes import (
     make_result,
     step,
 )
+from test_chaos import EVENTS, KINDS, T0, ev
 
-T0 = 1000.0
-KINDS = ["restart", "kill", "wipe"]
 CONFIG = {
     "nodes": 22,
     "query_nodes": 4,
@@ -28,20 +28,8 @@ CONFIG = {
 }
 
 
-def ev(at: float, event: str, node: str, kind: str, missing: Any = None) -> Any:
-    return awsb._chaos_event(T0 + at, event, node, kind, 10, 5.0, missing)
-
-
-# node0 restarts at 10 s and is synced at 40 s; node5 is killed at 70 s, starts at 130 s and
-# rejoins at 150 s, so it is faulty for the second and third step.
-EVENTS = [
-    ev(10, "fault", "node0", "restart"),
-    ev(25, "rejoined", "node0", "restart"),
-    ev(40, "caught_up", "node0", "restart"),
-    ev(70, "fault", "node5", "kill"),
-    ev(130, "started", "node5", "kill"),
-    ev(150, "rejoined", "node5", "kill"),
-]
+def spans_of(steps: list[Any]) -> list[tuple[float, float]]:
+    return [(s["t_start"], s["t_end"]) for s in steps]
 
 
 def steps_of(decided: list[float | None]) -> list[Any]:
@@ -56,87 +44,9 @@ def steps_of(decided: list[float | None]) -> list[Any]:
     return steps
 
 
-def test_fault_rows_follow_each_fault_to_its_events():
-    rows = netbench.fault_rows(EVENTS)
-    assert [(r["node"], r["kind"]) for r in rows] == [
-        ("node0", "restart"),
-        ("node5", "kill"),
-    ]
-    assert rows[0]["caught_up"] == T0 + 40
-    assert "caught_up" not in rows[1] and rows[1]["started"] == T0 + 130
-
-
-def test_fault_table_adds_the_missing_column_only_for_a_timeout_with_counts():
-    plain = awsb.fault_table(netbench.fault_rows(EVENTS), T0)
-    assert "missing" not in plain[2]
-    assert "| node5 | kill | 70 | 130 | 150 | - |" in plain
-    timeout = [*EVENTS[:2], ev(330, "timeout", "node0", "restart", (3, 0, 2))]
-    table = awsb.fault_table(netbench.fault_rows(timeout), T0)
-    assert table[2].endswith("| missing |")
-    assert (
-        table[4]
-        == "| node0 | restart | 10 | - | 25 | - | blocks 3, leaves 0, vid_common 2 |"
-    )
-    assert awsb.fault_table([], T0) == []
-
-
-def test_verdict_passes_only_when_every_fault_recovered():
-    rows = netbench.fault_rows(EVENTS)
-    assert awsb.chaos_verdict(rows, EVENTS, None, False).startswith(
-        "- Verdict: **pass**"
-    )
-    open_ = EVENTS[:-1]
-    verdict = awsb.chaos_verdict(netbench.fault_rows(open_), open_, None, False)
-    assert verdict == "- Verdict: **fail**: node5 (kill) did not rejoin"
-    timed_out = [*open_, ev(400, "timeout", "node5", "kill")]
-    verdict = awsb.chaos_verdict(netbench.fault_rows(timed_out), timed_out, None, True)
-    assert verdict == "- Verdict: **fail**: node5 (kill) not recovered after 5 s"
-
-
-@pytest.mark.parametrize(("error", "reason"), [("boom", "boom"), (None, "no result")])
-def test_verdict_of_a_run_without_result_fails_even_with_clean_faults(error, reason):
-    rows = netbench.fault_rows(EVENTS)
-    verdict = awsb.chaos_verdict(rows, EVENTS, error, True)
-    assert verdict.startswith("- Verdict: **fail**") and reason in verdict
-
-
-def test_recovery_table_has_median_and_max_per_kind():
-    events = [
-        *EVENTS,
-        ev(200, "fault", "node1", "restart"),
-        ev(230, "rejoined", "node1", "restart"),
-    ]
-    table = awsb.recovery_table(netbench.fault_rows(events), KINDS)
-    assert table[2:] == [
-        "| restart | 2 | 22 | 30 | 30 | 30 |",
-        "| kill | 1 | 80 | 80 | - | - |",
-        "| wipe | 0 | - | - | - | - |",
-    ]
-
-
-def test_steps_name_their_faults_and_restarted_nodes():
-    steps = steps_of([4.0, 2.0, 3.0, 4.0])
-    rows = netbench.fault_rows(EVENTS)
-    chaos = awsb.step_chaos(steps, rows, T0, T0 + 240)
-    assert [c["start_s"] for c in chaos] == [0, 60, 120, 180]
-    # A fault is active from its start to its rejoin.
-    assert [c["faults"] for c in chaos] == [
-        "node0 restart",
-        "node5 kill",
-        "node5 kill",
-        "",
-    ]
-    assert [sorted(c["restarted"]) for c in chaos] == [
-        ["node0"],
-        ["node5"],
-        ["node5"],
-        [],
-    ]
-
-
 def test_throughput_compares_steps_with_and_without_a_fault():
     steps = steps_of([4.0, 2.0, 3.0, 4.0])
-    chaos = awsb.step_chaos(steps, netbench.fault_rows(EVENTS), T0, T0 + 240)
+    chaos = ch.step_chaos(spans_of(steps), ch.fault_rows(EVENTS), T0, T0 + 240)
     lines = awsb.throughput_lines(steps, chaos)
     assert lines[1] == (
         "- Throughput: mean decided 3.25 MB/s of 4 MB/s offered over 4 steps; "
@@ -147,14 +57,17 @@ def test_throughput_compares_steps_with_and_without_a_fault():
     )
     unmeasured = steps_of([None, None])
     assert (
-        awsb.throughput_lines(unmeasured, awsb.step_chaos(unmeasured, [], T0, T0)) == []
+        awsb.throughput_lines(
+            unmeasured, ch.step_chaos(spans_of(unmeasured), [], T0, T0)
+        )
+        == []
     )
 
 
 def test_totals_count_faults_budget_timeouts_and_txs():
     meta = {"missing_payloads": [641, 1553], "submit_failovers": 19}
     txs = Counter(included=8, timeout=2, pending=1)
-    rows = netbench.fault_rows(EVENTS)
+    rows = ch.fault_rows(EVENTS)
     lines = awsb.chaos_totals(rows, EVENTS, CONFIG, meta, txs)
     assert lines == [
         "- Faults: 2 (restart 1, kill 1, wipe 0); max concurrent faulty 1 of budget 6",
@@ -176,7 +89,7 @@ def chaos_result(steps: list[Any]) -> Any:
 
 
 def view_of(steps: list[Any]) -> Any:
-    chaos = awsb.step_chaos(steps, netbench.fault_rows(EVENTS), T0, T0 + 240)
+    chaos = ch.step_chaos(spans_of(steps), ch.fault_rows(EVENTS), T0, T0 + 240)
     return {
         "lead": ["## Chaos test", "", "- Verdict: **pass**"],
         "faults": [],
@@ -340,21 +253,6 @@ def test_chaos_index_row_has_the_chaos_rate_and_the_mean_decided():
     assert (failed["rate"], failed["decided"], failed["status"]) == ("4", "-", "failed")
     plain = awsb.index_cells(index_manifest(), "01-run", None, 3, None)
     assert plain["chaos"] == "-"
-
-
-def test_fault_windows_end_at_the_rejoin_else_the_timeout_else_the_end():
-    end = T0 + 300
-    rows = netbench.fault_rows([*EVENTS, ev(200, "fault", "node7", "kill")])
-    windows = netbench.fault_windows(rows, end)
-    assert [(n, a - T0, b - T0) for n, _, a, b in windows] == [
-        ("node0", 10, 25),
-        ("node5", 70, 150),
-        ("node7", 200, 300),
-    ]
-    timed_out = netbench.fault_rows(
-        [ev(5, "fault", "node1", "kill"), ev(9, "timeout", "node1", "kill")]
-    )
-    assert netbench.fault_windows(timed_out, end)[0][3] == T0 + 9
 
 
 def test_tx_counts_of_a_run_without_load_log_is_empty(tmp_path: Path):

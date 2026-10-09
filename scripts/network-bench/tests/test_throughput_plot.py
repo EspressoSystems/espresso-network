@@ -1,10 +1,10 @@
 import json
 from pathlib import Path
 
-import netbench
 import numpy as np
 import pytest
 from fakes import load_script
+from test_chaos import CHAOS_EVENTS
 
 plot = load_script("throughput-plot")
 
@@ -147,46 +147,6 @@ def test_main_writes_the_chart_from_a_minimal_run_dir(tmp_path: Path):
     (run_dir / "clients.jsonl").write_text("")
     plot.main([str(run_dir)])
     assert (run_dir / "throughput.png").read_bytes() == three_panels
-
-
-def fault_event(ts: float, event: str, node: str, kind: str = "kill") -> dict:
-    return {"ts": ts, "event": event, "node": node, "kind": kind}
-
-
-CHAOS_EVENTS = [
-    fault_event(1005.0, "fault", "node5"),
-    fault_event(1015.0, "started", "node5"),
-    fault_event(1020.0, "rejoined", "node5"),
-    fault_event(1030.0, "caught_up", "node5"),
-    fault_event(1008.0, "fault", "node2", "wipe"),
-    fault_event(1018.0, "rejoined", "node2"),
-    fault_event(1040.0, "timeout", "node2"),
-    fault_event(1050.0, "fault", "node7", "restart"),
-]
-
-
-def test_phases_of_a_killed_query_node_run_from_fault_to_catch_up():
-    row = netbench.fault_rows(CHAOS_EVENTS)[0]
-    assert plot.phase_segments(row, end=1100.0) == [
-        ("down", 1005.0, 1015.0),
-        ("recovering", 1015.0, 1020.0),
-        ("catching up", 1020.0, 1030.0),
-    ]
-
-
-def test_a_node_without_a_start_event_has_no_down_phase():
-    row = {"fault": 10.0, "rejoined": 25.0}
-    assert plot.phase_segments(row, end=100.0) == [("recovering", 10.0, 25.0)]
-
-
-def test_a_timeout_ends_the_open_phase_and_a_run_end_ends_an_unfinished_one():
-    wiped = netbench.fault_rows(CHAOS_EVENTS)[1]
-    assert plot.phase_segments(wiped, end=1100.0) == [
-        ("recovering", 1008.0, 1018.0),
-        ("catching up", 1018.0, 1040.0),
-    ]
-    open_ = netbench.fault_rows(CHAOS_EVENTS)[2]
-    assert plot.phase_segments(open_, end=1100.0) == [("recovering", 1050.0, 1100.0)]
 
 
 def write_run(run_dir: Path, steps_only: bool = False) -> float:

@@ -29,6 +29,7 @@ from types import ModuleType
 from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
+import chaos as ch
 import netbench
 import pytest
 
@@ -997,7 +998,7 @@ class ClusterRunner(FakeRunner):
                     if sync == "-"
                     else ",".join(
                         str(json.loads(sync)[key]["missing"])
-                        for key in awsb.MISSING_NAMES
+                        for key in ch.MISSING_NAMES
                     ),
                 ]
             lines.append(f"{name} {' '.join(fields)}")
