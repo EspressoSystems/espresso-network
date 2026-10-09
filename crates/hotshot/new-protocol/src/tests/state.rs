@@ -128,7 +128,7 @@ fn count_header_created(events: &[StateManagerOutput<TestTypes>]) -> usize {
 
 /// A child whose parent state is missing is queued, with no stub and no output.
 #[tokio::test]
-async fn test_state_request_missing_parent_is_queued() {
+async fn test_state_request_missing_parent_spawns_nothing() {
     let mut manager = new_manager().await;
     let test_data = TestData::new(3).await;
 
@@ -240,6 +240,11 @@ async fn test_update_state_without_delta_missing_entry() {
 
     assert!(!manager.validated_contains_view(test_data.views[0].view_number));
     assert!(manager.next().await.is_none());
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.next().await.expect("parent validates");
+    manager.next().await.expect("queued request survived");
+    assert!(manager.validated_contains_view(test_data.views[1].view_number));
 }
 
 /// `seed_decided` runs work queued on the decided leaf.
@@ -364,13 +369,50 @@ async fn test_seed_decided_reseeds_after_validation_failure() {
 
     manager.seed_decided(bad_leaf);
 
-    let mut outputs = Vec::new();
+    let first = manager.next().await.expect("failure is reported");
+    assert!(matches!(
+        first,
+        StateManagerOutput::State {
+            validated: false,
+            ..
+        }
+    ));
+    let mut outputs = vec![first];
     while let Some(output) = manager.next().await {
         outputs.push(output);
     }
     assert_eq!(outputs.len(), 3);
     assert_eq!(count_state_verified(&outputs), 1);
     assert_eq!(count_header_created(&outputs), 1);
+}
+
+/// An older in-flight leaf does not displace a newer one, so the newer leaf's
+/// failed validation still releases its queued work.
+#[tokio::test]
+async fn test_seed_decided_older_leaf_keeps_newer_in_flight() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(4).await;
+
+    let mut bad: Proposal<TestTypes> = test_data.views[1].proposal.data.clone();
+    bad.block_header.block_number = INVALID_BLOCK_NUMBER;
+    let mut bad_request = make_state_request(&test_data.views[1]);
+    bad_request.proposal = bad.clone();
+    bad_request.parent_commitment = make_state_request(&test_data.views[0]).parent_commitment;
+    let mut child = make_state_request(&test_data.views[2]);
+    child.parent_commitment = proposal_commitment(&bad);
+    let older = make_state_request(&test_data.views[0]);
+
+    manager.request_state(bad_request);
+    manager.request_state(child);
+    manager.request_state(older);
+    manager.seed_decided(bad.into());
+    manager.seed_decided(test_data.views[0].leaf.clone());
+
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(count_state_verified(&outputs), 2);
 }
 
 /// State request with seeded genesis parent spawns validation and produces output.

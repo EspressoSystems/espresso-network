@@ -208,7 +208,13 @@ impl<T: NodeType> StateManager<T> {
             return;
         }
         if self.state_requests.contains_key(&commitment) {
-            self.decided_in_flight = Some(leaf);
+            let newest = self
+                .decided_in_flight
+                .as_ref()
+                .is_none_or(|held| held.view_number() <= leaf.view_number());
+            if newest {
+                self.decided_in_flight = Some(leaf);
+            }
             return;
         }
         let state = T::ValidatedState::from_header(leaf.block_header());
@@ -494,6 +500,9 @@ impl<T: NodeType> StateManager<T> {
             let view = entry.leaf.view_number();
             view >= view_number || (entry.delta.is_some() && view >= margin_view)
         });
+
+        self.decided_in_flight
+            .take_if(|leaf| leaf.view_number() < view_number);
 
         self.header_requests.retain(|(view, _), handle| {
             let keep = *view >= view_number;
