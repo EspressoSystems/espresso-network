@@ -4729,8 +4729,9 @@ mod tests {
         );
     }
 
-    // A test network only disperses with ADVZ, so the AvidM arms run only here, against the
-    // namespaced wrappers the node stores rather than the inner per-namespace shares.
+    // A test network only disperses with AvidmGf2, so the ADVZ and AvidM arms of the shares
+    // mainnet still serves from before 0.6 run only here, against the namespaced wrappers the
+    // node stores rather than the inner per-namespace shares.
     #[test]
     fn every_vid_share_arm_maps_to_its_own_shape() {
         let payload = b"two namespaces worth of payload bytes, dispersed";
@@ -4747,7 +4748,20 @@ mod tests {
             panic!("the V0 arm");
         };
         assert!(advz.aggregate_proofs.starts_with("FIELD~"));
-        assert!(!advz.evals_proof.unwrap().proof.is_empty());
+        let v1 = &serde_json::to_value(&share).unwrap()["V0"];
+        assert_eq!(
+            advz.aggregate_proofs,
+            v1["aggregate_proofs"].as_str().unwrap()
+        );
+        assert_eq!(advz.evals, v1["evals"].as_str().unwrap());
+        let proof = advz.evals_proof.unwrap();
+        assert_eq!(proof.pos, v1["evals_proof"]["pos"].as_str().unwrap());
+        let v1_nodes = v1["evals_proof"]["proof"].as_array().unwrap();
+        assert!(v1_nodes.len() > 1, "{v1}");
+        assert_eq!(proof.proof.len(), v1_nodes.len());
+        for (v1_node, node) in v1_nodes.iter().zip(&proof.proof) {
+            assert_advz_node_matches_v1(v1_node, node);
+        }
 
         let param = init_avidm_param(3).unwrap();
         let (_, mut shares) =
@@ -4780,6 +4794,35 @@ mod tests {
         assert_eq!(gf2.namespaces.len(), 2);
         assert!(!gf2.namespaces[0].payload.is_empty());
         assert!(gf2.namespaces[0].mt_proofs[0].starts_with("MERKLE_PROOF~"));
+    }
+
+    fn assert_advz_node_matches_v1(v1: &serde_json::Value, v2: &proto::AdvzMerkleNode) {
+        use proto::advz_merkle_node::Node;
+        match (v2.node.as_ref().unwrap(), v1) {
+            (Node::Leaf(leaf), v1) if v1.get("Leaf").is_some() => {
+                let v1 = &v1["Leaf"];
+                assert_eq!(leaf.elem, v1["elem"].as_str().unwrap());
+                assert_eq!(leaf.pos, v1["pos"].as_str().unwrap());
+                assert_eq!(leaf.value, v1["value"].as_str().unwrap());
+            },
+            (Node::Branch(branch), v1) if v1.get("Branch").is_some() => {
+                let v1 = &v1["Branch"];
+                assert_eq!(branch.value, v1["value"].as_str().unwrap());
+                let v1_children = v1["children"].as_array().unwrap();
+                assert_eq!(branch.children.len(), v1_children.len());
+                for (v1_child, v2_child) in v1_children.iter().zip(&branch.children) {
+                    assert_advz_node_matches_v1(v1_child, v2_child);
+                }
+            },
+            (Node::ForgottenSubtree(subtree), v1) if v1.get("ForgettenSubtree").is_some() => {
+                assert_eq!(
+                    subtree.value,
+                    v1["ForgettenSubtree"]["value"].as_str().unwrap()
+                );
+            },
+            (Node::Empty(_), v1) if v1.as_str() == Some("Empty") => {},
+            (v2, v1) => panic!("{v2:?} against {v1}"),
+        }
     }
 
     // No test network registers a validator, so this mapping is only exercised here.
