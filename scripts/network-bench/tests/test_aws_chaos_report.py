@@ -393,3 +393,11 @@ def test_render_of_a_failed_chaos_run_reads_back_its_error(tmp_path: Path):
     args = awsb.parse_args(["render", str(tmp_path)])
     awsb.cmd_render(args, FakeSystem(run=FakeRunner()))
     assert "gate failed hard" in (tmp_path / "summary.md").read_text()
+
+
+def test_totals_show_duplicates_only_when_non_zero():
+    txs = Counter(included=8)
+    rows = ch.fault_rows(EVENTS)
+    meta = {"missing_payloads": [], "submit_failovers": 1, "submit_duplicates": 3}
+    lines = awsb.chaos_totals(rows, EVENTS, T0 + 240, CONFIG, meta, txs)
+    assert lines[1].endswith("submit failovers 1; duplicate inclusions 3")

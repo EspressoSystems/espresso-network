@@ -254,7 +254,9 @@ just bench aws run --fleet --chaos --query-engine sqlite
 - `summary.md` and `driver.log` omit the capacity verdict, the search line and the baseline under `--chaos`: steps with
   a dead leader do not measure capacity.
 - The load driver submits to the next node when one is down; `submit_failovers` in `load-meta.json` counts the switches,
-  `submit_errors` stays 0 unless every node refused a tx.
+  `submit_errors` stays 0 unless every node refused a tx. A submit fails over only on a connection error before the
+  request was sent or an HTTP 5xx; a 4xx or a lost response fails that tx. `submit_duplicates` counts scans that saw an
+  already included tx id; the chaos totals line shows it when non-zero.
 - A node not recovered within 300 s writes one `timeout` event and turns `stuck`: it keeps its slot in the fault budget,
   is no longer gated or faulted, and the load runs on; the final drain waits only for the other faults. The run then
   fails: exit 3, `summary.md` keeps the reason, the run is invalid. A node that crashes without a fault fails the run at
@@ -798,7 +800,7 @@ runs/01-run/             one measurement
   metrics.jsonl heights.jsonl consensus.jsonl load.jsonl steps.json
   clients.jsonl          --clients: one row per range a reader fetched (ns, reader, start, end, t_start, t_done, bytes, status)
   clients.log            --clients: log of the readers process
-  load-meta.json         start_height, max_in_flight, cap_waits, submit_errors, submit_failovers, heartbeat_errors,
+  load-meta.json         start_height, max_in_flight, cap_waits, submit_errors, submit_failovers, submit_duplicates, heartbeat_errors,
                          missing_payloads, drain_s, refine_skipped, stop_reason, marker
   chaos.jsonl            --chaos: one record per fault, start, rejoin, catch-up, timeout and restore
   stake-table.json final-<node>.prom

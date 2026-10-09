@@ -8,6 +8,7 @@ import itertools
 import json
 import logging
 import math
+import socket
 import statistics
 import threading
 from collections.abc import Callable
@@ -2100,6 +2101,65 @@ def test_a_post_tries_each_url_once():
     assert netbench.post_failover(pool, urls, 1, b"{}")[:2] == (0, 0)
 
 
+class OutcomePool:
+    """Answers each POST with the next outcome: a status, or an exception to raise."""
+
+    def __init__(self, *outcomes: int | OSError) -> None:
+        self.outcomes = list(outcomes)
+        self.urls: list[str] = []
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None
+    ) -> tuple[int, bytes]:
+        self.urls.append(url)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, OSError):
+            raise outcome
+        return outcome, b"reply"
+
+
+def post(*outcomes: int | OSError) -> tuple[int, int, OutcomePool]:
+    pool = OutcomePool(*outcomes)
+    status, index, _ = netbench.post_failover(
+        cast("Any", pool), ["http://a", "http://b", "http://c"], 0, b"{}"
+    )
+    return status, index, pool
+
+
+def test_a_post_fails_over_on_connect_errors_and_5xx():
+    refused = ConnectionRefusedError("refused")
+    status, index, pool = post(refused, 503, 200)
+    assert (status, index, len(pool.urls)) == (200, 2, 3)
+
+
+@pytest.mark.parametrize(
+    "outcome", [400, 404, netbench.ResponseLost("timed out")], ids=str
+)
+def test_a_post_does_not_fail_over_once_the_node_may_have_the_tx(outcome: Any):
+    status, index, pool = post(outcome)
+    assert index == 0
+    assert len(pool.urls) == 1
+    assert status == (outcome if isinstance(outcome, int) else 0)
+
+
+def test_a_read_timeout_surfaces_as_response_lost():
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        url = f"http://127.0.0.1:{server.getsockname()[1]}/x"
+        with pytest.raises(netbench.ResponseLost):
+            netbench.HttpPool().request("POST", url, b"{}", timeout=0.2)
+
+
+def test_a_refused_connection_is_not_response_lost():
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        url = f"http://127.0.0.1:{server.getsockname()[1]}/x"
+    with pytest.raises(OSError) as err:
+        netbench.HttpPool().request("POST", url, b"{}")
+    assert not isinstance(err.value, netbench.ResponseLost)
+
+
 def test_the_heartbeat_fails_over_to_the_next_url():
     stop = threading.Event()
     pool = BeatPool(4, stop, down=("http://a",))
@@ -2349,6 +2409,22 @@ def test_a_tx_included_twice_after_a_failover_resolves_once():
     state.include(3, 12, 2.0)
     assert (tx.height, tx.t_included, tx.status) == (10, 1.0, "included")
     assert state.timeouts == 0
+
+
+def test_a_second_inclusion_of_a_tx_is_counted_as_a_duplicate():
+    state = netbench.LoadState()
+    state.submitted(netbench.Tx(id=3, node=0, t_queued=0.0, t_submit=0.0))
+    state.include(3, 10, 1.0)
+    assert state.duplicates == 0
+    state.include(3, 12, 2.0)
+    assert state.duplicates == 1
+
+
+def test_load_stats_carry_the_duplicates(tmp_path: Path):
+    state = netbench.LoadState()
+    state.duplicates = 2
+    write_load_files(tmp_path, state)
+    assert netbench.load_stats(tmp_path, [], [], 0.0, 1.0)["submit_duplicates"] == 2
 
 
 def test_faulted_nodes_are_exempt_from_coverage_and_decided_blocks():

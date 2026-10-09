@@ -7472,6 +7472,8 @@ def chaos_totals(
         lines[-1] += (
             f"; lost payloads {len(lost)}{heights}; submit failovers {meta['submit_failovers']}"
         )
+        if duplicates := meta.get("submit_duplicates", 0):
+            lines[-1] += f"; duplicate inclusions {duplicates}"
     if txs:
         lines.append(
             f"- Txs: {sum(txs.values())} submitted, {txs['included']} included, "

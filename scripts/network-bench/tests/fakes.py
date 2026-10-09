@@ -1286,6 +1286,7 @@ def make_result(
             "timeouts": 10,
             "submit_errors": 0,
             "submit_failovers": 0,
+            "submit_duplicates": 0,
             "max_in_flight": 48,
             "cap_waits": 0,
             "missing_payloads": [],

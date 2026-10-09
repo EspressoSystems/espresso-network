@@ -261,6 +261,8 @@ class LoadStats(TypedDict):
     submit_errors: int
     # Submits that went to another node after their own failed.
     submit_failovers: int
+    # Scans that saw a tx id already included, e.g. resubmitted after a lost response.
+    submit_duplicates: int
     max_in_flight: int
     cap_waits: int
     missing_payloads: list[int]
@@ -626,10 +628,15 @@ class Http(Protocol):
 HttpFactory = Callable[[Clock], Http]
 
 
+class ResponseLost(OSError):
+    """The request was sent but no complete response came back: the node may have the tx."""
+
+
 class HttpPool:
     """Keep-alive connections shared by threads, one request per connection at a time. A
     reused connection the server closed is retried once on a fresh one; any other failure
-    raises OSError. `closed` tells retrying readers to give up."""
+    raises OSError, `ResponseLost` if it came after the request was sent. `closed` tells
+    retrying readers to give up."""
 
     def __init__(self, clock: Clock = SYSTEM_CLOCK) -> None:
         self.clock = clock
@@ -653,14 +660,17 @@ class HttpPool:
                 conn = http.client.HTTPConnection(parts.netloc, timeout=timeout)
             elif conn.sock is not None:
                 conn.sock.settimeout(timeout)
+            sent = False
             try:
                 conn.request(method, parts.path, body=body, headers=headers)
+                sent = True
                 resp = conn.getresponse()
                 data = resp.read()
             except (OSError, http.client.HTTPException) as err:
                 conn.close()
                 if not reused or attempt:
-                    raise OSError(f"{method} {url}: {err}") from err
+                    kind = ResponseLost if sent else OSError
+                    raise kind(f"{method} {url}: {err}") from err
                 continue
             with self._lock:
                 idle.append(conn)
@@ -1120,6 +1130,8 @@ class LoadState:
         self.phase = Phase("starting", None, 0.0, 0.0)
         self.submit_errors = 0
         self.failovers = 0
+        self.included: set[int] = set()
+        self.duplicates = 0
         self.heartbeat_errors = 0
         self.missing_payloads: list[int] = []
 
@@ -1160,8 +1172,12 @@ class LoadState:
         self.room.set()
 
     def include(self, tx_id: int, height: int, at: float) -> None:
+        if tx_id in self.included:
+            self.duplicates += 1
+            return
         tx = self.pending.get(tx_id)
         if tx is not None:
+            self.included.add(tx_id)
             tx.height = height
             self.resolve(tx_id, "included", at)
 
@@ -1329,6 +1345,7 @@ def write_load_files(
             "cap_waits": state.cap_waits,
             "submit_errors": state.submit_errors,
             "submit_failovers": state.failovers,
+            "submit_duplicates": state.duplicates,
             "heartbeat_errors": state.heartbeat_errors,
             "missing_payloads": state.missing_payloads,
             "drain_s": end["drain_s"],
@@ -1957,7 +1974,9 @@ def post_failover(
     pool: Http, urls: Sequence[str], start: int, body: bytes
 ) -> tuple[int, int, str]:
     """POSTs `body` to the submit API of `urls[start]`, then of the following urls cyclically
-    until one answers 200, at most once each. Returns the last status, 0 if the request
+    until one answers 200, at most once each. Only a connection error before the request was
+    sent or a 5xx moves on; a 4xx or a lost response ends it, as the node may have the tx.
+    Returns the last status, 0 if the request
     failed, the index of the url that gave it, and the reply body or error text. A url that
     hangs costs its request timeout before the next is tried."""
     for attempt in range(len(urls)):
@@ -1967,9 +1986,11 @@ def post_failover(
                 "POST", urls[index] + "/v1/submit/submit", body
             )
             detail = reply.decode(errors="replace")
+        except ResponseLost as err:
+            return 0, index, str(err)
         except OSError as err:
             status, detail = 0, str(err)
-        if status == 200:
+        if 0 < status < 500:
             break
     return status, index, detail
 
@@ -2998,6 +3019,7 @@ def load_stats(
         "submit_errors": meta["submit_errors"],
         # Absent from load-meta.json of runs before it was recorded.
         "submit_failovers": meta.get("submit_failovers", 0),
+        "submit_duplicates": meta.get("submit_duplicates", 0),
         "max_in_flight": meta["max_in_flight"],
         "cap_waits": meta["cap_waits"],
         "missing_payloads": meta["missing_payloads"],
