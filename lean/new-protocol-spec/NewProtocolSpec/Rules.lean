@@ -61,16 +61,14 @@ node holds the parent and the `Cert2`, to check both; the anchor's `Cert2` is th
 configuration's (`Config.anchorCert2`).
 
 The parent is at the certificate's view exactly. Elsewhere a held parent may be at
-an earlier view than the certificate (`ProposalReady.parent`, `ParentReady`),
-since a re-vote certifies a block again at a later view; here that is what is
-ruled out.
+an earlier view (`ProposalReady.parent`, `ParentReady`), because a re-vote
+certifies a block again at a later view. Here that is ruled out: the outgoing
+committee can form a re-vote's certificate after the next epoch began, and
+building the epoch's first block on it could start the epoch a second time.
 
-A re-vote's certificate is over the same block at a later view, and the outgoing
-committee can form one after the next epoch began. Building the first block of an
-epoch on such a certificate could start the epoch a second time. The `Cert2` is
-what makes every honest voter of the epoch's first block one that can decide the
-previous epoch's last block, so the epoch never moves on without honest nodes
-learning that it ended.
+The `Cert2` is what makes every honest voter of the epoch's first block one that
+can decide the previous epoch's last block, so the epoch never moves on without
+honest nodes learning that it ended.
 -/
 def OpensEpochJustified (h : History) (p : Proposal) : Prop :=
   EntersEpoch cfg p → (∃ parent, h.HasProposal cfg parent ∧ parent.viewNumber = p.parentCert.view
