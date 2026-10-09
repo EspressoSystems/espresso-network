@@ -117,8 +117,9 @@ pub struct FollowerParams {
 pub struct FollowerHandle<P: SequencerPersistence> {
     #[derivative(Debug = "ignore")]
     consensus: Arc<FollowerConsensus>,
+    /// `None` when replaying a recorded chain.
     #[derivative(Debug = "ignore")]
-    light_client: Arc<NodeLightClient>,
+    light_client: Option<Arc<NodeLightClient>>,
     node_state: NodeState,
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
@@ -149,6 +150,65 @@ pub async fn init_follower_node<P>(
     persistence: P,
     l1_params: L1Params,
     sink: impl DecideSink + 'static,
+) -> anyhow::Result<FollowerHandle<P>>
+where
+    P: SequencerPersistence + MembershipPersistence,
+    Arc<P>: Storage<SeqTypes>,
+{
+    init_with_source(
+        genesis,
+        params,
+        metrics,
+        persistence,
+        l1_params,
+        sink,
+        Source::LightClient,
+    )
+    .await
+}
+
+/// A follower that reads `source` instead of a light client, for tests that replay a recorded
+/// chain. Its network config must already be persisted, as there are no peers to fetch it from.
+#[cfg(any(test, feature = "testing"))]
+pub(crate) async fn init_replay_node<P>(
+    genesis: Genesis,
+    params: FollowerParams,
+    metrics: Box<dyn Metrics>,
+    persistence: P,
+    l1_params: L1Params,
+    sink: impl DecideSink + 'static,
+    source: Arc<dyn ChainSource>,
+) -> anyhow::Result<FollowerHandle<P>>
+where
+    P: SequencerPersistence + MembershipPersistence,
+    Arc<P>: Storage<SeqTypes>,
+{
+    init_with_source(
+        genesis,
+        params,
+        metrics,
+        persistence,
+        l1_params,
+        sink,
+        Source::Replay(source),
+    )
+    .await
+}
+
+enum Source {
+    LightClient,
+    #[cfg_attr(not(any(test, feature = "testing")), allow(dead_code))]
+    Replay(Arc<dyn ChainSource>),
+}
+
+async fn init_with_source<P>(
+    genesis: Genesis,
+    params: FollowerParams,
+    metrics: Box<dyn Metrics>,
+    persistence: P,
+    l1_params: L1Params,
+    sink: impl DecideSink + 'static,
+    source: Source,
 ) -> anyhow::Result<FollowerHandle<P>>
 where
     P: SequencerPersistence + MembershipPersistence,
@@ -222,16 +282,22 @@ where
     .context("startup stake-table catchup failed")?;
     tracing::info!(%current_epoch, "startup catchup complete");
 
-    let light_client = Arc::new(
-        connect_light_client(
-            &params.options,
-            &params.upstreams,
-            &network_config,
-            genesis.chain_config.chain_id,
-            fetched,
-        )
-        .await?,
-    );
+    let (source, light_client): (Arc<dyn ChainSource>, _) = match source {
+        Source::LightClient => {
+            let light_client = Arc::new(
+                connect_light_client(
+                    &params.options,
+                    &params.upstreams,
+                    &network_config,
+                    genesis.chain_config.chain_id,
+                    fetched,
+                )
+                .await?,
+            );
+            (light_client.clone(), Some(light_client))
+        },
+        Source::Replay(source) => (source, None),
+    };
 
     // Seeded like a validator's lock, so the API validates state certificates against the
     // version the network has upgraded to rather than the base version forever.
@@ -254,7 +320,7 @@ where
         .await
         .context("reading the height the query database has reached")?;
     let follower = Follower {
-        source: light_client.clone(),
+        source,
         sink: Arc::new(sink),
         persistence: persistence.clone(),
         coordinator,
@@ -305,7 +371,8 @@ impl<P: SequencerPersistence> FollowerContext<P> {
         self.handle.node_state.clone()
     }
 
-    pub fn light_client(&self) -> Arc<NodeLightClient> {
+    /// `None` when replaying a recorded chain.
+    pub fn light_client(&self) -> Option<Arc<NodeLightClient>> {
         self.handle.light_client.clone()
     }
 
@@ -369,7 +436,7 @@ impl<P: SequencerPersistence> ApiContext for FollowerHandle<P> {
     }
 
     fn light_client(&self) -> Option<Arc<NodeLightClient>> {
-        Some(self.light_client.clone())
+        self.light_client.clone()
     }
 
     fn request_vid_shares(

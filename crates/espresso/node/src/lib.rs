@@ -10,6 +10,8 @@ pub mod consensus_handle;
 pub mod context;
 pub mod follower;
 pub mod genesis;
+#[cfg(any(test, feature = "testing"))]
+pub mod legacy_chain;
 pub use espresso_keyset as keyset;
 pub mod network;
 pub mod options;
