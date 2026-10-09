@@ -29,6 +29,7 @@ from fakes import (
     completed,
     fake_images,
     fleet,
+    make_result,
     write_collected_run,
 )
 
@@ -71,6 +72,8 @@ def with_health(state, **health) -> Any:
     nodes = {n: s.copy() for n, s in state["nodes"].items()}
     for name, h in health.items():
         nodes[name].update(health=h)
+        if h == "catching_up":
+            nodes[name].update(rejoined=0.0)
     return {**state, "nodes": nodes}
 
 
@@ -207,6 +210,40 @@ def test_query_catchup_needs_sync():
     obs = observe(topo, node1=(100, 100, 100, True))
     state = step(state, obs, 115.0)["state"]
     result = step(state, obs, 120.0)
+    assert result["state"]["nodes"]["node1"]["health"] == "up"
+    assert [e["event"] for e in result["events"]] == ["caught_up"]
+
+
+# TEST:stale-synced-after-rejoin-fails
+def test_catch_up_ignores_a_synced_answer_before_the_settle_time():
+    topo = topo_of()
+    state = with_health(init(topo=topo), node1="recovering")
+    state["next_fault_at"] = 1e9
+    obs = observe(topo, node1=(100, 100, 100, True))
+    state = step(state, obs, 100.0)["state"]
+    state = step(state, obs, 105.0)["state"]
+    assert state["nodes"]["node1"]["rejoined"] == 105.0
+    for now in (110.0, 114.9):
+        result = step(state, obs, now)
+        state = result["state"]
+        assert state["nodes"]["node1"]["health"] == "catching_up"
+        assert result["events"] == []
+    assert state["nodes"]["node1"]["streak"] == 0
+
+
+# TEST:synced-after-settle-passes-ok
+def test_catch_up_passes_on_synced_ticks_after_the_settle_time():
+    topo = topo_of()
+    state = with_health(init(topo=topo), node1="recovering")
+    state["next_fault_at"] = 1e9
+    obs = observe(topo, node1=(100, 100, 100, True))
+    state = step(state, obs, 100.0)["state"]
+    state = step(state, obs, 105.0)["state"]
+    settle = 105.0 + awsb.CHAOS_SYNC_SETTLE_S
+    state = step(state, obs, settle - 5.0)["state"]
+    state = step(state, obs, settle)["state"]
+    assert state["nodes"]["node1"]["health"] == "catching_up"
+    result = step(state, obs, settle + 5.0)
     assert result["state"]["nodes"]["node1"]["health"] == "up"
     assert [e["event"] for e in result["events"]] == ["caught_up"]
 
@@ -560,7 +597,7 @@ def parse(*argv: str) -> Any:
 # TEST:chaos-shape-defaults-ok
 def test_chaos_shape_defaults():
     cfg = awsb.config_from_args(parse("--chaos"))
-    assert (cfg.nodes, cfg.query_nodes) == (22, 4)
+    assert (cfg.nodes, cfg.query_nodes) == (22, 22)
     assert (cfg.node_type, cfg.ctl_type) == ("c8g.xlarge", "c8g.xlarge")
     assert cfg.query_engine == "sqlite"
     assert cfg.chaos == awsb.ChaosConfig()
@@ -569,6 +606,45 @@ def test_chaos_shape_defaults():
     assert cfg.load.keep_going
     assert cfg.load.submit_nodes == 22
     assert awsb.fleet_config_from_args(parse("--chaos")).query_engine == "sqlite"
+
+
+def test_chaos_nodes_without_query_nodes_makes_every_node_a_query_node():
+    cfg = awsb.config_from_args(parse("--chaos", "--nodes", "9"))
+    assert (cfg.nodes, cfg.query_nodes) == (9, 9)
+    cfg = awsb.config_from_args(parse("--chaos", "--nodes", "9", "--query-nodes", "4"))
+    assert cfg.query_nodes == 4
+
+
+def test_chaos_rejoin_and_node_env_set_the_sync_status_ttl(tmp_path: Path):
+    render(tmp_path, chaos_cfg())
+    for file in ("node.env", "node-rejoin.env"):
+        text = (tmp_path / "hosts/node0" / file).read_text()
+        assert "ESPRESSO_NODE_SYNC_STATUS_TTL=5s\n" in text
+        assert "ESPRESSO_NODE_API_PEERS=" in text
+        text = (tmp_path / "hosts/node5" / file).read_text()
+        assert "SYNC_STATUS_TTL" not in text
+    plain = tmp_path / "plain"
+    render(plain, dataclasses.replace(chaos_cfg(), chaos=None))
+    assert "SYNC_STATUS_TTL" not in (plain / "hosts/node0/node.env").read_text()
+
+
+def test_chaos_wipe_keeps_live_peers_with_every_node_a_query_node():
+    hosts = awsb.plan_hosts(dataclasses.replace(chaos_cfg(), nodes=7, query_nodes=7))
+    peers = awsb.plan_peers(hosts)
+    assert all(len(p) == 3 for p in peers.values())
+
+
+def test_chaos_summary_and_log_omit_the_capacity_verdict(caplog):
+    result = make_result()
+    capacity = netbench.capacity_line(result["capacity"])
+    assert capacity in netbench.render(result, None)
+    assert capacity not in netbench.render(result, None, capacity=False)
+    with caplog.at_level("INFO"):
+        awsb.log_result(result, chaos=True)
+    assert "Capacity" not in caplog.text
+    with caplog.at_level("INFO"):
+        awsb.log_result(result, chaos=False)
+    assert "Capacity" in caplog.text
 
 
 def test_plain_run_shape_is_unchanged():
@@ -593,7 +669,7 @@ def test_chaos_overrides_kept():
     cfg = awsb.config_from_args(args)
     assert cfg.nodes == 7 and cfg.ctl_type == "c8g.2xlarge"
     assert cfg.load.submit_nodes == 3 and cfg.load.steps == (2.0,) * 10
-    assert cfg.query_nodes == 4 and cfg.node_type == "c8g.xlarge"
+    assert cfg.query_nodes == 7 and cfg.node_type == "c8g.xlarge"
 
 
 # REQ:awsbench-chaos-refusals
@@ -881,6 +957,7 @@ def test_write_report_has_the_chaos_section_and_exempts_faulted_nodes(tmp_path: 
     (tmp_path / "chaos.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
     result = awsb.write_report(tmp_path)
     summary = (tmp_path / "summary.md").read_text()
+    assert "Capacity" not in summary
     assert "### Chaos" in summary and "| node1 | restart | 5 | - | 20 | - |" in summary
     assert "submit failovers 5" in summary
     assert result["validity"]["valid"]

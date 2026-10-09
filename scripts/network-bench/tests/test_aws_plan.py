@@ -101,6 +101,23 @@ def test_peers_skip_query_nodes(n, k):
         assert len(result) == min(3, n - k - (i >= k))
 
 
+@pytest.mark.parametrize(
+    ("i", "n", "expected"),
+    [(0, 4, [1, 2, 3]), (3, 4, [0, 1, 2]), (1, 2, [0]), (21, 22, [0, 1, 2])],
+)
+def test_peers_without_validators_cycle_over_all_nodes(i, n, expected):
+    assert awsb.peers(i, n, n) == expected
+
+
+@pytest.mark.parametrize("n", range(2, 23))
+def test_peers_without_validators_are_distinct_and_exclude_self(n):
+    for i in range(n):
+        result = awsb.peers(i, n, n)
+        assert len(result) == min(3, n - 1)
+        assert len(result) == len(set(result))
+        assert i not in result
+
+
 def old_peers(i: int, n: int) -> list[int]:
     if i == 0:
         return list(range(1, min(3, n - 1) + 1))
@@ -154,8 +171,8 @@ def test_plan_hosts_refuses_several_query_nodes_off_colocated(kw):
         awsb.plan_hosts(small_cfg(nodes=4, query_nodes=2, **kw))
 
 
-@pytest.mark.parametrize("query_nodes", [0, 4])
-def test_plan_hosts_refuses_query_nodes_outside_one_to_nodes_minus_one(query_nodes):
+@pytest.mark.parametrize("query_nodes", [0, 5])
+def test_plan_hosts_refuses_query_nodes_outside_one_to_nodes(query_nodes):
     with pytest.raises(awsb.Refused, match="--query-nodes"):
         awsb.plan_hosts(small_cfg(nodes=4, query_nodes=query_nodes))
 
@@ -173,6 +190,45 @@ def test_query_nodes_flag_reaches_the_config_and_the_hash():
     assert awsb.run_config_hash(
         cfg, hosts, fake_images(), b"g"
     ) != awsb.run_config_hash(other, hosts, fake_images(), b"g")
+
+
+def api_peers(hosts: dict, name: str, **kw) -> list[str]:
+    spec = {"name": name, "role": hosts[name]["role"]}
+    env = parse_env(awsb.render_node_env(spec, hosts, awsb.pg_endpoint(), **kw))
+    return env["ESPRESSO_NODE_API_PEERS"].split(",")
+
+
+def test_api_peers_of_a_query_node_are_the_other_query_nodes():
+    hosts = fleet(8, query_nodes=3)
+    urls = {j: awsb._node_url(hosts[f"node{j}"]) for j in range(8)}
+    assert api_peers(hosts, "node1") == [urls[2], urls[0]]
+    assert api_peers(hosts, "node0") == [urls[1], urls[2]]
+    validator = host("node5", "validator")
+    text = awsb.render_node_env(validator, hosts, None)
+    assert "ESPRESSO_NODE_API_PEERS" not in text
+
+
+def test_light_client_module_only_with_several_query_nodes():
+    single = awsb.render_start_sh(host("node0", "query"), fake_images(), 32768)
+    assert "light-client" not in single
+    multi = awsb.render_start_sh(
+        host("node0", "query"), fake_images(), 32768, light_client=True
+    )
+    assert "-- light-client" in multi
+    validator = awsb.render_start_sh(
+        host("node1", "validator"), fake_images(), 32768, light_client=True
+    )
+    assert "light-client" not in validator
+    recreate = awsb.render_recreate_sh(
+        host("node0", "query"), fake_images(), light_client=True
+    )
+    assert "-- light-client" in recreate
+
+
+def test_single_query_node_has_no_api_peers():
+    hosts = fleet(5)
+    text = awsb.render_node_env(host("node0", "query"), hosts, awsb.pg_endpoint())
+    assert "ESPRESSO_NODE_API_PEERS" not in text
 
 
 def test_state_peers_of_a_validator_exclude_every_query_node():
@@ -205,9 +261,22 @@ def test_support_plan_gates_postgres_on_every_query_host():
 
 def test_node_summary_prints_the_query_node_count():
     assert any(
-        "4 query" in line
+        "8 (4 query, 4 validator-only)" in line
         for line in awsb.format_node_summary(small_cfg(8, query_nodes=4))
     )
+
+
+def test_node_summary_and_preflight_state_the_topology(caplog):
+    cfg = small_cfg(22, query_nodes=22)
+    assert any(
+        "nodes: 22 (22 query, 0 validator-only)" in line
+        for line in awsb.format_node_summary(cfg)
+    )
+    hosts = awsb.plan_hosts(cfg)
+    pre = {"account": "1", "az": "a", "ami_id": "ami", "arch": "arm64", "images": {}}
+    with caplog.at_level("INFO"):
+        awsb.log_preflight(cfg, pre, hosts)
+    assert "(22 query, 0 validator-only, " in caplog.text
 
 
 # EDGE:old-manifest-no-chaos
@@ -1420,7 +1489,7 @@ def test_node_summary_names_the_storage_modules_and_every_run_setting():
     assert awsb.format_node_summary(cfg) == [
         "storage validators: consensus storage-journal",
         "storage query:      consensus storage-journal, query storage-sql (postgres, volume)",
-        "nodes: 2 (1 query); max block 20mb; submit 1 nodes; leader-trace on",
+        "nodes: 2 (1 query, 1 validator-only); max block 20mb; submit 1 nodes; leader-trace on",
         "node-env: A=1 B=2",
     ]
     fs = awsb.format_node_summary(small_cfg())
