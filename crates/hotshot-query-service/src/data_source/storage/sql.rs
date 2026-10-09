@@ -11,7 +11,14 @@
 // see <https://www.gnu.org/licenses/>.
 
 #![cfg(feature = "sql-data-source")]
-use std::{cmp::min, fmt::Debug, future::Future, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    cmp::min,
+    fmt::Debug,
+    future::Future,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -60,6 +67,8 @@ use crate::{
 pub extern crate sqlx;
 pub use sqlx::{Database, Sqlite};
 
+#[cfg(all(test, not(target_os = "windows")))]
+mod blob_pruning_test;
 mod db;
 mod migrate;
 #[cfg(all(test, not(target_os = "windows")))]
@@ -735,7 +744,7 @@ impl SqlStorage {
         if cfg!(feature = "embedded-db") || connection_type == StorageConnectionType::Sequencer {
             // re-use the same pool if present and return early
             if let Some(pool) = config.pool {
-                return Ok(Self {
+                let storage = Self {
                     metrics,
                     pool_metrics,
                     pruned_heights,
@@ -743,7 +752,9 @@ impl SqlStorage {
                     pruner_cfg,
                     serializable_retry_config,
                     blobs,
-                });
+                };
+                storage.gc_blobs().await?;
+                return Ok(storage);
             }
         } else if config.pool.is_some() {
             tracing::info!("not reusing existing pool for query connection");
@@ -857,6 +868,7 @@ impl SqlStorage {
             serializable_retry_config,
             blobs,
         };
+        storage.gc_blobs().await?;
         // Before the state writer can start: it resumes from the head, and the heights it rewrites
         // have to come under a pruning batch again. The pruner's first run is an interval away.
         storage.state_prune_start().await?;
@@ -1312,6 +1324,39 @@ impl SqlStorage {
         Transaction::new(&self.pool, self.pool_metrics.clone(), self.blobs.clone()).await
     }
 
+    /// Reclaims blob segments left behind by a run that stopped between the commit of a prune
+    /// batch and its `gc_payload_below`, and share segments past their retention.
+    async fn gc_blobs(&self) -> anyhow::Result<()> {
+        let Some(blobs) = &self.blobs else {
+            return Ok(());
+        };
+        let pruned = {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction to load the pruned height")?;
+            self.load_pruned_height(&mut tx, PruneCategory::Data)
+                .await?
+        };
+        if let Some(pruned) = pruned {
+            blobs
+                .gc_payload_below(pruned)
+                .await
+                .context("unlinking pruned payload segments")?;
+        }
+        self.gc_shares().await
+    }
+
+    async fn gc_shares(&self) -> anyhow::Result<()> {
+        if let Some(blobs) = &self.blobs {
+            blobs
+                .gc_shares_older_than(SystemTime::now())
+                .await
+                .context("unlinking expired share segments")?;
+        }
+        Ok(())
+    }
+
     async fn new_pruner<'a>(&'a self) -> anyhow::Result<Pruner<'a>> {
         let cfg = self
             .pruner_cfg
@@ -1475,7 +1520,17 @@ impl SqlStorage {
             .await
             .context("opening pruning transaction")?;
         tx.delete_batch(to).await?;
-        tx.commit().await.context("committing deleted batch")
+        tx.commit().await.context("committing deleted batch")?;
+
+        // Only after the commit: until then readers can still need the records. A failure here
+        // leaves segments that the next prune batch or the next `connect` unlinks.
+        if let Some(blobs) = &self.blobs {
+            blobs
+                .gc_payload_below(to)
+                .await
+                .context("unlinking pruned payload segments")?;
+        }
+        Ok(())
     }
 
     /// State is never fetched from peers, so unlike data the marker need not commit first.
@@ -1588,8 +1643,9 @@ impl SqlStorage {
 
         let row = tx.fetch_one(query).await.context("getting disk usage")?;
         let size: i64 = row.get(0);
+        let blob_bytes = self.blobs.as_ref().map_or(0, |blobs| blobs.payload_bytes());
 
-        Ok(size as u64)
+        Ok(size as u64 + blob_bytes)
     }
 
     /// No-op on Postgres: no incremental vacuum, and a full one is too expensive to schedule.
@@ -1690,7 +1746,11 @@ impl PruneStorage for SqlStorage {
     async fn prune<'a>(&'a self, pruner: &mut Option<Pruner<'a>>) -> anyhow::Result<Option<u64>> {
         let pruner = match pruner {
             Some(pruner) => pruner,
-            None => pruner.get_or_insert(self.new_pruner().await?),
+            None => {
+                // The first call of a run.
+                self.gc_shares().await?;
+                pruner.get_or_insert(self.new_pruner().await?)
+            },
         };
 
         // Prune data exceeding target retention in batches

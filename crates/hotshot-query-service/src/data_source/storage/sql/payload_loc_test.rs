@@ -20,7 +20,7 @@ type Block = BlockQueryData<MockTypes>;
 
 /// A block at `height` with the given transactions. Blocks with the same `ns_table` and
 /// transactions share one `payload` row.
-async fn block_at(height: u64, ns_table: u64, txs: &[&[u8]]) -> (Leaf, Block) {
+pub(super) async fn block_at(height: u64, ns_table: u64, txs: &[&[u8]]) -> (Leaf, Block) {
     let mut leaf =
         Leaf::genesis(&Default::default(), &Default::default(), TEST_VERSIONS.test).await;
     let header = leaf.leaf.block_header_mut();
@@ -39,14 +39,14 @@ async fn connect(db: &TmpDb) -> SqlStorage {
         .unwrap()
 }
 
-async fn store(storage: &SqlStorage, leaf: &Leaf, block: &Block) {
+pub(super) async fn store(storage: &SqlStorage, leaf: &Leaf, block: &Block) {
     let mut tx = storage.write().await.unwrap();
     tx.insert_leaf(leaf).await.unwrap();
     tx.insert_block(block).await.unwrap();
     tx.commit().await.unwrap();
 }
 
-async fn count(storage: &SqlStorage, sql: &str) -> i64 {
+pub(super) async fn count(storage: &SqlStorage, sql: &str) -> i64 {
     let mut tx = storage.read().await.unwrap();
     let (count,) = query_as::<(i64,)>(sql)
         .fetch_one(tx.as_mut())
@@ -55,7 +55,7 @@ async fn count(storage: &SqlStorage, sql: &str) -> i64 {
     count
 }
 
-fn counter(storage: &SqlStorage, name: &str) -> usize {
+pub(super) fn counter(storage: &SqlStorage, name: &str) -> usize {
     storage.metrics.get_counter(name).unwrap().get()
 }
 

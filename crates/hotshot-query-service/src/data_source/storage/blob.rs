@@ -125,6 +125,8 @@ pub struct BlobStore<F: JournalFs = StdFs> {
     missing: Mutex<Box<dyn Counter>>,
     /// Payloads appended inside a write transaction because the caller did not stage them.
     staged_in_tx: Mutex<Box<dyn Counter>>,
+    /// Segments unlinked by `gc_*`.
+    gc_unlinked: Mutex<Box<dyn Counter>>,
     // Field order matters: the writer threads exit once the lanes above are dropped, and the
     // directory stays locked until they have.
     _threads: JoinOnDrop,
@@ -151,6 +153,7 @@ impl<F: JournalFs> BlobStore<F> {
         }
         *self.missing.lock() = metrics.create_counter("blob_missing".into(), None);
         *self.staged_in_tx.lock() = metrics.create_counter("blob_staged_in_tx".into(), None);
+        *self.gc_unlinked.lock() = metrics.create_counter("blob_gc_unlinked".into(), None);
     }
 
     /// `append_payload` for a caller inside a write transaction, which should have staged.
@@ -212,13 +215,14 @@ impl<F: JournalFs> BlobStore<F> {
     pub async fn gc_payload_below(&self, height: u64) -> anyhow::Result<u64> {
         let lane = self.payload.clone();
         let fs = self.fs.clone();
-        tokio::task::spawn_blocking(move || {
+        let unlinked = tokio::task::spawn_blocking(move || {
             lane.unlink(&*fs, |segments| {
                 Ok(segments.oldest_below(height.saturating_add(1)))
             })
         })
         .await
-        .context("payload gc task panicked")?
+        .context("payload gc task panicked")??;
+        Ok(self.record_unlinked(unlinked))
     }
 
     /// Unlinks sealed share segments last written at least `share_retention` before `now`, oldest
@@ -227,14 +231,15 @@ impl<F: JournalFs> BlobStore<F> {
         let lane = self.share.clone();
         let fs = self.fs.clone();
         let retention = self.share_retention;
-        tokio::task::spawn_blocking(move || {
+        let unlinked = tokio::task::spawn_blocking(move || {
             let fs = &*fs;
             lane.unlink(fs, |segments| {
                 expired(fs, &lane.dir, segments, now, retention)
             })
         })
         .await
-        .context("share gc task panicked")?
+        .context("share gc task panicked")??;
+        Ok(self.record_unlinked(unlinked))
     }
 
     pub fn payload_bytes(&self) -> u64 {
@@ -245,7 +250,12 @@ impl<F: JournalFs> BlobStore<F> {
         self.share.segments.lock().bytes()
     }
 
-    async fn open_with(cfg: BlobCfg, fs: Arc<F>, segment_bytes: u64) -> anyhow::Result<Arc<Self>> {
+    /// `open` with a chosen segment size, so tests can seal segments without gigabytes of data.
+    pub(crate) async fn open_with(
+        cfg: BlobCfg,
+        fs: Arc<F>,
+        segment_bytes: u64,
+    ) -> anyhow::Result<Arc<Self>> {
         let payload_dir = cfg.dir.join("payload");
         let share_dir = cfg.dir.join("share");
         let lock = lock_dir(&*fs, &cfg.dir, &[&payload_dir, &share_dir])?;
@@ -264,11 +274,18 @@ impl<F: JournalFs> BlobStore<F> {
             appending: Mutex::default(),
             missing: Mutex::new(NoMetrics.create_counter(String::new(), None)),
             staged_in_tx: Mutex::new(NoMetrics.create_counter(String::new(), None)),
+            gc_unlinked: Mutex::new(NoMetrics.create_counter(String::new(), None)),
             _threads: JoinOnDrop(vec![payload_thread, share_thread]),
             _lock: lock,
         });
         spawn_share_sync(Arc::downgrade(&store.share));
         Ok(store)
+    }
+
+    /// Counts the unlinked segments and returns the bytes freed.
+    fn record_unlinked(&self, unlinked: Unlinked) -> u64 {
+        self.gc_unlinked.lock().add(unlinked.segments);
+        unlinked.bytes
     }
 
     async fn read(&self, lane: &BlobLane, loc: Location) -> anyhow::Result<Option<Vec<u8>>> {
@@ -295,15 +312,18 @@ impl BlobLane {
         self.index.lock().get(&(height, kind)).copied()
     }
 
-    /// Unlinks the segments `select` picks and returns the bytes freed.
+    /// Unlinks the segments `select` picks.
     fn unlink<F: JournalFs>(
         &self,
         fs: &F,
         select: impl FnOnce(&Segments) -> anyhow::Result<Vec<SegmentMeta>>,
-    ) -> anyhow::Result<u64> {
+    ) -> anyhow::Result<Unlinked> {
         let _gc = self.gc_lock.lock();
         let doomed = select(&self.segments.lock())?;
-        let freed = doomed.iter().map(|meta| meta.bytes).sum();
+        let unlinked = Unlinked {
+            segments: doomed.len(),
+            bytes: doomed.iter().map(|meta| meta.bytes).sum(),
+        };
         if let Some(bytes_left) = lane::prune(fs, &self.dir, &self.segments, &doomed)? {
             self.lane.set_total_bytes(bytes_left);
             let oldest = self.segments.lock().list().first().map(|meta| meta.seq);
@@ -311,8 +331,13 @@ impl BlobLane {
                 self.index.lock().retain(|_, loc| loc.seq >= oldest);
             }
         }
-        Ok(freed)
+        Ok(unlinked)
     }
+}
+
+struct Unlinked {
+    segments: usize,
+    bytes: u64,
 }
 
 /// Keeps the payload index entry of `height` alive while any `append_payload` for it is running,

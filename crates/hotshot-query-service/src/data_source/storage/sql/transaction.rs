@@ -595,6 +595,16 @@ impl Transaction<Prune> {
             .context("deleting leaf2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
 
+        let res = query("DELETE FROM payload_loc WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting payload locators")?;
+        tracing::debug!(
+            rows_affected = res.rows_affected(),
+            "pruned payload locators"
+        );
+
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
             .execute(self.as_mut())
