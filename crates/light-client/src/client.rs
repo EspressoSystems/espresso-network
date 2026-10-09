@@ -7,7 +7,7 @@ use anyhow::Result;
 use anyhow::{Context, anyhow};
 #[cfg(feature = "client")]
 use derive_builder::Builder;
-use espresso_types::{Certificate2, NamespaceId, SeqTypes, v0_3::StakeTableEvent};
+use espresso_types::{Certificate2, Header, NamespaceId, SeqTypes, v0_3::StakeTableEvent};
 #[cfg(feature = "client")]
 use futures::{
     FutureExt, TryFuture, TryFutureExt,
@@ -57,6 +57,11 @@ pub trait Client: Send + Sync + 'static {
         id: impl Into<LeafRequest> + Send,
         finalized: Option<u64>,
     ) -> impl Send + Future<Output = Result<LeafProof>>;
+
+    /// Get the header at `height`.
+    ///
+    /// The header is unverified. Callers must check it against a trusted commitment.
+    fn header(&self, height: u64) -> impl Send + Future<Output = Result<Header>>;
 
     /// Get an inclusion proof for the requested header relative to the Merkle tree at height `root`.
     fn header_proof(
@@ -240,6 +245,10 @@ impl Client for QueryServiceClient {
             .context("fetching leaf ranges")
     }
 
+    async fn header(&self, height: u64) -> Result<Header> {
+        self.fetch(&format!("/availability/header/{height}")).await
+    }
+
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
         self.fetch(&format!("/light-client/header/{root}/{}", fmt_block_id(id)))
             .await
@@ -372,6 +381,11 @@ where
         ranges: &[Range<u64>],
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
         self.get_any(&self.clients, |client| client.get_leaves_for_ranges(ranges))
+            .await
+    }
+
+    async fn header(&self, height: u64) -> Result<Header> {
+        self.get_any(&self.clients, |client| client.header(height))
             .await
     }
 

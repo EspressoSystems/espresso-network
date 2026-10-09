@@ -14,9 +14,9 @@ use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
-    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, Certificate2, EpochVersion, Leaf2, NamespaceId,
-    NodeState, NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash,
-    StakeTableState, Transaction,
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, Certificate2, EpochVersion, Header, Leaf2,
+    NamespaceId, NodeState, NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes,
+    StakeTableHash, StakeTableState, Transaction,
     v0_3::{AuthenticatedValidator, RegisteredValidator, StakeTableEvent},
 };
 use hotshot_contract_adapter::sol_types::StakeTableV3::{Delegated, ValidatorRegistered};
@@ -940,6 +940,19 @@ impl Client for TestClient {
         }
 
         Ok(proof)
+    }
+
+    async fn header(&self, height: u64) -> Result<Header> {
+        let mut inner = self.inner.lock().await;
+        ensure!(
+            !inner.missing_leaves.contains(&(height as usize)),
+            "missing leaf {height}"
+        );
+        Ok(inner
+            .leaf(height as usize, self.epoch_height, None)
+            .await
+            .header()
+            .clone())
     }
 
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {
