@@ -1064,6 +1064,15 @@ impl CatchupStorage for DataSource {
             .await
     }
 
+    async fn get_accounts_at(
+        &self,
+        height: u64,
+        root: FeeMerkleCommitment,
+        accounts: &[FeeAccount],
+    ) -> anyhow::Result<FeeMerkleTree> {
+        self.as_ref().get_accounts_at(height, root, accounts).await
+    }
+
     async fn get_reward_accounts_v2(
         &self,
         instance: &NodeState,
@@ -1095,6 +1104,14 @@ impl CatchupStorage for DataSource {
         view: ViewNumber,
     ) -> anyhow::Result<BlocksFrontier> {
         self.as_ref().get_frontier(instance, height, view).await
+    }
+
+    async fn get_frontier_at(
+        &self,
+        height: u64,
+        root: BlockMerkleCommitment,
+    ) -> anyhow::Result<BlocksFrontier> {
+        self.as_ref().get_frontier_at(height, root).await
     }
 
     async fn get_chain_config(
