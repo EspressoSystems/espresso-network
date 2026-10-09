@@ -40,17 +40,25 @@ structure Committee where
   /--
   The nodes that follow the rules in an epoch.
 
-  A node may be honest in an epoch without being a member of its committee
-  (`members`). It still receives the epoch's messages and decides. Its votes are
-  not meant to count towards a quorum of the epoch, though `Committee.Quorum` does not
-  require its signers to be members: a set holding a quorum is one too.
+  They need not be members of its committee: a node that is not still receives
+  the epoch's messages and decides.
   -/
   honest : EpochNumber → PubKey → Prop
 
-  /-- The members of an epoch's committee. -/
+  /--
+  The members of an epoch's committee.
+
+  A node owes timeout votes only in epochs it is a member of (`ProtocolHistory`),
+  and the honest members form a quorum (`TimedNetwork.honestQuorum`).
+  -/
   members : EpochNumber → PubKey → Prop
 
-  /-- The sets of signers that suffice for a certificate in an epoch. -/
+  /--
+  The sets of signers that suffice for a certificate in an epoch.
+
+  Left abstract: safety needs only that two quorums share an honest node
+  (`intersect`), and liveness that the honest members form one.
+  -/
   Quorum : EpochNumber → (PubKey → Prop) → Prop
 
   /-- Two quorums of one epoch share a member honest in that epoch. -/
