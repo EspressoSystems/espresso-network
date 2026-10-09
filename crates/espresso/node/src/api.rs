@@ -3492,13 +3492,14 @@ mod test {
             Transaction as _, VersionedDataSource,
             sql::Config,
             storage::{
-                MerklizedStateHeightStorage, NodeStorage, SqlStorage, StorageConnectionType,
-                UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
+                MerklizedStateHeightStorage, NodeStorage, SerializableRetry, SqlStorage,
+                StorageConnectionType, UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
             },
         },
         explorer::TransactionSummariesResponse,
         merklized_state::UpdateStateData,
         node::{NodeDataSource as _, SyncStatus, SyncStatusQueryData},
+        serializable_retry,
         types::HeightIndexed,
     };
     use hotshot_types::{
@@ -7677,27 +7678,31 @@ mod test {
     }
 
     /// Prune consensus data to `pruned` as a pruner batch would: stamp the data cursor, id 1,
-    /// then delete what `delete_batch` deletes.
+    /// then delete what `delete_batch` deletes. The node may be writing new blocks meanwhile, so
+    /// a serialization conflict is retried.
     async fn prune_data_to(db: &SqlStorage, pruned: u64) -> anyhow::Result<()> {
-        let mut tx = db.write().await?;
-        tx.upsert(
-            "pruned_height",
-            ["id", "last_height"],
-            ["id"],
-            [(1i32, pruned as i64)],
-        )
-        .await?;
-        for statement in [
-            "DELETE FROM transactions WHERE block_height <= $1",
-            "DELETE FROM leaf2 WHERE height <= $1",
-            "DELETE FROM header WHERE height <= $1",
-        ] {
-            sqlx::query(statement)
-                .bind(pruned as i64)
-                .execute(tx.as_mut())
-                .await?;
-        }
-        tx.commit().await
+        serializable_retry!(db, || async {
+            let mut tx = db.write().await?;
+            tx.upsert(
+                "pruned_height",
+                ["id", "last_height"],
+                ["id"],
+                [(1i32, pruned as i64)],
+            )
+            .await?;
+            for statement in [
+                "DELETE FROM transactions WHERE block_height <= $1",
+                "DELETE FROM leaf2 WHERE height <= $1",
+                "DELETE FROM header WHERE height <= $1",
+            ] {
+                sqlx::query(statement)
+                    .bind(pruned as i64)
+                    .execute(tx.as_mut())
+                    .await?;
+            }
+            tx.commit().await
+        })
+        .await
     }
 
     /// Delete consensus data above `from` up to and including `to` without moving the data
