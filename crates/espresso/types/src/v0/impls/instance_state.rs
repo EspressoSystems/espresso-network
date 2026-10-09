@@ -9,7 +9,7 @@ use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
 #[cfg(feature = "node")]
-use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
+use hotshot_contract_adapter::sol_types::{LightClientStateSol, LightClientV3, StakeTableV3};
 use hotshot_types::{
     HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
@@ -36,6 +36,9 @@ use crate::{
     },
     v0_3::{RegisteredValidator, RewardAmount},
 };
+
+#[cfg(feature = "node")]
+const L1_FINALITY_WAIT: Duration = Duration::from_secs(30);
 
 /// Represents the immutable state of a node.
 ///
@@ -167,6 +170,44 @@ impl NodeState {
                 Ok(finalized_hotshot_height)
             },
         }
+    }
+
+    /// The light client contract's finalized state, read at the L1 finalized block, or `None` when
+    /// there is no contract or L1 finality is not yet known. Not cached: it advances with every
+    /// prover update.
+    #[cfg(feature = "node")]
+    pub async fn finalized_light_client_state(
+        &self,
+    ) -> anyhow::Result<Option<LightClientStateSol>> {
+        if self.chain_config.stake_table_contract.is_none() {
+            return Ok(None);
+        }
+        let Some(finalized) = self.l1_finalized_block().await else {
+            return Ok(None);
+        };
+        let light_client_contract = LightClientV3::new(
+            self.light_client_contract_address().await?,
+            self.l1_client.provider.clone(),
+        );
+        let state = light_client_contract
+            .finalizedState()
+            .block(BlockId::number(finalized))
+            .call()
+            .await?;
+        Ok(Some(state.into()))
+    }
+
+    /// The L1 finalized block number. The L1 client learns it asynchronously after start, so this
+    /// waits briefly for a node that asks right at boot.
+    #[cfg(feature = "node")]
+    async fn l1_finalized_block(&self) -> Option<u64> {
+        if let Some(finalized) = self.l1_client.snapshot().await.finalized {
+            return Some(finalized.number);
+        }
+        tokio::time::timeout(L1_FINALITY_WAIT, self.l1_client.wait_for_finalized_block(0))
+            .await
+            .ok()
+            .map(|block| block.number)
     }
 
     /// The oldest HotShot block height the light client contract still holds a commitment for, or

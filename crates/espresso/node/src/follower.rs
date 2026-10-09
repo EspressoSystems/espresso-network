@@ -68,7 +68,7 @@ use crate::{
     apply_genesis_overrides,
     context::TaskList,
     init_node_state, load_or_fetch_network_config,
-    startup_catchup::bootstrap_epoch_window,
+    startup_catchup::{BootstrapMetrics, BootstrapParams, bootstrap_epoch_window, fetch_l1_anchor},
     state_signature::StateSignatureMemStorage,
 };
 
@@ -105,7 +105,7 @@ pub struct FollowerParams {
     /// The upstreams when unset.
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    pub bootstrap_epoch_catchup_timeout: Duration,
+    pub bootstrap: BootstrapParams,
     pub options: FollowerOptions,
 }
 
@@ -212,10 +212,15 @@ where
         epoch_height,
         genesis.epoch_start_block.unwrap_or_default(),
     );
+    let peers = query_clients(&params.upstreams);
+    let bootstrap_metrics = BootstrapMetrics::new(&*metrics);
     let current_epoch = bootstrap_epoch_window(
         &coordinator,
         epoch_height,
-        params.bootstrap_epoch_catchup_timeout,
+        fetch_l1_anchor(&node_state).await,
+        &peers,
+        &params.bootstrap,
+        &bootstrap_metrics,
     )
     .await
     .context("startup stake-table catchup failed")?;
@@ -263,7 +268,10 @@ where
         upgrade_lock,
         epoch_height,
         options: params.options,
-        bootstrap_epoch_catchup_timeout: params.bootstrap_epoch_catchup_timeout,
+        node_state: node_state.clone(),
+        peers,
+        bootstrap: params.bootstrap,
+        bootstrap_metrics,
         next,
     };
     let mut tasks = TaskList::default();
@@ -517,7 +525,10 @@ struct Follower<P> {
     upgrade_lock: UpgradeLock<SeqTypes>,
     epoch_height: u64,
     options: FollowerOptions,
-    bootstrap_epoch_catchup_timeout: Duration,
+    node_state: NodeState,
+    peers: Vec<QueryServiceClient>,
+    bootstrap: BootstrapParams,
+    bootstrap_metrics: BootstrapMetrics,
     next: u64,
 }
 
@@ -717,7 +728,10 @@ impl<P: SequencerPersistence> Follower<P> {
         let current_epoch = bootstrap_epoch_window(
             &self.coordinator,
             self.epoch_height,
-            self.bootstrap_epoch_catchup_timeout,
+            fetch_l1_anchor(&self.node_state).await,
+            &self.peers,
+            &self.bootstrap,
+            &self.bootstrap_metrics,
         )
         .await
         .context("stake-table catchup after skipping ahead")?;
@@ -772,6 +786,10 @@ fn seed_first_epoch(
         .set_first_epoch(first_epoch, INITIAL_DRB_RESULT);
 }
 
+fn query_clients(urls: &[Url]) -> Vec<QueryServiceClient> {
+    urls.iter().cloned().map(QueryServiceClient::new).collect()
+}
+
 async fn connect_light_client(
     options: &FollowerOptions,
     upstreams: &[Url],
@@ -785,13 +803,7 @@ async fn connect_light_client(
         .connect()
         .await
         .context("opening the light client database")?;
-    let client = FallbackClient::new(
-        upstreams
-            .iter()
-            .cloned()
-            .map(QueryServiceClient::new)
-            .collect(),
-    )?;
+    let client = FallbackClient::new(query_clients(upstreams))?;
     let genesis = match options.light_client_genesis.clone() {
         Some(genesis) => genesis,
         None => {

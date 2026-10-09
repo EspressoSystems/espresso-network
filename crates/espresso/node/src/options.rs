@@ -30,6 +30,7 @@ use crate::{
     keyset::KeySetOptions,
     persistence,
     proposal_fetcher::ProposalFetcherConfig,
+    startup_catchup::{BootstrapParams, SkipMode},
 };
 
 // This options struct is a bit unconventional. The sequencer has multiple optional modules which
@@ -363,6 +364,23 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
 
+    /// Whether startup skips the stake-table walk using the L1 light-client anchor.
+    ///
+    /// `off` always walks from the highest known epoch.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_BOOTSTRAP_SKIP",
+        value_enum,
+        default_value = "auto"
+    )]
+    pub bootstrap_skip: SkipMode,
+
+    /// How long startup retries the skip before giving up.
+    ///
+    /// At the deadline a node still more than 2 epochs behind the anchor exits with an error.
+    #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_DEADLINE", default_value = "15m", value_parser = parse_duration)]
+    pub bootstrap_deadline: Duration,
+
     /// How long a leader waits before proposing a block with no transactions in it.
     #[clap(long, env = "ESPRESSO_NODE_EMPTY_BLOCK_DELAY", default_value = "500ms", value_parser = parse_duration)]
     pub empty_block_delay: Duration,
@@ -381,6 +399,14 @@ pub struct Options {
 }
 
 impl Options {
+    pub fn bootstrap_params(&self) -> BootstrapParams {
+        BootstrapParams {
+            step_timeout: self.bootstrap_epoch_catchup_timeout,
+            deadline: self.bootstrap_deadline,
+            skip: self.bootstrap_skip,
+        }
+    }
+
     pub fn modules(&self) -> Modules {
         ModuleArgs(self.modules.clone()).parse()
     }
@@ -417,7 +443,7 @@ impl Options {
                 base_timeout: self.catchup_base_timeout,
                 local_timeout: self.local_catchup_timeout,
             },
-            bootstrap_epoch_catchup_timeout: self.bootstrap_epoch_catchup_timeout,
+            bootstrap: self.bootstrap_params(),
             options: FollowerOptions {
                 poll_interval: follower.poll_interval,
                 max_blocks_per_poll: follower.max_blocks_per_poll,
@@ -826,6 +852,8 @@ pub struct PublicNodeConfig {
     pub catchup_base_timeout: Duration,
     pub local_catchup_timeout: Duration,
     pub bootstrap_epoch_catchup_timeout: Duration,
+    pub bootstrap_deadline: Duration,
+    pub bootstrap_skip: SkipMode,
     pub catchup_backoff: BackoffParams,
     /// Unset on a validator.
     pub follower: Option<FollowerConfig>,
@@ -1191,6 +1219,8 @@ impl PublicNodeConfig {
             catchup_base_timeout: opt.catchup_base_timeout,
             local_catchup_timeout: opt.local_catchup_timeout,
             bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
+            bootstrap_deadline: opt.bootstrap_deadline,
+            bootstrap_skip: opt.bootstrap_skip,
             catchup_backoff: opt.catchup_backoff,
             follower: modules.follower.as_ref().map(FollowerConfig::from),
             proposal_fetcher: opt.proposal_fetcher_config,
