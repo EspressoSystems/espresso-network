@@ -64,7 +64,9 @@ use crate::{
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
     },
-    startup_catchup::bootstrap_epoch_window,
+    startup_catchup::{
+        BootstrapMetrics, BootstrapParams, bootstrap_epoch_window, fetch_l1_anchor, query_clients,
+    },
     state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
 pub(crate) type ConsensusNode<N, P> = Node<N, P>;
@@ -139,7 +141,8 @@ where
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
-        bootstrap_epoch_catchup_timeout: Duration,
+        bootstrap_params: BootstrapParams,
+        state_peers: Vec<Url>,
         empty_block_delay: Duration,
         block_sizes: BTreeMap<Version, u64>,
     ) -> anyhow::Result<Self>
@@ -202,10 +205,14 @@ where
         // Only the new protocol (cliquenet) needs this
         let max_configured_version = std::cmp::max(upgrade.base, upgrade.target);
         if max_configured_version >= NEW_PROTOCOL_VERSION {
+            let peers = query_clients(&state_peers);
             let current_epoch = bootstrap_epoch_window(
                 &membership_coordinator,
                 epoch_height,
-                bootstrap_epoch_catchup_timeout,
+                async || fetch_l1_anchor(&instance_state).await,
+                &peers,
+                &bootstrap_params,
+                &BootstrapMetrics::new(metrics),
             )
             .await
             .context("startup stake-table catchup failed")?;

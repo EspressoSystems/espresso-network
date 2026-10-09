@@ -68,7 +68,10 @@ use crate::{
     apply_genesis_overrides,
     context::TaskList,
     init_node_state, load_or_fetch_network_config,
-    startup_catchup::bootstrap_epoch_window,
+    startup_catchup::{
+        BootstrapMetrics, BootstrapParams, SkipMode, bootstrap_epoch_window, fetch_l1_anchor,
+        query_clients,
+    },
     state_signature::StateSignatureMemStorage,
 };
 
@@ -105,7 +108,7 @@ pub struct FollowerParams {
     /// The upstreams when unset.
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    pub bootstrap_epoch_catchup_timeout: Duration,
+    pub bootstrap: BootstrapParams,
     pub options: FollowerOptions,
 }
 
@@ -212,10 +215,15 @@ where
         epoch_height,
         genesis.epoch_start_block.unwrap_or_default(),
     );
+    let peers = query_clients(&params.upstreams);
+    let bootstrap_metrics = BootstrapMetrics::new(&*metrics);
     let current_epoch = bootstrap_epoch_window(
         &coordinator,
         epoch_height,
-        params.bootstrap_epoch_catchup_timeout,
+        async || fetch_l1_anchor(&node_state).await,
+        &peers,
+        &params.bootstrap,
+        &bootstrap_metrics,
     )
     .await
     .context("startup stake-table catchup failed")?;
@@ -263,7 +271,12 @@ where
         upgrade_lock,
         epoch_height,
         options: params.options,
-        bootstrap_epoch_catchup_timeout: params.bootstrap_epoch_catchup_timeout,
+        // Mid-run catchup keeps the plain walk: the skip can block for its whole deadline.
+        bootstrap: BootstrapParams {
+            skip: SkipMode::Off,
+            ..params.bootstrap
+        },
+        bootstrap_metrics,
         next,
     };
     let mut tasks = TaskList::default();
@@ -506,6 +519,8 @@ impl ConsensusSource for FollowerConsensus {
     }
 }
 
+const NO_PEERS: [(Url, QueryServiceClient); 0] = [];
+
 struct Follower<P> {
     light_client: Arc<NodeLightClient>,
     sink: Arc<dyn DecideSink>,
@@ -517,7 +532,8 @@ struct Follower<P> {
     upgrade_lock: UpgradeLock<SeqTypes>,
     epoch_height: u64,
     options: FollowerOptions,
-    bootstrap_epoch_catchup_timeout: Duration,
+    bootstrap: BootstrapParams,
+    bootstrap_metrics: BootstrapMetrics,
     next: u64,
 }
 
@@ -717,7 +733,10 @@ impl<P: SequencerPersistence> Follower<P> {
         let current_epoch = bootstrap_epoch_window(
             &self.coordinator,
             self.epoch_height,
-            self.bootstrap_epoch_catchup_timeout,
+            async || None,
+            &NO_PEERS,
+            &self.bootstrap,
+            &self.bootstrap_metrics,
         )
         .await
         .context("stake-table catchup after skipping ahead")?;

@@ -3611,8 +3611,9 @@ mod test {
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::{
+        field_to_u256,
         reward::RewardClaimInput,
-        sol_types::{EspToken, StakeTableV3},
+        sol_types::{EspToken, LightClientStateSol, LightClientV3Mock, StakeTableV3},
         stake_table::StakeTableContractVersion,
     };
     use hotshot_query_service::{
@@ -3629,16 +3630,21 @@ mod test {
             },
         },
         explorer::TransactionSummariesResponse,
+        metrics::PrometheusMetrics,
         node::{NodeDataSource as _, SyncStatus, SyncStatusQueryData},
         types::HeightIndexed,
     };
     use hotshot_types::{
         ValidatorConfig,
         addr::NetAddr,
-        data::EpochNumber,
+        data::{EpochNumber, ViewNumber},
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
-        traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
+        traits::{
+            block_contents::BlockHeader,
+            election::Membership,
+            metrics::{Metrics as _, NoMetrics},
+        },
         utils::epoch_from_block_number,
         x25519,
     };
@@ -3705,6 +3711,7 @@ mod test {
         genesis::{Genesis as NodeGenesis, L1Finalized, StakeTableConfig},
         persistence,
         persistence::no_storage,
+        startup_catchup::{BootstrapParams, SkipMode},
         testing::{
             TestConfig, TestConfigBuilder, decided_leaves, wait_for_decide_on_handle,
             wait_for_epochs,
@@ -5478,7 +5485,11 @@ mod test {
                 base_timeout: Duration::from_secs(2),
                 local_timeout: Duration::from_secs(5),
             },
-            bootstrap_epoch_catchup_timeout: Duration::from_secs(30),
+            bootstrap: BootstrapParams {
+                step_timeout: Duration::from_secs(30),
+                deadline: Duration::from_secs(900),
+                skip: SkipMode::Auto,
+            },
             options: FollowerOptions {
                 poll_interval: Duration::from_millis(500),
                 max_blocks_per_poll: 10,
@@ -6176,6 +6187,231 @@ mod test {
         .await
         .context("restarted node's event stream stalled")?;
         let proposed = proposed.context("restarted node's event stream ended")?;
+        tracing::info!(proposed, "restarted node proposed a decided block");
+
+        Ok(())
+    }
+
+    /// A validator that restarts on an empty database installs its stake-table window from the L1
+    /// light client anchor instead of walking every epoch, and goes on to propose again.
+    ///
+    /// Six nodes run the new protocol. Once the network is past epoch twelve, the light client
+    /// mock is pointed at a recent decided block, node 5 is stopped, and it restarts on an empty
+    /// database with node 0 as its only state peer.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_fresh_validator_skips_epoch_walk() -> anyhow::Result<()> {
+        const NUM_NODES: usize = 6;
+        const NODE: usize = 5;
+        const EPOCH_HEIGHT: u64 = 10;
+        const EPOCHS_BEFORE_RESTART: u64 = 12;
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+        const RECOVERY_TIMEOUT: Duration = Duration::from_secs(240);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+        let api_url: Url = format!("http://localhost:{api_port}").parse()?;
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default())
+                    .query_sql(Default::default(), tmp_options(&storage[0])),
+            )
+            .network_config(network_config)
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![api_url.clone()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await?
+            .build();
+
+        let genesis_state = config.states()[NODE].clone();
+        let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
+        let api_client: Client<ClientErr, SequencerApiVersion> = Client::new(api_url.clone());
+        assert!(
+            api_client.connect(Some(Duration::from_secs(60))).await,
+            "node 0 query API did not come up"
+        );
+
+        let mut events = network.peers[0].event_stream();
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, EPOCHS_BEFORE_RESTART).await;
+
+        // Point the light client at a decided block the API can still serve.
+        let tip: u64 = api_client.get("status/block-height").send().await?;
+        let anchor_height = tip - 1;
+        let anchor_epoch = epoch_from_block_number(anchor_height, EPOCH_HEIGHT);
+        let header: Header = api_client
+            .get(&format!("availability/header/{anchor_height}"))
+            .send()
+            .await?;
+        let state = header.get_light_client_state(ViewNumber::genesis())?;
+        let light_client_address = network
+            .contracts
+            .as_ref()
+            .and_then(|contracts| contracts.address(Contract::LightClientProxy))
+            .context("light client contract not deployed")?;
+        let provider = ProviderBuilder::new()
+            .wallet(EthereumWallet::from(network.cfg.signer()))
+            .connect_http(network.cfg.l1_url());
+        let receipt = LightClientV3Mock::new(light_client_address, provider)
+            .setFinalizedState(
+                LightClientStateSol {
+                    viewNum: 0,
+                    blockHeight: anchor_height,
+                    blockCommRoot: field_to_u256(state.block_comm_root),
+                }
+                .into(),
+            )
+            .send()
+            .await?
+            .get_receipt()
+            .await?;
+        let server_state = network.server.node_state();
+        timeout(
+            RECOVERY_TIMEOUT,
+            server_state
+                .l1_client
+                .wait_for_finalized_block(receipt.block_number.context("no block number")?),
+        )
+        .await
+        .context("the anchor never became L1 finalized")?;
+
+        let height_before_restart = tip;
+        let mut node = network.peers.pop().context("no validator to restart")?;
+        node.shut_down().await;
+        // Cliquenet peers dial the address in the stake table, so the node returns on its old port.
+        let cliquenet_port = network.cfg.known_nodes_with_stake()[NODE]
+            .connect_info
+            .as_ref()
+            .expect("node registered cliquenet connect info")
+            .p2p_addr
+            .port();
+        timeout(RECOVERY_TIMEOUT, async {
+            while std::net::TcpListener::bind(("127.0.0.1", cliquenet_port)).is_err() {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("shut-down node did not release its port")?;
+
+        let fresh_storage = SqlDataSource::create_storage().await;
+        let metrics = PrometheusMetrics::default();
+        let mut cfg = network.cfg.clone();
+        cfg.set_bootstrap_peers(vec![api_url.clone()]);
+        let node = cfg
+            .init_node(
+                NODE,
+                genesis_state,
+                tmp_options(&fresh_storage),
+                Some(StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![api_url],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )),
+                None,
+                &*metrics.subgroup("consensus".into()),
+                test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
+                NullEventConsumer,
+                NEW_PROTOCOL,
+                Default::default(),
+            )
+            .await;
+
+        // The window is the anchor's, with nothing below it walked.
+        let membership = node.node_state().coordinator.membership().clone();
+        for epoch in (anchor_epoch - 3)..=(anchor_epoch + 1) {
+            assert!(
+                membership.snapshot(EpochNumber::new(epoch)).is_some(),
+                "stake table for epoch {epoch} was not installed"
+            );
+        }
+        assert!(
+            membership.snapshot(EpochNumber::new(3)).is_none(),
+            "epoch 3 was walked despite the anchor"
+        );
+        for epoch in [anchor_epoch, anchor_epoch + 1] {
+            assert!(
+                membership
+                    .epoch_block_reward(EpochNumber::new(epoch))
+                    .is_some(),
+                "no block reward for epoch {epoch}"
+            );
+        }
+        let exported = metrics.export()?;
+        assert!(
+            exported.contains(&format!(
+                "consensus_bootstrap_l1_anchor_epoch {anchor_epoch}"
+            )),
+            "{exported}"
+        );
+        // The walk above the anchor may advance the window past it.
+        let window_epoch: u64 = exported
+            .lines()
+            .find_map(|line| line.strip_prefix("consensus_bootstrap_window_epoch "))
+            .context("window epoch gauge not exported")?
+            .parse()?;
+        assert!(window_epoch >= anchor_epoch, "{exported}");
+
+        node.start_consensus().await;
+
+        // Rejoining means proposing again: wait for a decided block the node led.
+        let node_key = network.cfg.known_nodes_with_stake()[NODE]
+            .stake_table_entry
+            .stake_key;
+        let coordinator = node.node_state().coordinator;
+        let mut events = node.event_stream();
+        let proposed = timeout(RECOVERY_TIMEOUT, async {
+            while let Some(event) = events.next().await {
+                let leaf_infos: &[LeafInfo<SeqTypes>] = match &event {
+                    CoordinatorEvent::LegacyEvent(Event {
+                        event: EventType::Decide { leaf_chain, .. },
+                        ..
+                    }) => leaf_chain,
+                    CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos,
+                    _ => continue,
+                };
+                for LeafInfo { leaf, .. } in leaf_infos {
+                    if leaf.height() <= height_before_restart {
+                        continue;
+                    }
+                    let Ok(membership) = coordinator.membership_for_epoch(leaf.epoch(EPOCH_HEIGHT))
+                    else {
+                        continue;
+                    };
+                    if membership.leader(leaf.view_number()).ok() == Some(node_key) {
+                        return Some(leaf.height());
+                    }
+                }
+            }
+            None
+        })
+        .await
+        .context("restarted node's event stream stalled")?
+        .context("restarted node's event stream ended")?;
         tracing::info!(proposed, "restarted node proposed a decided block");
 
         Ok(())

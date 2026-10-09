@@ -92,6 +92,7 @@ pub use options::Options;
 use proposal_fetcher::ProposalFetcherConfig;
 pub use run::main;
 use serde::{Deserialize, Serialize};
+pub use startup_catchup::{BootstrapParams, SkipMode};
 use tokio::select;
 use tracing::info;
 use url::Url;
@@ -142,9 +143,8 @@ pub struct NetworkParams {
     pub private_state_key: StateSignKey,
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    /// Per-step timeout for the startup stake-table catchup walk
-    /// (`bootstrap_epoch_window`).
-    pub bootstrap_epoch_catchup_timeout: Duration,
+    /// Startup stake-table catchup (`bootstrap_epoch_window`).
+    pub bootstrap: BootstrapParams,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -476,6 +476,7 @@ where
     // Print the libp2p public key
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
+    let state_peers = network_params.catchup.state_peers.clone();
     let catchup_params = network_params.catchup;
 
     let loaded_network_config = load_or_fetch_network_config(
@@ -740,7 +741,8 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
-        network_params.bootstrap_epoch_catchup_timeout,
+        network_params.bootstrap,
+        state_peers,
         empty_block_delay,
         block_sizes,
     )
@@ -1524,6 +1526,7 @@ pub mod testing {
                 coordinator_addrs: self.coordinator_addrs,
                 contracts: self.contracts,
                 genesis_chain_config: None,
+                bootstrap_peers: Vec::new(),
             }
         }
 
@@ -1665,6 +1668,8 @@ pub mod testing {
         contracts: Option<Contracts>,
         /// See [`Self::set_genesis_chain_config`].
         genesis_chain_config: Option<ChainConfig>,
+        /// State peers the startup stake-table skip fetches from. Empty disables the skip.
+        bootstrap_peers: Vec<Url>,
     }
 
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
@@ -1764,6 +1769,10 @@ pub mod testing {
         /// other's genesis QC.
         pub fn set_genesis_chain_config(&mut self, chain_config: ChainConfig) {
             self.genesis_chain_config = Some(chain_config);
+        }
+
+        pub fn set_bootstrap_peers(&mut self, peers: Vec<Url>) {
+            self.bootstrap_peers = peers;
         }
 
         /// Contracts deployed by [`TestConfigBuilder::set_upgrades_with`], if
@@ -2003,7 +2012,12 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
-                Duration::from_secs(2),
+                BootstrapParams {
+                    step_timeout: Duration::from_secs(2),
+                    deadline: Duration::from_secs(15),
+                    skip: SkipMode::Auto,
+                },
+                self.bootstrap_peers.clone(),
                 Duration::from_millis(500),
                 BTreeMap::from([(upgrade.base, max_block_size)]),
             )
