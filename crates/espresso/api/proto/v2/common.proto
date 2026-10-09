@@ -258,7 +258,7 @@ message HeaderV5 {
   // this message
   string payload_commitment = 7;
 
-  // TaggedBase64 `BUILDER_COMMITMENT~`
+  // TaggedBase64 `BUILDER_COMMITMENT~`. Empty on 0.7, whose headers carry none
   string builder_commitment = 8;
 
   NsTable ns_table = 9;

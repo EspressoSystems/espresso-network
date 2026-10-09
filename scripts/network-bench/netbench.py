@@ -1,0 +1,3794 @@
+"""Host-agnostic core of the network benchmark: the load generator, metrics sampling, analysis,
+comparison and markdown rendering. No process management and no host-specific paths; every
+network endpoint is passed in as a `Topology`. Imported by the local `bench` driver and, later,
+by the AWS driver and its agents.
+"""
+
+import argparse
+import asyncio
+import base64
+import contextlib
+import dataclasses
+import functools
+import hashlib
+import http.client
+import itertools
+import json
+import logging
+import math
+import multiprocessing
+import os
+import random
+import re
+import statistics
+import threading
+import time
+from collections.abc import (
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from multiprocessing.context import SpawnProcess
+from pathlib import Path
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar
+from urllib.parse import urlsplit
+
+log = logging.getLogger("netbench")
+T = TypeVar("T")
+
+# Bump when a metric's meaning changes: config_hash covers the inputs, not the analysis code.
+# 4: a late pacer catches up instead of losing rate, and every tx has its own content, so the
+# load and the submitted rate of a step differ from version 3 runs.
+SCHEMA_VERSION = 4
+METRIC_PREFIXES = (
+    "consensus_",
+    "process_",
+    "tokio_",
+    "hotshot_",
+    "sql",
+    "storage",
+    "internal_",
+    "journal_",
+    "pruner_",
+)
+STEAL_NOISY_PCT = 5.0
+DRIFT_NOISY_PCT = 10.0
+TRACKER_LAG_NOISY_MS = 1000.0
+SCRAPE_OK_MIN = 0.9
+MIN_READY_HEIGHT = 5
+PROGRESS_S = 10
+# Under half a transaction decided this long means consensus is idle: a block under a backlog
+# can take 2.5 s.
+DRAIN_IDLE_S = 5.0
+# Blocks the query node must show after consensus went idle.
+IDLE_BLOCKS = 3
+# Decided bytes per heartbeat: an 8-byte payload plus its 4-byte offset in the tx table.
+HEARTBEAT_TX_BYTES = 12
+# After that, the wait for sent transactions to resolve; the tracker scans a block behind.
+DRAIN_GRACE_S = 10.0
+# A drain gives up after this long without a new validator height, or in total.
+DRAIN_STALL_S = 30.0
+DRAIN_MAX_S = 300.0
+
+
+def final_drain_max_s(tx_timeout_s: float) -> float:
+    """Cap of the drain after a `keep_going` run: a long query lag needs a long drain."""
+    return max(DRAIN_MAX_S, tx_timeout_s)
+
+
+COLLAPSE_RATIO = 0.5
+CLIMB_FACTOR = 1.25
+# Float slack when comparing a bracket to the resolution.
+RESOLUTION_EPS = 1e-9
+# Payloads are read a block behind the query node's height: a payload requested as soon as its
+# header is stored can start a peer fetch that races the node's own insert.
+PAYLOAD_LAG_BLOCKS = 1
+MISSING_PAYLOAD_S = 10
+# One slow or failed answer from the query node must not end the run.
+READ_DEADLINE_S = 30.0
+READ_RETRY_S = 1.0
+# Payload scans run in this many processes when the caller asks for them (a block of 100 MB
+# costs about a core-second of JSON, base64 and search, which in the load process would
+# compete with the pacer for the GIL); this many blocks are scanned at once.
+SCAN_PROCESSES = 4
+SCAN_BATCH = 4
+# Light clients of `BenchConfig.clients` run as threads of one more process, for the same
+# reason. Each polls the query node's height this often and fetches new blocks in ranges of at
+# most CLIENT_RANGE, the server's limit for namespace proofs.
+CLIENT_POLL_S = 0.5
+CLIENT_RANGE = 100
+CLIENT_PROCESS_JOIN_S = 10.0
+CLIENTS_JSONL = "clients.jsonl"
+CLIENTS_LOG = "clients.log"
+# Request bodies are slices of one random pool of this many txs' size.
+BODY_POOL_TXS = 256
+# A pacer woken late sends the txs it missed, but never more than this many seconds of load at
+# once; schedule lost beyond that stays lost, so a long stall does not become a burst.
+CATCHUP_S = 1.0
+HEIGHT_POLL_S = 0.1
+COUNTER_POLL_S = 1.0
+METRICS_EVERY_S = 1.0
+KEEP_UP_RATIO = 0.8
+# A step stops early once decided stays under KEEP_UP_RATIO of submitted over this long.
+BEHIND_WINDOW_S = 10.0
+# A step submitting less than this fraction of its rate gets a cause line in the summary.
+SUBMIT_SHORT_RATIO = 0.95
+# Median wait for a submit thread above which the threads, not the pacer, held submission back.
+QUEUE_WAIT_BUSY_MS = 100
+# Step rules, see step_fails.
+QUERY_LAG_GROWTH_MS_S = 50.0
+BASELINE_RUNS = 10
+# GitHub's ubuntu-latest spans CPU models; a baseline run counts only on a like runner.
+CALIBRATION_MATCH_PCT = 10.0
+
+
+class Topology(TypedDict):
+    """Node name -> base URL, its role for reporting, and which node runs the query API.
+    `roles` has the same keys as `nodes`; `query_node` is one of those keys."""
+
+    nodes: dict[str, str]
+    roles: dict[str, str]
+    query_node: str
+
+
+class Calibration(TypedDict):
+    sha256_1t_mb_s: float
+    sha256_mt_mb_s: float
+    fsync_per_s: float
+
+
+class RunnerInfo(TypedDict):
+    cpu_model: str
+    nproc: int
+    affinity: int
+    cgroup_cpu_max: str | None
+    mhz: list[float]
+    flags: list[str]
+    mem_total_bytes: int
+    kernel: str
+    image_os: str | None
+    image_version: str | None
+    runner_name: str | None
+
+
+class RunMeta(TypedDict):
+    sha: str
+    ref: str
+    event: str
+    run_id: str | None
+    run_url: str | None
+    pr: int | None
+    started_at: str
+    wall_s: float
+    ready_s: float
+    local: bool
+    teardown: list[str]
+
+
+class Window(TypedDict):
+    t0: float
+    t1: float
+    height_start: int
+    height_end: int
+
+
+class Quantiles(TypedDict):
+    n: int
+    mean: float
+    p50: float
+    p95: float
+    p99: float
+    max: float
+
+
+class OpStats(TypedDict):
+    per_s: float
+    mean_ms: float
+    p50_ms: float | None
+    p99_ms: float | None
+    busy_frac: float
+
+
+class NodeStats(TypedDict):
+    role: str
+    decided_height_end: int
+    decided_blocks: int
+    view_lag_end: int
+    cpu_cores: float
+    rss_peak_bytes: int
+    tokio_busy_frac: float | None
+    ops: dict[str, OpStats]
+    # Gauges of the query node's pruner at the window end; absent where it has none.
+    pruned_data_height_end: NotRequired[int]
+    pruned_state_height_end: NotRequired[int]
+
+
+class ProcStats(TypedDict):
+    cpu_cores_mean: float
+    cpu_s: float
+    rss_peak_bytes: int
+
+
+class HostStats(TypedDict):
+    util_mean: float
+    util_max: float
+    steal_pct: float
+    iowait_pct: float
+    mem_avail_min_bytes: int
+
+
+class HostSample(HostStats):
+    """Adds throughput sampled by the AWS host monitor; absent for the local bench."""
+
+    disk_mb_s: float
+    net_mb_s: float
+
+
+class ClientStats(TypedDict):
+    """The light-client readers over the measured steps: `ranges` fetched by `readers`, of
+    which `missing` the node did not serve in time. `lag_ms` is from a validator showing a
+    range's last block to the reader holding the range; `fetch_ms` from its first request to
+    its last answer."""
+
+    readers: int
+    ranges: int
+    missing: int
+    mb_s: float
+    lag_ms: Quantiles | None
+    fetch_ms: Quantiles | None
+
+
+class LoadStats(TypedDict):
+    """Over the whole load, warmup included, except `clients`."""
+
+    submitted: int
+    included: int
+    timeouts: int
+    submit_errors: int
+    max_in_flight: int
+    cap_waits: int
+    missing_payloads: list[int]
+    # Per height: the bench finished scanning its payload after it could start.
+    tracker_lag_ms: Quantiles | None
+    # Before the refine step; skipped if the failed step's backlog did not drain in time.
+    # With keep_going: after the last step, None past `final_drain_max_s`.
+    drain_s: float | None
+    refine_skipped: bool
+    # Why the staircase ended; None for runs recorded before it existed.
+    stop_reason: str | None
+    # Present when the run had readers.
+    clients: NotRequired[ClientStats]
+
+
+ProbeKind = Literal["ramp", "refine", "climb", "bisect", "recovery", "confirm"]
+Side = Literal["overall", "consensus"]
+
+
+class StepWindow(TypedDict):
+    """One load step: `rate_mb_s` from `t_start`, measured from `t_mid` to `t_end`."""
+
+    rate_mb_s: float
+    refine: bool
+    kind: ProbeKind
+    t_start: float
+    t_mid: float
+    t_end: float
+
+
+class SubmitMeasures(TypedDict):
+    # What the pacer created, and the wait for a submit thread and the HTTP round trip of the
+    # submitted txs. None for runs recorded before `t_queued` and `t_done` existed. A pacer that
+    # runs late shows as `queued_mb_s` below the step's rate, busy submit threads as queue wait.
+    queued_mb_s: float | None
+    queue_wait_ms: Quantiles | None
+    submit_rtt_ms: Quantiles | None
+
+
+class StepMeasures(SubmitMeasures):
+    # What the load generator sent, which falls short of the step's rate when it is late.
+    submitted_mb_s: float
+    # Theil-Sen slope of the decided payload bytes.
+    decided_mb_s: float | None
+    timeouts: int | None
+    consensus_latency_ms: Quantiles | None
+    query_lag_ms: Quantiles | None
+    query_lag_slope_ms_s: float | None
+
+
+class StepResult(StepWindow, StepMeasures):
+    # Txs the pacer found the in-flight cap full for during the step; None for older runs.
+    cap_waits: int | None
+    # Submit to the block showing on the query node's API: what its client sees.
+    latency_ms: Quantiles | None
+    mean_view_ms: float | None
+    cpu_s_per_mb: float | None
+    node_cpu: dict[str, float]
+    postgres_cpu: float | None
+    consensus_fails: list[str]
+    query_fails: list[str]
+    passed: bool
+    # Present only on a step that `pace_while_keeping_up` stopped.
+    stopped_early: NotRequired[bool]
+
+
+class Limit(TypedDict):
+    # None: below the first step. Not `bounded`: every step passed, a lower bound.
+    mb_s: float | None
+    bounded: bool
+    failed_at_mb_s: float | None
+
+
+class Capacity(TypedDict):
+    overall: Limit
+    consensus: Limit
+    query_node: Limit
+    failed_at_mb_s: float | None
+    fail_rule: str | None
+    # Overall `failed_at_mb_s - mb_s`: what the probes could tell apart; None when unbounded.
+    resolution_mb_s: float | None
+    # A passing confirm probe ran at the overall limit.
+    confirmed: bool
+
+
+class Validity(TypedDict):
+    valid: bool
+    noisy: bool
+    reasons: list[str]
+
+
+class CalibrationPair(TypedDict):
+    before: Calibration
+    after: Calibration
+    drift_pct: float
+
+
+DbMode = Literal["colocated", "volume", "rds", "tmpfs"]
+
+
+class QueryDbMeta(TypedDict):
+    """Where the query node's database ran. `store` is the backing volume, `{type, gb, iops,
+    mbps}` (no iops or mbps for tmpfs) plus `volume_id` (ebs) or `identifier` (rds-gp3); `mode` is
+    the placement; `tuning` is the applied settings."""
+
+    mode: DbMode
+    engine: str
+    store: dict[str, Any]
+    tls: bool
+    tuning: dict[str, str]
+    instance_class: NotRequired[str]
+
+
+class LatencyMeta(TypedDict):
+    """`--latency` emulation: node counts per location and the pinged probes."""
+
+    profile: str
+    intra: bool
+    nodes: dict[str, int]
+    assignment: dict[str, str]  # node name -> location
+    matrix_sha256: str
+    # Runs from before the host tuning have neither key.
+    sysctls: NotRequired[dict[str, str]]
+    mtu: NotRequired[int]
+    probes: list[dict[str, Any]]
+
+
+class DeploymentMeta(TypedDict):
+    """AWS fleet metadata; absent for the local bench."""
+
+    provider: Literal["aws"]
+    account: str
+    region: str
+    az: str
+    ami: str
+    hosts: dict[str, dict[str, Any]]  # name -> {instance_type: str, ...}
+    images: dict[str, str]  # name -> "ref@digest"
+    image_revision: str | None
+    start_spread_s: float
+    clock_offset_ms_max: float
+    cost_usd: dict[str, float]  # expected, bound required; actual optional
+    fleet: NotRequired[str]
+    run_index: NotRequired[int]
+    query_db: NotRequired[QueryDbMeta]
+    latency: NotRequired[LatencyMeta]
+    # `KEY=VALUE` overrides of every node's environment.
+    node_env: NotRequired[list[str]]
+    # Genesis `max_block_size`; absent in manifests from before the flag.
+    max_block_size: NotRequired[str]
+    # `--prune` retention of the query node's data and state; absent without pruning.
+    prune: NotRequired[str]
+
+
+class BenchResult(TypedDict):
+    schema_version: int
+    run: RunMeta
+    runner: RunnerInfo
+    calibration: CalibrationPair
+    config: dict[str, Any]
+    config_hash: str
+    window: Window
+    steps: list[StepResult]
+    capacity: Capacity
+    nodes: dict[str, NodeStats]
+    processes: dict[str, ProcStats]
+    host: HostStats
+    load: LoadStats
+    stake_table: list[str]
+    validity: Validity
+    hosts: NotRequired[dict[str, HostSample]]
+    deployment: NotRequired[DeploymentMeta]
+
+
+@dataclass(frozen=True)
+class BenchConfig:
+    genesis: str = "scripts/network-bench/genesis.toml"
+    tx_size: int = 1_000_000
+    # The leader disperses a block's namespaces in parallel, one unit each. With two, a 100 MB
+    # block dispersed on at most two cores and the rest sat idle.
+    namespaces: tuple[int, int] = (10000, 10015)
+    # MB/s of each load step; each is held `step_s`, and its second half is measured.
+    steps: tuple[float, ...] = (4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0)
+    step_s: int = 30
+    submit_nodes: int = 3
+    workers: int = 6
+    # Safety cap on transactions in flight: this many seconds of the current step's load.
+    cap_s: float = 5.0
+    tx_timeout_s: int = 30
+    # At the first step's rate.
+    warmup_s: int = 60
+    seed: int = 42
+    # A step fails above either target, see step_fails.
+    latency_target_ms: int = 1000
+    query_lag_target_ms: int = 1000
+    # Every step runs whatever its verdict, no refine step; then the backlog drains, see
+    # run_staircase. In flight and tx timeouts stay bound by `cap_s` and `tx_timeout_s`.
+    keep_going: bool = False
+    # Unmarked 8-byte transactions per second for the whole run, so a leader never builds from
+    # an empty buffer and sleeps its empty block delay, as after a drain; 0 for none.
+    heartbeat_tx_s: float = 0.0
+    # Light-client readers per namespace, on top of the payload scan; 0 for none.
+    clients: int = 0
+
+    def __post_init__(self) -> None:
+        if self.clients < 0:
+            raise ValueError(f"clients must be >= 0: {self.clients}")
+        # The drain's idle rule allows half a transaction over DRAIN_IDLE_S (see `is_idle`).
+        beat_bytes = self.heartbeat_tx_s * HEARTBEAT_TX_BYTES * DRAIN_IDLE_S
+        if beat_bytes >= self.tx_size / 4:
+            raise ValueError(
+                f"heartbeat of {self.heartbeat_tx_s:g} tx/s decides {beat_bytes:.0f} B per "
+                f"{DRAIN_IDLE_S:g} s, too close to half a {self.tx_size} B transaction for "
+                "drains to see consensus idle"
+            )
+
+
+def load_config(saved: dict[str, Any]) -> BenchConfig:
+    saved["namespaces"] = tuple(saved["namespaces"])
+    saved["steps"] = tuple(saved["steps"])
+    return BenchConfig(**saved)
+
+
+@dataclass(frozen=True)
+class SearchConfig:
+    """Capacity search in place of the ramp: climb from `start_mb_s`, bisect to
+    `resolution_mb_s`, confirm; at most `max_probes` probes and `offered_gb` offered."""
+
+    start_mb_s: float = 100.0
+    resolution_mb_s: float = 5.0
+    max_probes: int = 12
+    offered_gb: float = 150.0
+
+
+class Probe(TypedDict):
+    rate_mb_s: float
+    kind: ProbeKind
+    duration_s: int
+
+
+class StaircaseEnd(TypedDict):
+    drain_s: float | None
+    refine_skipped: bool
+    stop_reason: str
+
+
+def parse_rates(text: str) -> tuple[float, ...]:
+    """`4,6,8`: increasing MB/s."""
+    rates = tuple(float(x) for x in text.split(","))
+    if list(rates) != sorted(set(rates)) or rates[0] <= 0:
+        raise argparse.ArgumentTypeError(
+            f"steps must be increasing and positive: {text}"
+        )
+    return rates
+
+
+class Row(TypedDict):
+    key: str
+    label: str
+    unit: str
+    better: str
+    current: float | None
+    baseline: float | None
+    delta_pct: float | None
+    threshold_pct: float
+    verdict: str
+
+
+class Baseline(TypedDict):
+    runs: list[BenchResult]
+    error: str | None
+    # `main`: stats-fetch output of main runs; `reference`: one result.json given locally.
+    source: Literal["main", "reference"]
+
+
+class Comparison(TypedDict):
+    n: int
+    excluded: dict[str, int]
+    error: str | None
+    source: Literal["main", "reference"]
+    used: list[RunMeta]
+    capacity: list["CapacityRow"]
+    steps: list["StepComparison"]
+
+
+class CapacityRow(TypedDict):
+    label: str
+    current: Limit
+    # The baseline runs' median, a run below the first step ranking lowest.
+    baseline: Limit | None
+    n: int
+    delta_mb_s: float | None
+    resolution_mb_s: float
+    verdict: str
+
+
+class StepComparison(TypedDict):
+    rate_mb_s: float
+    # Baseline runs that ran this rate.
+    n: int
+    rows: list[Row]
+
+
+class Clock(Protocol):
+    """Every wait and every elapsed-time read of the load path, so tests can run it on virtual
+    time."""
+
+    def time(self) -> float: ...
+
+    def monotonic(self) -> float: ...
+
+    def sleep(self, s: float) -> None: ...
+
+    def wait(self, event: threading.Event, s: float) -> bool: ...
+
+    async def asleep(self, s: float) -> None: ...
+
+    async def wait_for(self, aw: Awaitable[T], s: float) -> T: ...
+
+    def run(self, main: Coroutine[Any, Any, T]) -> T: ...
+
+
+class SystemClock:
+    def time(self) -> float:
+        return time.time()
+
+    def monotonic(self) -> float:
+        return time.monotonic()
+
+    def sleep(self, s: float) -> None:
+        time.sleep(s)
+
+    def wait(self, event: threading.Event, s: float) -> bool:
+        return event.wait(s)
+
+    async def asleep(self, s: float) -> None:
+        await asyncio.sleep(s)
+
+    async def wait_for(self, aw: Awaitable[T], s: float) -> T:
+        return await asyncio.wait_for(aw, s)
+
+    def run(self, main: Coroutine[Any, Any, T]) -> T:
+        return asyncio.run(main)
+
+
+SYSTEM_CLOCK = SystemClock()
+
+
+class Http(Protocol):
+    """What the load path needs of an HTTP client. `clock` times its retrying readers,
+    `closed` tells them to give up."""
+
+    clock: Clock
+    closed: threading.Event
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+    ) -> tuple[int, bytes]: ...
+
+    def close(self) -> None: ...
+
+
+# Builds one client per thread pool: `HttpPool` or a test double's `connect`.
+HttpFactory = Callable[[Clock], Http]
+
+
+class HttpPool:
+    """Keep-alive connections shared by threads, one request per connection at a time. A
+    reused connection the server closed is retried once on a fresh one; any other failure
+    raises OSError. `closed` tells retrying readers to give up."""
+
+    def __init__(self, clock: Clock = SYSTEM_CLOCK) -> None:
+        self.clock = clock
+        self._idle: dict[str, list[http.client.HTTPConnection]] = {}
+        self._lock = threading.Lock()
+        self.closed = threading.Event()
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+    ) -> tuple[int, bytes]:
+        parts = urlsplit(url)
+        headers = {"Accept": "application/json"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        for attempt in range(2):
+            with self._lock:
+                idle = self._idle.setdefault(parts.netloc, [])
+                conn = idle.pop() if idle else None
+            reused = conn is not None
+            if conn is None:
+                conn = http.client.HTTPConnection(parts.netloc, timeout=timeout)
+            elif conn.sock is not None:
+                conn.sock.settimeout(timeout)
+            try:
+                conn.request(method, parts.path, body=body, headers=headers)
+                resp = conn.getresponse()
+                data = resp.read()
+            except (OSError, http.client.HTTPException) as err:
+                conn.close()
+                if not reused or attempt:
+                    raise OSError(f"{method} {url}: {err}") from err
+                continue
+            with self._lock:
+                idle.append(conn)
+            return resp.status, data
+        raise AssertionError("unreachable")
+
+    def close(self) -> None:
+        self.closed.set()
+        with self._lock:
+            for conns in self._idle.values():
+                for conn in conns:
+                    conn.close()
+            self._idle.clear()
+
+
+class NetworkError(Exception):
+    pass
+
+
+def drive_load(
+    cfg: BenchConfig,
+    topo: Topology,
+    out: Path,
+    alive: Callable[[], bool],
+    clock: Clock = SYSTEM_CLOCK,
+    http: HttpFactory = HttpPool,
+    scan_processes: int = 0,
+    search: SearchConfig | None = None,
+) -> tuple[float, float]:
+    """Saves the stake table, runs the load staircase, then writes every node's final metrics
+    snapshot. Returns when the steps started and ended. The caller must have already waited for readiness with `wait_ready`. Raises
+    NetworkError if the network died since or the load generator hits an unrecoverable error."""
+    if not alive():
+        raise NetworkError("network process exited before load")
+    pool = http(clock)
+    try:
+        query_url = topo["nodes"][topo["query_node"]]
+        stake_table = get_ok(pool, query_url + "/v1/node/stake-table/current")
+        (out / "stake-table.json").write_bytes(stake_table)
+        if search:
+            log.info(
+                "load: warmup %d s, then search from %s MB/s in probes of %d s",
+                cfg.warmup_s,
+                fmt_num(search.start_mb_s),
+                cfg.step_s,
+            )
+        else:
+            log.info(
+                "load: warmup %d s, then steps of %d s at %s MB/s",
+                cfg.warmup_s,
+                cfg.step_s,
+                ", ".join(map(fmt_num, cfg.steps)),
+            )
+        validators = [
+            url for node, url in topo["nodes"].items() if node != topo["query_node"]
+        ]
+        submit_urls = [*validators, query_url]
+        t0, t1 = clock.run(
+            generate_load(
+                cfg,
+                submit_urls,
+                query_url,
+                validators,
+                out,
+                clock,
+                http,
+                scan_processes,
+                search,
+            )
+        )
+        for node, url in topo["nodes"].items():
+            prom = get_ok(pool, url + "/v1/status/metrics")
+            (out / f"final-{node}.prom").write_bytes(prom)
+    finally:
+        pool.close()
+    return t0, t1
+
+
+def wait_ready(
+    pool: Http,
+    urls: dict[str, str],
+    min_height: int,
+    timeout_s: float,
+    alive: Callable[[], bool],
+    clock: Clock = SYSTEM_CLOCK,
+) -> float:
+    start = clock.time()
+    while True:
+        heights = {node: block_height(pool, url) for node, url in urls.items()}
+        elapsed = clock.time() - start
+        if all(h is not None and h >= min_height for h in heights.values()):
+            return elapsed
+        if not alive():
+            raise NetworkError("network process exited during startup")
+        if elapsed > timeout_s:
+            raise NetworkError(
+                f"network not ready after {timeout_s:.0f} s: heights {heights}"
+            )
+        clock.sleep(2)
+
+
+def block_height(pool: Http, url: str) -> int | None:
+    """None until the node's API answers."""
+    try:
+        status, body = pool.request("GET", url + "/v1/status/block-height", timeout=2)
+    except OSError:
+        return None
+    return int(body) if status == 200 else None
+
+
+def get_ok(pool: Http, url: str) -> bytes:
+    status, body = read(pool, url)
+    if status != 200:
+        raise NetworkError(f"GET {url}: HTTP {status}")
+    return body
+
+
+def read(pool: Http, url: str) -> tuple[int, bytes]:
+    """GET, retrying failed requests and 5xx answers until READ_DEADLINE_S or until the
+    pool is closed."""
+    deadline = pool.clock.time() + READ_DEADLINE_S
+    for attempt in itertools.count():
+        try:
+            status, body = pool.request("GET", url)
+        except OSError as err:
+            problem = str(err)
+        else:
+            if status < 500:
+                return status, body
+            problem = f"GET {url}: HTTP {status}"
+        if pool.clock.time() >= deadline:
+            raise NetworkError(f"{problem}, retried for {READ_DEADLINE_S:.0f} s")
+        log.log(logging.DEBUG if attempt else logging.WARNING, "%s, retrying", problem)
+        if pool.clock.wait(pool.closed, READ_RETRY_S):
+            raise NetworkError(f"{problem}, stopped retrying")
+    raise AssertionError("unreachable")
+
+
+def block_count(pool: Http, url: str, source: "HeightSource") -> int:
+    """Blocks decided as `source` sees them. A validator's status API reports the newest
+    decided height, one less than the count."""
+    path, extra = HEIGHT_API[source]
+    return int(get_ok(pool, url + path)) + extra
+
+
+def block_payload(pool: Http, query_url: str, height: int) -> bytes | None:
+    """Raw payload bytes of block `height`, or None if the query node does not have it yet."""
+    url = f"{query_url}/v1/availability/payload/{height}"
+    status, body = read(pool, url)
+    if status == 404:
+        return None
+    if status != 200:
+        raise NetworkError(f"payload {height} from query node: HTTP {status}")
+    return base64.b64decode(json.loads(body)["data"]["raw_payload"])
+
+
+def find_tx_ids(raw: bytes, marker: bytes) -> list[int]:
+    pattern = re.compile(re.escape(marker) + b"(.{8})", re.DOTALL)
+    return [int.from_bytes(m.group(1), "big") for m in pattern.finditer(raw)]
+
+
+def scan_block(
+    pool: Http, query_url: str, marker: bytes, height: int
+) -> list[int] | None:
+    """Ids of our transactions in block `height`, None if the query node does not have it
+    yet. Pure of the load's state, so it can run in another process."""
+    raw = block_payload(pool, query_url, height)
+    return None if raw is None else find_tx_ids(raw, marker)
+
+
+@functools.cache
+def scan_http() -> HttpPool:
+    """The connections of a scan process, made on first use there."""
+    return HttpPool()
+
+
+def configure_scan_logging(level: int) -> None:
+    """A scan process starts without the parent's logging, which would drop the retry
+    warnings of `read`."""
+    logging.basicConfig(
+        level=level, format="%(asctime)s %(levelname)s scan: %(message)s"
+    )
+
+
+def scan_block_remote(query_url: str, marker: bytes, height: int) -> list[int] | None:
+    return scan_block(scan_http(), query_url, marker, height)
+
+
+# Fetches and scans one block: `Scan(height)`.
+Scan = Callable[[int], Awaitable[list[int] | None]]
+
+
+async def scan_in_processes(
+    procs: ProcessPoolExecutor, query_url: str, marker: bytes, height: int
+) -> list[int] | None:
+    return await asyncio.get_running_loop().run_in_executor(
+        procs, scan_block_remote, query_url, marker, height
+    )
+
+
+@dataclass
+class Reader:
+    """A light client of one namespace, as the stack's reader runs it: a cursor over the chain,
+    advanced a range at a time. `since` is when the first attempt at the range at `next`
+    started."""
+
+    ns: int
+    index: int
+    next: int
+    since: float | None = None
+
+
+def tagged_base64(tag: str, value: bytes) -> str:
+    """The `tagged-base64` crate's string: the tag, `~`, then URL-safe unpadded base64 of the
+    value and one checksum byte, the CRC-8 (poly 0x07) of tag and value xor the value's length
+    mod 256."""
+    crc = 0
+    for byte in tag.encode() + value:
+        crc ^= byte
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    encoded = base64.urlsafe_b64encode(value + bytes([crc ^ len(value) % 256]))
+    return f"{tag}~{encoded.rstrip(b'=').decode()}"
+
+
+def namespaces_path(start: int, end: int, ns: int) -> str:
+    """Light-client proofs of namespace `ns` in blocks [start, end); the namespace list is a
+    JSON array in a segment tagged `NS`."""
+    segment = tagged_base64("NS", json.dumps([ns], separators=(",", ":")).encode())
+    return f"/v1/light-client/namespaces/{start}/{end}/{segment}"
+
+
+def fetch_range(
+    pool: Http, query_url: str, start: int, end: int, ns: int
+) -> int | None:
+    """Bytes of the answers a light client needs for blocks [start, end): the finality proof of
+    the last leaf, the leaves before it, the namespace proofs. None while the node lacks any or
+    answers too slowly."""
+    paths = [f"/v1/light-client/leaf/{end - 1}", namespaces_path(start, end, ns)]
+    if end - start > 1:
+        paths.insert(1, f"/v1/availability/leaf/{start}/{end - 1}")
+    size = 0
+    for path in paths:
+        try:
+            status, body = read(pool, query_url + path)
+        except NetworkError:
+            # A node busy with a prune batch can answer slower than the read deadline.
+            return None
+        if status == 404:
+            return None
+        if status != 200:
+            raise NetworkError(f"client GET {path}: HTTP {status}")
+        size += len(body)
+    return size
+
+
+def poll_reader(
+    pool: Http, query_url: str, reader: Reader, clock: Clock
+) -> list[dict[str, Any]]:
+    """Fetches the blocks the query node has beyond the reader's cursor, one record per range.
+    A range the node cannot serve yet is tried again on the next poll; after MISSING_PAYLOAD_S
+    it is recorded as missing and skipped."""
+    tip = block_count(pool, query_url, "query")
+    records = []
+    while reader.next < tip:
+        start, end = reader.next, min(tip, reader.next + CLIENT_RANGE)
+        if reader.since is None:
+            reader.since = clock.time()
+        size = fetch_range(pool, query_url, start, end, reader.ns)
+        now = clock.time()
+        if size is None and now - reader.since < MISSING_PAYLOAD_S:
+            break
+        records.append(
+            {
+                "ns": reader.ns,
+                "reader": reader.index,
+                "start": start,
+                "end": end,
+                "t_start": reader.since,
+                "t_done": now,
+                "bytes": size or 0,
+                "status": "missing" if size is None else "ok",
+            }
+        )
+        reader.next, reader.since = end, None
+    return records
+
+
+def run_readers(
+    pool: Http,
+    query_url: str,
+    namespaces: Iterable[int],
+    per_ns: int,
+    out: Path,
+    stop: threading.Event,
+    clock: Clock = SYSTEM_CLOCK,
+) -> None:
+    """`per_ns` readers per namespace, one thread each, from the current height until `stop`.
+    Appends the records of `poll_reader` to `out` as they come; the first error stops all."""
+    start = block_count(pool, query_url, "query")
+    readers = [Reader(ns, i, start) for ns in namespaces for i in range(per_ns)]
+    lock = threading.Lock()
+    with open(out, "a", buffering=1) as f:
+
+        def follow(reader: Reader) -> None:
+            while not clock.wait(stop, CLIENT_POLL_S):
+                records = poll_reader(pool, query_url, reader, clock)
+                with lock:
+                    f.writelines(json.dumps(rec) + "\n" for rec in records)
+
+        with ThreadPoolExecutor(len(readers)) as threads:
+            try:
+                for done in as_completed([threads.submit(follow, r) for r in readers]):
+                    done.result()
+            finally:
+                stop.set()
+
+
+def readers_main(
+    query_url: str, namespaces: tuple[int, int], per_ns: int, out: Path, log_level: int
+) -> None:
+    """Entry of the readers process. Logs to clients.log next to `out`, which the final copy of
+    the run dir collects; the process's stderr does not leave the host on AWS."""
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(levelname)s clients: %(message)s",
+        handlers=[logging.FileHandler(out.parent / CLIENTS_LOG)],
+    )
+    pool = HttpPool()
+    try:
+        run_readers(
+            pool,
+            query_url,
+            range(namespaces[0], namespaces[1] + 1),
+            per_ns,
+            out,
+            threading.Event(),
+        )
+    except Exception:
+        log.exception("readers failed")
+        raise
+    finally:
+        pool.close()
+
+
+def start_readers(cfg: BenchConfig, query_url: str, out: Path) -> SpawnProcess:
+    process = multiprocessing.get_context("spawn").Process(
+        target=readers_main,
+        args=(
+            query_url,
+            cfg.namespaces,
+            cfg.clients,
+            out / CLIENTS_JSONL,
+            logging.getLogger().getEffectiveLevel(),
+        ),
+        name="clients",
+    )
+    process.start()
+    return process
+
+
+async def watch_readers(process: SpawnProcess, clock: Clock) -> None:
+    """Ends the load when the readers process dies on its own."""
+    while process.is_alive():
+        await clock.asleep(1.0)
+    raise NetworkError(
+        f"client readers exited with code {process.exitcode}, see {CLIENTS_LOG}"
+    )
+
+
+@dataclass
+class Tx:
+    id: int
+    node: int
+    # When the pacer created the tx; `t_submit - t_queued` is the wait for a submit thread.
+    t_queued: float
+    # inf while the request waits for a submit thread, so the timeout clock starts at send.
+    t_submit: float = math.inf
+    # When the response or error arrived; None while the request is out.
+    t_done: float | None = None
+    t_included: float | None = None
+    height: int | None = None
+    status: str = "pending"
+
+
+@dataclass
+class Client:
+    """HTTP on its own threads, so requests of one kind never queue behind another's."""
+
+    pool: Http
+    executor: ThreadPoolExecutor
+
+    async def call(self, fn: Callable[..., T], *args: Any) -> T:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self.executor, fn, self.pool, *args)
+
+    def close(self) -> None:
+        self.executor.shutdown(wait=False, cancel_futures=True)
+        self.pool.close()
+
+
+@dataclass(frozen=True)
+class Phase:
+    """What the load does, for the progress line: `rate_mb_s` None while nothing is offered."""
+
+    label: str
+    rate_mb_s: float | None
+    start: float
+    length_s: float
+
+
+class LoadState:
+    """Transactions of one run. At most `cap` are pending: submitted but neither included nor
+    timed out."""
+
+    def __init__(self) -> None:
+        self.cap = 1
+        self.room = asyncio.Event()
+        # Held by `post_tx` to send and by `drop_unsent` to drop: a tx is one or the other.
+        self.lock = threading.Lock()
+        self.txs: list[Tx] = []
+        self.pending: dict[int, Tx] = {}
+        self.max_in_flight = 0
+        self.cap_waits = 0
+        self.timeouts = 0
+        self.phase = Phase("starting", None, 0.0, 0.0)
+        self.submit_errors = 0
+        self.heartbeat_errors = 0
+        self.missing_payloads: list[int] = []
+
+    def submitted(self, tx: Tx) -> None:
+        self.txs.append(tx)
+        self.pending[tx.id] = tx
+        self.max_in_flight = max(self.max_in_flight, len(self.pending))
+
+    def failed(self, tx: Tx) -> None:
+        """A submit that failed, unless the transaction was included anyway, e.g. after a
+        timed-out response."""
+        self.submit_errors += 1
+        if self.pending.pop(tx.id, None) is not None:
+            self.txs.remove(tx)
+            self.room.set()
+
+    async def wait_for_room(self, until: float, clock: Clock) -> bool:
+        """False if there is no room before `until`."""
+        if len(self.pending) >= self.cap:
+            self.cap_waits += 1
+        while len(self.pending) >= self.cap:
+            self.room.clear()
+            try:
+                await clock.wait_for(self.room.wait(), until - clock.time())
+            except TimeoutError:
+                return False
+        return True
+
+    def resolve(self, tx_id: int, status: str, now: float) -> None:
+        tx = self.pending.pop(tx_id, None)
+        if tx is None:
+            return
+        tx.status = status
+        if status == "included":
+            tx.t_included = now
+        elif status == "timeout":
+            self.timeouts += 1
+        self.room.set()
+
+    def include(self, tx_id: int, height: int, at: float) -> None:
+        tx = self.pending.get(tx_id)
+        if tx is not None:
+            tx.height = height
+            self.resolve(tx_id, "included", at)
+
+
+async def generate_load(
+    cfg: BenchConfig,
+    submit_urls: list[str],
+    query_url: str,
+    validator_urls: list[str],
+    out: Path,
+    clock: Clock,
+    http: HttpFactory,
+    scan_processes: int = 0,
+    search: SearchConfig | None = None,
+) -> tuple[float, float]:
+    """The load staircase, then up to `tx_timeout_s` for the stragglers. Returns when the
+    steps started and ended. Writes one line per transaction to load.jsonl, per block height
+    to heights.jsonl, per consensus counter sample of the first validator to
+    consensus.jsonl, per step to steps.json, and the counters to load-meta.json. Payload scans
+    run in `scan_processes` processes, or on a thread of this one if 0. With `cfg.clients`,
+    readers in one more process write clients.jsonl."""
+    state = LoadState()
+    marker = hashlib.sha256(f"network-bench:{cfg.seed}".encode()).digest()[:16]
+    bodies = TxBodies(cfg, marker)
+    submitter = Client(http(clock), ThreadPoolExecutor(cfg.workers))
+    tracking = Client(http(clock), ThreadPoolExecutor(1))
+    scan_procs = (
+        ProcessPoolExecutor(
+            scan_processes,
+            mp_context=multiprocessing.get_context("spawn"),
+            initializer=configure_scan_logging,
+            initargs=(logging.getLogger().getEffectiveLevel(),),
+        )
+        if scan_processes
+        else None
+    )
+    scan: Scan = (
+        functools.partial(tracking.call, scan_block, query_url, marker)
+        if scan_procs is None
+        else functools.partial(scan_in_processes, scan_procs, query_url, marker)
+    )
+    readers = start_readers(cfg, query_url, out) if cfg.clients else None
+    polling = Client(http(clock), ThreadPoolExecutor(2 + len(validator_urls)))
+    beating = Client(http(clock), ThreadPoolExecutor(1))
+    beat_stop = threading.Event()
+    done = asyncio.Event()
+    counters: list[dict[str, Any]] = []
+    heights: Heights | None = None
+    steps: list[dict[str, Any]] = []
+    end: StaircaseEnd = {
+        "drain_s": None,
+        "refine_skipped": False,
+        "stop_reason": "interrupted",
+    }
+    try:
+        heights = Heights(await tracking.call(block_count, query_url, "query"))
+        async with asyncio.TaskGroup() as group:
+            pollers = [
+                group.create_task(
+                    poll_heights(polling, query_url, heights, "query", clock)
+                ),
+                *(
+                    group.create_task(
+                        poll_heights(polling, url, heights, "validator", clock)
+                    )
+                    for url in validator_urls
+                ),
+                group.create_task(
+                    poll_counters(polling, validator_urls[0], counters, clock)
+                ),
+                *(
+                    [group.create_task(watch_readers(readers, clock))]
+                    if readers
+                    else []
+                ),
+            ]
+            tracker = group.create_task(
+                track_inclusion(
+                    cfg,
+                    state,
+                    scan,
+                    heights,
+                    counters,
+                    done,
+                    clock,
+                )
+            )
+            load = Load(
+                cfg,
+                state,
+                submitter,
+                submit_urls[: cfg.submit_nodes],
+                bodies,
+                clock,
+            )
+            beat = (
+                group.create_task(
+                    beating.call(
+                        heartbeat,
+                        load.urls,
+                        cfg.namespaces[0],
+                        cfg.heartbeat_tx_s,
+                        beat_stop,
+                    )
+                )
+                if cfg.heartbeat_tx_s
+                else None
+            )
+            end = await run_staircase(load, heights, counters, steps, out, search)
+            done.set()
+            await tracker
+            beat_stop.set()
+            if beat is not None and (failed := await beat):
+                state.heartbeat_errors = failed
+                log.warning("%d heartbeat submits failed", failed)
+            for poller in pollers:
+                poller.cancel()
+    except* (NetworkError, OSError) as group:
+        end["stop_reason"] = "network error"
+        raise NetworkError(f"load generator: {innermost(group)}") from group
+    finally:
+        beat_stop.set()
+        beating.close()
+        submitter.close()
+        tracking.close()
+        if scan_procs is not None:
+            scan_procs.terminate_workers()
+        if readers is not None:
+            readers.terminate()
+            readers.join(CLIENT_PROCESS_JOIN_S)
+        polling.close()
+        # In `finally` so a load cut short (SIGTERM of the AWS agent) keeps its raw data.
+        if heights is not None:
+            write_load_files(out, state, heights, counters, steps, marker, end)
+    return steps[0]["t_start"], steps[-1]["t_end"]
+
+
+def write_load_files(
+    out: Path,
+    state: LoadState,
+    heights: "Heights",
+    counters: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+    marker: bytes,
+    end: StaircaseEnd,
+) -> None:
+    # A load cut short leaves txs still queued for a submit thread (`t_submit` inf, not JSON).
+    sent = (tx for tx in state.txs if math.isfinite(tx.t_submit))
+    write_jsonl(out / "load.jsonl", (dataclasses.asdict(tx) for tx in sent))
+    write_jsonl(out / "heights.jsonl", heights.records())
+    write_jsonl(out / "consensus.jsonl", iter(counters))
+    if steps:
+        write_json(out / "steps.json", steps)
+    write_json(
+        out / "load-meta.json",
+        {
+            "start_height": heights.start,
+            "max_in_flight": state.max_in_flight,
+            "cap_waits": state.cap_waits,
+            "submit_errors": state.submit_errors,
+            "heartbeat_errors": state.heartbeat_errors,
+            "missing_payloads": state.missing_payloads,
+            "drain_s": end["drain_s"],
+            "refine_skipped": end["refine_skipped"],
+            "stop_reason": end["stop_reason"],
+            "marker": marker.hex(),
+        },
+    )
+
+
+def innermost(err: BaseException) -> BaseException:
+    """The first leaf of nested exception groups, as raised by task groups."""
+    # ruff assumes Python 3.10 here; the script requires 3.11.
+    while isinstance(err, BaseExceptionGroup):  # noqa: F821
+        err = err.exceptions[0]
+    return err
+
+
+class TxBodies:
+    """Submit request bodies of exact `tx_size` payloads: 16 B marker, 8 B id, then random
+    bytes cut from one pool of BODY_POOL_TXS txs' size at a random offset, so no two txs
+    share their content beyond a rare overlap of the pool. The pool is base64-encoded once:
+    a slice of whole 3-byte groups encodes to the matching slice of the encoded pool, so a
+    request costs a few copies, no encoding. The 0 to 2 bytes left over come fresh from the
+    generator and carry the only padding, at the end."""
+
+    def __init__(self, cfg: BenchConfig, marker: bytes) -> None:
+        self.marker = marker
+        self.rng = random.Random(cfg.seed)
+        header_len = len(marker) + 8
+        if header_len % 3:
+            raise ValueError(f"marker and id are {header_len} B, not a multiple of 3")
+        body_len = cfg.tx_size - header_len
+        if body_len < 0:
+            raise ValueError(
+                f"tx_size {cfg.tx_size} is below the {header_len} B header"
+            )
+        self.groups = body_len // 3
+        self.tail_len = body_len % 3
+        pool_len = BODY_POOL_TXS * cfg.tx_size
+        self.encoded = memoryview(base64.b64encode(self.rng.randbytes(pool_len)))
+        self.slots = pool_len // 3 - self.groups + 1
+
+    def request(self, tx_id: int, namespace: int) -> bytes:
+        start = self.rng.randrange(self.slots) * 4
+        head = base64.b64encode(self.marker + tx_id.to_bytes(8, "big"))
+        tail = base64.b64encode(self.rng.randbytes(self.tail_len))
+        return b"".join(
+            (
+                b'{"namespace":%d,"payload":"' % namespace,
+                head,
+                self.encoded[start : start + self.groups * 4],
+                tail,
+                b'"}',
+            )
+        )
+
+
+def tx_interval_s(tx_size: int, rate_mb_s: float) -> float:
+    return tx_size / (rate_mb_s * 1e6)
+
+
+def step_cap(cfg: BenchConfig, rate_mb_s: float) -> int:
+    return max(1, round(cfg.cap_s / tx_interval_s(cfg.tx_size, rate_mb_s)))
+
+
+@dataclass
+class Load:
+    cfg: BenchConfig
+    state: LoadState
+    client: Client
+    urls: list[str]
+    bodies: TxBodies
+    clock: Clock
+    ids: Iterator[int] = dataclasses.field(default_factory=itertools.count)
+
+
+async def run_staircase(
+    load: Load,
+    heights: "Heights",
+    counters: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+    out: Path,
+    search: SearchConfig | None = None,
+) -> StaircaseEnd:
+    """Warmup, then the ramp or, with `search`, the capacity search. Each step is judged on
+    what is known at its end; the report keeps that verdict. Appends to `steps` as they end and
+    rewrites `out`/steps.json each time, so a run cut short keeps them."""
+    cfg = load.cfg
+    warmup_mb_s = search.start_mb_s if search else cfg.steps[0]
+    async with asyncio.TaskGroup() as submits:
+        start = load.clock.time()
+        load.state.phase = Phase("warmup", warmup_mb_s, start, cfg.warmup_s)
+        await pace(load, submits, warmup_mb_s, start + cfg.warmup_s)
+        if search:
+            return await search_probes(
+                load, submits, heights, counters, steps, out, search
+            )
+        return await ramp_steps(load, submits, heights, counters, steps, out)
+
+
+async def ramp_steps(
+    load: Load,
+    submits: asyncio.TaskGroup,
+    heights: "Heights",
+    counters: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+    out: Path,
+) -> StaircaseEnd:
+    """Steps up the ramp until one fails, then one refine step once the failed step's backlog
+    drained. The drain timing out skips the refine step. With `keep_going` every step of the
+    ramp runs, without a refine step, and the drain follows the last step."""
+    cfg = load.cfg
+    passed: list[bool] = []
+    drained, skipped = None, False
+    while (rate := next_rate(cfg.steps, passed, cfg.keep_going)) is not None:
+        refine = not cfg.keep_going and not all(passed)
+        if refine:
+            drained = await cooldown(load, heights, counters)
+            if drained is None:
+                log.warning("backlog did not drain, skipping the refine step")
+                skipped = True
+                break
+        judged = await run_probe(
+            load,
+            submits,
+            heights,
+            counters,
+            rate,
+            cfg.step_s,
+            "refine" if refine else "ramp",
+            f"step {len(steps) + 1}" + (" refine" if refine else ""),
+        )
+        passed.append(not side_fails(judged, "overall"))
+        steps.append(judged)
+        write_json(out / "steps.json", steps)
+    if cfg.keep_going:
+        drained = await drain(
+            load.state,
+            counters,
+            heights,
+            load.clock,
+            cfg.tx_size,
+            final_drain_max_s(cfg.tx_timeout_s),
+        )
+        if drained is None:
+            log.warning("backlog did not drain")
+        else:
+            log.info("backlog drained in %.1f s", drained)
+    return {
+        "drain_s": drained,
+        "refine_skipped": skipped,
+        "stop_reason": ramp_stop_reason(passed, skipped, cfg.keep_going),
+    }
+
+
+def ramp_stop_reason(passed: list[bool], skipped: bool, keep_going: bool) -> str:
+    if skipped:
+        return "drain timeout"
+    if keep_going or all(passed):
+        return "ramp exhausted"
+    return "first step failed" if passed.index(False) == 0 else "refined"
+
+
+async def search_probes(
+    load: Load,
+    submits: asyncio.TaskGroup,
+    heights: "Heights",
+    counters: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+    out: Path,
+    search: SearchConfig,
+) -> StaircaseEnd:
+    """Probes chosen by `next_probe` until it names a stop reason. A resolved search whose
+    only limit is the query service goes on to search the consensus limit."""
+    cfg = load.cfg
+    side: Side = "overall"
+    drained = None
+    while True:
+        found = next_probe(steps, search, cfg, side)
+        if side == "overall" and found == "resolved" and search_sides(steps):
+            side = "consensus"
+            log.info("query node limits first, searching the consensus limit")
+            continue
+        if isinstance(found, str):
+            reason = found
+            break
+        if steps and side_fails(steps[-1], "overall"):
+            drained = await cooldown(load, heights, counters)
+            if drained is None:
+                log.warning("backlog did not drain, stopping the search")
+                reason = "drain timeout"
+                break
+        label = search_log_prefix(steps, found, side)
+        judged = await run_probe(
+            load,
+            submits,
+            heights,
+            counters,
+            found["rate_mb_s"],
+            found["duration_s"],
+            found["kind"],
+            f"probe {len(steps) + 1} {found['kind']}",
+            label,
+        )
+        steps.append(judged)
+        write_json(out / "steps.json", steps)
+    log.info("search: %s after %d probes", reason, len(steps))
+    return {"drain_s": drained, "refine_skipped": False, "stop_reason": reason}
+
+
+async def run_probe(
+    load: Load,
+    submits: asyncio.TaskGroup,
+    heights: "Heights",
+    counters: list[dict[str, Any]],
+    rate: float,
+    duration_s: float,
+    kind: ProbeKind,
+    name: str,
+    label: str | None = None,
+) -> dict[str, Any]:
+    """One step at `rate` for `duration_s`, measured over its second half, and its verdict.
+    Without `keep_going` a step falling behind stops early and is measured over its last
+    BEHIND_WINDOW_S."""
+    start = load.clock.time()
+    cap_waits = load.state.cap_waits
+    load.state.phase = Phase(name, rate, start, duration_s)
+    until = start + duration_s
+    if load.cfg.keep_going:
+        await pace(load, submits, rate, until)
+        stopped = None
+    else:
+        stopped = await pace_while_keeping_up(load, submits, counters, rate, until)
+    step: StepWindow = {
+        "rate_mb_s": rate,
+        "refine": kind == "refine",
+        "kind": kind,
+        "t_start": start,
+        "t_mid": start + duration_s / 2,
+        "t_end": load.clock.time(),
+    }
+    if stopped is not None:
+        step["t_mid"], step["t_end"] = stopped - BEHIND_WINDOW_S, stopped
+    # Only what the judge reads: copying every tx of the run stalls the pacer as the run grows.
+    txs = [vars(tx).copy() for tx in load.state.txs if tx.t_submit >= step["t_mid"]]
+    judged = judge_step(
+        step, load.cfg, txs, list(heights.records()), counters, load.clock.time()
+    )
+    judged["cap_waits"] = load.state.cap_waits - cap_waits
+    if stopped is not None:
+        judged["stopped_early"] = True
+    log_step(judged, side_fails(judged, "overall"), label)
+    return judged
+
+
+async def pace_while_keeping_up(
+    load: Load,
+    submits: asyncio.TaskGroup,
+    counters: list[dict[str, Any]],
+    rate: float,
+    until: float,
+) -> float | None:
+    """`pace` until `until`, stopped once decided falls behind (see `keep_up`) over the last
+    BEHIND_WINDOW_S; the time of that check, or None if it never stopped."""
+    clock, state = load.clock, load.state
+    start, first = clock.time(), len(state.txs)
+    pacer = asyncio.create_task(pace(load, submits, rate, until))
+    try:
+        while True:
+            try:
+                await clock.wait_for(asyncio.shield(pacer), COUNTER_POLL_S)
+                return None
+            except TimeoutError:
+                pass
+            now = clock.time()
+            if now - start < BEHIND_WINDOW_S:
+                continue
+            ratio = keep_up(
+                state.txs[first:],
+                counters,
+                load.cfg.tx_size,
+                now - BEHIND_WINDOW_S,
+                now,
+            )
+            if ratio is not None and ratio < KEEP_UP_RATIO:
+                log.warning(
+                    "decided %.0f%% of submitted over the last %.0f s, stopping the step",
+                    ratio * 100,
+                    BEHIND_WINDOW_S,
+                )
+                return now
+    finally:
+        if not pacer.done():
+            pacer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pacer
+
+
+def keep_up(
+    txs: Sequence[Tx],
+    counters: Sequence[Mapping[str, Any]],
+    tx_size: int,
+    t0: float,
+    t1: float,
+) -> float | None:
+    """Decided over submitted MB/s in `[t0, t1]`; None without a decided rate or submits."""
+    decided = theil_sen(
+        [(c["ts"], c["decided_bytes"] / 1e6) for c in counters if t0 <= c["ts"] <= t1]
+    )
+    submitted = window_mb_s((tx.t_submit for tx in txs), tx_size, t0, t1)
+    if decided is None or not submitted:
+        return None
+    return decided / submitted
+
+
+async def cooldown(
+    load: Load, heights: "Heights", counters: list[dict[str, Any]]
+) -> float | None:
+    """Drain after a failed step; None if it timed out."""
+    drained = await drain(load.state, counters, heights, load.clock, load.cfg.tx_size)
+    if drained is not None:
+        log.info("backlog drained in %.1f s", drained)
+    return drained
+
+
+def next_probe(
+    steps: Sequence[Mapping[str, Any]],
+    search: SearchConfig,
+    cfg: BenchConfig,
+    side: Side,
+) -> Probe | str:
+    """The next probe after `steps`, or the reason to stop, from the steps alone. Climbs from
+    the start rate until a probe fails, bisects the bracket to the resolution, then confirms
+    its lower end for two steps. A collapsed probe is followed by a recovery probe at the
+    highest pass below it. A failing recovery fails that rate, so the next one steps down to the
+    pass below; the search ends once no pass is left below. The budgets stop it before a probe
+    that would exceed them."""
+    chosen = pick_probe(steps, search, cfg, side)
+    if isinstance(chosen, str):
+        return chosen
+    if len(steps) >= search.max_probes:
+        return "probe budget"
+    spent = (
+        offered_gb(steps, cfg) if steps else cfg.warmup_s * chosen["rate_mb_s"] / 1000
+    )
+    if spent + chosen["rate_mb_s"] * chosen["duration_s"] / 1000 > search.offered_gb:
+        return "disk budget"
+    return chosen
+
+
+def pick_probe(
+    steps: Sequence[Mapping[str, Any]],
+    search: SearchConfig,
+    cfg: BenchConfig,
+    side: Side,
+) -> Probe | str:
+    def probe(rate: float, kind: ProbeKind, step_count: int = 1) -> Probe:
+        return {"rate_mb_s": rate, "kind": kind, "duration_s": step_count * cfg.step_s}
+
+    if not steps:
+        return probe(search.start_mb_s, "climb")
+    last = steps[-1]
+    # Phase 2 probes fail the query side; the generator then waits on the lagging query node.
+    if side == "consensus" and last["cap_waits"] and last["query_fails"]:
+        return "generator throttled"
+    lo, hi = bracket(steps, side)
+    if last["kind"] == "recovery" and side_fails(last, side) and lo is None:
+        if any(not side_fails(s, side) for s in steps):
+            overload = next(s for s in reversed(steps) if s["kind"] != "recovery")
+            return f"degraded after overload at {fmt_num(overload['rate_mb_s'])}"
+        return "below start"
+    if collapsed(last):
+        return probe(search.start_mb_s if lo is None else lo, "recovery")
+    if lo is None:
+        return "below start"
+    if hi is None:
+        return probe(lo * CLIMB_FACTOR, "climb")
+    if hi - lo > search.resolution_mb_s + RESOLUTION_EPS:
+        return probe((lo + hi) / 2, "bisect")
+    if not any(is_confirm(s, lo) and not side_fails(s, side) for s in steps):
+        return probe(lo, "confirm", 2)
+    return "resolved"
+
+
+def is_confirm(step: Mapping[str, Any], rate: float) -> bool:
+    return step["kind"] == "confirm" and step["rate_mb_s"] == rate
+
+
+def side_fails(step: Mapping[str, Any], side: Side) -> list[str]:
+    """Failed rules of a step: both sides for `overall`, the consensus side alone otherwise."""
+    if side == "consensus":
+        return step["consensus_fails"]
+    return step["consensus_fails"] + step["query_fails"]
+
+
+def collapsed(step: Mapping[str, Any]) -> bool:
+    """Decided under COLLAPSE_RATIO of what was submitted: overload, not a marginal miss."""
+    return (step["decided_mb_s"] or 0.0) < COLLAPSE_RATIO * step["submitted_mb_s"]
+
+
+def settled(steps: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Without a collapsed first probe whose retry at the same rate passed: a cold start, which
+    says nothing about that rate."""
+    if (
+        len(steps) > 1
+        and collapsed(steps[0])
+        and steps[1]["kind"] == "recovery"
+        and steps[1]["rate_mb_s"] == steps[0]["rate_mb_s"]
+        and not side_fails(steps[1], "overall")
+    ):
+        return list(steps[1:])
+    return list(steps)
+
+
+def bracket(
+    steps: Sequence[Mapping[str, Any]], side: Side
+) -> tuple[float | None, float | None]:
+    """`(lo, hi)`: the highest rate passing `side` below the lowest rate failing it. A rate
+    that failed once fails, however often it passed."""
+    seen = settled(steps)
+    hi = min((s["rate_mb_s"] for s in seen if side_fails(s, side)), default=None)
+    lo = max(
+        (
+            s["rate_mb_s"]
+            for s in seen
+            if not side_fails(s, side) and (hi is None or s["rate_mb_s"] < hi)
+        ),
+        default=None,
+    )
+    return lo, hi
+
+
+def offered_gb(steps: Sequence[Mapping[str, Any]], cfg: BenchConfig) -> float:
+    """What the generator offered: the warmup at the first probe's rate plus every probe."""
+    if not steps:
+        return 0.0
+    warmup = cfg.warmup_s * steps[0]["rate_mb_s"]
+    probes = sum(s["rate_mb_s"] * (s["t_end"] - s["t_start"]) for s in steps)
+    return (warmup + probes) / 1000
+
+
+def search_sides(steps: Sequence[Mapping[str, Any]]) -> Side | None:
+    """ "consensus" when only the query side failed so far: the consensus limit is above."""
+    seen = settled(steps)
+    if any(s["consensus_fails"] for s in seen):
+        return None
+    return "consensus" if any(s["query_fails"] for s in seen) else None
+
+
+def search_log_prefix(
+    steps: Sequence[Mapping[str, Any]], probe: Probe, side: Side
+) -> str:
+    lo, hi = bracket(steps, side)
+    return (
+        f"probe {len(steps) + 1} {probe['kind']} {fmt_num(probe['rate_mb_s'])} MB/s "
+        f"[lo {fmt_num(lo) or '-'} hi {fmt_num(hi) or '-'}]"
+    )
+
+
+async def drain(
+    state: LoadState,
+    counters: list[dict[str, Any]],
+    heights: "Heights",
+    clock: Clock,
+    tx_size: int,
+    max_s: float = DRAIN_MAX_S,
+) -> float | None:
+    """Drops the transactions never sent and submits nothing more. Drained once consensus is
+    idle (see `is_idle`) and the query node shows IDLE_BLOCKS validator heights past the idle
+    point, with a counter sample taken after the last of them; then waits up to DRAIN_GRACE_S
+    for pending transactions. Seconds that took, or None if no validator height appeared for
+    DRAIN_STALL_S or after `max_s`."""
+    drop_unsent(state)
+    start = clock.time()
+    state.phase = Phase("drain", None, start, max_s)
+    drained = await wait_drained(counters, heights, clock, tx_size, max_s)
+    if drained:
+        grace = clock.time() + DRAIN_GRACE_S
+        while state.pending and clock.time() < grace:
+            await clock.asleep(0.1)
+    if state.pending:
+        log.info("%d sent transactions still pending", len(state.pending))
+    return clock.time() - start if drained else None
+
+
+async def wait_drained(
+    counters: list[dict[str, Any]],
+    heights: "Heights",
+    clock: Clock,
+    tx_size: int,
+    max_s: float,
+) -> bool:
+    """Whether consensus went idle and the query node showed IDLE_BLOCKS more blocks."""
+    start = clock.time()
+    top, moved, target = heights.top("validator"), start, None
+    while (now := clock.time()) - start < max_s:
+        if (seen := heights.top("validator")) != top:
+            top, moved = seen, now
+        if now - moved >= DRAIN_STALL_S:
+            log.warning(
+                "drain gave up: validator height %d stalled %.0f s", top, now - moved
+            )
+            return False
+        if not is_idle(counters, now, tx_size):
+            target = None
+        elif target is None:
+            target = top + IDLE_BLOCKS
+        if (
+            target is not None
+            and heights.top("query") >= target
+            and counters[-1]["ts"] > heights.seen["query"][target - 1]
+        ):
+            return True
+        await clock.asleep(0.1)
+    log.warning("drain gave up: cap of %.0f s reached", max_s)
+    return False
+
+
+def drop_unsent(state: LoadState) -> None:
+    """Transactions still queued for a submit thread are never sent."""
+    with state.lock:
+        unsent = {
+            tx.id for tx in state.pending.values() if not math.isfinite(tx.t_submit)
+        }
+        for tx_id in unsent:
+            del state.pending[tx_id]
+        state.txs = [tx for tx in state.txs if tx.id not in unsent]
+    if unsent:
+        log.info("dropped %d queued transactions", len(unsent))
+
+
+def is_idle(counters: Sequence[Mapping[str, Any]], now: float, tx_size: int) -> bool:
+    """Under half a transaction of `tx_size` decided over the whole of the last DRAIN_IDLE_S:
+    the heartbeat's transactions alone keep decided bytes growing."""
+    recent = [c for c in counters if c["ts"] >= now - DRAIN_IDLE_S]
+    if not recent or now - recent[0]["ts"] < DRAIN_IDLE_S - COUNTER_POLL_S:
+        return False
+    return recent[-1]["decided_bytes"] - recent[0]["decided_bytes"] < tx_size / 2
+
+
+def log_step(m: dict[str, Any], fails: list[str], label: str | None = None) -> None:
+    consensus, lag = m["consensus_latency_ms"], m["query_lag_ms"]
+    log.info(
+        "%s: submitted %s, decided %s MB/s, consensus p50 %s ms, query lag p50 "
+        "%s ms: %s",
+        label or f"step {fmt_num(m['rate_mb_s'])} MB/s",
+        fmt_num(m["submitted_mb_s"]),
+        fmt_num(m["decided_mb_s"]),
+        fmt_num(consensus["p50"] if consensus else None),
+        fmt_num(lag["p50"] if lag else None),
+        "; ".join(fails) or "pass",
+    )
+
+
+async def pace(
+    load: Load, submits: asyncio.TaskGroup, rate_mb_s: float, until: float
+) -> None:
+    """Submits at `rate_mb_s` until `until`, independent of inclusion, but never more than
+    the step's cap in flight. A pacer woken late sends every tx that came due meanwhile, up
+    to CATCHUP_S of load, so a slow wake does not lower the rate."""
+    state = load.state
+    state.cap = step_cap(load.cfg, rate_mb_s)
+    state.room.set()
+    interval = tx_interval_s(load.cfg.tx_size, rate_mb_s)
+    clock = load.clock
+    due = clock.time()
+    while True:
+        await clock.asleep(max(0.0, due - clock.time()))
+        while True:
+            now = clock.time()
+            if now >= until:
+                return
+            due = max(due, now - CATCHUP_S)
+            if due > now:
+                break
+            if not await state.wait_for_room(until, clock):
+                return
+            tx_id = next(load.ids)
+            tx = Tx(id=tx_id, node=tx_id % len(load.urls), t_queued=clock.time())
+            state.submitted(tx)
+            submits.create_task(submit_tx(load, tx))
+            due += interval
+
+
+async def submit_tx(load: Load, tx: Tx) -> None:
+    """Pending before the request goes out: its block may be scanned before the response
+    arrives."""
+    lo, hi = load.cfg.namespaces
+    request = functools.partial(load.bodies.request, tx.id, lo + tx.id % (hi - lo + 1))
+    url = load.urls[tx.node] + "/v1/submit/submit"
+    status = await load.client.call(post_tx, load.state, tx, url, request)
+    if status is not None and status != 200:
+        load.state.failed(tx)
+
+
+def heartbeat(
+    pool: Http,
+    urls: Sequence[str],
+    namespace: int,
+    rate_tx_s: float,
+    stop: threading.Event,
+) -> int:
+    """Until `stop`: an 8-byte transaction every 1 / `rate_tx_s` s, round robin over `urls`.
+    A counter keeps them distinct, so mempool deduplication keeps every one; without the bench
+    marker the scans skip them. A slow submit drops the beats it delayed instead of bursting
+    them. Returns the number of failed submits; the first failure is logged."""
+    clock = pool.clock
+    interval = 1 / rate_tx_s
+    n = failed = 0
+    due = clock.time()
+    while not clock.wait(stop, max(0.0, due - clock.time())):
+        payload = base64.b64encode(n.to_bytes(8, "big"))
+        body = b'{"namespace":%d,"payload":"%s"}' % (namespace, payload)
+        url = urls[n % len(urls)] + "/v1/submit/submit"
+        try:
+            status, reply = pool.request("POST", url, body)
+        except OSError as err:
+            status, reply = 0, str(err).encode()
+        if status != 200:
+            if not failed:
+                log.warning("heartbeat submit failed: %d %r", status, reply[:200])
+            failed += 1
+        n += 1
+        due = max(due + interval, clock.time())
+    return failed
+
+
+def post_tx(
+    pool: Http, state: LoadState, tx: Tx, url: str, build: Callable[[], bytes]
+) -> int | None:
+    """HTTP status, 0 if the request failed, None if `drop_unsent` dropped the tx first.
+    Builds the body on this thread, so only as many bodies are alive as there are threads.
+    Stamps `t_submit` as the request goes out, not when it was queued for a thread."""
+    body = build()
+    with state.lock:
+        if tx.id not in state.pending:
+            return None
+        tx.t_submit = pool.clock.time()
+    try:
+        status, _ = pool.request("POST", url, body)
+    except OSError:
+        return 0
+    finally:
+        tx.t_done = pool.clock.time()
+    return status
+
+
+HeightSource = Literal["query", "validator"]
+HEIGHT_API: dict[HeightSource, tuple[str, int]] = {
+    "query": ("/v1/node/block-height", 0),
+    "validator": ("/v1/status/block-height", 1),
+}
+
+
+class Heights:
+    """From `start` on, when each block height first showed on the query node's API and on
+    any validator's status API, and when the bench finished scanning its payload."""
+
+    def __init__(self, start: int) -> None:
+        self.start = start
+        self.seen: dict[HeightSource, dict[int, float]] = {
+            "query": {},
+            "validator": {},
+        }
+        self.scanned: dict[int, float] = {}
+
+    def top(self, source: HeightSource) -> int:
+        return self.start + len(self.seen[source])
+
+    def saw(self, source: HeightSource, count: int, now: float) -> None:
+        for height in range(self.top(source), count):
+            self.seen[source][height] = now
+
+    def records(self) -> Iterator[dict[str, Any]]:
+        top = max(self.top("query"), self.top("validator"))
+        for height in range(self.start, top):
+            yield {
+                "height": height,
+                "validator": self.seen["validator"].get(height),
+                "query": self.seen["query"].get(height),
+                "scanned": self.scanned.get(height),
+            }
+
+
+async def poll_heights(
+    client: Client,
+    url: str,
+    heights: Heights,
+    source: HeightSource,
+    clock: Clock,
+) -> None:
+    """On its own thread, so block times never wait for payload scans."""
+    while True:
+        heights.saw(source, await client.call(block_count, url, source), clock.time())
+        await clock.asleep(HEIGHT_POLL_S)
+
+
+async def poll_counters(
+    client: Client, url: str, counters: list[dict[str, Any]], clock: Clock
+) -> None:
+    """Decided payload bytes and view timeouts of one validator, every COUNTER_POLL_S."""
+    while True:
+        m = await client.call(consensus_counters, url)
+        counters.append({"ts": clock.time(), **m})
+        await clock.asleep(COUNTER_POLL_S)
+
+
+def consensus_counters(pool: Http, url: str) -> dict[str, float]:
+    m = parse_prom(get_ok(pool, url + "/v1/status/metrics").decode())
+    # Both appear only once the first block is decided or view timed out.
+    return {
+        "decided_bytes": m.get("consensus_finalized_bytes_sum", 0.0),
+        "timeouts": m.get("consensus_number_of_timeouts", 0.0),
+    }
+
+
+async def track_inclusion(
+    cfg: BenchConfig,
+    state: LoadState,
+    scan: Scan,
+    heights: Heights,
+    counters: list[dict[str, Any]],
+    done: asyncio.Event,
+    clock: Clock,
+) -> None:
+    """Scan every new block's payload for our marker; time out transactions that never show.
+    A transaction counts as included when its block's header appeared on the query node. A
+    payload the query node lacks is retried after each scan until MISSING_PAYLOAD_S."""
+    deadline = None
+    report = clock.time() + PROGRESS_S
+    reported_timeouts = 0
+    height = heights.start
+    missing: dict[int, float] = {}
+    while True:
+        now = clock.time()
+        if now >= report:
+            log_progress(
+                state,
+                heights,
+                counters,
+                now,
+                cfg.tx_size,
+                state.timeouts - reported_timeouts,
+            )
+            report, reported_timeouts = now + PROGRESS_S, state.timeouts
+        if done.is_set():
+            if deadline is None:
+                deadline = now + cfg.tx_timeout_s
+                state.phase = Phase("done", None, now, cfg.tx_timeout_s)
+            if not state.pending or (now > deadline and not missing):
+                for tx_id in list(state.pending):
+                    state.resolve(tx_id, "timeout", now)
+                log_totals(state)
+                return
+        for tx in [
+            tx for tx in state.pending.values() if now - tx.t_submit > cfg.tx_timeout_s
+        ]:
+            state.resolve(tx.id, "timeout", now)
+        top = heights.top("query")
+        while height < top - PAYLOAD_LAG_BLOCKS:
+            batch = range(height, min(top - PAYLOAD_LAG_BLOCKS, height + SCAN_BATCH))
+            scans = await asyncio.gather(*(scan_stamped(scan, h, clock) for h in batch))
+            for h, (ids, at) in zip(batch, scans):
+                if ids is None:
+                    missing[h] = heights.seen["query"][h]
+                else:
+                    record_inclusions(state, ids, heights, h, at)
+            height = batch.stop
+        await retry_missing(state, scan, heights, missing, clock)
+        await clock.asleep(0.1)
+
+
+async def retry_missing(
+    state: LoadState,
+    scan: Scan,
+    heights: Heights,
+    missing: dict[int, float],
+    clock: Clock,
+) -> None:
+    """One fetch per missing payload. Past MISSING_PAYLOAD_S after its block appeared a
+    payload counts as lost; its transactions, which cannot be told apart, time out."""
+    for height, at_height in list(missing.items()):
+        ids, at = await scan_stamped(scan, height, clock)
+        if ids is None and at - at_height < MISSING_PAYLOAD_S:
+            continue
+        del missing[height]
+        if ids is None:
+            log.warning("payload %d missing on the query node, skipping", height)
+            state.missing_payloads.append(height)
+        else:
+            record_inclusions(state, ids, heights, height, at)
+
+
+async def scan_stamped(
+    scan: Scan, height: int, clock: Clock
+) -> tuple[list[int] | None, float]:
+    """The scan and when it finished, so blocks scanned together are not stamped alike."""
+    ids = await scan(height)
+    return ids, clock.time()
+
+
+def record_inclusions(
+    state: LoadState,
+    ids: list[int],
+    heights: Heights,
+    height: int,
+    scanned_at: float,
+) -> None:
+    at = heights.seen["query"][height]
+    for tx_id in ids:
+        state.include(tx_id, height, at)
+    heights.scanned[height] = scanned_at
+
+
+def window_mb_s(times: Iterable[float], tx_size: int, t0: float, t1: float) -> float:
+    """MB/s of the transactions whose time falls in `[t0, t1]`."""
+    count = sum(1 for t in times if t0 <= t <= t1)
+    return count * tx_size / (t1 - t0) / 1e6
+
+
+def log_progress(
+    state: LoadState,
+    heights: Heights,
+    counters: Sequence[Mapping[str, Any]],
+    now: float,
+    tx_size: int,
+    timeouts: int,
+) -> None:
+    """One fixed-width line over the last PROGRESS_S: the phase, then the load (`sub`), the
+    validators (`cns`) and the query node (`qry`). `timeouts` timed out in the window."""
+    t0 = now - PROGRESS_S
+    phase = state.phase
+    rate = f"{fmt_rate(phase.rate_mb_s)} MB/s" if phase.rate_mb_s is not None else ""
+    elapsed = f"{now - phase.start:.0f}/{phase.length_s:.0f}s" if phase.length_s else ""
+    submitted = window_mb_s((tx.t_submit for tx in state.txs), tx_size, t0, now)
+    validator, query = heights.top("validator"), heights.top("query")
+    seen = heights.seen["validator"]
+    blocks = sum(1 for t in seen.values() if t >= t0)
+    inside = [c for c in counters if c["ts"] >= t0]
+    decided = block_mb = None
+    view_timeouts = 0
+    if len(inside) > 1:
+        first, last = inside[0], inside[-1]
+        decided_bytes = last["decided_bytes"] - first["decided_bytes"]
+        decided = decided_bytes / (last["ts"] - first["ts"]) / 1e6
+        spanned = sum(1 for t in seen.values() if first["ts"] <= t <= last["ts"])
+        block_mb = decided_bytes / spanned / 1e6 if spanned else None
+        view_timeouts = int(last["timeouts"] - first["timeouts"])
+    share = (
+        f"{min(decided / submitted, 9.99):4.0%}"
+        if decided is not None and submitted
+        else ""
+    )
+    # By scan time: `t_included` is set only once the block is scanned, after the window
+    # it falls in may already have been reported.
+    scanned = [
+        (h, tx.t_submit)
+        for tx in state.txs
+        if (h := tx.height) is not None and heights.scanned.get(h, -math.inf) >= t0
+    ]
+    latency = [(seen[h] - t) * 1000 for h, t in scanned if h in seen]
+    line = (
+        f"{phase.label:<17} {rate:>10} {elapsed:>10}"
+        f" | sub {fmt_rate(submitted)} MB/s pend {len(state.pending):6d} to {timeouts:5d}"
+        f" | cns {fmt_rate(decided)} MB/s {share:>4} h {fmt_height(validator, heights)}"
+        f" blk {fmt_fixed(PROGRESS_S / blocks if blocks else None, 5, 2)}s"
+        f" {fmt_fixed(block_mb, 5, 1)}MB"
+        f" lat {fmt_fixed(statistics.median(latency) if latency else None, 6, 0)}ms"
+        f" | qry {fmt_rate(len(scanned) * tx_size / PROGRESS_S / 1e6)} MB/s"
+        f" h {fmt_height(query, heights)}"
+        f" lag {fmt_fixed(query_lag_ms(heights, now), 6, 0)}ms"
+    )
+    if view_timeouts > 0:
+        line += f" | vto {view_timeouts}"
+    log.info("%s", line)
+
+
+def query_lag_ms(heights: Heights, now: float) -> float | None:
+    """Since a validator showed the first block the query node lacks, or the last block's lag
+    once the query node caught up."""
+    validator, query = heights.top("validator"), heights.top("query")
+    if validator > query:
+        return (now - heights.seen["validator"][query]) * 1000
+    if validator > heights.start:
+        last = validator - 1
+        return (heights.seen["query"][last] - heights.seen["validator"][last]) * 1000
+    return None
+
+
+def fmt_fixed(value: float | None, width: int, decimals: int) -> str:
+    return "-".rjust(width) if value is None else f"{value:{width}.{decimals}f}"
+
+
+def fmt_rate(mb_s: float | None) -> str:
+    """Five wide: one decimal below 100 MB/s, whole MB/s above."""
+    return fmt_fixed(mb_s, 5, 1 if mb_s is not None and mb_s < 100 else 0)
+
+
+def fmt_height(top: int, heights: Heights) -> str:
+    return fmt_fixed(top - 1 if top > heights.start else None, 7, 0)
+
+
+def log_totals(state: LoadState) -> None:
+    included = sum(1 for tx in state.txs if tx.status == "included")
+    log.info(
+        "load done: %d submitted, %d included, %d timed out, peak %d in flight, "
+        "%d waited for the cap",
+        len(state.txs),
+        included,
+        state.timeouts,
+        state.max_in_flight,
+        state.cap_waits,
+    )
+
+
+def next_rate(
+    ramp: Sequence[float], passed: list[bool], keep_going: bool = False
+) -> float | None:
+    """The rate of the next step after steps with `passed` verdicts: up the ramp until a step
+    fails, then one refine step halfway back, then none. With `keep_going` up the whole ramp,
+    whatever the verdicts."""
+    if keep_going or all(passed):
+        return ramp[len(passed)] if len(passed) < len(ramp) else None
+    first_fail = passed.index(False)
+    if first_fail == 0 or len(passed) > first_fail + 1:
+        return None
+    return (ramp[first_fail - 1] + ramp[first_fail]) / 2
+
+
+def judge_step(
+    step: StepWindow,
+    cfg: BenchConfig,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    counters: list[dict[str, Any]],
+    now: float,
+) -> dict[str, Any]:
+    """The one verdict on a step, as the ramp takes it at `now`; stored in steps.json."""
+    m = step_measures(step, cfg, txs, heights, counters, now)
+    consensus, query = step_fails(m, cfg)
+    return {**step, **m, "consensus_fails": consensus, "query_fails": query}
+
+
+def step_measures(
+    step: StepWindow,
+    cfg: BenchConfig,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    counters: list[dict[str, Any]],
+    now: float,
+) -> StepMeasures:
+    """Over the measured half, from what is known at `now`. A transaction not yet on a
+    validator, and a height not yet on the query node, count with their time so far once that
+    exceeds the target."""
+    t0, t1 = step["t_mid"], step["t_end"]
+    inside = [c for c in counters if t0 <= c["ts"] <= t1]
+    first, last = (inside[0], inside[-1]) if len(inside) >= 2 else (None, None)
+    on_validator = {h["height"]: h["validator"] for h in heights}
+    consensus = []
+    for tx in txs:
+        if not t0 <= tx["t_submit"] <= t1:
+            continue
+        seen = on_validator.get(tx["height"])
+        if seen is not None:
+            consensus.append((seen - tx["t_submit"]) * 1000)
+        elif (now - tx["t_submit"]) * 1000 > cfg.latency_target_ms:
+            consensus.append((now - tx["t_submit"]) * 1000)
+    lags = []
+    for h in heights:
+        seen = h["validator"]
+        if seen is None or not t0 <= seen <= t1:
+            continue
+        if h["query"] is not None:
+            lags.append((seen, (h["query"] - seen) * 1000))
+        elif (now - seen) * 1000 > cfg.query_lag_target_ms:
+            lags.append((seen, (now - seen) * 1000))
+    # A slope over all samples: two samples see whole blocks, off by up to one block.
+    decided = theil_sen([(c["ts"], c["decided_bytes"] / 1e6) for c in inside])
+    return {
+        "submitted_mb_s": window_mb_s(
+            (tx["t_submit"] for tx in txs), cfg.tx_size, t0, t1
+        ),
+        **submit_measures(txs, cfg.tx_size, t0, t1, now),
+        "decided_mb_s": decided,
+        "timeouts": int(last["timeouts"] - first["timeouts"])
+        if first and last
+        else None,
+        "consensus_latency_ms": quantiles(consensus),
+        "query_lag_ms": quantiles([lag for _, lag in lags]),
+        "query_lag_slope_ms_s": theil_sen(lags),
+    }
+
+
+def submit_measures(
+    txs: list[dict[str, Any]], tx_size: int, t0: float, t1: float, now: float
+) -> SubmitMeasures:
+    """Pacer output rate, queue wait and submit round trip over `[t0, t1]`; all None when
+    the load.jsonl predates `t_queued`. A tx not yet sent, and a request not yet answered,
+    count with their time so far at `now`."""
+    if not all("t_queued" in tx for tx in txs):
+        return {"queued_mb_s": None, "queue_wait_ms": None, "submit_rtt_ms": None}
+    queued = [tx for tx in txs if t0 <= tx["t_queued"] <= t1]
+    sent = [tx for tx in txs if t0 <= tx["t_submit"] <= t1]
+    return {
+        "queued_mb_s": window_mb_s((tx["t_queued"] for tx in txs), tx_size, t0, t1),
+        "queue_wait_ms": quantiles(
+            [(min(tx["t_submit"], now) - tx["t_queued"]) * 1000 for tx in queued]
+        ),
+        "submit_rtt_ms": quantiles(
+            [
+                ((now if tx["t_done"] is None else tx["t_done"]) - tx["t_submit"])
+                * 1000
+                for tx in sent
+            ]
+        ),
+    }
+
+
+def theil_sen(points: list[tuple[float, float]]) -> float | None:
+    """Median slope over all point pairs: one outlier does not tilt it."""
+    slopes = [
+        (y2 - y1) / (x2 - x1)
+        for (x1, y1), (x2, y2) in itertools.combinations(sorted(points), 2)
+        if x2 > x1
+    ]
+    return statistics.median(slopes) if slopes else None
+
+
+def step_fails(m: StepMeasures, cfg: BenchConfig) -> tuple[list[str], list[str]]:
+    """Failed rules of a step: consensus-side, then query-node-side."""
+    consensus, query = [], []
+    decided, submitted = m["decided_mb_s"], m["submitted_mb_s"]
+    if decided is None:
+        consensus.append("no consensus metrics")
+    elif decided < KEEP_UP_RATIO * submitted:
+        consensus.append(f"decided {decided / submitted:.0%} of submitted")
+    if m["timeouts"]:
+        consensus.append(f"{m['timeouts']} view timeouts")
+    latency = m["consensus_latency_ms"]
+    if latency and latency["p50"] > cfg.latency_target_ms:
+        consensus.append(
+            f"consensus latency p50 {latency['p50']:.0f} ms > {cfg.latency_target_ms} ms"
+        )
+    lag, slope = m["query_lag_ms"], m["query_lag_slope_ms_s"]
+    if slope is not None and slope > QUERY_LAG_GROWTH_MS_S:
+        query.append(f"query lag grows {slope:.0f} ms/s")
+    if lag and lag["p50"] > cfg.query_lag_target_ms:
+        query.append(
+            f"query lag p50 {lag['p50']:.0f} ms > {cfg.query_lag_target_ms} ms"
+        )
+    return consensus, query
+
+
+def capacity(steps: Sequence[Mapping[str, Any]]) -> Capacity:
+    """Highest passing rate below the lowest failing one, overall and per rule side.
+
+    A side can fail at one rate and pass at a higher one: noise, or a refine step below the
+    first failure that trips the other side. Its limit is still below its lowest failing
+    rate, so the two limits need not bracket the steps the ramp passed. A rate that failed in
+    any probe fails. The query side takes evidence only from steps whose consensus side
+    passed: query lag under a collapsed consensus says nothing about the query node."""
+    seen = settled(steps)
+
+    def limit(
+        fails: Callable[[Mapping[str, Any]], list[str]],
+        evidence: Callable[[Mapping[str, Any]], bool] = lambda s: True,
+    ) -> tuple[Limit, Any]:
+        passed = None
+        # At one rate a failing probe comes first.
+        for step in sorted(
+            filter(evidence, seen), key=lambda s: (s["rate_mb_s"], not fails(s))
+        ):
+            if fails(step):
+                at = step["rate_mb_s"]
+                return {"mb_s": passed, "bounded": True, "failed_at_mb_s": at}, step
+            passed = step["rate_mb_s"]
+        return {"mb_s": passed, "bounded": False, "failed_at_mb_s": None}, None
+
+    overall, failed = limit(lambda s: side_fails(s, "overall"))
+    return {
+        "overall": overall,
+        "consensus": limit(lambda s: s["consensus_fails"])[0],
+        "query_node": limit(
+            lambda s: s["query_fails"], lambda s: not s["consensus_fails"]
+        )[0],
+        "failed_at_mb_s": failed["rate_mb_s"] if failed else None,
+        "fail_rule": (
+            f"{'; '.join(side_fails(failed, 'overall'))} at "
+            f"{fmt_num(failed['rate_mb_s'])} MB/s"
+            if failed
+            else None
+        ),
+        "resolution_mb_s": (
+            failed["rate_mb_s"] - overall["mb_s"]
+            if failed and overall["mb_s"] is not None
+            else None
+        ),
+        "confirmed": overall["mb_s"] is not None
+        and any(
+            is_confirm(s, overall["mb_s"]) and not side_fails(s, "overall")
+            for s in seen
+        ),
+    }
+
+
+def capacity_line(cap: Capacity) -> str:
+    overall, consensus = cap["overall"], cap["consensus"]
+    if not overall["bounded"]:
+        return f"Capacity **>= {fmt_num(overall['mb_s'])} MB/s**: no step failed."
+    value = (
+        fmt_num(overall["mb_s"])
+        if overall["mb_s"] is not None
+        else f"< {fmt_num(cap['failed_at_mb_s'])}"
+    )
+    if consensus["bounded"] and consensus["mb_s"] == overall["mb_s"]:
+        who = "consensus limits"
+    else:
+        bound = "limits at" if consensus["bounded"] else ">="
+        who = (
+            f"query node limits at {value} MB/s, consensus {bound} "
+            f"{fmt_num(consensus['mb_s'])} MB/s"
+        )
+    resolution = cap["resolution_mb_s"]
+    spread = (
+        f" (+-{fmt_num(resolution)}{', confirmed' if cap['confirmed'] else ''})"
+        if resolution is not None
+        else ""
+    )
+    return f"Capacity **{value} MB/s**{spread}: {who} ({cap['fail_rule']})."
+
+
+def sample_metrics(
+    urls: dict[str, str],
+    out: Path,
+    stop: threading.Event,
+    clock: Clock = SYSTEM_CLOCK,
+) -> None:
+    """Every METRICS_EVERY_S, one JSON line per node: {ts, node, ok, m}; `m` keeps the
+    families in METRIC_PREFIXES. Often enough for rates over a step's measured half."""
+    pool = HttpPool(clock)
+    with open(out, "a", buffering=1) as f:
+        while not stop.is_set():
+            start = clock.time()
+            for node, url in urls.items():
+                rec: dict[str, Any] = {"ts": clock.time(), "node": node, "ok": False}
+                try:
+                    status, body = pool.request(
+                        "GET", url + "/v1/status/metrics", timeout=4
+                    )
+                    if status == 200:
+                        rec["ok"] = True
+                        rec["m"] = {
+                            k: v
+                            for k, v in parse_prom(body.decode()).items()
+                            if k.startswith(METRIC_PREFIXES)
+                        }
+                except OSError:
+                    pass
+                f.write(json.dumps(rec) + "\n")
+            clock.wait(stop, max(0.0, METRICS_EVERY_S - (clock.time() - start)))
+    pool.close()
+
+
+def usable_cpu_jiffies() -> list[int]:
+    """/proc/stat counters summed over the CPUs this process may run on, so utilisation under
+    taskset or a cpuset is relative to those CPUs."""
+    usable = {f"cpu{n}" for n in os.sched_getaffinity(0)}
+    rows = [
+        [int(x) for x in fields[1:]]
+        for fields in map(str.split, Path("/proc/stat").read_text().splitlines())
+        if fields and fields[0] in usable
+    ]
+    return [sum(column) for column in zip(*rows, strict=True)]
+
+
+def meminfo() -> dict[str, int]:
+    out = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, value = line.split(":", 1)
+        out[key] = int(value.split()[0]) * 1024
+    return out
+
+
+Sample = tuple[float, dict[str, float]]
+
+
+def analyze(out: Path, cfg: BenchConfig, topo: Topology) -> BenchResult:
+    """`window`, `nodes`, `processes`, `host` and `load` cover all steps; each step's own
+    metrics cover its measured half."""
+    nodes = list(topo["nodes"])
+    run = read_json(out / "run.json")
+    t0, t1 = run["t0"], run["t1"]
+    series = load_series(out / "metrics.jsonl", nodes)
+    host = list(read_jsonl(out / "host.jsonl"))
+    txs = list(read_jsonl(out / "load.jsonl"))
+    heights = list(read_jsonl(out / "heights.jsonl"))
+    calib = read_json(out / "calibration.json")
+    before, after = calib["before"], calib["after"]
+    steps = [
+        step_result(step, txs, series, host) for step in read_json(out / "steps.json")
+    ]
+    result: BenchResult = {
+        "schema_version": SCHEMA_VERSION,
+        "run": run_meta(run),
+        "runner": read_json(out / "sysinfo.json")["runner"],
+        "calibration": {
+            "before": before,
+            "after": after,
+            "drift_pct": pct_change(before["sha256_mt_mb_s"], after["sha256_mt_mb_s"]),
+        },
+        "config": dataclasses.asdict(cfg),
+        "config_hash": run["config_hash"],
+        "window": window(series, topo["query_node"], t0, t1),
+        "steps": steps,
+        "capacity": capacity(steps),
+        "nodes": {
+            node: node_stats(node, topo["roles"][node], series, t0, t1)
+            for node in nodes
+        },
+        "processes": process_stats(host, t0, t1),
+        "host": host_stats(host, t0, t1),
+        "load": load_stats(out, txs, heights, t0, t1),
+        "stake_table": stake_amounts(out / "stake-table.json"),
+        "validity": {"valid": True, "noisy": False, "reasons": []},
+    }
+    result["validity"] = check_validity(
+        result, scrape_coverage(out / "metrics.jsonl", nodes, t0, t1)
+    )
+    return result
+
+
+def step_kind(step: Mapping[str, Any]) -> ProbeKind:
+    """steps.json and result.json from before `kind` have only `refine`."""
+    return step.get("kind", "refine" if step["refine"] else "ramp")
+
+
+def step_result(
+    judged: dict[str, Any],
+    txs: list[dict[str, Any]],
+    series: dict[str, list[Sample]],
+    host: list[dict[str, Any]],
+) -> StepResult:
+    """The ramp's verdict on a step (see judge_step) plus metrics that decide nothing."""
+    t0, t1 = judged["t_mid"], judged["t_end"]
+    views = [
+        rate(s, t0, t1, "consensus_last_decided_view") for s in series.values() if s
+    ]
+    view = statistics.median(views) if views else None
+    node_cpu = {
+        node: rate(s, t0, t1, "process_cpu_seconds_total")
+        for node, s in series.items()
+        if s
+    }
+    decided = judged["decided_mb_s"]
+    procs = process_stats(host, t0, t1)
+    fails = judged["consensus_fails"] + judged["query_fails"]
+    result: StepResult = {
+        "rate_mb_s": judged["rate_mb_s"],
+        "refine": judged["refine"],
+        "kind": step_kind(judged),
+        "t_start": judged["t_start"],
+        "t_mid": t0,
+        "t_end": t1,
+        "submitted_mb_s": judged["submitted_mb_s"],
+        # steps.json of runs before `t_queued` lacks these.
+        "queued_mb_s": judged.get("queued_mb_s"),
+        "queue_wait_ms": judged.get("queue_wait_ms"),
+        "submit_rtt_ms": judged.get("submit_rtt_ms"),
+        "cap_waits": judged.get("cap_waits"),
+        "decided_mb_s": decided,
+        "timeouts": judged["timeouts"],
+        "consensus_latency_ms": judged["consensus_latency_ms"],
+        "query_lag_ms": judged["query_lag_ms"],
+        "query_lag_slope_ms_s": judged["query_lag_slope_ms_s"],
+        "latency_ms": quantiles(
+            [
+                (tx["t_included"] - tx["t_submit"]) * 1000
+                for tx in txs
+                if t0 <= tx["t_submit"] <= t1 and tx["status"] == "included"
+            ]
+        ),
+        "mean_view_ms": 1000 / view if view else None,
+        "cpu_s_per_mb": sum(node_cpu.values()) / decided if decided else None,
+        "node_cpu": node_cpu,
+        "postgres_cpu": (
+            procs["postgres"]["cpu_cores_mean"] if "postgres" in procs else None
+        ),
+        "consensus_fails": judged["consensus_fails"],
+        "query_fails": judged["query_fails"],
+        "passed": not fails,
+    }
+    if "stopped_early" in judged:
+        result["stopped_early"] = True
+    return result
+
+
+def check_validity(result: BenchResult, coverage: dict[str, float]) -> Validity:
+    n_nodes = len(result["nodes"])
+    invalid: list[str] = []
+    noisy: list[str] = []
+    for node, frac in coverage.items():
+        if frac < SCRAPE_OK_MIN:
+            invalid.append(f"{node} metrics answered for only {frac:.0%} of the window")
+    for node, stats in result["nodes"].items():
+        if stats["decided_blocks"] <= 0:
+            invalid.append(f"{node} decided no blocks in the window")
+    # A collapsed probe may decide nothing; only a run with no decided step is broken.
+    if result["steps"] and not any(step["decided_mb_s"] for step in result["steps"]):
+        invalid.append("every step decided nothing")
+    load = result["load"]
+    if load["included"] <= 0:
+        invalid.append("no transactions included")
+    stakes = result["stake_table"]
+    if len(stakes) != n_nodes or len(set(stakes)) != 1:
+        invalid.append(f"stake table is not {n_nodes} equal entries: {stakes}")
+    if result["host"]["steal_pct"] > STEAL_NOISY_PCT:
+        noisy.append(
+            f"steal {result['host']['steal_pct']:.1f}% > {STEAL_NOISY_PCT:.0f}%"
+        )
+    drift = result["calibration"]["drift_pct"]
+    if abs(drift) > DRIFT_NOISY_PCT:
+        noisy.append(f"calibration drift {drift:+.1f}% beyond {DRIFT_NOISY_PCT:.0f}%")
+    tracker = load["tracker_lag_ms"]
+    if tracker and tracker["p99"] > TRACKER_LAG_NOISY_MS:
+        noisy.append(
+            f"benchmark tracker behind: payload scans lag node0 by {tracker['p99']:.0f} ms p99"
+        )
+    mb_s = result["capacity"]["overall"]["mb_s"]
+    short = [
+        step["submitted_mb_s"]
+        for step in result["steps"]
+        if step["rate_mb_s"] == mb_s
+        and step["submitted_mb_s"] < SUBMIT_SHORT_RATIO * step["rate_mb_s"]
+    ]
+    if short:
+        noisy.append(
+            f"load generator submitted {fmt_num(min(short))} of {fmt_num(mb_s)} MB/s "
+            "at the capacity step"
+        )
+    if load["submit_errors"]:
+        noisy.append(f"{load['submit_errors']} submit errors")
+    if load["missing_payloads"]:
+        noisy.append(f"query node lost payloads at heights {load['missing_payloads']}")
+    return {"valid": not invalid, "noisy": bool(noisy), "reasons": invalid + noisy}
+
+
+def run_meta(run: dict[str, Any]) -> RunMeta:
+    meta = run["meta"]
+    return {
+        "sha": meta["sha"],
+        "ref": meta["ref"],
+        "event": meta["event"],
+        "run_id": meta["run_id"],
+        "run_url": meta["run_url"],
+        "pr": meta["pr"],
+        "started_at": datetime.fromtimestamp(run["started"], UTC).isoformat(
+            timespec="seconds"
+        ),
+        "wall_s": run["wall_s"],
+        "ready_s": run["ready_s"],
+        "local": meta["local"],
+        "teardown": run["teardown"],
+    }
+
+
+def config_hash(cfg: BenchConfig, extra: list[bytes]) -> str:
+    fields = dataclasses.asdict(cfg)
+    # Added later: left out while off, so the hashes of earlier runs hold.
+    if not cfg.heartbeat_tx_s:
+        del fields["heartbeat_tx_s"]
+    digest = hashlib.sha256(json.dumps(fields, sort_keys=True).encode())
+    for chunk in extra:
+        digest.update(chunk)
+    return digest.hexdigest()[:12]
+
+
+def load_series(path: Path, nodes: list[str]) -> dict[str, list[Sample]]:
+    series: dict[str, list[Sample]] = {node: [] for node in nodes}
+    for rec in read_jsonl(path):
+        if rec["ok"]:
+            series[rec["node"]].append((rec["ts"], rec["m"]))
+    return series
+
+
+def scrape_coverage(
+    path: Path, nodes: list[str], t0: float, t1: float
+) -> dict[str, float]:
+    seen: dict[str, list[bool]] = {node: [] for node in nodes}
+    for rec in read_jsonl(path):
+        if t0 <= rec["ts"] <= t1:
+            seen[rec["node"]].append(rec["ok"])
+    return {node: sum(oks) / len(oks) if oks else 0.0 for node, oks in seen.items()}
+
+
+def at(samples: list[Sample], t: float) -> Sample:
+    """The last sample at or before `t`, else the first one."""
+    best = samples[0]
+    for sample in samples:
+        if sample[0] > t:
+            break
+        best = sample
+    return best
+
+
+def delta(samples: list[Sample], ta: float, tb: float, key: str) -> tuple[float, float]:
+    (ts0, m0), (ts1, m1) = at(samples, ta), at(samples, tb)
+    return m1.get(key, 0.0) - m0.get(key, 0.0), ts1 - ts0
+
+
+def rate(samples: list[Sample], ta: float, tb: float, key: str) -> float:
+    d, dt = delta(samples, ta, tb, key)
+    return d / dt if dt > 0 else 0.0
+
+
+def node_stats(
+    node: str, role: str, series: dict[str, list[Sample]], t0: float, t1: float
+) -> NodeStats:
+    samples = series[node]
+    if not samples:
+        return {
+            "role": role,
+            "decided_height_end": 0,
+            "decided_blocks": 0,
+            "view_lag_end": 0,
+            "cpu_cores": 0.0,
+            "rss_peak_bytes": 0,
+            "tokio_busy_frac": None,
+            "ops": {},
+        }
+    m0, m1 = at(samples, t0)[1], at(samples, t1)[1]
+    top_view = max(
+        at(s, t1)[1].get("consensus_last_decided_view", 0) for s in series.values() if s
+    )
+    in_window = [m for ts, m in samples if t0 <= ts <= t1] or [m1]
+    workers = m1.get("tokio_workers")
+    busy = rate(samples, t0, t1, "tokio_worker_busy_seconds_total")
+    stats: NodeStats = {
+        "role": role,
+        "decided_height_end": int(m1.get("consensus_last_synced_block_height", 0)),
+        "decided_blocks": int(
+            delta(samples, t0, t1, "consensus_finalized_bytes_count")[0]
+        ),
+        "view_lag_end": int(top_view - m1.get("consensus_last_decided_view", 0)),
+        "cpu_cores": rate(samples, t0, t1, "process_cpu_seconds_total"),
+        "rss_peak_bytes": int(
+            max(m.get("process_resident_memory_bytes", 0) for m in in_window)
+        ),
+        "tokio_busy_frac": busy / workers if workers else None,
+        "ops": op_stats(m0, m1, delta(samples, t0, t1, "process_cpu_seconds_total")[1]),
+    }
+    if "pruner_data_height" in m1:
+        stats["pruned_data_height_end"] = int(m1["pruner_data_height"])
+        stats["pruned_state_height_end"] = int(m1["pruner_state_height"])
+    return stats
+
+
+def op_stats(
+    m0: dict[str, float], m1: dict[str, float], dt: float
+) -> dict[str, OpStats]:
+    ops: dict[str, OpStats] = {}
+    for key, end in m1.items():
+        if not key.endswith("_count") or "{" in key:
+            continue
+        base = key.removesuffix("_count")
+        if base + "_sum" not in m1 or not is_duration(base):
+            continue
+        count = end - m0.get(key, 0.0)
+        if count <= 0 or dt <= 0:
+            continue
+        total = m1[base + "_sum"] - m0.get(base + "_sum", 0.0)
+        quantiles = histogram_quantiles(m0, m1, base)
+        ops[base] = {
+            "per_s": count / dt,
+            "mean_ms": total / count * 1000,
+            "p50_ms": quantiles["p50"] if quantiles else None,
+            "p99_ms": quantiles["p99"] if quantiles else None,
+            "busy_frac": total / dt,
+        }
+    return ops
+
+
+def is_duration(base: str) -> bool:
+    return base.endswith("_duration") or base.startswith("consensus_storage_")
+
+
+def histogram_quantiles(
+    m0: dict[str, float], m1: dict[str, float], base: str
+) -> Quantiles | None:
+    """Quantiles in ms of a seconds histogram over the window delta, with linear
+    interpolation inside a bucket as Prometheus' histogram_quantile does."""
+    buckets: dict[float, float] = {}
+    for key, value in m1.items():
+        if key.startswith(base + "_bucket{") and 'le="' in key:
+            le = key.split('le="')[1].split('"')[0]
+            bound = math.inf if le == "+Inf" else float(le)
+            buckets[bound] = value - m0.get(key, 0.0)
+    count = m1.get(base + "_count", 0.0) - m0.get(base + "_count", 0.0)
+    total = m1.get(base + "_sum", 0.0) - m0.get(base + "_sum", 0.0)
+    if count <= 0 or not buckets:
+        return None
+    bounds = sorted(buckets)
+    finite_top = max((b for b in bounds if math.isfinite(b)), default=0.0)
+
+    def quantile(q: float) -> float:
+        rank = q * buckets[bounds[-1]]
+        lower, below = 0.0, 0.0
+        for bound in bounds:
+            if buckets[bound] >= rank:
+                if not math.isfinite(bound):
+                    return finite_top * 1000
+                inside = buckets[bound] - below
+                frac = (rank - below) / inside if inside else 1.0
+                return (lower + (bound - lower) * frac) * 1000
+            lower, below = bound, buckets[bound]
+        return finite_top * 1000
+
+    top = next(b for b in bounds if buckets[b] >= buckets[bounds[-1]])
+    return {
+        "n": int(count),
+        "mean": total / count * 1000,
+        "p50": quantile(0.5),
+        "p95": quantile(0.95),
+        "p99": quantile(0.99),
+        "max": (top if math.isfinite(top) else finite_top) * 1000,
+    }
+
+
+def window(
+    series: dict[str, list[Sample]], query_node: str, t0: float, t1: float
+) -> Window:
+    samples = series[query_node]
+    key = "consensus_last_synced_block_height"
+    return {
+        "t0": t0,
+        "t1": t1,
+        "height_start": int(at(samples, t0)[1].get(key, 0)) if samples else 0,
+        "height_end": int(at(samples, t1)[1].get(key, 0)) if samples else 0,
+    }
+
+
+def process_stats(
+    host: list[dict[str, Any]], t0: float, t1: float
+) -> dict[str, ProcStats]:
+    inside = [r for r in host if t0 <= r["ts"] <= t1]
+    if len(inside) < 2:
+        return {}
+    first, last = inside[0], inside[-1]
+    dt = last["ts"] - first["ts"]
+    out: dict[str, ProcStats] = {}
+    for label, now in sorted(last["procs"].items()):
+        cpu = now["cpu_s"] - first["procs"].get(label, {"cpu_s": 0.0})["cpu_s"]
+        out[label] = {
+            "cpu_cores_mean": cpu / dt,
+            "cpu_s": cpu,
+            "rss_peak_bytes": max(
+                r["procs"].get(label, {"rss": 0})["rss"] for r in inside
+            ),
+        }
+    return out
+
+
+def host_stats(host: list[dict[str, Any]], t0: float, t1: float) -> HostStats:
+    inside = [r for r in host if t0 <= r["ts"] <= t1]
+    if len(inside) < 2:
+        return {
+            "util_mean": 0.0,
+            "util_max": 0.0,
+            "steal_pct": 0.0,
+            "iowait_pct": 0.0,
+            "mem_avail_min_bytes": 0,
+        }
+
+    def busy(a: list[int], b: list[int]) -> tuple[float, float, float, float]:
+        d = [y - x for x, y in zip(a, b)]
+        total = sum(d[:8]) or 1
+        idle, iowait, steal = d[3], d[4], d[7]
+        return (total - idle - iowait) / total, steal / total, iowait / total, total
+
+    steps = [busy(a["cpu"], b["cpu"]) for a, b in itertools.pairwise(inside)]
+    whole = busy(inside[0]["cpu"], inside[-1]["cpu"])
+    return {
+        "util_mean": whole[0],
+        "util_max": max(s[0] for s in steps),
+        "steal_pct": whole[1] * 100,
+        "iowait_pct": whole[2] * 100,
+        "mem_avail_min_bytes": min(r["mem_avail"] for r in inside),
+    }
+
+
+def load_stats(
+    out: Path,
+    txs: list[dict[str, Any]],
+    heights: list[dict[str, Any]],
+    t0: float,
+    t1: float,
+) -> LoadStats:
+    meta = read_json(out / "load-meta.json")
+    stats: LoadStats = {
+        "submitted": len(txs),
+        "included": sum(1 for tx in txs if tx["status"] == "included"),
+        "timeouts": sum(1 for tx in txs if tx["status"] == "timeout"),
+        "submit_errors": meta["submit_errors"],
+        "max_in_flight": meta["max_in_flight"],
+        "cap_waits": meta["cap_waits"],
+        "missing_payloads": meta["missing_payloads"],
+        "tracker_lag_ms": quantiles(scan_lags(heights, t0, t1)),
+        "drain_s": meta["drain_s"],
+        "refine_skipped": meta["refine_skipped"],
+        # Absent from load-meta.json of runs before it was recorded.
+        "stop_reason": meta.get("stop_reason"),
+    }
+    if (out / CLIENTS_JSONL).exists():
+        stats["clients"] = client_stats(
+            list(read_jsonl(out / CLIENTS_JSONL)), heights, t0, t1
+        )
+    return stats
+
+
+def client_stats(
+    records: list[dict[str, Any]], heights: list[dict[str, Any]], t0: float, t1: float
+) -> ClientStats:
+    """Over the ranges the readers finished in `[t0, t1]`."""
+    on_validator = {h["height"]: h["validator"] for h in heights}
+    done = [r for r in records if t0 <= r["t_done"] <= t1]
+    served = [r for r in done if r["status"] == "ok"]
+    return {
+        "readers": len({(r["ns"], r["reader"]) for r in records}),
+        "ranges": len(done),
+        "missing": len(done) - len(served),
+        "mb_s": sum(r["bytes"] for r in done) / (t1 - t0) / 1e6,
+        "lag_ms": quantiles(
+            [
+                (r["t_done"] - on_validator[r["end"] - 1]) * 1000
+                for r in served
+                if on_validator.get(r["end"] - 1) is not None
+            ]
+        ),
+        "fetch_ms": quantiles([(r["t_done"] - r["t_start"]) * 1000 for r in served]),
+    }
+
+
+def scan_lags(heights: list[dict[str, Any]], t0: float, t1: float) -> list[float]:
+    """Per height: ms from when its scan could start, once node0 showed the height
+    PAYLOAD_LAG_BLOCKS above it, to the scan's end."""
+    shown = {h["height"]: h["query"] for h in heights}
+    lags = []
+    for h in heights:
+        ready = shown.get(h["height"] + PAYLOAD_LAG_BLOCKS)
+        if ready is not None and h["scanned"] is not None and t0 <= ready <= t1:
+            lags.append((h["scanned"] - ready) * 1000)
+    return lags
+
+
+def quantiles(values: list[float]) -> Quantiles | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+
+    def q(p: float) -> float:
+        return ordered[min(len(ordered) - 1, int(p * len(ordered)))]
+
+    return {
+        "n": len(ordered),
+        "mean": statistics.fmean(ordered),
+        "p50": q(0.5),
+        "p95": q(0.95),
+        "p99": q(0.99),
+        "max": ordered[-1],
+    }
+
+
+def stake_amounts(path: Path) -> list[str]:
+    table = read_json(path)["stake_table"]
+    return [entry["stake_table_entry"]["stake_amount"] for entry in table]
+
+
+def pct_change(before: float, after: float) -> float:
+    return (after - before) / before * 100 if before else 0.0
+
+
+@dataclass(frozen=True)
+class Metric:
+    label: str
+    path: str
+    unit: str
+    better: Literal["higher", "lower"]
+    floor_pct: float
+
+
+CAPACITY_LIMITS = (
+    ("capacity", "overall"),
+    ("consensus limit", "consensus"),
+    ("query node limit", "query_node"),
+)
+# Paths into one step of result.json's `steps`.
+STEP_METRICS = (
+    Metric("decided", "decided_mb_s", "MB/s", "higher", 10),
+    Metric("consensus p50", "consensus_latency_ms.p50", "ms", "lower", 15),
+    Metric("consensus p99", "consensus_latency_ms.p99", "ms", "lower", 20),
+    Metric("query lag p50", "query_lag_ms.p50", "ms", "lower", 30),
+    Metric("query lag p99", "query_lag_ms.p99", "ms", "lower", 30),
+    Metric("e2e p50", "latency_ms.p50", "ms", "lower", 15),
+    Metric("e2e p99", "latency_ms.p99", "ms", "lower", 20),
+    Metric("view time", "mean_view_ms", "ms", "lower", 10),
+    Metric("CPU-s/MB", "cpu_s_per_mb", "s/MB", "lower", 10),
+    Metric("node0 CPU", "node_cpu.node0", "cores", "lower", 15),
+    Metric("node1 CPU", "node_cpu.node1", "cores", "lower", 15),
+    Metric("node2 CPU", "node_cpu.node2", "cores", "lower", 15),
+    Metric("postgres CPU", "postgres_cpu", "cores", "lower", 15),
+)
+# The per-step summary table; the rest go to the step details.
+STEP_COLUMNS = (
+    "decided",
+    "consensus p50",
+    "consensus p99",
+    "query lag p50",
+    "e2e p50",
+    "CPU-s/MB",
+)
+
+
+def lookup(result: Any, path: str) -> float | None:
+    for part in path.split("."):
+        if not isinstance(result, dict) or part not in result or result[part] is None:
+            return None
+        result = result[part]
+    return float(result)
+
+
+def compare(current: BenchResult, baseline: Baseline) -> Comparison:
+    """Deltas against the median of comparable runs: capacity, and each step's metrics
+    against the runs that ran the same rate. A delta counts only beyond both the metric's
+    floor and 3 times the baseline's robust spread; a noisy current run is never conclusive."""
+    usable: list[BenchResult] = []
+    excluded: dict[str, int] = {}
+    for run in baseline["runs"]:
+        reason = exclusion(current, run)
+        if reason:
+            excluded[reason] = excluded.get(reason, 0) + 1
+        else:
+            usable.append(run)
+    usable = usable[:BASELINE_RUNS]
+    noisy = current["validity"]["noisy"]
+    # A search or refine resolves finer than the ramp gap; old results have no stored value.
+    resolution = current["capacity"].get("resolution_mb_s") or ramp_resolution(
+        current["config"]["steps"]
+    )
+    capacity_rows = [
+        compare_capacity(
+            label,
+            current["capacity"][key],
+            [run["capacity"][key] for run in usable],
+            resolution,
+            noisy,
+        )
+        for label, key in CAPACITY_LIMITS
+    ]
+    rates = sorted(
+        {step["rate_mb_s"] for run in [current, *usable] for step in run["steps"]}
+    )
+    return {
+        "n": len(usable),
+        "excluded": excluded,
+        "error": baseline["error"],
+        "source": baseline["source"],
+        "used": [run["run"] for run in usable],
+        "capacity": capacity_rows,
+        "steps": [compare_step(rate, current, usable, noisy) for rate in rates],
+    }
+
+
+def ramp_resolution(steps: Sequence[float]) -> float:
+    """The smallest capacity change the ramp can show: a refine step, half a step gap."""
+    gaps = [b - a for a, b in itertools.pairwise(steps)]
+    return min(gaps) / 2 if gaps else steps[0] / 2
+
+
+def compare_capacity(
+    label: str, current: Limit, history: list[Limit], resolution: float, noisy: bool
+) -> CapacityRow:
+    """In MB/s, not percent: capacity moves in ramp steps. A capacity below the first step
+    ranks lowest; a lower bound (no step failed) below the baseline says nothing."""
+    ordered = sorted(
+        history, key=lambda lim: -math.inf if lim["mb_s"] is None else lim["mb_s"]
+    )
+    baseline = ordered[(len(ordered) - 1) // 2] if ordered else None
+    cur = current["mb_s"]
+    base = baseline["mb_s"] if baseline else None
+    delta = cur - base if cur is not None and base is not None else None
+    if baseline is None:
+        verdict = "n/a"
+    elif noisy:
+        verdict = "inconclusive"
+    elif cur is None or base is None:
+        verdict = "same" if cur == base else ("worse" if cur is None else "better")
+    elif delta is not None and abs(delta) < resolution - 1e-9:
+        verdict = "same"
+    elif delta is not None and delta < 0:
+        verdict = "worse" if current["bounded"] else "inconclusive"
+    else:
+        verdict = "better" if baseline["bounded"] else "inconclusive"
+    return {
+        "label": label,
+        "current": current,
+        "baseline": baseline,
+        "n": len(history),
+        "delta_mb_s": delta,
+        "resolution_mb_s": resolution,
+        "verdict": verdict,
+    }
+
+
+def compare_step(
+    rate: float, current: BenchResult, usable: list[BenchResult], noisy: bool
+) -> StepComparison:
+    mine = step_at(current, rate)
+    theirs = [step for run in usable if (step := step_at(run, rate))]
+    return {
+        "rate_mb_s": rate,
+        "n": len(theirs),
+        "rows": [
+            compare_metric(
+                metric,
+                lookup(mine, metric.path),
+                [lookup(step, metric.path) for step in theirs],
+                noisy,
+            )
+            for metric in STEP_METRICS
+        ],
+    }
+
+
+def step_at(result: BenchResult, rate: float) -> StepResult | None:
+    return next((s for s in result["steps"] if s["rate_mb_s"] == rate), None)
+
+
+def exclusion(current: BenchResult, run: BenchResult) -> str | None:
+    """Why `run` is no baseline for `current`, or None if it is one."""
+    if run.get("schema_version") != SCHEMA_VERSION:
+        return "other schema"
+    if not run["validity"]["valid"]:
+        return "invalid"
+    if run["validity"]["noisy"]:
+        return "noisy"
+    if run["config_hash"] != current["config_hash"]:
+        return "other config"
+    ours, theirs = current["runner"], run["runner"]
+    if (ours["cpu_model"], ours["affinity"]) != (
+        theirs["cpu_model"],
+        theirs["affinity"],
+    ):
+        return "other runner"
+    speed = pct_change(
+        current["calibration"]["before"]["sha256_1t_mb_s"],
+        run["calibration"]["before"]["sha256_1t_mb_s"],
+    )
+    if abs(speed) > CALIBRATION_MATCH_PCT:
+        return "other calibration"
+    return None
+
+
+def compare_metric(
+    metric: Metric, value: float | None, values: list[float | None], noisy: bool
+) -> Row:
+    history = [v for v in values if v is not None]
+    baseline = statistics.median(history) if history else None
+    spread = 0.0
+    if baseline and len(history) >= 3:
+        mad = statistics.median(abs(v - baseline) for v in history)
+        spread = 1.4826 * mad / abs(baseline) * 100
+    threshold = max(metric.floor_pct, 3 * spread)
+    delta_pct = pct_change(baseline, value) if baseline and value is not None else None
+    if value is None or baseline is None:
+        verdict = "n/a"
+    elif noisy:
+        verdict = "inconclusive"
+    elif baseline == 0:
+        verdict = (
+            "same"
+            if value == 0
+            else ("worse" if metric.better == "lower" else "better")
+        )
+    elif delta_pct is not None and abs(delta_pct) > threshold:
+        verdict = (
+            "better" if (delta_pct > 0) == (metric.better == "higher") else "worse"
+        )
+    else:
+        verdict = "same"
+    return {
+        "key": metric.path,
+        "label": metric.label,
+        "unit": metric.unit,
+        "better": metric.better,
+        "current": value,
+        "baseline": baseline,
+        "delta_pct": delta_pct,
+        "threshold_pct": threshold,
+        "verdict": verdict,
+    }
+
+
+def load_baseline(path: Path) -> Baseline:
+    """`nextest-ci stats-fetch` output ({runs: [...], error?}, newest first) or a single
+    result.json. A stats-fetch `error` means the lookup failed, not that nothing was published."""
+    match read_json(path):
+        case {"runs": list() as runs} as fetched:
+            return {"runs": runs, "error": fetched.get("error"), "source": "main"}
+        case {"schema_version": _} as single:
+            return {"runs": [single], "error": None, "source": "reference"}
+        case other:
+            raise ValueError(
+                f"{path} is neither stats-fetch output nor a result.json: {other!r:.200}"
+            )
+
+
+def render(result: BenchResult, comparison: Comparison | None, chart: str = "") -> str:
+    """The summary; `chart`, a markdown image, goes right below the headline."""
+    lines = [
+        "## Network benchmark",
+        "",
+        f"- {status_line(result)}",
+        f"- {capacity_line(result['capacity'])}",
+        *search_lines(result),
+        f"- {baseline_line(comparison)}",
+        "",
+        *([chart, ""] if chart else []),
+        *capacity_table(result, comparison),
+        "### Load steps",
+        "",
+        *step_table(result, comparison),
+        "",
+        *details("Step details", step_details(result)),
+        "### Load",
+        "",
+        *load_lines(result),
+        "",
+        *details("Runner, calibration, host", runner_lines(result)),
+        *(details("Deployment", body) if (body := deployment_lines(result)) else []),
+        *(details("Hosts", body) if (body := hosts_table(result)) else []),
+        *details("Nodes", node_table(result)),
+        *details("Top ops by busy time", ops_table(result)),
+        *details("Processes", process_table(result)),
+        *footer(result),
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def search_lines(result: BenchResult) -> list[str]:
+    reason = result["load"]["stop_reason"]
+    if reason is None:
+        return []
+    probes = sum(1 for s in result["steps"] if step_kind(s) not in ("ramp", "refine"))
+    after = f" after {probes} probes" if probes else ""
+    return [f"- search: {reason}{after}"]
+
+
+def status_line(result: BenchResult) -> str:
+    validity = result["validity"]
+    reasons = "; ".join(validity["reasons"])
+    run = result["run"]
+    head = f"`{run['sha'][:10]}` {run_where(run)}, config `{result['config_hash']}`"
+    return f"{head}: run **{verdict_word(validity)}**" + (
+        f" ({reasons})" if reasons else ""
+    )
+
+
+def run_where(run: RunMeta) -> str:
+    # A dispatched PR run has the PR branch as ref; the PR number says more.
+    return f"PR #{run['pr']}" if run["pr"] else f"{run['event']} {run['ref']}"
+
+
+def baseline_label(comparison: Comparison) -> str:
+    if comparison["source"] == "main":
+        return f"main median (n={comparison['n']})"
+    return f"reference `{comparison['used'][0]['sha'][:10]}`"
+
+
+def baseline_line(comparison: Comparison | None) -> str:
+    if comparison is None:
+        return "Baseline: none given, no main runs to compare against."
+    if comparison["error"]:
+        return f"Baseline: fetching main runs failed: {comparison['error']}."
+    note = excluded_note(comparison)
+    if comparison["source"] == "reference":
+        if not comparison["used"]:
+            return f"Baseline: reference run not comparable{note}."
+        run = comparison["used"][0]
+        return f"Baseline: reference run {run_ref(run)}, {run_where(run)}."
+    if not comparison["used"]:
+        return f"Baseline: no main runs to compare against{note}."
+    runs = ", ".join(run_ref(run) for run in comparison["used"])
+    return f"Baseline: median of {comparison['n']} main runs: {runs}{note}."
+
+
+def run_ref(run: RunMeta) -> str:
+    sha = f"`{run['sha'][:10]}`"
+    started = run["started_at"][:16].replace("T", " ") + " UTC"
+    return (
+        f"[{sha}]({run['run_url']}) {started}" if run["run_url"] else f"{sha} {started}"
+    )
+
+
+def verdict_word(validity: Validity) -> str:
+    if not validity["valid"]:
+        return "invalid"
+    return "noisy" if validity["noisy"] else "valid"
+
+
+def runner_lines(result: BenchResult) -> list[str]:
+    r, c, h = result["runner"], result["calibration"], result["host"]
+    mhz = statistics.fmean(r["mhz"]) if r["mhz"] else 0.0
+    image = " ".join(x for x in (r["image_os"], r["image_version"]) if x) or "local"
+    quota = f", cgroup cpu.max {r['cgroup_cpu_max']}" if r["cgroup_cpu_max"] else ""
+    before, after = c["before"], c["after"]
+    return [
+        f"- CPU: {r['cpu_model']}, {mhz:.0f} MHz mean",
+        f"- CPUs: {r['affinity']} usable of {r['nproc']}{quota}",
+        f"- RAM: {fmt_bytes(r['mem_total_bytes'])}",
+        f"- image: {image}",
+        (
+            f"- sha256 1 core: {before['sha256_1t_mb_s']:.0f} MB/s before, "
+            f"{after['sha256_1t_mb_s']:.0f} MB/s after"
+        ),
+        (
+            f"- sha256 all usable cores: {before['sha256_mt_mb_s']:.0f} MB/s before, "
+            f"{after['sha256_mt_mb_s']:.0f} MB/s after, drift {c['drift_pct']:+.1f}%"
+        ),
+        f"- fsync: {before['fsync_per_s']:.0f}/s",
+        f"- host CPU busy (usable CPUs): {h['util_mean']:.0%} mean, {h['util_max']:.0%} max",
+        f"- steal {h['steal_pct']:.1f}%, iowait {h['iowait_pct']:.1f}%",
+    ]
+
+
+def latency_line(meta: LatencyMeta) -> str:
+    intra = "on" if meta["intra"] else "off"
+    line = f"- latency: {meta['profile']}, intra {intra}, matrix {meta['matrix_sha256'][:8]}"
+    if "mtu" in meta:
+        line += f"; mtu {meta['mtu']}"
+    if "sysctls" in meta:
+        sysctls = (f"{k.rsplit('.', 1)[1]}={v}" for k, v in meta["sysctls"].items())
+        line += f"; sysctl {' '.join(sysctls)}"
+    return line
+
+
+def deployment_lines(result: BenchResult) -> list[str]:
+    """AWS fleet metadata and cost; empty for the local bench."""
+    if "deployment" not in result:
+        return []
+    d = result["deployment"]
+    images = ", ".join(f"{name} {ref}" for name, ref in sorted(d["images"].items()))
+    rev = d["image_revision"]
+    images_line = (
+        f"- images @ {rev}: {images}" if rev is not None else f"- images: {images}"
+    )
+    types = ", ".join(
+        f"{name} {meta['instance_type']}" for name, meta in sorted(d["hosts"].items())
+    )
+    cost = d["cost_usd"]
+    cost_line = f"expected ${cost['expected']:.2f}, bound ${cost['bound']:.2f}"
+    if "actual" in cost:
+        cost_line += f", actual ${cost['actual']:.2f}"
+    return [
+        f"- account {d['account']} ({d['region']}), az {d['az']}, ami {d['ami']}",
+        images_line,
+        f"- instance types: {types}",
+        (
+            f"- start spread {d['start_spread_s']:.1f} s, clock offset max "
+            f"{d['clock_offset_ms_max']:.0f} ms"
+        ),
+        f"- cost: {cost_line}",
+        *([query_db_line(d["query_db"])] if "query_db" in d else []),
+        *([latency_line(d["latency"])] if "latency" in d else []),
+        *(
+            [f"- max block size: {d['max_block_size']}"]
+            if "max_block_size" in d
+            else []
+        ),
+        *(
+            ["- node env: " + ", ".join(f"`{pair}`" for pair in d["node_env"])]
+            if "node_env" in d
+            else []
+        ),
+        *prune_lines(result),
+    ]
+
+
+def prune_lines(result: BenchResult) -> list[str]:
+    """The pruner's retention and how far it had pruned by the window end."""
+    d = result["deployment"]
+    if "prune" not in d:
+        return []
+    heights = ", ".join(
+        f"{node} data {s['pruned_data_height_end']}, state {s['pruned_state_height_end']}"
+        for node, s in result["nodes"].items()
+        if "pruned_data_height_end" in s
+    )
+    return [f"- prune: retention {d['prune']}; pruned to height: {heights or 'n/a'}"]
+
+
+def query_db_line(q: QueryDbMeta) -> str:
+    store = q["store"]
+    ident = f" {store['identifier']}" if "identifier" in store else ""
+    cls = f" on {q['instance_class']}" if "instance_class" in q else ""
+    speed = f" {store['iops']} IOPS {store['mbps']} MB/s" if "iops" in store else ""
+    tls = "" if q["engine"] == "sqlite" else f", TLS {'on' if q['tls'] else 'off'}"
+    return (
+        f"- Query DB: {q['engine']}, {q['mode']}{cls}, {store['type']}{ident} "
+        f"{store['gb']} GB{speed}{tls}"
+    )
+
+
+def hosts_table(result: BenchResult) -> list[str]:
+    """Per-host CPU, steal and I/O; empty for the local bench."""
+    if "hosts" not in result:
+        return []
+    lines = [
+        "| host | CPU busy mean | steal | disk MB/s | net MB/s |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for name, h in sorted(result["hosts"].items()):
+        lines.append(
+            f"| {name} | {h['util_mean']:.0%} | {h['steal_pct']:.1f}% "
+            f"| {fmt_num(h['disk_mb_s'])} | {fmt_num(h['net_mb_s'])} |"
+        )
+    return lines
+
+
+def details(summary: str, body: list[str]) -> list[str]:
+    """A collapsed block; GitHub renders markdown inside only after a blank line."""
+    return [f"<details><summary>{summary}</summary>", "", *body, "", "</details>", ""]
+
+
+def capacity_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
+    """Capacity against the baseline; nothing without one."""
+    if comparison is None or not comparison["used"]:
+        return []
+    first = result["config"]["steps"][0]
+    lines = [
+        (
+            f"| metric | this run | {baseline_label(comparison)} | runs | delta "
+            "| verdict (resolution) |"
+        ),
+        "|---|---:|---:|---:|---:|---|",
+    ]
+    for row in comparison["capacity"]:
+        delta = row["delta_mb_s"]
+        mark = {"worse": "**worse**", "better": "better"}.get(
+            row["verdict"], row["verdict"]
+        )
+        base = fmt_limit(row["baseline"], first) if row["baseline"] else ""
+        lines.append(
+            f"| {row['label']} | {fmt_limit(row['current'], first)} | {base} "
+            f"| {row['n']} | {f'{delta:+g} MB/s' if delta is not None else ''} "
+            f"| {mark} (±{fmt_num(row['resolution_mb_s'])} MB/s) |"
+        )
+    return [*lines, ""]
+
+
+def fmt_limit(limit: Limit, first: float) -> str:
+    if limit["mb_s"] is None:
+        return f"< {fmt_num(first)} MB/s"
+    bound = "" if limit["bounded"] else ">= "
+    return f"{bound}{fmt_num(limit['mb_s'])} MB/s"
+
+
+def step_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
+    """One row per rate this run ran, and per ramp rate the baseline ran but this run did not
+    reach; a cell beyond its threshold against the baseline median at that rate carries the
+    delta, bold when worse. Refine rates only the baseline ran are left out."""
+    by_rate = (
+        {c["rate_mb_s"]: c for c in comparison["steps"]}
+        if comparison and comparison["used"]
+        else {}
+    )
+    ramp = set(result["config"]["steps"])
+    rates = sorted({s["rate_mb_s"] for s in result["steps"]} | (set(by_rate) & ramp))
+    runs = (
+        "main runs"
+        if comparison and comparison["source"] == "main"
+        else "reference runs"
+    )
+    lines = [
+        "| MB/s | "
+        + " | ".join(STEP_COLUMNS)
+        + " | verdict |"
+        + (f" {runs} |" if by_rate else ""),
+        "|---:|" + "---:|" * len(STEP_COLUMNS) + "---|" + ("---:|" if by_rate else ""),
+    ]
+    for rate in rates:
+        step, other = step_at(result, rate), by_rate.get(rate)
+        tail = f" {other['n']} |" if other else (" 0 |" if by_rate else "")
+        if step is None:
+            lines.append(
+                f"| {fmt_num(rate)} |"
+                + " |" * len(STEP_COLUMNS)
+                + f" **not reached** |{tail}"
+            )
+            continue
+        rows = {row["label"]: row for row in other["rows"]} if other else {}
+        cells = [step_cell(step, label, rows.get(label)) for label in STEP_COLUMNS]
+        lines.append(
+            f"| {fmt_num(rate)}{'' if step_kind(step) == 'ramp' else f' ({step_kind(step)})'} | "
+            + " | ".join(cells)
+            + f" | {step_verdict(step)} |{tail}"
+        )
+    return lines
+
+
+def step_cell(step: StepResult, label: str, row: Row | None) -> str:
+    metric = next(m for m in STEP_METRICS if m.label == label)
+    text = fmt_value(lookup(step, metric.path), metric.unit)
+    if (
+        row is None
+        or row["delta_pct"] is None
+        or row["verdict"] not in ("worse", "better")
+    ):
+        return text
+    text += f" ({row['delta_pct']:+.0f}%)"
+    return f"**{text}**" if row["verdict"] == "worse" else text
+
+
+def step_verdict(step: StepResult) -> str:
+    fails = step["consensus_fails"] + step["query_fails"]
+    return "pass" if not fails else "fail: " + ", ".join(map(fail_code, fails))
+
+
+# Rule text prefix -> the short name in the step table; see step_fails.
+FAIL_CODES = (
+    ("decided", "decided"),
+    ("no consensus metrics", "no metrics"),
+    ("consensus latency", "latency"),
+    ("query lag grows", "query lag growth"),
+    ("query lag p50", "query lag"),
+)
+
+
+def fail_code(rule: str) -> str:
+    if rule.endswith("view timeouts"):
+        return "timeouts"
+    return next((code for prefix, code in FAIL_CODES if rule.startswith(prefix)), rule)
+
+
+def step_details(result: BenchResult) -> list[str]:
+    lines = [
+        (
+            "| MB/s | submitted | queued | queue wait p50/p99 ms | submit rtt p50/p99 ms "
+            "| decided | view timeouts | consensus p50/p99 ms "
+            "| query lag p50/p99 ms | query lag slope ms/s | e2e p50/p99 ms | view ms "
+            "| CPU-s/MB | node0/1/2 CPU | postgres CPU | failed rules |"
+        ),
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"]):
+        cpu = "/".join(fmt_num(s["node_cpu"].get(node)) for node in result["nodes"])
+        lines.append(
+            f"| {fmt_num(s['rate_mb_s'])} | {fmt_num(s['submitted_mb_s'])} "
+            f"| {fmt_num(s['queued_mb_s'])} | {pair(s['queue_wait_ms'])} "
+            f"| {pair(s['submit_rtt_ms'])} | {fmt_num(s['decided_mb_s'])} "
+            f"| {s['timeouts']} "
+            f"| {pair(s['consensus_latency_ms'])} | {pair(s['query_lag_ms'])} "
+            f"| {fmt_num(s['query_lag_slope_ms_s'])} | {pair(s['latency_ms'])} "
+            f"| {fmt_num(s['mean_view_ms'])} | {fmt_num(s['cpu_s_per_mb'])} | {cpu} "
+            f"| {fmt_num(s['postgres_cpu'])} "
+            f"| {'; '.join(s['consensus_fails'] + s['query_fails'])} |"
+        )
+    short = [
+        f"- submission short at {fmt_num(s['rate_mb_s'])} MB/s: "
+        f"{submit_shortfall(s, result['config']['workers'])}"
+        for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"])
+        if s["submitted_mb_s"] < SUBMIT_SHORT_RATIO * s["rate_mb_s"]
+    ]
+    return [*lines, "", *short] if short else lines
+
+
+def submit_shortfall(s: StepResult, workers: int) -> str:
+    """Why a step submitted less than its rate; diagnostic text only, no verdict depends on it."""
+    queued, wait, rtt = s["queued_mb_s"], s["queue_wait_ms"], s["submit_rtt_ms"]
+    if queued is None or wait is None or rtt is None:
+        return "cause not available (run recorded without queue timestamps)"
+    if queued < SUBMIT_SHORT_RATIO * s["rate_mb_s"]:
+        if s["cap_waits"]:
+            return "in-flight cap reached (--cap-s)"
+        return "pacer late (controller CPU)"
+    if wait["p50"] > QUEUE_WAIT_BUSY_MS:
+        return f"submit workers busy (queue wait p50/p99 {pair(wait)} ms, {workers} workers)"
+    return f"slow submit responses (rtt p50/p99 {pair(rtt)} ms)"
+
+
+def pair(q: Quantiles | None) -> str:
+    return f"{q['p50']:.0f}/{q['p99']:.0f}" if q else ""
+
+
+def excluded_note(comparison: Comparison) -> str:
+    excluded = comparison["excluded"]
+    return (
+        " (excluded: " + ", ".join(f"{n} {why}" for why, n in excluded.items()) + ")"
+        if excluded
+        else ""
+    )
+
+
+def node_table(result: BenchResult) -> list[str]:
+    lines = [
+        "| node | role | decided height | view lag | tokio workers busy |",
+        "|---|---|---:|---:|---:|",
+    ]
+    for node, s in result["nodes"].items():
+        busy = f"{s['tokio_busy_frac']:.0%}" if s["tokio_busy_frac"] is not None else ""
+        lines.append(
+            f"| {node} | {s['role']} | {s['decided_height_end']} | {s['view_lag_end']} "
+            f"| {busy} |"
+        )
+    return lines
+
+
+# Timers nested in another listed op: their numbers repeat the outer one's.
+DUPLICATE_OPS = frozenset(
+    {
+        "consensus_decide_processor_process_duration",
+        "consensus_internal_append_da2_duration",
+        "consensus_internal_append_vid_duration",
+        "consensus_internal_append_quorum2_duration",
+    }
+)
+
+
+def ops_table(result: BenchResult, count: int = 8) -> list[str]:
+    """The ops that kept any node busiest, as p99 and busy fraction per node."""
+    busiest: dict[str, float] = {}
+    for s in result["nodes"].values():
+        for op, stats in s["ops"].items():
+            if op not in DUPLICATE_OPS:
+                busiest[op] = max(busiest.get(op, 0.0), stats["busy_frac"])
+    top = sorted(busiest, key=lambda op: -busiest[op])[:count]
+    nodes = list(result["nodes"])
+    lines = [
+        "| op (p99 ms, busy %) | " + " | ".join(nodes) + " |",
+        "|---|" + "---:|" * len(nodes),
+    ]
+    for op in top:
+        cells = []
+        for node in nodes:
+            stats = result["nodes"][node]["ops"].get(op)
+            cells.append(
+                f"{fmt_num(stats['p99_ms'])}, {stats['busy_frac']:.0%}" if stats else ""
+            )
+        lines.append(f"| {op.removeprefix('consensus_')} | " + " | ".join(cells) + " |")
+    return lines + [
+        "",
+        "busy: summed op duration over the window length; above 100% means overlapping calls.",
+    ]
+
+
+def process_table(result: BenchResult) -> list[str]:
+    lines = [
+        "| process | CPU cores mean | CPU-s | RSS peak (sum over its PIDs) |",
+        "|---|---:|---:|---:|",
+    ]
+    for label, p in sorted(result["processes"].items(), key=lambda kv: -kv[1]["cpu_s"]):
+        lines.append(
+            f"| {label} | {p['cpu_cores_mean']:.2f} | {p['cpu_s']:.0f} "
+            f"| {fmt_bytes(p['rss_peak_bytes'])} |"
+        )
+    return lines
+
+
+def early_stop_note(steps: Sequence[StepResult]) -> str:
+    stopped = sum(1 for s in steps if "stopped_early" in s)
+    if not stopped:
+        return ""
+    return (
+        f" ({stopped} stopped early: decided under {KEEP_UP_RATIO:.0%} of submitted over "
+        f"{BEHIND_WINDOW_S:g} s, measured over that window)"
+    )
+
+
+def load_lines(result: BenchResult) -> list[str]:
+    load, cfg = result["load"], result["config"]
+    return [
+        (
+            f"- steps: {', '.join(map(fmt_num, cfg['steps']))} MB/s, {cfg['step_s']} s each, "
+            f"second half measured{early_stop_note(result['steps'])}, after {cfg['warmup_s']} s warmup; "
+            f"{fmt_bytes(cfg['tx_size'])} txs to {cfg['submit_nodes']} nodes, "
+            f"{cfg['workers']} submit threads, in flight capped at {fmt_num(cfg['cap_s'])} s "
+            "of load"
+        ),
+        (
+            f"- step rules: decided >= {KEEP_UP_RATIO:.0%} of submitted, no view timeouts, consensus latency p50 "
+            f"<= {cfg['latency_target_ms']} ms; query lag p50 <= "
+            f"{cfg['query_lag_target_ms']} ms, growth <= {QUERY_LAG_GROWTH_MS_S:.0f} ms/s"
+        ),
+        (
+            f"- {load['submitted']} submitted, {load['included']} included, "
+            f"{load['timeouts']} timed out, {load['submit_errors']} submit errors, "
+            f"peak in flight {load['max_in_flight']}, {load['cap_waits']} submits waited"
+        ),
+        f"- benchmark tracker lag: {spread(load['tracker_lag_ms'])}",
+        *(client_lines(load["clients"]) if "clients" in load else []),
+        *(
+            ["- refine step skipped: the failed step's backlog did not drain"]
+            if load["refine_skipped"]
+            else []
+        ),
+        *drain_lines(
+            load["drain_s"],
+            cfg["keep_going"],
+            final_drain_max_s(cfg["tx_timeout_s"]),
+        ),
+    ]
+
+
+def client_lines(c: ClientStats) -> list[str]:
+    return [
+        (
+            f"- light-client readers: {c['readers']}, {c['ranges']} ranges fetched at "
+            f"{c['mb_s']:.1f} MB/s, {c['missing']} missing"
+        ),
+        f"- reader lag behind a validator: {spread(c['lag_ms'])}",
+        f"- reader fetch time per range: {spread(c['fetch_ms'])}",
+    ]
+
+
+def drain_lines(drain_s: float | None, keep_going: bool, max_s: float) -> list[str]:
+    if drain_s is not None:
+        when = "after the last step" if keep_going else "before the refine step"
+        return [f"- backlog drained in {drain_s:.1f} s {when}"]
+    if keep_going:
+        stalled_or_capped = f"chain stalled or cap of {max_s:.0f} s"
+        return [f"- backlog did not drain ({stalled_or_capped}) after the last step"]
+    return []
+
+
+def spread(q: Quantiles | None) -> str:
+    if q is None:
+        return "n/a"
+    return (
+        f"p50 {q['p50']:.0f}, p95 {q['p95']:.0f}, p99 {q['p99']:.0f}, "
+        f"max {q['max']:.0f} ms (n={q['n']})"
+    )
+
+
+def footer(result: BenchResult) -> list[str]:
+    w, run = result["window"], result["run"]
+    lines = [
+        (
+            f"Window {w['t1'] - w['t0']:.0f} s, heights {w['height_start']} to "
+            f"{w['height_end']}; network ready after {run['ready_s']:.0f} s, run took "
+            f"{run['wall_s']:.0f} s."
+        )
+    ]
+    if run["teardown"]:
+        lines.append("Teardown: " + "; ".join(run["teardown"]) + ".")
+    if run["run_url"]:
+        lines.append(f"Raw data: artifacts of [this run]({run['run_url']}).")
+    return lines
+
+
+def fmt_value(value: float | None, unit: str) -> str:
+    if value is None:
+        return ""
+    return f"{fmt_num(value)} {unit}"
+
+
+def fmt_num(value: float | None) -> str:
+    if value is None:
+        return ""
+    if value == 0 or abs(value) >= 100:
+        return f"{value:.0f}"
+    return f"{value:.3g}"
+
+
+def fmt_bytes(value: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(value) < 1000:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1000
+    return f"{value:.1f} TB"
+
+
+def parse_prom(text: str) -> dict[str, float]:
+    out = {}
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.rpartition(" ")
+        try:
+            out[key] = float(value)
+        except ValueError:
+            continue
+    return out
+
+
+def read_json(path: Path) -> Any:
+    return json.loads(path.read_text())
+
+
+def write_json(path: Path, data: Any) -> None:
+    """Strict JSON: NaN and Infinity are not JSON and break readers of result.json."""
+    path.write_text(json.dumps(data, indent=2, allow_nan=False) + "\n")
+
+
+def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
+    with open(path) as f:
+        for line in f:
+            yield json.loads(line)
+
+
+def write_jsonl(path: Path, records: Iterator[dict[str, Any]]) -> None:
+    with open(path, "w") as f:
+        f.writelines(json.dumps(record, allow_nan=False) + "\n" for record in records)
