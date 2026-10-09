@@ -31,8 +31,8 @@
 <a href=#31 id=31 data-nosnippet>31</a>};
 <a href=#32 id=32 data-nosnippet>32</a>
 <a href=#33 id=33 data-nosnippet>33</a><span class="kw">use crate</span>::{
-<a href=#34 id=34 data-nosnippet>34</a>    SequencerApiVersion, SequencerContext, consensus_handle::ConsensusHandle, context::TaskList,
-<a href=#35 id=35 data-nosnippet>35</a>    state_signature::StateSigner,
+<a href=#34 id=34 data-nosnippet>34</a>    SequencerContext, consensus_handle::ConsensusHandle, context::TaskList,
+<a href=#35 id=35 data-nosnippet>35</a>    state_signature::StateSignatureMemStorage,
 <a href=#36 id=36 data-nosnippet>36</a>};
 <a href=#37 id=37 data-nosnippet>37</a>
 <a href=#38 id=38 data-nosnippet>38</a><span class="kw">pub type </span>NodeLightClient = LightClient&lt;SqliteStorage, FallbackClient&lt;QueryServiceClient&gt;&gt;;
@@ -72,7 +72,7 @@
 <a href=#72 id=72 data-nosnippet>72</a>    <span class="kw">fn </span>node_state(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; NodeState;
 <a href=#73 id=73 data-nosnippet>73</a>    <span class="kw">fn </span>network_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; NetworkConfig&lt;SeqTypes&gt;;
 <a href=#74 id=74 data-nosnippet>74</a>    <span class="kw">fn </span>validator_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>ValidatorConfig&lt;SeqTypes&gt;&gt;;
-<a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">fn </span>state_signer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;RwLock&lt;StateSigner&lt;SequencerApiVersion&gt;&gt;&gt;&gt;;
+<a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">fn </span>state_signatures(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;RwLock&lt;StateSignatureMemStorage&gt;&gt;&gt;;
 <a href=#76 id=76 data-nosnippet>76</a>
 <a href=#77 id=77 data-nosnippet>77</a>    <span class="doccomment">/// A light client the node already runs, for the query service to fetch through.
 <a href=#78 id=78 data-nosnippet>78</a>    </span><span class="kw">fn </span>light_client(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;NodeLightClient&gt;&gt;;
@@ -187,8 +187,8 @@
 <a href=#187 id=187 data-nosnippet>187</a>        <span class="prelude-val">Some</span>(SequencerContext::validator_config(<span class="self">self</span>))
 <a href=#188 id=188 data-nosnippet>188</a>    }
 <a href=#189 id=189 data-nosnippet>189</a>
-<a href=#190 id=190 data-nosnippet>190</a>    <span class="kw">fn </span>state_signer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;RwLock&lt;StateSigner&lt;SequencerApiVersion&gt;&gt;&gt;&gt; {
-<a href=#191 id=191 data-nosnippet>191</a>        <span class="prelude-val">Some</span>(SequencerContext::state_signer(<span class="self">self</span>))
+<a href=#190 id=190 data-nosnippet>190</a>    <span class="kw">fn </span>state_signatures(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;RwLock&lt;StateSignatureMemStorage&gt;&gt;&gt; {
+<a href=#191 id=191 data-nosnippet>191</a>        <span class="prelude-val">Some</span>(SequencerContext::state_signatures(<span class="self">self</span>))
 <a href=#192 id=192 data-nosnippet>192</a>    }
 <a href=#193 id=193 data-nosnippet>193</a>
 <a href=#194 id=194 data-nosnippet>194</a>    <span class="kw">fn </span>light_client(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;NodeLightClient&gt;&gt; {

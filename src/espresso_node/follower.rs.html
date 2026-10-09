@@ -69,7 +69,7 @@
 <a href=#69 id=69 data-nosnippet>69</a>    context::TaskList,
 <a href=#70 id=70 data-nosnippet>70</a>    init_node_state, load_or_fetch_network_config,
 <a href=#71 id=71 data-nosnippet>71</a>    startup_catchup::bootstrap_epoch_window,
-<a href=#72 id=72 data-nosnippet>72</a>    state_signature::StateSigner,
+<a href=#72 id=72 data-nosnippet>72</a>    state_signature::StateSignatureMemStorage,
 <a href=#73 id=73 data-nosnippet>73</a>};
 <a href=#74 id=74 data-nosnippet>74</a>
 <a href=#75 id=75 data-nosnippet>75</a><span class="attr">#[derive(Clone, Debug)]
@@ -363,7 +363,7 @@
 <a href=#363 id=363 data-nosnippet>363</a>        <span class="prelude-val">None
 <a href=#364 id=364 data-nosnippet>364</a>    </span>}
 <a href=#365 id=365 data-nosnippet>365</a>
-<a href=#366 id=366 data-nosnippet>366</a>    <span class="kw">fn </span>state_signer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;RwLock&lt;StateSigner&lt;SequencerApiVersion&gt;&gt;&gt;&gt; {
+<a href=#366 id=366 data-nosnippet>366</a>    <span class="kw">fn </span>state_signatures(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;RwLock&lt;StateSignatureMemStorage&gt;&gt;&gt; {
 <a href=#367 id=367 data-nosnippet>367</a>        <span class="prelude-val">None
 <a href=#368 id=368 data-nosnippet>368</a>    </span>}
 <a href=#369 id=369 data-nosnippet>369</a>
