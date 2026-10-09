@@ -3636,6 +3636,7 @@ mod test {
         ValidatorConfig,
         addr::NetAddr,
         data::EpochNumber,
+        epoch_membership::EpochMembershipCoordinator,
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
         traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
@@ -6311,55 +6312,14 @@ mod test {
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        let node_state = network.server.node_state();
-        let coordinator = node_state.coordinator;
-
-        let mut expected_total_distributed = U256::ZERO;
-
-        let mut leaves = client
-            .socket("availability/stream/leaves/0")
-            .subscribe::<LeafQueryData<SeqTypes>>()
-            .await
-            .unwrap();
-
-        while let Some(leaf) = leaves.next().await {
-            let leaf = leaf.unwrap();
-            let header = leaf.header();
-            let height = header.height();
-
-            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
-
-            let is_epoch_last_block = height % EPOCH_HEIGHT == 0;
-
-            if epoch <= 3 {
-                continue;
-            }
-
-            let header_total_distributed = header
-                .total_reward_distributed()
-                .expect("total_reward_distributed should exist");
-
-            if is_epoch_last_block {
-                let prev_epoch = epoch - 1;
-                let prev_epoch_number = EpochNumber::new(prev_epoch);
-                let membership = coordinator.membership();
-                let prev_block_reward = membership
-                    .epoch_block_reward(prev_epoch_number)
-                    .expect("epoch block reward should exist");
-
-                let epoch_total = prev_block_reward.0 * U256::from(EPOCH_HEIGHT);
-                expected_total_distributed += epoch_total;
-            }
-
-            assert_eq!(
-                header_total_distributed.0, expected_total_distributed,
-                "total_reward_distributed mismatch at height {height}"
-            );
-
-            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
-                break;
-            }
-        }
+        let coordinator = network.server.node_state().coordinator;
+        assert_epoch_reward_totals(
+            &client,
+            &coordinator,
+            EPOCH_HEIGHT,
+            NUM_EPOCHS * EPOCH_HEIGHT,
+        )
+        .await;
 
         Ok(())
     }
@@ -6392,12 +6352,42 @@ mod test {
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        let node_state = network.server.node_state();
-        let coordinator = node_state.coordinator;
+        let coordinator = network.server.node_state().coordinator;
+        assert_epoch_leader_counts(
+            &client,
+            &coordinator,
+            EPOCH_HEIGHT,
+            NUM_EPOCHS * EPOCH_HEIGHT,
+        )
+        .await;
 
-        // Track expected leader counts by address
-        let mut expected_counts: HashMap<Address, u16> = HashMap::new();
+        Ok(())
+    }
 
+    /// Mainnet's 0.5 blocks were produced by legacy consensus, so a replayed 0.5 chain is what
+    /// keeps checking their reward totals and leader counts.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_epoch_rewards_and_leader_counts() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v5")?;
+        let replay = chain.replay().await?;
+        let epoch_height = chain.genesis.epoch_height.unwrap();
+        let coordinator = replay.node.node_state().coordinator;
+
+        assert_epoch_reward_totals(&replay.client, &coordinator, epoch_height, chain.tip()).await;
+        assert_epoch_leader_counts(&replay.client, &coordinator, epoch_height, chain.tip()).await;
+        Ok(())
+    }
+
+    /// Checks `total_reward_distributed` in every header up to `last`: nothing is distributed in
+    /// the first three epochs, and each later epoch's last block adds the previous epoch's block
+    /// reward for every block of an epoch.
+    async fn assert_epoch_reward_totals(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        epoch_height: u64,
+        last: u64,
+    ) {
+        let mut expected_total_distributed = U256::ZERO;
         let mut leaves = client
             .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
@@ -6408,9 +6398,50 @@ mod test {
             let leaf = leaf.unwrap();
             let header = leaf.header();
             let height = header.height();
-            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
-            let epoch_number = EpochNumber::new(epoch);
+            let epoch = epoch_from_block_number(height, epoch_height);
+            let header_total_distributed = header
+                .total_reward_distributed()
+                .expect("total_reward_distributed should exist");
 
+            if epoch > 3 && height % epoch_height == 0 {
+                let prev_block_reward = coordinator
+                    .membership()
+                    .epoch_block_reward(EpochNumber::new(epoch - 1))
+                    .expect("epoch block reward should exist");
+                expected_total_distributed += prev_block_reward.0 * U256::from(epoch_height);
+            }
+
+            assert_eq!(
+                header_total_distributed.0, expected_total_distributed,
+                "total_reward_distributed mismatch at height {height}"
+            );
+
+            if height >= last {
+                break;
+            }
+        }
+    }
+
+    /// Checks that each header's `leader_counts` up to `last`, from the third epoch on, counts the
+    /// leaders of the epoch's blocks so far.
+    async fn assert_epoch_leader_counts(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        epoch_height: u64,
+        last: u64,
+    ) {
+        let mut expected_counts: HashMap<Address, u16> = HashMap::new();
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+            let epoch = epoch_from_block_number(height, epoch_height);
             if epoch <= 2 {
                 continue;
             }
@@ -6418,56 +6449,47 @@ mod test {
             let header_leader_counts = header
                 .leader_counts()
                 .expect("V5+ header must have leader_counts");
-
-            // Reset counts at the start of a new epoch
-            let is_epoch_start = (height - 1) % EPOCH_HEIGHT == 0;
-            if is_epoch_start {
+            if (height - 1) % epoch_height == 0 {
                 expected_counts.clear();
             }
 
-            // Determine the leader for this block and track by address.
-            let view_number = leaf.leaf().view_number();
             let snapshot = coordinator
                 .membership()
-                .snapshot(epoch_number)
+                .snapshot(EpochNumber::new(epoch))
                 .expect("committee for epoch_number");
-            let leader = snapshot.leader(view_number).expect("leader should exist");
+            let leader = snapshot
+                .leader(leaf.leaf().view_number())
+                .expect("leader should exist");
             let leader_address = snapshot
                 .validator_config(&leader)
                 .expect("leader should have an address")
                 .account;
-
-            let validator_leader_counts =
-                ValidatorLeaderCounts::new(&snapshot, *header_leader_counts)
-                    .expect("ValidatorLeaderCounts should build from header leader_counts");
-
             *expected_counts.entry(leader_address).or_insert(0) += 1;
 
-            let header_counts: HashMap<Address, u16> = validator_leader_counts
-                .active_leaders()
-                .map(|(v, count)| (v.account, count))
-                .collect();
-
+            let header_counts: HashMap<Address, u16> =
+                ValidatorLeaderCounts::new(&snapshot, *header_leader_counts)
+                    .expect("ValidatorLeaderCounts should build from header leader_counts")
+                    .active_leaders()
+                    .map(|(v, count)| (v.account, count))
+                    .collect();
             assert_eq!(
                 header_counts, expected_counts,
                 "leader_counts mismatch at height {height} (epoch {epoch})"
             );
 
-            if height % EPOCH_HEIGHT == 0 {
+            if height % epoch_height == 0 {
                 let total: u16 = expected_counts.values().sum();
                 assert_eq!(
-                    total, EPOCH_HEIGHT as u16,
-                    "total leader_counts at epoch boundary should equal EPOCH_HEIGHT at height \
-                     {height}"
+                    total, epoch_height as u16,
+                    "total leader_counts at epoch boundary should equal the epoch height at \
+                     height {height}"
                 );
             }
 
-            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
+            if height >= last {
                 break;
             }
         }
-
-        Ok(())
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
