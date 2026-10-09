@@ -3600,7 +3600,7 @@ mod test {
         StateCertQueryDataV2, TEST_UPGRADE, ValidatedState, ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
-        v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
+        v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events,
     };
@@ -3611,7 +3611,7 @@ mod test {
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::{
-        reward::RewardClaimInput,
+        reward::{RewardAuthData, RewardClaimInput, RewardProofSiblings},
         sol_types::{EspToken, StakeTableV3},
         stake_table::StakeTableContractVersion,
     };
@@ -3636,6 +3636,7 @@ mod test {
         ValidatorConfig,
         addr::NetAddr,
         data::EpochNumber,
+        epoch_membership::EpochMembershipCoordinator,
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
         traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
@@ -3665,7 +3666,10 @@ mod test {
     use test_utils::reserve_tcp_port;
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
-    use versions::{LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
+    use versions::{
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION,
+        Upgrade,
+    };
 
     use self::{
         data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
@@ -4924,6 +4928,218 @@ mod test {
             Err(err) if err.status == StatusCode::NOT_FOUND => U256::ZERO,
             Err(err) => panic!("reward balance of {address} at {height}: {err}"),
         }
+    }
+
+    /// From 0.3 to 0.5 every block paid its leader's commission and delegators. Only legacy
+    /// consensus produced such blocks, so the replayed v4 chain is what checks mainnet's: each
+    /// header's `total_reward_distributed`, and every staker's balance in the reward tree, match
+    /// what the block's leader was owed. Its commissions change in epoch 2.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_block_rewards() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v4")?;
+        let replay = chain.replay().await?;
+        let client = &replay.client;
+        let epoch_height = chain.genesis.epoch_height.unwrap();
+        let coordinator = replay.node.node_state().coordinator;
+        let membership = coordinator.membership();
+
+        let mut expected = HashMap::<Address, U256>::new();
+        let mut total_distributed = U256::ZERO;
+        let mut validators_by_epoch = HashMap::<u64, AuthenticatedValidatorMap>::new();
+        for recorded in &chain.blocks[1..] {
+            let leaf = recorded.leaf.leaf();
+            let header = leaf.block_header();
+            let height = header.height();
+            let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                validators_by_epoch.entry(*epoch)
+            {
+                entry.insert(
+                    client
+                        .get(&format!("node/validators/{epoch}"))
+                        .send()
+                        .await?,
+                );
+            }
+            let validators = &validators_by_epoch[&*epoch];
+
+            match membership.epoch_block_reward(epoch) {
+                None => ensure!(*epoch <= 2, "epoch {epoch} pays no block reward"),
+                Some(block_reward) => {
+                    let snapshot = membership.snapshot(epoch).context("snapshot")?;
+                    let leader = snapshot.leader(leaf.view_number()).expect("leader");
+                    let account = snapshot
+                        .validator_config(&leader)
+                        .expect("leader config")
+                        .account;
+                    let leader = validators.get(&account).context("leader not found")?;
+                    pay_block_reward(&mut expected, leader, block_reward, header)?;
+                    total_distributed += block_reward.0;
+                },
+            }
+            ensure!(
+                header.total_reward_distributed().unwrap().0 == total_distributed,
+                "total_reward_distributed at {height}"
+            );
+            assert_stakers_balances(client, height, validators, &expected).await?;
+        }
+        ensure!(!total_distributed.is_zero(), "the chain paid no rewards");
+        Ok(())
+    }
+
+    /// Adds what one block pays `leader`'s commission and delegators to `balances`.
+    fn pay_block_reward(
+        balances: &mut HashMap<Address, U256>,
+        leader: &AuthenticatedValidator<PubKey>,
+        block_reward: RewardAmount,
+        header: &Header,
+    ) -> anyhow::Result<()> {
+        let delegated: U256 = leader.delegators.values().cloned().sum();
+        ensure!(delegated == leader.stake, "delegations add up to the stake");
+
+        let rewards = RewardDistributor::new(
+            leader.clone(),
+            block_reward,
+            header.total_reward_distributed().unwrap(),
+        )
+        .compute_rewards()?;
+        let commission =
+            U256::from(leader.commission) * block_reward.0 / U256::from(COMMISSION_BASIS_POINTS);
+        ensure!(
+            rewards.leader_commission().0 - commission <= U256::from(10),
+            "commission {} is not {commission}",
+            rewards.leader_commission().0
+        );
+
+        for (address, amount) in rewards.delegators().clone() {
+            *balances.entry(address).or_default() += amount.0;
+        }
+        *balances.entry(leader.account).or_default() += rewards.leader_commission().0;
+        Ok(())
+    }
+
+    /// Checks every validator's and delegator's balance in the v2 reward tree at `height`.
+    async fn assert_stakers_balances(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        height: u64,
+        validators: &AuthenticatedValidatorMap,
+        expected: &HashMap<Address, U256>,
+    ) -> anyhow::Result<()> {
+        let stakers = validators
+            .values()
+            .flat_map(|v| v.delegators.keys().copied().chain([v.account]))
+            .chain(expected.keys().copied())
+            .collect::<HashSet<_>>();
+        for staker in stakers {
+            let balance = match client
+                .get::<RewardAmount>(&format!("reward-state-v2/reward-balance/{height}/{staker}"))
+                .send()
+                .await
+            {
+                Ok(amount) => Some(amount.0),
+                // Not in the tree yet.
+                Err(err) if err.status == StatusCode::NOT_FOUND => None,
+                Err(err) => bail!("reward balance of {staker} at {height}: {err}"),
+            };
+            ensure!(
+                balance == expected.get(&staker).copied(),
+                "balance of {staker} at {height}: {balance:?}, expected {:?}",
+                expected.get(&staker)
+            );
+        }
+        Ok(())
+    }
+
+    /// Stakers claim rewards earned before 0.5 with proofs against those blocks' v2 reward
+    /// roots. On the replayed v4 chain every staker's proof, claim input and page entry must
+    /// agree with the header, and each epoch's block reward with the stake table.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_reward_queries() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v4")?;
+        let replay = chain.replay().await?;
+        let client = &replay.client;
+        let tip = chain.tip();
+        let root = chain
+            .blocks
+            .last()
+            .unwrap()
+            .leaf
+            .header()
+            .reward_merkle_tree_root();
+        let root = root
+            .right()
+            .context("v4 headers commit to the v2 reward tree")?;
+
+        let stakers = all_stakers(client, &chain).await?;
+        let mut balances = vec![];
+        for staker in stakers {
+            let res: RewardAccountQueryDataV2 = client
+                .get(&format!("reward-state-v2/proof/{tip}/{staker}"))
+                .send()
+                .await?;
+            ensure!(res.proof.verify(&root)? == res.balance, "proof of {staker}");
+            if res.balance.is_zero() {
+                continue;
+            }
+            let claim: RewardClaimInput = client
+                .get(&format!(
+                    "reward-state-v2/reward-claim-input/{tip}/{staker}"
+                ))
+                .send()
+                .await?;
+            ensure!(
+                claim.lifetime_rewards == res.balance,
+                "claim of {staker} pays its proven balance"
+            );
+            // The contract rebuilds the root from these siblings, so they must be the proof's.
+            let siblings: RewardProofSiblings = res.proof.clone().try_into()?;
+            ensure!(
+                RewardAuthData::try_from(claim.auth_data)? == RewardAuthData::new(siblings),
+                "claim of {staker} carries its proof"
+            );
+            balances.push((RewardAccountV2(staker), RewardAmount(res.balance)));
+        }
+        ensure!(!balances.is_empty(), "the chain paid no rewards");
+
+        balances.sort_by_key(|(account, _)| std::cmp::Reverse(*account));
+        let page: Vec<(RewardAccountV2, RewardAmount)> = client
+            .get(&format!("reward-state-v2/reward-amounts/{tip}/0/10000"))
+            .send()
+            .await?;
+        ensure!(page == balances, "reward page {page:?}");
+
+        let coordinator = replay.node.node_state().coordinator;
+        for epoch in 3..=epoch_from_block_number(tip, chain.genesis.epoch_height.unwrap()) {
+            let reward: Option<RewardAmount> = client
+                .get(&format!("node/block-reward/epoch/{epoch}"))
+                .send()
+                .await?;
+            let expected = coordinator
+                .membership()
+                .epoch_block_reward(EpochNumber::new(epoch));
+            ensure!(reward == expected, "block reward of epoch {epoch}");
+        }
+        Ok(())
+    }
+
+    /// Every validator and delegator of every epoch of `chain`.
+    async fn all_stakers(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        chain: &LegacyChain,
+    ) -> anyhow::Result<HashSet<Address>> {
+        let last_epoch = epoch_from_block_number(chain.tip(), chain.genesis.epoch_height.unwrap());
+        let mut stakers = HashSet::new();
+        for epoch in 1..=last_epoch {
+            let validators: AuthenticatedValidatorMap = client
+                .get(&format!("node/validators/{epoch}"))
+                .send()
+                .await?;
+            for v in validators.values() {
+                stakers.insert(v.account);
+                stakers.extend(v.delegators.keys());
+            }
+        }
+        Ok(stakers)
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -6311,55 +6527,14 @@ mod test {
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        let node_state = network.server.node_state();
-        let coordinator = node_state.coordinator;
-
-        let mut expected_total_distributed = U256::ZERO;
-
-        let mut leaves = client
-            .socket("availability/stream/leaves/0")
-            .subscribe::<LeafQueryData<SeqTypes>>()
-            .await
-            .unwrap();
-
-        while let Some(leaf) = leaves.next().await {
-            let leaf = leaf.unwrap();
-            let header = leaf.header();
-            let height = header.height();
-
-            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
-
-            let is_epoch_last_block = height % EPOCH_HEIGHT == 0;
-
-            if epoch <= 3 {
-                continue;
-            }
-
-            let header_total_distributed = header
-                .total_reward_distributed()
-                .expect("total_reward_distributed should exist");
-
-            if is_epoch_last_block {
-                let prev_epoch = epoch - 1;
-                let prev_epoch_number = EpochNumber::new(prev_epoch);
-                let membership = coordinator.membership();
-                let prev_block_reward = membership
-                    .epoch_block_reward(prev_epoch_number)
-                    .expect("epoch block reward should exist");
-
-                let epoch_total = prev_block_reward.0 * U256::from(EPOCH_HEIGHT);
-                expected_total_distributed += epoch_total;
-            }
-
-            assert_eq!(
-                header_total_distributed.0, expected_total_distributed,
-                "total_reward_distributed mismatch at height {height}"
-            );
-
-            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
-                break;
-            }
-        }
+        let coordinator = network.server.node_state().coordinator;
+        assert_epoch_reward_totals(
+            &client,
+            &coordinator,
+            EPOCH_HEIGHT,
+            NUM_EPOCHS * EPOCH_HEIGHT,
+        )
+        .await;
 
         Ok(())
     }
@@ -6392,12 +6567,42 @@ mod test {
         let client: Client<ClientErr, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
-        let node_state = network.server.node_state();
-        let coordinator = node_state.coordinator;
+        let coordinator = network.server.node_state().coordinator;
+        assert_epoch_leader_counts(
+            &client,
+            &coordinator,
+            EPOCH_HEIGHT,
+            NUM_EPOCHS * EPOCH_HEIGHT,
+        )
+        .await;
 
-        // Track expected leader counts by address
-        let mut expected_counts: HashMap<Address, u16> = HashMap::new();
+        Ok(())
+    }
 
+    /// Mainnet's 0.5 blocks were produced by legacy consensus, so a replayed 0.5 chain is what
+    /// keeps checking their reward totals and leader counts.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_epoch_rewards_and_leader_counts() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v5")?;
+        let replay = chain.replay().await?;
+        let epoch_height = chain.genesis.epoch_height.unwrap();
+        let coordinator = replay.node.node_state().coordinator;
+
+        assert_epoch_reward_totals(&replay.client, &coordinator, epoch_height, chain.tip()).await;
+        assert_epoch_leader_counts(&replay.client, &coordinator, epoch_height, chain.tip()).await;
+        Ok(())
+    }
+
+    /// Checks `total_reward_distributed` in every header up to `last`: nothing is distributed in
+    /// the first three epochs, and each later epoch's last block adds the previous epoch's block
+    /// reward for every block of an epoch.
+    async fn assert_epoch_reward_totals(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        epoch_height: u64,
+        last: u64,
+    ) {
+        let mut expected_total_distributed = U256::ZERO;
         let mut leaves = client
             .socket("availability/stream/leaves/0")
             .subscribe::<LeafQueryData<SeqTypes>>()
@@ -6408,9 +6613,50 @@ mod test {
             let leaf = leaf.unwrap();
             let header = leaf.header();
             let height = header.height();
-            let epoch = epoch_from_block_number(height, EPOCH_HEIGHT);
-            let epoch_number = EpochNumber::new(epoch);
+            let epoch = epoch_from_block_number(height, epoch_height);
+            let header_total_distributed = header
+                .total_reward_distributed()
+                .expect("total_reward_distributed should exist");
 
+            if epoch > 3 && height % epoch_height == 0 {
+                let prev_block_reward = coordinator
+                    .membership()
+                    .epoch_block_reward(EpochNumber::new(epoch - 1))
+                    .expect("epoch block reward should exist");
+                expected_total_distributed += prev_block_reward.0 * U256::from(epoch_height);
+            }
+
+            assert_eq!(
+                header_total_distributed.0, expected_total_distributed,
+                "total_reward_distributed mismatch at height {height}"
+            );
+
+            if height >= last {
+                break;
+            }
+        }
+    }
+
+    /// Checks that each header's `leader_counts` up to `last`, from the third epoch on, counts the
+    /// leaders of the epoch's blocks so far.
+    async fn assert_epoch_leader_counts(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+        epoch_height: u64,
+        last: u64,
+    ) {
+        let mut expected_counts: HashMap<Address, u16> = HashMap::new();
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .unwrap();
+
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.unwrap();
+            let header = leaf.header();
+            let height = header.height();
+            let epoch = epoch_from_block_number(height, epoch_height);
             if epoch <= 2 {
                 continue;
             }
@@ -6418,56 +6664,47 @@ mod test {
             let header_leader_counts = header
                 .leader_counts()
                 .expect("V5+ header must have leader_counts");
-
-            // Reset counts at the start of a new epoch
-            let is_epoch_start = (height - 1) % EPOCH_HEIGHT == 0;
-            if is_epoch_start {
+            if (height - 1) % epoch_height == 0 {
                 expected_counts.clear();
             }
 
-            // Determine the leader for this block and track by address.
-            let view_number = leaf.leaf().view_number();
             let snapshot = coordinator
                 .membership()
-                .snapshot(epoch_number)
+                .snapshot(EpochNumber::new(epoch))
                 .expect("committee for epoch_number");
-            let leader = snapshot.leader(view_number).expect("leader should exist");
+            let leader = snapshot
+                .leader(leaf.leaf().view_number())
+                .expect("leader should exist");
             let leader_address = snapshot
                 .validator_config(&leader)
                 .expect("leader should have an address")
                 .account;
-
-            let validator_leader_counts =
-                ValidatorLeaderCounts::new(&snapshot, *header_leader_counts)
-                    .expect("ValidatorLeaderCounts should build from header leader_counts");
-
             *expected_counts.entry(leader_address).or_insert(0) += 1;
 
-            let header_counts: HashMap<Address, u16> = validator_leader_counts
-                .active_leaders()
-                .map(|(v, count)| (v.account, count))
-                .collect();
-
+            let header_counts: HashMap<Address, u16> =
+                ValidatorLeaderCounts::new(&snapshot, *header_leader_counts)
+                    .expect("ValidatorLeaderCounts should build from header leader_counts")
+                    .active_leaders()
+                    .map(|(v, count)| (v.account, count))
+                    .collect();
             assert_eq!(
                 header_counts, expected_counts,
                 "leader_counts mismatch at height {height} (epoch {epoch})"
             );
 
-            if height % EPOCH_HEIGHT == 0 {
+            if height % epoch_height == 0 {
                 let total: u16 = expected_counts.values().sum();
                 assert_eq!(
-                    total, EPOCH_HEIGHT as u16,
-                    "total leader_counts at epoch boundary should equal EPOCH_HEIGHT at height \
-                     {height}"
+                    total, epoch_height as u16,
+                    "total leader_counts at epoch boundary should equal the epoch height at \
+                     height {height}"
                 );
             }
 
-            if height >= NUM_EPOCHS * EPOCH_HEIGHT {
+            if height >= last {
                 break;
             }
         }
-
-        Ok(())
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -10710,10 +10947,49 @@ mod test {
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
 
-        // Get the state cert for the epoch 3 to 5
-        for i in 3..=TEST_EPOCHS {
-            // v2
+        assert_state_certs(&client, 3..=TEST_EPOCHS, TEST_EPOCH_HEIGHT).await;
+    }
 
+    /// Light client provers and catching-up nodes still fetch the state certificates of
+    /// mainnet's epochs before 0.6, whose blocks only legacy consensus produced.
+    #[rstest]
+    #[case::v3("v3")]
+    #[case::v4("v4")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_state_certs(#[case] chain: &str) -> anyhow::Result<()> {
+        let chain = LegacyChain::load(chain)?;
+        let replay = chain.replay().await?;
+        let (last_epoch, _) = chain.state_certs.last().unwrap();
+        assert_state_certs(
+            &replay.client,
+            3..=*last_epoch,
+            chain.genesis.epoch_height.unwrap(),
+        )
+        .await;
+
+        let peers = StatePeers::<SequencerApiVersion>::from_urls(
+            vec![replay.url.clone()],
+            Default::default(),
+            Duration::from_secs(2),
+            &NoMetrics,
+        );
+        for (epoch, cert) in &chain.state_certs {
+            ensure!(
+                peers.try_fetch_state_cert(0, *epoch).await? == *cert,
+                "catchup of the epoch {epoch} state certificate"
+            );
+        }
+        Ok(())
+    }
+
+    /// Checks the v1 and v2 state certificates of `epochs` agree, and that each certifies the
+    /// block halfway through the epoch before it, with that block's auth root.
+    async fn assert_state_certs(
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+        epochs: std::ops::RangeInclusive<u64>,
+        epoch_height: u64,
+    ) {
+        for i in epochs {
             let state_query_data_v2 = client
                 .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{i}"))
                 .send()
@@ -10724,7 +11000,7 @@ mod test {
             assert_eq!(state_cert_v2.epoch.u64(), i);
             assert_eq!(
                 state_cert_v2.light_client_state.block_height,
-                i * TEST_EPOCH_HEIGHT - 5
+                i * epoch_height - 5
             );
             let block_height = state_cert_v2.light_client_state.block_height;
 
@@ -10734,14 +11010,17 @@ mod test {
                 .await
                 .unwrap();
 
-            let auth_root = state_cert_v2.auth_root;
-            let header_auth_root = header.auth_root().unwrap();
-            if auth_root.is_zero() || header_auth_root.is_zero() {
-                panic!("auth root shouldn't be zero");
-            }
-            assert_eq!(auth_root, header_auth_root, "auth root mismatch");
+            // Headers commit to an auth root from 0.4 on.
+            if header.version() >= DRB_AND_HEADER_UPGRADE_VERSION {
+                let auth_root = state_cert_v2.auth_root;
+                let header_auth_root = header.auth_root().unwrap();
+                if auth_root.is_zero() || header_auth_root.is_zero() {
+                    panic!("auth root shouldn't be zero");
+                }
 
-            // v1
+                assert_eq!(auth_root, header_auth_root, "auth root mismatch");
+            }
+
             let state_query_data_v1 = client
                 .get::<StateCertQueryDataV1<SeqTypes>>(&format!("availability/state-cert/{i}"))
                 .send()
@@ -11074,6 +11353,67 @@ mod test {
         assert_eq!(v.x25519_key, Some(x25519_key));
         assert_eq!(v.p2p_addr, Some(p2p_addr));
 
+        Ok(())
+    }
+
+    /// Mainnet's validators set their x25519 keys and p2p addresses with the V3 stake table
+    /// contract, after epochs run on V1 and V2. On the replayed v4 chain, whose contract did the
+    /// same, the indexer shows no network config before the upgrade and the update after it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_network_config_update() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v4")?;
+        let update = chain
+            .network_config_update
+            .clone()
+            .context("the v4 recording registered a network config")?;
+        let replay = chain.replay().await?;
+        let last_epoch = epoch_from_block_number(chain.tip(), chain.genesis.epoch_height.unwrap());
+        let validators = |epoch: u64| {
+            let client = replay.client.clone();
+            async move {
+                client
+                    .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
+                    .send()
+                    .await
+            }
+        };
+
+        // The update reaches the stake table a few epochs after the V3 upgrade in epoch 4.
+        // Until then no validator has a network config; from then on exactly the recorded
+        // validator has exactly the recorded one.
+        let mut first_seen = None;
+        // The stake table takes effect in epoch 3; before that the chain has no validators.
+        for epoch in 3..=last_epoch {
+            let validators = validators(epoch).await?;
+            ensure!(!validators.is_empty(), "epoch {epoch} has validators");
+            let configured = validators
+                .values()
+                .filter(|v| v.x25519_key.is_some() || v.p2p_addr.is_some())
+                .collect::<Vec<_>>();
+            if first_seen.is_none() {
+                if configured.is_empty() {
+                    continue;
+                }
+                first_seen = Some(epoch);
+            }
+            let [v] = configured.as_slice() else {
+                bail!(
+                    "epoch {epoch}: {} validators have a network config",
+                    configured.len()
+                );
+            };
+            ensure!(
+                v.account == update.validator
+                    && v.x25519_key.as_ref() == Some(&update.x25519_key)
+                    && v.p2p_addr.as_ref() == Some(&update.p2p_addr),
+                "epoch {epoch} shows the recorded network config update, not {v:?}"
+            );
+        }
+        let first_seen = first_seen.context("no epoch shows the network config update")?;
+        ensure!(
+            first_seen > 4,
+            "a V1 or V2 contract registers no network config, but epoch {first_seen} has one"
+        );
         Ok(())
     }
 
@@ -12394,7 +12734,8 @@ mod test {
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
 
         network.stop_consensus().await;
-        let height = network.server.decided_leaf().await.height();
+        // Reward trees are stored only at epoch boundaries, the only blocks that change them.
+        let height = network.server.decided_leaf().await.height() / EPOCH_HEIGHT * EPOCH_HEIGHT;
         wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
         let err = client
@@ -12563,6 +12904,89 @@ mod test {
         network.server.shut_down().await;
     }
 
+    /// Rollups still fetch their namespaces from mainnet blocks before 0.6, proven with ADVZ
+    /// before 0.3 and AvidM after. The first blocks of each version of a replayed chain must
+    /// prove each namespace's transactions, and no legacy block has a cert2.
+    #[rstest]
+    #[case::v2_v3("v2-v3")]
+    #[case::v4("v4")]
+    #[case::v5("v5")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_namespace_proofs(#[case] chain: &str) -> anyhow::Result<()> {
+        let chain = LegacyChain::load(chain)?;
+        let replay = chain.replay().await?;
+        let versions = chain.blocks[1..]
+            .iter()
+            .map(|block| block.leaf.header().version())
+            .collect::<HashSet<_>>();
+        // Proving every block of the long upgrade chain takes too long; the first blocks of each
+        // version cover each scheme.
+        let sampled = versions.iter().flat_map(|version| {
+            chain
+                .blocks
+                .iter()
+                .filter(move |block| block.leaf.header().version() == *version)
+                .take(25)
+        });
+        let mut proven = HashSet::new();
+        for recorded in sampled {
+            let header = recorded.leaf.header();
+            let height = header.height();
+            for ns in [101u64, 102].map(NamespaceId::from) {
+                let res: NamespaceProofQueryData = replay
+                    .client
+                    .get(&format!("availability/block/{height}/namespace/{ns}"))
+                    .send()
+                    .await?;
+                let Some(proof) = &res.proof else {
+                    ensure!(
+                        header.ns_table().find_ns_id(&ns).is_none() && res.transactions.is_empty(),
+                        "no proof of namespace {ns} in block {height}"
+                    );
+                    continue;
+                };
+                assert_ns_proof_matches_version(proof, header.version());
+                let (txs, proven_ns) = proof
+                    .verify(
+                        header.ns_table(),
+                        &header.payload_commitment(),
+                        recorded.vid_common.common(),
+                    )
+                    .with_context(|| format!("namespace {ns} of block {height}"))?;
+                ensure!(
+                    proven_ns == ns && !txs.is_empty() && txs == res.transactions,
+                    "namespace {ns} of block {height} proves its transactions"
+                );
+                proven.insert(header.version());
+            }
+
+            let cert2 = replay
+                .client
+                .get::<serde_json::Value>(&format!("availability/cert2/{height}"))
+                .send()
+                .await;
+            ensure!(
+                matches!(&cert2, Err(err) if err.status == StatusCode::NOT_FOUND),
+                "legacy block {height} has a cert2: {cert2:?}"
+            );
+        }
+        ensure!(proven == versions, "proved {proven:?} of {versions:?}");
+        Ok(())
+    }
+
+    /// ADVZ proves namespaces before 0.3, AvidM until 0.6 and AvidmGf2 from then on.
+    fn assert_ns_proof_matches_version(proof: &NsProof, version: Version) {
+        match proof {
+            NsProof::V0(..) => assert!(version < EPOCH_VERSION, "{version}"),
+            NsProof::V1(..) => assert!(
+                (EPOCH_VERSION..NEW_PROTOCOL_VERSION).contains(&version),
+                "{version}"
+            ),
+            NsProof::V2(..) => assert!(version >= NEW_PROTOCOL_VERSION, "{version}"),
+            NsProof::V1IncorrectEncoding(..) => panic!("honest blocks are encoded correctly"),
+        }
+    }
+
     /// Verify the light client leaf, header, and payload proofs at each height
     /// against the ground truth captured from the availability streams.
     ///
@@ -12652,14 +13076,11 @@ mod test {
     /// Check the light client stake table endpoint: replaying `first_epoch + 2`
     /// reproduces the validator set loaded from storage, and an earlier epoch
     /// is a `BAD_REQUEST`.
-    async fn check_light_client_stake_table<N, P>(
+    async fn check_light_client_stake_table(
         client: &Client<ClientErr, StaticVersion<0, 1>>,
-        server: &SequencerContext<N, P>,
+        storage: &impl SequencerPersistence,
         first_epoch: EpochNumber,
-    ) where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
+    ) {
         let events: Vec<StakeTableEvent> = client
             .get(&format!("light-client/stake-table/{}", first_epoch + 2))
             .send()
@@ -12671,8 +13092,7 @@ mod test {
         }
         assert_eq!(
             state_from_events.into_validators(),
-            server
-                .persistence()
+            storage
                 .load_all_validators(first_epoch + 2, 0, 1_000_000)
                 .await
                 .unwrap()
@@ -12819,7 +13239,51 @@ mod test {
             EPOCH_HEIGHT,
         )
         .await;
-        check_light_client_stake_table(&client, &network.server, first_epoch).await;
+        check_light_client_stake_table(&client, &*network.server.persistence(), first_epoch).await;
+    }
+
+    /// Mainnet ran without epochs until it upgraded to 0.3. Light clients still prove its leaves
+    /// from before the upgrade, across it and across the epoch that first used the stake table,
+    /// all produced by legacy consensus.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_light_client_completeness() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v2-v3")?;
+        let replay = chain.replay().await?;
+        let epoch_height = chain.genesis.epoch_height.unwrap();
+        let leaves: Vec<_> = chain.blocks.iter().map(|b| b.leaf.clone()).collect();
+        let blocks: Vec<_> = chain.blocks.iter().map(|b| b.block.clone()).collect();
+
+        let upgraded = leaves
+            .iter()
+            .find(|leaf| leaf.header().version() >= EPOCH_VERSION)
+            .context("the chain upgrades to 0.3")?;
+        let upgrade_height = upgraded.height();
+        let first_epoch = upgraded.leaf().epoch(epoch_height).unwrap();
+        let epoch_change = |epoch: EpochNumber| {
+            leaves
+                .iter()
+                .find(|leaf| leaf.leaf().epoch(epoch_height).is_some_and(|e| e > epoch))
+                .map(|leaf| leaf.height())
+                .context("the chain changes epoch")
+        };
+        let epoch_heights = [
+            epoch_change(first_epoch + 1)?,
+            epoch_change(first_epoch + 2)?,
+        ];
+        let max_block = epoch_heights[1] + 1;
+        ensure!(
+            max_block < chain.tip(),
+            "a header proof needs the block after it"
+        );
+
+        let heights = (0..=1)
+            .chain(upgrade_height - 1..=upgrade_height + 1)
+            .chain(epoch_heights[0] - 1..=epoch_heights[0] + 1)
+            .chain(epoch_heights[1] - 1..=max_block);
+        check_light_client_proofs(&replay.client, &leaves, &blocks, heights, epoch_height).await;
+        check_light_client_stake_table(&replay.client, &replay.persistence().await?, first_epoch)
+            .await;
+        Ok(())
     }
 
     /// Test that `fetch_leaf` returns a leaf with exactly the requested block height.

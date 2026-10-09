@@ -5,14 +5,21 @@
 //! cargo test -p espresso-node --features embedded-db --lib record_legacy_chains -- --ignored
 //! ```
 //!
-//! Each chain takes a few minutes, longer than nextest's slow-test limit. `LEGACY_CHAINS=v4,v5`
+//! Each chain takes a few minutes, longer than nextest's slow-test limit. `LEGACY_CHAINS=v2-v3,v4`
 //! records only the chains named.
 
 use std::time::Duration;
 
-use alloy::primitives::U256;
-use espresso_contract_deployer::{Contract, upgrade_stake_table_v2, upgrade_stake_table_v3};
-use espresso_types::{GenesisHeader, L1Client, NamespaceId, Transaction, ValidatedState};
+use alloy::{
+    network::EthereumWallet, primitives::U256, providers::ProviderBuilder,
+    signers::local::LocalSigner,
+};
+use espresso_contract_deployer::{
+    Contract, Contracts, deploy_fee_contract_proxy, upgrade_stake_table_v2, upgrade_stake_table_v3,
+};
+use espresso_types::{
+    GenesisHeader, L1Client, NamespaceId, Transaction, UpgradeType, ValidatedState,
+};
 use futures::future::join_all;
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::{traits::metrics::NoMetrics, utils::epoch_from_block_number, x25519};
@@ -21,7 +28,9 @@ use staking_cli::{
 };
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, Upgrade};
+use versions::{
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade,
+};
 
 use super::*;
 use crate::{
@@ -35,6 +44,11 @@ const NUM_NODES: usize = 5;
 const EPOCH_HEIGHT: u64 = 10;
 /// Long enough for rewards, state certificates and the stake table changes to span epochs.
 const EPOCHS: u64 = 8;
+/// Legacy consensus switches to 0.3 about 130 views after proposing the upgrade, and proposes
+/// it only where that switch and `UPGRADE_EPOCH_START_BLOCK` fall in the same epoch, so the
+/// epochs of a chain that upgrades have to be longer than that.
+const UPGRADE_EPOCH_HEIGHT: u64 = 200;
+const UPGRADE_EPOCH_START_BLOCK: u64 = 321;
 
 struct Scenario {
     name: &'static str,
@@ -78,6 +92,16 @@ async fn record_legacy_chains() -> anyhow::Result<()> {
             epoch_height: EPOCH_HEIGHT,
             epochs: EPOCHS,
         },
+        // Mainnet ran without epochs before it upgraded to 0.3.
+        Scenario {
+            name: "v2-v3",
+            upgrade: Upgrade::new(FEE_VERSION, EPOCH_VERSION),
+            stake_table: StakeTableContractVersion::V2,
+            contract_history: false,
+            epoch_height: UPGRADE_EPOCH_HEIGHT,
+            // Two epoch changes after the upgrade, and the stake table they bring in.
+            epochs: 5,
+        },
     ] {
         if only
             .as_ref()
@@ -85,12 +109,17 @@ async fn record_legacy_chains() -> anyhow::Result<()> {
         {
             continue;
         }
-        record(scenario).await?;
+        // Legacy consensus decides the 0.3 upgrade in time only on a single node.
+        if scenario.upgrade.base < EPOCH_VERSION {
+            record::<1>(scenario).await?;
+        } else {
+            record::<NUM_NODES>(scenario).await?;
+        }
     }
     Ok(())
 }
 
-async fn record(scenario: Scenario) -> anyhow::Result<()> {
+async fn record<const N: usize>(scenario: Scenario) -> anyhow::Result<()> {
     tracing::warn!(name = scenario.name, "recording legacy chain");
     let l1_dir = TempDir::new()?;
     let l1_state = l1_dir.path().join(L1_STATE);
@@ -103,13 +132,10 @@ async fn record(scenario: Scenario) -> anyhow::Result<()> {
         .arg("--dump-state")
         .arg(&l1_state)
         .spawn();
-    let network_config = TestConfigBuilder::default()
-        .epoch_height(scenario.epoch_height)
-        .anvil_provider(anvil)
-        .build();
+    let network_config = config_builder(&scenario, anvil).await?.build();
 
-    let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-    let persistence: [_; NUM_NODES] = storage
+    let storage = join_all((0..N).map(|_| SqlDataSource::create_storage())).await;
+    let persistence: [_; N] = storage
         .iter()
         .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
         .collect::<Vec<_>>()
@@ -117,7 +143,7 @@ async fn record(scenario: Scenario) -> anyhow::Result<()> {
         .unwrap();
     let port = reserve_tcp_port()?;
     let api_url: url::Url = format!("http://localhost:{port}").parse()?;
-    let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+    let mut config = TestNetworkConfigBuilder::<N, _, _>::with_num_nodes()
         .api_config(SqlDataSource::options(
             &storage[0],
             Options::with_port(port)
@@ -134,15 +160,18 @@ async fn record(scenario: Scenario) -> anyhow::Result<()> {
                 Duration::from_secs(2),
                 &NoMetrics,
             )
-        }))
-        .pos_hook(
-            DelegationConfig::MultipleDelegators,
-            scenario.stake_table,
-            scenario.upgrade,
-        )
-        .await?
-        .build();
-    let mut network = TestNetwork::new(config, scenario.upgrade).await;
+        }));
+    // A chain that upgrades to 0.3 deploys its stake table with the upgrade instead.
+    if scenario.upgrade.base >= EPOCH_VERSION {
+        config = config
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                scenario.stake_table,
+                scenario.upgrade,
+            )
+            .await?;
+    }
+    let mut network = TestNetwork::new(config.build(), scenario.upgrade).await;
     let client: Client<ClientErr, SequencerApiVersion> = Client::new(api_url);
     ensure!(client.connect(Some(Duration::from_secs(60))).await);
 
@@ -214,6 +243,43 @@ async fn record(scenario: Scenario) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn config_builder<const N: usize>(
+    scenario: &Scenario,
+    anvil: AnvilInstance,
+) -> anyhow::Result<TestConfigBuilder<N>> {
+    if scenario.upgrade.base >= EPOCH_VERSION {
+        return Ok(TestConfigBuilder::default()
+            .epoch_height(scenario.epoch_height)
+            .anvil_provider(anvil));
+    }
+    // Mainnet's 0.3 chain config names its fee contract, and a node starting from a genesis
+    // with that upgrade checks the contract is a proxy on L1.
+    let fee_contract = deploy_fee_contract(&anvil).await?;
+    let registered: Vec<usize> = (0..N).collect();
+    let mut builder = TestConfigBuilder::default()
+        .epoch_height(scenario.epoch_height)
+        .anvil_provider(anvil)
+        .epoch_start_block(UPGRADE_EPOCH_START_BLOCK)
+        .set_upgrades_with(scenario.upgrade.target, scenario.stake_table, &registered)
+        .await
+        .upgrade_proposing_views(0, 10_000);
+    for upgrade in builder.upgrades_mut().values_mut() {
+        if let UpgradeType::Epoch { chain_config } = &mut upgrade.upgrade_type {
+            chain_config.fee_contract = Some(fee_contract);
+        }
+    }
+    Ok(builder)
+}
+
+async fn deploy_fee_contract(anvil: &AnvilInstance) -> anyhow::Result<Address> {
+    let signer = LocalSigner::from(anvil.keys()[0].clone());
+    let admin = signer.address();
+    let provider = ProviderBuilder::new()
+        .wallet(EthereumWallet::from(signer))
+        .connect_http(anvil.endpoint_url());
+    deploy_fee_contract_proxy(provider, &mut Contracts::new(), admin).await
+}
+
 impl LegacyChain {
     fn save(&self, l1_state: &Path) -> anyhow::Result<()> {
         let dir = chain_dir(&self.name);
@@ -261,9 +327,9 @@ fn submit_transactions(client: Client<ClientErr, SequencerApiVersion>) -> JoinHa
     })
 }
 
-async fn upgrade_to_v2_and_change_commissions(
-    network: &mut TestNetwork<persistence::sql::Options, NUM_NODES>,
-    config: &TestConfig<NUM_NODES>,
+async fn upgrade_to_v2_and_change_commissions<const N: usize>(
+    network: &mut TestNetwork<persistence::sql::Options, N>,
+    config: &TestConfig<N>,
 ) -> anyhow::Result<()> {
     let provider = network.cfg.anvil().unwrap();
     let deployer = network.cfg.signer().address();
@@ -288,9 +354,9 @@ async fn upgrade_to_v2_and_change_commissions(
 }
 
 /// Registers a network config for the first validator and returns what it registered.
-async fn upgrade_to_v3_and_change_network_config(
-    network: &mut TestNetwork<persistence::sql::Options, NUM_NODES>,
-    config: &TestConfig<NUM_NODES>,
+async fn upgrade_to_v3_and_change_network_config<const N: usize>(
+    network: &mut TestNetwork<persistence::sql::Options, N>,
+    config: &TestConfig<N>,
 ) -> anyhow::Result<RecordedNetworkConfigUpdate> {
     let provider = network.cfg.anvil().unwrap();
     let contracts = network.contracts.as_mut().unwrap();
@@ -316,8 +382,8 @@ async fn upgrade_to_v3_and_change_network_config(
 }
 
 /// What `TestConfig::init_node` gives a validator, as a genesis file.
-fn genesis(
-    cfg: &TestConfig<NUM_NODES>,
+fn genesis<const N: usize>(
+    cfg: &TestConfig<N>,
     genesis_state: &ValidatedState,
     upgrade: Upgrade,
 ) -> Genesis {
@@ -340,7 +406,7 @@ fn genesis(
             capacity: hotshot.stake_table_capacity,
         },
         accounts: [(
-            TestConfig::<NUM_NODES>::builder_key().fee_account(),
+            TestConfig::<N>::builder_key().fee_account(),
             U256::MAX.into(),
         )]
         .into_iter()

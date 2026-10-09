@@ -1,0 +1,66 @@
+[
+  [
+    2,
+    {
+      "epoch": 2,
+      "light_client_state": "LIGHT_CLIENT_STATE~iwEAAAAAAACLAQAAAAAAAMpSyElPtglkI73pgTxYjKBH_Jim6JhO5PMK0hSLgf8tGQ",
+      "next_stake_table_state": "STAKE_TABLE_STATE~njOYor9_jTZI6KxE8NWC4wjXHSBZuCY-s1KMOMSmXxfU2DeezhlQjqevVJekdAoln4GnE52bjBM4l2qKSh9MBI2hEOad9KeO1k_r8ybKL7ogf0G0PVfft8aHsF-1AC8ZAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADA",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+          "SCHNORR_SIG~fU6ajqdeypHr34AN-9KJgGNsU1_euSPzbPeDmRfeWQPk0tmX9fFMfyXzpn-QlariJECM30gOD6lhzM6fw662GBtM-3CbbK9-29CjRee76iDMlAO-foPV-aU8SoCUPHsoLA",
+          "SCHNORR_SIG~fU6ajqdeypHr34AN-9KJgGNsU1_euSPzbPeDmRfeWQPk0tmX9fFMfyXzpn-QlariJECM30gOD6lhzM6fw662GBtM-3CbbK9-29CjRee76iDMlAO-foPV-aU8SoCUPHsoLA"
+        ]
+      ],
+      "auth_root": "0x0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  [
+    3,
+    {
+      "epoch": 3,
+      "light_client_state": "LIGHT_CLIENT_STATE~UwIAAAAAAABTAgAAAAAAAE2STJzIauBmzVRlA8AGnhcpSTf_uLp3s6HcSGjXa8oOyQ",
+      "next_stake_table_state": "STAKE_TABLE_STATE~njOYor9_jTZI6KxE8NWC4wjXHSBZuCY-s1KMOMSmXxfU2DeezhlQjqevVJekdAoln4GnE52bjBM4l2qKSh9MBC1GzpvM9EJnoHsbjNn15UWywmSXngMhuiohIojnwf4EVlUFIQ_Kl84BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC-",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+          "SCHNORR_SIG~c3Cs5mNJ-4OKR23dNBWeu09sE7zrvXgNApOcmPcsSQFPxLiPQ8CtOLbmTWgTJEkDnxvBa8i0HMdN1HPPZXcZCsLCwRH7DKqyyqs3GkIy5M9YQa_heYw5Y0UNETEe1HoVAA",
+          "SCHNORR_SIG~c3Cs5mNJ-4OKR23dNBWeu09sE7zrvXgNApOcmPcsSQFPxLiPQ8CtOLbmTWgTJEkDnxvBa8i0HMdN1HPPZXcZCsLCwRH7DKqyyqs3GkIy5M9YQa_heYw5Y0UNETEe1HoVAA"
+        ]
+      ],
+      "auth_root": "0x0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  [
+    4,
+    {
+      "epoch": 4,
+      "light_client_state": "LIGHT_CLIENT_STATE~GwMAAAAAAAAbAwAAAAAAAPVFWaa58xQDOuJhN7rsyDnE1lge304jGK7Ixe8E_44hIA",
+      "next_stake_table_state": "STAKE_TABLE_STATE~njOYor9_jTZI6KxE8NWC4wjXHSBZuCY-s1KMOMSmXxfU2DeezhlQjqevVJekdAoln4GnE52bjBM4l2qKSh9MBC1GzpvM9EJnoHsbjNn15UWywmSXngMhuiohIojnwf4EVlUFIQ_Kl84BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC-",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+          "SCHNORR_SIG~shxA_rDBrBIOYGmOeRj-TGr04EdvQ6_fa4Zbe2XujQPPtLE4buQnTHVm0-aM8pZWaho9wFVXbqgr_QBr-A8BI9fskKn3AAma8precA9gd7SWleTWVX0-8di-LilonaQefQ",
+          "SCHNORR_SIG~shxA_rDBrBIOYGmOeRj-TGr04EdvQ6_fa4Zbe2XujQPPtLE4buQnTHVm0-aM8pZWaho9wFVXbqgr_QBr-A8BI9fskKn3AAma8precA9gd7SWleTWVX0-8di-LilonaQefQ"
+        ]
+      ],
+      "auth_root": "0x0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  [
+    5,
+    {
+      "epoch": 5,
+      "light_client_state": "LIGHT_CLIENT_STATE~4wMAAAAAAADjAwAAAAAAALdx6j4Y5s7mfUC2qRFJspzT2R6pE1Wm6BRKTGZQCmwCrg",
+      "next_stake_table_state": "STAKE_TABLE_STATE~njOYor9_jTZI6KxE8NWC4wjXHSBZuCY-s1KMOMSmXxfU2DeezhlQjqevVJekdAoln4GnE52bjBM4l2qKSh9MBC1GzpvM9EJnoHsbjNn15UWywmSXngMhuiohIojnwf4EVlUFIQ_Kl84BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC-",
+      "signatures": [
+        [
+          "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+          "SCHNORR_SIG~tgLZshoW4eQK0orUGGb4S4fHPuMvpoLYvHICFfvyiABcVm7b-igVBx7ZP53AVrzOGhWB3UBzACLoqYOrIlcLFLYV1YAB1jAbIun3H90CFrsujIdtdnlnPYKW0TElphonrw",
+          "SCHNORR_SIG~tgLZshoW4eQK0orUGGb4S4fHPuMvpoLYvHICFfvyiABcVm7b-igVBx7ZP53AVrzOGhWB3UBzACLoqYOrIlcLFLYV1YAB1jAbIun3H90CFrsujIdtdnlnPYKW0TElphonrw"
+        ]
+      ],
+      "auth_root": "0x0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+]
