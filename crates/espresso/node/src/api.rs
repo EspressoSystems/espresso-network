@@ -3667,7 +3667,8 @@ mod test {
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
     use versions::{
-        DRB_AND_HEADER_UPGRADE_VERSION, LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION, Upgrade,
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION,
+        Upgrade,
     };
 
     use self::{
@@ -12866,6 +12867,84 @@ mod test {
         network.server.shut_down().await;
     }
 
+    /// Rollups still fetch their namespaces from mainnet blocks before 0.6, proven with ADVZ
+    /// before 0.3 and AvidM after. Every namespace of replayed blocks of each version must prove
+    /// its transactions, and none of those blocks has a cert2.
+    #[rstest]
+    #[case::v2_v3("v2-v3")]
+    #[case::v4("v4")]
+    #[case::v5("v5")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_namespace_proofs(#[case] chain: &str) -> anyhow::Result<()> {
+        let chain = LegacyChain::load(chain)?;
+        let replay = chain.replay().await?;
+        let mut proven = HashSet::new();
+        // Proving every block of the long upgrade chain takes too long; the first blocks of each
+        // version cover each scheme.
+        let mut sampled = HashMap::<Version, usize>::new();
+        for recorded in chain.blocks.iter().filter(|block| {
+            let count = sampled.entry(block.leaf.header().version()).or_default();
+            *count += 1;
+            *count <= 25
+        }) {
+            let header = recorded.leaf.header();
+            let height = header.height();
+            for ns in [101u64, 102].map(NamespaceId::from) {
+                let res: NamespaceProofQueryData = replay
+                    .client
+                    .get(&format!("availability/block/{height}/namespace/{ns}"))
+                    .send()
+                    .await?;
+                let Some(proof) = &res.proof else {
+                    ensure!(
+                        header.ns_table().find_ns_id(&ns).is_none() && res.transactions.is_empty(),
+                        "no proof of namespace {ns} in block {height}"
+                    );
+                    continue;
+                };
+                assert_ns_proof_matches_version(proof, header.version());
+                let (txs, proven_ns) = proof
+                    .verify(
+                        header.ns_table(),
+                        &header.payload_commitment(),
+                        recorded.vid_common.common(),
+                    )
+                    .with_context(|| format!("namespace {ns} of block {height}"))?;
+                ensure!(proven_ns == ns && !txs.is_empty() && txs == res.transactions);
+                proven.insert(header.version());
+            }
+
+            let cert2 = replay
+                .client
+                .get::<serde_json::Value>(&format!("availability/cert2/{height}"))
+                .send()
+                .await;
+            ensure!(
+                matches!(&cert2, Err(err) if err.status == StatusCode::NOT_FOUND),
+                "legacy block {height} has a cert2: {cert2:?}"
+            );
+        }
+        let versions = chain.blocks[1..]
+            .iter()
+            .map(|block| block.leaf.header().version())
+            .collect::<HashSet<_>>();
+        ensure!(proven == versions, "proved {proven:?} of {versions:?}");
+        Ok(())
+    }
+
+    /// ADVZ proves namespaces before 0.3, AvidM until 0.6 and AvidmGf2 from then on.
+    fn assert_ns_proof_matches_version(proof: &NsProof, version: Version) {
+        match proof {
+            NsProof::V0(..) => assert!(version < EPOCH_VERSION, "{version}"),
+            NsProof::V1(..) => assert!(
+                (EPOCH_VERSION..NEW_PROTOCOL_VERSION).contains(&version),
+                "{version}"
+            ),
+            NsProof::V2(..) => assert!(version >= NEW_PROTOCOL_VERSION, "{version}"),
+            NsProof::V1IncorrectEncoding(..) => panic!("honest blocks are encoded correctly"),
+        }
+    }
+
     /// Verify the light client leaf, header, and payload proofs at each height
     /// against the ground truth captured from the availability streams.
     ///
@@ -12955,14 +13034,11 @@ mod test {
     /// Check the light client stake table endpoint: replaying `first_epoch + 2`
     /// reproduces the validator set loaded from storage, and an earlier epoch
     /// is a `BAD_REQUEST`.
-    async fn check_light_client_stake_table<N, P>(
+    async fn check_light_client_stake_table(
         client: &Client<ClientErr, StaticVersion<0, 1>>,
-        server: &SequencerContext<N, P>,
+        storage: &impl SequencerPersistence,
         first_epoch: EpochNumber,
-    ) where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
-    {
+    ) {
         let events: Vec<StakeTableEvent> = client
             .get(&format!("light-client/stake-table/{}", first_epoch + 2))
             .send()
@@ -12974,8 +13050,7 @@ mod test {
         }
         assert_eq!(
             state_from_events.into_validators(),
-            server
-                .persistence()
+            storage
                 .load_all_validators(first_epoch + 2, 0, 1_000_000)
                 .await
                 .unwrap()
@@ -13122,7 +13197,51 @@ mod test {
             EPOCH_HEIGHT,
         )
         .await;
-        check_light_client_stake_table(&client, &network.server, first_epoch).await;
+        check_light_client_stake_table(&client, &*network.server.persistence(), first_epoch).await;
+    }
+
+    /// Mainnet ran without epochs until it upgraded to 0.3. Light clients still prove its leaves
+    /// from before the upgrade, across it and across the epoch that first used the stake table,
+    /// all produced by legacy consensus.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_light_client_completeness() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v2-v3")?;
+        let replay = chain.replay().await?;
+        let epoch_height = chain.genesis.epoch_height.unwrap();
+        let leaves: Vec<_> = chain.blocks.iter().map(|b| b.leaf.clone()).collect();
+        let blocks: Vec<_> = chain.blocks.iter().map(|b| b.block.clone()).collect();
+
+        let upgraded = leaves
+            .iter()
+            .find(|leaf| leaf.header().version() >= EPOCH_VERSION)
+            .context("the chain upgrades to 0.3")?;
+        let upgrade_height = upgraded.height();
+        let first_epoch = upgraded.leaf().epoch(epoch_height).unwrap();
+        let epoch_change = |epoch: EpochNumber| {
+            leaves
+                .iter()
+                .find(|leaf| leaf.leaf().epoch(epoch_height).is_some_and(|e| e > epoch))
+                .map(|leaf| leaf.height())
+                .context("the chain changes epoch")
+        };
+        let epoch_heights = [
+            epoch_change(first_epoch + 1)?,
+            epoch_change(first_epoch + 2)?,
+        ];
+        let max_block = epoch_heights[1] + 1;
+        ensure!(
+            max_block < chain.tip(),
+            "a header proof needs the block after it"
+        );
+
+        let heights = (0..=1)
+            .chain(upgrade_height - 1..=upgrade_height + 1)
+            .chain(epoch_heights[0] - 1..=epoch_heights[0] + 1)
+            .chain(epoch_heights[1] - 1..=max_block);
+        check_light_client_proofs(&replay.client, &leaves, &blocks, heights, epoch_height).await;
+        check_light_client_stake_table(&replay.client, &replay.persistence().await?, first_epoch)
+            .await;
+        Ok(())
     }
 
     /// Test that `fetch_leaf` returns a leaf with exactly the requested block height.

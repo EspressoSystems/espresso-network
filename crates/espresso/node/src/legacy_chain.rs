@@ -161,6 +161,7 @@ impl LegacyChain {
             .catchup(Default::default())
             .config(Default::default())
             .explorer(Default::default())
+            .light_client(Default::default())
             .serve(move |metrics, sink, _| {
                 async move {
                     init_replay_node(
