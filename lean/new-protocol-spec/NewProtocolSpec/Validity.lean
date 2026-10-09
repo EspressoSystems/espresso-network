@@ -58,7 +58,7 @@ The `Cert2` may be a re-vote's (`RevoteRequest`). The `Cert1` is the block's own
 the next epoch's first block is built on that one (`OpensEpochJustified`).
 -/
 structure EpochChangeWellFormed (c1 : Cert1) (c2 : Cert2) (p : Proposal) : Prop where
-  /-- The `Cert2` is at the block's view or a later one. -/
+  /-- The `Cert2` is at the proposal's view or a later one. -/
   cert2View : p.viewNumber ≤ c2.view
 
   /-- The `Cert2` is over what the `Cert1` is over. -/
@@ -67,7 +67,7 @@ structure EpochChangeWellFormed (c1 : Cert1) (c2 : Cert2) (p : Proposal) : Prop 
   /-- The `Cert1` is over the block. -/
   cert1Data : c1.data = ⟨blockHash p, p.epoch, p.blockHeader.blockNumber⟩
 
-  /-- The `Cert1` is at the block's view: it is the block's own. -/
+  /-- The `Cert1` is at the proposal's view: it is the block's own. -/
   cert1View : p.viewNumber = c1.view
 
   /-- The proposal is well formed. -/
@@ -131,17 +131,20 @@ def EpochViewLE (e : EpochNumber) (v : ViewNumber) (e' : EpochNumber) (v' : View
 def LockLE (a b : Cert1) : Prop := EpochViewLE a.data.epoch a.view b.data.epoch b.view
 
 /--
-A timeout certificate's lock lets a parent certificate through, for a block of
-epoch `e`, in three cases:
+Lock `lock` lets parent certificate `pc` through, for a block of epoch `e`, in
+three cases:
 
 * The lock is of an earlier epoch than `e`. What the lock guards is the commits of
   the block's own epoch `e`, so a lock of an earlier epoch never stands in the
   way. This is the case of an epoch's first block.
 * The lock is of the parent's epoch and at the parent's view or earlier. This is
-  the ordinary case: the parent is no earlier than anything the signers voted2 on.
+  the ordinary case: the parent is no earlier than the lock.
 * The lock is of the parent's epoch and over the same block. This is for a
-  re-vote request after a timeout (`SafeRevote`): a lock on an earlier re-vote's
-  certificate over the same block still admits the block's first certificate.
+  re-vote request (`SafeRevote`): a lock on an earlier re-vote's certificate over
+  the same block still admits the block's first certificate.
+
+The lock is the one a timeout certificate carries (`SafeEvidence`), no earlier
+than anything its honest signers voted2 on.
 -/
 def LockAllows (lock pc : Cert1) (e : EpochNumber) : Prop :=
   lock.data.epoch < e
