@@ -3703,6 +3703,7 @@ mod test {
         catchup::{NullStateCatchup, StatePeers},
         follower::{FollowerContext, FollowerOptions, FollowerParams, init_follower_node},
         genesis::{Genesis as NodeGenesis, L1Finalized, StakeTableConfig},
+        legacy_chain::LegacyChain,
         persistence,
         persistence::no_storage,
         testing::{
@@ -10544,6 +10545,68 @@ mod test {
                 "Mismatched transactions for namespace {namespace}"
             );
         }
+    }
+
+    /// Before 0.4 rewards accrue in the v1 tree and from 0.4 on in the v2 tree. A node rebuilding
+    /// mainnet's state replays headers from both eras. The replay derives each block's trees and
+    /// checks their roots against its header, so reaching the tip shows every header's tree was
+    /// rebuilt exactly; the v2 tree's balances show that each era filled the tree it should.
+    ///
+    /// The v1 tree's balances are not queryable: the state loop has stored no v1 paths since
+    /// #4325, so only its root can be checked.
+    #[rstest]
+    #[case::v3("v3", false)]
+    #[case::v4("v4", true)]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_reward_tree_updates(
+        #[case] chain: &str,
+        #[case] fills_v2: bool,
+    ) -> anyhow::Result<()> {
+        let chain = LegacyChain::load(chain)?;
+        let replay = chain.replay().await?;
+        let client = &replay.client;
+        let tip = chain.tip();
+
+        let roots: Vec<_> = chain
+            .blocks
+            .iter()
+            .map(|block| block.leaf.header().reward_merkle_tree_root())
+            .collect();
+        ensure!(
+            roots.iter().all(|root| root.is_right() == fills_v2),
+            "{} headers commit to the wrong reward tree",
+            chain.name
+        );
+        let reward_blocks = roots.windows(2).filter(|pair| pair[0] != pair[1]).count();
+        ensure!(reward_blocks > 0, "{} never paid a reward", chain.name);
+
+        let validators: AuthenticatedValidatorMap = client.get("node/validators/3").send().await?;
+        ensure!(!validators.is_empty(), "epoch 3 has validators");
+        let mut balances = vec![];
+        for validator in validators.keys() {
+            let balance = client
+                .get::<Option<RewardAmount>>(&format!(
+                    "reward-state-v2/reward-balance/{tip}/{validator}"
+                ))
+                .send()
+                .await;
+            if fills_v2 {
+                balances.push(balance?.unwrap_or_default().0);
+            } else {
+                // The v2 tree was never written, so there is no proof to answer with.
+                ensure!(
+                    balance.is_err(),
+                    "{}: {validator} has a v2 balance {balance:?}",
+                    chain.name
+                );
+            }
+        }
+        ensure!(
+            balances.iter().any(|balance| !balance.is_zero()) == fills_v2,
+            "{}: v2 reward balances {balances:?}",
+            chain.name
+        );
+        Ok(())
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
