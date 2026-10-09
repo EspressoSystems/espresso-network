@@ -455,6 +455,11 @@ impl Lane {
         Ok(())
     }
 
+    /// The newest lsn the writer has made durable, whose record is also in the index.
+    pub fn durable_lsn(&self) -> Lsn {
+        *self.durable.borrow()
+    }
+
     /// Asks the writer to `fdatasync` the active segment if it holds unsynced records, then
     /// publish them as durable. Returns immediately; callers that need the ack use `wait_durable`.
     pub fn request_sync(&self) {

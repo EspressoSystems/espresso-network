@@ -85,12 +85,13 @@ fn bytes_gauge(storage: &SqlStorage, stream: &str) -> usize {
         .get()
 }
 
-/// Appends a share per height and each time waits until the writer has indexed it.
+/// Appends a share per height and each time waits until the writer has written it.
 async fn append_shares(blobs: &BlobStore, heights: &[u64]) {
     for &height in heights {
+        let before = blobs.share_bytes();
         blobs.append_share(height, vec![height as u8; 10]);
         timeout(Duration::from_secs(5), async {
-            while blobs.read_share(height).await.unwrap().is_none() {
+            while blobs.share_bytes() == before {
                 sleep(Duration::from_millis(10)).await;
             }
         })
@@ -224,6 +225,8 @@ async fn test_pruning_disk_usage_counts_sealed_payload_bytes() {
     seal_segments(&storage).await;
 
     assert!(storage.get_disk_usage().await.unwrap() >= before + 100_000);
+    // The writer rolls after the ack, and must not find its directory gone.
+    drop(storage);
 }
 
 /// The active segment cannot be unlinked, so counting it would keep threshold pruning running

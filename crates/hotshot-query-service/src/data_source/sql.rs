@@ -391,6 +391,7 @@ mod blob_generic_test {
     use crate::{
         data_source::{
             ExtensibleDataSource, UpdateDataSource, availability_tests, fetching::Builder,
+            node_tests, persistence_tests,
         },
         fetching::provider::NoFetching,
         testing::{consensus::DataSourceLifeCycle, mocks::MockTypes},
@@ -437,22 +438,31 @@ mod blob_generic_test {
         }
     }
 
-    // `test_update` is left out: it opens a second data source on the same storage, and the blob
-    // directory admits one store.
-    macro_rules! availability_test {
-        ($($name:ident),*) => {$(
+    // `test_update` and `test_reset` are left out: they open a second data source on the same
+    // storage while the first is alive, and the blob directory admits one store.
+    macro_rules! blob_tests {
+        ($($module:ident: [$($name:ident),*]),*) => {$($(
             #[test_log::test(tokio::test(flavor = "multi_thread"))]
             async fn $name() {
-                availability_tests::$name::<BlobDataSource>().await
+                $module::$name::<BlobDataSource>().await
             }
-        )*};
+        )*)*};
     }
 
-    availability_test!(
-        test_range,
-        test_range_rev,
-        test_insert_consecutive_identical_blocks,
-        test_append_payload_verification
+    blob_tests!(
+        availability_tests: [
+            test_range,
+            test_range_rev,
+            test_insert_consecutive_identical_blocks,
+            test_append_payload_verification
+        ],
+        persistence_tests: [test_ranges, test_revert, test_drop_tx],
+        node_tests: [
+            test_sync_status,
+            test_vid_shares,
+            test_vid_monotonicity,
+            test_vid_recovery
+        ]
     );
 }
 

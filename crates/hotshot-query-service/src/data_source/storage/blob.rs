@@ -21,7 +21,7 @@ use std::{
 use anyhow::{Context, ensure};
 use hotshot_types::traits::metrics::{Counter, Metrics, NoMetrics};
 use journal_lane::{
-    format::{Class, Kind, SegmentHeader, Stream},
+    format::{Class, Kind, Lsn, SegmentHeader, Stream},
     lane::{
         self, DataIndex, JournalFs, Lane, LaneConfig, LaneMetrics, LaneMode, Location, Recovered,
         SegmentMeta, Segments, StdFs, segment_path,
@@ -43,6 +43,23 @@ const ID_FILE: &str = "ID";
 pub struct BlobCfg {
     pub dir: PathBuf,
     pub share_retention: Duration,
+}
+
+/// Removes the lanes and the id of the blob directory of a database that is being reset.
+pub fn reset_dir(dir: &Path) -> anyhow::Result<()> {
+    for lane in ["payload", "share"] {
+        ignore_not_found(std::fs::remove_dir_all(dir.join(lane)))
+            .with_context(|| format!("removing {lane} lane of {}", dir.display()))?;
+    }
+    ignore_not_found(std::fs::remove_file(dir.join(ID_FILE)))
+        .with_context(|| format!("removing ID of {}", dir.display()))
+}
+
+fn ignore_not_found(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
 }
 
 /// Where a payload record lives. The text form `{seq:x}:{offset:x}:{len:x}:{lsn:x}` goes into SQL;
@@ -195,11 +212,18 @@ impl<F: JournalFs> BlobStore<F> {
         Ok(loc.into())
     }
 
-    /// Queues the record; the share sync task makes it durable within a second.
+    /// Queues the record; the share sync task makes it durable within a second. `read_share`
+    /// returns it from then on.
     pub fn append_share(&self, height: u64, body: Vec<u8>) {
-        self.share
+        let lsn = self
+            .share
             .lane
-            .enqueue(height, SHARE, body, Class::Enqueue, None);
+            .enqueue(height, SHARE, body.clone(), Class::Enqueue, None);
+        let mut pending = self.share.pending.lock();
+        // Concurrent appends can get here out of lsn order.
+        if pending.get(&height).is_none_or(|(newest, _)| *newest < lsn) {
+            pending.insert(height, (lsn, body));
+        }
     }
 
     /// `None` when `loc` no longer holds the payload of `height`: unlinked segment, short read, bad
@@ -215,6 +239,9 @@ impl<F: JournalFs> BlobStore<F> {
     }
 
     pub async fn read_share(&self, height: u64) -> anyhow::Result<Option<Vec<u8>>> {
+        if let Some(body) = self.share.pending_body(height) {
+            return Ok(Some(body));
+        }
         match self.share.locate(height, SHARE) {
             Some(loc) => self.read(&self.share, loc, height, SHARE).await,
             None => Ok(None),
@@ -357,10 +384,32 @@ struct BlobLane {
     /// Payload lane: records between write and the end of `append_payload`. Share lane: the newest
     /// record per height, for as long as its segment exists.
     index: DataIndex,
+    /// Share lane: records queued but not yet durable, which the index does not have yet. The
+    /// writer indexes a record before it makes it durable.
+    pending: Mutex<HashMap<u64, (Lsn, Vec<u8>)>>,
     gc_lock: Mutex<()>,
 }
 
 impl BlobLane {
+    /// The body queued for `height`, unless its record is durable and so found through the index.
+    fn pending_body(&self, height: u64) -> Option<Vec<u8>> {
+        let durable = self.lane.durable_lsn();
+        let mut pending = self.pending.lock();
+        match pending.get(&height) {
+            Some((lsn, _)) if *lsn <= durable => {
+                pending.remove(&height);
+                None
+            },
+            Some((_, body)) => Some(body.clone()),
+            None => None,
+        }
+    }
+
+    fn sweep_pending(&self) {
+        let durable = self.lane.durable_lsn();
+        self.pending.lock().retain(|_, (lsn, _)| *lsn > durable);
+    }
+
     fn locate(&self, height: u64, kind: Kind) -> Option<Location> {
         self.index.lock().get(&(height, kind)).copied()
     }
@@ -544,6 +593,7 @@ fn open_lane_blocking<F: JournalFs>(
         lane,
         segments,
         index,
+        pending: Mutex::default(),
         gc_lock: Mutex::new(()),
     };
     Ok((blob_lane, thread))
@@ -660,6 +710,7 @@ fn spawn_share_tasks<F: JournalFs>(store: &Arc<BlobStore<F>>) {
                 _ = sync.tick() => {
                     let Some(lane) = lane.upgrade() else { break };
                     lane.lane.request_sync();
+                    lane.sweep_pending();
                 },
                 _ = gc.tick() => {
                     let Some(store) = store.upgrade() else { break };
@@ -674,8 +725,11 @@ fn spawn_share_tasks<F: JournalFs>(store: &Arc<BlobStore<F>>) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use hotshot_types::traits::metrics::NoMetrics;
     use journal_lane::{format, mem::MemFs};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     use tempfile::TempDir;
 
     use super::*;
@@ -720,6 +774,17 @@ mod tests {
 
     fn body(tag: u8) -> Vec<u8> {
         vec![tag; 100]
+    }
+
+    /// Waits until the writer has opened segment number `count`, which seals the one before it.
+    async fn wait_for_segments(lane: &BlobLane, count: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while lane.segments.lock().list().len() < count {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("writer never rolled the segment");
     }
 
     /// Queues the `nth` share (counting from 1) and waits until it is fsynced.
@@ -1019,6 +1084,7 @@ mod tests {
         for height in 1..=4 {
             append_share_synced(&store, height, height as u8, height).await;
         }
+        wait_for_segments(&store.share, 5).await;
         let now = SystemTime::now();
         let old = now - 2 * RETENTION;
         let young = now - RETENTION / 2;
@@ -1212,5 +1278,87 @@ mod tests {
         }
         assert!(gone, "share segment was never unlinked");
         assert_eq!(store.read_share(2).await.unwrap(), Some(body(2)));
+    }
+
+    #[tokio::test]
+    async fn share_is_readable_right_after_it_is_queued() {
+        let env = Env::new();
+        let store = env.open(SEGMENT_BYTES).await;
+        for height in 1..=200 {
+            store.append_share(height, body(height as u8));
+            assert_eq!(
+                store.read_share(height).await.unwrap(),
+                Some(body(height as u8))
+            );
+        }
+    }
+
+    /// Segments of about two records, so sequences seal and unlink segments often.
+    const SMALL_SEGMENT: u64 = 400;
+
+    /// Runs random appends, commits, gc runs (some failing midway) and crashes with reopen. A
+    /// payload counts as committed once `append_payload` returned and the "commit" happened.
+    /// After every step, each committed payload above the last gc height must read back as its own
+    /// body, and below it must read as its own body or as missing, never as another height's.
+    async fn run_crash_sequence(seed: u64) {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let env = Env::new();
+        let mut store = env.open(SMALL_SEGMENT).await;
+        let mut committed = BTreeMap::new();
+        let (mut next_height, mut gc_height) = (1u64, 0u64);
+
+        for step in 0..40 {
+            match rng.gen_range(0..6) {
+                0..=2 => {
+                    let height = next_height;
+                    next_height += 1;
+                    let loc = store
+                        .append_payload(height, body(height as u8))
+                        .await
+                        .unwrap();
+                    // Not committed: the process stops between the append and the SQL commit.
+                    if rng.gen_bool(0.7) {
+                        committed.insert(height, loc);
+                    }
+                },
+                3 => {
+                    gc_height = gc_height.max(rng.gen_range(0..next_height));
+                    store.gc_payload_below(gc_height).await.unwrap();
+                },
+                4 => {
+                    let oldest = store.payload.segments.lock().list()[0].seq;
+                    let path = env.payload_segment(oldest);
+                    env.fs.fail_remove.lock().unwrap().insert(path);
+                    gc_height = gc_height.max(rng.gen_range(0..next_height));
+                    store.gc_payload_below(gc_height).await.ok();
+                    env.fs.fail_remove.lock().unwrap().clear();
+                },
+                _ => {
+                    drop(store);
+                    env.fs.crash(|unsynced| rng.gen_range(0..unsynced));
+                    store = env.open(SMALL_SEGMENT).await;
+                },
+            }
+
+            for (&height, &loc) in &committed {
+                let read = store.read_payload(height, loc).await.unwrap();
+                let ctx = format!("seed {seed} step {step} height {height}");
+                if height > gc_height {
+                    assert_eq!(read, Some(body(height as u8)), "{ctx}");
+                } else if let Some(read) = read {
+                    assert_eq!(read, body(height as u8), "{ctx}");
+                }
+            }
+        }
+
+        store.gc_payload_below(u64::MAX).await.unwrap();
+        assert_eq!(store.sealed_payload_bytes(), 0, "seed {seed}");
+    }
+
+    #[tokio::test]
+    async fn committed_payloads_survive_random_crashes_and_gc() {
+        for seed in 0..25 {
+            run_crash_sequence(seed).await;
+        }
     }
 }

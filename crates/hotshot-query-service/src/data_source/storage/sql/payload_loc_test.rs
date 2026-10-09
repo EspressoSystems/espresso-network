@@ -1,16 +1,31 @@
 //! Payload write and read path through the blob store.
 
+use std::{
+    os::unix::fs::FileExt,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
+use async_trait::async_trait;
 use committable::Committable;
 use hotshot_example_types::node_types::TEST_VERSIONS;
 use hotshot_types::traits::EncodeBytes;
+use journal_lane::{format, lane::segment_path};
 
 use super::{testing::TmpDb, *};
 use crate::{
-    availability::{BlockQueryData, LeafQueryData, PayloadQueryData},
-    data_source::storage::{
-        AvailabilityStorage, ExplorerStorage, NodeStorage, UpdateAvailabilityStorage, blob::BlobLoc,
+    availability::{
+        AvailabilityDataSource, BlockInfo, BlockQueryData, LeafQueryData, PayloadQueryData,
+        UpdateAvailabilityData,
+    },
+    data_source::{
+        SqlDataSource,
+        storage::{
+            AvailabilityStorage, ExplorerStorage, NodeStorage, UpdateAvailabilityStorage,
+            blob::BlobLoc,
+        },
     },
     explorer::{BlockDetail, BlockIdentifier},
+    fetching::{Provider, provider::AnyProvider, request::PayloadRequest},
     node::BlockId,
     testing::mocks::{MockPayload, MockTypes, mock_transaction},
 };
@@ -320,6 +335,33 @@ async fn test_connect_restores_the_id_of_a_replaced_blob_dir() {
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_connect_with_reset_clears_the_blob_dir() {
+    let db = TmpDb::init().await.with_blobs();
+    let storage = connect(&db).await;
+    let (leaf, block) = block_at(1, 1, &[&[1]]).await;
+    store(&storage, &leaf, &block).await;
+    let loc = {
+        let mut tx = storage.read().await.unwrap();
+        let (loc,) = query_as::<(String,)>("SELECT loc FROM payload_loc WHERE height = 1")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        loc.parse::<BlobLoc>().unwrap()
+    };
+    drop(storage);
+
+    let storage = SqlStorage::connect(db.config().reset_schema(), StorageConnectionType::Query)
+        .await
+        .unwrap();
+
+    assert_eq!(count(&storage, "SELECT count(*) FROM payload_loc").await, 0);
+    let blobs = storage.blob_store().unwrap();
+    assert_eq!(blobs.read_payload(1, loc).await.unwrap(), None);
+    drop(storage);
+    connect(&db).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_shared_payload_without_its_own_locator_is_missing_in_sync_status() {
     let db = TmpDb::init().await.with_blobs();
     let storage = connect(&db).await;
@@ -368,4 +410,115 @@ async fn test_unreadable_record_is_missing_until_restored() {
     tx.commit().await.unwrap();
     let mut tx = storage.read().await.unwrap();
     assert_eq!(tx.get_block(id).await.unwrap(), block);
+}
+
+/// Serves one payload and counts the requests.
+#[derive(Debug)]
+struct ServePayload {
+    payload: MockPayload,
+    requests: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Provider<MockTypes, PayloadRequest> for ServePayload {
+    async fn fetch(&self, _req: PayloadRequest) -> Option<MockPayload> {
+        self.requests.fetch_add(1, Ordering::SeqCst);
+        Some(self.payload.clone())
+    }
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_unreadable_record_is_refetched_and_gets_a_new_locator() {
+    let db = TmpDb::init().await.with_blobs();
+    let (leaf, block) = block_at(1, 1, &[&[1, 2, 3]]).await;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let provider = AnyProvider::<MockTypes>::default().with_block_provider(ServePayload {
+        payload: block.payload().clone(),
+        requests: requests.clone(),
+    });
+    let ds: SqlDataSource<MockTypes, _> = db
+        .config()
+        .builder(provider)
+        .await
+        .unwrap()
+        .disable_proactive_fetching()
+        .build()
+        .await
+        .unwrap();
+    ds.append(BlockInfo::new(leaf, Some(block.clone()), None, None))
+        .await
+        .unwrap();
+    let stored = loc_of(&ds).await;
+
+    // Flips a payload byte, so the checksum fails.
+    let segment = segment_path(&db.blob_dir().unwrap().join("payload"), stored.seq);
+    let at = stored.offset + format::FRAME_HEADER_LEN as u64;
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(segment)
+        .unwrap();
+    file.write_all_at(&[0xFF], at).unwrap();
+
+    let fetched = tokio::time::timeout(Duration::from_secs(30), ds.get_block(1).await)
+        .await
+        .expect("block was not refetched");
+    assert_eq!(fetched, block);
+    assert!(requests.load(Ordering::SeqCst) >= 1);
+    let restored = loc_of(&ds).await;
+    assert_ne!(restored, stored);
+
+    let mut tx = ds.read().await.unwrap();
+    assert_eq!(tx.get_block(BlockId::Number(1)).await.unwrap(), block);
+}
+
+async fn loc_of(ds: &SqlDataSource<MockTypes, AnyProvider<MockTypes>>) -> BlobLoc {
+    let mut tx = ds.read().await.unwrap();
+    let (loc,) = query_as::<(String,)>("SELECT loc FROM payload_loc WHERE height = 1")
+        .fetch_one(tx.as_mut())
+        .await
+        .unwrap();
+    loc.parse().unwrap()
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_restore_of_a_height_keeps_the_last_committed_locator() {
+    let db = TmpDb::init().await.with_blobs();
+    let storage = connect(&db).await;
+    let (leaf, block) = block_at(1, 1, &[&[1, 2, 3]]).await;
+    let blobs = storage.blob_store().unwrap();
+    let body = block.payload.encode().as_ref().to_vec();
+    let first = blobs.append_payload(1, body.clone()).await.unwrap();
+    let second = blobs.append_payload(1, body).await.unwrap();
+    assert_ne!(first, second);
+
+    for loc in [first, second] {
+        let mut tx = storage.write().await.unwrap();
+        UpdateAvailabilityStorage::<MockTypes>::attach_blobs(&mut tx, vec![(1, loc)]);
+        tx.insert_leaf(&leaf).await.unwrap();
+        tx.insert_block(&block).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    let mut tx = storage.read().await.unwrap();
+    let (stored,) = query_as::<(String,)>("SELECT loc FROM payload_loc WHERE height = 1")
+        .fetch_one(tx.as_mut())
+        .await
+        .unwrap();
+    assert_eq!(stored.parse::<BlobLoc>().unwrap(), second);
+    assert_eq!(tx.get_block(BlockId::Number(1)).await.unwrap(), block);
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_block_below_the_pruned_height_gets_no_locator() {
+    let db = TmpDb::init().await.with_blobs();
+    let storage = connect(&db).await;
+    let mut tx = storage.write().await.unwrap();
+    tx.save_pruned_height(5).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let (leaf, block) = block_at(3, 3, &[&[1, 2, 3]]).await;
+    store(&storage, &leaf, &block).await;
+
+    assert_eq!(count(&storage, "SELECT count(*) FROM payload_loc").await, 0);
+    assert_eq!(count(&storage, "SELECT count(*) FROM payload").await, 0);
 }

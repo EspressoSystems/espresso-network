@@ -55,7 +55,7 @@ use crate::{
         VersionedDataSource,
         storage::{
             MerklizedStateHeightStorage, SerializableRetry,
-            blob::{BlobCfg, BlobStore},
+            blob::{self, BlobCfg, BlobStore},
             pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
         },
         update::Transaction as _,
@@ -734,7 +734,7 @@ impl SqlStorage {
 
         let pruner_cfg = config.pruner_cfg;
         let serializable_retry_config = config.serializable_retry_config;
-        let blobs = open_blobs(config.blob.take(), &connection_type).await?;
+        let blobs = open_blobs(config.blob.take(), &connection_type, config.reset).await?;
         if let Some(blobs) = &blobs {
             blobs.install_metrics(&metrics);
         }
@@ -866,12 +866,17 @@ impl SqlStorage {
     }
 }
 
+/// With `reset`, the database is about to be emptied, so the records in the directory go too.
 async fn open_blobs(
     cfg: Option<BlobCfg>,
     connection_type: &StorageConnectionType,
+    reset: bool,
 ) -> anyhow::Result<Option<Arc<BlobStore>>> {
     match cfg {
         Some(cfg) if *connection_type == StorageConnectionType::Query => {
+            if reset {
+                blob::reset_dir(&cfg.dir)?;
+            }
             Ok(Some(BlobStore::open(cfg, Arc::new(StdFs)).await?))
         },
         _ => Ok(None),
