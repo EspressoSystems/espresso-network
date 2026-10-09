@@ -20,7 +20,7 @@
 
 A run with `chaos.jsonl` gets a panel on top with one lane per faulted node: a bar for each phase
 of a fault (down, recovering, catching up) with a marker per event, ending in a red x when the
-node did not recover. The other panels shade each fault's down and recovering window. A run
+node did not recover. The other panels shade each fault until its node recovered. A run
 without `consensus.jsonl` samples (it failed) has no decided, block or timeout series, and its
 `run.json` is missing: the load starts at the first step.
 
@@ -310,7 +310,7 @@ def main(argv: list[str] | None = None) -> None:
         panel.grid(alpha=0.3)
     if rows:
         draw_lanes(lane_panel[0], rows, t1, minutes)
-        for _, _, start, stop in ch.fault_windows(rows, t1):
+        for start, stop in (ch.fault_span(r, t1) for r in rows):
             for panel in data_panels:
                 panel.axvspan(
                     minutes(start), minutes(stop), color=FAULT_SPAN, alpha=0.1, lw=0

@@ -1,6 +1,7 @@
 import gzip
 import json
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,6 +15,7 @@ from fakes import (
     awsb,
     index_manifest,
     make_result,
+    raiser,
     step,
 )
 from test_chaos import EVENTS, KINDS, T0, ev
@@ -44,37 +46,56 @@ def steps_of(decided: list[float | None]) -> list[Any]:
     return steps
 
 
-def test_throughput_compares_steps_with_and_without_a_fault():
+def test_throughput_has_the_mean_and_the_lowest_step():
     steps = steps_of([4.0, 2.0, 3.0, 4.0])
-    chaos = ch.step_chaos(spans_of(steps), ch.fault_rows(EVENTS), T0, T0 + 240)
-    lines = awsb.throughput_lines(steps, chaos)
-    assert lines[1] == (
-        "- Throughput: mean decided 3.25 MB/s of 4 MB/s offered over 4 steps; "
-        "minimum one-minute 2 MB/s (step at 60 s)"
-    )
-    assert lines[2] == (
-        "- Mean decided with an active fault 3 MB/s (3 steps), without 4 MB/s (1 steps)"
-    )
-    unmeasured = steps_of([None, None])
-    assert (
-        awsb.throughput_lines(
-            unmeasured, ch.step_chaos(spans_of(unmeasured), [], T0, T0)
+    assert awsb.throughput_lines(steps) == [
+        (
+            "- Throughput: mean decided 3.25 MB/s of 4 MB/s offered over 4 steps; "
+            "minimum one-minute 2 MB/s (step at 60 s)"
         )
-        == []
-    )
+    ]
+    assert awsb.throughput_lines(steps_of([None, None])) == []
+
+
+def write_counters(run_dir: Path) -> None:
+    """Every 10 s: 2 MB/s while a fault of `EVENTS` is active (10-40 s, 70-150 s), else 4."""
+    decided, lines = 0.0, []
+    for at in range(0, 250, 10):
+        lines.append(json.dumps({"ts": T0 + at, "decided_bytes": decided}) + "\n")
+        faulty = 10 <= at < 40 or 70 <= at < 150
+        decided += 20e6 if faulty else 40e6
+    (run_dir / "consensus.jsonl").write_text("".join(lines))
+
+
+def test_decided_with_and_without_a_fault_comes_from_the_counters(tmp_path: Path):
+    steps = steps_of([4.0, 2.0, 3.0, 4.0])
+    rows = ch.fault_rows(EVENTS)
+    assert awsb.fault_throughput_lines(tmp_path, rows, steps, T0 + 240) == []
+    (tmp_path / "consensus.jsonl").write_text("")
+    assert awsb.fault_throughput_lines(tmp_path, rows, steps, T0 + 240) == []
+    write_counters(tmp_path)
+    assert awsb.fault_throughput_lines(tmp_path, rows, steps, T0 + 240) == [
+        "- Decided with an active fault 2 MB/s over 110 s, without 4 MB/s over 130 s"
+    ]
+    assert awsb.fault_throughput_lines(tmp_path, [], steps, T0 + 240) == [
+        "- Decided with an active fault - over 0 s, without 3.08 MB/s over 240 s"
+    ]
 
 
 def test_totals_count_faults_budget_timeouts_and_txs():
     meta = {"missing_payloads": [641, 1553], "submit_failovers": 19}
     txs = Counter(included=8, timeout=2, pending=1)
     rows = ch.fault_rows(EVENTS)
-    lines = awsb.chaos_totals(rows, EVENTS, CONFIG, meta, txs)
+    lines = awsb.chaos_totals(rows, EVENTS, T0 + 240, CONFIG, meta, txs)
     assert lines == [
         "- Faults: 2 (restart 1, kill 1, wipe 0); max concurrent faulty 1 of budget 6",
         "- Timeouts: 0; lost payloads 2 (641, 1553); submit failovers 19",
         "- Txs: 11 submitted, 8 included, 2 timed out, 1 pending",
     ]
-    assert "lost payloads" not in awsb.chaos_totals(rows, EVENTS, CONFIG, None, txs)[1]
+    assert (
+        "lost payloads"
+        not in awsb.chaos_totals(rows, EVENTS, T0 + 240, CONFIG, None, txs)[1]
+    )
 
 
 def chaos_result(steps: list[Any]) -> Any:
@@ -114,6 +135,16 @@ def test_render_leads_with_the_chaos_test_and_lists_every_step():
         "node5 kill |",
         "- |",
     ]
+
+
+def test_chaos_step_table_shows_view_timeouts_not_a_verdict():
+    steps = steps_of([4.0, 2.0, 3.0, 4.0])
+    steps[1]["timeouts"], steps[2]["timeouts"] = 3, None
+    steps[1]["consensus_fails"] = ["3 view timeouts"]
+    table = netbench.chaos_step_table(steps, view_of(steps)["steps"])
+    assert "| view timeouts | faults |" in table[0] and "verdict" not in table[0]
+    assert [r.rsplit(" | ", 2)[1] for r in table[2:]] == ["0", "3", "-", "0"]
+    assert not any("fail" in r or "pass" in r for r in table)
 
 
 def test_step_details_show_a_dash_for_a_restarted_node_only_under_chaos():
@@ -168,7 +199,7 @@ def write_failed_run(run_dir: Path, png: bool = False) -> None:
 def test_failure_summary_of_a_chaos_run_reports_what_was_collected(tmp_path: Path):
     write_failed_run(tmp_path, png=True)
     manifest = netbench.read_json(tmp_path / "manifest.json")
-    awsb.write_failure_summary(tmp_path, manifest, "gate failed")
+    awsb.write_failure_summary(tmp_path, manifest, "gate failed", fallback=True)
     text = (tmp_path / "summary.md").read_text()
     assert text.startswith("## Chaos test\n")
     assert "- Verdict: **fail**: node2 (wipe) not recovered after 5 s" in text
@@ -181,11 +212,53 @@ def test_failure_summary_of_a_chaos_run_reports_what_was_collected(tmp_path: Pat
     assert "node0 log" not in text
 
 
+def log_line(at: float, level: str, message: str, **fields: str) -> str:
+    stamp = datetime.fromtimestamp(T0 + at, UTC).isoformat().replace("+00:00", "Z")
+    entry = {
+        "timestamp": stamp,
+        "level": level,
+        "fields": {"message": message, **fields},
+        "target": "espresso",
+    }
+    return json.dumps(entry) + "\n"
+
+
+def test_failure_log_of_a_timed_out_node_has_its_warnings_before_the_timeout(
+    tmp_path: Path,
+):
+    write_failed_run(tmp_path)
+    lines = [
+        "Starting Espresso node with sqlite...\n",
+        log_line(200, "INFO", "info before"),
+        log_line(210, "WARN", "fetch failed", err="timeout"),
+        log_line(220, "ERROR", "catchup stalled"),
+        log_line(431, "WARN", "after the timeout"),
+        log_line(500, "INFO", "shutting down"),
+    ]
+    log = tmp_path / "hosts" / "node2" / "espresso-node.log.gz"
+    log.write_bytes(gzip.compress("".join(lines).encode()))
+    manifest = netbench.read_json(tmp_path / "manifest.json")
+    awsb.write_failure_summary(tmp_path, manifest, "gate failed", fallback=True)
+    text = (tmp_path / "summary.md").read_text()
+    tail = text.split("WARN and ERROR lines of node2 before its timeout:")[1]
+    assert "WARN espresso: fetch failed err=timeout" in tail
+    assert "ERROR espresso: catchup stalled" in tail
+    for gone in ("info before", "after the timeout", "shutting down", "Last log lines"):
+        assert gone not in text
+
+
+def test_warn_lines_keep_the_last_ones():
+    lines = [log_line(i, "WARN", f"w{i}") for i in range(50)]
+    picked = awsb.warn_lines(lines, T0 + 40, 30)
+    assert len(picked) == 30
+    assert picked[-1].endswith("w39") and picked[0].endswith("w10")
+
+
 def test_failure_summary_without_a_timeout_shows_every_log(tmp_path: Path):
     write_failed_run(tmp_path)
     (tmp_path / "chaos.jsonl").write_text("".join(json.dumps(e) + "\n" for e in EVENTS))
     manifest = netbench.read_json(tmp_path / "manifest.json")
-    awsb.write_failure_summary(tmp_path, manifest, "boom")
+    awsb.write_failure_summary(tmp_path, manifest, "boom", fallback=True)
     text = (tmp_path / "summary.md").read_text()
     assert "node0 log" in text and "node2 log" in text
     assert "- Verdict: **fail**: boom" in text
@@ -196,14 +269,14 @@ def test_failure_summary_without_steps_or_load_meta(tmp_path: Path):
     (tmp_path / "steps.json").unlink()
     (tmp_path / "load-meta.json").unlink()
     manifest = netbench.read_json(tmp_path / "manifest.json")
-    awsb.write_failure_summary(tmp_path, manifest, "boom")
+    awsb.write_failure_summary(tmp_path, manifest, "boom", fallback=True)
     text = (tmp_path / "summary.md").read_text()
     assert "### Load steps" not in text and "lost payloads" not in text
 
 
 def test_failure_summary_of_a_plain_run_is_unchanged(tmp_path: Path):
     manifest = {"hosts": [], "config": {}}
-    awsb.write_failure_summary(tmp_path, manifest, "boom")
+    awsb.write_failure_summary(tmp_path, manifest, "boom", fallback=True)
     assert (tmp_path / "summary.md").read_text() == (
         "## Network benchmark\n\n**invalid**: boom\n"
     )
@@ -260,7 +333,7 @@ def test_tx_counts_of_a_run_without_load_log_is_empty(tmp_path: Path):
     write_failed_run(tmp_path)
     (tmp_path / "load.jsonl").unlink()
     manifest = netbench.read_json(tmp_path / "manifest.json")
-    awsb.write_failure_summary(tmp_path, manifest, "boom")
+    awsb.write_failure_summary(tmp_path, manifest, "boom", fallback=True)
     text = (tmp_path / "summary.md").read_text()
     assert text.startswith("## Chaos test\n") and "- Txs:" not in text
 
@@ -279,10 +352,20 @@ def test_failure_summary_falls_back_when_the_chaos_report_raises(
 
     monkeypatch.setattr(awsb, "chaos_view", broken)
     manifest = netbench.read_json(tmp_path / "manifest.json")
-    awsb.write_failure_summary(tmp_path, manifest, "gate failed")
+    awsb.write_failure_summary(tmp_path, manifest, "gate failed", fallback=True)
     text = (tmp_path / "summary.md").read_text()
     assert text.startswith("## Network benchmark\n\n**invalid**: gate failed\n")
     assert "node0 log" in text and "node2 log" in text
+
+
+def test_render_of_a_failed_chaos_run_raises_when_the_chaos_report_does(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    write_failed_run(tmp_path)
+    monkeypatch.setattr(awsb, "chaos_view", raiser(ValueError("bad chaos.jsonl")))
+    args = awsb.parse_args(["render", str(tmp_path)])
+    with pytest.raises(ValueError, match="bad chaos.jsonl"):
+        awsb.cmd_render(args, FakeSystem(run=FakeRunner()))
 
 
 def test_report_of_a_failed_run_writes_its_error(

@@ -619,8 +619,11 @@ def test_event_fields():
     events = [e for s in run(seconds=800) for e in s["events"]]
     kinds = {e["event"] for e in events}
     assert {"fault", "rejoined"} <= kinds
+    queries = queries_of(topo_of())
+    assert {e["query"] for e in events} == {True, False}
     for e in events:
         assert {"ts", "iso", "event", "node"} <= e.keys()
+        assert e["query"] == (e["node"] in queries)
         assert e["iso"].startswith("1970-01-01T")
         if e["event"] in ("rejoined", "caught_up"):
             assert e["after_s"] is not None
@@ -696,6 +699,7 @@ def test_missing_filter_prints_the_three_counts():
 
 T0 = 1000.0
 KINDS = ["restart", "kill", "wipe"]
+QUERIES = frozenset(f"node{i}" for i in range(4))
 
 
 def ev(
@@ -705,11 +709,11 @@ def ev(
     kind: ch.ChaosKind,
     missing: ch.Missing | None = None,
 ) -> ch.ChaosEvent:
-    return ch.chaos_event(T0 + at, event, node, kind, 10, 5.0, missing)
+    return ch.chaos_event(T0 + at, event, node, node in QUERIES, kind, 10, 5.0, missing)
 
 
-# node0 restarts at 10 s and is synced at 40 s; node5 is killed at 70 s, starts at 130 s and
-# rejoins at 150 s, so it is faulty for the second and third step.
+# node0, a query node, restarts at 10 s and is synced at 40 s; node5, a validator, is killed at
+# 70 s, starts at 130 s and rejoins at 150 s, so it is faulty for the second and third step.
 EVENTS = [
     ev(10, "fault", "node0", "restart"),
     ev(25, "rejoined", "node0", "restart"),
@@ -816,25 +820,73 @@ def test_steps_name_their_faults_and_restarted_nodes():
     ]
 
 
-def test_fault_windows_end_at_the_rejoin_else_the_timeout_else_the_end():
-    end = T0 + 300
-    rows = ch.fault_rows([*EVENTS, ev(200, "fault", "node7", "kill")])
-    windows = ch.fault_windows(rows, end)
-    assert [(n, a - T0, b - T0) for n, _, a, b in windows] == [
-        ("node0", 10, 25),
-        ("node5", 70, 150),
-        ("node7", 200, 300),
+def span_of(*events: ch.ChaosEvent, end: float = T0 + 300) -> tuple[float, float]:
+    (row,) = ch.fault_rows(events)
+    start, stop = ch.fault_span(row, end)
+    return start - T0, stop - T0
+
+
+def test_a_fault_lasts_until_the_node_recovered():
+    assert span_of(*EVENTS[:3]) == (10, 40)
+    assert span_of(*EVENTS[3:]) == (70, 150)
+    # A query node that rejoined is still faulty while it catches up.
+    assert span_of(*EVENTS[:2]) == (10, 300)
+
+
+def test_a_stuck_fault_lasts_until_the_end_and_an_interrupted_one_until_the_abort():
+    stuck = [ev(5, "fault", "node1", "wipe"), ev(9, "rejoined", "node1", "wipe")]
+    assert span_of(*stuck, ev(305, "timeout", "node1", "wipe")) == (5, 300)
+    killed = [ev(5, "fault", "node7", "kill"), ev(9, "timeout", "node7", "kill")]
+    assert span_of(*killed) == (5, 300)
+    aborted = [*stuck, ev(20, "interrupted", "node1", "wipe")]
+    assert span_of(*aborted) == (5, 20)
+
+
+def test_max_concurrent_faulty_counts_query_nodes_until_caught_up():
+    events = [
+        ev(0, "fault", "node1", "wipe"),
+        ev(10, "rejoined", "node1", "wipe"),
+        ev(20, "fault", "node5", "restart"),
+        ev(30, "rejoined", "node5", "restart"),
+        ev(50, "caught_up", "node1", "wipe"),
     ]
-    timed_out = ch.fault_rows(
-        [ev(5, "fault", "node1", "kill"), ev(9, "timeout", "node1", "kill")]
-    )
-    assert ch.fault_windows(timed_out, end)[0][3] == T0 + 9
+    assert ch.max_concurrent_faulty(ch.fault_rows(events), T0 + 60) == 2
+    assert ch.max_concurrent_faulty(ch.fault_rows(EVENTS), T0 + 300) == 1
+
+
+def test_a_step_counts_a_query_node_faulty_while_it_catches_up():
+    events = [ev(50, "fault", "node1", "wipe"), ev(55, "rejoined", "node1", "wipe")]
+    events.append(ev(70, "caught_up", "node1", "wipe"))
+    spans = [(T0, T0 + 60), (T0 + 60, T0 + 120)]
+    chaos = ch.step_chaos(spans, ch.fault_rows(events), T0, T0 + 120)
+    assert [c["faults"] for c in chaos] == ["node1 wipe", "node1 wipe"]
+
+
+def test_decided_splits_counter_intervals_by_fault_overlap():
+    counters = [(float(t), 2e6 * t) for t in range(11)]
+    faulty, quiet = ch.decided_by_fault(counters, [(2.5, 4.0)], start=1.0, stop=9.0)
+    # Intervals 2-3 and 3-4 overlap the fault; 1-2 and 4-9 do not.
+    assert faulty == (4.0, 2.0)
+    assert quiet == (12.0, 6.0)
+    assert ch.decided_by_fault(counters, [], 0.0, 10.0) == ((0.0, 0.0), (20.0, 10.0))
+
+
+def test_events_without_query_get_it_from_the_topology(tmp_path):
+    old = [{k: v for k, v in e.items() if k != "query"} for e in EVENTS]
+    lines = "".join(json.dumps(e) + "\n" for e in old)
+    (tmp_path / "chaos.jsonl").write_text(lines)
+    roles = {"node0": "validator, query, sqlite", "node5": "validator"}
+    (tmp_path / "topology.json").write_text(json.dumps({"roles": roles}))
+    assert ch.read_events(tmp_path) == EVENTS
+    (tmp_path / "topology.json").unlink()
+    (tmp_path / "chaos.jsonl").write_text("".join(json.dumps(e) + "\n" for e in EVENTS))
+    assert ch.read_events(tmp_path) == EVENTS
 
 
 def fault_event(
     ts: float, event: ch.ChaosEventKind, node: str, kind: ch.ChaosKind = "kill"
 ) -> ch.ChaosEvent:
-    return ch.chaos_event(ts, event, node, kind, None, None)
+    return ch.chaos_event(ts, event, node, True, kind, None, None)
 
 
 CHAOS_EVENTS = [
@@ -859,15 +911,36 @@ def test_phases_of_a_killed_query_node_run_from_fault_to_catch_up():
 
 
 def test_a_node_without_a_start_event_has_no_down_phase():
-    row = ch.FaultRow("node1", "restart", 10.0, rejoined=25.0)
+    row = ch.FaultRow("node1", False, "restart", 10.0, rejoined=25.0)
     assert ch.phase_segments(row, end=100.0) == [("recovering", 10.0, 25.0)]
 
 
-def test_a_timeout_ends_the_open_phase_and_a_run_end_ends_an_unfinished_one():
+def test_a_stuck_node_keeps_its_open_phase_and_a_run_end_ends_an_unfinished_one():
     wiped = ch.fault_rows(CHAOS_EVENTS)[1]
     assert ch.phase_segments(wiped, end=1100.0) == [
         ("recovering", 1008.0, 1018.0),
-        ("catching up", 1018.0, 1040.0),
+        ("catching up", 1018.0, 1100.0),
     ]
     open_ = ch.fault_rows(CHAOS_EVENTS)[2]
     assert ch.phase_segments(open_, end=1100.0) == [("recovering", 1050.0, 1100.0)]
+
+
+def test_a_kill_aborted_while_down_stays_down():
+    restored = ch.fault_rows(
+        [
+            fault_event(1005.0, "fault", "node5"),
+            fault_event(1030.0, "restored", "node5"),
+            fault_event(1030.0, "interrupted", "node5"),
+        ]
+    )[0]
+    assert ch.phase_segments(restored, end=1100.0) == [("down", 1005.0, 1030.0)]
+
+
+def test_a_kill_stuck_while_down_recovers_from_its_timeout():
+    stuck = ch.fault_rows(
+        [fault_event(1005.0, "fault", "node5"), fault_event(1305.0, "timeout", "node5")]
+    )[0]
+    assert ch.phase_segments(stuck, end=1400.0) == [
+        ("down", 1005.0, 1305.0),
+        ("recovering", 1305.0, 1400.0),
+    ]

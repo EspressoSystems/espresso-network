@@ -69,7 +69,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -566,6 +566,8 @@ REMOTE_POOL_SIZE = 16
 DOCKER_START_LEAD_S = 15.0
 # Container log lines per node in the summary of a run without a result.
 FAILURE_LOG_LINES = 10
+# WARN and ERROR lines of a timed out chaos node.
+FAILURE_WARN_LINES = 30
 CHECKIP_URL = "https://checkip.amazonaws.com"
 AGENT_POLL_S = 5.0
 CHAOS_NODES = 22
@@ -4115,7 +4117,7 @@ def report(run: Run) -> nb.BenchResult | None:
         plot_throughput(run.fleet.system.run, run.run_dir)
     if run.error:
         (run.run_dir / "error.txt").write_text(run.error)
-    write_failure_summary(run.run_dir, run.manifest, run.error)
+    write_failure_summary(run.run_dir, run.manifest, run.error, fallback=True)
     return None
 
 
@@ -6157,13 +6159,25 @@ class ChaosRunner:
             [
                 *(
                     ch.chaos_event(
-                        ts, "restored", name, nodes[name]["kind"], None, None
+                        ts,
+                        "restored",
+                        name,
+                        name in self.queries,
+                        nodes[name]["kind"],
+                        None,
+                        None,
                     )
                     for name in down
                 ),
                 *(
                     ch.chaos_event(
-                        ts, "interrupted", name, nodes[name]["kind"], None, None
+                        ts,
+                        "interrupted",
+                        name,
+                        name in self.queries,
+                        nodes[name]["kind"],
+                        None,
+                        None,
                     )
                     for name in open_
                 ),
@@ -6651,7 +6665,7 @@ def render_failed_chaos(run_dir: Path, system: System) -> int:
     plot_throughput(system.run, run_dir)
     error_path = run_dir / "error.txt"
     error = error_path.read_text() if error_path.exists() else None
-    write_failure_summary(run_dir, read_manifest(run_dir), error)
+    write_failure_summary(run_dir, read_manifest(run_dir), error, fallback=False)
     refresh_index_row(run_dir, None)
     log.info("wrote %s", run_dir / "summary.md")
     return EXIT_FAILED
@@ -7361,10 +7375,14 @@ def chaos_view(
     events = ch.read_events(run_dir)
     rows = ch.fault_rows(events)
     t0 = load_t0(run_dir, steps, events)
-    end = max((e["ts"] for e in events), default=t0)
+    end = run_end(run_dir, steps, events, t0)
     spans = [(s["t_start"], s["t_end"]) for s in steps]
     chaos_steps = ch.step_chaos(spans, rows, t0, end)
     meta_path = run_dir / "load-meta.json"
+    throughput = [
+        *throughput_lines(steps),
+        *fault_throughput_lines(run_dir, rows, steps, end),
+    ]
     lead = [
         "## Chaos test",
         "",
@@ -7374,6 +7392,7 @@ def chaos_view(
         *chaos_totals(
             rows,
             events,
+            end,
             config,
             nb.read_json(meta_path) if meta_path.exists() else None,
             tx_counts(run_dir),
@@ -7381,7 +7400,7 @@ def chaos_view(
         "",
         "",
         *ch.recovery_table(rows, config["chaos"]["kinds"]),
-        *throughput_lines(steps, chaos_steps),
+        *([""] + throughput if throughput else []),
     ]
     return {"lead": lead, "faults": ch.fault_table(rows, t0), "steps": chaos_steps}
 
@@ -7395,6 +7414,20 @@ def load_t0(
     if path.exists():
         return float(nb.read_json(path)["t0"])
     return steps[0]["t_start"] if steps else min((e["ts"] for e in events), default=0.0)
+
+
+def run_end(
+    run_dir: Path,
+    steps: Sequence[nb.StepResult],
+    events: Sequence[ch.ChaosEvent],
+    t0: float,
+) -> float:
+    """The last of the load's end (`run.json`), its last step and its last chaos event: a
+    fault still open runs to there."""
+    path = run_dir / "run.json"
+    ends = [nb.read_json(path)["t1"]] if path.exists() else []
+    ends += [s["t_end"] for s in steps] + [e["ts"] for e in events]
+    return max(ends, default=t0)
 
 
 def tx_counts(run_dir: Path) -> Counter[str]:
@@ -7418,6 +7451,7 @@ def setup_line(config: dict[str, Any]) -> str:
 def chaos_totals(
     rows: list[ch.FaultRow],
     events: Sequence[ch.ChaosEvent],
+    end: float,
     config: dict[str, Any],
     meta: dict[str, Any] | None,
     txs: Counter[str],
@@ -7428,7 +7462,7 @@ def chaos_totals(
     lines = [
         (
             f"- Faults: {len(rows)} ({per_kind}); max concurrent faulty "
-            f"{ch.max_concurrent_faulty(rows, events)} of budget {ch.fault_budget(config['nodes'])}"
+            f"{ch.max_concurrent_faulty(rows, end)} of budget {ch.fault_budget(config['nodes'])}"
         ),
         f"- Timeouts: {timeouts}",
     ]
@@ -7447,38 +7481,53 @@ def chaos_totals(
     return lines
 
 
-def throughput_lines(
-    steps: Sequence[nb.StepResult], chaos_steps: Sequence[ch.StepChaos]
-) -> list[str]:
-    """Decided MB/s over all steps against the offered rate, the lowest step, and the mean
-    over the steps with an active fault against those without."""
+def throughput_lines(steps: Sequence[nb.StepResult]) -> list[str]:
+    """Decided MB/s over all steps against the offered rate, and the lowest step."""
     measured = [
-        (s["decided_mb_s"], c)
-        for s, c in zip(steps, chaos_steps, strict=True)
+        (s["decided_mb_s"], s["t_start"] - steps[0]["t_start"])
+        for s in steps
         if s["decided_mb_s"] is not None
     ]
     if not measured:
         return []
-
-    def mean(values: list[float]) -> str:
-        return f"{nb.fmt_num(statistics.fmean(values))} MB/s" if values else "-"
-
-    decided = [d for d, _ in measured]
-    faulty = [d for d, c in measured if c["faults"]]
-    quiet = [d for d, c in measured if not c["faults"]]
-    lowest, at = min((d, c["start_s"]) for d, c in measured)
+    mean = statistics.fmean(d for d, _ in measured)
+    lowest, at = min(measured)
     offered = statistics.fmean(s["rate_mb_s"] for s in steps)
     return [
-        "",
         (
-            f"- Throughput: mean decided {mean(decided)} of {nb.fmt_num(offered)} MB/s offered "
-            f"over {len(measured)} steps; minimum one-minute {nb.fmt_num(lowest)} MB/s "
+            f"- Throughput: mean decided {nb.fmt_num(mean)} MB/s of {nb.fmt_num(offered)} MB/s "
+            f"offered over {len(measured)} steps; minimum one-minute {nb.fmt_num(lowest)} MB/s "
             f"(step at {at:.0f} s)"
-        ),
+        )
+    ]
+
+
+def fault_throughput_lines(
+    run_dir: Path, rows: list[ch.FaultRow], steps: Sequence[nb.StepResult], end: float
+) -> list[str]:
+    """Decided MB/s from `consensus.jsonl` over the steps, with a fault active and without;
+    empty without counter samples."""
+    path = run_dir / "consensus.jsonl"
+    if not steps or not path.exists():
+        return []
+    with path.open() as f:
+        counters = [(c["ts"], c["decided_bytes"]) for c in map(json.loads, f)]
+    if not counters:
+        return []
+    spans = [ch.fault_span(r, end) for r in rows]
+    split = ch.decided_by_fault(
+        counters, spans, steps[0]["t_start"], steps[-1]["t_end"]
+    )
+    (faulty_mb, faulty_s), (quiet_mb, quiet_s) = split
+
+    def rate(mb: float, s: float) -> str:
+        return f"{nb.fmt_num(mb / s)} MB/s" if s else "-"
+
+    return [
         (
-            f"- Mean decided with an active fault {mean(faulty)} ({len(faulty)} steps), "
-            f"without {mean(quiet)} ({len(quiet)} steps)"
-        ),
+            f"- Decided with an active fault {rate(faulty_mb, faulty_s)} over {faulty_s:.0f} s, "
+            f"without {rate(quiet_mb, quiet_s)} over {quiet_s:.0f} s"
+        )
     ]
 
 
@@ -8118,38 +8167,86 @@ def check_validity_aws(
     }
 
 
-def write_failure_summary(run_dir: Path, manifest: Manifest, error: str | None) -> None:
+def write_failure_summary(
+    run_dir: Path, manifest: Manifest, error: str | None, *, fallback: bool
+) -> None:
     """A run without a result: the error (`netbench.wait_ready` includes the last heights) and
     the last log lines of every node container that was collected. A chaos run reports
-    what its files hold and shows the log of the nodes that timed out."""
+    what its files hold and shows the WARN and ERROR lines of the nodes that timed out before
+    their timeout. With `fallback`, a chaos report that raises gives the plain one instead."""
+    timeouts: dict[str, float] = {}
     if manifest["config"].get("chaos") is None:
         lines = ["## Network benchmark", "", f"**invalid**: {error}", ""]
         names = [spec["name"] for spec in manifest["hosts"]]
     else:
         try:
-            lines, names = chaos_failure_lines(run_dir, manifest, error)
+            lines, timeouts = chaos_failure_lines(run_dir, manifest, error)
+            names = list(timeouts) or [spec["name"] for spec in manifest["hosts"]]
         except Exception:
+            if not fallback:
+                raise
             log.exception("chaos report failed")
             lines = ["## Network benchmark", "", f"**invalid**: {error}", ""]
             names = [spec["name"] for spec in manifest["hosts"]]
     for name in names:
         path = run_dir / "hosts" / name / "espresso-node.log.gz"
         if path.exists():
-            try:
-                with gzip.open(path, "rt", errors="replace") as log_file:
-                    tail_lines = log_file.read().splitlines()[-FAILURE_LOG_LINES:]
-                tail = [line[:300] for line in tail_lines]
-            except (OSError, EOFError) as exc:  # a log cut off by a timed-out collect
-                tail = [f"log unreadable: {exc}"]
-            lines += [f"Last log lines of {name}:", "", "```", *tail, "```", ""]
+            lines += node_log_lines(name, path, timeouts.get(name))
     (run_dir / "summary.md").write_text("\n".join(lines))
+
+
+def node_log_lines(name: str, path: Path, timeout: float | None) -> list[str]:
+    """With a `timeout`, its last WARN and ERROR lines before it; else, or without any, its
+    last lines."""
+    try:
+        with gzip.open(path, "rt", errors="replace") as log_file:
+            log_lines = log_file.read().splitlines()
+    except (OSError, EOFError) as exc:  # a log cut off by a timed-out collect
+        return [
+            f"Last log lines of {name}:",
+            "",
+            "```",
+            f"log unreadable: {exc}",
+            "```",
+            "",
+        ]
+    warned = (
+        [] if timeout is None else warn_lines(log_lines, timeout, FAILURE_WARN_LINES)
+    )
+    if warned:
+        title = f"WARN and ERROR lines of {name} before its timeout:"
+        tail = warned
+    else:
+        title = f"Last log lines of {name}:"
+        tail = log_lines[-FAILURE_LOG_LINES:]
+    return [title, "", "```", *(line[:300] for line in tail), "```", ""]
+
+
+def warn_lines(lines: Iterable[str], before: float, limit: int) -> list[str]:
+    """The last `limit` WARN and ERROR lines of a JSON node log before `before`, as
+    `<timestamp> <level> <target>: <message> <field>=<value>...`; other lines are skipped."""
+    picked: deque[str] = deque(maxlen=limit)
+    for line in lines:
+        if not line.startswith("{"):
+            continue
+        entry = json.loads(line)
+        if entry["level"] not in ("WARN", "ERROR"):
+            continue
+        if datetime.fromisoformat(entry["timestamp"]).timestamp() >= before:
+            break
+        fields = dict(entry["fields"])
+        message = fields.pop("message")
+        extra = "".join(f" {k}={v}" for k, v in fields.items())
+        picked.append(
+            f"{entry['timestamp']} {entry['level']} {entry['target']}: {message}{extra}"
+        )
+    return list(picked)
 
 
 def chaos_failure_lines(
     run_dir: Path, manifest: Manifest, error: str | None
-) -> tuple[list[str], list[str]]:
-    """The chaos report of a failed run and the nodes whose log to show: the timed out ones,
-    else every node."""
+) -> tuple[list[str], dict[str, float]]:
+    """The chaos report of a failed run and the time each node timed out."""
     steps_path = run_dir / "steps.json"
     steps = nb.read_json(steps_path) if steps_path.exists() else []
     view = chaos_view(run_dir, manifest, steps, error=error)
@@ -8165,8 +8262,10 @@ def chaos_failure_lines(
             else []
         ),
     ]
-    timed_out = [e["node"] for e in ch.read_events(run_dir) if e["event"] == "timeout"]
-    return lines, timed_out or [spec["name"] for spec in manifest["hosts"]]
+    timeouts = {
+        e["node"]: e["ts"] for e in ch.read_events(run_dir) if e["event"] == "timeout"
+    }
+    return lines, timeouts
 
 
 def tagged_resources(run: Runner, region: str, name: str | None = None) -> list[str]:

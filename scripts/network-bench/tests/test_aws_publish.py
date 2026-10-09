@@ -503,8 +503,8 @@ def test_published_row_derives_the_chaos_cell_from_the_chaos_log(tmp_path: Path)
     manifest["config"]["chaos"] = {"rate_mb_s": 4.0}
     netbench.write_json(run_dir / "manifest.json", manifest)
     events = [
-        ch.chaos_event(1.0, "fault", "node1", "kill", 5, None),
-        ch.chaos_event(9.0, "timeout", "node1", "kill", 5, 8.0),
+        ch.chaos_event(1.0, "fault", "node1", True, "kill", 5, None),
+        ch.chaos_event(9.0, "timeout", "node1", True, "kill", 5, 8.0),
     ]
     (run_dir / "chaos.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
     assert awsb.read_index_row(run_dir)["chaos"] == "1 faults, 1 timeouts"

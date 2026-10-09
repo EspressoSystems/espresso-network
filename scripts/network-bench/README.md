@@ -264,10 +264,11 @@ just bench aws run --fleet --chaos --query-engine sqlite
 - Ctrl-C or an error ends the faults still open with an `interrupted` event; the verdict names them, it does not count
   them as failures.
 - Output: `chaos.jsonl` (`fault`, `started`, `rejoined`, `caught_up`, `timeout`, `restored`, `interrupted`; `ts` on
-  ctl's clock; `after_s` from the fault, from `started` for a kill; `caught_up` carries `missing` as [blocks, leaves,
-  vid_common]; a query node's `timeout` carries `missing` when sync-status answered since the fault), a chaos report
-  leading `summary.md` (see [Chaos report](#chaos-report)), `chaos:` lines in `driver.log` (a timeout line lists the
-  last `missing` counts). Faulted nodes are exempt from the per-node scrape coverage and decided-blocks rules.
+  ctl's clock; `query` when the node serves the query API; `after_s` from the fault, from `started` for a kill;
+  `caught_up` carries `missing` as [blocks, leaves, vid_common]; a query node's `timeout` carries `missing` when
+  sync-status answered since the fault), a chaos report leading `summary.md` (see [Chaos report](#chaos-report)),
+  `chaos:` lines in `driver.log` (a timeout line lists the last `missing` counts). Faulted nodes are exempt from the
+  per-node scrape coverage and decided-blocks rules.
 - Cost: about $5.4/h for the default fleet, about 40 min per single shot. `render` recomputes the chaos report offline,
   also for a run that failed.
 - Check `rss_peak_bytes` in `result.json` after the first run: `c8g.xlarge` has 8 GiB.
@@ -276,22 +277,32 @@ just bench aws run --fleet --chaos --query-engine sqlite
 
 `summary.md` of a `--chaos` run leads with `## Chaos test`, built from `chaos.jsonl`, `load-meta.json` and `steps.json`:
 
-- Verdict: `fail` on a timeout or a failed run, with the reasons, else `pass`; interrupted faults are listed, not
-  blamed.
+- Verdict: `fail` on a timeout or a failed run, with the reasons, else `pass`: every fault recovered (rejoined, and
+  caught up for query nodes). A stuck node fails the verdict at the end of the run, not at its timeout. Interrupted
+  faults are listed, not blamed.
+- A fault is active from the fault until its node recovered: `caught_up` for a query node, `rejoined` for a validator. A
+  timed out node stays faulty until the end of the run, an interrupted fault ends at `interrupted`. Max concurrent
+  faulty, the faults per step, the decided split and the plot all use this span; every event carries `query`, events
+  written before it get it from the roles in `topology.json`.
 - Setup, and totals: faults per kind, max concurrent faulty against the fault budget, timeouts, lost payloads, submit
   failovers, txs submitted, included and timed out.
 - Recovery table per kind: count, rejoin p50 and max, caught-up p50 and max (seconds from the fault, from the start for
   a kill, as the `from` column says; query nodes only catch up).
-- Throughput: mean decided against offered, the lowest step, and the mean over steps with an active fault against steps
-  without. A fault is active from its start to its `rejoined` event.
+- Throughput: mean decided against offered and the lowest step; then decided MB/s from `consensus.jsonl` over the steps,
+  with an active fault against without: an interval between two counter samples that overlaps a fault counts as with
+  one. Without counter samples that line is omitted.
 - `throughput.png`, then the per-fault table (a `missing` column when a timeout carries counts), then one row per step
-  with its start (s since load start) and the faults active in it.
+  with its start (s since load start), its view timeouts in place of a verdict (a faulted leader times out its view) and
+  the faults active in it.
 - In the step details a node restarted during the step shows `-` for its CPU, as its counter reset.
 - `throughput.png` has a top panel with one lane per faulted node: down, recovering and catching up in distinct colors,
-  a marker per event, a red x at a timeout. The other panels shade each fault's down and recovering window.
+  a marker per event, a red x at a timeout. A kill aborted before its node started stays down. The other panels shade
+  each fault while it is active.
 - A run that ends early (an error or Ctrl-C) is collected and reported the same way from the files it has: no
-  `result.json`, `run.json` or consensus counters, so no decided figures and the load starts at the first step. The log
-  tail is that of the nodes that timed out.
+  `result.json` or `run.json`, so the load starts at the first step; consensus counters and steps run up to the end. The
+  log section shows, per node that timed out, its last 30 WARN and ERROR lines before the timeout, else its last lines;
+  without a timeout, every node's last lines. `render` fails when the chaos report raises; the run itself falls back to
+  a plain failure summary.
 - `INDEX.md` has a `chaos` column, `F faults, T timeouts` (`-` without chaos). `rate` is the chaos rate, `decided` the
   mean decided, `bound` is `-`.
 
@@ -308,6 +319,8 @@ just bench aws run --fleet --chaos --query-engine sqlite
 - Postgres query nodes: wipe needs `--query-engine sqlite`; `volume`, `rds` and `tmpfs` query storage are refused.
 - Upgrades: no binary or protocol version upgrade during the run.
 - Load shape: constant rate only; no bursts or capacity search under faults.
+- Correlated or simultaneous faults: one fault per tick, at least `gap_s` (45 s) apart.
+- Faults aimed at upcoming leaders: targets follow the seeded order, not the leader schedule.
 
 ### Node build and config
 

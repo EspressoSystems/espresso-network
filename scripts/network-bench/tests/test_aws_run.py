@@ -430,7 +430,7 @@ def test_truncated_node_log_does_not_break_the_failure_summary(tmp_path: Path):
     good = gzip.compress(b"line\n" * 1000)
     (host_dir / "espresso-node.log.gz").write_bytes(good[: len(good) // 2])
     manifest = {"hosts": [{"name": "node0"}], "config": {}}
-    awsb.write_failure_summary(tmp_path, manifest, "boom")
+    awsb.write_failure_summary(tmp_path, manifest, "boom", fallback=True)
     assert "log unreadable" in (tmp_path / "summary.md").read_text()
 
 

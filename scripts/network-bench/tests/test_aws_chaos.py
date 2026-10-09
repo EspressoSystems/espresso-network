@@ -489,7 +489,7 @@ def test_failed_fault_is_retried_on_the_next_tick(isolated: Path):
 
 # TEST:timeout-event-invalid-ok
 def test_timeout_event_makes_the_run_invalid():
-    event = ch.chaos_event(300.0, "timeout", "node4", "kill", None, 300.0)
+    event = ch.chaos_event(300.0, "timeout", "node4", False, "kill", None, 300.0)
     args = (clean_result(), aws_manifest(), clean_evidence())
     assert awsb.check_validity_aws(*args)["valid"]
     verdict = awsb.check_validity_aws(*args, [event])
@@ -514,8 +514,8 @@ def test_write_report_has_the_chaos_section_and_exempts_faulted_nodes(tmp_path: 
     run = netbench.read_json(tmp_path / "run.json")
     ev = ch.chaos_event
     events = [
-        ev(run["t0"] + 5, "fault", "node1", "restart", 9, None),
-        ev(run["t0"] + 20, "rejoined", "node1", "restart", None, 15.0),
+        ev(run["t0"] + 5, "fault", "node1", False, "restart", 9, None),
+        ev(run["t0"] + 20, "rejoined", "node1", False, "restart", None, 15.0),
     ]
     (tmp_path / "chaos.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
     result = awsb.write_report(tmp_path)

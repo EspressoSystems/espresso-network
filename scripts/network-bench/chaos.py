@@ -12,6 +12,7 @@ import statistics
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
@@ -49,12 +50,14 @@ ChaosEventKind = Literal[
 
 
 class ChaosEvent(TypedDict):
-    """A line of `chaos.jsonl`."""
+    """A line of `chaos.jsonl`. `query`: the node serves the query API, so it recovers only
+    once caught up."""
 
     ts: float
     iso: str
     event: ChaosEventKind
     node: str
+    query: bool
     kind: ChaosKind | None
     height: int | None
     after_s: float | None
@@ -65,6 +68,7 @@ def chaos_event(
     ts: float,
     event: ChaosEventKind,
     node: str,
+    query: bool,
     kind: ChaosKind | None,
     height: int | None,
     after_s: float | None,
@@ -75,6 +79,7 @@ def chaos_event(
         iso=datetime.fromtimestamp(ts, UTC).isoformat(),
         event=event,
         node=node,
+        query=query,
         kind=kind,
         height=height,
         after_s=after_s,
@@ -85,11 +90,18 @@ def chaos_event(
 
 
 def read_events(run_dir: Path) -> list[ChaosEvent]:
-    """Empty for a run without `chaos.jsonl`."""
+    """Empty for a run without `chaos.jsonl`. Events written before `query` existed get it
+    from the roles of `topology.json`."""
     path = run_dir / "chaos.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines()]
+    events: list[ChaosEvent] = [
+        json.loads(line) for line in path.read_text().splitlines()
+    ]
+    if all("query" in e for e in events):
+        return events
+    roles = json.loads((run_dir / "topology.json").read_text())["roles"]
+    return [{**e, "query": "query" in roles[e["node"]]} for e in events]
 
 
 def chaos_log_line(event: ChaosEvent) -> str:
@@ -239,6 +251,7 @@ def chaos_step(
                 ts,
                 event,
                 name,
+                name in queries,
                 nodes[name]["kind"],
                 obs["height"][name],
                 after_s,
@@ -518,6 +531,7 @@ class FaultRow:
     happened. `missing` is the last count an event of the node carried."""
 
     node: str
+    query: bool
     kind: ChaosKind
     fault: float
     started: float | None = None
@@ -537,7 +551,7 @@ def fault_rows(events: Iterable[ChaosEvent]) -> list[FaultRow]:
         if e["event"] == "fault":
             if e["kind"] is None:
                 raise ValueError(f"fault event without a kind: {e}")
-            latest[e["node"]] = FaultRow(e["node"], e["kind"], e["ts"])
+            latest[e["node"]] = FaultRow(e["node"], e["query"], e["kind"], e["ts"])
             rows.append(latest[e["node"]])
             continue
         row, ts = latest[e["node"]], e["ts"]
@@ -562,39 +576,57 @@ def fault_rows(events: Iterable[ChaosEvent]) -> list[FaultRow]:
 Phase = Literal["down", "recovering", "catching up"]
 
 
-def fault_windows(
-    rows: Iterable[FaultRow], end: float
-) -> list[tuple[str, ChaosKind, float, float]]:
-    """(node, kind, start, stop) per fault: from the fault to the rejoin, else to the timeout,
-    else to `end`."""
-    return [(r.node, r.kind, r.fault, _first(r.rejoined, r.timeout, end)) for r in rows]
+def fault_span(row: FaultRow, end: float) -> tuple[float, float]:
+    """(start, stop) of the time `row`'s node is faulty: from the fault until it caught up (a
+    query node) or rejoined (a validator), else until the fault was interrupted, else until
+    `end`. A timed out node is stuck, faulty until `end`."""
+    recovered = row.caught_up if row.query else row.rejoined
+    return row.fault, _first(recovered, row.interrupted, end)
 
 
-def max_concurrent_faulty(
-    rows: Sequence[FaultRow], events: Sequence[ChaosEvent]
-) -> int:
-    """Most rows open at once; a row is open from its fault to its catch-up, or to its rejoin
-    when it never catches up (a validator), or to the last event."""
-    end = max((e["ts"] for e in events), default=0.0)
-    spans = [(r.fault, _first(r.caught_up, r.rejoined, end)) for r in rows]
+def max_concurrent_faulty(rows: Iterable[FaultRow], end: float) -> int:
+    """Most nodes faulty at once."""
+    spans = [fault_span(r, end) for r in rows]
     return max((sum(a <= start < b for a, b in spans) for start, _ in spans), default=0)
 
 
 def phase_segments(row: FaultRow, end: float) -> list[tuple[Phase, float, float]]:
-    """(phase, start, stop) of a fault: down until the node starts (a kill only), recovering
-    until it rejoins, catching up until its query service is synced (a query node only). A
-    phase still open at the timeout, else at `end`, runs to there."""
-    stop = _first(row.timeout, end)
+    """(phase, start, stop) of a fault within its `fault_span`: a kill is down until the node
+    starts (`started`, else the start at its timeout), then recovering until it rejoins, then
+    catching up (a query node only). The phase open at the span's stop runs to there."""
+    stop = fault_span(row, end)[1]
+    up = _first(row.started, row.timeout, stop) if row.kind == "kill" else row.fault
     segments: list[tuple[Phase, float, float]] = []
-    if row.started is not None:
-        segments.append(("down", row.fault, row.started))
-    recovering = _first(row.started, row.fault)
-    segments.append(("recovering", recovering, _first(row.rejoined, stop)))
-    if row.rejoined is not None and row.caught_up is not None:
-        segments.append(("catching up", row.rejoined, row.caught_up))
-    elif row.rejoined is not None and row.timeout is not None:
+    if up > row.fault:
+        segments.append(("down", row.fault, up))
+    if up < stop:
+        segments.append(("recovering", up, _first(row.rejoined, stop)))
+    if row.query and row.rejoined is not None and row.rejoined < stop:
         segments.append(("catching up", row.rejoined, stop))
     return segments
+
+
+# (MB, seconds) decided.
+Decided = tuple[float, float]
+
+
+def decided_by_fault(
+    counters: Sequence[tuple[float, float]],
+    spans: Sequence[tuple[float, float]],
+    start: float,
+    stop: float,
+) -> tuple[Decided, Decided]:
+    """Decided over the intervals between consecutive `counters` samples, (ts, decided bytes),
+    within [`start`, `stop`]: (with a fault, without one). An interval overlapping any of the
+    fault `spans` counts as with a fault."""
+    faulty = [0.0, 0.0]
+    quiet = [0.0, 0.0]
+    inside = [c for c in counters if start <= c[0] <= stop]
+    for (a, bytes_a), (b, bytes_b) in pairwise(inside):
+        into = faulty if any(s < b and e > a for s, e in spans) else quiet
+        into[0] += (bytes_b - bytes_a) / 1e6
+        into[1] += b - a
+    return (faulty[0], faulty[1]), (quiet[0], quiet[1])
 
 
 def _first(*times: float | None) -> float:
@@ -626,7 +658,7 @@ def step_chaos(
 ) -> list[StepChaos]:
     """Per step, given as its (start, end): the faults active in it, and the nodes whose process
     stopped or started. `start_s` counts from `t0`."""
-    windows = fault_windows(rows, end)
+    windows = [(r.node, r.kind, *fault_span(r, end)) for r in rows]
     restarts = [
         (r.node, ts) for r in rows for ts in (r.fault, r.started) if ts is not None
     ]

@@ -3625,17 +3625,21 @@ def step_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
 def chaos_step_table(
     steps: Sequence[StepResult], chaos_steps: Sequence[ch.StepChaos]
 ) -> list[str]:
-    """One row per step, as every step runs the same rate."""
+    """One row per step, as every step runs the same rate. View timeouts in place of the
+    verdict: a faulted leader times out its view."""
     lines = [
-        "| start (s) | MB/s | " + " | ".join(STEP_COLUMNS) + " | verdict | faults |",
-        "|---:|---:|" + "---:|" * len(STEP_COLUMNS) + "---|---|",
+        "| start (s) | MB/s | "
+        + " | ".join(STEP_COLUMNS)
+        + " | view timeouts | faults |",
+        "|---:|---:|" + "---:|" * len(STEP_COLUMNS) + "---:|---|",
     ]
     for step, chaos in zip(steps, chaos_steps, strict=True):
         cells = [step_cell(step, label, None) for label in STEP_COLUMNS]
+        timeouts = "-" if step["timeouts"] is None else str(step["timeouts"])
         lines.append(
             f"| {chaos['start_s']:.0f} | {fmt_num(step['rate_mb_s'])} | "
             + " | ".join(cells)
-            + f" | {step_verdict(step)} | {chaos['faults'] or '-'} |"
+            + f" | {timeouts} | {chaos['faults'] or '-'} |"
         )
     return lines
 
