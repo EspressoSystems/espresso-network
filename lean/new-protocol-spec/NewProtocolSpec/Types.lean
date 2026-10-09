@@ -225,7 +225,7 @@ def Proposal.payloadCommit (p : Proposal) : PayloadCommit :=
 /--
 The hash identifying a block.
 
-`opaque`, so no proof can see through to the projection and every rule relates
+Opaque, so no proof can see through to the projection and every rule relates
 `blockHash` images without depending on how they arise. That is what keeps
 `CollisionFree` consistent: a visible body would let two blocks differing only in
 view share an identity, which refutes it. The body is there for the compiler, so

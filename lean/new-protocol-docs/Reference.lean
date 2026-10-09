@@ -41,7 +41,7 @@ the shares, so the payload is available. A quorum of vote2s is a {name NewProtoc
 block with a {name NewProtocol.Cert2}`Cert2` is _committed_. A node that holds the block and both its
 certificates _decides_ it: it delivers the block to the application, and with it may deliver ancestors
 it has not delivered yet, as far back as it holds them. An ancestor it does not hold is skipped;
-{ref "decides"}[Agreement on decides] says when a skipped block is delivered later.
+{ref "valid-decides"}[Valid decides] says when a skipped block is delivered later.
 
 A view that produces no {name NewProtocol.Cert1}`Cert1` in time is given up. Each node's timer fires, and
 the node sends a timeout vote. The vote names a {name NewProtocol.Cert1}`Cert1` the node holds, no
@@ -1781,6 +1781,10 @@ end Spec.DecideAgreement
 {docstring NewProtocol.decideAgreement}
 
 ## Valid decides
+
+%%%
+tag := "valid-decides"
+%%%
 
 Consensus never checks a block's validity itself. Each delivered block has a
 backed {name NewProtocol.Cert1}`Cert1` over it, and an honest signer of that certificate votes1 only for
