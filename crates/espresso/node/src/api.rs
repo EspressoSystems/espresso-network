@@ -5023,15 +5023,16 @@ mod test {
             .chain(expected.keys().copied())
             .collect::<HashSet<_>>();
         for staker in stakers {
-            let balance = client
-                .get::<Option<RewardAmount>>(&format!(
-                    "reward-state-v2/reward-balance/{height}/{staker}"
-                ))
+            let balance = match client
+                .get::<RewardAmount>(&format!("reward-state-v2/reward-balance/{height}/{staker}"))
                 .send()
                 .await
-                .ok()
-                .flatten()
-                .map(|amount| amount.0);
+            {
+                Ok(amount) => Some(amount.0),
+                // Not in the tree yet.
+                Err(err) if err.status == StatusCode::NOT_FOUND => None,
+                Err(err) => bail!("reward balance of {staker} at {height}: {err}"),
+            };
             ensure!(
                 balance == expected.get(&staker).copied(),
                 "balance of {staker} at {height}: {balance:?}, expected {:?}",
