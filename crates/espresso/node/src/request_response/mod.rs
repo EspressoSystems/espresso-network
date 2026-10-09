@@ -9,9 +9,7 @@ use hotshot_types::traits::network::ConnectedNetwork;
 use network::Sender;
 use recipient_source::RecipientSource;
 use request::{Request, Response};
-use request_response::{
-    RequestError, RequestResponse, RequestResponseConfig, RequestType, network::Bytes,
-};
+use request_response::{RequestError, RequestResponse, RequestResponseConfig, network::Bytes};
 use tokio::sync::mpsc::Receiver;
 
 pub mod catchup;
@@ -100,8 +98,6 @@ where
         &self,
         // The request to make
         request: Request,
-        // The type of request
-        request_type: RequestType,
         // The response validation function
         response_validation_fn: F,
     ) -> std::result::Result<O, RequestError>
@@ -115,7 +111,6 @@ where
             .request_indefinitely(
                 &self.public_key,
                 &self.private_key,
-                request_type,
                 self.config.incoming_request_ttl,
                 request,
                 response_validation_fn,

@@ -226,6 +226,58 @@ async fn test_smaller_blocks_drop_what_no_longer_fits() {
     );
 }
 
+/// The header constructors discard the builder commitment from 0.7, so only
+/// the builder's own output shows whether the leader still hashed the payload.
+#[tokio::test]
+async fn test_builder_commitment_is_empty_from_the_version_that_dropped_it() {
+    use hotshot_example_types::block_types::TestBlockPayload;
+    use hotshot_types::{traits::BlockPayload, utils::BuilderCommitment};
+
+    use crate::{block::BlockAndHeaderRequest, tests::common::utils::TestData};
+
+    // Upgrades at view 5: view 4 builds under 0.6 and view 5 under 0.7.
+    let mut b = builder_upgrading(512, 512);
+    let parent = TestData::new(2).await.views[0].proposal.data.clone();
+    for (n, target_view) in [(1, 4), (2, 5)] {
+        b.on_transactions(tx_msg(view(target_view - 1), vec![tx(n)]));
+        b.request_block(BlockAndHeaderRequest {
+            view: view(target_view),
+            epoch: epoch(),
+            parent_proposal: parent.clone(),
+        });
+    }
+    let mut outputs = BTreeMap::new();
+    for _ in 0..2 {
+        let Some(Ok(output)) = b.next().await else {
+            panic!("expected an Ok block builder output");
+        };
+        outputs.insert(output.view, output);
+    }
+
+    // Both blocks carry a transaction, so hashing them gives something other
+    // than the empty commitment and the two branches are told apart.
+    let hashed = |v: u64| {
+        let payload = &outputs[&view(v)].payload;
+        let hashed = <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(
+            &payload.payload,
+            &payload.metadata,
+        );
+        assert_ne!(hashed, BuilderCommitment::empty());
+        hashed
+    };
+    assert_eq!(
+        outputs[&view(4)].builder_commitment,
+        hashed(4),
+        "before the upgrade the leader hashes the payload"
+    );
+    hashed(5);
+    assert_eq!(
+        outputs[&view(5)].builder_commitment,
+        BuilderCommitment::empty(),
+        "from the upgrade the leader skips the hash"
+    );
+}
+
 #[tokio::test]
 async fn test_block_size_follows_the_running_version() {
     // The later version's size does not apply before its upgrade.
