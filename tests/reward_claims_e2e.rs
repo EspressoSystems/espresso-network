@@ -18,10 +18,11 @@ use espresso_node::{
     state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
     testing::{TestConfigBuilder, wait_for_epochs},
 };
-use espresso_types::{L1ClientOptions, SeqTypes};
+use espresso_types::{L1ClientOptions, SeqTypes, TEST_UPGRADE};
 use hotshot_contract_adapter::{
     reward::RewardClaimInput,
     sol_types::{EspTokenV2, LightClientV3, RewardClaim},
+    stake_table::StakeTableContractVersion,
 };
 use hotshot_query_service::data_source::SqlDataSource;
 use hotshot_state_prover::{StateProverConfig, v3::service::run_prover_once};
@@ -85,12 +86,16 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .api_config(SqlDataSource::options(&storage[0], api_options))
         .network_config(network_config)
         .persistences(persistence.clone())
-        .delegation(DelegationConfig::default())
-        .build()
-        .await;
+        .pos_hook(
+            DelegationConfig::default(),
+            StakeTableContractVersion::V3,
+            TEST_UPGRADE,
+        )
+        .await?
+        .build();
 
     println!("Starting Espresso TestNetwork with {} nodes...", NUM_NODES);
-    let network = TestNetwork::new(config).await;
+    let network = TestNetwork::new(config, TEST_UPGRADE).await;
     println!("TestNetwork started successfully");
 
     let contracts = network.contracts.unwrap();

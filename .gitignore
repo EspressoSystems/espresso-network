@@ -6,6 +6,9 @@ target/
 # Repo-local scratch directory for build trees and temporary files
 /tmp/
 
+# aws-bench fleet state: terraform state and ssh keys of live AWS fleets
+/bench-state/
+
 # .envrc typically just has `use flake .`
 # but this should be done by the user
 .envrc.local

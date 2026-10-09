@@ -545,7 +545,7 @@ mod test {
         },
         testing::{TestConfigBuilder, wait_for_decide_on_handle},
     };
-    use espresso_types::{Header, Transaction};
+    use espresso_types::{Header, TEST_UPGRADE, Transaction};
     use futures::{TryStreamExt, stream::StreamExt};
     use hotshot_query_service_types::{
         Resolvable,
@@ -591,10 +591,9 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
-            .build()
-            .await;
+            .build();
 
-        let _network = TestNetwork::new(config).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client = client(url);
 
         // Check that the block height increases over time.
@@ -631,10 +630,9 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
-            .build()
-            .await;
+            .build();
 
-        let _network = TestNetwork::new(config).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client = client(url.clone());
 
         // Wait for a chain of leaves to be produced.
@@ -715,10 +713,9 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
-            .build()
-            .await;
+            .build();
 
-        let _network = TestNetwork::new(config).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client = client(url.clone());
         let http = HttpClient::new(url);
 
@@ -793,10 +790,9 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
-            .build()
-            .await;
+            .build();
 
-        let _network = TestNetwork::new(config).await;
+        let _network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client = client(url.clone());
 
         // Wait for a few blocks to be produced.
@@ -849,10 +845,9 @@ mod test {
             )
             .persistences([persistence])
             .network_config(test_config)
-            .build()
-            .await;
+            .build();
 
-        let network = TestNetwork::new(config).await;
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
         let client = client(url.clone());
         let http = HttpClient::new(url);
 

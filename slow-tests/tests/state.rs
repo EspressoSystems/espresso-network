@@ -8,17 +8,24 @@ use espresso_node::{
         Options,
         data_source::testing::TestableSequencerDataSource,
         sql::DataSource as SqlDataSource,
-        test_helpers::{TestNetwork, TestNetworkConfigBuilder, node_storage},
+        test_helpers::{TestNetwork, TestNetworkConfigBuilder},
     },
+    catchup::StatePeers,
     testing::{TestConfig, TestConfigBuilder},
 };
 use espresso_types::{FeeAccount, FeeAmount, Header, SeqTypes};
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, future::join_all};
+use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_query_service::{availability::BlockQueryData, types::HeightIndexed};
+use hotshot_types::traits::metrics::NoMetrics;
 use http_client::{Client, error::ClientErr};
 use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
+use staking_cli::demo::DelegationConfig;
 use test_utils::reserve_tcp_port;
 use tokio::time::{sleep, timeout};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
+
+const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_merklized_state_api() {
@@ -29,7 +36,13 @@ async fn slow_test_merklized_state_api() {
     // SQL persistence on every node and catchup from node 0's query API: at
     // 0.6 the query node fills decided blocks' payloads from its persisted DA
     // proposals, and epoch boundaries need state catchup.
-    let (storage, persistence) = node_storage::<SqlDataSource, NUM_NODES>().await;
+    let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+    let persistence: [_; NUM_NODES] = storage
+        .iter()
+        .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
 
     let network_config = TestConfigBuilder::default()
         .epoch_height(EPOCH_HEIGHT)
@@ -42,10 +55,23 @@ async fn slow_test_merklized_state_api() {
         ))
         .network_config(network_config)
         .persistences(persistence)
-        .catchup_from_api()
-        .build()
-        .await;
-    let mut network = TestNetwork::new(config).await;
+        .catchups(std::array::from_fn(|_| {
+            StatePeers::<SequencerApiVersion>::from_urls(
+                vec![format!("http://localhost:{port}").parse().unwrap()],
+                Default::default(),
+                Duration::from_secs(2),
+                &NoMetrics,
+            )
+        }))
+        .pos_hook(
+            DelegationConfig::MultipleDelegators,
+            StakeTableContractVersion::V3,
+            NEW_PROTOCOL,
+        )
+        .await
+        .unwrap()
+        .build();
+    let mut network = TestNetwork::new(config, NEW_PROTOCOL).await;
     let url = format!("http://localhost:{port}").parse().unwrap();
     let client: Client<ClientErr, SequencerApiVersion> = Client::new(url);
 

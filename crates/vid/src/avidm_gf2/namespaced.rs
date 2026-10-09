@@ -246,6 +246,21 @@ impl NsAvidmGf2Scheme {
 
     /// Verify a namespaced share given already-verified common data.
     ///
+    /// Besides each namespace's Merkle proofs, this checks that each
+    /// namespace's shards have the size its `ns_lens` entry disperses to. The
+    /// commitment binds `ns_commits` but not `ns_lens`, so without this a
+    /// share could declare any payload length and have it believed. With it,
+    /// each declared length is pinned to within `2 * recovery_threshold`
+    /// bytes of the one the shards were built from.
+    ///
+    /// That window is per namespace, and the disperser chooses how many
+    /// namespaces there are, so the misdeclared total adds up: a payload split
+    /// into namespaces shorter than a window can declare each as a single
+    /// byte and still verify. This rejects gross forgeries early, such as a
+    /// shrunken one-namespace block or an absurd length; it does not bound
+    /// the total. Exact binding needs a verifier that knows the payload's
+    /// namespace table, or a commitment that covers `ns_lens`.
+    ///
     /// # Safety Contract
     /// Caller MUST ensure `is_consistent(commit, common)` returned `true`
     /// before calling this. Without that check, a malicious common could
@@ -266,8 +281,14 @@ impl NsAvidmGf2Scheme {
         match common
             .ns_commits
             .par_iter()
+            .zip(common.ns_lens.par_iter())
             .zip(share.0.par_iter())
-            .map(|(commit, content)| AvidmGf2Scheme::verify_share(&common.param, commit, content))
+            .map(|((commit, &ns_len), content)| {
+                if !Self::ns_len_matches_shards(&common.param, ns_len, content) {
+                    return Ok(Err(()));
+                }
+                AvidmGf2Scheme::verify_share(&common.param, commit, content)
+            })
             .find_any(|r| !matches!(r, Ok(Ok(()))))
         {
             None => Ok(Ok(())),
@@ -325,6 +346,18 @@ impl NsAvidmGf2Scheme {
             .filter_map(|share| share.inner_ns_share(ns_index))
             .collect();
         AvidmGf2Scheme::recover(&common.param, ns_commit, &shares)
+    }
+
+    /// Whether `content`'s shards have the size an `ns_len`-byte namespace
+    /// disperses to under `param`.
+    fn ns_len_matches_shards(
+        param: &NsAvidmGf2Param,
+        ns_len: usize,
+        content: &AvidmGf2Share,
+    ) -> bool {
+        content.shard_bytes().is_some_and(|shard_bytes| {
+            AvidmGf2Scheme::shard_bytes(ns_len, param.recovery_threshold) == Some(shard_bytes)
+        })
     }
 }
 
@@ -407,6 +440,107 @@ pub mod tests {
             NsAvidmGf2Scheme::verify_share_with_verified_common(&common, &mixed)
                 .is_ok_and(|r| r.is_err())
         );
+    }
+
+    /// Disperse `payload` under a known `recovery_threshold`, so a test knows
+    /// the shard-size window the `ns_lens` check tolerates.
+    fn disperse_with_threshold(
+        recovery_threshold: usize,
+        payload: &[u8],
+        ns_table: &[std::ops::Range<usize>],
+    ) -> (
+        crate::avidm_gf2::namespaced::NsAvidmGf2Commit,
+        crate::avidm_gf2::namespaced::NsAvidmGf2Common,
+        Vec<crate::avidm_gf2::namespaced::NsAvidmGf2Share>,
+    ) {
+        let total_weights = 3 * recovery_threshold;
+        let weights = vec![1u32; total_weights];
+        let params = NsAvidmGf2Scheme::setup(recovery_threshold, total_weights).unwrap();
+        NsAvidmGf2Scheme::ns_disperse(&params, &weights, payload, ns_table.iter().cloned()).unwrap()
+    }
+
+    /// The commitment does not bind `ns_lens`, so a share must not verify
+    /// against a common whose `ns_lens` its shards were not dispersed from.
+    /// The shard size pins each length to a `2 * recovery_threshold`-byte
+    /// window: lengths inside it still verify, lengths outside do not, and
+    /// a mismatch is a verification failure rather than an error or a panic.
+    #[test]
+    fn verify_share_rejects_ns_len_outside_shard_window() {
+        let k = 4;
+        let payload = vec![7u8; 100];
+        let (commit, common, shares) = disperse_with_threshold(k, &payload, &[0..30, 30..100]);
+        assert!(NsAvidmGf2Scheme::is_consistent(&commit, &common));
+        // 30 bytes plus the pad byte need ceil(31 / 4) = 8 bytes per shard,
+        // already even, so those shards fit any length in 24..32.
+        assert_eq!(shares[0].0[0].shard_bytes(), Some(8));
+        let window = (8 - 2) * k..8 * k;
+
+        for ns_len in [window.start, window.end - 1] {
+            let mut tampered = common.clone();
+            tampered.ns_lens[0] = ns_len;
+            for share in &shares {
+                assert_eq!(
+                    NsAvidmGf2Scheme::verify_share_with_verified_common(&tampered, share).unwrap(),
+                    Ok(()),
+                    "{ns_len}"
+                );
+            }
+        }
+        for ns_len in [0, window.start - 1, window.end, 100, usize::MAX] {
+            let mut tampered = common.clone();
+            tampered.ns_lens[0] = ns_len;
+            for share in &shares {
+                assert_eq!(
+                    NsAvidmGf2Scheme::verify_share_with_verified_common(&tampered, share).unwrap(),
+                    Err(()),
+                    "{ns_len}"
+                );
+            }
+        }
+
+        // The forgery this catches: shrink the second namespace by a full
+        // window, so the share reports a smaller block than was committed to.
+        // The same shrink spread over several namespaces is not caught, see
+        // `verify_share_accepts_ns_lens_shrunk_inside_every_window`.
+        let mut shrunk = common.clone();
+        shrunk.ns_lens[1] -= 2 * k;
+        assert!(shrunk.payload_byte_len() < common.payload_byte_len());
+        for share in &shares {
+            assert_eq!(
+                NsAvidmGf2Scheme::verify_share_with_verified_common(&shrunk, share).unwrap(),
+                Err(())
+            );
+        }
+    }
+
+    /// The window is per namespace and the disperser chooses how many there
+    /// are, so the misdeclared total adds up: a payload split into namespaces
+    /// shorter than a window can declare every one of them as a single byte
+    /// and still verify. This pins that residual gap; a check that binds
+    /// `ns_lens` exactly should flip it.
+    #[test]
+    fn verify_share_accepts_ns_lens_shrunk_inside_every_window() {
+        let k = 4;
+        // Lengths 1..=7 all disperse to 2-byte shards under k = 4.
+        let ns_len = 2 * k - 1;
+        let num_ns = 10;
+        let payload = vec![7u8; num_ns * ns_len];
+        let ns_table: Vec<_> = (0..num_ns).map(|i| i * ns_len..(i + 1) * ns_len).collect();
+        let (commit, common, shares) = disperse_with_threshold(k, &payload, &ns_table);
+        for share in &shares {
+            assert_eq!(share.0[0].shard_bytes(), Some(2));
+        }
+
+        let mut shrunk = common.clone();
+        shrunk.ns_lens = vec![1; num_ns];
+        assert!(NsAvidmGf2Scheme::is_consistent(&commit, &shrunk));
+        assert_eq!(shrunk.payload_byte_len(), num_ns);
+        for share in &shares {
+            assert_eq!(
+                NsAvidmGf2Scheme::verify_share_with_verified_common(&shrunk, share).unwrap(),
+                Ok(())
+            );
+        }
     }
 
     #[test]

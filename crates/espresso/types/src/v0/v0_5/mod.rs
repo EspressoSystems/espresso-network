@@ -24,4 +24,5 @@ pub const VERSION: Version = Version { major: 0, minor: 5 };
 pub type LeaderCounts = [u16; MAX_VALIDATORS];
 
 mod header;
+pub(crate) use header::leader_counts_serde;
 pub use header::*;

@@ -37,11 +37,10 @@ use espresso_dev_node::{
 use espresso_node::{
     SequencerApiVersion,
     api::{
+        data_source::testing::TestableSequencerDataSource,
         options,
         sql::DataSource,
-        test_helpers::{
-            STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder, node_storage,
-        },
+        test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
     },
     persistence,
     state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
@@ -51,7 +50,7 @@ use espresso_types::{
     L1ClientOptions, SeqTypes, ValidatedState, parse_duration, v0_3::ChainConfig,
 };
 use espresso_utils::logging;
-use futures::{StreamExt, stream::FuturesUnordered};
+use futures::{StreamExt, future::join_all, stream::FuturesUnordered};
 use hotshot_contract_adapter::sol_types::LightClientV2Mock::{self, LightClientV2MockInstance};
 use hotshot_state_prover::{StateProverConfig, v2::service::run_prover_service};
 use hotshot_types::{
@@ -665,27 +664,31 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     .explorer(Default::default())
     .query_sql(Default::default(), sql)
     .light_client(Default::default());
-    let (_consensus_dbs, persistences) = node_storage::<DataSource, NUM_NODES>().await;
+    let consensus_dbs = join_all((0..NUM_NODES).map(|_| DataSource::create_storage())).await;
+    let persistences: [_; NUM_NODES] = consensus_dbs
+        .iter()
+        .map(DataSource::persistence_options)
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("one persistence per node");
 
-    let upgrade = match version {
-        DevNodeVersion::V0_3 => Upgrade::trivial(versions::version(0, 3)),
-        DevNodeVersion::V0_4 => Upgrade::trivial(versions::version(0, 4)),
-        DevNodeVersion::V0_5 => Upgrade::trivial(versions::version(0, 5)),
-        DevNodeVersion::V0_6 => Upgrade::trivial(versions::NEW_PROTOCOL_VERSION),
-    };
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
         .api_config(api_options)
         .network_config(network_config)
         .states(states)
         .persistences(persistences)
-        .upgrade(upgrade)
-        // The dev-node deploys its own contracts and puts the stake table in `states`.
-        .no_stake_table()
-        .build()
-        .await;
+        .build();
 
     // Start the nodes
-    let network = TestNetwork::new(config).await;
+    let network = {
+        let u = match version {
+            DevNodeVersion::V0_3 => Upgrade::trivial(versions::version(0, 3)),
+            DevNodeVersion::V0_4 => Upgrade::trivial(versions::version(0, 4)),
+            DevNodeVersion::V0_5 => Upgrade::trivial(versions::version(0, 5)),
+            DevNodeVersion::V0_6 => Upgrade::trivial(versions::NEW_PROTOCOL_VERSION),
+        };
+        TestNetwork::new(config, u).await
+    };
 
     let relay_server_handle = spawn(async move {
         // using explicit relayer state will avoid it calling the dev-node on `/config/hotshot` for epoch info,

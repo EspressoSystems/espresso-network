@@ -1,0 +1,163 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.14"
+# dependencies = []
+# ///
+"""Regenerates mainnet-locations.json from the mainnet stake table.
+
+Fetches the current stake table, resolves each validator host to an IPv4 address, geolocates the
+addresses and writes city-level node counts and stake shares. The output holds no IPs or hostnames.
+
+Privacy: validator IPs are sent to ip-api.com (HTTP only, free tier 15 batch requests per minute,
+no key).
+"""
+
+import argparse
+import datetime
+import json
+import logging
+import re
+import socket
+import sys
+import unicodedata
+import urllib.request
+from collections import defaultdict
+from collections.abc import Callable
+from itertools import batched
+from pathlib import Path
+
+SOURCE = "https://query.main.net.espresso.network/v0/node/stake-table/current"
+GEO_URL = "http://ip-api.com/batch?fields=status,message,query,city,country,countryCode,lat,lon"
+BATCH = 100
+TIMEOUT_S = 30
+
+log = logging.getLogger("mainnet-locations")
+
+
+def main(
+    argv: list[str],
+    fetch: Callable[[str], bytes],
+    post: Callable[[str, bytes], bytes],
+    resolve: Callable[[str], str],
+    today: str,
+) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--out", type=Path, default=Path(__file__).with_name("mainnet-locations.json")
+    )
+    args = parser.parse_args(argv)
+
+    doc = json.loads(fetch(SOURCE))
+    entries = parse_stake_table(doc)
+    log.info(
+        "fetched stake table epoch %d with %d validators", doc["epoch"], len(entries)
+    )
+    ips = [resolve(host) for host, _ in entries]
+    log.info("resolved %d hosts", len(ips))
+    geo = geolocate(ips, post)
+    log.info("geolocated %d addresses", len(geo))
+    locations = aggregate(
+        [(g, stake) for g, (_, stake) in zip(geo, entries, strict=True)]
+    )
+    result = {
+        "measured_at": today,
+        "source": SOURCE,
+        "epoch": doc["epoch"],
+        "validators": len(entries),
+        "locations": locations,
+    }
+    args.out.write_text(json.dumps(result, indent=2) + "\n")
+    log.info("wrote %s", args.out)
+    print(f"{len(entries)} validators, {len(locations)} locations", file=sys.stderr)
+    return 0
+
+
+def parse_stake_table(doc: dict) -> list[tuple[str, int]]:
+    table = doc["stake_table"]
+    unregistered = sum(1 for e in table if e["connect_info"] is None)
+    if unregistered:
+        raise ValueError(
+            f"{unregistered} of {len(table)} validators have no connect_info"
+        )
+    return [
+        (
+            host_of(e["connect_info"]["p2p_addr"]),
+            int(e["stake_table_entry"]["stake_amount"], 16),
+        )
+        for e in table
+    ]
+
+
+def host_of(p2p_addr: str) -> str:
+    host, sep, port = p2p_addr.partition(":")
+    if not sep or ":" in port or not host or not port:
+        raise ValueError(f"expected host:port with one colon, got {p2p_addr!r}")
+    return host
+
+
+def geolocate(ips: list[str], post: Callable[[str, bytes], bytes]) -> list[dict]:
+    results: list[dict] = []
+    for chunk in batched(ips, BATCH):
+        results.extend(json.loads(post(GEO_URL, json.dumps(chunk).encode())))
+    for entry in results:
+        if entry["status"] != "success":
+            raise ValueError(
+                f"geolocation failed for {entry['query']}: {entry['message']}"
+            )
+    return results
+
+
+def aggregate(places: list[tuple[dict, int]]) -> list[dict]:
+    total = sum(stake for _, stake in places)
+    groups: dict[tuple[str, str], dict] = {}
+    stakes: defaultdict[tuple[str, str], int] = defaultdict(int)
+    for geo, stake in places:
+        key = (geo["city"], geo["countryCode"])
+        if key not in groups:
+            groups[key] = {
+                "label": f"{slug(geo['city'])}-{geo['countryCode'].lower()}",
+                "city": geo["city"],
+                "country": geo["countryCode"],
+                "lat": round(geo["lat"], 2),
+                "lon": round(geo["lon"], 2),
+                "nodes": 0,
+            }
+        groups[key]["nodes"] += 1
+        stakes[key] += stake
+    rows = [{**row, "stake_share": stakes[key] / total} for key, row in groups.items()]
+    return sorted(rows, key=lambda r: (-r["nodes"], r["label"]))
+
+
+def slug(text: str) -> str:
+    ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-")
+
+
+def resolve_ipv4(host: str) -> str:
+    return str(socket.getaddrinfo(host, None, socket.AF_INET)[0][4][0])
+
+
+def http_fetch(url: str) -> bytes:
+    with urllib.request.urlopen(url, timeout=TIMEOUT_S) as resp:
+        return resp.read()
+
+
+def http_post(url: str, body: bytes) -> bytes:
+    req = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+        return resp.read()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
+    sys.exit(
+        main(
+            sys.argv[1:],
+            http_fetch,
+            http_post,
+            resolve_ipv4,
+            datetime.datetime.now().astimezone().date().isoformat(),
+        )
+    )
