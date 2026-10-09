@@ -127,6 +127,12 @@ pub struct BlobStore<F: JournalFs = StdFs> {
     _lock: File,
 }
 
+impl<F: JournalFs> fmt::Debug for BlobStore<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BlobStore").finish_non_exhaustive()
+    }
+}
+
 impl<F: JournalFs> BlobStore<F> {
     /// Takes the directory lock, recovers both lanes, rebuilds the share index and starts the
     /// writers and the share sync task. A corrupt segment is dropped with every segment after it.

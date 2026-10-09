@@ -22,6 +22,7 @@ use std::{
     collections::HashMap,
     fmt::{Debug, Display},
     marker::PhantomData,
+    sync::Arc,
     time::Instant,
 };
 
@@ -66,7 +67,9 @@ use crate::{
         VidCommonQueryData, sql::payload_dir,
     },
     data_source::{
-        storage::{NodeStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
+        storage::{
+            NodeStorage, UpdateAvailabilityStorage, blob::BlobStore, pruning::PrunedHeightStorage,
+        },
         update,
     },
     merklized_state::{MerklizedState, UpdateStateData},
@@ -321,14 +324,27 @@ pub struct Transaction<Mode> {
     #[deref_mut]
     inner: sqlx::Transaction<'static, Db>,
     metrics: TransactionMetricsGuard<Mode>,
+    blobs: Option<Arc<BlobStore>>,
 }
 
 impl<Mode: TransactionMode> Transaction<Mode> {
-    pub(super) async fn new(pool: &Pool<Db>, metrics: PoolMetrics) -> anyhow::Result<Self> {
+    pub(super) async fn new(
+        pool: &Pool<Db>,
+        metrics: PoolMetrics,
+        blobs: Option<Arc<BlobStore>>,
+    ) -> anyhow::Result<Self> {
         let mut inner = pool.begin().await?;
         let metrics = TransactionMetricsGuard::begin(metrics);
         Mode::begin(inner.as_mut()).await?;
-        Ok(Self { inner, metrics })
+        Ok(Self {
+            inner,
+            metrics,
+            blobs,
+        })
+    }
+
+    pub fn blob_store(&self) -> Option<&Arc<BlobStore>> {
+        self.blobs.as_ref()
     }
 }
 

@@ -11,7 +11,7 @@
 // see <https://www.gnu.org/licenses/>.
 
 //! A generic algorithm for updating a HotShot Query Service data source with new data.
-use std::iter::once;
+use std::{iter::once, sync::Arc};
 
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
@@ -44,6 +44,7 @@ use crate::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
         UpdateAvailabilityData, VidCommonQueryData,
     },
+    data_source::storage::blob::BlobStore,
     types::HeightIndexed,
 };
 
@@ -448,6 +449,11 @@ pub trait VersionedDataSource: Send + Sync {
     ///
     /// Read-only transactions do not need to be committed, and reverting has no effect.
     fn read(&self) -> impl Future<Output = anyhow::Result<Self::ReadOnly<'_>>> + Send;
+
+    /// The blob store holding block payloads and VID shares outside the database, if configured.
+    fn blob_store(&self) -> Option<&Arc<BlobStore>> {
+        None
+    }
 }
 
 /// A unit of atomicity for updating a shared data source.

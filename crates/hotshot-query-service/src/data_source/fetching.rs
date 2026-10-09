@@ -99,6 +99,7 @@ use super::{
         Aggregate, AggregatesStorage, AvailabilityStorage, ExplorerStorage,
         MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, SerializableRetry,
         UpdateAggregatesStorage, UpdateAvailabilityStorage,
+        blob::BlobStore,
         pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
     },
 };
@@ -996,6 +997,10 @@ where
     async fn read(&self) -> anyhow::Result<Self::ReadOnly<'_>> {
         self.fetcher.read().await
     }
+
+    fn blob_store(&self) -> Option<&Arc<BlobStore>> {
+        self.fetcher.blob_store()
+    }
 }
 
 /// Asynchronous retrieval and storage of [`Fetchable`] resources.
@@ -1054,6 +1059,10 @@ where
 
     async fn read(&self) -> anyhow::Result<Self::ReadOnly<'_>> {
         self.storage.read().await
+    }
+
+    fn blob_store(&self) -> Option<&Arc<BlobStore>> {
+        self.storage.blob_store()
     }
 }
 

@@ -10,7 +10,10 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::ops::{Bound, Range, RangeBounds};
+use std::{
+    ops::{Bound, Range, RangeBounds},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
@@ -26,7 +29,7 @@ use crate::{
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
-    data_source::storage::pruning::PrunedHeightDataSource,
+    data_source::storage::{blob::BlobStore, pruning::PrunedHeightDataSource},
     explorer::{self, ExplorerDataSource, ExplorerHeader, ExplorerTransaction},
     merklized_state::{
         MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
@@ -138,6 +141,10 @@ where
 
     async fn read(&self) -> anyhow::Result<Self::ReadOnly<'_>> {
         self.data_source.read().await
+    }
+
+    fn blob_store(&self) -> Option<&Arc<BlobStore>> {
+        self.data_source.blob_store()
     }
 }
 

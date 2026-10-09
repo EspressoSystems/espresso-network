@@ -27,6 +27,7 @@ use hotshot_types::{
 use super::{
     Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, UpdateAggregatesStorage,
     UpdateAvailabilityStorage,
+    blob::BlobStore,
     pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
 };
 use crate::{
@@ -245,6 +246,10 @@ where
             inner: self.inner.read().await?,
             failure: self.failure.clone(),
         })
+    }
+
+    fn blob_store(&self) -> Option<&Arc<BlobStore>> {
+        self.inner.blob_store()
     }
 }
 
