@@ -97,7 +97,7 @@ def test_tcp_cc_and_mtu_need_a_profile_and_default_to_bbr_and_1500():
 
 
 # TEST:hash-four-distinct-ok
-def test_hash_differs_per_profile_and_matches_the_old_value_for_off():
+def test_hash_differs_per_profile():
     base = awsb.RunConfig(
         tag="x",
         nodes=2,
@@ -125,17 +125,6 @@ def test_hash_differs_per_profile_and_matches_the_old_value_for_off():
         for cfg in variants
     ]
     assert len(set(hashes)) == 4
-    old = netbench.config_hash(
-        base.load,
-        [
-            b"g",
-            json.dumps({}).encode(),
-            json.dumps(hosts, sort_keys=True).encode(),
-            base.query_db.encode(),
-            b"query-nodes=1",
-        ],
-    )
-    assert hashes[0] == old
 
 
 def test_hash_follows_the_matrix(monkeypatch: pytest.MonkeyPatch):

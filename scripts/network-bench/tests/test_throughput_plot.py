@@ -27,6 +27,25 @@ def test_rates_from_counters_and_tx_times():
     assert list(rate) == [3.0, 0.0, 1.0]
 
 
+def test_client_lag_is_measured_from_the_validator_that_showed_the_last_block():
+    clients = [
+        {"end": 3, "t_done": 105.0, "bytes": 4_000_000, "status": "ok"},
+        {"end": 4, "t_done": 106.0, "bytes": 0, "status": "missing"},
+        {"end": 9, "t_done": 107.0, "bytes": 1_000_000, "status": "ok"},
+    ]
+    done, lag = plot.client_lag(clients, {2: 104.5, 3: 105.5})
+    assert list(done) == [105.0]
+    assert list(lag) == [500.0]
+    t, rate = plot.binned_bytes_mb_s(
+        np.array([c["t_done"] for c in clients]),
+        np.array([c["bytes"] for c in clients]),
+        104.0,
+        108.0,
+    )
+    assert list(t) == [105.0, 106.0, 107.0, 108.0]
+    assert list(rate) == [0.0, 4.0, 0.0, 1.0]
+
+
 def test_block_series_over_the_trailing_window():
     counters = [{"ts": float(t), "decided_bytes": 4e6 * t} for t in range(25)]
     blocks = np.linspace(0.5, 24.5, 49)
@@ -105,6 +124,29 @@ def test_main_writes_the_chart_from_a_minimal_run_dir(tmp_path: Path):
         (run_dir / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
     plot.main([str(run_dir)])
     assert (run_dir / "throughput.png").read_bytes().startswith(b"\x89PNG")
+    three_panels = (run_dir / "throughput.png").read_bytes()
+    clients = [
+        {
+            "ns": 1,
+            "reader": 0,
+            "start": h,
+            "end": h + 1,
+            "t_start": t0 + h + 1,
+            "t_done": t0 + h + 1.2,
+            "bytes": 1_000_000,
+            "status": "ok",
+        }
+        for h in range(18)
+    ]
+    (run_dir / "clients.jsonl").write_text(
+        "".join(json.dumps(c) + "\n" for c in clients)
+    )
+    plot.main([str(run_dir)])
+    assert (run_dir / "throughput.png").read_bytes() != three_panels
+    # A run whose readers wrote nothing keeps the three panels.
+    (run_dir / "clients.jsonl").write_text("")
+    plot.main([str(run_dir)])
+    assert (run_dir / "throughput.png").read_bytes() == three_panels
 
 
 def fault_event(ts: float, event: str, node: str, kind: str = "kill") -> dict:
@@ -207,3 +249,21 @@ def test_main_charts_a_failed_run_without_counters_or_run_json(tmp_path: Path):
 
 def test_last_time_is_the_latest_step_submit_or_event():
     assert plot.last_time([{"t_end": 5.0}], [{"t_submit": 7.0}], [{"ts": 6.0}]) == 7.0
+
+
+def test_main_draws_the_chaos_lanes_and_the_clients_panel_together(tmp_path: Path):
+    run_dir = tmp_path / "fleet" / "runs" / "01-run"
+    t0 = write_run(run_dir)
+    plot.main([str(run_dir)])
+    chaos_only = (run_dir / "throughput.png").read_bytes()
+    clients = [
+        {"end": h + 1, "t_done": t0 + h + 1.2, "bytes": 1_000_000, "status": "ok"}
+        for h in range(18)
+    ]
+    (run_dir / "clients.jsonl").write_text(
+        "".join(json.dumps(c) + "\n" for c in clients)
+    )
+    plot.main([str(run_dir)])
+    both = (run_dir / "throughput.png").read_bytes()
+    assert both.startswith(b"\x89PNG")
+    assert both != chaos_only

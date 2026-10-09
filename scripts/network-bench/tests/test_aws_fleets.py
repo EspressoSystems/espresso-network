@@ -1,3 +1,4 @@
+import dataclasses
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -454,6 +455,21 @@ def test_search_run_needs_the_search_worst_case_from_the_ttl(harness, runner):
     awsb.check_run_allowed(manifest, ramp, now)
     with pytest.raises(awsb.Refused, match="this run needs up to"):
         awsb.check_run_allowed(manifest, searched, now)
+
+
+@pytest.mark.parametrize(
+    ("fleet_cc", "run_cc"), [("bbr", "bbr3"), ("bbr3", "bbr"), ("bbr3", "bbr_hold")]
+)
+def test_run_tcp_cc_must_match_the_fleet_kernel(harness, runner, fleet_cc, run_cc):
+    manifest = harness.fleet()
+    manifest["config"]["tcp_cc"] = fleet_cc
+    cfg = dataclasses.replace(
+        awsb.fleet_run_config(harness.run_args(), manifest), tcp_cc=run_cc
+    )
+    with pytest.raises(awsb.Refused, match="does not match fleet"):
+        awsb.check_run_allowed(
+            manifest, cfg, datetime.fromisoformat(manifest["created_at"])
+        )
 
 
 def test_search_run_needs_the_fleet_disks_to_hold_the_offered_gb(harness, runner):

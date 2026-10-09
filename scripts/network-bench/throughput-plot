@@ -3,7 +3,7 @@
 # requires-python = ">=3.14"
 # dependencies = ["matplotlib", "numpy"]
 # ///
-"""Plots a run into `<run_dir>/throughput.png`, three panels over the same time axis:
+"""Plots a run into `<run_dir>/throughput.png`, three to five panels over the same time axis:
 
 - decided MB/s (consensus counters) against the MB/s the query node makes transactions available
   (`t_included` of `load.jsonl`), with the submitted rate as reference, and a tick per view
@@ -14,6 +14,9 @@
   the last SMOOTH_S.
 - p50 submit until header on a validator over the last SMOOTH_S (left, log scale) and the
   transactions in flight (right).
+- only with a non-empty `clients.jsonl`: p50 of how long after a validator showed a range's last
+  block the light-client readers held it over the last SMOOTH_S (left, log scale) and the MB/s
+  they fetched (right).
 
 A run with `chaos.jsonl` gets a panel on top with one lane per faulted node: a bar for each phase
 of a fault (down, recovering, catching up) with a marker per event, ending in a red x when the
@@ -63,15 +66,24 @@ def decided_mb_s(counters: list[dict]) -> tuple[np.ndarray, np.ndarray]:
     return ts[1:], np.diff(decided) / np.diff(ts) / 1e6
 
 
+def binned_bytes_mb_s(
+    times: np.ndarray, sizes: np.ndarray, t0: float, t1: float, bin_s: float = 1.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """MB/s of the events (`sizes` bytes each) whose time falls in each `bin_s` bin of
+    `[t0, t1]`, at the bin's end."""
+    bins = math.ceil((t1 - t0) / bin_s)
+    edges = np.linspace(t0, t0 + bins * bin_s, bins + 1)
+    total, _ = np.histogram(times, edges, weights=sizes)
+    return edges[1:], total / bin_s / 1e6
+
+
 def binned_mb_s(
     times: list[float], tx_size: int, t0: float, t1: float, bin_s: float = 1.0
 ) -> tuple[np.ndarray, np.ndarray]:
-    """MB/s of the transactions whose time falls in each `bin_s` bin of `[t0, t1]`, at the
-    bin's end."""
-    bins = math.ceil((t1 - t0) / bin_s)
-    edges = np.linspace(t0, t0 + bins * bin_s, bins + 1)
-    counts, _ = np.histogram(times, edges)
-    return edges[1:], counts * tx_size / bin_s / 1e6
+    """`binned_bytes_mb_s` of transactions of `tx_size` bytes."""
+    return binned_bytes_mb_s(
+        np.asarray(times), np.full(len(times), tx_size), t0, t1, bin_s
+    )
 
 
 def moving_mean(y: np.ndarray, w: int = SMOOTH_S) -> np.ndarray:
@@ -120,6 +132,21 @@ def in_flight(starts: np.ndarray, ends: np.ndarray, grid: np.ndarray) -> np.ndar
     started = np.searchsorted(np.sort(starts), grid, "right")
     ended = np.searchsorted(np.sort(ends), grid, "right")
     return started - ended
+
+
+def client_lag(
+    clients: list[dict], on_validator: dict[int, float]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per served range: when the reader finished it and its lag in ms behind the validator
+    that first showed its last block. Ranges of blocks no validator showed are left out."""
+    served = [
+        c
+        for c in clients
+        if c["status"] == "ok" and on_validator.get(c["end"] - 1) is not None
+    ]
+    done = np.array([c["t_done"] for c in served])
+    lag = np.array([c["t_done"] - on_validator[c["end"] - 1] for c in served])
+    return done, lag * 1000
 
 
 def timeout_times(counters: list[dict]) -> np.ndarray:
@@ -236,6 +263,8 @@ def main(argv: list[str] | None = None) -> None:
     heights = read_jsonl(run_dir / "heights.jsonl")
     chaos_path = run_dir / "chaos.jsonl"
     events = read_jsonl(chaos_path) if chaos_path.exists() else []
+    clients_file = run_dir / "clients.jsonl"
+    clients = read_jsonl(clients_file) if clients_file.exists() else []
     run_path = run_dir / "run.json"
     t0 = (
         json.loads(run_path.read_text())["t0"]
@@ -277,30 +306,33 @@ def main(argv: list[str] | None = None) -> None:
 
     lane_count = len({r["node"] for r in rows})
     lane_ratio = (max(1.0, 0.3 * lane_count),) if rows else ()
-    fig, axes = plt.subplots(
-        3 + bool(rows),
+    client_ratio = (1,) if clients else ()
+    fig, panels = plt.subplots(
+        len(lane_ratio) + 3 + len(client_ratio),
         1,
-        figsize=(13, 10 + 0.4 * lane_count),
+        figsize=(13, 3.3 * (3 + len(client_ratio)) + 0.4 * lane_count),
         sharex=True,
-        height_ratios=(*lane_ratio, 2, 1, 1),
+        height_ratios=(*lane_ratio, 2, 1, 1, *client_ratio),
         facecolor=SURFACE,
     )
-    ax, blk_ax, lat_ax = axes[-3:]
-    for panel in axes:
+    lane_panel = panels[: len(lane_ratio)]
+    ax, blk_ax, lat_ax, *client_panel = panels[len(lane_ratio) :]
+    data_panels = (ax, blk_ax, lat_ax, *client_panel)
+    for panel in panels:
         panel.set_facecolor(SURFACE)
         panel.tick_params(colors=INK)
         panel.grid(alpha=0.3)
     if rows:
-        draw_lanes(axes[0], rows, t1, minutes)
+        draw_lanes(lane_panel[0], rows, t1, minutes)
         for _, _, start, stop in nb.fault_windows(rows, t1):
-            for panel in (ax, blk_ax, lat_ax):
+            for panel in data_panels:
                 panel.axvspan(
                     minutes(start), minutes(stop), color=FAULT_SPAN, alpha=0.1, lw=0
                 )
     for i, step in enumerate(steps):
         start, end = minutes(step["t_start"]), minutes(step["t_end"])
         failed = step["consensus_fails"] or step["query_fails"]
-        for panel in (ax, blk_ax, lat_ax):
+        for panel in data_panels:
             panel.axvspan(
                 minutes(step["t_mid"]),
                 end,
@@ -422,7 +454,38 @@ def main(argv: list[str] | None = None) -> None:
     flight_ax.set_ylabel("txs in flight", color=MUTED)
     flight_ax.tick_params(colors=INK)
     twin_legend(lat_ax, flight_ax)
-    lat_ax.set_xlabel("minutes since run start", color=INK)
+
+    if client_panel:
+        (cli_ax,) = client_panel
+        done, lag = client_lag(clients, on_validator)
+        cli_ax.plot(
+            minutes(grid),
+            rolling_median(done, lag, grid),
+            color=DECIDED,
+            lw=1.5,
+            label=f"reader lag p50, {SMOOTH_S} s window",
+        )
+        cli_ax.set_yscale("log")
+        cli_ax.set_ylabel("ms", color=DECIDED)
+        fetch_ax = cli_ax.twinx()
+        fetch_t, fetched = binned_bytes_mb_s(
+            np.array([c["t_done"] for c in clients]),
+            np.array([c["bytes"] for c in clients]),
+            t0,
+            t1,
+        )
+        fetch_ax.plot(
+            minutes(fetch_t),
+            moving_mean(fetched),
+            color=QUERY,
+            lw=1,
+            label=f"readers fetched, {SMOOTH_S} s mean",
+        )
+        fetch_ax.set_ylim(bottom=0)
+        fetch_ax.set_ylabel("MB/s", color=QUERY)
+        fetch_ax.tick_params(colors=INK)
+        twin_legend(cli_ax, fetch_ax)
+    panels[-1].set_xlabel("minutes since run start", color=INK)
 
     run = run_dir.resolve()
     fig.suptitle(f"{run.parent.parent.name}/{run.name}", color=INK)

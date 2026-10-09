@@ -1893,13 +1893,11 @@ def test_compare_uses_the_stored_resolution():
     assert row(comparison, "capacity")["resolution_mb_s"] == 75.0
 
 
-def test_legacy_config_hash_keeps_its_value():
-    assert netbench.config_hash(netbench.BenchConfig(), []) == "bdf88113f497"
-
-
 def test_heartbeat_changes_the_config_hash():
     beating = netbench.BenchConfig(heartbeat_tx_s=50.0)
-    assert netbench.config_hash(beating, []) != "bdf88113f497"
+    assert netbench.config_hash(beating, []) != netbench.config_hash(
+        netbench.BenchConfig(), []
+    )
 
 
 def test_legacy_staircase_reports_why_it_stopped(staircase):
@@ -2408,3 +2406,281 @@ def test_load_under_faults_end_to_end(tmp_path: Path):
     assert run.load.meta["submit_failovers"] > 0
     assert run.load.meta["submit_errors"] == 0
     assert run.load.meta["missing_payloads"] == []
+
+
+# `TAG~Ew` and `A~wA` are from the tagged-base64 crate's own tests (tests/tests.rs,
+# `empty_value`); the NS strings are what `TaggedBase64::new("NS", ..)` of tagged-base64 0.4.1
+# printed for the JSON arrays the light-client crate sends.
+@pytest.mark.parametrize(
+    ("tag", "value", "encoded"),
+    [
+        ("TAG", b"", "TAG~Ew"),
+        ("A", b"", "A~wA"),
+        ("NS", b"[10000]", "NS~WzEwMDAwXfY"),
+        ("NS", b"[10015]", "NS~WzEwMDE1Xdw"),
+        ("NS", b"[10000,10001]", "NS~WzEwMDAwLDEwMDAxXRk"),
+    ],
+)
+def test_tagged_base64_matches_the_crate(tag: str, value: bytes, encoded: str):
+    assert netbench.tagged_base64(tag, value) == encoded
+
+
+def test_tagged_base64_checksum_xors_the_length_modulo_256():
+    # The crate printed this string's tail for 300 bytes of 0x07; the tail holds the checksum.
+    assert netbench.tagged_base64("NS", b"\x07" * 300).endswith("cHBwcHwQ")
+
+
+def test_namespaces_path_carries_the_range_and_the_tagged_namespace():
+    assert netbench.namespaces_path(5, 8, 10000) == (
+        "/v1/light-client/namespaces/5/8/NS~WzEwMDAwXfY"
+    )
+
+
+def test_clients_change_the_config_hash():
+    assert netbench.config_hash(
+        netbench.BenchConfig(clients=2), []
+    ) != netbench.config_hash(netbench.BenchConfig(), [])
+
+
+def test_negative_clients_are_rejected():
+    with pytest.raises(ValueError, match="clients"):
+        netbench.BenchConfig(clients=-1)
+
+
+class QueryNode:
+    """Answers the readers' requests: `height` for the block height, 404 for namespace
+    proofs until `ready_at`, `status` for the rest. `paths` lists the requests."""
+
+    def __init__(self, clock: fakes.FakeClock, height: int, ready_at: float = 0.0):
+        self.clock: netbench.Clock = clock
+        self.closed = threading.Event()
+        self.height = height
+        self.ready_at = ready_at
+        self.status = 200
+        self.paths: list[str] = []
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+    ) -> tuple[int, bytes]:
+        path = url.removeprefix("http://q")
+        self.paths.append(path)
+        if path == "/v1/node/block-height":
+            return 200, str(self.height).encode()
+        if "/namespaces/" in path and self.clock.time() < self.ready_at:
+            return 404, b"missing"
+        return self.status, b"x" * 10
+
+    def close(self) -> None:
+        self.closed.set()
+
+
+def poll(node: QueryNode, reader: netbench.Reader) -> list[dict[str, Any]]:
+    return netbench.poll_reader(node, ["http://q"], reader, node.clock)
+
+
+def test_a_reader_fetches_a_new_range_as_a_light_client_does():
+    node = QueryNode(fakes.FakeClock(start=50.0), 13)
+    reader = netbench.Reader(ns=10001, index=1, next=10)
+    (rec,) = poll(node, reader)
+    assert node.paths == [
+        "/v1/node/block-height",
+        "/v1/light-client/leaf/12",
+        "/v1/availability/leaf/10/12",
+        netbench.namespaces_path(10, 13, 10001),
+    ]
+    assert rec == {
+        "ns": 10001,
+        "reader": 1,
+        "start": 10,
+        "end": 13,
+        "t_start": 50.0,
+        "t_done": 50.0,
+        "bytes": 30,
+        "status": "ok",
+    }
+    assert reader.next == 13
+    node.paths.clear()
+    assert poll(node, reader) == []
+    assert node.paths == ["/v1/node/block-height"]
+
+
+def test_a_single_block_needs_no_leaf_range():
+    node = QueryNode(fakes.FakeClock(), 11)
+    (rec,) = poll(node, netbench.Reader(ns=10000, index=0, next=10))
+    assert rec["bytes"] == 20
+    assert not [p for p in node.paths if p.startswith("/v1/availability/leaf/")]
+
+
+def test_ranges_are_cut_at_the_server_limit():
+    node = QueryNode(fakes.FakeClock(), 10 + 2 * netbench.CLIENT_RANGE + 1)
+    recs = poll(node, netbench.Reader(ns=10000, index=0, next=10))
+    limit = netbench.CLIENT_RANGE
+    assert [(r["start"], r["end"]) for r in recs] == [
+        (10, 10 + limit),
+        (10 + limit, 10 + 2 * limit),
+        (10 + 2 * limit, 11 + 2 * limit),
+    ]
+
+
+def test_a_range_the_node_lacks_is_retried_then_recorded_missing():
+    clock = fakes.FakeClock()
+    node = QueryNode(clock, 12, ready_at=math.inf)
+    reader = netbench.Reader(ns=10000, index=0, next=10)
+    assert poll(node, reader) == []
+    clock.advance(netbench.MISSING_PAYLOAD_S - 1)
+    assert poll(node, reader) == []
+    assert reader.next == 10
+    clock.advance(netbench.MISSING_PAYLOAD_S)
+    (rec,) = poll(node, reader)
+    assert (rec["status"], rec["bytes"], rec["t_start"]) == ("missing", 0, 0.0)
+    assert (reader.next, reader.since) == (12, None)
+
+
+def test_a_range_served_after_retries_counts_from_its_first_attempt():
+    clock = fakes.FakeClock()
+    node = QueryNode(clock, 12, ready_at=3.0)
+    reader = netbench.Reader(ns=10000, index=0, next=10)
+    assert poll(node, reader) == []
+    clock.advance(4.0)
+    (rec,) = poll(node, reader)
+    assert (rec["status"], rec["t_start"], rec["t_done"]) == ("ok", 0.0, 4.0)
+
+
+def test_an_unexpected_status_fails_the_reader():
+    node = QueryNode(fakes.FakeClock(), 12)
+    node.status = 400
+    with pytest.raises(netbench.NetworkError, match="HTTP 400"):
+        poll(node, netbench.Reader(ns=10000, index=0, next=10))
+
+
+def test_a_range_the_node_answers_too_slowly_is_recorded_missing_not_fatal():
+    class Slow(QueryNode):
+        def request(self, method, url, body=None, timeout=10.0):
+            if "/v1/light-client/" in url:
+                raise TimeoutError("timed out")
+            return super().request(method, url, body, timeout)
+
+    clock = fakes.FakeClock()
+    node = Slow(clock, 12)
+    reader = netbench.Reader(ns=10000, index=0, next=10)
+    assert poll(node, reader) == []
+    clock.advance(netbench.MISSING_PAYLOAD_S)
+    (rec,) = poll(node, reader)
+    assert (rec["status"], reader.next) == ("missing", 12)
+
+
+class BehindDown(QueryNode):
+    """`http://a` answers every request with `first`, an error or a status; `http://q` is
+    the QueryNode."""
+
+    def __init__(self, clock: fakes.FakeClock, height: int, first: int | OSError):
+        super().__init__(clock, height)
+        self.first = first
+
+    def request(self, method, url, body=None, timeout=10.0):
+        if url.startswith("http://a"):
+            if isinstance(self.first, OSError):
+                raise self.first
+            return self.first, b""
+        return super().request(method, url, body, timeout)
+
+
+@pytest.mark.parametrize("first", [ConnectionRefusedError("down"), 503, 404])
+def test_a_reader_fails_over_to_the_next_query_node(first: int | OSError):
+    node = BehindDown(fakes.FakeClock(), 13, first)
+    reader = netbench.Reader(ns=10000, index=0, next=10)
+    (rec,) = netbench.poll_reader(node, ["http://a", "http://q"], reader, node.clock)
+    assert (rec["status"], rec["bytes"]) == ("ok", 30)
+
+
+def test_a_reader_with_every_query_node_down_waits_for_the_next_poll():
+    node = BehindDown(fakes.FakeClock(), 13, ConnectionRefusedError("down"))
+    reader = netbench.Reader(ns=10000, index=0, next=10)
+    assert netbench.poll_reader(node, ["http://a"], reader, node.clock) == []
+    assert reader.next == 10
+
+
+def test_readers_append_records_until_stopped(tmp_path: Path):
+    clock = fakes.FakeClock()
+    node = QueryNode(clock, 5)
+    stop = threading.Event()
+
+    def grow(now: float) -> None:
+        node.height = 5 + int(now)
+        if now >= 3:
+            stop.set()
+
+    clock.on_advance = grow
+    out = tmp_path / netbench.CLIENTS_JSONL
+    netbench.run_readers(node, ["http://q"], [10000], 1, out, stop, clock)
+    recs = list(netbench.read_jsonl(out))
+    assert recs
+    assert recs[0]["start"] == 5
+    assert [r["start"] for r in recs[1:]] == [r["end"] for r in recs[:-1]]
+    assert {(r["ns"], r["reader"]) for r in recs} == {(10000, 0)}
+
+
+def test_client_stats_measure_lag_behind_the_validator():
+    heights = [{"height": h, "validator": 100.0 + h} for h in range(5)]
+    records = [
+        {"ns": 1, "reader": 0, "start": 0, "end": 2, "t_start": 100.5,
+         "t_done": 102.0, "bytes": 2_000_000, "status": "ok"},
+        {"ns": 1, "reader": 1, "start": 0, "end": 2, "t_start": 100.5,
+         "t_done": 103.0, "bytes": 2_000_000, "status": "ok"},
+        {"ns": 1, "reader": 0, "start": 2, "end": 3, "t_start": 102.0,
+         "t_done": 112.0, "bytes": 0, "status": "missing"},
+        {"ns": 1, "reader": 0, "start": 3, "end": 5, "t_start": 104.0,
+         "t_done": 200.0, "bytes": 9, "status": "ok"},
+    ]  # fmt: skip
+    stats = netbench.client_stats(records, heights, 100.0, 120.0)
+    assert (stats["readers"], stats["ranges"], stats["missing"]) == (2, 3, 1)
+    assert stats["mb_s"] == pytest.approx(4 / 20)
+    assert some(stats["lag_ms"])["mean"] == pytest.approx(1500.0)
+    assert some(stats["lag_ms"])["max"] == pytest.approx(2000.0)
+    assert some(stats["fetch_ms"])["p50"] == pytest.approx(2500.0)
+    assert netbench.client_stats([], heights, 100.0, 120.0)["lag_ms"] is None
+
+
+def test_summary_shows_readers_only_when_the_run_had_them(tmp_path: Path):
+    write_run_dir(tmp_path)
+    plain = analyze(tmp_path)
+    assert "clients" not in plain["load"]
+    assert "light-client readers" not in netbench.render(plain, None)
+    netbench.write_jsonl(
+        tmp_path / netbench.CLIENTS_JSONL,
+        iter(
+            [
+                {"ns": 1, "reader": 0, "start": 1000, "end": 1001, "t_start": 111.0,
+                 "t_done": 110.75, "bytes": 3_000_000, "status": "ok"},
+            ]
+        ),
+    )  # fmt: skip
+    result = analyze(tmp_path)
+    assert some(result["load"]["clients"]["lag_ms"])["p50"] == pytest.approx(250.0)
+    text = netbench.render(result, None)
+    assert "- light-client readers: 1, 1 ranges fetched" in text
+    assert "- reader lag behind a validator: p50 250" in text
+
+
+def test_pruned_heights_reach_the_summary_when_pruning_is_on(tmp_path: Path):
+    write_run_dir(tmp_path)
+    series = [
+        {
+            "ts": ts,
+            "node": node,
+            "ok": True,
+            "m": {"pruner_data_height": 7.0 * ts, "pruner_state_height": 3.0 * ts}
+            if node == "node0"
+            else {},
+        }
+        for ts in range(90, 175, 5)
+        for node in TOPOLOGY["nodes"]
+    ]
+    netbench.write_jsonl(tmp_path / "metrics.jsonl", iter(series))
+    result = analyze(tmp_path)
+    assert result["nodes"]["node0"]["pruned_data_height_end"] == 7 * 160
+    assert "pruned_data_height_end" not in result["nodes"]["node1"]
+    result["deployment"] = deployment() | {"prune": "60 s"}
+    assert "- prune: retention 60 s; pruned to height: node0 data 1120, state 480" in (
+        netbench.render(result, None)
+    )

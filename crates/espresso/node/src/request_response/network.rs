@@ -36,19 +36,4 @@ impl SenderTrait<PubKey> for Sender {
             .with_context(|| "failed to send message over channel")?;
         Ok(())
     }
-
-    async fn send_broadcast_message(&self, message: &Bytes) -> Result<()> {
-        // Serialize the inner message
-        let message_bytes = bincode::serialize(&ExternalMessage::RequestResponse(message.to_vec()))
-            .with_context(|| "failed to serialize message")?;
-
-        // Send the message
-        self.0
-            .send(OutboundMessage::Broadcast(
-                MessageKind::External::<SeqTypes>(message_bytes),
-            ))
-            .await
-            .with_context(|| "failed to send message over channel")?;
-        Ok(())
-    }
 }

@@ -208,21 +208,15 @@ def test_api_peers_of_a_query_node_are_the_other_query_nodes():
     assert "ESPRESSO_NODE_API_PEERS" not in text
 
 
-def test_light_client_module_only_with_several_query_nodes():
-    single = awsb.render_start_sh(host("node0", "query"), fake_images(), 32768)
-    assert "light-client" not in single
-    multi = awsb.render_start_sh(
-        host("node0", "query"), fake_images(), 32768, light_client=True
+def test_every_query_node_serves_the_light_client_module_also_after_a_wipe():
+    assert "-- light-client" in awsb.render_start_sh(
+        host("node1", "query"), fake_images(), 32768
     )
-    assert "-- light-client" in multi
-    validator = awsb.render_start_sh(
-        host("node1", "validator"), fake_images(), 32768, light_client=True
+    assert "-- light-client" in awsb.render_recreate_sh(
+        host("node1", "query"), fake_images()
     )
+    validator = awsb.render_recreate_sh(host("node2", "validator"), fake_images())
     assert "light-client" not in validator
-    recreate = awsb.render_recreate_sh(
-        host("node0", "query"), fake_images(), light_client=True
-    )
-    assert "-- light-client" in recreate
 
 
 def test_single_query_node_has_no_api_peers():
@@ -1237,6 +1231,102 @@ def test_node_env_flag():
         node_env_config("--node-env", "A=1", "--node-env", "A=2")
 
 
+def test_prune_env_deletes_past_the_retention_every_interval():
+    assert awsb.prune_env(60) == {
+        "ESPRESSO_NODE_DATABASE_PRUNE": "true",
+        "ESPRESSO_NODE_PRUNER_TARGET_RETENTION": "60s",
+        "ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION": "60s",
+        "ESPRESSO_NODE_PRUNER_INTERVAL": "30s",
+    }
+
+
+@pytest.mark.parametrize("engine", ["postgres", "sqlite"])
+def test_prune_reaches_node0_only_and_node_env_overrides_it(engine: str):
+    hosts = {h["name"]: h for h in awsb.plan_hosts(small_cfg())}
+    pg = awsb.pg_endpoint() if engine == "postgres" else None
+
+    def env(name: str, *extra: str, prune: int | None = 60) -> dict[str, str]:
+        text = awsb.render_node_env(
+            hosts[name], fleet(2), pg, extra, query_engine=engine, prune=prune
+        )
+        return parse_env(text)
+
+    assert env("node0")["ESPRESSO_NODE_PRUNER_TARGET_RETENTION"] == "60s"
+    assert "ESPRESSO_NODE_DATABASE_PRUNE" not in env("node0", prune=None)
+    assert "ESPRESSO_NODE_DATABASE_PRUNE" not in env("node1")
+    second_query = awsb.render_node_env(
+        host("node1", "query"),
+        fleet(3, query_nodes=2),
+        pg,
+        query_engine=engine,
+        prune=60,
+    )
+    assert "ESPRESSO_NODE_DATABASE_PRUNE" not in second_query
+    override = env("node0", "ESPRESSO_NODE_PRUNER_INTERVAL=5s")
+    assert override["ESPRESSO_NODE_PRUNER_INTERVAL"] == "5s"
+
+
+@pytest.mark.parametrize(
+    ("text", "seconds"), [("90s", 90), ("2m", 120), ("1h", 3600), ("010s", 10)]
+)
+def test_retention_parses_seconds_minutes_and_hours(text: str, seconds: int):
+    assert awsb.retention(text) == seconds
+
+
+@pytest.mark.parametrize("bad", ["5", "0m", "1d", "m", "1.5m", "", "-1m"])
+def test_retention_rejects_bad_formats(bad: str):
+    with pytest.raises(ValueError):
+        awsb.retention(bad)
+
+
+def test_prune_flag_is_off_by_default_and_bare_means_one_minute():
+    assert node_env_config().prune is None
+    assert node_env_config("--prune").prune == 60
+    assert node_env_config("--prune", "2m").prune == 120
+    with pytest.raises(SystemExit):
+        node_env_config("--prune", "soon")
+
+
+def test_prune_extends_the_warmup_by_the_retention():
+    assert awsb.prune_warmup_s(60, None) == 60
+    assert awsb.prune_warmup_s(60, 120) == 180
+    assert node_env_config().load.warmup_s == 60
+    assert node_env_config("--prune").load.warmup_s == 120
+    assert node_env_config("--prune", "2m", "--warmup-s", "30").load.warmup_s == 150
+
+
+def test_prune_differs_in_the_config_hash_only_when_set():
+    hosts = awsb.plan_hosts(small_cfg())
+
+    def digest(**kw) -> str:
+        return awsb.run_config_hash(small_cfg(**kw), hosts, {}, b"genesis")
+
+    assert digest() == digest(prune=None)
+    assert digest() != digest(prune=60)
+    assert digest(prune=60) != digest(prune=120)
+
+
+def test_manifest_config_without_prune_loads_as_off():
+    saved = awsb.config_to_json(small_cfg())
+    del saved["prune"]
+    assert awsb.config_from_manifest(saved).prune is None
+
+
+def test_clients_flag_defaults_to_a_sequencer_and_a_follower_per_namespace():
+    assert node_env_config().load.clients == 2
+    assert node_env_config("--clients", "0").load.clients == 0
+    with pytest.raises(SystemExit):
+        node_env_config("--clients", "-1")
+
+
+@pytest.mark.parametrize(("role", "serves"), [("query", True), ("validator", False)])
+def test_only_the_query_node_serves_the_light_client_module(role: str, serves: bool):
+    script = awsb.render_start_sh(host("node0", role), fake_images(), 32768)
+    assert ("-- config -- light-client" in script) is serves
+    if serves:
+        assert script.index("-- light-client") > script.index("-- storage-sql -- http")
+
+
 def test_consensus_storage_flag_defaults_to_fs_and_rejects_other_values():
     assert node_env_config().consensus_storage == "fs"
     assert node_env_config("--consensus-storage", "journal").consensus_storage == (
@@ -1500,6 +1590,9 @@ def test_node_summary_names_the_storage_modules_and_every_run_setting():
     assert fs[2].endswith("leader-trace off")
     assert fs[3] == "node-env: none"
     assert len(fs) == 4
+    assert awsb.format_node_summary(small_cfg(prune=60))[-1] == (
+        "prune: data and state older than 60s, every 30s"
+    )
 
 
 def test_format_node_summary_chaos() -> None:
@@ -1880,7 +1973,8 @@ def test_search_changes_the_run_config_hash():
 def test_the_ramp_run_config_hash_ignores_the_search_field():
     cfg = awsb.RunConfig(tag="x", consensus_storage="journal")
     assert awsb.run_config_hash(cfg, [], {}, b"") == netbench.config_hash(
-        cfg.load, [b"", b"{}", b"[]", b"colocated", b"query-nodes=1"]
+        cfg.load,
+        [b"", b"{}", b"[]", b"colocated", b"query-nodes=1", b"postgres", b"prune=None"],
     )
 
 

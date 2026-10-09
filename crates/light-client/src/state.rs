@@ -905,7 +905,8 @@ where
                 .server
                 .stake_table_events(EpochNumber::new(epoch))
                 .await?;
-            tracing::debug!(epoch, num_events = events.len(), "reconstruct stake table");
+            let num_events = events.len();
+            tracing::debug!(epoch, num_events, "reconstruct stake table");
             for event in events {
                 tracing::debug!(epoch, ?event, "replay event");
                 if let Err(err) = stake_table.apply_event(event).context("applying event")? {
@@ -972,7 +973,7 @@ where
                 tracing::warn!(epoch, "failed to cache stake table: {err:#}");
             }
 
-            tracing::info!(epoch, "finished stake table catchup for epoch");
+            tracing::info!(epoch, num_events, "finished stake table catchup for epoch");
             prev_quorum = next_quorum;
             epoch_root_protocol_version = root.version();
         }
