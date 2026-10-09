@@ -386,6 +386,22 @@ mod test {
         leaf_chain_with_upgrade,
     };
 
+    /// A proof as a dishonest prover might send it: the requested leaf alone, with a 2-chain of
+    /// QCs the prover did not derive from the leaves that follow it.
+    fn hand_crafted_two_chain(
+        leaf: &LeafQueryData<SeqTypes>,
+        committing_qc: Certificate,
+        deciding_qc: Certificate,
+    ) -> LeafProof {
+        LeafProof {
+            leaves: vec![leaf.leaf().clone()],
+            proof: FinalityProof::HotStuff2 {
+                committing_qc: Arc::new(committing_qc),
+                deciding_qc: Arc::new(deciding_qc),
+            },
+        }
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotstuff2() {
         let mut proof = LeafProof::default();
@@ -496,11 +512,10 @@ mod test {
         assert!(!proof.push(leaves[2].clone()));
 
         // A hand-crafted 2-chain proof fails to verify.
-        let mut proof = LeafProof::default();
-        assert!(!proof.push(leaves[0].clone()));
-        proof.add_qc_chain(
-            Arc::new(Certificate::for_parent(leaves[1].leaf())),
-            Arc::new(Certificate::for_parent(leaves[2].leaf())),
+        let proof = hand_crafted_two_chain(
+            &leaves[0],
+            Certificate::for_parent(leaves[1].leaf()),
+            Certificate::for_parent(leaves[2].leaf()),
         );
         let err = proof
             .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
@@ -563,11 +578,10 @@ mod test {
         assert!(!proof.push(leaves[2].clone()));
 
         // A hand-crafted spanning 2-chain fails to verify.
-        let mut proof = LeafProof::default();
-        assert!(!proof.push(leaves[0].clone()));
-        proof.add_qc_chain(
-            Arc::new(Certificate::for_parent(leaves[1].leaf())),
-            Arc::new(Certificate::for_parent(leaves[2].leaf())),
+        let proof = hand_crafted_two_chain(
+            &leaves[0],
+            Certificate::for_parent(leaves[1].leaf()),
+            Certificate::for_parent(leaves[2].leaf()),
         );
         assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
         let err = proof
