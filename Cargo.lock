@@ -7746,6 +7746,7 @@ dependencies = [
  "crc32fast",
  "hotshot-types",
  "parking_lot",
+ "tempfile",
  "tokio",
  "tracing",
 ]

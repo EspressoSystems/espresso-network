@@ -664,6 +664,7 @@ impl Persistence {
         let (dir, segments) = match stream {
             Stream::Wal => (self.inner.wal_dir.clone(), &self.inner.wal_segments),
             Stream::Data => (self.inner.data_dir.clone(), &self.inner.data_segments),
+            Stream::Payload | Stream::Share => unreachable!("journal has no {stream:?} lane"),
         };
         let key = view.u64();
         // (seq, sealed): only the last segment is active and may have a torn tail.

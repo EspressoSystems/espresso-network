@@ -7,6 +7,7 @@
 
 use std::{
     io::{self, Read},
+    os::unix::fs::FileExt,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -366,10 +367,17 @@ struct Write {
     _permit: Option<OwnedSemaphorePermit>,
 }
 
+/// What the writer thread receives. `Sync` shares the record channel so it is ordered after every
+/// record enqueued before it.
+enum Msg {
+    Record(Write),
+    Sync,
+}
+
 #[derive(Clone)]
 pub struct Lane {
     stream: Stream,
-    tx: mpsc::UnboundedSender<Write>,
+    tx: mpsc::UnboundedSender<Msg>,
     /// Guards lsn allocation *and* the channel send together, so a data-stream caller racing
     /// another can't allocate lsn N, then lose the race to send before lsn N+1. Shared with the
     /// writer thread so a wal roll's snapshot frame reserves its lsn from the same counter,
@@ -406,14 +414,14 @@ impl Lane {
         self.metrics.set_queue_bytes(queued);
         // The writer thread may already have exited (process is aborting); a dropped receiver
         // just means this record never lands, which is moot since the process is on its way down.
-        let _ = self.tx.send(Write {
+        let _ = self.tx.send(Msg::Record(Write {
             lsn,
             key,
             kind,
             body,
             class,
             _permit: permit,
-        });
+        }));
         lsn
     }
 
@@ -434,6 +442,13 @@ impl Lane {
             .await
             .context("journal writer thread exited before acking a durable write")?;
         Ok(())
+    }
+
+    /// Asks the writer to `fdatasync` the active segment if it holds unsynced records, then
+    /// publish them as durable. Returns immediately; callers that need the ack use `wait_durable`.
+    pub fn request_sync(&self) {
+        // A dropped receiver means the writer is gone and the process is aborting.
+        let _ = self.tx.send(Msg::Sync);
     }
 
     /// Reports `journal_bytes`: the caller (`Persistence::gc`) sums `Segments` after unlinking.
@@ -636,6 +651,28 @@ pub fn frame_locations<F: JournalFs>(
     known_kind: fn(u8) -> bool,
 ) -> anyhow::Result<Vec<(FrameHeader, Location)>> {
     Ok(read_segment(fs, &segment_path(dir, seq), seq, stream, known_kind, false)?.locations)
+}
+
+/// Reads the record body at `loc` in the segment file at `path`, validating its crc and lsn.
+/// `None` when the segment is gone (unlinked by GC), the frame runs past the end of the file or
+/// fails validation. Blocking; async callers use `spawn_blocking`.
+pub fn read_frame(path: &Path, loc: Location) -> anyhow::Result<Option<Vec<u8>>> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("opening segment {}", path.display())),
+    };
+    let mut frame = vec![0; format::FRAME_HEADER_LEN + loc.len as usize];
+    match file.read_exact_at(&mut frame, loc.offset) {
+        Ok(()) => {},
+        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("reading segment {}", path.display())),
+    }
+    if format::decode_frame(&frame, loc.lsn).is_err() {
+        return Ok(None);
+    }
+    frame.drain(..format::FRAME_HEADER_LEN);
+    Ok(Some(frame))
 }
 
 /// True only for a segment that was created but never durably written to: shorter than a header,
@@ -899,7 +936,7 @@ pub fn spawn_lane<F: JournalFs>(
         next_lsn
     };
 
-    let (tx, rx) = mpsc::unbounded_channel::<Write>();
+    let (tx, rx) = mpsc::unbounded_channel::<Msg>();
     let (durable_tx, durable_rx) = watch::channel(active.last_lsn);
     let in_flight = Arc::new(Semaphore::new(cfg.in_flight_bytes));
     let in_flight_budget =
@@ -949,6 +986,7 @@ pub fn spawn_lane<F: JournalFs>(
         metrics: metrics.clone(),
         frame_buf,
         index,
+        unsynced: false,
     };
     let stream = writer.cfg.stream;
     let handle = std::thread::Builder::new()
@@ -977,7 +1015,7 @@ struct Writer<F: JournalFs> {
     fs: Arc<F>,
     dir: PathBuf,
     cfg: LaneConfig,
-    rx: mpsc::UnboundedReceiver<Write>,
+    rx: mpsc::UnboundedReceiver<Msg>,
     active: ActiveSegment<F::File>,
     durable_tx: watch::Sender<Lsn>,
     hook: Option<Arc<dyn SnapshotHook>>,
@@ -989,6 +1027,8 @@ struct Writer<F: JournalFs> {
     metrics: Arc<LaneMetrics>,
     frame_buf: Vec<u8>,
     index: Option<DataIndex>,
+    /// Records written to `active` that no `fdatasync` has covered yet.
+    unsynced: bool,
 }
 
 /// Applies one record's bookkeeping to `active`: `max_key`, `first_key` (key 0 marks
@@ -1003,85 +1043,33 @@ fn apply_write_to_active<Fh>(active: &mut ActiveSegment<Fh>, w: &Write) {
     active.last_lsn = w.lsn;
 }
 
+/// Messages drained from the channel for one write and sync pass.
+#[derive(Default)]
+struct Batch {
+    records: Vec<Write>,
+    bytes: usize,
+    sync_requested: bool,
+}
+
+impl Batch {
+    fn push(&mut self, msg: Msg) {
+        match msg {
+            Msg::Record(w) => {
+                self.bytes += w.body.len();
+                self.records.push(w);
+            },
+            Msg::Sync => self.sync_requested = true,
+        }
+    }
+}
+
 impl<F: JournalFs> Writer<F> {
     fn run(mut self) {
-        loop {
-            let Some(first) = self.rx.blocking_recv() else {
-                return; // Lane (and the Persistence holding it) was dropped.
-            };
-            let mut batch = vec![first];
-            let mut batch_bytes = batch[0].body.len();
-            while batch_bytes < self.cfg.max_batch_bytes {
-                match self.rx.try_recv() {
-                    Ok(w) => {
-                        batch_bytes += w.body.len();
-                        batch.push(w);
-                    },
-                    Err(_) => break,
-                }
-            }
-            self.metrics.record_batch(batch.len(), batch_bytes);
-            self.queue_bytes
-                .fetch_sub(batch_bytes as u64, Ordering::Relaxed);
-            self.metrics
-                .set_queue_bytes(self.queue_bytes.load(Ordering::Relaxed));
+        while let Some(batch) = self.next_batch() {
+            let durable_in_batch = self.write_batch(batch.records, batch.bytes);
 
-            let mut durable_in_batch = false;
-            let mut written = Vec::new();
-            for w in &batch {
-                if self.index.is_some() {
-                    written.push((
-                        (w.key, w.kind),
-                        Location {
-                            seq: self.active.seq,
-                            offset: self.active.offset + self.frame_buf.len() as u64,
-                            lsn: w.lsn,
-                            len: w.body.len() as u32,
-                        },
-                    ));
-                }
-                format::encode_frame(&mut self.frame_buf, w.lsn, w.key, w.kind, &w.body);
-                durable_in_batch |= w.class == Class::Durable;
-                apply_write_to_active(&mut self.active, w);
-            }
-
-            if let Err(err) = self
-                .active
-                .file
-                .write_all_at(self.active.offset, &self.frame_buf)
-            {
-                tracing::error!(stream = ?self.cfg.stream, %err, "journal: write failed");
-                std::process::abort();
-            }
-            if let Some(index) = &self.index {
-                index.lock().extend(written);
-            }
-            self.active.offset += self.frame_buf.len() as u64;
-            // A batch can overshoot `max_batch_bytes`; shrink only well past it, so saturated
-            // batches reuse the buffer and one oversized record does not keep its copy resident.
-            self.frame_buf.clear();
-            if self.frame_buf.capacity() > 2 * self.cfg.max_batch_bytes {
-                self.frame_buf.shrink_to(self.cfg.max_batch_bytes);
-            }
-            // Permits are held by `batch` until here, bounding in-flight data bytes until the write
-            // (not the fsync) lands; the semaphore is about memory, not durability.
-            drop(batch);
-
-            // Update before publishing durability: `wait_durable` callers must see this batch's
-            // keys in `Segments` (e.g. via `scan_for`) as soon as it returns.
-            let total_bytes = {
-                let mut segments = self.segments.lock();
-                segments.update_active(self.active.offset, self.active.max_key);
-                segments.bytes()
-            };
-            self.metrics.set_total_bytes(total_bytes);
-
-            if durable_in_batch {
-                if let Err(err) = timed_sync(&mut self.active.file, &self.metrics) {
-                    tracing::error!(stream = ?self.cfg.stream, %err, "journal: fsync failed");
-                    std::process::abort();
-                }
-                self.durable_tx.send(self.active.last_lsn).ok();
+            if durable_in_batch || (batch.sync_requested && self.unsynced) {
+                self.sync_active();
             }
 
             let over_bytes = self.active.offset.saturating_sub(self.active.snapshot_end)
@@ -1096,6 +1084,93 @@ impl<F: JournalFs> Writer<F> {
                 self.roll();
             }
         }
+    }
+
+    /// Blocks for the next message, then takes whatever else is queued up to `max_batch_bytes`.
+    /// `None` once the `Lane` (and the `Persistence` holding it) was dropped.
+    fn next_batch(&mut self) -> Option<Batch> {
+        let mut batch = Batch::default();
+        batch.push(self.rx.blocking_recv()?);
+        while batch.bytes < self.cfg.max_batch_bytes {
+            match self.rx.try_recv() {
+                Ok(msg) => batch.push(msg),
+                Err(_) => break,
+            }
+        }
+        Some(batch)
+    }
+
+    /// Writes `records` to the active segment, updates `Segments` and returns whether any of them
+    /// is `Class::Durable`. Does not sync.
+    fn write_batch(&mut self, records: Vec<Write>, bytes: usize) -> bool {
+        if records.is_empty() {
+            return false;
+        }
+        self.metrics.record_batch(records.len(), bytes);
+        self.queue_bytes.fetch_sub(bytes as u64, Ordering::Relaxed);
+        self.metrics
+            .set_queue_bytes(self.queue_bytes.load(Ordering::Relaxed));
+
+        let mut durable_in_batch = false;
+        let mut written = Vec::new();
+        for w in &records {
+            if self.index.is_some() {
+                written.push((
+                    (w.key, w.kind),
+                    Location {
+                        seq: self.active.seq,
+                        offset: self.active.offset + self.frame_buf.len() as u64,
+                        lsn: w.lsn,
+                        len: w.body.len() as u32,
+                    },
+                ));
+            }
+            format::encode_frame(&mut self.frame_buf, w.lsn, w.key, w.kind, &w.body);
+            durable_in_batch |= w.class == Class::Durable;
+            apply_write_to_active(&mut self.active, w);
+        }
+
+        if let Err(err) = self
+            .active
+            .file
+            .write_all_at(self.active.offset, &self.frame_buf)
+        {
+            tracing::error!(stream = ?self.cfg.stream, %err, "journal: write failed");
+            std::process::abort();
+        }
+        if let Some(index) = &self.index {
+            index.lock().extend(written);
+        }
+        self.active.offset += self.frame_buf.len() as u64;
+        self.unsynced = true;
+        // A batch can overshoot `max_batch_bytes`; shrink only well past it, so saturated
+        // batches reuse the buffer and one oversized record does not keep its copy resident.
+        self.frame_buf.clear();
+        if self.frame_buf.capacity() > 2 * self.cfg.max_batch_bytes {
+            self.frame_buf.shrink_to(self.cfg.max_batch_bytes);
+        }
+        // Permits are held by `records` until here, bounding in-flight data bytes until the write
+        // (not the fsync) lands; the semaphore is about memory, not durability.
+        drop(records);
+
+        // Update before publishing durability: `wait_durable` callers must see this batch's
+        // keys in `Segments` (e.g. via `scan_for`) as soon as it returns.
+        let total_bytes = {
+            let mut segments = self.segments.lock();
+            segments.update_active(self.active.offset, self.active.max_key);
+            segments.bytes()
+        };
+        self.metrics.set_total_bytes(total_bytes);
+        durable_in_batch
+    }
+
+    fn sync_active(&mut self) {
+        if let Err(err) = timed_sync(&mut self.active.file, &self.metrics) {
+            tracing::error!(stream = ?self.cfg.stream, %err, "journal: fsync failed");
+            std::process::abort();
+        }
+        self.unsynced = false;
+        self.durable_tx.send(self.active.last_lsn).ok();
     }
 
     /// Drains any records already sent to the channel into the *old* segment under the state lock
@@ -1118,7 +1193,9 @@ impl<F: JournalFs> Writer<F> {
                 drain_buf.clear();
                 drained_records = 0;
                 drained_bytes = 0;
-                while let Ok(w) = rx.try_recv() {
+                // A pending `Sync` needs no handling: the roll fsyncs the old segment below.
+                while let Ok(msg) = rx.try_recv() {
+                    let Msg::Record(w) = msg else { continue };
                     format::encode_frame(&mut drain_buf, w.lsn, w.key, w.kind, &w.body);
                     drained_records += 1;
                     drained_bytes += w.body.len();
@@ -1154,6 +1231,7 @@ impl<F: JournalFs> Writer<F> {
             .lock()
             .update_active(active.offset, active.max_key);
         self.durable_tx.send(active.last_lsn).ok();
+        self.unsynced = false;
 
         let new_seq = active.seq + 1;
         let mut new_active = match open_new_segment(
@@ -1226,7 +1304,7 @@ mod tests {
     fn mode(stream: Stream) -> LaneMode {
         match stream {
             Stream::Wal => LaneMode::Snapshot,
-            Stream::Data => LaneMode::Append,
+            Stream::Data | Stream::Payload | Stream::Share => LaneMode::Append,
         }
     }
 
@@ -1398,6 +1476,117 @@ mod tests {
                 "Segments max_key {max_key} lagged the just-acked key {key}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn request_sync_makes_an_enqueue_record_durable() {
+        let fs = Arc::new(MemFs::default());
+        let dir = std::path::PathBuf::from("/data-sync");
+        let segments = Arc::new(Mutex::new(Segments::default()));
+        let (lane, _handle) = spawn_lane(
+            fs.clone(),
+            dir.clone(),
+            cfg(Stream::Share),
+            (1, 1),
+            None,
+            segments,
+            None,
+        )
+        .unwrap();
+
+        let lsn = lane.enqueue(1, VID, b"share".to_vec(), Class::Enqueue, None);
+        lane.request_sync();
+        tokio::time::timeout(Duration::from_secs(5), lane.wait_durable(lsn))
+            .await
+            .expect("sync was not acked")
+            .unwrap();
+
+        fs.crash(|_| 0);
+        let recovered = recover(&*fs, &dir, Stream::Share).unwrap();
+        assert_eq!(recovered.next_lsn, lsn + 1);
+    }
+
+    #[tokio::test]
+    async fn request_sync_without_unsynced_records_leaves_the_lane_working() {
+        let fs = Arc::new(MemFs::default());
+        let segments = Arc::new(Mutex::new(Segments::default()));
+        let (lane, _handle) = spawn_lane(
+            fs,
+            "/data-idle-sync".into(),
+            cfg(Stream::Share),
+            (1, 1),
+            None,
+            segments,
+            None,
+        )
+        .unwrap();
+
+        lane.request_sync();
+        let lsn = lane.enqueue(1, VID, b"x".to_vec(), Class::Durable, None);
+        tokio::time::timeout(Duration::from_secs(5), lane.wait_durable(lsn))
+            .await
+            .expect("durable write was not acked")
+            .unwrap();
+    }
+
+    fn write_frame_file(dir: &Path, body: &[u8]) -> (PathBuf, Location) {
+        let path = segment_path(dir, 1);
+        let header = SegmentHeader {
+            stream: Stream::Payload,
+            seq: 1,
+            first_lsn: 1,
+            prev_max_key: 0,
+        };
+        let mut bytes = header.encode().to_vec();
+        let mut frame = Vec::new();
+        format::encode_frame(&mut frame, 1, 5, VID, b"first");
+        let offset = (bytes.len() + frame.len()) as u64;
+        format::encode_frame(&mut frame, 2, 6, VID, body);
+        bytes.extend_from_slice(&frame);
+        std::fs::write(&path, bytes).unwrap();
+        let loc = Location {
+            seq: 1,
+            offset,
+            lsn: 2,
+            len: body.len() as u32,
+        };
+        (path, loc)
+    }
+
+    #[test]
+    fn read_frame_roundtrips_a_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, loc) = write_frame_file(dir.path(), b"payload bytes");
+        assert_eq!(
+            read_frame(&path, loc).unwrap().as_deref(),
+            Some(&b"payload bytes"[..])
+        );
+    }
+
+    #[test]
+    fn read_frame_is_none_for_missing_short_or_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, loc) = write_frame_file(dir.path(), b"payload bytes");
+
+        let gone = segment_path(dir.path(), 9);
+        assert!(read_frame(&gone, loc).unwrap().is_none());
+
+        let wrong_lsn = Location { lsn: 3, ..loc };
+        assert!(read_frame(&path, wrong_lsn).unwrap().is_none());
+
+        let past_end = Location {
+            len: loc.len + 1,
+            ..loc
+        };
+        assert!(read_frame(&path, past_end).unwrap().is_none());
+
+        let mut bytes = std::fs::read(&path).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(read_frame(&path, loc).unwrap().is_none());
+
+        std::fs::write(&path, &bytes[..loc.offset as usize + 4]).unwrap();
+        assert!(read_frame(&path, loc).unwrap().is_none());
     }
 
     #[tokio::test]

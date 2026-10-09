@@ -6,19 +6,24 @@
 /// Monotonic, per-stream, strictly consecutive sequence number assigned to every record.
 pub type Lsn = u64;
 
-/// One of the two independent append-only streams a journal maintains.
+/// Independent append-only streams. Each lives in its own directory; the tag is stored in every
+/// segment header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Stream {
     Wal = 0,
     Data = 1,
+    Payload = 2,
+    Share = 3,
 }
 
 impl Stream {
-    /// Metric label value: `"wal"` or `"data"`.
+    /// Metric label value.
     pub fn label(self) -> &'static str {
         match self {
             Self::Wal => "wal",
             Self::Data => "data",
+            Self::Payload => "payload",
+            Self::Share => "share",
         }
     }
 }
@@ -84,6 +89,8 @@ impl SegmentHeader {
         let stream = match b[6] {
             0 => Stream::Wal,
             1 => Stream::Data,
+            2 => Stream::Payload,
+            3 => Stream::Share,
             other => anyhow::bail!("segment header: bad stream tag {other}"),
         };
         let seq = u64::from_le_bytes(b[8..16].try_into().unwrap());
@@ -357,6 +364,34 @@ mod tests {
         assert_eq!(encoded.len(), SegmentHeader::LEN);
         let decoded = SegmentHeader::decode(&encoded).unwrap();
         assert_eq!(decoded, header);
+    }
+
+    #[test]
+    fn segment_header_roundtrips_every_stream() {
+        for stream in [Stream::Wal, Stream::Data, Stream::Payload, Stream::Share] {
+            let header = SegmentHeader {
+                stream,
+                seq: 7,
+                first_lsn: 3,
+                prev_max_key: 11,
+            };
+            assert_eq!(SegmentHeader::decode(&header.encode()).unwrap(), header);
+        }
+    }
+
+    #[test]
+    fn segment_header_rejects_unknown_stream_tag() {
+        let mut encoded = SegmentHeader {
+            stream: Stream::Share,
+            seq: 1,
+            first_lsn: 1,
+            prev_max_key: 0,
+        }
+        .encode();
+        encoded[6] = 4;
+        let crc = crc32fast::hash(&encoded[0..36]);
+        encoded[36..40].copy_from_slice(&crc.to_le_bytes());
+        assert!(SegmentHeader::decode(&encoded).is_err());
     }
 
     #[test]
