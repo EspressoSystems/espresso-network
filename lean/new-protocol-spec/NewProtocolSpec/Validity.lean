@@ -131,24 +131,23 @@ def EpochViewLE (e : EpochNumber) (v : ViewNumber) (e' : EpochNumber) (v' : View
 def LockLE (a b : Cert1) : Prop := EpochViewLE a.data.epoch a.view b.data.epoch b.view
 
 /--
-Lock `lock` lets parent certificate `pc` through, for a block of epoch `e`, in
-three cases:
+The lock timeout certificate `tc` carries lets parent certificate `pc` through,
+for a block of epoch `e`, in three cases:
 
 * The lock is of an earlier epoch than `e`. What the lock guards is the commits of
   the block's own epoch `e`, so a lock of an earlier epoch never stands in the
   way. This is the case of an epoch's first block.
 * The lock is of the parent's epoch and at the parent's view or earlier. This is
-  the ordinary case: the parent is no earlier than the lock.
+  the ordinary case: the parent is no earlier than anything the certificate's
+  honest signers voted2 on.
 * The lock is of the parent's epoch and over the same block. This is for a
   re-vote request (`SafeRevote`): a lock on an earlier re-vote's certificate over
   the same block still admits the block's first certificate.
-
-The lock is the one a timeout certificate carries (`SafeEvidence`), no earlier
-than anything its honest signers voted2 on.
 -/
-def LockAllows (lock pc : Cert1) (e : EpochNumber) : Prop :=
-  lock.data.epoch < e
-    ∨ (lock.data.epoch = pc.data.epoch ∧ (lock.view ≤ pc.view ∨ lock.data = pc.data))
+def TimeoutLockAllows (tc : TimeoutCert) (pc : Cert1) (e : EpochNumber) : Prop :=
+  tc.data.lock.data.epoch < e
+    ∨ (tc.data.lock.data.epoch = pc.data.epoch
+      ∧ (tc.data.lock.view ≤ pc.view ∨ tc.data.lock.data = pc.data))
 
 /-- A vote1 answers this re-vote request: the certificate's data, at the request's view. -/
 def Vote1Again (vote : Vote1) (r : RevoteRequest) : Prop :=

@@ -306,7 +306,7 @@ block.
 theorem no_gap_of_timeout {C : Committee} (N : Network cfg C) {c : Cert2} {tc : TimeoutCert}
     {pc : Cert1} (hc2 : Cert2Backed N.trace c) (htc : TimeoutCertBacked N.trace tc)
     (hep : tc.data.epoch = c.data.epoch) (hv : c.view ≤ tc.view)
-    (hallow : LockAllows tc.data.lock pc c.data.epoch) (hpce : pc.data.epoch.toNat ≤ c.data.epoch.toNat) :
+    (hallow : TimeoutLockAllows tc pc c.data.epoch) (hpce : pc.data.epoch.toNat ≤ c.data.epoch.toNat) :
     c.view ≤ pc.view ∨ (tc.data.lock.data = pc.data ∧ tc.data.lock.data.epoch = c.data.epoch
       ∧ c.view ≤ tc.data.lock.view) := by
   obtain ⟨qt, hqt, hcastt⟩ := htc
@@ -320,7 +320,7 @@ theorem no_gap_of_timeout {C : Committee} (N : Network cfg C) {c : Cert2} {tc : 
   -- Read every comparison as numbers.
   have e1 : ∀ a b : EpochNumber, a < b → a.toNat < b.toNat := fun _ _ h => h
   have e2 : ∀ a b : EpochNumber, a = b → a.toNat = b.toNat := fun _ _ h => congrArg _ h
-  simp only [LockLE, EpochViewLE, LockAllows] at htvl hallow hcov
+  simp only [LockLE, EpochViewLE, TimeoutLockAllows] at htvl hallow hcov
   show c.view.toNat ≤ pc.view.toNat ∨ (tc.data.lock.data = pc.data
     ∧ tc.data.lock.data.epoch = c.data.epoch ∧ c.view.toNat ≤ tc.data.lock.view.toNat)
   have hcv : c.view.toNat ≤ tv.data.lock.view.toNat ∨ c.data.epoch.toNat < tv.data.lock.data.epoch.toNat := by
@@ -354,7 +354,7 @@ theorem noGap_of_evidence {C : Committee} (N : Network cfg C) {c1 pc : Cert1} {c
     {tc : TimeoutCert} (hc2 : Cert2Backed N.trace c) (htc : TimeoutCertBacked N.trace tc)
     (hchk : TimeoutLockChecked N.trace cfg tc) (hep : tc.data.epoch = c.data.epoch)
     (hv : c.view ≤ tc.view) (htv : tc.view.toNat + 1 = c1.view.toNat)
-    (hallow : LockAllows tc.data.lock pc c.data.epoch) (hpce : pc.data.epoch.toNat ≤ c.data.epoch.toNat)
+    (hallow : TimeoutLockAllows tc pc c.data.epoch) (hpce : pc.data.epoch.toNat ≤ c.data.epoch.toNat)
     (hcfg : ConfigCoherent cfg) :
     c.view ≤ pc.view
       ∨ ∃ T, Cert1Backed N.trace T ∧ T.data = pc.data ∧ T.data.epoch = c.data.epoch

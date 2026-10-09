@@ -720,7 +720,7 @@ def ReadyToPropose (cfg : Config) (leader : EpochNumber → ViewNumber → Optio
             ∨ (IsLastBlock pc.data.blockNumber cfg.epochHeight
               ∧ ∃ c2, h.HasCert2 c2 ∧ c2.data = pc.data.toVote2))
           ∧ tc.data.epoch = epochOf (pc.data.blockNumber + 1) cfg.epochHeight
-          ∧ LockAllows tc.data.lock pc (epochOf (pc.data.blockNumber + 1) cfg.epochHeight))
+          ∧ TimeoutLockAllows tc pc (epochOf (pc.data.blockNumber + 1) cfg.epochHeight))
 
 section Leader
 
@@ -910,7 +910,7 @@ theorem leader_ready {l : PubKey} {hl' : C.Honest l} (hlE : C.HonestFrom E l) (h
       · exact h1 (hentry_c c hc hcw).2
       · exact h2 tc htc0 hwt (htcpath tc htc0 hwt)
     have hallow : ∀ tc : TimeoutCert, (tc.data.lock.data.epoch.toNat < E.toNat ∨ LockLE tc.data.lock L) →
-        LockAllows tc.data.lock L E := by
+        TimeoutLockAllows tc L E := by
       intro tc hle
       rcases hle with hlt | hlt | ⟨heq, hv⟩
       · exact Or.inl hlt
@@ -934,7 +934,7 @@ theorem leader_ready {l : PubKey} {hl' : C.Honest l} (hlE : C.HonestFrom E l) (h
         · rw [hfull, Nat.min_self]; exact hL
       · intro tc' h
         cases h
-        exact ⟨by rw [hte, hLE], by show LockAllows tc.data.lock L L.data.epoch; rw [hLE]; exact hallow tc htl⟩
+        exact ⟨by rw [hte, hLE], by show TimeoutLockAllows tc L L.data.epoch; rw [hLE]; exact hallow tc htl⟩
     · -- Not the last block: a proposal on the lock, in `E`.
       left
       have hbvL : L.view = b.viewNumber := ViewNumber.le_antisymm
@@ -1068,7 +1068,7 @@ theorem ready_of_tuple {r : Trace} {m n : Nat} (hmn : m ≤ n) {l : PubKey} {v :
       · rw [Trace.history_upTo r hmn]; exact hjust
     · intro tc' h
       cases h
-      exact ⟨by rw [hte, hnum], by show LockAllows _ _ (epochOf hdr.blockNumber cfg.epochHeight); rw [hnum]; exact hallow⟩
+      exact ⟨by rw [hte, hnum], by show TimeoutLockAllows _ _ (epochOf hdr.blockNumber cfg.epochHeight); rw [hnum]; exact hallow⟩
 
 omit hcfg hcf hs hst hw hl in
 /-- A view whose number is one less than `w`'s is `w - 1`. -/

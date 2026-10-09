@@ -515,24 +515,25 @@ end Spec.LockLE
 {includeDocstring NewProtocol.LockLE}
 
 ```lean -show
-namespace Spec.LockAllows
+namespace Spec.TimeoutLockAllows
 open NewProtocol.History
 ```
 
-:::spec NewProtocol.LockAllows
+:::spec NewProtocol.TimeoutLockAllows
   ```lean
-  def LockAllows (lock pc : Cert1) (e : EpochNumber) : Prop :=
-    lock.data.epoch < e
-      ∨ (lock.data.epoch = pc.data.epoch ∧ (lock.view ≤ pc.view ∨ lock.data = pc.data))
+  def TimeoutLockAllows (tc : TimeoutCert) (pc : Cert1) (e : EpochNumber) : Prop :=
+    tc.data.lock.data.epoch < e
+      ∨ (tc.data.lock.data.epoch = pc.data.epoch
+        ∧ (tc.data.lock.view ≤ pc.view ∨ tc.data.lock.data = pc.data))
   ```
 :::
 
 ```lean -show
-example : @Spec.LockAllows.LockAllows = @NewProtocol.LockAllows := rfl
-end Spec.LockAllows
+example : @Spec.TimeoutLockAllows.TimeoutLockAllows = @NewProtocol.TimeoutLockAllows := rfl
+end Spec.TimeoutLockAllows
 ```
 
-{includeDocstring NewProtocol.LockAllows}
+{includeDocstring NewProtocol.TimeoutLockAllows}
 
 ```lean -show
 namespace Spec.ChainLinked
@@ -1020,7 +1021,7 @@ open NewProtocol.History
 :::spec NewProtocol.SafeEvidence
   ```lean
   def SafeEvidence (ev : Option TimeoutCert) (c : Cert1) (e : EpochNumber) : Prop :=
-    ∀ tc, ev = some tc → tc.data.epoch = e ∧ LockAllows tc.data.lock c e
+    ∀ tc, ev = some tc → tc.data.epoch = e ∧ TimeoutLockAllows tc c e
   ```
 :::
 

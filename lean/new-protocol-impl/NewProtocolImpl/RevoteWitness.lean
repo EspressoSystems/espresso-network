@@ -24,7 +24,7 @@ answers it. That view times out, and the timeout certificate's lock is the
 re-vote's `Cert1`, the latest lock among its signers: the outgoing committee's
 members lock on it, the node new to the committee only on the block's own `Cert1`,
 through the epoch change. The leader builds on the block behind it, which the lock
-allows (`LockAllows`).
+allows (`TimeoutLockAllows`).
 
 The nodes and committees are `NewProtocolImpl.FiveNodes`'s: `a`, `b`, `c` and `nw` honest, `d`
 faulty and silent, `c` outside the even epochs' committees and `nw` outside the odd

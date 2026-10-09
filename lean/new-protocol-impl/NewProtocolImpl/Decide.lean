@@ -170,7 +170,7 @@ instance (p : Proposal) (vid : VidShare) : Decidable (ShareMatches p vid) :=
 
 instance (a b : Cert1) : Decidable (LockLE a b) := inferInstanceAs (Decidable (_ ∨ _))
 
-instance (l pc : Cert1) (e : EpochNumber) : Decidable (LockAllows l pc e) :=
+instance (tc : TimeoutCert) (pc : Cert1) (e : EpochNumber) : Decidable (TimeoutLockAllows tc pc e) :=
   inferInstanceAs (Decidable (_ ∨ _))
 
 instance (r : RevoteRequest) : Decidable (RevoteWellFormed cfg r) := by
@@ -186,7 +186,7 @@ instance (r : RevoteRequest) : Decidable (RevoteWellFormed cfg r) := by
 def SafeParentB (p : Proposal) : Prop :=
   match p.timeoutEvidence with
   | none => True
-  | some tc => tc.data.epoch = p.epoch ∧ LockAllows tc.data.lock p.parentCert p.epoch
+  | some tc => tc.data.epoch = p.epoch ∧ TimeoutLockAllows tc p.parentCert p.epoch
 
 instance (p : Proposal) : Decidable (SafeParentB p) := by
   unfold SafeParentB; split <;> infer_instance
@@ -203,7 +203,7 @@ instance (p : Proposal) : Decidable (SafeParent p) := decidable_of_iff _ safePar
 def SafeRevoteB (r : RevoteRequest) : Prop :=
   match r.timeoutEvidence with
   | none => True
-  | some tc => tc.data.epoch = r.cert.data.epoch ∧ LockAllows tc.data.lock r.cert r.cert.data.epoch
+  | some tc => tc.data.epoch = r.cert.data.epoch ∧ TimeoutLockAllows tc r.cert r.cert.data.epoch
 
 instance (r : RevoteRequest) : Decidable (SafeRevoteB r) := by
   unfold SafeRevoteB; split <;> infer_instance

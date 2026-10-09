@@ -9,7 +9,7 @@ What an honest node's history must satisfy.
 
 * `SafeHistory` is when a node may sign a vote and what a decide must show. It is
   all the no-fork result reads. A vote1 after a timeout extends no block the
-  timeout certificate's lock rules out (`LockAllows`), a timeout vote's lock
+  timeout certificate's lock rules out (`TimeoutLockAllows`), a timeout vote's lock
   covers the node's vote2s, and no vote2 follows a timeout of its view: together
   these keep a committed view from being skipped.
 * `ProtocolHistory` adds the rest of what a node may do: when it may time out and
@@ -37,7 +37,7 @@ open History
 
 /--
 Timeout evidence lets certificate `c` through, for a block of epoch `e`: the
-timeout certificate is of epoch `e`, and its lock allows `c` (`LockAllows`).
+timeout certificate is of epoch `e`, and its lock allows `c` (`TimeoutLockAllows`).
 
 So nothing skips a view a quorum may have committed. Without timeout evidence,
 a proposal extends the view before its own and skips nothing. With it, a quorum
@@ -46,7 +46,7 @@ certificate share a node honest in `e`, which voted2 at `x` before it timed out,
 so the certificate's lock is at `x` or later.
 -/
 def SafeEvidence (ev : Option TimeoutCert) (c : Cert1) (e : EpochNumber) : Prop :=
-  ∀ tc, ev = some tc → tc.data.epoch = e ∧ LockAllows tc.data.lock c e
+  ∀ tc, ev = some tc → tc.data.epoch = e ∧ TimeoutLockAllows tc c e
 
 /-- A proposal's parent is safe to build on, given its timeout evidence. -/
 def SafeParent (p : Proposal) : Prop := SafeEvidence p.timeoutEvidence p.parentCert p.epoch
