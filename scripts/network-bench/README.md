@@ -235,10 +235,11 @@ just bench aws run --fleet --chaos --query-engine sqlite
   `--query-engine` given on the command line are kept; `--latency` is per run, `up` does not take it; `--nodes N` alone
   gives N query nodes.
 - Refused: `--steps`, `--step-s`, `--search`, `--keep-going` and `--warmup-s` (set by the chaos config); fewer than 7
-  nodes; 2 or fewer query nodes; `--query-engine postgres`; `--query-db` other than `colocated`.
+  nodes; 2 or fewer query nodes; a `--chaos-min` that gives no faults; `--query-engine postgres`; `--query-db` other
+  than `colocated`.
 - Faults start after the warmup, one per 45 s, and stop the kill down time plus 120 s (180 s) before the load ends, so a
-  late kill recovers under load; `--chaos-min 3` or less gives no faults. Kinds are used in turn from `--chaos-kinds`
-  (default `restart,kill,wipe`) on nodes in the order `--chaos-seed` shuffles them to.
+  late kill recovers under load; `--chaos-min 3` or less is refused, as it gives no faults. Kinds are used in turn from
+  `--chaos-kinds` (default `restart,kill,wipe`) on nodes in the order `--chaos-seed` shuffles them to.
   - `restart`: `docker restart`. `kill`: `docker kill`, `docker start` after 60 s. `wipe`: container logs saved to
     `/opt/bench/espresso-node.wiped.log.gz`, container removed, journal and payload dir emptied, container recreated
     from `node-rejoin.env` (`recreate.sh`), started.
@@ -255,8 +256,10 @@ just bench aws run --fleet --chaos --query-engine sqlite
   a dead leader do not measure capacity.
 - The load driver submits to the next node when one is down; `submit_failovers` in `load-meta.json` counts the switches,
   `submit_errors` stays 0 unless every node refused a tx. A submit fails over only on a connection error before the
-  request was sent or an HTTP 5xx; a 4xx or a lost response fails that tx. `submit_duplicates` counts scans that saw an
-  already included tx id; the chaos totals line shows it when non-zero.
+  request was sent or an HTTP 5xx; a 4xx fails that tx. A lost response leaves the tx pending until a scan includes it
+  or `--tx-timeout-s` passes, and is no submit error. A reused keep-alive connection is retried on a fresh one only when
+  it failed before sending or was reset by the server. `submit_duplicates` counts scans that saw an already included tx
+  id; the chaos totals line shows it when non-zero.
 - A node not recovered within 300 s writes one `timeout` event and turns `stuck`: it keeps its slot in the fault budget,
   is no longer gated or faulted, and the load runs on; the final drain waits only for the other faults. The run then
   fails: exit 3, `summary.md` keeps the reason, the run is invalid. A node that crashes without a fault fails the run at
@@ -305,6 +308,9 @@ just bench aws run --fleet --chaos --query-engine sqlite
   log section shows, per node that timed out, its last 30 WARN and ERROR lines before the timeout, else its last lines;
   without a timeout, every node's last lines. `render` fails when the chaos report raises; the run itself falls back to
   a plain failure summary.
+- A run that finished its load is analyzed as usual. Its report ends with the same log section for the nodes that timed
+  out, and none without a timeout. An error after the load (Ctrl-C or ssh failures in the final drain) goes to
+  `error.txt`; the verdict fails with it in both reports.
 - `INDEX.md` has a `chaos` column, `F faults, T timeouts` (`-` without chaos). `rate` is the chaos rate, `decided` the
   mean decided, `bound` is `-`.
 

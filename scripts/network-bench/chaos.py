@@ -436,9 +436,9 @@ def _fault_target(
 ) -> int | None:
     """Index in `order` of the first node from `cursor` on whose fault keeps the budget, the up
     query floor and 2 up peers for itself and for every faulty node; `None` when there is
-    none. A `lagging` node counts as faulty and is never a target."""
-    up = {name for name, s in nodes.items() if s["health"] == "up"}
-    if len(nodes) - len(up) + len(lagging) + 1 > fault_budget(len(nodes)):
+    none. A `lagging` node counts as faulty everywhere and is never a target."""
+    up = {name for name, s in nodes.items() if s["health"] == "up"} - set(lagging)
+    if len(nodes) - len(up) + 1 > fault_budget(len(nodes)):
         return None
     up_queries = sum(q in up for q in queries)
 
@@ -448,7 +448,7 @@ def _fault_target(
     for step in range(len(order)):
         i = (cursor + step) % len(order)
         name = order[i]
-        if name not in up or name in lagging:
+        if name not in up:
             continue
         if up_queries - (name in queries) < QUERY_FLOOR:
             continue
@@ -659,8 +659,15 @@ def step_chaos(
     """Per step, given as its (start, end): the faults active in it, and the nodes whose process
     stopped or started. `start_s` counts from `t0`."""
     windows = [(r.node, r.kind, *fault_span(r, end)) for r in rows]
+    # A kill that timed out while down is started at its timeout.
     restarts = [
-        (r.node, ts) for r in rows for ts in (r.fault, r.started) if ts is not None
+        (r.node, ts)
+        for r in rows
+        for ts in (
+            r.fault,
+            r.timeout if r.kind == "kill" and r.started is None else r.started,
+        )
+        if ts is not None
     ]
     return [
         {

@@ -632,11 +632,15 @@ class ResponseLost(OSError):
     """The request was sent but no complete response came back: the node may have the tx."""
 
 
+# How a reused keep-alive connection the server already closed fails.
+STALE = (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError)
+
+
 class HttpPool:
     """Keep-alive connections shared by threads, one request per connection at a time. A
-    reused connection the server closed is retried once on a fresh one; any other failure
-    raises OSError, `ResponseLost` if it came after the request was sent. `closed` tells
-    retrying readers to give up."""
+    reused connection that fails before the request was sent, or with a `STALE` error, is
+    retried once on a fresh one; any other failure raises OSError, `ResponseLost` if it came
+    after the request was sent. `closed` tells retrying readers to give up."""
 
     def __init__(self, clock: Clock = SYSTEM_CLOCK) -> None:
         self.clock = clock
@@ -668,7 +672,7 @@ class HttpPool:
                 data = resp.read()
             except (OSError, http.client.HTTPException) as err:
                 conn.close()
-                if not reused or attempt:
+                if attempt or not reused or (sent and not isinstance(err, STALE)):
                     kind = ResponseLost if sent else OSError
                     raise kind(f"{method} {url}: {err}") from err
                 continue
@@ -1141,8 +1145,7 @@ class LoadState:
         self.max_in_flight = max(self.max_in_flight, len(self.pending))
 
     def failed(self, tx: Tx) -> None:
-        """A submit that failed, unless the transaction was included anyway, e.g. after a
-        timed-out response."""
+        """A submit that failed, unless the transaction was included anyway."""
         self.submit_errors += 1
         if self.pending.pop(tx.id, None) is not None:
             self.txs.remove(tx)
@@ -1937,7 +1940,8 @@ async def submit_tx(load: Load, tx: Tx) -> None:
     lo, hi = load.cfg.namespaces
     request = functools.partial(load.bodies.request, tx.id, lo + tx.id % (hi - lo + 1))
     status = await load.client.call(post_tx, load.state, tx, load.urls, request)
-    if status is not None and status != 200:
+    # A lost response stays pending: the scan or `tx_timeout_s` resolves it.
+    if status is not None and status not in (200, LOST):
         load.state.failed(tx)
 
 
@@ -1970,15 +1974,19 @@ def heartbeat(
     return failed
 
 
+# Status of a submit whose request was sent but whose response was lost.
+LOST = -1
+
+
 def post_failover(
     pool: Http, urls: Sequence[str], start: int, body: bytes
 ) -> tuple[int, int, str]:
     """POSTs `body` to the submit API of `urls[start]`, then of the following urls cyclically
     until one answers 200, at most once each. Only a connection error before the request was
     sent or a 5xx moves on; a 4xx or a lost response ends it, as the node may have the tx.
-    Returns the last status, 0 if the request
-    failed, the index of the url that gave it, and the reply body or error text. A url that
-    hangs costs its request timeout before the next is tried."""
+    Returns the last status (0 if the request failed, `LOST` if its response was lost), the
+    index of the url that gave it, and the reply body or error text. A url that hangs costs
+    its request timeout before the next is tried."""
     for attempt in range(len(urls)):
         index = (start + attempt) % len(urls)
         try:
@@ -1987,7 +1995,7 @@ def post_failover(
             )
             detail = reply.decode(errors="replace")
         except ResponseLost as err:
-            return 0, index, str(err)
+            return LOST, index, str(err)
         except OSError as err:
             status, detail = 0, str(err)
         if 0 < status < 500:
@@ -2002,10 +2010,10 @@ def post_tx(
     urls: Sequence[str],
     build: Callable[[], bytes],
 ) -> int | None:
-    """HTTP status of the last attempt (see `post_failover`), 0 if the request failed, None if
-    `drop_unsent` dropped the tx first. `tx.node` ends as the url that took it. Builds the
-    body on this thread, so only as many bodies are alive as there are threads. Stamps
-    `t_submit` as the first request goes out, not when it was queued for a thread."""
+    """Status of the last attempt (see `post_failover`), None if `drop_unsent` dropped the tx
+    first. `tx.node` ends as the url that took it. Builds the body on this thread, so only as
+    many bodies are alive as there are threads. Stamps `t_submit` as the first request goes
+    out, not when it was queued for a thread."""
     body = build()
     with state.lock:
         if tx.id not in state.pending:

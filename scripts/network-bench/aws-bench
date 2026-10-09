@@ -1251,6 +1251,12 @@ def check_chaos(cfg: RunConfig) -> None:
             f"--chaos needs more than {ch.QUERY_FLOOR} query nodes, so that one can be "
             f"faulted with {ch.QUERY_FLOOR} left serving: {cfg.query_nodes}"
         )
+    quiet_s = cfg.chaos.kill_down_s + ch.RECOVERY_ALLOWANCE_S
+    if cfg.chaos.minutes * CHAOS_STEP_S <= quiet_s:
+        raise Refused(
+            f"--chaos-min {cfg.chaos.minutes} issues no faults: they stop {quiet_s:g} s "
+            "before the load ends"
+        )
     if cfg.query_engine != "sqlite":
         raise Refused(
             "--chaos needs --query-engine sqlite: a postgres wipe needs a database reset"
@@ -4102,6 +4108,7 @@ def report(run: Run) -> nb.BenchResult | None:
     # A driver-side error after the load finished still leaves a complete run to analyze.
     run.agent = run.agent or finished_agent_state(run.run_dir)
     if run.agent is not None:
+        write_error(run)
         try:
             write_run_json(run)
             plot_throughput(run.fleet.system.run, run.run_dir)
@@ -4115,10 +4122,15 @@ def report(run: Run) -> nb.BenchResult | None:
             return result
     elif (run.run_dir / "chaos.jsonl").exists():
         plot_throughput(run.fleet.system.run, run.run_dir)
-    if run.error:
-        (run.run_dir / "error.txt").write_text(run.error)
+    write_error(run)
     write_failure_summary(run.run_dir, run.manifest, run.error, fallback=True)
     return None
+
+
+def write_error(run: Run) -> None:
+    """`error.txt`, which the chaos report reads for its verdict."""
+    if run.error:
+        (run.run_dir / "error.txt").write_text(run.error)
 
 
 def plot_traces(runner: Runner, run_dir: Path) -> None:
@@ -7343,6 +7355,7 @@ def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.Bench
     prepare_analysis(run_dir, manifest)
     events = ch.read_events(run_dir)
     faulted = frozenset(e["node"] for e in events if e["event"] == "fault")
+    timeouts = timeout_times(events)
     result = nb.analyze(run_dir, cfg, nb.read_json(run_dir / "topology.json"), faulted)
     run = nb.read_json(run_dir / "run.json")
     stats, evidence = load_evidence(run_dir, manifest, run["t0"], run["t1"])
@@ -7358,7 +7371,8 @@ def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.Bench
         else None
     )
     summary = nb.render(result, comparison, chart, chaos) + reproduce_section(manifest)
-    (run_dir / "summary.md").write_text(summary)
+    logs = node_logs(run_dir, list(timeouts), timeouts)
+    (run_dir / "summary.md").write_text("\n".join([summary, *logs]))
     return result
 
 
@@ -7367,11 +7381,12 @@ def chaos_view(
     manifest: Manifest,
     steps: Sequence[nb.StepResult],
     result: nb.BenchResult | None = None,
-    error: str | None = None,
 ) -> ch.ChaosView:
     """The chaos report of a run from its `chaos.jsonl`, `load-meta.json` and `steps`; without
-    a `result` (the analysis did not run) the run failed."""
+    a `result` (the analysis did not run) or with an `error.txt` the run failed."""
     config = manifest["config"]
+    error_path = run_dir / "error.txt"
+    error = error_path.read_text() if error_path.exists() else None
     events = ch.read_events(run_dir)
     rows = ch.fault_rows(events)
     t0 = load_t0(run_dir, steps, events)
@@ -7386,7 +7401,7 @@ def chaos_view(
     lead = [
         "## Chaos test",
         "",
-        ch.chaos_verdict(rows, events, error, result is None),
+        ch.chaos_verdict(rows, events, error, result is None or error is not None),
         setup_line(config),
         *([f"- Run: {nb.status_line(result)}"] if result else []),
         *chaos_totals(
@@ -8174,15 +8189,17 @@ def write_failure_summary(
 ) -> None:
     """A run without a result: the error (`netbench.wait_ready` includes the last heights) and
     the last log lines of every node container that was collected. A chaos run reports
-    what its files hold and shows the WARN and ERROR lines of the nodes that timed out before
-    their timeout. With `fallback`, a chaos report that raises gives the plain one instead."""
+    what its files hold, its error from `error.txt`, and shows the WARN and ERROR lines of the
+    nodes that timed out before their timeout. With `fallback`, a chaos report that raises
+    gives the plain one instead."""
     timeouts: dict[str, float] = {}
     if manifest["config"].get("chaos") is None:
         lines = ["## Network benchmark", "", f"**invalid**: {error}", ""]
         names = [spec["name"] for spec in manifest["hosts"]]
     else:
         try:
-            lines, timeouts = chaos_failure_lines(run_dir, manifest, error)
+            lines = chaos_failure_lines(run_dir, manifest)
+            timeouts = timeout_times(ch.read_events(run_dir))
             names = list(timeouts) or [spec["name"] for spec in manifest["hosts"]]
         except Exception:
             if not fallback:
@@ -8190,11 +8207,24 @@ def write_failure_summary(
             log.exception("chaos report failed")
             lines = ["## Network benchmark", "", f"**invalid**: {error}", ""]
             names = [spec["name"] for spec in manifest["hosts"]]
+    lines += node_logs(run_dir, names, timeouts)
+    (run_dir / "summary.md").write_text("\n".join(lines))
+
+
+def timeout_times(events: Iterable[ch.ChaosEvent]) -> dict[str, float]:
+    return {e["node"]: e["ts"] for e in events if e["event"] == "timeout"}
+
+
+def node_logs(
+    run_dir: Path, names: Iterable[str], timeouts: dict[str, float]
+) -> list[str]:
+    """`node_log_lines` of each of `names` whose log was collected."""
+    lines: list[str] = []
     for name in names:
         path = run_dir / "hosts" / name / "espresso-node.log.gz"
         if path.exists():
             lines += node_log_lines(name, path, timeouts.get(name))
-    (run_dir / "summary.md").write_text("\n".join(lines))
+    return lines
 
 
 def node_log_lines(name: str, path: Path, timeout: float | None) -> list[str]:
@@ -8245,15 +8275,13 @@ def warn_lines(lines: Iterable[str], before: float, limit: int) -> list[str]:
     return list(picked)
 
 
-def chaos_failure_lines(
-    run_dir: Path, manifest: Manifest, error: str | None
-) -> tuple[list[str], dict[str, float]]:
-    """The chaos report of a failed run and the time each node timed out."""
+def chaos_failure_lines(run_dir: Path, manifest: Manifest) -> list[str]:
+    """The chaos report of a failed run."""
     steps_path = run_dir / "steps.json"
     steps = nb.read_json(steps_path) if steps_path.exists() else []
-    view = chaos_view(run_dir, manifest, steps, error=error)
+    view = chaos_view(run_dir, manifest, steps)
     chart = throughput_chart(run_dir)
-    lines = [
+    return [
         *view["lead"],
         "",
         *([chart, ""] if chart else []),
@@ -8264,10 +8292,6 @@ def chaos_failure_lines(
             else []
         ),
     ]
-    timeouts = {
-        e["node"]: e["ts"] for e in ch.read_events(run_dir) if e["event"] == "timeout"
-    }
-    return lines, timeouts
 
 
 def tagged_resources(run: Runner, region: str, name: str | None = None) -> list[str]:

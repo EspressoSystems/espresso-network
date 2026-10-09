@@ -1,3 +1,4 @@
+import dataclasses
 import gzip
 import json
 from collections import Counter
@@ -17,6 +18,7 @@ from fakes import (
     make_result,
     raiser,
     step,
+    write_collected_run,
 )
 from test_chaos import EVENTS, KINDS, T0, ev
 
@@ -257,6 +259,7 @@ def test_warn_lines_keep_the_last_ones():
 def test_failure_summary_without_a_timeout_shows_every_log(tmp_path: Path):
     write_failed_run(tmp_path)
     (tmp_path / "chaos.jsonl").write_text("".join(json.dumps(e) + "\n" for e in EVENTS))
+    (tmp_path / "error.txt").write_text("boom")
     manifest = netbench.read_json(tmp_path / "manifest.json")
     awsb.write_failure_summary(tmp_path, manifest, "boom", fallback=True)
     text = (tmp_path / "summary.md").read_text()
@@ -401,3 +404,66 @@ def test_totals_show_duplicates_only_when_non_zero():
     meta = {"missing_payloads": [], "submit_failovers": 1, "submit_duplicates": 3}
     lines = awsb.chaos_totals(rows, EVENTS, T0 + 240, CONFIG, meta, txs)
     assert lines[1].endswith("submit failovers 1; duplicate inclusions 3")
+
+
+def write_chaos_run(run_dir: Path, *events: ch.ChaosEvent) -> None:
+    """A collected run under the default chaos config with `events` in `chaos.jsonl`."""
+    manifest = write_collected_run(run_dir)
+    chaos = dataclasses.asdict(ch.ChaosConfig())
+    manifest["config"] = {**manifest["config"], "chaos": chaos}
+    netbench.write_json(run_dir / "manifest.json", manifest)
+    meta = netbench.read_json(run_dir / "load-meta.json")
+    netbench.write_json(run_dir / "load-meta.json", {**meta, "submit_failovers": 0})
+    (run_dir / "chaos.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+
+
+def test_write_report_fails_the_chaos_verdict_of_a_run_with_an_error(tmp_path: Path):
+    write_chaos_run(
+        tmp_path,
+        ch.chaos_event(105.0, "fault", "node1", False, "restart", 9, None),
+        ch.chaos_event(120.0, "rejoined", "node1", False, "restart", None, 15.0),
+    )
+    (tmp_path / "error.txt").write_text("interrupted while draining")
+    awsb.write_report(tmp_path)
+    summary = (tmp_path / "summary.md").read_text()
+    assert "- Verdict: **fail**: interrupted while draining" in summary
+
+
+def test_report_writes_the_error_of_a_run_that_finished_its_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    write_chaos_run(tmp_path)
+    for name in ("write_run_json", "plot_throughput", "plot_traces"):
+        monkeypatch.setattr(awsb, name, lambda *_: None)
+    state: Any = SimpleNamespace(
+        agent={"phase": "done"},
+        run_dir=tmp_path,
+        error="interrupted while draining",
+        manifest=netbench.read_json(tmp_path / "manifest.json"),
+        fleet=SimpleNamespace(system=FakeSystem()),
+    )
+    assert awsb.report(state) is not None
+    assert (tmp_path / "error.txt").read_text() == "interrupted while draining"
+    assert (
+        "**fail**: interrupted while draining" in (tmp_path / "summary.md").read_text()
+    )
+
+
+def test_write_report_shows_the_warnings_of_a_timed_out_node(tmp_path: Path):
+    write_chaos_run(
+        tmp_path,
+        ch.chaos_event(105.0, "fault", "node1", False, "kill", None, None),
+        ch.chaos_event(150.0, "timeout", "node1", False, "kill", None, 45.0),
+    )
+    lines = [
+        log_line(130.0 - T0, "WARN", "fetch failed", err="timeout"),
+        log_line(155.0 - T0, "WARN", "after the timeout"),
+    ]
+    log = tmp_path / "hosts" / "node1" / "espresso-node.log.gz"
+    log.write_bytes(gzip.compress("".join(lines).encode()))
+    awsb.write_report(tmp_path)
+    summary = (tmp_path / "summary.md").read_text()
+    tail = summary.split("WARN and ERROR lines of node1 before its timeout:")[1]
+    assert "WARN espresso: fetch failed err=timeout" in tail
+    assert "after the timeout" not in summary
+    assert "lines of node0" not in summary

@@ -1465,13 +1465,38 @@ def test_histogram_quantiles(buckets, total_s, expected):
 
 
 def test_stale_connection_is_retried_on_a_fresh_one(monkeypatch: pytest.MonkeyPatch):
-    connections = fakes.FakeConnections(b"42")
+    connections = fakes.FakeConnections(
+        b"42", netbench.http.client.RemoteDisconnected("closed"), sent=False
+    )
     monkeypatch.setattr(netbench.http.client, "HTTPConnection", connections)
     pool = netbench.HttpPool(fakes.FakeClock())
     assert pool.request("GET", "http://x/y") == (200, b"42")
     assert pool.request("GET", "http://x/y") == (200, b"42")
     stale, fresh = connections.made
     assert (stale.closed, stale.requests, fresh.requests) == (True, 2, 1)
+
+
+def test_a_reused_connection_that_times_out_after_sending_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    connections = fakes.FakeConnections(b"42", TimeoutError("timed out"), sent=True)
+    monkeypatch.setattr(netbench.http.client, "HTTPConnection", connections)
+    pool = netbench.HttpPool(fakes.FakeClock())
+    pool.request("POST", "http://x/y", b"{}")
+    with pytest.raises(netbench.ResponseLost):
+        pool.request("POST", "http://x/y", b"{}")
+    assert len(connections.made) == 1
+
+
+def test_a_reused_connection_reset_after_sending_is_retried(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    connections = fakes.FakeConnections(b"42", ConnectionResetError("reset"), sent=True)
+    monkeypatch.setattr(netbench.http.client, "HTTPConnection", connections)
+    pool = netbench.HttpPool(fakes.FakeClock())
+    pool.request("POST", "http://x/y", b"{}")
+    assert pool.request("POST", "http://x/y", b"{}") == (200, b"42")
+    assert len(connections.made) == 2
 
 
 def test_window_rate_counts_transactions_in_the_window():
@@ -2092,6 +2117,19 @@ def test_a_failed_over_tx_stays_pending_and_records_where_it_landed():
     assert len(cluster.members["node2"].submits) == 1
 
 
+def test_a_lost_response_leaves_the_tx_pending_and_is_no_submit_error():
+    clock, _, load = cluster_load_parts(["node0", "node1"], {"node0"})
+    pool = OutcomePool(netbench.ResponseLost("timed out"))
+    pool.clock = clock
+    load.client = netbench.Client(cast("Any", pool), ThreadPoolExecutor(1))
+    tx = netbench.Tx(id=0, node=0, t_queued=0.0)
+    load.state.submitted(tx)
+    clock.run(netbench.submit_tx(load, tx))
+    assert load.state.submit_errors == 0
+    assert list(load.state.pending) == [0]
+    assert load.state.txs == [tx]
+
+
 def test_a_post_tries_each_url_once():
     clock, cluster, _ = cluster_load_parts(["node0", "node1", "node2"], {"node0"})
     for name in cluster.members:
@@ -2107,6 +2145,7 @@ class OutcomePool:
     def __init__(self, *outcomes: int | OSError) -> None:
         self.outcomes = list(outcomes)
         self.urls: list[str] = []
+        self.clock: netbench.Clock = netbench.SYSTEM_CLOCK
 
     def request(
         self, method: str, url: str, body: bytes | None = None
@@ -2139,7 +2178,7 @@ def test_a_post_does_not_fail_over_once_the_node_may_have_the_tx(outcome: Any):
     status, index, pool = post(outcome)
     assert index == 0
     assert len(pool.urls) == 1
-    assert status == (outcome if isinstance(outcome, int) else 0)
+    assert status == (outcome if isinstance(outcome, int) else netbench.LOST)
 
 
 def test_a_read_timeout_surfaces_as_response_lost():

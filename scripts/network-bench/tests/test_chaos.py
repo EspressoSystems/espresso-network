@@ -125,6 +125,17 @@ def test_query_floor_kept():
     ]
 
 
+def test_a_lagging_query_node_does_not_count_toward_the_query_floor():
+    topo = topo_of(13, 4)
+    state = with_health(init(topo=topo), node0="catching_up")
+    state["order"] = ["node2", "node4"]
+    state["next_fault_at"] = 0.0
+    result = step(
+        state, observe(topo, node1=None), 100.0, topo=topo, peers=peers_of(13, 4)
+    )
+    assert [e["node"] for e in faults([result])] == ["node4"]
+
+
 # TEST:every-node-is-a-target-ok
 def test_every_node_is_a_target():
     steps = run(seconds=2000, tick=5.0)
@@ -818,6 +829,13 @@ def test_steps_name_their_faults_and_restarted_nodes():
         ["node5"],
         [],
     ]
+
+
+def test_a_kill_that_timed_out_while_down_restarts_at_its_timeout():
+    events = [ev(10, "fault", "node5", "kill"), ev(70, "timeout", "node5", "kill")]
+    spans = [(T0, T0 + 60), (T0 + 60, T0 + 120)]
+    chaos = ch.step_chaos(spans, ch.fault_rows(events), T0, T0 + 120)
+    assert [sorted(c["restarted"]) for c in chaos] == [["node5"], ["node5"]]
 
 
 def span_of(*events: ch.ChaosEvent, end: float = T0 + 300) -> tuple[float, float]:

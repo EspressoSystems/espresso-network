@@ -9,7 +9,6 @@ import collections
 import copy
 import dataclasses
 import heapq
-import http.client
 import importlib.util
 import itertools
 import json
@@ -1026,23 +1025,29 @@ def no_http_pool(clock: netbench.Clock) -> netbench.Http:
 
 class FakeConnection:
     """`http.client.HTTPConnection` answering 200 `body`; with `drops_second` its second
-    request fails as on a kept-alive connection the server closed."""
+    request fails with `error`, raised before it is sent unless `sent`."""
 
     sock = None
     status = 200
 
-    def __init__(self, body: bytes, drops_second: bool) -> None:
+    def __init__(
+        self, body: bytes, drops_second: bool, error: OSError, sent: bool
+    ) -> None:
         self.body = body
         self.drops_second = drops_second
+        self.error = error
+        self.sent = sent
         self.requests = 0
         self.closed = False
 
     def request(self, method: str, path: str, body=None, headers=None) -> None:
         self.requests += 1
-        if self.drops_second and self.requests == 2:
-            raise http.client.RemoteDisconnected("closed")
+        if self.drops_second and self.requests == 2 and not self.sent:
+            raise self.error
 
     def getresponse(self) -> "FakeConnection":
+        if self.drops_second and self.requests == 2 and self.sent:
+            raise self.error
         return self
 
     def read(self) -> bytes:
@@ -1054,14 +1059,18 @@ class FakeConnection:
 
 class FakeConnections:
     """Factory in place of `http.client.HTTPConnection`: the first connection it makes drops
-    its second request."""
+    its second request with `error`, after sending it if `sent`."""
 
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, error: OSError, sent: bool) -> None:
         self.body = body
+        self.error = error
+        self.sent = sent
         self.made: list[FakeConnection] = []
 
     def __call__(self, netloc: str, timeout: float) -> FakeConnection:
-        conn = FakeConnection(self.body, drops_second=not self.made)
+        conn = FakeConnection(
+            self.body, drops_second=not self.made, error=self.error, sent=self.sent
+        )
         self.made.append(conn)
         return conn
 

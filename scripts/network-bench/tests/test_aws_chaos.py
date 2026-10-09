@@ -246,6 +246,13 @@ def test_chaos_store_refused(change, reason):
         awsb.check_chaos(cfg)
 
 
+def test_chaos_too_short_to_fault_refused():
+    chaos = ch.ChaosConfig(minutes=3)
+    with pytest.raises(awsb.Refused, match="--chaos-min"):
+        awsb.check_chaos(dataclasses.replace(chaos_cfg(), chaos=chaos))
+    awsb.check_chaos(dataclasses.replace(chaos_cfg(), chaos=ch.ChaosConfig(minutes=4)))
+
+
 # TEST:chaos-small-fleet-refused-fails
 @pytest.mark.parametrize(
     ("flags", "reason"),
