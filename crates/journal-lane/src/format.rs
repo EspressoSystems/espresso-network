@@ -1,7 +1,7 @@
 //! Frame and segment-header codec for the journal storage backend, plus torn-tail scanning.
 //!
 //! Deliberately independent of espresso types: this module only knows about a tagged, length- and
-//! crc-checked byte payload per record. `journal/state.rs` maps `Kind` to actual record types.
+//! crc-checked byte payload per record. Callers map `Kind` to actual record types.
 
 /// Monotonic, per-stream, strictly consecutive sequence number assigned to every record.
 pub type Lsn = u64;
@@ -32,7 +32,7 @@ pub enum Class {
 }
 
 /// Opaque record tag stored in each frame header. The lane layer never interprets it, except for
-/// `Kind::SNAPSHOT` on `LaneMode::Snapshot` lanes. `journal/state.rs` maps it to record types.
+/// `Kind::SNAPSHOT` on `LaneMode::Snapshot` lanes. Callers map it to record types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Kind(pub u8);
 
@@ -111,7 +111,7 @@ pub struct FrameHeader {
 
 /// Record header: 32 bytes LE (`crc32(4) len(4) lsn(8) key(8) kind(1) pad(7)`), followed by
 /// `len` bytes of bincode payload.
-pub(crate) const FRAME_HEADER_LEN: usize = 32;
+pub const FRAME_HEADER_LEN: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameError {

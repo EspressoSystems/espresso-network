@@ -4750,6 +4750,7 @@ dependencies = [
  "jf-merkle-tree-compat",
  "jf-rescue 0.3.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-rescue-v0.3.0)",
  "jf-signature 0.4.2",
+ "journal-lane",
  "libp2p",
  "light-client",
  "moka",
@@ -7735,6 +7736,18 @@ checksum = "9afb3de4395d6b3e67a780b6de64b51c978ecf11cb9a462c66be7d4ca9039d33"
 dependencies = [
  "getrandom 0.3.4",
  "libc",
+]
+
+[[package]]
+name = "journal-lane"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crc32fast",
+ "hotshot-types",
+ "parking_lot",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

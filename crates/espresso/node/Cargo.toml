@@ -83,6 +83,7 @@ jf-crhf = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-rescue = { workspace = true }
 jf-signature = { workspace = true }
+journal-lane = { workspace = true }
 libp2p = { workspace = true }
 light-client = { workspace = true, features = ["client", "rlp"] }
 moka = { workspace = true }
@@ -140,6 +141,7 @@ hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-testing = { workspace = true }
 insta = { workspace = true }
+journal-lane = { workspace = true, features = ["testing"] }
 light-client = { workspace = true, features = ["rlp", "testing"] }
 pretty_assertions = { workspace = true }
 prost = { workspace = true }

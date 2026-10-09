@@ -20,9 +20,7 @@ use hotshot_types::traits::metrics::{Gauge, Histogram, Metrics, NoMetrics};
 use parking_lot::Mutex;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
-use crate::persistence::journal::format::{
-    self, Class, FrameHeader, Kind, Lsn, ScanEnd, SegmentHeader, Stream,
-};
+use crate::format::{self, Class, FrameHeader, Kind, Lsn, ScanEnd, SegmentHeader, Stream};
 
 /// Per-stream journal metrics. A lane's writer thread starts recording into this before any real
 /// `Metrics` implementation exists (`enable_metrics` runs only after `Persistence::open` returns),
@@ -47,15 +45,15 @@ impl LaneMetrics {
         }
     }
 
-    /// Installs real histograms/gauges labelled `stream = "wal"|"data"` on every lane. Each family
-    /// is registered once: registering a name twice fails with Prometheus.
-    pub fn install(metrics: &dyn Metrics, lanes: &[&Lane]) {
+    /// Installs real histograms/gauges named `{prefix}_*`, labelled by stream, on every lane. Each
+    /// family is registered once: registering a name twice fails with Prometheus.
+    pub fn install(metrics: &dyn Metrics, prefix: &str, lanes: &[&Lane]) {
         let labels = || vec!["stream".to_string()];
-        let batch_records = metrics.histogram_family("journal_batch_records".into(), labels());
-        let batch_bytes = metrics.histogram_family("journal_batch_bytes".into(), labels());
-        let fsync_seconds = metrics.histogram_family("journal_fsync_seconds".into(), labels());
-        let queue_bytes = metrics.gauge_family("journal_queue_bytes".into(), labels());
-        let total_bytes = metrics.gauge_family("journal_bytes".into(), labels());
+        let batch_records = metrics.histogram_family(format!("{prefix}_batch_records"), labels());
+        let batch_bytes = metrics.histogram_family(format!("{prefix}_batch_bytes"), labels());
+        let fsync_seconds = metrics.histogram_family(format!("{prefix}_fsync_seconds"), labels());
+        let queue_bytes = metrics.gauge_family(format!("{prefix}_queue_bytes"), labels());
+        let total_bytes = metrics.gauge_family(format!("{prefix}_bytes"), labels());
         for lane in lanes {
             let label = vec![lane.stream.label().to_string()];
             let m = &lane.metrics;
@@ -201,7 +199,7 @@ impl JournalFile for std::fs::File {
     }
 }
 
-pub(crate) fn segment_path(dir: &Path, seq: u64) -> PathBuf {
+pub fn segment_path(dir: &Path, seq: u64) -> PathBuf {
     dir.join(format!("{seq:016x}.log"))
 }
 
@@ -222,7 +220,7 @@ pub struct SegmentMeta {
 
 /// Where one frame lives, so it can be read back without scanning its segment.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Location {
+pub struct Location {
     pub seq: u64,
     pub offset: u64,
     pub lsn: Lsn,
@@ -231,7 +229,7 @@ pub(crate) struct Location {
 
 /// The newest data frame for each `(key, kind)`, kept only on a query node, whose replay reads
 /// every decided block's payload and share back. Entries appear once their bytes are written.
-pub(crate) type DataIndex = Arc<Mutex<std::collections::BTreeMap<(u64, Kind), Location>>>;
+pub type DataIndex = Arc<Mutex<std::collections::BTreeMap<(u64, Kind), Location>>>;
 
 /// In-memory index of every segment one stream currently has on disk, oldest first and kept live by
 /// the writer thread. Lets GC compute what to unlink without a directory scan or a full-segment
@@ -630,7 +628,7 @@ fn read_segment<F: JournalFs>(
 
 /// Every frame in segment `seq` with where it lives, stopping at a torn tail. Streams the segment
 /// like recovery does, so at most one frame is in memory at a time.
-pub(crate) fn frame_locations<F: JournalFs>(
+pub fn frame_locations<F: JournalFs>(
     fs: &F,
     dir: &Path,
     stream: Stream,
@@ -870,7 +868,7 @@ fn check_snapshot_size(stream: Stream, body: &[u8], max_snapshot_bytes: u32) {
 /// handle, which the caller must join after dropping the `Lane` (see `journal::Inner`'s `Drop`).
 /// `hook` is `Some` only for the wal lane: it provides the `Snapshot` payload opening every new
 /// wal segment. `index`, when given, learns where every record this lane writes lives.
-pub(crate) fn spawn_lane<F: JournalFs>(
+pub fn spawn_lane<F: JournalFs>(
     fs: Arc<F>,
     dir: PathBuf,
     cfg: LaneConfig,
@@ -1212,185 +1210,11 @@ impl<F: JournalFs> Writer<F> {
 }
 
 #[cfg(test)]
-pub mod mem {
-    use std::{
-        collections::{HashMap, HashSet},
-        sync::{Arc, Mutex},
-    };
-
-    use super::{JournalFile, JournalFs};
-
-    #[derive(Default)]
-    struct FileState {
-        synced: Vec<u8>,
-        unsynced: Vec<u8>,
-    }
-
-    impl FileState {
-        fn len(&self) -> usize {
-            self.synced.len().max(self.unsynced.len())
-        }
-
-        fn write_at(&mut self, off: usize, buf: &[u8]) {
-            let end = off + buf.len();
-            if self.unsynced.len() < end {
-                self.unsynced.resize(end, 0);
-            }
-            self.unsynced[off..end].copy_from_slice(buf);
-        }
-    }
-
-    /// In-memory `JournalFs` with a crash model: `crash()` keeps every fsynced byte range and
-    /// randomly truncates the unsynced tail of each file, simulating a power loss mid-write.
-    #[derive(Clone, Default)]
-    pub struct MemFs {
-        files: Arc<Mutex<HashMap<std::path::PathBuf, FileState>>>,
-        pub fail_next_write: Arc<std::sync::atomic::AtomicBool>,
-        /// Paths on which `remove` fails once (removed from the set on the failing call).
-        pub fail_remove: Arc<Mutex<HashSet<std::path::PathBuf>>>,
-    }
-
-    pub struct MemFile {
-        path: std::path::PathBuf,
-        files: Arc<Mutex<HashMap<std::path::PathBuf, FileState>>>,
-        fail_next_write: Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    impl MemFs {
-        pub fn crash(&self, mut rng: impl FnMut(usize) -> usize) {
-            let mut files = self.files.lock().unwrap();
-            for state in files.values_mut() {
-                let extra = rng(state.unsynced.len().saturating_sub(state.synced.len()) + 1);
-                let keep = state.synced.len()
-                    + extra.min(state.unsynced.len().saturating_sub(state.synced.len()));
-                state.unsynced.truncate(keep.max(state.synced.len()));
-                state.synced = state.unsynced.clone();
-            }
-        }
-
-        pub fn file_len(&self, path: &std::path::Path) -> usize {
-            self.files
-                .lock()
-                .unwrap()
-                .get(path)
-                .map_or(0, FileState::len)
-        }
-    }
-
-    impl JournalFs for MemFs {
-        type File = MemFile;
-
-        fn create(&self, path: &std::path::Path) -> std::io::Result<Self::File> {
-            let mut files = self.files.lock().unwrap();
-            if files.contains_key(path) {
-                return Err(std::io::ErrorKind::AlreadyExists.into());
-            }
-            files.insert(path.to_path_buf(), FileState::default());
-            Ok(MemFile {
-                path: path.to_path_buf(),
-                files: self.files.clone(),
-                fail_next_write: self.fail_next_write.clone(),
-            })
-        }
-
-        fn open_write(&self, path: &std::path::Path) -> std::io::Result<Self::File> {
-            if !self.files.lock().unwrap().contains_key(path) {
-                return Err(std::io::ErrorKind::NotFound.into());
-            }
-            Ok(MemFile {
-                path: path.to_path_buf(),
-                files: self.files.clone(),
-                fail_next_write: self.fail_next_write.clone(),
-            })
-        }
-
-        fn open_read(&self, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
-            self.files
-                .lock()
-                .unwrap()
-                .get(path)
-                .map(|s| s.synced.clone())
-                .ok_or_else(|| std::io::ErrorKind::NotFound.into())
-        }
-
-        fn open_read_stream(
-            &self,
-            path: &std::path::Path,
-        ) -> std::io::Result<Box<dyn std::io::Read>> {
-            Ok(Box::new(std::io::Cursor::new(self.open_read(path)?)))
-        }
-
-        fn read_header(&self, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
-            let bytes = self.open_read(path)?;
-            if bytes.len() < super::SegmentHeader::LEN {
-                return Err(std::io::ErrorKind::UnexpectedEof.into());
-            }
-            Ok(bytes[..super::SegmentHeader::LEN].to_vec())
-        }
-
-        fn len(&self, path: &std::path::Path) -> std::io::Result<u64> {
-            self.open_read(path).map(|b| b.len() as u64)
-        }
-
-        fn list(&self, dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
-            Ok(self
-                .files
-                .lock()
-                .unwrap()
-                .keys()
-                .filter(|p| p.parent() == Some(dir))
-                .cloned()
-                .collect())
-        }
-
-        fn remove(&self, path: &std::path::Path) -> std::io::Result<()> {
-            if self.fail_remove.lock().unwrap().remove(path) {
-                return Err(std::io::ErrorKind::Other.into());
-            }
-            self.files.lock().unwrap().remove(path);
-            Ok(())
-        }
-
-        fn sync_dir(&self, _dir: &std::path::Path) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl JournalFile for MemFile {
-        fn write_all_at(&mut self, off: u64, buf: &[u8]) -> std::io::Result<()> {
-            if self
-                .fail_next_write
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-            {
-                return Err(std::io::ErrorKind::Other.into());
-            }
-            let mut files = self.files.lock().unwrap();
-            let state = files.get_mut(&self.path).expect("file exists");
-            state.write_at(off as usize, buf);
-            Ok(())
-        }
-
-        fn sync_data(&mut self) -> std::io::Result<()> {
-            let mut files = self.files.lock().unwrap();
-            let state = files.get_mut(&self.path).expect("file exists");
-            state.synced = state.unsynced.clone();
-            Ok(())
-        }
-
-        fn set_len(&mut self, len: u64) -> std::io::Result<()> {
-            let mut files = self.files.lock().unwrap();
-            let state = files.get_mut(&self.path).expect("file exists");
-            state.unsynced.truncate(len as usize);
-            Ok(())
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use super::{mem::MemFs, *};
+    use super::*;
+    use crate::mem::MemFs;
 
     const ACTION: Kind = Kind(2);
     const VID: Kind = Kind(11);

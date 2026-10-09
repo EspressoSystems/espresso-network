@@ -1,0 +1,20 @@
+[package]
+name = "journal-lane"
+version = { workspace = true }
+edition = { workspace = true }
+description = "Append-only segmented log lanes with group commit and crash recovery"
+license = "MIT"
+
+[features]
+testing = []
+
+[dependencies]
+anyhow.workspace = true
+crc32fast.workspace = true
+hotshot-types.workspace = true
+parking_lot.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+[lints]
+workspace = true

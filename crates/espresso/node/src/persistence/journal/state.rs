@@ -20,9 +20,10 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
+use journal_lane::format;
 use serde::{Deserialize, Serialize};
 
-use crate::{ViewNumber, persistence::journal::format};
+use crate::ViewNumber;
 
 /// Gap-fill decides can finalize a state cert whose leaf view is behind the current anchor
 /// (matches `sql.rs` `DECIDE_GAP_FILL_HORIZON`); pending certs older than this many views behind

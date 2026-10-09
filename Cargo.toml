@@ -36,6 +36,7 @@ members = [
     "crates/hotshot/utils",
     "crates/http-client",
     "crates/http-wire",
+    "crates/journal-lane",
     "crates/light-client",
     "crates/light-client-query-service",
     "crates/node-metrics",
@@ -86,6 +87,7 @@ default-members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/journal-lane",
     "crates/light-client",
     "crates/light-client-query-service",
     "crates/node-metrics",
@@ -296,6 +298,7 @@ jf-signature-compat = { package = "jf-signature", git = "https://github.com/Espr
     "gadgets",
 ] }
 jf-utils = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-utils-v0.5.0" }
+journal-lane = { path = "crates/journal-lane" }
 lazy_static = "1"
 libp2p = { package = "libp2p", version = "0.56", default-features = false, features = [
     "macros",

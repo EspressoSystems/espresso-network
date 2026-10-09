@@ -9,8 +9,6 @@
 //! A query node pairs the journal with a separate query-service database. Consensus writes stay
 //! here, and decided blocks are replayed into the query service from a cursor, off the voting path.
 
-pub mod format;
-pub mod lane;
 pub mod state;
 
 use std::{
@@ -51,19 +49,19 @@ use hotshot_types::{
         metrics::Metrics,
     },
 };
+use journal_lane::{
+    format::{self, Class, ScanEnd, SegmentHeader, Stream},
+    lane::{
+        self, DataIndex, JournalFs, Lane, LaneConfig, LaneMetrics, LaneMode, SegmentMeta, Segments,
+        SnapshotHook, StdFs,
+    },
+};
 
 use crate::{
     ViewNumber,
     persistence::{
         fs as side_fs,
-        journal::{
-            format::{Class, ScanEnd, SegmentHeader, Stream},
-            lane::{
-                DataIndex, JournalFs, Lane, LaneConfig, LaneMetrics, LaneMode, SegmentMeta,
-                Segments, SnapshotHook, StdFs,
-            },
-            state::{Kind, Record, Replay, ReplayLeaf, State},
-        },
+        journal::state::{Kind, Record, Replay, ReplayLeaf, State},
         persistence_metrics::PersistenceMetricsValue,
         sql::{self, DecidedLeaf, decide_events_from_chain, within_gap_fill_horizon},
         storage_probe::{self, StorageProbe},
@@ -1429,7 +1427,7 @@ impl SequencerPersistence for Persistence {
             )
             .add_point(self.inner.replay_seconds);
         self.inner.probe.register(&*metrics.subgroup("disk".into()));
-        LaneMetrics::install(metrics, &[&self.inner.wal, &self.inner.data]);
+        LaneMetrics::install(metrics, "journal", &[&self.inner.wal, &self.inner.data]);
     }
 }
 
