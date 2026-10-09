@@ -493,3 +493,41 @@ def test_fleet_run_publishes_and_honors_no_publish(
     assert not runner.ran("git", "clone")
     assert harness.run(runner) == awsb.EXIT_OK
     assert runner.ran("git", "push", "origin", "HEAD:main")
+
+
+def test_published_row_derives_the_chaos_cell_from_the_chaos_log(tmp_path: Path):
+    run_dir = make_run_dir(tmp_path)
+    assert awsb.read_index_row(run_dir)["chaos"] == "-"
+    manifest = netbench.read_json(run_dir / "manifest.json")
+    manifest["config"]["chaos"] = {"rate_mb_s": 4.0}
+    netbench.write_json(run_dir / "manifest.json", manifest)
+    events = [
+        awsb._chaos_event(1.0, "fault", "node1", "kill", 5, None),
+        awsb._chaos_event(9.0, "timeout", "node1", "kill", 5, 8.0),
+    ]
+    (run_dir / "chaos.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    assert awsb.read_index_row(run_dir)["chaos"] == "1 faults, 1 timeouts"
+
+
+def test_commit_message_of_a_chaos_run_names_its_faults():
+    row = {**ROW, "chaos": "10 faults, 0 timeouts", "bound": "-", "db": "sqlite"}
+    assert awsb.commit_message("f/01-run", row).endswith("chaos 10 faults, 0 timeouts")
+
+
+def test_append_index_rebuilds_a_file_with_the_old_header(tmp_path: Path):
+    old_columns = [c for k, c in awsb.INDEX_COLUMNS.items() if k != "chaos"]
+    old_header = f"| {' | '.join(old_columns)} |\n{'|---' * len(old_columns)}|\n"
+    cells = {k: "x" for k in awsb.INDEX_COLUMNS if k != "chaos"}
+    old_row = awsb.format_index_row({**cells, "run": f"{FLEET}/01-run"})
+    out_root = tmp_path / "bench-state/aws"
+    out_root.mkdir(parents=True)
+    (out_root / "INDEX.md").write_text(old_header + old_row)
+    new_row = awsb.format_index_row({k: "y" for k in awsb.INDEX_COLUMNS})
+    awsb.append_index(out_root, new_row)
+    lines = (out_root / "INDEX.md").read_text().splitlines(keepends=True)
+    assert "".join(lines[:2]) == awsb.INDEX_HEADER and lines[3] == new_row
+    migrated = [c.strip() for c in lines[2].strip().strip("|").split("|")]
+    assert len(migrated) == len(awsb.INDEX_COLUMNS)
+    chaos = list(awsb.INDEX_COLUMNS).index("chaos")
+    assert migrated[0] == f"{FLEET}/01-run" and migrated[chaos] == "-"
+    assert migrated[chaos + 1] == "x"

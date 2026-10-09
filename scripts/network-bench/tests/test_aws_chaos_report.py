@@ -1,0 +1,414 @@
+import gzip
+import json
+from collections import Counter
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import netbench
+import pytest
+from fakes import (
+    FakeRunner,
+    FakeSystem,
+    awsb,
+    index_manifest,
+    make_result,
+    step,
+)
+
+T0 = 1000.0
+KINDS = ["restart", "kill", "wipe"]
+CONFIG = {
+    "nodes": 22,
+    "query_nodes": 4,
+    "node_type": "c8g.xlarge",
+    "latency": "decaf-2025",
+    "intra_latency": True,
+    "chaos": {"minutes": 3, "rate_mb_s": 4.0, "seed": 42, "kinds": KINDS},
+}
+
+
+def ev(at: float, event: str, node: str, kind: str, missing: Any = None) -> Any:
+    return awsb._chaos_event(T0 + at, event, node, kind, 10, 5.0, missing)
+
+
+# node0 restarts at 10 s and is synced at 40 s; node5 is killed at 70 s, starts at 130 s and
+# rejoins at 150 s, so it is faulty for the second and third step.
+EVENTS = [
+    ev(10, "fault", "node0", "restart"),
+    ev(25, "rejoined", "node0", "restart"),
+    ev(40, "caught_up", "node0", "restart"),
+    ev(70, "fault", "node5", "kill"),
+    ev(130, "started", "node5", "kill"),
+    ev(150, "rejoined", "node5", "kill"),
+]
+
+
+def steps_of(decided: list[float | None]) -> list[Any]:
+    steps = [step(4.0, d) for d in decided]
+    for i, s in enumerate(steps):
+        s["decided_mb_s"] = decided[i]
+        s["t_start"], s["t_mid"], s["t_end"] = (
+            T0 + 60 * i,
+            T0 + 60 * i + 30,
+            T0 + 60 * i + 60,
+        )
+    return steps
+
+
+def test_fault_rows_follow_each_fault_to_its_events():
+    rows = netbench.fault_rows(EVENTS)
+    assert [(r["node"], r["kind"]) for r in rows] == [
+        ("node0", "restart"),
+        ("node5", "kill"),
+    ]
+    assert rows[0]["caught_up"] == T0 + 40
+    assert "caught_up" not in rows[1] and rows[1]["started"] == T0 + 130
+
+
+def test_fault_table_adds_the_missing_column_only_for_a_timeout_with_counts():
+    plain = awsb.fault_table(netbench.fault_rows(EVENTS), T0)
+    assert "missing" not in plain[2]
+    assert "| node5 | kill | 70 | 130 | 150 | - |" in plain
+    timeout = [*EVENTS[:2], ev(330, "timeout", "node0", "restart", (3, 0, 2))]
+    table = awsb.fault_table(netbench.fault_rows(timeout), T0)
+    assert table[2].endswith("| missing |")
+    assert (
+        table[4]
+        == "| node0 | restart | 10 | - | 25 | - | blocks 3, leaves 0, vid_common 2 |"
+    )
+    assert awsb.fault_table([], T0) == []
+
+
+def test_verdict_passes_only_when_every_fault_recovered():
+    rows = netbench.fault_rows(EVENTS)
+    assert awsb.chaos_verdict(rows, EVENTS, None, False).startswith(
+        "- Verdict: **pass**"
+    )
+    open_ = EVENTS[:-1]
+    verdict = awsb.chaos_verdict(netbench.fault_rows(open_), open_, None, False)
+    assert verdict == "- Verdict: **fail**: node5 (kill) did not rejoin"
+    timed_out = [*open_, ev(400, "timeout", "node5", "kill")]
+    verdict = awsb.chaos_verdict(netbench.fault_rows(timed_out), timed_out, None, True)
+    assert verdict == "- Verdict: **fail**: node5 (kill) not recovered after 5 s"
+
+
+@pytest.mark.parametrize(("error", "reason"), [("boom", "boom"), (None, "no result")])
+def test_verdict_of_a_run_without_result_fails_even_with_clean_faults(error, reason):
+    rows = netbench.fault_rows(EVENTS)
+    verdict = awsb.chaos_verdict(rows, EVENTS, error, True)
+    assert verdict.startswith("- Verdict: **fail**") and reason in verdict
+
+
+def test_recovery_table_has_median_and_max_per_kind():
+    events = [
+        *EVENTS,
+        ev(200, "fault", "node1", "restart"),
+        ev(230, "rejoined", "node1", "restart"),
+    ]
+    table = awsb.recovery_table(netbench.fault_rows(events), KINDS)
+    assert table[2:] == [
+        "| restart | 2 | 22 | 30 | 30 | 30 |",
+        "| kill | 1 | 80 | 80 | - | - |",
+        "| wipe | 0 | - | - | - | - |",
+    ]
+
+
+def test_steps_name_their_faults_and_restarted_nodes():
+    steps = steps_of([4.0, 2.0, 3.0, 4.0])
+    rows = netbench.fault_rows(EVENTS)
+    chaos = awsb.step_chaos(steps, rows, T0, T0 + 240)
+    assert [c["start_s"] for c in chaos] == [0, 60, 120, 180]
+    # A fault is active from its start to its rejoin.
+    assert [c["faults"] for c in chaos] == [
+        "node0 restart",
+        "node5 kill",
+        "node5 kill",
+        "",
+    ]
+    assert [sorted(c["restarted"]) for c in chaos] == [
+        ["node0"],
+        ["node5"],
+        ["node5"],
+        [],
+    ]
+
+
+def test_throughput_compares_steps_with_and_without_a_fault():
+    steps = steps_of([4.0, 2.0, 3.0, 4.0])
+    chaos = awsb.step_chaos(steps, netbench.fault_rows(EVENTS), T0, T0 + 240)
+    lines = awsb.throughput_lines(steps, chaos)
+    assert lines[1] == (
+        "- Throughput: mean decided 3.25 MB/s of 4 MB/s offered over 4 steps; "
+        "minimum one-minute 2 MB/s (step at 60 s)"
+    )
+    assert lines[2] == (
+        "- Mean decided with an active fault 3 MB/s (3 steps), without 4 MB/s (1 steps)"
+    )
+    unmeasured = steps_of([None, None])
+    assert (
+        awsb.throughput_lines(unmeasured, awsb.step_chaos(unmeasured, [], T0, T0)) == []
+    )
+
+
+def test_totals_count_faults_budget_timeouts_and_txs():
+    meta = {"missing_payloads": [641, 1553], "submit_failovers": 19}
+    txs = Counter(included=8, timeout=2, pending=1)
+    rows = netbench.fault_rows(EVENTS)
+    lines = awsb.chaos_totals(rows, EVENTS, CONFIG, meta, txs)
+    assert lines == [
+        "- Faults: 2 (restart 1, kill 1, wipe 0); max concurrent faulty 1 of budget 6",
+        "- Timeouts: 0; lost payloads 2 (641, 1553); submit failovers 19",
+        "- Txs: 11 submitted, 8 included, 2 timed out, 1 pending",
+    ]
+    assert "lost payloads" not in awsb.chaos_totals(rows, EVENTS, CONFIG, None, txs)[1]
+
+
+def chaos_result(steps: list[Any]) -> Any:
+    result = make_result(steps)
+    result["nodes"] = {
+        "node0": result["nodes"]["node0"],
+        "node5": result["nodes"]["node1"],
+    }
+    for s in steps:
+        s["node_cpu"] = {"node0": -1.0, "node5": 0.5}
+    return result
+
+
+def view_of(steps: list[Any]) -> Any:
+    chaos = awsb.step_chaos(steps, netbench.fault_rows(EVENTS), T0, T0 + 240)
+    return {
+        "lead": ["## Chaos test", "", "- Verdict: **pass**"],
+        "faults": [],
+        "steps": chaos,
+    }
+
+
+def test_render_leads_with_the_chaos_test_and_lists_every_step():
+    steps = steps_of([4.0, 2.0, 3.0, 4.0])
+    result = chaos_result(steps)
+    text = netbench.render(result, None, "![chart](throughput.png)", view_of(steps))
+    assert text.startswith("## Chaos test\n")
+    for gone in ("Network benchmark", "Capacity", "Baseline", "search:"):
+        assert gone not in text
+    assert text.index("![chart]") < text.index("### Load steps")
+    table = text.split("### Load steps")[1].split("<details>")[0]
+    rows = [ln for ln in table.splitlines() if ln[:3] in ("| 0", "| 6", "| 1")]
+    assert [r.split(" | ")[0] for r in rows] == ["| 0", "| 60", "| 120", "| 180"]
+    assert [r.rsplit(" | ", 1)[1] for r in rows] == [
+        "node0 restart |",
+        "node5 kill |",
+        "node5 kill |",
+        "- |",
+    ]
+
+
+def test_step_details_show_a_dash_for_a_restarted_node_only_under_chaos():
+    steps = steps_of([4.0, 4.0, 4.0, 4.0])
+    result = chaos_result(steps)
+    chaos = view_of(steps)
+    detail = netbench.step_details(result, chaos["steps"])
+    cpu = [row.split("|")[-4].strip() for row in detail[2:6]]
+    assert cpu == ["-/0.5", "-1/-", "-1/-", "-1/0.5"]
+    assert all("-1/0.5" in row for row in netbench.step_details(result)[2:6])
+
+
+def test_step_table_without_chaos_still_collapses_equal_rates():
+    result = chaos_result(steps_of([4.0, 4.0]))
+    assert len(netbench.step_table(result, None)) == 3
+
+
+def chaos_manifest() -> Any:
+    manifest = index_manifest()
+    manifest["config"] = {**manifest["config"], **CONFIG}
+    manifest["hosts"] = [{"name": f"node{i}"} for i in (0, 2, 5)]
+    return manifest
+
+
+def write_failed_run(run_dir: Path, png: bool = False) -> None:
+    """The files of a run that ended in a gate timeout: no `run.json` or `result.json`, and an
+    empty `consensus.jsonl`."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    events = [
+        *EVENTS,
+        ev(130, "fault", "node2", "wipe"),
+        ev(430, "timeout", "node2", "wipe"),
+    ]
+    (run_dir / "chaos.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    netbench.write_json(run_dir / "steps.json", steps_of([None, None]))
+    meta = {"missing_payloads": [], "submit_failovers": 2}
+    netbench.write_json(run_dir / "load-meta.json", meta)
+    (run_dir / "load.jsonl").write_text(
+        '{"status": "included"}\n{"status": "pending"}\n'
+    )
+    netbench.write_json(run_dir / "manifest.json", chaos_manifest())
+    for node in ("node0", "node2"):
+        log_dir = run_dir / "hosts" / node
+        log_dir.mkdir(parents=True)
+        (log_dir / "espresso-node.log.gz").write_bytes(
+            gzip.compress(f"{node} log\n".encode())
+        )
+    if png:
+        (run_dir / "throughput.png").write_bytes(b"png")
+
+
+def test_failure_summary_of_a_chaos_run_reports_what_was_collected(tmp_path: Path):
+    write_failed_run(tmp_path, png=True)
+    manifest = netbench.read_json(tmp_path / "manifest.json")
+    awsb.write_failure_summary(tmp_path, manifest, "gate failed")
+    text = (tmp_path / "summary.md").read_text()
+    assert text.startswith("## Chaos test\n")
+    assert "- Verdict: **fail**: node2 (wipe) not recovered after 5 s" in text
+    assert "- Faults: 3 (restart 1, kill 1, wipe 1)" in text
+    assert "- Txs: 2 submitted, 1 included, 0 timed out, 1 pending" in text
+    assert "![throughput" in text and "### Faults" in text
+    table = text.split("### Load steps")[1]
+    assert table.count("\n| 0 | 4 |") == 1 and "| 60 | 4 |" in table
+    assert "Last log lines of node2:" in text and "node2 log" in text
+    assert "node0 log" not in text
+
+
+def test_failure_summary_without_a_timeout_shows_every_log(tmp_path: Path):
+    write_failed_run(tmp_path)
+    (tmp_path / "chaos.jsonl").write_text("".join(json.dumps(e) + "\n" for e in EVENTS))
+    manifest = netbench.read_json(tmp_path / "manifest.json")
+    awsb.write_failure_summary(tmp_path, manifest, "boom")
+    text = (tmp_path / "summary.md").read_text()
+    assert "node0 log" in text and "node2 log" in text
+    assert "- Verdict: **fail**: boom" in text
+
+
+def test_failure_summary_without_steps_or_load_meta(tmp_path: Path):
+    write_failed_run(tmp_path)
+    (tmp_path / "steps.json").unlink()
+    (tmp_path / "load-meta.json").unlink()
+    manifest = netbench.read_json(tmp_path / "manifest.json")
+    awsb.write_failure_summary(tmp_path, manifest, "boom")
+    text = (tmp_path / "summary.md").read_text()
+    assert "### Load steps" not in text and "lost payloads" not in text
+
+
+def test_failure_summary_of_a_plain_run_is_unchanged(tmp_path: Path):
+    manifest = {"hosts": [], "config": {}}
+    awsb.write_failure_summary(tmp_path, manifest, "boom")
+    assert (tmp_path / "summary.md").read_text() == (
+        "## Network benchmark\n\n**invalid**: boom\n"
+    )
+
+
+def test_render_of_a_failed_chaos_run_plots_and_writes_the_report(tmp_path: Path):
+    write_failed_run(tmp_path)
+    runner = FakeRunner()
+    args = awsb.parse_args(["render", str(tmp_path)])
+    assert awsb.cmd_render(args, FakeSystem(run=runner)) == awsb.EXIT_FAILED
+    assert runner.ran("throughput-plot")
+    assert (tmp_path / "summary.md").read_text().startswith("## Chaos test")
+
+
+def test_report_of_a_failed_chaos_run_plots_before_the_failure_summary(
+    run_harness: Any, monkeypatch: pytest.MonkeyPatch
+):
+    plotted: list[Path] = []
+    monkeypatch.setattr(awsb, "plot_throughput", lambda _, d: plotted.append(d))
+    run = run_harness
+    write_failed_run(run.run_dir)
+    state: Any = SimpleNamespace(
+        agent=None,
+        run_dir=run.run_dir,
+        error="node2 timed out",
+        manifest=chaos_manifest(),
+        fleet=SimpleNamespace(system=FakeSystem()),
+    )
+    assert awsb.report(state) is None
+    assert plotted == [run.run_dir]
+    assert "## Chaos test" in (run.run_dir / "summary.md").read_text()
+
+
+def test_chaos_cell_counts_faults_and_timeouts():
+    events = [*EVENTS, ev(430, "timeout", "node2", "wipe")]
+    assert awsb.chaos_cell(CONFIG, events) == "2 faults, 1 timeouts"
+    assert awsb.chaos_cell({"nodes": 3}, events) == "-"
+
+
+def test_chaos_index_row_has_the_chaos_rate_and_the_mean_decided():
+    manifest = chaos_manifest()
+    result = make_result(steps_of([4.0, 2.0]))
+    cells = awsb.index_cells(manifest, "01-run", result, 0, None, EVENTS)
+    assert (cells["rate"], cells["decided"], cells["bound"]) == ("4", "3", "-")
+    assert cells["chaos"] == "2 faults, 0 timeouts"
+    failed = awsb.index_cells(manifest, "01-run", None, 3, None, EVENTS)
+    assert (failed["rate"], failed["decided"], failed["status"]) == ("4", "-", "failed")
+    plain = awsb.index_cells(index_manifest(), "01-run", None, 3, None)
+    assert plain["chaos"] == "-"
+
+
+def test_fault_windows_end_at_the_rejoin_else_the_timeout_else_the_end():
+    end = T0 + 300
+    rows = netbench.fault_rows([*EVENTS, ev(200, "fault", "node7", "kill")])
+    windows = netbench.fault_windows(rows, end)
+    assert [(n, a - T0, b - T0) for n, _, a, b in windows] == [
+        ("node0", 10, 25),
+        ("node5", 70, 150),
+        ("node7", 200, 300),
+    ]
+    timed_out = netbench.fault_rows(
+        [ev(5, "fault", "node1", "kill"), ev(9, "timeout", "node1", "kill")]
+    )
+    assert netbench.fault_windows(timed_out, end)[0][3] == T0 + 9
+
+
+def test_tx_counts_of_a_run_without_load_log_is_empty(tmp_path: Path):
+    assert tx_count_total(tmp_path) == 0
+    write_failed_run(tmp_path)
+    (tmp_path / "load.jsonl").unlink()
+    manifest = netbench.read_json(tmp_path / "manifest.json")
+    awsb.write_failure_summary(tmp_path, manifest, "boom")
+    text = (tmp_path / "summary.md").read_text()
+    assert text.startswith("## Chaos test\n") and "- Txs:" not in text
+
+
+def tx_count_total(run_dir: Path) -> int:
+    return sum(awsb.tx_counts(run_dir).values())
+
+
+def test_failure_summary_falls_back_when_the_chaos_report_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    write_failed_run(tmp_path)
+
+    def broken(*_: Any, **__: Any) -> Any:
+        raise ValueError("bad chaos.jsonl")
+
+    monkeypatch.setattr(awsb, "chaos_view", broken)
+    manifest = netbench.read_json(tmp_path / "manifest.json")
+    awsb.write_failure_summary(tmp_path, manifest, "gate failed")
+    text = (tmp_path / "summary.md").read_text()
+    assert text.startswith("## Network benchmark\n\n**invalid**: gate failed\n")
+    assert "node0 log" in text and "node2 log" in text
+
+
+def test_report_of_a_failed_run_writes_its_error(
+    run_harness: Any, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(awsb, "plot_throughput", lambda *_: None)
+    run = run_harness
+    write_failed_run(run.run_dir)
+    state: Any = SimpleNamespace(
+        agent=None,
+        run_dir=run.run_dir,
+        error="node2 timed out",
+        manifest=chaos_manifest(),
+        fleet=SimpleNamespace(system=FakeSystem()),
+    )
+    awsb.report(state)
+    assert (run.run_dir / "error.txt").read_text() == "node2 timed out"
+    assert "error.txt" in awsb.PUBLISH_OPTIONAL
+
+
+def test_render_of_a_failed_chaos_run_reads_back_its_error(tmp_path: Path):
+    write_failed_run(tmp_path)
+    (tmp_path / "chaos.jsonl").write_text("".join(json.dumps(e) + "\n" for e in EVENTS))
+    (tmp_path / "error.txt").write_text("gate failed hard")
+    args = awsb.parse_args(["render", str(tmp_path)])
+    awsb.cmd_render(args, FakeSystem(run=FakeRunner()))
+    assert "gate failed hard" in (tmp_path / "summary.md").read_text()

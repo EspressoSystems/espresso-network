@@ -61,6 +61,7 @@ import shlex
 import shutil
 import signal
 import socket
+import statistics
 import string
 import subprocess
 import sys
@@ -200,6 +201,7 @@ PUBLISH_OPTIONAL = (
     "trace/stats.json",
     "throughput.png",
     "chaos.jsonl",
+    "error.txt",
 )
 PG_GB = 400
 RDS_CLASS = "db.m8g.4xlarge"
@@ -4406,6 +4408,10 @@ def report(run: Run) -> nb.BenchResult | None:
             log_result(result, run.manifest["config"].get("chaos") is not None)
             plot_traces(run.fleet.system.run, run.run_dir)
             return result
+    elif (run.run_dir / "chaos.jsonl").exists():
+        plot_throughput(run.fleet.system.run, run.run_dir)
+    if run.error:
+        (run.run_dir / "error.txt").write_text(run.error)
     write_failure_summary(run.run_dir, run.manifest, run.error)
     return None
 
@@ -6899,6 +6905,8 @@ def cmd_render(args: argparse.Namespace, system: System) -> int:
             run_json(manifest, manifest["config"]["tag"], agent, started, agent["t1"]),
         )
     if not (run_dir / "run.json").exists():
+        if (run_dir / "chaos.jsonl").exists():
+            return render_failed_chaos(run_dir, system)
         raise Refused(
             f"{run_dir} has no run.json: the run produced no result, see summary.md"
         )
@@ -6913,7 +6921,19 @@ def cmd_render(args: argparse.Namespace, system: System) -> int:
     return EXIT_OK if result["validity"]["valid"] else EXIT_INVALID
 
 
-def refresh_index_row(run_dir: Path, result: nb.BenchResult) -> None:
+def render_failed_chaos(run_dir: Path, system: System) -> int:
+    """The chaos report of a run that ended before its analysis, from what it collected."""
+    setup_logging(run_dir)
+    plot_throughput(system.run, run_dir)
+    error_path = run_dir / "error.txt"
+    error = error_path.read_text() if error_path.exists() else None
+    write_failure_summary(run_dir, read_manifest(run_dir), error)
+    refresh_index_row(run_dir, None)
+    log.info("wrote %s", run_dir / "summary.md")
+    return EXIT_FAILED
+
+
+def refresh_index_row(run_dir: Path, result: nb.BenchResult | None) -> None:
     """Re-derives the measured cells of `index-row.json` from the new result; exit code, cost
     and user stay as the run recorded them."""
     path = run_dir / INDEX_ROW_JSON
@@ -6923,7 +6943,9 @@ def refresh_index_row(run_dir: Path, result: nb.BenchResult) -> None:
     cost_path = run_dir / "cost.json"
     cost = nb.read_json(cost_path) if cost_path.exists() else None
     manifest = read_manifest(run_dir)
-    cells = index_cells(manifest, run_dir.name, result, int(row["exit"]), cost)
+    cells = index_cells(
+        manifest, run_dir.name, result, int(row["exit"]), cost, chaos_events(run_dir)
+    )
     nb.write_json(path, {**cells, "user": row["user"]})
 
 
@@ -7592,17 +7614,12 @@ def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.Bench
     nb.write_json(run_dir / "result.json", result)
     comparison = nb.compare(result, baseline) if baseline else None
     chart = throughput_chart(run_dir)
-    is_chaos = manifest["config"].get("chaos") is not None
     chaos = (
-        chaos_section(events, run["t0"], nb.read_json(run_dir / "load-meta.json"))
-        if is_chaos
-        else ""
+        chaos_view(run_dir, manifest, result["steps"], result)
+        if manifest["config"].get("chaos") is not None
+        else None
     )
-    summary = (
-        nb.render(result, comparison, chart, capacity=not is_chaos)
-        + chaos
-        + reproduce_section(manifest)
-    )
+    summary = nb.render(result, comparison, chart, chaos) + reproduce_section(manifest)
     (run_dir / "summary.md").write_text(summary)
     return result
 
@@ -7614,51 +7631,249 @@ def chaos_events(run_dir: Path) -> list[ChaosEvent]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def chaos_section(
-    events: list[ChaosEvent], t0: float, load_meta: dict[str, Any]
+def chaos_view(
+    run_dir: Path,
+    manifest: Manifest,
+    steps: Sequence[nb.StepResult],
+    result: nb.BenchResult | None = None,
+    error: str | None = None,
+) -> nb.ChaosView:
+    """The chaos report of a run from its `chaos.jsonl`, `load-meta.json` and `steps`; without
+    a `result` (the analysis did not run) the run failed."""
+    config = manifest["config"]
+    events = chaos_events(run_dir)
+    rows = nb.fault_rows(events)
+    t0 = load_t0(run_dir, steps, events)
+    end = max((e["ts"] for e in events), default=t0)
+    chaos_steps = step_chaos(steps, rows, t0, end)
+    meta_path = run_dir / "load-meta.json"
+    lead = [
+        "## Chaos test",
+        "",
+        chaos_verdict(rows, events, error, result is None),
+        setup_line(config),
+        *([f"- Run: {nb.status_line(result)}"] if result else []),
+        *chaos_totals(
+            rows,
+            events,
+            config,
+            nb.read_json(meta_path) if meta_path.exists() else None,
+            tx_counts(run_dir),
+        ),
+        "",
+        "",
+        *recovery_table(rows, config["chaos"]["kinds"]),
+        *throughput_lines(steps, chaos_steps),
+    ]
+    return {"lead": lead, "faults": fault_table(rows, t0), "steps": chaos_steps}
+
+
+def load_t0(
+    run_dir: Path, steps: Sequence[nb.StepResult], events: Sequence[ChaosEvent]
+) -> float:
+    """The start of the load: `run.json`, which a run that failed does not have, else its
+    first step."""
+    path = run_dir / "run.json"
+    if path.exists():
+        return float(nb.read_json(path)["t0"])
+    return steps[0]["t_start"] if steps else min((e["ts"] for e in events), default=0.0)
+
+
+def tx_counts(run_dir: Path) -> Counter[str]:
+    """Empty for a run that failed before it wrote `load.jsonl`."""
+    path = run_dir / "load.jsonl"
+    if not path.exists():
+        return Counter()
+    with path.open() as f:
+        return Counter(json.loads(line)["status"] for line in f)
+
+
+def chaos_verdict(
+    rows: list[dict[str, Any]],
+    events: Sequence[ChaosEvent],
+    error: str | None,
+    failed: bool,
 ) -> str:
-    """One row per fault with the seconds since `t0` of each step of its recovery, then the
-    totals."""
-    rows: list[dict[str, Any]] = []
-    latest: dict[str, dict[str, Any]] = {}
-    for e in events:
-        if e["event"] == "fault":
-            latest[e["node"]] = {"node": e["node"], "kind": e["kind"], "fault": e["ts"]}
-            rows.append(latest[e["node"]])
-        elif e["event"] in ("started", "rejoined", "caught_up"):
-            latest[e["node"]][e["event"]] = e["ts"]
+    reasons = [
+        f"{e['node']} ({e['kind']}) not recovered after {e['after_s']:.0f} s"
+        for e in events
+        if e["event"] == "timeout"
+    ]
+    reasons += [
+        f"{r['node']} ({r['kind']}) did not rejoin"
+        for r in rows
+        if "rejoined" not in r and "timeout" not in r
+    ]
+    if not reasons and failed:
+        reasons.append(error or "the run produced no result")
+    if reasons:
+        return f"- Verdict: **fail**: {'; '.join(reasons)}"
+    return "- Verdict: **pass**: every fault recovered, no timeout"
+
+
+def setup_line(config: dict[str, Any]) -> str:
+    chaos = config["chaos"]
+    return (
+        f"- Setup: {config['nodes']} nodes ({config['query_nodes']} query), "
+        f"{config['node_type']}, latency {latency_cell(config)}, {chaos['minutes']} min at "
+        f"{chaos['rate_mb_s']:g} MB/s, seed {chaos['seed']}, kinds {','.join(chaos['kinds'])}"
+    )
+
+
+def chaos_totals(
+    rows: list[dict[str, Any]],
+    events: Sequence[ChaosEvent],
+    config: dict[str, Any],
+    meta: dict[str, Any] | None,
+    txs: Counter[str],
+) -> list[str]:
+    kinds = config["chaos"]["kinds"]
+    per_kind = ", ".join(f"{k} {sum(r['kind'] == k for r in rows)}" for k in kinds)
+    timeouts = sum(e["event"] == "timeout" for e in events)
+    lines = [
+        (
+            f"- Faults: {len(rows)} ({per_kind}); max concurrent faulty "
+            f"{max_concurrent_faulty(rows, events)} of budget {fault_budget(config['nodes'])}"
+        ),
+        f"- Timeouts: {timeouts}",
+    ]
+    if meta is not None:
+        lost = meta["missing_payloads"]
+        heights = f" ({', '.join(map(str, lost[:10]))})" if lost else ""
+        lines[-1] += (
+            f"; lost payloads {len(lost)}{heights}; submit failovers {meta['submit_failovers']}"
+        )
+    if txs:
+        lines.append(
+            f"- Txs: {sum(txs.values())} submitted, {txs['included']} included, "
+            f"{txs['timeout']} timed out"
+            + (f", {txs['pending']} pending" if txs["pending"] else "")
+        )
+    return lines
+
+
+def recovery_table(rows: list[dict[str, Any]], kinds: Sequence[str]) -> list[str]:
+    """Seconds from the fault to the `rejoined` and `caught_up` events, per kind; only query
+    nodes catch up."""
+
+    def spread(row_kind: list[dict[str, Any]], event: str) -> tuple[str, str]:
+        took = [r[event] - r["fault"] for r in row_kind if event in r]
+        if not took:
+            return "-", "-"
+        return f"{statistics.median(took):.0f}", f"{max(took):.0f}"
+
+    lines = [
+        "| kind | faults | rejoin p50 (s) | rejoin max (s) | caught up p50 (s) | caught up max (s) |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for kind in kinds:
+        of_kind = [r for r in rows if r["kind"] == kind]
+        rejoin, caught = spread(of_kind, "rejoined"), spread(of_kind, "caught_up")
+        lines.append(f"| {kind} | {len(of_kind)} | {' | '.join((*rejoin, *caught))} |")
+    return lines
+
+
+def throughput_lines(
+    steps: Sequence[nb.StepResult], chaos_steps: Sequence[nb.StepChaos]
+) -> list[str]:
+    """Decided MB/s over all steps against the offered rate, the lowest step, and the mean
+    over the steps with an active fault against those without."""
+    measured = [
+        (s["decided_mb_s"], c)
+        for s, c in zip(steps, chaos_steps, strict=True)
+        if s["decided_mb_s"] is not None
+    ]
+    if not measured:
+        return []
+
+    def mean(values: list[float]) -> str:
+        return f"{nb.fmt_num(statistics.fmean(values))} MB/s" if values else "-"
+
+    decided = [d for d, _ in measured]
+    faulty = [d for d, c in measured if c["faults"]]
+    quiet = [d for d, c in measured if not c["faults"]]
+    lowest, at = min((d, c["start_s"]) for d, c in measured)
+    offered = statistics.fmean(s["rate_mb_s"] for s in steps)
+    return [
+        "",
+        (
+            f"- Throughput: mean decided {mean(decided)} of {nb.fmt_num(offered)} MB/s offered "
+            f"over {len(measured)} steps; minimum one-minute {nb.fmt_num(lowest)} MB/s "
+            f"(step at {at:.0f} s)"
+        ),
+        (
+            f"- Mean decided with an active fault {mean(faulty)} ({len(faulty)} steps), "
+            f"without {mean(quiet)} ({len(quiet)} steps)"
+        ),
+    ]
+
+
+def step_chaos(
+    steps: Sequence[nb.StepResult], rows: list[dict[str, Any]], t0: float, end: float
+) -> list[nb.StepChaos]:
+    """Per step: the faults active in it, and the nodes whose process stopped or started.
+    `start_s` counts from `t0`."""
+    windows = nb.fault_windows(rows, end)
+    restarts = [
+        (r["node"], r[event])
+        for r in rows
+        for event in ("fault", "started")
+        if event in r
+    ]
+    out: list[nb.StepChaos] = []
+    for step in steps:
+        start, stop = step["t_start"], step["t_end"]
+        out.append(
+            {
+                "start_s": start - t0,
+                "faults": ", ".join(
+                    f"{node} {kind}"
+                    for node, kind, a, b in windows
+                    if a < stop and b > start
+                ),
+                "restarted": frozenset(
+                    node for node, ts in restarts if start <= ts < stop
+                ),
+            }
+        )
+    return out
+
+
+def fault_table(rows: list[dict[str, Any]], t0: float) -> list[str]:
+    """One row per fault with the seconds since `t0` of each step of its recovery; the counts
+    still missing at a timeout, when there was one."""
 
     def cell(row: dict[str, Any], key: str) -> str:
         return f"{row[key] - t0:.0f}" if key in row else "-"
 
-    totals = ", ".join(
-        [
-            f"faults {len(rows)}",
-            f"max concurrent faulty {max_concurrent_faulty(rows, events)}",
-            f"submit failovers {load_meta['submit_failovers']}",
-            f"timeouts {sum(e['event'] == 'timeout' for e in events)}",
-        ]
-    )
-    lines = [
+    def missing(row: dict[str, Any]) -> str:
+        if "missing" not in row:
+            return "-"
+        counts = zip(MISSING_NAMES, row["missing"], strict=True)
+        return ", ".join(f"{name} {count}" for name, count in counts)
+
+    if not rows:
+        return []
+    show = any("missing" in r for r in rows)
+    return [
+        "### Faults",
         "",
-        "",
-        "### Chaos",
-        "",
-        "| node | kind | at (s) | started (s) | rejoined (s) | caught up (s) |",
-        "|---|---|---|---|---|---|",
+        "| node | kind | at (s) | started (s) | rejoined (s) | caught up (s) |"
+        + (" missing |" if show else ""),
+        "|---|---|---|---|---|---|" + ("---|" if show else ""),
         *(
-            f"| {row['node']} | {row['kind']} | {cell(row, 'fault')} | "
-            f"{cell(row, 'started')} | {cell(row, 'rejoined')} | {cell(row, 'caught_up')} |"
-            for row in rows
+            f"| {r['node']} | {r['kind']} | {cell(r, 'fault')} | {cell(r, 'started')} | "
+            f"{cell(r, 'rejoined')} | {cell(r, 'caught_up')} |"
+            + (f" {missing(r)} |" if show else "")
+            for r in rows
         ),
         "",
-        totals,
-        "",
     ]
-    return "\n".join(lines)
 
 
-def max_concurrent_faulty(rows: list[dict[str, Any]], events: list[ChaosEvent]) -> int:
+def max_concurrent_faulty(
+    rows: list[dict[str, Any]], events: Sequence[ChaosEvent]
+) -> int:
     """Most rows open at once; a row is open from its fault to its catch-up, or to its rejoin
     when it never catches up (a validator), or to the last event."""
     end = max((e["ts"] for e in events), default=0.0)
@@ -8305,10 +8520,20 @@ def check_validity_aws(
 
 def write_failure_summary(run_dir: Path, manifest: Manifest, error: str | None) -> None:
     """A run without a result: the error (`netbench.wait_ready` includes the last heights) and
-    the last log lines of every node container that was collected."""
-    lines = ["## Network benchmark", "", f"**invalid**: {error}", ""]
-    for spec in manifest["hosts"]:
-        path = run_dir / "hosts" / spec["name"] / "espresso-node.log.gz"
+    the last log lines of every node container that was collected. A chaos run reports
+    what its files hold and shows the log of the nodes that timed out."""
+    if manifest["config"].get("chaos") is None:
+        lines = ["## Network benchmark", "", f"**invalid**: {error}", ""]
+        names = [spec["name"] for spec in manifest["hosts"]]
+    else:
+        try:
+            lines, names = chaos_failure_lines(run_dir, manifest, error)
+        except Exception:
+            log.exception("chaos report failed")
+            lines = ["## Network benchmark", "", f"**invalid**: {error}", ""]
+            names = [spec["name"] for spec in manifest["hosts"]]
+    for name in names:
+        path = run_dir / "hosts" / name / "espresso-node.log.gz"
         if path.exists():
             try:
                 with gzip.open(path, "rt", errors="replace") as log_file:
@@ -8316,8 +8541,32 @@ def write_failure_summary(run_dir: Path, manifest: Manifest, error: str | None) 
                 tail = [line[:300] for line in tail_lines]
             except (OSError, EOFError) as exc:  # a log cut off by a timed-out collect
                 tail = [f"log unreadable: {exc}"]
-            lines += [f"Last log lines of {spec['name']}:", "", "```", *tail, "```", ""]
+            lines += [f"Last log lines of {name}:", "", "```", *tail, "```", ""]
     (run_dir / "summary.md").write_text("\n".join(lines))
+
+
+def chaos_failure_lines(
+    run_dir: Path, manifest: Manifest, error: str | None
+) -> tuple[list[str], list[str]]:
+    """The chaos report of a failed run and the nodes whose log to show: the timed out ones,
+    else every node."""
+    steps_path = run_dir / "steps.json"
+    steps = nb.read_json(steps_path) if steps_path.exists() else []
+    view = chaos_view(run_dir, manifest, steps, error=error)
+    chart = throughput_chart(run_dir)
+    lines = [
+        *view["lead"],
+        "",
+        *([chart, ""] if chart else []),
+        *view["faults"],
+        *(
+            ["### Load steps", "", *nb.chaos_step_table(steps, view["steps"]), ""]
+            if steps
+            else []
+        ),
+    ]
+    timed_out = [e["node"] for e in chaos_events(run_dir) if e["event"] == "timeout"]
+    return lines, timed_out or [spec["name"] for spec in manifest["hosts"]]
 
 
 def tagged_resources(run: Runner, region: str, name: str | None = None) -> list[str]:
@@ -8690,6 +8939,7 @@ INDEX_COLUMNS = {
     "rate": "rate MB/s",
     "decided": "decided MB/s",
     "bound": "bound",
+    "chaos": "chaos",
     "lag_p99": "lag p99 ms",
     "status": "status",
     "exit": "exit",
@@ -8731,28 +8981,51 @@ def capacity_bound(limits: nb.Capacity) -> str:
     return "query" if query_mb_s < consensus_mb_s else "consensus"
 
 
+def chaos_cell(config: dict[str, Any], events: Sequence[ChaosEvent]) -> str:
+    """`-` for a run without chaos."""
+    if config.get("chaos") is None:
+        return "-"
+    faults = sum(e["event"] == "fault" for e in events)
+    timeouts = sum(e["event"] == "timeout" for e in events)
+    return f"{faults} faults, {timeouts} timeouts"
+
+
 def index_cells(
     manifest: Manifest,
     run_name: str,
     result: nb.BenchResult | None,
     code: int,
     cost: dict[str, float] | None,
+    events: Sequence[ChaosEvent] = (),
 ) -> dict[str, str]:
+    """`rate` and `decided` are those of the capacity step, or under chaos the offered rate and
+    the mean over the steps."""
+    chaos = manifest["config"].get("chaos")
     rate = decided = bound = lag = "-"
     status = "failed"
+    if chaos is not None:
+        rate = nb.fmt_num(chaos["rate_mb_s"])
     if result is not None:
         status = nb.verdict_word(result["validity"])
         limits = result["capacity"]
         mb_s = limits["overall"]["mb_s"]
-        rate = "-" if mb_s is None else nb.fmt_num(mb_s)
-        bound = capacity_bound(limits)
-        at_limit = [
-            s for s in result["steps"] if s["passed"] and s["rate_mb_s"] == mb_s
-        ]
-        if at_limit:
-            decided = nb.fmt_num(at_limit[-1]["decided_mb_s"])
-            quantiles = at_limit[-1]["query_lag_ms"]
-            lag = f"{quantiles['p99']:.0f}" if quantiles else "-"
+        if chaos is not None:
+            measured = [
+                s["decided_mb_s"]
+                for s in result["steps"]
+                if s["decided_mb_s"] is not None
+            ]
+            decided = nb.fmt_num(statistics.fmean(measured)) if measured else "-"
+        else:
+            rate = "-" if mb_s is None else nb.fmt_num(mb_s)
+            bound = capacity_bound(limits)
+            at_limit = [
+                s for s in result["steps"] if s["passed"] and s["rate_mb_s"] == mb_s
+            ]
+            if at_limit:
+                decided = nb.fmt_num(at_limit[-1]["decided_mb_s"])
+                quantiles = at_limit[-1]["query_lag_ms"]
+                lag = f"{quantiles['p99']:.0f}" if quantiles else "-"
     revision = (manifest["images"]["espresso-node"]["revision"] or "-")[:10]
     return {
         "run": f"{manifest['fleet']}/{run_name}",
@@ -8767,6 +9040,7 @@ def index_cells(
         "rate": rate,
         "decided": decided,
         "bound": bound,
+        "chaos": chaos_cell(manifest["config"], events),
         "lag_p99": lag,
         "status": status,
         "exit": str(code),
@@ -8780,10 +9054,42 @@ def format_index_row(cells: dict[str, str]) -> str:
 
 def append_index(out_root: Path, row: str) -> None:
     path = out_root / "INDEX.md"
+    if (
+        path.exists()
+        and path.stat().st_size
+        and not path.read_text().startswith(INDEX_HEADER)
+    ):
+        migrate_index(out_root)
     with path.open("a") as f:
         if f.tell() == 0:
             f.write(INDEX_HEADER)
         f.write(row)
+
+
+def migrate_index(out_root: Path) -> None:
+    """Rewrites an INDEX.md with an older header to `INDEX_HEADER`. A row keeps its cells; the
+    ones the header lacks come from its run dir, else `-` (the run dir may be deleted)."""
+    path = out_root / "INDEX.md"
+    by_name = {name: key for key, name in INDEX_COLUMNS.items()}
+    head, _, *body = path.read_text().splitlines()
+    keys = [by_name[cell.strip()] for cell in head.strip("|").split("|")]
+    lines = [INDEX_HEADER.rstrip("\n")]
+    for line in body:
+        old = dict(
+            zip(keys, (c.strip() for c in line.strip("|").split("|")), strict=True)
+        )
+        fleet, name = old["run"].split("/")
+        run_dir = out_root / fleet / RUNS_DIR / name
+        manifest = run_dir / MANIFEST_JSON
+        chaos = (
+            chaos_cell(nb.read_json(manifest)["config"], chaos_events(run_dir))
+            if manifest.exists()
+            else "-"
+        )
+        lines.append(
+            format_index_row({k: old.get(k, chaos) for k in INDEX_COLUMNS}).rstrip("\n")
+        )
+    path.write_text("\n".join(lines) + "\n")
 
 
 def record_index(
@@ -8791,7 +9097,9 @@ def record_index(
 ) -> None:
     """Appends the run's row to INDEX.md and writes the same cells plus `user` to
     `index-row.json`."""
-    cells = index_cells(run.manifest, run.run_dir.name, result, code, cost)
+    cells = index_cells(
+        run.manifest, run.run_dir.name, result, code, cost, chaos_events(run.run_dir)
+    )
     append_index(run.fleet.fleet_dir.parent, format_index_row(cells))
     nb.write_json(
         run.run_dir / INDEX_ROW_JSON, {**cells, "user": run.fleet.system.user()}
@@ -8891,8 +9199,11 @@ def published_manifest(run_dir: Path) -> dict[str, Any]:
 def commit_message(name: str, row: dict[str, str]) -> str:
     outcome = "failed"
     if row["status"] != "failed":
-        state = "lagging" if row["bound"] == "query" else "kept-up"
-        outcome = f"{row['decided']} MB/s {state}"
+        if row["chaos"] != "-":
+            outcome = f"chaos {row['chaos']}"
+        else:
+            state = "lagging" if row["bound"] == "query" else "kept-up"
+            outcome = f"{row['decided']} MB/s {state}"
     return f"run {name}: N={row['nodes']} {row['db']} {outcome}"
 
 
@@ -8905,8 +9216,8 @@ def read_index_row(run_dir: Path) -> dict[str, str]:
 
 
 def complete_index_row(run_dir: Path, row: dict[str, str]) -> dict[str, str]:
-    """Rows from before the latency, node type and bound columns get them from the manifest
-    and result; a run without result has no bound. `kept_up` is dropped."""
+    """Rows from before the latency, node type, bound and chaos columns get them from the
+    manifest, result and chaos log; a run without result has no bound. `kept_up` is dropped."""
     config = nb.read_json(run_dir / MANIFEST_JSON)["config"]
     result_path = run_dir / "result.json"
     derived = {
@@ -8918,6 +9229,7 @@ def complete_index_row(run_dir: Path, row: dict[str, str]) -> dict[str, str]:
             if result_path.exists()
             else "-"
         ),
+        "chaos": lambda: chaos_cell(config, chaos_events(run_dir)),
     }
     filled = {k: row[k] if k in row else derived[k]() for k in INDEX_COLUMNS}
     return {**filled, "user": row["user"]}

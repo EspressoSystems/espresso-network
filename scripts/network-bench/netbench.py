@@ -3049,29 +3049,86 @@ def load_baseline(path: Path) -> Baseline:
             )
 
 
+class StepChaos(TypedDict):
+    """What the faults did to one load step."""
+
+    start_s: float
+    # Faults active during the step, as "node kind".
+    faults: str
+    # Nodes whose process was stopped or started during the step: their CPU counter reset.
+    restarted: frozenset[str]
+
+
+class ChaosView(TypedDict):
+    """The chaos report of `render`: `lead` replaces the headline, `faults` follows the chart,
+    `steps` has one entry per step of the result."""
+
+    lead: list[str]
+    faults: list[str]
+    steps: list[StepChaos]
+
+
+def fault_rows(events: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """One row per fault with the time of each later event of its node."""
+    rows: list[dict[str, Any]] = []
+    latest: dict[str, dict[str, Any]] = {}
+    for e in events:
+        if e["event"] == "fault":
+            latest[e["node"]] = {"node": e["node"], "kind": e["kind"], "fault": e["ts"]}
+            rows.append(latest[e["node"]])
+        elif e["event"] in ("started", "rejoined", "caught_up", "timeout"):
+            latest[e["node"]][e["event"]] = e["ts"]
+            if "missing" in e:
+                latest[e["node"]]["missing"] = e["missing"]
+    return rows
+
+
+def fault_windows(
+    rows: Iterable[Mapping[str, Any]], end: float
+) -> list[tuple[str, str, float, float]]:
+    """(node, kind, start, stop) per fault: from the fault to the rejoin, else to the timeout,
+    else to `end`."""
+    return [
+        (r["node"], r["kind"], r["fault"], r.get("rejoined", r.get("timeout", end)))
+        for r in rows
+    ]
+
+
 def render(
     result: BenchResult,
     comparison: Comparison | None,
     chart: str = "",
-    capacity: bool = True,
+    chaos: ChaosView | None = None,
 ) -> str:
-    """The summary; `chart`, a markdown image, goes right below the headline. Without
-    `capacity` the capacity verdict line is left out."""
+    """The summary; `chart`, a markdown image, goes right below the headline. A `chaos` run
+    leads with its report and lists every step instead of every rate."""
+    head = (
+        [
+            f"- {status_line(result)}",
+            f"- {capacity_line(result['capacity'])}",
+            *search_lines(result),
+            f"- {baseline_line(comparison)}",
+        ]
+        if chaos is None
+        else []
+    )
     lines = [
-        "## Network benchmark",
-        "",
-        f"- {status_line(result)}",
-        *([f"- {capacity_line(result['capacity'])}"] if capacity else []),
-        *search_lines(result),
-        f"- {baseline_line(comparison)}",
-        "",
+        *(["## Network benchmark", ""] if chaos is None else [*chaos["lead"], ""]),
+        *head,
+        *([""] if head else []),
         *([chart, ""] if chart else []),
-        *capacity_table(result, comparison),
+        *(chaos["faults"] if chaos else capacity_table(result, comparison)),
         "### Load steps",
         "",
-        *step_table(result, comparison),
+        *(
+            chaos_step_table(result["steps"], chaos["steps"])
+            if chaos
+            else step_table(result, comparison)
+        ),
         "",
-        *details("Step details", step_details(result)),
+        *details(
+            "Step details", step_details(result, chaos["steps"] if chaos else None)
+        ),
         "### Load",
         "",
         *load_lines(result),
@@ -3334,6 +3391,24 @@ def step_table(result: BenchResult, comparison: Comparison | None) -> list[str]:
     return lines
 
 
+def chaos_step_table(
+    steps: Sequence[StepResult], chaos_steps: Sequence[StepChaos]
+) -> list[str]:
+    """One row per step, as every step runs the same rate."""
+    lines = [
+        "| start (s) | MB/s | " + " | ".join(STEP_COLUMNS) + " | verdict | faults |",
+        "|---:|---:|" + "---:|" * len(STEP_COLUMNS) + "---|---|",
+    ]
+    for step, chaos in zip(steps, chaos_steps, strict=True):
+        cells = [step_cell(step, label, None) for label in STEP_COLUMNS]
+        lines.append(
+            f"| {chaos['start_s']:.0f} | {fmt_num(step['rate_mb_s'])} | "
+            + " | ".join(cells)
+            + f" | {step_verdict(step)} | {chaos['faults'] or '-'} |"
+        )
+    return lines
+
+
 def step_cell(step: StepResult, label: str, row: Row | None) -> str:
     metric = next(m for m in STEP_METRICS if m.label == label)
     text = fmt_value(lookup(step, metric.path), metric.unit)
@@ -3368,7 +3443,18 @@ def fail_code(rule: str) -> str:
     return next((code for prefix, code in FAIL_CODES if rule.startswith(prefix)), rule)
 
 
-def step_details(result: BenchResult) -> list[str]:
+def step_details(
+    result: BenchResult, chaos_steps: Sequence[StepChaos] | None = None
+) -> list[str]:
+    """With `chaos_steps`, a node restarted during a step shows `-` in place of its CPU."""
+    resets = (
+        [c["restarted"] for c in chaos_steps]
+        if chaos_steps
+        else [frozenset[str]()] * len(result["steps"])
+    )
+    by_rate = sorted(
+        zip(result["steps"], resets, strict=True), key=lambda p: p[0]["rate_mb_s"]
+    )
     lines = [
         (
             "| MB/s | submitted | queued | queue wait p50/p99 ms | submit rtt p50/p99 ms "
@@ -3378,8 +3464,11 @@ def step_details(result: BenchResult) -> list[str]:
         ),
         "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
-    for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"]):
-        cpu = "/".join(fmt_num(s["node_cpu"].get(node)) for node in result["nodes"])
+    for s, reset in by_rate:
+        cpu = "/".join(
+            "-" if node in reset else fmt_num(s["node_cpu"].get(node))
+            for node in result["nodes"]
+        )
         lines.append(
             f"| {fmt_num(s['rate_mb_s'])} | {fmt_num(s['submitted_mb_s'])} "
             f"| {fmt_num(s['queued_mb_s'])} | {pair(s['queue_wait_ms'])} "
@@ -3394,7 +3483,7 @@ def step_details(result: BenchResult) -> list[str]:
     short = [
         f"- submission short at {fmt_num(s['rate_mb_s'])} MB/s: "
         f"{submit_shortfall(s, result['config']['workers'])}"
-        for s in sorted(result["steps"], key=lambda s: s["rate_mb_s"])
+        for s, _ in by_rate
         if s["submitted_mb_s"] < SUBMIT_SHORT_RATIO * s["rate_mb_s"]
     ]
     return [*lines, "", *short] if short else lines

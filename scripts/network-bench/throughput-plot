@@ -15,6 +15,12 @@
 - p50 submit until header on a validator over the last SMOOTH_S (left, log scale) and the
   transactions in flight (right).
 
+A run with `chaos.jsonl` gets a panel on top with one lane per faulted node: a bar for each phase
+of a fault (down, recovering, catching up) with a marker per event, ending in a red x when the
+node did not recover. The other panels shade each fault's down and recovering window. A run
+without `consensus.jsonl` samples (it failed) has no decided, block or timeout series, and its
+`run.json` is missing: the load starts at the first step.
+
     throughput-plot RUN_DIR
 """
 
@@ -25,11 +31,13 @@ import re
 from pathlib import Path
 
 import matplotlib
+import netbench as nb
 import numpy as np
 import tomllib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 SMOOTH_S = 10
 SURFACE = "#fcfcfb"
@@ -40,6 +48,10 @@ QUERY = "#eb6834"
 BAND = "#f0efec"
 BAND_FAILED = "#fbe3e2"
 BAND_FAILED_INK = "#c8352c"
+PHASES = (("down", "#6b4fa0"), ("recovering", "#e8a317"), ("catching up", "#2a9d8f"))
+PHASE_COLOR = dict(PHASES)
+EVENT_MARKERS = {"fault": "o", "started": "^", "rejoined": "s", "caught_up": "D"}
+FAULT_SPAN = "#e8a317"
 SIZE_UNITS = {"": 1, "b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9}
 SIZE_UNITS |= {"kib": 2**10, "mib": 2**20, "gib": 2**30}
 
@@ -126,6 +138,86 @@ def max_block_mb(genesis: Path) -> float:
     return float(match[1]) * SIZE_UNITS[match[2]] / 1e6
 
 
+def phase_segments(row: dict, end: float) -> list[tuple[str, float, float]]:
+    """(phase, start, stop) of a fault: down until the node starts (a kill only), recovering
+    until it rejoins, catching up until its query service is synced (a query node only). A
+    phase still open at the timeout, else at `end`, runs to there."""
+    stop = row.get("timeout", end)
+    recovering = row.get("started", row["fault"])
+    rejoined = row.get("rejoined")
+    segments = []
+    if "started" in row:
+        segments.append(("down", row["fault"], row["started"]))
+    segments.append(("recovering", recovering, rejoined or stop))
+    if rejoined is not None and "caught_up" in row:
+        segments.append(("catching up", rejoined, row["caught_up"]))
+    elif rejoined is not None and "timeout" in row:
+        segments.append(("catching up", rejoined, stop))
+    return segments
+
+
+def draw_lanes(lanes_ax: plt.Axes, rows: list[dict], end: float, minutes) -> None:
+    """One lane per faulted node, in the order of its first fault."""
+    nodes = list(dict.fromkeys(r["node"] for r in rows))
+    for row in rows:
+        y = nodes.index(row["node"])
+        for phase, start, stop in phase_segments(row, end):
+            lanes_ax.hlines(
+                y, minutes(start), minutes(stop), color=PHASE_COLOR[phase], lw=6
+            )
+        marks = {k: row[k] for k in EVENT_MARKERS if k in row}
+        for event, ts in marks.items():
+            lanes_ax.plot(
+                minutes(ts), y, EVENT_MARKERS[event], color=INK, ms=4, zorder=3
+            )
+        if "timeout" in row:
+            lanes_ax.plot(
+                minutes(row["timeout"]),
+                y,
+                "x",
+                color=BAND_FAILED_INK,
+                ms=9,
+                mew=2,
+                clip_on=False,
+            )
+        lanes_ax.text(
+            minutes(row["fault"]),
+            y - 0.45,
+            row["kind"],
+            fontsize=6,
+            color=MUTED,
+            va="bottom",
+        )
+    lanes_ax.set_yticks(range(len(nodes)), nodes, color=INK, fontsize=7)
+    lanes_ax.set_ylim(len(nodes) - 0.4, -0.7)
+    lanes_ax.spines[["top", "right"]].set_visible(False)
+    lanes_ax.legend(
+        handles=[
+            *(Line2D([], [], color=color, lw=6, label=name) for name, color in PHASES),
+            *(
+                Line2D([], [], color=INK, marker=m, ls="", ms=4, label=e)
+                for e, m in EVENT_MARKERS.items()
+            ),
+            Line2D([], [], color=BAND_FAILED_INK, marker="x", ls="", label="timeout"),
+        ],
+        loc="lower left",
+        bbox_to_anchor=(0, 1),
+        ncol=8,
+        fontsize=8,
+        frameon=False,
+        labelcolor=INK,
+    )
+
+
+def last_time(steps: list[dict], txs: list[dict], events: list[dict]) -> float:
+    """The end of a run without counter samples: its last step, submit or chaos event."""
+    return max(
+        [s["t_end"] for s in steps]
+        + [tx["t_submit"] for tx in txs]
+        + [e["ts"] for e in events]
+    )
+
+
 def read_jsonl(path: Path) -> list[dict]:
     with path.open() as f:
         return [json.loads(line) for line in f]
@@ -136,21 +228,35 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("run_dir", type=Path)
     run_dir = parser.parse_args(argv).run_dir
 
-    t0 = json.loads((run_dir / "run.json").read_text())["t0"]
     cfg = json.loads((run_dir / "config.json").read_text())
     tx_size = cfg["tx_size"]
     steps = json.loads((run_dir / "steps.json").read_text())
     counters = read_jsonl(run_dir / "consensus.jsonl")
     txs = read_jsonl(run_dir / "load.jsonl")
     heights = read_jsonl(run_dir / "heights.jsonl")
-    t1 = counters[-1]["ts"]
+    chaos_path = run_dir / "chaos.jsonl"
+    events = read_jsonl(chaos_path) if chaos_path.exists() else []
+    run_path = run_dir / "run.json"
+    t0 = (
+        json.loads(run_path.read_text())["t0"]
+        if run_path.exists()
+        else steps[0]["t_start"]
+    )
+    # A run that failed has no counter samples.
+    sampled = len(counters) > 1
+    t1 = counters[-1]["ts"] if sampled else last_time(steps, txs, events)
 
-    dec_t, dec = decided_mb_s(counters)
+    none = np.array([])
+    dec_t, dec = decided_mb_s(counters) if sampled else (none, none)
     sub_t, sub = binned_mb_s([tx["t_submit"] for tx in txs], tx_size, t0, t1)
     inc = [tx["t_included"] for tx in txs if tx["t_included"] is not None]
     inc_t, query = binned_mb_s(inc, tx_size, t0, t1)
     on_validator = {h["height"]: h["validator"] for h in heights if h["validator"]}
-    blk_t, interval, size = block_series(np.sort(list(on_validator.values())), counters)
+    blk_t, interval, size = (
+        block_series(np.sort(list(on_validator.values())), counters)
+        if sampled
+        else (none, none, none)
+    )
     decided_txs = [tx for tx in txs if on_validator.get(tx["height"]) is not None]
     seen = np.array([on_validator[tx["height"]] for tx in decided_txs])
     latency = seen - np.array([tx["t_submit"] for tx in decided_txs])
@@ -164,22 +270,33 @@ def main(argv: list[str] | None = None) -> None:
         for tx in txs
     ]
     flight = in_flight(np.array([tx["t_submit"] for tx in txs]), np.array(ends), grid)
+    rows = nb.fault_rows(events)
 
     def minutes[T: (np.ndarray, float)](t: T) -> T:
         return (t - t0) / 60
 
-    fig, (ax, blk_ax, lat_ax) = plt.subplots(
-        3,
+    lane_count = len({r["node"] for r in rows})
+    lane_ratio = (max(1.0, 0.3 * lane_count),) if rows else ()
+    fig, axes = plt.subplots(
+        3 + bool(rows),
         1,
-        figsize=(13, 10),
+        figsize=(13, 10 + 0.4 * lane_count),
         sharex=True,
-        height_ratios=(2, 1, 1),
+        height_ratios=(*lane_ratio, 2, 1, 1),
         facecolor=SURFACE,
     )
-    for panel in (ax, blk_ax, lat_ax):
+    ax, blk_ax, lat_ax = axes[-3:]
+    for panel in axes:
         panel.set_facecolor(SURFACE)
         panel.tick_params(colors=INK)
         panel.grid(alpha=0.3)
+    if rows:
+        draw_lanes(axes[0], rows, t1, minutes)
+        for _, _, start, stop in nb.fault_windows(rows, t1):
+            for panel in (ax, blk_ax, lat_ax):
+                panel.axvspan(
+                    minutes(start), minutes(stop), color=FAULT_SPAN, alpha=0.1, lw=0
+                )
     for i, step in enumerate(steps):
         start, end = minutes(step["t_start"]), minutes(step["t_end"])
         failed = step["consensus_fails"] or step["query_fails"]
@@ -221,14 +338,17 @@ def main(argv: list[str] | None = None) -> None:
         lw=0.8,
         label=f"submitted, {SMOOTH_S} s mean",
     )
-    ax.plot(minutes(dec_t), dec, color=DECIDED, lw=0.8, alpha=0.3, label="decided, 1 s")
-    ax.plot(
-        minutes(dec_t),
-        moving_mean(dec),
-        color=DECIDED,
-        lw=2,
-        label=f"decided, {SMOOTH_S} s mean",
-    )
+    if sampled:
+        ax.plot(
+            minutes(dec_t), dec, color=DECIDED, lw=0.8, alpha=0.3, label="decided, 1 s"
+        )
+        ax.plot(
+            minutes(dec_t),
+            moving_mean(dec),
+            color=DECIDED,
+            lw=2,
+            label=f"decided, {SMOOTH_S} s mean",
+        )
     ax.plot(
         minutes(inc_t),
         moving_mean(query),
@@ -236,7 +356,7 @@ def main(argv: list[str] | None = None) -> None:
         lw=2,
         label=f"query node, {SMOOTH_S} s mean",
     )
-    timeouts = timeout_times(counters)
+    timeouts = timeout_times(counters) if sampled else none
     if len(timeouts):
         ax.plot(
             minutes(timeouts),
@@ -262,6 +382,15 @@ def main(argv: list[str] | None = None) -> None:
         lw=1.5,
         label=f"block size, {SMOOTH_S} s window",
     )
+    if not sampled:
+        blk_ax.text(
+            0.5,
+            0.5,
+            "no consensus counters collected",
+            transform=blk_ax.transAxes,
+            ha="center",
+            color=MUTED,
+        )
     blk_ax.axhline(cap, color=DECIDED, lw=1, ls="--", label="max_block_size")
     blk_ax.set_ylim(0, cap * 1.15)
     blk_ax.set_ylabel("MB per block", color=DECIDED)

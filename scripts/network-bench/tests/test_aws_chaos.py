@@ -705,11 +705,8 @@ def test_chaos_wipe_keeps_live_peers_with_every_node_a_query_node():
     assert all(len(p) == 3 for p in peers.values())
 
 
-def test_chaos_summary_and_log_omit_the_capacity_verdict(caplog):
+def test_chaos_log_omits_the_capacity_verdict(caplog):
     result = make_result()
-    capacity = netbench.capacity_line(result["capacity"])
-    assert capacity in netbench.render(result, None)
-    assert capacity not in netbench.render(result, None, capacity=False)
     with caplog.at_level("INFO"):
         awsb.log_result(result, chaos=True)
     assert "Capacity" not in caplog.text
@@ -963,38 +960,6 @@ def test_drain_timeout_fails(isolated: Path):
     assert [e["event"] for e in awsb.chaos_events(isolated)] == ["timeout"]
 
 
-# REQ:awsbench-chaos-report
-# TEST:chaos-section-rows-ok
-def test_chaos_section_rows():
-    def event(ts, name, node, kind):
-        return awsb._chaos_event(ts, name, node, kind, 10, None)
-
-    events = [
-        event(100, "fault", "node0", "restart"),
-        event(112, "rejoined", "node0", "restart"),
-        event(130, "caught_up", "node0", "restart"),
-        event(150, "fault", "node5", "kill"),
-        event(210, "started", "node5", "kill"),
-        event(222, "rejoined", "node5", "kill"),
-        event(200, "fault", "node6", "wipe"),
-    ]
-    text = awsb.chaos_section(events, 90.0, {"submit_failovers": 17})
-    assert "### Chaos" in text and "rejoined (s)" in text
-    rows = [ln for ln in text.splitlines() if ln.startswith("| node")]
-    assert rows[1:] == [
-        "| node0 | restart | 10 | - | 22 | 40 |",
-        "| node5 | kill | 60 | 120 | 132 | - |",
-        "| node6 | wipe | 110 | - | - | - |",
-    ]
-    assert "faults 3, max concurrent faulty 2, submit failovers 17, timeouts 0" in text
-
-
-def test_chaos_section_counts_timeouts():
-    event = awsb._chaos_event(300.0, "timeout", "node4", "kill", None, 300.0)
-    text = awsb.chaos_section([event], 0.0, {"submit_failovers": 0})
-    assert "faults 0" in text and "timeouts 1" in text
-
-
 # TEST:timeout-event-invalid-ok
 def test_timeout_event_makes_the_run_invalid():
     event = awsb._chaos_event(300.0, "timeout", "node4", "kill", None, 300.0)
@@ -1029,7 +994,8 @@ def test_write_report_has_the_chaos_section_and_exempts_faulted_nodes(tmp_path: 
     result = awsb.write_report(tmp_path)
     summary = (tmp_path / "summary.md").read_text()
     assert "Capacity" not in summary
-    assert "### Chaos" in summary and "| node1 | restart | 5 | - | 20 | - |" in summary
+    assert summary.startswith("## Chaos test")
+    assert "| node1 | restart | 5 | - | 20 | - |" in summary
     assert "submit failovers 5" in summary
     assert result["validity"]["valid"]
     (tmp_path / "chaos.jsonl").unlink()
