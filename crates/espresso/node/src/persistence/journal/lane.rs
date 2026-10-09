@@ -81,7 +81,7 @@ impl LaneMetrics {
     }
 
     /// Total bytes on disk across every live segment of this stream; the caller (writer thread or
-    /// `Persistence::gc`) computes the sum from `SegmentSet`.
+    /// `Persistence::gc`) computes the sum from `Segments`.
     fn set_total_bytes(&self, bytes: u64) {
         self.total_bytes.lock().set(bytes as usize);
     }
@@ -233,150 +233,105 @@ pub(crate) struct Location {
 /// every decided block's payload and share back. Entries appear once their bytes are written.
 pub(crate) type DataIndex = Arc<Mutex<std::collections::BTreeMap<(u64, Kind), Location>>>;
 
-/// In-memory index of every segment a stream currently has on disk, kept live by the writer
-/// thread. Lets GC compute what to unlink without a directory scan or a full-segment read.
+/// In-memory index of every segment one stream currently has on disk, oldest first and kept live by
+/// the writer thread. Lets GC compute what to unlink without a directory scan or a full-segment
+/// read. The last entry is the active segment.
 #[derive(Clone, Debug, Default)]
-pub struct SegmentSet {
-    pub wal: Vec<SegmentMeta>,
-    pub data: Vec<SegmentMeta>,
+pub struct Segments(Vec<SegmentMeta>);
+
+impl From<Vec<SegmentMeta>> for Segments {
+    fn from(list: Vec<SegmentMeta>) -> Self {
+        Self(list)
+    }
 }
 
-impl SegmentSet {
-    fn list_mut(&mut self, stream: Stream) -> &mut Vec<SegmentMeta> {
-        match stream {
-            Stream::Wal => &mut self.wal,
-            Stream::Data => &mut self.data,
-        }
+impl Segments {
+    pub fn list(&self) -> &[SegmentMeta] {
+        &self.0
     }
 
-    pub fn list(&self, stream: Stream) -> &[SegmentMeta] {
-        match stream {
-            Stream::Wal => &self.wal,
-            Stream::Data => &self.data,
-        }
+    pub fn bytes(&self) -> u64 {
+        self.0.iter().map(|m| m.bytes).sum()
+    }
+
+    /// The oldest contiguous run of sealed segments whose `max_key` is below `bound`.
+    ///
+    /// Stops at the first segment that doesn't qualify: `max_key` is monotonic (see
+    /// `open_new_segment`), so a segment that isn't old enough means nothing sealed after it is
+    /// either, and unlinking one segment while keeping an older one would leave a gap GC can never
+    /// fill in later. Never includes the active (newest) segment.
+    pub fn oldest_below(&self, bound: u64) -> Vec<SegmentMeta> {
+        self.sealed()
+            .iter()
+            .take_while(|m| m.max_key < bound)
+            .copied()
+            .collect()
+    }
+
+    /// The oldest contiguous run of sealed segments to drop until the stream's total is at most
+    /// `max_bytes`. Stops before the first segment whose `max_key` is above `keep_after`. Never
+    /// includes the active (newest) segment.
+    pub fn oldest_over_bytes(&self, max_bytes: u64, keep_after: Option<u64>) -> Vec<SegmentMeta> {
+        let mut total = self.bytes();
+        self.sealed()
+            .iter()
+            .take_while(|m| keep_after.is_none_or(|keep| m.max_key <= keep))
+            .take_while(|m| {
+                let over = total > max_bytes;
+                total = total.saturating_sub(m.bytes);
+                over
+            })
+            .copied()
+            .collect()
+    }
+
+    fn sealed(&self) -> &[SegmentMeta] {
+        &self.0[..self.0.len().saturating_sub(1)]
     }
 
     fn push_active(&mut self, meta: SegmentMeta) {
-        self.list_mut(meta.stream).push(meta);
+        self.0.push(meta);
     }
 
-    fn update_active(&mut self, stream: Stream, bytes: u64, max_key: u64) {
-        if let Some(last) = self.list_mut(stream).last_mut() {
+    fn update_active(&mut self, bytes: u64, max_key: u64) {
+        if let Some(last) = self.0.last_mut() {
             last.bytes = bytes;
             last.max_key = max_key;
         }
     }
-
-    /// Segments GC may unlink. `wal`: age-based only, never the active segment or the one behind
-    /// it (a crash mid-roll falls back to that segment's snapshot). `data`: age-based, then
-    /// oldest-first while the running total exceeds `max_bytes`; never the active segment.
-    ///
-    /// Both only ever take a contiguous prefix of the oldest segments and stop at the first one
-    /// that doesn't qualify: `max_key` is monotonic (see `open_new_segment`), so a segment that
-    /// isn't old enough means nothing sealed after it is either, and unlinking one segment while
-    /// keeping an older one would leave a gap GC can never fill in later.
-    ///
-    /// `data` segments holding any key after `replayed` stay, even over `max_bytes`: a query
-    /// node's query service still has to ingest them.
-    pub fn to_unlink(
-        &self,
-        decided: u64,
-        key_retention: u64,
-        max_bytes: u64,
-        replayed: Option<u64>,
-    ) -> Vec<SegmentMeta> {
-        let bound = decided.saturating_sub(key_retention);
-        let mut out = Vec::new();
-
-        if self.wal.len() > 2 {
-            out.extend(
-                self.wal[..self.wal.len() - 2]
-                    .iter()
-                    .take_while(|m| m.max_key < bound)
-                    .copied(),
-            );
-        }
-
-        if !self.data.is_empty() {
-            let mut total: u64 = self.data.iter().map(|m| m.bytes).sum();
-            for meta in &self.data[..self.data.len() - 1] {
-                if replayed.is_some_and(|replayed| meta.max_key > replayed) {
-                    break;
-                }
-                if meta.max_key >= bound && total <= max_bytes {
-                    break;
-                }
-                out.push(*meta);
-                total = total.saturating_sub(meta.bytes);
-            }
-        }
-
-        out
-    }
 }
 
-/// Bytes remaining on disk per stream after a `prune` pass, if that stream's live set changed
-/// (`None` means nothing to report, matching `Persistence::gc`'s prior skip-if-untouched metric).
-#[derive(Debug)]
-pub struct PruneStats {
-    pub wal_bytes: Option<u64>,
-    pub data_bytes: Option<u64>,
-}
-
-/// Unlinks the segments `SegmentSet::to_unlink` selects, oldest first within each stream. A segment
-/// is dropped from `segments` only once its file is actually gone (`NotFound` counts as gone), so a
-/// failed unlink leaves it both on disk and tracked; the pass stops there and returns the error
-/// instead of unlinking younger segments first, which would leave a sequence gap recovery can never
-/// close. The caller must serialize passes (e.g. a gc lock): `to_unlink` is computed once up front,
-/// so an overlapping pass could otherwise select the same segment twice.
-#[allow(clippy::too_many_arguments)]
+/// Unlinks `to_unlink` from `dir`, oldest first, and returns the bytes left in `segments`, or
+/// `None` if `to_unlink` is empty. A segment is dropped from `segments` only once its file is
+/// actually gone (`NotFound` counts as gone), so a failed unlink leaves it both on disk and
+/// tracked; the pass stops there and returns the error instead of unlinking younger segments
+/// first, which would leave a sequence gap recovery can never close. The caller must serialize
+/// passes (e.g. a gc lock): `to_unlink` is computed up front, so an overlapping pass could
+/// otherwise select the same segment twice.
 pub fn prune<F: JournalFs>(
     fs: &F,
-    segments: &Mutex<SegmentSet>,
-    wal_dir: &Path,
-    data_dir: &Path,
-    decided: u64,
-    key_retention: u64,
-    max_bytes: u64,
-    replayed: Option<u64>,
-) -> anyhow::Result<PruneStats> {
-    let to_unlink = segments
-        .lock()
-        .to_unlink(decided, key_retention, max_bytes, replayed);
-    let mut stats = PruneStats {
-        wal_bytes: None,
-        data_bytes: None,
-    };
-
-    for (stream, dir) in [(Stream::Wal, wal_dir), (Stream::Data, data_dir)] {
-        let mut touched = false;
-        for meta in to_unlink.iter().filter(|m| m.stream == stream) {
-            match fs.remove(&segment_path(dir, meta.seq)) {
-                Ok(()) => {},
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {},
-                Err(err) => {
-                    if touched {
-                        fs.sync_dir(dir)?;
-                    }
-                    return Err(err).with_context(|| format!("unlinking segment {}", meta.seq));
-                },
-            }
-            segments
-                .lock()
-                .list_mut(stream)
-                .retain(|m| m.seq != meta.seq);
-            touched = true;
+    dir: &Path,
+    segments: &Mutex<Segments>,
+    to_unlink: &[SegmentMeta],
+) -> anyhow::Result<Option<u64>> {
+    for (i, meta) in to_unlink.iter().enumerate() {
+        match fs.remove(&segment_path(dir, meta.seq)) {
+            Ok(()) => {},
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {},
+            Err(err) => {
+                if i > 0 {
+                    fs.sync_dir(dir)?;
+                }
+                return Err(err).with_context(|| format!("unlinking segment {}", meta.seq));
+            },
         }
-        if touched {
-            fs.sync_dir(dir)?;
-            let bytes = segments.lock().list(stream).iter().map(|m| m.bytes).sum();
-            match stream {
-                Stream::Wal => stats.wal_bytes = Some(bytes),
-                Stream::Data => stats.data_bytes = Some(bytes),
-            }
-        }
+        segments.lock().0.retain(|m| m.seq != meta.seq);
     }
-    Ok(stats)
+    if to_unlink.is_empty() {
+        return Ok(None);
+    }
+    fs.sync_dir(dir)?;
+    Ok(Some(segments.lock().bytes()))
 }
 
 pub struct LaneConfig {
@@ -470,7 +425,7 @@ impl Lane {
         Ok(())
     }
 
-    /// Reports `journal_bytes`: the caller (`Persistence::gc`) sums `SegmentSet` after unlinking.
+    /// Reports `journal_bytes`: the caller (`Persistence::gc`) sums `Segments` after unlinking.
     pub fn set_total_bytes(&self, bytes: u64) {
         self.metrics.set_total_bytes(bytes);
     }
@@ -523,7 +478,7 @@ fn open_new_segment<F: JournalFs>(
         last_lsn: first_lsn.saturating_sub(1),
         first_key: None,
         // Seeded from the previous segment's bound, not 0: `SegmentMeta::max_key` is a running
-        // max across the whole stream, so GC (`SegmentSet::to_unlink`) never sees a segment appear
+        // max across the whole stream, so GC (`Segments::oldest_below`) never sees a segment appear
         // younger than the one sealed right before it (e.g. a snapshot-only segment with no real
         // records of its own).
         max_key: prev_max_key,
@@ -899,16 +854,12 @@ pub(crate) fn spawn_lane<F: JournalFs>(
     cfg: LaneConfig,
     start: (u64, Lsn),
     hook: Option<Arc<dyn SnapshotHook>>,
-    segments: Arc<Mutex<SegmentSet>>,
+    segments: Arc<Mutex<Segments>>,
     index: Option<DataIndex>,
 ) -> anyhow::Result<(Lane, std::thread::JoinHandle<()>)> {
     let (next_seq, next_lsn) = start;
     let metrics = Arc::new(LaneMetrics::noop());
-    let prev_max_key = segments
-        .lock()
-        .list(cfg.stream)
-        .last()
-        .map_or(0, |m| m.max_key);
+    let prev_max_key = segments.lock().list().last().map_or(0, |m| m.max_key);
     let mut active = open_new_segment(
         &*fs,
         &dir,
@@ -958,7 +909,7 @@ pub(crate) fn spawn_lane<F: JournalFs>(
         max_key: active.max_key,
     });
     // Published only after `segments` above reflects this segment: `wait_durable` callers must
-    // never observe a durable lsn `scan_for`/gc can't yet see in `SegmentSet`.
+    // never observe a durable lsn `scan_for`/gc can't yet see in `Segments`.
     if seeded {
         durable_tx.send(active.last_lsn).ok();
     }
@@ -1010,7 +961,7 @@ struct Writer<F: JournalFs> {
     active: ActiveSegment<F::File>,
     durable_tx: watch::Sender<Lsn>,
     hook: Option<Arc<dyn SnapshotHook>>,
-    segments: Arc<Mutex<SegmentSet>>,
+    segments: Arc<Mutex<Segments>>,
     /// Shared with `Lane::enqueue`; see the field doc on `Lane::alloc`.
     alloc: Arc<Mutex<Lsn>>,
     /// Shared with `Lane::enqueue`; see the field doc on `Lane::queue_bytes`.
@@ -1097,11 +1048,11 @@ impl<F: JournalFs> Writer<F> {
             drop(batch);
 
             // Update before publishing durability: `wait_durable` callers must see this batch's
-            // keys in `SegmentSet` (e.g. via `scan_for`) as soon as it returns.
+            // keys in `Segments` (e.g. via `scan_for`) as soon as it returns.
             let total_bytes = {
                 let mut segments = self.segments.lock();
-                segments.update_active(self.cfg.stream, self.active.offset, self.active.max_key);
-                segments.list(self.cfg.stream).iter().map(|m| m.bytes).sum()
+                segments.update_active(self.active.offset, self.active.max_key);
+                segments.bytes()
             };
             self.metrics.set_total_bytes(total_bytes);
 
@@ -1181,7 +1132,7 @@ impl<F: JournalFs> Writer<F> {
         }
         self.segments
             .lock()
-            .update_active(stream, active.offset, active.max_key);
+            .update_active(active.offset, active.max_key);
         self.durable_tx.send(active.last_lsn).ok();
 
         let new_seq = active.seq + 1;
@@ -1227,17 +1178,11 @@ impl<F: JournalFs> Writer<F> {
             new_active.snapshot_end = new_active.offset;
             self.segments
                 .lock()
-                .update_active(stream, new_active.offset, new_active.max_key);
+                .update_active(new_active.offset, new_active.max_key);
             self.durable_tx.send(new_active.last_lsn).ok();
         }
 
-        let total_bytes = self
-            .segments
-            .lock()
-            .list(stream)
-            .iter()
-            .map(|m| m.bytes)
-            .sum();
+        let total_bytes = self.segments.lock().bytes();
         self.metrics.set_total_bytes(total_bytes);
 
         self.active = new_active;
@@ -1434,79 +1379,77 @@ mod tests {
         }
     }
 
-    #[test]
-    fn to_unlink_keeps_two_newest_wal_segments() {
-        let set = SegmentSet {
-            wal: vec![
-                meta(Stream::Wal, 1, 100, 5),
-                meta(Stream::Wal, 2, 100, 10),
-                meta(Stream::Wal, 3, 100, 20),
-                meta(Stream::Wal, 4, 100, 30),
-            ],
-            data: vec![],
-        };
-        // decided=100, retention=50 -> bound=50: segments 1,2 are old enough, but only those
-        // outside the two newest (3, 4) are candidates.
-        let unlink = set.to_unlink(100, 50, u64::MAX, None);
-        assert_eq!(unlink.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![1, 2]);
+    fn segments(stream: Stream, spec: &[(u64, u64, u64)]) -> Segments {
+        spec.iter()
+            .map(|&(seq, bytes, max_key)| meta(stream, seq, bytes, max_key))
+            .collect::<Vec<_>>()
+            .into()
+    }
+
+    fn seqs(list: Vec<SegmentMeta>) -> Vec<u64> {
+        list.iter().map(|m| m.seq).collect()
     }
 
     #[test]
-    fn to_unlink_never_touches_active_or_recent_wal() {
-        let set = SegmentSet {
-            wal: vec![meta(Stream::Wal, 1, 100, 0), meta(Stream::Wal, 2, 100, 0)],
-            data: vec![],
-        };
-        assert!(set.to_unlink(1_000_000, 0, u64::MAX, None).is_empty());
-    }
-
-    // A zero-key segment (e.g. rolled right after a snapshot, before any real record landed)
-    // must never make `to_unlink` skip over an older, not-yet-old-enough segment: `max_key` is
-    // supposed to be monotonic (`open_new_segment` seeds it from the previous segment's bound),
-    // but this asserts `to_unlink` itself never produces a gap even if that invariant is somehow
-    // violated.
-    #[test]
-    fn to_unlink_wal_never_skips_a_segment_to_reach_a_younger_looking_one() {
-        let set = SegmentSet {
-            wal: vec![
-                meta(Stream::Wal, 1, 100, 60), // not old enough: bound is 50
-                meta(Stream::Wal, 2, 100, 0),  // looks old, but sits after segment 1
-                meta(Stream::Wal, 3, 100, 80),
-                meta(Stream::Wal, 4, 100, 90), // active
-            ],
-            data: vec![],
-        };
-        assert!(set.to_unlink(100, 50, u64::MAX, None).is_empty());
+    fn oldest_below_takes_sealed_prefix_under_bound() {
+        let segs = segments(
+            Stream::Wal,
+            &[(1, 10, 5), (2, 10, 10), (3, 10, 20), (4, 10, 30)],
+        );
+        assert_eq!(seqs(segs.oldest_below(15)), vec![1, 2]);
+        assert_eq!(seqs(segs.oldest_below(5)), Vec::<u64>::new());
     }
 
     #[test]
-    fn to_unlink_data_drops_oldest_first_over_byte_cap() {
-        let set = SegmentSet {
-            wal: vec![],
-            data: vec![
-                meta(Stream::Data, 1, 40, 100),
-                meta(Stream::Data, 2, 40, 100),
-                meta(Stream::Data, 3, 40, 100),
-                meta(Stream::Data, 4, 40, 100), // active, never dropped
-            ],
-        };
-        // All young (max_key 100 >= bound 0), total 160 > cap 90: drop oldest until <= cap.
-        let unlink = set.to_unlink(0, 0, 90, None);
-        assert_eq!(unlink.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![1, 2]);
+    fn oldest_below_never_includes_the_active_segment() {
+        let segs = segments(Stream::Wal, &[(1, 10, 0), (2, 10, 0)]);
+        assert_eq!(seqs(segs.oldest_below(1_000_000)), vec![1]);
+        let single = segments(Stream::Wal, &[(1, 10, 0)]);
+        assert!(single.oldest_below(1_000_000).is_empty());
+        assert!(Segments::default().oldest_below(1_000_000).is_empty());
+    }
+
+    // `max_key` is supposed to be monotonic (`open_new_segment` seeds it from the previous
+    // segment's bound), but `oldest_below` itself must never produce a gap even if it is not.
+    #[test]
+    fn oldest_below_stops_at_first_segment_over_bound() {
+        let segs = segments(
+            Stream::Wal,
+            &[(1, 10, 60), (2, 10, 0), (3, 10, 80), (4, 10, 90)],
+        );
+        assert!(segs.oldest_below(50).is_empty());
     }
 
     #[test]
-    fn to_unlink_data_age_based_ignores_byte_cap() {
-        let set = SegmentSet {
-            wal: vec![],
-            data: vec![
-                meta(Stream::Data, 1, 10, 0),
-                meta(Stream::Data, 2, 10, 1000),
-                meta(Stream::Data, 3, 10, 1000), // active
-            ],
-        };
-        let unlink = set.to_unlink(1000, 10, u64::MAX, None);
-        assert_eq!(unlink.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![1]);
+    fn oldest_over_bytes_drops_oldest_until_under_cap() {
+        let segs = segments(
+            Stream::Data,
+            &[(1, 40, 100), (2, 40, 100), (3, 40, 100), (4, 40, 100)],
+        );
+        assert_eq!(seqs(segs.oldest_over_bytes(90, None)), vec![1, 2]);
+        assert_eq!(seqs(segs.oldest_over_bytes(160, None)), Vec::<u64>::new());
+    }
+
+    #[test]
+    fn oldest_over_bytes_never_includes_the_active_segment() {
+        let segs = segments(Stream::Data, &[(1, 40, 1), (2, 40, 2), (3, 40, 3)]);
+        assert_eq!(seqs(segs.oldest_over_bytes(0, None)), vec![1, 2]);
+    }
+
+    #[test]
+    fn oldest_over_bytes_keeps_segments_after_keep_after() {
+        let segs = segments(
+            Stream::Data,
+            &[(1, 40, 5), (2, 40, 10), (3, 40, 20), (4, 40, 30)],
+        );
+        assert_eq!(seqs(segs.oldest_over_bytes(0, Some(10))), vec![1, 2]);
+        assert!(segs.oldest_over_bytes(0, Some(4)).is_empty());
+    }
+
+    #[test]
+    fn bytes_sums_every_segment() {
+        let segs = segments(Stream::Data, &[(1, 10, 0), (2, 20, 0), (3, 30, 0)]);
+        assert_eq!(segs.bytes(), 60);
     }
 
     fn cfg(stream: Stream) -> LaneConfig {
@@ -1534,7 +1477,7 @@ mod tests {
     async fn durable_ack_survives_crash() {
         let fs = Arc::new(MemFs::default());
         let dir = std::path::PathBuf::from("/data");
-        let segments = Arc::new(Mutex::new(SegmentSet::default()));
+        let segments = Arc::new(Mutex::new(Segments::default()));
         let (lane, _handle) = spawn_lane(
             fs.clone(),
             dir.clone(),
@@ -1555,7 +1498,7 @@ mod tests {
         assert_eq!(recovered.next_lsn, 2);
     }
 
-    // Regression test: `SegmentSet` must reflect an acked write's key before `durable_tx` publishes
+    // Regression test: `Segments` must reflect an acked write's key before `durable_tx` publishes
     // it, or a `scan_for` racing right after `wait_durable` returns can pick stale segment bounds and
     // miss the record. Two independent threads (writer thread vs. this task's tokio runtime) racing
     // on the watch channel, so many iterations to give a wrong order a chance to show up.
@@ -1563,7 +1506,7 @@ mod tests {
     async fn durable_ack_makes_segment_set_reflect_the_acked_key_immediately() {
         let fs = Arc::new(MemFs::default());
         let dir = std::path::PathBuf::from("/data-order");
-        let segments = Arc::new(Mutex::new(SegmentSet::default()));
+        let segments = Arc::new(Mutex::new(Segments::default()));
         let (lane, _handle) = spawn_lane(
             fs,
             dir,
@@ -1580,13 +1523,13 @@ mod tests {
             lane.wait_durable(lsn).await.unwrap();
             let max_key = segments
                 .lock()
-                .list(Stream::Data)
+                .list()
                 .last()
                 .map(|m| m.max_key)
                 .unwrap_or(0);
             assert!(
                 max_key >= key,
-                "SegmentSet max_key {max_key} lagged the just-acked key {key}"
+                "Segments max_key {max_key} lagged the just-acked key {key}"
             );
         }
     }
@@ -1594,7 +1537,7 @@ mod tests {
     #[tokio::test]
     async fn reserve_over_budget_takes_whole_budget() {
         let fs = Arc::new(MemFs::default());
-        let segments = Arc::new(Mutex::new(SegmentSet::default()));
+        let segments = Arc::new(Mutex::new(Segments::default()));
         let (lane, _handle) = spawn_lane(
             fs,
             PathBuf::from("/data-reserve"),
@@ -1616,7 +1559,7 @@ mod tests {
     async fn empty_dir_then_write_then_recover_roundtrips() {
         let fs = Arc::new(MemFs::default());
         let dir = std::path::PathBuf::from("/data2");
-        let segments = Arc::new(Mutex::new(SegmentSet::default()));
+        let segments = Arc::new(Mutex::new(Segments::default()));
         let (lane, _handle) = spawn_lane(
             fs.clone(),
             dir.clone(),
@@ -1657,7 +1600,7 @@ mod tests {
     async fn wal_roll_reserves_snapshot_lsn_so_recovery_reaches_the_last_acked_record() {
         let fs = Arc::new(MemFs::default());
         let dir = std::path::PathBuf::from("/wal3");
-        let segments = Arc::new(Mutex::new(SegmentSet::default()));
+        let segments = Arc::new(Mutex::new(Segments::default()));
         let state = Arc::new(Mutex::new(0u64));
         let hook: Arc<dyn SnapshotHook> = Arc::new(CounterHook(state.clone()));
 
@@ -1709,17 +1652,16 @@ mod tests {
         assert_eq!(snap_count + recovered.wal_records.len() as u64 - 1, 40);
     }
 
-    // Regression test: a failed unlink must not drop its segment from `SegmentSet` before the file
+    // Regression test: a failed unlink must not drop its segment from `Segments` before the file
     // is actually gone, or a later pass moves on to younger segments and leaves a gap on disk that
     // `recover` refuses to start over.
     #[tokio::test]
     async fn prune_stops_at_a_failed_unlink_instead_of_skipping_ahead() {
         let fs = MemFs::default();
-        let wal_dir = std::path::PathBuf::from("/gc-wal");
         let data_dir = std::path::PathBuf::from("/gc-data");
 
         // 6 data segments, all old enough to qualify except the last (active, never unlinked).
-        let mut segments = SegmentSet::default();
+        let mut segments = Segments::default();
         for seq in 1..=6u64 {
             write_segment(
                 &fs,
@@ -1732,9 +1674,7 @@ mod tests {
                 },
                 &[],
             );
-            segments
-                .data
-                .push(meta(Stream::Data, seq, SegmentHeader::LEN as u64, 100));
+            segments.push_active(meta(Stream::Data, seq, SegmentHeader::LEN as u64, 100));
         }
         let segments = Mutex::new(segments);
 
@@ -1743,7 +1683,8 @@ mod tests {
             .unwrap()
             .insert(segment_path(&data_dir, 2));
 
-        let err = prune(&fs, &segments, &wal_dir, &data_dir, 1000, 0, u64::MAX, None).unwrap_err();
+        let to_unlink = segments.lock().oldest_below(1000);
+        let err = prune(&fs, &data_dir, &segments, &to_unlink).unwrap_err();
         assert!(format!("{err:#}").contains("segment 2"), "{err:#}");
 
         assert_eq!(fs.list(&data_dir).unwrap().len(), 5, "only seq 1 unlinked");
@@ -1757,7 +1698,7 @@ mod tests {
         assert_eq!(
             segments
                 .lock()
-                .data
+                .list()
                 .iter()
                 .map(|m| m.seq)
                 .collect::<Vec<_>>(),
@@ -1766,12 +1707,13 @@ mod tests {
         );
 
         // Second pass, fault cleared (single-shot): must retry seq 2 first, in order.
-        let stats = prune(&fs, &segments, &wal_dir, &data_dir, 1000, 0, u64::MAX, None).unwrap();
-        assert_eq!(stats.data_bytes, Some(SegmentHeader::LEN as u64));
+        let to_unlink = segments.lock().oldest_below(1000);
+        let bytes = prune(&fs, &data_dir, &segments, &to_unlink).unwrap();
+        assert_eq!(bytes, Some(SegmentHeader::LEN as u64));
         assert_eq!(
             segments
                 .lock()
-                .data
+                .list()
                 .iter()
                 .map(|m| m.seq)
                 .collect::<Vec<_>>(),
