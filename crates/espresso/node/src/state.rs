@@ -12,7 +12,7 @@ use espresso_types::{
     v0_3::{ChainConfig, RewardMerkleTreeV1},
     v0_4::Delta,
 };
-use futures::{FutureExt, StreamExt, future::Future};
+use futures::{StreamExt, future::Future};
 use hotshot::traits::ValidatedState as HotShotState;
 use hotshot_query_service::{
     availability::AvailabilityDataSource,
@@ -588,21 +588,16 @@ where
 /// would only delete it again.
 async fn fetch_pruned_leaf(instance: &NodeState, height: u64) -> Leaf2 {
     tracing::debug!(height, "fetching leaf below the data pruned height");
-    let catchup = instance.state_catchup.clone();
-    let coordinator = instance.coordinator.clone();
     loop {
-        let fetched = BackoffParams::default()
-            .retry((), |_, retry| {
-                let catchup = catchup.clone();
-                let coordinator = coordinator.clone();
-                async move { catchup.try_fetch_leaf(retry, coordinator, height).await }.boxed()
-            })
-            .await;
-        match fetched {
+        match instance
+            .state_catchup
+            .fetch_leaf(instance.coordinator.clone(), height)
+            .await
+        {
             Ok(leaf) => return leaf,
-            // Not reached while retries are enabled; stay alive if it ever is.
+            // Peers retry with the node's catchup backoff, so this runs only when it is disabled.
             Err(err) => {
-                tracing::error!(height, "fetching leaf gave up: {err:#}");
+                tracing::warn!(height, "fetching leaf failed, retrying: {err:#}");
                 sleep(Duration::from_secs(1)).await;
             },
         }
