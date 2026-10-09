@@ -680,12 +680,14 @@ def drive_load(
             )
         validators = [url for node, url in topo["nodes"].items() if node not in queries]
         submit_urls = [*validators, *query_urls]
+        # Every node votes, query nodes included.
+        consensus_urls = list(topo["nodes"].values())
         t0, t1 = clock.run(
             generate_load(
                 cfg,
                 submit_urls,
                 query_urls,
-                validators,
+                consensus_urls,
                 out,
                 clock,
                 http,

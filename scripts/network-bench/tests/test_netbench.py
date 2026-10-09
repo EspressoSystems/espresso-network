@@ -2298,8 +2298,28 @@ def test_drive_load_splits_validators_from_query_nodes(
     assert seen == [
         [urls["node2"], urls["node3"], urls["node0"], urls["node1"]],
         [urls["node0"], urls["node1"]],
-        [urls["node2"], urls["node3"]],
+        [urls["node0"], urls["node1"], urls["node2"], urls["node3"]],
     ]
+
+
+def test_drive_load_polls_consensus_on_every_node_when_all_are_query_nodes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    clock = fakes.FakeClock()
+    names = ["node0", "node1", "node2"]
+    cluster = fakes.FakeCluster(clock, names, set(names))
+    seen: list[Any] = []
+
+    async def spy(*args: Any) -> tuple[float, float]:
+        seen.extend(args[1:4])
+        return 0.0, 1.0
+
+    monkeypatch.setattr(netbench, "generate_load", spy)
+    netbench.drive_load(
+        netbench.BenchConfig(), cluster.topology(), tmp_path, lambda: True, clock,
+        cluster.connect,
+    )  # fmt: skip
+    assert seen[2] == [cluster.urls[n] for n in names]
 
 
 def test_a_node_down_at_the_end_has_no_final_metrics(
