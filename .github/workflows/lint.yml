@@ -94,7 +94,7 @@ jobs:
       # alerts on, and no workflow ran their tests. `py::lint` and `py::check` still do not run
       # here: both need a tool installed, and nextest-ci has lint violations that belong in
       # their own change.
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           python-version: "3.14"
 
