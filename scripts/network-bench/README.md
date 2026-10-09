@@ -81,11 +81,11 @@ laptop                       EC2, one AZ, private IPs
                              +-------------------------------------------------+
 ```
 
-| Host      | Runs                                                                                         |
-| --------- | -------------------------------------------------------------------------------------------- |
-| `ctl`     | anvil, `deploy`, orchestrator, state-relay-server, `agent-drive`, `agent-host`               |
-| `node0`   | espresso-node `-- storage-sql -- http -- query ...`, postgres container, `agent-host`        |
-| `node1..` | espresso-node `-- storage-fs -- http -- status -- submit -- catchup -- config`, `agent-host` |
+| Host      | Runs                                                                                                  |
+| --------- | ----------------------------------------------------------------------------------------------------- |
+| `ctl`     | anvil, `deploy`, orchestrator, state-relay-server, `agent-drive`, `agent-host`                        |
+| `node0`   | espresso-node `-- storage-sql -- http -- query ... -- light-client`, postgres container, `agent-host` |
+| `node1..` | espresso-node `-- storage-fs -- http -- status -- submit -- catchup -- config`, `agent-host`          |
 
 Modules shown are for `--consensus-storage fs` (default). With `journal`, both roles also get `storage-journal` first.
 
@@ -167,18 +167,27 @@ just bench aws down lulu-20261001-074612 --yes          # --yes needs FLEET
 
 ### Query database
 
-| `--query-db` | Postgres                            | Store of `/data/pg`                                                             |
-| ------------ | ----------------------------------- | ------------------------------------------------------------------------------- |
-| `colocated`  | container on node0                  | root gp3 (`--pg-iops`, `--pg-mbps`)                                             |
-| `volume`     | container on node0                  | extra gp3 400 GiB (`--pg-iops`, `--pg-mbps`), ext4 by-id mount, dies with node0 |
-| `rds`        | RDS PostgreSQL db.m8g.4xlarge, 18.x | gp3 400 GiB or more, 12000 IOPS, 500 MB/s                                       |
+`--query-engine` picks the query service's database, `--query-db` where it lives.
+
+| `--query-engine` | `--query-db` | Database                            | Store                                                                           |
+| ---------------- | ------------ | ----------------------------------- | ------------------------------------------------------------------------------- |
+| `postgres`       | `colocated`  | container on node0                  | `/data/pg` on root gp3 (`--pg-iops`, `--pg-mbps`)                               |
+| `postgres`       | `volume`     | container on node0                  | extra gp3 400 GiB (`--pg-iops`, `--pg-mbps`), ext4 by-id mount, dies with node0 |
+| `postgres`       | `rds`        | RDS PostgreSQL db.m8g.4xlarge, 18.x | gp3 400 GiB or more, 12000 IOPS, 500 MB/s                                       |
+| `sqlite`         | `colocated`  | embedded SQLite in the node         | `/data/journal/espresso/sqlite` on root gp3                                     |
+| `sqlite`         | `volume`     | embedded SQLite in the node         | `/data/pg/sqlite` on the extra gp3 400 GiB volume (`--pg-iops`, `--pg-mbps`)    |
+| `sqlite`         | `tmpfs`      | embedded SQLite in the node         | 8 GiB tmpfs (RAM) at `/store/espresso/sqlite`, lost when the container stops    |
+
+Other combinations are refused. The default is `postgres` on `colocated`.
 
 ```
 just bench aws run --tag release-x --nodes 4 --query-db volume --pg-mbps 1000 --yes
 just bench aws run --fleet --query-db volume --node-env ESPRESSO_QUERY_PAYLOAD_DIR=/payload
 ```
 
-- `--db-modes` (`plan`, `up`) lists the stores a fleet prepares. `--query-db` (`run`) picks one.
+- `--db-modes` (`plan`, `up`) lists the placements a fleet prepares. `--query-db` (`run`) picks one; `tmpfs` needs no
+  preparation and runs on any fleet; it requires `--node-env ESPRESSO_QUERY_PAYLOAD_DIR=...` so payloads stay out of the
+  tmpfs.
 - A fleet with `rds` refuses `--pg-iops` and `--pg-mbps` values other than the defaults.
 - `rds` needs IAM rights `iam:CreateRole`, `iam:PutRolePolicy`, `iam:PassRole`, `scheduler:CreateSchedule`. Without them
   apply fails, the fleet is destroyed, exit 3.
@@ -202,6 +211,7 @@ just bench aws run --tag release-x --latency decaf-2025 --tcp-cc cubic   # cubic
   - cubic keeps small windows on the 158 ms links and backs off on rare losses: a 70 MB block run failed 150 MB/s.
   - `bbr_hold` (experiment): BBR held in its startup mode, built and loaded on each node by `aws/bbr-hold.sh` (kernel
     headers, mainline `tcp_bbr.c` of the kernel's version, ~1 min). Not a stock congestion control.
+  - `bbr3`: BBR v3 of the XanMod kernel, installed on the node hosts with a reboot (~5 min, x86_64 only).
 - `--mtu` (default 1500): interface MTU of the nodes. Traffic between AWS regions or over the internet carries at most
   1500 bytes; only one VPC gets jumbo frames (9001). Checked on every node after shaping.
   [AWS: network MTU](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/network_mtu.html).
@@ -239,6 +249,26 @@ just bench aws run --tag release-x --leader-trace
     values.
 - `--node-type`, `--ctl-type`: both types share one architecture. Preflight picks the Ubuntu AMI and image platform to
   match. Type choice: [instance-types.md](instance-types.md).
+- `--prune [RETENTION]`: node0 deletes data and state older than RETENTION (`90s`, `2m`, `1h`; bare: `1m`), checked
+  every 30 s (`ESPRESSO_NODE_DATABASE_PRUNE`, `ESPRESSO_NODE_PRUNER_TARGET_RETENTION`,
+  `ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION`, `ESPRESSO_NODE_PRUNER_INTERVAL`). Part of the config hash.
+  - The warmup grows by RETENTION, so the pruner runs before the first measured step.
+  - `--node-env` overrides these variables, e.g. `ESPRESSO_NODE_PRUNER_PRUNING_THRESHOLD` for the usage-triggered path.
+  - Payload files (`ESPRESSO_QUERY_PAYLOAD_DIR`) are not pruned: the node keeps them after their rows go.
+  - Scan or reader lag beyond RETENTION shows as missing payloads (noisy run) and missing reader ranges.
+  - The summary lists the retention and the `pruner_data_height` and `pruner_state_height` gauges at the window end.
+- `--clients N`: N light-client readers per namespace (default 2, a stack chain's sequencer and follower; 0 for none),
+  threads of one extra process on `ctl`. Part of the config hash when above 0. `2` models a sequencer and a follower per
+  rollup.
+  - Each reader polls `/v1/node/block-height` every 0.5 s. For new blocks, in ranges of at most 100, it requests
+    `/v1/light-client/leaf/{last}`, `/v1/availability/leaf/{start}/{last}` and
+    `/v1/light-client/namespaces/{start}/{end}/NS~...` for its namespace. Proofs are not verified; the node's load is
+    the same.
+  - A range the node answers with 404 or too slowly (30 s) is retried every poll for 10 s, then counted as missing.
+  - A reader failure ends the run; the cause is in `clients.log`.
+  - Writes `clients.jsonl`; the summary reports reader lag behind a validator, fetch time per range and MB/s, the chart
+    adds a lag panel. No step rule uses them.
+  - Needs the `light-client` module, which node0 always runs (routes only).
 - `--leader-trace`: nodes get `ESPRESSO_NODE_LEADER_TRACE_DIR=/trace` (host `/opt/bench/trace`).
   - Collected: `hosts/<name>/trace/leader_trace_node*.csv`.
   - `node_id` in the file name and rows is the orchestrator-assigned node index, not the host number; the host is the
@@ -340,7 +370,8 @@ Where:
 | `--step-s`                            | 30; `--search` 60              | all          | seconds per step                                                                              |
 | `--cap-s`                             | 5; `--search` 60               | all          | in-flight cap, in seconds of the step's load                                                  |
 | `--tx-timeout-s`                      | 30; `--search` 60              | all          | tx timeout                                                                                    |
-| `--warmup-s`                          | 60                             | all          | warmup at the first step's rate                                                               |
+| `--warmup-s`                          | 60                             | all          | warmup at the first step's rate; `--prune` adds its retention                                 |
+| `--clients`                           | 2                              | all          | light-client readers per namespace, on `ctl`                                                  |
 | `--submit-workers`                    | 32                             | all          | submit threads; part of the config hash                                                       |
 | `--namespaces`                        | 16                             | all          | namespaces the load spreads over, round robin from 10000; part of the config hash             |
 | `--heartbeat-tx-s`                    | 50                             | all          | 8-byte txs per second for the whole run, 0 for none                                           |
@@ -351,11 +382,13 @@ Where:
 | `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                                 |
 | `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `mainnet`                                                                |
 | `--no-intra-latency`                  | off                            | per run      | with `--latency`: no same-location delay                                                      |
-| `--tcp-cc`                            | bbr                            | per run      | with `--latency`: TCP congestion control, `bbr`, `cubic` or `bbr_hold`                        |
+| `--tcp-cc`                            | bbr                            | per run      | with `--latency`: TCP congestion control, `bbr`, `cubic`, `bbr_hold` or `bbr3`                |
 | `--mtu`                               | 1500                           | per run      | with `--latency`: interface MTU of the nodes                                                  |
 | `--consensus-storage`                 | `fs`                           | per run      | `fs`, `journal` (experimental, not in `main` images); query node uses `storage-sql` with `fs` |
+| `--prune [RETENTION]`                 | off; bare `1m`                 | per run      | node0 prunes data and state older than RETENTION every 30 s; part of the config hash          |
 | `--fleet [FLEET]`                     | none                           | run          | measure on a fleet from `up`                                                                  |
-| `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`                                                                  |
+| `--query-engine`                      | `postgres`                     | run          | `postgres`, `sqlite`                                                                          |
+| `--query-db`                          | `colocated`                    | run          | `colocated`, `volume`, `rds`, `tmpfs` (sqlite: not `rds`)                                     |
 | `--force`                             | off                            | run          | with `--fleet`: reset a dirty fleet, replace a stale lock                                     |
 | `--yes`                               | off                            | run          | skip the prompt, required without a tty; also on `up`, `down`, `destroy`, `prune`             |
 | `--no-publish`                        | off                            | run          | skip publishing                                                                               |
@@ -432,6 +465,8 @@ Progress: one fixed-width line every 10 s, totals at the end.
 - Inclusion: scans of the query node's blocks for the marker. Scans (fetch, JSON, base64, marker search) run in 4
   processes (`SCAN_PROCESSES`), stdlib only.
 - Namespaces 10000 and 10015: the leader disperses a block's namespaces in parallel.
+- With `--clients`, readers fetch each new range of blocks from the query node as a light client does, see `--clients`
+  above.
 - Pacer: one tx every `tx_size / rate`. A late pacer sends every tx that came due, up to 1 s of load (`CATCHUP_S`);
   schedule lost beyond that stays lost. The in-flight cap applies. Txs are sent only before the step's end.
 
@@ -485,7 +520,8 @@ Each step is judged over its second half. A step stopped early is judged over it
 
 ### Samples
 
-- Per node: CPU, RSS, tokio busy, top ops from `/v1/status/metrics` (`consensus_`, `journal_`, `sql`, `storage`, ...).
+- Per node: CPU, RSS, tokio busy, top ops from `/v1/status/metrics` (`consensus_`, `journal_`, `sql`, `storage`,
+  `pruner_`, ...).
 - Per host (AWS): CPU, steal, memory, disk and net rates, per-container CPU and memory (cgroups).
 - Per node host (AWS), `sockets.jsonl`: every 1 s the established cliquenet sockets from `ss -tinmO` (Send-Q, Recv-Q,
   cwnd, bbr, pacing and delivery rate, notsent, retrans, skmem verbatim) and TCP counters (retransmits, timeouts, memory
@@ -647,6 +683,8 @@ runs/01-run/             one measurement
   cloudwatch/            ec2-node0.json (EBS balance, every run); rds.json (rds runs)
   rds-logs/              postgres logs of the run window (rds runs)
   metrics.jsonl heights.jsonl consensus.jsonl load.jsonl steps.json
+  clients.jsonl          --clients: one row per range a reader fetched (ns, reader, start, end, t_start, t_done, bytes, status)
+  clients.log            --clients: log of the readers process
   load-meta.json         start_height, max_in_flight, cap_waits, submit_errors, heartbeat_errors,
                          missing_payloads, drain_s, refine_skipped, stop_reason, marker
   stake-table.json final-<node>.prom
@@ -656,7 +694,7 @@ runs/01-run/             one measurement
 
 - `bench-state/aws/INDEX.md`: one row per run (fleet/run, rev, tag, N, db, latency, capacity, validity, exit, run cost).
 - `throughput.png` (`throughput-plot RUN_DIR`): decided and query node MB/s, block size and interval, consensus latency
-  and txs in flight. Shown at the top of `summary.md`.
+  and txs in flight; with `clients.jsonl`, reader lag and fetched MB/s. Shown at the top of `summary.md`.
 - `bench-state/` is git-ignored and per worktree. tfstate and the ssh key of a fleet exist only in the worktree that ran
   `up`. `status --all` and `destroy --orphans` see every fleet through AWS tags.
 - `destroy --orphans` in another worktree offers a live fleet as `no local state`.

@@ -375,6 +375,37 @@ def test_a_colocated_run_after_an_rds_run_starts_its_own_postgres(
     assert netbench.read_json(host_dir / "pg.json")["host"] == "127.0.0.1"
 
 
+def test_a_sqlite_tmpfs_run_needs_no_provisioned_mode_and_starts_no_postgres(
+    isolated, monkeypatch
+):
+    harness = RdsHarness(monkeypatch, isolated, "colocated")
+    runner = harness.up_fleet()
+    mark = len(runner.calls)
+    harness.run(
+        runner,
+        *("--query-engine", "sqlite", "--query-db", "tmpfs"),
+        *("--node-env", "ESPRESSO_QUERY_PAYLOAD_DIR=/payload"),
+    )
+    assert not any("docker start postgres" in c for c in ssh_calls(runner, mark))
+    run_dir = harness.run_dir("01-sqlite-tmpfs")
+    assert netbench.read_json(run_dir / "manifest.json")["query_engine"] == "sqlite"
+    host_dir = run_dir / "hosts/node0"
+    start = (host_dir / "start.sh").read_text()
+    assert "--name postgres" not in start
+    assert "--tmpfs /store/espresso/sqlite:size=8g" in start
+    assert "ESPRESSO_NODE_EMBEDDED_DB=true" in (host_dir / "node.env").read_text()
+    assert not (host_dir / "pg.json").exists()
+
+
+def test_a_sqlite_run_on_rds_is_refused_before_any_ssh(isolated, monkeypatch):
+    harness = FleetHarness(monkeypatch, isolated)
+    runner = harness.up_fleet()
+    mark = len(runner.calls)
+    with pytest.raises(awsb.Refused, match="--query-engine sqlite does not support"):
+        harness.run(runner, "--query-engine", "sqlite", "--query-db", "rds")
+    assert not ssh_calls(runner, mark)
+
+
 def test_an_rds_run_needs_the_mode_in_the_fleet(isolated, monkeypatch):
     harness = FleetHarness(monkeypatch, isolated)
     runner = harness.up_fleet()
@@ -515,7 +546,7 @@ def test_the_result_and_summary_carry_the_block(tmp_path):
     assert query_db["instance_class"] == "db.m8g.4xlarge"
     assert not result["validity"]["noisy"], result["validity"]["reasons"]
     summary = (tmp_path / "summary.md").read_text()
-    assert "- Query DB: rds, postgres 18.2 on db.m8g.4xlarge, rds-gp3" in summary
+    assert "- Query DB: postgres 18.2, rds on db.m8g.4xlarge, rds-gp3" in summary
 
 
 def rds_event(message: str, date: str) -> dict:

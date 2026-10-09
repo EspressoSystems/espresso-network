@@ -337,3 +337,16 @@ def test_shaping_meta_shape():
         "mtu": 1500,
         "probes": [],
     }
+
+
+def test_tc_script_bbr3_uses_bbr_of_the_xanmod_kernel():
+    profile = decaf()
+    delays = latency.delays_ms(latency.assign(5, profile), profile, intra=True)
+    peers = {i: f"10.0.0.{i + 10}" for i in range(5)}
+    script = latency.tc_script(0, peers, delays, "bbr3", 9001)
+    assert 'net.ipv4.tcp_congestion_control="bbr"' in script
+    assert 'net.core.default_qdisc="fq"' in script
+    assert "modprobe" not in script
+    assert script.index("grep -q xanmod /proc/version") < script.index(
+        'tcp_congestion_control="bbr"'
+    )

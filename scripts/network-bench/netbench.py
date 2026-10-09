@@ -32,9 +32,10 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from multiprocessing.context import SpawnProcess
 from pathlib import Path
 from typing import Any, Literal, NotRequired, Protocol, TypedDict, TypeVar
 from urllib.parse import urlsplit
@@ -55,6 +56,7 @@ METRIC_PREFIXES = (
     "storage",
     "internal_",
     "journal_",
+    "pruner_",
 )
 STEAL_NOISY_PCT = 5.0
 DRIFT_NOISY_PCT = 10.0
@@ -97,6 +99,14 @@ READ_RETRY_S = 1.0
 # compete with the pacer for the GIL); this many blocks are scanned at once.
 SCAN_PROCESSES = 4
 SCAN_BATCH = 4
+# Light clients of `BenchConfig.clients` run as threads of one more process, for the same
+# reason. Each polls the query node's height this often and fetches new blocks in ranges of at
+# most CLIENT_RANGE, the server's limit for namespace proofs.
+CLIENT_POLL_S = 0.5
+CLIENT_RANGE = 100
+CLIENT_PROCESS_JOIN_S = 10.0
+CLIENTS_JSONL = "clients.jsonl"
+CLIENTS_LOG = "clients.log"
 # Request bodies are slices of one random pool of this many txs' size.
 BODY_POOL_TXS = 256
 # A pacer woken late sends the txs it missed, but never more than this many seconds of load at
@@ -195,6 +205,9 @@ class NodeStats(TypedDict):
     rss_peak_bytes: int
     tokio_busy_frac: float | None
     ops: dict[str, OpStats]
+    # Gauges of the query node's pruner at the window end; absent where it has none.
+    pruned_data_height_end: NotRequired[int]
+    pruned_state_height_end: NotRequired[int]
 
 
 class ProcStats(TypedDict):
@@ -218,8 +231,22 @@ class HostSample(HostStats):
     net_mb_s: float
 
 
+class ClientStats(TypedDict):
+    """The light-client readers over the measured steps: `ranges` fetched by `readers`, of
+    which `missing` the node did not serve in time. `lag_ms` is from a validator showing a
+    range's last block to the reader holding the range; `fetch_ms` from its first request to
+    its last answer."""
+
+    readers: int
+    ranges: int
+    missing: int
+    mb_s: float
+    lag_ms: Quantiles | None
+    fetch_ms: Quantiles | None
+
+
 class LoadStats(TypedDict):
-    """Over the whole load, warmup included."""
+    """Over the whole load, warmup included, except `clients`."""
 
     submitted: int
     included: int
@@ -236,6 +263,8 @@ class LoadStats(TypedDict):
     refine_skipped: bool
     # Why the staircase ended; None for runs recorded before it existed.
     stop_reason: str | None
+    # Present when the run had readers.
+    clients: NotRequired[ClientStats]
 
 
 ProbeKind = Literal["ramp", "refine", "climb", "bisect", "recovery", "confirm"]
@@ -320,12 +349,13 @@ class CalibrationPair(TypedDict):
     drift_pct: float
 
 
-DbMode = Literal["colocated", "volume", "rds"]
+DbMode = Literal["colocated", "volume", "rds", "tmpfs"]
 
 
 class QueryDbMeta(TypedDict):
-    """Where the query node's Postgres ran. `store` is the backing volume, `{type, gb, iops,
-    mbps}` plus `volume_id` (ebs) or `identifier` (rds-gp3); `tuning` is the applied settings."""
+    """Where the query node's database ran. `store` is the backing volume, `{type, gb, iops,
+    mbps}` (no iops or mbps for tmpfs) plus `volume_id` (ebs) or `identifier` (rds-gp3); `mode` is
+    the placement; `tuning` is the applied settings."""
 
     mode: DbMode
     engine: str
@@ -371,6 +401,8 @@ class DeploymentMeta(TypedDict):
     node_env: NotRequired[list[str]]
     # Genesis `max_block_size`; absent in manifests from before the flag.
     max_block_size: NotRequired[str]
+    # `--prune` retention of the query node's data and state; absent without pruning.
+    prune: NotRequired[str]
 
 
 class BenchResult(TypedDict):
@@ -420,8 +452,12 @@ class BenchConfig:
     # Unmarked 8-byte transactions per second for the whole run, so a leader never builds from
     # an empty buffer and sleeps its empty block delay, as after a drain; 0 for none.
     heartbeat_tx_s: float = 0.0
+    # Light-client readers per namespace, on top of the payload scan; 0 for none.
+    clients: int = 0
 
     def __post_init__(self) -> None:
+        if self.clients < 0:
+            raise ValueError(f"clients must be >= 0: {self.clients}")
         # The drain's idle rule allows half a transaction over DRAIN_IDLE_S (see `is_idle`).
         beat_bytes = self.heartbeat_tx_s * HEARTBEAT_TX_BYTES * DRAIN_IDLE_S
         if beat_bytes >= self.tx_size / 4:
@@ -817,6 +853,176 @@ async def scan_in_processes(
 
 
 @dataclass
+class Reader:
+    """A light client of one namespace, as the stack's reader runs it: a cursor over the chain,
+    advanced a range at a time. `since` is when the first attempt at the range at `next`
+    started."""
+
+    ns: int
+    index: int
+    next: int
+    since: float | None = None
+
+
+def tagged_base64(tag: str, value: bytes) -> str:
+    """The `tagged-base64` crate's string: the tag, `~`, then URL-safe unpadded base64 of the
+    value and one checksum byte, the CRC-8 (poly 0x07) of tag and value xor the value's length
+    mod 256."""
+    crc = 0
+    for byte in tag.encode() + value:
+        crc ^= byte
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    encoded = base64.urlsafe_b64encode(value + bytes([crc ^ len(value) % 256]))
+    return f"{tag}~{encoded.rstrip(b'=').decode()}"
+
+
+def namespaces_path(start: int, end: int, ns: int) -> str:
+    """Light-client proofs of namespace `ns` in blocks [start, end); the namespace list is a
+    JSON array in a segment tagged `NS`."""
+    segment = tagged_base64("NS", json.dumps([ns], separators=(",", ":")).encode())
+    return f"/v1/light-client/namespaces/{start}/{end}/{segment}"
+
+
+def fetch_range(
+    pool: Http, query_url: str, start: int, end: int, ns: int
+) -> int | None:
+    """Bytes of the answers a light client needs for blocks [start, end): the finality proof of
+    the last leaf, the leaves before it, the namespace proofs. None while the node lacks any or
+    answers too slowly."""
+    paths = [f"/v1/light-client/leaf/{end - 1}", namespaces_path(start, end, ns)]
+    if end - start > 1:
+        paths.insert(1, f"/v1/availability/leaf/{start}/{end - 1}")
+    size = 0
+    for path in paths:
+        try:
+            status, body = read(pool, query_url + path)
+        except NetworkError:
+            # A node busy with a prune batch can answer slower than the read deadline.
+            return None
+        if status == 404:
+            return None
+        if status != 200:
+            raise NetworkError(f"client GET {path}: HTTP {status}")
+        size += len(body)
+    return size
+
+
+def poll_reader(
+    pool: Http, query_url: str, reader: Reader, clock: Clock
+) -> list[dict[str, Any]]:
+    """Fetches the blocks the query node has beyond the reader's cursor, one record per range.
+    A range the node cannot serve yet is tried again on the next poll; after MISSING_PAYLOAD_S
+    it is recorded as missing and skipped."""
+    tip = block_count(pool, query_url, "query")
+    records = []
+    while reader.next < tip:
+        start, end = reader.next, min(tip, reader.next + CLIENT_RANGE)
+        if reader.since is None:
+            reader.since = clock.time()
+        size = fetch_range(pool, query_url, start, end, reader.ns)
+        now = clock.time()
+        if size is None and now - reader.since < MISSING_PAYLOAD_S:
+            break
+        records.append(
+            {
+                "ns": reader.ns,
+                "reader": reader.index,
+                "start": start,
+                "end": end,
+                "t_start": reader.since,
+                "t_done": now,
+                "bytes": size or 0,
+                "status": "missing" if size is None else "ok",
+            }
+        )
+        reader.next, reader.since = end, None
+    return records
+
+
+def run_readers(
+    pool: Http,
+    query_url: str,
+    namespaces: Iterable[int],
+    per_ns: int,
+    out: Path,
+    stop: threading.Event,
+    clock: Clock = SYSTEM_CLOCK,
+) -> None:
+    """`per_ns` readers per namespace, one thread each, from the current height until `stop`.
+    Appends the records of `poll_reader` to `out` as they come; the first error stops all."""
+    start = block_count(pool, query_url, "query")
+    readers = [Reader(ns, i, start) for ns in namespaces for i in range(per_ns)]
+    lock = threading.Lock()
+    with open(out, "a", buffering=1) as f:
+
+        def follow(reader: Reader) -> None:
+            while not clock.wait(stop, CLIENT_POLL_S):
+                records = poll_reader(pool, query_url, reader, clock)
+                with lock:
+                    f.writelines(json.dumps(rec) + "\n" for rec in records)
+
+        with ThreadPoolExecutor(len(readers)) as threads:
+            try:
+                for done in as_completed([threads.submit(follow, r) for r in readers]):
+                    done.result()
+            finally:
+                stop.set()
+
+
+def readers_main(
+    query_url: str, namespaces: tuple[int, int], per_ns: int, out: Path, log_level: int
+) -> None:
+    """Entry of the readers process. Logs to clients.log next to `out`, which the final copy of
+    the run dir collects; the process's stderr does not leave the host on AWS."""
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(levelname)s clients: %(message)s",
+        handlers=[logging.FileHandler(out.parent / CLIENTS_LOG)],
+    )
+    pool = HttpPool()
+    try:
+        run_readers(
+            pool,
+            query_url,
+            range(namespaces[0], namespaces[1] + 1),
+            per_ns,
+            out,
+            threading.Event(),
+        )
+    except Exception:
+        log.exception("readers failed")
+        raise
+    finally:
+        pool.close()
+
+
+def start_readers(cfg: BenchConfig, query_url: str, out: Path) -> SpawnProcess:
+    process = multiprocessing.get_context("spawn").Process(
+        target=readers_main,
+        args=(
+            query_url,
+            cfg.namespaces,
+            cfg.clients,
+            out / CLIENTS_JSONL,
+            logging.getLogger().getEffectiveLevel(),
+        ),
+        name="clients",
+    )
+    process.start()
+    return process
+
+
+async def watch_readers(process: SpawnProcess, clock: Clock) -> None:
+    """Ends the load when the readers process dies on its own."""
+    while process.is_alive():
+        await clock.asleep(1.0)
+    raise NetworkError(
+        f"client readers exited with code {process.exitcode}, see {CLIENTS_LOG}"
+    )
+
+
+@dataclass
 class Tx:
     id: int
     node: int
@@ -934,7 +1140,8 @@ async def generate_load(
     steps started and ended. Writes one line per transaction to load.jsonl, per block height
     to heights.jsonl, per consensus counter sample of the first validator to
     consensus.jsonl, per step to steps.json, and the counters to load-meta.json. Payload scans
-    run in `scan_processes` processes, or on a thread of this one if 0."""
+    run in `scan_processes` processes, or on a thread of this one if 0. With `cfg.clients`,
+    readers in one more process write clients.jsonl."""
     state = LoadState()
     marker = hashlib.sha256(f"network-bench:{cfg.seed}".encode()).digest()[:16]
     bodies = TxBodies(cfg, marker)
@@ -955,6 +1162,7 @@ async def generate_load(
         if scan_procs is None
         else functools.partial(scan_in_processes, scan_procs, query_url, marker)
     )
+    readers = start_readers(cfg, query_url, out) if cfg.clients else None
     polling = Client(http(clock), ThreadPoolExecutor(2 + len(validator_urls)))
     beating = Client(http(clock), ThreadPoolExecutor(1))
     beat_stop = threading.Event()
@@ -982,6 +1190,11 @@ async def generate_load(
                 ),
                 group.create_task(
                     poll_counters(polling, validator_urls[0], counters, clock)
+                ),
+                *(
+                    [group.create_task(watch_readers(readers, clock))]
+                    if readers
+                    else []
                 ),
             ]
             tracker = group.create_task(
@@ -1035,6 +1248,9 @@ async def generate_load(
         tracking.close()
         if scan_procs is not None:
             scan_procs.terminate_workers()
+        if readers is not None:
+            readers.terminate()
+            readers.join(CLIENT_PROCESS_JOIN_S)
         polling.close()
         # In `finally` so a load cut short (SIGTERM of the AWS agent) keeps its raw data.
         if heights is not None:
@@ -2502,7 +2718,7 @@ def node_stats(
     in_window = [m for ts, m in samples if t0 <= ts <= t1] or [m1]
     workers = m1.get("tokio_workers")
     busy = rate(samples, t0, t1, "tokio_worker_busy_seconds_total")
-    return {
+    stats: NodeStats = {
         "role": role,
         "decided_height_end": int(m1.get("consensus_last_synced_block_height", 0)),
         "decided_blocks": int(
@@ -2516,6 +2732,10 @@ def node_stats(
         "tokio_busy_frac": busy / workers if workers else None,
         "ops": op_stats(m0, m1, delta(samples, t0, t1, "process_cpu_seconds_total")[1]),
     }
+    if "pruner_data_height" in m1:
+        stats["pruned_data_height_end"] = int(m1["pruner_data_height"])
+        stats["pruned_state_height_end"] = int(m1["pruner_state_height"])
+    return stats
 
 
 def op_stats(
@@ -2659,7 +2879,7 @@ def load_stats(
     t1: float,
 ) -> LoadStats:
     meta = read_json(out / "load-meta.json")
-    return {
+    stats: LoadStats = {
         "submitted": len(txs),
         "included": sum(1 for tx in txs if tx["status"] == "included"),
         "timeouts": sum(1 for tx in txs if tx["status"] == "timeout"),
@@ -2672,6 +2892,34 @@ def load_stats(
         "refine_skipped": meta["refine_skipped"],
         # Absent from load-meta.json of runs before it was recorded.
         "stop_reason": meta.get("stop_reason"),
+    }
+    if (out / CLIENTS_JSONL).exists():
+        stats["clients"] = client_stats(
+            list(read_jsonl(out / CLIENTS_JSONL)), heights, t0, t1
+        )
+    return stats
+
+
+def client_stats(
+    records: list[dict[str, Any]], heights: list[dict[str, Any]], t0: float, t1: float
+) -> ClientStats:
+    """Over the ranges the readers finished in `[t0, t1]`."""
+    on_validator = {h["height"]: h["validator"] for h in heights}
+    done = [r for r in records if t0 <= r["t_done"] <= t1]
+    served = [r for r in done if r["status"] == "ok"]
+    return {
+        "readers": len({(r["ns"], r["reader"]) for r in records}),
+        "ranges": len(done),
+        "missing": len(done) - len(served),
+        "mb_s": sum(r["bytes"] for r in done) / (t1 - t0) / 1e6,
+        "lag_ms": quantiles(
+            [
+                (r["t_done"] - on_validator[r["end"] - 1]) * 1000
+                for r in served
+                if on_validator.get(r["end"] - 1) is not None
+            ]
+        ),
+        "fetch_ms": quantiles([(r["t_done"] - r["t_start"]) * 1000 for r in served]),
     }
 
 
@@ -3116,17 +3364,32 @@ def deployment_lines(result: BenchResult) -> list[str]:
             if "node_env" in d
             else []
         ),
+        *prune_lines(result),
     ]
+
+
+def prune_lines(result: BenchResult) -> list[str]:
+    """The pruner's retention and how far it had pruned by the window end."""
+    d = result["deployment"]
+    if "prune" not in d:
+        return []
+    heights = ", ".join(
+        f"{node} data {s['pruned_data_height_end']}, state {s['pruned_state_height_end']}"
+        for node, s in result["nodes"].items()
+        if "pruned_data_height_end" in s
+    )
+    return [f"- prune: retention {d['prune']}; pruned to height: {heights or 'n/a'}"]
 
 
 def query_db_line(q: QueryDbMeta) -> str:
     store = q["store"]
     ident = f" {store['identifier']}" if "identifier" in store else ""
     cls = f" on {q['instance_class']}" if "instance_class" in q else ""
+    speed = f" {store['iops']} IOPS {store['mbps']} MB/s" if "iops" in store else ""
+    tls = "" if q["engine"] == "sqlite" else f", TLS {'on' if q['tls'] else 'off'}"
     return (
-        f"- Query DB: {q['mode']}, {q['engine']}{cls}, {store['type']}{ident} "
-        f"{store['gb']} GB {store['iops']} IOPS {store['mbps']} MB/s, "
-        f"TLS {'on' if q['tls'] else 'off'}"
+        f"- Query DB: {q['engine']}, {q['mode']}{cls}, {store['type']}{ident} "
+        f"{store['gb']} GB{speed}{tls}"
     )
 
 
@@ -3416,6 +3679,7 @@ def load_lines(result: BenchResult) -> list[str]:
             f"peak in flight {load['max_in_flight']}, {load['cap_waits']} submits waited"
         ),
         f"- benchmark tracker lag: {spread(load['tracker_lag_ms'])}",
+        *(client_lines(load["clients"]) if "clients" in load else []),
         *(
             ["- refine step skipped: the failed step's backlog did not drain"]
             if load["refine_skipped"]
@@ -3426,6 +3690,17 @@ def load_lines(result: BenchResult) -> list[str]:
             cfg["keep_going"],
             final_drain_max_s(cfg["tx_timeout_s"]),
         ),
+    ]
+
+
+def client_lines(c: ClientStats) -> list[str]:
+    return [
+        (
+            f"- light-client readers: {c['readers']}, {c['ranges']} ranges fetched at "
+            f"{c['mb_s']:.1f} MB/s, {c['missing']} missing"
+        ),
+        f"- reader lag behind a validator: {spread(c['lag_ms'])}",
+        f"- reader fetch time per range: {spread(c['fetch_ms'])}",
     ]
 
 

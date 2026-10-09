@@ -593,7 +593,7 @@ def test_stop_freeze_and_collect_run_under_timeout(isolated: Path):
     hosts = remote(runner, isolated)
     awsb.stop_agent(hosts)
     awsb.freeze(hosts)
-    awsb.collect_hosts(hosts, list(hosts.hosts.values()), isolated)
+    awsb.collect_hosts(hosts, list(hosts.hosts.values()), isolated, "postgres")
     commands = [c[-1] for c in runner.calls if c[0] == "ssh"]
     assert len(commands) == 1 + 3 + 3
     prefix = f"sudo timeout -k 10 {awsb.COLLECT_HOST_TIMEOUT_S:.0f} bash -c "
@@ -608,7 +608,7 @@ def test_a_timed_out_collect_script_still_copies_back_what_is_on_the_host(
 ):
     runner = Scripted({"docker logs": [completed(returncode=124)]})
     hosts = remote(runner, isolated)
-    awsb.collect_hosts(hosts, [hosts.hosts["node0"]], isolated)
+    awsb.collect_hosts(hosts, [hosts.hosts["node0"]], isolated, "postgres")
     assert len([c for c in runner.calls if c[0] == "rsync"]) == 1
 
 
@@ -928,6 +928,39 @@ def test_support_containers_start_in_order_and_postgres_last(
     ]
 
 
+def test_sqlite_has_no_database_step_after_the_relay():
+    plan = awsb.support_plan("colocated", ["0xabc"], "sqlite")
+    assert [step["what"] for step in plan][-1] == "relay healthcheck"
+    assert all("pg" not in step["what"] for step in plan)
+
+
+def test_the_sqlite_size_is_taken_on_the_root_disk_or_the_volume():
+    assert "du -sb /data/journal/espresso/sqlite > du-sqlite.txt" in awsb.COLLECT_SCRIPT
+    assert "du -sb /data/pg/sqlite > du-sqlite.txt" in awsb.COLLECT_SCRIPT
+
+
+def test_hostmon_samples_postgres_unless_sqlite(isolated: Path):
+    sample = {}
+    for engine in ("postgres", "sqlite"):
+        runner = Scripted({})
+        awsb.start_hostmon(remote(runner, isolated), engine)
+        sample[engine] = [c[-1] for c in runner.calls if "--role query" in c[-1]]
+    assert f"--pg {awsb.PG_JSON}" in sample["postgres"][0]
+    assert "--pg" not in sample["sqlite"][0]
+
+
+def test_collect_hosts_skips_postgres_statistics_on_sqlite(isolated: Path):
+    scripts = {}
+    for engine in ("postgres", "sqlite"):
+        runner = Scripted({})
+        hosts = remote(runner, isolated)
+        awsb.collect_hosts(hosts, [hosts.hosts["node0"]], isolated, engine)
+        scripts[engine] = next(c[-1] for c in runner.calls if c[0] == "ssh")
+    assert "pg-stats.json" in scripts["postgres"]
+    assert "pg-stats.json" not in scripts["sqlite"]
+    assert "psql" not in scripts["sqlite"]
+
+
 def test_postgres_is_ready_before_its_extension_and_the_stats_reset():
     plan = awsb.support_plan("colocated", [])
     assert [step["what"] for step in plan][-3:] == [
@@ -981,6 +1014,13 @@ def test_start_support_starts_the_planned_containers_in_order(
         ),
         (None, False, "colocated", True, ["freeze", "collect_hosts", "ebs_balance"]),
         (
+            None,
+            True,
+            "tmpfs",
+            True,
+            ["freeze", "collect_hosts", "rsync_out", "ebs_balance"],
+        ),
+        (
             "boom",
             True,
             "volume",
@@ -1009,7 +1049,7 @@ def test_start_support_starts_the_planned_containers_in_order(
             ["freeze", "collect_hosts", "rsync_out", "rds_logs"],
         ),
     ],
-    ids=["clean", "no-agent", "error", "rds", "single-shot-rds"],
+    ids=["clean", "no-agent", "tmpfs", "error", "rds", "single-shot-rds"],
 )
 def test_collect_plan(
     error: str | None,

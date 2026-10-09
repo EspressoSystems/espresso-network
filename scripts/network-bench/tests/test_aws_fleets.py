@@ -1,3 +1,4 @@
+import dataclasses
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -82,7 +83,9 @@ def test_collect_without_a_dir_takes_the_last_run(harness, runner, monkeypatch):
     harness.run(runner)
     collected: list[Path] = []
 
-    def fake_collect(remote, hosts, run_dir: Path, subdir: str) -> None:
+    def fake_collect(
+        remote, hosts, run_dir: Path, query_engine: str, subdir: str
+    ) -> None:
         collected.append(run_dir)
         for host in hosts:
             out = run_dir / "hosts" / host["name"] / subdir
@@ -454,6 +457,21 @@ def test_search_run_needs_the_search_worst_case_from_the_ttl(harness, runner):
         awsb.check_run_allowed(manifest, searched, now)
 
 
+@pytest.mark.parametrize(
+    ("fleet_cc", "run_cc"), [("bbr", "bbr3"), ("bbr3", "bbr"), ("bbr3", "bbr_hold")]
+)
+def test_run_tcp_cc_must_match_the_fleet_kernel(harness, runner, fleet_cc, run_cc):
+    manifest = harness.fleet()
+    manifest["config"]["tcp_cc"] = fleet_cc
+    cfg = dataclasses.replace(
+        awsb.fleet_run_config(harness.run_args(), manifest), tcp_cc=run_cc
+    )
+    with pytest.raises(awsb.Refused, match="does not match fleet"):
+        awsb.check_run_allowed(
+            manifest, cfg, datetime.fromisoformat(manifest["created_at"])
+        )
+
+
 def test_search_run_needs_the_fleet_disks_to_hold_the_offered_gb(harness, runner):
     manifest = harness.fleet()
     with pytest.raises(awsb.Refused, match="root disk"):
@@ -478,6 +496,6 @@ def test_a_host_agent_runs_outside_the_repo_root(
     monkeypatch.setattr(
         "sys.argv", ["aws-bench", "agent-host", "host.jsonl", "--role", "query"]
     )
-    assert awsb.main() == awsb.EXIT_REFUSED
-    assert "needs --pg" in caplog.text
+    monkeypatch.setattr(awsb, "cmd_agent_host", lambda args, system: awsb.EXIT_OK)
+    assert awsb.main() == awsb.EXIT_OK
     assert "repo root" not in caplog.text
