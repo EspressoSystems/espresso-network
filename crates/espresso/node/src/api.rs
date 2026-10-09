@@ -3600,7 +3600,7 @@ mod test {
         StateCertQueryDataV2, TEST_UPGRADE, ValidatedState, ValidatorLeaderCounts,
         config::PublicHotShotConfig,
         traits::{NullEventConsumer, PersistenceOptions},
-        v0_3::{COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
+        v0_3::{AuthenticatedValidator, COMMISSION_BASIS_POINTS, Fetcher, RewardAmount},
         v0_4::{RewardAccountV2, RewardMerkleProofV2},
         validators_from_l1_events,
     };
@@ -4925,6 +4925,117 @@ mod test {
             Err(err) if err.status == StatusCode::NOT_FOUND => U256::ZERO,
             Err(err) => panic!("reward balance of {address} at {height}: {err}"),
         }
+    }
+
+    /// From 0.3 to 0.5 every block paid its leader's commission and delegators. Only legacy
+    /// consensus produced such blocks, so the replayed v4 chain is what checks mainnet's: each
+    /// header's `total_reward_distributed`, and every staker's balance in the reward tree, match
+    /// what the block's leader was owed. Its commissions change in epoch 2.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_block_rewards() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v4")?;
+        let replay = chain.replay().await?;
+        let client = &replay.client;
+        let epoch_height = chain.genesis.epoch_height.unwrap();
+        let coordinator = replay.node.node_state().coordinator;
+        let membership = coordinator.membership();
+
+        let mut expected = HashMap::<Address, U256>::new();
+        let mut total_distributed = U256::ZERO;
+        for recorded in &chain.blocks[1..] {
+            let leaf = recorded.leaf.leaf();
+            let header = leaf.block_header();
+            let height = header.height();
+            let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
+            let validators: AuthenticatedValidatorMap = client
+                .get(&format!("node/validators/{epoch}"))
+                .send()
+                .await?;
+
+            match membership.epoch_block_reward(epoch) {
+                None => ensure!(*epoch <= 2, "epoch {epoch} pays no block reward"),
+                Some(block_reward) => {
+                    let snapshot = membership.snapshot(epoch).context("snapshot")?;
+                    let leader = snapshot.leader(leaf.view_number()).expect("leader");
+                    let account = snapshot
+                        .validator_config(&leader)
+                        .expect("leader config")
+                        .account;
+                    let leader = validators.get(&account).context("leader not found")?;
+                    pay_block_reward(&mut expected, leader, block_reward, header)?;
+                    total_distributed += block_reward.0;
+                },
+            }
+            ensure!(
+                header.total_reward_distributed().unwrap().0 == total_distributed,
+                "total_reward_distributed at {height}"
+            );
+            assert_stakers_balances(client, height, &validators, &expected).await?;
+        }
+        ensure!(!total_distributed.is_zero(), "the chain paid no rewards");
+        Ok(())
+    }
+
+    /// Adds what one block pays `leader`'s commission and delegators to `balances`.
+    fn pay_block_reward(
+        balances: &mut HashMap<Address, U256>,
+        leader: &AuthenticatedValidator<PubKey>,
+        block_reward: RewardAmount,
+        header: &Header,
+    ) -> anyhow::Result<()> {
+        let delegated: U256 = leader.delegators.values().cloned().sum();
+        ensure!(delegated == leader.stake, "delegations add up to the stake");
+
+        let rewards = RewardDistributor::new(
+            leader.clone(),
+            block_reward,
+            header.total_reward_distributed().unwrap(),
+        )
+        .compute_rewards()?;
+        let commission =
+            U256::from(leader.commission) * block_reward.0 / U256::from(COMMISSION_BASIS_POINTS);
+        ensure!(
+            rewards.leader_commission().0 - commission <= U256::from(10),
+            "commission {} is not {commission}",
+            rewards.leader_commission().0
+        );
+
+        for (address, amount) in rewards.delegators().clone() {
+            *balances.entry(address).or_default() += amount.0;
+        }
+        *balances.entry(leader.account).or_default() += rewards.leader_commission().0;
+        Ok(())
+    }
+
+    /// Checks every validator's and delegator's balance in the v2 reward tree at `height`.
+    async fn assert_stakers_balances(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        height: u64,
+        validators: &AuthenticatedValidatorMap,
+        expected: &HashMap<Address, U256>,
+    ) -> anyhow::Result<()> {
+        let stakers = validators
+            .values()
+            .flat_map(|v| v.delegators.keys().copied().chain([v.account]))
+            .chain(expected.keys().copied())
+            .collect::<HashSet<_>>();
+        for staker in stakers {
+            let balance = client
+                .get::<Option<RewardAmount>>(&format!(
+                    "reward-state-v2/reward-balance/{height}/{staker}"
+                ))
+                .send()
+                .await
+                .ok()
+                .flatten()
+                .map(|amount| amount.0);
+            ensure!(
+                balance == expected.get(&staker).copied(),
+                "balance of {staker} at {height}: {balance:?}, expected {:?}",
+                expected.get(&staker)
+            );
+        }
+        Ok(())
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
