@@ -3611,7 +3611,7 @@ mod test {
     };
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::{
-        reward::RewardClaimInput,
+        reward::{RewardAuthData, RewardClaimInput, RewardProofSiblings},
         sol_types::{EspToken, StakeTableV3},
         stake_table::StakeTableContractVersion,
     };
@@ -5079,8 +5079,14 @@ mod test {
                 .send()
                 .await?;
             ensure!(
-                claim == res.clone().to_reward_claim_input()?,
-                "claim of {staker}"
+                claim.lifetime_rewards == res.balance,
+                "claim of {staker} pays its proven balance"
+            );
+            // The contract rebuilds the root from these siblings, so they must be the proof's.
+            let siblings: RewardProofSiblings = res.proof.clone().try_into()?;
+            ensure!(
+                RewardAuthData::try_from(claim.auth_data)? == RewardAuthData::new(siblings),
+                "claim of {staker} carries its proof"
             );
             balances.push((RewardAccountV2(staker), RewardAmount(res.balance)));
         }
