@@ -410,10 +410,11 @@ async fn conflicting_quorums_cannot_both_reach_threshold() {
             )))
             .await;
         harness
-            .apply(ConsensusInput::BlockReconstructed(
-                ViewNumber::new(6),
-                test_data.views[5].vid_commitment(),
-            ))
+            .apply(ConsensusInput::BlockReconstructed {
+                view: ViewNumber::new(6),
+                payload_commitment: test_data.views[5].vid_commitment(),
+                payload: test_data.views[5].payload.clone(),
+            })
             .await;
         for output in harness.outputs().iter().skip(before) {
             if let ConsensusOutput::SendVote2(v) = output

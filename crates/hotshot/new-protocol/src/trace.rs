@@ -343,7 +343,11 @@ impl std::fmt::Display for Dropped {
 /// One input, as the model's `Input`.
 fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped> {
     Ok(match input {
-        ConsensusInput::BlockReconstructed(view, commit)
+        ConsensusInput::BlockReconstructed {
+            view,
+            payload_commitment: commit,
+            ..
+        }
         | ConsensusInput::VidDisperseCreated(view, commit) => tagged(
             "blockReconstructed",
             obj(&[("v", view_json(*view)), ("c", ident(commit))]),

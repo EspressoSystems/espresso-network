@@ -68,6 +68,9 @@ const MAX_FINALIZED_HINT_DISTANCE: u64 = 500;
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientOptions {
     /// Maximum number of stake tables to cache in memory at any given time.
+    ///
+    /// The light client database keeps every stake table, so one evicted from memory is reloaded
+    /// from disk rather than rebuilt from peers.
     #[cfg_attr(
         feature = "clap",
         clap(
@@ -271,13 +274,14 @@ where
 
         // at this point, we know the end leaf is valid and is finalized
         // now we need to fetch all leaves from start to end - 1 from the server
-        let leaves = self.fetch_leaves_in_range_from_server(start_height, end_height - 1, &known_end_leaf)
+        let leaves = self
+            .fetch_leaves_in_range_from_server(start_height, end_height - 1, &known_end_leaf)
             .await
-        // add the known end leaf to the result
-        .map(|mut leaves| {
-            leaves.push(known_end_leaf);
-            leaves
-        })?;
+            // add the known end leaf to the result
+            .map(|mut leaves| {
+                leaves.push(known_end_leaf);
+                leaves
+            })?;
         Ok(leaves)
     }
 
@@ -901,7 +905,8 @@ where
                 .server
                 .stake_table_events(EpochNumber::new(epoch))
                 .await?;
-            tracing::debug!(epoch, num_events = events.len(), "reconstruct stake table");
+            let num_events = events.len();
+            tracing::debug!(epoch, num_events, "reconstruct stake table");
             for event in events {
                 tracing::debug!(epoch, ?event, "replay event");
                 if let Err(err) = stake_table.apply_event(event).context("applying event")? {
@@ -968,7 +973,7 @@ where
                 tracing::warn!(epoch, "failed to cache stake table: {err:#}");
             }
 
-            tracing::info!(epoch, "finished stake table catchup for epoch");
+            tracing::info!(epoch, num_events, "finished stake table catchup for epoch");
             prev_quorum = next_quorum;
             epoch_root_protocol_version = root.version();
         }

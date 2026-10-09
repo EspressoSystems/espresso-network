@@ -1,0 +1,383 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.14"
+# dependencies = ["matplotlib", "numpy"]
+# ///
+"""Plots a run into `<run_dir>/throughput.png`, three or four panels over the same time axis:
+
+- decided MB/s (consensus counters) against the MB/s the query node makes transactions available
+  (`t_included` of `load.jsonl`), with the submitted rate as reference, and a tick per view
+  timeout. Each step starts at a vertical line, is labelled with its target rate (`(r)` for a
+  refine step, `stop` for a step stopped early) and drawn as a dashed target segment; the shaded
+  band is its measured window, tinted when the step failed.
+- mean block size (left, with genesis `max_block_size` dashed) and block interval (right) over
+  the last SMOOTH_S.
+- p50 submit until header on a validator over the last SMOOTH_S (left, log scale) and the
+  transactions in flight (right).
+- only with a non-empty `clients.jsonl`: p50 of how long after a validator showed a range's last
+  block the light-client readers held it over the last SMOOTH_S (left, log scale) and the MB/s
+  they fetched (right).
+
+    throughput-plot RUN_DIR
+"""
+
+import argparse
+import json
+import math
+import re
+from pathlib import Path
+
+import matplotlib
+import numpy as np
+import tomllib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+SMOOTH_S = 10
+SURFACE = "#fcfcfb"
+INK = "#52514e"
+MUTED = "#898781"
+DECIDED = "#2a78d6"
+QUERY = "#eb6834"
+BAND = "#f0efec"
+BAND_FAILED = "#fbe3e2"
+BAND_FAILED_INK = "#c8352c"
+SIZE_UNITS = {"": 1, "b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9}
+SIZE_UNITS |= {"kib": 2**10, "mib": 2**20, "gib": 2**30}
+
+
+def decided_mb_s(counters: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+    """Rate between consecutive counter samples, at the later sample's time."""
+    ts = np.array([c["ts"] for c in counters])
+    decided = np.array([c["decided_bytes"] for c in counters])
+    return ts[1:], np.diff(decided) / np.diff(ts) / 1e6
+
+
+def binned_bytes_mb_s(
+    times: np.ndarray, sizes: np.ndarray, t0: float, t1: float, bin_s: float = 1.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """MB/s of the events (`sizes` bytes each) whose time falls in each `bin_s` bin of
+    `[t0, t1]`, at the bin's end."""
+    bins = math.ceil((t1 - t0) / bin_s)
+    edges = np.linspace(t0, t0 + bins * bin_s, bins + 1)
+    total, _ = np.histogram(times, edges, weights=sizes)
+    return edges[1:], total / bin_s / 1e6
+
+
+def binned_mb_s(
+    times: list[float], tx_size: int, t0: float, t1: float, bin_s: float = 1.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """`binned_bytes_mb_s` of transactions of `tx_size` bytes."""
+    return binned_bytes_mb_s(
+        np.asarray(times), np.full(len(times), tx_size), t0, t1, bin_s
+    )
+
+
+def moving_mean(y: np.ndarray, w: int = SMOOTH_S) -> np.ndarray:
+    """Centered mean; the window shrinks at the edges instead of reading zeros."""
+    box = np.ones(w)
+    return np.convolve(y, box, "same") / np.convolve(np.ones_like(y), box, "same")
+
+
+def block_series(
+    block_ts: np.ndarray, counters: list[dict], w: int = SMOOTH_S
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Mean block interval (s) and size (MB) over the `w` s before each counter sample, from the
+    first sample `w` s in; NaN where no block fell in the window."""
+    ts = np.array([c["ts"] for c in counters])
+    decided = np.array([c["decided_bytes"] for c in counters])
+    keep = ts - w >= ts[0]
+    ts, decided = ts[keep], decided[keep]
+    before = np.interp(
+        ts - w, [c["ts"] for c in counters], [c["decided_bytes"] for c in counters]
+    )
+    blocks = np.searchsorted(block_ts, ts, "right") - np.searchsorted(
+        block_ts, ts - w, "right"
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        interval = np.where(blocks > 0, w / blocks, np.nan)
+        size = np.where(blocks > 0, (decided - before) / blocks / 1e6, np.nan)
+    return ts, interval, size
+
+
+def rolling_median(
+    at: np.ndarray, values: np.ndarray, grid: np.ndarray, w: int = SMOOTH_S
+) -> np.ndarray:
+    """Median of the `values` whose time `at` falls in the `w` s before each grid point; NaN
+    where none does."""
+    order = np.argsort(at)
+    at, values = at[order], values[order]
+    lo = np.searchsorted(at, grid - w, "right")
+    hi = np.searchsorted(at, grid, "right")
+    return np.array(
+        [np.median(values[a:b]) if b > a else np.nan for a, b in zip(lo, hi)]
+    )
+
+
+def in_flight(starts: np.ndarray, ends: np.ndarray, grid: np.ndarray) -> np.ndarray:
+    """Transactions with `start <= t < end` at each grid point."""
+    started = np.searchsorted(np.sort(starts), grid, "right")
+    ended = np.searchsorted(np.sort(ends), grid, "right")
+    return started - ended
+
+
+def client_lag(
+    clients: list[dict], on_validator: dict[int, float]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per served range: when the reader finished it and its lag in ms behind the validator
+    that first showed its last block. Ranges of blocks no validator showed are left out."""
+    served = [
+        c
+        for c in clients
+        if c["status"] == "ok" and on_validator.get(c["end"] - 1) is not None
+    ]
+    done = np.array([c["t_done"] for c in served])
+    lag = np.array([c["t_done"] - on_validator[c["end"] - 1] for c in served])
+    return done, lag * 1000
+
+
+def timeout_times(counters: list[dict]) -> np.ndarray:
+    """Counter sample times at which the view timeout count grew."""
+    ts = np.array([c["ts"] for c in counters])
+    timeouts = np.array([c["timeouts"] for c in counters])
+    return ts[1:][np.diff(timeouts) > 0]
+
+
+def max_block_mb(genesis: Path) -> float:
+    """Genesis `chain_config.max_block_size` in MB, as the node parses it (decimal units)."""
+    text = tomllib.loads(genesis.read_text())["chain_config"]["max_block_size"]
+    match = re.fullmatch(r"\s*([\d.]+)\s*([a-z]*)\s*", text.lower())
+    if match is None or match[2] not in SIZE_UNITS:
+        raise ValueError(f"unexpected max_block_size {text!r}")
+    return float(match[1]) * SIZE_UNITS[match[2]] / 1e6
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    with path.open() as f:
+        return [json.loads(line) for line in f]
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("run_dir", type=Path)
+    run_dir = parser.parse_args(argv).run_dir
+
+    t0 = json.loads((run_dir / "run.json").read_text())["t0"]
+    cfg = json.loads((run_dir / "config.json").read_text())
+    tx_size = cfg["tx_size"]
+    steps = json.loads((run_dir / "steps.json").read_text())
+    counters = read_jsonl(run_dir / "consensus.jsonl")
+    txs = read_jsonl(run_dir / "load.jsonl")
+    heights = read_jsonl(run_dir / "heights.jsonl")
+    t1 = counters[-1]["ts"]
+    clients_file = run_dir / "clients.jsonl"
+    clients = read_jsonl(clients_file) if clients_file.exists() else []
+
+    dec_t, dec = decided_mb_s(counters)
+    sub_t, sub = binned_mb_s([tx["t_submit"] for tx in txs], tx_size, t0, t1)
+    inc = [tx["t_included"] for tx in txs if tx["t_included"] is not None]
+    inc_t, query = binned_mb_s(inc, tx_size, t0, t1)
+    on_validator = {h["height"]: h["validator"] for h in heights if h["validator"]}
+    blk_t, interval, size = block_series(np.sort(list(on_validator.values())), counters)
+    decided_txs = [tx for tx in txs if on_validator.get(tx["height"]) is not None]
+    seen = np.array([on_validator[tx["height"]] for tx in decided_txs])
+    latency = seen - np.array([tx["t_submit"] for tx in decided_txs])
+    grid = np.linspace(t0, t1, math.ceil(t1 - t0) + 1)
+    lat = rolling_median(seen, latency * 1000, grid)
+    # A tx that never showed on the query node resolved at its timeout.
+    ends = [
+        tx["t_included"]
+        if tx["t_included"] is not None
+        else tx["t_submit"] + cfg["tx_timeout_s"]
+        for tx in txs
+    ]
+    flight = in_flight(np.array([tx["t_submit"] for tx in txs]), np.array(ends), grid)
+
+    def minutes[T: (np.ndarray, float)](t: T) -> T:
+        return (t - t0) / 60
+
+    ratios = (2, 1, 1, 1) if clients else (2, 1, 1)
+    fig, panels = plt.subplots(
+        len(ratios),
+        1,
+        figsize=(13, 3.3 * len(ratios)),
+        sharex=True,
+        height_ratios=ratios,
+        facecolor=SURFACE,
+    )
+    ax, blk_ax, lat_ax, *client_panel = panels
+    for panel in panels:
+        panel.set_facecolor(SURFACE)
+        panel.tick_params(colors=INK)
+        panel.grid(alpha=0.3)
+    for i, step in enumerate(steps):
+        start, end = minutes(step["t_start"]), minutes(step["t_end"])
+        failed = step["consensus_fails"] or step["query_fails"]
+        for panel in panels:
+            panel.axvspan(
+                minutes(step["t_mid"]),
+                end,
+                color=BAND_FAILED if failed else BAND,
+                zorder=0,
+                label="_nolegend_" if i or panel is not ax else "measured window",
+            )
+            panel.axvline(start, color=MUTED, lw=0.6, alpha=0.5, zorder=0)
+        ax.hlines(
+            step["rate_mb_s"],
+            start,
+            end,
+            color=INK,
+            lw=1,
+            linestyles="--",
+            label="_nolegend_" if i else "step target",
+        )
+        label = f"{step['rate_mb_s']:.0f}{' (r)' if step['refine'] else ''}"
+        if step.get("stopped_early"):
+            label += " stop"
+        ax.text(
+            (start + end) / 2,
+            1.01,
+            label,
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            color=INK,
+        )
+    ax.plot(
+        minutes(sub_t),
+        moving_mean(sub),
+        color=MUTED,
+        lw=0.8,
+        label=f"submitted, {SMOOTH_S} s mean",
+    )
+    ax.plot(minutes(dec_t), dec, color=DECIDED, lw=0.8, alpha=0.3, label="decided, 1 s")
+    ax.plot(
+        minutes(dec_t),
+        moving_mean(dec),
+        color=DECIDED,
+        lw=2,
+        label=f"decided, {SMOOTH_S} s mean",
+    )
+    ax.plot(
+        minutes(inc_t),
+        moving_mean(query),
+        color=QUERY,
+        lw=2,
+        label=f"query node, {SMOOTH_S} s mean",
+    )
+    timeouts = timeout_times(counters)
+    if len(timeouts):
+        ax.plot(
+            minutes(timeouts),
+            np.full(len(timeouts), 0.97),
+            "|",
+            color=BAND_FAILED_INK,
+            ms=10,
+            mew=1.5,
+            transform=ax.get_xaxis_transform(),
+            label="view timeout",
+        )
+    ax.set_xlim(minutes(t0), minutes(t1))
+    ax.set_ylim(bottom=0)
+    ax.set_ylabel("MB/s", color=INK)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(loc="upper left", ncol=4, fontsize=8, frameon=False, labelcolor=INK)
+
+    cap = max_block_mb(run_dir / "genesis.toml")
+    blk_ax.plot(
+        minutes(blk_t),
+        size,
+        color=DECIDED,
+        lw=1.5,
+        label=f"block size, {SMOOTH_S} s window",
+    )
+    blk_ax.axhline(cap, color=DECIDED, lw=1, ls="--", label="max_block_size")
+    blk_ax.set_ylim(0, cap * 1.15)
+    blk_ax.set_ylabel("MB per block", color=DECIDED)
+    interval_ax = blk_ax.twinx()
+    interval_ax.plot(
+        minutes(blk_t),
+        interval,
+        color=QUERY,
+        lw=1.5,
+        label=f"block interval, {SMOOTH_S} s window",
+    )
+    interval_ax.set_ylim(bottom=0)
+    interval_ax.set_ylabel("s per block", color=QUERY)
+    interval_ax.tick_params(colors=INK)
+    twin_legend(blk_ax, interval_ax)
+
+    lat_ax.plot(
+        minutes(grid),
+        lat,
+        color=DECIDED,
+        lw=1.5,
+        label=f"consensus latency p50, {SMOOTH_S} s window",
+    )
+    lat_ax.set_yscale("log")
+    lat_ax.set_ylabel("ms", color=DECIDED)
+    flight_ax = lat_ax.twinx()
+    flight_ax.plot(minutes(grid), flight, color=MUTED, lw=1, label="txs in flight")
+    flight_ax.set_ylim(bottom=0)
+    flight_ax.set_ylabel("txs in flight", color=MUTED)
+    flight_ax.tick_params(colors=INK)
+    twin_legend(lat_ax, flight_ax)
+
+    if client_panel:
+        (cli_ax,) = client_panel
+        done, lag = client_lag(clients, on_validator)
+        cli_ax.plot(
+            minutes(grid),
+            rolling_median(done, lag, grid),
+            color=DECIDED,
+            lw=1.5,
+            label=f"reader lag p50, {SMOOTH_S} s window",
+        )
+        cli_ax.set_yscale("log")
+        cli_ax.set_ylabel("ms", color=DECIDED)
+        fetch_ax = cli_ax.twinx()
+        fetch_t, fetched = binned_bytes_mb_s(
+            np.array([c["t_done"] for c in clients]),
+            np.array([c["bytes"] for c in clients]),
+            t0,
+            t1,
+        )
+        fetch_ax.plot(
+            minutes(fetch_t),
+            moving_mean(fetched),
+            color=QUERY,
+            lw=1,
+            label=f"readers fetched, {SMOOTH_S} s mean",
+        )
+        fetch_ax.set_ylim(bottom=0)
+        fetch_ax.set_ylabel("MB/s", color=QUERY)
+        fetch_ax.tick_params(colors=INK)
+        twin_legend(cli_ax, fetch_ax)
+    panels[-1].set_xlabel("minutes since run start", color=INK)
+
+    run = run_dir.resolve()
+    fig.suptitle(f"{run.parent.parent.name}/{run.name}", color=INK)
+    fig.tight_layout()
+    fig.savefig(run_dir / "throughput.png", dpi=130, facecolor=SURFACE)
+
+
+def twin_legend(left: plt.Axes, right: plt.Axes) -> None:
+    """One legend for both axes of a panel, above it, so it never covers the lines."""
+    handles, labels = left.get_legend_handles_labels()
+    more, more_labels = right.get_legend_handles_labels()
+    left.legend(
+        handles + more,
+        labels + more_labels,
+        loc="lower left",
+        bbox_to_anchor=(0, 1),
+        ncol=4,
+        fontsize=8,
+        frameon=False,
+        labelcolor=INK,
+    )
+
+
+if __name__ == "__main__":
+    main()

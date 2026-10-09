@@ -159,6 +159,11 @@ impl NodeType for SeqTypes {
 pub const MOCK_SEQUENCER_VERSIONS: versions::Upgrade =
     versions::Upgrade::new(version(0, 1), version(0, 2));
 
+/// The version integration tests run a network at: the oldest one a live
+/// network can start from.
+pub const TEST_UPGRADE: versions::Upgrade =
+    versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION);
+
 pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;

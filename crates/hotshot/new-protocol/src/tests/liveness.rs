@@ -496,10 +496,11 @@ async fn fetched_payload_restores_certification() {
     // What the coordinator injects once a peer's response re-committed to the
     // proposal's payload commitment.
     harness
-        .apply(ConsensusInput::BlockReconstructed(
-            ViewNumber::new(1),
-            test_data.views[0].vid_commitment(),
-        ))
+        .apply(ConsensusInput::BlockReconstructed {
+            view: ViewNumber::new(1),
+            payload_commitment: test_data.views[0].vid_commitment(),
+            payload: test_data.views[0].payload.clone(),
+        })
         .await;
 
     assert!(

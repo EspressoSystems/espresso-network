@@ -298,6 +298,12 @@ impl BuilderCommitment {
     pub fn from_raw_digest(digest: impl Into<Sha256Digest>) -> Self {
         Self(digest.into())
     }
+
+    /// The commitment to no bytes, for where one is required but nothing was
+    /// committed to. Not the all-zero digest `Default` gives.
+    pub fn empty() -> Self {
+        Self::from_bytes([])
+    }
 }
 
 impl AsRef<Sha256Digest> for BuilderCommitment {

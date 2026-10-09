@@ -85,6 +85,23 @@ compile-metrics *args:
 lint *args:
     just clippy {{args}} -- -D warnings
 
+# Check the v2 protos' formatting and, if they changed since `base`, that they stay wire and JSON compatible
+proto-check $base="origin/main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    buf format --diff --exit-code crates/espresso/api/proto
+    merge_base=$(git merge-base "$base" HEAD)
+    # `buf.yaml` too, so a PR that only loosens the rules is still checked under them.
+    if git diff --quiet "$merge_base" -- 'crates/espresso/api/proto/*.proto' crates/espresso/api/proto/buf.yaml; then
+        echo "No proto changes since $base"
+        exit 0
+    fi
+    # buf's own `.git#ref=` input cannot read a git worktree, so compare against an export.
+    dir=$(mktemp -d)
+    trap 'rm -rf "$dir"' EXIT
+    git archive "$merge_base" crates/espresso/api/proto | tar -x -C "$dir"
+    buf breaking crates/espresso/api/proto --against "$dir/crates/espresso/api/proto"
+
 # postgres and sqlite variants checked separately to cover all code
 clippy *args:
     cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
@@ -109,6 +126,11 @@ demo-native-large-block-upgrade *args: (build "test" "--no-default-features")
 
 demo-native-ff *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+# A/B the leader block-build critical path between two git refs (see scripts/bench-block-build)
+[positional-arguments]
+bench-block-build *args:
+    scripts/bench-block-build "$@"
 
 demo-native-benchmark:
     cargo build --release --features benchmarking
