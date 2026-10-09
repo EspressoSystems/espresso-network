@@ -257,7 +257,8 @@ pub const NUM_NODES: usize = 2;
 pub const EPOCH_HEIGHT: u64 = 10;
 
 /// A data source following a [`MockChain`]: each block pushed onto the chain is decided and
-/// appended to the data source, as a node following consensus would.
+/// appended to the data source with the cert2 finalizing it, as a node following consensus
+/// would.
 pub struct ChainNode<D: DataSourceLifeCycle> {
     chain: MockChain,
     data_source: D,
@@ -331,7 +332,11 @@ impl<D: DataSourceLifeCycle + UpdateAvailabilityData<MockTypes>> ChainNode<D> {
     }
 
     async fn decide(&mut self, block: &MockBlock) {
-        self.data_source.append(block.block_info(0)).await.unwrap();
+        let mut info = block.block_info(0);
+        if let Some(cert2) = self.chain.cert2(block) {
+            info = info.with_cert2(cert2);
+        }
+        self.data_source.append(info).await.unwrap();
     }
 }
 
