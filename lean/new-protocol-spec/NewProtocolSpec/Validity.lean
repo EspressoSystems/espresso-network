@@ -20,16 +20,19 @@ A proposal's shape.
 
 Its parent is at an earlier view. Without timeout evidence the parent is at the
 view before; with it, the evidence is a timeout certificate for the view before,
-which covers the views in between. Its epoch is the one its height falls in, and
-its height is one more than its parent's. These make the epoch arithmetic about a
-chain meaningful: a certificate is often all a node has of a block, and it carries
-the block's height and epoch.
+and the parent may be at any earlier view. Its epoch is the one its height falls
+in, and its height is one more than its parent's. These make the epoch arithmetic
+about a chain meaningful: a certificate is often all a node has of a block, and it
+carries the block's height and epoch.
 -/
 structure ProposalWellFormed (p : Proposal) : Prop where
   /-- The parent is at an earlier view. -/
   parentEarlier : p.parentCert.view < p.viewNumber
 
-  /-- The parent is at the view before, or timeout evidence covers the views in between. -/
+  /--
+  Without timeout evidence the parent is at the view before; with it, the timeout
+  certificate is for the view before.
+  -/
   covered : (p.timeoutEvidence = none ∧ p.parentCert.view + 1 = p.viewNumber)
     ∨ ∃ tc, p.timeoutEvidence = some tc ∧ tc.view + 1 = p.viewNumber
 
