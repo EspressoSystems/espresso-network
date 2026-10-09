@@ -1,93 +1,219 @@
 module
 
-public import NewProtocolSpec.Network.Defs
-public import NewProtocolSpec.Network.Lemmas
+public import NewProtocolSpec.Rules
 
 /-!
-# What certificates guarantee
+# Networks
 
-The properties of certificates the safety argument uses, proved from the
-committee and the runs of `NewProtocolSpec.Network.Defs`.
+Honest nodes and what connects them: one trace per honest node, obeying the
+signing rules, and certificates that mean a quorum really voted.
+
+Faulty nodes have no trace. Nothing constrains what they send, which is how they
+are modelled.
+
+The network is authenticated and encrypted, so a node knows who sent it a
+message. Only votes need signatures: they are aggregated into certificates that
+travel on to nodes that never saw the votes. That a certificate an honest node is
+handed stands for real votes is one of the two cryptographic assumptions, and it
+is the content of `Network.cert1Genuine`, `Network.cert2Genuine`,
+`Network.timeoutCertGenuine` and `Network.revoteGenuine`. The other is that block
+hashes do not collide (`CollisionFree`).
 -/
 
 @[expose] public section
 
 namespace NewProtocol
 
-variable (cfg : Config)
+/--
+The committees, one per epoch, as quorum systems.
+
+`Committee.intersect` is what safety takes from stake: two quorums of one epoch
+share a member honest in that epoch. `Committee.honestFinite` is for liveness.
+
+Honesty is per epoch. A node honest in epoch `e` signs every message of `e` by
+the rules, whenever it sends it; what it signs for an epoch it is not honest in
+is unconstrained. So a node may be honest in one epoch and faulty in the next.
+That a node later faulty cannot sign messages of an epoch it was honest in, with
+that epoch's keys, is part of the assumption.
+-/
+structure Committee where
+  /--
+  The nodes that follow the rules in an epoch.
+
+  They need not be members of its committee: a node that is not still receives
+  the epoch's messages and decides.
+  -/
+  honest : EpochNumber → PubKey → Prop
+
+  /--
+  The members of an epoch's committee.
+
+  A node owes timeout votes only in epochs it is a member of (`ProtocolHistory`),
+  and the honest members form a quorum (`TimedNetwork.honestQuorum`).
+  -/
+  members : EpochNumber → PubKey → Prop
+
+  /--
+  The sets of signers that suffice for a certificate in an epoch.
+
+  Left abstract: safety needs only that two quorums share an honest node
+  (`intersect`), and liveness that the honest members form one.
+  -/
+  Quorum : EpochNumber → (PubKey → Prop) → Prop
+
+  /-- Two quorums of one epoch share a member honest in that epoch. -/
+  intersect : ∀ e q q', Quorum e q → Quorum e q' → ∃ k, q k ∧ q' k ∧ honest e k
+
+  /--
+  Finitely many nodes are honest in some epoch.
+
+  Over all epochs, not per epoch: a run whose validators keep changing for ever,
+  each honest in some epoch, is not covered. Liveness reads it to bound what all
+  honest nodes decided by a time.
+  -/
+  honestFinite : ∃ ks : List PubKey, ∀ e k, honest e k → k ∈ ks
 
 /--
-A quorum's timeout for view `x` means an honest node was in view `x`.
+The node is honest in some epoch.
 
-The fact the temporal half of the safety argument runs on. A quorum contains
-an honest member, and that member's timeout vote was either its own timer —
-which by `timeoutVoteSound` names the view it is in — or a vote joined on the
-one-honest threshold, which by `oneHonest_reached` only happens when an honest
-node really was there.
-
-This is why a proposal that skips a view cannot exist before that view has been
-left behind, and hence why it cannot be admitted by a node that has already
-locked past it.
+These are the nodes the model records a trace of. A node honest in no epoch has
+none: nothing constrains what it sends.
 -/
-theorem timeoutCert_reached {C : Committee} (N : Network cfg C) {tc : TimeoutCert}
-    (h : TimeoutCertBacked N.run tc) :
-    ∃ j, ∃ hj : C.honest j, ∃ m, (Run.state (N.run j hj) m).currentView = tc.view := by
-  obtain ⟨q, hq, hcast⟩ := h
-  obtain ⟨k, hk, -, hh⟩ := C.intersect q q hq hq
-  obtain ⟨n, o, hmem, e, rfl⟩ := hcast k hk hh
-  rcases timeoutVote_view (N.run k hh) hmem with hcur | hone
-  · exact ⟨k, hh, n, hcur⟩
-  · exact oneHonest_reached cfg N k hh n tc.view hone
+def Committee.Honest (C : Committee) (k : PubKey) : Prop := ∃ e, C.honest e k
+
+/-- A node honest in an epoch is honest in some epoch. -/
+theorem Committee.Honest.of {C : Committee} {e : EpochNumber} {k : PubKey} (h : C.honest e k) :
+    C.Honest k :=
+  ⟨e, h⟩
 
 /--
-**At most one block is `Cert1`-certified per view.**
+The node is honest in epoch `e` or a later one.
 
-Two quorums share an honest member, and an honest node votes once per view,
-so the two certificates carry the same block. Once an assumption,
-no longer assumed.
+Not that it is honest in every epoch from `e` on: one later epoch suffices. The
+network delivers a message of epoch `e` to these nodes only (`Synchrony`). A
+node honest in earlier epochs only has retired by the time `e` matters.
 -/
-theorem cert1_unique {C : Committee} (N : Network cfg C) {c c' : Cert1}
-    (h : Network.ValidCert1 cfg N c) (h' : Network.ValidCert1 cfg N c')
-    (hv : c.view = c'.view) : c.data.blockHash = c'.data.blockHash := by
-  obtain ⟨k, hh, n, m, h1, h2⟩ := valid1_shared cfg h h'
-  exact vote1_agree h1 h2 hv
+def Committee.HonestFrom (C : Committee) (e : EpochNumber) (k : PubKey) : Prop :=
+  ∃ e', e.toNat ≤ e'.toNat ∧ C.honest e' k
+
+/-- A node honest in an epoch is honest in it or a later one. -/
+theorem Committee.HonestFrom.of {C : Committee} {e : EpochNumber} {k : PubKey} (h : C.honest e k) :
+    C.HonestFrom e k :=
+  ⟨e, Nat.le_refl _, h⟩
+
+/-- Honest from an epoch on is honest from any earlier epoch on. -/
+theorem Committee.HonestFrom.mono {C : Committee} {e e' : EpochNumber} {k : PubKey} (hle : e.toNat ≤ e'.toNat)
+    (h : C.HonestFrom e' k) : C.HonestFrom e k :=
+  let ⟨e'', h1, h2⟩ := h; ⟨e'', Nat.le_trans hle h1, h2⟩
+
+/-- A node honest from an epoch on is honest in some epoch. -/
+theorem Committee.HonestFrom.honest {C : Committee} {e : EpochNumber} {k : PubKey} (h : C.HonestFrom e k) :
+    C.Honest k :=
+  let ⟨e', _, h'⟩ := h; ⟨e', h'⟩
 
 /--
-**A `Cert2` presupposes the matching `Cert1`.**
+The node is honest in infinitely many epochs: in one at or after every epoch.
 
-Once an assumption, now a theorem. An honest member of the
-quorum cast vote2, and `Vote2Justification.certMatches` says it did so only
-holding a `Cert1` over exactly the block it voted for; `cert1_backed`
-turns what that node holds into what the network signed.
-
-The genesis side condition is discharged, not assumed: the vote required an
-admitted proposal, and nothing is ever admitted at genesis because admission
-demands a view above the bar.
+When epochs have blocks, `ChainGrows` promises such a node keeps deciding.
 -/
-theorem cert2_implies_cert1 {C : Committee} (N : Network cfg C)
-    (hcfg : ConfigCoherent cfg) {c2 : Cert2}
-    (h : Network.ValidCert2 cfg N c2) :
-    ∃ c1 : Cert1, Cert1Backed N.run c1 ∧ c1.view = c2.view
-      ∧ c1.data.blockHash = c2.data.blockHash := by
-  obtain ⟨q, hq, hcast⟩ := h
-  obtain ⟨k, hk, -, hh⟩ := C.intersect q q hq hq
-  obtain ⟨n, o, hmem, rfl⟩ := hcast k hk hh
-  obtain ⟨c1, hheld, hkey, hhash, hne⟩ :=
-    vote2_holds_cert1 (N.run k hh) (N.start k hh) hcfg hmem
-  exact ⟨c1, cert1_backed cfg N hcfg k hh (n + 1) c2.view c1
-    (fun hz => hne (hkey ▸ hz)) hheld, hkey, hhash⟩
+def Committee.HonestOften (C : Committee) (k : PubKey) : Prop := ∀ e, C.HonestFrom e k
 
 /--
-**At most one block is `Cert2`-certified per view.**
+The node is honest in every epoch.
 
-Two quorums share an honest member, and an honest node votes once per view,
-so the two certificates carry the same block. Once an assumption,
-no longer assumed.
+`ChainGrows` promises these nodes keep deciding themselves, at any epoch height. A
+node honest in some epochs only is held to the protocol in those, and is not
+promised to decide in the others.
 -/
-theorem cert2_unique {C : Committee} (N : Network cfg C) {c c' : Cert2}
-    (h : Network.ValidCert2 cfg N c) (h' : Network.ValidCert2 cfg N c')
-    (hv : c.view = c'.view) : c.data.blockHash = c'.data.blockHash := by
-  obtain ⟨k, hh, n, m, h1, h2⟩ := valid2_shared cfg h h'
-  exact vote2_agree h1 h2 hv
+def Committee.Steady (C : Committee) (k : PubKey) : Prop := ∀ e, C.honest e k
+
+/-- A node's steps, one per index, for ever. -/
+abbrev Trace := Nat → Step
+
+/-- The first `n` steps of a trace. -/
+def Trace.history (r : Trace) (n : Nat) : History := (List.range n).map r
+
+/-- The trace's node sent `m` at some step. -/
+def SentBy (r : Trace) (m : Message) : Prop := ∃ n, Output.send m ∈ (r n).output
+
+/--
+`vote` is a timeout vote by `k` behind `tc`: for its view and epoch, with a lock no
+later than `tc`'s.
+-/
+def TimeoutVoteFor (k : PubKey) (tc : TimeoutCert) (vote : TimeoutVote) : Prop :=
+  vote.signer = k ∧ vote.view = tc.view ∧ vote.data.epoch = tc.data.epoch
+    ∧ LockLE vote.data.lock tc.data.lock
+
+section Backed
+
+variable {C : Committee} (trace : ∀ k, C.Honest k → Trace)
+
+/-- A quorum of `c`'s epoch cast the vote1s behind `c`. Only its honest members are held to it. -/
+def Cert1Backed (c : Cert1) : Prop :=
+  ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest c.data.epoch k,
+    SentBy (trace k (.of h)) (.vote1 ⟨c.data, c.view, k⟩)
+
+/-- A quorum of `c`'s epoch cast the vote2s behind `c`. -/
+def Cert2Backed (c : Cert2) : Prop :=
+  ∃ q, C.Quorum c.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest c.data.epoch k,
+    SentBy (trace k (.of h)) (.vote2 ⟨c.data, c.view, k⟩)
+
+/-- A quorum of `tc`'s epoch timed out on its view, each with a lock no later than `tc`'s. -/
+def TimeoutCertBacked (tc : TimeoutCert) : Prop :=
+  ∃ q, C.Quorum tc.data.epoch q ∧ ∀ k, q k → ∀ h : C.honest tc.data.epoch k,
+    ∃ vote, TimeoutVoteFor k tc vote ∧ SentBy (trace k (.of h)) (.timeoutVote vote)
+
+/--
+The lock a timeout certificate names passed the verifier: it is the anchor's or
+backed, and no later than the view timed out.
+
+An honest signer's lock is at an earlier view than the one it times out, so the
+latest of the signers' locks is too.
+-/
+def TimeoutLockChecked (cfg : Config) (tc : TimeoutCert) : Prop :=
+  (tc.data.lock = cfg.anchorCert ∨ Cert1Backed trace tc.data.lock) ∧ tc.data.lock.view ≤ tc.view
+
+end Backed
+
+/--
+One trace per node honest in some epoch, obeying the signing rules for the epochs
+it is honest in, where every certificate a traced node is handed stands for real
+votes.
+
+A node's inputs are what reached it, whichever epochs it is honest in:
+certificates cannot be forged. The anchor's certificate is the exception: nothing
+votes at genesis, and the configuration vouches for it (`ConfigCoherent`).
+-/
+structure Network (cfg : Config) (C : Committee) where
+  /-- One trace per node honest in some epoch. -/
+  trace : ∀ k, C.Honest k → Trace
+
+  /-- Every prefix obeys the signing rules, for the epochs the node is honest in. -/
+  safe : ∀ k h n, SafeHistory cfg k (C.honest · k) ((trace k h).history n)
+
+  /-- Every `Cert1` an input carries is backed, or is the anchor's. -/
+  cert1Genuine : ∀ k h n c, c ∈ (trace k h n).input.cert1 → c = cfg.anchorCert ∨ Cert1Backed trace c
+
+  /-- Every `Cert2` an input carries is backed. -/
+  cert2Genuine : ∀ k h n c, c ∈ (trace k h n).input.cert2 → Cert2Backed trace c
+
+  /--
+  Every timeout certificate an input carries is backed, and its lock checked.
+
+  The verifier checks the certificate each signer names as its lock, so the latest
+  of them is a real `Cert1`. That is what lets every honest node fetch its
+  proposal and payload (`Synchrony.timeoutLockSpread`).
+  -/
+  timeoutCertGenuine : ∀ k h n tc, tc ∈ (trace k h n).input.timeoutCert →
+    TimeoutCertBacked trace tc ∧ TimeoutLockChecked trace cfg tc
+
+  /--
+  The certificate a re-vote request votes on again is backed.
+
+  It is over the last block of an epoch, never the anchor, so the verifier checks
+  it as it checks any `Cert1`.
+  -/
+  revoteGenuine : ∀ k h n sender r, (trace k h n).input = .revote sender r →
+    Cert1Backed trace r.cert
 
 end NewProtocol

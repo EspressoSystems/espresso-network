@@ -3,9 +3,10 @@ module
 public import NewProtocolSpec.Base
 
 /-!
-# Protocol data types
+# Protocol data
 
-The data a node sends, receives and stores.
+What nodes send each other and what a certificate is made of. Everything here is
+content: nothing says when a node may send it, which is `NewProtocolSpec.Rules`.
 -/
 
 @[expose] public section
@@ -13,24 +14,23 @@ The data a node sends, receives and stores.
 namespace NewProtocol
 
 /--
-Hash identifying a whole block — header, view, parent certificate.
+Hash identifying a whole block: header, view, parent certificate and timeout evidence.
 
-This is what votes sign, certificates certify and chain links point to.
-Distinct from `PayloadCommit`, which covers only the transaction bytes.-/
+What votes sign, certificates certify and chain links point to. Distinct from
+`PayloadCommit`, which covers only the transaction bytes.
+-/
 structure BlockHash where
   /-- The value. Never read: hashes are only compared and stored. -/
   toNat : Nat
 deriving DecidableEq, Repr, Inhabited, Ord
 
 /--
-VID commitment to a block *payload* — the transaction bytes that are
-erasure-coded and dispersed as shares.
+Commitment to a block's payload, the transaction bytes that are erasure-coded
+and dispersed as VID shares.
 
-Not the commitment of the whole block (that is `BlockHash`): the payload
-is the only large part of a block and the only part travelling via VID, so
-it has its own commitment for verifying shares and reconstructions. The
-header contains it, and `BlockHash` covers the header, so the block hash
-commits to the payload transitively.-/
+The header contains it and the block hash covers the header, so the block hash
+commits to the payload too.
+-/
 structure PayloadCommit where
   /-- The value. Never read: commitments are only compared and stored. -/
   toNat : Nat
@@ -42,204 +42,215 @@ structure PubKey where
   toNat : Nat
 deriving DecidableEq, Repr, Ord, Inhabited
 
-/--
-The part of a block header the core consensus logic reads.
-
-The block height is not carried: it only feeds the epoch arithmetic, which returns with
-the epoch extension.
--/
+/-- The part of a block header consensus reads. -/
 structure BlockHeader where
   /-- The commitment to the block's payload. -/
   payloadCommit : PayloadCommit
+
+  /-- The block's height in the chain. -/
+  blockNumber : BlockNumber
 deriving DecidableEq, Repr, Inhabited
 
 /--
-What a vote1 (quorum) vote signs.
+What a vote1 signs: the block, the epoch whose committee certifies it, and its
+height.
 
-Reduced to the block hash; the epoch and block
-number belong to the epoch machinery.
+The epoch is signed because a verifier needs it before it has the block: a
+certificate is checked against the stake table of the epoch it names. The height
+is signed because a certificate is often all a node has of a block, and the
+epoch arithmetic is about heights.
 -/
 structure Vote1Data where
-  /-- The block being voted for. -/
+  /-- The block voted for. -/
   blockHash : BlockHash
+
+  /-- The epoch whose committee certifies the vote. -/
+  epoch : EpochNumber
+
+  /-- The height of the block voted for. -/
+  blockNumber : BlockNumber
 deriving DecidableEq, Repr
 
 /--
-What a vote2 signs.
+What a vote2 signs: the same fields as `Vote1Data`, as a distinct type.
 
-Reduced like `Vote1Data`, but deliberately a distinct type: it keeps `Cert1`
-and `Cert2` apart at the type level, so no rule can confuse a vote of one round
-for a vote of the other.
+Keeping the two apart means no rule can mistake a vote of one round for a vote of
+the other.
 -/
 structure Vote2Data where
-  /-- The block being voted for. -/
+  /-- The block voted for. -/
   blockHash : BlockHash
+
+  /-- The epoch whose committee certifies the vote. -/
+  epoch : EpochNumber
+
+  /-- The height of the block voted for. -/
+  blockNumber : BlockNumber
 deriving DecidableEq, Repr
 
-/--
-A certificate over vote data `α`, formed in view `view`.
+/-- The same fields, as `Vote2Data`. -/
+def Vote1Data.toVote2 (d : Vote1Data) : Vote2Data := ⟨d.blockHash, d.epoch, d.blockNumber⟩
 
-The aggregate signature is not modelled. A certificate's validity — that a
-quorum really signed `data` in `view` — is `Network.ValidCert1` and
-`Network.ValidCert2` in
-`NewProtocolSpec.Network.Defs`.
+/--
+A certificate over data `α`, formed in view `view`.
+
+The aggregate signature is not modelled. That a quorum really signed `data` in
+`view` is what `Cert1Backed` and its companions say. A timeout certificate is the
+exception: its signers' votes differ in their locks, and its `data` names a lock at
+least as late as each of them (`TimeoutCertBacked`).
 -/
 structure Certificate (α : Type) where
-  /-- What the quorum signed. -/
+  /-- What the quorum signed; for a timeout certificate, see `TimeoutData`. -/
   data : α
 
   /-- The view the certificate was formed in. -/
   view : ViewNumber
 deriving DecidableEq, Repr
 
-/--
-Quorum certificate over vote1s (QC).-/
+/-- A certificate over vote1s: the block certificate. -/
 abbrev Cert1 := Certificate Vote1Data
 
-/--
-`Cert2`; a block with a `Cert2` is decided.-/
+/-- A certificate over vote2s: the commit certificate. A block with one is decided. -/
 abbrev Cert2 := Certificate Vote2Data
 
 /--
-Certificate that a view timed out.
+What a timeout vote signs: the epoch whose committee is asked to form the
+certificate, and the sender's lock.
 
-`view` is the view that timed out; the certificate is stored under the view it
-advances *into*, i.e. `view + 1`. Several rules read it that way
-(`StepSpec.timeoutCertProvenance`, `StepSpec.timeoutCertIngested`,
-`ParentCertJustified`).
+The view timed out is the vote's own view. A timeout certificate carries the same
+fields, but its signers signed different locks: its `lock` is at least as late as
+each of them, and names the block a proposal after the timeout must not skip
+(`SafeParent`).
 -/
-abbrev TimeoutCert := Certificate Unit
+structure TimeoutData where
+  /-- The epoch whose committee certifies the vote. -/
+  epoch : EpochNumber
+
+  /-- The sender's lock; in a certificate, one at least as late as each of its signers'. -/
+  lock : Cert1
+deriving DecidableEq, Repr
+
+/-- A certificate that view `view` timed out. It lets nodes enter `view + 1`. -/
+abbrev TimeoutCert := Certificate TimeoutData
 
 /--
-Proposal to append a block to the chain.
+A proposal to append a block to the chain.
 
-Carries what the protocol reads. The fields a real message adds for the epoch
-machinery, light-client certification and version upgrades are not modelled.
+Carries what consensus reads. Fields a real proposal adds for light clients,
+state certificates and version upgrades are not modelled.
 -/
 structure Proposal where
-  /-- The block header to append. -/
+  /-- The block header. -/
   blockHeader : BlockHeader
 
-  /-- The view this proposal is made in. -/
+  /-- The view the proposal is made in. -/
   viewNumber : ViewNumber
 
-  /--
-  Certificate for the parent block this proposal extends.
+  /-- The epoch whose committee governs the block. -/
+  epoch : EpochNumber
 
-  The chain link: ancestry is followed through these, so the branch a proposal
-  belongs to is exactly the chain of `parentCert`s below it. A `Cert1`, not a
-  `Cert2` — a parent must be certified to be extended, not decided.
+  /--
+  The certificate over the parent block.
+
+  The chain link: ancestry follows these, so the branch a block belongs to is the
+  chain of parent certificates before it.
   -/
   parentCert : Cert1
 
-  /--
-  Proof that the views between `parentCert` and this proposal timed out.
-
-  Required whenever `parentCert` is not for the immediately preceding view.
-  -/
+  /-- The timeout certificate for the views the proposal skips, if it skips any. -/
   timeoutEvidence : Option TimeoutCert
 
   /--
-  The identity the network assigned this block, which `blockHash` reads.
+  The identity the network assigned the block, which `blockHash` reads.
 
-  Carried rather than computed, because the model cannot compute it: a real
-  commitment covers a serialised form over fields this type does not have.
-  Carrying is also what makes the comparisons work at all — every hash test in
-  the protocol puts this against an identity arriving inside a certificate
-  (`SafeToExtend`, `StepSpec.decideJustified`, `Vote1Justification.parentLinked`),
-  so the two must be values of the same provenance.
-
-  For a proposal a node *builds*, no identity has been assigned yet and this
-  field is meaningless. Nothing reads it: a proposer emits its proposal without
-  storing or hashing it, and every rule that hashes reaches for a block the
-  node *holds* — which arrived, and so carries a real one.
-
-  That the identity is honest and distinguishes blocks is `CollisionFree`
-  (`NewProtocolSpec.Assumptions`).
+  Carried rather than computed: a real commitment covers a serialised form over
+  fields this type does not have. For a proposal a node builds, no identity has
+  been assigned yet and nothing reads this field.
   -/
   identity : BlockHash
 deriving DecidableEq, Repr
 
 /--
-A block of the chain.
+A block of the chain, by its proposal.
 
-A proposal and the block it proposes are one object here, and
-carries the same data, so the model identifies the two.
+Three words are kept apart. A *proposal* is what a leader sends and what a node
+holds of a block: its header, view, epoch, parent certificate and timeout
+evidence, without the payload. The *payload* is the block's contents, which a
+node rebuilds from VID shares; the specification never reads it, and has it only
+as a commitment (`BlockHeader.payloadCommit`) and as the fact that a node rebuilt
+it (`History.HasPayload`). A *block* is the element of the chain a proposal
+proposes, header and payload together, named by its hash (`blockHash`): what a
+certificate is over, what is decided, what has a height and is the last of an
+epoch.
+
+So a node holds a proposal (`History.HasProposal`) and a payload, never a block,
+and the type is the proposal's: the specification reads a block only through its
+proposal.
 -/
 abbrev Block := Proposal
 
 /--
-Which block a hash identifies.
+A request to vote again on the last block of an epoch, in a later view.
 
-The blocks produced across a network form a tree: after timeouts or a leader
-proposing twice, two proposals can name the same parent, so one block can have
-more than one child. This is that tree's node table — it says which block a
-hash names, and each block's `parentCert` supplies the edge to its parent.
-`Ancestor` walks those edges.
+It is for when the last block of an epoch has a `Cert1` but no `Cert2`, so the
+next epoch cannot start. The outgoing committee votes on that block once more, at
+view `view`: vote1s over `cert`'s data at `view` form a `Cert1` over the same block
+at the later view, and vote2s over that a `Cert2`, which commits the block. No new
+block is built. No rule checks that the `Cert2` is missing; a leader may wait for it
+before asking (`RevoteJustified`).
+-/
+structure RevoteRequest where
+  /-- The certificate over the block voted on again: its first `Cert1`, or an earlier re-vote's. -/
+  cert : Cert1
 
-It is not part of a node's state and not something an implementation builds. It
-exists so that the safety statement has something to mean "ancestor" *in*: an
-individual node holds only the blocks it happens to have, which is not enough to
-trace a chain. What ties it to reality are two conditions on it, `Resolves` —
-that it contains the blocks honest nodes actually hold — and `TreeCoherent` —
-that it answers with a block of the hash it was asked about.
+  /-- The view the votes are cast in. -/
+  view : ViewNumber
+
+  /-- The timeout certificate for the view before, if the request follows a timeout. -/
+  timeoutEvidence : Option TimeoutCert
+deriving DecidableEq, Repr
+
+/--
+Which block a hash names.
+
+Not something a node keeps: it exists so the safety statement has something to
+mean "ancestor" in. `Resolves` ties it to the proposals honest nodes hold.
 -/
 abbrev BlockTable := BlockHash → Option Block
 
-/-- The proposed block's payload commitment. -/
+/-- The block's payload commitment. -/
 def Proposal.payloadCommit (p : Proposal) : PayloadCommit :=
   p.blockHeader.payloadCommit
 
 /--
-The hash identifying the proposed block.
+The hash identifying a block.
 
-`@[irreducible]`, which is what keeps this an abstraction rather than a definition: no proof
-can see through to the projection, so every rule relates `blockHash` images without depending
-on how they arise — exactly as when this was `opaque`. What the body buys is that the machine
-can be executed (`NewProtocolImpl.Demo`), and hence driven against a real node.
-
-Hashes the block a proposal carries.
+Opaque, so no proof can see through to the projection and every rule relates
+`blockHash` images without depending on how they arise. That is what keeps
+`CollisionFree` consistent: a visible body would let two blocks differing only in
+view share an identity, which refutes it. The body is there for the compiler, so
+a machine built on this can run.
 -/
-@[irreducible] def blockHash (b : Block) : BlockHash := b.identity
+opaque blockHash (b : Block) : BlockHash := b.identity
 
 /--
 The block is valid in the application's sense.
 
-Opaque, and deliberately so: consensus carries blocks it does not interpret, so
-validity is not something any rule here can compute. Whatever the application
-means by it — typically that a block's requests are admissible and consistent
-with the requests in its ancestors, recursively — is a black box to this
-specification.
-
-It appears in exactly one rule, `Vote1Justification.blockValid`: a node may not
-cast a vote1 for an invalid block, so a `Cert1` is quorum evidence that
-the block passed the application's own check. Nothing *obliges* a vote until the
-node has been told (`Vote1Enabled` reads `NodeState.validated`, which is
-what a node can act on), and what ties the two together is the one thing about
-validity that has to be believed rather than proved; see
-`NewProtocolSpec.Assumptions`.
+Opaque: consensus carries blocks it does not interpret. A node learns validity
+from `Input.blockValidated`, and the rules forbid a vote1 on an invalid block.
 -/
 opaque BlockValid : Block → Prop
 
-/--
-This node's VID share of a block payload.
-
-Reduced to the fields consensus reads.
--/
+/-- A node's VID share of a block payload, reduced to what consensus reads. -/
 structure VidShare where
-  /-- The view of the block this share belongs to. -/
+  /-- The view of the block the share belongs to. -/
   view : ViewNumber
 
-  /-- The payload this is a share of. -/
+  /-- The payload it is a share of. -/
   payloadCommit : PayloadCommit
 deriving DecidableEq, Repr
 
-/--
-A single node's vote over data `α`.
-
-Data, view and the voter's key. A signature would come too (the signature
-is dropped).
--/
+/-- A node's vote over data `α`: the data, the view, and who cast it. -/
 structure Vote (α : Type) where
   /-- What is signed. -/
   data : α
@@ -247,33 +258,17 @@ structure Vote (α : Type) where
   /-- The view voted in. -/
   view : ViewNumber
 
-  /-- Who cast it. A certificate needs a quorum of distinct signers. -/
+  /-- Who cast it. -/
   signer : PubKey
 deriving DecidableEq, Repr
 
-/-- Vote1. -/
+/-- A vote1. -/
 abbrev Vote1 := Vote Vote1Data
 
-/-- Vote2.-/
+/-- A vote2. -/
 abbrev Vote2 := Vote Vote2Data
 
-/--
-Timeout vote.
-
-See `TimeoutCert` for why the data is trivial.
--/
-abbrev TimeoutVote := Vote Unit
-
-/--
-The highest certificate a node holds.
-
-Attached to timeout votes so peers stuck on stale views can re-converge.-/
-inductive CatchupEvidence where
-  /-- The highest `Cert1` held: the peer may enter the view past it. -/
-  | cert1 (cert : Cert1)
-
-  /-- A timeout certificate, for a view that produced no `Cert1` at all. -/
-  | timeout (cert : TimeoutCert)
-deriving DecidableEq, Repr
+/-- A timeout vote. -/
+abbrev TimeoutVote := Vote TimeoutData
 
 end NewProtocol

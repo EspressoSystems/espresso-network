@@ -6,8 +6,9 @@ public import NewProtocolDiff.Replay
 # Replaying a corpus
 
 A divergence is not always a disagreement. The specification does not cover
-epochs, restart, or block fetching, so a recording that acted on one of those
-acted on something the machine was never told, and could not have followed.
+restart, the DRB, block fetching or state validation, so a recording that acted
+on one of those acted on something the machine was never told, and could not
+have followed.
 Such a trace is counted apart: it is not evidence that the implementation
 conforms, and not evidence that it does not.
 
@@ -43,19 +44,14 @@ step rather than being lost, and a trace that diverges around one of them is a
 disagreement to look at rather than a boundary to wave through.
 -/
 def unmodelledInputs : List (String × String) :=
-  [ ("EpochChange", "epoch machinery"),
-    ("DrbResult", "epoch machinery"),
-    ("FetchedProposal", "block fetching"),
+  [ ("DrbResult", "leader election"),
     ("StateValidationFailed", "state validation") ]
 
 /--
 An unmodelled feature a trace dropped an input for at or before `step`, if any.
 
-The step matters. A recording drops inputs all through a run, and one unmodelled
-drop used to excuse every divergence in the trace, however much later — a
-`StateValidationFailed` on step 3 of six hundred stood as the reason for anything
-that happened at step 580. The recorder writes the index it was at, so the excuse
-can be required to precede what it excuses.
+The step matters: the recorder writes the index it was at, so the excuse can be
+required to precede what it excuses.
 
 That is necessary and not sufficient. A drop at step 0 still excuses a divergence
 at step 47, which is most of the epoch suites, and no ordering rule can narrow
@@ -88,9 +84,9 @@ Each view whose proposal the trace shows, paired with its parent's view.
 Delivered *or* emitted. A node's own proposal is built rather than delivered, so
 counting only arrivals leaves every self-led view looking like state the trace
 cannot account for — and the excuse below then waves through any divergence
-there, which was true of eight of the twenty-one traces that propose. The
-excuse's premise is that the trace does not show where the state came from, and
-for a view this node proposed in the trace shows exactly that, as an output.
+there. The excuse's premise is that the trace does not show where the state
+came from, and for a view this node proposed in the trace shows exactly that, as
+an output.
 -/
 def proposalParents (events : List Event) : List (ViewNumber × ViewNumber) :=
   events.flatMap fun
@@ -107,7 +103,7 @@ def proposalParents (events : List Event) : List (ViewNumber × ViewNumber) :=
 The view an action at `view` needs and the trace does not deliver.
 
 Acting in a view needs that view's proposal and, unless the parent is genesis,
-the parent's too: `Vote1Justification.parentLinked` reads the parent block. A
+the parent's too: `ParentReady` reads the parent block. A
 recording that acted anyway held ancestry the trace does not show.
 -/
 def missingAncestor (parents : List (ViewNumber × ViewNumber)) (view : ViewNumber) :
@@ -128,6 +124,14 @@ inductive Verdict where
   | agree
   /-- The recording ran past what the specification covers, for this reason. -/
   | outOfScope (reason : String)
+  /--
+  The recording took an action the machine did not, and the trace obeys every rule.
+
+  Both made permitted choices: the machine, acting eagerly, reached a state where
+  the action was no longer owed, for instance by deciding further and raising its
+  decide floor, while the recording took it anyway.
+  -/
+  | differ
   /-- The implementation and the specification disagree. -/
   | diverge
   /-- The trace could not be read. -/
@@ -142,6 +146,7 @@ deriving DecidableEq, Repr
 def Verdict.label : Verdict → String
   | .agree => "agree"
   | .outOfScope _ => "out-of-scope"
+  | .differ => "differ"
   | .diverge => "diverge"
   | .malformed => "malformed"
   | .empty => "empty"
@@ -164,7 +169,7 @@ Why this divergence is a boundary of the specification rather than a
 disagreement, if it is one.
 -/
 def excuse (text : String) (events : List Event) (step : Nat) : Divergence → Option String
-  | .recordingAhead _ _ view =>
+  | .recordingAhead _ _ ⟨view, _⟩ =>
     match unmodelledDropped text step with
     | some reason => some reason
     | none =>
@@ -192,8 +197,15 @@ def parseOutOfScope (e : String) : Option String :=
   else
     none
 
-/-- The verdict on one replayed trace, and what to print under it. -/
-def verdictOf (text : String) (events : List Event) (o : Outcome) : Verdict × String :=
+/--
+The verdict on one replayed trace, and what to print under it.
+
+`obeysRules` is whether the trace passed the direct check against the
+specification. When it did, the recording being ahead of the machine is a
+different permitted choice rather than a disagreement.
+-/
+def verdictOf (text : String) (events : List Event) (o : Outcome) (obeysRules : Bool) :
+    Verdict × String :=
   match o.divergence with
   | none => (.agree, o.report)
   | some d =>
@@ -201,6 +213,10 @@ def verdictOf (text : String) (events : List Event) (o : Outcome) : Verdict × S
     | some reason =>
       (.outOfScope reason,
         o.report ++ s!"\n  reason: {reason}\n  checked {o.steps} of {events.length} steps")
-    | none => (.diverge, o.report)
+    | none =>
+      match d with
+      | .recordingAhead .. =>
+        if obeysRules then (.differ, o.report ++ "\n  the trace obeys every rule") else (.diverge, o.report)
+      | _ => (.diverge, o.report)
 
 end NewProtocolDiff

@@ -17,17 +17,20 @@
 //!
 //! # What does not survive the translation
 //!
-//! The model covers the core protocol only, so epochs, the DRB, light-client
-//! certification, the storage handshake and proposal fetching have no
-//! counterpart. Inputs carrying them are dropped, each leaving a `#` comment
-//! naming what went — visible in the trace rather than silent, because a dropped
-//! input can make the machine look behind us for a reason that is not a bug.
-//! Two are worth watching for, both of which make the machine look *ahead* of us
-//! rather than behind — which the comparison reports but tolerates:
-//! [`ConsensusInput::FetchedProposal`], since the machine has no way to hold a
-//! fetched block; and [`ConsensusInput::StateValidationFailed`], since the model
-//! has no way to un-admit one, so the machine goes on voting for a block we
-//! condemned. A first corpus should come from tests that do neither.
+//! The model covers the core protocol and epoch changes. The DRB and the storage
+//! handshake have no counterpart. Inputs carrying them are dropped, each leaving a
+//! `#` comment naming what went — visible in the trace rather than silent, because
+//! a dropped input can make the machine look behind us for a reason that is not a
+//! bug. A proposal not yet paired with our share, and a fetched block, are
+//! recorded as a `proposal` without a share: what the node then holds is the
+//! proposal alone. Light-client certification has no counterpart either: an
+//! epoch root's state certificate is left out, and only the `Cert1` it arrives
+//! with is recorded.
+//!
+//! One dropped input is worth watching for, since it makes the machine look
+//! *ahead* of us rather than behind — which the comparison reports but tolerates:
+//! [`ConsensusInput::StateValidationFailed`], since the model has no way to
+//! un-admit a block, so the machine goes on voting for a block we condemned.
 //!
 //! Pruning is not recorded either. We prune inside a consensus step; the model
 //! makes it a separate transition, so a faithful trace would have to say where
@@ -42,7 +45,7 @@
 //! that is asked is that distinct commitments give distinct text.
 
 use std::{
-    collections::BTreeSet,
+    collections::BTreeMap,
     fs::create_dir_all,
     path::PathBuf,
     sync::atomic::{AtomicUsize, Ordering},
@@ -50,7 +53,9 @@ use std::{
 
 use committable::Committable;
 use hotshot_types::{
-    data::{Leaf2, VidCommitment, VidDisperseShare2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, VidDisperseShare2, ViewNumber},
+    simple_certificate::TimeoutEvidence,
+    simple_vote::HasEpoch,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     vote::HasViewNumber,
 };
@@ -62,6 +67,23 @@ use crate::{
 
 /// Where traces are written, if anywhere.
 const TRACE_DIR: &str = "NP_TRACE_DIR";
+
+/// The note saying a run had timeouts that sign no lock.
+///
+/// The model's timeout votes and certificates carry the lock their signers
+/// held, which ours do not yet sign. A checker leaves such a run out rather
+/// than reading a lock that is not there.
+const UNSIGNED_LOCKS: &str = "# timeouts sign no lock";
+
+/// How a timeout vote or certificate shows up in a written trace: as a step's
+/// input, an output, a proposal's evidence or catch-up evidence.
+const TIMEOUT_TAGS: [&str; 5] = [
+    "\"timeoutVote\":",
+    "\"timeoutCertificate\":",
+    "\"timeoutCert\":",
+    "\"timeoutEvidence\":{",
+    "\"timeout\":{\"cert\"",
+];
 
 /// Distinguishes recorders sharing a label.
 ///
@@ -93,14 +115,19 @@ pub struct Recorder {
     ///
     /// See [`Recorder::record`] for why they wait rather than being dropped.
     pending: Vec<String>,
-    /// Views whose leader has been written; see [`Recorder::leader`].
-    led: BTreeSet<ViewNumber>,
+    /// Epochs and views whose leader has been written; see [`Recorder::leader`].
+    led: BTreeMap<(EpochNumber, ViewNumber), String>,
     /// Steps written so far, which is the index the next one will have.
     ///
     /// A dropped input is noted with this number, so a replay can tell whether
     /// the drop came before the divergence it is being asked to excuse. Without
     /// it, one unmodelled input anywhere excuses everything anywhere.
     steps: usize,
+    /// Blocks to an epoch on this network, as [`Recorder::preamble`] was told.
+    ///
+    /// A decided leaf carries no epoch of its own, so this is what turns its
+    /// block number into one.
+    epoch_height: u64,
 }
 
 impl Recorder {
@@ -111,8 +138,9 @@ impl Recorder {
             lines: Vec::new(),
             identified: true,
             pending: Vec::new(),
-            led: BTreeSet::new(),
+            led: BTreeMap::new(),
             steps: 0,
+            epoch_height: 0,
         };
         let Ok(dir) = std::env::var(TRACE_DIR) else {
             return inert;
@@ -130,8 +158,9 @@ impl Recorder {
             lines: Vec::new(),
             identified: false,
             pending: Vec::new(),
-            led: BTreeSet::new(),
+            led: BTreeMap::new(),
             steps: 0,
+            epoch_height: 0,
         }
     }
 
@@ -153,20 +182,85 @@ impl Recorder {
     ///
     /// Call before applying the input, so a first step that decides cannot move
     /// the anchor out from under the line describing where the run began.
-    pub fn preamble<T: NodeType>(&mut self, node: &T::SignatureKey, anchor: &Leaf2<T>) {
+    ///
+    /// `anchor_cert` is the certificate the node holds at the genesis view. The
+    /// first proposal names it as its parent, and a fresh node is locked on it,
+    /// so the replay has to start from that certificate rather than from one it
+    /// makes up from the anchor leaf.
+    pub fn preamble<T: NodeType>(
+        &mut self,
+        node: &T::SignatureKey,
+        anchor: &Leaf2<T>,
+        anchor_cert: Option<&Certificate1<T>>,
+        epoch_height: u64,
+    ) {
         if self.identified {
             return;
         }
         self.identified = true;
+        self.epoch_height = epoch_height;
         if self.path.is_none() {
             return;
         }
-        let line = obj(&[
+        let mut fields = vec![
             ("node", ident(node)),
             ("anchor", ident(&anchor.commit())),
+            // After genesis only for a node restored from storage, which the
+            // model does not cover.
+            ("anchorView", view_json(anchor.view_number())),
             ("decideBuffer", DECIDE_BUFFER.to_string()),
-        ]);
+            ("epochHeight", epoch_height.to_string()),
+        ];
+        if let Some(cert) = anchor_cert {
+            fields.push(("anchorCert", cert1_json_raw(cert)));
+        }
+        let line = obj(&fields);
         self.lines.push(format!("# trace {line}"));
+    }
+
+    /// Record that the node holds `proposal` without having received it, as a
+    /// test that seeds a node's state directly does.
+    ///
+    /// Written as a step receiving the proposal alone, which is the most the node
+    /// could have been given: holding it, not having voted on it.
+    pub fn held<T: NodeType>(&mut self, proposal: &Proposal<T>) {
+        if self.path.is_none() {
+            return;
+        }
+        self.lines
+            .push(step(bare_proposal_json(NO_SENDER, proposal), &[]));
+        self.steps += 1;
+    }
+
+    /// Record that a test placed the node at `view` in `epoch` directly.
+    ///
+    /// No input puts a node there, so the view and epoch a replay derives from
+    /// the steps are not the node's. Written on the comment channel with the
+    /// step it precedes, so a checker can leave the rules that read the view and
+    /// epoch unchecked rather than report the placement as a fault.
+    pub fn placed(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        if self.path.is_none() {
+            return;
+        }
+        self.lines.push(format!(
+            "# placed at view {view} epoch {epoch} (at step {})",
+            self.steps
+        ));
+    }
+
+    /// Record that a test replaced the node's proposal for `view` directly.
+    ///
+    /// No input does that, so the blocks a replay derives from the steps are not
+    /// the node's. Written like [`Recorder::placed`], so a checker can leave the
+    /// rules that read what the node holds unchecked.
+    pub fn forced(&mut self, view: ViewNumber) {
+        if self.path.is_none() {
+            return;
+        }
+        self.lines.push(format!(
+            "# forced proposal at view {view} (at step {})",
+            self.steps
+        ));
     }
 
     /// Whether anything is being recorded.
@@ -184,7 +278,7 @@ impl Recorder {
     /// so a trace that does not say who leads leaves a replay with no way to tell
     /// a proposal this node was entitled to make from one it was not: assuming
     /// this node leads everywhere makes the leader clause of
-    /// `ProposalJustification` unfalsifiable.
+    /// `ProposalJustified` unfalsifiable.
     ///
     /// `None` is written as `unknown` rather than left out. A stake table that
     /// cannot answer for an epoch it does not have leaves consensus unable to
@@ -192,17 +286,34 @@ impl Recorder {
     /// the same conclusion by the same ignorance — but silence would not say
     /// whether the leader was unknown or merely unrecorded.
     ///
+    /// The leader is named per epoch: at a boundary the outgoing committee's
+    /// leader may ask for a re-vote in the view the incoming committee's leader
+    /// proposes in. An `unknown` is written again once the leader is known.
+    ///
     /// Written on the comment channel, like the identity line, so a reader that
     /// only knows about steps skips it.
-    pub fn leader<T: NodeType>(&mut self, view: ViewNumber, leader: Option<&T::SignatureKey>) {
-        if self.path.is_none() || !self.led.insert(view) {
+    pub fn leader<T: NodeType>(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        leader: Option<&T::SignatureKey>,
+    ) {
+        let known = self
+            .led
+            .get(&(epoch, view))
+            .is_some_and(|named| named != "unknown");
+        if self.path.is_none() || known {
             return;
         }
         let named = match leader {
             Some(key) => ident(key),
             None => "unknown".to_string(),
         };
-        self.lines.push(format!("# leader {view} {named}"));
+        if self.led.get(&(epoch, view)) == Some(&named) {
+            return;
+        }
+        self.lines.push(format!("# leader {view} {epoch} {named}"));
+        self.led.insert((epoch, view), named);
     }
 
     /// Record one step: the input taken, and what it drew.
@@ -220,18 +331,49 @@ impl Recorder {
         // The model takes a proposal already paired with our share, and pairs
         // nothing itself. Rather than reassemble the pair here — where a bug
         // would look like a divergence — take it from the output that reports
-        // the pairing, as a step of its own.
+        // the pairing, as a step of its own. The parent's `Cert1`, the timeout
+        // certificate and the `Cert2` a proposal opening an epoch comes with
+        // are kept on pairing, so each is received just before: the model
+        // holds only the certificates it received.
         for output in &outputs {
             if let ConsensusOutput::ProposalPaired {
                 proposal,
                 vid_share,
             } = output
             {
-                lines.push(step(paired_proposal_json(&proposal.data, vid_share), &[]));
+                let carried =
+                    std::iter::once(tagged(
+                        "certificate1",
+                        obj(&[("c", cert1_json_raw(&proposal.data.justify_qc))]),
+                    ))
+                    .chain(proposal.data.view_change_evidence.as_ref().map(|tc| {
+                        tagged(
+                            "timeoutCertificate",
+                            obj(&[("c", timeout_cert_json_raw(tc))]),
+                        )
+                    }))
+                    .chain(
+                        proposal.data.next_epoch_justify_qc.as_ref().map(|cert2| {
+                            tagged("certificate2", obj(&[("c", cert2_json_raw(cert2))]))
+                        }),
+                    );
+                lines.extend(carried.map(|json| step(json, &[])));
+                let sender = self
+                    .led
+                    .get(&(proposal.data.epoch, proposal.data.view_number))
+                    .cloned();
+                lines.push(step(
+                    paired_proposal_json(&proposal.data, vid_share, sender),
+                    &[],
+                ));
             }
         }
 
-        let emitted: Vec<String> = outputs.iter().copied().filter_map(output_json).collect();
+        let emitted: Vec<String> = outputs
+            .iter()
+            .copied()
+            .filter_map(|o| output_json(o, self.epoch_height))
+            .collect();
         match input_json(input) {
             Ok(json) => {
                 // Anything held back rides along now. A recorded action reported
@@ -291,6 +433,11 @@ impl Drop for Recorder {
                 self.pending.join(", ")
             ));
         }
+        let times_out = |line: &String| TIMEOUT_TAGS.iter().any(|tag| line.contains(tag));
+        if self.lines.iter().any(times_out) {
+            self.lines
+                .insert(1.min(self.lines.len()), UNSIGNED_LOCKS.to_string());
+        }
         let mut text = self.lines.join("\n");
         text.push('\n');
         if let Err(err) = std::fs::write(path, text) {
@@ -309,24 +456,50 @@ fn step(input: String, outputs: &[String]) -> String {
 
 /// A proposal and this node's share for it, as the model's `Input.proposal`.
 ///
-/// The sender is the share's recipient, which is us: the model carries a sender
-/// but no rule reads it, so any key that identifies the step will do.
+/// The sender is the leader named for the proposal's view. The model does not
+/// carry signatures, so the sender is what authenticates a proposal: a vote1 is
+/// owed only on one the leader sent. Consensus admitted this one because the
+/// leader signed it, and the leader named for the view is the key it checked.
+/// When no leader was named, the share's recipient stands in.
 fn paired_proposal_json<T: NodeType>(
     proposal: &Proposal<T>,
     share: &VidDisperseShare2<T>,
+    leader: Option<String>,
 ) -> String {
+    let sender = match leader {
+        Some(named) if named != "unknown" => named,
+        _ => ident(&share.recipient_key),
+    };
     tagged(
         "proposal",
         obj(&[
-            ("sender", ident(&share.recipient_key)),
+            ("sender", sender),
             ("p", proposal_json(proposal)),
             (
-                "vid",
+                "share",
                 obj(&[
                     ("view", view_json(share.view_number)),
                     ("payloadCommit", ident(&share.payload_commitment)),
                 ]),
             ),
+        ]),
+    )
+}
+
+/// The sender of a proposal whose sender the recorder does not know.
+///
+/// A fetched or seeded proposal comes without its share, and no rule reads the
+/// sender of such a proposal: a vote1 needs the share.
+const NO_SENDER: &str = "\"\"";
+
+/// A proposal without this node's share, as the model's `Input.proposal`.
+fn bare_proposal_json<T: NodeType>(sender: &str, proposal: &Proposal<T>) -> String {
+    tagged(
+        "proposal",
+        obj(&[
+            ("sender", sender.to_string()),
+            ("p", proposal_json(proposal)),
+            ("share", "null".to_string()),
         ]),
     )
 }
@@ -352,7 +525,7 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
             "blockReconstructed",
             obj(&[("v", view_json(*view)), ("c", ident(commit))]),
         ),
-        ConsensusInput::Certificate1(cert) => {
+        ConsensusInput::Certificate1(cert) | ConsensusInput::AdvanceView(cert) => {
             tagged("certificate1", obj(&[("c", cert1_json_raw(cert))]))
         },
         // The pairing is epoch machinery, but the certificate is an ordinary
@@ -364,15 +537,12 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
         ConsensusInput::Certificate2(cert) => {
             tagged("certificate2", obj(&[("c", cert2_json_raw(cert))]))
         },
-        ConsensusInput::AdvanceView(cert) => {
-            tagged("advanceView", obj(&[("c", cert1_json_raw(cert))]))
-        },
         ConsensusInput::HeaderCreated(view, parent, header) => tagged(
             "headerBuilt",
             obj(&[
                 ("v", view_json(*view)),
                 ("parent", ident(parent)),
-                ("h", obj(&[("payloadCommit", payload_json(header))])),
+                ("h", header_json::<T>(header)),
             ]),
         ),
         ConsensusInput::StateValidated(response) => tagged(
@@ -388,19 +558,30 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
         },
         ConsensusInput::TimeoutCertificate(cert) => tagged(
             "timeoutCertificate",
-            obj(&[("c", timeout_cert_json_raw(cert.view_number()))]),
+            obj(&[("c", timeout_cert_json_raw(cert))]),
         ),
-        // The model receives a proposal already paired with our share, so the
-        // pair is emitted from `ProposalPaired` instead of reassembled here.
-        ConsensusInput::Proposal(..) => return Err(Dropped("Proposal (paired later)")),
+        // A proposal paired with our share is emitted from `ProposalPaired`
+        // instead of reassembled here. Until then, and for a fetched proposal,
+        // what the node holds is the proposal alone.
+        ConsensusInput::Proposal(sender, message) => {
+            bare_proposal_json(&ident(sender), &message.proposal.data)
+        },
+        ConsensusInput::FetchedProposal(message) => {
+            bare_proposal_json(NO_SENDER, &message.proposal.data)
+        },
         ConsensusInput::VidShare(..) => return Err(Dropped("VidShare (paired later)")),
-        // Outside the model's scope; see the module docs.
-        ConsensusInput::FetchedProposal(..) => return Err(Dropped("FetchedProposal")),
         ConsensusInput::StateValidationFailed(..) => return Err(Dropped("StateValidationFailed")),
         ConsensusInput::BlockBuilt { .. } => return Err(Dropped("BlockBuilt")),
         ConsensusInput::Stored(..) => return Err(Dropped("Stored")),
+        ConsensusInput::EpochChange(epoch_change) => tagged(
+            "epochChange",
+            obj(&[
+                ("c1", cert1_json_raw(&epoch_change.cert1)),
+                ("c2", cert2_json_raw(&epoch_change.cert2)),
+                ("p", proposal_json(&epoch_change.proposal)),
+            ]),
+        ),
         ConsensusInput::DrbResult(..) => return Err(Dropped("DrbResult")),
-        ConsensusInput::EpochChange(..) => return Err(Dropped("EpochChange")),
         ConsensusInput::UpgradeCertificateFormed(..) => {
             return Err(Dropped("UpgradeCertificateFormed"));
         },
@@ -408,7 +589,7 @@ fn input_json<T: NodeType>(input: &ConsensusInput<T>) -> Result<String, Dropped>
 }
 
 /// One output, as the model's `Output`, or nothing when the model has no such output.
-fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
+fn output_json<T: NodeType>(output: &ConsensusOutput<T>, epoch_height: u64) -> Option<String> {
     let message = match output {
         ConsensusOutput::SendVote1(vote) => tagged(
             "vote1",
@@ -417,7 +598,14 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
                 obj(&[
                     (
                         "data",
-                        obj(&[("blockHash", ident(&vote.vote.data.leaf_commit))]),
+                        obj(&[
+                            ("blockHash", ident(&vote.vote.data.leaf_commit)),
+                            ("epoch", epoch_json(HasEpoch::epoch(&vote.vote.data))),
+                            (
+                                "blockNumber",
+                                vote.vote.data.block_number.unwrap_or(0).to_string(),
+                            ),
+                        ]),
                     ),
                     ("view", view_json(vote.vote.view_number)),
                     ("signer", ident(&vote.vote.signature.0)),
@@ -429,7 +617,14 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
             obj(&[(
                 "v",
                 obj(&[
-                    ("data", obj(&[("blockHash", ident(&vote.data.leaf_commit))])),
+                    (
+                        "data",
+                        obj(&[
+                            ("blockHash", ident(&vote.data.leaf_commit)),
+                            ("epoch", epoch_json(HasEpoch::epoch(&vote.data))),
+                            ("blockNumber", vote.data.block_number.to_string()),
+                        ]),
+                    ),
                     ("view", view_json(vote.view_number)),
                     ("signer", ident(&vote.signature.0)),
                 ]),
@@ -444,7 +639,7 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
                 (
                     "v",
                     obj(&[
-                        ("data", obj(&[])),
+                        ("data", obj(&[("epoch", epoch_json(vote.epoch()))])),
                         ("view", view_json(vote.view_number())),
                         ("signer", ident(&vote.signing_key())),
                     ]),
@@ -454,10 +649,7 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
         ),
         ConsensusOutput::SendTimeoutCertificate(cert, view, _) => tagged(
             "timeoutCert",
-            obj(&[
-                ("c", timeout_cert_json_raw(cert.view_number())),
-                ("v", view_json(*view)),
-            ]),
+            obj(&[("c", timeout_cert_json_raw(cert)), ("v", view_json(*view))]),
         ),
         ConsensusOutput::SendCertificate1(cert) => {
             tagged("cert1", obj(&[("c", cert1_json_raw(cert))]))
@@ -465,6 +657,14 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
         ConsensusOutput::SendCertificate2(cert) => {
             tagged("cert2", obj(&[("c", cert2_json_raw(cert))]))
         },
+        ConsensusOutput::SendEpochChange(epoch_change) => tagged(
+            "epochChange",
+            obj(&[
+                ("c1", cert1_json_raw(&epoch_change.cert1)),
+                ("c2", cert2_json_raw(&epoch_change.cert2)),
+                ("p", proposal_json(&epoch_change.proposal)),
+            ]),
+        ),
         // A decide is not a message; it leaves through the other arm of `Output`.
         ConsensusOutput::LeafDecided {
             leaves,
@@ -475,7 +675,7 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
             // The model's decide carries a `Cert2`; without one there is nothing
             // to compare, and the views will arrive with a later decide anyway.
             let cert2 = cert2.as_ref()?;
-            let blocks: Vec<String> = leaves.iter().map(leaf_json).collect();
+            let blocks: Vec<String> = leaves.iter().map(|l| leaf_json(l, epoch_height)).collect();
             return Some(tagged(
                 "decided",
                 obj(&[
@@ -495,19 +695,26 @@ fn output_json<T: NodeType>(output: &ConsensusOutput<T>) -> Option<String> {
     Some(tagged("send", obj(&[("m", message)])))
 }
 
+/// A block header, as the model reads one: the payload it commits to, and the
+/// height the epoch arithmetic runs on.
+fn header_json<T: NodeType>(header: &T::BlockHeader) -> String {
+    obj(&[
+        ("payloadCommit", payload_json(header)),
+        ("blockNumber", header.block_number().to_string()),
+    ])
+}
+
 /// A proposal we sent, or one a decide delivered.
 fn proposal_json<T: NodeType>(proposal: &Proposal<T>) -> String {
     obj(&[
-        (
-            "blockHeader",
-            obj(&[("payloadCommit", payload_json(&proposal.block_header))]),
-        ),
+        ("blockHeader", header_json::<T>(&proposal.block_header)),
         ("viewNumber", view_json(proposal.view_number)),
+        ("epoch", proposal.epoch.to_string()),
         ("parentCert", cert1_json_raw(&proposal.justify_qc)),
         (
             "timeoutEvidence",
             match &proposal.view_change_evidence {
-                Some(tc) => timeout_cert_json_raw(tc.view_number()),
+                Some(tc) => timeout_cert_json_raw(tc),
                 None => "null".to_string(),
             },
         ),
@@ -522,13 +729,15 @@ fn proposal_json<T: NodeType>(proposal: &Proposal<T>) -> String {
 ///
 /// Only the view numbers are compared, so the remaining fields are filled as
 /// faithfully as a leaf allows and no further.
-fn leaf_json<T: NodeType>(leaf: &Leaf2<T>) -> String {
+fn leaf_json<T: NodeType>(leaf: &Leaf2<T>, epoch_height: u64) -> String {
     obj(&[
-        (
-            "blockHeader",
-            obj(&[("payloadCommit", payload_json(leaf.block_header()))]),
-        ),
+        ("blockHeader", header_json::<T>(leaf.block_header())),
         ("viewNumber", view_json(leaf.view_number())),
+        (
+            "epoch",
+            leaf.epoch(epoch_height)
+                .map_or_else(|| "0".to_string(), |e| e.to_string()),
+        ),
         ("parentCert", cert1_json_raw(leaf.justify_qc())),
         ("timeoutEvidence", "null".to_string()),
         ("identity", ident(&leaf.commit())),
@@ -541,11 +750,11 @@ fn evidence_json<T: NodeType>(evidence: Option<&CatchupEvidence<T>>) -> String {
         Some(CatchupEvidence::Qc(qc)) => tagged("cert1", obj(&[("cert", cert1_json_raw(qc))])),
         Some(CatchupEvidence::Tc(tc)) => tagged(
             "timeout",
-            obj(&[("cert", timeout_cert_json_raw(tc.view_number()))]),
+            obj(&[("cert", timeout_cert_json(tc.epoch(), tc.view_number()))]),
         ),
         Some(CatchupEvidence::Tc3(tc)) => tagged(
             "timeout",
-            obj(&[("cert", timeout_cert_json_raw(tc.view_number()))]),
+            obj(&[("cert", timeout_cert_json(tc.epoch(), tc.view_number()))]),
         ),
     }
 }
@@ -557,24 +766,62 @@ fn payload_json<H: BlockHeader<T>, T: NodeType>(header: &H) -> String {
     }
 }
 
-/// `{"data": {"blockHash": …}, "view": …}` for a `Cert1`.
+/// `{"data": {"blockHash": …, "epoch": …, "blockNumber": …}, "view": …}` for a `Cert1`.
 fn cert1_json_raw<T: NodeType>(cert: &Certificate1<T>) -> String {
     obj(&[
-        ("data", obj(&[("blockHash", ident(&cert.data.leaf_commit))])),
+        (
+            "data",
+            obj(&[
+                ("blockHash", ident(&cert.data.leaf_commit)),
+                ("epoch", epoch_json(cert.epoch())),
+                (
+                    "blockNumber",
+                    cert.data.block_number.unwrap_or(0).to_string(),
+                ),
+            ]),
+        ),
         ("view", view_json(cert.view_number())),
     ])
 }
 
 fn cert2_json_raw<T: NodeType>(cert: &Certificate2<T>) -> String {
     obj(&[
-        ("data", obj(&[("blockHash", ident(&cert.data.leaf_commit))])),
+        (
+            "data",
+            obj(&[
+                ("blockHash", ident(&cert.data.leaf_commit)),
+                ("epoch", epoch_json(cert.epoch())),
+                ("blockNumber", cert.data.block_number.to_string()),
+            ]),
+        ),
         ("view", view_json(cert.view_number())),
     ])
 }
 
-/// The model's timeout certificate carries no data; only the view it certifies.
-fn timeout_cert_json_raw(timed_out_view: ViewNumber) -> String {
-    obj(&[("data", obj(&[])), ("view", view_json(timed_out_view))])
+/// The epoch a certificate or vote names.
+///
+/// `None` goes out as zero, which is how the model reads a run with no epochs.
+/// On a network that does have them, a missing epoch is a real difference and
+/// shows up as one rather than being smoothed over.
+fn epoch_json(epoch: Option<EpochNumber>) -> String {
+    epoch.map_or(0, |e| *e).to_string()
+}
+
+/// A timeout certificate: the epoch whose committee formed it, and the view it
+/// certifies.
+///
+/// Both wire forms carry an epoch, so both are emitted the same way. The model
+/// has one timeout certificate, whose data is the epoch alone.
+fn timeout_cert_json_raw<T: NodeType>(cert: &TimeoutEvidence<T>) -> String {
+    timeout_cert_json(cert.epoch(), cert.view_number())
+}
+
+/// The same, for a certificate reached other than through `TimeoutEvidence`.
+fn timeout_cert_json(epoch: Option<EpochNumber>, view: ViewNumber) -> String {
+    obj(&[
+        ("data", obj(&[("epoch", epoch_json(epoch))])),
+        ("view", view_json(view)),
+    ])
 }
 
 /// A view number is a number.

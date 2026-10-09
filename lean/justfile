@@ -17,6 +17,10 @@ impl:
 diff:
     cd new-protocol-diff && lake build
 
+# Run the machine on random schedules over a simulated network, and check every run.
+sim seeds="4":
+    cd new-protocol-diff && lake build sim && .lake/build/bin/sim {{seeds}}
+
 # Build and render the reference document.
 docs:
     cd new-protocol-docs && lake build && .lake/build/bin/reference --output _out --with-tex
@@ -31,5 +35,5 @@ pdf: docs
 serve-docs: docs
     cd new-protocol-docs/_out/html-multi && python3 -m http.server --bind 127.0.0.1 8000
 
-all: spec lint impl diff docs coverage
+all: spec lint impl diff sim docs coverage
 

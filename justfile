@@ -187,6 +187,25 @@ test-all:
     just nextest --features embedded-db --profile all
     just nextest --profile all
 
+# Record runs of the new-protocol tests and check each against the signing rules
+# of `lean/new-protocol-spec`, directly rather than through the Lean machine. A
+# pass means the recorded node obeyed `SafeHistory`; see
+# `lean/new-protocol-diff/NewProtocolDiff/Check.lean`.
+test-lean-check dir="":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    (cd lean/new-protocol-diff && lake build check) || exit 1
+    # Given a directory, record nothing and check what is already there.
+    if [ -n "{{dir}}" ]; then
+      lean/new-protocol-diff/.lake/build/bin/check "{{dir}}"
+      exit $?
+    fi
+    traces="$(pwd)/target/np-traces"
+    rm -rf "$traces"
+    echo "recording to $traces"
+    NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || exit $?
+    lean/new-protocol-diff/.lake/build/bin/check "$traces"
+
 # Record runs of the new-protocol tests and replay them against the Lean machine.
 #
 # The machine is proved to satisfy `lean/new-protocol-spec`, so a divergence is

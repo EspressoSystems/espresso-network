@@ -6,219 +6,240 @@ public import NewProtocolSpec.Types
 /-!
 # Interface
 
-The configuration and the inputs and outputs of one consensus participant —
-shared between the specification and implementations.
+The configuration, and the inputs and outputs of one node. A node's history is a
+sequence of steps, each an input and the outputs it produced
+(`NewProtocolSpec.History`), and the rules are predicates on that history. This is
+also the shape of a recorded trace, which is what lets a trace of an
+implementation be checked against the rules directly.
 -/
 
 @[expose] public section
 
 namespace NewProtocol
 
-/-- Static protocol configuration. -/
+/-- Static configuration, agreed before the network starts. -/
 structure Config where
   /--
-  The block the node starts from, at `ViewNumber.genesis`.
+  The anchor: the decided block every node starts from, at any view and height.
 
-  Genesis on a fresh network. It is *held* but never *admitted*: nothing
-  votes on it, and it exists so that the first real proposal has a parent to
-  name and a header key to be built under. Its hash need not match
-  `Config.anchorCert` — the genesis exemptions in the proposing and
-  parent-linking rules are exactly this.
-
-  On restart this is the last decided block. Restart is
-  not covered, so here it is always genesis.
+  Nothing in a run votes on it. It is the genesis block, or a block an earlier run
+  decided; the chain before it is not modelled. It exists so the first proposal has
+  a parent to name.
   -/
   anchorBlock : Block
 
   /--
-  The certificate for `Config.anchorBlock`, at `ViewNumber.genesis`.
+  The certificate over `Config.anchorBlock`.
 
-  The chain's root of trust: it arrives with the configuration rather than
-  over the wire, which is why it can be present without violating
-  `SafetySpec.cert1Provenance` — no step introduces it.
+  Nothing in a run votes at the anchor's view, so no quorum of the run stands behind
+  it; the configuration vouches for it instead (`ConfigCoherent`).
   -/
   anchorCert : Cert1
 
   /--
-  Views to retain decide inputs behind the decided view.
+  How many views before its latest decide a node still owes anything.
 
-  Lets a late-broadcast `Cert2` decide an older gap view.
+  What lets a node with bounded memory meet the obligations: it may forget views
+  earlier than that, and nothing is owed there.
   -/
   decideBuffer : Nat := 20
+
+  /--
+  Blocks to an epoch.
+
+  Fixes where every epoch boundary falls, via `epochOf`. Zero means epochs are not
+  in use: every block reports epoch zero and no boundary falls.
+  -/
+  epochHeight : Nat := 0
 deriving Repr
 
 /--
-Inputs to the consensus transition function.
+The anchor's view. No view of a run is earlier; the run starts in the view after
+it, which the anchor's certificate is grounds for.
+-/
+abbrev Config.anchorView (cfg : Config) : ViewNumber := cfg.anchorBlock.viewNumber
 
-Certificates arriving here are already assumed signature-verified.
+/--
+The anchor's `Cert2`.
+
+The anchor is decided, so the configuration vouches for a `Cert2` over it, as it
+does for its `Cert1`. A proposal on the anchor that opens an epoch comes behind it
+(`OpensEpochJustified`).
+-/
+def Config.anchorCert2 (cfg : Config) : Cert2 := ⟨cfg.anchorCert.data.toVote2, cfg.anchorCert.view⟩
+
+/--
+The epoch a run starts in: the anchor's, or the next one if the anchor is the last
+block of its epoch. The anchor is decided, so its epoch has then ended.
+-/
+def Config.startEpoch (cfg : Config) : EpochNumber :=
+  if IsLastBlock cfg.anchorBlock.blockHeader.blockNumber cfg.epochHeight then cfg.anchorCert.data.epoch + 1
+  else cfg.anchorCert.data.epoch
+
+/-- The anchor's certificate describes the anchor block. -/
+structure ConfigCoherent (cfg : Config) : Prop where
+  /-- The certificate is at the anchor's view. -/
+  anchorCertView : cfg.anchorCert.view = cfg.anchorView
+
+  /-- It names the anchor block. -/
+  anchorCertBlock : cfg.anchorCert.data.blockHash = blockHash cfg.anchorBlock
+
+  /-- And its height. -/
+  anchorCertBlockNumber : cfg.anchorCert.data.blockNumber = cfg.anchorBlock.blockHeader.blockNumber
+
+  /-- And the epoch that height falls in. -/
+  anchorCertEpoch :
+    cfg.anchorCert.data.epoch = epochOf cfg.anchorBlock.blockHeader.blockNumber cfg.epochHeight
+
+  /-- The anchor block names that epoch too. -/
+  anchorBlockEpoch : cfg.anchorBlock.epoch = cfg.anchorCert.data.epoch
+
+/--
+An input to one step of a node.
+
+Certificates arriving here are already verified. Whether a node assembled a
+certificate from votes itself or was handed it is not distinguished: in a full
+mesh every honest node receives every honest vote, and both come in as the same
+input.
 -/
 inductive Input where
-  /--
-  This node has the payload of the block at `v`.
-
-  Reconstructed from peers' VID shares, or dispersed by this node itself when
-  it was the proposer — the specification does not distinguish, since what
-  every rule reads is only that the payload is *in hand*
-  (`NodeState.blocksReconstructed`).
-  -/
+  /-- The node has the payload of the block at view `v`, rebuilt from VID shares or built by itself. -/
   | blockReconstructed (v : ViewNumber) (c : PayloadCommit)
-
-  /-- A verified `Cert1` arrived. -/
+  /-- A `Cert1`. -/
   | certificate1 (c : Cert1)
-
-  /-- A verified `Cert2`. -/
+  /-- A `Cert2`. -/
   | certificate2 (c : Cert2)
-
-  /--
-  A `Cert1` requiring us to advance our view.
-
-  The same payload as `Input.certificate1`, but the two differ in what they oblige.
-  This one is an instruction: the node must be past `c.view` when the step ends
-  (`StepSpec.advanceOwed`).
-
-  The certificate alone, without the block it certifies. Nothing is lost by
-  advancing without it: proposing on that block needs it
-  (`ProposalJustification.headerBuilt`) and so does locking on it
-  (`SafetySpec.lockJustified`), so requiring it here would only stop a node
-  tracking a view it can see the network has reached.
-  -/
-  | advanceView (c : Cert1)
-
-  /--
-  A block is available for this leader to propose at `v` on the given parent.
-
-  Where the content comes from is not the specification's business. What the
-  rules need is only that *something* is available before a proposal can be
-  owed (`ProposeEnabled`), since a node cannot be obliged to propose a block
-  that does not exist yet.
-  -/
+  /-- Evidence that an epoch ended: the two certificates over its last block, and that block. -/
+  | epochChange (c1 : Cert1) (c2 : Cert2) (p : Proposal)
+  /-- Block content is available for this node to propose at `v` on the parent `parent`. -/
   | headerBuilt (v : ViewNumber) (parent : BlockHash) (h : BlockHeader)
-
   /--
-  A validated proposal together with this node's VID share for its payload.
+  A proposal received from `sender`, with this node's VID share of it, if any.
 
-  Every proposal arrival is this input, however the implementation obtained
-  it — the leader's broadcast or a fetch of its own devising. Admission is a
-  separate, guarded obligation: an arrival whose guards fail (a stale lock, a
-  mismatching share) may still be *held* for ancestry
-  (`SafetySpec.proposalProvenance`) without ever entering `NodeState.admitted`,
-  and only admitted proposals are votable. Holding is safe whatever the
-  block's provenance: `proposals` is only consumed certificate-anchored, so a
-  block no certificate names is inert.
+  A member of the proposal's committee gets its share from the leader with the
+  proposal. A node outside the committee gets none, a member may get the proposal
+  before its share, and a proposal fetched from a peer comes without one: each is
+  `share = none`. Holding the proposal is what lets a node extend or decide the
+  block; voting on it needs the share.
   -/
-  | proposal (sender : PubKey) (p : Proposal) (vid : VidShare)
-
-  /--
-  The block with this hash at view `v` is valid.
-
-  Validity is the application's notion, not consensus's — a block whose
-  requests satisfy the application's conditions and are consistent with its
-  ancestors — so it arrives from outside rather than being computed here.
-  What the specification takes on trust is that this input is only ever
-  supplied for blocks that really are valid; see `NewProtocolSpec.Assumptions`.
-
-  There is deliberately no counterpart reporting *failure*. A block never
-  reported valid is never votable, so nothing has to be undone; it sits in
-  `NodeState.proposals` as inert ancestry, and `StepSpec.contentRetained`
-  keeps it there — which is why an implementation should decline arrivals it
-  has no use for rather than take them and need the slot back.
-  -/
+  | proposal (sender : PubKey) (p : Proposal) (share : Option VidShare)
+  /-- A request from `sender` to vote again on an epoch's last block (`RevoteRequest`). -/
+  | revote (sender : PubKey) (r : RevoteRequest)
+  /-- The block with hash `h` at view `v` is valid. -/
   | blockValidated (v : ViewNumber) (h : BlockHash)
-
-  /-- The local timer for this view fired. -/
+  /-- The node's timer for view `v` fired. -/
   | timeout (v : ViewNumber)
-
-  /-- A verified timeout certificate. -/
+  /-- A timeout certificate. -/
   | timeoutCertificate (c : TimeoutCert)
-
-  /-- Timeout votes reached the one-honest threshold; vote timeout too. -/
+  /-- Timeout votes for view `v` reached the one-honest threshold. -/
   | timeoutOneHonest (v : ViewNumber)
-
 deriving DecidableEq, Repr
 
 /--
-Network messages of the protocol.
+The `Cert1` an input carries, if any: a certificate on its own, an epoch change's
+first certificate, or a proposal's parent certificate.
 
-What peers see. Together with `Output.decided` these are the only outputs any
-obligation requires; no message is required merely because it can be sent.
+Every certificate an input carries is checked before the node acts on it
+(`Network`). A re-vote request's certificate is checked too, but is never the
+anchor's, so it is stated apart (`Network.revoteGenuine`).
+-/
+def Input.cert1 : Input → Option Cert1
+  | .certificate1 c | .epochChange c _ _ => some c
+  | .proposal _ p _ => some p.parentCert
+  | _ => none
 
-No message names a recipient. Who receives what is not specified and no rule
-reads a destination, but the choice is not free everywhere: every honest node
-must be able to assemble a timeout certificate itself, since a node enters the
-next view only on a `Cert1` for the previous one or a timeout certificate over
-it, and cannot time out of a view it never entered. If one node alone could
-assemble that certificate, it could stop the network for good.
+/-- The `Cert2` an input carries, if any: a certificate on its own, or an epoch change's. -/
+def Input.cert2 : Input → Option Cert2
+  | .certificate2 c | .epochChange _ c _ => some c
+  | _ => none
 
-The three certificate relays differ in status. `cert2` is owed
-(`StepSpec.cert2RelayOwed`): a `Cert2` has no other route through
-the network, since only the view's vote collector can assemble one. The
-`cert1` and `timeoutCert` relays are optimisations — a `Cert1` travels on the
-next proposal as its `parentCert`, and a timeout certificate can be reassembled
-by anyone holding the timeout votes, which is the reach required above.
+/-- The timeout certificate an input carries, if any: one on its own, or timeout evidence. -/
+def Input.timeoutCert : Input → Option TimeoutCert
+  | .timeoutCertificate tc => some tc
+  | .proposal _ p _ => p.timeoutEvidence
+  | .revote _ r => r.timeoutEvidence
+  | _ => none
+
+/-- The `Cert1` an input carries, case by case. -/
+theorem Input.mem_cert1 {i : Input} {c : Cert1} : c ∈ i.cert1 ↔
+    i = .certificate1 c ∨ (∃ c2 p, i = .epochChange c c2 p)
+      ∨ ∃ s p share, i = .proposal s p share ∧ p.parentCert = c := by
+  cases i <;> simp [Input.cert1, eq_comm] <;>
+    (try exact ⟨fun h => ⟨_, _, ⟨rfl, rfl⟩, h⟩, fun ⟨_, _, ⟨_, h1⟩, h2⟩ => h1 ▸ h2⟩)
+
+/-- The `Cert2` an input carries, case by case. -/
+theorem Input.mem_cert2 {i : Input} {c : Cert2} : c ∈ i.cert2 ↔
+    i = .certificate2 c ∨ ∃ c1 p, i = .epochChange c1 c p := by
+  cases i <;> simp [Input.cert2, eq_comm]
+
+/-- The timeout certificate an input carries, case by case. -/
+theorem Input.mem_timeoutCert {i : Input} {tc : TimeoutCert} : tc ∈ i.timeoutCert ↔
+    i = .timeoutCertificate tc ∨ (∃ s p share, i = .proposal s p share ∧ p.timeoutEvidence = some tc)
+      ∨ ∃ s r, i = .revote s r ∧ r.timeoutEvidence = some tc := by
+  cases i <;> simp [Input.timeoutCert, eq_comm] <;>
+    (try exact ⟨fun h => ⟨_, _, ⟨rfl, rfl⟩, h⟩, fun ⟨_, _, ⟨_, h1⟩, h2⟩ => h1 ▸ h2⟩)
+
+/--
+A message a node sends.
+
+No message names a recipient. Who receives what, and when, is the network's part,
+stated as assumptions of the liveness result (`Synchrony`).
 -/
 inductive Message where
-  /-- The block we propose for our view. -/
+  /-- The block the node proposes for a view it leads. -/
   | proposal (p : Proposal)
-
-  /-- Our vote1 on a proposal. -/
+  /-- The node's request, as the leader of its view, to vote again on an epoch's last block. -/
+  | revote (r : RevoteRequest)
+  /-- The node's vote1. -/
   | vote1 (v : Vote1)
-
-  /-- Our vote2 on a proposal. -/
+  /-- The node's vote2. -/
   | vote2 (v : Vote2)
-
-  /-- Our vote to give up a view, with our best catchup evidence. -/
-  | timeoutVote (v : TimeoutVote) (e : Option CatchupEvidence)
-
-  /-- A timeout certificate, advancing into `v`. -/
-  | timeoutCert (c : TimeoutCert) (v : ViewNumber)
-
+  /-- The node's vote to give up a view. -/
+  | timeoutVote (v : TimeoutVote)
+  /-- A timeout certificate, grounds for the view after the one it certifies. -/
+  | timeoutCert (c : TimeoutCert)
   /-- A `Cert1`. -/
   | cert1 (c : Cert1)
-
-  /-- A `Cert2`, so peers that could not assemble it from votes can decide. -/
+  /-- A `Cert2`. -/
   | cert2 (c : Cert2)
-
-  /-- Our own VID share, so peers can reconstruct the block. -/
+  /-- The evidence that an epoch ended; see `Input.epochChange`. -/
+  | epochChange (c1 : Cert1) (c2 : Cert2) (p : Proposal)
+  /-- The node's own VID share, so peers can rebuild the payload. -/
   | vidShare (s : VidShare)
-
 deriving DecidableEq, Repr
 
+/-- The view a message is a leader's for: a proposal's, or a re-vote request's. -/
+def Message.leaderView : Message → Option ViewNumber
+  | .proposal p => some p.viewNumber
+  | .revote r => some r.view
+  | _ => none
+
+/-- The epoch a leader's message is for: a proposal's, or that of the block a re-vote request votes on again. -/
+def Message.leaderEpoch : Message → Option EpochNumber
+  | .proposal p => some p.epoch
+  | .revote r => some r.cert.data.epoch
+  | _ => none
+
 /--
-Outputs of the consensus transition function.
+Who sent an input that names its sender, and the message it sent: a proposal or a
+re-vote request.
+-/
+def Input.sentBy : Input → Option (PubKey × Message)
+  | .proposal l p _ => some (l, .proposal p)
+  | .revote l r => some (l, .revote r)
+  | _ => none
 
-Two kinds, and both are observable outside the node: messages to peers, and
-the decide stream to the application.
+/--
+An output of one step: a message to peers, or blocks decided.
 
-Deliberately absent is any request to the node's own modules — for a block to
-propose, for a validity verdict, for a VID dispersal, for the view timer to be
-reset. Each of those is one half of a seam whose other half is an `Input`,
-and the specification keeps only the half that says what the node *knows*: a
-request carries no protocol content, constrains nothing, and naming one would
-prescribe a decomposition into modules that an implementation is free not to
-have.
-
-Nothing here obliges a node to ask: an input that never arrives leaves the action
-it would have justified unenabled, and an unenabled action is owed nothing. So a
-node that starves its own subsystems satisfies fairness vacuously rather than
-failing it. That a node asks for what it needs is a property of an implementation
-and not of this specification.
+A decide lists blocks newest first. `c2` commits the newest and `c1` certifies it;
+each older block is the parent the next one's parent certificate names.
 -/
 inductive Output where
-  /-- Send a protocol message to peers. -/
+  /-- Send a message to peers. -/
   | send (m : Message)
-
-  /--
-  A chain of blocks is decided, newest first — the externally visible
-  result, delivered to the application.
-
-  `c1`/`c2` certify the newest block; each older block's `Cert1` is the next
-  block's `parentCert`, so the event is checkable against nothing but its
-  own contents. The chain stops at a block the node does not hold: the view
-  it names is skipped, not owed later — see `StepSpec.decideJustified` and
-  `DecideInv` for the delivery contract.
-  -/
+  /-- Blocks decided, delivered to the application. -/
   | decided (blocks : List Block) (c1 : Cert1) (c2 : Cert2)
-
 deriving DecidableEq, Repr
 
 end NewProtocol
