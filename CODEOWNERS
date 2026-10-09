@@ -3,3 +3,6 @@
 # opens a pull request.
 
 *       @sveitser @jbearer @tbro @imabdulbasit @ss-es @pls148 @bfish713 @rob-maron @lukaszrzasik
+
+# The recorded legacy chains cannot be regenerated once legacy consensus is deleted.
+data/legacy-chains/ @bfish713

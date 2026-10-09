@@ -1,0 +1,218 @@
+{
+  "rounds": 100,
+  "indexed_da": true,
+  "transactions_per_round": 10,
+  "manual_start_password": null,
+  "num_bootrap": 5,
+  "next_view_timeout": 10,
+  "view_sync_timeout": {
+    "secs": 2,
+    "nanos": 0
+  },
+  "builder_timeout": {
+    "secs": 10,
+    "nanos": 0
+  },
+  "data_request_delay": {
+    "secs": 2,
+    "nanos": 500000000
+  },
+  "node_index": 0,
+  "seed": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "transaction_size": 100,
+  "key_type_name": "espresso_types::v0::SeqTypes",
+  "libp2p_config": null,
+  "config": {
+    "start_threshold": [
+      5,
+      5
+    ],
+    "num_nodes_with_stake": 5,
+    "known_nodes_with_stake": [
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+        "connect_info": {
+          "x25519_key": "6dt8ewV2iVbvsJwDxJyb4JCAZkui7GXbki8zP39wowMY",
+          "p2p_addr": "127.0.0.1:34035"
+        }
+      },
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~4zQnaCOFJ7m95OjxeNls0QOOwWbz4rfxaL3NwmN2zSdnf8t5Nw_dfmMHq05ee8jCegw6Bn5T8inmrnGGAsQJMMWLv77nd7FJziz2ViAbXg-XGGF7o4HyzELCmypDOIYF3X2UWferFE_n72ZX0iQkUhOvYZZ7cfXToXxRTtb_mwRR",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg",
+        "connect_info": {
+          "x25519_key": "AXyBEU3QiwDJV42pzSUzCZgVdM1Cfaq9HPoNA2dYSGdM",
+          "p2p_addr": "127.0.0.1:40353"
+        }
+      },
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~IBRoz_Q1EXvcm1pNZcmVlyYZU8hZ7qmy337ePAjEMhz8Hl2q8vWPFOd3BaLwgRS1UzAPW3z4E-XIgRDGcRBTAMZX9b_0lKYjlyTlNF2EZfNnKmvv-xJ0yurkfjiveeYEsD2l5d8q_rJJbH1iZdXy-yPEbwI0SIvQfwdlcaKw9po4",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY",
+        "connect_info": {
+          "x25519_key": "26hMNAi7AzAaZyffRX2TW2TMbehyzoTpfymjtRUv1QR6",
+          "p2p_addr": "127.0.0.1:44471"
+        }
+      },
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~rO2PIjyY30HGfapFcloFe3mNDKMIFi6JlOLkH5ZWBSYoRm5fE2-Rm6Lp3EvmAcB5r7KFJ0c1Uor308x78r04EY_sfjcsDCWt7RSJdL4cJoD_4fSTCv_bisO8k98hs_8BtqQt8BHlPeJohpUXvcfnK8suXJETiJ6Er97pfxRbzgAL",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~le6RHdTasbBsTcbMqArt0XWFwfIJTY7RbUwaCvdxswL8LpXpO3eb86iyYUr63dtv4GGa5fIJaRH97nCd1lV9H8g",
+        "connect_info": {
+          "x25519_key": "FDUSEzivQn9kooJ53vSTf1xjLZtMh27aEtVrGAM6rDCP",
+          "p2p_addr": "127.0.0.1:33803"
+        }
+      },
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~r6b-Cwzp-b3czlt0MHmYPJIow5kMsXbrNmZsLSYg9RV49oCCO4WEeCRFR02x9bqLCa_sgNFMrIeNdEa11qNiBAohApYFIvrSa-zP5QGj3xbZaMOCrshxYit6E2TR-XsWvv6gjOrypmugjyTAth-iqQzTboSfmO9DD1-gjJIdCaD7",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw",
+        "connect_info": {
+          "x25519_key": "7U331v7hmBzPZfmYnt7YaZZ4hw3g7Xe2w3ZeSfRtrCja",
+          "p2p_addr": "127.0.0.1:43447"
+        }
+      }
+    ],
+    "known_da_nodes": [
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+        "connect_info": {
+          "x25519_key": "6dt8ewV2iVbvsJwDxJyb4JCAZkui7GXbki8zP39wowMY",
+          "p2p_addr": "127.0.0.1:34035"
+        }
+      },
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~4zQnaCOFJ7m95OjxeNls0QOOwWbz4rfxaL3NwmN2zSdnf8t5Nw_dfmMHq05ee8jCegw6Bn5T8inmrnGGAsQJMMWLv77nd7FJziz2ViAbXg-XGGF7o4HyzELCmypDOIYF3X2UWferFE_n72ZX0iQkUhOvYZZ7cfXToXxRTtb_mwRR",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~qQAC373HPv4s0mTTpdmSaynfUXC4SfPCuGD2fbeigSpexFB2ycCeXV9UAjuR86CC9udPhopgMsFLyD29VO2iJSg",
+        "connect_info": {
+          "x25519_key": "AXyBEU3QiwDJV42pzSUzCZgVdM1Cfaq9HPoNA2dYSGdM",
+          "p2p_addr": "127.0.0.1:40353"
+        }
+      },
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~IBRoz_Q1EXvcm1pNZcmVlyYZU8hZ7qmy337ePAjEMhz8Hl2q8vWPFOd3BaLwgRS1UzAPW3z4E-XIgRDGcRBTAMZX9b_0lKYjlyTlNF2EZfNnKmvv-xJ0yurkfjiveeYEsD2l5d8q_rJJbH1iZdXy-yPEbwI0SIvQfwdlcaKw9po4",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~tyuplKrHzvjODsjPKMHVFYfoMcgklQsMye-2aSCktBcbW_CIzLOq3wZXRIPBbw3FiV6_QoUXYAlpZ5up0zG_ANY",
+        "connect_info": {
+          "x25519_key": "26hMNAi7AzAaZyffRX2TW2TMbehyzoTpfymjtRUv1QR6",
+          "p2p_addr": "127.0.0.1:44471"
+        }
+      },
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~rO2PIjyY30HGfapFcloFe3mNDKMIFi6JlOLkH5ZWBSYoRm5fE2-Rm6Lp3EvmAcB5r7KFJ0c1Uor308x78r04EY_sfjcsDCWt7RSJdL4cJoD_4fSTCv_bisO8k98hs_8BtqQt8BHlPeJohpUXvcfnK8suXJETiJ6Er97pfxRbzgAL",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~le6RHdTasbBsTcbMqArt0XWFwfIJTY7RbUwaCvdxswL8LpXpO3eb86iyYUr63dtv4GGa5fIJaRH97nCd1lV9H8g",
+        "connect_info": {
+          "x25519_key": "FDUSEzivQn9kooJ53vSTf1xjLZtMh27aEtVrGAM6rDCP",
+          "p2p_addr": "127.0.0.1:33803"
+        }
+      },
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~r6b-Cwzp-b3czlt0MHmYPJIow5kMsXbrNmZsLSYg9RV49oCCO4WEeCRFR02x9bqLCa_sgNFMrIeNdEa11qNiBAohApYFIvrSa-zP5QGj3xbZaMOCrshxYit6E2TR-XsWvv6gjOrypmugjyTAth-iqQzTboSfmO9DD1-gjJIdCaD7",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~LfL6fFJQ8UZWR1Jro6LHtKm_y5-VQZBapO0XhcB8ABAmsVght9B8k7NntrgniffAMD8_OJ6Zjg8XUklhbb42CIw",
+        "connect_info": {
+          "x25519_key": "7U331v7hmBzPZfmYnt7YaZZ4hw3g7Xe2w3ZeSfRtrCja",
+          "p2p_addr": "127.0.0.1:43447"
+        }
+      }
+    ],
+    "da_committees": [],
+    "da_staked_committee_size": 5,
+    "fixed_leader_for_gpuvid": 0,
+    "next_view_timeout": 5000,
+    "view_sync_timeout": {
+      "secs": 1,
+      "nanos": 0
+    },
+    "num_bootstrap": 1,
+    "builder_timeout": {
+      "secs": 1,
+      "nanos": 0
+    },
+    "data_request_delay": {
+      "secs": 1,
+      "nanos": 0
+    },
+    "builder_urls": [
+      "http://localhost:36695/"
+    ],
+    "start_proposing_view": 0,
+    "stop_proposing_view": 0,
+    "start_voting_view": 0,
+    "stop_voting_view": 0,
+    "start_proposing_time": 0,
+    "stop_proposing_time": 0,
+    "start_voting_time": 0,
+    "stop_voting_time": 0,
+    "epoch_height": 10,
+    "epoch_start_block": 1,
+    "stake_table_capacity": 200,
+    "drb_difficulty": 10,
+    "drb_upgrade_difficulty": 20
+  },
+  "cdn_marshal_address": null,
+  "combined_network_config": null,
+  "commit_sha": "",
+  "builder": "Simple",
+  "random_builder": null,
+  "public_keys": []
+}
