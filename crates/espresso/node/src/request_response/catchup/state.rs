@@ -19,7 +19,6 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
 };
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme};
-use request_response::RequestType;
 use tokio::time::timeout;
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -220,7 +219,6 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
         let response = self
             .request_indefinitely(
                 Request::Accounts(height, *view, accounts),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -243,7 +241,6 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
         let leaf_chain = self
             .request_indefinitely(
                 Request::Leaf(height),
-                RequestType::Batched,
                 move |_request: &Request, response: Response| async move {
                     let Response::Leaf(leaves) = response else {
                         return Err(anyhow::anyhow!("expected leaf response"));
@@ -272,7 +269,6 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
             let cert2 = self
                 .request_indefinitely(
                     Request::Cert2(cert2_height),
-                    RequestType::Batched,
                     move |_request: &Request, response: Response| async move {
                         let Response::Cert2(cert2) = response else {
                             return Err(anyhow::anyhow!("expected cert2 response"));
@@ -325,11 +321,7 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
 
         // Wait for the protocol to send us the chain config
         let response = self
-            .request_indefinitely(
-                Request::ChainConfig(commitment),
-                RequestType::Batched,
-                response_validation_fn,
-            )
+            .request_indefinitely(Request::ChainConfig(commitment), response_validation_fn)
             .await
             .with_context(|| "failed to request chain config")?;
 
@@ -384,7 +376,6 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
         let response = self
             .request_indefinitely(
                 Request::BlocksFrontier(height, *view),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -436,7 +427,6 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
         let response = self
             .request_indefinitely(
                 Request::RewardMerkleTreeV2(height, *view),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -494,7 +484,6 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
         let response = self
             .request_indefinitely(
                 Request::RewardAccountsV1(height, *view, accounts),
-                RequestType::Batched,
                 response_validation_fn,
             )
             .await
@@ -523,11 +512,7 @@ impl<P: SequencerPersistence> StateCatchup for RequestResponseProtocol<P> {
 
         // Wait for the protocol to send us the state cert
         let response = self
-            .request_indefinitely(
-                Request::StateCert(epoch),
-                RequestType::Batched,
-                response_validation_fn,
-            )
+            .request_indefinitely(Request::StateCert(epoch), response_validation_fn)
             .await
             .with_context(|| "failed to request state cert")?;
 

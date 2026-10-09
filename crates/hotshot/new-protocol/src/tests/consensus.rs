@@ -34,9 +34,10 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, decides_view, is_leaf_decided, is_persist_proposal, is_proposal,
-            is_proposal_for_view, is_record_action, is_request_block_and_header, is_request_state,
-            is_send_cert2, is_send_timeout_cert, is_send_timeout_vote, is_view_changed, is_vote1,
-            is_vote1_for_view, is_vote2, is_vote2_for_view, node_index_for_key,
+            is_proposal_for_view, is_proposal_paired, is_record_action,
+            is_request_block_and_header, is_request_state, is_send_cert2, is_send_timeout_cert,
+            is_send_timeout_vote, is_view_changed, is_vote1, is_vote1_for_view, is_vote2,
+            is_vote2_for_view, node_index_for_key,
         },
         utils::{ConsensusHarness, MockBlock, state_verified_input},
     },
@@ -756,6 +757,49 @@ async fn test_single_view_decide() {
     );
 }
 
+/// A payload this node obtained before the view decides rides along on the
+/// decided leaf, so consumers need not pair the decide with a later
+/// `BlockPayloadReconstructed`.
+#[tokio::test]
+async fn test_decide_carries_obtained_payload() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    for view in &test_data.views[..2] {
+        harness
+            .apply_pair(view.proposal_input_consensus(&node_key))
+            .await;
+        harness.apply(view.block_reconstructed_input()).await;
+    }
+    harness.apply(test_data.views[1].cert1_input()).await;
+    harness.apply(test_data.views[1].cert2_input()).await;
+
+    let decided: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|output| match output {
+            ConsensusOutput::LeafDecided { leaves, .. } => Some(leaves),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(!decided.is_empty(), "cert2 should decide");
+    for leaf in decided {
+        let view = leaf.view_number();
+        let obtained = test_data
+            .views
+            .iter()
+            .find(|v| v.view_number == view)
+            .expect("decided a view the test did not drive");
+        assert_eq!(
+            leaf.block_payload().as_ref(),
+            Some(&obtained.payload),
+            "decided leaf at view {view:?} should carry the payload obtained for it"
+        );
+    }
+}
+
 /// Obtaining a Cert2 broadcasts it once so peers that missed the vote2s can
 /// still decide, and a re-delivered Cert2 for the same view is not re-broadcast.
 #[tokio::test]
@@ -1000,6 +1044,48 @@ async fn test_state_validation_failed_keeps_proposal() {
         any(harness.outputs(), |o| is_vote2_for_view(o, *view)),
         "Vote2 should still fire: the Cert1 certifies the block this node holds"
     );
+}
+
+/// A VID share whose `ns_lens` disagree with the proposal's namespace table is
+/// refused at pairing: no `ProposalPaired` persists it or seeds the
+/// reconstructor with its common, and the proposal is not processed and gets
+/// no vote1. The commitment does not bind `ns_lens`, so this check is what
+/// keeps a decided block's stored common honest about its namespace
+/// boundaries.
+#[tokio::test]
+async fn test_vid_share_with_mismatched_ns_lens_is_refused() {
+    let test_data = TestData::new(1).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+
+    // Same total as the table's single namespace, split in two.
+    let mut share = view.vid_share_for(&node_key);
+    let len = share.common.payload_byte_len();
+    share.common.ns_lens = vec![0, len];
+
+    let mut harness = ConsensusHarness::new(0).await;
+    harness
+        .apply_pair((
+            ConsensusInput::Proposal(view.leader_public_key, view.proposal_message()),
+            ConsensusInput::VidShare(share),
+        ))
+        .await;
+    assert!(
+        !any(harness.outputs(), is_proposal_paired),
+        "a mismatched share must not be persisted or seed the reconstructor"
+    );
+    assert!(
+        !any(harness.outputs(), is_request_state),
+        "a proposal paired with a mismatched share must not be processed"
+    );
+    assert!(!any(harness.outputs(), is_vote1));
+
+    // The honest share for the same proposal is processed.
+    let mut honest = ConsensusHarness::new(0).await;
+    honest
+        .apply_pair(view.proposal_input_consensus(&node_key))
+        .await;
+    assert!(any(honest.outputs(), is_request_state));
 }
 
 /// Without Certificate2, no decision is made even with all other data.
@@ -1908,6 +1994,38 @@ async fn test_restart_does_not_redecide_anchor() {
     assert!(
         decided_views.iter().all(|view| *view > anchor_view),
         "the decide re-included the anchor view {anchor_view:?}; decided {decided_views:?}"
+    );
+}
+
+/// A restart holds its anchor under the commitment that certifies the anchor,
+/// even when the high QC it restarts with is for a later view.
+#[tokio::test]
+async fn test_restart_holds_anchor_under_its_own_commitment() {
+    let test_data = TestData::new(4).await;
+    let anchor = &test_data.views[1];
+    let later = &test_data.views[2];
+    let anchor_commit = proposal_commitment(&anchor.proposal.data);
+    assert_ne!(
+        later.cert1.data.leaf_commit, anchor_commit,
+        "setup: the high QC names another proposal than the anchor"
+    );
+
+    let harness = ConsensusHarness::restarted_from(
+        0,
+        anchor.proposal.data.clone(),
+        later.cert1.clone(),
+        [later.proposal.data.clone()],
+    )
+    .await;
+
+    assert_eq!(
+        harness
+            .consensus
+            .proposals()
+            .get(anchor.view_number, anchor_commit)
+            .map(proposal_commitment),
+        Some(anchor_commit),
+        "the anchor is found by the commitment its certificate names"
     );
 }
 

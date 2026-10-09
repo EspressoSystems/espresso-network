@@ -1,0 +1,353 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["matplotlib", "pandas", "psutil", "tabulate", "typer"]
+# ///
+r"""A/B the leader's block build between two git refs, step by step.
+
+Runs the `request_block` benchmarks of espresso-types' `block_build` bench for both refs and
+writes tmp/bench-block-build/<base>-<head>.{csv,md,svg}: samples, a table of the whole build and
+each step, and a waterfall chart.
+
+    just bench-block-build                      # origin/main vs this checkout, edits included
+    just bench-block-build main my-branch
+    scripts/bench-block-build --filter 'request_block/50MiB' --repeats 3 main HEAD
+    scripts/bench-block-build --chart tmp/bench-block-build/<base>-<head>.csv
+
+Each ref is built in a temporary git worktree into this checkout's target dir. Each
+benchmark runs in its own process, since glibc's mmap threshold depends on earlier allocations,
+with base and head alternating, under glibc.malloc.hugetlb=1 by default (the AWS bench nodes).
+Changes carry one standard error from the spread of run medians and are marked as noise within
+two. Before each run the script samples CPU use while idle and warns if other work is busy.
+"""
+
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+from enum import Enum
+from pathlib import Path
+from typing import Annotated
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import psutil
+import typer
+
+ROOT = Path(
+    subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
+)
+OUT = ROOT / "tmp/bench-block-build"
+BENCH_FILE = "crates/espresso/types/benches/block_build.rs"
+WORKTREE = "worktree"
+DEFAULT_FILTER = r"^block_build/request_block/(30|50|70)MiB_t\d+_n100$"
+BUSY_LIMIT = 0.05
+LANES = {
+    "request_block": "#898781",
+    "from_transactions": "#2a78d6",
+    "block_commitments": "#c3c2b7",
+    "encode": "#e87ba4",
+    "transaction_commitments": "#eb6834",
+    "vid_commitment": "#1baf7a",
+    "builder_commitment": "#eda100",
+}
+
+log = logging.getLogger("bench-block-build")
+
+
+class Malloc(str, Enum):
+    default = "default"
+    hugetlb = "hugetlb"
+
+
+MALLOC_ENV = {
+    Malloc.default: {},
+    Malloc.hugetlb: {"GLIBC_TUNABLES": "glibc.malloc.hugetlb=1"},
+}
+
+
+def main(
+    base: Annotated[str, typer.Argument()] = "origin/main",
+    head: Annotated[
+        str,
+        typer.Argument(help=f"git ref, or {WORKTREE!r}: this checkout with its edits"),
+    ] = WORKTREE,
+    bench_filter: Annotated[str, typer.Option("--filter")] = DEFAULT_FILTER,
+    repeats: Annotated[int, typer.Option(min=2)] = 10,
+    malloc: Annotated[list[Malloc] | None, typer.Option(help="default hugetlb")] = None,
+    dry_run: Annotated[bool, typer.Option(help="resolve refs and stop")] = False,
+    chart: Annotated[
+        Path | None, typer.Option(help="redraw the SVG of a saved .csv")
+    ] = None,
+) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if chart:
+        waterfall(pd.read_csv(chart), chart.with_suffix(".svg"))
+        return
+    refs = {"base": base, "head": head}
+    shas = {side: resolve(ref) for side, ref in refs.items()}
+    for side, sha in shas.items():
+        log.info("%s %s = %s", side, refs[side], sha[:10])
+        if not has_bench(sha):
+            raise SystemExit(f"{side} {refs[side]} has no {BENCH_FILE}")
+    if dry_run:
+        return
+    if shas["base"] == shas["head"]:
+        del shas["base"]
+    labels = {side: f"{side} {refs[side]} {sha[:10]}" for side, sha in shas.items()}
+    with tempfile.TemporaryDirectory(prefix="bench-block-build-") as tmp:
+        binaries = {side: build(sha, Path(tmp)) for side, sha in shas.items()}
+        names = [
+            n for n in list_benches(binaries["head"]) if re.search(bench_filter, n)
+        ]
+        if not names:
+            raise SystemExit(f"no benchmark matches {bench_filter!r}")
+        mallocs = malloc or [Malloc.hugetlb]
+        runs = measure(
+            binaries, labels, names, mallocs, repeats, Path(tmp) / "criterion"
+        )
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    stem = OUT / "-".join(sha[:10] for sha in shas.values())
+    runs.to_csv(stem.with_suffix(".csv"), index=False)
+    table = summarize(runs)
+    print(table)
+    stem.with_suffix(".md").write_text(f"{', '.join(labels.values())}\n\n{table}\n")
+    waterfall(runs, stem.with_suffix(".svg"))
+    log.info("wrote %s.{csv,md,svg}", stem)
+
+
+def measure(
+    binaries: dict[str, Path],
+    labels: dict[str, str],
+    names: list[str],
+    mallocs: list[Malloc],
+    repeats: int,
+    home: Path,
+) -> pd.DataFrame:
+    """One row per step sample, with the run's side, repeat and CPU share of other work."""
+    frames = []
+    for rep in range(repeats):
+        order = list(binaries) if rep % 2 == 0 else list(reversed(binaries))
+        for malloc in mallocs:
+            for name in names:
+                for side in order:
+                    busy = other_cpu()
+                    if busy > BUSY_LIMIT:
+                        log.warning(
+                            "warning: other work used %.0f%% of CPU", busy * 100
+                        )
+                    run = run_one(binaries[side], name, MALLOC_ENV[malloc], home)
+                    frames.append(
+                        run.assign(
+                            malloc=malloc.value,
+                            benchmark=name,
+                            side=side,
+                            label=labels[side],
+                            rep=rep,
+                            other_cpu=busy,
+                        )
+                    )
+                    total = run.loc[run.step == "request_block", "duration"].median()
+                    log.info(
+                        "rep %d %s %s %s %.2f ms", rep, malloc.value, side, name, total
+                    )
+    return pd.concat(frames, ignore_index=True)
+
+
+def summarize(runs: pd.DataFrame) -> str:
+    keys = ["malloc", "benchmark", "step"]
+    per_run = (
+        runs.groupby([*keys, "side", "rep"])
+        .duration.median()
+        .groupby(level=[*keys, "side"])
+    )
+    median = runs.pivot_table(
+        index=keys, columns="side", values="duration", aggfunc="median"
+    )
+    sem = per_run.sem().unstack("side")
+    run_medians = per_run.agg(lambda v: " ".join(f"{x:.2f}" for x in v)).unstack("side")
+    if "base" not in median:
+        table = pd.DataFrame(
+            {"ms": median["head"], "± se": sem["head"], "runs": run_medians["head"]}
+        )
+    else:
+        median = median.dropna()
+        ratio = median["head"] / median["base"]
+        # Delta-method standard error of head / base.
+        se = (sem["head"] ** 2 + ratio**2 * sem["base"] ** 2) ** 0.5 / median["base"]
+        change = [
+            f"{r - 1:+.1%} ± {e:.1%}{'' if abs(r - 1) > 2 * e else ' (noise)'}"
+            for r, e in zip(ratio, se.reindex(ratio.index), strict=True)
+        ]
+        table = median.assign(
+            change=change, base_runs=run_medians["base"], head_runs=run_medians["head"]
+        )
+    table = table.reset_index()
+    table["benchmark"] = table.benchmark.str.removeprefix("block_build/")
+    table["later"] = table.step.ne("request_block")
+    table = table.sort_values(["malloc", "benchmark", "later", "step"]).drop(
+        columns="later"
+    )
+    return table.to_markdown(index=False, floatfmt=".2f")
+
+
+def waterfall(runs: pd.DataFrame, path: Path) -> None:
+    """One panel per malloc, benchmark and ref: each step at its median start and duration."""
+    keys = ["malloc", "benchmark", "label", "step"]
+    medians = runs.groupby(keys)[["start", "duration"]].median()
+    sem = runs.groupby([*keys, "rep"]).duration.median().groupby(level=keys).sem()
+    panels = medians.index.droplevel("step").unique()
+    fig, axes = plt.subplots(
+        len(panels), sharex=True, squeeze=False, figsize=(10, 2.2 * len(panels))
+    )
+    for ax, panel in zip(axes[:, 0], panels, strict=True):
+        bars = medians.loc[panel].reindex(list(LANES))
+        errors = sem.loc[panel].reindex(list(LANES)).fillna(0)
+        lanes = range(len(LANES))
+        ax.barh(
+            lanes,
+            bars.duration,
+            left=bars.start,
+            color=list(LANES.values()),
+            height=0.6,
+            xerr=errors,
+            error_kw={"ecolor": "#52514e", "capsize": 3},
+        )
+        for lane, start, duration, error in zip(
+            lanes, bars.start, bars.duration, errors, strict=True
+        ):
+            note = "not run" if pd.isna(duration) else f"{duration:.1f} ms"
+            x = 0 if pd.isna(start) else start + duration + error
+            ax.text(x, lane, f"  {note}", va="center")
+        ax.set_yticks(list(lanes), list(LANES))
+        ax.invert_yaxis()
+        ax.set_title(
+            " · ".join(panel).replace("block_build/request_block/", ""), loc="left"
+        )
+        ax.grid(axis="x", color="#e1e0d9")
+        ax.set_axisbelow(True)
+    axes[-1, 0].set_xlim(0, (medians.start + medians.duration).max() * 1.15)
+    axes[-1, 0].set_xlabel(
+        "ms since the build started; overlapping bars ran in parallel;"
+        " whiskers are one standard error across runs"
+    )
+    fig.tight_layout()
+    fig.savefig(path)
+
+
+def other_cpu(window: float = 0.3) -> float:
+    """Share of CPU busy over `window` seconds while no benchmark runs, i.e. other work."""
+    return psutil.cpu_percent(interval=window) / 100
+
+
+def run_one(binary: Path, name: str, env: dict[str, str], home: Path) -> pd.DataFrame:
+    sample_file, steps_file = (
+        home / name / "new" / "sample.json",
+        home / name / "steps.json",
+    )
+    # A binary without this benchmark exits 0 and writes nothing.
+    sample_file.unlink(missing_ok=True)
+    steps_file.unlink(missing_ok=True)
+    run = subprocess.run(
+        [binary, "--bench", "--noplot", f"^{re.escape(name)}$"],
+        env={**os.environ, **env, "CRITERION_HOME": str(home)},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if run.returncode or not steps_file.exists():
+        raise SystemExit(f"{binary} {name} failed:\n{run.stderr}")
+    # Steps start with criterion's warm-up iterations; keep one per measured iteration.
+    measured = int(sum(json.loads(sample_file.read_text())["iters"]))
+    steps = json.loads(steps_file.read_text())
+    rows = [(step, s, d) for step, spans in steps.items() for s, d in spans[-measured:]]
+    return pd.DataFrame(rows, columns=["step", "start", "duration"])
+
+
+def list_benches(binary: Path) -> list[str]:
+    out = subprocess.run(
+        [binary, "--bench", "--list"], check=True, capture_output=True, text=True
+    ).stdout
+    return [
+        line.removesuffix(": benchmark")
+        for line in out.splitlines()
+        if line.endswith(": benchmark")
+    ]
+
+
+def resolve(ref: str) -> str:
+    """A commit sha, or WORKTREE for this checkout when it has uncommitted edits."""
+    if ref == WORKTREE:
+        if git("status", "--porcelain", "--untracked-files=no"):
+            return WORKTREE
+        ref = "HEAD"
+    return git("rev-parse", "--verify", f"{ref}^{{commit}}")
+
+
+def has_bench(sha: str) -> bool:
+    if sha == WORKTREE:
+        return (ROOT / BENCH_FILE).exists()
+    probe = ["git", "cat-file", "-e", f"{sha}:{BENCH_FILE}"]
+    return subprocess.run(probe, check=False, capture_output=True).returncode == 0
+
+
+def build(sha: str, tmp: Path) -> Path:
+    """Build the bench for `sha` and copy it into `tmp`, since both refs build the same path."""
+    if sha == WORKTREE:
+        log.info("building block_build in this checkout")
+        executable = cargo_bench(ROOT, dict(os.environ))
+    else:
+        log.info("building block_build at %s", sha[:10])
+        worktree = tmp / sha
+        git("worktree", "prune")
+        git("worktree", "add", "--detach", str(worktree), sha)
+        # Reuse this checkout's target dir: only the workspace crates rebuild at the new path.
+        env = {"CARGO_TARGET_DIR": str(ROOT / "target"), **os.environ}
+        try:
+            executable = cargo_bench(worktree, env)
+        finally:
+            git("worktree", "remove", "--force", str(worktree))
+    return Path(shutil.copy2(executable, tmp / f"block_build-{sha[:10]}"))
+
+
+def cargo_bench(cwd: Path, env: dict[str, str]) -> Path:
+    cargo = [
+        "cargo",
+        "bench",
+        "-p",
+        "espresso-types",
+        "--bench",
+        "block_build",
+        "--no-run",
+    ]
+    out = subprocess.run(
+        [*cargo, "--message-format=json"],
+        cwd=cwd,
+        env=env,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout
+    for msg in map(json.loads, out.splitlines()):
+        if (
+            msg.get("reason") == "compiler-artifact"
+            and msg["target"]["name"] == "block_build"
+            and msg["executable"]
+        ):
+            return Path(msg["executable"])
+    raise SystemExit("cargo did not report a block_build executable")
+
+
+def git(*args: str) -> str:
+    run = subprocess.run(["git", *args], check=False, capture_output=True, text=True)
+    if run.returncode:
+        raise SystemExit(f"git {' '.join(args)} failed:\n{run.stderr.strip()}")
+    return run.stdout.strip()
+
+
+if __name__ == "__main__":
+    typer.run(main)

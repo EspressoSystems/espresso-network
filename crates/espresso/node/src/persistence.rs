@@ -214,7 +214,8 @@ mod tests {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
+        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, TEST_UPGRADE,
+        ValidatedState,
         traits::{
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
@@ -2316,11 +2317,10 @@ mod tests {
             .api_config(query_api_options)
             .network_config(network_config.clone())
             .persistences(persistence_options.clone())
-            .build()
-            .await;
+            .build();
 
         //start the network
-        let test_network = TestNetwork::new(testnet_config).await;
+        let test_network = TestNetwork::new(testnet_config, TEST_UPGRADE).await;
 
         let client: Client<ClientErr, SequencerApiVersion> = Client::new(
             format!("http://localhost:{query_service_port}")

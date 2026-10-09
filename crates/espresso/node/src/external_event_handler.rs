@@ -1,10 +1,12 @@
 //! Should probably rename this to "external" or something
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result, bail};
 use espresso_types::{PubKey, SeqTypes};
 use hotshot::types::Message;
 use hotshot_new_protocol::client::ClientApi;
-use hotshot_types::message::MessageKind;
+use hotshot_types::{message::MessageKind, traits::metrics::Counter};
 use request_response::network::Bytes;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError};
@@ -23,6 +25,9 @@ pub enum ExternalMessage {
 pub struct ExternalEventHandler {
     /// The sender to the request-response protocol
     request_response_sender: Sender<Bytes>,
+
+    /// Counts inbound request-response messages dropped because the channel was full
+    dropped_messages: Arc<dyn Counter>,
 }
 
 // The different types of outbound messages (broadcast or direct)
@@ -41,6 +46,7 @@ impl ExternalEventHandler {
         outbound_message_receiver: Receiver<OutboundMessage>,
         client_api: ClientApi<SeqTypes>,
         public_key: PubKey,
+        dropped_messages: Arc<dyn Counter>,
     ) -> Result<Self> {
         tasks.spawn(
             "ExternalEventHandler",
@@ -49,6 +55,7 @@ impl ExternalEventHandler {
 
         Ok(Self {
             request_response_sender,
+            dropped_messages,
         })
     }
 
@@ -69,7 +76,10 @@ impl ExternalEventHandler {
                     .try_send(request_response.into())
                 {
                     Ok(()) => Ok(()),
-                    Err(TrySendError::Full(..)) => bail!("request-response channel full"),
+                    Err(TrySendError::Full(..)) => {
+                        self.dropped_messages.add(1);
+                        bail!("request-response channel full")
+                    },
                     Err(TrySendError::Closed(..)) => bail!("request-response channel closed"),
                 }
             },

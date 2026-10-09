@@ -41,7 +41,7 @@ use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
 use tokio::{
     spawn,
-    sync::{mpsc::channel, watch},
+    sync::{broadcast, mpsc::channel, watch},
     task::JoinHandle,
 };
 use tracing::{Instrument, Level, info};
@@ -61,8 +61,16 @@ use crate::{
         recipient_source::RecipientSource,
     },
     startup_catchup::{bootstrap_epoch_window, seed_membership},
-    state_signature::{self, StateSigner},
+    state_signature::{self, DecidedLeaf, StateSignatureMemStorage, StateSigner},
 };
+
+/// Inbound request-response messages are dropped (not queued) when this channel is full. A node
+/// catching up has many batched requests in flight, each answered by up to `request_batch_size`
+/// peers per batch interval, so this must comfortably exceed that fan-in.
+const REQUEST_RESPONSE_CHANNEL_CAPACITY: usize = 256;
+
+/// Responders block on the outbound channel while holding request-response admission permits.
+const OUTBOUND_MESSAGE_CHANNEL_CAPACITY: usize = 128;
 
 /// The sequencer context contains a consensus handle and other sequencer specific information.
 #[derive(Derivative, Clone)]
@@ -85,8 +93,8 @@ pub struct SequencerContext<P: SequencerPersistence> {
     #[allow(dead_code)]
     pub request_response_protocol: RequestResponseProtocol<P>,
 
-    /// Context for generating state signatures.
-    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
+    /// Light client state signatures produced by the state signer task.
+    state_signatures: Arc<RwLock<StateSignatureMemStorage>>,
 
     /// An orchestrator to wait for before starting consensus, with the peer config this node
     /// registered there.
@@ -206,6 +214,10 @@ where
             .load_high_qc2()
             .await
             .context("loading persisted locked QC")?;
+        let anchor_cert2 = persistence
+            .load_cert2(initializer.anchor_leaf().view_number())
+            .await
+            .context("loading the anchor's cert2")?;
 
         let coordinator = Coordinator::maker()
             .membership_coordinator(membership_coordinator.clone())
@@ -223,6 +235,7 @@ where
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
             .maybe_locked_qc(locked_qc)
+            .maybe_anchor_cert2(anchor_cert2)
             .upgrade_config(UpgradeConfig {
                 start_proposing_view: config.start_proposing_view,
                 stop_proposing_view: config.stop_proposing_view,
@@ -254,19 +267,21 @@ where
         }
 
         // Create the channel for sending outbound messages from the external event handler
-        let (outbound_message_sender, outbound_message_receiver) = channel(20);
-        let (request_response_sender, request_response_receiver) = channel(20);
+        let (outbound_message_sender, outbound_message_receiver) =
+            channel(OUTBOUND_MESSAGE_CHANNEL_CAPACITY);
+        let (request_response_sender, request_response_receiver) =
+            channel(REQUEST_RESPONSE_CHANNEL_CAPACITY);
 
         // Configure the request-response protocol
         let request_response_config = RequestResponseConfig {
             incoming_request_ttl: Duration::from_secs(40),
             incoming_request_timeout: Duration::from_secs(5),
-            incoming_response_timeout: Duration::from_secs(5),
             request_batch_size: 5,
             request_batch_interval: Duration::from_secs(2),
-            max_incoming_requests: 10,
-            max_incoming_requests_per_key: 1,
-            max_incoming_responses: 200,
+            // Permits are held while a response is derived (possibly from SQL), and a peer
+            // catching up legitimately issues several distinct requests concurrently
+            max_incoming_requests: 32,
+            max_incoming_requests_per_key: 4,
         };
 
         // Create the request-response protocol
@@ -302,6 +317,10 @@ where
             outbound_message_receiver,
             client_api.clone(),
             pub_key,
+            metrics
+                .subgroup("request_response".into())
+                .create_counter("inbound_dropped".into(), None)
+                .into(),
         )
         .await
         .with_context(|| "Failed to create external event handler")?;
@@ -351,7 +370,7 @@ where
             coordinator,
             upgrade_lock,
             persistence: persistence.clone(),
-            state_signer: Arc::new(RwLock::new(state_signer)),
+            state_signatures: Arc::clone(&state_signer.signatures),
             request_response_protocol,
             tasks: Default::default(),
             detached: false,
@@ -389,15 +408,20 @@ where
             ),
         );
 
+        let (signer_tx, signer_rx) = broadcast::channel(SIGNER_QUEUE_CAPACITY);
+        ctx.spawn(
+            "state signer",
+            sign_decided_leaves(ctx.node_state.coordinator.clone(), state_signer, signer_rx),
+        );
+
         // Event loop. On a decide this only does the leaf write, then signals `decide_tx`.
         ctx.spawn(
             "event handler",
             handle_events(
-                ctx.node_state.coordinator.clone(),
                 node_id,
                 events,
                 persistence,
-                ctx.state_signer.clone(),
+                signer_tx,
                 external_event_handler,
                 event_consumer,
                 decide_tx,
@@ -426,9 +450,9 @@ where
         self
     }
 
-    /// Return a reference to the consensus state signer.
-    pub fn state_signer(&self) -> Arc<RwLock<StateSigner<SequencerApiVersion>>> {
-        self.state_signer.clone()
+    /// Return the light client state signatures this node has produced.
+    pub fn state_signatures(&self) -> Arc<RwLock<StateSignatureMemStorage>> {
+        self.state_signatures.clone()
     }
 
     /// Stream consensus events.
@@ -633,13 +657,11 @@ impl DecideProcessorMetrics {
 }
 
 #[tracing::instrument(skip_all, fields(node_id))]
-#[allow(clippy::too_many_arguments)]
 async fn handle_events<P, C>(
-    membership: EpochMembershipCoordinator<SeqTypes>,
     node_id: u64,
     mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
     persistence: Arc<P>,
-    state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
+    signer_tx: broadcast::Sender<DecidedLeaf>,
     external_event_handler: ExternalEventHandler,
     event_consumer: Arc<C>,
     decide_tx: watch::Sender<DecideSignal>,
@@ -667,31 +689,48 @@ async fn handle_events<P, C>(
             _ => {},
         }
 
+        if let Some(leaf) = DecidedLeaf::from_event(&event) {
+            let _ = signer_tx.send(leaf);
+        }
+
         // Critical path: only persist the decided leaves, then signal the background processor.
-        // Signalling after the persist future means it never reads ahead of committed state.
-        let persistence_fut = async {
-            if let Some(signal) = persistence
-                .persist_event(&event, event_consumer.as_ref())
-                .await
-            {
-                // Keep the max view: a gap-fill decide signals an *older* view
-                // and must not hide a newer, unconsumed tip signal.
-                decide_tx.send_modify(|current| match current {
-                    Some((view, _)) if *view > signal.0 => {},
-                    _ => *current = Some(signal),
-                });
-            }
-        };
+        // Signalling after the persist means it never reads ahead of committed state.
+        if let Some(signal) = persistence
+            .persist_event(&event, event_consumer.as_ref())
+            .await
+        {
+            // Keep the max view: a gap-fill decide signals an *older* view
+            // and must not hide a newer, unconsumed tip signal.
+            decide_tx.send_modify(|current| match current {
+                Some((view, _)) if *view > signal.0 => {},
+                _ => *current = Some(signal),
+            });
+        }
+    }
+}
 
-        let state_signer_fut = async {
-            state_signer
-                .write()
-                .await
-                .handle_event(&event, &membership)
-                .await;
-        };
+/// Decides the signer may fall behind by before it drops the oldest ones.
+const SIGNER_QUEUE_CAPACITY: usize = 128;
 
-        tokio::join!(persistence_fut, state_signer_fut);
+/// Signs and relays the newest leaf of every decide, in order, off the event loop, because a
+/// relay post can take as long as its HTTP timeout. The relay needs a threshold of signatures on
+/// one height, so every node must sign the same heights. Signing every decide keeps that while
+/// posts fall behind, and dropping only the oldest once the queue is full keeps it as well.
+async fn sign_decided_leaves(
+    membership: EpochMembershipCoordinator<SeqTypes>,
+    mut state_signer: StateSigner<SequencerApiVersion>,
+    mut leaves: broadcast::Receiver<DecidedLeaf>,
+) {
+    loop {
+        match leaves.recv().await {
+            Ok(leaf) => {
+                state_signer.handle_decide(&leaf, &membership).await;
+            },
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                tracing::warn!(skipped, "state signer fell behind, dropped oldest decides");
+            },
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
     }
 }
 
