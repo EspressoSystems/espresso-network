@@ -839,7 +839,7 @@ where
                     let gc_view = newest.view_number();
                     let gc_epoch = newest.justify_qc().epoch().unwrap_or_default();
                     self.gc(gc_epoch, GcScope::Decided(gc_view))?;
-                    // Seed only the decided view; older leaves are covered by gc.
+                    // A gap-fill decide trails the decided view; gc already covered its leaves.
                     if gc_view == self.consensus.last_decided_view() {
                         self.state_manager.seed_decided(newest.clone());
                     }

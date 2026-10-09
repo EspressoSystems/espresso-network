@@ -100,7 +100,8 @@ pub struct StateManager<T: NodeType> {
     state_requests: HashMap<Commitment<Leaf2<T>>, InFlight<T>>,
     header_requests: HashMap<(ViewNumber, Commitment<Leaf2<T>>), AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
-    /// Decided leaf whose in-flight validation made `seed_decided` skip it.
+    /// Newest decided leaf whose in-flight validation made `seed_decided` skip it.
+    /// Cleared by gc below the gc view.
     decided_in_flight: Option<Leaf2<T>>,
     upgrade_lock: UpgradeLock<T>,
     tasks: JoinSet<Completed<T>>,
@@ -201,7 +202,7 @@ impl<T: NodeType> StateManager<T> {
 
     /// Seed a stub for a decided leaf so work queued on it runs via catchup.
     /// No-op when the leaf is validated. When it is being validated, the stub is
-    /// seeded only if that validation fails.
+    /// seeded only if that validation fails. An older leaf never replaces a newer one.
     pub(crate) fn seed_decided(&mut self, leaf: Leaf2<T>) {
         let commitment = leaf.commit();
         if self.validated_states.contains_key(&commitment) {
