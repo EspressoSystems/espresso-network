@@ -69,7 +69,7 @@ use crate::{
     context::TaskList,
     init_node_state, load_or_fetch_network_config,
     startup_catchup::bootstrap_epoch_window,
-    state_signature::StateSigner,
+    state_signature::StateSignatureMemStorage,
 };
 
 #[derive(Clone, Debug)]
@@ -363,7 +363,7 @@ impl<P: SequencerPersistence> ApiContext for FollowerHandle<P> {
         None
     }
 
-    fn state_signer(&self) -> Option<Arc<RwLock<StateSigner<SequencerApiVersion>>>> {
+    fn state_signatures(&self) -> Option<Arc<RwLock<StateSignatureMemStorage>>> {
         None
     }
 
