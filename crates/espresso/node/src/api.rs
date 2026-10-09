@@ -5038,6 +5038,92 @@ mod test {
         Ok(())
     }
 
+    /// Stakers claim rewards earned before 0.5 with proofs against those blocks' v2 reward
+    /// roots. On the replayed v4 chain every staker's proof, claim input and page entry must
+    /// agree with the header, and each epoch's block reward with the stake table.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_reward_queries() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v4")?;
+        let replay = chain.replay().await?;
+        let client = &replay.client;
+        let tip = chain.tip();
+        let root = chain
+            .blocks
+            .last()
+            .unwrap()
+            .leaf
+            .header()
+            .reward_merkle_tree_root();
+        let root = root
+            .right()
+            .context("v4 headers commit to the v2 reward tree")?;
+
+        let stakers = all_stakers(client, &chain).await?;
+        let mut balances = vec![];
+        for staker in stakers {
+            let res: RewardAccountQueryDataV2 = client
+                .get(&format!("reward-state-v2/proof/{tip}/{staker}"))
+                .send()
+                .await?;
+            ensure!(res.proof.verify(&root)? == res.balance, "proof of {staker}");
+            if res.balance.is_zero() {
+                continue;
+            }
+            let claim: RewardClaimInput = client
+                .get(&format!(
+                    "reward-state-v2/reward-claim-input/{tip}/{staker}"
+                ))
+                .send()
+                .await?;
+            ensure!(
+                claim == res.clone().to_reward_claim_input()?,
+                "claim of {staker}"
+            );
+            balances.push((RewardAccountV2(staker), RewardAmount(res.balance)));
+        }
+        ensure!(!balances.is_empty(), "the chain paid no rewards");
+
+        balances.sort_by_key(|(account, _)| std::cmp::Reverse(*account));
+        let page: Vec<(RewardAccountV2, RewardAmount)> = client
+            .get(&format!("reward-state-v2/reward-amounts/{tip}/0/10000"))
+            .send()
+            .await?;
+        ensure!(page == balances, "reward page {page:?}");
+
+        let coordinator = replay.node.node_state().coordinator;
+        for epoch in 3..=epoch_from_block_number(tip, chain.genesis.epoch_height.unwrap()) {
+            let reward: Option<RewardAmount> = client
+                .get(&format!("node/block-reward/epoch/{epoch}"))
+                .send()
+                .await?;
+            let expected = coordinator
+                .membership()
+                .epoch_block_reward(EpochNumber::new(epoch));
+            ensure!(reward == expected, "block reward of epoch {epoch}");
+        }
+        Ok(())
+    }
+
+    /// Every validator and delegator of every epoch of `chain`.
+    async fn all_stakers(
+        client: &Client<ClientErr, SequencerApiVersion>,
+        chain: &LegacyChain,
+    ) -> anyhow::Result<HashSet<Address>> {
+        let last_epoch = epoch_from_block_number(chain.tip(), chain.genesis.epoch_height.unwrap());
+        let mut stakers = HashSet::new();
+        for epoch in 1..=last_epoch {
+            let validators: AuthenticatedValidatorMap = client
+                .get(&format!("node/validators/{epoch}"))
+                .send()
+                .await?;
+            for v in validators.values() {
+                stakers.insert(v.account);
+                stakers.extend(v.delegators.keys());
+            }
+        }
+        Ok(stakers)
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_reward_distribution_basic() -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
@@ -12527,7 +12613,8 @@ mod test {
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
 
         network.stop_consensus().await;
-        let height = network.server.decided_leaf().await.height();
+        // Reward trees are stored only at epoch boundaries, the only blocks that change them.
+        let height = network.server.decided_leaf().await.height() / EPOCH_HEIGHT * EPOCH_HEIGHT;
         wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
         let err = client
