@@ -3666,7 +3666,9 @@ mod test {
     use test_utils::reserve_tcp_port;
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
-    use versions::{LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
+    use versions::{
+        DRB_AND_HEADER_UPGRADE_VERSION, LARGE_BLOCK_VERSION, NEW_PROTOCOL_VERSION, Upgrade,
+    };
 
     use self::{
         data_source::{SequencerDataSource, testing::TestableSequencerDataSource},
@@ -10929,10 +10931,49 @@ mod test {
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
         client.connect(Some(Duration::from_secs(10))).await;
 
-        // Get the state cert for the epoch 3 to 5
-        for i in 3..=TEST_EPOCHS {
-            // v2
+        assert_state_certs(&client, 3..=TEST_EPOCHS, TEST_EPOCH_HEIGHT).await;
+    }
 
+    /// Light client provers and catching-up nodes still fetch the state certificates of
+    /// mainnet's epochs before 0.6, whose blocks only legacy consensus produced.
+    #[rstest]
+    #[case::v3("v3")]
+    #[case::v4("v4")]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_state_certs(#[case] chain: &str) -> anyhow::Result<()> {
+        let chain = LegacyChain::load(chain)?;
+        let replay = chain.replay().await?;
+        let (last_epoch, _) = chain.state_certs.last().unwrap();
+        assert_state_certs(
+            &replay.client,
+            3..=*last_epoch,
+            chain.genesis.epoch_height.unwrap(),
+        )
+        .await;
+
+        let peers = StatePeers::<SequencerApiVersion>::from_urls(
+            vec![replay.url.clone()],
+            Default::default(),
+            Duration::from_secs(2),
+            &NoMetrics,
+        );
+        for (epoch, cert) in &chain.state_certs {
+            ensure!(
+                peers.try_fetch_state_cert(0, *epoch).await? == *cert,
+                "catchup of the epoch {epoch} state certificate"
+            );
+        }
+        Ok(())
+    }
+
+    /// Checks the v1 and v2 state certificates of `epochs` agree, and that each certifies the
+    /// block halfway through the epoch before it, with that block's auth root.
+    async fn assert_state_certs(
+        client: &Client<ClientErr, StaticVersion<0, 1>>,
+        epochs: std::ops::RangeInclusive<u64>,
+        epoch_height: u64,
+    ) {
+        for i in epochs {
             let state_query_data_v2 = client
                 .get::<StateCertQueryDataV2<SeqTypes>>(&format!("availability/state-cert-v2/{i}"))
                 .send()
@@ -10943,7 +10984,7 @@ mod test {
             assert_eq!(state_cert_v2.epoch.u64(), i);
             assert_eq!(
                 state_cert_v2.light_client_state.block_height,
-                i * TEST_EPOCH_HEIGHT - 5
+                i * epoch_height - 5
             );
             let block_height = state_cert_v2.light_client_state.block_height;
 
@@ -10953,14 +10994,17 @@ mod test {
                 .await
                 .unwrap();
 
-            let auth_root = state_cert_v2.auth_root;
-            let header_auth_root = header.auth_root().unwrap();
-            if auth_root.is_zero() || header_auth_root.is_zero() {
-                panic!("auth root shouldn't be zero");
-            }
-            assert_eq!(auth_root, header_auth_root, "auth root mismatch");
+            // Headers commit to an auth root from 0.4 on.
+            if header.version() >= DRB_AND_HEADER_UPGRADE_VERSION {
+                let auth_root = state_cert_v2.auth_root;
+                let header_auth_root = header.auth_root().unwrap();
+                if auth_root.is_zero() || header_auth_root.is_zero() {
+                    panic!("auth root shouldn't be zero");
+                }
 
-            // v1
+                assert_eq!(auth_root, header_auth_root, "auth root mismatch");
+            }
+
             let state_query_data_v1 = client
                 .get::<StateCertQueryDataV1<SeqTypes>>(&format!("availability/state-cert/{i}"))
                 .send()

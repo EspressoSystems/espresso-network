@@ -91,6 +91,7 @@ pub struct RecordedNetworkConfigUpdate {
 pub struct ReplayNode {
     pub node: FollowerContext<persistence::sql::Persistence>,
     pub client: Client<ClientErr, SequencerApiVersion>,
+    pub url: url::Url,
     /// The recorded L1, which the node reads the stake table and rewards from.
     pub l1: AnvilInstance,
     _storage: TmpDb,
@@ -179,7 +180,7 @@ impl LegacyChain {
             .context("replayed node should start")?;
         let node = FollowerContext::new(handle);
 
-        let client = Client::new(url);
+        let client = Client::new(url.clone());
         ensure!(
             client.connect(Some(Duration::from_secs(60))).await,
             "replayed query API did not come up"
@@ -188,6 +189,7 @@ impl LegacyChain {
         Ok(ReplayNode {
             node,
             client,
+            url,
             l1,
             _storage: storage,
         })
