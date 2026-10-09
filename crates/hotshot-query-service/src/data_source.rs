@@ -304,13 +304,14 @@ pub mod availability_tests {
             }
         }
 
-        // The newest leaf is finalized by the cert2 its decide carried.
-        {
+        // The newest leaf is finalized by the cert2 its decide carried, unless it is genesis,
+        // which consensus decides without one.
+        let last_leaf = {
             let mut tx = ds.read().await.unwrap();
             let block_height = NodeStorage::block_height(&mut tx).await.unwrap();
-            let last_leaf = tx.get_leaf((block_height - 1).into()).await.unwrap();
-            drop(tx);
-
+            tx.get_leaf((block_height - 1).into()).await.unwrap()
+        };
+        if last_leaf.height() > 0 {
             let cert2 = ds
                 .get_cert2(last_leaf.height())
                 .await

@@ -173,8 +173,9 @@ impl MockChain {
     /// The event consensus sends node `node` when the blocks at `heights` are decided together.
     ///
     /// As the coordinator sends it, leaves are newest first and carry their payloads, `cert1`
-    /// certifies the newest leaf and `cert2` finalizes it. Genesis carries no VID share, since
-    /// consensus does not disperse it.
+    /// certifies the newest leaf and `cert2` finalizes it. Genesis is the exception: consensus
+    /// neither disperses it nor finalizes it with a cert2, so it carries no VID share and its
+    /// decide has no cert2.
     pub fn decide_event(
         &self,
         heights: RangeInclusive<usize>,
@@ -195,8 +196,13 @@ impl MockChain {
         CoordinatorEvent::NewDecide {
             leaf_infos,
             cert1: newest.leaf.qc().clone(),
-            cert2: Some(self.cert2_for(newest.leaf.leaf())),
+            cert2: self.cert2(newest),
         }
+    }
+
+    /// The cert2 finalizing `block`, or `None` for genesis, which consensus decides without one.
+    pub fn cert2(&self, block: &MockBlock) -> Option<Certificate2<MockTypes>> {
+        (block.height() > 0).then(|| self.cert2_for(block.leaf.leaf()))
     }
 
     fn vid_disperse_share(&self, block: &MockBlock, node: usize) -> VidDisperseShare<MockTypes> {
