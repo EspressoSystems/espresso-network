@@ -11340,6 +11340,45 @@ mod test {
         Ok(())
     }
 
+    /// Mainnet's validators set their x25519 keys and p2p addresses with the V3 stake table
+    /// contract, after epochs run on V1 and V2. On the replayed v4 chain, whose contract did the
+    /// same, the indexer shows no network config before the upgrade and the update after it.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_legacy_network_config_update() -> anyhow::Result<()> {
+        let chain = LegacyChain::load("v4")?;
+        let replay = chain.replay().await?;
+        let last_epoch = epoch_from_block_number(chain.tip(), chain.genesis.epoch_height.unwrap());
+        let validators = |epoch: u64| {
+            let client = replay.client.clone();
+            async move {
+                client
+                    .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch}"))
+                    .send()
+                    .await
+            }
+        };
+
+        let before = validators(3).await?;
+        ensure!(!before.is_empty(), "epoch 3 has validators");
+        ensure!(
+            before
+                .values()
+                .all(|v| v.x25519_key.is_none() && v.p2p_addr.is_none()),
+            "a V1 or V2 contract registers no network config"
+        );
+
+        // The address the recording set; nothing ever dialed it.
+        let p2p_addr: NetAddr = "127.0.0.1:9000".parse()?;
+        let after = validators(last_epoch).await?;
+        ensure!(
+            after
+                .values()
+                .any(|v| v.x25519_key.is_some() && v.p2p_addr.as_ref() == Some(&p2p_addr)),
+            "epoch {last_epoch} shows the network config update"
+        );
+        Ok(())
+    }
+
     /// Assert the endpoint returns a 2xx status and a valid JSON body.
     async fn assert_json_endpoint(
         http: &reqwest::Client,

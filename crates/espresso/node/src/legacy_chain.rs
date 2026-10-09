@@ -94,7 +94,7 @@ pub struct ReplayNode {
     pub url: url::Url,
     /// The recorded L1, which the node reads the stake table and rewards from.
     pub l1: AnvilInstance,
-    _storage: TmpDb,
+    storage: TmpDb,
 }
 
 impl LegacyChain {
@@ -191,8 +191,15 @@ impl LegacyChain {
             client,
             url,
             l1,
-            _storage: storage,
+            storage,
         })
+    }
+}
+
+impl ReplayNode {
+    /// Another connection to the node's consensus storage.
+    pub async fn persistence(&self) -> anyhow::Result<persistence::sql::Persistence> {
+        tmp_options(&self.storage).create().await
     }
 }
 
