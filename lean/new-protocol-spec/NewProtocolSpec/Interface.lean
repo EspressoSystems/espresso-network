@@ -133,11 +133,6 @@ inductive Input where
   | timeoutCertificate (c : TimeoutCert)
   /-- Timeout votes for view `v` reached the one-honest threshold. -/
   | timeoutOneHonest (v : ViewNumber)
-  /--
-  Nothing arrived. A step in which the node may act on what it already holds,
-  such as an action it deferred.
-  -/
-  | tick
 deriving DecidableEq, Repr
 
 /--
