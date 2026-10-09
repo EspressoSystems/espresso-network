@@ -11354,6 +11354,10 @@ mod test {
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_legacy_network_config_update() -> anyhow::Result<()> {
         let chain = LegacyChain::load("v4")?;
+        let update = chain
+            .network_config_update
+            .clone()
+            .context("the v4 recording registered a network config")?;
         let replay = chain.replay().await?;
         let last_epoch = epoch_from_block_number(chain.tip(), chain.genesis.epoch_height.unwrap());
         let validators = |epoch: u64| {
@@ -11366,23 +11370,41 @@ mod test {
             }
         };
 
-        let before = validators(3).await?;
-        ensure!(!before.is_empty(), "epoch 3 has validators");
-        ensure!(
-            before
+        // The update reaches the stake table a few epochs after the V3 upgrade in epoch 4.
+        // Until then no validator has a network config; from then on exactly the recorded
+        // validator has exactly the recorded one.
+        let mut first_seen = None;
+        // The stake table takes effect in epoch 3; before that the chain has no validators.
+        for epoch in 3..=last_epoch {
+            let validators = validators(epoch).await?;
+            ensure!(!validators.is_empty(), "epoch {epoch} has validators");
+            let configured = validators
                 .values()
-                .all(|v| v.x25519_key.is_none() && v.p2p_addr.is_none()),
-            "a V1 or V2 contract registers no network config"
-        );
-
-        // The address the recording set; nothing ever dialed it.
-        let p2p_addr: NetAddr = "127.0.0.1:9000".parse()?;
-        let after = validators(last_epoch).await?;
+                .filter(|v| v.x25519_key.is_some() || v.p2p_addr.is_some())
+                .collect::<Vec<_>>();
+            if first_seen.is_none() {
+                if configured.is_empty() {
+                    continue;
+                }
+                first_seen = Some(epoch);
+            }
+            let [v] = configured.as_slice() else {
+                bail!(
+                    "epoch {epoch}: {} validators have a network config",
+                    configured.len()
+                );
+            };
+            ensure!(
+                v.account == update.validator
+                    && v.x25519_key.as_ref() == Some(&update.x25519_key)
+                    && v.p2p_addr.as_ref() == Some(&update.p2p_addr),
+                "epoch {epoch} shows the recorded network config update, not {v:?}"
+            );
+        }
+        let first_seen = first_seen.context("no epoch shows the network config update")?;
         ensure!(
-            after
-                .values()
-                .any(|v| v.x25519_key.is_some() && v.p2p_addr.as_ref() == Some(&p2p_addr)),
-            "epoch {last_epoch} shows the network config update"
+            first_seen > 4,
+            "a V1 or V2 contract registers no network config, but epoch {first_seen} has one"
         );
         Ok(())
     }
