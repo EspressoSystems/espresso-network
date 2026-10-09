@@ -474,7 +474,7 @@ impl Persistence {
         let replay_started = Instant::now();
         let mut state = State::default();
         for (header, body) in &wal_recovered.wal_records {
-            let record = Record::decode(header.kind, header.view, body)
+            let record = Record::decode(header.kind, header.key, body)
                 .context("decoding wal record during replay")?;
             match record {
                 Record::Snapshot(snapshot) => state = *snapshot,
@@ -528,7 +528,7 @@ impl Persistence {
             LaneConfig {
                 stream: Stream::Wal,
                 segment_bytes: WAL_SEGMENT_BYTES,
-                max_view_span: WAL_MAX_VIEW_SPAN,
+                max_key_span: WAL_MAX_VIEW_SPAN,
                 max_batch_bytes: WAL_MAX_BATCH_BYTES,
                 max_snapshot_bytes: MAX_SNAPSHOT_BYTES,
                 in_flight_bytes: IN_FLIGHT_BYTES,
@@ -546,7 +546,7 @@ impl Persistence {
             LaneConfig {
                 stream: Stream::Data,
                 segment_bytes: DATA_SEGMENT_BYTES,
-                max_view_span: u64::MAX,
+                max_key_span: u64::MAX,
                 max_batch_bytes: DATA_MAX_BATCH_BYTES,
                 // Never read: the data lane has no `SnapshotHook`, so no `Snapshot` frame is ever
                 // written on it.
@@ -654,14 +654,14 @@ impl Persistence {
             Stream::Wal => self.inner.wal_dir.clone(),
             Stream::Data => self.inner.data_dir.clone(),
         };
-        let view_u64 = view.u64();
+        let key = view.u64();
         // (seq, sealed): only the last segment is active and may have a torn tail.
         let candidates: Vec<(u64, bool)> = {
             let segments = self.inner.segments.lock();
             let list = segments.list(stream);
             let active = list.last().map(|m| m.seq);
             list.iter()
-                .filter(|m| m.max_view >= view_u64)
+                .filter(|m| m.max_key >= key)
                 .map(|m| (m.seq, Some(m.seq) != active))
                 .collect()
         };
@@ -671,7 +671,7 @@ impl Persistence {
                 let path = lane::segment_path(&dir, seq);
                 let bytes = std::fs::read(&path)
                     .with_context(|| format!("reading segment {}", path.display()))?;
-                let found = find_in_segment(&bytes, kind, view_u64, sealed)
+                let found = find_in_segment(&bytes, kind, key, sealed)
                     .with_context(|| format!("scanning segment {}", path.display()))?;
                 if let Some(body) = found {
                     return Ok(Some(bincode::deserialize::<T>(&body)?));
@@ -935,12 +935,12 @@ impl Persistence {
     }
 }
 
-/// Body of the last `kind` record at `view` in a whole segment file. A torn tail is expected on
+/// Body of the last `kind` record at `key` in a whole segment file. A torn tail is expected on
 /// the active segment; on a sealed one (fsynced before the roll) it is corruption.
 fn find_in_segment(
     bytes: &[u8],
     kind: Kind,
-    view: u64,
+    key: u64,
     sealed: bool,
 ) -> anyhow::Result<Option<Vec<u8>>> {
     ensure!(
@@ -950,7 +950,7 @@ fn find_in_segment(
     let header = SegmentHeader::decode(bytes).context("corrupt segment header")?;
     let mut found = None;
     let (end, ..) = format::scan(&bytes[SegmentHeader::LEN..], header.first_lsn, |h, body| {
-        if h.kind == kind && h.view == view {
+        if h.kind == kind && h.key == key {
             found = Some(body.to_vec());
         }
         Ok(())
@@ -962,7 +962,7 @@ fn find_in_segment(
 }
 
 /// Index the data frames a query node may still replay: every record past the replay cursor,
-/// decided or not yet. `max_view` only grows along a stream, so segments ending at or before the
+/// decided or not yet. `max_key` only grows along a stream, so segments ending at or before the
 /// cursor hold nothing replay needs.
 async fn index_unreplayed(
     fs: Arc<StdFs>,
@@ -974,7 +974,7 @@ async fn index_unreplayed(
     let cursor = replay.cursor.map_or(0, |(view, _)| view.u64());
     let seqs = segments
         .iter()
-        .filter(|meta| replay.cursor.is_none() || meta.max_view > cursor)
+        .filter(|meta| replay.cursor.is_none() || meta.max_key > cursor)
         .map(|meta| meta.seq)
         .collect::<Vec<_>>();
     let frames = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<_>> {
@@ -989,7 +989,7 @@ async fn index_unreplayed(
     index.lock().extend(
         frames
             .into_iter()
-            .map(|(header, location)| ((header.view, header.kind), location)),
+            .map(|(header, location)| ((header.key, header.kind), location)),
     );
     Ok(index)
 }
@@ -1669,7 +1669,7 @@ mod tests {
             stream: Stream::Data,
             seq: 1,
             first_lsn: 1,
-            prev_max_view: 0,
+            prev_max_key: 0,
         };
         let mut seg = header.encode().to_vec();
         format::encode_frame(&mut seg, 1, 5, Kind::Da, b"five");

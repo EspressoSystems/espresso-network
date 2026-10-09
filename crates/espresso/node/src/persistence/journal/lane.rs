@@ -217,7 +217,7 @@ pub struct SegmentMeta {
     pub stream: Stream,
     pub seq: u64,
     pub bytes: u64,
-    pub max_view: u64,
+    pub max_key: u64,
 }
 
 /// Where one frame lives, so it can be read back without scanning its segment.
@@ -229,7 +229,7 @@ pub(crate) struct Location {
     pub len: u32,
 }
 
-/// The newest data frame for each `(view, kind)`, kept only on a query node, whose replay reads
+/// The newest data frame for each `(key, kind)`, kept only on a query node, whose replay reads
 /// every decided block's payload and share back. Entries appear once their bytes are written.
 pub(crate) type DataIndex = Arc<Mutex<std::collections::BTreeMap<(u64, Kind), Location>>>;
 
@@ -260,10 +260,10 @@ impl SegmentSet {
         self.list_mut(meta.stream).push(meta);
     }
 
-    fn update_active(&mut self, stream: Stream, bytes: u64, max_view: u64) {
+    fn update_active(&mut self, stream: Stream, bytes: u64, max_key: u64) {
         if let Some(last) = self.list_mut(stream).last_mut() {
             last.bytes = bytes;
-            last.max_view = max_view;
+            last.max_key = max_key;
         }
     }
 
@@ -272,27 +272,27 @@ impl SegmentSet {
     /// oldest-first while the running total exceeds `max_bytes`; never the active segment.
     ///
     /// Both only ever take a contiguous prefix of the oldest segments and stop at the first one
-    /// that doesn't qualify: `max_view` is monotonic (see `open_new_segment`), so a segment that
+    /// that doesn't qualify: `max_key` is monotonic (see `open_new_segment`), so a segment that
     /// isn't old enough means nothing sealed after it is either, and unlinking one segment while
     /// keeping an older one would leave a gap GC can never fill in later.
     ///
-    /// `data` segments holding any view after `replayed` stay, even over `max_bytes`: a query
+    /// `data` segments holding any key after `replayed` stay, even over `max_bytes`: a query
     /// node's query service still has to ingest them.
     pub fn to_unlink(
         &self,
         decided: u64,
-        view_retention: u64,
+        key_retention: u64,
         max_bytes: u64,
         replayed: Option<u64>,
     ) -> Vec<SegmentMeta> {
-        let bound = decided.saturating_sub(view_retention);
+        let bound = decided.saturating_sub(key_retention);
         let mut out = Vec::new();
 
         if self.wal.len() > 2 {
             out.extend(
                 self.wal[..self.wal.len() - 2]
                     .iter()
-                    .take_while(|m| m.max_view < bound)
+                    .take_while(|m| m.max_key < bound)
                     .copied(),
             );
         }
@@ -300,10 +300,10 @@ impl SegmentSet {
         if !self.data.is_empty() {
             let mut total: u64 = self.data.iter().map(|m| m.bytes).sum();
             for meta in &self.data[..self.data.len() - 1] {
-                if replayed.is_some_and(|replayed| meta.max_view > replayed) {
+                if replayed.is_some_and(|replayed| meta.max_key > replayed) {
                     break;
                 }
-                if meta.max_view >= bound && total <= max_bytes {
+                if meta.max_key >= bound && total <= max_bytes {
                     break;
                 }
                 out.push(*meta);
@@ -336,13 +336,13 @@ pub fn prune<F: JournalFs>(
     wal_dir: &Path,
     data_dir: &Path,
     decided: u64,
-    view_retention: u64,
+    key_retention: u64,
     max_bytes: u64,
     replayed: Option<u64>,
 ) -> anyhow::Result<PruneStats> {
     let to_unlink = segments
         .lock()
-        .to_unlink(decided, view_retention, max_bytes, replayed);
+        .to_unlink(decided, key_retention, max_bytes, replayed);
     let mut stats = PruneStats {
         wal_bytes: None,
         data_bytes: None,
@@ -382,7 +382,7 @@ pub fn prune<F: JournalFs>(
 pub struct LaneConfig {
     pub stream: Stream,
     pub segment_bytes: u64,
-    pub max_view_span: u64,
+    pub max_key_span: u64,
     pub max_batch_bytes: usize,
     /// Bound on a wal `Snapshot` frame; irrelevant for a data lane, which never writes one.
     pub max_snapshot_bytes: u32,
@@ -393,7 +393,7 @@ pub struct LaneConfig {
 /// so channel order always matches `lsn` order, which `format::scan` requires on replay.
 struct Write {
     lsn: Lsn,
-    view: u64,
+    key: u64,
     kind: Kind,
     body: Vec<u8>,
     class: Class,
@@ -424,7 +424,7 @@ impl Lane {
     /// `State::apply` order); data records don't need it.
     pub fn enqueue(
         &self,
-        view: u64,
+        key: u64,
         kind: Kind,
         body: Vec<u8>,
         class: Class,
@@ -442,7 +442,7 @@ impl Lane {
         // just means this record never lands, which is moot since the process is on its way down.
         let _ = self.tx.send(Write {
             lsn,
-            view,
+            key,
             kind,
             body,
             class,
@@ -482,10 +482,10 @@ struct ActiveSegment<Fh> {
     offset: u64,
     /// Last lsn actually written to this segment (including any not-yet-fsynced bytes).
     last_lsn: Lsn,
-    /// View baseline for this segment, used to bound `max_view_span`; unset (`None`) until the
-    /// first real record lands, since the wal's own `Snapshot` record has no consensus view.
-    first_view: Option<u64>,
-    max_view: u64,
+    /// Key baseline for this segment, used to bound `max_key_span`; unset (`None`) until the
+    /// first real record lands, since the wal's own `Snapshot` record has no key.
+    first_key: Option<u64>,
+    max_key: u64,
     /// Offset right after the segment's own `Snapshot` frame (or right after the header, for a
     /// data segment, which never writes one). `over_bytes` in `Writer::run` measures from here,
     /// not from `offset` directly, so a large snapshot can't make the very next batch look like
@@ -499,7 +499,7 @@ fn open_new_segment<F: JournalFs>(
     stream: Stream,
     seq: u64,
     first_lsn: Lsn,
-    prev_max_view: u64,
+    prev_max_key: u64,
     metrics: &LaneMetrics,
 ) -> anyhow::Result<ActiveSegment<F::File>> {
     let path = segment_path(dir, seq);
@@ -510,7 +510,7 @@ fn open_new_segment<F: JournalFs>(
         stream,
         seq,
         first_lsn,
-        prev_max_view,
+        prev_max_key,
     }
     .encode();
     file.write_all_at(0, &header)?;
@@ -521,12 +521,12 @@ fn open_new_segment<F: JournalFs>(
         seq,
         offset: SegmentHeader::LEN as u64,
         last_lsn: first_lsn.saturating_sub(1),
-        first_view: None,
-        // Seeded from the previous segment's bound, not 0: `SegmentMeta::max_view` is a running
+        first_key: None,
+        // Seeded from the previous segment's bound, not 0: `SegmentMeta::max_key` is a running
         // max across the whole stream, so GC (`SegmentSet::to_unlink`) never sees a segment appear
         // younger than the one sealed right before it (e.g. a snapshot-only segment with no real
         // records of its own).
-        max_view: prev_max_view,
+        max_key: prev_max_key,
         snapshot_end: SegmentHeader::LEN as u64,
     })
 }
@@ -549,7 +549,7 @@ struct SegmentRead {
     locations: Vec<(FrameHeader, Location)>,
     end: ScanEnd,
     next_lsn: Lsn,
-    max_view: u64,
+    max_key: u64,
 }
 
 /// Fills `buf` from `r` as far as it goes before EOF, returning how many bytes landed (which may
@@ -597,7 +597,7 @@ fn read_segment<F: JournalFs>(
     let mut locations = Vec::new();
     let mut frame_buf: Vec<u8> = Vec::new();
     let mut expect_lsn = header.first_lsn;
-    let mut max_view = 0u64;
+    let mut max_key = 0u64;
     let mut consumed = 0u64;
 
     let end = loop {
@@ -641,7 +641,7 @@ fn read_segment<F: JournalFs>(
                         len: frame_header.len,
                     },
                 ));
-                max_view = max_view.max(frame_header.view);
+                max_key = max_key.max(frame_header.key);
                 expect_lsn = frame_header.lsn + 1;
                 consumed += total as u64;
             },
@@ -655,7 +655,7 @@ fn read_segment<F: JournalFs>(
         locations,
         end,
         next_lsn: expect_lsn,
-        max_view,
+        max_key,
     })
 }
 
@@ -807,19 +807,19 @@ pub fn recover<F: JournalFs>(fs: &F, dir: &Path, stream: Stream) -> anyhow::Resu
             seq: *seq,
             bytes: fs.len(path)?,
             // Backfilled below from the following segment's header.
-            max_view: 0,
+            max_key: 0,
         });
     }
     segments.push(SegmentMeta {
         stream,
         seq: newest_seq,
         bytes: total,
-        // `read.max_view` alone is only this segment's own records; carry the running bound
+        // `read.max_key` alone is only this segment's own records; carry the running bound
         // forward from its header, same as the writer does for a freshly rolled segment.
-        max_view: read.max_view.max(read.header.prev_max_view),
+        max_key: read.max_key.max(read.header.prev_max_key),
     });
 
-    backfill_prev_max_view(fs, stream, &paths, &mut segments)?;
+    backfill_prev_max_key(fs, stream, &paths, &mut segments)?;
 
     Ok(Recovered {
         segments,
@@ -833,14 +833,14 @@ pub fn recover<F: JournalFs>(fs: &F, dir: &Path, stream: Stream) -> anyhow::Resu
     })
 }
 
-fn backfill_prev_max_view<F: JournalFs>(
+fn backfill_prev_max_key<F: JournalFs>(
     fs: &F,
     stream: Stream,
     paths: &[(u64, PathBuf)],
     segments: &mut [SegmentMeta],
 ) -> anyhow::Result<()> {
     for i in 0..segments.len().saturating_sub(1) {
-        if segments[i].max_view != 0 {
+        if segments[i].max_key != 0 {
             continue;
         }
         let next_path = &paths[i + 1].1;
@@ -851,7 +851,7 @@ fn backfill_prev_max_view<F: JournalFs>(
             header.stream as u8 == stream as u8,
             "stream mismatch in {next_path:?}"
         );
-        segments[i].max_view = header.prev_max_view;
+        segments[i].max_key = header.prev_max_key;
     }
     Ok(())
 }
@@ -904,18 +904,18 @@ pub(crate) fn spawn_lane<F: JournalFs>(
 ) -> anyhow::Result<(Lane, std::thread::JoinHandle<()>)> {
     let (next_seq, next_lsn) = start;
     let metrics = Arc::new(LaneMetrics::noop());
-    let prev_max_view = segments
+    let prev_max_key = segments
         .lock()
         .list(cfg.stream)
         .last()
-        .map_or(0, |m| m.max_view);
+        .map_or(0, |m| m.max_key);
     let mut active = open_new_segment(
         &*fs,
         &dir,
         cfg.stream,
         next_seq,
         next_lsn,
-        prev_max_view,
+        prev_max_key,
         &metrics,
     )?;
 
@@ -955,7 +955,7 @@ pub(crate) fn spawn_lane<F: JournalFs>(
         stream: cfg.stream,
         seq: next_seq,
         bytes: active.offset,
-        max_view: active.max_view,
+        max_key: active.max_key,
     });
     // Published only after `segments` above reflects this segment: `wait_durable` callers must
     // never observe a durable lsn `scan_for`/gc can't yet see in `SegmentSet`.
@@ -1020,14 +1020,14 @@ struct Writer<F: JournalFs> {
     index: Option<DataIndex>,
 }
 
-/// Applies one record's bookkeeping to `active`: `max_view`, `first_view` (view 0 marks
-/// `Snapshot`/`Upgrade`, never a span baseline, or `over_views` would latch true forever) and
+/// Applies one record's bookkeeping to `active`: `max_key`, `first_key` (key 0 marks
+/// `Snapshot`/`Upgrade`, never a span baseline, or `over_keys` would latch true forever) and
 /// `last_lsn`. Shared by `Writer::run`'s batch loop and `roll`'s drain, so a record landing during
 /// a roll is tracked exactly like one landing in the normal path.
 fn apply_write_to_active<Fh>(active: &mut ActiveSegment<Fh>, w: &Write) {
-    active.max_view = active.max_view.max(w.view);
-    if w.view != 0 {
-        active.first_view.get_or_insert(w.view);
+    active.max_key = active.max_key.max(w.key);
+    if w.key != 0 {
+        active.first_key.get_or_insert(w.key);
     }
     active.last_lsn = w.lsn;
 }
@@ -1060,7 +1060,7 @@ impl<F: JournalFs> Writer<F> {
             for w in &batch {
                 if self.index.is_some() {
                     written.push((
-                        (w.view, w.kind),
+                        (w.key, w.kind),
                         Location {
                             seq: self.active.seq,
                             offset: self.active.offset + self.frame_buf.len() as u64,
@@ -1069,7 +1069,7 @@ impl<F: JournalFs> Writer<F> {
                         },
                     ));
                 }
-                format::encode_frame(&mut self.frame_buf, w.lsn, w.view, w.kind, &w.body);
+                format::encode_frame(&mut self.frame_buf, w.lsn, w.key, w.kind, &w.body);
                 durable_in_batch |= w.class == Class::Durable;
                 apply_write_to_active(&mut self.active, w);
             }
@@ -1097,10 +1097,10 @@ impl<F: JournalFs> Writer<F> {
             drop(batch);
 
             // Update before publishing durability: `wait_durable` callers must see this batch's
-            // views in `SegmentSet` (e.g. via `scan_for`) as soon as it returns.
+            // keys in `SegmentSet` (e.g. via `scan_for`) as soon as it returns.
             let total_bytes = {
                 let mut segments = self.segments.lock();
-                segments.update_active(self.cfg.stream, self.active.offset, self.active.max_view);
+                segments.update_active(self.cfg.stream, self.active.offset, self.active.max_key);
                 segments.list(self.cfg.stream).iter().map(|m| m.bytes).sum()
             };
             self.metrics.set_total_bytes(total_bytes);
@@ -1115,13 +1115,13 @@ impl<F: JournalFs> Writer<F> {
 
             let over_bytes = self.active.offset.saturating_sub(self.active.snapshot_end)
                 >= self.cfg.segment_bytes;
-            let over_views = self.cfg.stream == Stream::Wal
+            let over_keys = self.cfg.stream == Stream::Wal
                 && self
                     .active
-                    .max_view
-                    .saturating_sub(self.active.first_view.unwrap_or(self.active.max_view))
-                    >= self.cfg.max_view_span;
-            if over_bytes || over_views {
+                    .max_key
+                    .saturating_sub(self.active.first_key.unwrap_or(self.active.max_key))
+                    >= self.cfg.max_key_span;
+            if over_bytes || over_keys {
                 self.roll();
             }
         }
@@ -1148,7 +1148,7 @@ impl<F: JournalFs> Writer<F> {
                 drained_records = 0;
                 drained_bytes = 0;
                 while let Ok(w) = rx.try_recv() {
-                    format::encode_frame(&mut drain_buf, w.lsn, w.view, w.kind, &w.body);
+                    format::encode_frame(&mut drain_buf, w.lsn, w.key, w.kind, &w.body);
                     drained_records += 1;
                     drained_bytes += w.body.len();
                     apply_write_to_active(active, &w);
@@ -1181,7 +1181,7 @@ impl<F: JournalFs> Writer<F> {
         }
         self.segments
             .lock()
-            .update_active(stream, active.offset, active.max_view);
+            .update_active(stream, active.offset, active.max_key);
         self.durable_tx.send(active.last_lsn).ok();
 
         let new_seq = active.seq + 1;
@@ -1191,7 +1191,7 @@ impl<F: JournalFs> Writer<F> {
             stream,
             new_seq,
             new_first_lsn,
-            active.max_view,
+            active.max_key,
             &self.metrics,
         ) {
             Ok(seg) => seg,
@@ -1206,7 +1206,7 @@ impl<F: JournalFs> Writer<F> {
             stream,
             seq: new_seq,
             bytes: new_active.offset,
-            max_view: new_active.max_view,
+            max_key: new_active.max_key,
         });
 
         if let Some(body) = snapshot {
@@ -1227,7 +1227,7 @@ impl<F: JournalFs> Writer<F> {
             new_active.snapshot_end = new_active.offset;
             self.segments
                 .lock()
-                .update_active(stream, new_active.offset, new_active.max_view);
+                .update_active(stream, new_active.offset, new_active.max_key);
             self.durable_tx.send(new_active.last_lsn).ok();
         }
 
@@ -1425,12 +1425,12 @@ mod tests {
 
     use super::{mem::MemFs, *};
 
-    fn meta(stream: Stream, seq: u64, bytes: u64, max_view: u64) -> SegmentMeta {
+    fn meta(stream: Stream, seq: u64, bytes: u64, max_key: u64) -> SegmentMeta {
         SegmentMeta {
             stream,
             seq,
             bytes,
-            max_view,
+            max_key,
         }
     }
 
@@ -1460,8 +1460,8 @@ mod tests {
         assert!(set.to_unlink(1_000_000, 0, u64::MAX, None).is_empty());
     }
 
-    // A zero-view segment (e.g. rolled right after a snapshot, before any real record landed)
-    // must never make `to_unlink` skip over an older, not-yet-old-enough segment: `max_view` is
+    // A zero-key segment (e.g. rolled right after a snapshot, before any real record landed)
+    // must never make `to_unlink` skip over an older, not-yet-old-enough segment: `max_key` is
     // supposed to be monotonic (`open_new_segment` seeds it from the previous segment's bound),
     // but this asserts `to_unlink` itself never produces a gap even if that invariant is somehow
     // violated.
@@ -1490,7 +1490,7 @@ mod tests {
                 meta(Stream::Data, 4, 40, 100), // active, never dropped
             ],
         };
-        // All young (max_view 100 >= bound 0), total 160 > cap 90: drop oldest until <= cap.
+        // All young (max_key 100 >= bound 0), total 160 > cap 90: drop oldest until <= cap.
         let unlink = set.to_unlink(0, 0, 90, None);
         assert_eq!(unlink.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![1, 2]);
     }
@@ -1513,7 +1513,7 @@ mod tests {
         LaneConfig {
             stream,
             segment_bytes: 10_000,
-            max_view_span: 10_000,
+            max_key_span: 10_000,
             max_batch_bytes: 4096,
             max_snapshot_bytes: 1024,
             in_flight_bytes: 1 << 20,
@@ -1555,12 +1555,12 @@ mod tests {
         assert_eq!(recovered.next_lsn, 2);
     }
 
-    // Regression test: `SegmentSet` must reflect an acked write's view before `durable_tx` publishes
+    // Regression test: `SegmentSet` must reflect an acked write's key before `durable_tx` publishes
     // it, or a `scan_for` racing right after `wait_durable` returns can pick stale segment bounds and
     // miss the record. Two independent threads (writer thread vs. this task's tokio runtime) racing
     // on the watch channel, so many iterations to give a wrong order a chance to show up.
     #[tokio::test]
-    async fn durable_ack_makes_segment_set_reflect_the_acked_view_immediately() {
+    async fn durable_ack_makes_segment_set_reflect_the_acked_key_immediately() {
         let fs = Arc::new(MemFs::default());
         let dir = std::path::PathBuf::from("/data-order");
         let segments = Arc::new(Mutex::new(SegmentSet::default()));
@@ -1575,18 +1575,18 @@ mod tests {
         )
         .unwrap();
 
-        for view in 1..=2000u64 {
-            let lsn = lane.enqueue(view, Kind::Vid, vec![0u8; 4], Class::Durable, None);
+        for key in 1..=2000u64 {
+            let lsn = lane.enqueue(key, Kind::Vid, vec![0u8; 4], Class::Durable, None);
             lane.wait_durable(lsn).await.unwrap();
-            let max_view = segments
+            let max_key = segments
                 .lock()
                 .list(Stream::Data)
                 .last()
-                .map(|m| m.max_view)
+                .map(|m| m.max_key)
                 .unwrap_or(0);
             assert!(
-                max_view >= view,
-                "SegmentSet max_view {max_view} lagged the just-acked view {view}"
+                max_key >= key,
+                "SegmentSet max_key {max_key} lagged the just-acked key {key}"
             );
         }
     }
@@ -1675,16 +1675,16 @@ mod tests {
         )
         .unwrap();
 
-        for view in 1..=40u64 {
+        for key in 1..=40u64 {
             // Mirrors `put_wal`: mutate "state" and enqueue while holding the same lock the hook
             // locks, so alloc's counter and the hook's drain always agree on what's been sent.
             let lsn = {
                 let mut n = state.lock();
                 *n += 1;
                 lane.enqueue(
-                    view,
+                    key,
                     Kind::Action,
-                    view.to_le_bytes().to_vec(),
+                    key.to_le_bytes().to_vec(),
                     Class::Durable,
                     None,
                 )
@@ -1728,7 +1728,7 @@ mod tests {
                     stream: Stream::Data,
                     seq,
                     first_lsn: seq,
-                    prev_max_view: 100,
+                    prev_max_key: 100,
                 },
                 &[],
             );
@@ -1808,7 +1808,7 @@ mod tests {
                 stream: Stream::Wal,
                 seq: 1,
                 first_lsn: 1,
-                prev_max_view: 0,
+                prev_max_key: 0,
             },
             &seg1,
         );
@@ -1820,7 +1820,7 @@ mod tests {
                 stream: Stream::Wal,
                 seq: 2,
                 first_lsn: 3,
-                prev_max_view: 7,
+                prev_max_key: 7,
             },
             &[],
         );
@@ -1863,7 +1863,7 @@ mod tests {
                 stream: Stream::Wal,
                 seq: 1,
                 first_lsn: 1,
-                prev_max_view: 0,
+                prev_max_key: 0,
             },
             &seg,
         );
@@ -1891,7 +1891,7 @@ mod tests {
             stream: Stream::Wal,
             seq,
             first_lsn: 1,
-            prev_max_view: 0,
+            prev_max_key: 0,
         };
 
         let mut seg = Vec::new();
