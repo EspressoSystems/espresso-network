@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, bail, ensure};
 use async_lock::Mutex;
-use committable::{Commitment, Committable};
+use committable::Committable;
 use either::Either;
 use espresso_types::{
     BackoffParams, BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2,
@@ -455,7 +455,8 @@ where
 /// Apply every leaf above `parent_leaf` as it arrives. Leaves come from the local stream, except
 /// those the data pruner has already deleted: the availability layer never fetches a leaf at or
 /// below the data pruned height, so the stream would wait for one forever. Those come from peers,
-/// one at a time.
+/// one at a time. Returns when the stream ends, or when a leaf from peers does not extend the
+/// parent.
 async fn follow_leaves<T>(
     storage: &Arc<T>,
     instance: &NodeState,
@@ -476,7 +477,18 @@ async fn follow_leaves<T>(
                     "leaves are at or below the data pruned height; fetching them from peers"
                 );
             }
-            let leaf = fetch_pruned_leaf(instance, next_height, Some(parent_leaf.commit())).await;
+            let leaf = fetch_pruned_leaf(instance, next_height).await;
+            // The leaf is verified, so it is the decided leaf at this height, and a refetch
+            // returns it again. A mismatch means the loop's parent is wrong, which no retry fixes.
+            if leaf.parent_commitment() != parent_leaf.commit() {
+                tracing::error!(
+                    height = next_height,
+                    parent = %parent_leaf.commit(),
+                    leaf_parent = %leaf.parent_commitment(),
+                    "fetched leaf does not extend the state loop's parent; stopping the loop"
+                );
+                return;
+            }
             apply_leaf(storage, instance, &mut parent_leaf, &mut parent_state, leaf).await;
             next_height += 1;
             fetched += 1;
@@ -553,7 +565,7 @@ where
                 pruned,
                 "leaf is at or below the data pruned height; fetching it from peers"
             );
-            return fetch_pruned_leaf(instance, height, None).await;
+            return fetch_pruned_leaf(instance, height).await;
         }
         let local = AvailabilityDataSource::get_leaf(&**storage, height as usize).await;
         // On a timeout the data pruner may have passed this height in the meantime, so check
@@ -573,13 +585,8 @@ where
 /// has stamped the height but not deleted it yet, and otherwise asks peers. They keep leaves for
 /// their own retention, and the node already depends on them for the epoch roots of the same
 /// stretch of chain. A fetched leaf is not stored, since the loop needs it once and the pruner
-/// would only delete it again, and when `parent` is given its parent link has to match; a leaf
-/// that fails that check is retried like a failed fetch rather than applied.
-async fn fetch_pruned_leaf(
-    instance: &NodeState,
-    height: u64,
-    parent: Option<Commitment<Leaf2>>,
-) -> Leaf2 {
+/// would only delete it again.
+async fn fetch_pruned_leaf(instance: &NodeState, height: u64) -> Leaf2 {
     tracing::debug!(height, "fetching leaf below the data pruned height");
     let catchup = instance.state_catchup.clone();
     let coordinator = instance.coordinator.clone();
@@ -588,18 +595,7 @@ async fn fetch_pruned_leaf(
             .retry((), |_, retry| {
                 let catchup = catchup.clone();
                 let coordinator = coordinator.clone();
-                async move {
-                    let leaf = catchup.try_fetch_leaf(retry, coordinator, height).await?;
-                    if let Some(parent) = parent {
-                        ensure!(
-                            leaf.parent_commitment() == parent,
-                            "fetched leaf {height} has parent {} but the loop's parent is {parent}",
-                            leaf.parent_commitment()
-                        );
-                    }
-                    Ok(leaf)
-                }
-                .boxed()
+                async move { catchup.try_fetch_leaf(retry, coordinator, height).await }.boxed()
             })
             .await;
         match fetched {
