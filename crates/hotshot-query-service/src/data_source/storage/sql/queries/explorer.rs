@@ -28,7 +28,7 @@ use super::{
 };
 use crate::{
     Header, Payload, QueryError, QueryResult, Transaction as HotshotTransaction,
-    availability::{BlockQueryData, QueryableHeader, QueryablePayload},
+    availability::{QueryableHeader, QueryablePayload, sql::BlockRow},
     data_source::storage::{ExplorerStorage, NodeStorage},
     explorer::{
         self, BalanceAmount, BlockDetail, BlockIdentifier, BlockRange, BlockSummary,
@@ -250,10 +250,16 @@ where
                 .bind(request.num_blocks.get() as i64),
         };
 
-        let row_stream = query_stmt.fetch(self.as_mut());
-        let result = row_stream.map(|row| BlockSummary::from_row(&row?));
-
-        Ok(result.try_collect().await?)
+        let rows = query_stmt
+            .fetch(self.as_mut())
+            .map(|row| Ok::<_, QueryError>(BlockRow::<Types>::from_row(&row?)?))
+            .collect::<Vec<_>>()
+            .await;
+        let blocks = self.load_blocks(rows).await;
+        Ok(blocks
+            .into_iter()
+            .map(|block| Ok(BlockSummary::try_from(block?)?))
+            .collect::<Result<_, QueryError>>()?)
     }
 
     async fn get_block_detail(
@@ -271,9 +277,11 @@ where
         };
 
         let query_result = query_stmt.fetch_one(self.as_mut()).await?;
-        let block = BlockDetail::from_row(&query_result)?;
+        let block = self
+            .load_block(BlockRow::<Types>::from_row(&query_result)?)
+            .await?;
 
-        Ok(block)
+        Ok(BlockDetail::try_from(block).map_err(QueryError::from)?)
     }
 
     async fn get_transaction_summaries(
@@ -349,9 +357,12 @@ where
             },
         };
 
-        let block_stream = query_stmt
+        let rows = query_stmt
             .fetch(self.as_mut())
-            .map(|row| BlockQueryData::from_row(&row?));
+            .map(|row| Ok::<_, QueryError>(BlockRow::<Types>::from_row(&row?)?))
+            .collect::<Vec<_>>()
+            .await;
+        let block_stream = stream::iter(self.load_blocks(rows).await);
 
         let transaction_summary_stream = block_stream.flat_map(|row| match row {
             Ok(block) => {
@@ -384,7 +395,7 @@ where
                         .collect::<Vec<QueryResult<TransactionSummary<Types>>>>(),
                 )
             },
-            Err(err) => stream::iter(vec![Err(err.into())]),
+            Err(err) => stream::iter(vec![Err(err)]),
         });
 
         let transaction_summary_vec = transaction_summary_stream
@@ -424,7 +435,9 @@ where
         };
 
         let query_row = query_stmt.fetch_one(self.as_mut()).await?;
-        let block = BlockQueryData::<Types>::from_row(&query_row)?;
+        let block = self
+            .load_block(BlockRow::<Types>::from_row(&query_row)?)
+            .await?;
 
         let txns = block.enumerate().map(|(_, txn)| txn).collect::<Vec<_>>();
 
@@ -590,11 +603,11 @@ where
                 .await?;
 
             // An unknown hash is an empty result, as in the transaction search.
-            let blocks = row
-                .map(|row| BlockSummary::from_row(&row))
-                .transpose()?
-                .into_iter()
-                .collect();
+            let mut blocks = vec![];
+            if let Some(row) = row {
+                let block = self.load_block(BlockRow::<Types>::from_row(&row)?).await?;
+                blocks.push(BlockSummary::try_from(block).map_err(QueryError::from)?);
+            }
 
             Ok(SearchResult {
                 blocks,
@@ -610,12 +623,18 @@ where
                     ORDER BY h.height DESC
                     LIMIT 5"
             );
-            let transactions_query_rows = query(transactions_query.as_str())
+            let rows = query(transactions_query.as_str())
                 .bind(&search_query_string)
-                .fetch(self.as_mut());
-            let transactions_query_result: Vec<TransactionSummary<Types>> = transactions_query_rows
-                .map(|row| -> Result<Vec<TransactionSummary<Types>>, QueryError>{
-                    let block = BlockQueryData::<Types>::from_row(&row?)?;
+                .fetch(self.as_mut())
+                .map(|row| Ok::<_, QueryError>(BlockRow::<Types>::from_row(&row?)?))
+                .collect::<Vec<_>>()
+                .await;
+            let transactions_query_result: Vec<TransactionSummary<Types>> = self
+                .load_blocks(rows)
+                .await
+                .into_iter()
+                .map(|block| -> Result<Vec<TransactionSummary<Types>>, QueryError> {
+                    let block = block?;
                     let transactions = block
                         .enumerate()
                         .enumerate()
@@ -628,8 +647,7 @@ where
                         .try_collect::<TransactionSummary<Types>, Vec<TransactionSummary<Types>>, QueryError>()?;
                     Ok(transactions)
                 })
-                .try_collect::<Vec<Vec<TransactionSummary<Types>>>>()
-                .await?
+                .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .flatten()
                 .collect();

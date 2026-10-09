@@ -12,11 +12,15 @@
 
 //! Availability storage implementation for a database query engine.
 
-use std::ops::{Range, RangeBounds};
+use std::{
+    fmt::Display,
+    ops::{Range, RangeBounds},
+    path::Path,
+};
 
 use async_trait::async_trait;
-use futures::stream::{StreamExt, TryStreamExt};
-use hotshot_types::traits::node_implementation::NodeType;
+use futures::stream::{self, StreamExt, TryStreamExt};
+use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 use snafu::OptionExt;
 use sqlx::FromRow;
 
@@ -30,12 +34,16 @@ use crate::{
     availability::{
         BlockId, BlockQueryData, Certificate2, LeafId, LeafQueryData, NamespaceInfo, NamespaceMap,
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
+        sql::{BlockRow, PayloadSource, payload_dir},
     },
     data_source::storage::{
-        AvailabilityStorage, PayloadMetadata, VidCommonMetadata, sql::sqlx::Row,
+        AvailabilityStorage, PayloadMetadata, VidCommonMetadata, blob::BlobLoc, sql::sqlx::Row,
     },
     types::HeightIndexed,
 };
+
+/// Payload reads in flight per block range.
+const LOAD_CONCURRENCY: usize = 4;
 
 #[async_trait]
 impl<Mode, Types> AvailabilityStorage<Types> for Transaction<Mode>
@@ -72,8 +80,7 @@ where
               LIMIT 1"
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
-        let block = BlockQueryData::from_row(&row)?;
-        Ok(block)
+        self.load_block(BlockRow::<Types>::from_row(&row)?).await
     }
 
     async fn get_header(&mut self, id: BlockId<Types>) -> QueryResult<Header<Types>> {
@@ -91,8 +98,10 @@ where
               LIMIT 1"
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
-        let payload = PayloadQueryData::from_row(&row)?;
-        Ok(payload)
+        Ok(self
+            .load_block(BlockRow::<Types>::from_row(&row)?)
+            .await?
+            .into())
     }
 
     async fn get_payload_metadata(
@@ -191,13 +200,13 @@ where
               {where_clause}
               ORDER BY h.height"
         );
-        Ok(query
+        let rows = query
             .query(&sql)
             .fetch(self.as_mut())
-            .map(|res| BlockQueryData::from_row(&res?))
-            .map_err(QueryError::from)
-            .collect()
-            .await)
+            .map(|res| Ok::<_, QueryError>(BlockRow::<Types>::from_row(&res?)?))
+            .collect::<Vec<_>>()
+            .await;
+        Ok(self.load_blocks(rows).await)
     }
 
     async fn get_header_range<R>(
@@ -241,13 +250,18 @@ where
               {where_clause}
               ORDER BY h.height"
         );
-        Ok(query
+        let rows = query
             .query(&sql)
             .fetch(self.as_mut())
-            .map(|res| PayloadQueryData::from_row(&res?))
-            .map_err(QueryError::from)
-            .collect()
-            .await)
+            .map(|res| Ok::<_, QueryError>(BlockRow::<Types>::from_row(&res?)?))
+            .collect::<Vec<_>>()
+            .await;
+        Ok(self
+            .load_blocks(rows)
+            .await
+            .into_iter()
+            .map(|block| block.map(PayloadQueryData::from))
+            .collect())
     }
 
     async fn get_payload_metadata_range<R>(
@@ -348,13 +362,13 @@ where
               {where_clause}
               ORDER BY h.height"
         );
-        query
+        let rows = query
             .query(&sql)
             .fetch(self.as_mut())
-            .map(|res| BlockQueryData::from_row(&res?))
-            .map_err(QueryError::from)
-            .try_collect()
-            .await
+            .map(|res| Ok::<_, QueryError>(BlockRow::<Types>::from_row(&res?)?))
+            .collect::<Vec<_>>()
+            .await;
+        self.load_blocks(rows).await.into_iter().collect()
     }
 
     async fn get_vid_common_ranges(
@@ -427,7 +441,7 @@ where
                 LIMIT 1"
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
-        Ok(BlockQueryData::from_row(&row)?)
+        self.load_block(BlockRow::<Types>::from_row(&row)?).await
     }
 
     async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
@@ -447,6 +461,67 @@ impl<Mode> Transaction<Mode>
 where
     Mode: TransactionMode,
 {
+    /// Resolve the payload of a decoded block row and build the block.
+    pub async fn load_block<Types>(
+        &self,
+        mut row: BlockRow<Types>,
+    ) -> QueryResult<BlockQueryData<Types>>
+    where
+        Types: NodeType,
+        Header<Types>: QueryableHeader<Types>,
+        Payload<Types>: QueryablePayload<Types>,
+    {
+        let source = std::mem::take(&mut row.payload);
+        let bytes = self.payload_bytes::<Types>(&row.header, source).await?;
+        Ok(row.into_block(&bytes))
+    }
+
+    /// Load rows in parallel, preserving order.
+    pub(crate) async fn load_blocks<Types>(
+        &self,
+        rows: Vec<QueryResult<BlockRow<Types>>>,
+    ) -> Vec<QueryResult<BlockQueryData<Types>>>
+    where
+        Types: NodeType,
+        Header<Types>: QueryableHeader<Types>,
+        Payload<Types>: QueryablePayload<Types>,
+    {
+        stream::iter(rows)
+            .map(|row| async move { self.load_block(row?).await })
+            .buffered(LOAD_CONCURRENCY)
+            .collect()
+            .await
+    }
+
+    async fn payload_bytes<Types>(
+        &self,
+        header: &Header<Types>,
+        source: PayloadSource,
+    ) -> QueryResult<Vec<u8>>
+    where
+        Types: NodeType,
+    {
+        match source {
+            PayloadSource::Inline(bytes) => Ok(bytes),
+            PayloadSource::Empty => match payload_dir() {
+                Some(dir) => read_payload_file(dir, header.payload_commitment().to_string()).await,
+                None => Ok(vec![]),
+            },
+            PayloadSource::Blob(loc) => {
+                let blobs = self
+                    .blob_store()
+                    .ok_or_else(|| query_error("payload locator present but no blob store"))?;
+                let loc = loc.parse::<BlobLoc>().map_err(query_error)?;
+                blobs
+                    .read_payload(loc)
+                    .await
+                    .map_err(query_error)?
+                    .ok_or(QueryError::Missing)
+            },
+            PayloadSource::Missing => Err(QueryError::Missing),
+        }
+    }
+
     async fn load_namespaces<Types>(
         &mut self,
         height: u64,
@@ -487,10 +562,23 @@ where
     }
 }
 
+async fn read_payload_file(dir: &Path, name: String) -> QueryResult<Vec<u8>> {
+    let path = dir.join(name);
+    tokio::fs::read(&path)
+        .await
+        .map_err(|err| query_error(format!("reading payload file {}: {err}", path.display())))
+}
+
+fn query_error(err: impl Display) -> QueryError {
+    QueryError::Error {
+        message: err.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_types::{data::VidCommon, vid::advz::advz_scheme};
+    use hotshot_types::{data::VidCommon, traits::EncodeBytes, vid::advz::advz_scheme};
     use jf_advz::VidScheme;
     use pretty_assertions::assert_eq;
 
@@ -676,6 +764,53 @@ mod test {
                 .unwrap_err(),
         );
         assert_eq!(tx.get_block(BlockId::Number(1)).await.unwrap(), blocks[1]);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_load_block_payload_sources() {
+        let storage = TmpDb::init().await;
+        let db = SqlStorage::connect(storage.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let block = BlockQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let row = |payload| BlockRow {
+            header: block.header().clone(),
+            hash: block.hash(),
+            size: block.size(),
+            payload,
+        };
+
+        let tx = db.read().await.unwrap();
+        let bytes = block.payload().encode().to_vec();
+        assert_eq!(
+            tx.load_block(row(PayloadSource::Inline(bytes)))
+                .await
+                .unwrap(),
+            block
+        );
+        assert_eq!(
+            tx.load_block(row(PayloadSource::Empty)).await.unwrap(),
+            block
+        );
+        assert!(matches!(
+            tx.load_block(row(PayloadSource::Missing))
+                .await
+                .unwrap_err(),
+            QueryError::Missing
+        ));
+        // No blob store is configured on this connection.
+        assert!(matches!(
+            tx.load_block(row(PayloadSource::Blob("0-0-0-0".into())))
+                .await
+                .unwrap_err(),
+            QueryError::Error { .. }
+        ));
     }
 
     fn assert_absent(err: QueryError) {
