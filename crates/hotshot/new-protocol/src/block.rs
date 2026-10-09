@@ -231,7 +231,7 @@ pub struct BlockBuilder<T: NodeType> {
     /// leader and view, so a second block for the view is votable only if its
     /// payload is the same. It is the same whenever the new parent does not
     /// change how the payload is built.
-    view_transactions: BTreeMap<ViewNumber, Vec<T::Transaction>>,
+    view_transactions: BTreeMap<ViewNumber, Arc<Vec<T::Transaction>>>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -288,7 +288,7 @@ impl<T: NodeType> BlockBuilder<T> {
             let validated_state =
                 T::ValidatedState::from_header(&request.parent_proposal.block_header);
             let (payload, metadata) =
-                T::BlockPayload::from_transactions(txs, &validated_state, &instance)
+                T::BlockPayload::from_transactions(&txs, &validated_state, &instance)
                     .await
                     .map_err(|e| BlockError::PayloadConstruction(e.to_string()))?;
             let payload: PayloadWithMetadata<T> = PayloadWithMetadata { payload, metadata };
@@ -348,12 +348,12 @@ impl<T: NodeType> BlockBuilder<T> {
         self.calculations.insert((view, parent_commitment), handle);
     }
 
-    fn transactions_for(&mut self, view: ViewNumber) -> Vec<T::Transaction> {
+    fn transactions_for(&mut self, view: ViewNumber) -> Arc<Vec<T::Transaction>> {
         if let Some(txs) = self.view_transactions.get(&view) {
-            return txs.clone();
+            return Arc::clone(txs);
         }
-        let txs = self.take_block(view);
-        self.view_transactions.insert(view, txs.clone());
+        let txs = Arc::new(self.take_block(view));
+        self.view_transactions.insert(view, Arc::clone(&txs));
         txs
     }
 

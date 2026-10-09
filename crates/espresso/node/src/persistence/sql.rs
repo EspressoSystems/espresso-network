@@ -4094,7 +4094,7 @@ mod postgres_tests {
             .into();
 
         let (payload, ns_table) =
-            Payload::from_transactions(txs.clone(), &validated_state, &instance_state)
+            Payload::from_transactions(&txs, &validated_state, &instance_state)
                 .await
                 .unwrap();
         let payload_bytes = payload.encode();

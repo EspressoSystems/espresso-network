@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, iter, sync::Arc};
 
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
@@ -34,6 +34,8 @@ pub enum BlockBuildingError {
     UnexpectedGenesis,
     #[error("ChainConfig is not available")]
     MissingChainConfig(String),
+    #[error("Namespace payload needs {expected} bytes, buffer has {actual}")]
+    NsPayloadBufferTooShort { expected: usize, actual: usize },
 }
 
 /// Proposer-side limit that keeps VID dispersal size bounded. Not a
@@ -45,7 +47,7 @@ impl Payload {
         &self.ns_table
     }
 
-    /// The bytes [`BlockPayload::encode`] returns, without its copy into a fresh `Arc`.
+    /// The bytes [`BlockPayload::encode`] returns, without the `Arc` handle.
     pub fn raw_payload(&self) -> &[u8] {
         &self.raw_payload
     }
@@ -80,7 +82,7 @@ impl Payload {
 
     /// Need a sync version of [`BlockPayload::from_transactions`] in order to impl [`BlockPayload::empty`].
     pub fn from_transactions_sync(
-        transactions: impl IntoIterator<Item = <Self as BlockPayload<SeqTypes>>::Transaction> + Send,
+        transactions: &[Transaction],
         chain_config: ChainConfig,
     ) -> Result<
         (Self, <Self as BlockPayload<SeqTypes>>::Metadata),
@@ -94,7 +96,7 @@ impl Payload {
         // add each tx to its namespace
         let mut ns_builders = BTreeMap::<NamespaceId, NsPayloadBuilder>::new();
         let mut deferred = 0usize;
-        for tx in transactions.into_iter() {
+        for tx in transactions {
             let opens_new_ns = !ns_builders.contains_key(&tx.namespace());
             if opens_new_ns && ns_builders.len() >= MAX_NAMESPACES_PER_BLOCK {
                 deferred += 1;
@@ -130,11 +132,15 @@ impl Payload {
         }
 
         // build block payload and namespace table
-        let mut payload = Vec::new();
+        let len = ns_builders.values().map(NsPayloadBuilder::byte_len).sum();
+        // Perf: one allocation, filled in place.
+        let mut payload: Arc<[u8]> = iter::repeat_n(0, len).collect();
+        let out = Arc::get_mut(&mut payload).expect("freshly allocated Arc is unique");
+        let mut end = 0;
         let mut ns_table_builder = NsTableBuilder::new();
         for (ns_id, ns_builder) in ns_builders {
-            payload.extend(ns_builder.into_bytes());
-            ns_table_builder.append_entry(ns_id, payload.len());
+            end += ns_builder.write_into(&mut out[end..])?;
+            ns_table_builder.append_entry(ns_id, end);
         }
         let ns_table = ns_table_builder.into_ns_table();
         let metadata = ns_table.clone();
@@ -158,6 +164,11 @@ impl Payload {
 /// erasure decode and the vote.
 pub(crate) const MIN_PARALLEL_TRANSACTIONS: usize = 32;
 
+/// Payload size from which [`BlockPayload::transaction_commitments`] hashes in
+/// parallel regardless of transaction count; a few large transactions are slow to
+/// hash serially.
+pub(crate) const MIN_PARALLEL_BYTES: usize = 1 << 20;
+
 #[async_trait]
 impl BlockPayload<SeqTypes> for Payload {
     // TODO BlockPayload trait eliminate unneeded args, return vals of type
@@ -169,7 +180,7 @@ impl BlockPayload<SeqTypes> for Payload {
     type ValidatedState = ValidatedState;
 
     async fn from_transactions(
-        transactions: impl IntoIterator<Item = Self::Transaction> + Send,
+        transactions: &[Self::Transaction],
         validated_state: &Self::ValidatedState,
         instance_state: &Self::Instance,
     ) -> Result<(Self, Self::Metadata), Self::Error> {
@@ -193,16 +204,15 @@ impl BlockPayload<SeqTypes> for Payload {
         Self::from_transactions_sync(transactions, chain_config)
     }
 
-    // TODO avoid cloning the entire payload here?
     fn from_bytes(block_payload_bytes: &[u8], ns_table: &Self::Metadata) -> Self {
         Self {
-            raw_payload: block_payload_bytes.to_vec(),
+            raw_payload: block_payload_bytes.into(),
             ns_table: ns_table.clone(),
         }
     }
 
     fn empty() -> (Self, Self::Metadata) {
-        let payload = Self::from_transactions_sync(vec![], Default::default())
+        let payload = Self::from_transactions_sync(&[], Default::default())
             .unwrap()
             .0;
 
@@ -242,7 +252,7 @@ impl BlockPayload<SeqTypes> for Payload {
     ///
     /// Indices are materialized first — an `NsIndex` plus a position, far smaller
     /// than the transactions themselves — so only the hashing goes wide, and only
-    /// past [`MIN_PARALLEL_TRANSACTIONS`].
+    /// past [`MIN_PARALLEL_TRANSACTIONS`] or [`MIN_PARALLEL_BYTES`].
     ///
     /// Order must match [`Self::transactions`]: callers pair a commitment index
     /// with a transaction index. `par_iter` is an indexed parallel iterator, so
@@ -264,7 +274,8 @@ impl BlockPayload<SeqTypes> for Payload {
         };
 
         let indices: Vec<Index> = QueryablePayload::iter(self, metadata).collect();
-        if indices.len() < MIN_PARALLEL_TRANSACTIONS {
+        if indices.len() < MIN_PARALLEL_TRANSACTIONS && self.raw_payload.len() < MIN_PARALLEL_BYTES
+        {
             return indices.iter().map(commit).collect();
         }
         indices.par_iter().map(commit).collect()
@@ -315,7 +326,7 @@ impl std::fmt::Display for Payload {
 
 impl EncodeBytes for Payload {
     fn encode(&self) -> Arc<[u8]> {
-        Arc::from(self.raw_payload.as_ref())
+        Arc::clone(&self.raw_payload)
     }
 }
 
@@ -366,3 +377,6 @@ impl Payload {
         &mut self.ns_table
     }
 }
+
+#[cfg(test)]
+mod test;

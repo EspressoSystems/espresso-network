@@ -14,7 +14,7 @@ use rand::RngCore;
 
 use crate::{
     BlockSize, NamespaceId, NodeState, NsProof, Payload, Transaction, TxProof, ValidatedState,
-    v0::impls::block::{MAX_NAMESPACES_PER_BLOCK, MIN_PARALLEL_TRANSACTIONS},
+    v0::impls::block::{MAX_NAMESPACES_PER_BLOCK, MIN_PARALLEL_BYTES, MIN_PARALLEL_TRANSACTIONS},
     v0_3::ChainConfig,
 };
 
@@ -34,7 +34,7 @@ async fn basic_correctness() {
         tracing::info!("test case {} nss {} txs", test.nss.len(), all_txs.len());
 
         let block =
-            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
                 .await
                 .unwrap()
                 .0;
@@ -129,7 +129,7 @@ async fn enforce_max_block_size() {
         chain_config: chain_config.into(),
         ..Default::default()
     };
-    let block = Payload::from_transactions(test.all_txs(), &validated_state, &instance_state)
+    let block = Payload::from_transactions(&test.all_txs(), &validated_state, &instance_state)
         .await
         .unwrap()
         .0;
@@ -151,7 +151,7 @@ async fn enforce_max_block_size() {
         ..Default::default()
     };
 
-    let block = Payload::from_transactions(test.all_txs(), &validated_state, &instance_state)
+    let block = Payload::from_transactions(&test.all_txs(), &validated_state, &instance_state)
         .await
         .unwrap()
         .0;
@@ -166,7 +166,7 @@ async fn ns_limit_exact() {
         .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
         .collect();
 
-    let block = Payload::from_transactions(txs, &Default::default(), &Default::default())
+    let block = Payload::from_transactions(&txs, &Default::default(), &Default::default())
         .await
         .unwrap()
         .0;
@@ -185,7 +185,7 @@ async fn ns_limit() {
         .collect();
     txs.push(Transaction::new(admitted_ns, vec![1, 2, 3]));
 
-    let block = Payload::from_transactions(txs, &Default::default(), &Default::default())
+    let block = Payload::from_transactions(&txs, &Default::default(), &Default::default())
         .await
         .unwrap()
         .0;
@@ -212,7 +212,7 @@ async fn ns_limit_commitments_cover_included_only() {
         .map(|i| Transaction::new(NamespaceId::from(i as u32), vec![]))
         .collect();
     let (block, ns_table) =
-        Payload::from_transactions(txs.clone(), &Default::default(), &Default::default())
+        Payload::from_transactions(&txs, &Default::default(), &Default::default())
             .await
             .unwrap();
 
@@ -267,7 +267,7 @@ fn ns_limit_ignores_deferred_bytes() {
     txs.push(deferred_tx);
     txs.push(final_tx);
 
-    let block = Payload::from_transactions_sync(txs, chain_config)
+    let block = Payload::from_transactions_sync(&txs, chain_config)
         .unwrap()
         .0;
 
@@ -362,7 +362,7 @@ async fn transaction_commitments_match_serial() {
         .zip(counts)
     {
         let (payload, meta) =
-            Payload::from_transactions(test.all_txs(), &Default::default(), &Default::default())
+            Payload::from_transactions(&test.all_txs(), &Default::default(), &Default::default())
                 .await
                 .unwrap();
 
@@ -380,4 +380,31 @@ async fn transaction_commitments_match_serial() {
             serial,
         );
     }
+}
+
+/// A few transactions past [`MIN_PARALLEL_BYTES`] take the parallel branch and must keep the
+/// serial order.
+#[test]
+fn transaction_commitments_match_serial_few_large() {
+    let mut rng = jf_utils::test_rng();
+    let test = ValidTest::from_tx_lengths(
+        vec![
+            vec![MIN_PARALLEL_BYTES / 2; 2],
+            vec![MIN_PARALLEL_BYTES / 2],
+        ],
+        &mut rng,
+    );
+    let chain_config = ChainConfig {
+        max_block_size: (4 * MIN_PARALLEL_BYTES as u64).into(),
+        ..Default::default()
+    };
+    let (payload, meta) = Payload::from_transactions_sync(&test.all_txs(), chain_config).unwrap();
+    let serial: Vec<_> = BlockPayload::<crate::SeqTypes>::transactions(&payload, &meta)
+        .map(|txn| txn.commit())
+        .collect();
+    assert_eq!(serial.len(), 3);
+    assert_eq!(
+        BlockPayload::<crate::SeqTypes>::transaction_commitments(&payload, &meta),
+        serial,
+    );
 }

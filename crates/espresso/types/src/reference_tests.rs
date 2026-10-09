@@ -109,7 +109,7 @@ async fn reference_payload() -> Payload {
         txs
     };
 
-    Payload::from_transactions(txs, &Default::default(), &Default::default())
+    Payload::from_transactions(&txs, &Default::default(), &Default::default())
         .await
         .unwrap()
         .0

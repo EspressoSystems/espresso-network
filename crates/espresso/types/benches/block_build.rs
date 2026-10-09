@@ -1,7 +1,7 @@
 //! The leader's block build (`request_block` in crates/hotshot/new-protocol/src/block.rs), timed
 //! step by step.
 //!
-//! `request_block` runs `from_transactions` on a copy of the cached transactions, then
+//! `request_block` runs `from_transactions` on the cached transactions, then
 //! `hotshot_new_protocol::block::block_commitments`, the function the leader calls. A tracing
 //! layer records each step span's start and duration; when `CRITERION_HOME` is set they are
 //! written to `steps.json` next to the benchmark's criterion output. Step samples start with
@@ -71,11 +71,8 @@ fn request_block(
     txs: &[Transaction],
 ) -> (PayloadWithMetadata<SeqTypes>, BlockCommitments<SeqTypes>) {
     let _span = tracing::debug_span!("request_block").entered();
-    // `from_transactions` takes owned transactions, so the leader clones its cached ones
-    // (`transactions_for` in block.rs).
     let (payload, metadata): (Payload, NsTable) =
-        Payload::from_transactions_sync(txs.to_vec(), chain_config())
-            .expect("payload construction");
+        Payload::from_transactions_sync(txs, chain_config()).expect("payload construction");
     let payload = PayloadWithMetadata { payload, metadata };
     let commitments = block_commitments(&payload, VID_WEIGHT, NEW_PROTOCOL_VERSION);
     (payload, commitments)

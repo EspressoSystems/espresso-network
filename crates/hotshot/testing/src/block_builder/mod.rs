@@ -166,7 +166,7 @@ where
     <TYPES as NodeType>::InstanceState: Default,
 {
     let (block_payload, metadata) = TYPES::BlockPayload::from_transactions(
-        transactions,
+        &transactions,
         &Default::default(),
         &Default::default(),
     )
