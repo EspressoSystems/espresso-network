@@ -27,7 +27,7 @@ structure Step where
 deriving DecidableEq, Repr
 
 /-- The step with only its first `i` outputs: what it had produced before output `i`. -/
-abbrev Step.take (st : Step) (i : Nat) : Step := ⟨st.input, st.output.take i⟩
+abbrev Step.take (st : Step) (i : Nat) : Step := { st with output := st.output.take i }
 
 /-- A node's steps so far, oldest first. -/
 abbrev History := List Step
@@ -65,20 +65,18 @@ def TimedOut (v : ViewNumber) : Prop :=
 The node holds a `Cert1`: the anchor's, one it received on its own, or the one an
 epoch change carried.
 
-A proposal's parent certificate, a re-vote request's certificate and a timeout
-certificate's lock are not held by receiving them: they are checked, but the node
-has not seen them form. An implementation that keeps such a certificate records
-that as an input of its own (`Input.certificate1`).
+A `Cert1` carried inside any other message is not held until the implementation
+records it as an `Input.certificate1`.
 -/
 def HasCert1 (c : Cert1) : Prop :=
   c = cfg.anchorCert ∨ Received h (.certificate1 c) ∨ ∃ c2 p, Received h (.epochChange c c2 p)
 
 /--
-The node holds a `Cert2` it received.
+The node holds a `Cert2`: one it received on its own, or the one an epoch change
+carried.
 
-An implementation that keeps a `Cert2` another message carried, such as the one
-a proposal opening an epoch comes with, records that as an input of its own
-(`Input.certificate2`).
+A `Cert2` carried inside any other message is not held until the implementation
+records it as an `Input.certificate2`.
 -/
 def HasCert2 (c : Cert2) : Prop :=
   Received h (.certificate2 c) ∨ ∃ c1 p, Received h (.epochChange c1 c p)
