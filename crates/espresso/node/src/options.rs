@@ -906,6 +906,8 @@ pub struct SqlStorageConfig {
     pub max_connections: u32,
     pub query_min_connections: Option<u32>,
     pub query_max_connections: Option<u32>,
+    pub blob_dir: Option<PathBuf>,
+    pub share_retention: Duration,
     pub pruning: PruningView,
     pub consensus_pruning: ConsensusPruningView,
 }
@@ -1024,6 +1026,8 @@ impl From<&persistence::sql::Options> for SqlStorageConfig {
             query_max_connections: o.query_max_connections,
             #[cfg(feature = "embedded-db")]
             query_max_connections: None,
+            blob_dir: o.blob_dir.clone(),
+            share_retention: o.share_retention,
             pruning: PruningView::from(&o.pruning),
             consensus_pruning: ConsensusPruningView::from(&o.consensus_pruning),
         }
@@ -1624,6 +1628,8 @@ pub(crate) mod tests {
             "--prune",
             "--pruning-threshold",
             "1000000000000",
+            "--blob-dir",
+            "/var/lib/espresso/blob",
             "--",
             "http",
             "--port",

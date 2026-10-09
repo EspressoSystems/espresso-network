@@ -114,6 +114,11 @@ Backends:
 - Journal (`persistence/journal.rs`, `storage-journal` module): append-only consensus persistence for non-query nodes,
   no query module support (`run.rs` refuses `query` and a genesis below `NEW_PROTOCOL_VERSION`). Two write-ahead streams
   (`wal`, `data`) with group-committed fsyncs and segment-level GC; side `fs::Persistence` for membership/DHT/DRB state.
+- Blob store (`hotshot-query-service` `storage/blob.rs`, crate `journal-lane`): optional with `storage-sql`. Set
+  `--blob-dir` (`ESPRESSO_NODE_BLOB_DIR`) to keep block payloads (`payload_loc` rows) and VID shares in
+  `<dir>/{payload,share}` journal lanes instead of the database. Payload segments are unlinked after a prune up to their
+  `max_key`; share segments are unlinked by age (`--share-retention`, default `7d`). Connecting fails if `payload_loc`
+  rows exist and the dir is unset. One process per dir (`<dir>/LOCK`).
 
 Migrations (all backends required when adding storage):
 

@@ -2239,4 +2239,34 @@ mod tests {
             "should have at least one table in the database"
         );
     }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_blob_dir_option_opens_blob_store() {
+        let db = TmpDb::init().await;
+        let blob_dir = tempfile::tempdir().unwrap();
+
+        let mut opt = tmp_options(&db);
+        opt.blob_dir = Some(blob_dir.path().to_path_buf());
+        opt.share_retention = std::time::Duration::from_secs(3600);
+        let cfg = Config::try_from(&opt).expect("failed to create config from options");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("failed to connect to storage");
+
+        assert!(storage.blob_store().is_some());
+        assert!(blob_dir.path().join("LOCK").exists());
+        assert!(blob_dir.path().join("payload").is_dir());
+        assert!(blob_dir.path().join("share").is_dir());
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_no_blob_dir_option_keeps_payloads_in_database() {
+        let db = TmpDb::init().await;
+        let cfg = Config::try_from(&tmp_options(&db)).unwrap();
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        assert!(storage.blob_store().is_none());
+    }
 }

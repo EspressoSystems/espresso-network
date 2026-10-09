@@ -226,6 +226,10 @@ storage:
     max_connections: 25
     query_min_connections: ~
     query_max_connections: ~
+    blob_dir: /var/lib/espresso/blob
+    share_retention:
+      secs: 604800
+      nanos: 0
     pruning:
       pruning_threshold: 1000000000000
       minimum_retention: ~

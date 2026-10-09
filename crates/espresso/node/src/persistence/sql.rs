@@ -39,6 +39,7 @@ use hotshot_query_service::{
         Transaction as _, VersionedDataSource,
         storage::{
             SerializableRetry,
+            blob::BlobCfg,
             pruning::PrunerCfg,
             sql::{
                 Config, Db, Read, SerializableRetryConfig, SqlStorage, StorageConnectionType,
@@ -90,6 +91,10 @@ use crate::{
 /// A few days of heights at mainnet rates, and what binds whenever the light client's history is
 /// shorter than that.
 pub const DEFAULT_ARCHIVE_STATE_MIN_RETENTION: u64 = 500_000;
+
+/// Matches the `--share-retention` default of `7d`.
+#[cfg(any(feature = "embedded-db", test))]
+const DEFAULT_SHARE_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Options for Postgres-backed persistence.
 #[derive(Parser, Clone, Derivative)]
@@ -376,6 +381,17 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_DATABASE_STATEMENT_TIMEOUT", value_parser = parse_duration, default_value = "10m")]
     pub(crate) statement_timeout: Duration,
 
+    /// Directory for block payloads and VID shares, kept outside the database.
+    ///
+    /// When unset, payloads and shares stay in the database. A database that already references
+    /// blob records fails to start without this directory.
+    #[clap(long, env = "ESPRESSO_NODE_BLOB_DIR")]
+    pub(crate) blob_dir: Option<PathBuf>,
+
+    /// How long VID shares in the blob directory are kept. Expiry is by segment age.
+    #[clap(long, env = "ESPRESSO_NODE_SHARE_RETENTION", value_parser = parse_duration, default_value = "7d")]
+    pub(crate) share_retention: Duration,
+
     /// The minimum number of database connections to maintain at any time.
     ///
     /// The database client will, to the best of its ability, maintain at least `min` open
@@ -516,6 +532,8 @@ impl From<SqliteOptions> for Options {
             slow_statement_threshold: Duration::from_secs(1),
             uri: None,
             statement_timeout: Duration::from_secs(600),
+            blob_dir: None,
+            share_retention: DEFAULT_SHARE_RETENTION,
             prune: false,
             pruning: Default::default(),
             consensus_pruning: Default::default(),
@@ -623,6 +641,13 @@ impl TryFrom<&Options> for Config {
         }
 
         cfg = cfg.serializable_retry(opt.serializable_retry.to_retry_config());
+
+        if let Some(dir) = &opt.blob_dir {
+            cfg = cfg.blob(BlobCfg {
+                dir: dir.clone(),
+                share_retention: opt.share_retention,
+            });
+        }
 
         Ok(cfg)
     }
@@ -3437,6 +3462,42 @@ mod test {
 
     use super::*;
     use crate::{BLSPubKey, PubKey, persistence::tests::TestablePersistence as _};
+
+    fn parse_sql_options(extra: &[&str]) -> Options {
+        let mut args = vec!["storage-sql"];
+        #[cfg(feature = "embedded-db")]
+        args.extend(["--path", "./tmp/blob-options-test"]);
+        args.extend(extra);
+        Options::try_parse_from(args).unwrap()
+    }
+
+    #[test]
+    fn blob_options_default_to_off_with_seven_day_share_retention() {
+        let opt = parse_sql_options(&[]);
+
+        assert_eq!(opt.blob_dir, None);
+        assert_eq!(opt.share_retention, DEFAULT_SHARE_RETENTION);
+        assert_eq!(opt.share_retention, Duration::from_secs(7 * 24 * 3600));
+    }
+
+    #[test]
+    fn blob_options_parse_dir_and_retention() {
+        let opt = parse_sql_options(&["--blob-dir", "/var/blob", "--share-retention", "36h"]);
+
+        assert_eq!(opt.blob_dir, Some(PathBuf::from("/var/blob")));
+        assert_eq!(opt.share_retention, Duration::from_secs(36 * 3600));
+        Config::try_from(&opt).unwrap();
+    }
+
+    #[test]
+    fn blob_options_reject_invalid_retention() {
+        let mut args = vec!["storage-sql"];
+        #[cfg(feature = "embedded-db")]
+        args.extend(["--path", "./tmp/blob-options-test"]);
+        args.extend(["--share-retention", "soon"]);
+
+        Options::try_parse_from(args).unwrap_err();
+    }
 
     #[cfg(feature = "embedded-db")]
     #[tokio::test]
