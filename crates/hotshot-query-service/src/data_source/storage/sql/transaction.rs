@@ -68,7 +68,9 @@ use crate::{
     },
     data_source::{
         storage::{
-            NodeStorage, UpdateAvailabilityStorage, blob::BlobStore, pruning::PrunedHeightStorage,
+            NodeStorage, UpdateAvailabilityStorage,
+            blob::{BlobLoc, BlobStore, StagedBlobs},
+            pruning::PrunedHeightStorage,
         },
         update,
     },
@@ -325,6 +327,7 @@ pub struct Transaction<Mode> {
     inner: sqlx::Transaction<'static, Db>,
     metrics: TransactionMetricsGuard<Mode>,
     blobs: Option<Arc<BlobStore>>,
+    staged: HashMap<u64, BlobLoc>,
 }
 
 impl<Mode: TransactionMode> Transaction<Mode> {
@@ -340,11 +343,16 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             inner,
             metrics,
             blobs,
+            staged: HashMap::new(),
         })
     }
 
     pub fn blob_store(&self) -> Option<&Arc<BlobStore>> {
         self.blobs.as_ref()
+    }
+
+    pub fn staged_blob(&self, height: u64) -> Option<&BlobLoc> {
+        self.staged.get(&height)
     }
 }
 
@@ -994,6 +1002,10 @@ where
         }
 
         Ok(())
+    }
+
+    fn attach_blobs(&mut self, staged: StagedBlobs) {
+        self.staged.extend(staged);
     }
 }
 

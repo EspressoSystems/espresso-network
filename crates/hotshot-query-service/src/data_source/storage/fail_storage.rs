@@ -27,7 +27,7 @@ use hotshot_types::{
 use super::{
     Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, UpdateAggregatesStorage,
     UpdateAvailabilityStorage,
-    blob::BlobStore,
+    blob::{BlobStore, StagedBlobs},
     pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
 };
 use crate::{
@@ -538,6 +538,10 @@ where
     ) -> anyhow::Result<()> {
         self.maybe_fail_write(FailableAction::Any).await?;
         self.inner.insert_vid_range(vid).await
+    }
+
+    fn attach_blobs(&mut self, staged: StagedBlobs) {
+        self.inner.attach_blobs(staged);
     }
 }
 

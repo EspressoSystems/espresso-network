@@ -2043,7 +2043,8 @@ mod test {
     use crate::{
         availability::{BlockQueryData, LeafQueryData},
         data_source::storage::{
-            MerklizedStateStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage,
+            MerklizedStateStorage, UpdateAvailabilityStorage, blob::BlobLoc,
+            pruning::PrunedHeightStorage,
         },
         merklized_state::{MerklizedState, Snapshot, UpdateStateData},
         testing::mocks::{MockMerkleTree, MockTypes},
@@ -2779,6 +2780,30 @@ mod test {
             .unwrap();
         assert!(unset.blob_store().is_none());
         assert!(unset.read().await.unwrap().blob_store().is_none());
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_attach_blobs_is_scoped_to_one_transaction() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+        let loc = BlobLoc {
+            seq: 1,
+            offset: 2,
+            len: 3,
+            lsn: 4,
+        };
+
+        let mut tx = storage.write().await.unwrap();
+        assert!(tx.staged_blob(7).is_none());
+        UpdateAvailabilityStorage::<MockTypes>::attach_blobs(&mut tx, vec![(7, loc)]);
+        assert_eq!(tx.staged_blob(7), Some(&loc));
+        assert!(tx.staged_blob(8).is_none());
+        tx.revert().await;
+
+        let tx = storage.write().await.unwrap();
+        assert!(tx.staged_blob(7).is_none());
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

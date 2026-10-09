@@ -67,6 +67,7 @@ use hotshot_types::{
 use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
+use self::blob::StagedBlobs;
 use crate::{
     Header, Payload, QueryResult, Transaction,
     availability::{
@@ -338,6 +339,10 @@ where
             Item = (&'a VidCommonQueryData<Types>, Option<&'a VidShare>),
         >,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    /// Locators of payloads already written to the blob store, to be used by later inserts in
+    /// this transaction.
+    fn attach_blobs(&mut self, _staged: StagedBlobs) {}
 }
 
 #[async_trait]
