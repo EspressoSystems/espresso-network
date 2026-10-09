@@ -232,10 +232,9 @@ impl<T: NodeType> StateManager<T> {
                 epoch = %request.epoch,
                 block = %request.block,
                 parent_commitment = %request.parent_commitment,
-                "parent state unavailable; queued on parent for retry (from_header stub inserted). \
+                "parent state unavailable; queued on parent for retry. \
                  If this persists, the parent state never arrived and the node cannot vote."
             );
-            self.insert_empty_state(request.proposal.clone());
             let queued = self
                 .pending_requests
                 .entry(request.parent_commitment)
@@ -246,7 +245,6 @@ impl<T: NodeType> StateManager<T> {
             {
                 queued.push(Pending::State(request));
             }
-            self.start_pending(commitment);
             return;
         };
 
@@ -401,6 +399,13 @@ impl<T: NodeType> StateManager<T> {
             delta,
         } = update;
         let commitment = leaf.commit();
+        if delta.is_none() {
+            // Enrichment only: never abort a validation or start work on a stub.
+            if self.validated_states.contains_key(&commitment) {
+                self.insert_state(view, state, delta, leaf);
+            }
+            return;
+        }
         self.insert_state(view, state, delta, leaf);
         if let Some(in_flight) = self.state_requests.remove(&commitment) {
             in_flight.handle.abort();
@@ -438,7 +443,6 @@ impl<T: NodeType> StateManager<T> {
                                 validated: true,
                             });
                         } else {
-                            self.pending_requests.remove(&response.commitment);
                             return Some(StateManagerOutput::State {
                                 response,
                                 validated: false,
