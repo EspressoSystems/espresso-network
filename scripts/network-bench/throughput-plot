@@ -3,7 +3,7 @@
 # requires-python = ">=3.14"
 # dependencies = ["matplotlib", "numpy"]
 # ///
-"""Plots a run into `<run_dir>/throughput.png`, three or four panels over the same time axis:
+"""Plots a run into `<run_dir>/throughput.png`, three to five panels over the same time axis:
 
 - decided MB/s (consensus counters) against the MB/s the query node makes transactions available
   (`t_included` of `load.jsonl`), with the submitted rate as reference, and a tick per view
@@ -18,6 +18,12 @@
   block the light-client readers held it over the last SMOOTH_S (left, log scale) and the MB/s
   they fetched (right).
 
+A run with `chaos.jsonl` gets a panel on top with one lane per faulted node: a bar for each phase
+of a fault (down, recovering, catching up) with a marker per event, ending in a red x when the
+node did not recover. The other panels shade each fault until its node recovered. A run
+without `consensus.jsonl` samples (it failed) has no decided, block or timeout series, and its
+`run.json` is missing: the load starts at the first step.
+
     throughput-plot RUN_DIR
 """
 
@@ -25,14 +31,17 @@ import argparse
 import json
 import math
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
+import chaos as ch
 import matplotlib
 import numpy as np
 import tomllib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 SMOOTH_S = 10
 SURFACE = "#fcfcfb"
@@ -43,6 +52,10 @@ QUERY = "#eb6834"
 BAND = "#f0efec"
 BAND_FAILED = "#fbe3e2"
 BAND_FAILED_INK = "#c8352c"
+PHASES = (("down", "#6b4fa0"), ("recovering", "#e8a317"), ("catching up", "#2a9d8f"))
+PHASE_COLOR = dict(PHASES)
+EVENT_MARKERS = {"fault": "o", "started": "^", "rejoined": "s", "caught_up": "D"}
+FAULT_SPAN = "#e8a317"
 SIZE_UNITS = {"": 1, "b": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9}
 SIZE_UNITS |= {"kib": 2**10, "mib": 2**20, "gib": 2**30}
 
@@ -153,6 +166,72 @@ def max_block_mb(genesis: Path) -> float:
     return float(match[1]) * SIZE_UNITS[match[2]] / 1e6
 
 
+def draw_lanes(
+    lanes_ax: plt.Axes, rows: list[ch.FaultRow], end: float, minutes
+) -> None:
+    """One lane per faulted node, in the order of its first fault."""
+    nodes = list(dict.fromkeys(r.node for r in rows))
+    for row in rows:
+        y = nodes.index(row.node)
+        for phase, start, stop in ch.phase_segments(row, end):
+            lanes_ax.hlines(
+                y, minutes(start), minutes(stop), color=PHASE_COLOR[phase], lw=6
+            )
+        marks = {k: ts for k in EVENT_MARKERS if (ts := getattr(row, k)) is not None}
+        for event, ts in marks.items():
+            lanes_ax.plot(
+                minutes(ts), y, EVENT_MARKERS[event], color=INK, ms=4, zorder=3
+            )
+        if row.timeout is not None:
+            lanes_ax.plot(
+                minutes(row.timeout),
+                y,
+                "x",
+                color=BAND_FAILED_INK,
+                ms=9,
+                mew=2,
+                clip_on=False,
+            )
+        lanes_ax.text(
+            minutes(row.fault),
+            y - 0.45,
+            row.kind,
+            fontsize=6,
+            color=MUTED,
+            va="bottom",
+        )
+    lanes_ax.set_yticks(range(len(nodes)), nodes, color=INK, fontsize=7)
+    lanes_ax.set_ylim(len(nodes) - 0.4, -0.7)
+    lanes_ax.spines[["top", "right"]].set_visible(False)
+    lanes_ax.legend(
+        handles=[
+            *(Line2D([], [], color=color, lw=6, label=name) for name, color in PHASES),
+            *(
+                Line2D([], [], color=INK, marker=m, ls="", ms=4, label=e)
+                for e, m in EVENT_MARKERS.items()
+            ),
+            Line2D([], [], color=BAND_FAILED_INK, marker="x", ls="", label="timeout"),
+        ],
+        loc="lower left",
+        bbox_to_anchor=(0, 1),
+        ncol=8,
+        fontsize=8,
+        frameon=False,
+        labelcolor=INK,
+    )
+
+
+def last_time(
+    steps: list[dict], txs: list[dict], events: Sequence[ch.ChaosEvent]
+) -> float:
+    """The end of a run without counter samples: its last step, submit or chaos event."""
+    return max(
+        [s["t_end"] for s in steps]
+        + [tx["t_submit"] for tx in txs]
+        + [e["ts"] for e in events]
+    )
+
+
 def read_jsonl(path: Path) -> list[dict]:
     with path.open() as f:
         return [json.loads(line) for line in f]
@@ -163,23 +242,36 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("run_dir", type=Path)
     run_dir = parser.parse_args(argv).run_dir
 
-    t0 = json.loads((run_dir / "run.json").read_text())["t0"]
     cfg = json.loads((run_dir / "config.json").read_text())
     tx_size = cfg["tx_size"]
     steps = json.loads((run_dir / "steps.json").read_text())
     counters = read_jsonl(run_dir / "consensus.jsonl")
     txs = read_jsonl(run_dir / "load.jsonl")
     heights = read_jsonl(run_dir / "heights.jsonl")
-    t1 = counters[-1]["ts"]
+    events = ch.read_events(run_dir)
     clients_file = run_dir / "clients.jsonl"
     clients = read_jsonl(clients_file) if clients_file.exists() else []
+    run_path = run_dir / "run.json"
+    t0 = (
+        json.loads(run_path.read_text())["t0"]
+        if run_path.exists()
+        else steps[0]["t_start"]
+    )
+    # A run that failed has no counter samples.
+    sampled = len(counters) > 1
+    t1 = counters[-1]["ts"] if sampled else last_time(steps, txs, events)
 
-    dec_t, dec = decided_mb_s(counters)
+    none = np.array([])
+    dec_t, dec = decided_mb_s(counters) if sampled else (none, none)
     sub_t, sub = binned_mb_s([tx["t_submit"] for tx in txs], tx_size, t0, t1)
     inc = [tx["t_included"] for tx in txs if tx["t_included"] is not None]
     inc_t, query = binned_mb_s(inc, tx_size, t0, t1)
     on_validator = {h["height"]: h["validator"] for h in heights if h["validator"]}
-    blk_t, interval, size = block_series(np.sort(list(on_validator.values())), counters)
+    blk_t, interval, size = (
+        block_series(np.sort(list(on_validator.values())), counters)
+        if sampled
+        else (none, none, none)
+    )
     decided_txs = [tx for tx in txs if on_validator.get(tx["height"]) is not None]
     seen = np.array([on_validator[tx["height"]] for tx in decided_txs])
     latency = seen - np.array([tx["t_submit"] for tx in decided_txs])
@@ -193,28 +285,40 @@ def main(argv: list[str] | None = None) -> None:
         for tx in txs
     ]
     flight = in_flight(np.array([tx["t_submit"] for tx in txs]), np.array(ends), grid)
+    rows = ch.fault_rows(events)
 
     def minutes[T: (np.ndarray, float)](t: T) -> T:
         return (t - t0) / 60
 
-    ratios = (2, 1, 1, 1) if clients else (2, 1, 1)
+    lane_count = len({r.node for r in rows})
+    lane_ratio = (max(1.0, 0.3 * lane_count),) if rows else ()
+    client_ratio = (1,) if clients else ()
     fig, panels = plt.subplots(
-        len(ratios),
+        len(lane_ratio) + 3 + len(client_ratio),
         1,
-        figsize=(13, 3.3 * len(ratios)),
+        figsize=(13, 3.3 * (3 + len(client_ratio)) + 0.4 * lane_count),
         sharex=True,
-        height_ratios=ratios,
+        height_ratios=(*lane_ratio, 2, 1, 1, *client_ratio),
         facecolor=SURFACE,
     )
-    ax, blk_ax, lat_ax, *client_panel = panels
+    lane_panel = panels[: len(lane_ratio)]
+    ax, blk_ax, lat_ax, *client_panel = panels[len(lane_ratio) :]
+    data_panels = (ax, blk_ax, lat_ax, *client_panel)
     for panel in panels:
         panel.set_facecolor(SURFACE)
         panel.tick_params(colors=INK)
         panel.grid(alpha=0.3)
+    if rows:
+        draw_lanes(lane_panel[0], rows, t1, minutes)
+        for start, stop in (ch.fault_span(r, t1) for r in rows):
+            for panel in data_panels:
+                panel.axvspan(
+                    minutes(start), minutes(stop), color=FAULT_SPAN, alpha=0.1, lw=0
+                )
     for i, step in enumerate(steps):
         start, end = minutes(step["t_start"]), minutes(step["t_end"])
         failed = step["consensus_fails"] or step["query_fails"]
-        for panel in panels:
+        for panel in data_panels:
             panel.axvspan(
                 minutes(step["t_mid"]),
                 end,
@@ -252,14 +356,17 @@ def main(argv: list[str] | None = None) -> None:
         lw=0.8,
         label=f"submitted, {SMOOTH_S} s mean",
     )
-    ax.plot(minutes(dec_t), dec, color=DECIDED, lw=0.8, alpha=0.3, label="decided, 1 s")
-    ax.plot(
-        minutes(dec_t),
-        moving_mean(dec),
-        color=DECIDED,
-        lw=2,
-        label=f"decided, {SMOOTH_S} s mean",
-    )
+    if sampled:
+        ax.plot(
+            minutes(dec_t), dec, color=DECIDED, lw=0.8, alpha=0.3, label="decided, 1 s"
+        )
+        ax.plot(
+            minutes(dec_t),
+            moving_mean(dec),
+            color=DECIDED,
+            lw=2,
+            label=f"decided, {SMOOTH_S} s mean",
+        )
     ax.plot(
         minutes(inc_t),
         moving_mean(query),
@@ -267,7 +374,7 @@ def main(argv: list[str] | None = None) -> None:
         lw=2,
         label=f"query node, {SMOOTH_S} s mean",
     )
-    timeouts = timeout_times(counters)
+    timeouts = timeout_times(counters) if sampled else none
     if len(timeouts):
         ax.plot(
             minutes(timeouts),
@@ -293,6 +400,15 @@ def main(argv: list[str] | None = None) -> None:
         lw=1.5,
         label=f"block size, {SMOOTH_S} s window",
     )
+    if not sampled:
+        blk_ax.text(
+            0.5,
+            0.5,
+            "no consensus counters collected",
+            transform=blk_ax.transAxes,
+            ha="center",
+            color=MUTED,
+        )
     blk_ax.axhline(cap, color=DECIDED, lw=1, ls="--", label="max_block_size")
     blk_ax.set_ylim(0, cap * 1.15)
     blk_ax.set_ylabel("MB per block", color=DECIDED)

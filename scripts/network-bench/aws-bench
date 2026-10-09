@@ -10,10 +10,10 @@ and region, replacing manual `espresso-deploy` runs for this purpose. `plan` ren
 and prints a cost estimate without writing anything to AWS; `run` additionally provisions,
 measures, collects and destroys. `up` provisions a fleet that stays idle for several
 measurements: `run --fleet FLEET` measures on it (`fleet.lock` admits one run at a time and a
-reset wipes the chain between runs), and `down FLEET` destroys it. The query service's Postgres
-runs in a container on node0, on the root volume (`--query-db colocated`) or an extra volume
+reset wipes the chain between runs), and `down FLEET` destroys it. The query service runs on the
+first `--query-nodes` nodes (node0 by default). Its Postgres runs in a container on node0, on the root volume (`--query-db colocated`) or an extra volume
 (`volume`), or on an RDS instance (`rds`); `up --db-modes` provisions the stores, a run picks one.
-`--query-engine sqlite` runs node0's query service on embedded SQLite instead, with no Postgres:
+`--query-engine sqlite` runs the query service on embedded SQLite instead, with no Postgres:
 on the root volume (`--query-db colocated`) or in RAM (`tmpfs`); neither needs provisioning.
 
 `status` shows one fleet (phase, instances, agent progress, cost so far) or, with `--all`, every
@@ -38,6 +38,7 @@ Examples:
     scripts/network-bench/aws-bench plan --tag release-x --nodes 5
     scripts/network-bench/aws-bench up --tag release-x --ttl-min 180
     scripts/network-bench/aws-bench run --fleet --query-db colocated
+    scripts/network-bench/aws-bench run --tag release-x --chaos   # faults nodes during a constant load
     scripts/network-bench/aws-bench down <fleet>
 
 FLEET is a name under bench-state/aws, or a path when it contains `/`. `run --fleet`, `down`,
@@ -59,6 +60,7 @@ import shlex
 import shutil
 import signal
 import socket
+import statistics
 import string
 import subprocess
 import sys
@@ -67,8 +69,8 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections import Counter, defaultdict, deque
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -86,6 +88,7 @@ from typing import (
     get_args,
 )
 
+import chaos as ch
 import latency
 import netbench as nb
 
@@ -197,6 +200,8 @@ PUBLISH_OPTIONAL = (
     "trace/leader_path.md",
     "trace/stats.json",
     "throughput.png",
+    "chaos.jsonl",
+    "error.txt",
 )
 PG_GB = 400
 RDS_CLASS = "db.m8g.4xlarge"
@@ -304,7 +309,8 @@ STORAGE_MODULES: dict[tuple[ConsensusStorage, NodeRole], tuple[str, ...]] = {
     ("fs", "validator"): ("storage-fs",),
     ("fs", "query"): ("storage-sql",),
 }
-# `light-client` serves the readers of `--clients`; it adds routes only.
+# `light-client` serves the readers of `--clients` and the query nodes fetching from each other
+# through ESPRESSO_NODE_API_PEERS; it adds routes only.
 API_MODULES: dict[NodeRole, tuple[str, ...]] = {
     "validator": ("http", "status", "submit", "catchup", "config"),
     "query": ("http", "query", "submit", "catchup", "config", "light-client"),
@@ -336,7 +342,15 @@ REPO_ROOT = SCRIPT_DIR.parents[1]
 USER_DATA_TEMPLATE = SCRIPT_DIR / "aws" / "user-data.sh"
 TERRAFORM_SRC = SCRIPT_DIR / "aws" / "terraform"
 # Rendered per host after `tofu apply`, shipped to /opt/bench next to netbench.py and aws-bench.
-SHIPPED_HOST_FILES = ("node.env", "ctl.env", "start.sh", "agent.json", "pg.json")
+SHIPPED_HOST_FILES = (
+    "node.env",
+    "node-rejoin.env",
+    "recreate.sh",
+    "ctl.env",
+    "start.sh",
+    "agent.json",
+    "pg.json",
+)
 
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 # Matches bench.sample_host, so host_stats/process_stats coverage math is unchanged.
@@ -387,7 +401,7 @@ def pg_tuning(memory_mib: int) -> PgTuning:
     shared_buffers is a quarter of the host, effective_cache_size three quarters,
     maintenance_work_mem 1/16 and autovacuum_work_mem 1/64, each floored to whole MB. No caps:
     the priced types span 16 to 64 GiB, where these stay below a third of the host (Postgres 18
-    has no 1 GB vacuum limit). work_mem and wal_buffers stay fixed: per-query and WAL sizing
+    has no 1 GB vacuum limit); hosts below 16 GiB are untuned and unsupported for Postgres. work_mem and wal_buffers stay fixed: per-query and WAL sizing
     does not grow with the host. The last group pins what RDS defaults differently from
     postgres."""
     return {
@@ -523,6 +537,7 @@ UP_MAX_USD = 60.0
 # What `reset_chain` leaves in BENCH_DIR: `up` wrote these and the shipped agents run from here.
 RESET_KEEP = (
     "netbench.py",
+    "chaos.py",
     "latency.py",
     "aws-bench",
     "bbr-hold.sh",
@@ -534,6 +549,7 @@ RESET_KEEP = (
 # Flags that shape the fleet, refused by `run --fleet` (the values are in fleet.json).
 FLEET_ONLY_FLAGS = (
     "--nodes",
+    "--query-nodes",
     "--node-type",
     "--ctl-type",
     "--root-gb",
@@ -550,8 +566,22 @@ REMOTE_POOL_SIZE = 16
 DOCKER_START_LEAD_S = 15.0
 # Container log lines per node in the summary of a run without a result.
 FAILURE_LOG_LINES = 10
+# WARN and ERROR lines of a timed out chaos node.
+FAILURE_WARN_LINES = 30
 CHECKIP_URL = "https://checkip.amazonaws.com"
 AGENT_POLL_S = 5.0
+CHAOS_NODES = 22
+CHAOS_NODE_TYPE = "c8g.xlarge"
+CHAOS_CTL_TYPE = "c8g.xlarge"
+CHAOS_LATENCY = "decaf-2025"
+CHAOS_FLAGS = ("--chaos-min", "--chaos-rate", "--chaos-seed", "--chaos-kinds")
+# The load shape is the chaos config's.
+CHAOS_LOAD_FLAGS = ("--steps", "--step-s", "--search", "--keep-going", "--warmup-s")
+CHAOS_MIN_NODES = 7
+# Consecutive chaos ticks with a failed probe or fault ssh before the run fails.
+CHAOS_SSH_FAILURES = 5
+CHAOS_STEP_S = 60
+CHAOS_DRAIN_EXPECTED_S = 60.0
 OUT_RSYNC_S = 60.0
 NODE_CHECK_S = 30.0
 # Per remote command of stop, freeze and collect: above the docker stop grace of every
@@ -671,6 +701,7 @@ DbMode = Literal["colocated", "volume", "rds", "tmpfs"]
 DB_MODES: tuple[DbMode, ...] = ("colocated", "volume", "rds")
 QueryEngine = Literal["postgres", "sqlite"]
 QUERY_ENGINES: tuple[QueryEngine, ...] = ("postgres", "sqlite")
+CHAOS_QUERY_ENGINE: QueryEngine = "sqlite"
 QUERY_PLACEMENTS: dict[QueryEngine, tuple[DbMode, ...]] = {
     "postgres": DB_MODES,
     "sqlite": ("colocated", "volume", "tmpfs"),
@@ -921,6 +952,8 @@ INTERNET_MTU = latency.INTERNET_MTU
 class RunConfig:
     tag: str
     nodes: int = 5
+    # The first `query_nodes` nodes run the query service; the rest are validators.
+    query_nodes: int = 1
     node_type: str = NODE_TYPE
     ctl_type: str = CTL_TYPE
     load: nb.BenchConfig = field(default_factory=lambda: aws_load())
@@ -953,6 +986,8 @@ class RunConfig:
     allocator: str | None = None
     # `journal` is experimental and absent from images built from `main`.
     consensus_storage: ConsensusStorage = "fs"
+    # Faults while the load runs; None for a plain run.
+    chaos: ch.ChaosConfig | None = None
     # node0 prunes its data and state older than this many seconds; None for no pruning.
     prune: int | None = None
 
@@ -1202,12 +1237,55 @@ def rds_spec(cfg: RunConfig, pre: Preflight) -> RdsSpec | None:
     }
 
 
+def check_chaos(cfg: RunConfig) -> None:
+    """Refuses, before any AWS call, a fleet chaos cannot fault within its invariants."""
+    if cfg.chaos is None:
+        return
+    if cfg.nodes < CHAOS_MIN_NODES:
+        raise Refused(
+            f"--chaos needs at least {CHAOS_MIN_NODES} nodes to keep faulty stake below f: "
+            f"{cfg.nodes}"
+        )
+    if cfg.query_nodes <= ch.QUERY_FLOOR:
+        raise Refused(
+            f"--chaos needs more than {ch.QUERY_FLOOR} query nodes, so that one can be "
+            f"faulted with {ch.QUERY_FLOOR} left serving: {cfg.query_nodes}"
+        )
+    quiet_s = cfg.chaos.kill_down_s + ch.RECOVERY_ALLOWANCE_S
+    if cfg.chaos.minutes * CHAOS_STEP_S <= quiet_s:
+        raise Refused(
+            f"--chaos-min {cfg.chaos.minutes} issues no faults: they stop {quiet_s:g} s "
+            "before the load ends"
+        )
+    if cfg.query_engine != "sqlite":
+        raise Refused(
+            "--chaos needs --query-engine sqlite: a postgres wipe needs a database reset"
+        )
+    if cfg.query_db != "colocated":
+        raise Refused(
+            "--chaos needs --query-db colocated: volume and rds serve one host, tmpfs turns "
+            "every restart into a wipe"
+        )
+
+
 def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     check_rds_config(cfg)
     check_search(cfg)
+    check_chaos(cfg)
     if cfg.nodes < 2:
         raise Refused(f"--nodes must be at least 2: {cfg.nodes}")
     check_submit_nodes(cfg)
+    if not 1 <= cfg.query_nodes <= cfg.nodes:
+        raise Refused(
+            f"--query-nodes must be between 1 and nodes ({cfg.nodes}): {cfg.query_nodes}"
+        )
+    if cfg.query_nodes > 1 and (
+        cfg.query_db != "colocated" or set(cfg.db_modes) != {"colocated"}
+    ):
+        raise Refused(
+            "--query-nodes above 1 needs --query-db colocated: volume and rds serve one host, "
+            "tmpfs turns every restart into a wipe"
+        )
     hosts: list[HostSpec] = [
         {
             "name": "ctl",
@@ -1219,7 +1297,7 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
         }
     ]
     for i in range(cfg.nodes):
-        query = i == 0
+        query = i < cfg.query_nodes
         hosts.append(
             {
                 "name": f"node{i}",
@@ -1233,24 +1311,29 @@ def plan_hosts(cfg: RunConfig) -> list[HostSpec]:
     return hosts
 
 
-def peers(i: int, n: int) -> list[int]:
-    """Up to 3 other validators for node i's `STATE_PEERS`, never itself. node0 gets the first
-    `min(3, n - 1)` validators, so it can catch up on state it lacks instead of skewing query
-    lag; other nodes get the next `min(3, n - 2)` validators after i in the fixed cycle
-    `1, .., n-1`, wrapping around, excluding node0 (query load).
+def peers(i: int, n: int, k: int = 1) -> list[int]:
+    """Up to 3 other validators for node i's `STATE_PEERS`, never itself. The query nodes
+    `0..k-1` get the first `min(3, n - k)` validators, so they can catch up on state they lack
+    instead of skewing query lag; validators get the next `min(3, n - k - 1)` validators after
+    i in the fixed cycle `k, .., n-1`, wrapping around, never a query node (query load).
+    Without validators (k == n) every node gets the next 3 nodes in the cycle `0, .., n-1`.
     """
-    if i == 0:
-        return list(range(1, min(3, n - 1) + 1))
-    if n <= 2:
+    validators = n - k
+    if validators == 0:
+        return [(i + j) % n for j in range(1, min(3, n - 1) + 1)]
+    if i < k:
+        return list(range(k, k + min(3, validators)))
+    if validators <= 1:
         return []
-    count = min(3, n - 2)
-    return [(i - 1 + k) % (n - 1) + 1 for k in range(1, count + 1)]
+    count = min(3, validators - 1)
+    return [(i - k + j) % validators + k for j in range(1, count + 1)]
 
 
 def plan_peers(hosts: list[HostSpec]) -> dict[str, list[str]]:
     nodes = [h["name"] for h in hosts if h["role"] != "ctl"]
+    k = sum(h["role"] == "query" for h in hosts)
     return {
-        nodes[i]: [nodes[j] for j in peers(i, len(nodes))] for i in range(len(nodes))
+        nodes[i]: [nodes[j] for j in peers(i, len(nodes), k)] for i in range(len(nodes))
     }
 
 
@@ -1316,6 +1399,9 @@ def _measure_seconds(cfg: RunConfig) -> tuple[float, float]:
     disconnect: the ready timeout and the collection cap."""
     expected_load = load_seconds(cfg.load, cfg.search, worst=False)
     worst_load = load_seconds(cfg.load, cfg.search, worst=True)
+    if cfg.chaos:
+        expected_load += CHAOS_DRAIN_EXPECTED_S
+        worst_load += cfg.chaos.recover_timeout_s
     return (
         SERVICES_S + expected_load + READY_EXPECTED_S + COLLECT_EXPECTED_S,
         SERVICES_S + worst_load + READY_TIMEOUT_S + COLLECT_MAX_S,
@@ -1515,20 +1601,36 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
     return [
         f"storage validators: consensus {validators[0]}",
         (
-            f"storage node0:      consensus {node0[0]}, query {node0[-1]} "
+            f"storage query:      consensus {node0[0]}, query {node0[-1]} "
             f"({cfg.query_engine}, {cfg.query_db})"
         ),
         (
-            f"nodes: max block {cfg.max_block_size}; submit {cfg.load.submit_nodes} nodes; "
+            f"nodes: {cfg.nodes} ({cfg.query_nodes} query, "
+            f"{cfg.nodes - cfg.query_nodes} validator-only); max block {cfg.max_block_size}; "
+            f"submit {cfg.load.submit_nodes} nodes; "
             f"leader-trace {'on' if cfg.leader_trace else 'off'}"
         ),
         f"node-env: {' '.join(cfg.node_env) or 'none'}",
+        *(
+            [format_chaos_summary(cfg.chaos, cfg.nodes, cfg.latency)]
+            if cfg.chaos
+            else []
+        ),
         *(
             [f"prune: data and state older than {cfg.prune}s, every {PRUNE_INTERVAL}"]
             if cfg.prune
             else []
         ),
     ]
+
+
+def format_chaos_summary(chaos: ch.ChaosConfig, nodes: int, latency: str) -> str:
+    return (
+        f"chaos: {chaos.minutes} min at {chaos.rate_mb_s:g} MB/s; latency {latency}; "
+        f"kinds {','.join(chaos.kinds)}; seed {chaos.seed}; "
+        f"at most {ch.fault_budget(nodes)} faulty; gap {chaos.gap_s:g} s; "
+        f"kill down {chaos.kill_down_s:g} s; recover timeout {chaos.recover_timeout_s:g} s"
+    )
 
 
 def format_fleet_summary(estimate: Estimate, max_usd: float, expires: datetime) -> str:
@@ -2171,6 +2273,10 @@ def env_port(key: str) -> int:
     return int(dotenv()[key])
 
 
+def _query_names(hosts: dict[str, HostInfo]) -> list[str]:
+    return [name for name in _node_names(hosts) if hosts[name]["role"] == "query"]
+
+
 def _node_names(hosts: dict[str, HostInfo]) -> list[str]:
     return sorted(
         (name for name in hosts if name != "ctl"),
@@ -2200,12 +2306,17 @@ def render_node_env(
     consensus_storage: ConsensusStorage = "fs",
     query_engine: QueryEngine = "postgres",
     prune: int | None = None,
+    config_peers: bool = False,
+    chaos: bool = False,
 ) -> str:
     self_info = hosts[host["name"]]
     ctl_info = hosts["ctl"]
     node_names = _node_names(hosts)
     i = node_names.index(host["name"])
-    peer_urls = [_node_url(hosts[node_names[j]]) for j in peers(i, len(node_names))]
+    peer_urls = [
+        _node_url(hosts[node_names[j]])
+        for j in peers(i, len(node_names), len(_query_names(hosts)))
+    ]
     env = {
         "ESPRESSO_NODE_KEY_MNEMONIC": BENCH_MNEMONIC,
         "ESPRESSO_NODE_KEY_INDEX": str(KEY_INDEX_BASE + i),
@@ -2233,6 +2344,21 @@ def render_node_env(
     # A required value left empty risks a clap parse error; omit rather than pass "".
     if peer_urls:
         env["ESPRESSO_NODE_STATE_PEERS"] = ",".join(peer_urls)
+        if config_peers:
+            # A wiped node has no persisted config; with this it fetches it from peers instead
+            # of waiting on the orchestrator.
+            env["ESPRESSO_NODE_CONFIG_PEERS"] = env["ESPRESSO_NODE_STATE_PEERS"]
+    if host["role"] == "query":
+        # The query service fetches data it missed from the other query nodes.
+        # Rotated to start after this node so catch-up fetches do not all hit the first peer.
+        names = _query_names(hosts)
+        i = names.index(host["name"])
+        api_peers = [_node_url(hosts[name]) for name in names[i + 1 :] + names[:i]]
+        if api_peers:
+            env["ESPRESSO_NODE_API_PEERS"] = ",".join(api_peers)
+        if chaos:
+            # The default 5 min cache would report a wiped node as synced from its empty DB.
+            env["ESPRESSO_NODE_SYNC_STATUS_TTL"] = f"{ch.SYNC_STATUS_TTL_S:g}s"
     if host["role"] == "query" and query_engine == "sqlite":
         # The entrypoint then execs espresso-node-sqlite, which prepends storage-sql itself.
         env["ESPRESSO_NODE_EMBEDDED_DB"] = "true"
@@ -2254,7 +2380,7 @@ def render_node_env(
                 "ESPRESSO_NODE_POSTGRES_DATABASE": pg["database"],
             }
         )
-    if host["role"] == "query" and prune is not None:
+    if host["name"] == "node0" and prune is not None:
         env.update(prune_env(prune))
     for pair in node_env:
         key, _, value = pair.partition("=")
@@ -2479,6 +2605,36 @@ def render_start_sh(
                 *render_postgres_args(memory_mib),
             ],
         )
+    if host["role"] == "query":
+        # After reset_script wiped /data/pg and pg_store_script mounted the run's placement.
+        script += f"mkdir -p {PAYLOAD_HOST_DIR}\n\n"
+        if query_engine == "sqlite" and query_db == "volume":
+            script += f"mkdir -p {SQLITE_VOLUME_DIR}\n\n"
+    if leader_trace:
+        script += f"mkdir -p {TRACE_HOST_DIR}\n\n"
+    argv = node_create_argv(
+        host,
+        images,
+        query_db,
+        leader_trace,
+        consensus_storage,
+        query_engine,
+        f"{BENCH_DIR}/node.env",
+    )
+    script += _docker_create("espresso-node", argv)
+    return script
+
+
+def node_create_argv(
+    host: HostSpec,
+    images: dict[str, ImageInfo],
+    query_db: DbMode,
+    leader_trace: bool,
+    consensus_storage: ConsensusStorage,
+    query_engine: QueryEngine,
+    env_file: str,
+) -> list[str]:
+    """`docker create` arguments of the espresso-node container."""
     node = images["espresso-node"]
     role: NodeRole = "query" if host["role"] == "query" else "validator"
     storage = STORAGE_MODULES[consensus_storage, role]
@@ -2487,30 +2643,63 @@ def render_start_sh(
     modules = (*storage, *API_MODULES[role])
     argv = [
         "--env-file",
-        f"{BENCH_DIR}/node.env",
+        env_file,
         "-v",
         "/data/journal:/store",
         "-v",
         f"{BENCH_DIR}/genesis.toml:{BENCH_DIR}/genesis.toml:ro",
     ]
     if host["role"] == "query":
-        # After reset_script wiped /data/pg and pg_store_script mounted the run's placement.
-        script += f"mkdir -p {PAYLOAD_HOST_DIR}\n\n"
         argv += ["-v", f"{PAYLOAD_HOST_DIR}:{PAYLOAD_CONTAINER_DIR}"]
         if query_engine == "sqlite" and query_db == "volume":
-            script += f"mkdir -p {SQLITE_VOLUME_DIR}\n\n"
             argv += ["-v", f"{SQLITE_VOLUME_DIR}:{SQLITE_CONTAINER_DIR}"]
         if query_db == "tmpfs":
             argv += ["--tmpfs", f"{SQLITE_CONTAINER_DIR}:size={SQLITE_TMPFS_GB}g"]
     if leader_trace:
-        script += f"mkdir -p {TRACE_HOST_DIR}\n\n"
         argv += ["-v", f"{TRACE_HOST_DIR}:{TRACE_CONTAINER_DIR}"]
     argv.append(f"{node['ref']}@{node['digest']}")
     argv.append("/bin/espresso-node")
     for module in modules:
         argv += ["--", module]
-    script += _docker_create("espresso-node", argv)
-    return script
+    return argv
+
+
+def render_recreate_sh(
+    host: HostSpec,
+    images: dict[str, ImageInfo],
+    query_db: DbMode = "colocated",
+    leader_trace: bool = False,
+    consensus_storage: ConsensusStorage = "fs",
+    query_engine: QueryEngine = "postgres",
+) -> str:
+    """Recreates the espresso-node container from `node-rejoin.env`; same arguments as start.sh
+    otherwise."""
+    argv = node_create_argv(
+        host,
+        images,
+        query_db,
+        leader_trace,
+        consensus_storage,
+        query_engine,
+        f"{BENCH_DIR}/node-rejoin.env",
+    )
+    return "#!/usr/bin/env bash\nset -eEu -o pipefail\n\n" + _docker_create(
+        "espresso-node", argv
+    )
+
+
+def wipe_script(query: bool) -> str:
+    """Run as root through `bounded`. Safe to rerun: `rm -f` and `find` accept what is gone."""
+    lines = [
+        "set -eu",
+        f"docker logs espresso-node 2>&1 | gzip >> {BENCH_DIR}/espresso-node.wiped.log.gz",
+        "docker rm -f espresso-node",
+        "find /data/journal -mindepth 1 -delete",
+    ]
+    if query:
+        lines.append(f"find {PAYLOAD_HOST_DIR} -mindepth 1 -delete")
+    lines += [f"bash {BENCH_DIR}/recreate.sh", "docker start espresso-node"]
+    return "\n".join(lines) + "\n"
 
 
 def geometric_steps(start: float, factor: float, top: float) -> tuple[float, ...]:
@@ -2543,6 +2732,7 @@ def add_run_flags(parser: argparse.ArgumentParser, tag_required: bool = True) ->
         help="espresso-node built with this allocator, espresso-node-alloc:<tag>-<allocator>",
     )
     parser.add_argument("--nodes", type=int, default=defaults.nodes)
+    parser.add_argument("--query-nodes", type=int, default=defaults.query_nodes)
     parser.add_argument("--node-type", default=defaults.node_type)
     parser.add_argument("--ctl-type", default=defaults.ctl_type)
     steps = ", ".join(f"{rate:g}" for rate in load.steps)
@@ -2632,6 +2822,52 @@ def add_search_flags(parser: argparse.ArgumentParser) -> None:
         "--offered-gb",
         type=positive_float,
         help=f"with --search: bytes offered in total, default {search.offered_gb:g}",
+    )
+
+
+def chaos_kinds(text: str) -> tuple[ch.ChaosKind, ...]:
+    kinds = text.split(",")
+    unknown = [kind for kind in kinds if kind not in get_args(ch.ChaosKind)]
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"unknown fault kind {', '.join(unknown)}; choose from "
+            f"{', '.join(get_args(ch.ChaosKind))}"
+        )
+    return cast(tuple[ch.ChaosKind, ...], tuple(kinds))
+
+
+def add_chaos_flags(parser: argparse.ArgumentParser) -> None:
+    chaos = ch.ChaosConfig()
+    parser.add_argument(
+        "--chaos",
+        action="store_true",
+        help=f"restart, kill and wipe nodes during the load; flags not given take the chaos "
+        f"shape ({CHAOS_NODES} nodes, all of them query nodes, sqlite, "
+        f"{CHAOS_NODE_TYPE}, --latency {CHAOS_LATENCY}) and the load is {chaos.minutes} steps of {CHAOS_STEP_S} s",
+    )
+    parser.add_argument(
+        "--chaos-min",
+        type=positive_int,
+        default=chaos.minutes,
+        help="with --chaos: minutes of load, one step each",
+    )
+    parser.add_argument(
+        "--chaos-rate",
+        type=positive_float,
+        default=chaos.rate_mb_s,
+        help="with --chaos: offered MB/s of every step",
+    )
+    parser.add_argument(
+        "--chaos-seed",
+        type=int,
+        default=chaos.seed,
+        help="with --chaos: seed of the order the nodes are faulted in",
+    )
+    parser.add_argument(
+        "--chaos-kinds",
+        type=chaos_kinds,
+        default=chaos.kinds,
+        help="with --chaos: comma separated fault kinds, used in turn",
     )
 
 
@@ -2770,25 +3006,69 @@ def env_pair(text: str) -> str:
     return text
 
 
+def given_flags(argv: list[str]) -> set[str]:
+    return {tok.partition("=")[0] for tok in argv if tok.startswith("--")}
+
+
+def chaos_default(args: argparse.Namespace, flag: str, chaos_value: Any) -> Any:
+    """The value of `flag`, or `chaos_value` when `--chaos` is set and the flag is not given."""
+    if args.chaos and flag not in given_flags(args.argv):
+        return chaos_value
+    return getattr(args, flag.removeprefix("--").replace("-", "_"))
+
+
+def chaos_from_args(args: argparse.Namespace) -> ch.ChaosConfig | None:
+    given = given_flags(args.argv)
+    if not args.chaos:
+        if flags := sorted(given & set(CHAOS_FLAGS)):
+            raise Refused(f"{', '.join(flags)} needs --chaos")
+        return None
+    if flags := sorted(given & set(CHAOS_LOAD_FLAGS)):
+        raise Refused(f"{', '.join(flags)} is set by --chaos")
+    return ch.ChaosConfig(
+        minutes=args.chaos_min,
+        rate_mb_s=args.chaos_rate,
+        seed=args.chaos_seed,
+        kinds=args.chaos_kinds,
+    )
+
+
+def chaos_load(load: nb.BenchConfig, chaos: ch.ChaosConfig) -> nb.BenchConfig:
+    """One step of `chaos.rate_mb_s` per minute; every step runs, whatever a fault does to it."""
+    return dataclasses.replace(
+        load,
+        steps=(chaos.rate_mb_s,) * chaos.minutes,
+        step_s=CHAOS_STEP_S,
+        keep_going=True,
+    )
+
+
 def config_from_args(args: argparse.Namespace) -> RunConfig:
     keys = [pair.partition("=")[0] for pair in args.node_env]
     for key in keys:
         if keys.count(key) > 1:
             raise Refused(f"--node-env repeats {key}")
-    check_latency_flags(args.latency, args.intra_latency, args.tcp_cc, args.mtu)
+    profile = chaos_default(args, "--latency", CHAOS_LATENCY)
+    check_latency_flags(profile, args.intra_latency, args.tcp_cc, args.mtu)
+    chaos = chaos_from_args(args)
+    nodes = chaos_default(args, "--nodes", CHAOS_NODES)
     search = search_from_args(args)
-    load = load_from_args(args, search)
+    load = load_from_args(args, search, nodes)
+    if chaos is not None:
+        load = chaos_load(load, chaos)
     return RunConfig(
         tag=args.tag,
         allocator=args.allocator,
-        nodes=args.nodes,
-        node_type=args.node_type,
-        ctl_type=args.ctl_type,
+        nodes=nodes,
+        query_nodes=chaos_default(args, "--query-nodes", nodes),
+        node_type=chaos_default(args, "--node-type", CHAOS_NODE_TYPE),
+        ctl_type=chaos_default(args, "--ctl-type", CHAOS_CTL_TYPE),
+        chaos=chaos,
         load=load,
         node_env=tuple(args.node_env),
         max_block_size=args.max_block_size,
         leader_trace=args.leader_trace,
-        latency=args.latency,
+        latency=profile,
         intra_latency=args.intra_latency,
         tcp_cc=args.tcp_cc,
         mtu=args.mtu,
@@ -2801,6 +3081,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         max_usd=args.max_usd,
         yes=args.yes,
         search=search,
+        query_engine=CHAOS_QUERY_ENGINE if chaos else RunConfig.query_engine,
     )
 
 
@@ -2820,7 +3101,7 @@ def search_from_args(args: argparse.Namespace) -> nb.SearchConfig | None:
 
 
 def load_from_args(
-    args: argparse.Namespace, search: nb.SearchConfig | None
+    args: argparse.Namespace, search: nb.SearchConfig | None, nodes: int
 ) -> nb.BenchConfig:
     """Flags not given take the ramp's defaults, or the search's. A search probes one rate at
     a time, so `--steps` takes at most one value, unused."""
@@ -2840,7 +3121,7 @@ def load_from_args(
     return nb.BenchConfig(
         steps=steps if args.steps is None else args.steps,
         step_s=step_s if args.step_s is None else args.step_s,
-        submit_nodes=submit_nodes(args, args.nodes),
+        submit_nodes=submit_nodes(args, nodes),
         workers=args.submit_workers,
         namespaces=(
             defaults.namespaces[0],
@@ -2944,6 +3225,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "plan",
         help="render the run dir and print the cost estimate",
         formatter_class=DefaultsFormatter,
+        allow_abbrev=False,
     )
     add_run_flags(plan_p)
     add_node_env_flag(plan_p)
@@ -2953,6 +3235,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_consensus_storage_flag(plan_p)
     add_prune_flag(plan_p)
     add_submit_nodes_flag(plan_p)
+    add_chaos_flags(plan_p)
     add_ttl_flag(plan_p)
     plan_p.add_argument("--db-modes", type=parse_db_modes, default=defaults.db_modes)
     plan_p.set_defaults(func=cmd_plan, yes=False, max_usd=UP_MAX_USD)
@@ -2978,6 +3261,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         consensus_storage=defaults.consensus_storage,
         prune=defaults.prune,
         submit_nodes=None,
+        chaos=False,
         fleet=None,
         force=False,
         query_engine=defaults.query_engine,
@@ -3001,6 +3285,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_consensus_storage_flag(run_p)
     add_prune_flag(run_p)
     add_submit_nodes_flag(run_p)
+    add_chaos_flags(run_p)
     add_ttl_flag(run_p)
     run_p.add_argument(
         "--fleet",
@@ -3097,7 +3382,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     agent_host_p.set_defaults(func=cmd_agent_host)
 
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.argv = argv
+    return args
 
 
 def cmd_plan(args: argparse.Namespace, system: System) -> int:
@@ -3602,15 +3889,40 @@ def measure_run(run: Run) -> None:
             fleet.interrupts,
             run.cfg.query_db,
             run.cfg.query_engine,
+            _query_names(remote.hosts),
         )
         enter_phase(fleet, run.manifest_path, "nodes", "synchronized docker start")
         at = fleet_time(remote) + DOCKER_START_LEAD_S
         spread = start_nodes(remote, node_hosts(remote.hosts), at)
         update_manifest(run.manifest_path, "measuring", start_spread_s=spread)
         log.info("measuring: nodes started within %.2f s of each other", spread)
+        chaos = (
+            ChaosRunner(
+                remote,
+                run.cfg.chaos,
+                run.cfg.load,
+                topology(remote.hosts, run.cfg.query_engine),
+                manifest["peers"],
+                fleet.interrupts.clock,
+                run.run_dir,
+            )
+            if run.cfg.chaos is not None
+            else None
+        )
         start_agent(remote)
         run.agent_started = True
-        run.agent = poll_agent(remote, run.run_dir, run.cfg, fleet.interrupts)
+        try:
+            run.agent = poll_agent(
+                remote, run.run_dir, run.cfg, fleet.interrupts, chaos
+            )
+        finally:
+            if chaos is not None:
+                chaos.restore()
+        if chaos is not None and (stuck := chaos.stuck()):
+            raise RemoteError(
+                f"chaos: {', '.join(stuck)} not recovered within "
+                f"{chaos.chaos.recover_timeout_s:.0f} s"
+            )
 
 
 def connect(fleet: FleetState) -> Remote:
@@ -3796,6 +4108,7 @@ def report(run: Run) -> nb.BenchResult | None:
     # A driver-side error after the load finished still leaves a complete run to analyze.
     run.agent = run.agent or finished_agent_state(run.run_dir)
     if run.agent is not None:
+        write_error(run)
         try:
             write_run_json(run)
             plot_throughput(run.fleet.system.run, run.run_dir)
@@ -3804,11 +4117,20 @@ def report(run: Run) -> nb.BenchResult | None:
             log.exception("report failed")
             run.error = f"report failed: {type(exc).__name__}: {exc}"
         else:
-            log_result(result)
+            log_result(result, run.manifest["config"].get("chaos") is not None)
             plot_traces(run.fleet.system.run, run.run_dir)
             return result
-    write_failure_summary(run.run_dir, run.manifest, run.error)
+    elif (run.run_dir / "chaos.jsonl").exists():
+        plot_throughput(run.fleet.system.run, run.run_dir)
+    write_error(run)
+    write_failure_summary(run.run_dir, run.manifest, run.error, fallback=True)
     return None
+
+
+def write_error(run: Run) -> None:
+    """`error.txt`, which the chaos report reads for its verdict."""
+    if run.error:
+        (run.run_dir / "error.txt").write_text(run.error)
 
 
 def plot_traces(runner: Runner, run_dir: Path) -> None:
@@ -3845,9 +4167,10 @@ def run_plot(runner: Runner, script_name: str, run_dir: Path) -> None:
         log.warning("%s failed: %s: %s", script_name, type(exc).__name__, exc)
 
 
-def log_result(result: nb.BenchResult) -> None:
+def log_result(result: nb.BenchResult, chaos: bool) -> None:
     log.info(nb.status_line(result))
-    log.info(nb.capacity_line(result["capacity"]).replace("**", ""))
+    if not chaos:
+        log.info(nb.capacity_line(result["capacity"]).replace("**", ""))
 
 
 def teardown(run: Run) -> int:
@@ -4175,11 +4498,12 @@ def check_query_store(
 
 
 def fleet_config_from_args(args: argparse.Namespace) -> RunConfig:
-    check_query_store(args.query_engine, args.query_db, args.node_env)
+    query_engine = chaos_default(args, "--query-engine", CHAOS_QUERY_ENGINE)
+    check_query_store(query_engine, args.query_db, args.node_env)
     return dataclasses.replace(
         config_from_args(args),
         db_modes=args.db_modes,
-        query_engine=args.query_engine,
+        query_engine=query_engine,
         query_db=args.query_db,
         ttl_min=args.ttl_min,
         fleet=args.fleet,
@@ -4197,6 +4521,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         tag=base.tag if cli.tag is None else cli.tag,
         allocator=cli.allocator,
         load=load,
+        chaos=cli.chaos,
         yes=cli.yes,
         query_engine=cli.query_engine,
         query_db=cli.query_db,
@@ -4215,6 +4540,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
     )
     check_submit_nodes(cfg)
     check_search(cfg)
+    check_chaos(cfg)
     check_fleet_disks(saved, cfg)
     return cfg
 
@@ -4659,10 +4985,13 @@ def log_preflight(cfg: RunConfig, pre: Preflight, hosts: list[HostSpec]) -> None
     log.info("images %s: %s", image_label(cfg), images)
     types = {h["role"]: h["instance_type"] for h in hosts}
     log.info(
-        "hosts: ctl %s; %d x %s (node0 validator+query, postgres)",
+        "hosts: ctl %s; %d x %s (%d query, %d validator-only, %s)",
         types["ctl"],
         len(hosts) - 1,
         types["query"],
+        cfg.query_nodes,
+        cfg.nodes - cfg.query_nodes,
+        cfg.query_engine,
     )
     if "rds" in cfg.db_modes:
         log.info(
@@ -4815,10 +5144,16 @@ def run_config_hash(
             json.dumps(digests).encode(),
             json.dumps(hosts, sort_keys=True).encode(),
             cfg.query_db.encode(),
+            f"query-nodes={cfg.query_nodes}".encode(),
             cfg.query_engine.encode(),
             *([json.dumps(sorted(cfg.node_env)).encode()] if cfg.node_env else []),
             *([b"leader-trace"] if cfg.leader_trace else []),
             f"prune={cfg.prune}".encode(),
+            *(
+                [json.dumps(dataclasses.asdict(cfg.chaos), sort_keys=True).encode()]
+                if cfg.chaos
+                else []
+            ),
             # Absent for journal, which older runs used, to keep their hashes.
             *(
                 [f"consensus-storage={cfg.consensus_storage}".encode()]
@@ -5014,13 +5349,13 @@ def query_endpoint(cfg: RunConfig, run_dir: Path) -> PgEndpoint | None:
 
 
 def topology(hosts: dict[str, HostInfo], query_engine: QueryEngine) -> nb.Topology:
-    """Private URLs: the load runs on ctl, inside the VPC."""
+    """Private URLs: the load runs on ctl, inside the VPC. `query_node` is the first query node."""
     names = _node_names(hosts)
     return {
         "nodes": {name: _node_url(hosts[name]) for name in names},
         "roles": {
             name: f"validator, query, {query_engine}"
-            if name == "node0"
+            if hosts[name]["role"] == "query"
             else "validator"
             for name in names
         },
@@ -5066,17 +5401,31 @@ def render_host_files(
             if cfg.query_db == "rds" and pg is not None:
                 node_env.touch(mode=0o600)
                 node_env.chmod(0o600)
-            node_env.write_text(
-                render_node_env(
-                    spec,
-                    hosts,
-                    pg,
-                    (*trace_env(cfg), *cfg.node_env),
-                    cfg.consensus_storage,
-                    cfg.query_engine,
-                    cfg.prune,
-                )
+            env_args = (
+                spec,
+                hosts,
+                pg,
+                (*trace_env(cfg), *cfg.node_env),
+                cfg.consensus_storage,
+                cfg.query_engine,
+                cfg.prune,
             )
+            chaos = cfg.chaos is not None
+            node_env.write_text(render_node_env(*env_args, chaos=chaos))
+            if chaos:
+                (host_dir / "node-rejoin.env").write_text(
+                    render_node_env(*env_args, config_peers=True, chaos=chaos)
+                )
+                (host_dir / "recreate.sh").write_text(
+                    render_recreate_sh(
+                        spec,
+                        manifest["images"],
+                        query_db=cfg.query_db,
+                        leader_trace=cfg.leader_trace,
+                        consensus_storage=cfg.consensus_storage,
+                        query_engine=cfg.query_engine,
+                    )
+                )
             if pg is not None:
                 write_private_json(host_dir / "pg.json", pg)
     topo = topology(hosts, cfg.query_engine)
@@ -5225,10 +5574,12 @@ def digest_mismatches(
 
 
 def ship_agents(remote: Remote) -> str:
-    """The laptop's current `aws-bench`, `netbench.py`, `latency.py` and `bbr-hold.sh` to every host, whatever
-    `up` put there. Returns the git revision they were shipped from."""
+    """The laptop's current `aws-bench`, `netbench.py`, `chaos.py`, `latency.py` and
+    `bbr-hold.sh` to every host, whatever `up` put there. Returns the git revision they were
+    shipped from."""
     files = [
         SCRIPT_DIR / "netbench.py",
+        SCRIPT_DIR / "chaos.py",
         SCRIPT_DIR / "latency.py",
         SCRIPT_DIR / "aws-bench",
         SCRIPT_DIR / "aws" / "bbr-hold.sh",
@@ -5400,7 +5751,10 @@ SupportStart = GateStart | DeployStart
 
 
 def support_plan(
-    query_db: DbMode, contracts: list[str], query_engine: QueryEngine = "postgres"
+    query_db: DbMode,
+    contracts: list[str],
+    query_engine: QueryEngine = "postgres",
+    query_hosts: Sequence[str] = ("node0",),
 ) -> list[SupportStart]:
     """The support services in start order, each with the check that gates the next. The rds
     instance is only checked: it is already running. SQLite has no database service."""
@@ -5453,33 +5807,34 @@ def support_plan(
     ]
     if query_engine == "sqlite":
         return plan
-    plan += [
-        GateStart(
-            kind="gate",
-            host="node0",
-            container=None if query_db == "rds" else "postgres",
-            what="pg_isready",
-            gate_cmd=pg_shell("pg_isready"),
-            timeout_s=GATE_TIMEOUT_S,
-        ),
-    ]
-    for what, sql in (
-        ("pg_stat_statements", PG_EXTENSION_SQL),
-        (
-            "pg stats reset",
-            "CHECKPOINT; SELECT pg_stat_reset_shared(NULL); SELECT pg_stat_statements_reset()",
-        ),
-    ):
-        plan.append(
+    for host in query_hosts:
+        plan += [
             GateStart(
                 kind="gate",
-                host="node0",
-                container=None,
-                what=what,
-                gate_cmd=pg_shell(f"psql -c {shlex.quote(sql)}"),
+                host=host,
+                container=None if query_db == "rds" else "postgres",
+                what="pg_isready",
+                gate_cmd=pg_shell("pg_isready"),
                 timeout_s=GATE_TIMEOUT_S,
+            ),
+        ]
+        for what, sql in (
+            ("pg_stat_statements", PG_EXTENSION_SQL),
+            (
+                "pg stats reset",
+                "CHECKPOINT; SELECT pg_stat_reset_shared(NULL); SELECT pg_stat_statements_reset()",
+            ),
+        ):
+            plan.append(
+                GateStart(
+                    kind="gate",
+                    host=host,
+                    container=None,
+                    what=what,
+                    gate_cmd=pg_shell(f"psql -c {shlex.quote(sql)}"),
+                    timeout_s=GATE_TIMEOUT_S,
+                )
             )
-        )
     return plan
 
 
@@ -5489,11 +5844,12 @@ def start_support(
     interrupts: Interrupts,
     query_db: DbMode = "colocated",
     query_engine: QueryEngine = "postgres",
+    query_hosts: Sequence[str] = ("node0",),
 ) -> None:
     """On ctl, in order and each gated on a check: anvil, contract deployment, orchestrator,
-    relay; then Postgres on node0 (the rds instance is only gated, it is already running;
-    SQLite has no such step)."""
-    for step in support_plan(query_db, contracts, query_engine):
+    relay; then Postgres on each query host (the rds instance is only gated, it is already
+    running; SQLite has no such step)."""
+    for step in support_plan(query_db, contracts, query_engine, query_hosts):
         host = step["host"]
         if step["container"] is not None:
             remote.ssh(host, f"sudo docker start {step['container']}")
@@ -5735,10 +6091,179 @@ def manifest_storage(config: dict[str, Any]) -> ConsensusStorage:
     return config.get("consensus_storage", LEGACY_CONSENSUS_STORAGE)
 
 
-def check_nodes(remote: Remote) -> None:
+DOCKER_NODE_COMMANDS = {
+    "restart": "sudo docker restart -t 30 espresso-node",
+    "kill": "sudo docker kill espresso-node",
+    "start": "sudo docker start espresso-node",
+}
+
+
+class ChaosRunner:
+    """Drives `chaos_step` from the laptop, which has ssh to every host: the probe runs on ctl,
+    the faults on the nodes. Called from the single `poll_agent` thread, so a fault never races
+    `check_nodes`. Event times are on ctl's clock, like `consensus.jsonl`."""
+
+    def __init__(
+        self,
+        remote: Remote,
+        chaos: ch.ChaosConfig,
+        load: nb.BenchConfig,
+        topo: nb.Topology,
+        peers: dict[str, list[str]],
+        clock: nb.Clock,
+        run_dir: Path,
+    ) -> None:
+        self.remote = remote
+        self.chaos = chaos
+        self.load = load
+        self.topo = topo
+        self.queries = frozenset(nb.query_nodes(topo))
+        self.peers = peers
+        self.clock = clock
+        self.path = run_dir / "chaos.jsonl"
+        self.offset = fleet_time(remote) - clock.time()
+        self.state: ch.ChaosState | None = None
+        self.failures = 0
+
+    def tick(self, agent: AgentState | None) -> None:
+        """Nothing before the agent loads; the first `loading` state starts the schedule."""
+        if agent is None or agent["phase"] != "loading":
+            return
+        ts = self.clock.time() + self.offset
+        if self.state is None:
+            load_s = len(self.load.steps) * self.load.step_s
+            self.state = ch.chaos_init(
+                self.chaos, list(self.topo["nodes"]), ts, self.load.warmup_s, load_s
+            )
+        self._advance(ts)
+
+    def expected_down(self) -> frozenset[str]:
+        if self.state is None:
+            return frozenset()
+        return frozenset(
+            name for name, s in self.state["nodes"].items() if s["health"] != "up"
+        )
+
+    def stuck(self) -> list[str]:
+        return [] if self.state is None else ch.stuck_nodes(self.state)
+
+    def drain(self, interrupts: Interrupts) -> None:
+        """Ticks until every fault recovered or got stuck."""
+        while self.state is not None and ch.open_faults(self.state):
+            interrupts.sleep(AGENT_POLL_S)
+            self._advance(self.clock.time() + self.offset)
+
+    def restore(self) -> None:
+        """Starts the nodes still killed, so that collection finds their containers running,
+        and marks every open fault `interrupted`."""
+        if self.state is None:
+            return
+        nodes = self.state["nodes"]
+        open_ = ch.open_faults(self.state)
+        down = [name for name in open_ if nodes[name]["health"] == "down"]
+        for name in down:
+            best_effort(
+                f"restore {name}",
+                lambda name=name: self.remote.ssh(name, DOCKER_NODE_COMMANDS["start"]),
+            )
+        ts = self.clock.time() + self.offset
+        self._record(
+            [
+                *(
+                    ch.chaos_event(
+                        ts,
+                        "restored",
+                        name,
+                        name in self.queries,
+                        nodes[name]["kind"],
+                        None,
+                        None,
+                    )
+                    for name in down
+                ),
+                *(
+                    ch.chaos_event(
+                        ts,
+                        "interrupted",
+                        name,
+                        name in self.queries,
+                        nodes[name]["kind"],
+                        None,
+                        None,
+                    )
+                    for name in open_
+                ),
+            ]
+        )
+
+    def _advance(self, ts: float) -> None:
+        """A failed probe skips the tick and a failed action is retried on the next one; the
+        run fails after CHAOS_SSH_FAILURES such ticks in a row."""
+        assert self.state is not None
+        command = ch.probe_command(self.topo["nodes"], self.queries)
+        probe = self.remote.ssh("ctl", command, check=False)
+        if probe.returncode != 0:
+            self._failed(f"probe exited {probe.returncode}: {probe.stderr.strip()}")
+            return
+        obs = ch.parse_probe(probe.stdout, self.topo["nodes"], self.queries)
+        prev = self.state
+        step = ch.chaos_step(prev, self.chaos, self.queries, self.peers, obs, ts)
+        actions = {action["node"]: action["op"] for action in step["actions"]}
+
+        def act(name: str) -> subprocess.CompletedProcess[str]:
+            if actions[name] == "wipe":
+                script = bounded(wipe_script(name in self.queries))
+            else:
+                script = DOCKER_NODE_COMMANDS[actions[name]]
+            return self.remote.ssh(name, script, check=False)
+
+        done = self.remote.parallel(act, actions)
+        failed = {name for name, out in done.items() if out.returncode != 0}
+        step = ch.revert_failed(prev, step, failed)
+        self.state = step["state"]
+        for name, s in self.state["nodes"].items():
+            if s["health"] == "catching_up":
+                log.debug(
+                    "chaos: %s catching up, query height %s, missing %s",
+                    name,
+                    obs["query_height"][name],
+                    s["last_missing"],
+                )
+        self._record(step["events"])
+        if failed:
+            self._failed(
+                "; ".join(
+                    f"{name} {actions[name]} exited {done[name].returncode}: "
+                    f"{done[name].stderr.strip()}"
+                    for name in sorted(failed)
+                )
+            )
+        else:
+            self.failures = 0
+
+    def _failed(self, what: str) -> None:
+        self.failures += 1
+        if self.failures >= CHAOS_SSH_FAILURES:
+            raise RemoteError(
+                f"chaos: {self.failures} consecutive ssh failures, last: {what}"
+            )
+        log.warning("chaos: tick failed (%d in a row): %s", self.failures, what)
+
+    def _record(self, events: list[ch.ChaosEvent]) -> None:
+        with self.path.open("a") as f:
+            for event in events:
+                f.write(json.dumps(event) + "\n")
+                log.info("chaos: %s", ch.chaos_log_line(event))
+
+
+def check_nodes(remote: Remote, expected_down: frozenset[str] = frozenset()) -> None:
     """Raises when an `espresso-node` container is not running, with the log tail of the
-    first such node."""
-    names = [info["name"] for info in node_hosts(remote.hosts)]
+    first such node. A node in `expected_down` is down on purpose and is not inspected."""
+    names = [
+        info["name"]
+        for info in node_hosts(remote.hosts)
+        if info["name"] not in expected_down
+    ]
     statuses = remote.parallel(
         lambda name: node_status(remote.ssh(name, NODE_STATUS_COMMAND, check=False)),
         names,
@@ -5758,10 +6283,15 @@ def check_nodes(remote: Remote) -> None:
 
 
 def poll_agent(
-    remote: Remote, run_dir: Path, cfg: RunConfig, interrupts: Interrupts
+    remote: Remote,
+    run_dir: Path,
+    cfg: RunConfig,
+    interrupts: Interrupts,
+    chaos: ChaosRunner | None = None,
 ) -> AgentState:
     """Until the agent reports `done`: reads its state every AGENT_POLL_S, logs each new line of
-    its `agent.log` and each new phase, and rsyncs its output every OUT_RSYNC_S."""
+    its `agent.log` and each new phase, and rsyncs its output every OUT_RSYNC_S. With `chaos`,
+    every poll also ticks the fault controller, and `done` waits for the recoveries."""
     clock = interrupts.clock
     begin = clock.monotonic()
     poll = PollState(
@@ -5798,11 +6328,15 @@ def poll_agent(
             raise RemoteError(step["error"])
         if step["done"]:
             assert latest is not None
+            if chaos is not None:
+                chaos.drain(interrupts)
             return latest
         if step["retry"]:
             log.warning("ctl unreachable, retrying: %s", probe.stderr.strip())
+        if chaos is not None and not step["retry"]:
+            chaos.tick(latest)
         if step["node_check"]:
-            check_nodes(remote)
+            check_nodes(remote, frozenset() if chaos is None else chaos.expected_down())
         if step["rsync"]:
             best_effort(
                 "partial rsync",
@@ -5916,6 +6450,7 @@ COLLECT_EXCLUDES = (
     "--exclude=/out/",
     "--exclude=/aws-bench",
     "--exclude=/netbench.py",
+    "--exclude=/chaos.py",
     "--exclude=/latency.py",
     "--exclude=/bbr-hold.sh",
     "--exclude=/pg.json",
@@ -6120,6 +6655,8 @@ def cmd_render(args: argparse.Namespace, system: System) -> int:
             run_json(manifest, manifest["config"]["tag"], agent, started, agent["t1"]),
         )
     if not (run_dir / "run.json").exists():
+        if (run_dir / "chaos.jsonl").exists():
+            return render_failed_chaos(run_dir, system)
         raise Refused(
             f"{run_dir} has no run.json: the run produced no result, see summary.md"
         )
@@ -6127,14 +6664,26 @@ def cmd_render(args: argparse.Namespace, system: System) -> int:
     baseline = nb.load_baseline(args.baseline) if args.baseline else None
     plot_throughput(system.run, run_dir)
     result = write_report(run_dir, baseline)
-    log_result(result)
+    log_result(result, read_manifest(run_dir)["config"].get("chaos") is not None)
     plot_traces(system.run, run_dir)
     refresh_index_row(run_dir, result)
     log.info("wrote %s", run_dir / "summary.md")
     return EXIT_OK if result["validity"]["valid"] else EXIT_INVALID
 
 
-def refresh_index_row(run_dir: Path, result: nb.BenchResult) -> None:
+def render_failed_chaos(run_dir: Path, system: System) -> int:
+    """The chaos report of a run that ended before its analysis, from what it collected."""
+    setup_logging(run_dir)
+    plot_throughput(system.run, run_dir)
+    error_path = run_dir / "error.txt"
+    error = error_path.read_text() if error_path.exists() else None
+    write_failure_summary(run_dir, read_manifest(run_dir), error, fallback=False)
+    refresh_index_row(run_dir, None)
+    log.info("wrote %s", run_dir / "summary.md")
+    return EXIT_FAILED
+
+
+def refresh_index_row(run_dir: Path, result: nb.BenchResult | None) -> None:
     """Re-derives the measured cells of `index-row.json` from the new result; exit code, cost
     and user stay as the run recorded them."""
     path = run_dir / INDEX_ROW_JSON
@@ -6144,7 +6693,9 @@ def refresh_index_row(run_dir: Path, result: nb.BenchResult) -> None:
     cost_path = run_dir / "cost.json"
     cost = nb.read_json(cost_path) if cost_path.exists() else None
     manifest = read_manifest(run_dir)
-    cells = index_cells(manifest, run_dir.name, result, int(row["exit"]), cost)
+    cells = index_cells(
+        manifest, run_dir.name, result, int(row["exit"]), cost, ch.read_events(run_dir)
+    )
     nb.write_json(path, {**cells, "user": row["user"]})
 
 
@@ -6529,6 +7080,7 @@ def config_from_manifest(saved: dict[str, Any]) -> RunConfig:
     fields.setdefault("region", LEGACY_REGION)
     fields.setdefault("consensus_storage", LEGACY_CONSENSUS_STORAGE)
     fields["search"] = search_config(saved.get("search"))
+    fields["chaos"] = chaos_config(saved.get("chaos"))
     return RunConfig(**fields)
 
 
@@ -6801,18 +7353,199 @@ def write_report(run_dir: Path, baseline: nb.Baseline | None = None) -> nb.Bench
     manifest = read_manifest(run_dir)
     cfg = nb.load_config(nb.read_json(run_dir / "config.json"))
     prepare_analysis(run_dir, manifest)
-    result = nb.analyze(run_dir, cfg, nb.read_json(run_dir / "topology.json"))
+    events = ch.read_events(run_dir)
+    faulted = frozenset(e["node"] for e in events if e["event"] == "fault")
+    timeouts = timeout_times(events)
+    result = nb.analyze(run_dir, cfg, nb.read_json(run_dir / "topology.json"), faulted)
     run = nb.read_json(run_dir / "run.json")
     stats, evidence = load_evidence(run_dir, manifest, run["t0"], run["t1"])
     result["hosts"] = stats
     result["deployment"] = deployment_meta(manifest, evidence)
-    result["validity"] = check_validity_aws(result, manifest, evidence)
+    result["validity"] = check_validity_aws(result, manifest, evidence, events)
     nb.write_json(run_dir / "result.json", result)
     comparison = nb.compare(result, baseline) if baseline else None
     chart = throughput_chart(run_dir)
-    summary = nb.render(result, comparison, chart) + reproduce_section(manifest)
-    (run_dir / "summary.md").write_text(summary)
+    chaos = (
+        chaos_view(run_dir, manifest, result["steps"], result)
+        if manifest["config"].get("chaos") is not None
+        else None
+    )
+    summary = nb.render(result, comparison, chart, chaos) + reproduce_section(manifest)
+    logs = node_logs(run_dir, list(timeouts), timeouts)
+    (run_dir / "summary.md").write_text("\n".join([summary, *logs]))
     return result
+
+
+def chaos_view(
+    run_dir: Path,
+    manifest: Manifest,
+    steps: Sequence[nb.StepResult],
+    result: nb.BenchResult | None = None,
+) -> ch.ChaosView:
+    """The chaos report of a run from its `chaos.jsonl`, `load-meta.json` and `steps`; without
+    a `result` (the analysis did not run) or with an `error.txt` the run failed."""
+    config = manifest["config"]
+    error_path = run_dir / "error.txt"
+    error = error_path.read_text() if error_path.exists() else None
+    events = ch.read_events(run_dir)
+    rows = ch.fault_rows(events)
+    t0 = load_t0(run_dir, steps, events)
+    end = run_end(run_dir, steps, events, t0)
+    spans = [(s["t_start"], s["t_end"]) for s in steps]
+    chaos_steps = ch.step_chaos(spans, rows, t0, end)
+    meta_path = run_dir / "load-meta.json"
+    throughput = [
+        *throughput_lines(steps),
+        *fault_throughput_lines(run_dir, rows, steps, end),
+    ]
+    lead = [
+        "## Chaos test",
+        "",
+        ch.chaos_verdict(rows, events, error, result is None or error is not None),
+        setup_line(config),
+        *([f"- Run: {nb.status_line(result)}"] if result else []),
+        *chaos_totals(
+            rows,
+            events,
+            end,
+            config,
+            nb.read_json(meta_path) if meta_path.exists() else None,
+            tx_counts(run_dir),
+        ),
+        "",
+        "",
+        *ch.recovery_table(rows, config["chaos"]["kinds"]),
+        *([""] + throughput if throughput else []),
+    ]
+    return {"lead": lead, "faults": ch.fault_table(rows, t0), "steps": chaos_steps}
+
+
+def load_t0(
+    run_dir: Path, steps: Sequence[nb.StepResult], events: Sequence[ch.ChaosEvent]
+) -> float:
+    """The start of the load: `run.json`, which a run that failed does not have, else its
+    first step."""
+    path = run_dir / "run.json"
+    if path.exists():
+        return float(nb.read_json(path)["t0"])
+    return steps[0]["t_start"] if steps else min((e["ts"] for e in events), default=0.0)
+
+
+def run_end(
+    run_dir: Path,
+    steps: Sequence[nb.StepResult],
+    events: Sequence[ch.ChaosEvent],
+    t0: float,
+) -> float:
+    """The last of the load's end (`run.json`), its last step and its last chaos event: a
+    fault still open runs to there."""
+    path = run_dir / "run.json"
+    ends = [nb.read_json(path)["t1"]] if path.exists() else []
+    ends += [s["t_end"] for s in steps] + [e["ts"] for e in events]
+    return max(ends, default=t0)
+
+
+def tx_counts(run_dir: Path) -> Counter[str]:
+    """Empty for a run that failed before it wrote `load.jsonl`."""
+    path = run_dir / "load.jsonl"
+    if not path.exists():
+        return Counter()
+    with path.open() as f:
+        return Counter(json.loads(line)["status"] for line in f)
+
+
+def setup_line(config: dict[str, Any]) -> str:
+    chaos = config["chaos"]
+    return (
+        f"- Setup: {config['nodes']} nodes ({config['query_nodes']} query), "
+        f"{config['node_type']}, latency {latency_cell(config)}, {chaos['minutes']} min at "
+        f"{chaos['rate_mb_s']:g} MB/s, seed {chaos['seed']}, kinds {','.join(chaos['kinds'])}"
+    )
+
+
+def chaos_totals(
+    rows: list[ch.FaultRow],
+    events: Sequence[ch.ChaosEvent],
+    end: float,
+    config: dict[str, Any],
+    meta: dict[str, Any] | None,
+    txs: Counter[str],
+) -> list[str]:
+    kinds = config["chaos"]["kinds"]
+    per_kind = ", ".join(f"{k} {sum(r.kind == k for r in rows)}" for k in kinds)
+    timeouts = sum(e["event"] == "timeout" for e in events)
+    lines = [
+        (
+            f"- Faults: {len(rows)} ({per_kind}); max concurrent faulty "
+            f"{ch.max_concurrent_faulty(rows, end)} of budget {ch.fault_budget(config['nodes'])}"
+        ),
+        f"- Timeouts: {timeouts}",
+    ]
+    if meta is not None:
+        lost = meta["missing_payloads"]
+        heights = f" ({', '.join(map(str, lost[:10]))})" if lost else ""
+        lines[-1] += (
+            f"; lost payloads {len(lost)}{heights}; submit failovers {meta['submit_failovers']}"
+        )
+        if duplicates := meta.get("submit_duplicates", 0):
+            lines[-1] += f"; duplicate inclusions {duplicates}"
+    if txs:
+        lines.append(
+            f"- Txs: {sum(txs.values())} submitted, {txs['included']} included, "
+            f"{txs['timeout']} timed out"
+            + (f", {txs['pending']} pending" if txs["pending"] else "")
+        )
+    return lines
+
+
+def throughput_lines(steps: Sequence[nb.StepResult]) -> list[str]:
+    """Decided MB/s over all steps against the offered rate, and the lowest step."""
+    measured = [
+        (s["decided_mb_s"], s["t_start"] - steps[0]["t_start"])
+        for s in steps
+        if s["decided_mb_s"] is not None
+    ]
+    if not measured:
+        return []
+    mean = statistics.fmean(d for d, _ in measured)
+    lowest, at = min(measured)
+    offered = statistics.fmean(s["rate_mb_s"] for s in steps)
+    return [
+        (
+            f"- Throughput: mean decided {nb.fmt_num(mean)} MB/s of {nb.fmt_num(offered)} MB/s "
+            f"offered over {len(measured)} steps; minimum one-minute {nb.fmt_num(lowest)} MB/s "
+            f"(step at {at:.0f} s)"
+        )
+    ]
+
+
+def fault_throughput_lines(
+    run_dir: Path, rows: list[ch.FaultRow], steps: Sequence[nb.StepResult], end: float
+) -> list[str]:
+    """Decided MB/s from `consensus.jsonl` over the steps, with a fault active and without;
+    empty without counter samples."""
+    path = run_dir / "consensus.jsonl"
+    if not steps or not path.exists():
+        return []
+    with path.open() as f:
+        counters = [(c["ts"], c["decided_bytes"]) for c in map(json.loads, f)]
+    if not counters:
+        return []
+    spans = [ch.fault_span(r, end) for r in rows]
+    split = ch.decided_by_fault(
+        counters, spans, steps[0]["t_start"], steps[-1]["t_end"]
+    )
+    (faulty_mb, faulty_s), (quiet_mb, quiet_s) = split
+
+    def rate(mb: float, s: float) -> str:
+        return f"{nb.fmt_num(mb / s)} MB/s" if s else "-"
+
+    return [
+        (
+            f"- Decided with an active fault {rate(faulty_mb, faulty_s)} over {faulty_s:.0f} s, "
+            f"without {rate(quiet_mb, quiet_s)} over {quiet_s:.0f} s"
+        )
+    ]
 
 
 def sanitize_argv(argv: list[str]) -> list[str]:
@@ -6876,6 +7609,13 @@ def throughput_chart(run_dir: Path) -> str:
     if not (run_dir / "throughput.png").is_file():
         return ""
     return "![throughput, blocks and latency](throughput.png)"
+
+
+def chaos_config(saved: dict[str, Any] | None) -> ch.ChaosConfig | None:
+    if saved is None:
+        return None
+    fields: dict[str, Any] = {**saved, "kinds": tuple(saved["kinds"])}
+    return ch.ChaosConfig(**fields)
 
 
 def search_config(saved: dict[str, Any] | None) -> nb.SearchConfig | None:
@@ -7372,14 +8112,23 @@ def db_store(manifest: Manifest) -> tuple[str, dict[str, Any]]:
 
 
 def check_validity_aws(
-    result: nb.BenchResult, manifest: Manifest, evidence: Evidence
+    result: nb.BenchResult,
+    manifest: Manifest,
+    evidence: Evidence,
+    chaos: Sequence[ch.ChaosEvent] = (),
 ) -> nb.Validity:
     """`result["validity"]` (netbench's own rules) plus the fleet rules: invalid on missing host
     samples, a digest that differs from the manifest or a clock offset above
     CLOCK_OFFSET_INVALID_MS; noisy on start spread, clock offset, ctl
-    CPU, journal size, steal or node0's EBS balance below 95% (or not collected)."""
+    CPU, journal size, steal or node0's EBS balance below 95% (or not collected). A `timeout`
+    event of `chaos` is invalid."""
     invalid: list[str] = []
     noisy: list[str] = []
+    for e in chaos:
+        if e["event"] == "timeout":
+            invalid.append(
+                f"chaos: {e['node']} not recovered after {e['after_s']:.0f} s"
+            )
     for host, frac in evidence["coverage"].items():
         if frac < nb.SCRAPE_OK_MIN:
             invalid.append(f"{host} host samples cover only {frac:.0%} of the window")
@@ -7435,21 +8184,114 @@ def check_validity_aws(
     }
 
 
-def write_failure_summary(run_dir: Path, manifest: Manifest, error: str | None) -> None:
+def write_failure_summary(
+    run_dir: Path, manifest: Manifest, error: str | None, *, fallback: bool
+) -> None:
     """A run without a result: the error (`netbench.wait_ready` includes the last heights) and
-    the last log lines of every node container that was collected."""
-    lines = ["## Network benchmark", "", f"**invalid**: {error}", ""]
-    for spec in manifest["hosts"]:
-        path = run_dir / "hosts" / spec["name"] / "espresso-node.log.gz"
-        if path.exists():
-            try:
-                with gzip.open(path, "rt", errors="replace") as log_file:
-                    tail_lines = log_file.read().splitlines()[-FAILURE_LOG_LINES:]
-                tail = [line[:300] for line in tail_lines]
-            except (OSError, EOFError) as exc:  # a log cut off by a timed-out collect
-                tail = [f"log unreadable: {exc}"]
-            lines += [f"Last log lines of {spec['name']}:", "", "```", *tail, "```", ""]
+    the last log lines of every node container that was collected. A chaos run reports
+    what its files hold, its error from `error.txt`, and shows the WARN and ERROR lines of the
+    nodes that timed out before their timeout. With `fallback`, a chaos report that raises
+    gives the plain one instead."""
+    timeouts: dict[str, float] = {}
+    if manifest["config"].get("chaos") is None:
+        lines = ["## Network benchmark", "", f"**invalid**: {error}", ""]
+        names = [spec["name"] for spec in manifest["hosts"]]
+    else:
+        try:
+            lines = chaos_failure_lines(run_dir, manifest)
+            timeouts = timeout_times(ch.read_events(run_dir))
+            names = list(timeouts) or [spec["name"] for spec in manifest["hosts"]]
+        except Exception:
+            if not fallback:
+                raise
+            log.exception("chaos report failed")
+            lines = ["## Network benchmark", "", f"**invalid**: {error}", ""]
+            names = [spec["name"] for spec in manifest["hosts"]]
+    lines += node_logs(run_dir, names, timeouts)
     (run_dir / "summary.md").write_text("\n".join(lines))
+
+
+def timeout_times(events: Iterable[ch.ChaosEvent]) -> dict[str, float]:
+    return {e["node"]: e["ts"] for e in events if e["event"] == "timeout"}
+
+
+def node_logs(
+    run_dir: Path, names: Iterable[str], timeouts: dict[str, float]
+) -> list[str]:
+    """`node_log_lines` of each of `names` whose log was collected."""
+    lines: list[str] = []
+    for name in names:
+        path = run_dir / "hosts" / name / "espresso-node.log.gz"
+        if path.exists():
+            lines += node_log_lines(name, path, timeouts.get(name))
+    return lines
+
+
+def node_log_lines(name: str, path: Path, timeout: float | None) -> list[str]:
+    """With a `timeout`, its last WARN and ERROR lines before it; else, or without any, its
+    last lines."""
+    try:
+        with gzip.open(path, "rt", errors="replace") as log_file:
+            log_lines = log_file.read().splitlines()
+    except (OSError, EOFError) as exc:  # a log cut off by a timed-out collect
+        return [
+            f"Last log lines of {name}:",
+            "",
+            "```",
+            f"log unreadable: {exc}",
+            "```",
+            "",
+        ]
+    warned = (
+        [] if timeout is None else warn_lines(log_lines, timeout, FAILURE_WARN_LINES)
+    )
+    if warned:
+        title = f"WARN and ERROR lines of {name} before its timeout:"
+        tail = warned
+    else:
+        title = f"Last log lines of {name}:"
+        tail = log_lines[-FAILURE_LOG_LINES:]
+    return [title, "", "```", *(line[:300] for line in tail), "```", ""]
+
+
+def warn_lines(lines: Iterable[str], before: float, limit: int) -> list[str]:
+    """The last `limit` WARN and ERROR lines of a JSON node log before `before`, as
+    `<timestamp> <level> <target>: <message> <field>=<value>...`; other lines are skipped."""
+    picked: deque[str] = deque(maxlen=limit)
+    for line in lines:
+        if not line.startswith("{"):
+            continue
+        entry = json.loads(line)
+        if entry["level"] not in ("WARN", "ERROR"):
+            continue
+        if datetime.fromisoformat(entry["timestamp"]).timestamp() >= before:
+            break
+        fields = dict(entry["fields"])
+        message = fields.pop("message")
+        extra = "".join(f" {k}={v}" for k, v in fields.items())
+        picked.append(
+            f"{entry['timestamp']} {entry['level']} {entry['target']}: {message}{extra}"
+        )
+    return list(picked)
+
+
+def chaos_failure_lines(run_dir: Path, manifest: Manifest) -> list[str]:
+    """The chaos report of a failed run."""
+    steps_path = run_dir / "steps.json"
+    steps = nb.read_json(steps_path) if steps_path.exists() else []
+    view = chaos_view(run_dir, manifest, steps)
+    chart = throughput_chart(run_dir)
+    return [
+        *view["lead"],
+        "",
+        *([chart, ""] if chart else []),
+        *view["faults"],
+        *(
+            ["### Load steps", "", *nb.chaos_step_table(steps, view["steps"]), ""]
+            if steps
+            else []
+        ),
+    ]
 
 
 def tagged_resources(run: Runner, region: str, name: str | None = None) -> list[str]:
@@ -7822,6 +8664,7 @@ INDEX_COLUMNS = {
     "rate": "rate MB/s",
     "decided": "decided MB/s",
     "bound": "bound",
+    "chaos": "chaos",
     "lag_p99": "lag p99 ms",
     "status": "status",
     "exit": "exit",
@@ -7863,28 +8706,51 @@ def capacity_bound(limits: nb.Capacity) -> str:
     return "query" if query_mb_s < consensus_mb_s else "consensus"
 
 
+def chaos_cell(config: dict[str, Any], events: Sequence[ch.ChaosEvent]) -> str:
+    """`-` for a run without chaos."""
+    if config.get("chaos") is None:
+        return "-"
+    faults = sum(e["event"] == "fault" for e in events)
+    timeouts = sum(e["event"] == "timeout" for e in events)
+    return f"{faults} faults, {timeouts} timeouts"
+
+
 def index_cells(
     manifest: Manifest,
     run_name: str,
     result: nb.BenchResult | None,
     code: int,
     cost: dict[str, float] | None,
+    events: Sequence[ch.ChaosEvent] = (),
 ) -> dict[str, str]:
+    """`rate` and `decided` are those of the capacity step, or under chaos the offered rate and
+    the mean over the steps."""
+    chaos = manifest["config"].get("chaos")
     rate = decided = bound = lag = "-"
     status = "failed"
+    if chaos is not None:
+        rate = nb.fmt_num(chaos["rate_mb_s"])
     if result is not None:
         status = nb.verdict_word(result["validity"])
         limits = result["capacity"]
         mb_s = limits["overall"]["mb_s"]
-        rate = "-" if mb_s is None else nb.fmt_num(mb_s)
-        bound = capacity_bound(limits)
-        at_limit = [
-            s for s in result["steps"] if s["passed"] and s["rate_mb_s"] == mb_s
-        ]
-        if at_limit:
-            decided = nb.fmt_num(at_limit[-1]["decided_mb_s"])
-            quantiles = at_limit[-1]["query_lag_ms"]
-            lag = f"{quantiles['p99']:.0f}" if quantiles else "-"
+        if chaos is not None:
+            measured = [
+                s["decided_mb_s"]
+                for s in result["steps"]
+                if s["decided_mb_s"] is not None
+            ]
+            decided = nb.fmt_num(statistics.fmean(measured)) if measured else "-"
+        else:
+            rate = "-" if mb_s is None else nb.fmt_num(mb_s)
+            bound = capacity_bound(limits)
+            at_limit = [
+                s for s in result["steps"] if s["passed"] and s["rate_mb_s"] == mb_s
+            ]
+            if at_limit:
+                decided = nb.fmt_num(at_limit[-1]["decided_mb_s"])
+                quantiles = at_limit[-1]["query_lag_ms"]
+                lag = f"{quantiles['p99']:.0f}" if quantiles else "-"
     revision = (manifest["images"]["espresso-node"]["revision"] or "-")[:10]
     return {
         "run": f"{manifest['fleet']}/{run_name}",
@@ -7899,6 +8765,7 @@ def index_cells(
         "rate": rate,
         "decided": decided,
         "bound": bound,
+        "chaos": chaos_cell(manifest["config"], events),
         "lag_p99": lag,
         "status": status,
         "exit": str(code),
@@ -7912,10 +8779,42 @@ def format_index_row(cells: dict[str, str]) -> str:
 
 def append_index(out_root: Path, row: str) -> None:
     path = out_root / "INDEX.md"
+    if (
+        path.exists()
+        and path.stat().st_size
+        and not path.read_text().startswith(INDEX_HEADER)
+    ):
+        migrate_index(out_root)
     with path.open("a") as f:
         if f.tell() == 0:
             f.write(INDEX_HEADER)
         f.write(row)
+
+
+def migrate_index(out_root: Path) -> None:
+    """Rewrites an INDEX.md with an older header to `INDEX_HEADER`. A row keeps its cells; the
+    ones the header lacks come from its run dir, else `-` (the run dir may be deleted)."""
+    path = out_root / "INDEX.md"
+    by_name = {name: key for key, name in INDEX_COLUMNS.items()}
+    head, _, *body = path.read_text().splitlines()
+    keys = [by_name[cell.strip()] for cell in head.strip("|").split("|")]
+    lines = [INDEX_HEADER.rstrip("\n")]
+    for line in body:
+        old = dict(
+            zip(keys, (c.strip() for c in line.strip("|").split("|")), strict=True)
+        )
+        fleet, name = old["run"].split("/")
+        run_dir = out_root / fleet / RUNS_DIR / name
+        manifest = run_dir / MANIFEST_JSON
+        chaos = (
+            chaos_cell(nb.read_json(manifest)["config"], ch.read_events(run_dir))
+            if manifest.exists()
+            else "-"
+        )
+        lines.append(
+            format_index_row({k: old.get(k, chaos) for k in INDEX_COLUMNS}).rstrip("\n")
+        )
+    path.write_text("\n".join(lines) + "\n")
 
 
 def record_index(
@@ -7923,7 +8822,9 @@ def record_index(
 ) -> None:
     """Appends the run's row to INDEX.md and writes the same cells plus `user` to
     `index-row.json`."""
-    cells = index_cells(run.manifest, run.run_dir.name, result, code, cost)
+    cells = index_cells(
+        run.manifest, run.run_dir.name, result, code, cost, ch.read_events(run.run_dir)
+    )
     append_index(run.fleet.fleet_dir.parent, format_index_row(cells))
     nb.write_json(
         run.run_dir / INDEX_ROW_JSON, {**cells, "user": run.fleet.system.user()}
@@ -8023,8 +8924,11 @@ def published_manifest(run_dir: Path) -> dict[str, Any]:
 def commit_message(name: str, row: dict[str, str]) -> str:
     outcome = "failed"
     if row["status"] != "failed":
-        state = "lagging" if row["bound"] == "query" else "kept-up"
-        outcome = f"{row['decided']} MB/s {state}"
+        if row["chaos"] != "-":
+            outcome = f"chaos {row['chaos']}"
+        else:
+            state = "lagging" if row["bound"] == "query" else "kept-up"
+            outcome = f"{row['decided']} MB/s {state}"
     return f"run {name}: N={row['nodes']} {row['db']} {outcome}"
 
 
@@ -8037,8 +8941,8 @@ def read_index_row(run_dir: Path) -> dict[str, str]:
 
 
 def complete_index_row(run_dir: Path, row: dict[str, str]) -> dict[str, str]:
-    """Rows from before the latency, node type and bound columns get them from the manifest
-    and result; a run without result has no bound. `kept_up` is dropped."""
+    """Rows from before the latency, node type, bound and chaos columns get them from the
+    manifest, result and chaos log; a run without result has no bound. `kept_up` is dropped."""
     config = nb.read_json(run_dir / MANIFEST_JSON)["config"]
     result_path = run_dir / "result.json"
     derived = {
@@ -8050,6 +8954,7 @@ def complete_index_row(run_dir: Path, row: dict[str, str]) -> dict[str, str]:
             if result_path.exists()
             else "-"
         ),
+        "chaos": lambda: chaos_cell(config, ch.read_events(run_dir)),
     }
     filled = {k: row[k] if k in row else derived[k]() for k in INDEX_COLUMNS}
     return {**filled, "user": row["user"]}
@@ -8456,7 +9361,6 @@ def cmd_agent_host(args: argparse.Namespace, system: System) -> int:
 def main() -> int:
     argv = sys.argv[1:]
     args = parse_args(argv)
-    args.argv = argv
     system = host_system()
     if args.command in ("status", "list", "destroy", "down", "prune", "publish"):
         logging.basicConfig(level=logging.INFO, format="%(message)s")

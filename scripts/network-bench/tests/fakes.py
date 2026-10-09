@@ -9,7 +9,6 @@ import collections
 import copy
 import dataclasses
 import heapq
-import http.client
 import importlib.util
 import itertools
 import json
@@ -29,6 +28,7 @@ from types import ModuleType
 from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
+import chaos as ch
 import netbench
 import pytest
 
@@ -514,6 +514,221 @@ class FakeNode:
             self.made.append(self.made[-1] + BLOCK_S)
 
 
+@dataclass
+class FakeMember:
+    """One node of a `FakeCluster`. While running, its height closes on the chain tip at the
+    cluster's `catchup_blocks_s` from `base`, the height it started at; a wipe makes that 0.
+    `saved` is the height it stopped at.
+    Voted view and query height equal the height. `decided` restarts at 0 with each start, as
+    `consensus_finalized_bytes_sum` does with the process."""
+
+    name: str
+    query: bool
+    running: bool = True
+    removed: bool = False
+    started_at: float = 0.0
+    base: int = 0
+    saved: int = 0
+    submits: list[float] = field(default_factory=list)
+
+
+class FakeClusterPool:
+    """One client's view of a `FakeCluster`, with the `closed` flag of its own."""
+
+    def __init__(self, cluster: "FakeCluster", clock: netbench.Clock) -> None:
+        self.cluster = cluster
+        self.clock = clock
+        self.closed = threading.Event()
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None, timeout: float = 10.0
+    ) -> tuple[int, bytes]:
+        return self.cluster.request(method, url, body)
+
+    def close(self) -> None:
+        self.closed.set()
+
+
+class FakeCluster:
+    """Nodes behind the HTTP and docker surfaces the harness uses. One shared chain makes a
+    block every BLOCK_S clock seconds, when a request finds it due, from every submit any
+    running node took. A stopped node refuses connections; a started one lags the tip until it
+    caught up at `catchup_blocks_s`. Only `query` nodes serve the query API, and payloads above
+    their height answer 404. `kill`, `start`, `restart` and `wipe` change a node;
+    `docker(name, command)` does the same for the docker commands the AWS bench runs."""
+
+    def __init__(
+        self,
+        clock: netbench.Clock,
+        names: list[str],
+        query: set[str],
+        catchup_blocks_s: float = 100.0,
+    ) -> None:
+        self.clock = clock
+        self.catchup_blocks_s = catchup_blocks_s
+        self.lock = threading.RLock()
+        self.urls = {name: f"http://{name}" for name in names}
+        self.members = {
+            name: FakeMember(name, name in query, started_at=clock.time())
+            for name in names
+        }
+        self.pending: list[bytes] = []
+        self.blocks = [b""]
+        self.sizes = [0]
+        self.made = [clock.time()]
+
+    def connect(self, clock: netbench.Clock) -> FakeClusterPool:
+        return FakeClusterPool(self, clock)
+
+    def topology(self) -> netbench.Topology:
+        roles = {
+            name: "validator, query, sqlite" if m.query else "validator"
+            for name, m in self.members.items()
+        }
+        first = next(name for name, m in self.members.items() if m.query)
+        return {"nodes": dict(self.urls), "roles": roles, "query_node": first}
+
+    def peers(self) -> dict[str, list[str]]:
+        """Three validators per node: the first ones for a query node, the next in the cycle
+        for a validator."""
+        validators = [name for name, m in self.members.items() if not m.query]
+        out: dict[str, list[str]] = {}
+        for name, m in self.members.items():
+            if m.query:
+                out[name] = validators[:3]
+                continue
+            i = validators.index(name)
+            n = len(validators)
+            out[name] = [validators[(i + j) % n] for j in range(1, min(3, n - 1) + 1)]
+        return out
+
+    def height(self, name: str) -> int:
+        """Newest block the node decided; its last one while stopped."""
+        with self.lock:
+            return self.height_of(self.members[name])
+
+    def height_of(self, m: FakeMember) -> int:
+        if not m.running:
+            return m.saved
+        self.produce()
+        climbed = m.base + int(
+            (self.clock.time() - m.started_at) * self.catchup_blocks_s
+        )
+        return min(len(self.blocks) - 1, climbed)
+
+    def decided(self, name: str) -> int:
+        m = self.members[name]
+        with self.lock:
+            return sum(self.sizes[m.base + 1 : self.height_of(m) + 1])
+
+    def kill(self, name: str) -> None:
+        with self.lock:
+            m = self.members[name]
+            m.saved = self.height_of(m)
+            m.running = False
+
+    def start(self, name: str) -> None:
+        with self.lock:
+            m = self.members[name]
+            m.running = True
+            m.started_at = self.clock.time()
+            m.base = m.saved
+
+    def restart(self, name: str) -> None:
+        self.kill(name)
+        self.start(name)
+
+    def wipe(self, name: str) -> None:
+        """Loses the database and the journal; the node starts from block 0."""
+        with self.lock:
+            self.kill(name)
+            self.members[name].saved = 0
+
+    def docker(self, name: str, command: str) -> subprocess.CompletedProcess:
+        """Runs the docker commands, `find ... -delete` and `recreate.sh` lines of `command`
+        in order on the node."""
+        m = self.members[name]
+        for line in command.splitlines():
+            if "docker kill" in line:
+                self.kill(name)
+            elif "docker rm -f" in line:
+                self.kill(name)
+                m.removed = True
+            elif "docker restart" in line:
+                self.restart(name)
+            elif "docker start" in line:
+                if m.removed:
+                    return completed(returncode=1, stderr="No such container")
+                self.start(name)
+            elif "find /data/journal" in line:
+                m.saved = 0
+            elif "recreate.sh" in line:
+                m.removed = False
+            elif "docker inspect" in line:
+                return completed("running 0" if m.running else "exited 137")
+        return completed()
+
+    def request(
+        self, method: str, url: str, body: bytes | None = None
+    ) -> tuple[int, bytes]:
+        parts = urlsplit(url)
+        m = self.members[parts.netloc]
+        if not m.running:
+            raise OSError(f"{method} {url}: connection refused")
+        with self.lock:
+            if method == "POST" and parts.path == "/v1/submit/submit":
+                assert body is not None
+                return self.submit(m, body)
+            if method == "GET":
+                return self.get(m, parts.path)
+        raise ValueError(f"FakeCluster: unexpected {method} {parts.path}")
+
+    def submit(self, m: FakeMember, body: bytes) -> tuple[int, bytes]:
+        self.produce()
+        self.pending.append(base64.b64decode(json.loads(body)["payload"]))
+        m.submits.append(self.clock.time())
+        return 200, json.dumps("TX~fake").encode()
+
+    def get(self, m: FakeMember, path: str) -> tuple[int, bytes]:
+        height = self.height_of(m)
+        if path == "/v1/status/block-height":
+            return 200, json.dumps(height).encode()
+        if path == "/v1/status/metrics":
+            lines = (
+                f"consensus_finalized_bytes_sum {self.decided(m.name)}",
+                "consensus_number_of_timeouts 0",
+                f"consensus_last_voted_view {height}",
+                f"consensus_last_decided_view {height}",
+                f"consensus_last_synced_block_height {height}",
+            )
+            return 200, "\n".join(lines).encode()
+        if not m.query:
+            return 404, json.dumps("not found").encode()
+        if path == "/v1/node/block-height":
+            return 200, json.dumps(height + 1).encode()
+        if path == "/v1/node/sync-status":
+            missing = {"missing": max(0, len(self.blocks) - 1 - height)}
+            doc = {"blocks": missing, "leaves": missing, "vid_common": missing}
+            return 200, json.dumps(doc).encode()
+        if path == "/v1/node/stake-table/current":
+            return 200, json.dumps({"stake_table": []}).encode()
+        prefix = "/v1/availability/payload/"
+        at = int(path.removeprefix(prefix))
+        if at > height:
+            return 404, json.dumps("not found").encode()
+        raw = base64.b64encode(self.blocks[at]).decode()
+        payload = {"data": {"raw_payload": raw, "ns_table": {"bytes": ""}}}
+        return 200, json.dumps(payload).encode()
+
+    def produce(self) -> None:
+        """Makes the blocks due since the last request. Callers hold `lock`."""
+        while self.made[-1] + BLOCK_S <= self.clock.time():
+            taken, self.pending = self.pending, []
+            self.blocks.append(b"".join(taken))
+            self.sizes.append(len(self.blocks[-1]))
+            self.made.append(self.made[-1] + BLOCK_S)
+
+
 def completed(
     stdout: str = "", returncode: int = 0, stderr: str = ""
 ) -> subprocess.CompletedProcess:
@@ -725,6 +940,81 @@ class FakeRunner:
         return completed()
 
 
+class ClusterRunner(FakeRunner):
+    """A fleet runner whose node hosts are the members of a `FakeCluster`: an ssh to a node
+    answers the docker and status commands from the member, an ssh to ctl answers the chaos
+    probe from the cluster. `states` are the agent states, as for `FakeRunner`."""
+
+    def __init__(
+        self,
+        cluster: FakeCluster,
+        query_nodes: int,
+        states: list[dict],
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(states=states, **kwargs)
+        self.cluster = cluster
+        self.hosts = fleet(len(cluster.members), query_nodes)
+        self.names = {h["public_ip"]: name for name, h in self.hosts.items()}
+
+    def tofu(self, verb: str) -> subprocess.CompletedProcess:
+        if verb == "output":
+            return completed(stdout=json.dumps({"hosts": {"value": self.hosts}}))
+        return super().tofu(verb)
+
+    def default(self, argv: list[str]) -> subprocess.CompletedProcess:
+        if argv[0] == "ssh":
+            target = self.names[argv[-2].partition("@")[2]]
+            command = argv[-1]
+            if target == "ctl" and "consensus_last_voted_view" in command:
+                return completed(stdout=self.probe())
+            if target == "ctl" and "date +%s.%N" in command:
+                return completed(stdout=f"{self.cluster.clock.time()}\n")
+            if target != "ctl" and any(key in command for key in NODE_COMMANDS):
+                return self.cluster.docker(target, command)
+        return super().default(argv)
+
+    def probe(self) -> str:
+        """`probe_command` output: `-` for a field the node does not answer."""
+
+        def get(m: FakeMember, path: str) -> str:
+            try:
+                status, body = self.cluster.request("GET", f"http://{m.name}{path}")
+            except OSError:
+                return "-"
+            return body.decode() if status == 200 else "-"
+
+        lines = []
+        for name, m in self.cluster.members.items():
+            metrics = get(m, "/v1/status/metrics")
+            view = re.search(r"consensus_last_voted_view (\d+)", metrics)
+            fields = [get(m, "/v1/status/block-height"), view[1] if view else "-"]
+            if m.query:
+                sync = get(m, "/v1/node/sync-status")
+                fields += [
+                    get(m, "/v1/node/block-height"),
+                    "-"
+                    if sync == "-"
+                    else ",".join(
+                        str(json.loads(sync)[key]["missing"])
+                        for key in ch.MISSING_NAMES
+                    ),
+                ]
+            lines.append(f"{name} {' '.join(fields)}")
+        return "\n".join(lines) + "\n"
+
+
+# What a node host runs that `FakeCluster.docker` answers.
+NODE_COMMANDS = (
+    "docker kill",
+    "docker restart",
+    "docker rm -f",
+    "docker start",
+    "recreate.sh",
+    ".State.Status",
+)
+
+
 def no_children(signum: int) -> list[str]:
     return []
 
@@ -735,23 +1025,29 @@ def no_http_pool(clock: netbench.Clock) -> netbench.Http:
 
 class FakeConnection:
     """`http.client.HTTPConnection` answering 200 `body`; with `drops_second` its second
-    request fails as on a kept-alive connection the server closed."""
+    request fails with `error`, raised before it is sent unless `sent`."""
 
     sock = None
     status = 200
 
-    def __init__(self, body: bytes, drops_second: bool) -> None:
+    def __init__(
+        self, body: bytes, drops_second: bool, error: OSError, sent: bool
+    ) -> None:
         self.body = body
         self.drops_second = drops_second
+        self.error = error
+        self.sent = sent
         self.requests = 0
         self.closed = False
 
     def request(self, method: str, path: str, body=None, headers=None) -> None:
         self.requests += 1
-        if self.drops_second and self.requests == 2:
-            raise http.client.RemoteDisconnected("closed")
+        if self.drops_second and self.requests == 2 and not self.sent:
+            raise self.error
 
     def getresponse(self) -> "FakeConnection":
+        if self.drops_second and self.requests == 2 and self.sent:
+            raise self.error
         return self
 
     def read(self) -> bytes:
@@ -763,14 +1059,18 @@ class FakeConnection:
 
 class FakeConnections:
     """Factory in place of `http.client.HTTPConnection`: the first connection it makes drops
-    its second request."""
+    its second request with `error`, after sending it if `sent`."""
 
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, error: OSError, sent: bool) -> None:
         self.body = body
+        self.error = error
+        self.sent = sent
         self.made: list[FakeConnection] = []
 
     def __call__(self, netloc: str, timeout: float) -> FakeConnection:
-        conn = FakeConnection(self.body, drops_second=not self.made)
+        conn = FakeConnection(
+            self.body, drops_second=not self.made, error=self.error, sent=self.sent
+        )
         self.made.append(conn)
         return conn
 
@@ -838,7 +1138,7 @@ TOPOLOGY: netbench.Topology = {
         "node2": "http://localhost:24002",
     },
     "roles": {
-        "node0": "validator, sqlite",
+        "node0": "validator, query, sqlite",
         "node1": "validator, sqlite",
         "node2": "validator, sqlite",
     },
@@ -994,6 +1294,8 @@ def make_result(
             "included": 990,
             "timeouts": 10,
             "submit_errors": 0,
+            "submit_failovers": 0,
+            "submit_duplicates": 0,
             "max_in_flight": 48,
             "cap_waits": 0,
             "missing_payloads": [],
@@ -1170,9 +1472,7 @@ awsb: Any = load_script("aws-bench")
 
 def parse_plan_args(argv: list[str]) -> argparse.Namespace:
     full = ["plan", *argv]
-    args = awsb.parse_args(full)
-    args.argv = full
-    return args
+    return awsb.parse_args(full)
 
 
 def sts_response(account: str) -> subprocess.CompletedProcess:
@@ -1202,10 +1502,10 @@ def plan_args(*extra: str, nodes: str = "2") -> argparse.Namespace:
     return parse_plan_args(["--tag", "x", "--nodes", nodes, *extra])
 
 
-def fleet(n: int) -> dict:
+def fleet(n: int, query_nodes: int = 1) -> dict:
     hosts = {"ctl": host_info("ctl", "ctl", 1)}
     for i in range(n):
-        role = "query" if i == 0 else "validator"
+        role = "query" if i < query_nodes else "validator"
         hosts[f"node{i}"] = host_info(f"node{i}", role, i + 2)
     return hosts
 
@@ -1241,6 +1541,7 @@ def fake_images() -> dict:
 
 # `MemoryInfo.SizeInMiB` of `describe-instance-types` for every type of the fake price table.
 MEMORY_MIB = {
+    "c8g.xlarge": 8192,
     "c8g.2xlarge": 16384,
     "c8g.4xlarge": 32768,
     "c8g.8xlarge": 65536,
@@ -1255,6 +1556,7 @@ MEMORY_MIB = {
 
 # On-demand Linux USD per hour in eu-west-1, as the Pricing API listed them.
 INSTANCE_PRICES = {
+    "c8g.xlarge": 0.17056,
     "c8g.2xlarge": 0.34112,
     "c8g.4xlarge": 0.68224,
     "c8g.8xlarge": 1.36448,
@@ -1402,14 +1704,13 @@ class RunHarness:
         monkeypatch.setattr(awsb, "preflight", lambda *_: fake_preflight())
         monkeypatch.setattr(awsb, "dotenv", lambda: awsb.parse_dotenv(DOTENV_TEXT))
 
-    def args(self, *extra: str) -> argparse.Namespace:
-        argv = ["run", "--tag", "t", "--nodes", "2", "--yes", *extra]
-        args = awsb.parse_args(argv)
-        args.argv = argv
-        return args
+    def args(self, *extra: str, nodes: int = 2) -> argparse.Namespace:
+        return awsb.parse_args(
+            ["run", "--tag", "t", "--nodes", str(nodes), "--yes", *extra]
+        )
 
-    def run(self, runner: FakeRunner, *extra: str) -> int:
-        return awsb.cmd_run(self.args(*extra), FakeSystem(run=runner))
+    def run(self, runner: FakeRunner, *extra: str, nodes: int = 2) -> int:
+        return awsb.cmd_run(self.args(*extra, nodes=nodes), FakeSystem(run=runner))
 
     def down(self, runner: FakeRunner, *extra: str) -> int:
         args = awsb.parse_args(["down", str(self.fleet_dir), *extra])
@@ -1730,9 +2031,7 @@ class FleetHarness:
         monkeypatch.setattr(awsb, "dotenv", lambda: awsb.parse_dotenv(DOTENV_TEXT))
 
     def parse(self, *argv: str) -> argparse.Namespace:
-        args = awsb.parse_args(list(argv))
-        args.argv = list(argv)
-        return args
+        return awsb.parse_args(list(argv))
 
     def fleet_flags(self) -> list[str]:
         return [

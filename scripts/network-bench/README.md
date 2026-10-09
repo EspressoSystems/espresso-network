@@ -81,11 +81,12 @@ laptop                       EC2, one AZ, private IPs
                              +-------------------------------------------------+
 ```
 
-| Host      | Runs                                                                                                  |
-| --------- | ----------------------------------------------------------------------------------------------------- |
-| `ctl`     | anvil, `deploy`, orchestrator, state-relay-server, `agent-drive`, `agent-host`                        |
-| `node0`   | espresso-node `-- storage-sql -- http -- query ... -- light-client`, postgres container, `agent-host` |
-| `node1..` | espresso-node `-- storage-fs -- http -- status -- submit -- catchup -- config`, `agent-host`          |
+| Host        | Runs                                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| `ctl`       | anvil, `deploy`, orchestrator, state-relay-server, `agent-drive`, `agent-host`                         |
+| `node0`     | espresso-node `-- storage-sql -- http -- query ... -- light-client`, postgres container, `agent-host`  |
+| query nodes | with `--query-nodes K` (all nodes under `--chaos`), `node0..node{K-1}` run the same modules as `node0` |
+| `node1..`   | espresso-node `-- storage-fs -- http -- status -- submit -- catchup -- config`, `agent-host`           |
 
 Modules shown are for `--consensus-storage fs` (default). With `journal`, both roles also get `storage-journal` first.
 
@@ -218,6 +219,117 @@ just bench aws run --tag release-x --latency decaf-2025 --tcp-cc cubic   # cubic
 - Never shaped: `ctl` traffic (orchestrator, L1, relay, submit, metrics), RDS, ssh.
 - Model and profiles: [Latency model](#latency-model).
 
+### Chaos
+
+```
+just bench aws run --tag release-x --chaos
+just bench aws run --tag release-x --chaos --chaos-min 10 --chaos-rate 4 --chaos-seed 7 --chaos-kinds restart,kill
+just bench aws up --tag release-x --nodes 22 --query-nodes 22 --node-type c8g.xlarge --ctl-type c8g.xlarge --ttl-min 180
+just bench aws run --fleet --chaos --query-engine sqlite
+```
+
+- `--chaos` restarts, kills and wipes nodes, any node, while the load runs at a constant rate. Flags not given take the
+  chaos shape: 22 nodes, every node a query node, `sqlite` colocated, `c8g.xlarge` nodes and `ctl`,
+  `--latency decaf-2025`, `--chaos-min` steps of 60 s at `--chaos-rate` MB/s, `--keep-going`. `--nodes`,
+  `--query-nodes`, `--node-type`, `--ctl-type`, `--latency` (`off`, `mainnet` or `decaf-2025`), `--submit-nodes` and
+  `--query-engine` given on the command line are kept; `--latency` is per run, `up` does not take it; `--nodes N` alone
+  gives N query nodes.
+- Refused: `--steps`, `--step-s`, `--search`, `--keep-going` and `--warmup-s` (set by the chaos config); fewer than 7
+  nodes; 2 or fewer query nodes; a `--chaos-min` that gives no faults; `--query-engine postgres`; `--query-db` other
+  than `colocated`.
+- Faults start after the warmup, one per 45 s, and stop the kill down time plus 120 s (180 s) before the load ends, so a
+  late kill recovers under load; `--chaos-min 3` or less is refused, as it gives no faults. Kinds are used in turn from
+  `--chaos-kinds` (default `restart,kill,wipe`) on nodes in the order `--chaos-seed` shuffles them to.
+  - `restart`: `docker restart`. `kill`: `docker kill`, `docker start` after 60 s. `wipe`: container logs saved to
+    `/opt/bench/espresso-node.wiped.log.gz`, container removed, journal and payload dir emptied, container recreated
+    from `node-rejoin.env` (`recreate.sh`), started.
+- A fault is issued only while faulty nodes stay at most `(n-1)//3 - 1` (6 of 22), at least 2 query nodes are up and the
+  target and every faulty node keep 2 up peers; otherwise it waits for a recovery. Faulty counts stuck nodes and up
+  nodes whose probe failed or is more than 2 blocks behind the tip; those are never targets.
+- Query nodes get `ESPRESSO_NODE_SYNC_STATUS_TTL=5s` in `node.env` and `node-rejoin.env`; the default 5 min cache would
+  report a wiped node as synced from its empty database.
+- Recovery gates, 2 consecutive 5 s ticks: a node rejoined when its height and voted view are near the tip of the up
+  nodes; a query node then caught up when its height is near the up query nodes' tip and `sync-status` is fully synced
+  (`missing` of blocks, leaves and vid_common all 0), counted only from 10 s after the node first answered after its
+  fault or start. `rejoined` and `caught_up` carry the time of the first tick of the 2.
+- `summary.md` and `driver.log` omit the capacity verdict, the search line and the baseline under `--chaos`: steps with
+  a dead leader do not measure capacity.
+- The load driver submits to the next node when one is down; `submit_failovers` in `load-meta.json` counts the switches,
+  `submit_errors` stays 0 unless every node refused a tx. A submit fails over only on a connection error before the
+  request was sent or an HTTP 5xx; a 4xx fails that tx. A lost response leaves the tx pending until a scan includes it
+  or `--tx-timeout-s` passes, and is no submit error. A reused keep-alive connection is retried on a fresh one only when
+  it failed before sending or was reset by the server. `submit_duplicates` counts scans that saw an already included tx
+  id; the chaos totals line shows it when non-zero.
+- A node not recovered within 300 s writes one `timeout` event and turns `stuck`: it keeps its slot in the fault budget,
+  is no longer gated or faulted, and the load runs on; the final drain waits only for the other faults. The run then
+  fails: exit 3, `summary.md` keeps the reason, the run is invalid. A node that crashes without a fault fails the run at
+  once.
+- A failed probe or fault ssh skips the tick, and the fault is retried on the next one; 5 such ticks in a row fail the
+  run.
+- Ctrl-C or an error ends the faults still open with an `interrupted` event; the verdict names them, it does not count
+  them as failures.
+- Output: `chaos.jsonl` (`fault`, `started`, `rejoined`, `caught_up`, `timeout`, `restored`, `interrupted`; `ts` on
+  ctl's clock; `query` when the node serves the query API; `after_s` from the fault, from `started` for a kill;
+  `caught_up` carries `missing` as [blocks, leaves, vid_common]; a query node's `timeout` carries `missing` when
+  sync-status answered since the fault), a chaos report leading `summary.md` (see [Chaos report](#chaos-report)),
+  `chaos:` lines in `driver.log` (a timeout line lists the last `missing` counts). Faulted nodes are exempt from the
+  per-node scrape coverage and decided-blocks rules.
+- Cost: about $5.4/h for the default fleet, about 40 min per single shot. `render` recomputes the chaos report offline,
+  also for a run that failed.
+- Check `rss_peak_bytes` in `result.json` after the first run: `c8g.xlarge` has 8 GiB.
+
+#### Chaos report
+
+`summary.md` of a `--chaos` run leads with `## Chaos test`, built from `chaos.jsonl`, `load-meta.json` and `steps.json`:
+
+- Verdict: `fail` on a timeout or a failed run, with the reasons, else `pass`: every fault recovered (rejoined, and
+  caught up for query nodes). A stuck node fails the verdict at the end of the run, not at its timeout. Interrupted
+  faults are listed, not blamed.
+- A fault is active from the fault until its node recovered: `caught_up` for a query node, `rejoined` for a validator. A
+  timed out node stays faulty until the end of the run, an interrupted fault ends at `interrupted`. Max concurrent
+  faulty, the faults per step, the decided split and the plot all use this span; every event carries `query`, events
+  written before it get it from the roles in `topology.json`.
+- Setup, and totals: faults per kind, max concurrent faulty against the fault budget, timeouts, lost payloads, submit
+  failovers, txs submitted, included and timed out.
+- Recovery table per kind: count, rejoin p50 and max, caught-up p50 and max (seconds from the fault, from the start for
+  a kill, as the `from` column says; query nodes only catch up).
+- Throughput: mean decided against offered and the lowest step; then decided MB/s from `consensus.jsonl` over the steps,
+  with an active fault against without: an interval between two counter samples that overlaps a fault counts as with
+  one. Without counter samples that line is omitted.
+- `throughput.png`, then the per-fault table (a `missing` column when a timeout carries counts), then one row per step
+  with its start (s since load start), its view timeouts in place of a verdict (a faulted leader times out its view) and
+  the faults active in it.
+- In the step details a node restarted during the step shows `-` for its CPU, as its counter reset.
+- `throughput.png` has a top panel with one lane per faulted node: down, recovering and catching up in distinct colors,
+  a marker per event, a red x at a timeout. A kill aborted before its node started stays down. The other panels shade
+  each fault while it is active.
+- A run that ends early (an error or Ctrl-C) is collected and reported the same way from the files it has: no
+  `result.json` or `run.json`, so the load starts at the first step; consensus counters and steps run up to the end. The
+  log section shows, per node that timed out, its last 30 WARN and ERROR lines before the timeout, else its last lines;
+  without a timeout, every node's last lines. `render` fails when the chaos report raises; the run itself falls back to
+  a plain failure summary.
+- A run that finished its load is analyzed as usual. Its report ends with the same log section for the nodes that timed
+  out, and none without a timeout. An error after the load (Ctrl-C or ssh failures in the final drain) goes to
+  `error.txt`; the verdict fails with it in both reports.
+- `INDEX.md` has a `chaos` column, `F faults, T timeouts` (`-` without chaos). `rate` is the chaos rate, `decided` the
+  mean decided, `bound` is `-`.
+
+#### Not covered
+
+- Stake table changes: no delegation, undelegation, validator registration or exit during the run.
+- Epoch transitions under faults: runs do not span a stake table epoch change.
+- L1 faults: anvil on ctl never stalls, reorgs or drops RPC.
+- Network faults: no partitions, packet loss or latency spikes; `--latency` shaping is static.
+- ctl services: orchestrator, state-relay-server, anvil and the load driver are never faulted.
+- Host faults: no instance reboot, disk full, disk stalls or clock skew.
+- Byzantine behaviour: faulted nodes stop or lose state, they never equivocate or send bad data.
+- Faults at or above `f`: the scheduler stays below the fault budget, so liveness loss is not exercised.
+- Postgres query nodes: wipe needs `--query-engine sqlite`; `volume`, `rds` and `tmpfs` query storage are refused.
+- Upgrades: no binary or protocol version upgrade during the run.
+- Load shape: constant rate only; no bursts or capacity search under faults.
+- Correlated or simultaneous faults: one fault per tick, at least `gap_s` (45 s) apart.
+- Faults aimed at upcoming leaders: targets follow the seeded order, not the leader schedule.
+
 ### Node build and config
 
 ```
@@ -249,8 +361,8 @@ just bench aws run --tag release-x --leader-trace
     values.
 - `--node-type`, `--ctl-type`: both types share one architecture. Preflight picks the Ubuntu AMI and image platform to
   match. Type choice: [instance-types.md](instance-types.md).
-- `--prune [RETENTION]`: node0 deletes data and state older than RETENTION (`90s`, `2m`, `1h`; bare: `1m`), checked
-  every 30 s (`ESPRESSO_NODE_DATABASE_PRUNE`, `ESPRESSO_NODE_PRUNER_TARGET_RETENTION`,
+- `--prune [RETENTION]`: node0 (not the other query nodes) deletes data and state older than RETENTION (`90s`, `2m`,
+  `1h`; bare: `1m`), checked every 30 s (`ESPRESSO_NODE_DATABASE_PRUNE`, `ESPRESSO_NODE_PRUNER_TARGET_RETENTION`,
   `ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION`, `ESPRESSO_NODE_PRUNER_INTERVAL`). Part of the config hash.
   - The warmup grows by RETENTION, so the pruner runs before the first measured step.
   - `--node-env` overrides these variables, e.g. `ESPRESSO_NODE_PRUNER_PRUNING_THRESHOLD` for the usage-triggered path.
@@ -264,11 +376,12 @@ just bench aws run --tag release-x --leader-trace
     `/v1/light-client/leaf/{last}`, `/v1/availability/leaf/{start}/{last}` and
     `/v1/light-client/namespaces/{start}/{end}/NS~...` for its namespace. Proofs are not verified; the node's load is
     the same.
-  - A range the node answers with 404 or too slowly (30 s) is retried every poll for 10 s, then counted as missing.
+  - Each request goes to the query nodes in order, node0 first, and moves on at a refused or failed request, a timeout
+    (10 s), 5xx or 404. A range no query node serves is retried every poll for 10 s, then counted as missing.
   - A reader failure ends the run; the cause is in `clients.log`.
   - Writes `clients.jsonl`; the summary reports reader lag behind a validator, fetch time per range and MB/s, the chart
     adds a lag panel. No step rule uses them.
-  - Needs the `light-client` module, which node0 always runs (routes only).
+  - Needs the `light-client` module, which every query node runs (routes only).
 - `--leader-trace`: nodes get `ESPRESSO_NODE_LEADER_TRACE_DIR=/trace` (host `/opt/bench/trace`).
   - Collected: `hosts/<name>/trace/leader_trace_node*.csv`.
   - `node_id` in the file name and rows is the orchestrator-assigned node index, not the host number; the host is the
@@ -358,6 +471,7 @@ Where:
 | `--tag`                               | required; fleet's on `--fleet` | all          | ghcr image tag pushed by CI                                                                   |
 | `--allocator`                         | none                           | all          | `jemalloc`, `mimalloc`, `snmalloc`, `tcmalloc`                                                |
 | `--nodes`                             | 5                              | provision    | validator count, `node0` included                                                             |
+| `--query-nodes`                       | 1                              | provision    | query service nodes, the first `K` of `--nodes`; above 1 needs `--query-db colocated`         |
 | `--node-type`                         | `c8g.4xlarge`                  | provision    | node instance type                                                                            |
 | `--ctl-type`                          | `c8g.2xlarge`                  | provision    | `ctl` instance type                                                                           |
 | `--root-gb`                           | `auto`                         | provision    | root volume GB; `auto` sizes from the ramp, or from `--offered-gb` with `--search`            |
@@ -376,11 +490,16 @@ Where:
 | `--namespaces`                        | 16                             | all          | namespaces the load spreads over, round robin from 10000; part of the config hash             |
 | `--heartbeat-tx-s`                    | 50                             | all          | 8-byte txs per second for the whole run, 0 for none                                           |
 | `--keep-going`                        | off                            | all          | run every step, then drain                                                                    |
+| `--chaos`                             | off                            | per run      | fault nodes during the load; see [Chaos](#chaos)                                              |
+| `--chaos-min`                         | 10                             | per run      | minutes of load, one 60 s step each                                                           |
+| `--chaos-rate`                        | 4                              | per run      | MB/s of every step                                                                            |
+| `--chaos-seed`                        | 42                             | per run      | seed of the order nodes are faulted in                                                        |
+| `--chaos-kinds`                       | `restart,kill,wipe`            | per run      | comma separated, used in turn                                                                 |
 | `--max-block-size`                    | `50mb`                         | per run      | genesis `max_block_size`                                                                      |
 | `--node-env KEY=VALUE`                | none                           | per run      | repeatable; node environment                                                                  |
 | `--leader-trace`, `--no-leader-trace` | off                            | per run      | leader trace CSVs and plots                                                                   |
 | `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                                 |
-| `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `mainnet`                                                                |
+| `--latency`                           | `off`                          | per run      | `off`, `decaf-2025`, `mainnet`; `decaf-2025` with `--chaos`                                   |
 | `--no-intra-latency`                  | off                            | per run      | with `--latency`: no same-location delay                                                      |
 | `--tcp-cc`                            | bbr                            | per run      | with `--latency`: TCP congestion control, `bbr`, `cubic`, `bbr_hold` or `bbr3`                |
 | `--mtu`                               | 1500                           | per run      | with `--latency`: interface MTU of the nodes                                                  |
@@ -549,7 +668,8 @@ Each step is judged over its second half. A step stopped early is judged over it
 - vCPUs: an Intel vCPU is a hyperthread (c8i.4xlarge: 16 vCPU = 8 cores). A Graviton vCPU is a physical core
   (c8g.4xlarge: 16 cores).
 - Stake: equal, orchestrator self-registration. 5 nodes give quorum 4, so a lagging `node0` never stalls consensus.
-- Peers: `node0` has state peers like every node and no API peers.
+- Peers: every node has state peers. Query nodes set `ESPRESSO_NODE_API_PEERS` to the other query nodes; the single
+  query node has none.
 - Keys: test mnemonic, index 20 + i. No `keygen`, no `stake-for-demo`.
 - Network: cliquenet over private IPs, libp2p over private DNS. The security group allows ssh from this machine's IP
   only (checkip).
@@ -678,6 +798,7 @@ runs/01-run/             one measurement
   genesis.toml topology.json config.json
   hosts/<host>/          node.env|ctl.env, start.sh, agent.json, <container>.log.gz, collect-<k>/ (`collect`),
                          cloud-init-output.log, chrony.txt, host.jsonl, sockets.jsonl (nodes), ena-allowance.txt,
+                         node-rejoin.env, recreate.sh (--chaos), espresso-node.wiped.log.gz (wiped nodes)
                          trace/ (--leader-trace)
                          pg-stats.json pg-stats.jsonl pg-statements.json pg-settings.json du-payload.txt (node0)
   cloudwatch/            ec2-node0.json (EBS balance, every run); rds.json (rds runs)
@@ -685,8 +806,9 @@ runs/01-run/             one measurement
   metrics.jsonl heights.jsonl consensus.jsonl load.jsonl steps.json
   clients.jsonl          --clients: one row per range a reader fetched (ns, reader, start, end, t_start, t_done, bytes, status)
   clients.log            --clients: log of the readers process
-  load-meta.json         start_height, max_in_flight, cap_waits, submit_errors, heartbeat_errors,
+  load-meta.json         start_height, max_in_flight, cap_waits, submit_errors, submit_failovers, submit_duplicates, heartbeat_errors,
                          missing_payloads, drain_s, refine_skipped, stop_reason, marker
+  chaos.jsonl            --chaos: one record per fault, start, rejoin, catch-up, timeout and restore
   stake-table.json final-<node>.prom
   run.json agent-state.json agent.log result.json summary.md throughput.png
   trace/                 trace-plots output (--leader-trace)
@@ -732,6 +854,7 @@ scripts/network-bench/
                          metrics scrape, analysis, validity, compare, summary
   bench                  local driver: preflight, process-compose, host sampling, selftest
   aws-bench              AWS driver (laptop) and host agents (agent-drive, agent-host)
+  chaos.py               --chaos: event schema, fault scheduler and probe, fault rows, chaos report
   nullserver.py          null node for `selftest`
   latency.py             --latency profiles: node placement, RTT matrix, per-node tc script, probes
   latency-matrix.csv     56 measured AWS region pairs (espresso-deploy 34b35f6)

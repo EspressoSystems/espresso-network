@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from fakes import load_script
+from test_chaos import CHAOS_EVENTS
 
 plot = load_script("throughput-plot")
 
@@ -146,3 +147,83 @@ def test_main_writes_the_chart_from_a_minimal_run_dir(tmp_path: Path):
     (run_dir / "clients.jsonl").write_text("")
     plot.main([str(run_dir)])
     assert (run_dir / "throughput.png").read_bytes() == three_panels
+
+
+def write_run(run_dir: Path, steps_only: bool = False) -> float:
+    """A minimal run dir for `main`. `steps_only`: as a run that failed leaves it, without
+    `run.json` and with an empty `consensus.jsonl`."""
+    t0 = 1000.0
+    run_dir.mkdir(parents=True, exist_ok=True)
+    consensus = (
+        []
+        if steps_only
+        else [
+            {"ts": t0 + i, "decided_bytes": 2e6 * i, "timeouts": 0} for i in range(60)
+        ]
+    )
+    load = [
+        {"t_submit": t0 + i, "t_included": t0 + i + 1, "height": i} for i in range(50)
+    ]
+    heights = [{"height": h, "validator": t0 + h + 0.5} for h in range(50)]
+    step = {
+        "rate_mb_s": 2.0,
+        "refine": False,
+        "t_start": t0,
+        "t_mid": t0 + 30,
+        "t_end": t0 + 60,
+        "consensus_fails": [],
+        "query_fails": [],
+    }
+    files = {
+        "config.json": {"tx_size": TX_SIZE, "tx_timeout_s": 60},
+        "steps.json": [step],
+    }
+    if not steps_only:
+        files["run.json"] = {"t0": t0}
+    for name, data in files.items():
+        (run_dir / name).write_text(json.dumps(data))
+    (run_dir / "genesis.toml").write_text('[chain_config]\nmax_block_size = "50mb"\n')
+    for name, rows in (
+        ("consensus.jsonl", consensus),
+        ("load.jsonl", load),
+        ("heights.jsonl", heights),
+        ("chaos.jsonl", CHAOS_EVENTS),
+    ):
+        (run_dir / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return t0
+
+
+def test_main_draws_the_chaos_panel_and_shading(tmp_path: Path):
+    run_dir = tmp_path / "fleet" / "runs" / "01-run"
+    write_run(run_dir)
+    plot.main([str(run_dir)])
+    assert (run_dir / "throughput.png").read_bytes().startswith(b"\x89PNG")
+
+
+def test_main_charts_a_failed_run_without_counters_or_run_json(tmp_path: Path):
+    run_dir = tmp_path / "fleet" / "runs" / "01-run"
+    write_run(run_dir, steps_only=True)
+    plot.main([str(run_dir)])
+    assert (run_dir / "throughput.png").read_bytes().startswith(b"\x89PNG")
+
+
+def test_last_time_is_the_latest_step_submit_or_event():
+    assert plot.last_time([{"t_end": 5.0}], [{"t_submit": 7.0}], [{"ts": 6.0}]) == 7.0
+
+
+def test_main_draws_the_chaos_lanes_and_the_clients_panel_together(tmp_path: Path):
+    run_dir = tmp_path / "fleet" / "runs" / "01-run"
+    t0 = write_run(run_dir)
+    plot.main([str(run_dir)])
+    chaos_only = (run_dir / "throughput.png").read_bytes()
+    clients = [
+        {"end": h + 1, "t_done": t0 + h + 1.2, "bytes": 1_000_000, "status": "ok"}
+        for h in range(18)
+    ]
+    (run_dir / "clients.jsonl").write_text(
+        "".join(json.dumps(c) + "\n" for c in clients)
+    )
+    plot.main([str(run_dir)])
+    both = (run_dir / "throughput.png").read_bytes()
+    assert both.startswith(b"\x89PNG")
+    assert both != chaos_only
