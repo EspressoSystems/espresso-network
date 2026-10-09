@@ -193,6 +193,20 @@ impl<T: NodeType> StateManager<T> {
         self.start_pending(commitment);
     }
 
+    /// Seed a stub for a decided leaf so work queued on it runs via catchup.
+    /// No-op when the leaf is validated or being validated.
+    pub(crate) fn seed_decided(&mut self, leaf: Leaf2<T>) {
+        let commitment = leaf.commit();
+        if self.validated_states.contains_key(&commitment)
+            || self.state_requests.contains_key(&commitment)
+        {
+            return;
+        }
+        let state = T::ValidatedState::from_header(leaf.block_header());
+        self.insert_state(leaf.view_number(), Arc::new(state), None, leaf);
+        self.start_pending(commitment);
+    }
+
     pub fn request_state(&mut self, request: StateRequest<T>) {
         let commitment = proposal_commitment(&request.proposal);
         if self.state_requests.contains_key(&commitment) {

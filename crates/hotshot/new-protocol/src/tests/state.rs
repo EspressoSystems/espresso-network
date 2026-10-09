@@ -193,6 +193,51 @@ async fn test_state_request_missing_parent_retried_after_seed() {
     );
 }
 
+/// `seed_decided` runs work queued on the decided leaf.
+#[tokio::test]
+async fn test_seed_decided_releases_queued_work() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.request_header(make_header_request(
+        &test_data.views[1],
+        test_data.views[2].view_number,
+    ));
+    manager.seed_decided(test_data.views[0].leaf.clone());
+
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(count_state_verified(&outputs), 1);
+}
+
+/// `seed_decided` is a no-op for a leaf already seeded, validated or in flight.
+#[tokio::test]
+async fn test_seed_decided_duplicate_is_noop() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+    let leaf0 = test_data.views[0].leaf.clone();
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.seed_decided(leaf0.clone());
+    assert!(!manager.validated_contains_view(test_data.views[0].view_number));
+    manager.next().await.expect("validation was not aborted");
+
+    manager.seed_decided(leaf0.clone());
+    let entry = manager.get_state(test_data.views[0].view_number).unwrap();
+    assert!(
+        entry.delta.is_some(),
+        "validated state must not be displaced"
+    );
+
+    manager.seed_decided(test_data.views[1].leaf.clone());
+    manager.seed_decided(test_data.views[1].leaf.clone());
+    assert!(manager.validated_contains_view(test_data.views[1].view_number));
+    assert!(manager.next().await.is_none());
+}
+
 /// State request with seeded genesis parent spawns validation and produces output.
 #[tokio::test]
 async fn test_state_request_with_genesis_parent() {
