@@ -59,8 +59,8 @@ just demo-native                      # local network via process-compose
 - **ValidatedState** (`crates/espresso/types/src/v0/impls/state.rs`): four merkle trees (block, fee, reward v1, reward
   v2) plus chain config; `validate_and_apply_header()` is the state transition. Persisting the merklized state is
   `crates/espresso/node/src/state.rs`.
-- **HotShot SystemContext** (`crates/hotshot/hotshot/src/lib.rs`): tasks via `ConsensusTaskRegistry`, broadcast channels
-  with `HotShotEvent` variants. `EpochMembershipCoordinator` manages per-epoch stake tables.
+- **Coordinator** (`crates/hotshot/new-protocol/src/coordinator.rs`): runs the new protocol, answers `ClientApi` queries
+  and emits `CoordinatorEvent`s. `EpochMembershipCoordinator` manages per-epoch stake tables.
 - **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): tracks `head` and `finalized`; reads use
   `BlockId::finalized()`.
 - **Stake table fetcher** (`crates/espresso/types/src/v0/impls/stake_table.rs`): polls finalized L1, builds

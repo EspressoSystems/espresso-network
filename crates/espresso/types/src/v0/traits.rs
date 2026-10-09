@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
 #[cfg(feature = "node")]
-use hotshot::{HotShotInitializer, InitializerEpochInfo, types::EventType};
+use hotshot::{HotShotInitializer, InitializerEpochInfo};
 #[cfg(feature = "node")]
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
 #[cfg(feature = "node")]
@@ -851,38 +851,6 @@ pub trait SequencerPersistence:
         consumer: &(impl EventConsumer + 'static),
     ) -> Option<(ViewNumber, Option<Arc<CertificatePair<SeqTypes>>>)> {
         match event {
-            CoordinatorEvent::LegacyEvent(hotshot_event) => {
-                let EventType::Decide {
-                    leaf_chain,
-                    committing_qc,
-                    deciding_qc,
-                    ..
-                } = &hotshot_event.event
-                else {
-                    return None;
-                };
-                let LeafInfo { leaf, .. } = leaf_chain.first()?;
-                let decided_view = leaf.view_number();
-
-                let chain = leaf_chain.iter().zip(
-                    std::iter::once((**committing_qc).clone()).chain(
-                        leaf_chain
-                            .iter()
-                            .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
-                    ),
-                );
-
-                if let Err(err) = self
-                    .persist_decided_leaves(decided_view, chain, deciding_qc.clone(), consumer)
-                    .await
-                {
-                    tracing::error!(
-                        "failed to save decided leaves, chain may not be up to date: {err:#}"
-                    );
-                    return None;
-                }
-                Some((decided_view, deciding_qc.clone()))
-            },
             CoordinatorEvent::NewDecide {
                 leaf_infos, cert1, ..
             } => {

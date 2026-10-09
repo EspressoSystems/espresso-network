@@ -49,9 +49,7 @@ use hotshot_types::{
     traits::election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
     utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
-    vote::HasViewNumber,
 };
-use itertools::Itertools;
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use moka::future::Cache;
 use rand::Rng;
@@ -209,19 +207,22 @@ impl<C: ApiContext, D: Sync> StakeTableDataSource<SeqTypes> for StorageState<C, 
         self.as_ref().get_block_reward(epoch).await
     }
     /// Get all the validator participation for the current epoch
-    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
+    async fn current_proposal_participation(&self) -> anyhow::Result<HashMap<PubKey, f64>> {
         self.as_ref().current_proposal_participation().await
     }
     /// Get all the validator participation for the previous epoch
-    async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
+    async fn proposal_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<HashMap<PubKey, f64>> {
         self.as_ref().proposal_participation(epoch).await
     }
     /// Get all the vote participation for the current epoch
-    async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
+    async fn current_vote_participation(&self) -> anyhow::Result<HashMap<PubKey, f64>> {
         self.as_ref().current_vote_participation().await
     }
     /// Get all the vote participation for a given epoch
-    async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
+    async fn vote_participation(&self, epoch: EpochNumber) -> anyhow::Result<HashMap<PubKey, f64>> {
         self.as_ref().vote_participation(epoch).await
     }
 
@@ -301,7 +302,7 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
                 ));
             }
         }
-        let highest_epoch = handle.current_epoch().await.map(|e| e + 1);
+        let highest_epoch = handle.current_epoch().await?.map(|e| e + 1);
         if epoch > highest_epoch {
             return Err(anyhow::anyhow!(
                 "requested stake table for epoch {epoch:?} is beyond the current epoch + 1 \
@@ -315,7 +316,7 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
 
     /// Get the stake table for the current epoch and return it along with the epoch number
     async fn get_stake_table_current(&self) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
-        let epoch = self.consensus().await.current_epoch().await;
+        let epoch = self.consensus().await.current_epoch().await?;
 
         Ok(StakeTableWithEpochNumber {
             epoch,
@@ -348,7 +349,7 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
     async fn get_da_stake_table_current(
         &self,
     ) -> anyhow::Result<StakeTableWithEpochNumber<SeqTypes>> {
-        let epoch = self.consensus().await.current_epoch().await;
+        let epoch = self.consensus().await.current_epoch().await?;
 
         Ok(StakeTableWithEpochNumber {
             epoch,
@@ -386,26 +387,30 @@ impl<C: ApiContext> StakeTableDataSource<SeqTypes> for ApiState<C> {
     }
 
     /// Get the current proposal participation.
-    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        self.consensus()
+    async fn current_proposal_participation(&self) -> anyhow::Result<HashMap<PubKey, f64>> {
+        Ok(self
+            .consensus()
             .await
             .current_proposal_participation()
-            .await
+            .await?)
     }
 
     /// Get the proposal participation for a given epoch.
-    async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        self.consensus().await.proposal_participation(epoch).await
+    async fn proposal_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> anyhow::Result<HashMap<PubKey, f64>> {
+        Ok(self.consensus().await.proposal_participation(epoch).await?)
     }
 
     /// Get the current vote participation.
-    async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
-        self.consensus().await.current_vote_participation().await
+    async fn current_vote_participation(&self) -> anyhow::Result<HashMap<PubKey, f64>> {
+        Ok(self.consensus().await.current_vote_participation().await?)
     }
 
     /// Get the vote participation for a given epoch.
-    async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        self.consensus().await.vote_participation(epoch).await
+    async fn vote_participation(&self, epoch: EpochNumber) -> anyhow::Result<HashMap<PubKey, f64>> {
+        Ok(self.consensus().await.vote_participation(epoch).await?)
     }
 
     async fn get_all_validators(
@@ -556,7 +561,10 @@ impl<C: ApiContext> StateCertFetchingDataSource<SeqTypes> for ApiState<C> {
         tracing::info!("fetching state certificate for epoch={epoch}");
         let handle = self.consensus().await;
 
-        let current_epoch = handle.current_epoch().await;
+        let current_epoch = handle
+            .current_epoch()
+            .await
+            .map_err(|err| StateCertFetchError::Other(err.into()))?;
 
         // The highest epoch we can have a state certificate for is current_epoch + 1
         // Check if requested epoch is beyond the highest possible epoch
@@ -679,7 +687,7 @@ impl<C: ApiContext> SubmitDataSource for ApiState<C> {
         // so the updated chain config is found in the validated state.
         let cf = handle
             .decided_state()
-            .await
+            .await?
             .and_then(|state| state.chain_config.resolve());
 
         // Use the chain config from the validated state if available,
@@ -819,15 +827,6 @@ impl<C: ApiContext, D: CatchupStorage + Send + Sync> CatchupDataSource for Stora
         self.inner().get_chain_config(commitment).await
     }
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
-        // Check if we have the desired state in memory.
-        match self.as_ref().get_leaf_chain(height).await {
-            Ok(cf) => return Ok(cf),
-            Err(err) => {
-                tracing::info!("leaf chain is not in memory, trying storage: {err:#}");
-            },
-        }
-
-        // Try storage.
         self.inner().get_leaf_chain(height).await
     }
 
@@ -962,7 +961,7 @@ impl<C: ApiContext> CatchupDataSource for ApiState<C> {
         view: ViewNumber,
         accounts: &[FeeAccount],
     ) -> anyhow::Result<FeeMerkleTree> {
-        let state = self.consensus().await.state(view).await.context(format!(
+        let state = self.consensus().await.state(view).await?.context(format!(
             "state not available for height {height}, view {view}"
         ))?;
         retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
@@ -975,7 +974,7 @@ impl<C: ApiContext> CatchupDataSource for ApiState<C> {
         height: u64,
         view: ViewNumber,
     ) -> anyhow::Result<BlocksFrontier> {
-        let state = self.consensus().await.state(view).await.context(format!(
+        let state = self.consensus().await.state(view).await?.context(format!(
             "state not available for height {height}, view {view}"
         ))?;
         let tree = &state.block_merkle_tree;
@@ -991,7 +990,7 @@ impl<C: ApiContext> CatchupDataSource for ApiState<C> {
             .consensus()
             .await
             .decided_state()
-            .await
+            .await?
             .context("decided state not available")?;
         let chain_config = state.chain_config;
 
@@ -1003,39 +1002,7 @@ impl<C: ApiContext> CatchupDataSource for ApiState<C> {
     }
 
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
-        // Builds a legacy 3-chain from undecided leaves in memory. New-protocol heights fall
-        // through to the storage path.
-        let mut leaves = self.consensus().await.undecided_leaves().await;
-        leaves.sort_by_key(|l| l.view_number());
-        let (position, mut last_leaf) = leaves
-            .iter()
-            .find_position(|l| l.height() == height)
-            .context(format!("leaf chain not available for {height}"))?;
-        let mut chain = vec![last_leaf.clone()];
-        for leaf in leaves.iter().skip(position + 1) {
-            if leaf.justify_qc().view_number() == last_leaf.view_number() {
-                chain.push(leaf.clone());
-            } else {
-                continue;
-            }
-            if leaf.view_number() == last_leaf.view_number() + 1 {
-                // one away from decide
-                last_leaf = leaf;
-                break;
-            }
-            last_leaf = leaf;
-        }
-        // Make sure we got one more leaf to confirm the decide
-        for leaf in leaves
-            .iter()
-            .skip_while(|l| l.view_number() <= last_leaf.view_number())
-        {
-            if leaf.justify_qc().view_number() == last_leaf.view_number() {
-                chain.push(leaf.clone());
-                return Ok(chain);
-            }
-        }
-        bail!(format!("leaf chain not available for {height}"))
+        bail!("consensus keeps no leaf chain for {height} in memory, only storage does")
     }
 
     #[tracing::instrument(skip(self, _instance))]
@@ -1046,7 +1013,7 @@ impl<C: ApiContext> CatchupDataSource for ApiState<C> {
         view: ViewNumber,
         accounts: &[RewardAccountV2],
     ) -> anyhow::Result<RewardMerkleTreeV2> {
-        let state = self.consensus().await.state(view).await.context(format!(
+        let state = self.consensus().await.state(view).await?.context(format!(
             "state not available for height {height}, view {view}"
         ))?;
 
@@ -1061,7 +1028,7 @@ impl<C: ApiContext> CatchupDataSource for ApiState<C> {
         view: ViewNumber,
         accounts: &[RewardAccountV1],
     ) -> anyhow::Result<RewardMerkleTreeV1> {
-        let state = self.consensus().await.state(view).await.context(format!(
+        let state = self.consensus().await.state(view).await?.context(format!(
             "state not available for height {height}, view {view}"
         ))?;
 
@@ -1073,7 +1040,7 @@ impl<C: ApiContext> CatchupDataSource for ApiState<C> {
         height: u64,
         view: ViewNumber,
     ) -> anyhow::Result<Vec<u8>> {
-        let state = self.consensus().await.state(view).await.context(format!(
+        let state = self.consensus().await.state(view).await?.context(format!(
             "state not available for height {height}, view {view}"
         ))?;
 
@@ -1791,7 +1758,6 @@ pub mod test_helpers {
         future::{FutureExt, join_all},
         stream::{Stream, StreamExt},
     };
-    use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
         event::LeafInfo, light_client::LCV3StateSignatureRequestBody,
@@ -1808,7 +1774,7 @@ pub mod test_helpers {
     use test_utils::reserve_tcp_port;
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
-    use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
+    use versions::{EPOCH_VERSION, Upgrade};
 
     use super::*;
     use crate::{
@@ -1816,7 +1782,7 @@ pub mod test_helpers {
         catchup::{NullStateCatchup, ParallelStateCatchup, StatePeers},
         persistence::no_storage,
         testing::{
-            TestConfig, TestConfigBuilder, decided_leaves, deploy_stake_table, run_test_builder,
+            TestConfig, TestConfigBuilder, decided_leaves, deploy_stake_table,
             wait_for_decide_on_handle, wait_for_epochs,
         },
     };
@@ -2116,13 +2082,9 @@ pub mod test_helpers {
             upgrade: versions::Upgrade,
         ) -> Self {
             let mut cfg = cfg;
-            if upgrade.base >= NEW_PROTOCOL_VERSION && !cfg.has_stake_table() {
+            if !cfg.has_stake_table() {
                 cfg.deploy_default_stake_table().await;
             }
-            let (_builder_task, builder_url) =
-                run_test_builder::<{ NUM_NODES }>(cfg.network_config.builder_port()).await;
-            cfg.network_config
-                .set_builder_urls(vec1::vec1![builder_url.clone()]);
 
             // add default storage if none is provided as query module is now required
             let mut opt = cfg.api_config.clone();
@@ -2651,10 +2613,6 @@ pub mod test_helpers {
         // its target.
         wait_for_epochs(&mut events, epoch_height, current + epochs_ahead - 1).await;
 
-        if node.decided_leaf().await.block_header().version() < versions::NEW_PROTOCOL_VERSION {
-            tracing::info!("legacy version: skipping transaction-inclusion liveness check");
-            return;
-        }
         // Detect inclusion via the header's namespace table: the namespace is
         // unique to this call, and decide events at 0.6 do not always carry
         // payloads.
@@ -2666,14 +2624,11 @@ pub mod test_helpers {
             .expect("live node accepts transactions");
         tokio::time::timeout(Duration::from_secs(120), async {
             loop {
-                let leaf = match events.next().await.unwrap() {
-                    CoordinatorEvent::LegacyEvent(Event {
-                        event: EventType::Decide { leaf_chain, .. },
-                        ..
-                    }) => leaf_chain[0].leaf.clone(),
-                    CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
-                    _ => continue,
+                let CoordinatorEvent::NewDecide { leaf_infos, .. } = events.next().await.unwrap()
+                else {
+                    continue;
                 };
+                let leaf = leaf_infos[0].leaf.clone();
                 if leaf
                     .block_header()
                     .ns_table()
@@ -3574,7 +3529,6 @@ mod test {
         stream::{StreamExt, TryStreamExt},
         try_join,
     };
-    use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::{
         reward::RewardClaimInput,
         sol_types::{EspToken, StakeTableV3},
@@ -4088,10 +4042,6 @@ mod test {
         let namespace = NamespaceId::from(7_u32);
         let mut decided = network.server.event_stream().filter_map(|event| {
             future::ready(match event {
-                CoordinatorEvent::LegacyEvent(Event {
-                    event: EventType::Decide { leaf_chain, .. },
-                    ..
-                }) => Some(leaf_chain[0].leaf.clone()),
                 CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos[0].leaf.clone()),
                 _ => None,
             })
@@ -4367,6 +4317,65 @@ mod test {
         drop(network);
     }
 
+    /// A node keeps the certificate of an upgrade it already went through. Started with that
+    /// upgrade's version as the base and a later target, it must ignore the certificate: kept, it
+    /// makes every view after the old cutover fail to resolve its version.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_completed_upgrade_certificate_does_not_stop_consensus() {
+        let (storage, mut persistence) = node_storage::<SqlDataSource, 5>().await;
+        let data = hotshot_types::simple_vote::UpgradeProposalData {
+            old_version: versions::EPOCH_REWARD_VERSION,
+            new_version: versions::NEW_PROTOCOL_VERSION,
+            decide_by: ViewNumber::genesis(),
+            new_version_hash: Vec::new(),
+            old_version_last_view: ViewNumber::genesis(),
+            new_version_first_view: ViewNumber::genesis(),
+        };
+        let commitment = data.commit();
+        let completed = hotshot_types::simple_certificate::UpgradeCertificate::new(
+            data,
+            commitment,
+            ViewNumber::genesis(),
+            None,
+            std::marker::PhantomData,
+        );
+        for opt in &mut persistence {
+            opt.create()
+                .await
+                .unwrap()
+                .store_upgrade_certificate(Some(completed.clone()))
+                .await
+                .unwrap();
+        }
+
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
+            .persistences(persistence)
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let network = TestNetwork::new(
+            config,
+            Upgrade::new(versions::NEW_PROTOCOL_VERSION, LARGE_BLOCK_VERSION),
+        )
+        .await;
+
+        let mut events = network.server.event_stream();
+        timeout(Duration::from_secs(120), async {
+            loop {
+                let event = events.next().await.expect("event stream ended");
+                if decided_leaves(&event).is_some_and(|leaves| leaves[0].leaf.height() >= 3) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("the network stopped deciding");
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     pub(crate) async fn test_restart() {
         const NUM_NODES: usize = 5;
@@ -4428,11 +4437,7 @@ mod test {
             .await
             .unwrap();
         let decided_view = chain.last().unwrap().leaf().view_number();
-
-        // Get the most recent state, for catchup.
-
-        let state = network.server.decided_state().await.unwrap();
-        tracing::info!(?decided_view, ?state, "consensus state");
+        tracing::info!(?decided_view, "decided before shutting down");
 
         // Fully shut down the API servers.
         drop(network);
@@ -11203,9 +11208,22 @@ mod test {
                 sleep(Duration::from_millis(500)).await;
             };
 
+            let http = reqwest::Client::new();
+
+            // These endpoints read the running coordinator, so check them before stopping it.
+            assert_json_endpoint(&http, api_port, "node/stake-table/current").await?;
+            assert_json_endpoint(&http, api_port, "node/stake-table/1").await?;
+            assert_json_endpoint(&http, api_port, "node/da-stake-table/current").await?;
+            assert_json_endpoint(&http, api_port, "node/participation/proposal/current").await?;
+            assert_json_endpoint(&http, api_port, "node/participation/proposal/1").await?;
+            assert_json_endpoint(&http, api_port, "node/participation/vote/current").await?;
+            assert_json_endpoint(&http, api_port, "node/participation/vote/1").await?;
+
             network.stop_consensus().await;
 
-            let http = reqwest::Client::new();
+            // Once stopped, they report that consensus is unavailable.
+            assert_error_body(&http, api_port, "node/stake-table/current", 503).await?;
+            assert_error_body(&http, api_port, "node/participation/vote/current", 503).await?;
 
             for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
                 let (_, expected_proof) = validated_state
@@ -11875,18 +11893,10 @@ mod test {
             )
             .await?;
 
-            assert_json_endpoint(&http, api_port, "node/stake-table/current").await?;
-            assert_json_endpoint(&http, api_port, "node/stake-table/1").await?;
-            assert_json_endpoint(&http, api_port, "node/da-stake-table/current").await?;
             assert_json_endpoint(&http, api_port, "node/da-stake-table/1").await?;
 
             assert_json_endpoint(&http, api_port, "node/validators/1").await?;
             assert_json_endpoint(&http, api_port, "node/all-validators/1/0/100").await?;
-
-            assert_json_endpoint(&http, api_port, "node/participation/proposal/current").await?;
-            assert_json_endpoint(&http, api_port, "node/participation/proposal/1").await?;
-            assert_json_endpoint(&http, api_port, "node/participation/vote/current").await?;
-            assert_json_endpoint(&http, api_port, "node/participation/vote/1").await?;
 
             assert_json_endpoint(&http, api_port, "node/block-reward").await?;
             assert_json_endpoint(&http, api_port, "node/block-reward/epoch/1").await?;
@@ -12219,8 +12229,15 @@ mod test {
         let mut events = network.server.event_stream();
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 3).await;
 
+        // A stopped coordinator answers no reads, so take the decided leaf and its state first.
+        let leaf = network.server.decided_leaf().await;
+        let state = network
+            .server
+            .state(leaf.view_number())
+            .await
+            .expect("the decided leaf's state is in memory");
         network.stop_consensus().await;
-        let height = network.server.decided_leaf().await.height();
+        let height = leaf.height();
         wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
 
         let err = client
@@ -12236,11 +12253,7 @@ mod test {
 
         );
 
-        let mut expected: Vec<_> = network
-            .server
-            .decided_state()
-            .await
-            .unwrap()
+        let mut expected: Vec<_> = state
             .reward_merkle_tree_v2
             .iter()
             .map(|(addr, amt)| (*addr, *amt))

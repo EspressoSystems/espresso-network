@@ -4736,7 +4736,6 @@ dependencies = [
  "hotshot-orchestrator",
  "hotshot-query-service",
  "hotshot-state-prover",
- "hotshot-testing",
  "hotshot-types",
  "http-client 0.1.0",
  "http-wire",

@@ -12,7 +12,6 @@ use espresso_types::{
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
-use hotshot_new_protocol::client::ClientApi;
 use hotshot_query_service::{
     data_source::{
         VersionedDataSource,
@@ -29,7 +28,10 @@ use request_response::data_source::DataSource as DataSourceTrait;
 
 use super::request::{Request, Response};
 use crate::{
-    api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
+    api::{
+        BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data,
+        context::{ConsensusSource as _, CoordinatorConsensus},
+    },
     catchup::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state,
@@ -45,7 +47,9 @@ pub enum Storage {
 
 #[derive(Clone)]
 pub struct DataSource<P: SequencerPersistence> {
-    pub client_api: ClientApi<SeqTypes>,
+    /// Answers from memory only while the coordinator runs, so responders fall back to storage
+    /// instead of waiting on a coordinator that has not started.
+    pub(crate) consensus: CoordinatorConsensus,
     /// The node's state
     pub node_state: NodeState,
     /// The storage
@@ -61,7 +65,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
         match request {
             Request::Accounts(height, view, accounts) => {
                 // Try to get accounts from memory first, then fall back to storage
-                if let Ok(Some(state)) = self.client_api.state(ViewNumber::new(*view)).await
+                if let Ok(Some(state)) = self.consensus.state(ViewNumber::new(*view)).await
                     && let Ok(accounts) =
                         retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
                 {
@@ -81,7 +85,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
                 if let Err(err) = add_fee_accounts_to_state(
-                    &self.client_api,
+                    &self.consensus,
                     &ViewNumber::new(*view),
                     accounts,
                     &merkle_tree,
@@ -109,7 +113,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
             },
             Request::ChainConfig(commitment) => {
                 // Try to get the chain config from memory first, then fall back to storage
-                if let Ok(Some(state)) = self.client_api.decided_state().await {
+                if let Ok(Some(state)) = self.consensus.decided_state().await {
                     let chain_config_from_memory = state.chain_config;
                     if chain_config_from_memory.commit() == *commitment
                         && let Some(chain_config) = chain_config_from_memory.resolve()
@@ -133,7 +137,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
             Request::BlocksFrontier(height, view) => {
                 // First try to respond from memory
                 let blocks_frontier_from_memory: Option<Result<BlocksFrontier>> = self
-                    .client_api
+                    .consensus
                     .state(ViewNumber::new(*view))
                     .await
                     .ok()
@@ -164,7 +168,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
             },
             Request::RewardAccountsV2(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
-                if let Ok(Some(state)) = self.client_api.state(ViewNumber::new(*view)).await
+                if let Ok(Some(state)) = self.consensus.state(ViewNumber::new(*view)).await
                     && let Ok(reward_accounts) = retain_v2_reward_accounts(
                         &state.reward_merkle_tree_v2,
                         accounts.iter().copied(),
@@ -193,7 +197,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
                 if let Err(err) = add_v2_reward_accounts_to_state(
-                    &self.client_api,
+                    &self.consensus,
                     &ViewNumber::new(*view),
                     accounts,
                     &merkle_tree,
@@ -209,7 +213,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
 
             Request::RewardAccountsV1(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
-                if let Ok(Some(state)) = self.client_api.state(ViewNumber::new(*view)).await
+                if let Ok(Some(state)) = self.consensus.state(ViewNumber::new(*view)).await
                     && let Ok(reward_accounts) = retain_v1_reward_accounts(
                         &state.reward_merkle_tree_v1,
                         accounts.iter().copied(),
@@ -238,7 +242,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
                 if let Err(err) = add_v1_reward_accounts_to_state(
-                    &self.client_api,
+                    &self.consensus,
                     &ViewNumber::new(*view),
                     accounts,
                     &merkle_tree,
@@ -310,7 +314,7 @@ impl<P: SequencerPersistence> DataSourceTrait<Request> for DataSource<P> {
             },
             Request::RewardMerkleTreeV2(height, view) => {
                 // Try to get the reward merkle tree from memory first, then fall back to storage
-                if let Ok(Some(state)) = self.client_api.state(ViewNumber::new(*view)).await {
+                if let Ok(Some(state)) = self.consensus.state(ViewNumber::new(*view)).await {
                     let tree_data =
                         TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)
                             .inspect_err(|err| {

@@ -1,8 +1,9 @@
-use std::{mem, sync::Arc};
+use std::sync::Arc;
 
 use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use futures::stream::{BoxStream, StreamExt as _};
 use hotshot_new_protocol::{
+    client::ClientApi,
     consensus::{ConsensusInput, ConsensusOutput},
     coordinator::{
         Coordinator,
@@ -21,52 +22,49 @@ use hotshot_types::{
     },
 };
 use parking_lot::Mutex;
-use tokio::{select, spawn};
+use tokio::{
+    select, spawn,
+    sync::{oneshot, watch},
+};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::{error, warn};
 
-/// Owns the new-protocol [`Coordinator`] and the task that drives it.
+/// Owns the task that drives the new-protocol [`Coordinator`].
 ///
-/// The coordinator is built at startup but only runs once [`CoordinatorTask::start`] is called.
-/// Queries sent through its `ClientApi` before then wait in the coordinator's request channel.
-pub(crate) struct CoordinatorTask<T, S>
+/// The task is spawned at startup but only starts the coordinator once [`CoordinatorTask::start`]
+/// is called. Queries sent through its [`ClientApi`] before then wait in the coordinator's request
+/// channel, so callers that must not wait check [`CoordinatorTask::status`] first.
+pub(crate) struct CoordinatorTask<T>
 where
     T: NodeType,
 {
-    state: Mutex<State<T, S>>,
+    client_api: ClientApi<T>,
+    start: Mutex<Option<oneshot::Sender<()>>>,
+    shutdown: CancellationToken,
+    task: Mutex<Option<AbortOnDropHandle<()>>>,
+    status: watch::Receiver<Status>,
     events: InactiveReceiver<CoordinatorEvent<T>>,
 }
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "held once per node, boxing buys nothing"
-)]
-enum State<T, S>
-where
-    T: NodeType,
-{
-    Parked {
-        coordinator: Coordinator<T, S>,
-        event_tx: Sender<CoordinatorEvent<T>>,
-        queue_len: Option<Arc<dyn Gauge>>,
-    },
-    Running {
-        handle: AbortOnDropHandle<()>,
-        shutdown: CancellationToken,
-    },
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Status {
+    NotStarted,
+    Running,
     Stopped,
 }
 
-impl<T, S> CoordinatorTask<T, S>
+impl<T> CoordinatorTask<T>
 where
     T: NodeType,
-    S: NewProtocolStorage<T>,
 {
-    pub(crate) fn new(
+    pub(crate) fn new<S>(
         coordinator: Coordinator<T, S>,
         event_channel_capacity: usize,
         metrics: &dyn Metrics,
-    ) -> CoordinatorTask<T, S> {
+    ) -> CoordinatorTask<T>
+    where
+        S: NewProtocolStorage<T>,
+    {
         let (mut event_tx, mut event_rx) = broadcast(event_channel_capacity);
         event_tx.set_await_active(false);
         event_rx.set_overflow(true);
@@ -77,14 +75,32 @@ where
                 .into()
         });
 
+        let client_api = coordinator.client_api().clone();
+        let (start_tx, start_rx) = oneshot::channel();
+        let (status_tx, status_rx) = watch::channel(Status::NotStarted);
+        let shutdown = CancellationToken::new();
+        let task = spawn(run_coordinator(
+            coordinator,
+            event_tx,
+            queue_len,
+            start_rx,
+            shutdown.clone(),
+            status_tx,
+        ));
+
         CoordinatorTask {
-            state: Mutex::new(State::Parked {
-                coordinator,
-                event_tx,
-                queue_len,
-            }),
+            client_api,
+            start: Mutex::new(Some(start_tx)),
+            shutdown,
+            task: Mutex::new(Some(AbortOnDropHandle::new(task))),
+            status: status_rx,
             events: event_rx.deactivate(),
         }
+    }
+
+    /// A handle for querying and driving the coordinator.
+    pub(crate) fn client_api(&self) -> &ClientApi<T> {
+        &self.client_api
     }
 
     /// Every event the coordinator emits from now on.
@@ -92,29 +108,25 @@ where
         self.events.activate_cloned().boxed()
     }
 
-    /// Spawn the coordinator. Does nothing if it is already running or has been shut down.
+    pub(crate) fn status(&self) -> watch::Receiver<Status> {
+        self.status.clone()
+    }
+
+    /// Start the coordinator. Does nothing if it already started or has been shut down.
     pub(crate) fn start(&self) {
-        let mut state = self.state.lock();
-        match mem::replace(&mut *state, State::Stopped) {
-            State::Parked {
-                coordinator,
-                event_tx,
-                queue_len,
-            } => {
-                let shutdown = CancellationToken::new();
-                *state = State::Running {
-                    handle: AbortOnDropHandle::new(spawn(run_coordinator(
-                        coordinator,
-                        event_tx,
-                        queue_len,
-                        shutdown.clone(),
-                    ))),
-                    shutdown,
-                };
-            },
-            running @ State::Running { .. } => *state = running,
-            State::Stopped => {},
+        let start = self.start.lock().take();
+        if let Some(start) = start {
+            _ = start.send(());
         }
+    }
+
+    /// Resolves once the coordinator has stopped, whether it was shut down or failed.
+    pub(crate) async fn stopped(&self) {
+        _ = self
+            .status
+            .clone()
+            .wait_for(|status| *status == Status::Stopped)
+            .await;
     }
 
     /// Stop the coordinator and wait for it to flush its storage.
@@ -124,18 +136,38 @@ where
     /// This method is not cancel safe. Cancelling it after the coordinator was signalled aborts
     /// the coordinator task before its storage is flushed.
     pub(crate) async fn shut_down(&self) {
-        let state = mem::replace(&mut *self.state.lock(), State::Stopped);
-        match state {
-            State::Running { handle, shutdown } => {
-                shutdown.cancel();
-                _ = handle.await;
-            },
-            State::Parked { .. } | State::Stopped => {},
+        self.shutdown.cancel();
+        let task = self.task.lock().take();
+        if let Some(task) = task {
+            _ = task.await;
         }
     }
 }
 
 async fn run_coordinator<T, S>(
+    coord: Coordinator<T, S>,
+    tx: Sender<CoordinatorEvent<T>>,
+    queue_len: Option<Arc<dyn Gauge>>,
+    start: oneshot::Receiver<()>,
+    shutdown: CancellationToken,
+    status: watch::Sender<Status>,
+) where
+    T: NodeType,
+    S: NewProtocolStorage<T>,
+{
+    select! {
+        started = start => {
+            if started.is_ok() {
+                status.send_replace(Status::Running);
+                drive_coordinator(coord, tx, queue_len, shutdown).await;
+            }
+        },
+        () = shutdown.cancelled() => {},
+    }
+    status.send_replace(Status::Stopped);
+}
+
+async fn drive_coordinator<T, S>(
     mut coord: Coordinator<T, S>,
     tx: Sender<CoordinatorEvent<T>>,
     queue_len: Option<Arc<dyn Gauge>>,

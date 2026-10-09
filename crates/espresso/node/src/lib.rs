@@ -230,6 +230,14 @@ pub async fn init_node<P>(
 where
     P: SequencerPersistence + MembershipPersistence,
 {
+    let new_protocol = versions::NEW_PROTOCOL_VERSION;
+    anyhow::ensure!(
+        genesis.base_version >= new_protocol,
+        "base_version {} predates the new protocol ({new_protocol}), which this node requires. \
+         Set base_version in the genesis file to {new_protocol} or later.",
+        genesis.base_version,
+    );
+
     // Expose genesis version fields via the status API.
     metrics
         .text_family(
@@ -541,7 +549,6 @@ where
         network_config,
         version_upgrade,
         validator_config,
-        coordinator,
         initializer,
         anchor_view,
         storage,
@@ -965,17 +972,14 @@ pub mod testing {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        ChainConfig, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
-        Upgrade, UpgradeMap, UpgradeMode,
+        ChainConfig, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction, Upgrade,
+        UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, PersistenceOptions, StateCatchup},
     };
     use futures::stream::{Stream, StreamExt};
-    use hotshot::{traits::BlockPayload, types::EventType};
+    use hotshot::traits::BlockPayload;
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
-    use hotshot_testing::block_builder::{
-        BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
-    };
     use hotshot_types::{
         HotShotConfig, PeerConfig, PeerConnectInfo,
         data::EpochNumber,
@@ -1008,33 +1012,6 @@ pub mod testing {
             RootProvider,
         >,
     >;
-
-    pub async fn run_test_builder<const NUM_NODES: usize>(
-        port: Option<u16>,
-    ) -> (Box<dyn BuilderTask<SeqTypes>>, Url) {
-        let port = match port {
-            Some(p) => p,
-            None => reserve_tcp_port().expect("OS should have ephemeral ports available"),
-        };
-
-        // This should never fail.
-        let url: Url = format!("http://localhost:{port}")
-            .parse()
-            .expect("Failed to parse builder URL");
-        tracing::info!("Starting test builder on {url}");
-
-        let task = <SimpleBuilderImplementation as TestBuilderImplementation<SeqTypes>>::start(
-            NUM_NODES,
-            format!("http://0.0.0.0:{port}")
-                .parse()
-                .expect("Failed to parse builder listener"),
-            (),
-            HashMap::new(),
-        )
-        .await;
-
-        (task, url)
-    }
 
     pub struct TestConfigBuilder<const NUM_NODES: usize> {
         config: HotShotConfig<SeqTypes>,
@@ -1748,7 +1725,6 @@ pub mod testing {
                 },
                 upgrade,
                 validator_config,
-                coordinator,
                 initializer,
                 anchor_view,
                 storage,
@@ -1775,14 +1751,9 @@ pub mod testing {
 
     // Wait for the submitted transaction to be sequenced in a decided block. Return the block
     // number containing the transaction and the block payload size.
-    /// The leaves a decide event finalizes, newest first. Decides arrive as
-    /// `LegacyEvent` before the new protocol and as `NewDecide` after.
+    /// The leaves a decide event finalizes, newest first.
     pub fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
         match event {
-            CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) => Some(leaf_chain),
             CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos),
             _ => None,
         }
@@ -1865,16 +1836,10 @@ pub mod testing {
         tracing::info!(target_epoch, "waiting for epoch");
         let mut last_seen = None;
         while let Some(event) = events.next().await {
-            // Decides arrive as `LegacyEvent` before the new protocol and as
-            // `NewDecide` after; both carry the most recent leaf first.
-            let leaf = match event {
-                CoordinatorEvent::LegacyEvent(Event {
-                    event: EventType::Decide { leaf_chain, .. },
-                    ..
-                }) => leaf_chain[0].leaf.clone(),
-                CoordinatorEvent::NewDecide { leaf_infos, .. } => leaf_infos[0].leaf.clone(),
-                _ => continue,
+            let Some(leaves) = decided_leaves(&event) else {
+                continue;
             };
+            let leaf = leaves[0].leaf.clone();
             let epoch = leaf.epoch(epoch_height);
             tracing::debug!(
                 "Node decided at height: {}, epoch: {epoch:?}",

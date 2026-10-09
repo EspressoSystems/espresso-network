@@ -16,11 +16,11 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use espresso_types::SeqTypes;
-use hotshot::HotShotInitializer;
+use hotshot::{HotShotInitializer, load_start_epoch_info};
 use hotshot_types::{
     HotShotConfig,
     data::EpochNumber,
-    drb::{INITIAL_DRB_RESULT, drb_difficulty_selector},
+    drb::drb_difficulty_selector,
     epoch_membership::EpochMembershipCoordinator,
     traits::{election::Membership, storage::Storage},
     utils::epoch_from_block_number,
@@ -32,15 +32,12 @@ use vbs::version::Version;
 /// results persisted around the anchor.
 ///
 /// Must run before [`bootstrap_epoch_window`], which walks forward from the first epoch.
-pub(crate) async fn seed_membership<S>(
+pub(crate) async fn seed_membership(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     initializer: &HotShotInitializer<SeqTypes>,
     config: &HotShotConfig<SeqTypes>,
     version: Version,
-    storage: &S,
-) where
-    S: Storage<SeqTypes>,
-{
+) {
     coordinator.set_drb_difficulty_selector(drb_difficulty_selector(config));
 
     let membership = coordinator.membership();
@@ -53,36 +50,41 @@ pub(crate) async fn seed_membership<S>(
         }
     }
 
-    let first_epoch = EpochNumber::new(epoch_from_block_number(
-        config.epoch_start_block,
+    load_start_epoch_info(
+        coordinator,
+        &initializer.start_epoch_info().to_vec(),
         config.epoch_height,
-    ));
-    membership.set_first_epoch(first_epoch, INITIAL_DRB_RESULT);
+        config.epoch_start_block,
+    )
+    .await;
+}
 
-    let mut start_epoch_info = initializer.start_epoch_info().to_vec();
-    start_epoch_info.sort_by_key(|info| info.epoch);
-    for info in &start_epoch_info {
-        if let Some(block_header) = &info.block_header
-            && let Err(err) = coordinator.add_epoch_root(block_header.clone()).await
-        {
-            tracing::error!(epoch = %info.epoch, err = %format_args!("{err:#}"), "failed to add epoch root");
-        }
-    }
-    for info in start_epoch_info {
-        membership.add_drb_result(info.epoch, info.drb_result);
-    }
-
+/// Give the epoch after the high QC's its persisted DRB result.
+///
+/// Runs after [`bootstrap_epoch_window`], which loads that epoch's stake table: on a cold restart
+/// it is not loaded before, and the result would be dropped.
+pub(crate) async fn restore_next_epoch_drb<S>(
+    coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    initializer: &HotShotInitializer<SeqTypes>,
+    epoch_height: u64,
+    storage: &S,
+) where
+    S: Storage<SeqTypes>,
+{
     let Some(high_qc_block) = initializer.high_qc().data.block_number else {
         return;
     };
-    let next_epoch = EpochNumber::new(epoch_from_block_number(
-        high_qc_block + 1,
-        config.epoch_height,
-    )) + 1;
-    if let Ok(drb_result) = storage.load_drb_result(next_epoch).await
-        && let Ok(stake_table) = coordinator.stake_table_for_epoch(Some(next_epoch))
-    {
-        stake_table.add_drb_result(drb_result);
+    let next_epoch = EpochNumber::new(epoch_from_block_number(high_qc_block + 1, epoch_height)) + 1;
+    let Ok(drb_result) = storage.load_drb_result(next_epoch).await else {
+        return;
+    };
+    match coordinator.stake_table_for_epoch(Some(next_epoch)) {
+        Ok(stake_table) => stake_table.add_drb_result(drb_result),
+        Err(err) => tracing::warn!(
+            %next_epoch,
+            err = %format_args!("{err:#}"),
+            "dropping the persisted DRB result, its epoch has no stake table"
+        ),
     }
 }
 

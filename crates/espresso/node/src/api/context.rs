@@ -2,7 +2,7 @@
 //! [`ApiContext`], so the same API modules can be served by a validator ([`SequencerContext`])
 //! or by a node that follows the chain without taking part in consensus.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
 use ::light_client::{
     LightClient,
@@ -13,7 +13,7 @@ use anyhow::Context as _;
 use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
-use espresso_api::error::SubmitError;
+use espresso_api::error::{ConsensusUnavailable, SubmitError};
 use espresso_types::{
     Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
     v0::traits::SequencerPersistence,
@@ -33,22 +33,33 @@ use hotshot_types::{
     network::NetworkConfig,
     utils::StateAndDelta,
 };
-use tracing::warn;
+use tokio::sync::watch;
 
-use crate::{SequencerContext, context::TaskList, state_signature::StateSignatureMemStorage};
+use crate::{
+    SequencerContext, context::TaskList, coordinator_task::Status,
+    state_signature::StateSignatureMemStorage,
+};
 
 pub type NodeLightClient = LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>;
 
 pub type Delta = <ValidatedState as hotshot_types::traits::ValidatedState<SeqTypes>>::Delta;
 
+/// Reads fail with [`ConsensusUnavailable`] when consensus cannot answer, so the API can tell "not
+/// running" apart from "no value" and report it as 503.
 #[async_trait]
 pub trait ConsensusSource: Send + Sync + 'static {
-    async fn decided_leaf(&self) -> anyhow::Result<Leaf2>;
-    async fn decided_state(&self) -> Option<Arc<ValidatedState>>;
-    async fn state(&self, view: ViewNumber) -> Option<Arc<ValidatedState>>;
-    async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<SeqTypes>;
-    async fn undecided_leaves(&self) -> Vec<Leaf2>;
-    async fn current_epoch(&self) -> Option<EpochNumber>;
+    async fn decided_leaf(&self) -> Result<Leaf2, ConsensusUnavailable>;
+    async fn decided_state(&self) -> Result<Option<Arc<ValidatedState>>, ConsensusUnavailable>;
+    async fn state(
+        &self,
+        view: ViewNumber,
+    ) -> Result<Option<Arc<ValidatedState>>, ConsensusUnavailable>;
+    async fn state_and_delta(
+        &self,
+        view: ViewNumber,
+    ) -> Result<StateAndDelta<SeqTypes>, ConsensusUnavailable>;
+    async fn undecided_leaves(&self) -> Result<Vec<Leaf2>, ConsensusUnavailable>;
+    async fn current_epoch(&self) -> Result<Option<EpochNumber>, ConsensusUnavailable>;
     /// The commitment the accepting node reports, which the submit API returns.
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>>;
     /// How catchup pushes a state it recovered from storage back into memory.
@@ -58,10 +69,20 @@ pub trait ConsensusSource: Send + Sync + 'static {
         state: Arc<ValidatedState>,
         delta: Option<Arc<Delta>>,
     ) -> anyhow::Result<()>;
-    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64>;
-    async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64>;
-    async fn current_vote_participation(&self) -> HashMap<PubKey, f64>;
-    async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64>;
+    async fn current_proposal_participation(
+        &self,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable>;
+    async fn proposal_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable>;
+    async fn current_vote_participation(
+        &self,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable>;
+    async fn vote_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable>;
 }
 
 pub trait ApiContext: Clone + Send + Sync + 'static {
@@ -92,58 +113,73 @@ pub trait ApiContext: Clone + Send + Sync + 'static {
         Self: Sized;
 }
 
-/// Reads that fail because the coordinator stopped are logged and answered as if the value were
-/// unknown, except [`ConsensusSource::decided_leaf`], which always has an answer while consensus
-/// runs and so reports the failure.
+/// A validator's consensus: the coordinator, read through its [`ClientApi`].
+#[derive(Clone)]
+pub(crate) struct CoordinatorConsensus {
+    pub(crate) client_api: ClientApi<SeqTypes>,
+    pub(crate) status: watch::Receiver<Status>,
+}
+
+impl CoordinatorConsensus {
+    /// Fails at once while the coordinator is not running, instead of queueing a query behind a
+    /// coordinator that has not started or will never answer.
+    fn running(&self) -> Result<(), ConsensusUnavailable> {
+        let status = *self.status.borrow();
+        match status {
+            Status::NotStarted => Err(ConsensusUnavailable::NotStarted),
+            Status::Stopped => Err(ConsensusUnavailable::Stopped),
+            Status::Running => Ok(()),
+        }
+    }
+
+    async fn ask<A>(
+        &self,
+        query: impl Future<Output = Result<A, QueryError>>,
+    ) -> Result<A, ConsensusUnavailable> {
+        self.running()?;
+        query
+            .await
+            .map_err(|err| ConsensusUnavailable::Failed(Box::new(err)))
+    }
+}
+
 #[async_trait]
-impl ConsensusSource for ClientApi<SeqTypes> {
-    async fn decided_leaf(&self) -> anyhow::Result<Leaf2> {
-        ClientApi::decided_leaf(self)
-            .await
-            .context("failed to read the decided leaf from the coordinator")
+impl ConsensusSource for CoordinatorConsensus {
+    async fn decided_leaf(&self) -> Result<Leaf2, ConsensusUnavailable> {
+        self.ask(self.client_api.decided_leaf()).await
     }
 
-    async fn decided_state(&self) -> Option<Arc<ValidatedState>> {
-        ClientApi::decided_state(self)
-            .await
-            .inspect_err(|err| warn!(%err, "coordinator unavailable for decided_state"))
-            .ok()
-            .flatten()
+    async fn decided_state(&self) -> Result<Option<Arc<ValidatedState>>, ConsensusUnavailable> {
+        self.ask(self.client_api.decided_state()).await
     }
 
-    async fn state(&self, view: ViewNumber) -> Option<Arc<ValidatedState>> {
-        ClientApi::state(self, view)
-            .await
-            .inspect_err(|err| warn!(%view, %err, "coordinator unavailable for state"))
-            .ok()
-            .flatten()
+    async fn state(
+        &self,
+        view: ViewNumber,
+    ) -> Result<Option<Arc<ValidatedState>>, ConsensusUnavailable> {
+        self.ask(self.client_api.state(view)).await
     }
 
-    async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<SeqTypes> {
-        ClientApi::state_and_delta(self, view)
-            .await
-            .inspect_err(|err| warn!(%view, %err, "coordinator unavailable for state_and_delta"))
-            .unwrap_or((None, None))
+    async fn state_and_delta(
+        &self,
+        view: ViewNumber,
+    ) -> Result<StateAndDelta<SeqTypes>, ConsensusUnavailable> {
+        self.ask(self.client_api.state_and_delta(view)).await
     }
 
-    async fn undecided_leaves(&self) -> Vec<Leaf2> {
-        ClientApi::undecided_leaves(self)
-            .await
-            .inspect_err(|err| warn!(%err, "coordinator unavailable for undecided_leaves"))
-            .unwrap_or_default()
+    async fn undecided_leaves(&self) -> Result<Vec<Leaf2>, ConsensusUnavailable> {
+        self.ask(self.client_api.undecided_leaves()).await
     }
 
-    async fn current_epoch(&self) -> Option<EpochNumber> {
-        ClientApi::current_epoch(self)
-            .await
-            .inspect_err(|err| warn!(%err, "coordinator unavailable for current_epoch"))
-            .ok()
-            .flatten()
+    async fn current_epoch(&self) -> Result<Option<EpochNumber>, ConsensusUnavailable> {
+        self.ask(self.client_api.current_epoch()).await
     }
 
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
         let commitment = tx.commit();
-        ClientApi::submit_transaction(self, tx)
+        self.running()?;
+        self.client_api
+            .submit_transaction(tx)
             .await
             .map_err(|err| match err {
                 QueryError::Rejected(rejection @ block::SubmitError::TooLarge { .. }) => {
@@ -152,7 +188,7 @@ impl ConsensusSource for ClientApi<SeqTypes> {
                 QueryError::Rejected(rejection @ block::SubmitError::RetryBufferFull) => {
                     SubmitError::Overloaded(rejection.to_string()).into()
                 },
-                err => anyhow::Error::new(err)
+                err => anyhow::Error::new(ConsensusUnavailable::Failed(Box::new(err)))
                     .context("failed to submit transaction to the coordinator"),
             })?;
         Ok(commitment)
@@ -170,37 +206,37 @@ impl ConsensusSource for ClientApi<SeqTypes> {
             state,
             delta,
         };
-        ClientApi::update_leaf(self, update)
+        self.ask(self.client_api.update_leaf(update))
             .await
             .context("failed to update a leaf in the coordinator")
     }
 
-    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        ClientApi::proposal_participation(self, None)
-            .await
-            .inspect_err(|err| warn!(%err, "coordinator unavailable for proposal participation"))
-            .unwrap_or_default()
+    async fn current_proposal_participation(
+        &self,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable> {
+        self.ask(self.client_api.proposal_participation(None)).await
     }
 
-    async fn proposal_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        ClientApi::proposal_participation(self, Some(epoch))
+    async fn proposal_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable> {
+        self.ask(self.client_api.proposal_participation(Some(epoch)))
             .await
-            .inspect_err(|err| warn!(%err, "coordinator unavailable for proposal participation"))
-            .unwrap_or_default()
     }
 
-    async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
-        ClientApi::vote_participation(self, None)
-            .await
-            .inspect_err(|err| warn!(%err, "coordinator unavailable for vote participation"))
-            .unwrap_or_default()
+    async fn current_vote_participation(
+        &self,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable> {
+        self.ask(self.client_api.vote_participation(None)).await
     }
 
-    async fn vote_participation(&self, epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        ClientApi::vote_participation(self, Some(epoch))
+    async fn vote_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable> {
+        self.ask(self.client_api.vote_participation(Some(epoch)))
             .await
-            .inspect_err(|err| warn!(%err, "coordinator unavailable for vote participation"))
-            .unwrap_or_default()
     }
 }
 
@@ -211,11 +247,11 @@ where
     type Persistence = P;
 
     fn consensus(&self) -> Arc<dyn ConsensusSource> {
-        Arc::new(self.client_api().clone())
+        Arc::new(SequencerContext::consensus(self))
     }
 
     fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
-        self.node_state().coordinator
+        SequencerContext::membership_coordinator(self).clone()
     }
 
     fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {

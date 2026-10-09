@@ -1088,7 +1088,9 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
     }
 }
 
-async fn load_start_epoch_info<TYPES: NodeType>(
+/// Seed the membership with the first epoch and the epoch roots and DRB results the initializer
+/// loaded from storage.
+pub async fn load_start_epoch_info<TYPES: NodeType>(
     coordinator: &EpochMembershipCoordinator<TYPES>,
     start_epoch_info: &Vec<InitializerEpochInfo<TYPES>>,
     epoch_height: u64,

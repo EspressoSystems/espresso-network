@@ -217,21 +217,23 @@ pub(crate) trait StakeTableDataSource<T: NodeType> {
     /// Get the current proposal participation.
     fn current_proposal_participation(
         &self,
-    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+    ) -> impl Send + Future<Output = anyhow::Result<HashMap<BLSPubKey, f64>>>;
 
     /// Get the proposal participation for a given epoch.
     fn proposal_participation(
         &self,
         epoch: EpochNumber,
-    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+    ) -> impl Send + Future<Output = anyhow::Result<HashMap<BLSPubKey, f64>>>;
     /// Get the current vote participation.
-    fn current_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+    fn current_vote_participation(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<HashMap<BLSPubKey, f64>>>;
 
     /// Get the vote participation for a given epoch.
     fn vote_participation(
         &self,
         epoch: EpochNumber,
-    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>>;
+    ) -> impl Send + Future<Output = anyhow::Result<HashMap<BLSPubKey, f64>>>;
 
     fn get_all_validators(
         &self,
@@ -570,7 +572,7 @@ where
 
     fn current_proposal_participation(
         &self,
-    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+    ) -> impl Send + Future<Output = anyhow::Result<HashMap<BLSPubKey, f64>>> {
         let this = self.clone();
         async move { (*this).current_proposal_participation().await }
     }
@@ -578,12 +580,14 @@ where
     fn proposal_participation(
         &self,
         epoch: EpochNumber,
-    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+    ) -> impl Send + Future<Output = anyhow::Result<HashMap<BLSPubKey, f64>>> {
         let this = self.clone();
         async move { (*this).proposal_participation(epoch).await }
     }
 
-    fn current_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+    fn current_vote_participation(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<HashMap<BLSPubKey, f64>>> {
         let this = self.clone();
         async move { (*this).current_vote_participation().await }
     }
@@ -591,7 +595,7 @@ where
     fn vote_participation(
         &self,
         epoch: EpochNumber,
-    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+    ) -> impl Send + Future<Output = anyhow::Result<HashMap<BLSPubKey, f64>>> {
         let this = self.clone();
         async move { (*this).vote_participation(epoch).await }
     }
