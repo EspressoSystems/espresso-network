@@ -46,10 +46,11 @@ impl LaneMetrics {
         }
     }
 
-    /// Installs real histograms/gauges named `{prefix}_*`, labelled by stream, on every lane. Each
-    /// family is registered once: registering a name twice fails with Prometheus.
-    pub fn install(metrics: &dyn Metrics, prefix: &str, lanes: &[&Lane]) {
-        let labels = || vec!["stream".to_string()];
+    /// Installs real histograms/gauges named `{prefix}_*`, with the stream name under the label key
+    /// `label`, on every lane. Each family is registered once: registering a name twice fails with
+    /// Prometheus.
+    pub fn install(metrics: &dyn Metrics, prefix: &str, label: &str, lanes: &[&Lane]) {
+        let labels = || vec![label.to_string()];
         let batch_records = metrics.histogram_family(format!("{prefix}_batch_records"), labels());
         let batch_bytes = metrics.histogram_family(format!("{prefix}_batch_bytes"), labels());
         let fsync_seconds = metrics.histogram_family(format!("{prefix}_fsync_seconds"), labels());
@@ -358,8 +359,6 @@ pub enum LaneMode {
 pub struct LaneConfig {
     pub stream: Stream,
     pub mode: LaneMode,
-    /// Whether a frame's kind tag is recognized. An unrecognized tag ends a scan like a torn tail.
-    pub known_kind: fn(u8) -> bool,
     pub segment_bytes: u64,
     pub max_key_span: u64,
     pub max_batch_bytes: usize,
@@ -665,13 +664,17 @@ pub fn frame_locations<F: JournalFs>(
     Ok(read_segment(fs, &segment_path(dir, seq), seq, stream, known_kind, false)?.locations)
 }
 
-/// Reads the record body at `loc` in the segment file at `path`, validating its crc and lsn.
-/// `None` when the segment is gone (unlinked by GC), the frame runs past the end of the file or
-/// fails validation. Blocking; async callers use `spawn_blocking`.
+/// Reads the record body at `loc` in the segment file at `path`. `None` when the segment is gone
+/// (unlinked by GC), the frame runs past the end of the file, or the bytes at `loc` are not the
+/// record `(key, kind, loc.len, loc.lsn)`. The key check matters because a lane that loses
+/// segments reuses their seq, offset and lsn for later records. Blocking; async callers use
+/// `spawn_blocking`.
 pub fn read_frame<F: JournalFs>(
     fs: &F,
     path: &Path,
     loc: Location,
+    key: u64,
+    kind: Kind,
 ) -> anyhow::Result<Option<Vec<u8>>> {
     let mut frame = vec![0; format::FRAME_HEADER_LEN + loc.len as usize];
     match fs.read_at(path, loc.offset, &mut frame) {
@@ -686,11 +689,13 @@ pub fn read_frame<F: JournalFs>(
         },
         Err(err) => return Err(err).with_context(|| format!("reading segment {}", path.display())),
     }
-    if format::decode_frame(&frame, loc.lsn).is_err() {
-        return Ok(None);
+    match format::decode_frame(&frame, loc.lsn) {
+        Ok((header, ..)) if (header.len, header.key, header.kind) == (loc.len, key, kind) => {
+            frame.drain(..format::FRAME_HEADER_LEN);
+            Ok(Some(frame))
+        },
+        _ => Ok(None),
     }
-    frame.drain(..format::FRAME_HEADER_LEN);
-    Ok(Some(frame))
 }
 
 /// True only for a segment that was created but never durably written to: shorter than a header,
@@ -1416,7 +1421,6 @@ mod tests {
         LaneConfig {
             stream,
             mode: mode(stream),
-            known_kind: known,
             segment_bytes: 10_000,
             max_key_span: 10_000,
             max_batch_bytes: 4096,
@@ -1576,7 +1580,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (path, loc) = write_frame_file(dir.path(), b"payload bytes");
         assert_eq!(
-            read_frame(&StdFs, &path, loc).unwrap().as_deref(),
+            read_frame(&StdFs, &path, loc, 6, VID).unwrap().as_deref(),
             Some(&b"payload bytes"[..])
         );
     }
@@ -1587,24 +1591,63 @@ mod tests {
         let (path, loc) = write_frame_file(dir.path(), b"payload bytes");
 
         let gone = segment_path(dir.path(), 9);
-        assert!(read_frame(&StdFs, &gone, loc).unwrap().is_none());
+        assert!(read_frame(&StdFs, &gone, loc, 6, VID).unwrap().is_none());
 
         let wrong_lsn = Location { lsn: 3, ..loc };
-        assert!(read_frame(&StdFs, &path, wrong_lsn).unwrap().is_none());
+        assert!(
+            read_frame(&StdFs, &path, wrong_lsn, 6, VID)
+                .unwrap()
+                .is_none()
+        );
 
         let past_end = Location {
             len: loc.len + 1,
             ..loc
         };
-        assert!(read_frame(&StdFs, &path, past_end).unwrap().is_none());
+        assert!(
+            read_frame(&StdFs, &path, past_end, 6, VID)
+                .unwrap()
+                .is_none()
+        );
 
         let mut bytes = std::fs::read(&path).unwrap();
         *bytes.last_mut().unwrap() ^= 1;
         std::fs::write(&path, &bytes).unwrap();
-        assert!(read_frame(&StdFs, &path, loc).unwrap().is_none());
+        assert!(read_frame(&StdFs, &path, loc, 6, VID).unwrap().is_none());
 
         std::fs::write(&path, &bytes[..loc.offset as usize + 4]).unwrap();
-        assert!(read_frame(&StdFs, &path, loc).unwrap().is_none());
+        assert!(read_frame(&StdFs, &path, loc, 6, VID).unwrap().is_none());
+    }
+
+    /// A locator outlives its segment when the lane reuses the same seq, offset and lsn for a
+    /// different record; the frame must still be the one that was asked for.
+    #[test]
+    fn read_frame_is_none_for_a_different_record_at_the_locator() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, loc) = write_frame_file(dir.path(), b"payload bytes");
+
+        assert!(read_frame(&StdFs, &path, loc, 7, VID).unwrap().is_none());
+        assert!(
+            read_frame(&StdFs, &path, loc, 6, Kind(VID.0 + 1))
+                .unwrap()
+                .is_none()
+        );
+
+        let longer = Location {
+            len: loc.len - 1,
+            ..loc
+        };
+        assert!(read_frame(&StdFs, &path, longer, 6, VID).unwrap().is_none());
+
+        let (path, loc) = write_frame_file(dir.path(), b"shorter");
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.extend_from_slice(&[0; 32]);
+        std::fs::write(&path, bytes).unwrap();
+        let stale = Location {
+            len: b"payload bytes".len() as u32,
+            ..loc
+        };
+        assert!(read_frame(&StdFs, &path, stale, 6, VID).unwrap().is_none());
     }
 
     #[tokio::test]

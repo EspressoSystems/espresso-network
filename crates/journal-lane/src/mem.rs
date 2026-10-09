@@ -39,6 +39,8 @@ pub struct MemFs {
     pub fail_next_write: Arc<std::sync::atomic::AtomicBool>,
     /// Paths on which `remove` fails once (removed from the set on the failing call).
     pub fail_remove: Arc<Mutex<HashSet<std::path::PathBuf>>>,
+    /// Paths on which `read_header` always fails with a non-EOF error.
+    pub fail_read_header: Arc<Mutex<HashSet<std::path::PathBuf>>>,
 }
 
 pub struct MemFile {
@@ -125,6 +127,9 @@ impl JournalFs for MemFs {
     }
 
     fn read_header(&self, path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+        if self.fail_read_header.lock().unwrap().contains(path) {
+            return Err(std::io::ErrorKind::Other.into());
+        }
         let bytes = self.open_read(path)?;
         if bytes.len() < SegmentHeader::LEN {
             return Err(std::io::ErrorKind::UnexpectedEof.into());

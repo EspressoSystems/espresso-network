@@ -534,7 +534,6 @@ impl Persistence {
             LaneConfig {
                 stream: Stream::Wal,
                 mode: LaneMode::Snapshot,
-                known_kind: Kind::is_known,
                 segment_bytes: WAL_SEGMENT_BYTES,
                 max_key_span: WAL_MAX_VIEW_SPAN,
                 max_batch_bytes: WAL_MAX_BATCH_BYTES,
@@ -554,7 +553,6 @@ impl Persistence {
             LaneConfig {
                 stream: Stream::Data,
                 mode: LaneMode::Append,
-                known_kind: Kind::is_known,
                 segment_bytes: DATA_SEGMENT_BYTES,
                 max_key_span: u64::MAX,
                 max_batch_bytes: DATA_MAX_BATCH_BYTES,
@@ -1428,7 +1426,12 @@ impl SequencerPersistence for Persistence {
             )
             .add_point(self.inner.replay_seconds);
         self.inner.probe.register(&*metrics.subgroup("disk".into()));
-        LaneMetrics::install(metrics, "journal", &[&self.inner.wal, &self.inner.data]);
+        LaneMetrics::install(
+            metrics,
+            "journal",
+            "stream",
+            &[&self.inner.wal, &self.inner.data],
+        );
     }
 }
 

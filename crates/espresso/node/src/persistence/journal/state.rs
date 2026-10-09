@@ -174,7 +174,7 @@ impl Kind {
         })
     }
 
-    /// `LaneConfig::known_kind` for the consensus journal lanes.
+    /// Passed to `lane::recover` for the consensus journal lanes.
     pub fn is_known(b: u8) -> bool {
         Self::from_u8(b).is_some()
     }

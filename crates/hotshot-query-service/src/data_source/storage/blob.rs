@@ -147,7 +147,12 @@ impl<F: JournalFs> BlobStore<F> {
     }
 
     pub fn install_metrics(&self, metrics: &dyn Metrics) {
-        LaneMetrics::install(metrics, "blob", &[&self.payload.lane, &self.share.lane]);
+        LaneMetrics::install(
+            metrics,
+            "blob",
+            "lane",
+            &[&self.payload.lane, &self.share.lane],
+        );
         for lane in [&self.payload, &self.share] {
             lane.lane.set_total_bytes(lane.segments.lock().bytes());
         }
@@ -194,9 +199,12 @@ impl<F: JournalFs> BlobStore<F> {
             .enqueue(height, SHARE, body, Class::Enqueue, None);
     }
 
-    /// `None` when the record is gone: unlinked segment, short read or bad checksum.
-    pub async fn read_payload(&self, loc: BlobLoc) -> anyhow::Result<Option<Vec<u8>>> {
-        let bytes = self.read(&self.payload, loc.into()).await?;
+    /// `None` when `loc` no longer holds the payload of `height`: unlinked segment, short read, bad
+    /// checksum, or a later record written at the same position.
+    pub async fn read_payload(&self, height: u64, loc: BlobLoc) -> anyhow::Result<Option<Vec<u8>>> {
+        let bytes = self
+            .read(&self.payload, loc.into(), height, PAYLOAD)
+            .await?;
         if bytes.is_none() {
             self.missing.lock().add(1);
         }
@@ -205,7 +213,7 @@ impl<F: JournalFs> BlobStore<F> {
 
     pub async fn read_share(&self, height: u64) -> anyhow::Result<Option<Vec<u8>>> {
         match self.share.locate(height, SHARE) {
-            Some(loc) => self.read(&self.share, loc).await,
+            Some(loc) => self.read(&self.share, loc, height, SHARE).await,
             None => Ok(None),
         }
     }
@@ -288,10 +296,16 @@ impl<F: JournalFs> BlobStore<F> {
         unlinked.bytes
     }
 
-    async fn read(&self, lane: &BlobLane, loc: Location) -> anyhow::Result<Option<Vec<u8>>> {
+    async fn read(
+        &self,
+        lane: &BlobLane,
+        loc: Location,
+        height: u64,
+        kind: Kind,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
         let fs = self.fs.clone();
         let path = segment_path(&lane.dir, loc.seq);
-        tokio::task::spawn_blocking(move || lane::read_frame(&*fs, &path, loc))
+        tokio::task::spawn_blocking(move || lane::read_frame(&*fs, &path, loc, height, kind))
             .await
             .context("blob read task panicked")?
     }
@@ -458,7 +472,6 @@ fn open_lane_blocking<F: JournalFs>(
     let cfg = LaneConfig {
         stream,
         mode: LaneMode::Append,
-        known_kind,
         segment_bytes,
         max_key_span: u64::MAX,
         max_batch_bytes: MAX_BATCH_BYTES,
@@ -538,7 +551,7 @@ fn remove_unreadable_tail<F: JournalFs>(
     let mut readable = 0;
     for (i, (seq, path)) in segments.iter().enumerate() {
         let contiguous = i == 0 || *seq == segments[i - 1].0 + 1;
-        if !contiguous || !header_matches(fs, path, *seq, stream) {
+        if !contiguous || !header_matches(fs, path, *seq, stream)? {
             break;
         }
         readable += 1;
@@ -552,11 +565,21 @@ fn remove_unreadable_tail<F: JournalFs>(
     Ok(segments.len() - readable)
 }
 
-fn header_matches<F: JournalFs>(fs: &F, path: &Path, seq: u64, stream: Stream) -> bool {
-    fs.read_header(path)
-        .ok()
-        .and_then(|bytes| SegmentHeader::decode(&bytes).ok())
-        .is_some_and(|header| header.seq == seq && header.stream == stream)
+/// A short file or a bad header is `false`. Any other I/O error propagates, so a transient failure
+/// never gets durable segments unlinked.
+fn header_matches<F: JournalFs>(
+    fs: &F,
+    path: &Path,
+    seq: u64,
+    stream: Stream,
+) -> anyhow::Result<bool> {
+    let bytes = match fs.read_header(path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
+        Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
+    };
+    Ok(SegmentHeader::decode(&bytes)
+        .is_ok_and(|header| header.seq == seq && header.stream == stream))
 }
 
 /// The oldest run of sealed segments last modified at least `retention` before `now`.
@@ -716,7 +739,7 @@ mod tests {
 
         let loc = store.append_payload(5, body(7)).await.unwrap();
         assert_eq!(loc.len, 100);
-        assert_eq!(store.read_payload(loc).await.unwrap(), Some(body(7)));
+        assert_eq!(store.read_payload(5, loc).await.unwrap(), Some(body(7)));
         assert!(store.payload.index.lock().is_empty());
         assert!(store.payload_bytes() > 100);
     }
@@ -730,7 +753,7 @@ mod tests {
             lsn: loc.lsn + 1,
             ..loc
         };
-        assert_eq!(store.read_payload(wrong).await.unwrap(), None);
+        assert_eq!(store.read_payload(5, wrong).await.unwrap(), None);
     }
 
     #[tokio::test]
@@ -742,11 +765,11 @@ mod tests {
         env.fs.crash(|_| 0);
 
         let store = env.open(SEGMENT_BYTES).await;
-        assert_eq!(store.read_payload(first).await.unwrap(), Some(body(1)));
+        assert_eq!(store.read_payload(1, first).await.unwrap(), Some(body(1)));
         let second = store.append_payload(2, body(2)).await.unwrap();
         assert!(second.seq > first.seq);
-        assert_eq!(store.read_payload(first).await.unwrap(), Some(body(1)));
-        assert_eq!(store.read_payload(second).await.unwrap(), Some(body(2)));
+        assert_eq!(store.read_payload(1, first).await.unwrap(), Some(body(1)));
+        assert_eq!(store.read_payload(2, second).await.unwrap(), Some(body(2)));
     }
 
     #[tokio::test]
@@ -758,7 +781,7 @@ mod tests {
             store.append_payload(3, body(3))
         );
         for loc in [a.unwrap(), b.unwrap()] {
-            assert_eq!(store.read_payload(loc).await.unwrap(), Some(body(3)));
+            assert_eq!(store.read_payload(3, loc).await.unwrap(), Some(body(3)));
         }
         assert!(store.payload.index.lock().is_empty());
         assert!(store.appending.lock().is_empty());
@@ -774,10 +797,10 @@ mod tests {
 
         let segment = SegmentHeader::LEN + format::FRAME_HEADER_LEN + body(1).len();
         assert_eq!(freed, 2 * segment as u64);
-        assert_eq!(store.read_payload(locs[0]).await.unwrap(), None);
-        assert_eq!(store.read_payload(locs[1]).await.unwrap(), None);
-        assert_eq!(store.read_payload(locs[2]).await.unwrap(), Some(body(3)));
-        assert_eq!(store.read_payload(locs[3]).await.unwrap(), Some(body(4)));
+        assert_eq!(store.read_payload(1, locs[0]).await.unwrap(), None);
+        assert_eq!(store.read_payload(2, locs[1]).await.unwrap(), None);
+        assert_eq!(store.read_payload(3, locs[2]).await.unwrap(), Some(body(3)));
+        assert_eq!(store.read_payload(4, locs[3]).await.unwrap(), Some(body(4)));
         assert_eq!(store.gc_payload_below(2).await.unwrap(), 0);
     }
 
@@ -788,7 +811,7 @@ mod tests {
         let loc = store.append_payload(1, body(1)).await.unwrap();
 
         assert_eq!(store.gc_payload_below(u64::MAX).await.unwrap(), 0);
-        assert_eq!(store.read_payload(loc).await.unwrap(), Some(body(1)));
+        assert_eq!(store.read_payload(1, loc).await.unwrap(), Some(body(1)));
     }
 
     #[tokio::test]
@@ -799,12 +822,15 @@ mod tests {
         let locs = append_payloads(&store, &[10, 1, 11]).await;
 
         assert_eq!(store.gc_payload_below(5).await.unwrap(), 0);
-        assert_eq!(store.read_payload(locs[1]).await.unwrap(), Some(body(1)));
+        assert_eq!(store.read_payload(1, locs[1]).await.unwrap(), Some(body(1)));
 
         assert!(store.gc_payload_below(10).await.unwrap() > 0);
-        assert_eq!(store.read_payload(locs[0]).await.unwrap(), None);
-        assert_eq!(store.read_payload(locs[1]).await.unwrap(), None);
-        assert_eq!(store.read_payload(locs[2]).await.unwrap(), Some(body(11)));
+        assert_eq!(store.read_payload(10, locs[0]).await.unwrap(), None);
+        assert_eq!(store.read_payload(1, locs[1]).await.unwrap(), None);
+        assert_eq!(
+            store.read_payload(11, locs[2]).await.unwrap(),
+            Some(body(11))
+        );
     }
 
     #[tokio::test]
@@ -817,11 +843,11 @@ mod tests {
         env.fs.crash(|_| 0);
 
         let store = env.open(ROLL_EACH).await;
-        assert_eq!(store.read_payload(locs[0]).await.unwrap(), None);
-        assert_eq!(store.read_payload(locs[1]).await.unwrap(), Some(body(2)));
+        assert_eq!(store.read_payload(1, locs[0]).await.unwrap(), None);
+        assert_eq!(store.read_payload(2, locs[1]).await.unwrap(), Some(body(2)));
         assert!(store.gc_payload_below(2).await.unwrap() > 0);
-        assert_eq!(store.read_payload(locs[1]).await.unwrap(), None);
-        assert_eq!(store.read_payload(locs[2]).await.unwrap(), Some(body(3)));
+        assert_eq!(store.read_payload(2, locs[1]).await.unwrap(), None);
+        assert_eq!(store.read_payload(3, locs[2]).await.unwrap(), Some(body(3)));
     }
 
     #[tokio::test]
@@ -926,9 +952,9 @@ mod tests {
         journal_lane::lane::JournalFile::sync_data(&mut file).unwrap();
 
         let store = env.open(SEGMENT_BYTES).await;
-        assert_eq!(store.read_payload(loc).await.unwrap(), Some(body(1)));
+        assert_eq!(store.read_payload(1, loc).await.unwrap(), Some(body(1)));
         let next = store.append_payload(2, body(2)).await.unwrap();
-        assert_eq!(store.read_payload(next).await.unwrap(), Some(body(2)));
+        assert_eq!(store.read_payload(2, next).await.unwrap(), Some(body(2)));
     }
 
     #[tokio::test]
@@ -987,12 +1013,12 @@ mod tests {
         journal_lane::lane::JournalFile::sync_data(&mut file).unwrap();
 
         let store = env.open(ROLL_EACH).await;
-        assert_eq!(store.read_payload(locs[0]).await.unwrap(), Some(body(1)));
-        assert_eq!(store.read_payload(locs[1]).await.unwrap(), None);
-        assert_eq!(store.read_payload(locs[2]).await.unwrap(), None);
+        assert_eq!(store.read_payload(1, locs[0]).await.unwrap(), Some(body(1)));
+        assert_eq!(store.read_payload(2, locs[1]).await.unwrap(), None);
+        assert_eq!(store.read_payload(3, locs[2]).await.unwrap(), None);
         let fresh = store.append_payload(2, body(2)).await.unwrap();
-        assert_eq!(store.read_payload(fresh).await.unwrap(), Some(body(2)));
-        assert_eq!(store.read_payload(locs[0]).await.unwrap(), Some(body(1)));
+        assert_eq!(store.read_payload(2, fresh).await.unwrap(), Some(body(2)));
+        assert_eq!(store.read_payload(1, locs[0]).await.unwrap(), Some(body(1)));
     }
 
     #[tokio::test]
@@ -1004,10 +1030,10 @@ mod tests {
         env.fs.remove(&env.payload_segment(locs[1].seq)).unwrap();
 
         let store = env.open(ROLL_EACH).await;
-        assert_eq!(store.read_payload(locs[0]).await.unwrap(), Some(body(1)));
-        assert_eq!(store.read_payload(locs[2]).await.unwrap(), None);
+        assert_eq!(store.read_payload(1, locs[0]).await.unwrap(), Some(body(1)));
+        assert_eq!(store.read_payload(3, locs[2]).await.unwrap(), None);
         let fresh = store.append_payload(2, body(2)).await.unwrap();
-        assert_eq!(store.read_payload(fresh).await.unwrap(), Some(body(2)));
+        assert_eq!(store.read_payload(2, fresh).await.unwrap(), Some(body(2)));
     }
 
     #[tokio::test]
@@ -1026,5 +1052,71 @@ mod tests {
         assert_eq!(store.read_share(1).await.unwrap(), Some(body(1)));
         assert_eq!(store.read_share(2).await.unwrap(), None);
         assert_eq!(store.read_share(3).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn read_payload_of_another_height_is_none() {
+        let env = Env::new();
+        let store = env.open(SEGMENT_BYTES).await;
+        let loc = store.append_payload(5, body(5)).await.unwrap();
+        assert_eq!(store.read_payload(6, loc).await.unwrap(), None);
+        assert_eq!(store.read_payload(5, loc).await.unwrap(), Some(body(5)));
+    }
+
+    #[tokio::test]
+    async fn locator_reused_after_a_dropped_segment_does_not_serve_the_new_record() {
+        let env = Env::new();
+        let store = env.open(ROLL_EACH).await;
+        let locs = append_payloads(&store, &[1, 2, 3]).await;
+        drop(store);
+        let mut file = env
+            .fs
+            .open_write(&env.payload_segment(locs[1].seq))
+            .unwrap();
+        journal_lane::lane::JournalFile::write_all_at(&mut file, 0, &[0xFF; 8]).unwrap();
+        journal_lane::lane::JournalFile::sync_data(&mut file).unwrap();
+
+        let store = env.open(ROLL_EACH).await;
+        let fresh = store.append_payload(7, body(7)).await.unwrap();
+        assert_eq!(fresh, locs[1]);
+        assert_eq!(store.read_payload(7, fresh).await.unwrap(), Some(body(7)));
+        assert_eq!(store.read_payload(2, locs[1]).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn locator_reused_after_the_payload_dir_is_wiped_is_missing() {
+        let env = Env::new();
+        let store = env.open(SEGMENT_BYTES).await;
+        let old = store.append_payload(1, body(1)).await.unwrap();
+        drop(store);
+        env.fs.remove(&env.payload_segment(old.seq)).unwrap();
+
+        let store = env.open(SEGMENT_BYTES).await;
+        let fresh = store.append_payload(2, body(2)).await.unwrap();
+        assert_eq!(fresh, old);
+        assert_eq!(store.read_payload(1, old).await.unwrap(), None);
+        assert_eq!(store.read_payload(2, fresh).await.unwrap(), Some(body(2)));
+    }
+
+    #[tokio::test]
+    async fn header_read_error_at_open_removes_nothing() {
+        let env = Env::new();
+        let store = env.open(ROLL_EACH).await;
+        let locs = append_payloads(&store, &[1, 2, 3]).await;
+        drop(store);
+        let mut file = env
+            .fs
+            .open_write(&env.payload_segment(locs[1].seq))
+            .unwrap();
+        journal_lane::lane::JournalFile::write_all_at(&mut file, 0, &[0xFF; 8]).unwrap();
+        journal_lane::lane::JournalFile::sync_data(&mut file).unwrap();
+        let first = env.payload_segment(locs[0].seq);
+        env.fs.fail_read_header.lock().unwrap().insert(first);
+
+        env.try_open(ROLL_EACH).await.err().unwrap();
+
+        for loc in &locs {
+            assert!(env.fs.file_len(&env.payload_segment(loc.seq)) > 0);
+        }
     }
 }

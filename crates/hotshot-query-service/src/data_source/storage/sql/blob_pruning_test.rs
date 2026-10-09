@@ -38,14 +38,14 @@ async fn connect(db: &TmpDb) -> SqlStorage {
 }
 
 /// Stores one block with a payload of its own at each height.
-async fn store_blocks(storage: &SqlStorage, heights: &[u64]) -> Vec<BlobLoc> {
+async fn store_blocks(storage: &SqlStorage, heights: &[u64]) -> Vec<(u64, BlobLoc)> {
     for &height in heights {
         let (leaf, block) = block_at(height, height, &[&[height as u8]]).await;
         store(storage, &leaf, &block).await;
     }
     let mut locs = vec![];
     for &height in heights {
-        locs.push(loc_of(storage, height).await);
+        locs.push((height, loc_of(storage, height).await));
     }
     locs
 }
@@ -67,11 +67,11 @@ async fn loc_of(storage: &SqlStorage, height: u64) -> BlobLoc {
     loc.parse().unwrap()
 }
 
-async fn readable(storage: &SqlStorage, locs: &[BlobLoc]) -> Vec<bool> {
+async fn readable(storage: &SqlStorage, locs: &[(u64, BlobLoc)]) -> Vec<bool> {
     let blobs = storage.blob_store().unwrap();
     let mut readable = vec![];
-    for loc in locs {
-        readable.push(blobs.read_payload(*loc).await.unwrap().is_some());
+    for &(height, loc) in locs {
+        readable.push(blobs.read_payload(height, loc).await.unwrap().is_some());
     }
     readable
 }

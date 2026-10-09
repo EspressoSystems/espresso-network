@@ -509,7 +509,7 @@ where
                     .blob_store()
                     .ok_or_else(|| query_error("payload locator present but no blob store"))?;
                 let loc = loc.parse::<BlobLoc>().map_err(query_error)?;
-                let bytes = blobs.read_payload(loc).await.map_err(query_error)?;
+                let bytes = blobs.read_payload(height, loc).await.map_err(query_error)?;
                 bytes.ok_or_else(|| {
                     tracing::warn!(height, %loc, "payload record unreadable");
                     QueryError::Missing
