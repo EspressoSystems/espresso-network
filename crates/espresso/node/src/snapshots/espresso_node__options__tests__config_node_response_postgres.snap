@@ -250,7 +250,6 @@ modules:
     light_client_db:
       num_connections: 5
       num_leaves: 100
-      num_stake_tables: 100
       lc_path: ~
   submit: false
   status: false

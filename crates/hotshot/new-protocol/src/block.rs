@@ -29,7 +29,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::{debug_span, error, warn};
-use versions::Version;
+use versions::{NO_BUILDER_COMMITMENT_VERSION, Version};
 
 use crate::{
     consensus::ConsensusInput,
@@ -120,9 +120,15 @@ pub fn block_commitments<T: NodeType>(
                         )
                     })
                 },
+                // From 0.7 the header carries no builder commitment, so the leader skips the
+                // SHA-256 over the whole payload that produced it.
                 || {
-                    debug_span!("builder_commitment")
-                        .in_scope(|| payload.payload.builder_commitment(&payload.metadata))
+                    if version >= NO_BUILDER_COMMITMENT_VERSION {
+                        BuilderCommitment::empty()
+                    } else {
+                        debug_span!("builder_commitment")
+                            .in_scope(|| payload.payload.builder_commitment(&payload.metadata))
+                    }
                 },
             )
         },

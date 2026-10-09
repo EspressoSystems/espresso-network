@@ -6,12 +6,17 @@ use std::{
 use committable::Commitment;
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment2, VidDisperseShare2, ViewNumber, ns_table::parse_ns_table},
+    data::{
+        EpochNumber, VidCommitment2, VidDisperseShare2, ViewNumber,
+        ns_table::{ns_table_payload_byte_len, parse_ns_table},
+    },
     traits::{block_contents::EncodeBytes, node_implementation::NodeType},
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::{error, warn};
+
+use super::ns_lens_match_metadata;
 
 pub(crate) type Metadata<T> = <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata;
 
@@ -317,18 +322,26 @@ impl<T: NodeType> VidShareAccumulator<T> {
             warn!(%view, ?sender, "VID share common param differs from the committee's");
             return;
         }
-        // The commitment hash-binds the common, so trust it as the verification
-        // oracle only after that check; later shares must carry the same common.
+        // The commitment hash-binds the common's `ns_commits` but not its
+        // `ns_lens`, which a forwarded share could shuffle against the
+        // proposal's table. Trust a common as the verification oracle only
+        // after both checks; later shares must carry the same common.
         if let Some(common) = &self.common {
             if share.common != *common {
                 warn!(%view, ?sender, "VID share common differs from the accumulator's");
                 return;
             }
-        } else if AvidmGf2Scheme::is_consistent(&self.payload_commitment, &share.common) {
-            self.common = Some(share.common.clone());
-        } else {
+        } else if !AvidmGf2Scheme::is_consistent(&self.payload_commitment, &share.common) {
             warn!(%view, ?sender, "VID share common is inconsistent with its commitment");
             return;
+        } else if !ns_lens_match_metadata(&share.common, &self.metadata.encode()) {
+            warn!(
+                %view, ?sender,
+                "VID share namespace lengths disagree with the proposal's namespace table"
+            );
+            return;
+        } else {
+            self.common = Some(share.common.clone());
         }
         // A share whose namespaces disagree on the shard range is malformed.
         let Some(range) = share.share.range() else {
@@ -505,19 +518,45 @@ fn decode_and_recommit<T: NodeType>(
             return None;
         },
     };
-    matches_commitment::<T>(view, &common.param, metadata, &bytes, payload_commitment)
-        .then_some(bytes)
+    matches_commitment(
+        view,
+        &common.param,
+        &metadata.encode(),
+        &bytes,
+        payload_commitment,
+    )
+    .then_some(bytes)
 }
 
-/// Whether `bytes` are the payload `payload_commitment` commits to.
-pub(crate) fn matches_commitment<T: NodeType>(
+/// Whether `payload` is what `payload_commitment` commits to, sliced by the
+/// header's namespace table `ns_table`.
+///
+/// The commitment covers each namespace's bytes but not the table, and
+/// `parse_ns_table` substitutes one namespace spanning the payload for a table
+/// sized for another payload. For a one-namespace block that substitute is the
+/// honest table, so a header claiming a shorter or longer payload would
+/// recommit to the same bytes and decide with a table that misdescribes them.
+/// Refuse such a table instead: it must be sized for `payload`, or be no
+/// table at all, which the disperser also reads as one namespace.
+pub(crate) fn matches_commitment(
     view: ViewNumber,
     param: &AvidmGf2Param,
-    metadata: &Metadata<T>,
+    ns_table: &[u8],
     payload: &[u8],
     payload_commitment: &VidCommitment2,
 ) -> bool {
-    let ns_table = parse_ns_table(payload.len(), &metadata.encode());
+    if let Some(claimed) = ns_table_payload_byte_len(ns_table)
+        && claimed != payload.len()
+    {
+        warn!(
+            %view,
+            claimed,
+            actual = payload.len(),
+            "namespace table is sized for another payload"
+        );
+        return false;
+    }
+    let ns_table = parse_ns_table(payload.len(), ns_table);
     match AvidmGf2Scheme::commit(param, payload, ns_table) {
         Ok((recomputed, _)) if recomputed == *payload_commitment => true,
         Ok((recomputed, _)) => {
