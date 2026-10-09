@@ -51,6 +51,17 @@ testing = [
     "pretty_assertions",
 ]
 
+# Dependencies enabled by feature "backtrace-on-stack-overflow".
+#
+# This feature allows unit tests to print out a backtrace if they overflow their stack. The
+# implementation may trigger undefined behavior, so it is only used in tests and requires its own
+# separate feature flag; it is not enabled just by using the "testing" feature.
+#
+# This feature is not supported on Windows because it uses Unix-style signal handling to catch
+# stack overflow exceptions.
+[target.'cfg(not(windows))'.dependencies]
+backtrace-on-stack-overflow = { version = "0.3", optional = true }
+
 [dependencies]
 alloy = { workspace = true }
 anyhow = { workspace = true }
@@ -86,8 +97,10 @@ include_dir = { workspace = true, optional = true }
 itertools = { workspace = true }
 jf-advz = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
+journal-lane.workspace = true
 lazy_static = { workspace = true }
 log = { workspace = true, optional = true }
+parking_lot.workspace = true
 pretty_assertions = { workspace = true, optional = true }
 prometheus = { workspace = true }
 rand = { workspace = true, optional = true }
@@ -110,17 +123,6 @@ vbs = { workspace = true }
 vec1 = { workspace = true }
 versions = { workspace = true }
 
-# Dependencies enabled by feature "backtrace-on-stack-overflow".
-#
-# This feature allows unit tests to print out a backtrace if they overflow their stack. The
-# implementation may trigger undefined behavior, so it is only used in tests and requires its own
-# separate feature flag; it is not enabled just by using the "testing" feature.
-#
-# This feature is not supported on Windows because it uses Unix-style signal handling to catch
-# stack overflow exceptions.
-[target.'cfg(not(windows))'.dependencies]
-backtrace-on-stack-overflow = { version = "0.3", optional = true }
-
 [dev-dependencies]
 axum = { workspace = true }
 disco-types = { workspace = true }
@@ -128,6 +130,7 @@ generic-array = "0.14"
 # Enable our own `testing` feature when building tests.
 hotshot-query-service = { path = ".", features = ["testing"] }
 http-wire = { workspace = true, features = ["server"] }
+journal-lane = { workspace = true, features = ["testing"] }
 test-log = { workspace = true }
 
 [lints]

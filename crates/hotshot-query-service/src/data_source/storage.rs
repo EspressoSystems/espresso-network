@@ -143,6 +143,7 @@ macro_rules! serializable_retry {
     };
 }
 
+pub mod blob;
 pub mod fail_storage;
 pub mod fs;
 mod ledger_log;

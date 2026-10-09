@@ -13,7 +13,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 
 use anyhow::Context;
@@ -113,6 +113,9 @@ pub trait JournalFs: Send + Sync + 'static {
     /// gigabyte-sized) data segment.
     fn read_header(&self, path: &Path) -> io::Result<Vec<u8>>;
     fn len(&self, path: &Path) -> io::Result<u64>;
+    /// Fills `buf` from `offset`; `UnexpectedEof` if the file ends first.
+    fn read_at(&self, path: &Path, offset: u64, buf: &mut [u8]) -> io::Result<()>;
+    fn modified(&self, path: &Path) -> io::Result<SystemTime>;
     fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>>;
     fn remove(&self, path: &Path) -> io::Result<()>;
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
@@ -169,6 +172,14 @@ impl JournalFs for StdFs {
         Ok(std::fs::metadata(path)?.len())
     }
 
+    fn read_at(&self, path: &Path, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        std::fs::File::open(path)?.read_exact_at(buf, offset)
+    }
+
+    fn modified(&self, path: &Path) -> io::Result<SystemTime> {
+        std::fs::metadata(path)?.modified()
+    }
+
     fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
         std::fs::read_dir(dir)?
             .map(|e| e.map(|e| e.path()))
@@ -204,7 +215,7 @@ pub fn segment_path(dir: &Path, seq: u64) -> PathBuf {
     dir.join(format!("{seq:016x}.log"))
 }
 
-fn parse_seq(path: &Path) -> Option<u64> {
+pub fn parse_seq(path: &Path) -> Option<u64> {
     if path.extension().and_then(|e| e.to_str()) != Some("log") {
         return None;
     }
@@ -284,7 +295,8 @@ impl Segments {
             .collect()
     }
 
-    fn sealed(&self) -> &[SegmentMeta] {
+    /// Every segment but the active (newest) one.
+    pub fn sealed(&self) -> &[SegmentMeta] {
         &self.0[..self.0.len().saturating_sub(1)]
     }
 
@@ -656,16 +668,22 @@ pub fn frame_locations<F: JournalFs>(
 /// Reads the record body at `loc` in the segment file at `path`, validating its crc and lsn.
 /// `None` when the segment is gone (unlinked by GC), the frame runs past the end of the file or
 /// fails validation. Blocking; async callers use `spawn_blocking`.
-pub fn read_frame(path: &Path, loc: Location) -> anyhow::Result<Option<Vec<u8>>> {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err).with_context(|| format!("opening segment {}", path.display())),
-    };
+pub fn read_frame<F: JournalFs>(
+    fs: &F,
+    path: &Path,
+    loc: Location,
+) -> anyhow::Result<Option<Vec<u8>>> {
     let mut frame = vec![0; format::FRAME_HEADER_LEN + loc.len as usize];
-    match file.read_exact_at(&mut frame, loc.offset) {
+    match fs.read_at(path, loc.offset, &mut frame) {
         Ok(()) => {},
-        Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::UnexpectedEof
+            ) =>
+        {
+            return Ok(None);
+        },
         Err(err) => return Err(err).with_context(|| format!("reading segment {}", path.display())),
     }
     if format::decode_frame(&frame, loc.lsn).is_err() {
@@ -1558,7 +1576,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (path, loc) = write_frame_file(dir.path(), b"payload bytes");
         assert_eq!(
-            read_frame(&path, loc).unwrap().as_deref(),
+            read_frame(&StdFs, &path, loc).unwrap().as_deref(),
             Some(&b"payload bytes"[..])
         );
     }
@@ -1569,24 +1587,24 @@ mod tests {
         let (path, loc) = write_frame_file(dir.path(), b"payload bytes");
 
         let gone = segment_path(dir.path(), 9);
-        assert!(read_frame(&gone, loc).unwrap().is_none());
+        assert!(read_frame(&StdFs, &gone, loc).unwrap().is_none());
 
         let wrong_lsn = Location { lsn: 3, ..loc };
-        assert!(read_frame(&path, wrong_lsn).unwrap().is_none());
+        assert!(read_frame(&StdFs, &path, wrong_lsn).unwrap().is_none());
 
         let past_end = Location {
             len: loc.len + 1,
             ..loc
         };
-        assert!(read_frame(&path, past_end).unwrap().is_none());
+        assert!(read_frame(&StdFs, &path, past_end).unwrap().is_none());
 
         let mut bytes = std::fs::read(&path).unwrap();
         *bytes.last_mut().unwrap() ^= 1;
         std::fs::write(&path, &bytes).unwrap();
-        assert!(read_frame(&path, loc).unwrap().is_none());
+        assert!(read_frame(&StdFs, &path, loc).unwrap().is_none());
 
         std::fs::write(&path, &bytes[..loc.offset as usize + 4]).unwrap();
-        assert!(read_frame(&path, loc).unwrap().is_none());
+        assert!(read_frame(&StdFs, &path, loc).unwrap().is_none());
     }
 
     #[tokio::test]

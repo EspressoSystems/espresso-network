@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
+    time::SystemTime,
 };
 
 use crate::{
@@ -12,6 +13,7 @@ use crate::{
 struct FileState {
     synced: Vec<u8>,
     unsynced: Vec<u8>,
+    modified: Option<SystemTime>,
 }
 
 impl FileState {
@@ -20,6 +22,7 @@ impl FileState {
     }
 
     fn write_at(&mut self, off: usize, buf: &[u8]) {
+        self.modified = Some(SystemTime::now());
         let end = off + buf.len();
         if self.unsynced.len() < end {
             self.unsynced.resize(end, 0);
@@ -56,6 +59,16 @@ impl MemFs {
         }
     }
 
+    /// Overrides the modification time `JournalFs::modified` reports for `path`.
+    pub fn set_modified(&self, path: &std::path::Path, time: SystemTime) {
+        self.files
+            .lock()
+            .unwrap()
+            .get_mut(path)
+            .expect("file exists")
+            .modified = Some(time);
+    }
+
     pub fn file_len(&self, path: &std::path::Path) -> usize {
         self.files
             .lock()
@@ -73,7 +86,13 @@ impl JournalFs for MemFs {
         if files.contains_key(path) {
             return Err(std::io::ErrorKind::AlreadyExists.into());
         }
-        files.insert(path.to_path_buf(), FileState::default());
+        files.insert(
+            path.to_path_buf(),
+            FileState {
+                modified: Some(SystemTime::now()),
+                ..Default::default()
+            },
+        );
         Ok(MemFile {
             path: path.to_path_buf(),
             files: self.files.clone(),
@@ -115,6 +134,24 @@ impl JournalFs for MemFs {
 
     fn len(&self, path: &std::path::Path) -> std::io::Result<u64> {
         self.open_read(path).map(|b| b.len() as u64)
+    }
+
+    fn read_at(&self, path: &std::path::Path, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+        let files = self.files.lock().unwrap();
+        let state = files.get(path).ok_or(std::io::ErrorKind::NotFound)?;
+        let start = offset as usize;
+        let src = state
+            .unsynced
+            .get(start..start + buf.len())
+            .ok_or(std::io::ErrorKind::UnexpectedEof)?;
+        buf.copy_from_slice(src);
+        Ok(())
+    }
+
+    fn modified(&self, path: &std::path::Path) -> std::io::Result<SystemTime> {
+        let files = self.files.lock().unwrap();
+        let state = files.get(path).ok_or(std::io::ErrorKind::NotFound)?;
+        Ok(state.modified.expect("set at create"))
     }
 
     fn list(&self, dir: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
