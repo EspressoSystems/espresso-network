@@ -14,7 +14,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
     traits::{metrics::Histogram, node_implementation::NodeType, signature_key::SignatureKey},
-    vid::avidm_gf2::AvidmGf2Scheme,
+    vid::avidm_gf2::{AvidmGf2Encoding, AvidmGf2Scheme},
 };
 use hotshot_utils::anytrace::{self, Wrap};
 use rayon::prelude::*;
@@ -45,6 +45,7 @@ pub struct VidDisperseOutput {
 
 pub struct VidDisperser<T: NodeType> {
     calculations: BTreeMap<(ViewNumber, EpochNumber, VidCommitment2), AbortHandle>,
+    encodings: BTreeMap<(ViewNumber, VidCommitment2), Vec<AvidmGf2Encoding>>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
     network: Sender<T>,
     public_key: T::SignatureKey,
@@ -62,6 +63,7 @@ impl<T: NodeType> VidDisperser<T> {
     ) -> Self {
         Self {
             calculations: BTreeMap::new(),
+            encodings: BTreeMap::new(),
             epoch_membership_coordinator,
             network,
             public_key,
@@ -76,12 +78,27 @@ impl<T: NodeType> VidDisperser<T> {
         self
     }
 
+    /// Keep the leader's encoding of a block it built, so dispersing that block does not code it
+    /// again.
+    pub fn retain_encoding(
+        &mut self,
+        view: ViewNumber,
+        payload_commitment: VidCommitment2,
+        encoding: Vec<AvidmGf2Encoding>,
+    ) {
+        self.encodings.insert((view, payload_commitment), encoding);
+    }
+
     pub fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
         let key = (
             vid_disperse_request.view,
             vid_disperse_request.epoch,
             vid_disperse_request.payload_commitment,
         );
+        let encoding = self.encodings.remove(&(
+            vid_disperse_request.view,
+            vid_disperse_request.payload_commitment,
+        ));
         if self.calculations.contains_key(&key) {
             return;
         }
@@ -98,6 +115,7 @@ impl<T: NodeType> VidDisperser<T> {
                 public_key,
                 private_key,
                 vid_disperse_request,
+                encoding,
             );
             finish_measurement(measurement);
             result
@@ -130,6 +148,9 @@ impl<T: NodeType> VidDisperser<T> {
             handle.abort();
         }
         self.calculations = keep;
+        self.encodings = self
+            .encodings
+            .split_off(&(view_number, VidCommitment2::default()));
     }
 }
 
@@ -139,6 +160,7 @@ fn handle_vid_disperse_request<T: NodeType>(
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     vid_disperse_request: VidDisperseRequest<T>,
+    encoding: Option<Vec<AvidmGf2Encoding>>,
 ) -> Result<VidDisperseOutput, VidDisperseError> {
     let view = vid_disperse_request.view;
     let epoch = vid_disperse_request.epoch;
@@ -169,19 +191,43 @@ fn handle_vid_disperse_request<T: NodeType>(
         let threshold = params.payload.len().div_ceil(*NUM_THREADS).max(256 * 1024);
         bucketize(&params.ns_table, threshold)
     };
+    let mut ns_encodings = encoding
+        .unwrap_or_default()
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
+    let buckets = buckets
+        .into_iter()
+        .map(|bucket| {
+            bucket
+                .into_iter()
+                .map(|ns_index| {
+                    (
+                        ns_index,
+                        ns_encodings.get_mut(ns_index).and_then(Option::take),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
 
-    buckets.par_iter().try_for_each_with(
+    buckets.into_par_iter().try_for_each_with(
         network,
         |network, bucket| -> Result<(), VidDisperseError> {
             let mut pieces = vec![Vec::new(); params.recipients.len()];
 
-            for &ns_index in bucket {
-                let dispersal = AvidmGf2Scheme::ns_disperse_one(
-                    &params.param,
-                    &params.weights,
-                    &params.payload[params.ns_table[ns_index].clone()],
-                    ns_index,
-                )
+            for (ns_index, encoding) in bucket {
+                let dispersal = match encoding {
+                    Some(encoding) => {
+                        AvidmGf2Scheme::ns_disperse_encoded(&params.weights, encoding, ns_index)
+                    },
+                    None => AvidmGf2Scheme::ns_disperse_one(
+                        &params.param,
+                        &params.weights,
+                        &params.payload[params.ns_table[ns_index].clone()],
+                        ns_index,
+                    ),
+                }
                 .wrap()
                 .map_err(VidDisperseError::Vid)?;
 
