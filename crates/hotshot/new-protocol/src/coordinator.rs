@@ -839,7 +839,10 @@ where
                     let gc_view = newest.view_number();
                     let gc_epoch = newest.justify_qc().epoch().unwrap_or_default();
                     self.gc(gc_epoch, GcScope::Decided(gc_view))?;
-                    self.state_manager.seed_decided(newest.clone());
+                    // A gap-fill decide can carry leaves older than the decided view.
+                    if gc_view == self.consensus.last_decided_view() {
+                        self.state_manager.seed_decided(newest.clone());
+                    }
                 }
                 for leaf in leaves.into_iter().rev() {
                     self.participation

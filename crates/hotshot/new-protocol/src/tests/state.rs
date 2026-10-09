@@ -4,7 +4,7 @@ use hotshot::traits::BlockPayload;
 use hotshot_example_types::{
     block_types::{TestBlockPayload, TestMetadata},
     node_types::{TEST_VERSIONS, TestTypes},
-    state_types::{TestInstanceState, TestStateDelta, TestValidatedState},
+    state_types::{INVALID_BLOCK_NUMBER, TestInstanceState, TestStateDelta, TestValidatedState},
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber, vid_commitment},
@@ -288,6 +288,73 @@ async fn test_seed_decided_duplicate_is_noop() {
     manager.seed_decided(test_data.views[1].leaf.clone());
     assert!(manager.validated_contains_view(test_data.views[1].view_number));
     assert!(manager.next().await.is_none());
+}
+
+/// View 1's proposal with a header that fails validation, and queued work on it:
+/// view 2's validation and the header for view 3.
+fn invalid_leaf_with_queued_work(
+    manager: &mut StateManager<TestTypes>,
+    test_data: &TestData,
+) -> (StateRequest<TestTypes>, Leaf2<TestTypes>) {
+    let mut bad: Proposal<TestTypes> = test_data.views[0].proposal.data.clone();
+    bad.block_header.block_number = INVALID_BLOCK_NUMBER;
+
+    let mut bad_request = make_state_request(&test_data.views[0]);
+    bad_request.proposal = bad.clone();
+    let mut child = make_state_request(&test_data.views[1]);
+    child.parent_commitment = proposal_commitment(&bad);
+    let mut header = make_header_request(&test_data.views[0], test_data.views[2].view_number);
+    header.parent_proposal = bad.clone();
+
+    manager.request_state(bad_request.clone());
+    manager.request_state(child);
+    manager.request_header(header);
+    (bad_request, bad.into())
+}
+
+/// A failed validation keeps the work queued on it.
+#[tokio::test]
+async fn test_state_failure_keeps_queue() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(4).await;
+    let (_, bad_leaf) = invalid_leaf_with_queued_work(&mut manager, &test_data);
+
+    let output = manager.next().await.expect("failure is reported");
+    assert!(matches!(
+        output,
+        StateManagerOutput::State {
+            validated: false,
+            ..
+        }
+    ));
+    assert!(manager.next().await.is_none(), "queued work must not run");
+
+    manager.seed_decided(bad_leaf);
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(count_state_verified(&outputs), 1);
+    assert_eq!(count_header_created(&outputs), 1);
+}
+
+/// A decided leaf whose validation fails after `seed_decided` skipped it is
+/// reseeded, releasing the work queued on it.
+#[tokio::test]
+async fn test_seed_decided_reseeds_after_validation_failure() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(4).await;
+    let (_, bad_leaf) = invalid_leaf_with_queued_work(&mut manager, &test_data);
+
+    manager.seed_decided(bad_leaf);
+
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(outputs.len(), 3);
+    assert_eq!(count_state_verified(&outputs), 1);
+    assert_eq!(count_header_created(&outputs), 1);
 }
 
 /// State request with seeded genesis parent spawns validation and produces output.

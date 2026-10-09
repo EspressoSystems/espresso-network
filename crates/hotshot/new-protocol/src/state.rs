@@ -99,6 +99,8 @@ pub struct StateManager<T: NodeType> {
     state_requests: HashMap<Commitment<Leaf2<T>>, InFlight<T>>,
     header_requests: HashMap<(ViewNumber, Commitment<Leaf2<T>>), AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
+    /// Decided leaf whose in-flight validation made `seed_decided` skip it.
+    decided_in_flight: Option<Leaf2<T>>,
     upgrade_lock: UpgradeLock<T>,
     tasks: JoinSet<Completed<T>>,
     validate_duration_metric: Option<Arc<dyn Histogram>>,
@@ -145,6 +147,7 @@ impl<T: NodeType> StateManager<T> {
             state_requests: HashMap::new(),
             header_requests: HashMap::new(),
             pending_requests: HashMap::new(),
+            decided_in_flight: None,
             upgrade_lock,
             tasks: JoinSet::new(),
             validate_duration_metric: None,
@@ -196,12 +199,15 @@ impl<T: NodeType> StateManager<T> {
     }
 
     /// Seed a stub for a decided leaf so work queued on it runs via catchup.
-    /// No-op when the leaf is validated or being validated.
+    /// No-op when the leaf is validated. When it is being validated, the stub is
+    /// seeded only if that validation fails.
     pub(crate) fn seed_decided(&mut self, leaf: Leaf2<T>) {
         let commitment = leaf.commit();
-        if self.validated_states.contains_key(&commitment)
-            || self.state_requests.contains_key(&commitment)
-        {
+        if self.validated_states.contains_key(&commitment) {
+            return;
+        }
+        if self.state_requests.contains_key(&commitment) {
+            self.decided_in_flight = Some(leaf);
             return;
         }
         let state = T::ValidatedState::from_header(leaf.block_header());
@@ -427,6 +433,9 @@ impl<T: NodeType> StateManager<T> {
                         if self.state_requests.remove(&response.commitment).is_none() {
                             continue;
                         }
+                        let decided = self
+                            .decided_in_flight
+                            .take_if(|leaf| leaf.commit() == response.commitment);
                         if let Some(leaf) = leaf2 {
                             let measurement = self
                                 .update_leaf_duration_metric
@@ -445,6 +454,9 @@ impl<T: NodeType> StateManager<T> {
                                 validated: true,
                             });
                         } else {
+                            if let Some(leaf) = decided {
+                                self.seed_decided(leaf);
+                            }
                             return Some(StateManagerOutput::State {
                                 response,
                                 validated: false,
