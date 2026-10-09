@@ -1,0 +1,130 @@
+{
+  "rounds": 100,
+  "indexed_da": true,
+  "transactions_per_round": 10,
+  "manual_start_password": null,
+  "num_bootrap": 5,
+  "next_view_timeout": 10,
+  "view_sync_timeout": {
+    "secs": 2,
+    "nanos": 0
+  },
+  "builder_timeout": {
+    "secs": 10,
+    "nanos": 0
+  },
+  "data_request_delay": {
+    "secs": 2,
+    "nanos": 500000000
+  },
+  "node_index": 0,
+  "seed": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "transaction_size": 100,
+  "key_type_name": "espresso_types::v0::SeqTypes",
+  "libp2p_config": null,
+  "config": {
+    "start_threshold": [
+      1,
+      1
+    ],
+    "num_nodes_with_stake": 1,
+    "known_nodes_with_stake": [
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+        "connect_info": {
+          "x25519_key": "6dt8ewV2iVbvsJwDxJyb4JCAZkui7GXbki8zP39wowMY",
+          "p2p_addr": "127.0.0.1:32829"
+        }
+      }
+    ],
+    "known_da_nodes": [
+      {
+        "stake_table_entry": {
+          "stake_key": "BLS_VER_KEY~bQszS-QKYvUij2g20VqS8asttGSb95NrTu2PUj0uMh1CBUxNy1FqyPDjZqB29M7ZbjWqj79QkEOWkpga84AmDYUeTuWmy-0P1AdKHD3ehc-dKvei78BDj5USwXPJiDUlCxvYs_9rWYhagaq-5_LXENr78xel17spftNd5MA1Mw5U",
+          "stake_amount": "0x1"
+        },
+        "state_ver_key": "SCHNORR_VER_KEY~lJqDaVZyM0hWP2Br52IX5FeE-dCAIC-dPX7bL5-qUx-vjbunwe-ENOeZxj6FuOyvDCFzoGeP7yZ0fM995qF-CRE",
+        "connect_info": {
+          "x25519_key": "6dt8ewV2iVbvsJwDxJyb4JCAZkui7GXbki8zP39wowMY",
+          "p2p_addr": "127.0.0.1:32829"
+        }
+      }
+    ],
+    "da_committees": [],
+    "da_staked_committee_size": 1,
+    "fixed_leader_for_gpuvid": 0,
+    "next_view_timeout": 5000,
+    "view_sync_timeout": {
+      "secs": 1,
+      "nanos": 0
+    },
+    "num_bootstrap": 1,
+    "builder_timeout": {
+      "secs": 1,
+      "nanos": 0
+    },
+    "data_request_delay": {
+      "secs": 1,
+      "nanos": 0
+    },
+    "builder_urls": [
+      "http://localhost:34467/"
+    ],
+    "start_proposing_view": 0,
+    "stop_proposing_view": 10000,
+    "start_voting_view": 0,
+    "stop_voting_view": 18446744073709551615,
+    "start_proposing_time": 0,
+    "stop_proposing_time": 18446744073709551615,
+    "start_voting_time": 0,
+    "stop_voting_time": 18446744073709551615,
+    "epoch_height": 200,
+    "epoch_start_block": 321,
+    "stake_table_capacity": 200,
+    "drb_difficulty": 10,
+    "drb_upgrade_difficulty": 20
+  },
+  "cdn_marshal_address": null,
+  "combined_network_config": null,
+  "commit_sha": "",
+  "builder": "Simple",
+  "random_builder": null,
+  "public_keys": []
+}
