@@ -4,12 +4,12 @@ use hotshot::traits::BlockPayload;
 use hotshot_example_types::{
     block_types::{TestBlockPayload, TestMetadata},
     node_types::{TEST_VERSIONS, TestTypes},
-    state_types::{TestInstanceState, TestValidatedState},
+    state_types::{INVALID_BLOCK_NUMBER, TestInstanceState, TestStateDelta, TestValidatedState},
 };
 use hotshot_types::{
     data::{Leaf2, ViewNumber, vid_commitment},
     traits::{
-        EncodeBytes,
+        EncodeBytes, ValidatedState,
         block_contents::{BlockHeader, BuilderFee},
         signature_key::BuilderSignatureKey,
     },
@@ -19,7 +19,7 @@ use hotshot_types::{
 use crate::{
     helpers::{proposal_commitment, test_upgrade_lock},
     message::Proposal,
-    state::{HeaderRequest, StateManager, StateManagerOutput, StateRequest},
+    state::{HeaderRequest, StateManager, StateManagerOutput, StateRequest, UpdateLeaf},
     tests::common::utils::{TestData, TestView},
 };
 
@@ -126,71 +126,293 @@ fn count_header_created(events: &[StateManagerOutput<TestTypes>]) -> usize {
         .count()
 }
 
-/// State request with missing parent inserts empty state (no output produced).
+/// A child whose parent state is missing is queued, with no stub and no output.
 #[tokio::test]
-async fn test_state_request_missing_parent_inserts_empty() {
-    let mut manager =
-        StateManager::new(Arc::new(TestInstanceState::default()), test_upgrade_lock());
-    let test_data = TestData::new(2).await;
-
-    // View 1's parent is genesis (view 0), which isn't seeded.
-    manager.request_state(make_state_request(&test_data.views[0]));
-
-    // No task was spawned, so next() should return None.
-    assert!(
-        manager.next().await.is_none(),
-        "No output when parent is missing"
-    );
-
-    // But the empty state should be stored for the view.
-    assert!(
-        manager.validated_contains_view(test_data.views[0].view_number),
-        "Empty state should be inserted for the view"
-    );
-}
-
-/// A state request whose parent is entirely unknown is retried once the
-/// parent is seeded from its header — the ordering where a first-of-epoch
-/// proposal arrives before the boundary leaf's `EpochChangeMessage`.
-#[tokio::test]
-async fn test_state_request_missing_parent_retried_after_seed() {
-    let mut manager =
-        StateManager::new(Arc::new(TestInstanceState::default()), test_upgrade_lock());
+async fn test_state_request_missing_parent_spawns_nothing() {
+    let mut manager = new_manager().await;
     let test_data = TestData::new(3).await;
 
-    // View 2 arrives while view 1 (its parent) is entirely unknown.
     manager.request_state(make_state_request(&test_data.views[1]));
 
-    let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
-    assert!(
-        manager.pending_contains_commitment(&view_1_commit),
-        "View 2 should be queued on its missing parent's commitment"
-    );
-    assert!(
-        manager.validated_contains_view(test_data.views[1].view_number),
-        "A from_header stub should be inserted for view 2"
-    );
+    assert!(!manager.validated_contains_view(test_data.views[1].view_number));
+    assert!(manager.next().await.is_none(), "no work may be spawned");
+}
 
-    // The parent becomes final (e.g. via a verified EpochChangeMessage):
-    // seeding it must restart the queued request.
-    manager.seed_from_header(test_data.views[0].proposal.data.clone());
+/// Children and descendants queued on a missing parent validate once it validates.
+#[tokio::test]
+async fn test_state_request_late_parent_validates_descendants() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(4).await;
 
-    assert!(
-        !manager.pending_contains_commitment(&view_1_commit),
-        "the queued request should be consumed, not re-queued"
-    );
+    manager.request_state(make_state_request(&test_data.views[2]));
+    manager.request_state(make_state_request(&test_data.views[1]));
+    for view in &test_data.views[1..3] {
+        assert!(!manager.validated_contains_view(view.view_number));
+    }
+    manager.request_state(make_state_request(&test_data.views[0]));
 
-    let output = manager.next().await.expect("view 2 should complete");
-    assert!(
-        matches!(
-            output,
-            StateManagerOutput::State {
-                validated: true,
-                ..
-            }
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(count_state_verified(&outputs), 3);
+    assert_eq!(outputs.len(), 3);
+}
+
+/// A leader header request queued on a missing parent runs once the parent validates.
+#[tokio::test]
+async fn test_header_request_after_missing_parent_validates() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(4).await;
+
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.request_header(make_header_request(
+        &test_data.views[1],
+        test_data.views[2].view_number,
+    ));
+    assert!(!manager.validated_contains_view(test_data.views[1].view_number));
+    manager.request_state(make_state_request(&test_data.views[0]));
+
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(count_state_verified(&outputs), 2);
+    assert_eq!(count_header_created(&outputs), 1);
+}
+
+fn leaf_update(view: &TestView, delta: bool) -> UpdateLeaf<TestTypes> {
+    let proposal: Proposal<TestTypes> = view.proposal.data.clone();
+    UpdateLeaf {
+        view: view.view_number,
+        state: Arc::new(
+            <TestValidatedState as ValidatedState<TestTypes>>::from_header(&proposal.block_header),
         ),
-        "View 2 should validate against the seeded parent state"
-    );
+        delta: delta.then(|| Arc::new(TestStateDelta {})),
+        leaf: proposal.into(),
+    }
+}
+
+/// A delta-less update neither aborts an in-flight validation nor releases queued work.
+#[tokio::test]
+async fn test_update_state_without_delta_keeps_in_flight_validation() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.update_state(leaf_update(&test_data.views[0], false));
+
+    assert!(!manager.validated_contains_view(test_data.views[0].view_number));
+
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(count_state_verified(&outputs), 2);
+}
+
+/// A delta-less update for an existing stub keeps the stub and starts nothing.
+#[tokio::test]
+async fn test_update_state_without_delta_existing_stub() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.seed_from_header(test_data.views[0].proposal.data.clone());
+    let update = leaf_update(&test_data.views[0], false);
+    let state = update.state.clone();
+    manager.update_state(update);
+
+    let entry = manager.get_state(test_data.views[0].view_number).unwrap();
+    assert!(entry.delta.is_none());
+    assert!(Arc::ptr_eq(&entry.state, &state), "stub state is replaced");
+    assert!(manager.next().await.is_none());
+}
+
+/// A delta-less update for an unknown leaf inserts nothing and releases nothing.
+#[tokio::test]
+async fn test_update_state_without_delta_missing_entry() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.update_state(leaf_update(&test_data.views[0], false));
+
+    assert!(!manager.validated_contains_view(test_data.views[0].view_number));
+    assert!(manager.next().await.is_none());
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.next().await.expect("parent validates");
+    manager.next().await.expect("queued request survived");
+    assert!(manager.validated_contains_view(test_data.views[1].view_number));
+}
+
+/// `seed_decided` runs work queued on the decided leaf.
+#[tokio::test]
+async fn test_seed_decided_releases_queued_work() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.request_state(make_state_request(&test_data.views[1]));
+    manager.request_header(make_header_request(
+        &test_data.views[1],
+        test_data.views[2].view_number,
+    ));
+    manager.seed_decided(test_data.views[0].leaf.clone());
+
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(count_state_verified(&outputs), 1);
+    assert_eq!(count_header_created(&outputs), 1);
+}
+
+/// `seed_decided` does not abort a validation in flight.
+#[tokio::test]
+async fn test_seed_decided_in_flight_is_noop() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.seed_decided(test_data.views[0].leaf.clone());
+
+    assert!(!manager.validated_contains_view(test_data.views[0].view_number));
+    manager.next().await.expect("validation was not aborted");
+    let entry = manager.get_state(test_data.views[0].view_number).unwrap();
+    assert!(entry.delta.is_some());
+}
+
+/// `seed_decided` does not displace a validated state.
+#[tokio::test]
+async fn test_seed_decided_validated_is_noop() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.next().await.expect("validation completes");
+    manager.seed_decided(test_data.views[0].leaf.clone());
+
+    let entry = manager.get_state(test_data.views[0].view_number).unwrap();
+    assert!(entry.delta.is_some());
+    assert!(manager.next().await.is_none());
+}
+
+/// Seeding the same leaf twice leaves one stub and starts nothing.
+#[tokio::test]
+async fn test_seed_decided_twice_is_noop() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.seed_decided(test_data.views[1].leaf.clone());
+    manager.seed_decided(test_data.views[1].leaf.clone());
+
+    assert!(manager.validated_contains_view(test_data.views[1].view_number));
+    assert!(manager.next().await.is_none());
+}
+
+/// View 1's proposal with a header that fails validation, and queued work on it:
+/// view 2's validation and the header for view 3.
+fn invalid_leaf_with_queued_work(
+    manager: &mut StateManager<TestTypes>,
+    test_data: &TestData,
+) -> (StateRequest<TestTypes>, Leaf2<TestTypes>) {
+    let mut bad: Proposal<TestTypes> = test_data.views[0].proposal.data.clone();
+    bad.block_header.block_number = INVALID_BLOCK_NUMBER;
+
+    let mut bad_request = make_state_request(&test_data.views[0]);
+    bad_request.proposal = bad.clone();
+    let mut child = make_state_request(&test_data.views[1]);
+    child.parent_commitment = proposal_commitment(&bad);
+    let mut header = make_header_request(&test_data.views[0], test_data.views[2].view_number);
+    header.parent_proposal = bad.clone();
+
+    manager.request_state(bad_request.clone());
+    manager.request_state(child);
+    manager.request_header(header);
+    (bad_request, bad.into())
+}
+
+/// A failed validation keeps the work queued on it.
+#[tokio::test]
+async fn test_state_failure_keeps_queue() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(4).await;
+    let (_, bad_leaf) = invalid_leaf_with_queued_work(&mut manager, &test_data);
+
+    let output = manager.next().await.expect("failure is reported");
+    assert!(matches!(
+        output,
+        StateManagerOutput::State {
+            validated: false,
+            ..
+        }
+    ));
+    assert!(manager.next().await.is_none(), "queued work must not run");
+
+    manager.seed_decided(bad_leaf);
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(count_state_verified(&outputs), 1);
+    assert_eq!(count_header_created(&outputs), 1);
+}
+
+/// A decided leaf whose validation fails after `seed_decided` skipped it is
+/// reseeded, releasing the work queued on it.
+#[tokio::test]
+async fn test_seed_decided_reseeds_after_validation_failure() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(4).await;
+    let (_, bad_leaf) = invalid_leaf_with_queued_work(&mut manager, &test_data);
+
+    manager.seed_decided(bad_leaf);
+
+    let first = manager.next().await.expect("failure is reported");
+    assert!(matches!(
+        first,
+        StateManagerOutput::State {
+            validated: false,
+            ..
+        }
+    ));
+    let mut outputs = vec![first];
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(outputs.len(), 3);
+    assert_eq!(count_state_verified(&outputs), 1);
+    assert_eq!(count_header_created(&outputs), 1);
+}
+
+/// An older in-flight leaf does not displace a newer one, so the newer leaf's
+/// failed validation still releases its queued work.
+#[tokio::test]
+async fn test_seed_decided_older_leaf_keeps_newer_in_flight() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(4).await;
+
+    let mut bad: Proposal<TestTypes> = test_data.views[1].proposal.data.clone();
+    bad.block_header.block_number = INVALID_BLOCK_NUMBER;
+    let mut bad_request = make_state_request(&test_data.views[1]);
+    bad_request.proposal = bad.clone();
+    bad_request.parent_commitment = make_state_request(&test_data.views[0]).parent_commitment;
+    let mut child = make_state_request(&test_data.views[2]);
+    child.parent_commitment = proposal_commitment(&bad);
+    let older = make_state_request(&test_data.views[0]);
+
+    manager.request_state(bad_request);
+    manager.request_state(child);
+    manager.request_state(older);
+    manager.seed_decided(bad.into());
+    manager.seed_decided(test_data.views[0].leaf.clone());
+
+    let mut outputs = Vec::new();
+    while let Some(output) = manager.next().await {
+        outputs.push(output);
+    }
+    assert_eq!(count_state_verified(&outputs), 2);
 }
 
 /// State request with seeded genesis parent spawns validation and produces output.
@@ -249,13 +471,6 @@ async fn test_state_request_queued_behind_parent() {
     manager.request_state(make_state_request(&test_data.views[0]));
     manager.request_state(make_state_request(&test_data.views[1]));
 
-    // View 2 should be queued as pending (parent view 1 is in progress).
-    let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
-    assert!(
-        manager.pending_contains_commitment(&view_1_commit),
-        "View 2 should be pending on view 1's commitment"
-    );
-
     // next() should process view 1, then eagerly chain view 2.
     let output1 = manager.next().await.expect("view 1 should complete");
     let output2 = manager.next().await.expect("view 2 should complete");
@@ -305,13 +520,6 @@ async fn test_header_request_queued_behind_state() {
     // Send header request with view 1 as parent BEFORE view 1 completes.
     let header_req = make_header_request(&test_data.views[0], test_data.views[1].view_number);
     manager.request_header(header_req);
-
-    // Header should be pending on view 1's commitment.
-    let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
-    assert!(
-        manager.pending_contains_commitment(&view_1_commit),
-        "Header should be pending on view 1's commitment"
-    );
 
     // next() processes state completion, which chains the header request.
     let output1 = manager.next().await.expect("state should complete");
@@ -477,5 +685,26 @@ async fn test_gc_aborts_stale_validation_without_dependents() {
     assert!(
         !manager.validated_contains_view(test_data.views[0].view_number),
         "no stub should be seeded for a view nothing is queued on"
+    );
+}
+
+/// gc keeps validated states up to 8 views below the decided view and drops stubs below it.
+#[tokio::test]
+async fn test_gc_retains_validated_states_within_margin() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(20).await;
+    let decided = &test_data.views[10];
+    let at = |below: u64| test_data.views[10 - below as usize].view_number;
+
+    manager.update_state(leaf_update(&test_data.views[10 - 8], true));
+    manager.update_state(leaf_update(&test_data.views[10 - 9], true));
+    manager.seed_from_header(test_data.views[9].proposal.data.clone());
+    manager.gc(decided.view_number);
+
+    assert!(manager.validated_contains_view(at(8)));
+    assert!(!manager.validated_contains_view(at(9)));
+    assert!(
+        !manager.validated_contains_view(at(1)),
+        "stubs are not retained"
     );
 }

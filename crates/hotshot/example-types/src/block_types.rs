@@ -267,7 +267,7 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
 /// A [`BlockHeader`] that commits to [`TestBlockPayload`].
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Deserialize, Serialize)]
 pub struct TestBlockHeader {
-    /// Block number.
+    /// Block number. `INVALID_BLOCK_NUMBER` fails state validation.
     pub block_number: u64,
     /// VID commitment to the payload.
     pub payload_commitment: VidCommitment,

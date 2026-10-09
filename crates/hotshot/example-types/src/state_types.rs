@@ -22,6 +22,9 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use vbs::version::Version;
 
+/// Headers with this block number fail `validate_and_apply_header`.
+pub const INVALID_BLOCK_NUMBER: u64 = 1 << 62;
+
 pub use crate::node_types::{TestTwoStakeTablesTypes, TestTypes};
 use crate::{
     block_types::{TestBlockPayload, TestTransaction},
@@ -101,12 +104,17 @@ impl<TYPES: NodeType> ValidatedState<TYPES> for TestValidatedState {
         &self,
         instance: &Self::Instance,
         _parent_leaf: &Leaf2<TYPES>,
-        _proposed_header: &TYPES::BlockHeader,
+        proposed_header: &TYPES::BlockHeader,
         _payload_byte_len: Option<u32>,
         _version: Version,
         _view_number: u64,
     ) -> Result<(Self, Self::Delta), Self::Error> {
         Self::run_delay_settings_from_config(&instance.delay_config).await;
+        if proposed_header.block_number() == INVALID_BLOCK_NUMBER {
+            return Err(BlockError::InvalidBlockHeader(
+                "test header marked invalid".into(),
+            ));
+        }
         Ok((
             TestValidatedState {
                 block_height: self.block_height + 1,
