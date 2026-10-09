@@ -3475,6 +3475,84 @@ mod test {
         assert!(matches!(err, QueryError::NotFound), "{err:?}");
     }
 
+    /// `get_path_at` reads a snapshot below the head after the data pruner deleted its header, by
+    /// the root the caller gives. It rejects a root the snapshot does not have, and a snapshot at
+    /// the state pruned height.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_get_path_at_without_header() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let head = 5u64;
+        let pruned = 1u64;
+        let mut tree = MockMerkleTree::new(MockMerkleTree::tree_height());
+        let mut roots = vec![];
+        {
+            let mut tx = storage.write().await.unwrap();
+            for height in 0..=head {
+                insert_mock_state(&mut tx, &mut tree, height, 0).await;
+                roots.push(tree.commitment());
+            }
+            UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(&mut tx, head as usize)
+                .await
+                .unwrap();
+            query("DELETE FROM header WHERE height < $1")
+                .bind(head as i64)
+                .execute(tx.as_mut())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        let mut tx = storage.prune_write().await.unwrap();
+        tx.save_state_pruned_height(pruned).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let created = 3u64;
+        let key = created as usize;
+        let mut tx = storage.read().await.unwrap();
+        let err = tx
+            .get_path(
+                Snapshot::<_, MockMerkleTree, { MockMerkleTree::ARITY }>::Index(created),
+                key,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, QueryError::NotFound), "{err:?}");
+        let proof = tx
+            .get_path_at::<MockTypes, MockMerkleTree, { MockMerkleTree::ARITY }>(
+                created, roots[key], key,
+            )
+            .await
+            .unwrap();
+        assert_eq!(proof.elem(), Some(&key));
+
+        // Nothing but `path_at` sees the root here, so this checks its root check alone.
+        let err = tx
+            .get_path_at::<MockTypes, MockMerkleTree, { MockMerkleTree::ARITY }>(
+                created,
+                roots[key - 1],
+                key,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, QueryError::Error { message } if message.contains("does not match")),
+            "{err:?}"
+        );
+
+        let err = tx
+            .get_path_at::<MockTypes, MockMerkleTree, { MockMerkleTree::ARITY }>(
+                pruned,
+                roots[pruned as usize],
+                pruned as usize,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, QueryError::NotFound), "{err:?}");
+    }
+
     /// State up to `head`, then pruned past it by a run from before the state pruner was bounded:
     /// every version superseded at or below `stale_cursor` is gone and the cursor is stamped there.
     async fn state_with_stale_cursor(

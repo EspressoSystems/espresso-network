@@ -2003,7 +2003,10 @@ mod tests {
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
 
     use super::{ArchiveStateGc, SeqTypes, impl_testable_data_source::tmp_options, query_as};
-    use crate::{api::RewardMerkleTreeDataSource, catchup::SqlStateCatchup};
+    use crate::{
+        api::RewardMerkleTreeDataSource,
+        catchup::{CatchupStorage, SqlStateCatchup},
+    };
 
     async fn write_fee_state(storage: &SqlStorage, account: FeeAccount, balance: u64, height: u64) {
         let mut tree = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT);
@@ -2077,21 +2080,29 @@ mod tests {
         assert_eq!(tx.load_pruned_height().await.unwrap(), None);
     }
 
-    /// The data pruner deletes the leaf and header at the state head, but the state pruner keeps
-    /// the head's snapshot. The local catchup still reads that snapshot, by the root it is given.
+    /// The data pruner deletes the leaf and header at the state head and keeps the ones above it,
+    /// while the state pruner keeps the head's snapshot. The local catchup still reads that
+    /// snapshot, by the root it is given.
     #[tokio::test]
     #[test_log::test]
     async fn test_catchup_reads_snapshot_without_header() {
         let db = TmpDb::init().await;
-        let storage = SqlStorage::connect(
-            Config::try_from(&tmp_options(&db)).unwrap(),
-            StorageConnectionType::Query,
-        )
-        .await
-        .unwrap();
+        let storage = Arc::new(
+            SqlStorage::connect(
+                Config::try_from(&tmp_options(&db)).unwrap(),
+                StorageConnectionType::Query,
+            )
+            .await
+            .unwrap(),
+        );
 
-        // A head snapshot with no leaf or header rows, as the data pruner leaves it.
+        // A head snapshot whose leaf and header the data pruner deleted, below a stored leaf.
         let height = 3;
+        let leaves = leaf_chain(0..=height + 1, DRB_AND_HEADER_UPGRADE_VERSION).await;
+        let mut tx = storage.write().await.unwrap();
+        tx.insert_leaf(&leaves[height as usize + 1]).await.unwrap();
+        Transaction::commit(tx).await.unwrap();
+
         let account = FeeAccount::from(Address::repeat_byte(0x42));
         let absent = FeeAccount::from(Address::repeat_byte(0x43));
         write_fee_state(&storage, account, 100, height).await;
@@ -2100,7 +2111,7 @@ mod tests {
         let fee_root = fee_tree.commitment();
 
         let mut block_tree = BlockMerkleTree::new(BLOCK_MERKLE_TREE_HEIGHT);
-        for leaf in leaf_chain(0..height, DRB_AND_HEADER_UPGRADE_VERSION).await {
+        for leaf in &leaves[..height as usize] {
             block_tree.push(leaf.block_hash()).unwrap();
         }
         let frontier = block_tree.lookup(height - 1).expect_ok().unwrap().1;
@@ -2118,9 +2129,24 @@ mod tests {
         .unwrap();
         Transaction::commit(tx).await.unwrap();
 
-        let catchup = SqlStateCatchup::new(Arc::new(storage), BackoffParams::disabled());
         let instance = NodeState::mock();
         let view = ViewNumber::new(height);
+
+        // The reads through the leaf and header fail, so the catchup has to read by root.
+        let err = storage
+            .get_accounts(&instance, height, view, &[account])
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains(&format!("leaf {height} not available")),
+            "{err:#}"
+        );
+        storage
+            .get_frontier(&instance, height, view)
+            .await
+            .unwrap_err();
+
+        let catchup = SqlStateCatchup::new(storage, BackoffParams::disabled());
 
         let proofs = catchup
             .try_fetch_accounts(0, &instance, height, view, fee_root, &[account, absent])
