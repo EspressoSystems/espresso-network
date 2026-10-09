@@ -16,9 +16,77 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use espresso_types::SeqTypes;
+use hotshot::{HotShotInitializer, load_start_epoch_info};
 use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::election::Membership,
+    HotShotConfig,
+    data::EpochNumber,
+    drb::drb_difficulty_selector,
+    epoch_membership::EpochMembershipCoordinator,
+    traits::{election::Membership, storage::Storage},
+    utils::epoch_from_block_number,
 };
+use vbs::version::Version;
+
+/// Load what this node already knows about the stake tables into the membership: the DRB
+/// difficulty, the DA committees active at `version`, the first epoch, and the epoch roots and DRB
+/// results persisted around the anchor.
+///
+/// Must run before [`bootstrap_epoch_window`], which walks forward from the first epoch.
+pub(crate) async fn seed_membership(
+    coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    initializer: &HotShotInitializer<SeqTypes>,
+    config: &HotShotConfig<SeqTypes>,
+    version: Version,
+) {
+    coordinator.set_drb_difficulty_selector(drb_difficulty_selector(config));
+
+    let membership = coordinator.membership();
+    for da_committee in &config.da_committees {
+        if version >= da_committee.start_version {
+            membership.add_da_committee(
+                da_committee.start_epoch.into(),
+                da_committee.committee.clone(),
+            );
+        }
+    }
+
+    load_start_epoch_info(
+        coordinator,
+        &initializer.start_epoch_info().to_vec(),
+        config.epoch_height,
+        config.epoch_start_block,
+    )
+    .await;
+}
+
+/// Give the epoch after the high QC's its persisted DRB result.
+///
+/// Runs after [`bootstrap_epoch_window`], which loads that epoch's stake table: on a cold restart
+/// it is not loaded before, and the result would be dropped.
+pub(crate) async fn restore_next_epoch_drb<S>(
+    coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    initializer: &HotShotInitializer<SeqTypes>,
+    epoch_height: u64,
+    storage: &S,
+) where
+    S: Storage<SeqTypes>,
+{
+    let Some(high_qc_block) = initializer.high_qc().data.block_number else {
+        return;
+    };
+    let next_epoch = EpochNumber::new(epoch_from_block_number(high_qc_block + 1, epoch_height)) + 1;
+    let Ok(drb_result) = storage.load_drb_result(next_epoch).await else {
+        return;
+    };
+    match coordinator.stake_table_for_epoch(Some(next_epoch)) {
+        Ok(stake_table) => stake_table.add_drb_result(drb_result),
+        Err(err) => tracing::warn!(
+            %next_epoch,
+            err = %format_args!("{err:#}"),
+            "dropping the persisted DRB result, its epoch has no stake table"
+        ),
+    }
+}
 
 /// Walk forward from the highest already-known epoch until peers can no
 /// longer serve the next epoch root leaf, populating the membership with

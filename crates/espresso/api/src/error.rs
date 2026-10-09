@@ -27,6 +27,17 @@ pub enum SubmitError {
     Overloaded(String),
 }
 
+/// Consensus cannot answer right now, so a retry can succeed (503).
+#[derive(Debug, Error)]
+pub enum ConsensusUnavailable {
+    #[error("consensus has not started")]
+    NotStarted,
+    #[error("consensus has stopped")]
+    Stopped,
+    #[error("consensus did not answer")]
+    Failed(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
 /// API error types that can be downcast at the HTTP/gRPC boundary
 #[derive(Debug)]
 pub enum ApiError {
@@ -67,10 +78,13 @@ impl std::error::Error for ApiError {
     }
 }
 
-/// Errors raised as [`SubmitError`] or [`AvailabilityError`] by a state implementation carry
-/// semantic meaning; anything else is a failure the client cannot act on. Both transports classify
-/// through here, so v1 and v2 cannot drift on what counts as a 404.
+/// Errors raised as [`SubmitError`], [`ConsensusUnavailable`] or [`AvailabilityError`] by a state
+/// implementation carry semantic meaning; anything else is a failure the client cannot act on.
+/// Both transports classify through here, so v1 and v2 cannot drift on what counts as a 404.
 pub fn classify(err: anyhow::Error) -> ApiError {
+    if err.downcast_ref::<ConsensusUnavailable>().is_some() {
+        return ApiError::Unavailable(err);
+    }
     match err.downcast_ref::<SubmitError>() {
         Some(SubmitError::Invalid(_)) => return ApiError::BadRequest(err),
         Some(SubmitError::Overloaded(_)) => return ApiError::Unavailable(err),
@@ -124,6 +138,12 @@ mod tests {
             "{}",
             status.message()
         );
+    }
+
+    #[test]
+    fn consensus_unavailable_maps_to_unavailable() {
+        let err = anyhow::Error::new(ConsensusUnavailable::NotStarted).context("current epoch");
+        assert_eq!(to_status(err).code(), tonic::Code::Unavailable);
     }
 
     /// A 404 has to stay a 404 through the classifier, since the scrub sits on the same path.

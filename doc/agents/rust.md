@@ -53,13 +53,14 @@ just demo-native                      # local network via process-compose
 
 ## Architecture pointers
 
-- **SequencerContext** (`crates/espresso/node/src/context.rs`): wraps HotShot's `SystemContextHandle`.
-- **Node** (`crates/espresso/node/src/lib.rs`): generic over `N: ConnectedNetwork`, `P: SequencerPersistence`.
+- **SequencerContext** (`crates/espresso/node/src/context.rs`): owns the new-protocol coordinator task
+  (`coordinator_task.rs`) and queries consensus through its `ClientApi`. Generic over `P: SequencerPersistence`. The
+  node only runs the new protocol, so it refuses a genesis `base_version` below 0.6.
 - **ValidatedState** (`crates/espresso/types/src/v0/impls/state.rs`): four merkle trees (block, fee, reward v1, reward
   v2) plus chain config; `validate_and_apply_header()` is the state transition. Persisting the merklized state is
   `crates/espresso/node/src/state.rs`.
-- **HotShot SystemContext** (`crates/hotshot/hotshot/src/lib.rs`): tasks via `ConsensusTaskRegistry`, broadcast channels
-  with `HotShotEvent` variants. `EpochMembershipCoordinator` manages per-epoch stake tables.
+- **Coordinator** (`crates/hotshot/new-protocol/src/coordinator.rs`): runs the new protocol, answers `ClientApi` queries
+  and emits `CoordinatorEvent`s. `EpochMembershipCoordinator` manages per-epoch stake tables.
 - **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): tracks `head` and `finalized`; reads use
   `BlockId::finalized()`.
 - **Stake table fetcher** (`crates/espresso/types/src/v0/impls/stake_table.rs`): polls finalized L1, builds

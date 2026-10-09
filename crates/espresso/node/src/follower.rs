@@ -22,7 +22,7 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
-use espresso_api::error::SubmitError;
+use espresso_api::error::{ConsensusUnavailable, SubmitError};
 use espresso_types::{
     ChainConfig, Header, Leaf2, NodeState, PubKey, SeqTypes, Transaction, ValidatedState,
     traits::MembershipPersistence,
@@ -297,7 +297,11 @@ impl<P: SequencerPersistence> FollowerContext<P> {
 
     /// Waits for the first decided leaf.
     pub async fn decided_leaf(&self) -> Leaf2 {
-        self.handle.consensus.decided_leaf().await
+        self.handle
+            .consensus
+            .decided_leaf()
+            .await
+            .expect("the follower's decided_leaf is infallible")
     }
 
     pub fn node_state(&self) -> NodeState {
@@ -345,6 +349,14 @@ impl<P: SequencerPersistence> ApiContext for FollowerHandle<P> {
 
     fn consensus(&self) -> Arc<dyn ConsensusSource> {
         self.consensus.clone()
+    }
+
+    fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
+        self.consensus.coordinator.clone()
+    }
+
+    fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
+        self.consensus.upgrade_lock.clone()
     }
 
     fn persistence(&self) -> Arc<P> {
@@ -401,50 +413,51 @@ struct FollowerConsensus {
 
 #[async_trait]
 impl ConsensusSource for FollowerConsensus {
-    async fn decided_leaf(&self) -> Leaf2 {
+    async fn decided_leaf(&self) -> Result<Leaf2, ConsensusUnavailable> {
         let mut decided = self.decided.clone();
         let leaf = decided
             .wait_for(Option::is_some)
             .await
             .expect("the follower context holds the sender");
-        leaf.as_ref()
+        Ok(leaf
+            .as_ref()
             .expect("waited for a decided leaf")
             .leaf()
-            .clone()
+            .clone())
     }
 
-    async fn decided_state(&self) -> Option<Arc<ValidatedState>> {
-        let leaf = self.decided.borrow().clone()?;
+    async fn decided_state(&self) -> Result<Option<Arc<ValidatedState>>, ConsensusUnavailable> {
+        let Some(leaf) = self.decided.borrow().clone() else {
+            return Ok(None);
+        };
         let mut state = ValidatedState::from_header(leaf.header());
         state.chain_config = (*self.chain_config.read().await).into();
-        Some(Arc::new(state))
+        Ok(Some(Arc::new(state)))
     }
 
-    async fn state(&self, _view: ViewNumber) -> Option<Arc<ValidatedState>> {
-        None
+    async fn state(
+        &self,
+        _view: ViewNumber,
+    ) -> Result<Option<Arc<ValidatedState>>, ConsensusUnavailable> {
+        Ok(None)
     }
 
-    async fn state_and_delta(&self, _view: ViewNumber) -> StateAndDelta<SeqTypes> {
-        (None, None)
+    async fn state_and_delta(
+        &self,
+        _view: ViewNumber,
+    ) -> Result<StateAndDelta<SeqTypes>, ConsensusUnavailable> {
+        Ok((None, None))
     }
 
-    async fn undecided_leaves(&self) -> Vec<Leaf2> {
-        Vec::new()
+    async fn undecided_leaves(&self) -> Result<Vec<Leaf2>, ConsensusUnavailable> {
+        Ok(Vec::new())
     }
 
-    async fn current_epoch(&self) -> Option<EpochNumber> {
+    async fn current_epoch(&self) -> Result<Option<EpochNumber>, ConsensusUnavailable> {
         let decided = self.decided.borrow();
-        decided
+        Ok(decided
             .as_ref()
-            .and_then(|leaf| leaf.leaf().epoch(self.epoch_height))
-    }
-
-    async fn membership_coordinator(&self) -> EpochMembershipCoordinator<SeqTypes> {
-        self.coordinator.clone()
-    }
-
-    async fn upgrade_lock(&self) -> UpgradeLock<SeqTypes> {
-        self.upgrade_lock.clone()
+            .and_then(|leaf| leaf.leaf().epoch(self.epoch_height)))
     }
 
     async fn submit_transaction(&self, tx: Transaction) -> anyhow::Result<Commitment<Transaction>> {
@@ -489,20 +502,30 @@ impl ConsensusSource for FollowerConsensus {
         Ok(())
     }
 
-    async fn current_proposal_participation(&self) -> HashMap<PubKey, f64> {
-        HashMap::new()
+    async fn current_proposal_participation(
+        &self,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable> {
+        Ok(HashMap::new())
     }
 
-    async fn proposal_participation(&self, _epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        HashMap::new()
+    async fn proposal_participation(
+        &self,
+        _epoch: EpochNumber,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable> {
+        Ok(HashMap::new())
     }
 
-    async fn current_vote_participation(&self) -> HashMap<PubKey, f64> {
-        HashMap::new()
+    async fn current_vote_participation(
+        &self,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable> {
+        Ok(HashMap::new())
     }
 
-    async fn vote_participation(&self, _epoch: EpochNumber) -> HashMap<PubKey, f64> {
-        HashMap::new()
+    async fn vote_participation(
+        &self,
+        _epoch: EpochNumber,
+    ) -> Result<HashMap<PubKey, f64>, ConsensusUnavailable> {
+        Ok(HashMap::new())
     }
 }
 

@@ -11,7 +11,7 @@ use super::{
     CatchupParams, Genesis, L1Params, NetworkParams,
     api::{self, data_source::DataSourceOptions},
     context::SequencerContext,
-    init_node, network,
+    init_node,
     options::{Modules, Options, PublicNodeConfig},
     persistence,
 };
@@ -22,7 +22,7 @@ use crate::{
 };
 
 pub enum NodeContext<P: SequencerPersistence> {
-    Validator(Box<SequencerContext<network::Production, P>>),
+    Validator(Box<SequencerContext<P>>),
     Follower(Box<FollowerContext<P>>),
 }
 
@@ -116,6 +116,22 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         tracing::error!("{e:#}; continuing without telemetry");
     }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
+    // The node no longer runs libp2p or the CDN. These are still parsed so existing deployments
+    // start, and only the libp2p advertise address is still sent to the orchestrator.
+    let ignored: Vec<String> = std::env::vars()
+        .map(|(name, _)| name)
+        .filter(|name| {
+            name == "ESPRESSO_NODE_CDN_ENDPOINT"
+                || (name.starts_with("ESPRESSO_NODE_LIBP2P_")
+                    && name != "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS")
+        })
+        .collect();
+    if !ignored.is_empty() {
+        tracing::warn!(
+            ?ignored,
+            "these settings have no effect and will be removed"
+        );
+    }
     log_cpu_probe(genesis.drb_difficulty.max(genesis.drb_upgrade_difficulty)).await;
 
     tracing::warn!(?modules, "sequencer starting up");

@@ -1903,26 +1903,24 @@ where
 
     async fn current_proposal_participation(&self) -> anyhow::Result<Self::Participation> {
         let ds = &*self.data_source;
-        Ok(ds.current_proposal_participation().await)
+        ds.current_proposal_participation().await
     }
 
     async fn proposal_participation(&self, epoch: u64) -> anyhow::Result<Self::Participation> {
         let ds = &*self.data_source;
-        Ok(ds
-            .proposal_participation(hotshot_types::data::EpochNumber::new(epoch))
-            .await)
+        ds.proposal_participation(hotshot_types::data::EpochNumber::new(epoch))
+            .await
     }
 
     async fn current_vote_participation(&self) -> anyhow::Result<Self::Participation> {
         let ds = &*self.data_source;
-        Ok(ds.current_vote_participation().await)
+        ds.current_vote_participation().await
     }
 
     async fn vote_participation(&self, epoch: u64) -> anyhow::Result<Self::Participation> {
         let ds = &*self.data_source;
-        Ok(ds
-            .vote_participation(hotshot_types::data::EpochNumber::new(epoch))
-            .await)
+        ds.vote_participation(hotshot_types::data::EpochNumber::new(epoch))
+            .await
     }
 
     async fn get_block_reward(&self, epoch: Option<u64>) -> anyhow::Result<Self::BlockReward> {
@@ -3402,7 +3400,7 @@ where
     let node_state = ds.node_state().await;
     let chain_id = node_state.chain_config.chain_id;
 
-    let header = ds.get_decided_header().await;
+    let header = ds.get_decided_header().await?;
     let now_secs = header.timestamp_internal();
     let total_reward_distributed = header.total_reward_distributed();
 
