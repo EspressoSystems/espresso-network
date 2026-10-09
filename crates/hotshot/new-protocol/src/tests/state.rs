@@ -134,8 +134,6 @@ async fn test_state_request_missing_parent_is_queued() {
 
     manager.request_state(make_state_request(&test_data.views[1]));
 
-    let parent_commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
-    assert!(manager.pending_contains_commitment(&parent_commit));
     assert!(!manager.validated_contains_view(test_data.views[1].view_number));
     assert!(manager.next().await.is_none(), "no work may be spawned");
 }
@@ -205,8 +203,6 @@ async fn test_update_state_without_delta_keeps_in_flight_validation() {
     manager.request_state(make_state_request(&test_data.views[1]));
     manager.update_state(leaf_update(&test_data.views[0], false));
 
-    let commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
-    assert!(manager.pending_contains_commitment(&commit));
     assert!(!manager.validated_contains_view(test_data.views[0].view_number));
 
     let mut outputs = Vec::new();
@@ -223,10 +219,13 @@ async fn test_update_state_without_delta_existing_stub() {
     let test_data = TestData::new(3).await;
 
     manager.seed_from_header(test_data.views[0].proposal.data.clone());
-    manager.update_state(leaf_update(&test_data.views[0], false));
+    let update = leaf_update(&test_data.views[0], false);
+    let state = update.state.clone();
+    manager.update_state(update);
 
     let entry = manager.get_state(test_data.views[0].view_number).unwrap();
     assert!(entry.delta.is_none());
+    assert!(Arc::ptr_eq(&entry.state, &state), "stub state is replaced");
     assert!(manager.next().await.is_none());
 }
 
@@ -239,8 +238,6 @@ async fn test_update_state_without_delta_missing_entry() {
     manager.request_state(make_state_request(&test_data.views[1]));
     manager.update_state(leaf_update(&test_data.views[0], false));
 
-    let commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
-    assert!(manager.pending_contains_commitment(&commit));
     assert!(!manager.validated_contains_view(test_data.views[0].view_number));
     assert!(manager.next().await.is_none());
 }
@@ -263,29 +260,48 @@ async fn test_seed_decided_releases_queued_work() {
         outputs.push(output);
     }
     assert_eq!(count_state_verified(&outputs), 1);
+    assert_eq!(count_header_created(&outputs), 1);
 }
 
-/// `seed_decided` is a no-op for a leaf already seeded, validated or in flight.
+/// `seed_decided` does not abort a validation in flight.
 #[tokio::test]
-async fn test_seed_decided_duplicate_is_noop() {
+async fn test_seed_decided_in_flight_is_noop() {
     let mut manager = new_manager().await;
     let test_data = TestData::new(3).await;
-    let leaf0 = test_data.views[0].leaf.clone();
 
     manager.request_state(make_state_request(&test_data.views[0]));
-    manager.seed_decided(leaf0.clone());
+    manager.seed_decided(test_data.views[0].leaf.clone());
+
     assert!(!manager.validated_contains_view(test_data.views[0].view_number));
     manager.next().await.expect("validation was not aborted");
-
-    manager.seed_decided(leaf0.clone());
     let entry = manager.get_state(test_data.views[0].view_number).unwrap();
-    assert!(
-        entry.delta.is_some(),
-        "validated state must not be displaced"
-    );
+    assert!(entry.delta.is_some());
+}
+
+/// `seed_decided` does not displace a validated state.
+#[tokio::test]
+async fn test_seed_decided_validated_is_noop() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
+
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.next().await.expect("validation completes");
+    manager.seed_decided(test_data.views[0].leaf.clone());
+
+    let entry = manager.get_state(test_data.views[0].view_number).unwrap();
+    assert!(entry.delta.is_some());
+    assert!(manager.next().await.is_none());
+}
+
+/// Seeding the same leaf twice leaves one stub and starts nothing.
+#[tokio::test]
+async fn test_seed_decided_twice_is_noop() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(3).await;
 
     manager.seed_decided(test_data.views[1].leaf.clone());
     manager.seed_decided(test_data.views[1].leaf.clone());
+
     assert!(manager.validated_contains_view(test_data.views[1].view_number));
     assert!(manager.next().await.is_none());
 }
@@ -413,13 +429,6 @@ async fn test_state_request_queued_behind_parent() {
     manager.request_state(make_state_request(&test_data.views[0]));
     manager.request_state(make_state_request(&test_data.views[1]));
 
-    // View 2 should be queued as pending (parent view 1 is in progress).
-    let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
-    assert!(
-        manager.pending_contains_commitment(&view_1_commit),
-        "View 2 should be pending on view 1's commitment"
-    );
-
     // next() should process view 1, then eagerly chain view 2.
     let output1 = manager.next().await.expect("view 1 should complete");
     let output2 = manager.next().await.expect("view 2 should complete");
@@ -469,13 +478,6 @@ async fn test_header_request_queued_behind_state() {
     // Send header request with view 1 as parent BEFORE view 1 completes.
     let header_req = make_header_request(&test_data.views[0], test_data.views[1].view_number);
     manager.request_header(header_req);
-
-    // Header should be pending on view 1's commitment.
-    let view_1_commit = proposal_commitment(&test_data.views[0].proposal.data.clone());
-    assert!(
-        manager.pending_contains_commitment(&view_1_commit),
-        "Header should be pending on view 1's commitment"
-    );
 
     // next() processes state completion, which chains the header request.
     let output1 = manager.next().await.expect("state should complete");

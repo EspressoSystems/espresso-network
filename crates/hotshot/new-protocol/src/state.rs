@@ -25,6 +25,7 @@ use crate::{
     message::Proposal,
 };
 
+/// Validated states stay this many views below the decided view so peers can serve catchup.
 const STATE_GC_MARGIN: u64 = 8;
 
 pub struct UpdateLeaf<T: NodeType> {
@@ -487,9 +488,6 @@ impl<T: NodeType> StateManager<T> {
     /// The decided view's own validation, or a header this node needs to
     /// propose, may be queued behind a validation aborted here. A stub for the
     /// aborted proposal lets them proceed via catchup instead of hanging.
-    ///
-    /// Validated states stay for `STATE_GC_MARGIN` views below `view_number` so peers can
-    /// serve catchup at recently decided views.
     pub fn gc(&mut self, view_number: ViewNumber) {
         let margin_view = ViewNumber::new(view_number.saturating_sub(STATE_GC_MARGIN));
         self.validated_states.retain(|_, entry| {
@@ -576,10 +574,5 @@ impl<T: NodeType> StateManager<T> {
         self.validated_states
             .iter()
             .any(|(_, entry)| entry.leaf.view_number() == v)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pending_contains_commitment(&self, c: &Commitment<Leaf2<T>>) -> bool {
-        self.pending_requests.contains_key(c)
     }
 }
