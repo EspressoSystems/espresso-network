@@ -1046,7 +1046,7 @@ pub mod node_tests {
             BlockPayload,
             block_contents::{BlockHeader, EncodeBytes},
         },
-        vid::advz::advz_scheme,
+        vid::{advz::advz_scheme, avidm_gf2::AvidmGf2Scheme},
     };
     use jf_advz::VidScheme;
     use pretty_assertions::assert_eq;
@@ -1063,7 +1063,7 @@ pub mod node_tests {
             SyncStatusRange, TimeWindowQueryData, WindowStart,
         },
         testing::{
-            chain::ChainNode,
+            chain::{ChainNode, EPOCH_HEIGHT, MockChain, NUM_NODES},
             consensus::TestableDataSource,
             mocks::{MockPayload, MockTypes, mock_transaction},
             sleep,
@@ -1514,6 +1514,48 @@ pub mod node_tests {
                 VidShare::V0(disperse.shares[0].clone())
             );
         }
+    }
+
+    /// Recover a payload from the AvidmGf2 shares the storage nodes keep for a block.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_vid_recovery<D: TestableDataSource>() {
+        let mut chain = MockChain::new(NUM_NODES, EPOCH_HEIGHT).await;
+        let block = chain.push([mock_transaction(vec![1, 2, 3])]).await.clone();
+        let height = block.height() as usize;
+
+        // Each storage node keeps only its own share of every block.
+        let mut nodes = Vec::new();
+        for node in 0..NUM_NODES {
+            let storage = D::create(node).await;
+            let ds = D::connect(&storage).await;
+            for block in chain.blocks() {
+                ds.append(block.block_info(node)).await.unwrap();
+            }
+            nodes.push((storage, ds));
+        }
+
+        let VidCommitment::V2(commit) = block.leaf.payload_hash() else {
+            panic!("chain disperses with AvidmGf2");
+        };
+        let common = nodes[0].1.get_vid_common(height).await.await;
+        let VidCommon::V2(common) = common.common() else {
+            panic!("expect AvidmGf2 common");
+        };
+        assert!(AvidmGf2Scheme::is_consistent(&commit, common));
+
+        // Verify each node's share against the commitment, then recover the payload from them.
+        let mut shares = Vec::new();
+        for (_, ds) in &nodes {
+            let VidShare::V2(share) = ds.vid_share(height).await.unwrap() else {
+                panic!("expect AvidmGf2 share");
+            };
+            AvidmGf2Scheme::verify_share(&commit, common, &share)
+                .unwrap()
+                .unwrap();
+            shares.push(share);
+        }
+        let bytes = AvidmGf2Scheme::recover(common, &shares).unwrap();
+        assert_eq!(&bytes[..], &block.block.payload().encode()[..]);
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
