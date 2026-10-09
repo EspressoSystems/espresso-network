@@ -76,7 +76,7 @@ jobs:
       - uses: ./.github/actions/install-postgres
       # No cache: the run executes pull request code, which could write into it before the
       # post-step save.
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: false
       - uses: taiki-e/install-action@just
