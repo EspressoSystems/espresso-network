@@ -53,8 +53,10 @@ pub struct TestStorageState<TYPES: NodeType> {
     )>,
     next_epoch_high_qc2:
         Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
+    /// The new protocol's latest epoch boundary block's own certificate.
+    boundary_qc2: Option<hotshot_types::simple_certificate::QuorumCertificate2<TYPES>>,
     action: ViewNumber,
-    action_log: Vec<(ViewNumber, HotShotAction)>,
+    action_log: Vec<(ViewNumber, Option<EpochNumber>, HotShotAction)>,
     epoch: Option<EpochNumber>,
     state_certs: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<TYPES>>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
@@ -78,6 +80,7 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             high_qc2: None,
             eqc: None,
             next_epoch_high_qc2: None,
+            boundary_qc2: None,
             action: ViewNumber::genesis(),
             action_log: Vec::new(),
             epoch: None,
@@ -137,6 +140,27 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.inner.read().await.next_epoch_high_qc2.clone()
     }
 
+    pub async fn boundary_qc_cloned(&self) -> Option<QuorumCertificate2<TYPES>> {
+        self.inner.read().await.boundary_qc2.clone()
+    }
+
+    /// Keep `qc` as the boundary certificate if it is later than the one kept,
+    /// ordered by epoch, then view.
+    pub async fn update_boundary_qc2(&self, qc: QuorumCertificate2<TYPES>) -> Result<()> {
+        if self.should_return_err.load(Ordering::Relaxed) {
+            bail!("Failed to update boundary qc to storage");
+        }
+        let mut inner = self.inner.write().await;
+        let newer = inner.boundary_qc2.as_ref().is_none_or(|kept| {
+            hotshot_types::simple_vote::LockView::of(kept)
+                < hotshot_types::simple_vote::LockView::of(&qc)
+        });
+        if newer {
+            inner.boundary_qc2 = Some(qc);
+        }
+        Ok(())
+    }
+
     pub async fn decided_upgrade_certificate(&self) -> Option<UpgradeCertificate<TYPES>> {
         self.decided_upgrade_certificate.read().await.clone()
     }
@@ -145,8 +169,8 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.inner.read().await.action
     }
 
-    /// Every action successfully recorded, in call order.
-    pub async fn action_log(&self) -> Vec<(ViewNumber, HotShotAction)> {
+    /// Every action successfully recorded, with its view and epoch, in call order.
+    pub async fn action_log(&self) -> Vec<(ViewNumber, Option<EpochNumber>, HotShotAction)> {
         self.inner.read().await.action_log.clone()
     }
 
@@ -302,7 +326,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
             bail!("Failed to append Action to storage");
         }
         let mut inner = self.inner.write().await;
-        inner.action_log.push((view, action));
+        inner.action_log.push((view, epoch, action));
         if matches!(
             action,
             HotShotAction::Vote | HotShotAction::Propose | HotShotAction::TimeoutVote
@@ -370,8 +394,11 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
         let mut inner = self.inner.write().await;
+        // Locks are ordered by epoch, then view.
         if let Some(ref current_high_qc) = inner.high_qc2 {
-            if new_high_qc.view_number() > current_high_qc.view_number() {
+            if hotshot_types::simple_vote::LockView::of(&new_high_qc)
+                > hotshot_types::simple_vote::LockView::of(current_high_qc)
+            {
                 inner.high_qc2 = Some(new_high_qc);
             }
         } else {

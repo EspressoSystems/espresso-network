@@ -12,6 +12,7 @@ use hotshot_types::{
     event::HotShotAction,
     message::Proposal as SignedProposal,
     simple_certificate::{LightClientStateUpdateCertificateV2, UpgradeCertificate},
+    simple_vote::LockView,
     traits::{
         EncodeBytes,
         metrics::{Histogram, Metrics},
@@ -46,12 +47,27 @@ pub trait NewProtocolStorage<T: NodeType>: StorageTrait<T> {
 
     /// Load the persisted locked QC, if any.
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>>;
+
+    /// Persist the own `Certificate1` of the last block of an epoch, at the
+    /// block's own view.
+    ///
+    /// A re-vote request and the next epoch's first block name it, and
+    /// nothing else carries it once the view has passed: without it a
+    /// restarted node cannot lead either. Implementations keep the latest,
+    /// ordered by epoch, then view, as a monotonic compare-and-set.
+    async fn append_boundary_qc2(&self, qc: Certificate1<T>) -> anyhow::Result<()>;
+
+    /// Load the persisted boundary certificate, if any.
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ActionKind {
     Vote,
     Propose,
+    /// A timeout vote that carries the signer's lock. Recorded before it is
+    /// sent, so that a restarted node does not vote2 at a view it timed out.
+    Timeout,
 }
 
 impl From<ActionKind> for HotShotAction {
@@ -59,6 +75,7 @@ impl From<ActionKind> for HotShotAction {
         match kind {
             ActionKind::Vote => HotShotAction::Vote,
             ActionKind::Propose => HotShotAction::Propose,
+            ActionKind::Timeout => HotShotAction::TimeoutVote,
         }
     }
 }
@@ -68,17 +85,15 @@ pub enum StorageOutput<T: NodeType> {
     Proposal(ViewNumber, Commitment<Leaf2<T>>),
     Vid(ViewNumber),
     Action(ViewNumber, ActionKind),
-    /// The locked QC for the given view has been durably persisted.
-    HighQc(ViewNumber),
+    /// The locked QC at the given lock position has been durably persisted.
+    HighQc(LockView),
 }
 
 impl<T: NodeType> StorageOutput<T> {
     pub fn view_number(&self) -> ViewNumber {
         match self {
-            Self::Proposal(view, _)
-            | Self::Vid(view)
-            | Self::Action(view, _)
-            | Self::HighQc(view) => *view,
+            Self::Proposal(view, _) | Self::Vid(view) | Self::Action(view, _) => *view,
+            Self::HighQc(lock) => lock.view,
         }
     }
 }
@@ -245,10 +260,30 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         self.handles.entry(view).or_default().push(handle);
     }
 
+    /// Persist the own certificate of the last block of an epoch (see
+    /// [`NewProtocolStorage::append_boundary_qc2`]). Nothing waits on it.
+    pub fn append_boundary_qc2(&mut self, qc: Certificate1<T>) {
+        let view = qc.view_number();
+        let storage = self.storage.clone();
+        let handle = self.tasks.spawn(async move {
+            loop {
+                match storage.append_boundary_qc2(qc.clone()).await {
+                    Ok(()) => return None,
+                    Err(err) => {
+                        warn!(%err, %view, "failed to append boundary qc, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
+    }
+
     /// Persist the locked QC; on success emits [`StorageOutput::HighQc`], which
     /// gates the matching phase-2 vote.
     pub fn append_high_qc2(&mut self, high_qc: Certificate1<T>) {
         let view = high_qc.view_number();
+        let lock = LockView::of(&high_qc);
         let storage = self.storage.clone();
         let timer = self
             .metrics
@@ -259,7 +294,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 match storage.append_high_qc2(high_qc.clone()).await {
                     Ok(()) => {
                         finish_measurement(timer);
-                        return Some(StorageOutput::HighQc(view));
+                        return Some(StorageOutput::HighQc(lock));
                     },
                     Err(err) => {
                         warn!(%err, %view, "failed to append high qc, retrying");
@@ -324,7 +359,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     /// `proposal` must already be validated: `state_cert`'s presence is not
     /// re-checked here, only gated at write time by `state_cert_matches_parent`
     /// (received proposals) and `maybe_propose` (self-proposed ones).
-    /// `seed_proposals` reads persisted rows back on restart without
+    /// `seed_signed_proposals` reads persisted rows back on restart without
     /// re-checking, so that write-time gate is the only thing enforcing this.
     pub fn append_proposal(&mut self, proposal: Proposal<T>) {
         let view = proposal.view_number;
@@ -438,5 +473,13 @@ impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
 
     async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>> {
         Ok(self.high_qc_cloned().await)
+    }
+
+    async fn append_boundary_qc2(&self, qc: Certificate1<T>) -> anyhow::Result<()> {
+        self.update_boundary_qc2(qc).await
+    }
+
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>> {
+        Ok(self.boundary_qc_cloned().await)
     }
 }

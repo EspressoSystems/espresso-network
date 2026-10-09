@@ -29,7 +29,15 @@
   two epochs and neither may reach a threshold. The view times out again and the votes converge as the nodes do. Before
   V0_7 they are pooled instead, since the epoch is then covered by no signature and names no committee. The same upgrade
   carries the `LargeBlock` chain-config change raising `max_block_size`; it is the first upgrade run by the new
-  protocol's own upgrade sub-protocol (`crates/hotshot/new-protocol/src/upgrade.rs`).
+  protocol's own upgrade sub-protocol (`crates/hotshot/new-protocol/src/upgrade.rs`). V0_7 also switches the vote rules
+  to the certificate rule (`UpgradeLock::certificate_rule`, see `epoch-boundary-stall.typ`): `TimeoutData3` signs the
+  signer's lock, a `TimeoutCertificate3` groups its signers by lock and carries the latest lock's `Certificate1`, a node
+  never votes2 at a view it sent such a timeout vote for (the vote is recorded as an action first, so this survives a
+  restart), and a vote1 after a timeout checks the parent against the certificate's lock instead of the voter's own
+  votes. Locks are ordered by epoch, then view. The last block of an epoch that can no longer get a `Certificate2` at
+  its own view is committed by a re-vote (`ReVote`, a new `ConsensusMessage` variant), whose `Certificate2` is at a
+  later view than the block; the next epoch's first block still names the block's own `Certificate1`. That
+  certificate is persisted (`boundary_qc2`, migration `V1506`) so a restarted node can still lead either.
 
 What a network runs: `base_version` and `upgrade_version` in `data/genesis/<network>.toml`. Live confirmation is
 `consensus_genesis{base_version,upgrade_version}` from `/v1/status/metrics`, see `doc/agents/live-chains.md`.

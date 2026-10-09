@@ -107,13 +107,43 @@ pub struct TimeoutData2 {
     pub epoch: Option<EpochNumber>,
 }
 
-/// Data used for a timeout vote, binding the epoch the vote was cast in.
+/// Data used for a timeout vote, binding the epoch the vote was cast in and
+/// the lock its signer held when it timed out.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct TimeoutData3 {
     /// View the timeout is for
     pub view: ViewNumber,
     /// Epoch number
     pub epoch: EpochNumber,
+    /// The signer's lock, `None` while it is locked on nothing but genesis.
+    pub lock: Option<LockView>,
+}
+
+/// Where a lock sits in the order locks are compared by: epoch first, then view.
+///
+/// A certificate of a later epoch is later than any certificate of an earlier
+/// one, whatever their views.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LockView {
+    /// Field order is the comparison order: epoch, then view.
+    pub epoch: EpochNumber,
+    pub view: ViewNumber,
+}
+
+impl LockView {
+    /// The position of the lock a `Certificate1` (`QuorumCertificate2`) gives.
+    pub fn of<T: NodeType>(cert: &crate::simple_certificate::QuorumCertificate2<T>) -> Self {
+        Self {
+            epoch: cert.data.epoch.unwrap_or_else(EpochNumber::genesis),
+            view: cert.view_number(),
+        }
+    }
+}
+
+impl std::fmt::Display for LockView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.epoch, self.view)
+    }
 }
 
 /// Data used for a Pre Commit vote.
@@ -520,12 +550,19 @@ impl Committable for TimeoutData2 {
 
 impl Committable for TimeoutData3 {
     fn commit(&self) -> Commitment<Self> {
-        let TimeoutData3 { view, epoch } = self;
+        let TimeoutData3 { view, epoch, lock } = self;
 
-        committable::RawCommitmentBuilder::new("Timeout data v3")
+        let builder = committable::RawCommitmentBuilder::new("Timeout data v3")
             .u64_field("view number", **view)
-            .u64_field("epoch number", **epoch)
-            .finalize()
+            .u64_field("epoch number", **epoch);
+        match lock {
+            None => builder.u64_field("lock", 0),
+            Some(lock) => builder
+                .u64_field("lock", 1)
+                .u64_field("lock epoch", *lock.epoch)
+                .u64_field("lock view", *lock.view),
+        }
+        .finalize()
     }
 }
 

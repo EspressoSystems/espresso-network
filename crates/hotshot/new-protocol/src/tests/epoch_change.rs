@@ -77,6 +77,39 @@ async fn test_epoch_change_sent_on_last_block() {
     );
 }
 
+/// The epoch change a node sent when it decided an epoch's last block is the one
+/// it answers a timeout vote of that epoch with: a node still voting in the epoch
+/// has not learnt it ended, and the change sent once may have been lost.
+#[tokio::test]
+async fn test_epoch_change_ending_matches_the_one_sent() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    run_views_full(&mut harness, &test_data, &node_key, 0..10).await;
+
+    let sent = harness
+        .outputs()
+        .iter()
+        .find_map(|o| match o {
+            ConsensusOutput::SendEpochChange(change) => Some(change.clone()),
+            _ => None,
+        })
+        .expect("setup: the epoch change is sent when epoch 1's last block is decided");
+    let epoch = test_data.views[9].epoch_number;
+    let answer = harness
+        .consensus
+        .epoch_change_ending(epoch)
+        .expect("a node that decided the epoch's last block holds its epoch change");
+    assert_eq!(answer.cert1, sent.cert1);
+    assert_eq!(answer.cert2, sent.cert2);
+    assert_eq!(answer.proposal, sent.proposal);
+    assert!(
+        harness.consensus.epoch_change_ending(epoch + 1).is_none(),
+        "no epoch change is held for an epoch that has not ended"
+    );
+}
+
 /// Epoch change should not be emitted for blocks before the epoch boundary.
 #[tokio::test]
 async fn test_epoch_change_not_sent_mid_epoch() {
@@ -572,7 +605,7 @@ async fn test_locking_the_boundary_block_keeps_the_new_epoch() {
         .await;
 
     assert_eq!(
-        harness.consensus.locked_view(),
+        harness.consensus.lock_view().map(|lock| lock.view),
         Some(boundary.view_number),
         "the lock moved onto the boundary block in the same step"
     );

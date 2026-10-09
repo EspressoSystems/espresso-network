@@ -14,29 +14,39 @@ mod accumulate;
 use std::{
     any::{type_name, type_name_of_val},
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    marker::PhantomData,
     mem,
     panic::resume_unwind,
 };
 
 pub(crate) use accumulate::{Cert, CheckedAccumulator};
 use alloy::primitives::U256;
+use committable::Committable;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::UpgradeLock,
     simple_certificate::{
         LightClientStateUpdateCertificateV2, QuorumCertificate2, SuccessThreshold, Threshold,
-        UpgradeThreshold,
+        TimeoutCertificate3, UpgradeThreshold,
     },
-    simple_vote::{HasEpoch, QuorumVote2, SimpleVote, UpgradeVote2, Voteable},
-    traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
+    simple_vote::{HasEpoch, QuorumVote2, SimpleVote, UpgradeVote2, VersionedVoteData, Voteable},
+    stake_table::StakeTableEntries,
+    traits::{
+        node_implementation::NodeType,
+        signature_key::{SignatureKey, StakeTableEntryType},
+    },
     vote::{Certificate, HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote},
 };
+use hotshot_utils::anytrace;
 use tokio::{sync::mpsc, task::spawn_blocking};
 use tokio_util::task::JoinMap;
 use tracing::{error, info, warn};
 
-use crate::{cert_verifier::ValidCert, message::Vote1};
+use crate::{
+    cert_verifier::{ValidCert, verify_signatures, verify_timeout3},
+    message::{TimeoutBallot, Vote1},
+};
 
 /// Information about a vote.
 ///
@@ -226,6 +236,214 @@ impl<T: NodeType> Tally<T> for EpochRootTally<T> {
             return None;
         };
         Some((ValidCert::new(q.clone(), e), s.clone()))
+    }
+}
+
+impl<T: NodeType> Ballot for TimeoutBallot<T> {
+    type Signer = T::SignatureKey;
+
+    fn view(&self) -> ViewNumber {
+        self.vote().view_number()
+    }
+
+    fn epoch(&self) -> Option<EpochNumber> {
+        Some(self.vote().data.epoch)
+    }
+
+    fn signer(&self) -> Self::Signer {
+        self.vote().signing_key()
+    }
+}
+
+/// Accumulates [`TimeoutBallot`]s into a [`TimeoutCertificate3`] once their
+/// signers' combined stake reaches the threshold `Th`.
+///
+/// Signers with different locks sign different data, so unlike a
+/// [`SimpleTally`] the stake is counted across locks. As in a
+/// [`CheckedAccumulator`], votes are taken unchecked until a certificate
+/// fails to verify, and are checked one by one from then on. A ballot's lock
+/// certificate is checked along with its signature: a vote naming a lock no
+/// quorum certified is not counted, so it cannot raise the certificate's lock.
+pub struct TimeoutTally<T: NodeType, Th> {
+    membership: EpochMembership<T>,
+    upgrade_lock: UpgradeLock<T>,
+    ballots: Vec<TimeoutBallot<T>>,
+    weight: U256,
+    verify_votes: bool,
+    _threshold: PhantomData<fn() -> Th>,
+}
+
+impl<T: NodeType, Th: Threshold<T> + Send + 'static> Tally<T> for TimeoutTally<T, Th> {
+    type Vote = TimeoutBallot<T>;
+    type Output = ValidCert<TimeoutCertificate3<T>>;
+
+    fn new(m: EpochMembership<T>, l: UpgradeLock<T>) -> Self {
+        Self {
+            membership: m,
+            upgrade_lock: l,
+            ballots: Vec::new(),
+            weight: U256::ZERO,
+            verify_votes: false,
+            _threshold: PhantomData,
+        }
+    }
+
+    fn min_votes(&self) -> usize {
+        let table: Vec<_> = self.membership.stake_table().collect();
+        let largest = table
+            .iter()
+            .map(|peer| peer.stake_table_entry.stake())
+            .max()
+            .unwrap_or_default();
+        if largest.is_zero() {
+            return 1;
+        }
+        let nodes = table.len().max(1);
+        let votes = Th::threshold(&self.membership).div_ceil(largest);
+        usize::try_from(votes).unwrap_or(nodes).clamp(1, nodes)
+    }
+
+    fn has_signer(m: &EpochMembership<T>, signer: &T::SignatureKey) -> bool {
+        m.stake(signer).is_some()
+    }
+
+    fn add(&mut self, ballot: TimeoutBallot<T>) -> Option<Self::Output> {
+        if self.verify_votes && !self.is_valid(&ballot) {
+            return None;
+        }
+        self.weight += self.stake(&ballot);
+        self.ballots.push(ballot);
+        if self.weight < Th::threshold(&self.membership) {
+            return None;
+        }
+        match self.assemble() {
+            Some(Ok(cert)) => Some(cert),
+            Some(Err(err)) if !self.verify_votes => {
+                warn!(%err, "invalid timeout certificate formed");
+                self.recover()
+            },
+            Some(Err(err)) => {
+                error!(%err, "timeout certificate of checked votes is invalid");
+                None
+            },
+            None => None,
+        }
+    }
+}
+
+impl<T: NodeType, Th: Threshold<T>> TimeoutTally<T, Th> {
+    fn stake(&self, ballot: &TimeoutBallot<T>) -> U256 {
+        self.membership
+            .stake(&ballot.vote().signing_key())
+            .map(|peer| peer.stake_table_entry.stake())
+            .unwrap_or_default()
+    }
+
+    /// The certificate of the ballots so far, checked.
+    fn assemble(&self) -> Option<anytrace::Result<ValidCert<TimeoutCertificate3<T>>>> {
+        let first = self.ballots.first()?;
+        let view = first.vote().view_number();
+        let epoch = first.vote().data.epoch;
+        let latest = self
+            .ballots
+            .iter()
+            .max_by_key(|ballot| ballot.vote().data.lock)
+            .expect("there is a first ballot");
+        let entries = StakeTableEntries::from_iter(self.membership.stake_table()).0;
+        let threshold = Th::threshold(&self.membership);
+        let votes = self.ballots.iter().map(|ballot| {
+            (
+                ballot.vote().data.lock,
+                ballot.vote().signing_key(),
+                ballot.vote().signature(),
+            )
+        });
+        let result =
+            TimeoutCertificate3::assemble(view, epoch, &entries, votes, latest.lock().cloned())
+                .and_then(|cert| {
+                    verify_timeout3(
+                        &cert,
+                        &entries,
+                        threshold,
+                        *self.membership.coordinator.epoch_height(),
+                        &self.upgrade_lock,
+                        &self.membership.coordinator,
+                    )?;
+                    Ok(cert)
+                })
+                .map(|cert| {
+                    info!(%view, %epoch, lock = ?cert.lock(), "timeout certificate formed");
+                    ValidCert::new(cert, epoch)
+                });
+        Some(result)
+    }
+
+    /// Drop the ballots that fail their checks and assemble the rest again.
+    fn recover(&mut self) -> Option<ValidCert<TimeoutCertificate3<T>>> {
+        self.verify_votes = true;
+        let ballots = mem::take(&mut self.ballots);
+        self.weight = U256::ZERO;
+        for ballot in ballots {
+            if self.is_valid(&ballot) {
+                self.weight += self.stake(&ballot);
+                self.ballots.push(ballot);
+            }
+        }
+        if self.weight < Th::threshold(&self.membership) {
+            return None;
+        }
+        match self.assemble()? {
+            Ok(cert) => Some(cert),
+            Err(err) => {
+                error!(%err, "timeout certificate of checked votes is invalid");
+                None
+            },
+        }
+    }
+
+    /// Check a ballot's signature and its lock certificate.
+    fn is_valid(&self, ballot: &TimeoutBallot<T>) -> bool {
+        let vote = ballot.vote();
+        let Ok(data) =
+            VersionedVoteData::new(vote.data.clone(), vote.view_number(), &self.upgrade_lock)
+        else {
+            return false;
+        };
+        if !vote
+            .signing_key()
+            .validate(&vote.signature(), data.commit().as_ref())
+        {
+            warn!(view = %vote.view_number(), signer = %vote.signing_key(), "invalid timeout vote");
+            return false;
+        }
+        let Some(cert) = ballot.lock() else {
+            return true;
+        };
+        if !cert
+            .data
+            .is_well_formed(*self.membership.coordinator.epoch_height())
+        {
+            return false;
+        }
+        let Ok(membership) = self
+            .membership
+            .coordinator
+            .membership_for_epoch(cert.data.epoch)
+        else {
+            return false;
+        };
+        let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+        let valid = verify_signatures(
+            cert,
+            &entries,
+            membership.success_threshold(),
+            &self.upgrade_lock,
+        )
+        .is_ok();
+        if !valid {
+            warn!(view = %vote.view_number(), signer = %vote.signing_key(), "timeout vote with an invalid lock certificate");
+        }
+        valid
     }
 }
 
@@ -505,12 +723,12 @@ mod tests {
         epoch_membership::EpochMembership,
         message::UpgradeLock,
         simple_certificate::{
-            SuccessThreshold, Threshold, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
-            UpgradeCertificate,
+            Certificate1, SuccessThreshold, Threshold, TimeoutCertificate2, TimeoutCertificate3,
+            TimeoutEvidence, UpgradeCertificate,
         },
         simple_vote::{
-            HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutData3,
-            TimeoutVote2, TimeoutVote3, UpgradeProposalData, VersionedVoteData, Vote2Data,
+            HasEpoch, LockView, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutData3,
+            TimeoutVote2, UpgradeProposalData, VersionedVoteData, Vote2Data,
         },
         stake_table::StakeTableEntries,
         traits::{node_implementation::NodeType, signature_key::SignatureKey},
@@ -519,11 +737,10 @@ mod tests {
     use tokio::{sync::mpsc, time::timeout};
     use versions::{NEW_PROTOCOL_VERSION, TIMEOUT_EPOCH_VERSION, Upgrade};
 
-    use super::{Ballot, Cert, SimpleTally, VoteCollector};
+    use super::{Ballot, Cert, SimpleTally, TimeoutTally, VoteCollector};
     use crate::{
-        cert_verifier::verify_signatures,
-        helpers::test_upgrade_lock,
-        message::{UpgradeVoteMessage, Vote2},
+        helpers::{test_timeout_epoch_lock, test_upgrade_lock},
+        message::{TimeoutBallot, TimeoutVoteMessage3, UpgradeVoteMessage, Vote2},
         tests::common::utils::mock_membership,
     };
 
@@ -534,6 +751,9 @@ mod tests {
 
     /// How long to wait for expected certificates before failing.
     const CERT_TIMEOUT: Duration = Duration::from_millis(100);
+    /// How long to wait for a timeout certificate that checks its votes one
+    /// by one, lock certificates included, which is slow on a loaded machine.
+    const RECOVERY_TIMEOUT: Duration = Duration::from_secs(10);
     /// How long to wait to confirm no certificate is produced (failure tests).
     const NO_CERT_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -949,25 +1169,34 @@ mod tests {
     /// recovery that drops such votes would never run.
     #[tokio::test]
     async fn test_genesis_timeout_invalid_signature_recovery() {
-        let mut task = setup_task::<TimeoutVote3<TestTypes>, SuccessThreshold>();
+        let lock = test_timeout_epoch_lock();
+        let mut task = VoteCollector::<TestTypes, TimeoutTally<TestTypes, SuccessThreshold>>::new(
+            mock_membership(),
+            lock.clone(),
+        );
         let view = ViewNumber::genesis();
         let epoch = EpochNumber::genesis();
         let vote = |node_index, signer_seed| {
             let (pub_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
             let (_, priv_key) = BLSPubKey::generated_from_seed_indexed(signer_seed, node_index);
-            let data = TimeoutData3 { view, epoch };
-            let commit =
-                VersionedVoteData::<TestTypes, _>::new(data.clone(), view, &test_upgrade_lock())
-                    .unwrap()
-                    .commit();
-            TimeoutVote3::<TestTypes> {
-                signature: (
-                    pub_key,
-                    BLSPubKey::sign(&priv_key, commit.as_ref()).unwrap(),
-                ),
-                data,
-                view_number: view,
+            let data = TimeoutData3 {
+                view,
+                epoch,
+                lock: None,
+            };
+            let commit = VersionedVoteData::<TestTypes, _>::new(data.clone(), view, &lock)
+                .unwrap()
+                .commit();
+            TimeoutVoteMessage3 {
+                signer: pub_key,
+                signature: BLSPubKey::sign(&priv_key, commit.as_ref()).unwrap(),
+                view,
+                epoch,
+                lock: None,
+                evidence: None,
             }
+            .ballot()
+            .unwrap()
         };
 
         for i in 0..6 {
@@ -976,16 +1205,121 @@ mod tests {
         for i in 6..8 {
             task.accumulate_vote(vote(i, [1u8; 32]));
         }
-        assert_no_certs(&mut task).await;
+        // Six valid votes are one short; the two invalid ones are dropped.
+        assert!(timeout(NO_CERT_TIMEOUT, task.next()).await.is_err());
 
         task.accumulate_vote(vote(9, [0u8; 32]));
-        let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
+        let cert = timeout(RECOVERY_TIMEOUT, task.next())
+            .await
+            .unwrap()
+            .unwrap();
         let membership = mock_membership().membership_for_epoch(Some(epoch)).unwrap();
-        let entries =
-            StakeTableEntries::<TestTypes>::from(TimeoutCertificate3::stake_table(&membership)).0;
-        let threshold = TimeoutCertificate3::<TestTypes>::threshold(&membership);
-        verify_signatures(cert.cert(), &entries, threshold, &test_upgrade_lock())
+        let entries = StakeTableEntries::<TestTypes>::from_iter(membership.stake_table()).0;
+        cert.check_signatures(&entries, membership.success_threshold(), &lock)
             .expect("the certificate carries only valid signatures");
+        assert!(cert.earlier.is_empty());
+    }
+
+    /// Timeout votes naming different locks are counted together, and the
+    /// certificate carries the latest of their locks.
+    #[tokio::test]
+    async fn timeout_votes_with_different_locks_form_one_certificate() {
+        let lock = test_timeout_epoch_lock();
+        let coordinator = mock_membership();
+        let mut task = VoteCollector::<TestTypes, TimeoutTally<TestTypes, SuccessThreshold>>::new(
+            coordinator.clone(),
+            lock.clone(),
+        );
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let view = ViewNumber::new(5);
+        let older = lock_cert(ViewNumber::new(2), epoch, &membership, &lock);
+        let newer = lock_cert(ViewNumber::new(3), epoch, &membership, &lock);
+        let ballot = |node_index, cert: &Option<Certificate1<TestTypes>>| {
+            let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+            TimeoutBallot::sign(view, epoch, cert.clone(), &pub_key, &priv_key, &lock).unwrap()
+        };
+        for i in 0..3 {
+            task.accumulate_vote(ballot(i, &None));
+        }
+        for i in 3..5 {
+            task.accumulate_vote(ballot(i, &Some(older.clone())));
+        }
+        for i in 5..7 {
+            task.accumulate_vote(ballot(i, &Some(newer.clone())));
+        }
+        let cert = timeout(RECOVERY_TIMEOUT, task.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(cert.earlier.len(), 2);
+        assert_eq!(cert.lock(), Some(LockView::of(&newer)));
+        let entries = StakeTableEntries::<TestTypes>::from_iter(membership.stake_table()).0;
+        cert.check_signatures(&entries, membership.success_threshold(), &lock)
+            .expect("valid grouped certificate");
+    }
+
+    /// A vote naming a lock its certificate does not show is not counted, so
+    /// it cannot raise the certificate's lock.
+    #[tokio::test]
+    async fn timeout_vote_with_a_forged_lock_is_dropped() {
+        let lock = test_timeout_epoch_lock();
+        let coordinator = mock_membership();
+        let mut task = VoteCollector::<TestTypes, TimeoutTally<TestTypes, SuccessThreshold>>::new(
+            coordinator.clone(),
+            lock.clone(),
+        );
+        let epoch = EpochNumber::genesis();
+        let membership = coordinator.membership_for_epoch(Some(epoch)).unwrap();
+        let view = ViewNumber::new(5);
+        let honest = lock_cert(ViewNumber::new(2), epoch, &membership, &lock);
+        // A "certificate" at a later view with no signatures at all.
+        let mut forged = honest.clone();
+        forged.view_number = ViewNumber::new(4);
+        forged.signatures = None;
+        let ballot = |node_index, cert: &Certificate1<TestTypes>| {
+            let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
+            TimeoutBallot::sign(view, epoch, Some(cert.clone()), &pub_key, &priv_key, &lock)
+                .unwrap()
+        };
+        task.accumulate_vote(ballot(0, &forged));
+        for i in 1..8 {
+            task.accumulate_vote(ballot(i, &honest));
+        }
+        let cert = timeout(RECOVERY_TIMEOUT, task.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(cert.lock(), Some(LockView::of(&honest)));
+    }
+
+    /// A `Certificate1` at `view` signed by every member.
+    fn lock_cert(
+        view: ViewNumber,
+        epoch: EpochNumber,
+        membership: &EpochMembership<TestTypes>,
+        lock: &UpgradeLock<TestTypes>,
+    ) -> Certificate1<TestTypes> {
+        let mut accumulator =
+            VoteAccumulator::<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>>::new(
+                lock.clone(),
+            );
+        for i in 0..NUM_NODES {
+            let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
+            let data = QuorumData2 {
+                leaf_commit: committable::RawCommitmentBuilder::new("FakeLeaf")
+                    .u64(*view)
+                    .finalize(),
+                epoch: Some(epoch),
+                block_number: Some(*view),
+            };
+            let vote = SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, lock)
+                .expect("failed to sign quorum vote");
+            if let Some(cert) = accumulator.accumulate(&vote, membership.clone()) {
+                return cert;
+            }
+        }
+        panic!("threshold reached without forming a certificate");
     }
 
     /// Channel closed before threshold means no certificate is produced.
@@ -1405,22 +1739,20 @@ mod tests {
         lock: &UpgradeLock<TestTypes>,
         membership: &EpochMembership<TestTypes>,
     ) -> TimeoutCertificate3<TestTypes> {
-        let mut accumulator = VoteAccumulator::<
-            TestTypes,
-            TimeoutVote3<TestTypes>,
-            TimeoutCertificate3<TestTypes>,
-        >::new(lock.clone());
-
-        for i in 0..NUM_NODES {
+        let entries = StakeTableEntries::<TestTypes>::from_iter(membership.stake_table()).0;
+        let votes = (0..NUM_NODES).map(|i| {
             let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
-            let data = TimeoutData3 { view, epoch };
+            let data = TimeoutData3 {
+                view,
+                epoch,
+                lock: None,
+            };
             let vote = SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, lock)
                 .expect("failed to sign timeout vote");
-            if let Some(cert) = accumulator.accumulate(&vote, membership.clone()) {
-                return cert;
-            }
-        }
-        panic!("threshold reached without forming a certificate");
+            (None, pub_key, vote.signature())
+        });
+        TimeoutCertificate3::assemble(view, epoch, &entries, votes.collect::<Vec<_>>(), None)
+            .expect("assemble timeout certificate")
     }
 
     fn verifies(
@@ -1475,7 +1807,7 @@ mod tests {
             "freshly collected certificate must verify"
         );
 
-        cert.data.epoch = epoch + 1;
+        cert.epoch = epoch + 1;
         assert!(
             !verifies(&TimeoutEvidence::V3(cert), &membership, &lock),
             "a certificate relabelled to another epoch must not verify"

@@ -200,7 +200,7 @@ pub struct TestRunner {
     decided_transactions: BTreeMap<ViewNumber, Vec<Commitment<TestTransaction>>>,
 
     /// The version upgrade every node is configured for. Trivial by default.
-    #[builder(default = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION))]
+    #[builder(default = versions::Upgrade::trivial(crate::helpers::test_version()))]
     upgrade: versions::Upgrade,
 
     /// Windows for the upgrade sub-protocol. Disabled by default.

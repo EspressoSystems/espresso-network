@@ -227,6 +227,12 @@ where
             .load_high_qc2()
             .await
             .context("loading persisted locked QC")?;
+        // And the epoch boundary certificate a re-vote and the next epoch's
+        // first block name.
+        let boundary_qc = persistence
+            .load_boundary_qc2()
+            .await
+            .context("loading persisted boundary QC")?;
         let anchor_cert2 = persistence
             .load_cert2(initializer_for_coordinator.anchor_leaf().view_number())
             .await
@@ -248,6 +254,7 @@ where
             .metrics(metrics)
             .consensus_metrics(consensus_metrics)
             .maybe_locked_qc(locked_qc)
+            .maybe_boundary_qc(boundary_qc)
             .maybe_anchor_cert2(anchor_cert2)
             .upgrade_config(UpgradeConfig {
                 start_proposing_view: config.start_proposing_view,
