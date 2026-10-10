@@ -62,7 +62,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, bail};
+use anyhow::{Context, bail, ensure};
 use async_lock::Semaphore;
 use async_trait::async_trait;
 use backon::{BackoffBuilder, ExponentialBuilder};
@@ -384,6 +384,37 @@ where
 {
     /// Build a [`FetchingDataSource`] with these options.
     pub async fn build(self) -> anyhow::Result<FetchingDataSource<Types, S, P>> {
+        // Reject zero-sized parameters up front. A zero `range_chunk_size`,
+        // `proactive_range_chunk_size`, or `sync_status_chunk_size` makes `range_chunks` produce an
+        // empty iterator for any non-empty range, silently yielding no data instead of an error. A
+        // zero `rate_limit` creates a `Semaphore` with no permits, which permanently deadlocks the
+        // retry path (`retry_semaphore.acquire().await`). These values can be set directly through
+        // the builder or indirectly via node configuration such as
+        // `ESPRESSO_NODE_PROACTIVE_SCAN_CHUNK_SIZE`, so we validate them here rather than letting
+        // the misconfiguration surface as mysterious data loss or a hang.
+        ensure!(
+            self.rate_limit > 0,
+            "rate limit must be greater than zero"
+        );
+        ensure!(
+            self.range_chunk_size > 0,
+            "range chunk size must be greater than zero"
+        );
+        ensure!(
+            self.proactive_range_chunk_size > 0,
+            "proactive range chunk size must be greater than zero"
+        );
+        ensure!(
+            self.sync_status_chunk_size > 0,
+            "sync status chunk size must be greater than zero"
+        );
+        if let Some(size) = self.aggregator_chunk_size {
+            ensure!(
+                size > 0,
+                "aggregator chunk size must be greater than zero"
+            );
+        }
+
         FetchingDataSource::new(self).await
     }
 }
@@ -3521,5 +3552,73 @@ mod test {
             .await
             .expect("aggregate should be available after recovery");
         assert_eq!(total, expected_total);
+    }
+
+    #[derive(Clone, Copy)]
+    enum ZeroParam {
+        RateLimit,
+        RangeChunk,
+        ProactiveRangeChunk,
+        SyncStatusChunk,
+        AggregatorChunk,
+    }
+
+    /// Build a [`FetchingDataSource`] whose `param` has been set to zero and return the error
+    /// produced by [`Builder::build`].
+    async fn builder_with_zero(param: ZeroParam) -> anyhow::Error {
+        let db = TmpDb::init().await;
+        let builder: crate::data_source::sql::Builder<MockTypes, NoFetching> =
+            db.config().builder(NoFetching).await.unwrap();
+        let builder = match param {
+            ZeroParam::RateLimit => builder.with_rate_limit(0),
+            ZeroParam::RangeChunk => builder.with_range_chunk_size(0),
+            ZeroParam::ProactiveRangeChunk => builder.with_proactive_range_chunk_size(0),
+            ZeroParam::SyncStatusChunk => builder.with_sync_status_chunk_size(0),
+            ZeroParam::AggregatorChunk => builder.with_aggregator_chunk_size(0),
+        };
+        builder.build().await.unwrap_err()
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_builder_rejects_zero_sized_config() {
+        // A zero `rate_limit` creates a `Semaphore` with no permits, permanently deadlocking the
+        // retry path (`retry_semaphore.acquire().await`).
+        let err = builder_with_zero(ZeroParam::RateLimit).await;
+        assert!(
+            err.to_string().contains("rate limit must be greater than zero"),
+            "unexpected error: {err:?}"
+        );
+
+        // A zero `range_chunk_size` makes `range_chunks` yield an empty iterator for any range,
+        // silently returning no data instead of an error.
+        let err = builder_with_zero(ZeroParam::RangeChunk).await;
+        assert!(
+            err.to_string().contains("range chunk size must be greater than zero"),
+            "unexpected error: {err:?}"
+        );
+
+        // Same silent failure mode for the proactive scanner chunk size, which operators can set
+        // directly through `ESPRESSO_NODE_PROACTIVE_SCAN_CHUNK_SIZE`.
+        let err = builder_with_zero(ZeroParam::ProactiveRangeChunk).await;
+        assert!(
+            err.to_string()
+                .contains("proactive range chunk size must be greater than zero"),
+            "unexpected error: {err:?}"
+        );
+
+        let err = builder_with_zero(ZeroParam::SyncStatusChunk).await;
+        assert!(
+            err.to_string()
+                .contains("sync status chunk size must be greater than zero"),
+            "unexpected error: {err:?}"
+        );
+
+        // An explicitly configured zero `aggregator_chunk_size` is likewise rejected.
+        let err = builder_with_zero(ZeroParam::AggregatorChunk).await;
+        assert!(
+            err.to_string()
+                .contains("aggregator chunk size must be greater than zero"),
+            "unexpected error: {err:?}"
+        );
     }
 }
