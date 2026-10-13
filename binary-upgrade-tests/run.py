@@ -764,11 +764,12 @@ def drop_builder(compose: dict) -> dict:
 
     #4939 deleted it, so the upgrade tag has no image to roll it to. Both tags
     run a 0.6 genesis, whose leaders build blocks in-process and never contact
-    a builder, so the base tag can run without it too.
+    a builder, so the base tag can run without it too. Tags from 0.7.0.0 on
+    ship without it already.
     """
     services = compose["services"]
     for name in ("permissionless-builder", "fund-builder"):
-        del services[name]
+        services.pop(name, None)
         for service in services.values():
             service.get("depends_on", {}).pop(name, None)
     for service in services.values():
