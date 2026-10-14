@@ -131,6 +131,7 @@ rand_chacha = { workspace = true }
 rayon = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
+rustix = { workspace = true }
 test-log = { workspace = true }
 test-server = { workspace = true }
 test-utils = { workspace = true }
