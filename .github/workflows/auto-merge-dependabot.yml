@@ -9,7 +9,7 @@ permissions:
 jobs:
   dependabot-auto-merge:
     name: Dependabot
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ github.actor == 'dependabot[bot]' && github.event_name == 'pull_request'}}
     steps:
       - name: Dependabot metadata

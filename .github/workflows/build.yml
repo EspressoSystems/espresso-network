@@ -42,7 +42,7 @@ env:
 jobs:
   build-amd:
     name: Build ${{ matrix.binary }} AMD
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -112,7 +112,7 @@ jobs:
 
   build-arm:
     name: Build ${{ matrix.binary }} ARM
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     if: ${{ github.event_name != 'pull_request' }}
     strategy:
       fail-fast: false
@@ -175,7 +175,7 @@ jobs:
     name: Compile metrics
     needs: build-amd
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Reporter only: failures here must not fail the workflow.
     continue-on-error: true
     permissions:
@@ -195,7 +195,7 @@ jobs:
     needs: build-amd
     # !cancelled() so one failed build job on main does not freeze the baseline artifact.
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Reporter only: failures here must not fail the workflow.
     continue-on-error: true
     permissions:
@@ -211,7 +211,7 @@ jobs:
   # Other pull requests run it on demand with `/benchmark` (network-bench-command.yml).
   network-bench-changes:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       pull-requests: read
     outputs:
@@ -249,7 +249,7 @@ jobs:
 
   build-dockers-amd:
     needs: build-amd
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -380,7 +380,7 @@ jobs:
     # Arm builds cost money, skip on PRs
     if: github.event_name != 'pull_request'
     needs: build-arm
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     strategy:
       fail-fast: false
       matrix:
@@ -480,7 +480,7 @@ jobs:
   create-multiplatform-docker-image:
     if: github.event_name != 'pull_request'
     needs: [build-dockers-amd, build-dockers-arm]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -591,7 +591,7 @@ jobs:
 
   test-demo-pr:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [build-dockers-amd]
     steps:
       - uses: actions/checkout@v7
@@ -632,7 +632,7 @@ jobs:
 
   test-demo-non-pr:
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     steps:
       - uses: actions/checkout@v7
@@ -660,7 +660,7 @@ jobs:
   # This job enables having a single required status check for both test-demo jobs
   test-demo:
     needs: [test-demo-pr, test-demo-non-pr]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}
     steps:
@@ -678,7 +678,7 @@ jobs:
 
   binary-upgrade-test-pr:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [build-dockers-amd]
     strategy:
       fail-fast: false
@@ -735,7 +735,7 @@ jobs:
 
   binary-upgrade-test-non-pr:
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     strategy:
       fail-fast: false
@@ -782,7 +782,7 @@ jobs:
 
   binary-upgrade-test:
     needs: [binary-upgrade-test-pr, binary-upgrade-test-non-pr]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ always() && !cancelled() }}
     steps:
       - name: Aggregate binary upgrade test results
@@ -798,7 +798,7 @@ jobs:
   # The soak test takes ~1h; on PRs only run it when the scripts driving it change.
   memory-soak-changes:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       soak: ${{ steps.filter.outputs.soak }}
     steps:
@@ -815,7 +815,7 @@ jobs:
 
   memory-soak-pr:
     if: github.event_name == 'pull_request' && needs.memory-soak-changes.outputs.soak == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     needs: [build-dockers-amd, memory-soak-changes]
     strategy:
@@ -877,7 +877,7 @@ jobs:
 
   memory-soak-non-pr:
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     strategy:

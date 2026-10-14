@@ -19,7 +19,7 @@ env:
 
 jobs:
   doc-rust:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -43,7 +43,7 @@ jobs:
           retention-days: 1
 
   doc-contracts:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -73,7 +73,7 @@ jobs:
 
   deploy:
     needs: [doc-rust, doc-contracts]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Download Rust Docs
         uses: actions/download-artifact@v8

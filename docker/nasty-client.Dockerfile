@@ -1,4 +1,4 @@
-FROM ghcr.io/espressosystems/ubuntu-base:main
+FROM ghcr.io/espressosystems/ubuntu-base:ubuntu-26
 
 ARG TARGETARCH
 

@@ -31,7 +31,7 @@ jobs:
     concurrency:
       group: tag-release-${{ github.event.issue.number || github.ref }}
       cancel-in-progress: false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       # The release branch isn't known until the script resolves it from the
       # issue title, so checkout the default ref and let `scripts/release`
@@ -67,7 +67,7 @@ jobs:
       contains(github.event.issue.labels.*.name, 'release-tracker') &&
       startsWith(github.event.comment.body, '/backport ') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       issues: write
       actions: write

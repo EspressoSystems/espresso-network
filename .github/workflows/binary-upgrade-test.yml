@@ -14,7 +14,7 @@ on:
 
 jobs:
   binary-upgrade-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:

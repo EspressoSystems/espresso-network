@@ -21,7 +21,7 @@ concurrency:
 jobs:
   cut:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
       issues: write
@@ -52,7 +52,7 @@ jobs:
       github.event_name == 'delete' &&
       github.event.ref_type == 'branch' &&
       startsWith(github.event.ref, 'release-')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       issues: write

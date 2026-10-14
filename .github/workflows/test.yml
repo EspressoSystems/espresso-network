@@ -195,7 +195,7 @@ jobs:
 
   build-test-bins-sqlite:
     name: Build espresso-node-sqlite test binary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
@@ -238,7 +238,7 @@ jobs:
   # The go-sdk test job only needs the dev-node binary, compile it separately.
   build-test-bins-dev-node:
     name: Build espresso-dev-node test binary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
@@ -325,7 +325,7 @@ jobs:
 
   test-postgres:
     needs: build-test-artifacts-postgres
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       matrix:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -360,7 +360,7 @@ jobs:
 
   test-sqlite:
     needs: build-test-artifacts-sqlite
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       matrix:
         partition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -393,7 +393,7 @@ jobs:
 
   test-go-sdk:
     needs: build-test-bins-dev-node
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
@@ -434,7 +434,7 @@ jobs:
           - test-name: test_native_demo_ff_base
 
       fail-fast: false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/free-disk-space
@@ -510,7 +510,7 @@ jobs:
 
   demo-native:
     needs: [build-test-bins, build-test-bins-sqlite]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/install-process-compose
@@ -553,7 +553,7 @@ jobs:
 
   nextest-report:
     needs: [test-postgres, test-sqlite, test-integration]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ always() && !cancelled() }}
     # Reporter only: failures here must not fail the workflow.
     continue-on-error: true
@@ -607,7 +607,7 @@ jobs:
     needs: [test-postgres, test-sqlite, test-integration]
     # always() so a single flaky shard on main does not freeze the history artifact.
     if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Reporter only: failures here must not fail the workflow.
     continue-on-error: true
     permissions:
@@ -649,7 +649,7 @@ jobs:
       - build-test-bins-dev-node
       - build-test-archive-integration
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Reporter only: failures here must not fail the workflow.
     continue-on-error: true
     permissions:
@@ -674,7 +674,7 @@ jobs:
       - build-test-bins-dev-node
     # !cancelled() so one failed build job on main does not freeze the baseline artifact.
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Reporter only: failures here must not fail the workflow.
     continue-on-error: true
     permissions:
@@ -690,7 +690,7 @@ jobs:
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
     needs: [test-postgres, test-sqlite, test-go-sdk, demo-native, test-integration]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}
     steps:

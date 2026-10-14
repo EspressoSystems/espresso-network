@@ -23,7 +23,7 @@ env:
 
 jobs:
   cargo-features:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       matrix:
         command:
@@ -49,7 +49,7 @@ jobs:
           ${{ matrix.command }}
 
   check-sp1-target:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 

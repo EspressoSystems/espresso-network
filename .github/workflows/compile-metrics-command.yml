@@ -28,7 +28,7 @@ jobs:
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/compile-metrics') &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}

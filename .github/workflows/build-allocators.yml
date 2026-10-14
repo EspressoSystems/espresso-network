@@ -37,10 +37,10 @@ jobs:
         arch: [amd64, arm64]
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-26.04
             platform: linux/amd64
           - arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
             platform: linux/arm64
           - allocator: jemalloc
             dep: tikv-jemallocator --features profiling
@@ -144,7 +144,7 @@ jobs:
   # Merge the amd64 + arm64 images into one multiplatform image per allocator.
   merge:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:

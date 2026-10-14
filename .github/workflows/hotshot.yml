@@ -19,7 +19,7 @@ env:
 
 jobs:
   test-rest:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
         name: Checkout Repository
@@ -75,7 +75,7 @@ jobs:
             filter: 'test(/tests::failures::/)'
           - name: network
             filter: 'test(/tests::(cliquenet|memory_network)::/)'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
         name: Checkout Repository
@@ -120,7 +120,7 @@ jobs:
 
   nextest-report:
     needs: [test-rest, test-new-protocol]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ always() && !cancelled() }}
     # Reporter only: failures here must not fail the workflow.
     continue-on-error: true
@@ -174,7 +174,7 @@ jobs:
     needs: [test-rest, test-new-protocol]
     # always() so a single flaky shard on main does not freeze the history artifact.
     if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Reporter only: failures here must not fail the workflow.
     continue-on-error: true
     permissions:
@@ -209,7 +209,7 @@ jobs:
   # This job enables having a single required status check in github for all hotshot tests.
   aggregate-hotshot-tests:
     needs: [test-rest, test-new-protocol]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}
     steps:

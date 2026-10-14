@@ -22,7 +22,7 @@ env:
 
 jobs:
   security_audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -32,7 +32,7 @@ jobs:
 
   audit_fix:
     needs: security_audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Only create fix PRs for main and manual dispatch. Release branches and
     # PRs still get the audit check but fixes should be cherry-picked from main.
     if: |
