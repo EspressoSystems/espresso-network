@@ -69,7 +69,7 @@ where
     } else if new_protocol {
         get_leaf_proof_with_cert2(state, requested_leaf, fetch_timeout, chain_limit).await
     } else {
-        get_leaf_proof_with_qc_chain(state, requested_leaf, fetch_timeout, chain_limit).await
+        get_leaf_proof_with_leaf_chain(state, requested_leaf, fetch_timeout, chain_limit).await
     }
 }
 
@@ -90,7 +90,8 @@ where
     Some(cert2.data.block_number)
 }
 
-pub(crate) async fn get_leaf_proof_with_qc_chain<State>(
+/// Build a leaf proof for a legacy leaf from the justify QCs of the leaves that follow it.
+pub(crate) async fn get_leaf_proof_with_leaf_chain<State>(
     state: &State,
     requested_leaf: LeafQueryData<SeqTypes>,
     fetch_timeout: Duration,
@@ -101,12 +102,8 @@ where
     for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
     let requested = requested_leaf.height() as usize;
-    // Grab the endpoint and the final QC chain in the same transaction, to ensure that
-    // the QC chain actually corresponds to the endpoint block (and is not subject to
-    // concurrent updates).
     let mut tx = state.read().await.map_err(internal)?;
     let latest_height = NodeStorage::block_height(&mut tx).await.map_err(internal)?;
-    let qc_chain = tx.latest_qc_chain().await.map_err(internal)?;
     drop(tx);
 
     let mut leaves = state.get_leaf_range(requested + 1..latest_height).await;
@@ -144,15 +141,9 @@ where
         }
     }
 
-    // We reached the end of the range of interest without encountering a 3-chain. Thus, if the last
-    // leaf in the chain is not already assumed finalized by the client, we must prove it finalized
-    // by appending two more QCs.
-    let Some([committing_qc, deciding_qc]) = qc_chain else {
-        return Err(not_found("missing QC 2-chain to prove finality"));
-    };
-    proof.add_qc_chain(Arc::new(committing_qc), Arc::new(deciding_qc));
-
-    Ok(proof)
+    // The stored legacy QC chain is no longer read: it could only close a chain whose tip was
+    // legacy, and every network is past the 0.6 cutover, so running out of leaves is a 404.
+    Err(not_found("not enough leaves to prove finality"))
 }
 
 /// Build a leaf proof for the new protocol using certificate2 finality.
@@ -768,25 +759,28 @@ mod test {
         fetching::provider::TrustedQueryServiceProvider,
         merklized_state::{MerklizedState, UpdateStateData},
     };
-    use hotshot_types::{
-        data::ViewNumber, simple_certificate::CertificatePair, simple_vote::Vote2Data,
-    };
+    use hotshot_types::{data::ViewNumber, simple_vote::Vote2Data};
     use http_wire::{ServerError, respond};
+    use itertools::Itertools;
     use jf_merkle_tree_compat::{
         AppendableMerkleTreeScheme, ToTraversalPath, prelude::SHA3MerkleTree,
     };
     use light_client::{
         consensus::leaf::{FinalityProof, LeafProofHint},
         testing::{
-            AlwaysTrueQuorum, ENABLE_EPOCHS, LEGACY_VERSION, TestClient, VersionCheckQuorum,
-            custom_leaf_chain_with_upgrade, leaf_chain, leaf_chain_with_upgrade,
+            AlwaysTrueQuorum, TestClient, VersionCheckQuorum, custom_leaf_chain_with_upgrade,
+            custom_leaf_chain_with_upgrades, leaf_chain, leaf_chain_with_upgrade,
         },
     };
     use tokio::{
         net::TcpListener,
         time::{sleep, timeout},
     };
-    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
+    use vbs::version::Version;
+    use versions::{
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
+        NEW_PROTOCOL_VERSION, Upgrade,
+    };
 
     use super::*;
     use crate::api::{
@@ -834,7 +828,7 @@ mod test {
 
         // Ask for the first leaf; it is proved finalized by the chain formed along with the second.
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert_eq!(
@@ -1155,12 +1149,12 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let err = get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, 1)
+        let err = get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, 1)
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
 
-        let proof = get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, 2)
+        let proof = get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, 2)
             .await
             .unwrap();
         assert_eq!(
@@ -1239,7 +1233,7 @@ mod test {
         }
 
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
@@ -1283,7 +1277,7 @@ mod test {
         }
 
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
@@ -1333,7 +1327,7 @@ mod test {
         }
 
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
@@ -1382,7 +1376,7 @@ mod test {
         }
 
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[1].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[1].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
@@ -1439,7 +1433,7 @@ mod test {
         }
 
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[1].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[1].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. }));
@@ -1450,6 +1444,112 @@ mod test {
                 .unwrap(),
             leaves[1]
         );
+    }
+
+    /// Every leaf of a history whose tip is past the 0.6 cutover is proved from stored leaves and
+    /// cert2s alone, with no legacy QC chain stored.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_leaf_proofs_across_history() {
+        // Every protocol version from mainnet's 0.2 genesis on, with the height it took effect.
+        const UPGRADES: [(u64, Version); 4] = [
+            (6, EPOCH_VERSION),
+            (11, DRB_AND_HEADER_UPGRADE_VERSION),
+            (16, EPOCH_REWARD_VERSION),
+            (21, NEW_PROTOCOL_VERSION),
+        ];
+        // A view fails just before each of these heights, under HotStuff and under HotStuff2.
+        const FAILED_VIEWS_BEFORE: [u64; 2] = [3, 13];
+        const CERT2_HEIGHTS: [u64; 3] = [22, 24, 25];
+
+        let view_of = |height: u64| {
+            height + FAILED_VIEWS_BEFORE.iter().filter(|&&h| h <= height).count() as u64
+        };
+        let leaves = custom_leaf_chain_with_upgrades(1..=25, FEE_VERSION, &UPGRADES, |proposal| {
+            proposal.view_number = ViewNumber::new(view_of(proposal.block_header.height()));
+            // Upgrades take effect by view, so failed views move where each one starts.
+            if let Some(cert) = &mut proposal.upgrade_certificate {
+                let (height, _) = UPGRADES
+                    .into_iter()
+                    .find(|(_, version)| *version == cert.data.new_version)
+                    .unwrap();
+                let first_view = ViewNumber::new(view_of(height));
+                cert.data.old_version_last_view = first_view - 1;
+                cert.data.new_version_first_view = first_view;
+                cert.data.decide_by = first_view;
+            }
+        })
+        .await;
+        let leaf_at = |height: u64| &leaves[height as usize - 1];
+
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+        {
+            let mut tx = ds.write().await.unwrap();
+            for leaf in &leaves {
+                tx.insert_leaf(leaf).await.unwrap();
+            }
+            for height in CERT2_HEIGHTS {
+                tx.insert_cert2(height, cert2_for_leaf(leaf_at(height)))
+                    .await
+                    .unwrap();
+            }
+            tx.commit().await.unwrap();
+        }
+
+        let quorum = VersionCheckQuorum::new(leaves.iter().map(|leaf| leaf.leaf().clone()));
+        for leaf in &leaves {
+            let height = leaf.height();
+            let proof = get_leaf_proof(&ds, leaf.clone(), None, Duration::MAX, CHAIN_LIMIT)
+                .await
+                .unwrap_or_else(|err| panic!("no proof for height {height}: {err:#}"));
+            match height {
+                // A 3-chain, which past a failed view closes later on.
+                1..=4 => assert!(matches!(proof.proof(), FinalityProof::HotStuff { .. })),
+                // From 5, the first 2-chain closes before the 3-chain does.
+                5..=19 => assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. })),
+                // The last legacy leaf's 2-chain would span the cutover.
+                _ => assert!(matches!(proof.proof(), FinalityProof::NewProtocol { .. })),
+            }
+            assert_eq!(
+                proof.verify(LeafProofHint::Quorum(&quorum)).await.unwrap(),
+                *leaf,
+                "height {height}"
+            );
+        }
+
+        // The client may instead name a leaf it already trusts, here the next one.
+        for (leaf, finalized) in leaves.iter().tuple_windows() {
+            let height = leaf.height();
+            let proof = get_leaf_proof(
+                &ds,
+                leaf.clone(),
+                Some(finalized.height() as usize),
+                Duration::MAX,
+                CHAIN_LIMIT,
+            )
+            .await
+            .unwrap_or_else(|err| panic!("no proof for height {height}: {err:#}"));
+            assert!(
+                matches!(proof.proof(), FinalityProof::Assumption),
+                "height {height}"
+            );
+            assert_eq!(
+                proof
+                    .verify(LeafProofHint::<AlwaysTrueQuorum>::Assumption(
+                        finalized.leaf()
+                    ))
+                    .await
+                    .unwrap(),
+                *leaf,
+                "height {height}"
+            );
+        }
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1506,7 +1606,7 @@ mod test {
             tx.commit().await.unwrap();
         }
 
-        let err = get_leaf_proof_with_qc_chain(
+        let err = get_leaf_proof_with_leaf_chain(
             &ds,
             leaves[0].clone(),
             Duration::from_secs(1),
@@ -1532,7 +1632,7 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_final_qcs() {
+    async fn test_chain_ends_before_finality() {
         let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
         let ds = DataSource::create(
             DataSource::persistence_options(&storage),
@@ -1542,22 +1642,38 @@ mod test {
         .await
         .unwrap();
 
-        // Insert a single leaf, plus an extra QC chain proving it finalized.
-        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
-        let qcs = [
-            CertificatePair::for_parent(leaves[1].leaf()),
-            CertificatePair::for_parent(leaves[2].leaf()),
-        ];
+        // A legacy tip, as every replayed pre-0.6 chain has: the next leaf chains onto the
+        // requested one, but no deciding QC has arrived and no cert2 ever will.
+        let leaves = leaf_chain(1..=3, EPOCH_REWARD_VERSION).await;
         {
             let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf_with_qc_chain(&leaves[0], Some(qcs.clone()))
-                .await
-                .unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.insert_leaf(&leaves[1]).await.unwrap();
             tx.commit().await.unwrap();
         }
 
+        let err = get_leaf_proof_with_leaf_chain(
+            &ds,
+            leaves[0].clone(),
+            Duration::from_secs(1),
+            CHAIN_LIMIT,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        assert!(
+            matches!(&err, hotshot_query_service::Error::Custom { message, .. } if message.contains("not enough leaves")),
+            "{err}"
+        );
+
+        // Once the leaf carrying the deciding QC is stored, the same request succeeds.
+        {
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf(&leaves[2]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
         let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
+            get_leaf_proof_with_leaf_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
                 .await
                 .unwrap();
         assert_eq!(
@@ -1567,52 +1683,6 @@ mod test {
                 .unwrap(),
             leaves[0]
         );
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_upgrade_to_epochs() {
-        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
-        let ds = DataSource::create(
-            DataSource::persistence_options(&storage),
-            Default::default(),
-            false,
-        )
-        .await
-        .unwrap();
-
-        // Upgrade to epochs (and enabling HotStuff2) in the middle of a leaf chain, so that the
-        // last leaf in the chain only requires 2 QCs to verify, even though at the start of the
-        // chain we would have required 3.
-        let leaves = leaf_chain_with_upgrade(1..=4, 2, ENABLE_EPOCHS).await;
-        assert_eq!(leaves[0].header().version(), LEGACY_VERSION);
-        assert_eq!(leaves[1].header().version(), DRB_AND_HEADER_UPGRADE_VERSION);
-        let qcs = [
-            CertificatePair::for_parent(leaves[2].leaf()),
-            CertificatePair::for_parent(leaves[3].leaf()),
-        ];
-        {
-            let mut tx = ds.write().await.unwrap();
-            tx.insert_leaf(&leaves[0]).await.unwrap();
-            tx.insert_leaf_with_qc_chain(&leaves[1], Some(qcs.clone()))
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-        }
-
-        let proof =
-            get_leaf_proof_with_qc_chain(&ds, leaves[0].clone(), Duration::MAX, CHAIN_LIMIT)
-                .await
-                .unwrap();
-        assert_eq!(
-            proof
-                .verify(LeafProofHint::Quorum(&VersionCheckQuorum::new(
-                    leaves.iter().map(|leaf| leaf.leaf().clone())
-                )))
-                .await
-                .unwrap(),
-            leaves[0]
-        );
-        assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }))
     }
 
     #[tokio::test]

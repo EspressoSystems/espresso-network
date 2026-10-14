@@ -322,24 +322,6 @@ impl LeafProof {
         false
     }
 
-    /// Complete a finality proof by appending 2 QCs which extend from the last pushed leaf.
-    ///
-    /// This is meant to be called by the prover and so it is assumed that the provided QCs
-    /// correctly form a 2-chain and that the protocol version is HotStuff2. If these conditions are
-    /// met, this function will not fail but may produce a proof which fails to verify.
-    pub fn add_qc_chain(&mut self, committing_qc: Arc<Certificate>, deciding_qc: Arc<Certificate>) {
-        debug_assert!(
-            committing_qc.view_number() == self.leaves[self.leaves.len() - 1].view_number()
-        );
-        debug_assert!(committing_qc.leaf_commit() == self.leaves[self.leaves.len() - 1].commit());
-        debug_assert!(deciding_qc.view_number() == committing_qc.view_number() + 1);
-
-        self.proof = FinalityProof::HotStuff2 {
-            committing_qc,
-            deciding_qc,
-        };
-    }
-
     /// Complete a finality proof using the new protocol Certificate2.
     pub fn add_certificate(
         &mut self,
@@ -385,6 +367,22 @@ mod test {
         AlwaysFalseQuorum, AlwaysTrueQuorum, LEGACY_VERSION, VersionCheckQuorum, leaf_chain,
         leaf_chain_with_upgrade,
     };
+
+    /// A proof as a dishonest prover might send it: the requested leaf alone, with a 2-chain of
+    /// QCs the prover did not derive from the leaves that follow it.
+    fn hand_crafted_two_chain(
+        leaf: &LeafQueryData<SeqTypes>,
+        committing_qc: Certificate,
+        deciding_qc: Certificate,
+    ) -> LeafProof {
+        LeafProof {
+            leaves: vec![leaf.leaf().clone()],
+            proof: FinalityProof::HotStuff2 {
+                committing_qc: Arc::new(committing_qc),
+                deciding_qc: Arc::new(deciding_qc),
+            },
+        }
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_hotstuff2() {
@@ -466,26 +464,6 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_final_qcs() {
-        let mut proof = LeafProof::default();
-
-        // Insert a single leaf, plus an extra QC chain proving it finalized.
-        let leaves = leaf_chain(1..=3, EPOCH_VERSION).await;
-        assert!(!proof.push(leaves[0].clone()));
-        proof.add_qc_chain(
-            Arc::new(Certificate::for_parent(leaves[1].leaf())),
-            Arc::new(Certificate::for_parent(leaves[2].leaf())),
-        );
-        assert_eq!(
-            proof
-                .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
-                .await
-                .unwrap(),
-            leaves[0]
-        );
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_new_protocol_two_chain_rejected() {
         let leaves = leaf_chain(1..=3, NEW_PROTOCOL_VERSION).await;
 
@@ -496,11 +474,10 @@ mod test {
         assert!(!proof.push(leaves[2].clone()));
 
         // A hand-crafted 2-chain proof fails to verify.
-        let mut proof = LeafProof::default();
-        assert!(!proof.push(leaves[0].clone()));
-        proof.add_qc_chain(
-            Arc::new(Certificate::for_parent(leaves[1].leaf())),
-            Arc::new(Certificate::for_parent(leaves[2].leaf())),
+        let proof = hand_crafted_two_chain(
+            &leaves[0],
+            Certificate::for_parent(leaves[1].leaf()),
+            Certificate::for_parent(leaves[2].leaf()),
         );
         let err = proof
             .verify(LeafProofHint::Quorum(&AlwaysTrueQuorum))
@@ -563,11 +540,10 @@ mod test {
         assert!(!proof.push(leaves[2].clone()));
 
         // A hand-crafted spanning 2-chain fails to verify.
-        let mut proof = LeafProof::default();
-        assert!(!proof.push(leaves[0].clone()));
-        proof.add_qc_chain(
-            Arc::new(Certificate::for_parent(leaves[1].leaf())),
-            Arc::new(Certificate::for_parent(leaves[2].leaf())),
+        let proof = hand_crafted_two_chain(
+            &leaves[0],
+            Certificate::for_parent(leaves[1].leaf()),
+            Certificate::for_parent(leaves[2].leaf()),
         );
         assert!(matches!(proof.proof(), FinalityProof::HotStuff2 { .. }));
         let err = proof
