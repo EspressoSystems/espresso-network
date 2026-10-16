@@ -1069,158 +1069,9 @@ mod tests {
         assert_eq!(view_number, new_view_number_for_certificate);
     }
 
-    #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_next_epoch_quorum_certificate<P: TestablePersistence>(_p: PhantomData<P>) {
-        let tmp = P::tmp_storage().await;
-        let storage = P::connect(&tmp).await;
-
-        //  test that next epoch qc2 does not exist
-        assert_eq!(
-            storage.load_next_epoch_quorum_certificate().await.unwrap(),
-            None
-        );
-
-        let upgrade_lock = UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test);
-
-        let genesis_view = ViewNumber::genesis();
-
-        let leaf = Leaf2::genesis(
-            &ValidatedState::default(),
-            &NodeState::default(),
-            TEST_VERSIONS.test.base,
-        )
-        .await;
-        let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
-            leaf_commit: leaf.commit(),
-            epoch: Some(EpochNumber::new(1)),
-            block_number: Some(leaf.height()),
-        }
-        .into();
-
-        let versioned_data =
-            VersionedVoteData::new_infallible(data.clone(), genesis_view, &upgrade_lock);
-
-        let bytes: [u8; 32] = versioned_data.commit().into();
-
-        let next_epoch_qc = NextEpochQuorumCertificate2::new(
-            data,
-            Commitment::from_raw(bytes),
-            genesis_view,
-            None,
-            PhantomData,
-        );
-
-        let res = storage
-            .append_next_epoch_high_qc2(next_epoch_qc.clone())
-            .await;
-        assert!(res.is_ok());
-
-        let res = storage.load_next_epoch_quorum_certificate().await.unwrap();
-        let view_number = res.unwrap().view_number;
-        assert_eq!(view_number, ViewNumber::genesis());
-
-        let new_view_number_for_qc = ViewNumber::new(50);
-        let mut new_qc = next_epoch_qc.clone();
-        new_qc.view_number = new_view_number_for_qc;
-
-        let res = storage.append_next_epoch_high_qc2(new_qc.clone()).await;
-        assert!(res.is_ok());
-
-        let res = storage.load_next_epoch_quorum_certificate().await.unwrap();
-        let view_number = res.unwrap().view_number;
-        assert_eq!(view_number, new_view_number_for_qc);
-    }
-
-    /// `append_next_epoch_high_qc2` must apply an atomic monotonic compare-and-set (like
-    /// `append_high_qc2`): a stale (older-view) write is a no-op and never regresses the stored view.
-    #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_append_next_epoch_high_qc2_monotonic<P: TestablePersistence>(
-        _p: PhantomData<P>,
-    ) {
-        let tmp = P::tmp_storage().await;
-        let storage = P::connect(&tmp).await;
-
-        assert_eq!(
-            storage.load_next_epoch_quorum_certificate().await.unwrap(),
-            None
-        );
-
-        let upgrade_lock = UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test);
-        let leaf = Leaf2::genesis(
-            &ValidatedState::default(),
-            &NodeState::default(),
-            TEST_VERSIONS.test.base,
-        )
-        .await;
-        let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
-            leaf_commit: leaf.commit(),
-            epoch: Some(EpochNumber::new(1)),
-            block_number: Some(leaf.height()),
-        }
-        .into();
-        let versioned_data =
-            VersionedVoteData::new_infallible(data.clone(), ViewNumber::genesis(), &upgrade_lock);
-        let bytes: [u8; 32] = versioned_data.commit().into();
-        let mut qc = NextEpochQuorumCertificate2::new(
-            data,
-            Commitment::from_raw(bytes),
-            ViewNumber::genesis(),
-            None,
-            PhantomData,
-        );
-
-        // Persist at view 5, then advance to 6.
-        qc.view_number = ViewNumber::new(5);
-        storage
-            .append_next_epoch_high_qc2(qc.clone())
-            .await
-            .unwrap();
-        assert_eq!(
-            storage
-                .load_next_epoch_quorum_certificate()
-                .await
-                .unwrap()
-                .unwrap()
-                .view_number,
-            ViewNumber::new(5)
-        );
-
-        qc.view_number = ViewNumber::new(6);
-        storage
-            .append_next_epoch_high_qc2(qc.clone())
-            .await
-            .unwrap();
-        assert_eq!(
-            storage
-                .load_next_epoch_quorum_certificate()
-                .await
-                .unwrap()
-                .unwrap()
-                .view_number,
-            ViewNumber::new(6)
-        );
-
-        // A stale (older) write is a no-op: the compare-and-set never regresses the stored view.
-        qc.view_number = ViewNumber::new(4);
-        storage
-            .append_next_epoch_high_qc2(qc.clone())
-            .await
-            .unwrap();
-        assert_eq!(
-            storage
-                .load_next_epoch_quorum_certificate()
-                .await
-                .unwrap()
-                .unwrap()
-                .view_number,
-            ViewNumber::new(6)
-        );
-    }
-
     /// The `Storage<SeqTypes>` impl on `Arc<P>` (the object the consensus tasks actually hold) used
-    /// to no-op `update_high_qc2` / `update_next_epoch_high_qc2` — the persist-before-vote hook.
-    /// They must now durably route to the `high_qc2` / `next_epoch_quorum_certificate` tables, and
-    /// `update_high_qc2` must stay monotonic.
+    /// to no-op `update_high_qc2`, the persist-before-vote hook. It must now durably route to the
+    /// `high_qc2` table and stay monotonic.
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_storage_update_high_qc2_persists<P: TestablePersistence>(_p: PhantomData<P>) {
         use hotshot_types::traits::storage::Storage;
@@ -1253,43 +1104,6 @@ mod tests {
         Storage::update_high_qc2(&arc, stale).await.unwrap();
         assert_eq!(
             storage.load_high_qc2().await.unwrap().unwrap().view_number,
-            ViewNumber::new(7)
-        );
-
-        // The next-epoch high QC round-trips through update_next_epoch_high_qc2 as well.
-        let upgrade_lock = UpgradeLock::<SeqTypes>::new(TEST_VERSIONS.test);
-        let leaf = Leaf2::genesis(
-            &ValidatedState::default(),
-            &NodeState::default(),
-            TEST_VERSIONS.test.base,
-        )
-        .await;
-        let data: NextEpochQuorumData2<SeqTypes> = QuorumData2 {
-            leaf_commit: leaf.commit(),
-            epoch: Some(EpochNumber::new(1)),
-            block_number: Some(leaf.height()),
-        }
-        .into();
-        let versioned_data =
-            VersionedVoteData::new_infallible(data.clone(), ViewNumber::new(7), &upgrade_lock);
-        let bytes: [u8; 32] = versioned_data.commit().into();
-        let next_epoch_qc = NextEpochQuorumCertificate2::new(
-            data,
-            Commitment::from_raw(bytes),
-            ViewNumber::new(7),
-            None,
-            PhantomData,
-        );
-        Storage::update_next_epoch_high_qc2(&arc, next_epoch_qc)
-            .await
-            .unwrap();
-        assert_eq!(
-            storage
-                .load_next_epoch_quorum_certificate()
-                .await
-                .unwrap()
-                .unwrap()
-                .view_number,
             ViewNumber::new(7)
         );
     }
@@ -1326,11 +1140,10 @@ mod tests {
         assert_eq!(initializer.high_qc().view_number, ViewNumber::new(9));
     }
 
-    /// Recovery must not hand `Consensus::new` a mismatched (high QC, next-epoch QC) pair: when a
-    /// newer running high QC is adopted, a persisted next-epoch QC that does not correspond to it
-    /// (`verify_next_epoch_qc`) is dropped to `None` instead of being recovered alongside it.
+    /// `load_consensus_state` adopts the running high QC persisted via `update_high_qc2` over an
+    /// older eQC checkpoint.
     #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_load_consensus_state_drops_noncorresponding_next_epoch_qc<
+    pub async fn test_load_consensus_state_prefers_running_high_qc_over_eqc<
         P: TestablePersistence,
     >(
         _p: PhantomData<P>,
@@ -1376,19 +1189,10 @@ mod tests {
             .await
             .unwrap();
 
-        // A newer running high QC (view 9) — recovery adopts it...
+        // A newer running high QC (view 9): recovery adopts it over the eQC checkpoint.
         let mut running_high_qc = eqc_high_qc.clone();
         running_high_qc.view_number = ViewNumber::new(9);
         storage.append_high_qc2(running_high_qc).await.unwrap();
-
-        // ...and a standalone next-epoch QC (view 3) in its table. Neither it nor the eQC's view-5
-        // next-epoch QC corresponds to the recovered high QC at view 9.
-        let mut other_next_epoch_qc = next_epoch_qc.clone();
-        other_next_epoch_qc.view_number = ViewNumber::new(3);
-        storage
-            .append_next_epoch_high_qc2(other_next_epoch_qc)
-            .await
-            .unwrap();
 
         let (initializer, _anchor_view) = storage
             .load_consensus_state(
@@ -1399,12 +1203,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(initializer.high_qc().view_number, ViewNumber::new(9));
-        // The recovered high QC corresponds to neither persisted next-epoch QC, so the pair is left
-        // without one rather than recovering a mismatched (high QC, next-epoch QC) pair.
-        assert!(
-            initializer.next_epoch_high_qc().is_none(),
-            "a next-epoch QC that does not correspond to the recovered high QC must be dropped"
-        );
     }
 
     #[rstest_reuse::apply(persistence_types)]

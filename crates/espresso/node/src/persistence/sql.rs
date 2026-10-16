@@ -2219,24 +2219,6 @@ impl SequencerPersistence for Persistence {
         .await
     }
 
-    async fn load_next_epoch_quorum_certificate(
-        &self,
-    ) -> anyhow::Result<Option<NextEpochQuorumCertificate2<SeqTypes>>> {
-        let result = self
-            .db
-            .read()
-            .await?
-            .fetch_optional("SELECT * FROM next_epoch_quorum_certificate where id = true")
-            .await?;
-
-        result
-            .map(|row| {
-                let bytes: Vec<u8> = row.get("data");
-                anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
-            })
-            .transpose()
-    }
-
     async fn append_next_epoch_high_qc2(
         &self,
         next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
