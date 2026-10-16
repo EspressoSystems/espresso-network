@@ -69,7 +69,9 @@ use crate::{
     apply_genesis_overrides,
     context::TaskList,
     init_node_state, load_or_fetch_network_config,
-    startup_catchup::bootstrap_epoch_window,
+    startup_catchup::{
+        BootstrapMetrics, BootstrapParams, TrustedAnchor, bootstrap_epoch_window, query_clients,
+    },
     state_signature::StateSignatureMemStorage,
 };
 
@@ -106,7 +108,7 @@ pub struct FollowerParams {
     /// The upstreams when unset.
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    pub bootstrap_epoch_catchup_timeout: Duration,
+    pub bootstrap: BootstrapParams,
     pub options: FollowerOptions,
 }
 
@@ -259,14 +261,19 @@ where
         genesis.epoch_start_block.unwrap_or_default(),
     )
     .await;
-    let current_epoch = bootstrap_epoch_window(
+    let peers = query_clients(&params.upstreams);
+    let replaying = replay.is_some();
+    let bootstrap_metrics = BootstrapMetrics::new(&*metrics);
+    bootstrap_epoch_window(
         &coordinator,
         epoch_height,
-        params.bootstrap_epoch_catchup_timeout,
+        || l1_anchor(&node_state, replaying),
+        &peers,
+        &params.bootstrap,
+        &bootstrap_metrics,
     )
     .await
     .context("startup stake-table catchup failed")?;
-    tracing::info!(%current_epoch, "startup catchup complete");
 
     let (source, light_client): (Arc<dyn ChainSource>, _) = match replay {
         Some(source) => (source, None),
@@ -307,6 +314,8 @@ where
         .context("reading the height the query database has reached")?;
     let follower = Follower {
         source,
+        node_state: node_state.clone(),
+        replaying,
         sink: Arc::new(sink),
         persistence: persistence.clone(),
         coordinator,
@@ -316,7 +325,15 @@ where
         upgrade_lock,
         epoch_height,
         options: params.options,
-        bootstrap_epoch_catchup_timeout: params.bootstrap_epoch_catchup_timeout,
+        // Mid-run, the poll loop waits for the catchup, so it gets one step's time per upstream,
+        // not the boot deadline. A failure is retried by the next poll.
+        bootstrap: BootstrapParams {
+            deadline: params.bootstrap.step_timeout * peers.len() as u32,
+            boot: false,
+            ..params.bootstrap
+        },
+        bootstrap_metrics,
+        peers,
         next,
     };
     let mut tasks = TaskList::default();
@@ -562,6 +579,8 @@ impl ConsensusSource for FollowerConsensus {
 
 struct Follower<P> {
     source: Arc<dyn ChainSource>,
+    node_state: NodeState,
+    replaying: bool,
     sink: Arc<dyn DecideSink>,
     persistence: Arc<P>,
     coordinator: EpochMembershipCoordinator<SeqTypes>,
@@ -571,7 +590,9 @@ struct Follower<P> {
     upgrade_lock: UpgradeLock<SeqTypes>,
     epoch_height: u64,
     options: FollowerOptions,
-    bootstrap_epoch_catchup_timeout: Duration,
+    bootstrap: BootstrapParams,
+    bootstrap_metrics: BootstrapMetrics,
+    peers: Vec<(Url, QueryServiceClient)>,
     next: u64,
 }
 
@@ -752,7 +773,10 @@ impl<P: SequencerPersistence> Follower<P> {
         let current_epoch = bootstrap_epoch_window(
             &self.coordinator,
             self.epoch_height,
-            self.bootstrap_epoch_catchup_timeout,
+            || l1_anchor(&self.node_state, self.replaying),
+            &self.peers,
+            &self.bootstrap,
+            &self.bootstrap_metrics,
         )
         .await
         .context("stake-table catchup after skipping ahead")?;
@@ -833,6 +857,14 @@ impl ChainSource for NodeLightClient {
     async fn fetch_cert2(&self, header: &Header) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
         Ok(self.fetch_certificate2_for_header(header).await?)
     }
+}
+
+async fn l1_anchor(node_state: &NodeState, replaying: bool) -> anyhow::Result<TrustedAnchor> {
+    // A replayed chain has no light-client contract to read.
+    if replaying {
+        return Ok(TrustedAnchor::genesis());
+    }
+    Ok(node_state.finalized_light_client_state().await?.into())
 }
 
 async fn connect_light_client(

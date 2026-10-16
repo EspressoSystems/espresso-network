@@ -2199,6 +2199,7 @@ impl From<crate::options::PublicNodeConfig> for proto::RuntimeConfigResponse {
             catchup_base_timeout: _,
             local_catchup_timeout: _,
             bootstrap_epoch_catchup_timeout: _,
+            bootstrap_deadline: _,
             catchup_backoff: _,
             follower,
             proposal_fetcher: _,

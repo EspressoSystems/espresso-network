@@ -304,7 +304,7 @@ impl EpochCommittees {
         // Return early if previous epoch is not the first two epochs
         // and we don't have the stake table.
         if previous_epoch > first_epoch + 1 && self.snapshot(previous_epoch.into()).is_none() {
-            warn!(?previous_epoch, "missing stake table for previous epoch");
+            debug!(?previous_epoch, "missing stake table for previous epoch");
             return Ok(None);
         }
 

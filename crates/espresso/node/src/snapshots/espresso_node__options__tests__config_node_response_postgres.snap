@@ -102,6 +102,9 @@ local_catchup_timeout:
 bootstrap_epoch_catchup_timeout:
   secs: 30
   nanos: 0
+bootstrap_deadline:
+  secs: 900
+  nanos: 0
 catchup_backoff:
   factor: 4
   base:

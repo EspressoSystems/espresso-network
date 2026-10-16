@@ -33,6 +33,7 @@ use crate::{
     keyset::KeySetOptions,
     persistence,
     proposal_fetcher::ProposalFetcherConfig,
+    startup_catchup::BootstrapParams,
 };
 
 // This options struct is a bit unconventional. The sequencer has multiple optional modules which
@@ -352,6 +353,9 @@ pub struct Options {
     pub is_da: bool,
 
     /// Peer nodes use to fetch missing state
+    ///
+    /// A node joining a running network needs at least one peer that serves the light-client
+    /// module (query module with SQL storage). Without one, startup fails.
     #[clap(long, env = "ESPRESSO_NODE_STATE_PEERS", value_delimiter = ',')]
     #[derivative(Debug(format_with = "fmt_urls"))]
     pub state_peers: Vec<Url>,
@@ -383,15 +387,22 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_LOCAL_CATCHUP_TIMEOUT", default_value = "5s", value_parser = parse_duration)]
     pub local_catchup_timeout: Duration,
 
-    /// Per-step timeout for the startup stake-table catchup walk.
+    /// Timeout for each step of the startup stake-table catchup.
     ///
-    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`. The
-    /// underlying peer leaf fetch is bounded to 3 attempts, so exceeding this means a slow
-    /// or unresponsive peer set, not a retry loop. Exceeding it terminates the walk but
-    /// does not cancel the catchup task, which is a detached `tokio::spawn` bounded by its
-    /// own `DEFAULT_CATCHUP_TIMEOUT` watchdog.
+    /// Bounds a walk step (`wait_for_stake_table`), the anchor read, a skip attempt on one peer,
+    /// a peer height read, and DRB preparation. Below the chain tip's epoch a timed-out step is
+    /// retried until the bootstrap deadline. From there up, it ends the walk. The timeout does
+    /// not cancel the catchup task, which is a detached `tokio::spawn` bounded by its own
+    /// `DEFAULT_CATCHUP_TIMEOUT` watchdog.
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
+
+    /// How long startup retries before giving up, for the install (anchor read, epoch roots and their
+    /// install) and again for the walk toward the chain tip the state peers report.
+    ///
+    /// At the deadline the node exits with an error.
+    #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_DEADLINE", default_value = "15m", value_parser = parse_duration)]
+    pub bootstrap_deadline: Duration,
 
     /// How long a leader waits before proposing a block with no transactions in it.
     #[clap(long, env = "ESPRESSO_NODE_EMPTY_BLOCK_DELAY", default_value = "500ms", value_parser = parse_duration)]
@@ -411,6 +422,13 @@ pub struct Options {
 }
 
 impl Options {
+    pub fn bootstrap_params(&self) -> BootstrapParams {
+        BootstrapParams {
+            step_timeout: self.bootstrap_epoch_catchup_timeout,
+            deadline: self.bootstrap_deadline,
+            boot: true,
+        }
+    }
     /// Parse the command line, also returning the ignored network options it set.
     pub fn parse_with_ignored() -> (Self, Vec<String>) {
         let mut cmd = Self::command();
@@ -457,7 +475,7 @@ impl Options {
                 base_timeout: self.catchup_base_timeout,
                 local_timeout: self.local_catchup_timeout,
             },
-            bootstrap_epoch_catchup_timeout: self.bootstrap_epoch_catchup_timeout,
+            bootstrap: self.bootstrap_params(),
             options: FollowerOptions {
                 poll_interval: follower.poll_interval,
                 max_blocks_per_poll: follower.max_blocks_per_poll,
@@ -884,6 +902,7 @@ pub struct PublicNodeConfig {
     pub catchup_base_timeout: Duration,
     pub local_catchup_timeout: Duration,
     pub bootstrap_epoch_catchup_timeout: Duration,
+    pub bootstrap_deadline: Duration,
     pub catchup_backoff: BackoffParams,
     /// Unset on a validator.
     pub follower: Option<FollowerConfig>,
@@ -1249,6 +1268,7 @@ impl PublicNodeConfig {
             catchup_base_timeout: opt.catchup_base_timeout,
             local_catchup_timeout: opt.local_catchup_timeout,
             bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
+            bootstrap_deadline: opt.bootstrap_deadline,
             catchup_backoff: opt.catchup_backoff,
             follower: modules.follower.as_ref().map(FollowerConfig::from),
             proposal_fetcher: opt.proposal_fetcher_config,
