@@ -1376,9 +1376,12 @@ mod tests {
             .await
             .unwrap();
 
-        // A newer running high QC (view 9) — recovery adopts it...
+        // A newer running high QC (view 9) on an epoch-transition block, so recovery must check the
+        // next-epoch QC against it — recovery adopts it...
+        let epoch_height = 10;
         let mut running_high_qc = eqc_high_qc.clone();
         running_high_qc.view_number = ViewNumber::new(9);
+        running_high_qc.data.block_number = Some(epoch_height);
         storage.append_high_qc2(running_high_qc).await.unwrap();
 
         // ...and a standalone next-epoch QC (view 3) in its table. Neither it nor the eQC's view-5
@@ -1392,7 +1395,7 @@ mod tests {
 
         let (initializer, _anchor_view) = storage
             .load_consensus_state(
-                NodeState::mock(),
+                NodeState::mock().with_epoch_height(epoch_height),
                 Upgrade::trivial(versions::EPOCH_REWARD_VERSION),
             )
             .await

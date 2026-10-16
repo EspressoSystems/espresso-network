@@ -30,7 +30,7 @@ use espresso_types::{
     ValidatedState, v0_3::Fetcher,
 };
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
-use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorage};
+use hotshot_example_types::storage_types::TestStorage;
 use hotshot_new_protocol::message::{
     BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, DedupManifest,
     EpochChangeMessage, Message as NewProtocolMessage, MessageType, ProposalFetchMessage,
@@ -79,7 +79,11 @@ use pretty_assertions::assert_eq;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
-use versions::TIMEOUT_EPOCH_VERSION;
+use versions::{TIMEOUT_EPOCH_VERSION, Upgrade, version};
+
+/// The pre-epoch versions that produced the genesis leaf and QC in the `messages` vectors.
+/// Pinned here, not taken from the shared test versions, so the committed vectors do not change.
+const LEGACY_MESSAGE_UPGRADE: Upgrade = Upgrade::new(version(0, 1), version(0, 2));
 
 /// Compare `messages` against the vectors committed at `data/v{minor}/{name}.{json,bin}`.
 ///
@@ -203,7 +207,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let leaf = Leaf::genesis(
         &ValidatedState::default(),
         &node_state,
-        TEST_VERSIONS.test.base,
+        LEGACY_MESSAGE_UPGRADE.base,
     )
     .await;
     let block_header = leaf.block_header().clone();
@@ -242,7 +246,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
                 justify_qc: QuorumCertificate::genesis(
                     &ValidatedState::default(),
                     &node_state,
-                    TEST_VERSIONS.test,
+                    LEGACY_MESSAGE_UPGRADE,
                 )
                 .await,
                 upgrade_certificate: Some(UpgradeCertificate::new(
