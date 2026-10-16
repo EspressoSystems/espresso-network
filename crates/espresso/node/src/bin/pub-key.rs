@@ -3,11 +3,7 @@ use clap::{Parser, ValueEnum};
 use derive_more::Display;
 use espresso_node::keyset::{KeySet, KeySetOptions};
 use espresso_types::PubKey;
-use hotshot::traits::implementations::derive_libp2p_peer_id;
-use hotshot_types::{
-    light_client::StateKeyPair, signature_key::BLSPubKey, traits::signature_key::SignatureKey,
-    x25519,
-};
+use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
 
 #[derive(Clone, Copy, Debug, Display, Default, ValueEnum)]
 enum Scheme {
@@ -20,15 +16,13 @@ enum Scheme {
     Schnorr,
     #[display("x25519")]
     X25519,
-    #[display("libp2p")]
-    Libp2p,
 }
 
 impl Scheme {
     fn print(self, keys: &KeySet) -> anyhow::Result<()> {
         match self {
             Scheme::All => {
-                for scheme in [Scheme::Bls, Scheme::Schnorr, Scheme::X25519, Scheme::Libp2p] {
+                for scheme in [Scheme::Bls, Scheme::Schnorr, Scheme::X25519] {
                     scheme.print(keys)?;
                 }
             },
@@ -40,11 +34,6 @@ impl Scheme {
             Scheme::X25519 => println!(
                 "{}",
                 x25519::Keypair::from(keys.x25519.clone()).public_key()
-            ),
-            Scheme::Libp2p => println!(
-                "{}",
-                derive_libp2p_peer_id::<BLSPubKey>(&keys.staking)
-                    .context("deriving libp2p peer ID")?
             ),
         }
 

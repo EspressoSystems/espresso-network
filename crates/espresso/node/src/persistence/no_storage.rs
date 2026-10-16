@@ -10,9 +10,6 @@ use espresso_types::{
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
 };
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
-    DhtPersistentStorage, SerializableRecord,
-};
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposalWrapper, VidCommitment,
@@ -327,18 +324,5 @@ impl MembershipPersistence for NoStorage {
         _limit: u64,
     ) -> anyhow::Result<Vec<RegisteredValidator<PubKey>>> {
         Ok(Default::default())
-    }
-}
-
-#[async_trait]
-impl DhtPersistentStorage for NoStorage {
-    /// Don't do anything
-    async fn save(&self, _records: Vec<SerializableRecord>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// Don't do anything
-    async fn load(&self) -> anyhow::Result<Vec<SerializableRecord>> {
-        Ok(vec![])
     }
 }

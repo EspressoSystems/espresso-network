@@ -11,8 +11,6 @@ use async_trait::async_trait;
 use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
 #[cfg(feature = "node")]
-use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-#[cfg(feature = "node")]
 use hotshot_new_protocol::storage::NewProtocolStorage;
 #[cfg(feature = "node")]
 use hotshot_types::simple_certificate::{Certificate1, Certificate2};
@@ -578,7 +576,7 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 #[cfg(feature = "node")]
 #[async_trait]
 pub trait SequencerPersistence:
-    Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
+    Sized + Send + Sync + Clone + 'static + MembershipPersistence
 {
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(

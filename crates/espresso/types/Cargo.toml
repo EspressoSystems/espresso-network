@@ -22,7 +22,6 @@ node = [
     "alloy/node-bindings",
     "alloy/provider-ws",
     "alloy/signer-ledger",
-    "dep:hotshot-libp2p-networking",
     "dep:hotshot-new-protocol",
     "espresso-utils/full",
     "hotshot-query-service-types/sqlx",
@@ -73,7 +72,6 @@ ethers-core = { workspace = true }
 futures = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-example-types = { workspace = true, optional = true }
-hotshot-libp2p-networking = { workspace = true, optional = true }
 hotshot-new-protocol = { workspace = true, optional = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
