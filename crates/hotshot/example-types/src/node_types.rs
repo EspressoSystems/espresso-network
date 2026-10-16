@@ -8,17 +8,12 @@ use std::{
     marker::PhantomData,
 };
 
-use hotshot::traits::{
-    NodeImplementation,
-    implementations::{CombinedNetworks, Libp2pNetwork, MemoryNetwork, PushCdnNetwork},
-};
 use hotshot_types::{
     constants::TEST_UPGRADE_CONSTANTS,
     signature_key::{BLSPubKey, BuilderKey, SchnorrPubKey},
     traits::node_implementation::NodeType,
     upgrade_config::UpgradeConstants,
 };
-use serde::{Deserialize, Serialize};
 use vbs::version::StaticVersion;
 use versions::{Upgrade, version};
 
@@ -33,7 +28,6 @@ use crate::{
         strict_membership::StrictMembership, two_static_committees::TwoStakeTables,
     },
     state_types::{TestInstanceState, TestValidatedState},
-    storage_types::TestStorage,
 };
 
 #[derive(
@@ -264,46 +258,6 @@ impl NodeType for TestTwoStakeTablesTypes {
         StrictMembership<TestTwoStakeTablesTypes, TwoStakeTables<BLSPubKey, SchnorrPubKey>>;
     type BuilderSignatureKey = BuilderKey;
     type StateSignatureKey = SchnorrPubKey;
-}
-
-/// The Push CDN implementation
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-pub struct PushCdnImpl;
-
-/// Memory network implementation
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-pub struct MemoryImpl;
-
-/// Libp2p network implementation
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-pub struct Libp2pImpl;
-
-/// Web server network implementation
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-pub struct WebImpl;
-
-/// Combined Network implementation (libp2p + web server)
-#[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-pub struct CombinedImpl;
-
-impl<TYPES: NodeType> NodeImplementation<TYPES> for PushCdnImpl {
-    type Network = PushCdnNetwork<TYPES::SignatureKey>;
-    type Storage = TestStorage<TYPES>;
-}
-
-impl<TYPES: NodeType> NodeImplementation<TYPES> for MemoryImpl {
-    type Network = MemoryNetwork<TYPES::SignatureKey>;
-    type Storage = TestStorage<TYPES>;
-}
-
-impl<TYPES: NodeType> NodeImplementation<TYPES> for CombinedImpl {
-    type Network = CombinedNetworks<TYPES>;
-    type Storage = TestStorage<TYPES>;
-}
-
-impl<TYPES: NodeType> NodeImplementation<TYPES> for Libp2pImpl {
-    type Network = Libp2pNetwork<TYPES>;
-    type Storage = TestStorage<TYPES>;
 }
 
 #[non_exhaustive]

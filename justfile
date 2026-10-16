@@ -1,4 +1,3 @@
-mod hotshot
 mod py "scripts/py.just"
 mod binary-upgrade-tests "binary-upgrade-tests/justfile"
 mod soak "crates/process-metrics/justfile"
@@ -148,13 +147,12 @@ docker-stop-rm:
 anvil *args:
     docker run -p 127.0.0.1:8545:8545 ghcr.io/foundry-rs/foundry:latest "anvil {{args}}"
 
-# hotshot-testing: tested in hotshot.yml
 # hotshot-new-protocol: tested in hotshot.yml
 # espresso-node-sqlite: no tests, enables embedded-db feature
 # slow-tests: slow and serial tests
 # espresso-dev-node: enables embedded-db
 # espresso-crypto-helper: vendored openssl leaks to workspace via feature unification
-nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper"
+nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude espresso-crypto-helper"
 
 nextest *args:
     cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
@@ -251,17 +249,11 @@ check-features-ci *args:
     cargo hack check --feature-powerset \
         --depth 2 \
         --exclude-all-features \
-        --exclude hotshot \
-        --exclude hotshot-builder-api \
         --exclude hotshot-contract-adapter \
         --exclude hotshot-example-types \
-        --exclude hotshot-libp2p-networking \
         --exclude hotshot-orchestrator \
         --exclude hotshot-query-service \
         --exclude hotshot-state-prover \
-        --exclude hotshot-task \
-        --exclude hotshot-task-impls \
-        --exclude hotshot-testing \
         --exclude hotshot-types \
         --exclude hotshot-utils \
         --exclude vid \

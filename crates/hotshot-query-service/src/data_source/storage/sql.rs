@@ -56,7 +56,9 @@ use crate::{
     status::HasMetrics,
 };
 pub extern crate sqlx;
-pub use sqlx::{Database, Sqlite};
+pub use sqlx::Database;
+#[cfg(feature = "embedded-db")]
+pub use sqlx::Sqlite;
 
 mod db;
 mod migrate;
