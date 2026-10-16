@@ -148,11 +148,12 @@ where
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
         tracing::info!(%pub_key, "initializing consensus");
+        let upgrade_lock = restored_upgrade_lock(upgrade, &initializer);
+        let version = running_version(&upgrade_lock);
         ensure!(
-            upgrade.base >= NEW_PROTOCOL_VERSION,
-            "base version {} predates the new protocol ({NEW_PROTOCOL_VERSION}), the only \
-             consensus this node runs",
-            upgrade.base
+            version >= NEW_PROTOCOL_VERSION,
+            "the chain runs version {version}, which predates the new protocol \
+             ({NEW_PROTOCOL_VERSION}), the only consensus this node runs"
         );
 
         let instance_state = initializer.instance_state().clone();
@@ -175,7 +176,6 @@ where
 
         let epoch_height = initializer.epoch_height();
 
-        let upgrade_lock = restored_upgrade_lock(upgrade, &initializer);
         seed_membership(&membership_coordinator, config, &upgrade_lock, &initializer).await;
 
         let mut coordinator_network = coordinator_network(upgrade_lock.clone()).await?;
@@ -581,6 +581,14 @@ fn restored_upgrade_lock(
     UpgradeLock::from_certificate(upgrade, &decided_upgrade_certificate)
 }
 
+/// The version the chain runs now: the decided upgrade's, or the base when none was decided.
+fn running_version(upgrade_lock: &UpgradeLock<SeqTypes>) -> Version {
+    upgrade_lock
+        .decided_upgrade_cert()
+        .map(|cert| cert.data.new_version)
+        .unwrap_or(upgrade_lock.upgrade().base)
+}
+
 async fn seed_membership(
     membership_coordinator: &EpochMembershipCoordinator<SeqTypes>,
     config: &HotShotConfig<SeqTypes>,
@@ -589,10 +597,7 @@ async fn seed_membership(
 ) {
     membership_coordinator.set_drb_difficulty_selector(drb_difficulty_selector(config));
 
-    let running_version = upgrade_lock
-        .decided_upgrade_cert()
-        .map(|cert| cert.data.new_version)
-        .unwrap_or(upgrade_lock.upgrade().base);
+    let running_version = running_version(upgrade_lock);
     let membership = membership_coordinator.membership();
     for da_committee in &config.da_committees {
         if running_version >= da_committee.start_version {
