@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       base_tag:
-        description: "Base docker tag to start from (empty = latest X.Y.Z.N tag)"
+        description: "Base docker tag to start from (empty = tags decaf and mainnet run, at or below the ref's release line and not containing the ref; one job per base)"
         required: false
         default: ""
       upgrade_tag:
@@ -13,28 +13,48 @@ on:
         default: "main"
 
 jobs:
+  bases:
+    runs-on: ubuntu-latest
+    outputs:
+      bases: ${{ steps.bases.outputs.bases }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - uses: astral-sh/setup-uv@v10.0.1
+      - id: bases
+        env:
+          BASE_TAG: ${{ inputs.base_tag }}
+        run: |
+          bases=$(./binary-upgrade-tests/run.py --list-base-tags)
+          echo "bases=$bases" >> "$GITHUB_OUTPUT"
+
   binary-upgrade-test:
     runs-on: ubuntu-latest
+    needs: [bases]
     strategy:
       fail-fast: false
       matrix:
+        base: ${{ fromJSON(needs.bases.outputs.bases) }}
         scenario:
           - vanilla
           - new-from-old-fs
           - new-from-old-pg
           - old-from-new-fs
           - old-from-new-pg
-    name: binary-upgrade-test (${{ matrix.scenario }})
+    name: binary-upgrade-test (${{ matrix.base }}, ${{ matrix.scenario }})
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-tags: true
+          fetch-depth: 0
+          filter: blob:none
       - uses: taiki-e/install-action@just
       - uses: astral-sh/setup-uv@v10.0.1
 
       - name: Pull docker images
         env:
-          BASE_TAG: ${{ inputs.base_tag }}
+          BASE_TAG: ${{ matrix.base }}
           UPGRADE_TAG: ${{ inputs.upgrade_tag }}
           UPGRADE_PULL: "1"
         run: |
@@ -43,7 +63,7 @@ jobs:
 
       - name: Run binary upgrade test
         env:
-          BASE_TAG: ${{ inputs.base_tag }}
+          BASE_TAG: ${{ matrix.base }}
           UPGRADE_TAG: ${{ inputs.upgrade_tag }}
           UPGRADE_PULL: "1"
         run: |
@@ -55,7 +75,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: compose-logs-${{ matrix.scenario }}
+          name: compose-logs-${{ matrix.base }}-${{ matrix.scenario }}
           path: tmp/compose-logs/
           retention-days: 1
           if-no-files-found: ignore

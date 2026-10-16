@@ -4,10 +4,13 @@ run *args:
     ./run.py {{args}}
 
 fmt *args:
-    ruff format run.py {{args}}
+    ruff format run.py test_run.py {{args}}
 
 lint *args:
-    ruff check run.py {{args}}
+    ruff check run.py test_run.py {{args}}
 
 check *args:
     ty check run.py {{args}}
+
+test *args:
+    uv run --with pytest --with-requirements run.py pytest test_run.py {{args}}

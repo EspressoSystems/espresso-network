@@ -676,24 +676,43 @@ jobs:
             exit 1
           fi
 
+  binary-upgrade-bases:
+    runs-on: ubuntu-latest
+    outputs:
+      bases: ${{ steps.bases.outputs.bases }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - uses: astral-sh/setup-uv@v10.0.1
+      - id: bases
+        run: |
+          bases=$(./binary-upgrade-tests/run.py --list-base-tags)
+          echo "bases=$bases" >> "$GITHUB_OUTPUT"
+
   binary-upgrade-test-pr:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    needs: [build-dockers-amd]
+    needs: [build-dockers-amd, binary-upgrade-bases]
     strategy:
       fail-fast: false
       matrix:
+        base: ${{ fromJSON(needs.binary-upgrade-bases.outputs.bases) }}
         scenario:
           - vanilla
           - new-from-old-fs
           - new-from-old-pg
           - old-from-new-fs
           - old-from-new-pg
-    name: binary-upgrade-test-pr (${{ matrix.scenario }})
+    name: binary-upgrade-test-pr (${{ matrix.base }}, ${{ matrix.scenario }})
+    env:
+      BASE_TAG: ${{ matrix.base }}
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-tags: true
+          fetch-depth: 0
+          filter: blob:none
       - uses: taiki-e/install-action@just
       - uses: astral-sh/setup-uv@v10.0.1
 
@@ -728,7 +747,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: compose-logs-${{ github.job }}-${{ matrix.scenario }}
+          name: compose-logs-${{ github.job }}-${{ matrix.base }}-${{ matrix.scenario }}
           path: tmp/compose-logs/
           retention-days: 1
           if-no-files-found: ignore
@@ -736,21 +755,25 @@ jobs:
   binary-upgrade-test-non-pr:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    needs: [build-dockers-amd, create-multiplatform-docker-image]
+    needs: [build-dockers-amd, create-multiplatform-docker-image, binary-upgrade-bases]
     strategy:
       fail-fast: false
       matrix:
+        base: ${{ fromJSON(needs.binary-upgrade-bases.outputs.bases) }}
         scenario:
           - vanilla
           - new-from-old-fs
           - new-from-old-pg
           - old-from-new-fs
           - old-from-new-pg
-    name: binary-upgrade-test-non-pr (${{ matrix.scenario }})
+    name: binary-upgrade-test-non-pr (${{ matrix.base }}, ${{ matrix.scenario }})
+    env:
+      BASE_TAG: ${{ matrix.base }}
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-tags: true
+          fetch-depth: 0
+          filter: blob:none
       - uses: taiki-e/install-action@just
       - uses: astral-sh/setup-uv@v10.0.1
 
@@ -775,20 +798,24 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: compose-logs-${{ github.job }}-${{ matrix.scenario }}
+          name: compose-logs-${{ github.job }}-${{ matrix.base }}-${{ matrix.scenario }}
           path: tmp/compose-logs/
           retention-days: 1
           if-no-files-found: ignore
 
   binary-upgrade-test:
-    needs: [binary-upgrade-test-pr, binary-upgrade-test-non-pr]
+    needs: [binary-upgrade-bases, binary-upgrade-test-pr, binary-upgrade-test-non-pr]
     runs-on: ubuntu-latest
     if: ${{ always() && !cancelled() }}
     steps:
       - name: Aggregate binary upgrade test results
         run: |
           echo "All results: ${{ toJson(needs) }}"
-          if ${{ contains(needs.*.result, 'success') }}; then
+          if [[ "${{ needs.binary-upgrade-bases.result }}" != success ]]; then
+            echo "Base tag discovery failed. Failing."
+            exit 1
+          fi
+          if ${{ needs.binary-upgrade-test-pr.result == 'success' || needs.binary-upgrade-test-non-pr.result == 'success' }}; then
             echo "At least one job passed. Ok."
           else
             echo "No jobs passed. Failing."
