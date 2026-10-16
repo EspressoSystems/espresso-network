@@ -99,6 +99,9 @@ catchup_base_timeout:
 local_catchup_timeout:
   secs: 5
   nanos: 0
+http_catchup_delay:
+  secs: 2
+  nanos: 0
 bootstrap_epoch_catchup_timeout:
   secs: 30
   nanos: 0

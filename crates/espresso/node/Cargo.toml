@@ -147,7 +147,7 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "net"] }
+tokio = { workspace = true, features = ["io-util", "net", "test-util"] }
 tokio-tungstenite = { workspace = true }
 
 [lints]
