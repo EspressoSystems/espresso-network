@@ -2,7 +2,6 @@ use std::{marker::PhantomData, time::Duration};
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_testing::helpers::build_cert;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment2, ViewNumber},
     epoch_membership::EpochMembership,
@@ -16,6 +15,7 @@ use hotshot_types::{
 use tokio::time::timeout;
 
 use super::common::{
+    certs::build_cert,
     harness::TestHarness,
     utils::{TestData, TestView, build_cert1, build_cert2, build_timeout_cert3},
 };

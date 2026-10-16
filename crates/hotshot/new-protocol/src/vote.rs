@@ -497,8 +497,10 @@ mod tests {
     use std::{fmt::Debug, marker::PhantomData, time::Duration};
 
     use committable::Committable;
-    use hotshot_example_types::node_types::TestTypes;
-    use hotshot_testing::{node_stake::TestNodeStakes, test_builder::gen_node_lists};
+    use hotshot_example_types::{
+        node_stake::{TestNodeStakes, gen_node_lists},
+        node_types::TestTypes,
+    };
     use hotshot_types::{
         data::{EpochNumber, ViewNumber},
         epoch_membership::EpochMembership,
