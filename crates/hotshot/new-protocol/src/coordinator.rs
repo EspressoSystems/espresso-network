@@ -594,6 +594,7 @@ where
                                     epoch: block.epoch,
                                     payload: block.payload.payload.clone(),
                                     metadata: block.payload.metadata.clone(),
+                                    hashes: manifest.hashes.clone(),
                                 },
                             );
                         } else {
@@ -829,10 +830,7 @@ where
                         // A leader never reconstructs its own block, and a block it built
                         // but did not propose puts nothing on the chain, so this is where
                         // its transactions count as included.
-                        self.block_builder.on_block_reconstructed(
-                            view,
-                            da.payload.transaction_commitments(&da.metadata),
-                        );
+                        self.block_builder.on_block_reconstructed(view, da.hashes);
                         self.storage.append_da(
                             view,
                             da.epoch,
@@ -2127,6 +2125,7 @@ struct PendingDa<T: NodeType> {
     epoch: EpochNumber,
     payload: T::BlockPayload,
     metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    hashes: Vec<Commitment<T::Transaction>>,
 }
 
 type ProposalFetchResponseSender<T> =
