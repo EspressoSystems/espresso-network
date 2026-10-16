@@ -50,6 +50,7 @@ use self::proto::{
     config_service_server::{ConfigService, ConfigServiceServer},
     database_service_server::{DatabaseService, DatabaseServiceServer},
     explorer_service_server::{ExplorerService, ExplorerServiceServer},
+    light_client_service_server::{LightClientService, LightClientServiceServer},
     merklized_state_service_server::{MerklizedStateService, MerklizedStateServiceServer},
     node_service_server::{NodeService, NodeServiceServer},
     reward_state_service_server::{RewardStateService, RewardStateServiceServer},
@@ -113,6 +114,7 @@ where
         + SubmitService
         + ExplorerService
         + CatchupService
+        + LightClientService
         + Send
         + Sync
         + 'static,
@@ -164,6 +166,7 @@ where
         + SubmitService
         + ExplorerService
         + CatchupService
+        + LightClientService
         + Send
         + Sync
         + 'static,
@@ -191,6 +194,14 @@ where
         router.merge(axum::router_module_disabled(
             "explorer",
             routes::v2::EXPLORER_ROUTES,
+        ))
+    };
+    let router = if modules.light_client {
+        router.merge(rest::light_client_service_rest_router(state.clone()))
+    } else {
+        router.merge(axum::router_module_disabled(
+            "light-client",
+            routes::v2::LIGHT_CLIENT_ROUTES,
         ))
     };
     let router = if modules.config {
@@ -416,6 +427,7 @@ where
         + SubmitService
         + ExplorerService
         + CatchupService
+        + LightClientService
         + Clone,
 {
     use ::tonic::transport::Server;
@@ -448,6 +460,11 @@ where
             modules
                 .explorer
                 .then(|| ExplorerServiceServer::new(state.clone())),
+        )
+        .add_optional_service(
+            modules
+                .light_client
+                .then(|| LightClientServiceServer::new(state.clone())),
         )
         .add_optional_service(modules.config.then(|| ConfigServiceServer::new(state)));
 
