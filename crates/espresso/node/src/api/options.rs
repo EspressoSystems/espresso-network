@@ -9,7 +9,7 @@ use espresso_telemetry as telemetry;
 use espresso_types::v0::traits::{NullEventConsumer, PersistenceOptions};
 use futures::{channel::oneshot, future::BoxFuture};
 use hotshot_query_service::{
-    data_source::{ExtensibleDataSource, MetricsDataSource},
+    data_source::{ExtensibleDataSource, MetricsDataSource, storage::pruning::PrunerConfig},
     status::{HasMetrics, UpdateStatusData},
 };
 use hotshot_types::traits::metrics::{Metrics, NoMetrics};
@@ -28,10 +28,13 @@ use super::{
     update::{ApiEventConsumer, ApiSink},
 };
 use crate::{
-    api::LightClientProvider, catchup::CatchupStorage, context::TaskList,
-    options::PublicNodeConfig, persistence,
+    api::LightClientProvider,
+    catchup::CatchupStorage,
+    context::TaskList,
+    options::PublicNodeConfig,
+    persistence,
     request_response::data_source::Storage as RequestResponseStorage,
-    state::update_state_storage_loop,
+    state::{EmptyStateStart, update_state_storage_loop},
 };
 
 #[derive(Clone, Debug)]
@@ -359,9 +362,11 @@ impl Options {
             let state = state.clone();
             async move { state.node_state().await }
         };
+        let empty_state_start =
+            EmptyStateStart::for_pruning(inner_storage.get_pruning_config().as_ref());
         tasks.spawn(
             "merklized state storage update loop",
-            update_state_storage_loop(ds.clone(), get_node_state, light_client),
+            update_state_storage_loop(ds.clone(), get_node_state, light_client, empty_state_start),
         );
 
         // Archive mode disables the pruner, so nothing else bounds the merklized state tables.
