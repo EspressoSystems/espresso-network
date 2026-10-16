@@ -4,12 +4,14 @@ public import NewProtocolDiff.Trace
 public import NewProtocolDiff.Corpus
 public import NewProtocolDiff.PromptCheck
 public import NewProtocolDiff.Check
+public import NewProtocolDiff.Coverage
 public meta import NewProtocolSpec.Interface
 public meta import NewProtocolDiff.Json
 public meta import NewProtocolDiff.Trace
 public meta import NewProtocolDiff.Corpus
 public meta import NewProtocolDiff.PromptCheck
 public meta import NewProtocolDiff.Check
+public meta import NewProtocolDiff.Coverage
 
 /-!
 # Checks on the harness itself
@@ -248,6 +250,19 @@ private def unanswered (es : List Event) (released : List (Nat × Nat)) (ended �
 
 /-- info: ["timeout vote for view 1 at t=3"] -/
 #guard_msgs in #eval unanswered (opening ++ [timerStep [], voteStep [timeoutVote]]) [] 100 0
+
+/-- What a run exercises, as the coverage report counts it. -/
+private def covered (es : List Event) : String :=
+  let h := historyOf es
+  let ms := moments h (List.range h.length).toArray (List.replicate h.length []).toArray
+  let cov := Coverage.add cfg (fun _ _ => some me) me {} h ms
+  s!"owed {cov.owed.getD "vote1" 0}, ended by notVoted {cov.ended.getD ("vote1", "notVoted") 0}, \
+    blocked by validated {cov.soleFalse.getD ("vote1", "validated") 0}"
+
+-- The vote1 is owed once validated, and ends by being cast. Before, after the proposal and
+-- after the reconstruction of its parent, the anchor, validation alone was missing.
+/-- info: "owed 1, ended by notVoted 1, blocked by validated 2" -/
+#guard_msgs in #eval covered (opening ++ [voteStep [], .consensus (.blockValidated ⟨9⟩ ⟨9⟩) [vote ⟨3⟩]])
 
 /-- A recorded step carries its time and its releases, and the trace its end. -/
 private def timedTrace : String :=

@@ -6,6 +6,7 @@ public import NewProtocolDiff.Header
 public import NewProtocolDiff.Check
 public import NewProtocolDiff.ProtocolCheck
 public import NewProtocolDiff.PromptCheck
+public import NewProtocolDiff.Coverage
 public import NewProtocolDiff.Corpus
 public import NewProtocolDiff.Tests
 public import NewProtocolDiff.Sim
@@ -24,6 +25,8 @@ implementation produced (`lake exe check`), and for running the machine.
 * `NewProtocolDiff.Check` — the signing rules of `NewProtocol.SafeHistory`.
 * `NewProtocolDiff.ProtocolCheck` — the rest of `NewProtocol.ProtocolHistory`.
 * `NewProtocolDiff.PromptCheck` — `NewProtocol.Prompt`, on the steps a trace has.
+* `NewProtocolDiff.Coverage` — which conjuncts of `NewProtocol.Owed` a corpus of
+  traces exercises (`check --coverage`).
 * `NewProtocolDiff.Corpus` — what puts a trace or a delay outside what the
   specification covers.
 * `NewProtocolDiff.Sim` — random runs of several machines over a simulated

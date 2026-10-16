@@ -39,7 +39,7 @@ use crate::{
         TimeoutVote,
     },
     outbox::Outbox,
-    storage::StorageOutput,
+    storage::{ActionKind, StorageOutput},
 };
 
 const EPOCH_HEIGHT: u64 = 10;
@@ -360,6 +360,183 @@ async fn leader_requests_a_revote_for_an_uncommitted_boundary_block() {
     );
 }
 
+/// A node that is not the leader of `view` in `e`, so that it sends no re-vote
+/// request of its own there.
+fn non_leader(harness: &ConsensusHarness, v: ViewNumber, e: EpochNumber) -> u64 {
+    let leader = leader_index(harness, v, e);
+    if leader == 0 { 1 } else { 0 }
+}
+
+/// A signed re-vote request from the leader of `revote.view` in epoch 1.
+fn revote_from_leader(
+    harness: &ConsensusHarness,
+    revote: ReVote<TestTypes>,
+) -> ConsensusInput<TestTypes> {
+    let leader = leader_index(harness, revote.view, epoch(1));
+    let (_, leader_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], leader);
+    ConsensusInput::ReVote(ReVoteMessage::new(revote, &leader_key).unwrap())
+}
+
+/// A re-vote request for a view the node has left, by a timeout certificate it
+/// received but did not sign, still gets a vote1.
+///
+/// The specification permits it: a vote1 may be for a view no later than the
+/// node's, and is owed only in the view the node is in. A late vote1 can still
+/// help nodes that have not left the view form the `Certificate1`.
+#[tokio::test]
+async fn revote_for_a_view_left_still_gets_a_vote1() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let probe =
+        ConsensusHarness::new_with_upgrade_lock(0, EPOCH_HEIGHT, test_timeout_epoch_lock()).await;
+    let node = non_leader(&probe, view(11), epoch(1));
+    let mut harness =
+        node_before_the_boundary_certificate(node, &test_data, test_timeout_epoch_lock()).await;
+    harness.apply(boundary.cert1_input()).await;
+    harness
+        .apply(timeout_cert_input(timeout_cert(
+            &harness,
+            view(11),
+            Some(boundary.cert1.clone()),
+        )))
+        .await;
+    assert_eq!(
+        harness.consensus.current_view(),
+        view(12),
+        "setup: the node left view 11"
+    );
+
+    let revote = revote_from_leader(
+        &harness,
+        ReVote {
+            view: view(11),
+            epoch: epoch(1),
+            cert1: boundary.cert1.clone(),
+            timeout: None,
+        },
+    );
+    harness.apply(revote).await;
+    assert!(
+        vote1_at(&harness, view(11)).is_some(),
+        "a vote1 in a view left"
+    );
+}
+
+/// A re-vote request for a view the node timed out gets no vote1.
+#[tokio::test]
+async fn revote_for_a_timed_out_view_gets_no_vote1() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let probe =
+        ConsensusHarness::new_with_upgrade_lock(0, EPOCH_HEIGHT, test_timeout_epoch_lock()).await;
+    let node = non_leader(&probe, view(11), epoch(1));
+    let mut harness =
+        node_before_the_boundary_certificate(node, &test_data, test_timeout_epoch_lock()).await;
+    harness.apply(boundary.cert1_input()).await;
+    harness.apply(ConsensusInput::Timeout(view(11))).await;
+    assert!(
+        last_timeout_vote(&harness).is_some(),
+        "setup: the node timed view 11 out"
+    );
+
+    let revote = revote_from_leader(
+        &harness,
+        ReVote {
+            view: view(11),
+            epoch: epoch(1),
+            cert1: boundary.cert1.clone(),
+            timeout: None,
+        },
+    );
+    harness.apply(revote).await;
+    assert!(
+        vote1_at(&harness, view(11)).is_none(),
+        "no vote1 in a view timed out"
+    );
+}
+
+/// A re-vote request naming a certificate earlier than its timeout
+/// certificate's lock, over another block, gets no vote1: the lock may be on a
+/// branch without the block.
+#[tokio::test]
+async fn revote_behind_its_timeout_certificates_lock_gets_no_vote1() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let probe =
+        ConsensusHarness::new_with_upgrade_lock(0, EPOCH_HEIGHT, test_timeout_epoch_lock()).await;
+    let node = non_leader(&probe, view(12), epoch(1));
+    let mut harness =
+        node_before_the_boundary_certificate(node, &test_data, test_timeout_epoch_lock()).await;
+    harness.apply(boundary.cert1_input()).await;
+    // A lock at view 11 over another last block of epoch 1.
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(epoch(1)))
+        .unwrap();
+    let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let block = BlockHeader::<TestTypes>::block_number(&boundary.proposal.data.block_header);
+    let other = proposal_commitment(&test_data.views[BOUNDARY - 1].proposal.data);
+    let lock = build_cert1(other, epoch(1), block, &membership, view(11), &pk, &sk);
+    let TimeoutEvidence::V3(timeout) = timeout_cert(&harness, view(11), Some(lock)) else {
+        unreachable!()
+    };
+
+    let revote = revote_from_leader(
+        &harness,
+        ReVote {
+            view: view(12),
+            epoch: epoch(1),
+            cert1: boundary.cert1.clone(),
+            timeout: Some(timeout),
+        },
+    );
+    harness.apply(revote).await;
+    assert!(
+        vote1_at(&harness, view(12)).is_none(),
+        "no vote1 behind the lock"
+    );
+}
+
+/// The first block of an epoch naming its parent by a re-vote's certificate,
+/// not by the parent's own at its view, gets no vote1.
+#[tokio::test]
+async fn first_block_naming_a_revotes_certificate_gets_no_vote1() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 2, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let first = &test_data.views[BOUNDARY + 1];
+    let mut harness =
+        node_before_the_boundary_certificate(0, &test_data, test_timeout_epoch_lock()).await;
+    harness.apply(boundary.cert1_input()).await;
+
+    // The first block of epoch 2 at view 12, built on the re-vote at view 11.
+    let (cert1_11, cert2_11) = revote_certs(&harness, &test_data, view(11));
+    let mut proposal = first.proposal_message();
+    proposal.proposal.data.view_number = view(12);
+    proposal.proposal.data.justify_qc = cert1_11;
+    proposal.proposal.data.next_epoch_justify_qc = Some(cert2_11);
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let mut share = first.vid_share_for(&node_key);
+    share.view_number = view(12);
+    let leader = leader_index(&harness, view(12), epoch(2));
+    let leader_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], leader).0;
+    harness
+        .apply_pair((
+            ConsensusInput::Proposal(leader_key, proposal),
+            ConsensusInput::VidShare(share),
+        ))
+        .await;
+    harness.apply(first.block_reconstructed_input()).await;
+
+    assert!(
+        !harness.outputs().iter().any(|o| matches!(
+            o,
+            ConsensusOutput::SendVote1(vote)
+                if vote.vote.view_number() == view(12) && vote.vote.data.epoch == Some(epoch(2))
+        )),
+        "no vote1 on a first block whose parent is not named at its own view"
+    );
+}
+
 /// The leader of the view after the boundary block asks for a re-vote as soon
 /// as it can lock on the block, without waiting for the view to time out.
 #[tokio::test]
@@ -457,6 +634,101 @@ async fn node_votes_on_a_revote_naming_a_revotes_certificate() {
 
     let vote = vote1_at(&harness, view(13)).expect("the node votes1 on the re-vote");
     assert_eq!(vote.vote.data, boundary.cert1.data);
+}
+
+/// A node owing a vote1 on a re-vote request at view 13 of a re-vote's
+/// `Certificate1` at view 12, with the vote1 waiting for its action to be
+/// stored.
+async fn revote_vote1_waiting_on_storage(test_data: &TestData) -> ConsensusHarness {
+    let boundary = &test_data.views[BOUNDARY];
+    let mut harness =
+        node_before_the_boundary_certificate(0, test_data, test_timeout_epoch_lock()).await;
+    harness.defer_action(view(13), ActionKind::Vote);
+    harness.apply(boundary.cert1_input()).await;
+    let (cert1_12, _) = revote_certs(&harness, test_data, view(12));
+    harness
+        .apply(ConsensusInput::Certificate1(ValidCert::new(
+            cert1_12.clone(),
+            epoch(1),
+        )))
+        .await;
+    let revote = revote_from_leader(
+        &harness,
+        ReVote {
+            view: view(13),
+            epoch: epoch(1),
+            cert1: cert1_12,
+            timeout: None,
+        },
+    );
+    harness.apply(revote).await;
+    assert!(
+        vote1_at(&harness, view(13)).is_none(),
+        "setup: the vote1 waits for its action to be stored"
+    );
+    harness
+}
+
+/// A vote1 on a re-vote request that waits for its action to be stored is not
+/// sent once the node has timed the view out.
+#[tokio::test]
+async fn revote_vote1_waiting_on_storage_is_not_sent_after_a_timeout() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let mut harness = revote_vote1_waiting_on_storage(&test_data).await;
+    harness.apply(ConsensusInput::Timeout(view(13))).await;
+    harness.release_action(view(13), ActionKind::Vote).await;
+    assert!(
+        vote1_at(&harness, view(13)).is_none(),
+        "no vote1 in a view timed out"
+    );
+}
+
+/// A vote1 on a re-vote request that waits for its action to be stored is still
+/// sent once a timeout certificate has moved the node past the view. The
+/// specification permits it, but no longer owes it.
+#[tokio::test]
+async fn revote_vote1_waiting_on_storage_is_sent_after_leaving_the_view() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let mut harness = revote_vote1_waiting_on_storage(&test_data).await;
+    let (cert1_12, _) = revote_certs(&harness, &test_data, view(12));
+    let tc = timeout_cert(&harness, view(13), Some(cert1_12));
+    harness.apply(timeout_cert_input(tc)).await;
+    assert_eq!(
+        *harness.consensus.current_view(),
+        14,
+        "setup: the node is past view 13"
+    );
+    harness.release_action(view(13), ActionKind::Vote).await;
+    assert!(
+        vote1_at(&harness, view(13)).is_some(),
+        "the vote1 goes out once stored"
+    );
+}
+
+/// A vote1 on a re-vote request that waits for its action to be stored is not
+/// sent once a timeout certificate of the next epoch has moved the node there.
+#[tokio::test]
+async fn revote_vote1_waiting_on_storage_is_not_sent_after_an_epoch_change() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let mut harness = revote_vote1_waiting_on_storage(&test_data).await;
+    let (cert1_12, _) = revote_certs(&harness, &test_data, view(12));
+    let tc = timeout_cert_of(&harness, epoch(2), view(12), Some(cert1_12));
+    harness.apply(timeout_cert_input(tc)).await;
+    assert_eq!(
+        harness.consensus.current_epoch(),
+        Some(epoch(2)),
+        "setup: the node is in epoch 2"
+    );
+    assert_eq!(
+        *harness.consensus.current_view(),
+        13,
+        "setup: still in view 13"
+    );
+    harness.release_action(view(13), ActionKind::Vote).await;
+    assert!(
+        vote1_at(&harness, view(13)).is_none(),
+        "no vote1 of an epoch the node has left"
+    );
 }
 
 /// A node that decided the boundary block still votes2 on a re-vote's

@@ -658,7 +658,10 @@ impl<T: NodeType> Consensus<T> {
         leaf_commit: Commitment<Leaf2<T>>,
         block_number: Option<u64>,
     ) -> Option<(ViewNumber, &Proposal<T>)> {
-        if let Some(proposal) = self.proposals.get(view, leaf_commit) {
+        let numbered = |proposal: &&Proposal<T>| {
+            block_number.is_none_or(|bn| bn == proposal.block_header.block_number())
+        };
+        if let Some(proposal) = self.proposals.get(view, leaf_commit).filter(numbered) {
             return Some((view, proposal));
         }
         if !block_number.is_some_and(|bn| is_last_block(bn, *self.epoch_height)) {
@@ -666,6 +669,7 @@ impl<T: NodeType> Consensus<T> {
         }
         self.proposals
             .latest_before(view, leaf_commit)
+            .filter(numbered)
             .map(|proposal| (proposal.view_number, proposal))
     }
 
@@ -3274,6 +3278,13 @@ impl<T: NodeType> Consensus<T> {
         if !self.stored_actions.contains(&(view, ActionKind::Propose)) {
             return;
         }
+        if view <= self.timeout_view {
+            debug!(%view, "dropping pending proposal and re-vote request for timed-out view");
+            self.pending_revote.retain(|ViewEpoch(v, _), _| *v != view);
+            self.pending_proposal
+                .retain(|ViewEpoch(v, _), _| *v != view);
+            return;
+        }
         for (ViewEpoch(_, epoch), message) in self
             .pending_revote
             .extract_if(ViewEpoch::at_view(view), |_, _| true)
@@ -3285,7 +3296,7 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::SendReVote(message));
         }
         let stored = self.stored_proposals.get(&view);
-        for (_, message) in
+        for (ViewEpoch(_, epoch), message) in
             self.pending_proposal
                 .extract_if(ViewEpoch::at_view(view), |_, message| {
                     stored.is_some_and(|commitments| {
@@ -3293,6 +3304,10 @@ impl<T: NodeType> Consensus<T> {
                     })
                 })
         {
+            if self.upgrade_lock.certificate_rule(view) && epoch < self.current_epoch {
+                debug!(%view, %epoch, "dropping pending proposal of an epoch this node has left");
+                continue;
+            }
             outbox.push_back(ConsensusOutput::SendProposal(message));
         }
     }
