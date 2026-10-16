@@ -782,6 +782,18 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         self.version_infallible(v) >= TIMEOUT_EPOCH_VERSION
     }
 
+    /// Whether the certificate rule governs votes at `view`.
+    ///
+    /// Under it a node does not vote2 at a view it has sent a timeout vote
+    /// for, and a vote1 for a proposal after a timeout checks the proposal's
+    /// parent against the lock its timeout certificate carries instead of
+    /// against the voter's own votes. The certificates that carry a lock are
+    /// the epoch-binding ones, so the rule starts with them:
+    /// `certificate_rule(v) == timeout_epoch_bound(v - 1)`.
+    pub fn certificate_rule(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) >= TIMEOUT_EPOCH_VERSION
+    }
+
     /// Return whether the new protocol (HotShot 0.8) is active for the given view.
     ///
     /// Once true for any view, all consensus messages tagged with versions strictly

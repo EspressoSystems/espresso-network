@@ -316,9 +316,10 @@ def OwedB (h : History) : Obligation → Prop
   | .vote2 c =>
       (c ∈ cert1sHeld cfg h ∧ ∃ b ∈ proposalsHeld cfg h, Certifies c b
         ∧ h.HasPayload cfg b.viewNumber b.payloadCommit)
+      ∧ NotBehindB cfg h c.data.epoch
       ∧ (∀ vote ∈ vote2sSent h, vote.data.epoch = c.data.epoch → vote.view ≠ c.view)
       ∧ (∀ c2 ∈ cert2sHeld h, c2.data.epoch = c.data.epoch → c2.view ≠ c.view)
-      ∧ ¬ PastViewB h c.view ∧ AboveFloorB cfg h c.view
+      ∧ ¬ PastViewB h c.view ∧ cfg.anchorView < c.view ∧ ∀ u ∈ decidedViews h, u < c.view
   | .decide c =>
       c ∈ cert2sHeld h ∧ ∃ b ∈ proposalsHeld cfg h, Commits c b
         ∧ (∃ c1 ∈ cert1sHeld cfg h, Certifies c1 b)
@@ -564,10 +565,11 @@ theorem owedVote2_iff {h : History} {c : Cert1} :
     OwedVote2 cfg h c ↔
       ((∃ b, h.HasCert1 cfg c ∧ h.HasProposal cfg b ∧ Certifies c b
           ∧ h.HasPayload cfg b.viewNumber b.payloadCommit)
+        ∧ NotBehind cfg h c.data.epoch
         ∧ (∀ vote : Vote2, h.Sent (.vote2 vote) → vote.data.epoch = c.data.epoch → vote.view ≠ c.view)
         ∧ (∀ c2, h.HasCert2 c2 → c2.data.epoch = c.data.epoch → c2.view ≠ c.view)
-        ∧ ¬ h.PastView c.view ∧ h.AfterFloor cfg c.view) :=
-  ⟨fun ⟨a, b, c, d, e⟩ => ⟨a, b, c, d, e⟩, fun ⟨a, b, c, d, e⟩ => ⟨a, b, c, d, e⟩⟩
+        ∧ ¬ h.PastView c.view ∧ cfg.anchorView < c.view ∧ ∀ u, h.DecidedView u → u < c.view) :=
+  ⟨fun ⟨a, b, c, d, e, f, g⟩ => ⟨a, b, c, d, e, f, g⟩, fun ⟨a, b, c, d, e, f, g⟩ => ⟨a, b, c, d, e, f, g⟩⟩
 
 theorem owedDecide_iff {h : History} {c : Cert2} :
     OwedDecide cfg h c ↔
@@ -598,7 +600,7 @@ theorem owedB_iff {h : History} {o : Obligation} :
       exact ⟨(s, r), mem_receivedRevotes.mpr hr, rfl, hl⟩
   | vote2 c =>
     simp only [OwedB, Owed, owedVote2_iff, mem_cert1sHeld, mem_proposalsHeld,
-      mem_vote2sSent, mem_cert2sHeld, pastViewB_iff, aboveFloorB_iff]
+      mem_vote2sSent, mem_cert2sHeld, pastViewB_iff, mem_decidedViews, notBehindB_iff]
     apply and_congr _ Iff.rfl
     constructor
     · rintro ⟨hc, b, hb, h1, h2⟩; exact ⟨b, hc, hb, h1, h2⟩

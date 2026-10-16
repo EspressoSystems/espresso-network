@@ -131,7 +131,7 @@ theorem decides_of_epochChange {δ : Nat} (hp : Prompt N δ) {k : PubKey} {hk : 
       refine Nat.lt_of_not_le fun hle => hneg ⟨x + 1, u, ?_, hu⟩
       have : (u - cfg.decideBuffer).toNat ≤ u.toNat := Nat.sub_le _ _
       exact Nat.le_trans hle this
-    obtain ⟨x, hx, -, hnow⟩ := hp k hk m _ (howed m (Nat.le_refl _))
+    obtain ⟨x, hx, -, hnow⟩ := hp.owed k hk m _ (howed m (Nat.le_refl _))
     exact hnow (howed x hx)
 
 include hs in
@@ -250,18 +250,19 @@ private theorem tc_solid_aux : ∀ T j (hj : C.Honest j) i tc, N.time j hj i = T
     obtain ⟨k', hqk, -, hk'e⟩ := C.intersect _ q q hq hq
     obtain ⟨m, vote, ⟨-, -, hve, -⟩, hm, htm⟩ := hvotes k' hqk hk'e
     have hk' : C.Honest k' := .of hk'e
-    obtain ⟨-, hep, -⟩ := (N.protocol k' hk' (m + 1)).timeoutJustified m (N.trace k' hk' m) vote
-      (Trace.history_getElem? _ (Nat.lt_succ_self m)) hm (by rw [hve]; exact hk'e)
-    rw [Trace.history_upTo _ (Nat.le_succ m)] at hep
+    obtain ⟨-, j0, hj0, -, hep, -⟩ := (N.protocol k' hk' (m + 1)).timeoutJustified m (N.trace k' hk' m)
+      vote (Trace.history_getElem? _ (Nat.lt_succ_self m)) hm (by rw [hve]; exact hk'e)
+    rw [Trace.history_upTo _ (Nat.le_succ_of_le hj0)] at hep
     rw [← hve]
     rcases hep.1 with h1 | h1 | ⟨tc', htc', he⟩ | h1
-    · exact ⟨k', hk', m, Or.inl h1⟩
-    · exact ⟨k', hk', m, Or.inr (Or.inl h1)⟩
+    · exact ⟨k', hk', j0, Or.inl h1⟩
+    · exact ⟨k', hk', j0, Or.inr (Or.inl h1)⟩
     · obtain ⟨i', hi', hin'⟩ := (Trace.received_history _).mp htc'
       rw [he]
-      exact ih (N.time k' hk' i') (by have := time_mono N k' hk' (Nat.le_of_lt hi'); omega)
+      exact ih (N.time k' hk' i')
+        (by have := time_mono N k' hk' (Nat.le_of_lt (Nat.lt_of_lt_of_le hi' hj0)); omega)
         k' hk' i' tc' rfl hin'
-    · exact ⟨k', hk', m, Or.inr (Or.inr h1)⟩
+    · exact ⟨k', hk', j0, Or.inr (Or.inr h1)⟩
 
 omit hcfg hcf hs hp hdk hV in
 /--
@@ -512,8 +513,8 @@ theorem times_out_late {k : PubKey} {hk : C.Honest k} {y : ViewNumber}
   obtain ⟨m, hm, hm0, htm⟩ := hchain (cut N hu k hk T)
   exact ⟨m, cut_after N hu hm, htm, hin m (reached_mono (by omega) hrn0)⟩
 
-variable {E : EpochNumber} {t0 : Nat} (hst : Stable N GST E t0)
-include hst
+variable {E : EpochNumber} {t0 : Nat} (hst : Stable N GST E t0) {δ : Nat} (hp : Prompt N δ)
+include hst hp
 
 omit hcfg in
 /--
@@ -552,13 +553,16 @@ theorem member_reaches {y : ViewNumber}
     intro T
     obtain ⟨m, hmT, htm, hinm⟩ := times_out_late hs hcapk hr0 (max T t0)
     have hE := stable_inEpoch hst hu (.of hkE.2) (cut_le_of_lt hu (show t0 < N.time k hk m by omega))
-    obtain ⟨e, L, -, hout⟩ := (N.protocol k hk (m + 1)).timeoutAnswered m _ _
-      (Trace.history_getElem? _ (Nat.lt_succ_self m))
-      (Or.inl ⟨htm, by rw [Trace.history_upTo _ (Nat.le_succ m)]; exact hinm⟩)
-      (fun e' he' => by
-        rw [Trace.history_upTo _ (Nat.le_succ m)] at he'
-        rw [inEpoch_unique he' hE]; exact ⟨hkE.2, hkE.1⟩)
-    exact ⟨m, _, by omega, rfl, hout⟩
+    obtain ⟨m', -, -, hans | ⟨u, hgu, hlt⟩⟩ := hp.timers k hk m _
+      ⟨_, Trace.history_getElem? _ (Nat.lt_succ_self m),
+        Or.inl ⟨htm, by rw [Trace.history_upTo _ (Nat.le_succ m)]; exact hinm⟩⟩
+      (fun e' he' => by rw [inEpoch_unique he' hE]; exact ⟨hkE.2, hkE.1⟩)
+    · obtain ⟨e, L, i, hmi, -, hsent⟩ := hans
+      obtain ⟨-, hout⟩ := (Trace.sentAt_history _).mp hsent
+      exact ⟨i, _, by have := time_mono N k hk hmi; omega, rfl, hout⟩
+    · have := hcapk _ u hgu
+      have : y.toNat - d < u.toNat := hlt
+      omega
   obtain ⟨v, hv, hyv⟩ := hr
   have hyv' : y.toNat ≤ v.toNat := hyv
   have hv1 : 1 ≤ v.toNat := by
@@ -604,20 +608,23 @@ theorem views_unbounded (x : ViewNumber) : ∃ T, ReachedBy N T x := by
     (fun _ _ _ hle h he => let ⟨L, hL⟩ := h he; ⟨L, by_later hle hL⟩)
     (fun k hk => by
       by_cases hkE : C.members E k ∧ C.honest E k
-      · obtain ⟨nk, hrk⟩ := member_reaches hs hst hcap hr hkE
+      · obtain ⟨nk, hrk⟩ := member_reaches hs hst hp hcap hr hkE
         obtain ⟨m, hmT, htm, hinm⟩ := times_out_late hs (hcap k hk) hrk t0
         have hE := stable_inEpoch hst hu (.of hkE.2) (cut_le_of_lt hu hmT)
-        obtain ⟨e, L, hep, hout⟩ := (N.protocol k hk (m + 1)).timeoutAnswered m _ y
-          (Trace.history_getElem? _ (Nat.lt_succ_self m))
-          (Or.inl ⟨htm, by rw [Trace.history_upTo _ (Nat.le_succ m)]; exact hinm⟩)
-          (fun e' he' => by
-            rw [Trace.history_upTo _ (Nat.le_succ m)] at he'
-            rw [inEpoch_unique he' hE]; exact ⟨hkE.2, hkE.1⟩)
-        rw [Trace.history_upTo _ (Nat.le_succ m)] at hep
-        have he : e = E := inEpoch_unique hep hE
-        subst he
-        exact ⟨N.time k hk m, fun _ => ⟨L, m + 1, fun i hi => time_mono N k hk (Nat.le_of_lt_succ hi),
-          (Trace.sent_history _).mpr ⟨m, Nat.lt_succ_self m, hout⟩⟩⟩
+        obtain ⟨m', hmm', -, hans | ⟨u, hgu, hlt⟩⟩ := hp.timers k hk m y
+          ⟨_, Trace.history_getElem? _ (Nat.lt_succ_self m),
+            Or.inl ⟨htm, by rw [Trace.history_upTo _ (Nat.le_succ m)]; exact hinm⟩⟩
+          (fun e' he' => by rw [inEpoch_unique he' hE]; exact ⟨hkE.2, hkE.1⟩)
+        · obtain ⟨e, L, i, -, hep, hsent⟩ := hans
+          obtain ⟨-, hout⟩ := (Trace.sentAt_history _).mp hsent
+          rw [Trace.history_upTo _ (Nat.le_succ_of_le hmm')] at hep
+          have he : e = E := inEpoch_unique hep hE
+          subst he
+          exact ⟨N.time k hk i, fun _ => ⟨L, i + 1, fun i' hi' => time_mono N k hk (Nat.le_of_lt_succ hi'),
+            (Trace.sent_history _).mpr ⟨i, Nat.lt_succ_self i, hout⟩⟩⟩
+        · have := hcap k hk _ u hgu
+          have : y.toNat < u.toNat := hlt
+          omega
       · exact ⟨0, fun he => absurd he hkE⟩)
   obtain ⟨n1, -, tc, -, htcv, hrec⟩ := hs.timeoutCert E _ y t (N.honestQuorum E)
     (fun k ⟨hm, hk⟩ => ⟨hk, ht k (.of hk) ⟨hm, hk⟩⟩) k0 hk0 (.of hk0E)
@@ -634,7 +641,7 @@ after the one committed at an earlier such view (`noFork`), so its block number 
 larger. No block of `E` has a larger block number than `E`'s last
 (`epochOf_height_le`).
 -/
-theorem not_stable (hcf : CollisionFree) {δ : Nat} (hp : Prompt N δ) (hτ : 8 * Δ + 3 * δ < τ)
+theorem not_stable (hcf : CollisionFree) (hτ : 8 * Δ + 4 * δ < τ)
     (hrot : LeaderRotation C leader) (hh : cfg.epochHeight ≠ 0) : False := by
   have hu := hs.timeUnbounded
   obtain ⟨B, hB⟩ := ground_bound N hu t0
@@ -650,7 +657,7 @@ theorem not_stable (hcf : CollisionFree) {δ : Nat} (hp : Prompt N δ) (hτ : 8 
     obtain ⟨w, hwge, l, hlead, hl, hlm⟩ := hrot E ⟨X + B + cfg.anchorView.toNat + 3⟩
     have hwge' : X + B + cfg.anchorView.toNat + 3 ≤ w.toNat := hwge
     obtain ⟨j, hj, n, c2, q, hq, hc2, hcq, hce, hwc⟩ := late_cert2 hcfg hcf hs hst
-      (hlateOf _ (by show B ≤ w.toNat - 1; omega)) hp (by omega) (views_unbounded hs hst w) hτ
+      (hlateOf _ (by show B ≤ w.toNat - 1; omega)) hp (by omega) (views_unbounded hs hst hp w) hτ
       hl hlead hlm
     have : w.toNat ≤ c2.view.toNat := hwc
     exact ⟨j, hj, n, c2, q, hq, hc2, hcq, hce, by omega⟩
@@ -711,7 +718,7 @@ when `E` became stable, is reached (`Liveness.views_unbounded`) and decided by t
 node (`Liveness.late_decide`).
 -/
 theorem stable_decides {GST Δ δ τ : Nat} (hcfg : ConfigCoherent cfg) (hcf : CollisionFree)
-    (hs : Synchrony N GST Δ τ) (hp : Prompt N δ) (hτ : 8 * Δ + 3 * δ < τ) (hrot : LeaderRotation C leader)
+    (hs : Synchrony N GST Δ τ) (hp : Prompt N δ) (hτ : 8 * Δ + 4 * δ < τ) (hrot : LeaderRotation C leader)
     {E : EpochNumber} {t0 : Nat} (hst : Stable N GST E t0) {d : PubKey} (hd : C.honest E d) {V : Nat}
     (hV : ∀ n v, (((N.trace d (.of hd)).history n).restrict (C.honest · d)).DecidedView v → v.toNat < V) :
     False := by
@@ -724,7 +731,7 @@ theorem stable_decides {GST Δ δ τ : Nat} (hcfg : ConfigCoherent cfg) (hcf : C
     have := hB j hj n hn v hv
     have : w.toNat - 1 ≤ v.toNat := hwv
     omega
-  have hex := views_unbounded hs hst w
+  have hex := views_unbounded hs hst hp w
   obtain ⟨n, v, hwv, hdec⟩ := late_decide hcfg hcf hs hst hlate hp hw3 hex hτ hl hlead hlm d hd
   have := hV n v hdec
   have : w.toNat ≤ v.toNat := hwv
@@ -738,7 +745,7 @@ stable (`stabilises`), and the node honest in `E` decides past `V`
 (`Liveness.stable_decides`).
 -/
 theorem decides_unbounded {GST Δ δ τ : Nat} (hcfg : ConfigCoherent cfg) (hcf : CollisionFree)
-    (hs : Synchrony N GST Δ τ) (hp : Prompt N δ) (hτ : 8 * Δ + 3 * δ < τ) (hrot : LeaderRotation C leader)
+    (hs : Synchrony N GST Δ τ) (hp : Prompt N δ) (hτ : 8 * Δ + 4 * δ < τ) (hrot : LeaderRotation C leader)
     {dk : EpochNumber → PubKey} (hdk : ∀ e, C.honest e (dk e)) {V : Nat}
     (hV : ∀ e n v, (((N.trace (dk e) (.of (hdk e))).history n).restrict (C.honest · (dk e))).DecidedView v →
       v.toNat < V) : False := by
@@ -763,7 +770,7 @@ have no blocks. Every solid ground is then the start epoch
 (`stabilises`), and the node decides past any bound (`Liveness.stable_decides`).
 -/
 theorem single_epoch_decides {GST Δ δ τ : Nat} (hcfg : ConfigCoherent cfg) (hcf : CollisionFree)
-    (hs : Synchrony N GST Δ τ) (hp : Prompt N δ) (hτ : 8 * Δ + 3 * δ < τ) (hrot : LeaderRotation C leader)
+    (hs : Synchrony N GST Δ τ) (hp : Prompt N δ) (hτ : 8 * Δ + 4 * δ < τ) (hrot : LeaderRotation C leader)
     (hh : cfg.epochHeight = 0) {k : PubKey} (hks : C.honest cfg.startEpoch k) {V : Nat}
     (hV : ∀ n v, (((N.trace k (.of hks)).history n).restrict (C.honest · k)).DecidedView v → v.toNat < V) :
     False := by
@@ -786,7 +793,7 @@ epochs have blocks. Were it bounded by `V`, the node would be honest in some epo
 and none does (`Liveness.not_stable`).
 -/
 theorem often_decides {GST Δ δ τ : Nat} (hcfg : ConfigCoherent cfg) (hcf : CollisionFree)
-    (hs : Synchrony N GST Δ τ) (hp : Prompt N δ) (hτ : 8 * Δ + 3 * δ < τ) (hrot : LeaderRotation C leader)
+    (hs : Synchrony N GST Δ τ) (hp : Prompt N δ) (hτ : 8 * Δ + 4 * δ < τ) (hrot : LeaderRotation C leader)
     (hh : cfg.epochHeight ≠ 0) {k : PubKey} (hko : C.HonestOften k) {V : Nat}
     (hV : ∀ n v, (((N.trace k hko.honest).history n).restrict (C.honest · k)).DecidedView v → v.toNat < V) :
     False := by
@@ -811,7 +818,7 @@ theorem often_decides {GST Δ δ τ : Nat} (hcfg : ConfigCoherent cfg) (hcf : Co
     have h2 : q.viewNumber.toNat ≤ v.toNat := hqv
     omega
   obtain ⟨E, t0, hst⟩ := stabilises hcfg hcf hs hB
-  exact not_stable hcfg hs hst hcf hp hτ hrot hh
+  exact not_stable hcfg hs hst hp hcf hτ hrot hh
 
 /--
 **`ChainGrows` holds**, for every epoch height.

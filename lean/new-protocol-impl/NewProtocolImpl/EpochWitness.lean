@@ -585,7 +585,7 @@ theorem not_pastView {k : PubKey} {n : Nat} {v : ViewNumber} : ¬ (H k n).PastVi
 variable (hv : ∀ b, BlockValid b)
 
 include hv in
-theorem protocol (k : PubKey) (n : Nat) : ProtocolHistory cfg leader k (fun _ => True) (fun _ => True) (H k n) :=
+theorem protocol (k : PubKey) (n : Nat) : ProtocolHistory cfg leader k (fun _ => True) (H k n) :=
   Kit.protocol input hv k n
 
 /-- With no timeout certificate anywhere, a justified certificate carries no evidence. -/
@@ -841,7 +841,9 @@ theorem votes2 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 8 * u + 
     ∧ Output.send (.vote2 ⟨(C2 u).data, ⟨u + 1⟩, k⟩) ∈ (tr k j).output := by
   refine Classical.byContradiction fun hneg => settled k (8 * u + 4) (.vote2 (certOf (blk u)))
     ⟨⟨blk u, hasCert1_of u (by omega), hasProposal_of u (by omega), ⟨Nat.le_refl _, rfl⟩,
-      payload_of u hl (by omega)⟩, fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_, not_pastView, ?_⟩
+      payload_of u hl (by omega)⟩, notBehind (by rw [cert_epoch]; have := eAt_facts u 5 (by omega); show eAt (8 * u + 5) ≤ u + 1; omega),
+      fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_, not_pastView,
+      by rw [cert_view]; show 0 < u + 1; omega, Kit.decidedBefore_of fun c2 hc2 => ?_⟩
   · obtain ⟨j, hj, hjv⟩ := sent_iff.mp hs
     obtain ⟨u', rfl, -⟩ := sent_vote2 hv hjv
     rw [cert_view] at hvv
@@ -851,11 +853,10 @@ theorem votes2 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 8 * u + 
     rw [cert_view] at hv2
     have : x + 1 = u + 1 := view_inj hv2
     omega
-  · refine Kit.afterFloor_of input hv (by rw [cert_view]; show 0 < u + 1; omega) fun x hx => ?_
+  · obtain ⟨x, rfl, hlt⟩ := hasCert2 hc2
     rw [cert_view]
-    rcases hasProposal hx with rfl | ⟨y, rfl, hy⟩
-    · show 0 < u + 1 + 20; omega
-    · rw [blk_view]; show y + 1 < u + 1 + 20; omega
+    show x + 1 < u + 1
+    omega
 
 end Sends
 
@@ -1098,14 +1099,14 @@ theorem sync : Synchrony (net hv) 0 4 33 where
     obtain ⟨k0, hq0, -, hk0⟩ := C.intersect _ q q hq hq
     obtain ⟨L, hs⟩ := hvotes k0 hq0 hk0
     obtain ⟨j, -, hj⟩ := sentBy hv hs
-    rcases Kit.timeout_vote_input input hv hj with h | h
+    rcases Kit.timeout_vote_input input hj with h | h
     · exact input_quiet.1 _ h
     · exact input_quiet.2.1 _ h
   timeoutCertForward tc k hk n hin := absurd (hin ▸ Trace.received_self _ n) no_tc
   timeoutCatchUp k hk v hrep := by
     exfalso
     obtain ⟨m, vote, -, -, hout⟩ := hrep 0
-    rcases Kit.timeout_vote_input input hv hout with h | h
+    rcases Kit.timeout_vote_input input hout with h | h
     · exact input_quiet.1 _ h
     · exact input_quiet.2.1 _ h
   timeoutLockSpread tc k hk n hin := absurd hin no_tc
@@ -1142,7 +1143,7 @@ include hv in
 /-- **The liveness premises can be met together, across epoch changes.** -/
 theorem premises_met :
     ConfigCoherent cfg ∧ Synchrony (net hv) 0 4 33 ∧ Prompt (net hv) 0
-      ∧ 8 * 4 + 3 * 0 < 33 ∧ LeaderRotation C leader :=
+      ∧ 8 * 4 + 4 * 0 < 33 ∧ LeaderRotation C leader :=
   ⟨cfg_coherent, sync hv, prompt_of_machine _ 0 (fun k _ => ⟨input k, rfl⟩)
     (fun _ hk => Kit.steady_of_uniform (fun _ _ _ h => h) hk), by decide, rotation⟩
 

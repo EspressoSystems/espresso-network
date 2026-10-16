@@ -116,11 +116,11 @@ async fn restart_all_nodes_with_storage() {
 
     for (idx, storage) in runner.node_storages().iter().enumerate() {
         let mut seen = HashSet::new();
-        for (view, action) in storage.action_log().await {
+        for (view, epoch, action) in storage.action_log().await {
             assert!(
-                seen.insert((view, action)),
-                "node {idx} recorded {action:?} twice for view {view} — it re-entered a view it \
-                 had already acted in"
+                seen.insert((view, epoch, action)),
+                "node {idx} recorded {action:?} twice for view {view} in epoch {epoch:?} — it \
+                 re-entered a view it had already acted in"
             );
         }
 
@@ -163,11 +163,11 @@ async fn restart_all_nodes_at_epoch_boundary() {
 
     for (idx, storage) in runner.node_storages().iter().enumerate() {
         let mut seen = HashSet::new();
-        for (view, action) in storage.action_log().await {
+        for (view, epoch, action) in storage.action_log().await {
             assert!(
-                seen.insert((view, action)),
-                "node {idx} recorded {action:?} twice for view {view} — it re-entered a view it \
-                 had already acted in"
+                seen.insert((view, epoch, action)),
+                "node {idx} recorded {action:?} twice for view {view} in epoch {epoch:?} — it \
+                 re-entered a view it had already acted in"
             );
         }
 

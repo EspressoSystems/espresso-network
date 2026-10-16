@@ -25,7 +25,8 @@ theorem SafeHistory.of_every {node : PubKey} {P : EpochNumber → Prop} {h : His
   vote2Justified := fun n vote ⟨st, hn, hm⟩ _ => hs.vote2Justified n vote ⟨st, hn, hm⟩ trivial
   vote2Once v v' a b _ he hv := hs.vote2Once v v' a b trivial he hv
   vote2BeforeTimeout := fun n vote ⟨st, hn, hm⟩ _ tv htv _ => hs.vote2BeforeTimeout n vote ⟨st, hn, hm⟩ trivial tv htv trivial
-  timeoutLock := fun n vote ⟨st, hn, hm⟩ _ v2 hv2 _ => hs.timeoutLock n vote ⟨st, hn, hm⟩ trivial v2 hv2 trivial
+  timeoutLock := fun n vote ⟨st, hn, hm⟩ _ v2 hv2 _ hle =>
+    hs.timeoutLock n vote ⟨st, hn, hm⟩ trivial v2 hv2 trivial hle
   decideJustified n st blocks c1 c2 hn hm _ := hs.decideJustified n st blocks c1 c2 hn hm trivial
   decideOnce n st i blocks c1 c2 hn hi _ := hs.decideOnce n st i blocks c1 c2 hn hi trivial
 
@@ -165,7 +166,7 @@ theorem timeout_lock_covers {k : PubKey} {h : C.Honest k} {v2 : Vote2} {tv : Tim
     exact absurd hle (Nat.not_le_of_lt hlt)
   · have hcover := (N.safe_at k h j).timeoutLock j tv ⟨(N.trace k h j), (Trace.history_getElem? _ (Nat.lt_succ_self j)), hj⟩ het v2
     rw [Trace.history_upTo _ (Nat.le_succ j)] at hcover
-    exact hcover ((Trace.sent_history _).mpr ⟨i, by omega, hi⟩) he2
+    exact hcover ((Trace.sent_history _).mpr ⟨i, by omega, hi⟩) he2 hle
 
 /-- A `Cert1` an honest node holds, other than the anchor's, it received at some step. -/
 theorem cert1_received {k : PubKey} {h : C.Honest k} {n : Nat} {c : Cert1}

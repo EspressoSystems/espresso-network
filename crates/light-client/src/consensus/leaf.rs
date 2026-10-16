@@ -207,9 +207,13 @@ impl LeafProof {
                     cert2.data.leaf_commit == curr.commit(),
                     "cert2 leaf commitment does not match leaf"
                 );
+                // A re-vote commits the last block of an epoch again, at a view of
+                // its own, so the commit may be later than the leaf. Its signers
+                // still signed this leaf's commitment, which is what finality
+                // rests on.
                 ensure!(
-                    cert2.view_number() == curr.view_number(),
-                    "cert2 view number does not match leaf"
+                    cert2.view_number() >= curr.view_number(),
+                    "cert2 view number is earlier than the leaf"
                 );
                 ensure!(
                     cert2.data.block_number == curr.block_header().block_number(),

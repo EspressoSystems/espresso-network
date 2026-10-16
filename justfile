@@ -191,6 +191,11 @@ test-all:
 # owed within `defaultDelta` (`Prompt`). See `lean/new-protocol-diff/CheckMain.lean`
 # and `crates/hotshot/new-protocol/src/trace.rs`.
 #
+# The suite is recorded at 0.7 (`NP_TEST_VERSION`), whose timeouts sign their
+# lock: the specification covers only lock-signing timeouts. A test of behaviour
+# before 0.7 pins its version, and its traces are out of scope. A test that fails
+# fails the recipe, after the check has run on the traces recorded.
+#
 # Record runs of the new-protocol tests and check each against `lean/new-protocol-spec`.
 test-lean-check dir="":
     #!/usr/bin/env bash
@@ -205,9 +210,16 @@ test-lean-check dir="":
     # Under `target` because it is build output: gitignored, and cleaned with it.
     traces="$(pwd)/target/np-traces"
     rm -rf "$traces"
-    echo "recording to $traces"
-    NP_TRACE_DIR="$traces" cargo test -p hotshot-new-protocol --release --lib tests:: || exit $?
-    lean/new-protocol-diff/.lake/build/bin/check "$traces"
+    echo "recording at 0.7 to $traces"
+    suite=0
+    NP_TEST_VERSION=0.7 NP_TRACE_DIR="$traces" \
+      cargo test -p hotshot-new-protocol --release --lib tests:: || suite=$?
+    checked=0
+    lean/new-protocol-diff/.lake/build/bin/check "$traces" || checked=$?
+    if [ "$suite" -ne 0 ]; then
+      echo "the test suite failed at 0.7" >&2
+    fi
+    [ "$suite" -eq 0 ] && [ "$checked" -eq 0 ]
 
 test-integration: (build "test")
 	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic

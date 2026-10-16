@@ -21,7 +21,7 @@ the format is checked at build time in both directions:
   every constructor round-trips through JSON — which catches an instance the
   deriving got wrong as well as one a future hand-written override breaks;
 * the step times are read as written, and the `Prompt` check passes a node that
-  votes in time and fails one that does not;
+  votes, and answers its timers, in time and fails one that does not;
 * the signing rules refuse a vote whose identity does not match the block, since
   that is how a hash-namespace mistake would show up.
 -/
@@ -215,6 +215,39 @@ private def late (es : List Event) (released : List (Nat × Nat)) (ended δ : Na
 -- A recording that stopped before the deadline could still have voted.
 /-- info: [] -/
 #guard_msgs in #eval late (opening ++ [voteStep []]) [] 8 5
+
+/-! A timer the node takes in view 1, answered in the same step, on a release, in a later step, or not at all. -/
+
+private def timerStep (outs : List Output) : Event := .consensus (.timeout ⟨1⟩) outs
+
+private def timeoutVote : Output := .send (.timeoutVote ⟨⟨⟨0⟩, lk⟩, ⟨1⟩, me⟩)
+
+/-- The timers a run has not answered `δ` after them, timed as in `late`. -/
+private def unanswered (es : List Event) (released : List (Nat × Nat)) (ended δ : Nat) : List String :=
+  let h := historyOf es
+  let ms := moments h (List.range h.length).toArray
+    ((List.replicate (h.length - 1) []).toArray.push released)
+  (timerFaults cfg me ms ended δ).map fun (k, v) =>
+    s!"timeout vote for view {v.toNat} at t={(ms[k]?.map (·.time)).getD 0}"
+
+/-- info: [] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [timeoutVote]]) [] 100 5
+
+/-- info: ["timeout vote for view 1 at t=3"] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep []]) [] 100 5
+
+/-- info: ["timeout vote for view 1 at t=3"] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [timeoutVote]]) [(50, 1)] 100 5
+
+/-- info: [] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [timeoutVote]]) [(50, 1)] 100 60
+
+-- The vote may come in a later step, as long as it is within `δ`.
+/-- info: [] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [], voteStep [timeoutVote]]) [] 100 5
+
+/-- info: ["timeout vote for view 1 at t=3"] -/
+#guard_msgs in #eval unanswered (opening ++ [timerStep [], voteStep [timeoutVote]]) [] 100 0
 
 /-- A recorded step carries its time and its releases, and the trace its end. -/
 private def timedTrace : String :=

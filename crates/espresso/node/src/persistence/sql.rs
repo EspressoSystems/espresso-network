@@ -66,6 +66,7 @@ use hotshot_types::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
+    simple_vote::LockView,
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
@@ -1692,10 +1693,17 @@ impl SequencerPersistence for Persistence {
         cert2: Option<&Certificate2<SeqTypes>>,
         _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
+        let leaf_chain: Vec<_> = leaf_chain.into_iter().collect();
+        // Keyed by the view of the newest leaf, which a re-vote's cert2 is later than.
+        let newest = leaf_chain
+            .iter()
+            .map(|(info, _)| info.leaf.view_number())
+            .max();
         let cert2_row = cert2
-            .map(|cert2| {
+            .zip(newest)
+            .map(|(cert2, newest)| {
                 let data = bincode::serialize(cert2).context("serializing cert2")?;
-                anyhow::Ok((cert2.view_number.u64() as i64, data))
+                anyhow::Ok((newest.u64() as i64, data))
             })
             .transpose()?;
         let values = leaf_chain
@@ -1708,7 +1716,9 @@ impl SequencerPersistence for Persistence {
                 let mut leaf = info.leaf.clone();
                 leaf.unfill_block_payload();
 
-                let view = cert.view_number().u64() as i64;
+                // Keyed by the leaf's view, as everything joined with it is: the certificate of
+                // an epoch's last block may be a re-vote's, at a later view.
+                let view = leaf.view_number().u64() as i64;
                 let leaf_bytes = bincode::serialize(&leaf)?;
                 let qc_bytes = bincode::serialize(cert.qc())?;
                 let next_epoch_qc_bytes = match cert.next_epoch_qc() {
@@ -2020,7 +2030,13 @@ impl SequencerPersistence for Persistence {
         action: HotShotAction,
     ) -> anyhow::Result<()> {
         // Todo Remove this after https://github.com/EspressoSystems/espresso-network/issues/1931
-        if !matches!(action, HotShotAction::Propose | HotShotAction::Vote) {
+        //
+        // A timeout vote counts: a restarted node must not vote2 at a view it
+        // sent a timeout vote for.
+        if !matches!(
+            action,
+            HotShotAction::Propose | HotShotAction::Vote | HotShotAction::TimeoutVote
+        ) {
             return Ok(());
         }
 
@@ -2137,7 +2153,8 @@ impl SequencerPersistence for Persistence {
     }
 
     async fn append_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        let view = high_qc.view_number();
+        // Locks are ordered by epoch, then view.
+        let lock = LockView::of(&high_qc);
         let data = bincode::serialize(&high_qc).context("serializing high_qc2")?;
         serializable_retry!(self, || async {
             let mut tx = self.db.write().await?;
@@ -2152,10 +2169,10 @@ impl SequencerPersistence for Persistence {
                     let bytes: Vec<u8> = row.get("data");
                     bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
                         .context("deserializing existing high_qc2")
-                        .map(|qc| qc.view_number())
+                        .map(|qc| LockView::of(&qc))
                 })
                 .transpose()?;
-            if stored_view.is_some_and(|stored| stored >= view) {
+            if stored_view.is_some_and(|stored| stored >= lock) {
                 return Ok(());
             }
             tx.upsert("high_qc2", ["id", "data"], ["id"], [(true, data.clone())])
@@ -2176,6 +2193,52 @@ impl SequencerPersistence for Persistence {
             let bytes: Vec<u8> = row.get("data");
             bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
                 .context("deserializing high_qc2")
+        })
+        .transpose()
+    }
+
+    async fn append_boundary_qc2(&self, qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        let lock = LockView::of(&qc);
+        let data = bincode::serialize(&qc).context("serializing boundary_qc2")?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            // Compare-and-set inside one write transaction, as for `high_qc2`.
+            let stored = query("SELECT data FROM boundary_qc2 WHERE id = true")
+                .fetch_optional(tx.as_mut())
+                .await?
+                .map(|row| {
+                    let bytes: Vec<u8> = row.get("data");
+                    bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
+                        .context("deserializing existing boundary_qc2")
+                        .map(|qc| LockView::of(&qc))
+                })
+                .transpose()?;
+            if stored.is_some_and(|stored| stored >= lock) {
+                return Ok(());
+            }
+            tx.upsert(
+                "boundary_qc2",
+                ["id", "data"],
+                ["id"],
+                [(true, data.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
+    }
+
+    async fn load_boundary_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        let row = self
+            .db
+            .read()
+            .await?
+            .fetch_optional("SELECT data FROM boundary_qc2 WHERE id = true")
+            .await?;
+        row.map(|row| {
+            let bytes: Vec<u8> = row.get("data");
+            bincode::deserialize::<QuorumCertificate2<SeqTypes>>(&bytes)
+                .context("deserializing boundary_qc2")
         })
         .transpose()
     }

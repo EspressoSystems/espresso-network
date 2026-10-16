@@ -342,7 +342,7 @@ mod tests {
             SimpleCertificate, TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence,
             optional_timeout_evidence,
         },
-        simple_vote::{HasEpoch, TimeoutData2, TimeoutData3, VersionedVoteData},
+        simple_vote::{HasEpoch, TimeoutData2, VersionedVoteData},
         utils::{genesis_epoch_from_version, option_epoch_from_block_number},
     };
     use serde::{Deserialize, Serialize};
@@ -381,17 +381,20 @@ mod tests {
     }
 
     fn timeout_cert_v3() -> TimeoutCertificate3<TestTypes> {
-        let data = TimeoutData3 {
-            view: ViewNumber::new(7),
-            epoch: EpochNumber::new(1),
-        };
-        SimpleCertificate::new(
-            data.clone(),
-            data.commit(),
+        use alloy::primitives::U256;
+        use hotshot_types::{signature_key::BLSPubKey, traits::signature_key::SignatureKey};
+
+        let (key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+        let entries = vec![key.stake_table_entry(U256::from(1))];
+        let signature = BLSPubKey::sign(&private_key, b"timeout").unwrap();
+        TimeoutCertificate3::assemble(
             ViewNumber::new(7),
+            EpochNumber::new(1),
+            &entries,
+            [(None, key, signature)],
             None,
-            PhantomData,
         )
+        .unwrap()
     }
 
     /// The proposal field, so the tests exercise the encoding in the position

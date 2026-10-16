@@ -15,15 +15,19 @@ Check recorded traces against the rules of the specification.
 
 Each argument is a trace or a directory of `*.jsonl` traces. A trace passes when
 its history obeys every rule of `NewProtocol.ProtocolHistory`, for the leaders the
-trace names, and its node discharges what it owes within `δ` milliseconds
-(`NewProtocolDiff.PromptUntil`), for a node honest in every epoch, for which
-`NewProtocol.OwedIn` is `NewProtocol.Owed`. `NewProtocolDiff.checkProtocol_sound`
-and `NewProtocolDiff.checkPrompt_sound` are what make a pass mean that. A delay
-an unmodelled input excuses is reported and does not fail the trace, so a pass
-with an excuse does not mean `PromptUntil`. A trace in which a test set the node's
+trace names, and its node discharges what it owes and answers its timers within
+`δ` milliseconds (`NewProtocolDiff.PromptUntil`, `NewProtocolDiff.TimersUntil`),
+for a node honest in every epoch, for which `NewProtocol.OwedIn` is
+`NewProtocol.Owed`, and a member of every committee. `NewProtocolDiff.checkProtocol_sound`,
+`NewProtocolDiff.checkPrompt_sound` and `NewProtocolDiff.checkTimers_sound` are
+what make a pass mean that. A delay an unmodelled input excuses is reported and
+does not fail the trace, so a pass with an excuse does not mean `PromptUntil` or
+`TimersUntil`. A trace in which a test set the node's
 view directly is checked against the signing rules of `NewProtocol.SafeHistory`
 only (`NewProtocolDiff.checkSafe_sound`), since its steps do not show the view it
-is in. The exit status is 1 if any trace breaks a rule or cannot be read.
+is in. The exit status is 1 if any trace breaks a rule or cannot be read, or if no
+trace is checked against any rule: a recorder that stopped writing, or a run in
+which every trace is out of scope, must not pass for one that conforms.
 -/
 
 open Lean NewProtocol NewProtocolDiff
@@ -58,21 +62,21 @@ def describeObligation : Obligation → String
   | .propose e v => s!"proposal of epoch {e.toNat} for view {v.toNat}"
 
 /--
-Each obligation the node did not discharge within `δ`, once, with the step it was
-first owed after and what excuses it, if anything does.
+Each obligation or timer the node did not discharge within `δ`, once, with the
+step it was first owed after and what excuses it, if anything does.
 
 A node waiting on something the model does not cover, a DRB result for one, can
 owe for that reason alone. An unmodelled input dropped before the last step within
 the deadline excuses the delay.
 -/
-def lateness (text : String) (ms : List Moment) (δ : Nat) (faults : List (Nat × Obligation)) :
-    List (String × Option String) :=
+def lateness {α : Type} [BEq α] (describe : α → String) (text : String) (ms : List Moment) (δ : Nat)
+    (faults : List (Nat × α)) : List (String × Option String) :=
   let first := faults.foldl (fun acc (k, o) => if acc.any (·.2 == o) then acc else acc ++ [(k, o)]) []
   first.map fun (k, o) =>
     let t := timeAt ms k
     let n := (ms[k]?.map (·.step)).getD 0
     let last := (((ms.drop k).takeWhile (·.time ≤ t + δ)).getLast?.map (·.step)).getD n
-    (s!"{describeObligation o} owed in step {n} (t={t} ms)", unmodelledDropped text last)
+    (s!"{describe o} owed in step {n} (t={t} ms)", unmodelledDropped text last)
 
 /--
 What the node owes after its last step, in words.
@@ -95,6 +99,8 @@ def checkOne (δ : Nat) (path : System.FilePath) : IO Finding := do
       return .outOfScope s!"restored from view {said.anchorView}, and restarts are not covered"
     else if signsNoLock text then
       return .outOfScope "its timeouts sign no lock, as before the certificate rule"
+    else if testFailed text then
+      return .outOfScope "the test that recorded it failed"
     else
     match parseTrace text with
     | .error e =>
@@ -126,7 +132,9 @@ def checkOne (δ : Nat) (path : System.FilePath) : IO Finding := do
           return .unreadable s!"step {n} released more outputs than it has"
         let ms := moments h time.steps time.releases
         let faults := promptFaults (said.configFor h) leader ⟨said.node⟩ ms time.ended δ
-        let late := lateness text ms δ faults
+        let timers := timerFaults (said.configFor h) ⟨said.node⟩ ms time.ended δ
+        let late := lateness describeObligation text ms δ faults
+          ++ lateness (fun v => s!"timeout vote for view {v.toNat}") text ms δ timers
         let unexcused := late.filterMap fun (what, excuse) => if excuse.isNone then some what else none
         if !unexcused.isEmpty then return .late unexcused
         return .pass (late.filterMap fun (what, excuse) => excuse.map (s!"{what}, excused by {·}"))
@@ -184,4 +192,7 @@ public def main (args : List String) : IO UInt32 := do
   IO.println s!"checked {traces.size} traces: {passed} obey every rule and discharge \
     what they owe within {δ} ms, {signingOnly} every signing rule, {skipped} out of scope; \
     {excused} of those passing were late where an unmodelled input excuses it"
+  if passed + signingOnly == 0 then
+    IO.println "no trace was checked against any rule"
+    failed := true
   return if failed then 1 else 0

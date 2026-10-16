@@ -6,10 +6,12 @@ public import NewProtocolImpl.Conformance
 # Checking that a trace's node acts promptly
 
 `NewProtocol.Prompt` asks that whatever a node owes after a step, it discharges, or
-stops owing, by a step at most `δ` later. A recorded trace is a prefix of a run
+stops owing, by a step at most `δ` later, and that it answers every timer it takes
+within the same bound. A recorded trace is a prefix of a run
 with a time for each step, so this can be decided on the steps it has, except near
-its end: an obligation whose deadline is after the recording stopped could still be
-discharged by a step the recording did not see (`PromptUntil`).
+its end: an obligation or timer whose deadline is after the recording stopped could
+still be discharged by a step the recording did not see (`PromptUntil`,
+`TimersUntil`).
 
 A recorded step can grow after it is taken. An implementation acting on an input
 the specification has no counterpart for, storage confirming a write for one, emits
@@ -22,14 +24,15 @@ count as cast when its proposal arrived.
 What a node owes at a moment is decided over the obligations its history could give
 rise to (`NewProtocolImpl.candidates`). Those are all of them
 (`NewProtocolImpl.mem_candidates`), so a trace that passes owes nothing the check
-did not look at (`checkPrompt_sound`).
+did not look at (`checkPrompt_sound`). The timers a node takes are read off the
+steps' inputs, as `History.TimerAt` defines them (`checkTimers_sound`).
 -/
 
 @[expose] public section
 
 namespace NewProtocolDiff
 
-open NewProtocol
+open NewProtocol NewProtocol.Lists NewProtocolImpl
 
 deriving instance DecidableEq for Obligation
 
@@ -53,6 +56,20 @@ def PromptUntil (ms : List Moment) (ended δ : Nat) : Prop :=
   ∀ k (hk : k < ms.length), ∀ o, Owed cfg leader node ms[k].history o →
     (∃ j, ∃ hj : j < ms.length, k ≤ j ∧ ms[j].time ≤ ms[k].time + δ
       ∧ ¬ Owed cfg leader node ms[j].history o)
+      ∨ ended ≤ ms[k].time + δ
+
+/--
+`NewProtocol.Prompt.timers`, on the moments of a prefix of a run that stopped at
+`ended`.
+
+Every timer the node took, it answers by a moment at most `δ` later, or by then it
+has grounds for a later view, or the recording stopped no later than that.
+-/
+def TimersUntil (ms : List Moment) (ended δ : Nat) : Prop :=
+  ∀ k (hk : k < ms.length), ∀ v, ms[k].history.TimerAt cfg ms[k].step v →
+    (∃ j, ∃ hj : j < ms.length, k ≤ j ∧ ms[j].time ≤ ms[k].time + δ
+      ∧ (ms[j].history.TimerAnswered cfg node ms[k].step v
+        ∨ ∃ u, ms[j].history.ViewGround cfg u ∧ v < u))
       ∨ ended ≤ ms[k].time + δ
 
 /--
@@ -104,6 +121,54 @@ def promptFaults (ms : List Moment) (ended δ : Nat) : List (Nat × Obligation) 
     if ended ≤ t + δ then []
     else ((owed.getD k []).filter fun o => !stopsBy owed (timeAt ms) o (t + δ) k ms.length).map (k, ·)
 
+/-- The view of the timer or one-honest indication step `n` of `h` takes (`History.TimerAt`), if any. -/
+def timerView (h : History) (n : Nat) : Option ViewNumber :=
+  match h[n]? with
+  | some st =>
+    match st.input with
+    | .timeout v => if viewOf cfg (h.take n) = v then some v else none
+    | .timeoutOneHonest v => if viewOf cfg (h.take n) ≤ v then some v else none
+    | _ => none
+  | none => none
+
+/--
+Whether `h` answers the timer for `v` taken in step `n`, or has grounds past `v`.
+
+The epoch the vote names is the one the node was in at the timer.
+-/
+def timerSettled (h : History) (n : Nat) (v : ViewNumber) : Bool :=
+  let e := epochOfHistory cfg (h.take n)
+  ((h.drop n).any fun st => (timeoutVotesOf st).any fun tv =>
+      decide (tv.view = v ∧ tv.signer = node ∧ tv.data.epoch = e))
+    || decide (v < viewOf cfg h)
+
+/--
+Whether the timer for `v` taken in step `n` is settled at some moment from `m` on,
+before the times pass `deadline`.
+-/
+def settlesBy (ms : List Moment) (n : Nat) (v : ViewNumber) (deadline : Nat) (m : Nat) : Nat → Bool
+  | 0 => false
+  | fuel + 1 =>
+    match ms[m]? with
+    | some x => decide (x.time ≤ deadline)
+        && (timerSettled cfg node x.history n v || settlesBy ms n v deadline (m + 1) fuel)
+    | none => false
+
+/--
+Each timer taken at a moment and neither answered nor overtaken at any moment up
+to `δ` later, with the moment's index, while the recording ran past that deadline.
+-/
+def timerFaults (ms : List Moment) (ended δ : Nat) : List (Nat × ViewNumber) :=
+  (List.range ms.length).filterMap fun k =>
+    match ms[k]? with
+    | some x =>
+      match timerView cfg x.history x.step with
+      | some v =>
+        if ended ≤ x.time + δ || settlesBy cfg node ms x.step v (x.time + δ) k ms.length then none
+        else some (k, v)
+      | none => none
+    | none => none
+
 /-! ## Soundness -/
 
 variable {cfg leader node}
@@ -149,5 +214,66 @@ theorem checkPrompt_sound {ms : List Moment} {ended δ : Nat}
   obtain ⟨j, hj, hjs, ht, hno⟩ := stopsBy_witness (hnone o ((mem_owedAt hk).mpr ho))
   rw [owedAt_size] at hjs
   exact Or.inl ⟨j, hjs, hj, timeAt_of hjs ▸ ht, fun hj' => hno ((mem_owedAt hjs).mpr hj')⟩
+
+theorem timerView_of {h : History} {n : Nat} {v : ViewNumber} (ht : h.TimerAt cfg n v) :
+    timerView cfg h n = some v := by
+  obtain ⟨st, hst, hcase⟩ := ht
+  unfold timerView
+  rw [hst]
+  rcases hcase with ⟨hi, hv⟩ | ⟨hi, w, hw, hle⟩
+  · have : viewOf cfg (h.take n) = v := viewOf_of_inView hv
+    simp [hi, this]
+  · have : viewOf cfg (h.take n) ≤ v := viewOf_of_inView hw ▸ hle
+    simp [hi, this]
+
+theorem timerSettled_of {h : History} {n : Nat} {v : ViewNumber} (hs : timerSettled cfg node h n v = true) :
+    h.TimerAnswered cfg node n v ∨ ∃ u, h.ViewGround cfg u ∧ v < u := by
+  simp only [timerSettled, Bool.or_eq_true, List.any_eq_true, decide_eq_true_eq] at hs
+  rcases hs with ⟨st, hst, tv, htv, hview, hsig, hep⟩ | hlt
+  · left
+    obtain ⟨j, hj⟩ := List.mem_iff_getElem?.mp hst
+    rw [List.getElem?_drop] at hj
+    obtain ⟨⟨e, L⟩, w, k⟩ := tv
+    simp only at hview hsig hep
+    subst hview hsig hep
+    exact ⟨_, L, n + j, Nat.le_add_right _ _, inEpoch_epochOfHistory cfg _, st, hj,
+      mem_timeoutVotesOf_iff.mp htv⟩
+  · exact Or.inr ⟨_, (inView_viewOf cfg h).1, hlt⟩
+
+theorem settlesBy_witness {ms : List Moment} {n : Nat} {v : ViewNumber} {deadline : Nat} :
+    ∀ {m fuel}, settlesBy cfg node ms n v deadline m fuel = true →
+      ∃ j, ∃ hj : j < ms.length, m ≤ j ∧ ms[j].time ≤ deadline
+        ∧ timerSettled cfg node ms[j].history n v = true
+  | _, 0, hs => by simp [settlesBy] at hs
+  | m, fuel + 1, hs => by
+    unfold settlesBy at hs
+    split at hs
+    · rename_i x hx
+      obtain ⟨hm, rfl⟩ := List.getElem?_eq_some_iff.mp hx
+      simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at hs
+      obtain ⟨ht, hset | hrest⟩ := hs
+      · exact ⟨m, hm, Nat.le_refl m, ht, hset⟩
+      · obtain ⟨j, hj, hmj, rest⟩ := settlesBy_witness hrest
+        exact ⟨j, hj, Nat.le_of_succ_le hmj, rest⟩
+    · cases hs
+
+/--
+**A trace with no timer fault obeys `TimersUntil`**: every timer its node took, it
+answered within `δ`, or had grounds past its view by then, or the recording stopped
+before the deadline.
+-/
+theorem checkTimers_sound {ms : List Moment} {ended δ : Nat}
+    (hp : timerFaults cfg node ms ended δ = []) : TimersUntil cfg node ms ended δ := by
+  intro k hk v ht
+  have hnone := List.filterMap_eq_nil_iff.mp hp k (List.mem_range.mpr hk)
+  simp only [List.getElem?_eq_getElem hk, timerView_of ht] at hnone
+  by_cases he : ended ≤ ms[k].time + δ
+  · exact Or.inr he
+  · have hs : settlesBy cfg node ms ms[k].step v (ms[k].time + δ) k ms.length = true := by
+      cases hsb : settlesBy cfg node ms ms[k].step v (ms[k].time + δ) k ms.length
+      · simp [he, hsb] at hnone
+      · rfl
+    obtain ⟨j, hj, hkj, htj, hset⟩ := settlesBy_witness hs
+    exact Or.inl ⟨j, hj, hkj, htj, timerSettled_of hset⟩
 
 end NewProtocolDiff

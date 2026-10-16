@@ -118,6 +118,41 @@ jobs:
           path: target/nextest/*/junit.xml
           retention-days: 1
 
+  # Record a trace of every new-protocol test and check each against the Lean
+  # specification.
+  check-new-protocol-traces:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        name: Checkout Repository
+
+      - name: Install Protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: Swatinem/rust-cache@v2
+        name: Enable Rust Caching
+        with:
+          shared-key: "hotshot-lean-traces"
+          cache-on-failure: "true"
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+          prefix-key: v2-hotshot
+
+      - uses: taiki-e/install-action@just
+
+      - uses: leanprover/lean-action@v1
+        name: Install Lean and Build the Checker
+        with:
+          lake-package-directory: lean/new-protocol-diff
+          use-github-cache: "false"
+
+      - name: Record and check traces
+        run: just test-lean-check
+        timeout-minutes: 60
+        env:
+          RUST_BACKTRACE: full
+
   nextest-report:
     needs: [test-rest, test-new-protocol]
     runs-on: ubuntu-latest
@@ -208,7 +243,7 @@ jobs:
 
   # This job enables having a single required status check in github for all hotshot tests.
   aggregate-hotshot-tests:
-    needs: [test-rest, test-new-protocol]
+    needs: [test-rest, test-new-protocol, check-new-protocol-traces]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}

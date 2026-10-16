@@ -65,7 +65,7 @@ def CheckVote2BeforeTimeout : Prop :=
 /-- `SafeHistory.timeoutLock`. -/
 def CheckTimeoutLock : Prop :=
   ∀ i, (hi : i < h.length) → ∀ tv ∈ timeoutVotesOf h[i], ∀ st ∈ h.take i, ∀ v2 ∈ vote2sOf st,
-    v2.data.epoch < tv.data.lock.data.epoch
+    v2.view ≤ tv.view → v2.data.epoch < tv.data.lock.data.epoch
       ∨ (v2.data.epoch = tv.data.lock.data.epoch ∧ v2.view ≤ tv.data.lock.view)
 
 /-- `SafeHistory.decideJustified`. -/
@@ -153,9 +153,9 @@ theorem checkSafe_sound (hc : checkSafe cfg node h = true) (hvalid : ValidityTru
     obtain ⟨hn, rfl⟩ := List.getElem?_eq_some_iff.mp hst
     exact Nat.lt_of_not_le fun hle =>
       hbt n hn vote (mem_vote2sOf.mpr hmem) st' hst' tv (mem_timeoutVotesOf htv) hle
-  · rintro n vote ⟨st, hst, hmem⟩ _ v2 ⟨st', hst', hv2⟩ _
+  · rintro n vote ⟨st, hst, hmem⟩ _ v2 ⟨st', hst', hv2⟩ _ hle
     obtain ⟨hn, rfl⟩ := List.getElem?_eq_some_iff.mp hst
-    exact hlock n hn vote (mem_timeoutVotesOf hmem) st' hst' v2 (mem_vote2sOf.mpr hv2)
+    exact hlock n hn vote (mem_timeoutVotesOf hmem) st' hst' v2 (mem_vote2sOf.mpr hv2) hle
   · intro n st blocks c1 c2 hst hmem _
     obtain ⟨hn, rfl⟩ := List.getElem?_eq_some_iff.mp hst
     obtain ⟨⟨head, hhead, hc2, hcommit, hc1, hcert⟩, hlinked, hall⟩ :=
