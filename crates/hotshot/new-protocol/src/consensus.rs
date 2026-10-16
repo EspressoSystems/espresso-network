@@ -2575,6 +2575,10 @@ impl<T: NodeType> Consensus<T> {
             debug!("no parent certificate");
             return;
         };
+        if parent_cert.view_number() >= view {
+            debug!(parent = %parent_cert.view_number(), "parent certificate not before this view");
+            return;
+        }
         let Some((parent_view, proposal)) = self
             .certified_proposal(
                 parent_cert.view_number(),

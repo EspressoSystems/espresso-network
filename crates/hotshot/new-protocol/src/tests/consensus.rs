@@ -1582,6 +1582,78 @@ async fn test_proposal_waiting_on_storage_is_not_sent_after_a_timeout() {
     );
 }
 
+/// A leader proposes no block whose parent certificate is at the proposal's own
+/// view.
+///
+/// The leader of view 2 enters it on a timeout certificate, so it builds on its
+/// lock. Before its header arrives, a view-2 block under its own key, which it does
+/// not remember proposing, as after a restart, is certified and moves its lock to
+/// view 2. That lock cannot be the parent of a block at view 2.
+#[tokio::test]
+async fn test_leader_never_proposes_on_a_certificate_of_its_own_view() {
+    let test_data = TestData::new(3).await;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let leader_index = node_index_for_key(&leader_for_view_2);
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(leader_index, 10, test_timeout_epoch_lock()).await;
+    let genesis_leaf = harness.consensus.last_decided_leaf().clone();
+    harness.consensus.seed_parent(
+        build_genesis_cert1(&genesis_leaf),
+        build_genesis_proposal(&genesis_leaf),
+        std::iter::empty(),
+    );
+    harness.defer_header(ViewNumber::new(2));
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&leader_for_view_2))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    let epoch = EpochNumber::genesis();
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(epoch))
+        .expect("the genesis epoch resolves");
+    let timed_out = &test_data.views[0];
+    harness
+        .apply(ConsensusInput::TimeoutCertificate(ValidCert::new(
+            build_timeout_cert3(
+                timed_out.view_number,
+                epoch,
+                &membership,
+                &timed_out.leader_public_key,
+                &timed_out.leader_private_key,
+            ),
+            epoch,
+        )))
+        .await;
+
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&leader_for_view_2))
+        .await;
+    harness
+        .apply(test_data.views[1].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    harness.apply(test_data.views[1].cert1_input()).await;
+    harness.release_header(ViewNumber::new(2)).await;
+
+    let parents: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::SendProposal(p) => {
+                Some((p.data.view_number, p.data.justify_qc.view_number()))
+            },
+            _ => None,
+        })
+        .collect();
+    assert!(
+        parents.iter().all(|(view, parent)| parent < view),
+        "every proposal's parent is at an earlier view: {parents:?}"
+    );
+}
+
 /// A timeout certificate of the next epoch for `timed_out`, locked on `lock`,
 /// which moves a node to that epoch without moving it past the view after.
 fn next_epoch_timeout_cert(

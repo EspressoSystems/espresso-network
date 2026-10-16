@@ -10,6 +10,7 @@ public import NewProtocolDiff.Coverage
 public import NewProtocolDiff.Corpus
 public import NewProtocolDiff.Tests
 public import NewProtocolDiff.Sim
+public import NewProtocolDiff.Scenario
 
 /-!
 # Checking a recorded run against the specification
@@ -32,6 +33,8 @@ implementation produced (`lake exe check`), and for running the machine.
 * `NewProtocolDiff.Sim` — random runs of several machines over a simulated
   network, each history checked against the rules, the decides for agreement and
   the chain for growth (`lake exe sim`).
+* `NewProtocolDiff.Scenario` — what one simulated node was given, written for a
+  runner that replays it to the Rust node (`lake exe sim --scenarios`).
 * `NewProtocolDiff.Tests` — the format round-trips and the checks catch what they
   claim to, checked at build time.
 

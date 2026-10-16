@@ -153,6 +153,12 @@ jobs:
         env:
           RUST_BACKTRACE: full
 
+      - name: Replay and check simulator scenarios
+        run: just test-lean-scenarios
+        timeout-minutes: 30
+        env:
+          RUST_BACKTRACE: full
+
   nextest-report:
     needs: [test-rest, test-new-protocol]
     runs-on: ubuntu-latest

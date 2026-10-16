@@ -17,6 +17,11 @@ The conjuncts mirror `NewProtocolImpl.OwedB`. Their conjunction is checked again
 `NewProtocol.Owed` at every point, and a disagreement is reported (`mismatches`),
 since a split that does not add up would make the counts meaningless.
 
+It also counts how each timer the node took ended (`History.TimerAt`): answered
+in the moment it was taken, on a later release in the same step, or in a later
+step, overtaken by grounds for a later view, or still open when the recording
+stopped. An ending no trace reaches is a gap too.
+
 The report also counts the kinds of input and output each trace has, which shows
 an input or action that no trace contains at all.
 
@@ -117,6 +122,8 @@ structure Coverage where
   owed : Std.HashMap String Nat := {}
   /-- Points where the conjuncts' conjunction disagreed with `Owed`. -/
   mismatches : Std.HashMap String Nat := {}
+  /-- Timers by how they ended. -/
+  timers : Std.HashMap String Nat := {}
   /-- Steps by the kind of their input. -/
   inputs : Std.HashMap String Nat := {}
   /-- Outputs by kind. -/
@@ -142,6 +149,35 @@ def outputKind (o : Output) : String :=
 def candidateConjuncts (h : History) : List (Obligation × List (String × Bool)) :=
   (candidates cfg h).eraseDups.map fun o => (o, conjuncts cfg leader node h o)
 
+/--
+Whether `h` holds the answer to the timer for `v` taken in step `n`: a timeout
+vote for `v`, in that step or a later one, naming the epoch the node was in at
+the timer.
+-/
+def timerAnswered (h : History) (n : Nat) (v : ViewNumber) : Bool :=
+  let e := epochOfHistory cfg (h.take n)
+  (h.drop n).any fun st => (timeoutVotesOf st).any fun tv =>
+    decide (tv.view = v ∧ tv.signer = node ∧ tv.data.epoch = e)
+
+/-- The ways a timer ends, in the order the report lists them. -/
+def timerEndings : List String :=
+  ["answered at once", "answered on a release", "answered in a later step", "overtaken",
+   "open at the end"]
+
+/--
+How the timer for `v`, taken in step `n` at moment `k`, ended: at the first
+moment from `k` on that answers it or has grounds past `v`.
+-/
+def timerEnding (ms : List Moment) (k n : Nat) (v : ViewNumber) : String :=
+  let settles (m : Moment) := timerAnswered cfg node m.history n v || decide (v < viewOf cfg m.history)
+  match (ms.drop k).zipIdx.find? (settles ·.1) with
+  | none => "open at the end"
+  | some (m, i) =>
+    if !timerAnswered cfg node m.history n v then "overtaken"
+    else if i == 0 then "answered at once"
+    else if m.step == n then "answered on a release"
+    else "answered in a later step"
+
 /-- Add what one trace, read as moments, exercised. -/
 def Coverage.add (cov : Coverage) (h : History) (ms : List Moment) : Coverage := Id.run do
   let mut cov := cov
@@ -149,6 +185,12 @@ def Coverage.add (cov : Coverage) (h : History) (ms : List Moment) : Coverage :=
     cov := { cov with inputs := bump cov.inputs (jsonKind (toJson st.input)) }
     for o in st.output do
       cov := { cov with outputs := bump cov.outputs (outputKind o) }
+  let mut previous : Option Nat := none
+  for (m, k) in ms.zipIdx do
+    if previous != some m.step then
+      if let some v := timerView cfg m.history m.step then
+        cov := { cov with timers := bump cov.timers (timerEnding cfg node ms k m.step v) }
+    previous := some m.step
   let mut before : List (Obligation × List (String × Bool)) := []
   for m in ms do
     let now := candidateConjuncts cfg leader node m.history
@@ -174,6 +216,17 @@ def Coverage.add (cov : Coverage) (h : History) (ms : List Moment) : Coverage :=
         cov := { cov with ended := bump cov.ended (o.kind, "noLongerCandidate") }
     before := now
   return cov
+
+/-- Add one count map to another. -/
+def addCounts {κ : Type} [BEq κ] [Hashable κ] (m n : Std.HashMap κ Nat) : Std.HashMap κ Nat :=
+  n.fold (fun acc k c => acc.insert k (acc.getD k 0 + c)) m
+
+/-- The counts of two coverages together. -/
+def Coverage.merge (a b : Coverage) : Coverage :=
+  { falseAt := addCounts a.falseAt b.falseAt, soleFalse := addCounts a.soleFalse b.soleFalse,
+    ended := addCounts a.ended b.ended, owed := addCounts a.owed b.owed,
+    mismatches := addCounts a.mismatches b.mismatches, timers := addCounts a.timers b.timers,
+    inputs := addCounts a.inputs b.inputs, outputs := addCounts a.outputs b.outputs }
 
 /-- Every conjunct of every kind, in the order the report lists them. -/
 def allConjuncts : List (String × List String) :=
@@ -217,6 +270,10 @@ def Coverage.render (cov : Coverage) : String := Id.run do
         else if sole == 0 && ended == 0 then "  <- never decides"
         else ""
       out := out ++ s!"    {name}: false {false_}, sole {sole}, ended {ended}{gap}\n"
+  out := out ++ "timers: how each timer the node took ended\n"
+  for ending in timerEndings do
+    let n := cov.timers.getD ending 0
+    out := out ++ s!"  {ending}: {n}{if n == 0 then "  <- none" else ""}\n"
   out := out ++ "inputs:\n"
   for k in allInputs do
     let n := cov.inputs.getD k 0
