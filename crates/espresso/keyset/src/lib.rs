@@ -157,9 +157,9 @@ impl TryFrom<KeySetOptions> for KeySet {
             }
         } else if let Some(path) = &opt.key_file {
             let vars = dotenvy::from_path_iter(path)
-                .context("reading key file")?
+                .with_context(|| format!("reading key file {}", path.display()))?
                 .collect::<Result<HashMap<_, _>, _>>()
-                .context("reading key file")?;
+                .with_context(|| format!("reading key file {}", path.display()))?;
             if staking.is_none() {
                 staking = Some(read_from_key_file(
                     &vars,
@@ -298,6 +298,25 @@ mod tests {
         };
         let result = KeySet::try_from(opts).unwrap();
         assert_eq!(result.x25519, keys.x25519);
+    }
+
+    #[test]
+    fn missing_key_file_includes_path_in_error() {
+        let missing = std::env::temp_dir().join("espresso-missing-key-file-does-not-exist.env");
+        let _ = std::fs::remove_file(&missing);
+        let opts = KeySetOptions {
+            mnemonic: None,
+            index: None,
+            key_file: Some(missing.clone()),
+            private_staking_key: None,
+            private_state_key: None,
+            private_x25519_key: None,
+        };
+        let err = KeySet::try_from(opts).unwrap_err().to_string();
+        assert!(
+            err.contains(&missing.display().to_string()),
+            "error should include key file path, got: {err}"
+        );
     }
 
     #[test]
