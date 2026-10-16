@@ -73,7 +73,6 @@ jf-crhf = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-rescue = { workspace = true }
 jf-signature = { workspace = true }
-libp2p = { workspace = true }
 light-client = { workspace = true, features = ["client", "rlp"] }
 moka = { workspace = true }
 parking_lot = { workspace = true }

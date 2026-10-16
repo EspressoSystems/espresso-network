@@ -24,7 +24,7 @@ which must be set. The follower needs:
 - an L1 RPC, for fee deposits and the stake table, like any node;
 - upstream query nodes that serve the `light-client`, `catchup`, `config` and (for `submit`) `submit` modules.
 
-It does not need staking keys, an orchestrator, CDN, libp2p or cliquenet; those options are ignored. `--state-peers` and
+It does not need staking keys, an orchestrator or cliquenet; those options are ignored. `--state-peers` and
 `--config-peers` default to the upstreams. Telemetry is disabled with a warning: a follower has no staking key to
 identify itself with.
 

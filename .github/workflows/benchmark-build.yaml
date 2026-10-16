@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUST_LOG: info,libp2p=off,node=error
+  RUST_LOG: info,node=error
 
 jobs:
   build:

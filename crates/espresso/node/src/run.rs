@@ -52,7 +52,7 @@ impl<P: SequencerPersistence> NodeContext<P> {
 
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     espresso_types::assert_node_feature();
-    let (opt, ignored_network_options) = Options::parse_with_ignored();
+    let opt = <Options as clap::Parser>::parse();
     let mut modules = opt.modules();
 
     // Genesis carries the chain ID, which selects the default telemetry
@@ -115,13 +115,6 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         tracing::error!("{e:#}; continuing without telemetry");
     }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
-    if !ignored_network_options.is_empty() {
-        tracing::warn!(
-            ?ignored_network_options,
-            "the CDN and libp2p options are deprecated and ignored: consensus has run over \
-             cliquenet since protocol 0.6. Remove them from the command line and environment."
-        );
-    }
     log_cpu_probe(genesis.drb_difficulty.max(genesis.drb_upgrade_difficulty)).await;
 
     tracing::warn!(?modules, "sequencer starting up");
@@ -487,11 +480,6 @@ mod test {
             &format!("127.0.0.1:{port2}"),
             "--cliquenet-advertise-address",
             &format!("127.0.0.1:{port2}"),
-            // Never bound: this test blocks at orchestrator before libp2p starts. Port 0 is a
-            // placeholder to satisfy the orchestrator-bootstrap requirement on the advertise
-            // address.
-            "--libp2p-advertise-address",
-            "127.0.0.1:0",
             "--genesis-file",
             &genesis_file.display().to_string(),
         ]);

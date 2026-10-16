@@ -354,10 +354,9 @@ where
 
             let registration = orchestrator_registration(&validator_config)?;
 
-            let config =
-                get_complete_config(&orchestrator_client, registration.clone(), None, None)
-                    .await?
-                    .0;
+            let config = get_complete_config(&orchestrator_client, registration.clone())
+                .await?
+                .0;
 
             tracing::warn!(
                 node_id = config.node_index,

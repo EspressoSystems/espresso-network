@@ -9826,26 +9826,6 @@ mod test {
                 num_bootstrap: v1_hotshot.num_bootstrap as u64,
                 commit_sha: v1_config.commit_sha().to_string(),
                 indexed_da: v1_config.indexed_da(),
-                cdn_marshal_address: v1_config.cdn_marshal_address().map(ToString::to_string),
-                libp2p_config: v1_config.libp2p_config().map(|libp2p| {
-                    espresso_api::proto::Libp2pNetworkConfig {
-                        bootstrap_nodes: libp2p
-                            .bootstrap_nodes
-                            .iter()
-                            .map(
-                                |(peer_id, multiaddr)| espresso_api::proto::Libp2pBootstrapNode {
-                                    peer_id: peer_id.to_string(),
-                                    multiaddr: multiaddr.to_string(),
-                                },
-                            )
-                            .collect(),
-                    }
-                }),
-                combined_network_config: v1_config.combined_network_config().map(|combined| {
-                    espresso_api::proto::CombinedNetworkConfig {
-                        delay_duration_ms: combined.delay_duration.as_millis() as u64,
-                    }
-                }),
                 builder: match v1_config.builder() {
                     hotshot_types::network::BuilderType::External => {
                         espresso_api::proto::BuilderType::External
@@ -9858,6 +9838,7 @@ mod test {
                     },
                 }
                 .into(),
+                ..Default::default()
             }
         );
         // The comparison above builds its expected value with the same `From<PeerConfig>` the

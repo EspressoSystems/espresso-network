@@ -87,7 +87,7 @@ LOCAL_TOPOLOGY: nb.Topology = {
     },
     "query_node": "node0",
 }
-# From .env: API, tonic, cliquenet, libp2p, anvil, postgres, orchestrator and relay.
+# From .env: API, tonic, cliquenet, anvil, postgres, orchestrator and relay.
 PORTS = (
     24000,
     24001,
@@ -98,9 +98,6 @@ PORTS = (
     11000,
     11001,
     11002,
-    7000,
-    7001,
-    7002,
     8545,
     5432,
     30001,

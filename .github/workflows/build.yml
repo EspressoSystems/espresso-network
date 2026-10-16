@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  RUST_LOG: info,libp2p=off,node=error
+  RUST_LOG: info,node=error
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 

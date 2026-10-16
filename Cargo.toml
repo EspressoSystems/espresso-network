@@ -270,20 +270,6 @@ jf-signature-compat = { package = "jf-signature", git = "https://github.com/Espr
 ] }
 jf-utils = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-utils-v0.5.0" }
 lazy_static = "1"
-libp2p = { package = "libp2p", version = "0.56", default-features = false, features = [
-    "macros",
-    "cbor",
-    "dns",
-    "gossipsub",
-    "identify",
-    "kad",
-    "quic",
-    "request-response",
-    "secp256k1",
-    "serde",
-    "tokio",
-] }
-libp2p-identity = { version = "0.2", features = ["ed25519", "serde"] }
 light-client = { path = "crates/light-client", features = ["clap"] }
 local-ip-address = "0.6"
 log = { version = "0.4" }
@@ -292,7 +278,6 @@ lru = "0.18.2"
 memoize = { version = "0.4", features = ["full"] }
 mnemonic = "1"
 moka = { version = "0.12.12", features = ["future"] }
-multiaddr = { version = "0.18" }
 nohash-hasher = "0.2.0"
 nonempty-collections = "0.2"
 num-bigint = "0.4"

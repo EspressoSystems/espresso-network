@@ -1432,10 +1432,6 @@ def test_advertise_addresses_use_private_ip_and_dns():
         env["ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS"]
         == f"10.0.0.4:{awsb.CLIQUENET_PORT}"
     )
-    assert (
-        env["ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS"]
-        == f"ip-10-0-0-4.eu-west-1.compute.internal:{awsb.LIBP2P_PORT}"
-    )
 
 
 @pytest.fixture
