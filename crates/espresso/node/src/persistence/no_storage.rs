@@ -194,13 +194,6 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn append_proposal2(
-        &self,
-        _proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn store_drb_result(
         &self,
         _epoch: EpochNumber,

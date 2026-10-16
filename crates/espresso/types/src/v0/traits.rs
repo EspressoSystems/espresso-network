@@ -16,17 +16,13 @@ use hotshot_new_protocol::storage::NewProtocolStorage;
 use hotshot_types::simple_certificate::{Certificate1, Certificate2};
 #[cfg(feature = "node")]
 use hotshot_types::{
-    data::{
-        DaProposal, DaProposal2, QuorumProposal, QuorumProposal2, QuorumProposalWrapper,
-        VidCommitment, VidDisperseShare,
-    },
+    data::{DaProposal, DaProposal2, QuorumProposalWrapper, VidCommitment, VidDisperseShare},
     drb::DrbInput,
     event::{HotShotAction, LeafInfo},
     initializer::{HotShotInitializer, InitializerEpochInfo},
-    message::{Proposal, convert_proposal},
+    message::Proposal,
     simple_certificate::{
-        CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
-        UpgradeCertificate,
+        CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
     },
     traits::{
         ValidatedState as HotShotState, metrics::Metrics, node_implementation::NodeType,
@@ -1057,13 +1053,6 @@ pub trait SequencerPersistence:
         vid_commit: VidCommitment,
     ) -> anyhow::Result<()>;
 
-    async fn append_proposal2(
-        &self,
-        proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        self.append_quorum_proposal2(proposal).await
-    }
-
     async fn store_drb_result(
         &self,
         epoch: EpochNumber,
@@ -1139,54 +1128,11 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         (**self).record_action(view, epoch, action).await
     }
 
-    async fn update_high_qc(&self, _high_qc: QuorumCertificate<SeqTypes>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn append_proposal(
+    async fn append_proposal_wrapper(
         &self,
-        proposal: &Proposal<SeqTypes, QuorumProposal<SeqTypes>>,
+        proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
     ) -> anyhow::Result<()> {
-        (**self)
-            .append_quorum_proposal2(&convert_proposal(proposal.clone()))
-            .await
-    }
-
-    async fn append_proposal2(
-        &self,
-        proposal: &Proposal<SeqTypes, QuorumProposal2<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        let proposal_qp_wrapper: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
-            convert_proposal(proposal.clone());
-        (**self).append_quorum_proposal2(&proposal_qp_wrapper).await
-    }
-
-    async fn update_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
-        (**self).append_high_qc2(high_qc).await
-    }
-
-    /// Update the current eQC in storage.
-    async fn update_eqc(
-        &self,
-        high_qc: QuorumCertificate2<SeqTypes>,
-        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        if let Some((existing_high_qc, _)) = (**self).load_eqc().await
-            && high_qc.view_number() < existing_high_qc.view_number()
-        {
-            return Ok(());
-        }
-
-        (**self).store_eqc(high_qc, next_epoch_high_qc).await
-    }
-
-    async fn update_next_epoch_high_qc2(
-        &self,
-        next_epoch_high_qc: NextEpochQuorumCertificate2<SeqTypes>,
-    ) -> anyhow::Result<()> {
-        (**self)
-            .append_next_epoch_high_qc2(next_epoch_high_qc)
-            .await
+        (**self).append_quorum_proposal2(proposal).await
     }
 
     async fn update_decided_upgrade_certificate(

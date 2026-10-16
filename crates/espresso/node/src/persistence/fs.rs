@@ -1332,13 +1332,6 @@ impl SequencerPersistence for Persistence {
         )
     }
 
-    async fn append_proposal2(
-        &self,
-        proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        self.append_quorum_proposal2(proposal).await
-    }
-
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
         if let Ok(loaded_drb_input) = self.load_drb_input(drb_input.epoch).await {
             if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
