@@ -116,6 +116,14 @@ async fn test_handle_epoch_change_valid() {
         any(harness.outputs(), is_view_changed),
         "Valid EpochChange should produce ViewChanged output"
     );
+    assert!(
+        any(harness.outputs(), |output| matches!(
+            output,
+            ConsensusOutput::ProposalCertified(certified)
+                if certified.view_number == epoch_view.view_number
+        )),
+        "the boundary proposal is announced so the reconstructor can pin its view"
+    );
 }
 
 /// An EpochChangeMessage with mismatched cert1 and cert2 view numbers is not
