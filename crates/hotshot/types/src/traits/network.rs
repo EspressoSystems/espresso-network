@@ -24,10 +24,6 @@ use crate::{
     message::SequencingMessage,
 };
 
-/// Centralized server specific errors
-#[derive(Debug, Error, Serialize, Deserialize)]
-pub enum PushCdnNetworkError {}
-
 /// the type of transmission
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransmitType<TYPES: NodeType> {

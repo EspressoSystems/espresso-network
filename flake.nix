@@ -96,7 +96,6 @@
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
-      keydb = pkgs.callPackage ./nix/keydb.nix { };
       myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
         # The mold linker is around 50% faster on Linux than the default linker.
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
@@ -199,7 +198,6 @@
           };
         };
       };
-      packages.keydb = keydb;
 
       devShells.default =
         let
@@ -240,7 +238,6 @@
             datadog-pup
             process-compose
             lazydocker # a docker compose TUI
-            keydb
             postgresql_18
             opentofu # scripts/network-bench/aws
             awscli2 # scripts/network-bench/aws

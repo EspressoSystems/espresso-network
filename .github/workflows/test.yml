@@ -175,9 +175,6 @@ jobs:
           retention-days: 1
           path: |
             target/debug/orchestrator
-            target/debug/cdn-broker
-            target/debug/cdn-marshal
-            target/debug/cdn-whitelist
             target/debug/state-relay-server
             target/debug/state-prover
             target/debug/espresso-node

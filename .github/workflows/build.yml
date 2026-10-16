@@ -255,9 +255,6 @@ jobs:
       matrix:
         service:
           - bridge
-          - cdn-broker
-          - cdn-marshal
-          - cdn-whitelist
           - deploy
           - espresso-dev-node
           - light-client-query-service
@@ -386,9 +383,6 @@ jobs:
       matrix:
         service:
           - bridge
-          - cdn-broker
-          - cdn-marshal
-          - cdn-whitelist
           - deploy
           - espresso-dev-node
           - light-client-query-service
@@ -486,9 +480,6 @@ jobs:
       matrix:
         service:
           - bridge
-          - cdn-broker
-          - cdn-marshal
-          - cdn-whitelist
           - deploy
           - espresso-dev-node
           - light-client-query-service

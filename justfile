@@ -279,7 +279,6 @@ dev-state-relay-server:
 dev-espresso-node:
     target/release/espresso-node \
     --orchestrator-url http://localhost:8080 \
-    --cdn-endpoint "127.0.0.1:1738" \
     --state-relay-server-url http://localhost:8083 \
     -- http --port 8083  -- query --storage-path storage
 

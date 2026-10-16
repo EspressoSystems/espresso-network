@@ -18,7 +18,6 @@ x-availability:
     restart: exit_on_failure
 
 environment:
-  - ESPRESSO_NODE_CDN_ENDPOINT=127.0.0.1:${ESPRESSO_CDN_SERVER_PORT}
   - ESPRESSO_NODE_ORCHESTRATOR_URL=http://localhost:${ESPRESSO_ORCHESTRATOR_PORT}
   - ESPRESSO_API_NODE_URL=http://localhost:${ESPRESSO_NODE_0_API_PORT}
   - ESPRESSO_L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}

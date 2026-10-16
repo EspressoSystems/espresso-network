@@ -87,8 +87,7 @@ LOCAL_TOPOLOGY: nb.Topology = {
     },
     "query_node": "node0",
 }
-# From .env: API, tonic, cliquenet, libp2p, anvil, postgres, orchestrator, relay, and the CDN
-# the nodes would join if a demo left one listening.
+# From .env: API, tonic, cliquenet, libp2p, anvil, postgres, orchestrator and relay.
 PORTS = (
     24000,
     24001,
@@ -106,7 +105,6 @@ PORTS = (
     5432,
     30001,
     30011,
-    30000,
 )
 # Exact /proc/<pid>/comm names (truncated to 15 chars) of the processes the network runs.
 PROCESS_NAMES = (

@@ -13,7 +13,6 @@ pub mod genesis;
 #[cfg(any(test, feature = "testing"))]
 pub mod legacy_chain;
 pub use espresso_keyset as keyset;
-pub mod network;
 pub mod options;
 pub mod persistence;
 pub mod run;

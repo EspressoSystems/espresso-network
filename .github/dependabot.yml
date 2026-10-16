@@ -20,9 +20,6 @@ updates:
       ark:
         patterns:
           - "ark-*"
-      cdn:
-        patterns:
-          - "cdn-*"
       jf:
         patterns:
           - "jf-*"

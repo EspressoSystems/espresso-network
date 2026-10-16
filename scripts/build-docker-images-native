@@ -137,9 +137,6 @@ else
   else
     images=(
       bridge
-      cdn-broker
-      cdn-marshal
-      cdn-whitelist
       deploy
       espresso-dev-node
       nasty-client
