@@ -86,6 +86,11 @@ pub enum BuilderValidationError {
 /// Possible proposal validation failures
 #[derive(Error, Debug, Eq, PartialEq)]
 pub enum ProposalValidationError {
+    #[error("Header version mismatch: expected={expected}, proposal={proposal}")]
+    HeaderVersionMismatch {
+        expected: Version,
+        proposal: Version,
+    },
     #[error("Next stake table hash mismatch: expected={expected:?}, proposal={proposal:?}")]
     NextStakeTableHashMismatch {
         expected: StakeTableHash,
@@ -613,6 +618,7 @@ impl<'a> ValidatedTransition<'a> {
     /// Top level validation routine. Performs all validation units in
     /// the given order.
     /// ```ignore
+    /// self.validate_version()?;
     /// self.validate_timestamp()?;
     /// self.validate_builder_fee()?;
     /// self.validate_height()?;
@@ -627,6 +633,7 @@ impl<'a> ValidatedTransition<'a> {
     /// self.validate_total_rewards_distributed()?;
     /// ```
     pub(crate) fn validate(self) -> Result<Self, ProposalValidationError> {
+        self.validate_version()?;
         self.validate_timestamp()?;
         self.validate_builder_fee()?;
         self.validate_height()?;
@@ -643,6 +650,20 @@ impl<'a> ValidatedTransition<'a> {
         self.validate_leader_counts()?;
 
         Ok(self)
+    }
+
+    /// Decided headers are replayed by the query node under their own version, not the view's,
+    /// so a header tagged differently from its view would be applied under different rules
+    /// there than the ones consensus validated it with.
+    fn validate_version(&self) -> Result<(), ProposalValidationError> {
+        let proposal = self.proposal.header.version();
+        if proposal != self.version {
+            return Err(ProposalValidationError::HeaderVersionMismatch {
+                expected: self.version,
+                proposal,
+            });
+        }
+        Ok(())
     }
 
     /// The proposal [Header::l1_finalized] must be `Some` and non-decreasing relative to parent.
@@ -2536,6 +2557,37 @@ mod test {
         )
         .validate_total_rewards_distributed()
         .unwrap_err();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_header_version_must_match_view_version() {
+        let instance = NodeState::mock().with_genesis_version(EPOCH_REWARD_VERSION);
+        let (payload, metadata) =
+            Payload::from_transactions(&[], &instance.genesis_state, &instance)
+                .await
+                .unwrap();
+        let v5_header = Header::genesis(&instance, payload, &metadata, EPOCH_REWARD_VERSION);
+
+        let err = ValidatedTransition::new(
+            ValidatedState::default(),
+            &v5_header,
+            Proposal::new(&v5_header, 0),
+            None,
+            NEW_PROTOCOL_VERSION,
+            OffsetDateTime::now_utc(),
+            None,
+            None,
+        )
+        .validate()
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ProposalValidationError::HeaderVersionMismatch {
+                expected: NEW_PROTOCOL_VERSION,
+                proposal: EPOCH_REWARD_VERSION,
+            }
+        );
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
