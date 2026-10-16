@@ -175,6 +175,12 @@ pub enum ConsensusOutput<T: NodeType> {
         proposal: SignedProposal<T, Proposal<T>>,
         sender: T::SignatureKey,
     },
+    /// A proposal taken in on a certificate's word rather than paired with
+    /// this node's VID share: fetched from a peer, or parked live until a
+    /// certificate vouched for it. The share the leader owed this node may
+    /// never arrive, so this is what lets the payload be rebuilt from the
+    /// shares the voters broadcast.
+    ProposalCertified(Proposal<T>),
     RequestMissingProposal {
         view: ViewNumber,
         leaf_commit: Commitment<Leaf2<T>>,
@@ -1326,6 +1332,7 @@ impl<T: NodeType> Consensus<T> {
         let payload_size = self.payload_size_for(&proposal);
         self.request_state(&proposal, payload_size, outbox);
         self.request_block_and_header_if_next_leader(&proposal, outbox);
+        outbox.push_back(ConsensusOutput::ProposalCertified(proposal));
     }
 
     /// Adopt the live proposal parked for `view` awaiting this node's VID
@@ -1832,12 +1839,41 @@ impl<T: NodeType> Consensus<T> {
             warn!("locked certificate is newer than epoch change certificate1");
             return Protocol::Abort;
         }
+<<<<<<< HEAD
         let next_view = cert2.view_number() + 1;
         let next_epoch = cert2.data.epoch + 1;
         // Change view to the first view of the next epoch
         self.current_view = self.current_view.max(next_view);
         self.current_epoch = Some(next_epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(next_view, next_epoch));
+||||||| parent of c5a379754 (fix(new-protocol): reconstruct a certified block without our own share (#5278))
+    
+        let curr_view = self.current_view;
+        let next_view = boundary_view + 1;
+        let next_epoch = boundary_epoch + 1;
+
+        self.set_current_view_max(next_view);
+        self.set_current_epoch_max(next_epoch);
+
+        if self.current_view != curr_view {
+            outbox.push_back(ConsensusOutput::ViewChanged(next_view, self.current_epoch));
+        }
+=======
+        // Taken in on the certificates' word like a fetched proposal, and this
+        // node may hold no share of it.
+        outbox.push_back(ConsensusOutput::ProposalCertified(proposal.clone()));
+
+        let curr_view = self.current_view;
+        let next_view = boundary_view + 1;
+        let next_epoch = boundary_epoch + 1;
+
+        self.set_current_view_max(next_view);
+        self.set_current_epoch_max(next_epoch);
+
+        if self.current_view != curr_view {
+            outbox.push_back(ConsensusOutput::ViewChanged(next_view, self.current_epoch));
+        }
+>>>>>>> c5a379754 (fix(new-protocol): reconstruct a certified block without our own share (#5278))
 
         // Request block and header if we're the first leader of the next epoch
         if self.is_leader(next_view, next_epoch) {
