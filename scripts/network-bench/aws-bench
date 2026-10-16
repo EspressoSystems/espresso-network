@@ -981,6 +981,9 @@ class RunConfig:
     node_env: tuple[str, ...] = ()
     # Genesis `max_block_size`, verbatim.
     max_block_size: str = "50mb"
+    # Genesis `base_version` and `upgrade_version`, verbatim: the protocol the network runs
+    # from genesis. The images must support it.
+    protocol_version: str = "0.6"
     # espresso-node writes leader_trace_node{N}.csv to /opt/bench/trace; `trace-plots` renders it.
     leader_trace: bool = False
     # `latency.PROFILES` name; `off` shapes nothing. `intra_latency` adds the same-location delay.
@@ -1642,6 +1645,7 @@ def format_node_summary(cfg: RunConfig) -> list[str]:
         (
             f"nodes: {cfg.nodes} ({cfg.query_nodes} query, "
             f"{cfg.nodes - cfg.query_nodes} validator-only); max block {cfg.max_block_size}; "
+            f"protocol {cfg.protocol_version}; "
             f"submit {cfg.load.submit_nodes} nodes; "
             f"leader-trace {'on' if cfg.leader_trace else 'off'}"
         ),
@@ -2262,11 +2266,17 @@ def write_private_json(path: Path, data: Any) -> None:
 
 
 def render_genesis(
-    template: bytes, n: int, max_block_size: str, epoch_height: int | None = None
+    template: bytes,
+    n: int,
+    max_block_size: str,
+    protocol_version: str,
+    epoch_height: int | None = None,
 ) -> bytes:
     """`n` validators need a stake table at least as large; contract addresses stay as the
     template's, since they are deterministic from the deployer nonce. `max_block_size` goes
-    into both chain configs; `epoch_height` replaces the template's when given."""
+    into both chain configs. `protocol_version` goes into `base_version` and
+    `upgrade_version`, so the network runs it from genesis; `genesis_version` stays the
+    template's. `epoch_height` replaces the template's when given."""
     capacity = max(10, n)
     text = template.decode()
     text, size_n = re.subn(
@@ -2275,6 +2285,17 @@ def render_genesis(
     if size_n != 2:
         raise ValueError(
             f"expected 2 max_block_size fields in genesis template, replaced {size_n}"
+        )
+    text, base_n = re.subn(
+        r'(?m)^base_version = ".*"$', f'base_version = "{protocol_version}"', text
+    )
+    text, upgrade_n = re.subn(
+        r'(?m)^upgrade_version = ".*"$', f'upgrade_version = "{protocol_version}"', text
+    )
+    if base_n != 1 or upgrade_n != 1:
+        raise ValueError(
+            "expected one base_version and one upgrade_version field in genesis template, "
+            f"replaced {base_n} and {upgrade_n}"
         )
     text, stake_n = re.subn(
         r"(?m)^stake_table_capacity = \d+$", f"stake_table_capacity = {capacity}", text
@@ -3067,6 +3088,16 @@ def add_block_size_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_protocol_version_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--protocol-version",
+        type=protocol_version,
+        default=RunConfig(tag="").protocol_version,
+        help="genesis base_version and upgrade_version, e.g. 0.8: the protocol the network "
+        "runs from genesis; the images must support it",
+    )
+
+
 def add_leader_trace_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--leader-trace",
@@ -3101,6 +3132,12 @@ def check_submit_nodes(cfg: RunConfig) -> None:
 def block_size(text: str) -> str:
     if re.fullmatch(r"[1-9]\d*(kb|mb|gb)", text, re.IGNORECASE) is None:
         raise argparse.ArgumentTypeError(f"not a size like 50mb: {text}")
+    return text
+
+
+def protocol_version(text: str) -> str:
+    if re.fullmatch(r"\d+\.\d+", text) is None:
+        raise argparse.ArgumentTypeError(f"not a version like 0.8: {text}")
     return text
 
 
@@ -3182,6 +3219,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         load=load,
         node_env=tuple(args.node_env),
         max_block_size=args.max_block_size,
+        protocol_version=args.protocol_version,
         leader_trace=args.leader_trace,
         latency=profile,
         intra_latency=args.intra_latency,
@@ -3348,6 +3386,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_run_flags(plan_p)
     add_node_env_flag(plan_p)
     add_block_size_flag(plan_p)
+    add_protocol_version_flag(plan_p)
     add_leader_trace_flag(plan_p)
     add_latency_flags(plan_p)
     add_consensus_storage_flag(plan_p)
@@ -3371,6 +3410,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         func=cmd_up,
         node_env=[],
         max_block_size=defaults.max_block_size,
+        protocol_version=defaults.protocol_version,
         leader_trace=defaults.leader_trace,
         latency=defaults.latency,
         intra_latency=defaults.intra_latency,
@@ -3401,6 +3441,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_run_flags(run_p, tag_required=False)
     add_node_env_flag(run_p)
     add_block_size_flag(run_p)
+    add_protocol_version_flag(run_p)
     add_leader_trace_flag(run_p)
     add_latency_flags(run_p)
     add_consensus_storage_flag(run_p)
@@ -4648,6 +4689,7 @@ def fleet_run_config(args: argparse.Namespace, saved: FleetManifest) -> RunConfi
         query_db=cli.query_db,
         node_env=cli.node_env,
         max_block_size=cli.max_block_size,
+        protocol_version=cli.protocol_version,
         leader_trace=cli.leader_trace,
         latency=cli.latency,
         intra_latency=cli.intra_latency,
@@ -5207,6 +5249,7 @@ def render_run(
         (SCRIPT_DIR / "genesis.toml").read_bytes(),
         cfg.nodes,
         cfg.max_block_size,
+        cfg.protocol_version,
         cfg.epoch_height,
     )
     run_dir = new_run_dir(fleet_dir, name)
@@ -8298,6 +8341,11 @@ def deployment_meta(manifest: Manifest, evidence: Evidence) -> nb.DeploymentMeta
         **(
             {"max_block_size": config["max_block_size"]}
             if "max_block_size" in config
+            else {}
+        ),
+        **(
+            {"protocol_version": config["protocol_version"]}
+            if "protocol_version" in config
             else {}
         ),
         **({"prune": f"{config['prune']} s"} if config.get("prune") else {}),

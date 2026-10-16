@@ -421,6 +421,8 @@ just bench aws run --tag release-x --leader-trace
     `<branch>-<allocator>`.
   - Each image is `espresso-node:main` with the branch's two binaries, so its revision label is main's.
 - `--max-block-size`: genesis `max_block_size` of both chain configs; part of the config hash, shown in the summary.
+- `--protocol-version`: genesis `base_version` and `upgrade_version`, the protocol the network runs from genesis; the
+  images must support it. Part of the config hash, shown in the summary.
   - Mainnet uses `10mb`. Local `genesis.toml` uses `100mb`.
   - On 5 x c8g.4xlarge the block interval grows superlinearly above about 60 MB blocks. Blocks at a 100 MB cap decide at
     about 93 MB/s, 45 to 60 MB blocks at about 160 MB/s.
@@ -574,6 +576,7 @@ Where:
 | `--chaos-query-floor`                 | 2                              | per run      | query nodes kept up; below `--query-nodes`                                                    |
 | `--chaos-mass-nodes`                  | all nodes                      | per run      | nodes per mass fault; needs a mass kind, at most `--nodes`                                    |
 | `--max-block-size`                    | `50mb`                         | per run      | genesis `max_block_size`                                                                      |
+| `--protocol-version`                  | `0.6`                          | per run      | genesis `base_version` and `upgrade_version`; the images must support it                      |
 | `--node-env KEY=VALUE`                | none                           | per run      | repeatable; node environment                                                                  |
 | `--leader-trace`, `--no-leader-trace` | off                            | per run      | leader trace CSVs and plots                                                                   |
 | `--submit-nodes`                      | nodes                          | per run      | nodes receiving txs, 1..nodes                                                                 |
