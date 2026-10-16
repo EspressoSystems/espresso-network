@@ -4,7 +4,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use espresso_node::SequencerApiVersion;
 use espresso_types::{EpochVersion, Header, config::PublicNetworkConfig};
-use hotshot_types::{data::EpochNumber, utils::epoch_from_block_number};
+use hotshot_types::{
+    data::EpochNumber,
+    utils::{epoch_from_block_number, first_block_in_epoch},
+};
 use http_client::{Client, Url};
 use light_client::state::Genesis;
 use light_client_query_service::{LogFormat, init_logging};
@@ -49,6 +52,11 @@ impl Options {
 
         // We know the upgrade to proof of stake must have occurred before the first epoch.
         let upper_bound_pos = config.hotshot_config().epoch_start_block();
+
+        // Round the upper bound down to the start of an epoch. If POS was in effect during an
+        // epoch, it must have been in effect at the start.
+        let upper_bound_epoch = epoch_from_block_number(upper_bound_pos, epoch_height);
+        let upper_bound_pos = first_block_in_epoch(upper_bound_epoch, epoch_height);
 
         // Through binary search, find the first block where the upgrade to PoS occurred.
         let target_version = EpochVersion::VERSION;
