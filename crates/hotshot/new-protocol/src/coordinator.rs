@@ -51,6 +51,7 @@ use crate::{
     },
     epoch::{EpochManager, EpochRootResult},
     fetch::{Fetcher, Retry},
+    heal::{HealConfig, Healer, serve::ShareServer},
     helpers::{proposal_commitment, validated_state_cert},
     leader_trace::LeaderTracerHandle,
     logging::KeyPrefix,
@@ -58,6 +59,7 @@ use crate::{
         self, BlockMessage, CatchupEvidence, Certificate1, Certificate2, ConsensusMessage, Message,
         MessageType, OpaqueMessage, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutVote,
         TransactionMessage, Unchecked, Validated, Vote2, payload::PayloadFetchMessage,
+        share::ShareFetchMessage,
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -142,6 +144,9 @@ pub struct Coordinator<T: NodeType, S> {
     #[builder(default = KeyPrefix::from(&public_key))]
     node_id: KeyPrefix,
     timer: Timer,
+    /// Serves this node's shares to peers healing theirs; `None` when share heal is off.
+    share_server: Option<ShareServer<T, S>>,
+    healer: Option<Healer<T, S>>,
     #[builder(skip)]
     pending_proposal_fetches: PendingProposalFetches<T>,
     #[builder(skip)]
@@ -202,6 +207,7 @@ where
         upgrade_config: UpgradeConfig,
         leader_tracer: Option<LeaderTracerHandle>,
         external_tx: mpsc::UnboundedSender<OpaqueMessage<T::SignatureKey>>,
+        heal: Option<HealConfig>,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -327,6 +333,29 @@ where
         let mut vid_reconstructor = VidReconstructor::new();
         vid_reconstructor.set_tracer(leader_tracer);
 
+        let healer = heal.clone().map(|config| {
+            Healer::new(
+                config,
+                storage.clone(),
+                membership_coordinator.clone(),
+                public_key.clone(),
+                private_key.clone(),
+                network.sender().clone(),
+                consensus.current_view(),
+                metrics,
+            )
+        });
+        let share_server = heal.as_ref().zip(healer.as_ref()).map(|(config, healer)| {
+            ShareServer::over_network(
+                storage.clone(),
+                network.sender().clone(),
+                public_key.clone(),
+                healer.view_receiver(),
+                config,
+                metrics,
+            )
+        });
+
         let lock = upgrade_lock.clone();
         let genesis_qc = consensus.cert1_at(ViewNumber::genesis()).cloned();
 
@@ -426,12 +455,17 @@ where
             .maybe_metrics(coordinator_metrics)
             .participation(participation)
             .external_tx(external_tx)
+            .maybe_share_server(share_server)
+            .maybe_healer(healer)
             .build()
     }
 
     /// Emit `ViewChanged(current_view + 1)` and, if leader, a
     /// `RequestBlockAndHeader`.
     pub fn start(&mut self) {
+        if let Some(healer) = &mut self.healer {
+            healer.start();
+        }
         let cur_view = self.consensus.current_view();
         let next_view = cur_view + 1;
         // Client requests are served before the outbox reaches the builder, so it must know the
@@ -927,7 +961,8 @@ where
             } => {
                 let view = proposal.data.view_number;
                 debug!(%node, %view, "proposal paired with vid share");
-                self.storage.append_vid(vid_share.clone());
+                self.storage
+                    .append_vid(vid_share.clone(), proposal.data.block_header.timestamp());
                 self.storage.append_proposal(proposal.data.clone());
                 // Same gate as the in-memory store in `Consensus::apply`: persisting
                 // unconditionally writes a `state_cert` row under a view the sender
@@ -1165,6 +1200,9 @@ where
                     return Ok(());
                 }
                 info!(%node, %view, %epoch, "view changed");
+                if let Some(healer) = &self.healer {
+                    healer.on_view_changed(view);
+                }
                 self.timer.reset_with(view);
                 self.gc(epoch, GcScope::Local(view))?;
                 let resend = self.block_builder.on_view_changed(view);
@@ -1739,6 +1777,20 @@ where
                     {
                         warn!(%node, %sender, %view, %err, "failed to send payload request");
                     }
+                }
+                None
+            },
+            MessageType::ShareFetch(ShareFetchMessage::Req(request)) => {
+                debug!(%node, %sender, view = %request.view_number(), "received share fetch request");
+                if let Some(server) = &self.share_server {
+                    server.handle_request(request, message.sender);
+                }
+                None
+            },
+            MessageType::ShareFetch(ShareFetchMessage::Res(response)) => {
+                debug!(%node, %sender, view = %response.view_number(), "received share fetch response");
+                if let Some(healer) = &self.healer {
+                    healer.on_response(message.sender, response);
                 }
                 None
             },

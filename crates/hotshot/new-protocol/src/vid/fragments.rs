@@ -238,28 +238,48 @@ impl<T: NodeType> PendingShare<T> {
     /// they cover `0..num_namespaces` exactly; the `BTreeMap` yields them in
     /// that order.
     fn into_share(self, view: ViewNumber) -> VidDisperseShare2<T> {
-        let mut ns_commits = Vec::with_capacity(self.num_namespaces);
-        let mut ns_lens = Vec::with_capacity(self.num_namespaces);
-        let mut ns_shares = Vec::with_capacity(self.num_namespaces);
-        for piece in self.pieces.into_values() {
-            ns_commits.push(piece.ns_commit);
-            ns_lens.push(piece.ns_payload_byte_len);
-            ns_shares.push(piece.ns_share);
-        }
-        VidDisperseShare2 {
-            view_number: view,
-            epoch: Some(self.epoch),
-            // Equal to `epoch` by `well_formed`; reusing it is what keeps the
-            // two from diverging in the assembled share.
-            target_epoch: Some(self.epoch),
-            payload_commitment: self.payload_commitment,
-            share: ns_shares.into(),
-            recipient_key: self.recipient_key,
-            common: AvidmGf2Common {
-                param: self.param,
-                ns_commits,
-                ns_lens,
-            },
-        }
+        assemble_share(
+            view,
+            self.epoch,
+            self.payload_commitment,
+            self.recipient_key,
+            self.param,
+            self.pieces.into_values().collect(),
+        )
+    }
+}
+
+/// Assemble a recipient's share from its per-namespace `pieces`, ordered by
+/// namespace index and covering every namespace.
+pub(crate) fn assemble_share<T: NodeType>(
+    view: ViewNumber,
+    epoch: EpochNumber,
+    payload_commitment: VidCommitment2,
+    recipient_key: T::SignatureKey,
+    param: AvidmGf2Param,
+    pieces: Vec<AvidmGf2NamespacePiece>,
+) -> VidDisperseShare2<T> {
+    let mut ns_commits = Vec::with_capacity(pieces.len());
+    let mut ns_lens = Vec::with_capacity(pieces.len());
+    let mut ns_shares = Vec::with_capacity(pieces.len());
+    for piece in pieces {
+        ns_commits.push(piece.ns_commit);
+        ns_lens.push(piece.ns_payload_byte_len);
+        ns_shares.push(piece.ns_share);
+    }
+    VidDisperseShare2 {
+        view_number: view,
+        epoch: Some(epoch),
+        // Equal to `epoch` by `well_formed`; reusing it is what keeps the
+        // two from diverging in the assembled share.
+        target_epoch: Some(epoch),
+        payload_commitment,
+        share: ns_shares.into(),
+        recipient_key,
+        common: AvidmGf2Common {
+            param,
+            ns_commits,
+            ns_lens,
+        },
     }
 }

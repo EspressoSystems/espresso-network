@@ -5,14 +5,16 @@
 //! consensus waits on come from the `Storage` wrapper, not the inner store, and the
 //! bench never restarts, so nothing reads DA proposals back.
 
+use std::collections::BTreeSet;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_new_protocol::{message::Certificate1, storage::NewProtocolStorage};
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2, VidCommitment,
-        VidDisperseShare, ViewNumber,
+        DaProposal, DaProposal2, EpochNumber, Leaf2, QuorumProposal, QuorumProposal2,
+        VidCommitment, VidDisperseShare, ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     event::HotShotAction,
@@ -119,5 +121,17 @@ impl<T: NodeType> NewProtocolStorage<T> for NullStorage<T> {
     }
     async fn load_high_qc2(&self) -> Result<Option<Certificate1<T>>> {
         self.0.load_high_qc2().await
+    }
+    async fn load_vid_share(
+        &self,
+        _view: ViewNumber,
+    ) -> Result<Option<Proposal<T, VidDisperseShare<T>>>> {
+        Ok(None)
+    }
+    async fn held_vid_views(&self) -> Result<BTreeSet<ViewNumber>> {
+        Ok(BTreeSet::new())
+    }
+    async fn decided_leaves(&self, _min_header_ts: u64) -> Result<Vec<Leaf2<T>>> {
+        Ok(Vec::new())
     }
 }

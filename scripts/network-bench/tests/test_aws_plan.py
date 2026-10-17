@@ -2014,3 +2014,28 @@ def test_genesis_epoch_height_replaces_the_template_value():
             "30mb",
             3000,
         )
+
+
+def test_heap_profile_needs_the_jemalloc_allocator():
+    with pytest.raises(awsb.Refused, match="--heap-profile needs --allocator jemalloc"):
+        node_env_config("--heap-profile")
+    with pytest.raises(awsb.Refused, match="--heap-profile needs --allocator jemalloc"):
+        node_env_config("--heap-profile", "--allocator", "mimalloc")
+    cfg = node_env_config("--heap-profile", "--allocator", "jemalloc")
+    assert cfg.heap_profile is True
+    assert cfg.heap_profile_interval == awsb.HEAP_LG_INTERVAL
+    cfg = node_env_config(
+        "--heap-profile", "--allocator", "jemalloc", "--heap-profile-interval", "30"
+    )
+    assert cfg.heap_profile_interval == 30
+    assert node_env_config().heap_profile is False
+
+
+def test_heap_profile_differs_in_the_config_hash_only_when_on():
+    assert awsb.heap_env(awsb.RunConfig(tag="x")) == ()
+    on = awsb.RunConfig(tag="x", allocator="jemalloc", heap_profile=True)
+    (env,) = awsb.heap_env(on)
+    assert env == (
+        "_RJEM_MALLOC_CONF=prof:true,prof_active:true,prof_final:true,"
+        "lg_prof_sample:19,lg_prof_interval:32,prof_prefix:/store/jeprof/heap"
+    )

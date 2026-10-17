@@ -6,6 +6,7 @@ mod consensus;
 mod epoch_change;
 mod equivocation;
 mod failures;
+mod heal;
 mod integration;
 mod liveness;
 mod proposal;

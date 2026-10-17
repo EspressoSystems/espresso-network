@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Renders the newest jemalloc heap dump of every node of a `--heap-profile` run (see aws-bench)
+with jeprof against the run's binary, into `<run_dir>/heap/<node>.txt` (and `.svg`).
+
+    heap-report RUN_DIR [--svg]
+
+Reads `<run_dir>/hosts/<node>/jeprof/*.heap` and `<run_dir>/espresso-node.bin`; node0 uses
+`espresso-node-sqlite.bin` when present. Needs `jeprof` (nixpkgs `jemalloc`, in the devshell)
+and, for `--svg`, graphviz `dot`.
+"""
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+QUERY_NODE = "node0"
+SQLITE_BINARY = "espresso-node-sqlite.bin"
+BINARY = "espresso-node.bin"
+
+
+def newest_dump(dumps: list[Path]) -> Path:
+    """Newest by mtime: `prof_final` writes the last one at exit."""
+    return max(dumps, key=lambda p: (p.stat().st_mtime, p.name))
+
+
+def binary_for(run_dir: Path, node: str) -> Path:
+    sqlite = run_dir / SQLITE_BINARY
+    if node == QUERY_NODE and sqlite.exists():
+        return sqlite
+    return run_dir / BINARY
+
+
+def jeprof_argv(binary: Path, dump: Path, fmt: str) -> list[str]:
+    return ["jeprof", f"--{fmt}", "--show_bytes", str(binary), str(dump)]
+
+
+def report(run_dir: Path, svg: bool) -> None:
+    out = run_dir / "heap"
+    out.mkdir(exist_ok=True)
+    nodes = sorted(d.parent.name for d in run_dir.glob("hosts/*/jeprof"))
+    if not nodes:
+        sys.exit(f"{run_dir}: no hosts/*/jeprof; run with --heap-profile")
+    for node in nodes:
+        dumps = list((run_dir / "hosts" / node / "jeprof").glob("*.heap"))
+        if not dumps:
+            print(f"{node}: no dumps", file=sys.stderr)
+            continue
+        dump, binary = newest_dump(dumps), binary_for(run_dir, node)
+        for fmt in ("text", *(["svg"] if svg else [])):
+            target = out / f"{node}.{'txt' if fmt == 'text' else fmt}"
+            with target.open("w") as file:
+                subprocess.run(jeprof_argv(binary, dump, fmt), stdout=file, check=True)
+        print(f"{node}: {dump.name} -> {out / node}.*")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("run_dir", type=Path)
+    parser.add_argument("--svg", action="store_true", help="also a call graph per node")
+    args = parser.parse_args()
+    report(args.run_dir, args.svg)
+
+
+if __name__ == "__main__":
+    main()

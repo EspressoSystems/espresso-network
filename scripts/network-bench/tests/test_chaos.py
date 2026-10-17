@@ -5,6 +5,7 @@ import shlex
 import subprocess
 from datetime import UTC, datetime
 from itertools import pairwise
+from pathlib import Path
 from typing import Any
 
 import chaos as ch
@@ -591,6 +592,17 @@ def test_kinds_cycle():
     assert [e["kind"] for e in faults(steps)][:3] == ["restart", "kill", "wipe"]
     ops = [a["op"] for s in steps for a in s["actions"] if a["op"] != "start"]
     assert ops[:3] == ["restart", "kill", "wipe"]
+
+
+def test_share_wipe_can_target_query_nodes():
+    cfg = ch.ChaosConfig(kinds=("share-wipe",))
+    steps = run(cfg, seconds=1000)
+    queries = queries_of(topo_of())
+    targets = [e["node"] for e in faults(steps)]
+    assert queries.intersection(targets)
+    assert {a["op"] for s in steps for a in s["actions"] if a["op"] != "start"} == {
+        "share-wipe"
+    }
 
 
 # TEST:gap-respected-ok
@@ -1829,3 +1841,90 @@ def test_recovery_table_prints_one_row_per_kind():
         ["| mass-kill", "0", "start"],
         ["| mass-restart", "0", "restart"],
     ]
+
+
+def heal_scrape(
+    ts: float, targets: float, done: float, fetched: float = 0, inflight: float = 0
+) -> ch.HealSample:
+    p = ch.HEAL
+    return ts, {
+        p + "targets": targets,
+        p + "done_total": done,
+        p + "fetch_bytes_total": fetched,
+        p + "inflight": inflight,
+        p + "unreachable": 0,
+        p + "verify_fail_total": 0,
+        p + 'height_seconds_sum{phase="fetch"}': done * 0.5,
+        p + 'height_seconds_count{phase="fetch"}': done,
+    }
+
+
+def share_wipe_rows() -> list[ch.FaultRow]:
+    return ch.fault_rows(
+        [
+            ev(0, "fault", "node5", "share-wipe"),
+            ev(10, "rejoined", "node5", "share-wipe"),
+        ]
+    )
+
+
+def test_heal_rows_healed() -> None:
+    series = {
+        "node5": [
+            heal_scrape(T0 + 10, 100, 0),
+            heal_scrape(T0 + 30, 40, 60, 90e6, inflight=8),
+            heal_scrape(T0 + 50, 0, 100, 150e6, inflight=3),
+            heal_scrape(T0 + 60, 0, 100, 150e6),
+        ]
+    }
+    [heal] = ch.heal_rows(share_wipe_rows(), series)
+    assert heal.heal_s == pytest.approx(40)
+    assert (heal.heights, heal.fetched_mb, heal.max_inflight) == (100, 150, 8)
+    assert heal.payload_mb_s == pytest.approx(150 / 1.5 / 40)
+    assert heal.phase_ms == {"fetch": pytest.approx(500)}
+    assert "| node5 | 40 s | 100 | 150 |" in "\n".join(ch.heal_table([heal]))
+
+
+def test_heal_rows_still_healing() -> None:
+    series = {
+        "node5": [heal_scrape(T0 + 10, 100, 0), heal_scrape(T0 + 30, 70, 30, 30e6)]
+    }
+    [heal] = ch.heal_rows(share_wipe_rows(), series)
+    assert heal.heal_s is None
+    assert "still healing, 70 left after 20 s" in "\n".join(ch.heal_table([heal]))
+
+
+def test_heal_rows_ignores_idle_targets_before_any_height_healed() -> None:
+    series = {"node5": [heal_scrape(T0 + 10, 0, 0), heal_scrape(T0 + 20, 0, 0)]}
+    [heal] = ch.heal_rows(share_wipe_rows(), series)
+    assert heal.heal_s is None
+
+
+def test_heal_rows_omitted_without_metrics_or_share_wipe() -> None:
+    assert ch.heal_rows(share_wipe_rows(), {"node5": []}) == []
+    assert ch.heal_table([]) == []
+    restart = ch.fault_rows(
+        [ev(0, "fault", "node5", "restart"), ev(10, "rejoined", "node5", "restart")]
+    )
+    assert ch.heal_rows(restart, {"node5": [heal_scrape(T0 + 10, 0, 5)]}) == []
+
+
+def test_read_heal_series(tmp_path: Path) -> None:
+    lines = [
+        {"ts": 1, "node": "node5", "ok": True, "m": {"x": 1.0}},
+        {
+            "ts": 2,
+            "node": "node5",
+            "ok": True,
+            "m": {
+                ch.HEAL + "targets": 3.0,
+                ch.HEAL + 'height_seconds_bucket{le="1"}': 2.0,
+            },
+        },
+        {"ts": 2, "node": "node6", "ok": True, "m": {ch.HEAL + "targets": 4.0}},
+    ]
+    (tmp_path / "metrics.jsonl").write_text("\n".join(map(json.dumps, lines)))
+    assert ch.read_heal_series(tmp_path, {"node5"}) == {
+        "node5": [(2, {ch.HEAL + "targets": 3.0})]
+    }
+    assert ch.read_heal_series(tmp_path / "none", {"node5"}) == {"node5": []}

@@ -27,7 +27,7 @@ use hotshot_types::{
         Certificate2, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
     },
-    traits::{node_implementation::NodeType, storage::Storage},
+    traits::{block_contents::BlockHeader, node_implementation::NodeType, storage::Storage},
     vote::HasViewNumber,
 };
 
@@ -62,6 +62,7 @@ pub struct TestStorageState<TYPES: NodeType> {
     epoch_roots: BTreeMap<EpochNumber, TYPES::BlockHeader>,
     restart_view: ViewNumber,
     anchor_leaf: Option<(Leaf2<TYPES>, QuorumCertificate2<TYPES>)>,
+    decided_leaves: BTreeMap<ViewNumber, Leaf2<TYPES>>,
     cert2s: BTreeMap<ViewNumber, Certificate2<TYPES>>,
 }
 
@@ -87,6 +88,7 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             epoch_roots: BTreeMap::new(),
             restart_view: ViewNumber::genesis(),
             anchor_leaf: None,
+            decided_leaves: BTreeMap::new(),
             cert2s: BTreeMap::new(),
         }
     }
@@ -171,6 +173,33 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
 
     pub async fn anchor_leaf(&self) -> Option<(Leaf2<TYPES>, QuorumCertificate2<TYPES>)> {
         self.inner.read().await.anchor_leaf.clone()
+    }
+
+    /// Record a decided leaf for share heal's chain scan.
+    pub async fn insert_decided_leaf(&self, leaf: Leaf2<TYPES>) {
+        let mut inner = self.inner.write().await;
+        inner.decided_leaves.insert(leaf.view_number(), leaf);
+    }
+
+    /// Decided leaves with header time at least `min_header_ts`, newest first.
+    pub async fn decided_leaves_cloned(&self, min_header_ts: u64) -> Vec<Leaf2<TYPES>> {
+        let inner = self.inner.read().await;
+        inner
+            .decided_leaves
+            .values()
+            .rev()
+            .filter(|leaf| leaf.block_header().timestamp() >= min_header_ts)
+            .cloned()
+            .collect()
+    }
+
+    /// The share stored for `view`; a node's storage only holds its own.
+    pub async fn vid_share(
+        &self,
+        view: ViewNumber,
+    ) -> Option<Proposal<TYPES, VidDisperseShare<TYPES>>> {
+        let inner = self.inner.read().await;
+        inner.vids.get(&view)?.values().next().cloned()
     }
 
     pub async fn insert_cert2(&self, view: ViewNumber, cert2: Certificate2<TYPES>) {

@@ -219,6 +219,7 @@ where
             .transpose()?;
 
         let (external_tx, external_rx) = unbounded_channel();
+        let heal = persistence.share_heal_config();
         let coordinator = Coordinator::maker()
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
@@ -248,6 +249,7 @@ where
                 stop_voting_time: config.stop_voting_time,
             })
             .external_tx(external_tx)
+            .maybe_heal(heal)
             .make();
 
         let consensus_handle = Arc::new(ConsensusHandle::new(

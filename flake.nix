@@ -244,6 +244,7 @@
             postgresql_18
             opentofu # scripts/network-bench/aws
             awscli2 # scripts/network-bench/aws
+            jemalloc # jeprof, for scripts/network-bench/heap-report
 
             # Figures
             graphviz

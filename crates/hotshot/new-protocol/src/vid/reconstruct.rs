@@ -89,10 +89,10 @@ pub(crate) struct VidShareAccumulator<T: NodeType> {
     expected_param: Option<AvidmGf2Param>,
     /// Common data pinned by the first admitted share; hash-bound to
     /// `payload_commitment` (see [`Self::accept`]).
-    common: Option<AvidmGf2Common>,
+    pub(crate) common: Option<AvidmGf2Common>,
     /// Admitted shares by voter; their shard ranges are pairwise disjoint
     /// (see [`Self::accept`]).
-    shares: BTreeMap<T::SignatureKey, AvidmGf2Share>,
+    pub(crate) shares: BTreeMap<T::SignatureKey, AvidmGf2Share>,
     /// Every voter whose share was admitted, including weeded ones: a voter
     /// whose share failed verification doesn't get a second submission.
     seen_keys: HashSet<T::SignatureKey>,
@@ -312,7 +312,7 @@ impl<T: NodeType> VidReconstructor<T> {
 }
 
 impl<T: NodeType> VidShareAccumulator<T> {
-    fn new(
+    pub(crate) fn new(
         payload_commitment: VidCommitment2,
         metadata: Metadata<T>,
         epoch: EpochNumber,
@@ -334,7 +334,12 @@ impl<T: NodeType> VidShareAccumulator<T> {
     /// any intake check. The non-overlapping path stays crypto-free; a
     /// shard-range overlap is the only case that triggers per-share
     /// verification, via [`Self::resolve_conflict`].
-    fn accept(&mut self, view: ViewNumber, sender: T::SignatureKey, share: VidDisperseShare2<T>) {
+    pub(crate) fn accept(
+        &mut self,
+        view: ViewNumber,
+        sender: T::SignatureKey,
+        share: VidDisperseShare2<T>,
+    ) {
         if self.exhausted {
             return;
         }
@@ -456,11 +461,11 @@ impl<T: NodeType> VidShareAccumulator<T> {
 
     /// Number of shard positions covered by the admitted shares; exact
     /// because their ranges are disjoint.
-    fn coverage(&self) -> usize {
+    pub(crate) fn coverage(&self) -> usize {
         self.ranges().map(ExactSizeIterator::len).sum()
     }
 
-    fn has_enough_shares(&self) -> bool {
+    pub(crate) fn has_enough_shares(&self) -> bool {
         self.common
             .as_ref()
             .is_some_and(|common| self.coverage() >= common.param.recovery_threshold)
@@ -474,7 +479,7 @@ impl<T: NodeType> VidShareAccumulator<T> {
 /// verifies, the payload is unrecoverable: the shares cover the recovery
 /// threshold with disjoint ranges, so the disperser committed to a
 /// non-codeword and no share subset can ever succeed.
-fn reconstruct<T: NodeType>(
+pub(crate) fn reconstruct<T: NodeType>(
     view: ViewNumber,
     epoch: EpochNumber,
     payload_commitment: VidCommitment2,
@@ -484,8 +489,32 @@ fn reconstruct<T: NodeType>(
     tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 ) -> ReconstructResult<T> {
     let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
+    reconstruct_borrowed::<T>(
+        view,
+        epoch,
+        payload_commitment,
+        &common,
+        &keys,
+        &shares,
+        metadata,
+        tracer,
+    )
+}
+
+/// `reconstruct` over shares the caller keeps, so it can retain the good ones after a failure.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reconstruct_borrowed<T: NodeType>(
+    view: ViewNumber,
+    epoch: EpochNumber,
+    payload_commitment: VidCommitment2,
+    common: &AvidmGf2Common,
+    keys: &[T::SignatureKey],
+    shares: &[AvidmGf2Share],
+    metadata: Metadata<T>,
+    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
+) -> ReconstructResult<T> {
     if let Some(bytes) =
-        decode_and_recommit::<T>(view, &common, &shares, &payload_commitment, &metadata)
+        decode_and_recommit::<T>(view, common, shares, &payload_commitment, &metadata)
     {
         crate::trace_leader_event!(
             tracer,
@@ -506,10 +535,10 @@ fn reconstruct<T: NodeType>(
     }
 
     let bad_share_keys: Vec<_> = keys
-        .into_iter()
-        .zip(&shares)
-        .filter(|(_, share)| !share_verifies(&common, share))
-        .map(|(key, _)| key)
+        .iter()
+        .zip(shares)
+        .filter(|(_, share)| !share_verifies(common, share))
+        .map(|(key, _)| key.clone())
         .collect();
 
     let kind = if bad_share_keys.is_empty() {

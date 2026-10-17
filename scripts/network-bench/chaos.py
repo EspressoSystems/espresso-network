@@ -34,11 +34,14 @@ FLOOR_TAIL_S = VIEW_TIMEOUT_S + COUNTER_POLL_S
 SYNC_STATUS_TTL_S = 5.0
 SYNC_SETTLE_S = 2 * SYNC_STATUS_TTL_S
 
-ChaosKind = Literal["restart", "kill", "wipe", "mass-restart", "mass-kill"]
+ChaosKind = Literal[
+    "restart", "kill", "wipe", "share-wipe", "mass-restart", "mass-kill"
+]
 MASS_RESTART: ChaosKind = "mass-restart"
 MASS_KILL: ChaosKind = "mass-kill"
 MASS_KINDS = frozenset({MASS_RESTART, MASS_KILL})
 KILL_KINDS = frozenset({"kill", MASS_KILL})
+# Moves the share lane of a validator aside; a query node is never a target.
 
 # Missing blocks, leaves and vid_common of a query node's `sync-status`.
 Missing = tuple[int, int, int]
@@ -202,7 +205,7 @@ class ChaosObservation(TypedDict):
 
 class ChaosAction(TypedDict):
     node: str
-    op: Literal["restart", "kill", "start", "wipe"]
+    op: Literal["restart", "kill", "start", "wipe", "share-wipe"]
 
 
 class ChaosStep(TypedDict):
@@ -505,7 +508,7 @@ def with_started(state: ChaosState, started: Iterable[ChaosEvent]) -> ChaosState
     return {**state, "nodes": nodes}
 
 
-def _op(kind: ChaosKind) -> Literal["restart", "kill", "wipe"]:
+def _op(kind: ChaosKind) -> Literal["restart", "kill", "wipe", "share-wipe"]:
     match kind:
         case "mass-restart":
             return "restart"
@@ -779,6 +782,145 @@ def fault_rows(events: Iterable[ChaosEvent]) -> list[FaultRow]:
         if "missing" in e:
             row.missing = e["missing"]
     return rows
+
+
+HEAL = "consensus_share_heal_"
+HealSample = tuple[float, Mapping[str, float]]
+SHARE_WIPE: ChaosKind = "share-wipe"
+# Payload bytes fetched per payload byte healed: the decode goal is 1.5x the recovery threshold.
+DECODE_GOAL_FACTOR = 1.5
+
+
+def read_heal_series(
+    run_dir: Path, nodes: Collection[str]
+) -> dict[str, list[HealSample]]:
+    """Node to its (ts, share heal metrics) scrapes of `metrics.jsonl`; empty without the
+    file or the metrics (runs from before share heal)."""
+    path = run_dir / "metrics.jsonl"
+    series: dict[str, list[HealSample]] = {n: [] for n in nodes}
+    if not path.exists():
+        return series
+    with path.open() as f:
+        for line in f:
+            if HEAL + "targets" not in line:
+                continue
+            d = json.loads(line)
+            if d["node"] in series:
+                heal = {
+                    k: v
+                    for k, v in d["m"].items()
+                    if k.startswith(HEAL) and "_bucket" not in k
+                }
+                series[d["node"]].append((d["ts"], heal))
+    return series
+
+
+@dataclass(slots=True)
+class HealRow:
+    """The share heal of a `share-wipe` from its rejoin. `heal_s`: to the first scrape without
+    targets after a height healed; `None` while it still heals at `elapsed_s`, with `left`
+    targets."""
+
+    node: str
+    heal_s: float | None
+    elapsed_s: float
+    left: float
+    heights: float
+    fetched_mb: float
+    payload_mb_s: float
+    phase_ms: dict[str, float]
+    max_inflight: float
+    max_unreachable: float
+    verify_fail: float
+
+
+def heal_rows(
+    rows: Sequence[FaultRow], series: Mapping[str, Sequence[HealSample]]
+) -> list[HealRow]:
+    """One row per `share-wipe` that rejoined and has heal scrapes after it, until the node's
+    next fault; counters count from the first such scrape."""
+    healed: list[HealRow] = []
+    for i, row in enumerate(rows):
+        if row.kind != SHARE_WIPE or row.rejoined is None:
+            continue
+        stop = next(
+            (r.fault for r in rows[i + 1 :] if r.node == row.node), float("inf")
+        )
+        window = [
+            (ts, m)
+            for ts, m in series.get(row.node, ())
+            if row.rejoined - 1 <= ts < stop
+        ]
+        if window:
+            healed.append(_heal_row(row.node, row.rejoined, window))
+    return healed
+
+
+def _heal_row(node: str, rejoined: float, window: Sequence[HealSample]) -> HealRow:
+    base = window[0][1]
+    done = HEAL + "done_total"
+    end = next(
+        (
+            i
+            for i, (_, m) in enumerate(window)
+            if m[HEAL + "targets"] == 0 and m[done] > base[done]
+        ),
+        None,
+    )
+    used = window if end is None else window[: end + 1]
+    ts, last = used[-1]
+    elapsed = ts - rejoined
+
+    def delta(name: str) -> float:
+        # A phase histogram has no series before its first observation.
+        return last[name] - base.get(name, 0.0)
+
+    fetched_mb = delta(HEAL + "fetch_bytes_total") / 1e6
+    phases = [
+        k.split('"')[1] for k in last if k.startswith(HEAL + "height_seconds_sum")
+    ]
+    phase_ms = {}
+    for p in phases:
+        total, count = (
+            f'{HEAL}height_seconds_{s}{{phase="{p}"}}' for s in ("sum", "count")
+        )
+        phase_ms[p] = 1000 * delta(total) / max(delta(count), 1)
+    return HealRow(
+        node=node,
+        heal_s=None if end is None else elapsed,
+        elapsed_s=elapsed,
+        left=last[HEAL + "targets"],
+        heights=delta(done),
+        fetched_mb=fetched_mb,
+        payload_mb_s=fetched_mb / DECODE_GOAL_FACTOR / max(elapsed, 1),
+        phase_ms=phase_ms,
+        max_inflight=max(m[HEAL + "inflight"] for _, m in used),
+        max_unreachable=max(m[HEAL + "unreachable"] for _, m in used),
+        verify_fail=delta(HEAL + "verify_fail_total"),
+    )
+
+
+def heal_table(heals: Sequence[HealRow]) -> list[str]:
+    """Empty without `heals`."""
+    if not heals:
+        return []
+    lines = [
+        "| node | heal | heights | fetched (MB) | payload (MB/s) | ms per height by phase | max inflight | max unreachable | verify fails |",
+        "|---|---:|---:|---:|---:|---|---:|---:|---:|",
+    ]
+    for h in heals:
+        took = (
+            f"{h.heal_s:.0f} s"
+            if h.heal_s is not None
+            else f"still healing, {h.left:.0f} left after {h.elapsed_s:.0f} s"
+        )
+        phases = " ".join(f"{p} {ms:.0f}" for p, ms in sorted(h.phase_ms.items()))
+        lines.append(
+            f"| {h.node} | {took} | {h.heights:.0f} | {h.fetched_mb:.0f} | "
+            f"{h.payload_mb_s:.1f} | {phases} | {h.max_inflight:.0f} | "
+            f"{h.max_unreachable:.0f} | {h.verify_fail:.0f} |"
+        )
+    return lines
 
 
 Phase = Literal["down", "recovering", "catching up"]

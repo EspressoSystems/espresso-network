@@ -59,6 +59,27 @@ def test_wipe_script_steps():
     ]
 
 
+def test_share_wipe_script_moves_the_share_lane():
+    assert awsb.share_wipe_script().splitlines() == [
+        "set -eu",
+        "share=/data/journal/espresso/journal/share",
+        'test -d "$share" || { echo "no share lane at $share" >&2; exit 1; }',
+        "docker stop -t 30 espresso-node >/dev/null",
+        "trap 'docker start espresso-node >/dev/null' EXIT",
+        "dest=/data/journal/share.orig.$(date +%s)",
+        'mv "$share" "$dest"',
+        'echo "$dest"',
+    ]
+
+
+def test_share_wipe_script_checks_before_stopping_and_restarts_on_failure():
+    lines = awsb.share_wipe_script().splitlines()
+    check = next(i for i, c in enumerate(lines) if c.startswith("test -d"))
+    stop = next(i for i, c in enumerate(lines) if c.startswith("docker stop"))
+    trap = next(i for i, c in enumerate(lines) if c.startswith("trap "))
+    assert check < stop < trap
+
+
 # TEST:rejoin-env-config-peers-ok
 def test_rejoin_env_config_peers():
     hosts = fleet(8, 2)

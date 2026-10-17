@@ -1247,3 +1247,8 @@ def test_a_ramp_run_records_no_search(run_harness: RunHarness):
     run_harness.run(FakeRunner(states=[DONE_STATE]))
     agent = netbench.read_json(run_harness.run_dir / "hosts" / "ctl" / "agent.json")
     assert agent["search"] is None
+
+
+def test_collect_plan_extracts_the_binary_after_the_freeze_for_a_heap_profile():
+    plan = awsb.collect_plan(None, True, "colocated", False, heap_profile=True)
+    assert plan == ["freeze", "heap_binary", "collect_hosts", "rsync_out"]
