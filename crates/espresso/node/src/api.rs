@@ -90,6 +90,7 @@ pub mod data_source;
 pub mod fs;
 pub mod light_client;
 pub mod options;
+pub mod payload_budget;
 pub mod sql;
 pub mod state;
 pub mod unlock_schedule;
@@ -3908,6 +3909,93 @@ mod test {
                 .unwrap();
             assert_eq!(res.status(), status, "{path}");
         }
+    }
+
+    /// With a budget smaller than any block, every payload route still serves (a request larger
+    /// than the budget takes all of it), ranges requests acquire once for all their ranges, and
+    /// concurrent requests that find the budget held get a 503 with `Retry-After`.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_payload_admission() {
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let storage = SqlDataSource::create_storage().await;
+        let mut api_config = SqlDataSource::options(&storage, Options::with_port(port))
+            .light_client(Default::default());
+        api_config.query.as_mut().unwrap().payload_memory_budget = Some(1);
+        let config = TestNetworkConfigBuilder::default()
+            .api_config(api_config)
+            .network_config(TestConfigBuilder::default().build())
+            .build();
+        let network = TestNetwork::new(config, TEST_UPGRADE).await;
+
+        let mut events = network.server.event_stream();
+        let ns = NamespaceId::from(42_u32);
+        let mut heights = vec![];
+        for payload in [vec![1, 2, 3], vec![4, 5, 6]] {
+            let tx = Transaction::new(ns, payload);
+            network.server.submit_transaction(tx.clone()).await.unwrap();
+            heights.push(wait_for_decide_on_handle(&mut events, &tx).await.0);
+        }
+        let client: Client<ClientErr, StaticVersion<0, 1>> =
+            Client::new(format!("http://localhost:{port}").parse().unwrap());
+        wait_until_block_height(&client, "node/block-height", heights[1] + 1).await;
+
+        let base = format!("http://localhost:{port}/v1");
+        let http = reqwest::Client::new();
+        let height = heights[0];
+        let ns = u64::from(ns);
+        let two_ranges = serde_json::json!([
+            {"start": heights[0], "end": heights[0] + 1},
+            {"start": heights[1], "end": heights[1] + 1},
+        ]);
+
+        for path in [
+            format!("light-client/payload/{height}"),
+            format!("light-client/payload/{height}/{}", height + 1),
+            format!("light-client/namespace/{height}/{ns}"),
+            format!("light-client/namespace/{height}/{}/{ns}", height + 1),
+            format!("availability/block/{height}"),
+            format!("availability/payload/{height}"),
+            format!("availability/block/{height}/{}", height + 1),
+            format!("availability/transaction/{height}/0"),
+        ] {
+            let res = http.get(format!("{base}/{path}")).send().await.unwrap();
+            assert_eq!(res.status(), reqwest::StatusCode::OK, "{path}");
+        }
+        // Two ranges of one block each fit a 1 KiB budget each, so this takes the whole budget
+        // twice over unless the per-range loads share the request's permit.
+        for path in ["availability/block/ranges", "light-client/payload/ranges"] {
+            let res = http
+                .post(format!("{base}/{path}"))
+                .json(&two_ranges)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(res.status(), reqwest::StatusCode::OK, "{path}");
+        }
+
+        // Ranges fail fast, so concurrent ones overlap on the one-permit budget and some are
+        // turned away. Retry rounds in case a round happens to serialize.
+        let mut rejected = None;
+        for _ in 0..10 {
+            let responses = futures::future::join_all((0..64).map(|_| {
+                http.post(format!("{base}/availability/block/ranges"))
+                    .json(&two_ranges)
+                    .send()
+            }))
+            .await;
+            for res in responses.into_iter().map(Result::unwrap) {
+                match res.status() {
+                    reqwest::StatusCode::OK => {},
+                    reqwest::StatusCode::SERVICE_UNAVAILABLE => rejected = Some(res),
+                    status => panic!("unexpected status {status}"),
+                }
+            }
+            if rejected.is_some() {
+                break;
+            }
+        }
+        let rejected = rejected.expect("no request was turned away");
+        assert_eq!(rejected.headers()[reqwest::header::RETRY_AFTER], "5");
     }
 
     async fn run_catchup_test(url_suffix: &str) {

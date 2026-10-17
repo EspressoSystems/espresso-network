@@ -43,7 +43,7 @@ pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "
 use tower::Layer;
 
 // Re-exports
-pub use self::axum::{create_router_v1, routes};
+pub use self::axum::{create_router_v1, hold_until_response_dropped, routes};
 use self::proto::{
     availability_service_server::{AvailabilityService, AvailabilityServiceServer},
     config_service_server::{ConfigService, ConfigServiceServer},
@@ -367,6 +367,7 @@ async fn serve_router(
     if let Some(limit) = max_connections {
         router = apply_connection_limit(router, limit);
     }
+    let router = router.layer(::axum::middleware::from_fn(axum::hold_response_guards));
     let router = router.layer(http_wire::body_limit_layer());
     // CORS goes on last so it wraps the connection limit, whose 429 would otherwise skip it.
     let router = router.layer(http_wire::cors_layer());

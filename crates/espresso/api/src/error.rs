@@ -17,6 +17,13 @@ pub enum AvailabilityError {
     /// Pruned by this node (410).
     #[error("{0}")]
     Pruned(String),
+    /// The node cannot load the requested payloads right now, retrying later can succeed (503).
+    /// `retry_after_secs` goes out as `Retry-After`.
+    #[error("{message}")]
+    Overloaded {
+        message: String,
+        retry_after_secs: u64,
+    },
 }
 
 /// Why a node refused a transaction. Downcast by [`classify`] to pick the status code.
@@ -87,6 +94,7 @@ pub fn classify(err: anyhow::Error) -> ApiError {
     match err.downcast_ref::<AvailabilityError>() {
         Some(AvailabilityError::NotFound(_)) => ApiError::NotFound(err),
         Some(AvailabilityError::Pruned(_)) => ApiError::Gone(err),
+        Some(AvailabilityError::Overloaded { .. }) => ApiError::Unavailable(err),
         Some(AvailabilityError::RangeExceeded(_) | AvailabilityError::BadRequest(_)) => {
             ApiError::BadRequest(err)
         },

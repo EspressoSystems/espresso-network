@@ -6,7 +6,10 @@ use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOption
 use anyhow::{Context, bail};
 use clap::Parser;
 use espresso_telemetry as telemetry;
-use espresso_types::v0::traits::{NullEventConsumer, PersistenceOptions};
+use espresso_types::{
+    parse_size,
+    v0::traits::{NullEventConsumer, PersistenceOptions},
+};
 use futures::{channel::oneshot, future::BoxFuture};
 use hotshot_query_service::{
     data_source::{ExtensibleDataSource, MetricsDataSource},
@@ -22,7 +25,9 @@ use super::{
     data_source::{
         NodeStateDataSource, Provider, PruningDataSource, SequencerDataSource, provider,
     },
-    fs, sql,
+    fs,
+    payload_budget::PayloadBudget,
+    sql,
     sql::ArchiveStateGc,
     state::NodeApiStateImpl,
     update::{ApiEventConsumer, ApiSink},
@@ -268,6 +273,7 @@ impl Options {
         Option<RequestResponseStorage>,
     )> {
         let light_client_db = query_opt.light_client_db();
+        let payload_budget = query_opt.payload_budget();
         let ds = <fs::DataSource as SequencerDataSource>::create(
             mod_opt,
             provider(
@@ -301,7 +307,8 @@ impl Options {
         tasks.spawn("API server", async move {
             let state = NodeApiStateImpl::new(ds_for_axum)
                 .with_env_vars(env_vars)
-                .with_public_node_config(node_cfg);
+                .with_public_node_config(node_cfg)
+                .with_payload_budget(payload_budget);
             if let Err(e) = espresso_api::serve_axum_fs(port, state, modules, max_connections).await
             {
                 tracing::error!("Axum server error: {}", e);
@@ -341,6 +348,7 @@ impl Options {
             .with_vid_common_provider(db_provider);
         // If that fails, fetch missing data from peers.
         let light_client_db = query_opt.light_client_db();
+        let payload_budget = query_opt.payload_budget();
         let light_client = Arc::new(LightClientProvider::new(
             query_opt.peers,
             state.clone(),
@@ -391,7 +399,8 @@ impl Options {
         // rather than copying the genesis they embed.
         let mut api_state = NodeApiStateImpl::new(ds.clone())
             .with_env_vars(env_vars)
-            .with_public_node_config(node_cfg);
+            .with_public_node_config(node_cfg)
+            .with_payload_budget(payload_budget);
         if let Some(ranges_concurrency) = ranges_concurrency {
             api_state = api_state.with_ranges_concurrency(ranges_concurrency);
         }
@@ -490,9 +499,34 @@ pub struct Query {
     /// is kept under it, so the stake tables it verified survive a restart.
     #[clap(long, env = "ESPRESSO_NODE_STORAGE_PATH")]
     pub storage_path: Option<PathBuf>,
+
+    /// Block payload bytes the query API loads into memory at once, across all requests.
+    ///
+    /// A request that cannot get budget gets a 503 with `Retry-After`; single-block requests
+    /// wait a few seconds first, range requests fail at once. A request larger than the whole
+    /// budget is served alone. Takes a size such as `512MiB`.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_API_PAYLOAD_MEMORY_BUDGET",
+        value_parser = parse_budget,
+        default_value = "512MiB"
+    )]
+    pub payload_memory_budget: Option<u64>,
+}
+
+fn parse_budget(s: &str) -> Result<u64, String> {
+    match parse_size(s).map_err(|err| err.to_string())? {
+        0 => Err("payload memory budget must be greater than 0".into()),
+        bytes => Ok(bytes),
+    }
 }
 
 impl Query {
+    fn payload_budget(&self) -> PayloadBudget {
+        self.payload_memory_budget
+            .map_or_else(PayloadBudget::default, PayloadBudget::new)
+    }
+
     pub fn light_client_db(&self) -> LightClientSqliteOptions {
         let lc_path = self.light_client_db.lc_path.clone().or_else(|| {
             self.storage_path
@@ -510,6 +544,28 @@ impl Query {
 impl Query {
     pub fn test() -> Self {
         Self::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::payload_budget::DEFAULT_BUDGET_BYTES;
+
+    #[test]
+    fn payload_memory_budget_defaults_to_512_mib() {
+        let query = Query::try_parse_from(["query"]).unwrap();
+
+        assert_eq!(query.payload_memory_budget, Some(DEFAULT_BUDGET_BYTES));
+    }
+
+    #[test]
+    fn payload_memory_budget_takes_sizes_and_rejects_zero() {
+        let parse = |arg: &str| Query::try_parse_from(["query", "--payload-memory-budget", arg]);
+
+        assert_eq!(parse("1MiB").unwrap().payload_memory_budget, Some(1 << 20));
+        assert!(parse("0").is_err());
+        assert!(parse("lots").is_err());
     }
 }
 
