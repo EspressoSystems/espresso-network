@@ -3,18 +3,21 @@ use std::{cmp::Ordering, collections::HashMap, fmt::Display, sync::Arc, time::Du
 use anyhow::{Result, bail, ensure};
 use committable::{Commitment, Committable};
 use disco_types::status::StatusCode;
-use espresso_types::{BlockMerkleTree, Header, NsIndex, NsProof, SeqTypes};
-use futures::{TryStreamExt, future::try_join, stream::StreamExt};
+use espresso_types::{BlockMerkleTree, Header, NsIndex, NsProof, Payload, SeqTypes};
+use futures::{
+    TryStreamExt,
+    future::{self, try_join},
+    stream::{self, StreamExt},
+};
 use hotshot_query_service::{
     Error, QueryError,
-    availability::{AvailabilityDataSource, LeafQueryData, PayloadQueryData, VidCommonQueryData},
+    availability::{AvailabilityDataSource, BlockQueryData, LeafQueryData, VidCommonQueryData},
     data_source::{VersionedDataSource, storage::NodeStorage},
     merklized_state::{MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot},
     node::BlockId,
     types::HeightIndexed,
 };
 use hotshot_types::simple_certificate::QuorumCertificate2;
-use itertools::izip;
 use jf_merkle_tree_compat::{
     DigestAlgorithm, MerkleTreeScheme,
     internal::MerkleNode,
@@ -537,23 +540,14 @@ fn child_values(
         .collect())
 }
 
-pub(crate) async fn fetch_block_data_range<State>(
-    state: &State,
-    start: usize,
-    end: usize,
-    fetch_timeout: Duration,
-    large_object_range_limit: usize,
-) -> Result<
-    Vec<(
-        Header,
-        PayloadQueryData<SeqTypes>,
-        VidCommonQueryData<SeqTypes>,
-    )>,
-    Error,
->
-where
-    State: AvailabilityDataSource<SeqTypes>,
-{
+/// Number of blocks loaded concurrently by one range request.
+///
+/// Each block holds its payload until its proof is built, so a request keeps at most this many
+/// payloads in memory, independent of the range length. The response still holds every
+/// [`NamespaceProof`], so its size is O(range x namespace size).
+const BLOCK_WINDOW: usize = 4;
+
+fn check_range(start: usize, end: usize, large_object_range_limit: usize) -> Result<(), Error> {
     if end <= start {
         return Err(Error::Custom {
             message: format!("requested empty interval [{start}, {end})"),
@@ -568,62 +562,57 @@ where
             status: StatusCode::BAD_REQUEST,
         });
     }
+    Ok(())
+}
 
-    let fetch_headers = async move {
+/// Load a block and its VID common, failing with 404 if either is missing.
+async fn fetch_block_data<State>(
+    state: &State,
+    height: usize,
+    fetch_timeout: Duration,
+) -> Result<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>), Error>
+where
+    State: AvailabilityDataSource<SeqTypes>,
+{
+    let id = BlockId::Number(height);
+    let block = async {
         state
-            .get_header_range(start..end)
+            .get_block(id)
             .await
-            .enumerate()
-            .then(|(i, fetch)| async move {
-                fetch
-                    .with_timeout(fetch_timeout)
-                    .await
-                    .ok_or_else(|| Error::Custom {
-                        message: format!("missing header {}", start + i),
-                        status: StatusCode::NOT_FOUND,
-                    })
-            })
-            .try_collect::<Vec<_>>()
+            .with_timeout(fetch_timeout)
             .await
+            .ok_or_else(|| not_found(format!("missing block {height}")))
     };
-    let fetch_payloads = async move {
+    let vid_common = async {
         state
-            .get_payload_range(start..end)
+            .get_vid_common(id)
             .await
-            .enumerate()
-            .then(|(i, fetch)| async move {
-                fetch
-                    .with_timeout(fetch_timeout)
-                    .await
-                    .ok_or_else(|| Error::Custom {
-                        message: format!("missing payload {}", start + i),
-                        status: StatusCode::NOT_FOUND,
-                    })
-            })
-            .try_collect::<Vec<_>>()
+            .with_timeout(fetch_timeout)
             .await
+            .ok_or_else(|| not_found(format!("missing VID common {height}")))
     };
-    let fetch_vid_commons = async move {
-        state
-            .get_vid_common_range(start..end)
-            .await
-            .enumerate()
-            .then(|(i, fetch)| async move {
-                fetch
-                    .with_timeout(fetch_timeout)
-                    .await
-                    .ok_or_else(|| Error::Custom {
-                        message: format!("missing VID common {}", start + i),
-                        status: StatusCode::NOT_FOUND,
-                    })
-            })
-            .try_collect::<Vec<_>>()
-            .await
-    };
-    let (headers, (payloads, vid_commons)) =
-        try_join(fetch_headers, try_join(fetch_payloads, fetch_vid_commons)).await?;
+    try_join(block, vid_common).await
+}
 
-    Ok(izip!(headers, payloads, vid_commons).collect())
+/// Fetch the blocks in `start..end` and reduce each with `process`, in height order.
+///
+/// At most [`BLOCK_WINDOW`] fetched blocks are alive at any time; a block is dropped as soon as
+/// `process` returns.
+async fn try_map_blocks<B, T, Fut>(
+    start: usize,
+    end: usize,
+    fetch: impl Fn(usize) -> Fut,
+    process: impl Fn(B) -> Result<T, Error>,
+) -> Result<Vec<T>, Error>
+where
+    Fut: Future<Output = Result<B, Error>>,
+{
+    stream::iter(start..end)
+        .map(fetch)
+        .buffered(BLOCK_WINDOW)
+        .and_then(|block| future::ready(process(block)))
+        .try_collect()
+        .await
 }
 
 /// Single-namespace version of [`get_namespaces_proof_range`].
@@ -668,22 +657,25 @@ pub(crate) async fn get_namespaces_proof_range<State>(
 where
     State: AvailabilityDataSource<SeqTypes>,
 {
-    fetch_block_data_range(state, start, end, fetch_timeout, large_object_range_limit)
-        .await?
-        .into_iter()
-        .map(|(header, payload, vid_common)| {
+    check_range(start, end, large_object_range_limit)?;
+    try_map_blocks(
+        start,
+        end,
+        |height| fetch_block_data(state, height, fetch_timeout),
+        |(block, vid_common)| {
             namespaces
                 .iter()
                 .filter_map(|&namespace| {
-                    let ns_index = header.ns_table().find_ns_id(&namespace.into())?;
+                    let ns_index = block.header.ns_table().find_ns_id(&namespace.into())?;
                     Some(
-                        build_namespace_proof(&payload, &ns_index, &vid_common)
+                        build_namespace_proof(&block.payload, &ns_index, &vid_common)
                             .map(|proof| (namespace, proof)),
                     )
                 })
-                .collect::<Result<HashMap<_, _>, _>>()
-        })
-        .collect()
+                .collect()
+        },
+    )
+    .await
 }
 
 /// Decode the `namespaces` path segment: a `TaggedBase64` string tagged `NS` wrapping a
@@ -704,16 +696,14 @@ pub(crate) fn parse_namespaces_str(encoded: &str) -> anyhow::Result<Vec<u64>> {
 
 /// Construct a [`NamespaceProof`] for the namespace at `ns_index` of the given block.
 fn build_namespace_proof(
-    payload: &PayloadQueryData<SeqTypes>,
+    payload: &Payload,
     ns_index: &NsIndex,
     vid_common: &VidCommonQueryData<SeqTypes>,
 ) -> Result<NamespaceProof, Error> {
     let ns_proof =
-        NsProof::new(payload.data(), ns_index, vid_common.common()).ok_or_else(|| {
-            Error::Custom {
-                message: "failed to construct namespace proof".into(),
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-            }
+        NsProof::new(payload, ns_index, vid_common.common()).ok_or_else(|| Error::Custom {
+            message: "failed to construct namespace proof".into(),
+            status: StatusCode::INTERNAL_SERVER_ERROR,
         })?;
     Ok(NamespaceProof::new(ns_proof, vid_common.common().clone()))
 }
@@ -740,7 +730,13 @@ fn chain_too_long(requested: usize, chain_limit: usize) -> Error {
 
 #[cfg(test)]
 mod test {
-    use std::{marker::PhantomData, sync::Mutex};
+    use std::{
+        marker::PhantomData,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering::SeqCst},
+        },
+    };
 
     use axum::{Router, extract::Path, http::HeaderMap, routing::get};
     use committable::Committable;
@@ -761,7 +757,7 @@ mod test {
     };
     use hotshot_types::{data::ViewNumber, simple_vote::Vote2Data};
     use http_wire::{ServerError, respond};
-    use itertools::Itertools;
+    use itertools::{Itertools, izip};
     use jf_merkle_tree_compat::{
         AppendableMerkleTreeScheme, ToTraversalPath, prelude::SHA3MerkleTree,
     };
@@ -1923,6 +1919,90 @@ mod test {
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Counts live instances, standing in for a payload held in memory.
+    struct Live(Arc<AtomicUsize>);
+
+    impl Live {
+        fn new(live: &Arc<AtomicUsize>, peak: &AtomicUsize) -> Self {
+            peak.fetch_max(live.fetch_add(1, SeqCst) + 1, SeqCst);
+            Self(live.clone())
+        }
+    }
+
+    impl Drop for Live {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_try_map_blocks_bounds_live_blocks() {
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = AtomicUsize::new(0);
+        let out = try_map_blocks(
+            0,
+            100,
+            |height| {
+                let (live, peak) = (&live, &peak);
+                async move {
+                    tokio::task::yield_now().await;
+                    Ok((height, Live::new(live, peak)))
+                }
+            },
+            |(height, _block)| Ok(height),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, (0..100).collect::<Vec<_>>());
+        assert_eq!(live.load(SeqCst), 0);
+        assert!(peak.load(SeqCst) <= BLOCK_WINDOW, "{peak:?}");
+    }
+
+    #[tokio::test]
+    async fn test_try_map_blocks_stops_at_first_error() {
+        let fetched = AtomicUsize::new(0);
+        let err = try_map_blocks(
+            0,
+            100,
+            |height| {
+                fetched.fetch_add(1, SeqCst);
+                async move { Ok(height) }
+            },
+            |height| {
+                if height == 2 {
+                    Err(not_found("boom"))
+                } else {
+                    Ok(height)
+                }
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+        // Processing height 2 has pulled in heights up to 2 + BLOCK_WINDOW.
+        assert!(fetched.load(SeqCst) <= 3 + BLOCK_WINDOW);
+    }
+
+    #[tokio::test]
+    async fn test_try_map_blocks_fetch_error_passes_through() {
+        let err = try_map_blocks(
+            0,
+            100,
+            |height| async move {
+                if height == 50 {
+                    Err(internal("fetch failed"))
+                } else {
+                    Ok(height)
+                }
+            },
+            Ok,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(err.to_string().contains("fetch failed"), "{err:#}");
     }
 
     #[tokio::test]
