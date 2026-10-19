@@ -120,6 +120,37 @@ async fn test_timeout_vote_binds_the_local_epoch_when_upgraded() {
     assert_eq!(vote.vote().data.epoch, local);
 }
 
+/// A timeout vote waiting for its action to be stored is not replaced by one
+/// the node signs for the same view in a later epoch. Each answers its own timer,
+/// and both are sent once the action is stored.
+#[tokio::test]
+async fn test_timeout_votes_waiting_on_storage_are_kept_per_epoch() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let view = ViewNumber::new(2);
+    let first = EpochNumber::genesis();
+    harness.defer_action(view, ActionKind::Timeout);
+    harness.set_view(view, first);
+    harness.apply(ConsensusInput::Timeout(view)).await;
+    harness.set_view(view, first + 1);
+    harness.apply(ConsensusInput::TimeoutOneHonest(view)).await;
+    assert!(
+        !any(harness.outputs(), is_send_timeout_vote),
+        "setup: both votes wait for the action to be stored"
+    );
+
+    harness.release_action(view, ActionKind::Timeout).await;
+    let epochs: Vec<_> = harness
+        .outputs()
+        .iter()
+        .filter_map(|o| match o {
+            ConsensusOutput::SendTimeoutVote(vote, ..) => Some(HasEpoch::epoch(vote)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(epochs, vec![Some(first), Some(first + 1)]);
+}
+
 /// A timeout certificate from an epoch the node has left does not pull it back.
 ///
 /// The certificate names the epoch its voters signed under, and at a boundary
