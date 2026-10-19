@@ -657,7 +657,10 @@ impl<T: NodeType> Consensus<T> {
         leaf_commit: Commitment<Leaf2<T>>,
         block_number: Option<u64>,
     ) -> Option<(ViewNumber, &Proposal<T>)> {
-        if let Some(proposal) = self.proposals.get(view, leaf_commit) {
+        let numbered = |proposal: &&Proposal<T>| {
+            block_number.is_none_or(|bn| bn == proposal.block_header.block_number())
+        };
+        if let Some(proposal) = self.proposals.get(view, leaf_commit).filter(numbered) {
             return Some((view, proposal));
         }
         if !block_number.is_some_and(|bn| is_last_block(bn, *self.epoch_height)) {
@@ -665,6 +668,7 @@ impl<T: NodeType> Consensus<T> {
         }
         self.proposals
             .latest_before(view, leaf_commit)
+            .filter(numbered)
             .map(|proposal| (proposal.view_number, proposal))
     }
 
@@ -796,6 +800,16 @@ impl<T: NodeType> Consensus<T> {
             self.last_decided_view.saturating_sub(DECIDE_BUFFER).into(),
             self.decide_floor_view,
         )
+    }
+
+    /// Whether `view` is decided or at or below the decide floor, so that no
+    /// block of it is wanted any more.
+    ///
+    /// A view between the floor and the last decided view that is not decided
+    /// is a gap, and its block is still wanted: a later decide fills it in
+    /// (`maybe_decide_at`).
+    fn decided_or_past(&self, view: ViewNumber) -> bool {
+        view <= self.decide_floor() || self.decided_views.contains(&view)
     }
 
     /// Apply consensus to the given input and collect protocol outputs.
@@ -1121,20 +1135,30 @@ impl<T: NodeType> Consensus<T> {
 
     /// Whether a proposal for `view` in `epoch` can still matter to this node.
     ///
-    /// Locks are ordered by epoch, then view, so a proposal of a later epoch
-    /// is wanted even if a lock of an earlier one is at a later view.
+    /// One at or before the decide floor cannot be decided any more. Under the
+    /// certificate rule, one behind the lock is kept: it gets no vote1
+    /// (`maybe_vote_1`), but a `Certificate2` for its view may still arrive and
+    /// decide it. Before the certificate rule, one behind the lock fails
+    /// `is_safe` and is not wanted. Locks are ordered by epoch, then view, so a
+    /// proposal of a later epoch is wanted even if a lock of an earlier one is at
+    /// a later view.
     pub fn wants_proposal_for_view(&self, view: &ViewNumber, epoch: EpochNumber) -> bool {
-        let locked_too_new = self
-            .lock_view()
-            .is_some_and(|lock| lock > LockView { epoch, view: *view });
+        if *view <= self.decide_floor() {
+            return false;
+        }
+        if !self.upgrade_lock.certificate_rule(*view)
+            && self
+                .lock_view()
+                .is_some_and(|lock| lock > LockView { epoch, view: *view })
+        {
+            return false;
+        }
         // A proposal may already be in `self.proposals` because we received
         // an EpochChangeMessage for it (which carries the proposal but no
         // vid_share and does not trigger state validation).  In that case we
         // still want to process the real proposal message so handle_proposal
         // runs — it populates vid_shares and emits RequestState.
-        let fully_processed =
-            self.proposals.live(*view).is_some() && self.vid_shares.contains_key(view);
-        !(locked_too_new || fully_processed)
+        self.proposals.live(*view).is_none() || !self.vid_shares.contains_key(view)
     }
 
     pub fn proposals(&self) -> &Proposals<T> {
@@ -1377,7 +1401,17 @@ impl<T: NodeType> Consensus<T> {
         };
         let key = (view, Some(proposal.proposal.data.epoch), commit);
         let Some(vid_share) = self.unpaired_vid_shares.remove(&key) else {
+            let leaf_commit = proposal_commitment(&proposal.proposal.data);
             self.unpaired_proposals.insert(key, (sender, proposal));
+            // Under the certificate rule, a `Certificate2` that arrived first
+            // vouches for it as one arriving later would (`handle_certificate2`).
+            if self.upgrade_lock.certificate_rule(view)
+                && !self.decided_or_past(view)
+                && self.cert2_over(view, leaf_commit).is_some()
+                && self.adopt_unpaired_proposal(view, leaf_commit, outbox)
+            {
+                return Protocol::Continue;
+            }
             return Protocol::Abort;
         };
         self.on_proposal_paired(sender, proposal, vid_share, outbox)
@@ -1619,7 +1653,7 @@ impl<T: NodeType> Consensus<T> {
             let parent_view = proposal.justify_qc.view_number();
             let leaf_commit = proposal.justify_qc.data().leaf_commit;
             if parent_view >= view
-                || parent_view <= self.last_decided_view
+                || self.decided_or_past(parent_view)
                 || self.proposals.contains(parent_view, leaf_commit)
             {
                 break;
@@ -1640,8 +1674,8 @@ impl<T: NodeType> Consensus<T> {
         let signed_proposal = message.proposal;
         let proposal = signed_proposal.data.clone();
         let view = proposal.view_number;
-        if view <= self.last_decided_view {
-            debug!(%view, "certified proposal at or below decided view; discarding");
+        if self.decided_or_past(view) {
+            debug!(%view, "certified proposal of a decided view or one past the floor; discarding");
             return;
         }
         let commit = proposal_commitment(&proposal);
@@ -1828,9 +1862,7 @@ impl<T: NodeType> Consensus<T> {
     ) {
         let parent_view = proposal.justify_qc.view_number();
         let leaf_commit = proposal.justify_qc.data().leaf_commit;
-        if parent_view <= self.last_decided_view
-            || self.proposals.contains(parent_view, leaf_commit)
-        {
+        if self.decided_or_past(parent_view) || self.proposals.contains(parent_view, leaf_commit) {
             return;
         }
         // Only a parent behind the proposal is adopted; adopting for a forward
@@ -1895,7 +1927,7 @@ impl<T: NodeType> Consensus<T> {
         let leaf_commit = certificate.data.leaf_commit;
         let block_number = Some(certificate.data.block_number);
         self.insert_cert2(certificate.into_cert());
-        if view > self.last_decided_view
+        if !self.decided_or_past(view)
             && self
                 .certified_proposal(view, leaf_commit, block_number)
                 .is_none()
@@ -2551,6 +2583,10 @@ impl<T: NodeType> Consensus<T> {
             debug!("no parent certificate");
             return;
         };
+        if parent_cert.view_number() >= view {
+            debug!(parent = %parent_cert.view_number(), "parent certificate not before this view");
+            return;
+        }
         let Some((parent_view, proposal)) = self
             .certified_proposal(
                 parent_cert.view_number(),
@@ -3254,6 +3290,13 @@ impl<T: NodeType> Consensus<T> {
         if !self.stored_actions.contains(&(view, ActionKind::Propose)) {
             return;
         }
+        if view <= self.timeout_view {
+            debug!(%view, "dropping pending proposal and re-vote request for timed-out view");
+            self.pending_revote.retain(|ViewEpoch(v, _), _| *v != view);
+            self.pending_proposal
+                .retain(|ViewEpoch(v, _), _| *v != view);
+            return;
+        }
         for (ViewEpoch(_, epoch), message) in self
             .pending_revote
             .extract_if(ViewEpoch::at_view(view), |_, _| true)
@@ -3265,7 +3308,7 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::SendReVote(message));
         }
         let stored = self.stored_proposals.get(&view);
-        for (_, message) in
+        for (ViewEpoch(_, epoch), message) in
             self.pending_proposal
                 .extract_if(ViewEpoch::at_view(view), |_, message| {
                     stored.is_some_and(|commitments| {
@@ -3273,6 +3316,10 @@ impl<T: NodeType> Consensus<T> {
                     })
                 })
         {
+            if self.upgrade_lock.certificate_rule(view) && epoch < self.current_epoch {
+                debug!(%view, %epoch, "dropping pending proposal of an epoch this node has left");
+                continue;
+            }
             outbox.push_back(ConsensusOutput::SendProposal(message));
         }
     }
@@ -3320,6 +3367,16 @@ impl<T: NodeType> Consensus<T> {
             debug!(%view, "proposal not available");
             return;
         };
+        // A proposal behind the lock is kept only to be decided.
+        if self.lock_view().is_some_and(|lock| {
+            lock > LockView {
+                epoch: proposal.epoch,
+                view,
+            }
+        }) {
+            debug!(%view, "proposal behind the lock");
+            return;
+        }
         if !self
             .states_verified
             .contains(&(view, proposal_commitment(proposal)))
