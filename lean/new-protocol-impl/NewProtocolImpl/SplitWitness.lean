@@ -981,7 +981,7 @@ theorem not_timedOut {k : PubKey} {n : Nat} {v : ViewNumber} (h : (H k n).TimedO
 variable (hv : ∀ b, BlockValid b)
 
 include hv in
-theorem protocol (k : PubKey) (n : Nat) : ProtocolHistory cfg leader k (fun _ => True) (fun _ => True) (H k n) :=
+theorem protocol (k : PubKey) (n : Nat) : ProtocolHistory cfg leader k (fun _ => True) (H k n) :=
   Kit.protocol input hv k n
 
 /-- What a justified proposal or request names, the node holds. -/
@@ -1414,7 +1414,21 @@ theorem votes2 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ at0 4 10
   have hcl := classes k
   refine Classical.byContradiction fun hneg => settled k (at0 4 10 u) (.vote2 (certOf (blk u)))
     ⟨⟨blk u, hasCert1_of u (by have := at0_facts 3 9 u; omega), hasProposal_of u (by have := at0_facts 1 7 u; omega),
-      ⟨Nat.le_refl _, rfl⟩, payload_of u hl (by omega)⟩, fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_, ?_, ?_⟩
+      ⟨Nat.le_refl _, rfl⟩, payload_of u hl (by omega)⟩, notBehind (by
+        rw [cert_epoch]
+        show eAt k (at0 4 10 u + 1) ≤ u + 1
+        have := at0_facts 4 10 u
+        by_cases hu : u = 0
+        · subst hu
+          rw [show at0 4 10 0 + 1 = 5 by simp [at0]]
+          have := eAt_first (k := k) (n := 5) (by omega)
+          have : 6 ≤ ecAt k := by unfold ecAt; split <;> omega
+          omega
+        · rw [show at0 4 10 u + 1 = 8 * u + 5 + 6 by omega]
+          have := eAt_later (k := k) u 5 (by omega) (by omega)
+          omega),
+      fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_, ?_,
+      by rw [cert_view]; show 0 < bv u; have := bv_facts u; omega, Kit.decidedBefore_of fun c2 hc2 => ?_⟩
   · obtain ⟨j, hj, hjv⟩ := sent_iff.mp hs
     obtain ⟨u', rfl, -, -⟩ := sent_vote2 hv hjv
     rw [cert_view] at hvv
@@ -1435,14 +1449,13 @@ theorem votes2 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ at0 4 10
       have h' : bv u ≤ 2 := hle
       have := bv_facts u
       omega
-  · refine Kit.afterFloor_of input hv (by rw [cert_view]; show 0 < bv u; have := bv_facts u; omega) fun x hx => ?_
+  · obtain ⟨x, rfl, hlt⟩ := hasCert2 hc2
     rw [cert_view]
-    have := bv_facts u
-    rcases hasProposal hx with rfl | ⟨y, rfl, hy⟩
-    · show 0 < bv u + 20; omega
-    · rw [blk_view]; show bv y < bv u + 20
-      have := bv_facts y; have := at0_facts 1 7 y; have := at0_facts 4 10 u
-      omega
+    show bv x < bv u
+    have := at0_facts (c2At k) 11 x
+    have : 5 ≤ c2At k := by unfold c2At; split <;> omega
+    have := bv_facts x; have := bv_facts u
+    omega
 
 end Sends
 
@@ -1909,8 +1922,7 @@ theorem sync : Synchrony (net hv) 36 4 33 where
       rwa [(vAt_first (by omega)).2 (by omega)] at this
     have hinput : (tr k 7).input = .timeout ⟨2⟩ := by
       rw [Kit.tr_step]; show input k 7 = _; rw [input_first (by omega)]; rfl
-    obtain ⟨e', L', -, hout⟩ := (Kit.protocol input hv k 8).timeoutAnswered 7 _ ⟨2⟩ (Kit.getElem_H 7)
-      (Or.inl ⟨hinput, by rw [Kit.upTo_H]; exact hin7⟩) (fun _ _ => ⟨trivial, trivial⟩)
+    obtain ⟨e', L', -, hout⟩ := Kit.answers (Or.inl ⟨hinput, hin7⟩)
     obtain ⟨_, hke⟩ := hk
     exact by_at hv (m := 8) (fun _ => by show tm 7 ≤ _; omega)
       (Or.inr (Or.inr ⟨_, Kit.sent_iff.mpr ⟨7, by omega, hout⟩, rfl, hke⟩))
@@ -1980,7 +1992,7 @@ include hv in
 /-- **The liveness premises can be met together, with a first epoch change that splits the nodes before GST.** -/
 theorem premises_met :
     ConfigCoherent cfg ∧ Synchrony (net hv) 36 4 33 ∧ Prompt (net hv) 0
-      ∧ 8 * 4 + 3 * 0 < 33 ∧ LeaderRotation C leader :=
+      ∧ 8 * 4 + 4 * 0 < 33 ∧ LeaderRotation C leader :=
   ⟨cfg_coherent, sync hv, prompt_of_machine _ 0 (fun k _ => ⟨input k, rfl⟩)
     (fun _ hk => Kit.steady_of_uniform (fun _ _ _ h => h) hk), by decide, rotation⟩
 

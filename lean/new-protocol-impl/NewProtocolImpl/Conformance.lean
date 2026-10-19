@@ -4,6 +4,7 @@ public import NewProtocolImpl.Machine
 public import NewProtocolImpl.Steps
 public import NewProtocolSpec.Timing
 public import NewProtocolSpec.Properties
+public import NewProtocolSpec.Proofs.Traces
 
 /-!
 # The machine meets the specification
@@ -752,7 +753,7 @@ theorem timedOut_step {out' : List Output} (hsub : ∀ y ∈ timeoutAnswer cfg n
 
 theorem step_ok (hvt : ValidityTruthful (pre ++ [Step.mk i []])) :
     StepOK cfg leader node pre (step cfg leader node pre i) := by
-  refine ⟨?_, ?_, ?_, discharge_once _ _ fun j blocks c1 c2 hj => ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, discharge_once _ _ fun j blocks c1 c2 hj => ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro vote hm
     rcases step_mem hm with h0 | ⟨o, out', hsub, ho, ha⟩
     · obtain ⟨v, hx, _⟩ := mem_timeoutAnswer h0; cases hx
@@ -767,8 +768,8 @@ theorem step_ok (hvt : ValidityTruthful (pre ++ [Step.mk i []])) :
     rcases step_mem hm with h0 | ⟨o, out', hsub, ho, ha⟩
     · obtain ⟨v, hx, _⟩ := mem_timeoutAnswer h0; cases hx
     · obtain ⟨c, rfl, rfl⟩ := act_vote2 ha
-      obtain ⟨⟨b, hc, hb, hcert, hpay⟩, _, _, _, hgen⟩ := ho
-      exact ⟨rfl, hgen.1, c, b, (sameInputs_step.hasCert1 c).mp hc, (sameInputs_step.hasProposal b).mp hb,
+      obtain ⟨⟨b, hc, hb, hcert, hpay⟩, _, _, _, _, hgen, _⟩ := ho
+      exact ⟨rfl, hgen, c, b, (sameInputs_step.hasCert1 c).mp hc, (sameInputs_step.hasProposal b).mp hb,
         hcert, (sameInputs_step.hasPayload _ _).mp hpay, rfl, rfl⟩
   · intro blocks c1 c2 hm
     rcases step_mem hm with h0 | ⟨o, out', hsub, ho, ha⟩
@@ -819,18 +820,6 @@ theorem step_ok (hvt : ValidityTruthful (pre ++ [Step.mk i []])) :
         · exact Or.inl ⟨hi, hv ▸ inView_viewOf cfg pre⟩
         · exact Or.inr ⟨hi, _, inView_viewOf cfg pre, hv⟩
     · exact absurd ha act_no_timeoutVote
-  · intro v howed
-    refine ⟨epochOfHistory cfg pre, lockOf cfg pre, inEpoch_epochOfHistory cfg pre, ?_⟩
-    rw [step_output]
-    apply discharge_sup
-    rcases howed with ⟨hi, hv⟩ | ⟨hi, w, hw, hle⟩
-    · simp only [step_input] at hi
-      subst hi
-      simp [timeoutAnswer, viewOf_of_inView hv]
-    · simp only [step_input] at hi
-      subst hi
-      have : viewOf cfg pre ≤ v := viewOf_of_inView hw ▸ hle
-      simp [timeoutAnswer, this]
   · intro p hm
     rcases step_mem hm with h0 | ⟨o, out', _, _, ha⟩
     · obtain ⟨v, hx, _⟩ := mem_timeoutAnswer h0; cases hx
@@ -846,6 +835,46 @@ theorem step_global (hg : Global pre) : Global (pre ++ [step cfg leader node pre
   have h0 := global_arrive (i := i) hg (out := timeoutAnswer cfg node pre i)
     (fun x hx => by obtain ⟨v, hx, _⟩ := mem_timeoutAnswer hx; exact ⟨_, hx⟩)
   exact discharge_global _ _ h0
+
+/-- A step decides only blocks at or before the view of a `Cert2` the node holds. -/
+theorem step_decided_le {blocks : List Block} {c1 : Cert1} {c2 : Cert2}
+    (hm : Output.decided blocks c1 c2 ∈ (step cfg leader node pre i).output) :
+    (pre ++ [step cfg leader node pre i]).HasCert2 c2 ∧ ∀ x ∈ blocks, x.viewNumber ≤ c2.view := by
+  rcases step_mem hm with h0 | ⟨o, out', _, ho, ha⟩
+  · obtain ⟨v, hx, _⟩ := mem_timeoutAnswer h0; cases hx
+  · obtain ⟨rfl, b, -, hcm, -, -, -, seen, rfl⟩ := act_decided ha
+    obtain ⟨-, -, hc2, -⟩ := owedDecide_iff.mp ho
+    refine ⟨(sameInputs_step.hasCert2 c2).mp hc2, fun x hx => ?_⟩
+    have hb : b.viewNumber.toNat ≤ c2.view.toNat := hcm.1
+    rcases mem_chainFrom _ _ _ _ _ hx with rfl | ⟨-, -, -, -, hlt⟩
+    · exact hb
+    · show x.viewNumber.toNat ≤ c2.view.toNat; omega
+
+/-- A step sends a timeout vote only in answer to a timer or one-honest indication for its view. -/
+theorem step_timeoutVote_input {vote : TimeoutVote}
+    (hx : Output.send (.timeoutVote vote) ∈ (step cfg leader node pre i).output) :
+    i = .timeout vote.view ∨ i = .timeoutOneHonest vote.view := by
+  rcases step_mem hx with h0 | ⟨o, out', _, _, ha⟩
+  · obtain ⟨v, hx', hin⟩ := mem_timeoutAnswer h0
+    simp only [Output.send.injEq, Message.timeoutVote.injEq] at hx'
+    subst hx'
+    rcases hin with ⟨h, -⟩ | ⟨h, -⟩
+    · exact Or.inl h
+    · exact Or.inr h
+  · exact absurd ha act_no_timeoutVote
+
+/-- A step answers the timer or one-honest indication it takes, in the epoch the node was in. -/
+theorem step_answers {v : ViewNumber} (ht : (i = .timeout v ∧ pre.InView cfg v)
+      ∨ (i = .timeoutOneHonest v ∧ ∃ w, pre.InView cfg w ∧ w ≤ v)) :
+    ∃ e L, pre.InEpoch cfg e
+      ∧ Output.send (.timeoutVote ⟨⟨e, L⟩, v, node⟩) ∈ (step cfg leader node pre i).output := by
+  refine ⟨epochOfHistory cfg pre, lockOf cfg pre, inEpoch_epochOfHistory cfg pre, ?_⟩
+  rw [step_output]
+  apply discharge_sup
+  rcases ht with ⟨rfl, hv⟩ | ⟨rfl, w, hw, hle⟩
+  · simp [timeoutAnswer, viewOf_of_inView hv]
+  · have : viewOf cfg pre ≤ v := viewOf_of_inView hw ▸ hle
+    simp [timeoutAnswer, this]
 
 /-- **A step leaves nothing owed.** -/
 theorem step_settled (o : Obligation) : ¬ Owed cfg leader node (pre ++ [step cfg leader node pre i]) o := by
@@ -875,8 +904,8 @@ validity report among its inputs is truthful.
 -/
 theorem historyOf_protocol {inputs : Nat → Input}
     (hvalid : ∀ n v hash, inputs n = .blockValidated v hash → ∀ b, blockHash b = hash → BlockValid b)
-    (n : Nat) : ProtocolHistory cfg leader node (fun _ => True) (fun _ => True) (historyOf cfg leader node inputs n) := by
-  suffices ∀ n, ProtocolHistory cfg leader node (fun _ => True) (fun _ => True) (historyOf cfg leader node inputs n)
+    (n : Nat) : ProtocolHistory cfg leader node (fun _ => True) (historyOf cfg leader node inputs n) := by
+  suffices ∀ n, ProtocolHistory cfg leader node (fun _ => True) (historyOf cfg leader node inputs n)
       ∧ Global (historyOf cfg leader node inputs n) from (this n).1
   intro n
   induction n with
@@ -898,11 +927,30 @@ theorem historyOf_settled (inputs : Nat → Input) (n : Nat) (o : Obligation) :
     ¬ Owed cfg leader node (historyOf cfg leader node inputs (n + 1)) o :=
   step_settled o
 
-/-- **A network of machines is prompt**, for every `δ`: no obligation outlives the step that creates it. -/
+/-- In a network of machines, every timer is answered in the step that takes it. -/
+theorem timers_of_machine {C : Committee} (N : TimedNetwork cfg leader C)
+    (hm : ∀ k hk, ∃ inputs, N.trace k hk = traceOf cfg leader k inputs) (k : PubKey) (hk : C.Honest k)
+    (n : Nat) (v : ViewNumber) (ht : ((N.trace k hk).history (n + 1)).TimerAt cfg n v) :
+    ((N.trace k hk).history (n + 1)).TimerAnswered cfg k n v := by
+  obtain ⟨inputs, he⟩ := hm k hk
+  rw [he] at ht ⊢
+  obtain ⟨st, hst', hcase⟩ := ht
+  rw [Trace.history_getElem? _ (Nat.lt_succ_self n)] at hst'
+  obtain rfl := Option.some.inj hst'
+  rw [Trace.history_upTo _ (Nat.le_succ n), traceOf_history] at hcase
+  obtain ⟨e, L, hep, hout⟩ := step_answers (leader := leader) hcase
+  exact ⟨e, L, n, Nat.le_refl _, by rw [Trace.history_upTo _ (Nat.le_succ n), traceOf_history]; exact hep,
+    (Trace.sentAt_history _).mpr ⟨Nat.lt_succ_self n, hout⟩⟩
+
+/--
+**A network of machines is prompt**, for every `δ`: no obligation outlives the
+step that creates it, and every timer is answered in the step that takes it.
+-/
 theorem prompt_of_machine {C : Committee} (N : TimedNetwork cfg leader C) (δ : Nat)
     (hm : ∀ k hk, ∃ inputs, N.trace k hk = traceOf cfg leader k inputs) (hst : ∀ k, C.Honest k → C.Steady k) :
     Prompt N δ := by
-  intro k hk n o ho
+  refine ⟨fun k hk n o ho => ?_, fun k hk n v ht _ =>
+    ⟨n, Nat.le_refl _, Nat.le_add_right _ _, Or.inl (timers_of_machine N hm k hk n v ht)⟩⟩
   obtain ⟨inputs, he⟩ := hm k hk
   rw [he, traceOf_history] at ho
   exact absurd ((owedIn_all (hst k hk)).mp ho) (historyOf_settled inputs n o)

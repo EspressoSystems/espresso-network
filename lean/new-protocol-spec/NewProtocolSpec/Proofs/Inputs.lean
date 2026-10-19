@@ -154,10 +154,10 @@ theorem owed_antitone {h1 h2 : History} (he : SameInputs h1 h2)
       ⟨b, (he.hasProposal _).mpr hb, hcert, (he.hasPayload _ _).mpr hpay⟩, (he.notBehind _).mpr hnb,
       hto _ ht, fun vote hsv => honce vote (hs _ hsv), (he.inView _).mpr hv⟩
   | vote2 c =>
-    obtain ⟨⟨b, hc, hb, hcert, hpay⟩, honce, hc2, hpast, hfloor⟩ := ho
+    obtain ⟨⟨b, hc, hb, hcert, hpay⟩, hnb, honce, hc2, hpast, hgen, hdec⟩ := ho
     refine ⟨⟨b, (he.hasCert1 _).mpr hc, (he.hasProposal _).mpr hb, hcert, (he.hasPayload _ _).mpr hpay⟩,
-      fun vote hsv => honce vote (hs _ hsv), fun c2 h => hc2 c2 ((he.hasCert2 _).mp h),
-      fun hp => hpast ?_, hfl _ hfloor⟩
+      (he.notBehind _).mpr hnb, fun vote hsv => honce vote (hs _ hsv), fun c2 h => hc2 c2 ((he.hasCert2 _).mp h),
+      fun hp => hpast ?_, hgen, fun u hu => hdec u (hd u hu)⟩
     rcases hp with ⟨vote, hsv, hle⟩ | ⟨tc, htc, hle⟩
     · exact Or.inl ⟨vote, hs _ hsv, hle⟩
     · exact Or.inr ⟨tc, (he.received _).mp htc, hle⟩

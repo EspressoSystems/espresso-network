@@ -615,7 +615,7 @@ open Lists
 variable (hv : ∀ b, BlockValid b)
 
 include hv in
-theorem protocol (k : PubKey) (n : Nat) : ProtocolHistory cfg leader k (fun _ => True) (fun _ => True) (H k n) :=
+theorem protocol (k : PubKey) (n : Nat) : ProtocolHistory cfg leader k (fun _ => True) (H k n) :=
   Kit.protocol input hv k n
 
 /-- Nothing is owed after a step. -/
@@ -866,14 +866,13 @@ theorem votes2 (k : PubKey) (u : Nat) (hu : u ≠ 0 ∨ k ≠ c) : ∃ j, j ≤ 
     · exact not_pastView (by rw [certOf_view, vOf_succ]; show 3 ≤ u + 3; omega)
   refine Classical.byContradiction fun hneg => settled k (sAt u + 4) (.vote2 (certOf (blk u)))
     ⟨⟨blk u, Or.inr (Or.inl (recv_cert1 u (by omega))), hasProposal_of u (by omega),
-      ⟨Nat.le_refl _, rfl⟩, Or.inr ?_⟩, fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_,
-      hpast, Kit.afterFloor_of input hv (by rw [certOf_view]; show 0 < vOf u; unfold vOf; split <;> omega)
-        fun x hx => by
-          rw [certOf_view]
-          rcases hasProposal hx with rfl | ⟨y, rfl, hy⟩
-          · show 0 < vOf u + 20; omega
-          · rw [blk_view]; show vOf y < vOf u + 20
-            rcases y with _ | y <;> rcases u with _ | u <;> simp [vOf, sAt] at hy ⊢ <;> omega⟩
+      ⟨Nat.le_refl _, rfl⟩, Or.inr ?_⟩, notBehind, fun vote hs _ hvv => ?_, fun c2 hc2 _ hv2 => ?_,
+      hpast, by rw [certOf_view]; show 0 < vOf u; unfold vOf; split <;> omega,
+      Kit.decidedBefore_of fun c2 hc2 => by
+        obtain ⟨x, rfl, hlt⟩ := hasCert2 hc2
+        rw [certOf_view]
+        show x + 3 < vOf u
+        rcases u with _ | u <;> simp [vOf, sAt] at hlt ⊢ <;> omega⟩
   · rw [blk_view]; exact recv_payload u (by omega)
   · obtain ⟨j, hj, hjv⟩ := sent_iff.mp hs
     obtain ⟨u', rfl, -⟩ := sent_vote2 hv hjv
@@ -1232,7 +1231,7 @@ include hv in
 /-- **The liveness premises can be met together, with a timeout before GST.** -/
 theorem premises_met :
     ConfigCoherent cfg ∧ Synchrony (net hv) 28 3 25 ∧ Prompt (net hv) 0
-      ∧ 8 * 3 + 3 * 0 < 25 ∧ LeaderRotation C leader :=
+      ∧ 8 * 3 + 4 * 0 < 25 ∧ LeaderRotation C leader :=
   ⟨cfg_coherent, sync hv, prompt_of_machine _ 0 (fun k _ => ⟨input k, rfl⟩)
     (fun _ hk => Kit.steady_of_uniform (fun _ _ _ h => h) hk), by decide, rotation⟩
 
