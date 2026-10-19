@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, time::Duration};
 
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot_example_types::node_types::TestTypes;
@@ -13,14 +13,16 @@ use hotshot_types::{
 };
 
 use crate::{
-    helpers::{proposal_commitment, test_upgrade_lock},
+    helpers::{proposal_commitment, test_timeout_epoch_lock, test_upgrade_lock},
     message::{Certificate1, Proposal, ProposalMessage},
     proposal::{
         MalformedProposal, ProposalValidator, ValidationError, epoch_matches_height,
         justify_qc_matches_parent, next_epoch_justify_qc_matches_parent, state_cert_matches_parent,
         view_change_evidence_matches_parent,
     },
-    tests::common::utils::{TestData, mock_membership_with_num_nodes},
+    tests::common::utils::{
+        TestData, build_timeout_cert3_with_lock, mock_membership_with_num_nodes,
+    },
     upgrade::expected_upgrade_data,
 };
 
@@ -535,7 +537,6 @@ async fn skipping_views_without_evidence_for_the_previous_view_is_rejected() {
         },
         TimeoutEvidence::V3(mut tc) => {
             tc.view_number = view;
-            tc.data.view = view;
             TimeoutEvidence::V3(tc)
         },
     };
@@ -591,7 +592,6 @@ async fn evidence_on_a_proposal_that_follows_its_parent_is_checked() {
         },
         TimeoutEvidence::V3(mut tc) => {
             tc.view_number = previous.view_number;
-            tc.data.view = previous.view_number;
             TimeoutEvidence::V3(tc)
         },
     };
@@ -615,6 +615,50 @@ async fn evidence_on_a_proposal_that_follows_its_parent_is_checked() {
     );
 
     let result = validate_with_genesis_qc(with_evidence(relabelled), None).await;
+    assert!(
+        matches!(result, Err(ValidationError::InvalidViewChangeEvidence(_))),
+        "expected InvalidViewChangeEvidence, got {result:?}"
+    );
+}
+
+/// A timeout certificate whose lock is of a later epoch than the certificate is
+/// rejected before the lock's epoch is looked up: no honest signer holds such a
+/// lock, and looking it up would wait on a catchup for an epoch of the
+/// leader's choosing.
+#[tokio::test]
+async fn evidence_with_a_lock_of_a_later_epoch_is_rejected_before_lookup() {
+    let data = TestData::new_with_epoch_height(3, EPOCH_HEIGHT).await;
+    let [.., previous, view] = data.views.as_slice() else {
+        panic!("three views");
+    };
+    let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let (membership, _storage, _client) =
+        mock_membership_with_num_nodes(10, EPOCH_HEIGHT, public_key);
+    let mut lock = previous.cert1.clone();
+    lock.data.epoch = Some(view.epoch_number + 1000);
+    let committee = membership
+        .membership_for_epoch(Some(view.epoch_number))
+        .expect("the proposal's committee");
+    let evidence = TimeoutEvidence::V3(build_timeout_cert3_with_lock(
+        previous.view_number,
+        view.epoch_number,
+        Some(lock),
+        &committee,
+    ));
+    let mut proposal = view.proposal.clone();
+    proposal.data.view_change_evidence = Some(evidence);
+    let leaf: Leaf2<TestTypes> = proposal.data.clone().into();
+    proposal.signature = BLSPubKey::sign(&view.leader_private_key, leaf.commit().as_ref())
+        .expect("sign the proposal");
+
+    let mut validator =
+        ProposalValidator::new(membership, EPOCH_HEIGHT, test_timeout_epoch_lock(), None);
+    validator.validate(ProposalMessage::unchecked(proposal));
+    let result = tokio::time::timeout(Duration::from_secs(10), validator.next())
+        .await
+        .expect("validation does not wait on the lock's epoch")
+        .expect("a validation result")
+        .map(|_| ());
     assert!(
         matches!(result, Err(ValidationError::InvalidViewChangeEvidence(_))),
         "expected InvalidViewChangeEvidence, got {result:?}"

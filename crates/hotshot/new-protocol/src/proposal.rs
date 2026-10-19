@@ -24,7 +24,7 @@ use tokio::task::JoinSet;
 use tracing::error;
 
 use crate::{
-    cert_verifier::verify_signatures,
+    cert_verifier::{verify_signatures, verify_timeout3},
     message::{
         Certificate1, Certificate2, Proposal, ProposalMessage, Unchecked, Validated,
         VidShareMessage,
@@ -478,13 +478,24 @@ impl<T: NodeType> Validator<T> {
             let Some(tc_epoch) = tc.epoch() else {
                 return Err(ValidationError::MissingEpoch(view, "view_change_evidence"));
             };
+            if let TimeoutEvidence::V3(cert) = tc {
+                cert.check_lock()
+                    .map_err(ValidationError::InvalidViewChangeEvidence)?;
+            }
             let membership = self.membership(tc_epoch).await?;
+            if let Some((lock, _)) = tc.lock()
+                && lock.checked_in(tc_epoch)
+            {
+                self.membership(lock.epoch).await?;
+            }
             let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
             verify_timeout_evidence(
                 tc,
                 &entries,
                 membership.success_threshold(),
+                self.epoch_height,
                 &self.upgrade_lock,
+                &self.membership_coordinator,
             )
             .map_err(ValidationError::InvalidViewChangeEvidence)?;
         }
@@ -646,11 +657,15 @@ pub enum ValidationError {
 /// `TimeoutEvidence::is_valid_cert` checks the same, except that it skips the
 /// signatures at the genesis view. Every timeout certificate is formed from
 /// signed votes, at the genesis view as at any other, so none is exempt here.
+/// A certificate that carries a lock has its lock certificate checked against
+/// the lock's own epoch's committee.
 fn verify_timeout_evidence<T: NodeType>(
     tc: &TimeoutEvidence<T>,
     stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
     threshold: U256,
+    epoch_height: u64,
     upgrade_lock: &UpgradeLock<T>,
+    memberships: &EpochMembershipCoordinator<T>,
 ) -> anytrace::Result<()> {
     let view = tc.view_number();
     ensure!(
@@ -666,14 +681,14 @@ fn verify_timeout_evidence<T: NodeType>(
             );
             verify_signatures(cert, stake_table, threshold, upgrade_lock)
         },
-        TimeoutEvidence::V3(cert) => {
-            ensure!(
-                view == cert.data.view,
-                "timeout certificate view {view} != data view {}",
-                cert.data.view
-            );
-            verify_signatures(cert, stake_table, threshold, upgrade_lock)
-        },
+        TimeoutEvidence::V3(cert) => verify_timeout3(
+            cert,
+            stake_table,
+            threshold,
+            epoch_height,
+            upgrade_lock,
+            memberships,
+        ),
     }
 }
 
