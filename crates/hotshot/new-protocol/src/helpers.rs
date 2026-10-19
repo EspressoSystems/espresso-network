@@ -68,14 +68,34 @@ pub fn validated_state_cert<T: NodeType>(
 /// `NP_TEST_VERSION=0.7` runs the tests at
 /// [`TIMEOUT_EPOCH_VERSION`](versions::TIMEOUT_EPOCH_VERSION) instead, whose
 /// timeout votes and certificates sign their lock: the form the Lean
-/// specification covers. `just test-lean-check` and `just test-lean-diff`
-/// record a second pass that way.
+/// specification covers. `just test-lean-check` records the tests that way.
+///
+/// A test of behaviour one version has and another lacks pins its version
+/// ([`pin_test_version`]), and runs at it whatever `NP_TEST_VERSION` says.
 #[cfg(test)]
 pub fn test_version() -> versions::Version {
+    if let Some(version) = PINNED_TEST_VERSION.get() {
+        return version;
+    }
     match std::env::var("NP_TEST_VERSION").as_deref() {
         Ok("0.7") => versions::TIMEOUT_EPOCH_VERSION,
         _ => versions::NEW_PROTOCOL_VERSION,
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static PINNED_TEST_VERSION: std::cell::Cell<Option<versions::Version>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run the calling test at `version` ([`test_version`]), for the rest of it.
+///
+/// The pin is per thread, and a `#[tokio::test]` runs on its own: it holds for
+/// everything the test builds and runs, and for no other test.
+#[cfg(test)]
+pub fn pin_test_version(version: versions::Version) {
+    PINNED_TEST_VERSION.set(Some(version));
 }
 
 #[cfg(test)]
