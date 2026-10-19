@@ -11,7 +11,7 @@ use hotshot_types::{
     message::Proposal as SignedProposal,
     signature_key::BLSPubKey,
     simple_certificate::{LightClientStateUpdateCertificateV2, TimeoutEvidence},
-    simple_vote::{HasEpoch, QuorumData2, SimpleVote, TimeoutData2, Vote2Data},
+    simple_vote::{HasEpoch, LockView, QuorumData2, SimpleVote, TimeoutData2, Vote2Data},
     traits::{ValidatedState, block_contents::BlockHeader, signature_key::SignatureKey},
     utils::is_epoch_root,
     vote::HasViewNumber,
@@ -1690,7 +1690,9 @@ async fn test_timeout_proposal_chains_from_lock_not_timed_out_cert1() {
         harness
             .consensus
             .cert1_at(ViewNumber::new(2))
-            .is_some_and(|_| harness.consensus.locked_view() == Some(ViewNumber::new(1))),
+            .is_some_and(
+                |_| harness.consensus.lock_view().map(|lock| lock.view) == Some(ViewNumber::new(1))
+            ),
         "setup: cert1(2) must be held while the lock stays at view 1"
     );
     assert!(
@@ -2347,7 +2349,9 @@ async fn test_vote2_gated_on_vid_storage() {
     );
 
     consensus.apply(
-        ConsensusInput::Stored(StorageOutput::HighQc(view)),
+        ConsensusInput::Stored(StorageOutput::HighQc(LockView::of(
+            &test_data.views[0].cert1,
+        ))),
         &mut outbox,
     );
     assert_eq!(count_matching(&outbox, is_vote2), 1);
@@ -2530,7 +2534,7 @@ async fn test_advance_view_records_a_certificate_behind_the_view() {
         "setup: view 3's certificate moves the node past view 1"
     );
     assert_ne!(
-        harness.consensus.locked_view(),
+        harness.consensus.lock_view().map(|lock| lock.view),
         Some(ViewNumber::new(1)),
         "setup: the node is not locked on view 1"
     );
@@ -2541,7 +2545,7 @@ async fn test_advance_view_records_a_certificate_behind_the_view() {
         "the certificate for view 1 is recorded"
     );
     assert_eq!(
-        harness.consensus.locked_view(),
+        harness.consensus.lock_view().map(|lock| lock.view),
         Some(ViewNumber::new(1)),
         "and the node locks on it, holding the block"
     );
@@ -2585,7 +2589,7 @@ async fn test_no_fork_votes_from_one_node() {
         .await;
     harness.apply(test_data.views[0].cert1_input()).await;
     assert_eq!(
-        harness.consensus.locked_view(),
+        harness.consensus.lock_view().map(|lock| lock.view),
         Some(ViewNumber::new(1)),
         "view 1 arrived in full, so it should be locked"
     );
@@ -2603,7 +2607,7 @@ async fn test_no_fork_votes_from_one_node() {
     assert_eq!(
         (
             harness.consensus.current_view(),
-            harness.consensus.locked_view()
+            harness.consensus.lock_view().map(|lock| lock.view)
         ),
         (ViewNumber::new(4), Some(ViewNumber::new(1))),
         "past view 3, still locked at view 1"
@@ -2698,7 +2702,7 @@ async fn test_no_fork_votes_from_one_node_reversed() {
         .await;
     harness.apply(test_data.views[0].cert1_input()).await;
     assert_eq!(
-        harness.consensus.locked_view(),
+        harness.consensus.lock_view().map(|lock| lock.view),
         Some(ViewNumber::new(1)),
         "view 1 arrived in full, so it should be locked"
     );
@@ -2755,7 +2759,7 @@ async fn test_no_fork_votes_from_one_node_reversed() {
         "view 3 arrived in full, so the node should have voted phase-2 there"
     );
     assert_eq!(
-        harness.consensus.locked_view(),
+        harness.consensus.lock_view().map(|lock| lock.view),
         Some(ViewNumber::new(3)),
         "the phase-2 vote should have taken the lock at view 3"
     );
