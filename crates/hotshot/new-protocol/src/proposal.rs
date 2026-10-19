@@ -318,10 +318,12 @@ pub(crate) fn state_cert_matches_parent<T: NodeType>(
 /// proposal does not follow a boundary block and carries none.
 ///
 /// `justify_qc_epoch` is the justify QC's own, as returned by
-/// [`justify_qc_matches_parent`]. The certificate names the same view, epoch
-/// and block as that QC because both certify the same leaf, and the leaf
+/// [`justify_qc_matches_parent`]. The certificate names the same epoch and
+/// block as that QC because both certify the same leaf, and the leaf
 /// commitment covers neither, so agreement otherwise rests on an honest signer
-/// being in the quorum that formed it.
+/// being in the quorum that formed it. Its view is the QC's or later: the
+/// justify QC is the block's own `Certificate1`, at the block's view, and a
+/// re-vote commits the block at a view of its own.
 pub(crate) fn next_epoch_justify_qc_matches_parent<T: NodeType>(
     proposal: &Proposal<T>,
     epoch_height: u64,
@@ -342,7 +344,7 @@ pub(crate) fn next_epoch_justify_qc_matches_parent<T: NodeType>(
         return Err(MalformedProposal::NextEpochJustifyQcLeafCommit(view));
     }
     let parent_view = proposal.justify_qc.view_number();
-    if cert2.view_number() != parent_view
+    if cert2.view_number() < parent_view
         || cert2.data.epoch != justify_qc_epoch
         || cert2.data.block_number != parent_block
     {
@@ -354,6 +356,13 @@ pub(crate) fn next_epoch_justify_qc_matches_parent<T: NodeType>(
             parent_view,
             parent_epoch: justify_qc_epoch,
             parent_block,
+        });
+    }
+    // The block comes after the commit of its parent (rule 1).
+    if cert2.view_number() >= view {
+        return Err(MalformedProposal::NextEpochJustifyQcNotEarlier {
+            view,
+            claimed_view: cert2.view_number(),
         });
     }
     Ok(Some(cert2))
@@ -478,6 +487,18 @@ impl<T: NodeType> Validator<T> {
             let Some(tc_epoch) = tc.epoch() else {
                 return Err(ValidationError::MissingEpoch(view, "view_change_evidence"));
             };
+            let admitted = if tc.binds_epoch() {
+                tc_epoch == proposal.epoch
+            } else {
+                tc_epoch <= proposal.epoch
+            };
+            if !admitted {
+                return Err(ValidationError::ViewChangeEvidenceEpoch {
+                    view,
+                    evidence_epoch: tc_epoch,
+                    epoch: proposal.epoch,
+                });
+            }
             if let TimeoutEvidence::V3(cert) = tc {
                 cert.check_lock()
                     .map_err(ValidationError::InvalidViewChangeEvidence)?;
@@ -621,6 +642,16 @@ pub enum ValidationError {
     #[error("missing epoch number in view {0} ({1})")]
     MissingEpoch(ViewNumber, &'static str),
 
+    #[error(
+        "view change evidence of proposal at view {view} is of epoch {evidence_epoch}, which the \
+         proposal's epoch {epoch} does not admit"
+    )]
+    ViewChangeEvidenceEpoch {
+        view: ViewNumber,
+        evidence_epoch: EpochNumber,
+        epoch: EpochNumber,
+    },
+
     #[error("failed to get membership for epoch {0}: {1}")]
     NoMembershipForEpoch(EpochNumber, #[source] anytrace::Error),
 
@@ -751,9 +782,18 @@ pub enum MalformedProposal {
     NextEpochJustifyQcLeafCommit(ViewNumber),
 
     #[error(
+        "next_epoch_justify_qc of proposal at view {view} is at view {claimed_view}, which is not \
+         earlier"
+    )]
+    NextEpochJustifyQcNotEarlier {
+        view: ViewNumber,
+        claimed_view: ViewNumber,
+    },
+
+    #[error(
         "next_epoch_justify_qc of proposal at view {view} certifies view {claimed_view} of epoch \
-         {claimed_epoch} at block {claimed_block}, not view {parent_view} of epoch {parent_epoch} \
-         at block {parent_block}"
+         {claimed_epoch} at block {claimed_block}, not view {parent_view} or later of epoch \
+         {parent_epoch} at block {parent_block}"
     )]
     NextEpochJustifyQcParent {
         view: ViewNumber,

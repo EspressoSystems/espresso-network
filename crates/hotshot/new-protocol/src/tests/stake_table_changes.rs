@@ -246,12 +246,22 @@ async fn validator_leaves_at_epoch_boundary() {
         .build();
     runner.run().await.unwrap();
 
-    // All views 1..=35 decided, so view == block height; node 5's membership
-    // ends with epoch 2 at view 20.
+    // Node 5's membership ends with epoch 2. It acts for that epoch until the
+    // epoch's last block, block 20, is committed, which a re-vote may do at a
+    // later view than the block's own.
+    let committed_at = runner.node_storages()[5]
+        .cert2s()
+        .await
+        .into_iter()
+        .filter(|cert| cert.data.block_number == 20)
+        .map(|cert| cert.view_number)
+        .max()
+        .expect("node 5 holds the certificate that ended its epoch");
     for (view, action) in runner.node_storages()[5].action_log().await {
         assert!(
-            *view <= 20,
-            "node 5 recorded {action:?} for view {view} after its membership ended"
+            view <= committed_at,
+            "node 5 recorded {action:?} for view {view} after its epoch ended at view \
+             {committed_at}"
         );
     }
 

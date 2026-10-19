@@ -284,15 +284,14 @@ async fn conflicting_quorums_cannot_both_reach_threshold() {
         // View 2's block finally reaches the late node, after it has already
         // voted on the competing branch.
         if node == LATE {
-            // Still in view 2. Casting a phase-1 vote does not advance the view,
-            // and a received proposal's `view_change_evidence` is never applied
-            // as an input — it is read only when building a proposal. So a guard
-            // phrased as "vote phase-2 only while `current_view` is the vote's
-            // view" would not stop what follows.
+            // In view 6: the competing proposal's timeout certificate moved it
+            // there. A node still votes phase-2 at a view it has left, since a
+            // certificate that arrives late is owed its vote, so the view it is
+            // in does not stop what follows.
             assert_eq!(
                 harness.consensus.current_view(),
-                ViewNumber::new(2),
-                "the late node is still in view 2 after voting phase-1 at view 6"
+                ViewNumber::new(6),
+                "the late node is in view 6 after voting phase-1 there"
             );
             harness.apply(committed.block_reconstructed_input()).await;
         }

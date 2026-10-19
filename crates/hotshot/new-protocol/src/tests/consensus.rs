@@ -20,8 +20,8 @@ use hotshot_types::{
 use super::common::{
     coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
     utils::{
-        TestData, TestView, build_cert1, build_state_cert_for_test, build_timeout_cert3,
-        mock_membership,
+        TestData, TestView, build_cert1, build_state_cert_for_test, build_timeout_cert2_signed_by,
+        build_timeout_cert3, mock_membership,
     },
 };
 use crate::{
@@ -86,7 +86,7 @@ async fn test_timeout_vote_names_the_local_epoch() {
         .outputs()
         .iter()
         .filter_map(|o| match o {
-            ConsensusOutput::SendTimeoutVote(vote, _) => Some(HasEpoch::epoch(vote)),
+            ConsensusOutput::SendTimeoutVote(vote, ..) => Some(HasEpoch::epoch(vote)),
             _ => None,
         })
         .collect();
@@ -109,7 +109,7 @@ async fn test_timeout_vote_binds_the_local_epoch_when_upgraded() {
         .outputs()
         .iter()
         .filter_map(|o| match o {
-            ConsensusOutput::SendTimeoutVote(vote, _) => Some(vote.clone()),
+            ConsensusOutput::SendTimeoutVote(vote, ..) => Some(vote.clone()),
             _ => None,
         })
         .collect();
@@ -320,7 +320,16 @@ async fn test_unbound_timeout_certificate_is_refused_when_upgraded() {
     let mut harness =
         ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
     let test_data = TestData::new(2).await;
-    let cert = test_data.views[1].timeout_cert_input();
+    let view = &test_data.views[1];
+    let membership = harness
+        .membership_coordinator
+        .membership_for_epoch(Some(view.epoch_number))
+        .expect("the epoch resolves");
+    let signers: Vec<u64> = (0..10).collect();
+    let cert = ConsensusInput::TimeoutCertificate(ValidCert::new(
+        build_timeout_cert2_signed_by(view.view_number, view.epoch_number, &membership, &signers),
+        view.epoch_number,
+    ));
     assert!(
         matches!(&cert, ConsensusInput::TimeoutCertificate(c) if !c.cert().binds_epoch()),
         "the test certificate must be the unbound form"
@@ -670,7 +679,8 @@ async fn test_vote1_genesis_parent() {
 }
 
 /// Vote2 requires Certificate1 + BlockReconstructed + Proposal.
-/// Without Certificate1, no Vote2 is sent.
+/// Without Certificate1, no Vote2 is sent. View 2's proposal carries view 1's
+/// certificate, so only view 2 lacks one.
 #[tokio::test]
 async fn test_vote2_missing_cert1() {
     let mut harness = ConsensusHarness::new(0).await;
@@ -692,7 +702,7 @@ async fn test_vote2_missing_cert1() {
         .await;
 
     assert!(
-        !any(harness.outputs(), is_vote2),
+        !any(harness.outputs(), |o| is_vote2_for_view(o, 2)),
         "Vote2 should not be sent without Certificate1"
     );
 }
@@ -1108,7 +1118,7 @@ async fn test_no_duplicate_vote2() {
     harness.apply(test_data.views[1].cert2_input()).await;
 
     assert_eq!(
-        count_matching(harness.outputs(), is_vote2),
+        count_matching(harness.outputs(), |o| is_vote2_for_view(o, 2)),
         1,
         "Should only send one Vote2 per view"
     );
@@ -1263,7 +1273,7 @@ async fn test_vote2_missing_block_reconstructed() {
     harness.apply(test_data.views[1].cert1_input()).await;
 
     assert!(
-        !any(harness.outputs(), is_vote2),
+        !any(harness.outputs(), |o| is_vote2_for_view(o, 2)),
         "Vote2 should not fire without BlockReconstructed"
     );
 }
@@ -1963,11 +1973,12 @@ async fn test_vote_after_timeout_cert() {
         "Timeout should emit timeout vote"
     );
 
-    // Receive timeout cert for view 2 → view advances to 3
+    // Receive timeout cert for view 2 → view advances to 3. This node voted for
+    // view 2, which the nodes still there count, so it does not send it on.
     harness.apply(test_data.views[1].timeout_cert_input()).await;
     assert!(
-        any(harness.outputs(), is_send_timeout_cert),
-        "Timeout certificate should be forwarded"
+        !any(harness.outputs(), is_send_timeout_cert),
+        "a timeout certificate for a view this node voted in is not sent on"
     );
 
     let vote1_before = count_matching(harness.outputs(), is_vote1);
@@ -1981,6 +1992,37 @@ async fn test_vote_after_timeout_cert() {
     assert!(
         count_matching(harness.outputs(), is_vote1) > vote1_before,
         "Vote1 should fire for proposal after timeout certificate"
+    );
+}
+
+/// A timeout certificate that takes a node out of a view it has not voted in
+/// is sent on to every node: the nodes still in the view lack its vote, and may
+/// be one short of a certificate of their own.
+#[tokio::test]
+async fn test_timeout_cert_sent_on_without_own_vote() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    harness
+        .apply_pair(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+    harness
+        .apply_pair(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+
+    harness.apply(test_data.views[1].timeout_cert_input()).await;
+    assert!(
+        !any(harness.outputs(), is_send_timeout_vote),
+        "setup: the node did not time view 2 out"
+    );
+    assert!(
+        any(harness.outputs(), is_send_timeout_cert),
+        "a timeout certificate that took the node out of view 2 without its vote is sent on"
     );
 }
 
@@ -2569,6 +2611,23 @@ fn reparented_proposal(
     )
     .expect("sign re-parented proposal");
     SignedProposal::new(proposal, signature)
+}
+
+/// Under the certificate rule a `Cert1` alone moves the node to the view after
+/// it, without the block or its payload; it locks on it only once it holds both.
+#[tokio::test]
+async fn test_cert1_alone_is_grounds_for_the_next_view() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    harness.apply(view.cert1_input()).await;
+    assert_eq!(harness.consensus.current_view(), view.view_number + 1);
+    assert!(
+        harness.consensus.lock_view().is_none(),
+        "no lock without the block and its payload"
+    );
 }
 
 /// A `Cert1` that advances nothing is still recorded, and locked on.

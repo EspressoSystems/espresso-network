@@ -29,7 +29,7 @@ use tracing::{error, warn};
 
 use crate::{
     helpers::ViewEpoch,
-    message::{EpochChangeMessage, Unchecked, Validated},
+    message::{EpochChangeMessage, ReVoteMessage, Unchecked, Validated},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -251,6 +251,63 @@ impl<T: NodeType> Verifiable<T> for TimeoutCertificate3<T> {
             memberships,
         )?;
         Ok(self)
+    }
+}
+
+impl<T: NodeType> Verifiable<T> for ReVoteMessage<T, Unchecked> {
+    type Key = ViewNumber;
+    type Output = ReVoteMessage<T, Validated>;
+
+    fn key(&self) -> Option<ViewNumber> {
+        Some(self.view_number())
+    }
+
+    /// Its own epoch, and the lock's of its timeout certificate if that lock
+    /// is recent: the lock certificate is verified against that epoch's
+    /// committee.
+    fn epochs(&self) -> impl Iterator<Item = EpochNumber> {
+        let lock = self
+            .revote
+            .timeout
+            .as_ref()
+            .and_then(|tc| tc.timeout_lock().verified_in());
+        std::iter::once(self.revote.epoch).chain(lock)
+    }
+
+    fn check(
+        self,
+        stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
+        threshold: U256,
+        epoch_height: u64,
+        upgrade_lock: &UpgradeLock<T>,
+        memberships: &EpochMembershipCoordinator<T>,
+    ) -> Result<Self::Output> {
+        let revote = &self.revote;
+        ensure! {
+            upgrade_lock.certificate_rule(revote.view),
+            "re-vote request for view {} before the certificate rule", revote.view
+        }
+        revote.well_formed(epoch_height).wrap()?;
+        let leader = memberships
+            .membership_for_epoch(Some(revote.epoch))
+            .wrap()?
+            .leader(revote.view)?;
+        ensure! {
+            self.signed_by(&leader),
+            "re-vote request not signed by its leader"
+        }
+        verify_signatures(&revote.cert1, stake_table, threshold, upgrade_lock)?;
+        if let Some(timeout) = &revote.timeout {
+            verify_timeout3(
+                timeout,
+                stake_table,
+                threshold,
+                epoch_height,
+                upgrade_lock,
+                memberships,
+            )?;
+        }
+        Ok(self.into_validated())
     }
 }
 
@@ -758,6 +815,7 @@ pub struct CertVerifiers<T: NodeType> {
     pub timeout3: CertBySenderVerifier<T, TimeoutCertificate3<T>>,
     pub advance: CertBySenderVerifier<T, Certificate1<T>>,
     pub epoch_change: CertVerifier<T, EpochChangeMessage<T, Unchecked>>,
+    pub revote: CertVerifier<T, ReVoteMessage<T, Unchecked>>,
 }
 
 impl<T: NodeType> CertVerifiers<T> {
@@ -780,7 +838,8 @@ impl<T: NodeType> CertVerifiers<T> {
                 upgrade_lock.clone(),
                 Completion::PerViewAndEpoch,
             ),
-            epoch_change: CertVerifier::new(membership, upgrade_lock),
+            epoch_change: CertVerifier::new(membership.clone(), upgrade_lock.clone()),
+            revote: CertVerifier::new(membership, upgrade_lock),
         }
     }
 
@@ -806,6 +865,9 @@ impl<T: NodeType> CertVerifiers<T> {
         for epoch in self.epoch_change.retry_pending() {
             request(epoch);
         }
+        for epoch in self.revote.retry_pending() {
+            request(epoch);
+        }
     }
 
     pub fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
@@ -815,6 +877,7 @@ impl<T: NodeType> CertVerifiers<T> {
         self.timeout3.gc(view);
         self.advance.gc(view);
         self.epoch_change.gc(epoch);
+        self.revote.gc(view);
     }
 
     pub fn num_invalid_certs(&self) -> u64 {
@@ -825,6 +888,7 @@ impl<T: NodeType> CertVerifiers<T> {
             .saturating_add(self.timeout3.num_invalid_certs())
             .saturating_add(self.advance.num_invalid_certs())
             .saturating_add(self.epoch_change.num_invalid_certs())
+            .saturating_add(self.revote.num_invalid_certs())
     }
 }
 

@@ -429,13 +429,35 @@ async fn next_epoch_justify_qc_certifying_another_view_epoch_or_block_is_rejecte
     let (proposal, justify_qc_epoch) = first_of_epoch(&proposals);
     let parent_block = proposal.block_header.block_number - 1;
 
+    // A commit earlier than the block is no commit of it.
     let mut wrong_view = proposal.clone();
     let cert2 = wrong_view.next_epoch_justify_qc.as_mut().expect("a cert2");
-    cert2.view_number += 1;
+    cert2.view_number = proposal.justify_qc.view_number() - 1;
     assert!(matches!(
         rejects_next_epoch_justify_qc(&wrong_view, justify_qc_epoch),
         MalformedProposal::NextEpochJustifyQcParent { claimed_view, parent_view, .. }
-            if claimed_view == parent_view + 1
+            if claimed_view + 1 == parent_view
+    ));
+
+    // A later one is: a re-vote commits the block again at a view of its own,
+    // and the first block of the next epoch still names the block's own QC.
+    let mut revoted = proposal.clone();
+    revoted.view_number += 1;
+    let cert2 = revoted.next_epoch_justify_qc.as_mut().expect("a cert2");
+    cert2.view_number += 1;
+    assert!(
+        next_epoch_justify_qc_matches_parent(&revoted, EPOCH_HEIGHT, justify_qc_epoch).is_ok(),
+        "a commit at a later view than the block is accepted"
+    );
+
+    // But not one at the proposal's own view or later: the first block comes
+    // after the commit of its parent.
+    let mut too_late = proposal.clone();
+    let cert2 = too_late.next_epoch_justify_qc.as_mut().expect("a cert2");
+    cert2.view_number = proposal.view_number;
+    assert!(matches!(
+        rejects_next_epoch_justify_qc(&too_late, justify_qc_epoch),
+        MalformedProposal::NextEpochJustifyQcNotEarlier { .. }
     ));
 
     let mut wrong_epoch = proposal.clone();
@@ -663,6 +685,54 @@ async fn evidence_with_a_lock_of_a_later_epoch_is_rejected_before_lookup() {
         matches!(result, Err(ValidationError::InvalidViewChangeEvidence(_))),
         "expected InvalidViewChangeEvidence, got {result:?}"
     );
+}
+
+/// A timeout certificate that binds another epoch than its proposal's, later or
+/// earlier, is rejected before its committee is looked up, for the same reason.
+#[tokio::test]
+async fn evidence_of_another_epoch_than_the_proposal_is_rejected_before_lookup() {
+    let data = TestData::new_with_epoch_height(3, EPOCH_HEIGHT).await;
+    let [.., previous, view] = data.views.as_slice() else {
+        panic!("three views");
+    };
+    let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let (membership, _storage, _client) =
+        mock_membership_with_num_nodes(10, EPOCH_HEIGHT, public_key);
+    let committee = membership
+        .membership_for_epoch(Some(view.epoch_number))
+        .expect("the proposal's committee");
+    let later = view.epoch_number + 1000;
+    let earlier = EpochNumber::new(view.epoch_number.saturating_sub(1));
+    for tc_epoch in [later, earlier] {
+        let evidence = TimeoutEvidence::V3(build_timeout_cert3_with_lock(
+            previous.view_number,
+            tc_epoch,
+            None,
+            &committee,
+        ));
+        let mut proposal = view.proposal.clone();
+        proposal.data.view_change_evidence = Some(evidence);
+        let leaf: Leaf2<TestTypes> = proposal.data.clone().into();
+        proposal.signature = BLSPubKey::sign(&view.leader_private_key, leaf.commit().as_ref())
+            .expect("sign the proposal");
+
+        let mut validator = ProposalValidator::new(
+            membership.clone(),
+            EPOCH_HEIGHT,
+            test_timeout_epoch_lock(),
+            None,
+        );
+        validator.validate(ProposalMessage::unchecked(proposal));
+        let result = tokio::time::timeout(Duration::from_secs(10), validator.next())
+            .await
+            .expect("validation does not wait on the certificate's epoch")
+            .expect("a validation result")
+            .map(|_| ());
+        assert!(
+            matches!(result, Err(ValidationError::ViewChangeEvidenceEpoch { .. })),
+            "certificate of epoch {tc_epoch}: expected ViewChangeEvidenceEpoch, got {result:?}"
+        );
+    }
 }
 
 /// Validate `proposal` with a validator that accepts `genesis_qc` at the genesis
