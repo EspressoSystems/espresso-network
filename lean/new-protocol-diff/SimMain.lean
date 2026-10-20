@@ -47,10 +47,12 @@ def runAll (dir : Option System.FilePath) (runs : List (String × Nat × Params)
   let mut failed := 0
   let mut written := 0
   -- Each run in a task of its own, so the runs use every core.
+  -- An incoherent setting is not run at all.
   let tasks := runs.map fun (name, seed, p) =>
-    (name, seed, p, Task.spawn fun _ => let s := run p; (s, checkState p s))
+    (name, seed, p, if p.coherent then some (Task.spawn fun _ => let s := run p; (s, checkState p s))
+      else none)
   for (name, seed, p, task) in tasks do
-    unless p.coherent do
+    let some task := task | do
       failed := failed + 1
       IO.println s!"incoherent setting: {describe name p}"
       continue

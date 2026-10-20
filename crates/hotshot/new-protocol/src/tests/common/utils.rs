@@ -21,7 +21,7 @@ use hotshot_types::{
     data::{
         EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse, VidDisperse2,
         VidDisperseShare2, ViewNumber, vid_commitment,
-        vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
+        vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece, vid_total_weight},
     },
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
@@ -1040,7 +1040,28 @@ pub struct MockBlock {
 }
 
 impl MockBlock {
+    /// The block for the ten-node committee of `mock_membership`.
     pub fn new() -> Self {
+        Self::with_total_weight(10)
+    }
+
+    /// The block whose payload commitment the dispersal over `epoch`'s
+    /// committee computes, as the node's own VID does. That of
+    /// [`Self::new`] if the committee is not known.
+    pub fn for_epoch(
+        membership: &EpochMembershipCoordinator<TestTypes>,
+        epoch: EpochNumber,
+    ) -> Self {
+        match membership.stake_table_for_epoch(Some(epoch)) {
+            Ok(committee) => Self::with_total_weight(vid_total_weight::<TestTypes, _>(
+                committee.stake_table(),
+                Some(epoch),
+            )),
+            Err(_) => Self::new(),
+        }
+    }
+
+    fn with_total_weight(total_weight: usize) -> Self {
         let block = TestBlockPayload::genesis();
         let metadata = TestMetadata {
             num_transactions: 0,
@@ -1048,7 +1069,7 @@ impl MockBlock {
         let payload_commitment = vid_commitment(
             &block.encode(),
             &metadata.encode(),
-            10,
+            total_weight,
             crate::helpers::test_version(),
         );
         let builder_commitment =
@@ -1598,7 +1619,7 @@ impl ConsensusHarness {
                 );
             },
             ConsensusOutput::RequestBlockAndHeader(req) => {
-                let mock_block = MockBlock::new();
+                let mock_block = MockBlock::for_epoch(&self.membership_coordinator, req.epoch);
                 let parent_leaf = req.parent_proposal.clone().into();
                 let header = TestBlockHeader::new(
                     &parent_leaf,

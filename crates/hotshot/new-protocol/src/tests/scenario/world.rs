@@ -97,8 +97,8 @@ impl Built {
 /// with the same committees that names the same reuses it.
 #[derive(Default)]
 pub struct Cache {
-    /// The node count and committees the rest was built for.
-    committees: Option<(u64, Committees)>,
+    /// The node count, epoch height and committees the rest was built for.
+    committees: Option<(u64, u64, Committees)>,
     /// By payload (`None` for the harness's own block), view and epoch.
     vids: BTreeMap<(Option<u64>, u64, u64), VidDisperse2<TestTypes>>,
     /// By the block's leaf commitment, epoch, height and view.
@@ -132,6 +132,8 @@ pub struct World {
     own: std::collections::HashSet<u64>,
     /// The `Certificate2`s the node was given, by the block they are over.
     cert2s: HashMap<u64, Vec<Cert>>,
+    /// The epochs whose committee an epoch root registered.
+    registered_epochs: std::collections::HashSet<u64>,
 }
 
 impl World {
@@ -142,7 +144,7 @@ impl World {
         blocks: &[format::Block],
         mut cache: Cache,
     ) -> Self {
-        let setup = Some((nodes, committees.clone()));
+        let setup = Some((nodes, epoch_height, committees.clone()));
         if cache.committees != setup {
             cache = Cache {
                 committees: setup,
@@ -176,6 +178,7 @@ impl World {
             built: HashMap::new(),
             own: std::collections::HashSet::new(),
             cert2s: HashMap::new(),
+            registered_epochs: std::collections::HashSet::new(),
         }
     }
 
@@ -203,6 +206,18 @@ impl World {
             .expect("the leader is a test key")
             .clone();
         (leader, key)
+    }
+
+    /// The leader of block `id`, in the epoch [`Self::block`] signs it in:
+    /// the one its parent's height puts it in. `None` if that epoch's
+    /// committee is not known.
+    pub fn block_leader(&self, id: u64) -> Option<BLSPubKey> {
+        let def = self.defs.get(&id)?;
+        self.membership
+            .membership_for_epoch(Some(EpochNumber::new(self.epoch_of(def))))
+            .ok()?
+            .leader(ViewNumber::new(def.view))
+            .ok()
     }
 
     /// The node a key belongs to, numbered from 1.
@@ -252,11 +267,16 @@ impl World {
         {
             return false;
         }
-        let mock = MockBlock::new();
         let epoch = proposal.data.epoch;
+        let mock = MockBlock::for_epoch(&self.membership, epoch);
         let vid = self
             .disperse(None, &mock.block, &mock.metadata, def.view, epoch)
             .await;
+        assert_eq!(
+            VidCommitment::V2(vid.payload_commitment),
+            BlockHeader::<TestTypes>::payload_commitment(&proposal.data.block_header),
+            "the node's own block is dispersed as its header commits to"
+        );
         let leader = self.leader(*epoch, def.view).0;
         let leaf = Leaf2::from(proposal.data.clone());
         if is_epoch_root(def.height, self.epoch_height) {
@@ -613,16 +633,23 @@ impl World {
     /// Register the epochs an epoch root decides, as the harness does once the
     /// root is decided, so the committee that signs the later epochs' certificates
     /// is known here too.
+    ///
+    /// Registered when a root is built, not when it is decided, so only the
+    /// first root built at a height registers: a faulty leader can build
+    /// another block there.
     async fn register_epoch_root(&mut self, header: &TestBlockHeader) {
         let height = <TestBlockHeader as BlockHeader<TestTypes>>::block_number(header);
+        let target = epoch_from_block_number(height, self.epoch_height) + 2;
+        if !self.registered_epochs.insert(target) {
+            return;
+        }
         self.membership
             .add_epoch_root(header.clone())
             .await
             .expect("an epoch root registers");
-        let target = EpochNumber::new(epoch_from_block_number(height, self.epoch_height) + 2);
         self.membership
             .membership()
-            .add_drb_result(target, TEST_DRB_RESULT);
+            .add_drb_result(EpochNumber::new(target), TEST_DRB_RESULT);
     }
 }
 

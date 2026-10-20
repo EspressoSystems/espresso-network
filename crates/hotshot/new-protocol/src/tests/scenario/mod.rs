@@ -159,14 +159,18 @@ async fn replay(path: &Path, cache: Cache) -> Cache {
             .collect();
         seen_outputs = harness.outputs().len();
         for p in own {
+            let view = p.data.view_number;
             if let Some(id) = scenario
                 .blocks
                 .iter()
-                .find(|b| b.view == *p.data.view_number && b.epoch == *p.data.epoch)
-                .filter(|b| world.leader(b.epoch, b.view).0 == my_key)
+                .find(|b| b.view == *view && b.epoch == *p.data.epoch)
+                .filter(|b| world.block_leader(b.id) == Some(my_key))
                 .map(|b| b.id)
+                && !world.adopt_own(id, p).await
             {
-                world.adopt_own(id, p).await;
+                // The node built on another parent than the simulation's block:
+                // the simulated block, under this node's key, stands for it.
+                tracing::debug!(%view, "own proposal not adopted");
             }
         }
         if let Some(inputs) = consensus_input(&mut world, &my_key, &step.input).await {

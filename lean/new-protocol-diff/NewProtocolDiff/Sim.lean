@@ -304,8 +304,8 @@ structure State where
   blocks : List Block := []
   /-- The identities of the blocks that are not valid. -/
   invalid : List Nat := []
-  /-- The nodes each block was sent to, by its identity. -/
-  sentTo : List (Nat × List PubKey) := []
+  /-- Who sent each block, and the nodes it was sent to, by its identity. -/
+  sentTo : List (Nat × PubKey × List PubKey) := []
   vote1s : List ((Vote1Data × ViewNumber) × List PubKey) := []
   vote2s : List ((Vote2Data × ViewNumber) × List PubKey) := []
   timeouts : List ((ViewNumber × EpochNumber) × List (PubKey × Cert1)) := []
@@ -454,18 +454,19 @@ sent to, within `Δ` of GST if that is later, without a share: what they would f
 (`Synchrony.blockSpread`).
 -/
 def spreadBlock (now : Nat) (b : Block) : SimM Unit := do
-  let sent := ((← get).sentTo.find? (·.1 == b.identity.toNat)).map (·.2) |>.getD []
-  let sender := (P.leader b.epoch b.viewNumber).getD ⟨1⟩
+  -- A certified block was sent by its proposer to the nodes that voted on it.
+  let some (_, sender, sent) := (← get).sentTo.find? (·.1 == b.identity.toNat) | return
   for k in P.running.filter (!sent.contains ·) do
     push (max now P.gst + 1 + (← rand P.delta)) k (.proposal sender b none)
-  modify fun s => { s with sentTo := (b.identity.toNat, P.running) :: s.sentTo }
+  modify fun s =>
+    { s with sentTo := (b.identity.toNat, sender, P.running) :: s.sentTo.filter (·.1 != b.identity.toNat) }
 
-/-- Note that the block `b` was sent to node `k`. -/
-def sentBlockTo (b : Block) (k : PubKey) : SimM Unit :=
+/-- Note that `sender` sent the block `b` to node `k`. -/
+def sentBlockTo (sender : PubKey) (b : Block) (k : PubKey) : SimM Unit :=
   modify fun s =>
     let id := b.identity.toNat
-    let ks := ((s.sentTo.find? (·.1 == id)).map (·.2)).getD []
-    { s with sentTo := (id, k :: ks) :: s.sentTo.filter (·.1 != id) }
+    let ks := ((s.sentTo.find? (·.1 == id)).map (·.2.2)).getD []
+    { s with sentTo := (id, sender, k :: ks) :: s.sentTo.filter (·.1 != id) }
 
 /-- What the network does with an output of node `k` at `now`. -/
 def handle (now : Nat) (k : PubKey) : Output → SimM Unit
@@ -481,7 +482,7 @@ def handle (now : Nat) (k : PubKey) : Output → SimM Unit
       if bh == some .selective && (← rand 2) == 0 then continue
       let t ← if bh == some .lateLeader then (now + 1 + ·) <$> rand P.tau else arrival P now k'
       let b' := if bh == some .equivocate && members.idxOf k' ≥ members.length / 2 then other else b
-      sentBlockTo b' k'
+      sentBlockTo k b' k'
       if P.isMember b.epoch k' then
         push t k' (.proposal k b' (some ⟨b'.viewNumber, b'.payloadCommit⟩))
         if valid then push (t + 1) k' (.blockValidated b'.viewNumber (blockHash b'))
