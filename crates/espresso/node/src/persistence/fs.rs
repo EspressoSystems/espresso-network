@@ -798,11 +798,17 @@ impl SequencerPersistence for Persistence {
         // Written before the leaves and under the same lock as the decide replay, so the replay
         // can never find the newest leaf on disk without its cert2. Keyed by that leaf's view,
         // which a re-vote's cert2 is later than.
+        let newest = leaf_chain
+            .iter()
+            .map(|(info, _)| info.leaf.view_number())
+            .max();
         if let Some(cert2) = cert2
-            && let Some(newest) = leaf_chain
-                .iter()
-                .map(|(info, _)| info.leaf.view_number())
-                .max()
+            && newest.is_none()
+        {
+            tracing::warn!(view = %cert2.view_number, "cert2 without a decided leaf; not stored");
+        }
+        if let Some(cert2) = cert2
+            && let Some(newest) = newest
         {
             inner.append_cert2(newest, cert2)?;
         }

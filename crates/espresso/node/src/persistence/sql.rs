@@ -931,6 +931,11 @@ impl SequencerPersistence for Persistence {
             .iter()
             .map(|(info, _)| info.leaf.view_number())
             .max();
+        if let Some(cert2) = cert2
+            && newest.is_none()
+        {
+            tracing::warn!(view = %cert2.view_number, "cert2 without a decided leaf; not stored");
+        }
         let cert2_row = cert2
             .zip(newest)
             .map(|(cert2, newest)| {

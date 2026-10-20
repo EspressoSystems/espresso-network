@@ -239,7 +239,11 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     pub fn append_boundary_qc2(&mut self, qc: Certificate1<T>) {
         let view = qc.view_number();
         let storage = self.storage.clone();
-        let handle = self.tasks.spawn(async move {
+        // Not registered with the decided-view GC, which would abort a write
+        // still retrying once a decide passes the block: nothing else carries
+        // the certificate by then. A late write is harmless, since only a later
+        // certificate replaces the stored one.
+        self.tasks.spawn(async move {
             loop {
                 match storage.append_boundary_qc2(qc.clone()).await {
                     Ok(()) => return None,
@@ -250,7 +254,6 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 }
             }
         });
-        self.handles.entry(view).or_default().push(handle);
     }
 
     /// Persist the locked QC; on success emits [`StorageOutput::HighQc`], which
