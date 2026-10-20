@@ -187,7 +187,12 @@ public def main (args : List String) : IO UInt32 := do
   -- Each trace in a task of its own, so the checks use every core.
   let tasks ← traces.mapM fun path => IO.asTask (checkOne δ coverage path)
   for (path, task) in traces.zip tasks do
-    match ← IO.ofExcept task.get with
+    -- A trace that cannot be read, gone since it was listed for one, is reported
+    -- with the others rather than ending the run.
+    let finding := match task.get with
+      | .ok finding => finding
+      | .error e => .unreadable (toString e)
+    match finding with
     | .unreadable e =>
       failed := true
       IO.println s!"unreadable: {path}: {e}"

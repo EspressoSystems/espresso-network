@@ -91,7 +91,18 @@ const UNSIGNED_LOCKS: &str = "# timeouts sign no lock";
 /// A failing test has left the path it was written for, often because it was
 /// written for another version, so its run says nothing about whether the node
 /// conforms. A checker leaves such a run out rather than report its breaks.
+///
+/// The note is best-effort: it is written when the recorder drops while its
+/// thread panics. A test that drops the recorder before it fails, fails by
+/// returning an error, or panics on another thread leaves no note.
 const TEST_FAILED: &str = "# test failed";
+
+/// The note saying no certificate for the anchor was named, so the locks that
+/// stand for it are written as `null`.
+///
+/// The model's lock is a certificate, so a checker cannot read such a trace.
+/// The note says why, rather than leaving only the decoding error.
+const ANCHOR_UNKNOWN: &str = "# anchor lock unknown: no certificate for the anchor was named";
 
 /// Distinguishes recorders sharing a label.
 ///
@@ -581,20 +592,36 @@ impl Drop for Recorder {
         }
         let mut text = self.lines.join("\n");
         text.push('\n');
-        let text = match (&self.anchor_lock, &self.fallback_anchor) {
-            (Some(anchor), _) => text.replace(ANCHOR_LOCK, anchor),
-            (None, Some(fallback)) if text.contains(ANCHOR_LOCK) => text
-                .replacen(
-                    "# trace {",
-                    &format!("# trace {{\"anchorCert\":{fallback},"),
-                    1,
-                )
-                .replace(ANCHOR_LOCK, fallback),
-            (None, _) => text.replace(ANCHOR_LOCK, "null"),
-        };
+        let text = fill_anchor_lock(
+            &text,
+            self.anchor_lock.as_deref(),
+            self.fallback_anchor.as_deref(),
+        );
         if let Err(err) = std::fs::write(path, text) {
             eprintln!("trace: cannot write {}: {err}", path.display());
         }
+    }
+}
+
+/// `text` with the placeholder for the anchor's certificate filled in.
+///
+/// With no certificate named for the anchor, `fallback` is used and written into
+/// the identity line, so the checker holds it too. With neither, the locks are
+/// written as `null` and the trace says why.
+fn fill_anchor_lock(text: &str, anchor: Option<&str>, fallback: Option<&str>) -> String {
+    if !text.contains(ANCHOR_LOCK) {
+        return text.to_string();
+    }
+    match (anchor, fallback) {
+        (Some(anchor), _) => text.replace(ANCHOR_LOCK, anchor),
+        (None, Some(fallback)) => text
+            .replacen(
+                "# trace {",
+                &format!("# trace {{\"anchorCert\":{fallback},"),
+                1,
+            )
+            .replace(ANCHOR_LOCK, fallback),
+        (None, None) => format!("{}{ANCHOR_UNKNOWN}\n", text.replace(ANCHOR_LOCK, "null")),
     }
 }
 
@@ -1134,4 +1161,46 @@ fn quoted(text: &str) -> String {
 
 fn tagged(tag: &str, body: String) -> String {
     obj(&[(tag, body)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ANCHOR_LOCK, ANCHOR_UNKNOWN, fill_anchor_lock};
+
+    /// A trace whose identity line names no anchor, and whose step has a lock
+    /// standing for the anchor's certificate.
+    fn trace() -> String {
+        format!("# trace {{\"node\":1}}\n{{\"lock\":{ANCHOR_LOCK}}}\n")
+    }
+
+    #[test]
+    fn the_anchor_named_fills_the_lock() {
+        assert_eq!(
+            fill_anchor_lock(&trace(), Some("\"A\""), Some("\"F\"")),
+            "# trace {\"node\":1}\n{\"lock\":\"A\"}\n"
+        );
+    }
+
+    #[test]
+    fn the_fallback_fills_the_lock_and_the_identity_line() {
+        assert_eq!(
+            fill_anchor_lock(&trace(), None, Some("\"F\"")),
+            "# trace {\"anchorCert\":\"F\",\"node\":1}\n{\"lock\":\"F\"}\n"
+        );
+    }
+
+    #[test]
+    fn with_neither_the_lock_is_null_and_the_trace_says_why() {
+        assert_eq!(
+            fill_anchor_lock(&trace(), None, None),
+            format!("# trace {{\"node\":1}}\n{{\"lock\":null}}\n{ANCHOR_UNKNOWN}\n")
+        );
+    }
+
+    #[test]
+    fn a_trace_without_the_placeholder_is_unchanged() {
+        let text = "# trace {\"node\":1}\n{\"lock\":\"L\"}\n";
+        assert_eq!(fill_anchor_lock(text, None, Some("\"F\"")), text);
+        assert_eq!(fill_anchor_lock(text, None, None), text);
+    }
 }
