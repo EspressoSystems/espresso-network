@@ -19,7 +19,10 @@ use hotshot_types::{
 
 use super::common::{
     coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
-    utils::{TestData, TestView, build_state_cert_for_test, build_timeout_cert3},
+    utils::{
+        TestData, TestView, build_cert1, build_state_cert_for_test, build_timeout_cert3,
+        mock_membership,
+    },
 };
 use crate::{
     cert_verifier::ValidCert,
@@ -719,6 +722,64 @@ async fn test_vote2_with_cert1() {
     assert!(
         any(harness.outputs(), is_vote2),
         "Vote2 should be sent when cert1 is present"
+    );
+}
+
+/// Certificates of two epochs at one view, both held by the time the block is
+/// reconstructed, each move the lock, so that it ends on the later one, but the
+/// node votes2 at the view once.
+#[tokio::test]
+async fn test_two_epochs_at_one_view_draw_one_vote2() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let at = &test_data.views[1];
+    let parent = &test_data.views[0];
+    harness
+        .apply_pair(parent.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(parent.block_reconstructed_input()).await;
+    harness
+        .apply_pair(at.proposal_input_consensus(&node_key))
+        .await;
+
+    // The same block, proposed again as the next epoch's at the same view.
+    let mut later = at.proposal.data.clone();
+    later.epoch = at.epoch_number + 1;
+    harness.consensus.seed_proposals([later.clone()]);
+    let membership = mock_membership()
+        .membership_for_epoch(Some(later.epoch))
+        .expect("the next epoch resolves");
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let later_cert1 = build_cert1(
+        proposal_commitment(&later),
+        later.epoch,
+        BlockHeader::<TestTypes>::block_number(&later.block_header),
+        &membership,
+        at.view_number,
+        &public_key,
+        &private_key,
+    );
+
+    harness.apply(at.cert1_input()).await;
+    harness
+        .apply(ConsensusInput::Certificate1(ValidCert::new(
+            later_cert1.clone(),
+            later.epoch,
+        )))
+        .await;
+
+    harness.apply(at.block_reconstructed_input()).await;
+
+    assert_eq!(
+        harness.consensus.lock_view(),
+        Some(LockView::of(&later_cert1)),
+        "the lock ends on the later epoch's certificate"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), |o| is_vote2_for_view(o, *at.view_number)),
+        1,
+        "one vote2 at the view"
     );
 }
 

@@ -2261,7 +2261,8 @@ impl<T: NodeType> Consensus<T> {
             .insert(ViewEpoch(view, proposal_epoch), message);
     }
 
-    /// Decide on each `Certificate2` at `view`, earliest epoch first.
+    /// Decide on the `Certificate2`s at `view`, earliest epoch first, until one
+    /// decides.
     #[instrument(level = "debug", skip_all)]
     fn maybe_decide(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
         let epochs: Vec<EpochNumber> = self
@@ -2753,7 +2754,7 @@ impl<T: NodeType> Consensus<T> {
         view: ViewNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
-        if view == ViewNumber::genesis() || self.voted_2_at(view) {
+        if view == ViewNumber::genesis() {
             return;
         }
         let epochs: Vec<EpochNumber> = self
@@ -2778,6 +2779,13 @@ impl<T: NodeType> Consensus<T> {
         let Some(cert1) = self.certs1.get(&key) else {
             return;
         };
+        if self.voted_2_at(view)
+            && self
+                .lock_view()
+                .is_some_and(|lock| lock >= LockView::of(cert1))
+        {
+            return;
+        }
         let Some(proposal) = self.proposals.get(view, cert1.data.leaf_commit) else {
             debug!(%view, "proposal not available");
             return;
@@ -2831,7 +2839,8 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::PersistHighQc(cert1));
         }
 
-        if self.certs2.contains_key(&key)
+        if self.voted_2_at(view)
+            || self.certs2.contains_key(&key)
             || self.decided_views.contains(&view)
             || view <= self.decide_floor()
         {
