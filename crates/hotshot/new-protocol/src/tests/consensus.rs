@@ -775,6 +775,9 @@ async fn test_vote2_with_cert1() {
 /// node votes2 at the view once.
 #[tokio::test]
 async fn test_two_epochs_at_one_view_draw_one_vote2() {
+    // Tests behaviour before 0.7: under the certificate rule a node votes2
+    // once per epoch.
+    crate::helpers::pin_test_version(versions::NEW_PROTOCOL_VERSION);
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;

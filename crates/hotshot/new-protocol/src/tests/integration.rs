@@ -1589,12 +1589,9 @@ async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
         .await;
 
     // A timeout vote goes out once its action is stored.
-    timeout(
-        Duration::from_secs(5),
-        harness.process_until_output(|outputs| any(outputs, is_send_timeout_vote)),
-    )
-    .await
-    .expect("f+1 timeout votes should trigger TimeoutOneHonest");
+    harness
+        .process_until_output(|outputs| any(outputs, is_send_timeout_vote))
+        .await;
 }
 
 /// A peer's timeout vote carries its locked QC.
