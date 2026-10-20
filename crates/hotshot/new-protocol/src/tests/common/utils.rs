@@ -1149,13 +1149,13 @@ pub(crate) struct ConsensusHarness {
     pub consensus: Consensus<TestTypes>,
     pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
     pub collected: Outbox<ConsensusOutput<TestTypes>>,
-    deferred_states: BTreeMap<ViewNumber, ConsensusInput<TestTypes>>,
+    deferred_states: BTreeMap<ViewNumber, Vec<ConsensusInput<TestTypes>>>,
     defer_state_for: BTreeSet<ViewNumber>,
     deferred_headers: BTreeMap<ViewNumber, Vec<ConsensusInput<TestTypes>>>,
     defer_header_for: BTreeSet<ViewNumber>,
     deferred_actions: BTreeSet<(ViewNumber, ActionKind)>,
     defer_action_for: BTreeSet<(ViewNumber, ActionKind)>,
-    deferred_locks: BTreeMap<ViewNumber, ConsensusInput<TestTypes>>,
+    deferred_locks: BTreeMap<ViewNumber, Vec<ConsensusInput<TestTypes>>>,
     defer_lock_for: BTreeSet<ViewNumber>,
     trace: trace::Recorder,
 }
@@ -1351,11 +1351,13 @@ impl ConsensusHarness {
     /// Deliver the response withheld by [`Self::defer_state`].
     pub async fn release_state(&mut self, view: ViewNumber) {
         self.defer_state_for.remove(&view);
-        let input = self
+        let inputs = self
             .deferred_states
             .remove(&view)
             .expect("a state request for this view was deferred");
-        self.apply(input).await;
+        for input in inputs {
+            self.apply(input).await;
+        }
     }
 
     /// Withhold `view`'s header and block until [`Self::release_header`].
@@ -1400,11 +1402,13 @@ impl ConsensusHarness {
     /// Deliver the confirmation withheld by [`Self::defer_lock`].
     pub async fn release_lock(&mut self, view: ViewNumber) {
         self.defer_lock_for.remove(&view);
-        let input = self
+        let inputs = self
             .deferred_locks
             .remove(&view)
             .expect("a lock at this view was deferred");
-        self.apply(input).await;
+        for input in inputs {
+            self.apply(input).await;
+        }
     }
 
     /// Deliver the header and block withheld by [`Self::defer_header`].
@@ -1453,7 +1457,10 @@ impl ConsensusHarness {
             ConsensusOutput::RequestState(req) => {
                 let input = state_verified_input(&req.proposal, req.view);
                 if self.defer_state_for.contains(&req.view) {
-                    self.deferred_states.insert(req.view, input);
+                    self.deferred_states
+                        .entry(req.view)
+                        .or_default()
+                        .push(input);
                 } else {
                     self.apply_recorded(input, outbox);
                 }
@@ -1472,7 +1479,9 @@ impl ConsensusHarness {
                 let input = ConsensusInput::Stored(StorageOutput::HighQc(LockView::of(high_qc)));
                 if self.defer_lock_for.contains(&LockView::of(high_qc).view) {
                     self.deferred_locks
-                        .insert(LockView::of(high_qc).view, input);
+                        .entry(LockView::of(high_qc).view)
+                        .or_default()
+                        .push(input);
                 } else {
                     self.apply_recorded(input, outbox);
                 }
@@ -1523,7 +1532,10 @@ impl ConsensusHarness {
                     },
                 ];
                 if self.defer_header_for.contains(&req.view) {
-                    self.deferred_headers.insert(req.view, inputs);
+                    self.deferred_headers
+                        .entry(req.view)
+                        .or_default()
+                        .extend(inputs);
                 } else {
                     for input in inputs {
                         self.apply_recorded(input, outbox);

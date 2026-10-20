@@ -20,8 +20,9 @@ use hotshot_types::{
 use super::common::{
     coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
     utils::{
-        TestData, TestView, build_cert1, build_state_cert_for_test, build_timeout_cert2_signed_by,
-        build_timeout_cert3, build_timeout_cert3_with_lock, mock_membership,
+        TestData, TestView, build_cert1, build_cert2, build_state_cert_for_test,
+        build_timeout_cert2_signed_by, build_timeout_cert3, build_timeout_cert3_with_lock,
+        mock_membership,
     },
 };
 use crate::{
@@ -994,6 +995,47 @@ async fn test_proposal_after_its_certificates_is_adopted() {
     assert!(
         any(harness.outputs(), is_leaf_decided),
         "and its view decides"
+    );
+}
+
+/// A `Certificate2` names its block by number as well as by leaf: one whose
+/// number is not that of the block it names decides nothing.
+#[tokio::test]
+async fn test_cert2_of_another_block_number_decides_nothing() {
+    let mut harness =
+        ConsensusHarness::new_with_upgrade_lock(0, 10, test_timeout_epoch_lock()).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = &test_data.views[0];
+    harness
+        .apply_pair(view.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(view.block_reconstructed_input()).await;
+    harness.apply(view.cert1_input()).await;
+
+    let block = BlockHeader::<TestTypes>::block_number(&view.proposal.data.block_header);
+    let membership = mock_membership()
+        .membership_for_epoch(Some(view.epoch_number))
+        .unwrap();
+    let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], 0);
+    let misnumbered = build_cert2(
+        proposal_commitment(&view.proposal.data),
+        view.epoch_number,
+        block + 1,
+        &membership,
+        view.view_number,
+        &public_key,
+        &private_key,
+    );
+    harness
+        .apply(ConsensusInput::Certificate2(ValidCert::new(
+            misnumbered,
+            view.epoch_number,
+        )))
+        .await;
+    assert!(
+        !any(harness.outputs(), is_leaf_decided),
+        "a certificate naming another block number decides nothing"
     );
 }
 

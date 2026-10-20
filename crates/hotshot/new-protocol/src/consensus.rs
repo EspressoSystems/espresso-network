@@ -1408,7 +1408,7 @@ impl<T: NodeType> Consensus<T> {
             if self.upgrade_lock.certificate_rule(view)
                 && !self.decided_or_past(view)
                 && self.cert2_over(view, leaf_commit).is_some()
-                && self.adopt_unpaired_proposal(view, leaf_commit, outbox)
+                && self.adopt_unpaired_proposal(view, leaf_commit, None, outbox)
             {
                 return Protocol::Continue;
             }
@@ -1658,7 +1658,7 @@ impl<T: NodeType> Consensus<T> {
             {
                 break;
             }
-            let Some(parent) = self.parked_proposal(parent_view, leaf_commit) else {
+            let Some(parent) = self.parked_proposal(parent_view, leaf_commit, None) else {
                 break;
             };
             chain.push(parent);
@@ -1708,9 +1708,10 @@ impl<T: NodeType> Consensus<T> {
         &mut self,
         view: ViewNumber,
         leaf_commit: Commitment<Leaf2<T>>,
+        block_number: Option<u64>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> bool {
-        let Some(message) = self.parked_proposal(view, leaf_commit) else {
+        let Some(message) = self.parked_proposal(view, leaf_commit, block_number) else {
             return false;
         };
         debug!(%view, "adopting live proposal parked without a vid share");
@@ -1718,20 +1719,38 @@ impl<T: NodeType> Consensus<T> {
         true
     }
 
-    /// The live proposal parked for `view` awaiting this node's VID share, if
-    /// it is the leaf `leaf_commit` names.
+    /// The live proposal parked awaiting this node's VID share that a
+    /// certificate at `view` over `leaf_commit` certifies.
+    ///
+    /// As for [`Self::certified_proposal`], that is one parked for `view`
+    /// itself, except for a re-vote's certificate, which certifies the last
+    /// block of an epoch again at a later view.
     fn parked_proposal(
         &self,
         view: ViewNumber,
         leaf_commit: Commitment<Leaf2<T>>,
+        block_number: Option<u64>,
     ) -> Option<ProposalMessage<T, Validated>> {
         let vc = VidCommitment2::default();
-        let range = (view, None, vc)..(view + 1, None, vc);
-        self.unpaired_proposals
-            .range(range)
-            .map(|(_, (_, message))| message)
-            .find(|message| proposal_commitment(&message.proposal.data) == leaf_commit)
-            .cloned()
+        let certified = |message: &&ProposalMessage<T, Validated>| {
+            let proposal = &message.proposal.data;
+            proposal_commitment(proposal) == leaf_commit
+                && block_number.is_none_or(|bn| bn == proposal.block_header.block_number())
+        };
+        let parked = |range| {
+            self.unpaired_proposals
+                .range(range)
+                .rev()
+                .map(|(_, (_, message))| message)
+                .find(certified)
+                .cloned()
+        };
+        parked((view, None, vc)..(view + 1, None, vc)).or_else(|| {
+            block_number
+                .is_some_and(|bn| is_last_block(bn, *self.epoch_height))
+                .then(|| parked((ViewNumber::genesis(), None, vc)..(view, None, vc)))
+                .flatten()
+        })
     }
 
     fn request_state(
@@ -1868,7 +1887,7 @@ impl<T: NodeType> Consensus<T> {
         // Only a parent behind the proposal is adopted; adopting for a forward
         // QC could re-enter adoption without end.
         if parent_view < proposal.view_number
-            && self.adopt_unpaired_proposal(parent_view, leaf_commit, outbox)
+            && self.adopt_unpaired_proposal(parent_view, leaf_commit, None, outbox)
         {
             return;
         }
@@ -1931,7 +1950,7 @@ impl<T: NodeType> Consensus<T> {
             && self
                 .certified_proposal(view, leaf_commit, block_number)
                 .is_none()
-            && !self.adopt_unpaired_proposal(view, leaf_commit, outbox)
+            && !self.adopt_unpaired_proposal(view, leaf_commit, block_number, outbox)
         {
             warn!(%view, "have certificate2 but no proposal; requesting fetch");
             outbox.push_back(ConsensusOutput::RequestMissingProposal { view, leaf_commit });
@@ -2439,7 +2458,7 @@ impl<T: NodeType> Consensus<T> {
         self.adopt_certified_drb(lock.view);
         match self.certified_proposal(lock.view, leaf_commit, block_number) {
             None => {
-                if !self.adopt_unpaired_proposal(lock.view, leaf_commit, outbox) {
+                if !self.adopt_unpaired_proposal(lock.view, leaf_commit, block_number, outbox) {
                     debug!(%view, %lock, "timeout certificate lock without its block; requesting fetch");
                     outbox.push_back(ConsensusOutput::RequestMissingProposal {
                         view: lock.view,

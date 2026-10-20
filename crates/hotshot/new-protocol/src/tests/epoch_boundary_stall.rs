@@ -11,9 +11,10 @@
 
 use std::collections::BTreeSet;
 
+use committable::Commitment;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     message::UpgradeLock,
     signature_key::BLSPubKey,
     simple_certificate::TimeoutEvidence,
@@ -24,7 +25,7 @@ use hotshot_types::{
 };
 
 use super::common::{
-    assertions::{any, decides_view, is_vote2_for_view},
+    assertions::{any, decides_view, is_proposal_certified, is_vote2_for_view},
     utils::{
         ConsensusHarness, TEST_DRB_RESULT, TestData, build_cert1, build_cert2,
         build_timeout_cert3_with_lock,
@@ -74,6 +75,23 @@ async fn node_before_the_boundary_certificate(
     lock: UpgradeLock<TestTypes>,
 ) -> ConsensusHarness {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], node_index).0;
+    let mut harness = node_before_the_boundary_block(node_index, test_data, lock).await;
+    let boundary = &test_data.views[BOUNDARY];
+    harness
+        .apply_pair(boundary.proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(boundary.block_reconstructed_input()).await;
+    harness
+}
+
+/// A node, run under the certificate rule, through views 1..=9 of epoch 1,
+/// before the boundary block at view 10 is proposed.
+async fn node_before_the_boundary_block(
+    node_index: u64,
+    test_data: &TestData,
+    lock: UpgradeLock<TestTypes>,
+) -> ConsensusHarness {
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], node_index).0;
     let mut harness = ConsensusHarness::new_with_upgrade_lock(node_index, EPOCH_HEIGHT, lock).await;
     let mut drb_epochs = BTreeSet::new();
     for v in &test_data.views[..=BOUNDARY] {
@@ -95,11 +113,6 @@ async fn node_before_the_boundary_certificate(
         harness.apply(v.cert1_input()).await;
         harness.apply(v.cert2_input()).await;
     }
-    let boundary = &test_data.views[BOUNDARY];
-    harness
-        .apply_pair(boundary.proposal_input_consensus(&node_key))
-        .await;
-    harness.apply(boundary.block_reconstructed_input()).await;
     harness
 }
 
@@ -1590,5 +1603,69 @@ async fn late_lock_of_the_next_epoch_does_not_refuse_an_admitted_first_block() {
     assert!(
         vote1_at(&harness, view(12)).is_some(),
         "the timeout certificate's lock admits the boundary block"
+    );
+}
+
+/// Whether the node asked for the proposal of `leaf_commit` to be fetched.
+fn fetches(harness: &ConsensusHarness, leaf_commit: Commitment<Leaf2<TestTypes>>) -> bool {
+    any(
+        harness.outputs(),
+        |o| matches!(o, ConsensusOutput::RequestMissingProposal { leaf_commit: c, .. } if *c == leaf_commit),
+    )
+}
+
+/// A boundary block held without this node's share is adopted on a re-vote's
+/// `Certificate2`, which names it at a later view, rather than fetched again.
+#[tokio::test]
+async fn parked_boundary_block_is_adopted_on_a_later_revote_certificate2() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let leaf = proposal_commitment(&boundary.proposal.data);
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let mut harness =
+        node_before_the_boundary_block(0, &test_data, test_timeout_epoch_lock()).await;
+    let (proposal, _share) = boundary.proposal_input_consensus(&node_key);
+    harness.apply(proposal).await;
+    assert!(
+        !any(harness.outputs(), is_proposal_certified),
+        "setup: the block is parked, waiting for the node's share"
+    );
+
+    let (_, cert2_12) = revote_certs(&harness, &test_data, view(12));
+    harness
+        .apply(ConsensusInput::Certificate2(ValidCert::new(
+            cert2_12,
+            epoch(1),
+        )))
+        .await;
+    assert!(
+        any(harness.outputs(), is_proposal_certified),
+        "the parked block is adopted on the re-vote's commit"
+    );
+    assert!(!fetches(&harness, leaf), "and not fetched again");
+}
+
+/// The same, in the other order: a parked boundary block arriving after a
+/// re-vote's `Certificate2` is adopted on it.
+#[tokio::test]
+async fn boundary_block_parked_after_a_revote_certificate2_is_adopted() {
+    let test_data = TestData::new_with_epoch_height(BOUNDARY + 1, EPOCH_HEIGHT).await;
+    let boundary = &test_data.views[BOUNDARY];
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let mut harness =
+        node_before_the_boundary_block(0, &test_data, test_timeout_epoch_lock()).await;
+    let (_, cert2_12) = revote_certs(&harness, &test_data, view(12));
+    harness
+        .apply(ConsensusInput::Certificate2(ValidCert::new(
+            cert2_12,
+            epoch(1),
+        )))
+        .await;
+
+    let (proposal, _share) = boundary.proposal_input_consensus(&node_key);
+    harness.apply(proposal).await;
+    assert!(
+        any(harness.outputs(), is_proposal_certified),
+        "the block is adopted on the re-vote's commit already held"
     );
 }
