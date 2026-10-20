@@ -83,6 +83,21 @@ theorem timeout_vote_input {j : Nat} {vote : TimeoutVote}
   rw [tr_step] at hx
   exact step_timeoutVote_input hx
 
+/-- A timer or one-honest indication the node took at step `j` is that step's input. -/
+theorem timerAt_input {n j : Nat} {v : ViewNumber} (ht : (H cfg leader input k n).TimerAt cfg j v) :
+    j < n ∧ (input k j = .timeout v ∨ input k j = .timeoutOneHonest v) := by
+  obtain ⟨st, hst, hcase⟩ := ht
+  have hjn : j < n := by
+    have := (List.getElem?_eq_some_iff.mp hst).1
+    rwa [Trace.history_length] at this
+  rw [Trace.history_getElem? _ hjn] at hst
+  obtain rfl := (Option.some.inj hst).symm
+  have hin : (tr cfg leader input k j).input = input k j := by rw [tr_step]; rfl
+  refine ⟨hjn, ?_⟩
+  rcases hcase with ⟨h, -⟩ | ⟨h, -⟩
+  · exact Or.inl (hin ▸ h)
+  · exact Or.inr (hin ▸ h)
+
 /-- The node answers a timer or one-honest indication in the step that takes it. -/
 theorem answers {j : Nat} {v : ViewNumber}
     (ht : ((tr cfg leader input k j).input = .timeout v ∧ (H cfg leader input k j).InView cfg v)

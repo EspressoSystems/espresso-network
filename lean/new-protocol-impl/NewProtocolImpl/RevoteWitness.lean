@@ -885,6 +885,16 @@ theorem timedOut {k : PubKey} {n : Nat} {v : ViewNumber} (h : (H k n).TimedOut v
   obtain ⟨u, rfl, rfl⟩ := sent_timeout hjv
   exact ⟨u, hle, hj⟩
 
+/-- A timer or one-honest indication for `v` or a later view comes no earlier than a timeout vote. -/
+theorem timer {k : PubKey} {n : Nat} {v : ViewNumber}
+    (h : ∃ j w, (H k n).TimerAt cfg j w ∧ v ≤ w) : ∃ u, v.toNat ≤ 3 * u + 3 ∧ 15 * u + 12 < n := by
+  obtain ⟨j, w, ht, hle⟩ := h
+  obtain ⟨hj, hi | hi⟩ := Kit.timerAt_input ht
+  · obtain ⟨u, rfl, rfl⟩ := input_timeout hi
+    exact ⟨u, hle, hj⟩
+  · obtain ⟨u, rfl, rfl⟩ := input_oneHonest hi
+    exact ⟨u, hle, by omega⟩
+
 variable (hv : ∀ b, BlockValid b)
 
 include hv in
@@ -1311,11 +1321,14 @@ theorem votes2 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 15 * u +
     · have : 3 * x + 2 = 3 * u + 1 := view_inj hv2
       omega
   · rw [cert_view]
-    rintro (ht | ⟨tc, htc, hle⟩)
+    rintro (ht | ⟨tc, htc, hle⟩ | ht)
     · obtain ⟨y, hle, hy⟩ := timedOut ht
       have : 3 * u + 1 ≤ 3 * y + 3 := hle
       omega
     · obtain ⟨y, rfl, hy⟩ := received_tc htc
+      have : 3 * u + 1 ≤ 3 * y + 3 := hle
+      omega
+    · obtain ⟨y, hle, hy⟩ := timer ht
       have : 3 * u + 1 ≤ 3 * y + 3 := hle
       omega
   · rw [cert_view]
@@ -1348,11 +1361,14 @@ theorem votes2R (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 15 * u 
       omega
     · have : 3 * x + 2 = 3 * u + 2 := view_inj hv2
       omega
-  · rintro (ht | ⟨tc, htc, hle⟩)
+  · rintro (ht | ⟨tc, htc, hle⟩ | ht)
     · obtain ⟨y, hle, hy⟩ := timedOut ht
       have : 3 * u + 2 ≤ 3 * y + 3 := hle
       omega
     · obtain ⟨y, rfl, hy⟩ := received_tc htc
+      have : 3 * u + 2 ≤ 3 * y + 3 := hle
+      omega
+    · obtain ⟨y, hle, hy⟩ := timer ht
       have : 3 * u + 2 ≤ 3 * y + 3 := hle
       omega
   · rcases hasCert2 hc2 with ⟨x, rfl, hlt⟩ | ⟨x, rfl, hlt⟩

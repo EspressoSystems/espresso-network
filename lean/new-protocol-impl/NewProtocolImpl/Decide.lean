@@ -288,9 +288,26 @@ def AboveFloorB (h : History) (v : ViewNumber) : Prop :=
 /-- `History.TimedOut`, over lists. -/
 def TimedOutB (h : History) (v : ViewNumber) : Prop := ∃ vote ∈ timeoutVotesSent h, v ≤ vote.view
 
+/--
+The view of the timer or one-honest indication step `n` of `h` takes
+(`History.TimerAt`), if any.
+-/
+def timerView (h : History) (n : Nat) : Option ViewNumber :=
+  match h[n]? with
+  | some st =>
+    match st.input with
+    | .timeout v => if viewOf cfg (h.take n) = v then some v else none
+    | .timeoutOneHonest v => if viewOf cfg (h.take n) ≤ v then some v else none
+    | _ => none
+  | none => none
+
+/-- The views of the timers and one-honest indications a history took. -/
+def timerViews (h : History) : List ViewNumber :=
+  (List.range h.length).filterMap (timerView cfg h)
+
 /-- `History.PastView`, over lists. -/
 def PastViewB (h : History) (v : ViewNumber) : Prop :=
-  TimedOutB h v ∨ ∃ tc ∈ timeoutCertsIn h, v ≤ tc.view
+  TimedOutB h v ∨ (∃ tc ∈ timeoutCertsIn h, v ≤ tc.view) ∨ ∃ w ∈ timerViews cfg h, v ≤ w
 
 /-- `Owed`, over lists. -/
 def OwedB (h : History) : Obligation → Prop
@@ -319,7 +336,7 @@ def OwedB (h : History) : Obligation → Prop
       ∧ NotBehindB cfg h c.data.epoch
       ∧ (∀ vote ∈ vote2sSent h, vote.data.epoch = c.data.epoch → vote.view ≠ c.view)
       ∧ (∀ c2 ∈ cert2sHeld h, c2.data.epoch = c.data.epoch → c2.view ≠ c.view)
-      ∧ ¬ PastViewB h c.view ∧ cfg.anchorView < c.view ∧ ∀ u ∈ decidedViews h, u < c.view
+      ∧ ¬ PastViewB cfg h c.view ∧ cfg.anchorView < c.view ∧ ∀ u ∈ decidedViews h, u < c.view
   | .decide c =>
       c ∈ cert2sHeld h ∧ ∃ b ∈ proposalsHeld cfg h, Commits c b
         ∧ (∃ c1 ∈ cert1sHeld cfg h, Certifies c1 b)
@@ -352,7 +369,7 @@ instance (h : History) (v : ViewNumber) : Decidable (AboveFloorB cfg h v) := by
 instance (h : History) (v : ViewNumber) : Decidable (TimedOutB h v) := by
   unfold TimedOutB; infer_instance
 
-instance (h : History) (v : ViewNumber) : Decidable (PastViewB h v) := by
+instance (h : History) (v : ViewNumber) : Decidable (PastViewB cfg h v) := by
   unfold PastViewB; infer_instance
 
 instance decOwedB (h : History) : (o : Obligation) → Decidable (OwedB cfg leader node h o)
@@ -375,8 +392,51 @@ theorem timedOutB_iff {h : History} {v : ViewNumber} : TimedOutB h v ↔ h.Timed
 theorem inView_iff_viewOf {h : History} {v : ViewNumber} : h.InView cfg v ↔ viewOf cfg h = v :=
   ⟨viewOf_of_inView, fun e => e ▸ inView_viewOf cfg h⟩
 
-theorem pastViewB_iff {h : History} {v : ViewNumber} : PastViewB h v ↔ h.PastView v := by
-  simp only [PastViewB, PastView, timedOutB_iff, mem_timeoutCertsIn]
+theorem timerView_eq_some {h : History} {n : Nat} {v : ViewNumber} :
+    timerView cfg h n = some v ↔ h.TimerAt cfg n v := by
+  constructor
+  · intro ht
+    unfold timerView at ht
+    split at ht
+    · rename_i st hst
+      refine ⟨st, hst, ?_⟩
+      revert ht
+      cases st.input <;> simp only [reduceCtorEq, false_implies, Option.ite_none_right_eq_some,
+        Option.some.injEq]
+      · rintro ⟨hv, rfl⟩
+        exact Or.inl ⟨rfl, hv ▸ inView_viewOf cfg _⟩
+      · rintro ⟨hv, rfl⟩
+        exact Or.inr ⟨rfl, _, inView_viewOf cfg _, hv⟩
+    · cases ht
+  · rintro ⟨st, hst, hcase⟩
+    unfold timerView
+    rw [hst]
+    rcases hcase with ⟨hi, hv⟩ | ⟨hi, w, hw, hle⟩
+    · have : viewOf cfg (h.take n) = v := viewOf_of_inView hv
+      simp [hi, this]
+    · have : viewOf cfg (h.take n) ≤ v := viewOf_of_inView hw ▸ hle
+      simp [hi, this]
+
+theorem mem_timerViews {h : History} {v : ViewNumber} :
+    v ∈ timerViews cfg h ↔ ∃ n, h.TimerAt cfg n v := by
+  simp only [timerViews, List.mem_filterMap, List.mem_range, timerView_eq_some]
+  constructor
+  · rintro ⟨n, -, ht⟩; exact ⟨n, ht⟩
+  · rintro ⟨n, ht⟩
+    obtain ⟨st, hst, -⟩ := id ht
+    exact ⟨n, (List.getElem?_eq_some_iff.mp hst).1, ht⟩
+
+theorem pastViewB_iff {h : History} {v : ViewNumber} : PastViewB cfg h v ↔ h.PastView cfg v := by
+  simp only [PastViewB, PastView, timedOutB_iff, mem_timeoutCertsIn, mem_timerViews]
+  constructor
+  · rintro (ht | htc | ⟨w, ⟨n, hn⟩, hle⟩)
+    · exact Or.inl ht
+    · exact Or.inr (Or.inl htc)
+    · exact Or.inr (Or.inr ⟨n, w, hn, hle⟩)
+  · rintro (ht | htc | ⟨n, w, hn, hle⟩)
+    · exact Or.inl ht
+    · exact Or.inr (Or.inl htc)
+    · exact Or.inr (Or.inr ⟨w, ⟨n, hn⟩, hle⟩)
 
 theorem notBehindB_iff {h : History} {e : EpochNumber} : NotBehindB cfg h e ↔ NotBehind cfg h e := by
   have hE := inEpoch_epochOfHistory cfg h
@@ -568,7 +628,7 @@ theorem owedVote2_iff {h : History} {c : Cert1} :
         ∧ NotBehind cfg h c.data.epoch
         ∧ (∀ vote : Vote2, h.Sent (.vote2 vote) → vote.data.epoch = c.data.epoch → vote.view ≠ c.view)
         ∧ (∀ c2, h.HasCert2 c2 → c2.data.epoch = c.data.epoch → c2.view ≠ c.view)
-        ∧ ¬ h.PastView c.view ∧ cfg.anchorView < c.view ∧ ∀ u, h.DecidedView u → u < c.view) :=
+        ∧ ¬ h.PastView cfg c.view ∧ cfg.anchorView < c.view ∧ ∀ u, h.DecidedView u → u < c.view) :=
   ⟨fun ⟨a, b, c, d, e, f, g⟩ => ⟨a, b, c, d, e, f, g⟩, fun ⟨a, b, c, d, e, f, g⟩ => ⟨a, b, c, d, e, f, g⟩⟩
 
 theorem owedDecide_iff {h : History} {c : Cert2} :

@@ -577,10 +577,13 @@ theorem not_timedOut {k : PubKey} {n : Nat} {v : ViewNumber} : ¬ (H k n).TimedO
   obtain ⟨j, -, hj⟩ := sent_iff.mp hs
   exact no_timeoutVote hj
 
-theorem not_pastView {k : PubKey} {n : Nat} {v : ViewNumber} : ¬ (H k n).PastView v := by
-  rintro (ht | ⟨tc, htc, -⟩)
+theorem not_pastView {k : PubKey} {n : Nat} {v : ViewNumber} : ¬ (H k n).PastView cfg v := by
+  rintro (ht | ⟨tc, htc, -⟩ | ⟨j, w, ht, -⟩)
   · exact not_timedOut ht
   · exact no_tc htc
+  · obtain ⟨-, hi | hi⟩ := Kit.timerAt_input ht
+    · exact input_quiet.1 _ hi
+    · exact input_quiet.2.1 _ hi
 
 variable (hv : ∀ b, BlockValid b)
 

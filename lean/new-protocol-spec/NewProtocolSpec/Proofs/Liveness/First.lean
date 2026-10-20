@@ -114,6 +114,34 @@ theorem timeout_late {w : ViewNumber} (hw : cfg.anchorView.toNat + 2 ≤ w.toNat
   timeout_late_aux hcfg hs hw hex _ k hk m vote he rfl hm hwv
 
 /--
+No honest node takes a timer or one-honest indication for `w` or later before `τ`
+after the first node reached `w`.
+-/
+theorem timer_late {w : ViewNumber} (hw : cfg.anchorView.toNat + 2 ≤ w.toNat)
+    (hex : ∃ T, ReachedBy N T w) {k : PubKey} {hk : C.Honest k} {n j : Nat} {v : ViewNumber}
+    (ht : ((N.trace k hk).history n).TimerAt cfg j v) (hwv : w ≤ v) :
+    firstReach N hex + τ ≤ N.time k hk j := by
+  obtain ⟨st, hst, hcase⟩ := ht
+  have hjn : j < n := by
+    have := (List.getElem?_eq_some_iff.mp hst).1
+    rwa [Trace.history_length] at this
+  rw [Trace.history_getElem? _ hjn] at hst
+  obtain rfl := (Option.some.inj hst).symm
+  rw [Trace.history_upTo _ (Nat.le_of_lt hjn)] at hcase
+  rcases hcase with ⟨hin, hview⟩ | ⟨hin, -⟩
+  · have h0 : ¬ ((N.trace k hk).history 0).InView cfg v := fun h0 => by
+      have := ground_nil hcfg h0.1
+      have : w.toNat ≤ v.toNat := hwv
+      omega
+    obtain ⟨n, hnj, hin1, hnot⟩ := entered _ hview h0
+    have hlate := hs.timerNotEarly k hk n j v hin1 (Or.inr hnot) (Nat.le_of_lt hnj) hin
+    have hfirst := firstReach_le hex (n := n) ⟨v, hin1.1, hwv⟩
+    omega
+  · obtain ⟨k', e, hk'e, m', vote', hve, hm', hv', htm⟩ := N.oneHonestCausal k hk j v hin
+    have := timeout_late hcfg hs hw hex (hk := .of hk'e) (by rw [hve]; exact hk'e) hm' (hv' ▸ hwv)
+    omega
+
+/--
 The timer a timeout vote for `w` or later answers, by a node honest in the vote's
 epoch, comes no earlier than `τ` after the first node reached `w`, and the vote
 names the epoch the node was in at the timer.
@@ -124,25 +152,11 @@ theorem timeout_timer_late {w : ViewNumber} (hw : cfg.anchorView.toNat + 2 ≤ w
     (hwv : w ≤ vote.view) :
     ∃ j ≤ m, firstReach N hex + τ ≤ N.time k hk j
       ∧ ((N.trace k hk).history j).InEpoch cfg vote.data.epoch := by
-  obtain ⟨-, j, hjm, ⟨st, hst, hcase⟩, hep, -⟩ :=
+  obtain ⟨-, j, hjm, ht, hep, -⟩ :=
     (N.protocol k hk (m + 1)).timeoutJustified m (N.trace k hk m) vote
       (Trace.history_getElem? _ (Nat.lt_succ_self m)) hm he
-  rw [Trace.history_getElem? _ (Nat.lt_succ_of_le hjm)] at hst
-  obtain rfl := (Option.some.inj hst).symm
-  rw [Trace.history_upTo _ (Nat.le_succ_of_le hjm)] at hcase hep
-  refine ⟨j, hjm, ?_, hep⟩
-  rcases hcase with ⟨hin, hview⟩ | ⟨hin, -⟩
-  · have h0 : ¬ ((N.trace k hk).history 0).InView cfg vote.view := fun h0 => by
-      have := ground_nil hcfg h0.1
-      have : w.toNat ≤ vote.view.toNat := hwv
-      omega
-    obtain ⟨n, hnj, hin1, hnot⟩ := entered _ hview h0
-    have hlate := hs.timerNotEarly k hk n j vote.view hin1 (Or.inr hnot) (Nat.le_of_lt hnj) hin
-    have hfirst := firstReach_le hex (n := n) ⟨vote.view, hin1.1, hwv⟩
-    omega
-  · obtain ⟨k', e, hk'e, m', vote', hve, hm', hv', htm⟩ := N.oneHonestCausal k hk j vote.view hin
-    have := timeout_late hcfg hs hw hex (hk := .of hk'e) (by rw [hve]; exact hk'e) hm' (hv' ▸ hwv)
-    omega
+  rw [Trace.history_upTo _ (Nat.le_succ_of_le hjm)] at hep
+  exact ⟨j, hjm, timer_late hcfg hs hw hex ht hwv, hep⟩
 
 /-- No honest node holds a timeout certificate for `w` or later until after `τ` from the first node in `w`. -/
 theorem timeoutCert_late {w : ViewNumber} (hw : cfg.anchorView.toNat + 2 ≤ w.toNat) (hex : ∃ T, ReachedBy N T w)
@@ -162,8 +176,8 @@ signed for the epochs it is honest in.
 theorem not_past {w : ViewNumber} (hw : cfg.anchorView.toNat + 2 ≤ w.toNat) (hex : ∃ T, ReachedBy N T w)
     {k : PubKey} {hk : C.Honest k} {n : Nat}
     (hn : ∀ i, i < n → N.time k hk i < firstReach N hex + τ) {v : ViewNumber} (hwv : w ≤ v) :
-    ¬ (((N.trace k hk).history n).restrict (C.honest · k)).PastView v := by
-  rintro (⟨vote, hs', hle⟩ | ⟨tc, htc, hle⟩)
+    ¬ (((N.trace k hk).history n).restrict (C.honest · k)).PastView cfg v := by
+  rintro (⟨vote, hs', hle⟩ | ⟨tc, htc, hle⟩ | ⟨i, u, ht, hle⟩)
   · obtain ⟨hs', he⟩ := restrict_sent.mp hs'
     obtain ⟨i, hi, hm⟩ := (Trace.sent_history _).mp hs'
     have := timeout_late hcfg hs hw hex he hm (Nat.le_trans hwv hle)
@@ -171,6 +185,14 @@ theorem not_past {w : ViewNumber} (hw : cfg.anchorView.toNat + 2 ≤ w.toNat) (h
     omega
   · obtain ⟨i, hi, hin⟩ := (Trace.received_history _).mp ((sameInputs_restrict.received _).mp htc)
     have := timeoutCert_late hcfg hs hw hex hin (Nat.le_trans hwv hle)
+    have := hn i hi
+    omega
+  · have ht := (sameInputs_restrict.timerAt i u).mp ht
+    have hi : i < n := by
+      obtain ⟨st, hst, -⟩ := ht
+      have := (List.getElem?_eq_some_iff.mp hst).1
+      rwa [Trace.history_length] at this
+    have := timer_late hcfg hs hw hex ht (Nat.le_trans hwv hle)
     have := hn i hi
     omega
 

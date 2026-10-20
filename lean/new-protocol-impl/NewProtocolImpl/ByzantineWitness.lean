@@ -1204,9 +1204,26 @@ theorem timedOut {k : PubKey} {n : Nat} {v : ViewNumber} (h : (H k n).TimedOut v
   have := offs k
   exact ⟨w, hle, by omega⟩
 
+/-- A timer or one-honest indication for `v` or a later view comes no earlier than a timeout vote. -/
+theorem timer {k : PubKey} {n : Nat} {v : ViewNumber}
+    (h : ∃ j w, (H k n).TimerAt cfg j w ∧ v ≤ w) : ∃ w, v.toNat ≤ 4 * w + 4 ∧ 29 * w + 25 < n := by
+  obtain ⟨j, w', ht, hle⟩ := h
+  obtain ⟨hj, hi | hi⟩ := Kit.timerAt_input ht
+  · obtain ⟨w, rfl, rfl⟩ := input_timeout hi
+    have := offs k
+    exact ⟨w, hle, by omega⟩
+  · obtain ⟨w, rfl, rfl⟩ := input_oneHonest hi
+    exact ⟨w, hle, by omega⟩
+
 /-- Nothing times an honest block's view out before its view is over. -/
 theorem not_timedOut {k : PubKey} {n u : Nat} (h : (H k n).TimedOut ⟨vOf u⟩) (hn : n ≤ sAt u + 7) : False := by
   obtain ⟨w, hle, hlt⟩ := timedOut h
+  have := view_le_round (u := u) (w := w) hle
+  omega
+
+/-- Nothing takes a timer for a view before then. -/
+theorem not_timer {k : PubKey} {n u : Nat} (h : ∃ j w, (H k n).TimerAt cfg j w ∧ ⟨vOf u⟩ ≤ w) (hn : n ≤ sAt u + 7) : False := by
+  obtain ⟨w, hle, hlt⟩ := timer h
   have := view_le_round (u := u) (w := w) hle
   omega
 
@@ -1523,11 +1540,12 @@ theorem votes2 (k : PubKey) (u : Nat) : ∃ j, j ≤ sAt u + lkOff k
     obtain rfl : x = u := vOf_inj (view_inj hv2)
     omega
   · rw [cert_view]
-    rintro (ht | ⟨tc, htc, hle⟩)
+    rintro (ht | ⟨tc, htc, hle⟩ | ht)
     · exact not_timedOut ht (by omega)
     · obtain ⟨w, rfl, hw⟩ := received_tc htc
       have := view_le_round (u := u) (w := w) hle
       omega
+    · exact not_timer ht (by omega)
   · obtain ⟨x, rfl, hlt⟩ := hasCert2 hc2
     rw [cert_view]
     show vOf x < vOf u

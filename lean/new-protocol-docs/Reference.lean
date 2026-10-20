@@ -966,14 +966,36 @@ end Spec.History_InEpoch
 {includeDocstring NewProtocol.History.InEpoch}
 
 ```lean -show
+namespace Spec.History_TimerAt
+open NewProtocol.History
+```
+
+:::spec NewProtocol.History.TimerAt
+  ```lean
+  def History.TimerAt (cfg : Config) (h : History) (n : Nat) (v : ViewNumber) : Prop :=
+    ∃ st, h[n]? = some st
+      ∧ ((st.input = .timeout v ∧ InView cfg (upTo h n) v)
+        ∨ (st.input = .timeoutOneHonest v ∧ ∃ w, InView cfg (upTo h n) w ∧ w ≤ v))
+  ```
+:::
+
+```lean -show
+example : @Spec.History_TimerAt.History.TimerAt = @NewProtocol.History.TimerAt := rfl
+end Spec.History_TimerAt
+```
+
+{includeDocstring NewProtocol.History.TimerAt}
+
+```lean -show
 namespace Spec.History_PastView
 open NewProtocol.History
 ```
 
 :::spec NewProtocol.History.PastView
   ```lean
-  def History.PastView (h : History) (v : ViewNumber) : Prop :=
-    h.TimedOut v ∨ ∃ tc, h.Received (.timeoutCertificate tc) ∧ v ≤ tc.view
+  def History.PastView (cfg : Config) (h : History) (v : ViewNumber) : Prop :=
+    h.TimedOut v ∨ (∃ tc, h.Received (.timeoutCertificate tc) ∧ v ≤ tc.view)
+      ∨ ∃ n w, TimerAt cfg h n w ∧ v ≤ w
   ```
 :::
 
@@ -1218,27 +1240,6 @@ end Spec.ProposedIn
 ```
 
 {includeDocstring NewProtocol.ProposedIn}
-
-```lean -show
-namespace Spec.History_TimerAt
-open NewProtocol.History
-```
-
-:::spec NewProtocol.History.TimerAt
-  ```lean
-  def History.TimerAt (cfg : Config) (h : History) (n : Nat) (v : ViewNumber) : Prop :=
-    ∃ st, h[n]? = some st
-      ∧ ((st.input = .timeout v ∧ InView cfg (upTo h n) v)
-        ∨ (st.input = .timeoutOneHonest v ∧ ∃ w, InView cfg (upTo h n) w ∧ w ≤ v))
-  ```
-:::
-
-```lean -show
-example : @Spec.History_TimerAt.History.TimerAt = @NewProtocol.History.TimerAt := rfl
-end Spec.History_TimerAt
-```
-
-{includeDocstring NewProtocol.History.TimerAt}
 
 ```lean -show
 namespace Spec.History_TimerAnswered

@@ -661,12 +661,19 @@ theorem not_timedOut_early {k : PubKey} {n : Nat} {v : ViewNumber} (hn : n ≤ 5
   omega
 
 theorem not_pastView {k : PubKey} {n : Nat} {v : ViewNumber} (h3 : 3 ≤ v.toNat) :
-    ¬ (H k n).PastView v := by
-  rintro (h | ⟨tc, htc, hle⟩)
+    ¬ (H k n).PastView cfg v := by
+  rintro (h | ⟨tc, htc, hle⟩ | ⟨j, w, ht, hle⟩)
   · exact not_timedOut h3 h
   · obtain ⟨rfl, -⟩ := received_tc htc
     have : v.toNat ≤ 2 := hle
     omega
+  · obtain ⟨-, hi | hi⟩ := Kit.timerAt_input ht
+    · obtain ⟨-, rfl⟩ := input_timeout hi
+      have : v.toNat ≤ 2 := hle
+      omega
+    · obtain ⟨-, rfl⟩ := input_oneHonest hi
+      have : v.toNat ≤ 2 := hle
+      omega
 
 include hv in
 /-- No honest node asks for a re-vote: no block is the last of an epoch. -/
@@ -776,11 +783,16 @@ theorem proposes (u : Nat) :
     · exact not_timedOut (by show 3 ≤ vOf (u + 1); rw [vOf_succ]; omega)
 
 theorem not_pastView_early {k : PubKey} {n : Nat} {v : ViewNumber} (hn : n ≤ 5) :
-    ¬ (H k n).PastView v := by
-  rintro (h | ⟨tc, htc, -⟩)
+    ¬ (H k n).PastView cfg v := by
+  rintro (h | ⟨tc, htc, -⟩ | ⟨j, w, ht, -⟩)
   · exact not_timedOut_early hn h
   · obtain ⟨-, h⟩ := received_tc htc
     omega
+  · obtain ⟨hj, hi | hi⟩ := Kit.timerAt_input ht
+    · obtain ⟨rfl, -⟩ := input_timeout hi
+      omega
+    · obtain ⟨rfl, -⟩ := input_oneHonest hi
+      omega
 
 include hv in
 /-- Every vote1 an honest node sends is on the schedule's proposal, after it arrived. -/
@@ -860,7 +872,7 @@ theorem votes2 (k : PubKey) (u : Nat) (hu : u ≠ 0 ∨ k ≠ c) : ∃ j, j ≤ 
   have hp : pAt k u = sAt u + 4 := by
     unfold pAt
     exact ite_eq_right fun ⟨h0, hk⟩ => hu.elim (· h0) (· hk)
-  have hpast : ¬ (H k (sAt u + 4 + 1)).PastView (certOf (blk u)).view := by
+  have hpast : ¬ (H k (sAt u + 4 + 1)).PastView cfg (certOf (blk u)).view := by
     rcases u with _ | u
     · exact not_pastView_early (by simp [sAt])
     · exact not_pastView (by rw [certOf_view, vOf_succ]; show 3 ≤ u + 3; omega)

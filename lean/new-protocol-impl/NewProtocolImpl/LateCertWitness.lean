@@ -1070,10 +1070,28 @@ theorem timedOut {k : PubKey} {n : Nat} {v : ViewNumber} (h : (H k n).TimedOut v
   · exact Or.inl ⟨hle, hj⟩
   · exact Or.inr ⟨hle, hj⟩
 
+/-- A timer or one-honest indication for `v` or a later view comes no earlier than a timeout vote. -/
+theorem timer {k : PubKey} {n : Nat} {v : ViewNumber}
+    (h : ∃ j w, (H k n).TimerAt cfg j w ∧ v ≤ w) :
+    (v.toNat ≤ 1 ∧ 4 < n) ∨ (v.toNat ≤ 3 ∧ 13 < n) := by
+  obtain ⟨j, w, ht, hle⟩ := h
+  obtain ⟨hj, hi | hi⟩ := Kit.timerAt_input ht
+  · rcases input_timeout hi with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+    · exact Or.inl ⟨hle, hj⟩
+    · exact Or.inr ⟨hle, hj⟩
+  · exact (input_oneHonest hi).elim
+
 /-- Nothing times out a view before its timer. -/
 theorem not_timedOut {k : PubKey} {n : Nat} {v : ViewNumber} (h : (H k n).TimedOut v)
     (h1 : v.toNat ≤ 1 → n ≤ 4) (h3 : v.toNat ≤ 3 → n ≤ 13) : False := by
   rcases timedOut h with ⟨ha, hb⟩ | ⟨ha, hb⟩
+  · exact absurd (h1 ha) (by omega)
+  · exact absurd (h3 ha) (by omega)
+
+/-- Nothing takes a timer for a view before then. -/
+theorem not_timer {k : PubKey} {n : Nat} {v : ViewNumber} (h : ∃ j w, (H k n).TimerAt cfg j w ∧ v ≤ w)
+    (h1 : v.toNat ≤ 1 → n ≤ 4) (h3 : v.toNat ≤ 3 → n ≤ 13) : False := by
+  rcases timer h with ⟨ha, hb⟩ | ⟨ha, hb⟩
   · exact absurd (h1 ha) (by omega)
   · exact absurd (h3 ha) (by omega)
 
@@ -1707,11 +1725,12 @@ theorem votes2R (k : PubKey) (hl : lag k 0 = 0) : ∃ j, j ≤ 9
   · obtain ⟨x, rfl, hlt⟩ := hasCert2 hc2
     have := at0_facts 10 12 x
     omega
-  · rintro (ht | ⟨tc, htc, hle⟩)
+  · rintro (ht | ⟨tc, htc, hle⟩ | ht)
     · exact not_timedOut ht (fun h => absurd h (by show ¬ (2 : Nat) ≤ 1; omega)) (fun _ => by omega)
     · rcases received_tc htc with ⟨rfl, -⟩ | ⟨rfl, h14⟩
       · exact absurd hle (by show ¬ (2 : Nat) ≤ 1; omega)
       · omega
+    · exact not_timer ht (fun h => absurd h (by show ¬ (2 : Nat) ≤ 1; omega)) (fun _ => by omega)
   · obtain ⟨x, rfl, hlt⟩ := hasCert2 hc2
     have := at0_facts 10 12 x
     omega
@@ -1746,7 +1765,7 @@ theorem votes2 (k : PubKey) (u : Nat) (hu : 1 ≤ u) (hl : lag k u = 0) : ∃ j,
     have := at0_facts 10 12 x
     omega
   · rw [cert_view]
-    rintro (ht | ⟨tc, htc, hle⟩)
+    rintro (ht | ⟨tc, htc, hle⟩ | ht)
     · refine not_timedOut ht (fun h => ?_) (fun h => ?_)
       · have h' : bv u ≤ 1 := h; omega
       · have h' : bv u ≤ 3 := h; omega
@@ -1754,6 +1773,9 @@ theorem votes2 (k : PubKey) (u : Nat) (hu : 1 ≤ u) (hl : lag k u = 0) : ∃ j,
       rcases received_tc htc with ⟨rfl, -⟩ | ⟨rfl, -⟩
       · have : bv u ≤ 1 := h'; omega
       · have : bv u ≤ 3 := h'; omega
+    · refine not_timer ht (fun h => ?_) (fun h => ?_)
+      · have h' : bv u ≤ 1 := h; omega
+      · have h' : bv u ≤ 3 := h; omega
   · obtain ⟨x, rfl, hlt⟩ := hasCert2 hc2
     rw [cert_view]
     show cv x < bv u

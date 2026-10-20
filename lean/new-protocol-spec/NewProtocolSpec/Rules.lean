@@ -332,18 +332,6 @@ def ProposedIn (h : History) (e : EpochNumber) (v : ViewNumber) : Prop :=
     ∨ ∃ r, h.Sent (.revote r) ∧ r.view = v ∧ r.cert.data.epoch = e
 
 /--
-At step `n`, the node took a timer or the one-honest indication for view `v`.
-
-The timer fires for the view the node is in. The one-honest indication may be for
-a later view, since the node is following others who already left. Both are read
-from the history before the step (`h.upTo n`), not after it.
--/
-def History.TimerAt (h : History) (n : Nat) (v : ViewNumber) : Prop :=
-  ∃ st, h[n]? = some st
-    ∧ ((st.input = .timeout v ∧ (h.upTo n).InView cfg v)
-      ∨ (st.input = .timeoutOneHonest v ∧ ∃ w, (h.upTo n).InView cfg w ∧ w ≤ v))
-
-/--
 `h` answers the timer for view `v` the node took at step `n`: in that step or a
 later one, it sent a timeout vote for `v` naming the epoch it was in at the timer.
 -/
@@ -530,7 +518,7 @@ structure OwedVote2 (h : History) (c : Cert1) : Prop where
   notCommitted : ∀ c2, h.HasCert2 c2 → c2.data.epoch = c.data.epoch → c2.view ≠ c.view
 
   /-- The node has not given the view up. -/
-  notPast : ¬ h.PastView c.view
+  notPast : ¬ h.PastView cfg c.view
 
   /-- The view is after the anchor's. -/
   afterAnchor : cfg.anchorView < c.view
