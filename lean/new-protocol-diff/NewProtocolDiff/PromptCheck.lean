@@ -121,16 +121,6 @@ def promptFaults (ms : List Moment) (ended δ : Nat) : List (Nat × Obligation) 
     if ended ≤ t + δ then []
     else ((owed.getD k []).filter fun o => !stopsBy owed (timeAt ms) o (t + δ) k ms.length).map (k, ·)
 
-/-- The view of the timer or one-honest indication step `n` of `h` takes (`History.TimerAt`), if any. -/
-def timerView (h : History) (n : Nat) : Option ViewNumber :=
-  match h[n]? with
-  | some st =>
-    match st.input with
-    | .timeout v => if viewOf cfg (h.take n) = v then some v else none
-    | .timeoutOneHonest v => if viewOf cfg (h.take n) ≤ v then some v else none
-    | _ => none
-  | none => none
-
 /--
 Whether `h` answers the timer for `v` taken in step `n`, or has grounds past `v`.
 
@@ -215,17 +205,6 @@ theorem checkPrompt_sound {ms : List Moment} {ended δ : Nat}
   rw [owedAt_size] at hjs
   exact Or.inl ⟨j, hjs, hj, timeAt_of hjs ▸ ht, fun hj' => hno ((mem_owedAt hjs).mpr hj')⟩
 
-theorem timerView_of {h : History} {n : Nat} {v : ViewNumber} (ht : h.TimerAt cfg n v) :
-    timerView cfg h n = some v := by
-  obtain ⟨st, hst, hcase⟩ := ht
-  unfold timerView
-  rw [hst]
-  rcases hcase with ⟨hi, hv⟩ | ⟨hi, w, hw, hle⟩
-  · have : viewOf cfg (h.take n) = v := viewOf_of_inView hv
-    simp [hi, this]
-  · have : viewOf cfg (h.take n) ≤ v := viewOf_of_inView hw ▸ hle
-    simp [hi, this]
-
 theorem timerSettled_of {h : History} {n : Nat} {v : ViewNumber} (hs : timerSettled cfg node h n v = true) :
     h.TimerAnswered cfg node n v ∨ ∃ u, h.ViewGround cfg u ∧ v < u := by
   simp only [timerSettled, Bool.or_eq_true, List.any_eq_true, decide_eq_true_eq] at hs
@@ -266,7 +245,7 @@ theorem checkTimers_sound {ms : List Moment} {ended δ : Nat}
     (hp : timerFaults cfg node ms ended δ = []) : TimersUntil cfg node ms ended δ := by
   intro k hk v ht
   have hnone := List.filterMap_eq_nil_iff.mp hp k (List.mem_range.mpr hk)
-  simp only [List.getElem?_eq_getElem hk, timerView_of ht] at hnone
+  simp only [List.getElem?_eq_getElem hk, timerView_eq_some.mpr ht] at hnone
   by_cases he : ended ≤ ms[k].time + δ
   · exact Or.inr he
   · have hs : settlesBy cfg node ms ms[k].step v (ms[k].time + δ) k ms.length = true := by

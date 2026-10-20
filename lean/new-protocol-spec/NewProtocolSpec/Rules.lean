@@ -552,10 +552,9 @@ Each case is the action being justified by what the node holds, not yet taken, a
 not overtaken. A vote1 and a proposal are owed only in the view the node is in, and
 until it times the view out; a vote2 until the node gives the certificate's view
 up, holds its `Cert2`, decides the view or a later one, or leaves the epoch; a
-decide until the
-block's view is decided or falls behind the floor. So every obligation ends, and
-none asks for anything the node would have to fetch, or for a view earlier than
-the floor (`Config.decideBuffer`).
+decide until the block's view is decided or falls behind the floor. So every
+obligation ends, and none asks for anything the node would have to fetch, or for
+a view earlier than the floor (`Config.decideBuffer`).
 -/
 def Owed (h : History) : Obligation → Prop
   | .vote1 p => OwedVote1 cfg leader h p

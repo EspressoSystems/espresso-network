@@ -8,10 +8,10 @@ public import NewProtocolImpl.Steps
 
 The rules `NewProtocol.ProtocolHistory` adds to the signing rules, decided on a
 recorded trace: when a node may time out, and what it may propose. That it answers
-its timers in time is checked with the obligations (`NewProtocolDiff.PromptCheck`). Unlike the signing rules, these read the node's view, epoch and lock,
-which the specification derives from the history as the latest each has grounds
-for. Here each ground is collected into a list, and the latest is the largest
-element.
+its timers in time is checked with the obligations (`NewProtocolDiff.PromptCheck`).
+Unlike the signing rules, these read the node's view, epoch and lock, which the
+specification derives from the history as the latest each has grounds for. Here
+each ground is collected into a list, and the latest is the largest element.
 
 `checkProtocol_sound` is what makes a pass mean the trace obeys
 `ProtocolHistory`, for the leader schedule the trace names.
@@ -31,13 +31,7 @@ variable (node : PubKey) (leader : EpochNumber → ViewNumber → Option PubKey)
 
 /-- Whether step `m` took a timer or one-honest indication for view `v` (`History.TimerAt`). -/
 def timerAtB (m : Nat) (v : ViewNumber) : Bool :=
-  match h[m]? with
-  | some st =>
-    match st.input with
-    | .timeout v' => decide (v' = v ∧ viewOf cfg (h.take m) = v)
-    | .timeoutOneHonest v' => decide (v' = v ∧ viewOf cfg (h.take m) ≤ v)
-    | _ => false
-  | none => false
+  decide (timerView cfg h m = some v)
 
 /--
 Whether a timeout vote sent in step `n` is justified (`ProtocolHistory.timeoutJustified`).
@@ -151,18 +145,8 @@ variable {cfg h}
 
 variable {node leader}
 
-theorem timerAt_of {m : Nat} {v : ViewNumber} (ht : timerAtB cfg h m v = true) : h.TimerAt cfg m v := by
-  unfold timerAtB at ht
-  split at ht
-  · rename_i st hst
-    refine ⟨st, hst, ?_⟩
-    revert ht
-    cases st.input <;> simp only [decide_eq_true_eq, Bool.false_eq_true, false_implies]
-    · rintro ⟨rfl, hv⟩
-      exact Or.inl ⟨rfl, hv ▸ inView_viewOf cfg _⟩
-    · rintro ⟨rfl, hv⟩
-      exact Or.inr ⟨rfl, _, inView_viewOf cfg _, hv⟩
-  · cases ht
+theorem timerAt_of {m : Nat} {v : ViewNumber} (ht : timerAtB cfg h m v = true) : h.TimerAt cfg m v :=
+  timerView_eq_some.mp (of_decide_eq_true ht)
 
 theorem timeoutJustified_of {n : Nat} {vote : TimeoutVote} (hj : timeoutJustifiedBy cfg h node n vote = true) :
     vote.signer = node ∧ ∃ m ≤ n, h.TimerAt cfg m vote.view ∧ (h.upTo m).InEpoch cfg vote.data.epoch
