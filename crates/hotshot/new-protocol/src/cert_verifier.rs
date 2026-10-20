@@ -83,6 +83,13 @@ pub trait Verifiable<T: NodeType>: HasViewNumber + HasEpoch + Sized {
 
     fn key(&self) -> Option<Self::Key>;
 
+    /// The epochs whose committees [`Self::check`] reads.
+    ///
+    /// The item waits until every one of them is known.
+    fn epochs(&self) -> impl Iterator<Item = EpochNumber> {
+        self.epoch().into_iter()
+    }
+
     fn check(
         self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
@@ -214,6 +221,16 @@ impl<T: NodeType> Verifiable<T> for TimeoutCertificate3<T> {
 
     fn key(&self) -> Option<ViewNumber> {
         Some(self.view_number())
+    }
+
+    /// Its own epoch, and its lock's if the lock is checked: the lock
+    /// certificate is verified against that epoch's committee.
+    fn epochs(&self) -> impl Iterator<Item = EpochNumber> {
+        let lock = self
+            .lock()
+            .filter(|lock| lock.checked_in(self.epoch))
+            .map(|lock| lock.epoch);
+        std::iter::once(self.epoch).chain(lock)
     }
 
     fn check(
@@ -353,6 +370,16 @@ impl<T: NodeType, C: Verifiable<T> + Send + 'static> CertVerifier<T, C> {
                 .insert(sender, cert);
             return Some(epoch);
         };
+        let missing = cert
+            .epochs()
+            .find(|epoch| self.membership.membership_for_epoch(Some(*epoch)).is_err());
+        if let Some(missing) = missing {
+            self.pending_membership
+                .entry(key)
+                .or_default()
+                .insert(sender, cert);
+            return Some(missing);
+        }
 
         let lock = self.upgrade_lock.clone();
         let epoch_height = *self.membership.epoch_height();
@@ -569,6 +596,13 @@ where
             self.pending.insert(sender, cert);
             return Some(epoch);
         };
+        let missing = cert
+            .epochs()
+            .find(|epoch| self.membership.membership_for_epoch(Some(*epoch)).is_err());
+        if let Some(missing) = missing {
+            self.pending.insert(sender, cert);
+            return Some(missing);
+        }
 
         let lock = self.upgrade_lock.clone();
         let epoch_height = *self.membership.epoch_height();
@@ -817,7 +851,8 @@ mod tests {
     use crate::{
         helpers::{test_timeout_epoch_lock, test_upgrade_lock},
         tests::common::utils::{
-            build_timeout_cert, build_timeout_cert3_with_lock, mock_membership,
+            TEST_DRB_RESULT, build_cert1, build_timeout_cert, build_timeout_cert3_with_lock,
+            mock_membership,
         },
     };
 
@@ -883,6 +918,61 @@ mod tests {
         let mut cert = build_timeout_cert3_with_lock(view + 1, epoch, None, &membership);
         cert.view_number = view;
         cert
+    }
+
+    /// A certificate whose lock is of an epoch whose committee is not known yet
+    /// waits until it is, as one of an unknown epoch of its own does, and is
+    /// then verified.
+    #[tokio::test]
+    async fn certificate_with_a_lock_of_an_unknown_epoch_waits() {
+        let (lock_epoch, epoch) = (EpochNumber::new(3), EpochNumber::new(4));
+        let known = mock_membership();
+        for e in [lock_epoch, epoch] {
+            known.membership().register_epoch(e, TEST_DRB_RESULT);
+        }
+        let lock_membership = known.membership_for_epoch(Some(lock_epoch)).unwrap();
+        let membership = known.membership_for_epoch(Some(epoch)).unwrap();
+        let (pk, sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+        let leaf = committable::RawCommitmentBuilder::new("leaf")
+            .u64(29)
+            .finalize();
+        let lock = build_cert1(
+            leaf,
+            lock_epoch,
+            29,
+            &lock_membership,
+            ViewNumber::new(30),
+            &pk,
+            &sk,
+        );
+        let tc = build_timeout_cert3_with_lock(ViewNumber::new(31), epoch, Some(lock), &membership);
+
+        let coordinator = mock_membership();
+        coordinator
+            .membership()
+            .register_epoch(epoch, TEST_DRB_RESULT);
+        assert!(
+            coordinator.membership_for_epoch(Some(epoch)).is_ok()
+                && coordinator.membership_for_epoch(Some(lock_epoch)).is_err(),
+            "setup: the certificate's committee is known, the lock's is not"
+        );
+        let mut verifier = CertBySenderVerifier::<TestTypes, TimeoutCertificate3<TestTypes>>::new(
+            coordinator.clone(),
+            test_timeout_epoch_lock(),
+            Completion::PerViewAndEpoch,
+        );
+        assert_eq!(verifier.verify(sender(1), tc.clone()), Some(lock_epoch));
+        assert!(verifier.tasks.is_empty(), "nothing is checked yet");
+
+        coordinator
+            .membership()
+            .register_epoch(lock_epoch, TEST_DRB_RESULT);
+        assert!(verifier.retry_pending().is_empty());
+        let valid = verifier
+            .next()
+            .await
+            .expect("verified once the lock's committee is known");
+        assert_eq!(valid.into_cert(), tc);
     }
 
     // ==================== Parking ====================

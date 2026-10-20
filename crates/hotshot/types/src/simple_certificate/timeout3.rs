@@ -48,6 +48,11 @@ pub struct TimeoutCertificate3<T: NodeType> {
 pub struct LatestTimeoutSignatures<T: NodeType> {
     /// The certificate of their lock; `None` if they are locked on nothing
     /// but genesis.
+    ///
+    /// Its signatures are verified only if the lock is checked in the
+    /// certificate's epoch ([`LockView::checked_in`]). Otherwise only its
+    /// [`LockView`] is bound, by the latest group's signatures, and the rest
+    /// of it is whatever the sender put there.
     pub lock_cert: Option<QuorumCertificate2<T>>,
     /// Their aggregate signature and signer bit vector.
     pub signatures: <T::SignatureKey as SignatureKey>::QcType,
@@ -133,6 +138,9 @@ impl<T: NodeType> TimeoutCertificate3<T> {
     }
 
     /// The certificate of the certificate's lock.
+    ///
+    /// Only its [`LockView`] is verified unless the lock is checked (see
+    /// [`LatestTimeoutSignatures::lock_cert`]).
     pub fn lock_cert(&self) -> Option<&QuorumCertificate2<T>> {
         self.latest.lock_cert.as_ref()
     }
@@ -184,9 +192,10 @@ impl<T: NodeType> TimeoutCertificate3<T> {
     /// earlier than the certificate's lock, which must pass
     /// [`Self::check_lock`]. Every group must have a signer, and no signer may
     /// be in two groups. Each group's signature must be valid over its own
-    /// data, and together the groups must reach `threshold`. That the lock certificate is signed by a quorum
-    /// of its own epoch is [`Self::lock_epoch`]'s committee's to check, and
-    /// is not checked here: a certificate is valid only with both.
+    /// data, and together the groups must reach `threshold`. That the lock
+    /// certificate is signed by a quorum of its own epoch is
+    /// [`Self::lock_epoch`]'s committee's to check, and is not checked here: a
+    /// certificate is valid only with both.
     pub fn check_signatures(
         &self,
         stake_table: &[<T::SignatureKey as SignatureKey>::StakeTableEntry],
@@ -256,6 +265,12 @@ impl<T: NodeType> HasEpoch for TimeoutCertificate3<T> {
     }
 }
 
+/// Covers the lock certificate as sent. For a lock that is not checked, two
+/// certificates that differ only in the unverified parts of it both verify and
+/// commit differently, so the commitment does not identify the certificate's
+/// signed content. Nothing keys on it: consensus keys timeout certificates by
+/// view, and a proposal's leaf commitment covers the evidence its leader
+/// signed.
 impl<T: NodeType> Committable for TimeoutCertificate3<T> {
     fn commit(&self) -> Commitment<Self> {
         let mut builder = committable::RawCommitmentBuilder::new("Timeout certificate v3")

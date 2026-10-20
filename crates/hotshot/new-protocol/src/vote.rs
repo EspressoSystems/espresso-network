@@ -61,6 +61,13 @@ pub trait Ballot {
     fn view(&self) -> ViewNumber;
     fn epoch(&self) -> Option<EpochNumber>;
     fn signer(&self) -> Self::Signer;
+
+    /// The epochs whose committees counting the vote reads, its own included.
+    ///
+    /// The vote waits until every one of them is known.
+    fn epochs(&self) -> impl Iterator<Item = EpochNumber> {
+        self.epoch().into_iter()
+    }
 }
 
 /// How to count votes to form a certificate.
@@ -254,6 +261,18 @@ impl<T: NodeType> Ballot for TimeoutBallot<T> {
 
     fn signer(&self) -> Self::Signer {
         self.vote().signing_key()
+    }
+
+    /// Its own epoch, and its lock's if the lock is checked: the lock
+    /// certificate is verified against that epoch's committee.
+    fn epochs(&self) -> impl Iterator<Item = EpochNumber> {
+        let epoch = self.vote().data.epoch;
+        let lock = self
+            .lock()
+            .map(LockView::of)
+            .filter(|lock| lock.checked_in(epoch))
+            .map(|lock| lock.epoch);
+        std::iter::once(epoch).chain(lock)
     }
 }
 
@@ -580,42 +599,56 @@ where
         }
     }
 
-    pub fn accumulate_vote(&mut self, vote: S::Vote) {
+    /// Count `vote`, or hold it until the committees of its epochs are known.
+    ///
+    /// Returns the epoch whose committee a held vote waits for, so that the
+    /// caller can drive its catchup.
+    pub fn accumulate_vote(&mut self, vote: S::Vote) -> Option<EpochNumber> {
         let view = vote.view();
 
         let Some(epoch) = vote.epoch() else {
             // A vote without an epoch names no committee, so it can never be tallied.
-            return;
+            return None;
         };
 
         let key = (view, epoch);
 
         if view < self.lower_bound || self.completed.contains(&key) {
-            return;
+            return None;
         }
 
+        // A stake table may still arrive by catchup, so keep the vote for
+        // `retry_pending_votes`.
         let Ok(membership) = self.membership.membership_for_epoch(Some(epoch)) else {
-            // The epoch's stake table may still arrive by catchup, so keep
-            // the vote for `retry_pending_votes`.
             self.pending
                 .entry(key)
                 .or_default()
                 .insert(vote.signer(), vote);
-            return;
+            return Some(epoch);
         };
+        let missing = vote
+            .epochs()
+            .find(|e| self.membership.membership_for_epoch(Some(*e)).is_err());
+        if let Some(missing) = missing {
+            self.pending
+                .entry(key)
+                .or_default()
+                .insert(vote.signer(), vote);
+            return Some(missing);
+        }
 
         if !S::has_signer(&membership, &vote.signer()) {
-            return;
+            return None;
         }
 
         // Check that we have not received a vote from this signer already.
         if !self.signers.entry(key).or_default().insert(vote.signer()) {
-            return;
+            return None;
         }
 
         if let Some(tx) = self.ballot_boxes.get(&key) {
             let _ = tx.send(vote);
-            return;
+            return None;
         }
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -625,6 +658,7 @@ where
 
         let tally = S::new(membership, self.upgrade_lock.clone());
         self.accumulators.spawn(key, run_tally::<T, S>(rx, tally));
+        None
     }
 
     /// Record that `view`'s certificate in `epoch` was obtained by other means,
@@ -650,7 +684,7 @@ where
             .into_values()
             .flat_map(|votes| votes.into_values())
         {
-            self.accumulate_vote(vote)
+            self.accumulate_vote(vote);
         }
     }
 
@@ -763,7 +797,8 @@ mod tests {
         helpers::{test_timeout_epoch_lock, test_upgrade_lock},
         message::{CatchupEvidence, TimeoutBallot, TimeoutVoteMessage3, UpgradeVoteMessage, Vote2},
         tests::common::utils::{
-            build_timeout_cert3_signed_by, build_timeout_cert3_with_lock, mock_membership,
+            TEST_DRB_RESULT, build_timeout_cert3_signed_by, build_timeout_cert3_with_lock,
+            mock_membership,
         },
     };
 
@@ -1280,6 +1315,58 @@ mod tests {
         let entries = StakeTableEntries::<TestTypes>::from_iter(membership.stake_table()).0;
         cert.check_signatures(&entries, membership.success_threshold(), &lock)
             .expect("valid grouped certificate");
+    }
+
+    /// A vote whose lock is of an epoch whose committee is not known yet waits,
+    /// as one of an unknown epoch of its own does, and is counted once it is.
+    #[tokio::test]
+    async fn timeout_vote_with_a_lock_of_an_unknown_epoch_waits() {
+        let lock = test_timeout_epoch_lock();
+        let (lock_epoch, epoch) = (EpochNumber::new(3), EpochNumber::new(4));
+        let known = mock_membership();
+        for e in [lock_epoch, epoch] {
+            known.membership().register_epoch(e, TEST_DRB_RESULT);
+        }
+        let lock_membership = known.membership_for_epoch(Some(lock_epoch)).unwrap();
+        let cert = Some(lock_cert(
+            ViewNumber::new(30),
+            lock_epoch,
+            &lock_membership,
+            &lock,
+        ));
+
+        let coordinator = mock_membership();
+        coordinator
+            .membership()
+            .register_epoch(epoch, TEST_DRB_RESULT);
+        let mut task = VoteCollector::<TestTypes, TimeoutTally<TestTypes, SuccessThreshold>>::new(
+            coordinator.clone(),
+            lock.clone(),
+        );
+        let view = ViewNumber::new(31);
+        for i in 0..NUM_NODES {
+            let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
+            let ballot =
+                TimeoutBallot::sign(view, epoch, cert.clone(), &pub_key, &priv_key, &lock).unwrap();
+            assert_eq!(task.accumulate_vote(ballot), Some(lock_epoch));
+        }
+        assert!(
+            !matches!(
+                timeout(Duration::from_millis(100), task.next()).await,
+                Ok(Some(_))
+            ),
+            "nothing is counted yet"
+        );
+
+        coordinator
+            .membership()
+            .register_epoch(lock_epoch, TEST_DRB_RESULT);
+        task.retry_pending_votes();
+        let formed = timeout(RECOVERY_TIMEOUT, task.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(formed.lock(), cert.as_ref().map(LockView::of));
     }
 
     /// A vote naming a lock its certificate does not show is not counted, so
