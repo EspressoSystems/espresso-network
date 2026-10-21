@@ -195,20 +195,35 @@ structure Network (cfg : Config) (C : Committee) where
   /-- Every prefix obeys the signing rules, for the epochs the node is honest in. -/
   safe : ∀ k h n, SafeHistory cfg k (C.honest · k) ((trace k h).history n)
 
-  /-- Every `Cert1` an input carries is backed, or is the anchor's. -/
-  cert1Genuine : ∀ k h n c, c ∈ (trace k h n).input.cert1 → c = cfg.anchorCert ∨ Cert1Backed trace c
+  /--
+  A `Cert1` an input carries is backed, or is the anchor's: a certificate on its
+  own, an epoch change's first certificate, or a proposal's parent certificate.
 
-  /-- Every `Cert2` an input carries is backed. -/
-  cert2Genuine : ∀ k h n c, c ∈ (trace k h n).input.cert2 → Cert2Backed trace c
+  A re-vote request's certificate is never the anchor's, so it is stated apart
+  (`revoteGenuine`).
+  -/
+  cert1Genuine : ∀ k h n c,
+    ((trace k h n).input = .certificate1 c ∨ (∃ c2 p, (trace k h n).input = .epochChange c c2 p)
+      ∨ ∃ s p share, (trace k h n).input = .proposal s p share ∧ p.parentCert = c) →
+    c = cfg.anchorCert ∨ Cert1Backed trace c
+
+  /-- A `Cert2` an input carries is backed: a certificate on its own, or an epoch change's. -/
+  cert2Genuine : ∀ k h n c,
+    ((trace k h n).input = .certificate2 c ∨ ∃ c1 p, (trace k h n).input = .epochChange c1 c p) →
+    Cert2Backed trace c
 
   /--
-  Every timeout certificate an input carries is backed, and its lock checked.
+  A timeout certificate an input carries is backed, and its lock checked: a
+  certificate on its own, or the timeout evidence of a proposal or a re-vote request.
 
   The verifier checks the certificate each signer names as its lock, so the latest
   of them is a real `Cert1`. That is what lets every honest node fetch its
   proposal and payload (`Synchrony.timeoutLockSpread`).
   -/
-  timeoutCertGenuine : ∀ k h n tc, tc ∈ (trace k h n).input.timeoutCert →
+  timeoutCertGenuine : ∀ k h n tc,
+    ((trace k h n).input = .timeoutCertificate tc
+      ∨ (∃ s p share, (trace k h n).input = .proposal s p share ∧ p.timeoutEvidence = some tc)
+      ∨ ∃ s r, (trace k h n).input = .revote s r ∧ r.timeoutEvidence = some tc) →
     TimeoutCertBacked trace tc ∧ TimeoutLockChecked trace cfg tc
 
   /--

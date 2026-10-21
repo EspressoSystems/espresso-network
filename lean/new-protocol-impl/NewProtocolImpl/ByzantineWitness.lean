@@ -1836,7 +1836,7 @@ def net (B : Bool) : TimedNetwork cfg leader (C' B) where
   trace k _ := tr k
   safe k _ n := .of_every (protocol hv k n).toSafeHistory
   cert1Genuine k _ n x hc := by
-    rcases Input.mem_cert1.mp hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
+    rcases hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
     · obtain ⟨u, -, rfl⟩ := input_cert1 hin
       exact Or.inr (backed1 hv u)
     · obtain ⟨w, -, -, rfl, -, -⟩ := input_epochChange hin
@@ -1850,13 +1850,13 @@ def net (B : Bool) : TimedNetwork cfg leader (C' B) where
       · exact Or.inr (backed1 hv _)
       · exact Or.inr (backed1 hv _)
   cert2Genuine k _ n x hc := by
-    rcases Input.mem_cert2.mp hc with hin | ⟨c1, p, hin⟩
+    rcases hc with hin | ⟨c1, p, hin⟩
     · obtain ⟨u, -, rfl⟩ := input_cert2 hin
       exact backed2 hv u
     · obtain ⟨w, -, -, -, rfl, -⟩ := input_epochChange hin
       exact backed2 hv _
   timeoutCertGenuine k _ n tc hc := by
-    rcases Input.mem_timeoutCert.mp hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, -⟩
+    rcases hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, -⟩
     · obtain ⟨w, -, rfl⟩ := input_tc hin
       exact ⟨tcBacked w, tcChecked hv w⟩
     · obtain ⟨v, rfl⟩ := input_share hin

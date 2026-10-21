@@ -986,7 +986,7 @@ def net : TimedNetwork cfg leader C where
   trace k _ := tr k
   safe k _ n := .of_every (protocol hv k n).toSafeHistory
   cert1Genuine _ _ n x hc := by
-    rcases Input.mem_cert1.mp hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
+    rcases hc with hin | ⟨c2, p, hin⟩ | ⟨s, p, vid, hin, rfl⟩
     · obtain ⟨u, -, rfl⟩ := input_cert1 hin
       exact Or.inr (backed1 hv u)
     · exact absurd hin (input_none.1 _ _ _)
@@ -997,12 +997,12 @@ def net : TimedNetwork cfg leader C where
       | zero => exact Or.inl rfl
       | succ u => exact Or.inr (backed1 hv u)
   cert2Genuine _ _ n x hc := by
-    rcases Input.mem_cert2.mp hc with hin | ⟨c1, p, hin⟩
+    rcases hc with hin | ⟨c1, p, hin⟩
     · obtain ⟨u, -, rfl⟩ := input_cert2 hin
       exact backed2 hv u
     · exact absurd hin (input_none.1 _ _ _)
   timeoutCertGenuine _ _ n tc hc := by
-    rcases Input.mem_timeoutCert.mp hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, -⟩
+    rcases hc with hin | ⟨s, p, vid, hin, hte⟩ | ⟨s, r, hin, -⟩
     · obtain ⟨-, rfl⟩ := input_tc hin
       exact ⟨tc_backed, Or.inr (backed1 hv 0), by show (1 : Nat) ≤ 2; omega⟩
     · obtain ⟨v, rfl⟩ := input_share hin

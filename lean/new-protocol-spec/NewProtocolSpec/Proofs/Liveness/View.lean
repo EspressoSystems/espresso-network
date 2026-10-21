@@ -774,7 +774,7 @@ theorem lockable_before_start {j : PubKey} {hj : C.Honest j} {n : Nat} {c : Cert
   · exfalso
     obtain ⟨i, -, hin⟩ := (Trace.received_history _).mp hrec
     have hc2b : Cert2Backed N.trace c2 :=
-      N.cert2Genuine j hj i c2 (by rw [hin]; rfl)
+      N.cert2Genuine j hj i c2 (Or.inr ⟨_, _, hin⟩)
     obtain ⟨cc, hccb, -, -, hcce⟩ := cert2_implies_cert1 cfg N.toNetwork hcfg hc2b
     have h1 := cert1_epoch_after_start N.toNetwork hcfg _ _ (Nat.le_refl _) hccb
     have h2 : c.data.epoch = c2.data.epoch := congrArg Vote2Data.epoch hwf.sameData

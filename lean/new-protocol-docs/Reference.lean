@@ -34,7 +34,7 @@ once it holds its own share of the payload and was told the block is valid. A
 quorum of vote1s is a {name NewProtocol.Cert1}`Cert1`. With it, any node may enter
 the next view, and the next leader may build on the block. A node that also has the
 block's payload may lock on it. A node's _lock_ is the latest {name NewProtocol.Cert1}`Cert1`
-it could lock on ({name NewProtocol.History.LockedOn}`History.LockedOn`).
+it could lock on.
 
 A vote2 says the node holds the block's {name NewProtocol.Cert1}`Cert1` and has rebuilt its
 payload from the shares, so the payload is available. A quorum of vote2s is a
@@ -233,7 +233,8 @@ so that no rule can take a vote of one round for one of the other.
 {expansion NewProtocol.TimeoutCert}
 
 The last kind of data is a leader's request to vote again on an epoch's last block,
-for when that block has a {name NewProtocol.Cert1}`Cert1` but no {name NewProtocol.Cert2}`Cert2` ({ref "epochs"}[Crossing an epoch boundary]).
+for when that block has a {name NewProtocol.Cert1}`Cert1` but no {name NewProtocol.Cert2}`Cert2`
+  ({ref "epochs"}[Crossing an epoch boundary]).
 
 {docstring NewProtocol.RevoteRequest}
 
@@ -266,12 +267,6 @@ Certificates arriving as inputs are already verified, which is what the network
 assumptions below say.
 
 {docstring NewProtocol.Input}
-
-{docstring NewProtocol.Input.cert1}
-
-{docstring NewProtocol.Input.cert2}
-
-{docstring NewProtocol.Input.timeoutCert}
 
 A node's outputs are messages to its peers and blocks delivered to the application.
 No message names a recipient; who receives what, and when, is the network's part
