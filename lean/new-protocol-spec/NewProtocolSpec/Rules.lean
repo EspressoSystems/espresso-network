@@ -573,7 +573,11 @@ def Output.SignedIn (honestIn : EpochNumber → Prop) : Output → Prop
   | .send (.vote1 v) => honestIn v.data.epoch
   | .send (.vote2 v) => honestIn v.data.epoch
   | .send (.timeoutVote v) => honestIn v.data.epoch
-  | .send _ => True
+  | .send (.timeoutCert _) => True
+  | .send (.cert1 _) => True
+  | .send (.cert2 _) => True
+  | .send (.epochChange ..) => True
+  | .send (.vidShare _) => True
   | .decided _ _ c2 => honestIn c2.data.epoch
 
 open Classical in

@@ -1150,13 +1150,15 @@ What else an honest node may do: when it may time out, what it may propose, and
 from whom it takes a proposal.
 
 A proposal and a re-vote request name a certificate the leader may build on
-({name NewProtocol.CertJustified}`CertJustified`). Without a timeout, the leader holds the certificate and
-the block's proposal, though not necessarily its payload. After a timeout, it was locked on the certificate at some point after
-it received the timeout certificate. A re-vote request without a timeout also
-needs the block's payload ({name NewProtocol.RevoteJustified.lockable}`RevoteJustified.lockable`).
+({name NewProtocol.CertJustified}`CertJustified`). Without a timeout, the leader holds the
+certificate and the block's proposal, though not necessarily its payload. After a timeout, it was
+locked on the certificate at some point after it received the timeout certificate. A re-vote
+request without a timeout also needs the block's payload
+({name NewProtocol.RevoteJustified.lockable}`RevoteJustified.lockable`).
 
 Whether the honest members accept the certificate, given the timeout
-certificate's lock, is a separate condition ({name NewProtocol.ProposalReady.safe}`ProposalReady.safe`).
+certificate's lock, is a separate condition
+({name NewProtocol.ProposalReady.safe}`ProposalReady.safe`).
 
 ```lean -show
 namespace Spec.NotBehind
@@ -1277,14 +1279,15 @@ tag := "owed"
 %%%
 
 The rules above are permissions: a node that never acts satisfies all of them.
-{name NewProtocol.Owed}`Owed` is the other side, what a node must eventually do. Each obligation is an
-action that is justified by what the node holds, not yet taken, and not overtaken
-by events. Every obligation ends, and none asks for anything the node would have to
-fetch: a vote1 and a proposal are owed only in the node's current view and until it
+{name NewProtocol.Owed}`Owed` is the other side, what a node must eventually do.
+Each obligation is an action that is justified by what the node holds, not yet taken,
+and not overtaken by events. Every obligation ends, and none asks for anything the node would
+have to fetch: a vote1 and a proposal are owed only in the node's current view and until it
 times the view out, a vote2 until the node gives its view up, decides it or a
 later one, or leaves its epoch, and a decide only after the decide floor.
 
-How long an obligation may stay owed is not said here. That is {name NewProtocol.Prompt}`Prompt`, below.
+How long an obligation may stay owed is not said here. That is {name NewProtocol.Prompt}`Prompt`,
+below.
 
 ```lean -show
 namespace Spec.ParentReady
@@ -1363,7 +1366,11 @@ open NewProtocol.History
     | .send (.vote1 v) => honestIn v.data.epoch
     | .send (.vote2 v) => honestIn v.data.epoch
     | .send (.timeoutVote v) => honestIn v.data.epoch
-    | .send _ => True
+    | .send (.timeoutCert _) => True
+    | .send (.cert1 _) => True
+    | .send (.cert2 _) => True
+    | .send (.epochChange ..) => True
+    | .send (.vidShare _) => True
     | .decided _ _ c2 => honestIn c2.data.epoch
   ```
 :::
@@ -1465,7 +1472,7 @@ open NewProtocol.History
 :::spec NewProtocol.Committee.HonestFrom
   ```lean
   def Committee.HonestFrom (C : Committee) (e : EpochNumber) (k : PubKey) : Prop :=
-    ∃ e', e.toNat ≤ e'.toNat ∧ C.honest e' k
+    ∃ e', e ≤ e' ∧ C.honest e' k
   ```
 :::
 
@@ -1660,10 +1667,10 @@ end Spec.TimeoutLockChecked
 
 A network is one trace per honest node, each obeying the signing rules, in which
 every certificate an honest node is handed is backed. The fields saying so are named
-_genuine_ ({name NewProtocol.Network.cert1Genuine}`Network.cert1Genuine` and the others); _backed_ is what they say of a
-certificate. The two words name one notion: a genuine certificate is a backed one. Those fields are the
-verification layer's contract and, with {name NewProtocol.CollisionFree}`CollisionFree`, the only cryptographic
-assumptions.
+_genuine_ ({name NewProtocol.Network.cert1Genuine}`Network.cert1Genuine` and the others);
+_backed_ is what they say of a certificate. The two words name one notion: a genuine certificate
+is a backed one. Those fields are the verification layer's contract and, with
+{name NewProtocol.CollisionFree}`CollisionFree`, the only cryptographic assumptions.
 
 {docstring NewProtocol.Network}
 
@@ -1802,18 +1809,28 @@ Each property is a named proposition, proved for every configuration and committ
 Each premise below is a hypothesis of the proposition, or a field of the structures
 it quantifies over.
 
-* {name NewProtocol.NoFork}`NoFork`, proved by {name NewProtocol.noFork}`noFork`, and {name NewProtocol.DecideAgreement}`DecideAgreement`, proved by
-  {name NewProtocol.decideAgreement}`decideAgreement`: the signing rules and genuine certificates ({name NewProtocol.Network}`Network`),
-  quorum intersection ({name NewProtocol.Committee.intersect}`Committee.intersect`), {name NewProtocol.ConfigCoherent}`ConfigCoherent`, {name NewProtocol.CollisionFree}`CollisionFree`,
-  and a block table that is {name NewProtocol.TreeCoherent}`TreeCoherent` and {name NewProtocol.Resolves}`Resolves` the honest nodes'
-  blocks.
-* {name NewProtocol.DecidesValid}`DecidesValid`, proved by {name NewProtocol.decidesValid}`decidesValid`: {name NewProtocol.Network}`Network`, quorum
-  intersection, {name NewProtocol.ConfigCoherent}`ConfigCoherent` and {name NewProtocol.CollisionFree}`CollisionFree`.
-* {name NewProtocol.ChainGrows}`ChainGrows`, proved by {name NewProtocol.Liveness.chainGrows}`Liveness.chainGrows`: a {name NewProtocol.TimedNetwork}`TimedNetwork`, which
-  adds to {name NewProtocol.Network}`Network` the whole protocol and honest quorums in every epoch
-  ({name NewProtocol.TimedNetwork.honestQuorum}`TimedNetwork.honestQuorum`); finitely many honest nodes
-  ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`); {name NewProtocol.Synchrony}`Synchrony`, {name NewProtocol.Prompt}`Prompt`, `8Δ + 4δ < τ`,
-  {name NewProtocol.LeaderRotation}`LeaderRotation`, {name NewProtocol.ConfigCoherent}`ConfigCoherent` and {name NewProtocol.CollisionFree}`CollisionFree`.
+* {name NewProtocol.NoFork}`NoFork`, proved by {name NewProtocol.noFork}`noFork`, and
+  {name NewProtocol.DecideAgreement}`DecideAgreement`, proved by
+  {name NewProtocol.decideAgreement}`decideAgreement`: the signing rules and genuine certificates
+  ({name NewProtocol.Network}`Network`), quorum intersection
+  ({name NewProtocol.Committee.intersect}`Committee.intersect`),
+  {name NewProtocol.ConfigCoherent}`ConfigCoherent`, {name NewProtocol.CollisionFree}`CollisionFree`,
+  and a block table that is {name NewProtocol.TreeCoherent}`TreeCoherent` and
+  {name NewProtocol.Resolves}`Resolves` the honest nodes' blocks.
+* {name NewProtocol.DecidesValid}`DecidesValid`, proved by
+  {name NewProtocol.decidesValid}`decidesValid`: {name NewProtocol.Network}`Network`, quorum
+  intersection, {name NewProtocol.ConfigCoherent}`ConfigCoherent` and
+  {name NewProtocol.CollisionFree}`CollisionFree`.
+* {name NewProtocol.ChainGrows}`ChainGrows`, proved by
+  {name NewProtocol.Liveness.chainGrows}`Liveness.chainGrows`: a
+  {name NewProtocol.TimedNetwork}`TimedNetwork`, which adds to {name NewProtocol.Network}`Network`
+  the whole protocol and honest quorums in every epoch
+  ({name NewProtocol.TimedNetwork.honestQuorum}`TimedNetwork.honestQuorum`); finitely many honest
+  nodes ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`);
+  {name NewProtocol.Synchrony}`Synchrony`, {name NewProtocol.Prompt}`Prompt`, `8Δ + 4δ < τ`,
+  {name NewProtocol.LeaderRotation}`LeaderRotation`,
+  {name NewProtocol.ConfigCoherent}`ConfigCoherent` and
+  {name NewProtocol.CollisionFree}`CollisionFree`.
 
 ## No fork
 
@@ -1943,8 +1960,8 @@ with it the honest voter checked the evidence's lock.
 {docstring NewProtocol.cert2_ancestor_epoch}
 
 Across epochs, the walk passes through a committed last block, because a proposal
-opening an epoch comes behind a {name NewProtocol.Cert2}`Cert2` over its parent. So the argument never
-intersects the quorums of two committees.
+opening an epoch comes behind a {name NewProtocol.Cert2}`Cert2` over its parent. So the
+argument never intersects the quorums of two committees.
 
 {docstring NewProtocol.cert1_crosses_boundary}
 
@@ -1954,10 +1971,11 @@ intersects the quorums of two committees.
 tag := "decides"
 %%%
 
-A decide counts when the node is honest in the epoch of the {name NewProtocol.Cert2}`Cert2` it decides on.
-Such a decide carries a {name NewProtocol.Cert2}`Cert2` the node holds, which is backed, and every block it
-delivers is an ancestor of that certificate's block. {name NewProtocol.noFork}`noFork` orders the
-certificates, so what honest nodes decide lies on one chain.
+A decide counts when the node is honest in the epoch of the {name NewProtocol.Cert2}`Cert2` it
+decides on. Such a decide carries a {name NewProtocol.Cert2}`Cert2` the node holds, which is
+backed, and every block it delivers is an ancestor of that certificate's block.
+{name NewProtocol.noFork}`noFork` orders the certificates, so what honest nodes decide lies on
+one chain.
 
 ```lean -show
 namespace Spec.DecidedBlock
@@ -2012,9 +2030,9 @@ tag := "valid-decides"
 %%%
 
 Consensus never checks a block's validity itself. Each delivered block has a
-backed {name NewProtocol.Cert1}`Cert1` over it, and an honest signer of that certificate votes1 only for
-a valid block ({name NewProtocol.SafeHistory.vote1Justified}`SafeHistory.vote1Justified`). How a node learns validity is
-outside the rules, under {ref "not-covered"}[what is not covered].
+backed {name NewProtocol.Cert1}`Cert1` over it, and an honest signer of that certificate votes1
+only for a valid block ({name NewProtocol.SafeHistory.vote1Justified}`SafeHistory.vote1Justified`).
+How a node learns validity is outside the rules, under {ref "not-covered"}[what is not covered].
 
 ```lean -show
 namespace Spec.DecidesValid
@@ -2124,19 +2142,18 @@ end Spec.ChainGrows
 {docstring NewProtocol.Liveness.chainGrows}
 
 Both parts are proved by contradiction, from one argument
-({name NewProtocol.Liveness.decides_unbounded}`Liveness.decides_unbounded`). For each epoch, take a node honest in it, and
-suppose that the views each decides on `Cert2`s of epochs it is honest in are
-bounded by `V`. For
-the first part, these are nodes from each epoch's honest quorum, and the bound is
-what all nodes had decided by `t`. For the second, the steady node is that node for
+({name NewProtocol.Liveness.decides_unbounded}`Liveness.decides_unbounded`). For each epoch, take
+a node honest in it, and suppose that the views each decides on `Cert2`s of epochs it is honest in
+are bounded by `V`. For the first part, these are nodes from each epoch's honest quorum, and the
+bound is what all nodes had decided by `t`. For the second, the steady node is that node for
 every epoch. A node honest only in infinitely many epochs takes one more step, at
 the end of this section.
 
 First, no honest node ever gets grounds for an epoch later than a bound. Grounds for
 a later epoch come from an epoch change, from a certified block of that epoch,
-whose chain entered it behind a last block an honest node held with a {name NewProtocol.Cert2}`Cert2`,
-or from a timeout certificate, whose signers were already in the epoch. Either way
-the epoch change reaches the node honest in that epoch, which then decides that
+whose chain entered it behind a last block an honest node held with a
+{name NewProtocol.Cert2}`Cert2`, or from a timeout certificate, whose signers were already in the
+epoch. Either way the epoch change reaches the node honest in that epoch, which then decides that
 last block, and the last block's view grows with its epoch. Grounds other than a
 timeout certificate are _solid_:
 
@@ -2179,8 +2196,8 @@ block, or asks for a re-vote, within `4Δ + 2δ`.
 
 {docstring NewProtocol.Liveness.leader_acts}
 
-The members vote1, lock on the {name NewProtocol.Cert1}`Cert1` and vote2, and every node honest in the
-epoch, member or not, gets the block and decides the view or a later one, all
+The members vote1, lock on the {name NewProtocol.Cert1}`Cert1` and vote2, and every node honest
+in the epoch, member or not, gets the block and decides the view or a later one, all
 before the timer of `τ` can fire. A re-vote cannot get this far in a stable epoch:
 its {name NewProtocol.Cert2}`Cert2` would commit the epoch's last block. So the node honest in the
 stable epoch decides a view past the bound, which contradicts the supposition.
@@ -2224,12 +2241,13 @@ results are about really happens.
 
 For the safety premises, this package has one: a network in which a block is
 committed and a proposal opens the next epoch behind it, so that the rule for
-opening an epoch ({name NewProtocol.OpensEpochJustified}`OpensEpochJustified`) is met by doing something rather than by
-having nothing to do.
+opening an epoch ({name NewProtocol.OpensEpochJustified}`OpensEpochJustified`) is met
+by doing something rather than by having nothing to do.
 
 {docstring NewProtocol.Witness.premises_met}
 
-{name NewProtocol.DecideAgreement}`DecideAgreement` and {name NewProtocol.DecidesValid}`DecidesValid` read no premise beyond those of
+{name NewProtocol.DecideAgreement}`DecideAgreement` and
+{name NewProtocol.DecidesValid}`DecidesValid` read no premise beyond those of
 {name NewProtocol.NoFork}`NoFork`, so the same network meets theirs.
 
 Its committees change with the epoch, and so does honesty. The node that is the
@@ -2251,13 +2269,13 @@ premise of {name NewProtocol.ChainGrows}`ChainGrows`. Each witness exercises a d
 * `SplitWitness`: GST after the first timer, so the first epoch change reaches only
   some nodes, the first timeout votes name two epochs and form no certificate, and
   the timer's second round does. Every later boundary is crossed without a timer.
-* `LateCertWitness`: an epoch's last block whose {name NewProtocol.Cert1}`Cert1` arrives after every node
-  timed its view out. Nobody votes2 at the block's view, the epoch change carries the
+* `LateCertWitness`: an epoch's last block whose {name NewProtocol.Cert1}`Cert1` arrives after
+  every node timed its view out. Nobody votes2 at the block's view, the epoch change carries the
   re-vote's {name NewProtocol.Cert2}`Cert2`, and the next epoch's first block names the block's own
   {name NewProtocol.Cert1}`Cert1`, behind a timeout certificate.
 * `ByzantineWitness`, without epochs: rotating leaders, the faulty one proposing
-  different blocks to two honest nodes; no {name NewProtocol.Cert1}`Cert1` forms, and the next honest
-  leader builds behind the timeout certificate.
+  different blocks to two honest nodes; no {name NewProtocol.Cert1}`Cert1` forms, and the next
+  honest leader builds behind the timeout certificate.
 * `ByzantineWitness`, with three blocks to an epoch: the faulty leader's view
   follows each epoch's last block, the timeout certificate is of the new epoch, and
   the next honest leader opens it behind the certificate, with no re-vote. The
@@ -2280,11 +2298,10 @@ epoch only, and is not among the nodes its `decides` covers.
 Every witness starts from an anchor at view and height zero. A run from a later
 anchor, and one whose anchor ends its epoch, are proved but not shown in an example.
 
-The witnesses are fixed schedules. Random ones are run by `just sim`
-(`NewProtocolDiff.Sim`): several nodes run the machine over a simulated network
-that meets the synchrony assumptions with random delays, with one silent node,
-one equivocating leader, or a different member faulty in each epoch, and epochs of
-one to three blocks or none. Each run is checked against the rules by the
+The witnesses are fixed schedules. Random ones are run by `NewProtocolDiff.Sim`: several
+nodes run the machine over a simulated network that meets the synchrony assumptions with
+random delays, with one silent node, one equivocating leader, or a different member faulty
+in each epoch, and epochs of one to three blocks or none. Each run is checked against the rules by the
 verified checker, for agreement on one chain, and for growth.
 
 # What is not covered
@@ -2315,44 +2332,49 @@ kind is where an audit should spend its doubt.
 *Omissions that narrow the results.*
 
 * _Signatures._ A certificate is its data and its view. That a quorum really
-  signed it is an assumption on the verification layer ({name NewProtocol.Network}`Network`), not something
-  proved from cryptography. For a timeout certificate this includes the claim that
+  signed it is an assumption on the verification layer ({name NewProtocol.Network}`Network`),
+  not something proved from cryptography. For a timeout certificate this includes the claim that
   its lock is at least as late as each of its signers' locks, which may be earlier
   ({name NewProtocol.TimeoutCertBacked}`TimeoutCertBacked`); how a real
   aggregate shows that is outside the model.
-* _Where committees come from._ Committees are a parameter ({name NewProtocol.Committee}`Committee`), one per
-  epoch, and so is the leader schedule. The stake table and the randomness that
+* _Where committees come from._ Committees are a parameter ({name NewProtocol.Committee}`Committee`),
+  one per epoch, and so is the leader schedule. The stake table and the randomness that
   picks the next epoch's leaders are not described, so nothing here says a committee
   is the right one.
-* _Application validity._ {name NewProtocol.BlockValid}`BlockValid` is opaque. A node learns validity from an
-  input and believes it. The signing rules require a vote1's block to be valid, so
+* _Application validity._ {name NewProtocol.BlockValid}`BlockValid` is opaque. A node learns
+  validity from an input and believes it. The signing rules require a vote1's block to be valid, so
   the liveness result needs the reports to be true: a node owes a vote1 on a block
   reported valid, and a false report would leave it an obligation it may not meet
   ({name NewProtocol.Prompt}`Prompt`).
 * _Crashes and restarts._ Nodes are honest or faulty, and an honest node never loses
-  its history. Restarts are out of scope. {name NewProtocol.SafeHistory.vote1Once}`SafeHistory.vote1Once`,
-  {name NewProtocol.SafeHistory.vote2Once}`SafeHistory.vote2Once` and {name NewProtocol.SafeHistory.timeoutLock}`SafeHistory.timeoutLock` read every vote the
+  its history. Restarts are out of scope.
+  {name NewProtocol.SafeHistory.vote1Once}`SafeHistory.vote1Once`,
+  {name NewProtocol.SafeHistory.vote2Once}`SafeHistory.vote2Once` and
+  {name NewProtocol.SafeHistory.timeoutLock}`SafeHistory.timeoutLock` read every vote the
   node ever sent, so an implementation meets them across a restart only if it
   persists what it signed.
-* _A bound on how long._ {name NewProtocol.ChainGrows}`ChainGrows` says decides keep coming after GST, not
-  how soon. The proof uses `8Δ + 4δ < τ` to fit a view into one timer, but no
+* _A bound on how long._ {name NewProtocol.ChainGrows}`ChainGrows` says decides keep coming after
+  GST, not how soon. The proof uses `8Δ + 4δ < τ` to fit a view into one timer, but no
   latency bound reaches the statement.
 * _Before GST._ Safety holds at all times. Progress is claimed only after the network
   stabilises ({name NewProtocol.Synchrony}`Synchrony`).
 * _Too many faults._ Each committee is assumed to be a quorum system whose quorums
-  intersect in a member honest in that epoch ({name NewProtocol.Committee.intersect}`Committee.intersect`). Nothing is
-  claimed beyond that.
+  intersect in a member honest in that epoch
+  ({name NewProtocol.Committee.intersect}`Committee.intersect`). Nothing is claimed beyond that.
 * _Endless churn._ Finitely many nodes are honest over the whole run
-  ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`). Liveness does not cover a run whose validators keep
-  changing for ever.
+  ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`). Liveness does not cover a
+  run whose validators keep changing for ever.
 * _Every block at every node._ The fault bound is per epoch: the members honest in
-  an epoch are a quorum of its committee ({name NewProtocol.TimedNetwork.honestQuorum}`TimedNetwork.honestQuorum`), and the epoch keeps
-  getting leaders honest in it ({name NewProtocol.LeaderRotation}`LeaderRotation`). What a node signs for an epoch it is
-  not honest in does not count against what it owes in the epochs it is honest in
-  ({name NewProtocol.OwedIn}`OwedIn`). {name NewProtocol.ChainGrows}`ChainGrows` promises that decides keep coming, and that a node honest in
-  every epoch ({name NewProtocol.Committee.Steady}`Committee.Steady`) keeps deciding, as does a node honest in infinitely many
-  epochs ({name NewProtocol.Committee.HonestOften}`Committee.HonestOften`) when epochs have blocks. A node that retires,
-  honest in no epoch after some, is promised nothing after its last.
+  an epoch are a quorum of its committee
+  ({name NewProtocol.TimedNetwork.honestQuorum}`TimedNetwork.honestQuorum`), and the epoch keeps
+  getting leaders honest in it ({name NewProtocol.LeaderRotation}`LeaderRotation`). What a node
+  signs for an epoch it is not honest in does not count against what it owes in the epochs it is
+  honest in ({name NewProtocol.OwedIn}`OwedIn`). {name NewProtocol.ChainGrows}`ChainGrows` promises
+  that decides keep coming, and that a node honest in every epoch
+  ({name NewProtocol.Committee.Steady}`Committee.Steady`) keeps deciding, as does a node honest in
+  infinitely many epochs ({name NewProtocol.Committee.HonestOften}`Committee.HonestOften`) when
+  epochs have blocks. A node that retires, honest in no epoch after some, is promised nothing after
+  its last.
 * _Every block._ Nothing promises every block to every node. A decide is owed only on a
   {name NewProtocol.Cert2}`Cert2` the node holds and only after its floor, and it may skip
   ancestors the node does not hold. A block committed only through a later block's
@@ -2365,8 +2387,8 @@ kind is where an audit should spend its doubt.
   deployment needs per-epoch keys, or keys that cannot be used once retired, for
   this to hold.
 * _Migration._ Every run starts from the configured anchor block
-  ({name NewProtocol.Config.anchorBlock}`Config.anchorBlock`), at any view and height. How the nodes come to agree on
-  it, and a switch from an earlier protocol, are not described.
+  ({name NewProtocol.Config.anchorBlock}`Config.anchorBlock`), at any view and height. How the
+  nodes come to agree on it, and a switch from an earlier protocol, are not described.
 
 # How to audit this
 
@@ -2398,24 +2420,27 @@ machine and the trace checker; neither needs reading to judge what is claimed.
 
 * The configuration: {name NewProtocol.ConfigCoherent}`ConfigCoherent`.
 * The cryptographic assumptions: {name NewProtocol.CollisionFree}`CollisionFree`, and the fields
-  {name NewProtocol.Network.cert1Genuine}`Network.cert1Genuine`, {name NewProtocol.Network.cert2Genuine}`Network.cert2Genuine`, {name NewProtocol.Network.timeoutCertGenuine}`Network.timeoutCertGenuine` and
-  {name NewProtocol.Network.revoteGenuine}`Network.revoteGenuine`, which say every certificate an honest node is handed
-  is backed.
+  {name NewProtocol.Network.cert1Genuine}`Network.cert1Genuine`,
+  {name NewProtocol.Network.cert2Genuine}`Network.cert2Genuine`,
+  {name NewProtocol.Network.timeoutCertGenuine}`Network.timeoutCertGenuine` and
+  {name NewProtocol.Network.revoteGenuine}`Network.revoteGenuine`, which say every certificate an
+  honest node is handed is backed.
 * The quorum system: the fields of {name NewProtocol.Committee}`Committee`, quorum intersection and
   finitely many honest nodes ({name NewProtocol.Committee.honestFinite}`Committee.honestFinite`).
-* For liveness: the fields of {name NewProtocol.TimedNetwork}`TimedNetwork` and {name NewProtocol.Synchrony}`Synchrony`, the bound
-  `8Δ + 4δ < τ`, and {name NewProtocol.LeaderRotation}`LeaderRotation`.
-* {name NewProtocol.Resolves}`Resolves` and {name NewProtocol.TreeCoherent}`TreeCoherent`, which are about the block table of the
-  statement rather than about the protocol. Without them the statement says nothing,
-  since ancestry is followed through the table.
+* For liveness: the fields of {name NewProtocol.TimedNetwork}`TimedNetwork` and
+  {name NewProtocol.Synchrony}`Synchrony`, the bound `8Δ + 4δ < τ`, and
+  {name NewProtocol.LeaderRotation}`LeaderRotation`.
+* {name NewProtocol.Resolves}`Resolves` and {name NewProtocol.TreeCoherent}`TreeCoherent`, which
+  are about the block table of the statement rather than about the protocol. Without them the
+  statement says nothing, since ancestry is followed through the table.
 
 *Questions worth asking of the rules.*
 
-* Does {name NewProtocol.SafeHistory}`SafeHistory` forbid everything a node must not sign? It is all the safety
-  results read of a node.
-* Does every obligation in {name NewProtocol.Owed}`Owed` end, and is every action it asks for permitted by
-  {name NewProtocol.ProtocolHistory}`ProtocolHistory`? An action that is owed but forbidden would make the rules
-  unsatisfiable; the witnesses show that they are not.
+* Does {name NewProtocol.SafeHistory}`SafeHistory` forbid everything a node must not sign? It is
+  all the safety results read of a node.
+* Does every obligation in {name NewProtocol.Owed}`Owed` end, and is every action it asks for
+  permitted by {name NewProtocol.ProtocolHistory}`ProtocolHistory`? An action that is owed but
+  forbidden would make the rules unsatisfiable; the witnesses show that they are not.
 * Are the omissions listed under {ref "not-covered"}[what is not covered] safe to
   make?
 

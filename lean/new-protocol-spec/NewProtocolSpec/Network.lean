@@ -94,7 +94,7 @@ network delivers a message of epoch `e` to these nodes only (`Synchrony`). A
 node honest in earlier epochs only has retired by the time `e` matters.
 -/
 def Committee.HonestFrom (C : Committee) (e : EpochNumber) (k : PubKey) : Prop :=
-  ∃ e', e.toNat ≤ e'.toNat ∧ C.honest e' k
+  ∃ e', e ≤ e' ∧ C.honest e' k
 
 /-- A node honest in an epoch is honest in it or a later one. -/
 theorem Committee.HonestFrom.of {C : Committee} {e : EpochNumber} {k : PubKey} (h : C.honest e k) :
