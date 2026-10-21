@@ -291,34 +291,43 @@ tag := "epochs"
 Most of the rules below have a case for epochs. This section gives an overview of
 them, in the order a boundary is crossed. The definitions it names come later.
 
-*The last block.* Block heights fix where each epoch ends ({name NewProtocol.IsLastBlock}`IsLastBlock`). A
-proposal's epoch is the one its height falls in ({name NewProtocol.ProposalWellFormed}`ProposalWellFormed`), and the
+*The last block.* Block heights fix where each epoch ends
+({name NewProtocol.IsLastBlock}`IsLastBlock`). A proposal's epoch is the one its height falls
+in ({name NewProtocol.ProposalWellFormed}`ProposalWellFormed`), and the
 proposal after a last block opens the next epoch ({name NewProtocol.EntersEpoch}`EntersEpoch`).
 
 *Ending the epoch.* The next epoch may start only once the outgoing committee has
 decided its last block. A proposal opening an epoch must name its parent by the
-parent's own {name NewProtocol.Cert1}`Cert1`, at the parent's view, and its leader must hold a {name NewProtocol.Cert2}`Cert2`
-over the parent ({name NewProtocol.OpensEpochJustified}`OpensEpochJustified`). An honest node votes1 for such a proposal only
-when it holds that {name NewProtocol.Cert2}`Cert2` too. So a branch crosses a boundary only at a decided
-block, and the safety argument never has to intersect the quorums of two committees.
+parent's own {name NewProtocol.Cert1}`Cert1`, at the parent's view, and its leader must hold a
+{name NewProtocol.Cert2}`Cert2` over the parent
+({name NewProtocol.OpensEpochJustified}`OpensEpochJustified`). An honest node votes1 for such a
+proposal only when it holds that {name NewProtocol.Cert2}`Cert2` too. So a branch crosses a
+boundary only at a decided block, and the safety argument never has to intersect the quorums of
+two committees.
 
-*The re-vote.* If the last block has a {name NewProtocol.Cert1}`Cert1` but no {name NewProtocol.Cert2}`Cert2`, the next view's
-leader may ask the outgoing committee to vote on it again ({name NewProtocol.RevoteRequest}`RevoteRequest`,
-{name NewProtocol.RevoteWellFormed}`RevoteWellFormed`, {name NewProtocol.RevoteJustified}`RevoteJustified`). The vote1s form a {name NewProtocol.Cert1}`Cert1` over the
-same block at the later view, and vote2s on that a {name NewProtocol.Cert2}`Cert2`, which commits the
-block ({name NewProtocol.Commits}`Commits` allows a later view). The next epoch's first block still names
-the block's own {name NewProtocol.Cert1}`Cert1`, not the re-vote's: the outgoing committee can form
-re-vote certificates after the next epoch began, and building on one of those could
-start the epoch a second time.
+*The re-vote.* If the last block has a {name NewProtocol.Cert1}`Cert1` but no
+{name NewProtocol.Cert2}`Cert2`, the next view's leader may ask the outgoing committee to vote
+on it again ({name NewProtocol.RevoteRequest}`RevoteRequest`,
+{name NewProtocol.RevoteWellFormed}`RevoteWellFormed`,
+{name NewProtocol.RevoteJustified}`RevoteJustified`). The vote1s form a
+{name NewProtocol.Cert1}`Cert1` over the same block at the later view, and vote2s on that a
+{name NewProtocol.Cert2}`Cert2`, which commits the
+block ({name NewProtocol.Commits}`Commits` allows a later view). The next epoch's first block
+still names the block's own {name NewProtocol.Cert1}`Cert1`, not the re-vote's: the outgoing
+committee can form re-vote certificates after the next epoch began, and building on one of those
+could start the epoch a second time.
 
-*The epoch change.* The last block travels with its own {name NewProtocol.Cert1}`Cert1` and a {name NewProtocol.Cert2}`Cert2` as
-an epoch change ({name NewProtocol.Input.epochChange}`Input.epochChange`, {name NewProtocol.EpochChangeWellFormed}`EpochChangeWellFormed`). Once one honest
-node holds the block's proposal and the {name NewProtocol.Cert2}`Cert2`, every node honest in that epoch or later
+*The epoch change.* The last block travels with its own {name NewProtocol.Cert1}`Cert1` and
+a {name NewProtocol.Cert2}`Cert2` as an epoch change
+({name NewProtocol.Input.epochChange}`Input.epochChange`,
+{name NewProtocol.EpochChangeWellFormed}`EpochChangeWellFormed`). Once one honest node holds the
+block's proposal and the {name NewProtocol.Cert2}`Cert2`, every node honest in that epoch or later
 receives the epoch change within `Δ` of that, or of GST if that is later
-({name NewProtocol.Synchrony.epochChange}`Synchrony.epochChange`). A node that takes one has grounds for the next epoch and
-for the view after the {name NewProtocol.Cert2}`Cert2`, and may lock on the block without its payload
-({name NewProtocol.History.Lockable}`History.Lockable`). That is what lets a node new to the incoming committee,
-which holds no share of the outgoing epoch's blocks, start voting.
+({name NewProtocol.Synchrony.epochChange}`Synchrony.epochChange`). A node that takes one has
+grounds for the next epoch and for the view after the {name NewProtocol.Cert2}`Cert2`, and may
+lock on the block without its payload ({name NewProtocol.History.Lockable}`History.Lockable`).
+That is what lets a node new to the incoming committee, which holds no share of the outgoing
+epoch's blocks, start voting.
 
 *Staying in step.* Re-votes of the outgoing committee and the views of the next
 epoch must not mix. So a node votes only for its own epoch or a later one
@@ -804,8 +813,8 @@ end Spec.History_TookEpochChange
 
 ## The lock
 
-The lock is not state either. It is the latest certificate, in {name NewProtocol.LockLE}`LockLE` order,
-the node could lock on, and what it could lock on is fixed by what it holds. A node
+The lock is not state either. It is the latest certificate, in {name NewProtocol.LockLE}`LockLE`
+order, the node could lock on, and what it could lock on is fixed by what it holds. A node
 needs a block's payload to lock on it, except for the last block of an epoch handed
 to it in an epoch change, whose {name NewProtocol.Cert2}`Cert2` shows that a quorum had the payload.
 
@@ -872,8 +881,8 @@ end Spec.History_LockedOn
 
 ## Where the node is
 
-The node's view and epoch are the latest it has grounds for. A {name NewProtocol.Cert1}`Cert1` alone is
-grounds for the next view, whether or not the node can rebuild the block: a node
+The node's view and epoch are the latest it has grounds for. A {name NewProtocol.Cert1}`Cert1`
+alone is grounds for the next view, whether or not the node can rebuild the block: a node
 shown a certificate follows it. A {name NewProtocol.Cert1}`Cert1` over an epoch's last block is not
 grounds for the next epoch, since it does not make the block final.
 
@@ -1030,21 +1039,22 @@ When a node may sign, and what a decide must show, for the epochs the node is ho
 in. Each rule applies when the node is honest in the epoch of every message the rule
 relates. This is all the no-fork result reads of a node.
 
-Within a view, at most one {name NewProtocol.Cert1}`Cert1` of an epoch forms: an honest node votes1 at most
-once per epoch and view ({name NewProtocol.SafeHistory.vote1Once}`SafeHistory.vote1Once`), and two quorums of an epoch
-share a node honest in it. Across views, these rules of {name NewProtocol.SafeHistory}`SafeHistory`, shown
-below, keep a committed view from being skipped:
+Within a view, at most one {name NewProtocol.Cert1}`Cert1` of an epoch forms: an honest node votes1
+at most once per epoch and view ({name NewProtocol.SafeHistory.vote1Once}`SafeHistory.vote1Once`),
+and two quorums of an epoch share a node honest in it. Across views, these rules of
+{name NewProtocol.SafeHistory}`SafeHistory`, shown below, keep a committed view from being skipped:
 
 * A vote1 on a proposal that follows a timeout checks the parent against the
   timeout certificate's lock ({name NewProtocol.SafeParent}`SafeParent`).
 * A timeout vote names a lock at least as late as every view up to its own that
   the node voted2 in ({name NewProtocol.SafeHistory.timeoutLock}`SafeHistory.timeoutLock`).
-* No vote2 follows a timeout of its view ({name NewProtocol.SafeHistory.vote2BeforeTimeout}`SafeHistory.vote2BeforeTimeout`).
+* No vote2 follows a timeout of its view
+  ({name NewProtocol.SafeHistory.vote2BeforeTimeout}`SafeHistory.vote2BeforeTimeout`).
 
 Suppose a quorum committed a block at view `x`, and a later view's proposal skips
 past `x` behind a timeout certificate of the same epoch. The certificate's quorum and
-the committing quorum share a node honest in that epoch. That node voted2 at `x` before it timed out, so its
-timeout vote's lock is at `x` or later, and so is the certificate's, which is at
+the committing quorum share a node honest in that epoch. That node voted2 at `x` before it timed
+out, so its timeout vote's lock is at `x` or later, and so is the certificate's, which is at
 least as late as each of its signers' locks. An honest vote1 on the proposal then requires its
 parent to be no earlier than that lock, so the proposal cannot skip `x`.
 
