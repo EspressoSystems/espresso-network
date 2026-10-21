@@ -1223,7 +1223,7 @@ theorem votes1 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ 15 * u +
   · rw [blk_view]; exact recv_at u 2 (by omega) (by omega)
   · cases u with
     | zero => exact Or.inl rfl
-    | succ u => exact Or.inr (Or.inl (blk_enters u))
+    | succ u => exact Liveness.parentReady_of_opens (blk_enters u) hopen
   · rw [blk_epoch]; show eAt (15 * u + 3) ≤ u + 1; omega
   · obtain ⟨y, hle, hy⟩ := timedOut ht
     rw [blk_view] at hle

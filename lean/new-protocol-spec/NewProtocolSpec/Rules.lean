@@ -399,18 +399,13 @@ structure ProtocolHistory (honestIn : EpochNumber → Prop) (h : History) : Prop
 /-! ## What a node owes -/
 
 /--
-The node holds what a vote1 on `p` reads of its parent.
+The node holds the parent of `p`, unless the parent is the anchor.
 
-The parent and its payload, unless the parent is the anchor or `p` opens an epoch.
-The exemption is there because VID shares go to the committee of a block's own
-epoch, so a node new to the incoming committee cannot rebuild the outgoing
-epoch's last block.
 -/
 def ParentReady (h : History) (p : Proposal) : Prop :=
-  p.parentCert.view = cfg.anchorView ∨ EntersEpoch cfg p
+  p.parentCert.view = cfg.anchorView
     ∨ ∃ parent, h.HasProposal cfg parent ∧ parent.viewNumber ≤ p.parentCert.view
         ∧ p.parentCert.data.blockHash = blockHash parent
-        ∧ h.HasPayload cfg parent.viewNumber parent.payloadCommit
 
 /--
 The node owes a vote1 on `p`: it received `p` from the view's leader with its

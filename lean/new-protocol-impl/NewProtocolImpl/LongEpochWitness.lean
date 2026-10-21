@@ -750,15 +750,15 @@ theorem votes1 (k : PubKey) (u : Nat) (hl : lag k (u / 2) = 0) : ∃ j, j ≤ 8 
         simp only [phase, hl, ite_true] at this; exact this, rfl, by rw [blk_view], rfl⟩, blk_wellFormed u, ?_, ?_,
       blk_safe u, hopen, notBehind ?_, not_timedOut, fun vote hs _ hvv => ?_, ?_⟩
   · rw [blk_view]; exact recv_at u 2 (by omega) (by omega)
-  · -- The parent is genesis, ends the epoch before, or is the epoch's first block, whose payload the node holds.
+  · -- The parent is genesis, ends the epoch before, or is the epoch's first block, which the node holds.
     cases u with
     | zero => exact Or.inl rfl
     | succ u =>
       rcases par u with hp | hp
       · rw [show (u + 1) / 2 = u / 2 by omega] at hl
-        exact Or.inr (Or.inr ⟨blk u, hasProposal_of u (by omega), by rw [blk_parent]; exact Nat.le_refl _,
-          by rw [blk_parent]; rfl, payload_of u hl (by omega)⟩)
-      · exact Or.inr (Or.inl ((enters_iff _).mpr ⟨by omega, by omega⟩))
+        exact Or.inr ⟨blk u, hasProposal_of u (by omega), by rw [blk_parent]; exact Nat.le_refl _,
+          by rw [blk_parent]; rfl⟩
+      · exact Liveness.parentReady_of_opens ((enters_iff _).mpr ⟨by omega, by omega⟩) hopen
   · rw [blk_epoch]; show eAt (8 * u + 3) ≤ u / 2 + 1; rw [eAt_eq]; omega
   · obtain ⟨j, hj, hjv⟩ := sent_iff.mp hs
     obtain ⟨u', rfl, -, -⟩ := sent_vote1 hv hjv

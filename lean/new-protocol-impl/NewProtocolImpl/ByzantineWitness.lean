@@ -1459,8 +1459,8 @@ theorem votes1 (k : PubKey) (u : Nat) : ∃ j, j ≤ sAt u + 2
     | zero => exact Or.inl rfl
     | succ u =>
       have := sAt_succ u
-      exact Or.inr (Or.inr ⟨blk u, hasProposal_of u (by omega), by rw [blk_parent]; exact Nat.le_refl _,
-        by rw [blk_parent]; rfl, payload_of u (by omega)⟩)
+      exact Or.inr ⟨blk u, hasProposal_of u (by omega), by rw [blk_parent]; exact Nat.le_refl _,
+        by rw [blk_parent]; rfl⟩
   have hcur : NotBehind cfg (H k (sAt u + 2 + 1)) (blk u).epoch :=
     notBehind (by rw [blk_epoch, show sAt u + 2 + 1 = sAt u + 3 from rfl, eAt_view u 3 (by omega)]; exact Nat.le_refl _)
   refine Classical.byContradiction fun hneg => settled k (sAt u + 2) (.vote1 (blk u))
@@ -2432,8 +2432,8 @@ theorem votesE (w : Nat) {k : PubKey} {E : Block} (hk : (k = a ∧ E = E1 w) ∨
   have hs2 := sAt_at w 2 (by omega)
   have ho := offs_nat k
   have hready : ParentReady cfg (H k (29 * w + 23)) E :=
-    Or.inr (Or.inr ⟨blk (3 * w + 2), hasProposal_of _ (by omega), by rw [hEp]; exact Nat.le_refl _,
-      by rw [hEp]; rfl, payload_of _ (by omega)⟩)
+    Or.inr ⟨blk (3 * w + 2), hasProposal_of _ (by omega), by rw [hEp]; exact Nat.le_refl _,
+      by rw [hEp]; rfl⟩
   have hopens : OpensEpochJustified cfg (H k (29 * w + 23)) E := fun _ =>
     ⟨⟨blk (3 * w + 2), hasProposal_of _ (by omega), by rw [hEp]; rfl, by rw [hEp]; rfl⟩,
       C2 (3 * w + 2), Or.inl <| hasCert2_of _ (by omega),

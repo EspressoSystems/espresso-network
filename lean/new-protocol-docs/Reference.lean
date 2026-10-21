@@ -1294,10 +1294,9 @@ open NewProtocol.History
 :::spec NewProtocol.ParentReady
   ```lean
   def ParentReady (cfg : Config) (h : History) (p : Proposal) : Prop :=
-    p.parentCert.view = cfg.anchorView ∨ EntersEpoch cfg p
+    p.parentCert.view = cfg.anchorView
       ∨ ∃ parent, h.HasProposal cfg parent ∧ parent.viewNumber ≤ p.parentCert.view
           ∧ p.parentCert.data.blockHash = blockHash parent
-          ∧ h.HasPayload cfg parent.viewNumber parent.payloadCommit
   ```
 :::
 

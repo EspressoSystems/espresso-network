@@ -813,18 +813,14 @@ theorem sent_vote1 {k : PubKey} {j : Nat} {vote : Vote1}
   rw [hsig, hv', hd, blk_view]
   rfl
 
-/-- The parent's payload reaches every node before its child's validity report. -/
+/-- The parent reaches every node before its child's validity report. -/
 theorem parent_ready {k : PubKey} (u : Nat) : ParentReady cfg (H k (sAt u + 2 + 1)) (blk u) := by
   rcases u with _ | w
   · exact Or.inl rfl
-  · refine Or.inr (Or.inr ⟨blk w, hasProposal_of w ?_, ?_, ?_, Or.inr ?_⟩)
+  · refine Or.inr ⟨blk w, hasProposal_of w ?_, ?_, ?_⟩
     · rw [sAt_succ]; unfold sAt; split <;> omega
     · rw [blk_parent]; exact Nat.le_refl _
     · rw [blk_parent]; rfl
-    · rw [blk_view]
-      refine recv_payload w ?_
-      rw [sAt_succ]; unfold pAt sAt; repeat' split
-      all_goals omega
 
 include hv in
 /-- Every honest node votes1 for `blk u` by the step its validity report arrives in. -/

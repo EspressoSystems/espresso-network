@@ -1614,7 +1614,7 @@ theorem votes1 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ at0 2 9 
   · rw [blk_view]; exact recv_u u 2 2 (by omega) (by omega) rfl (by show at0 2 9 u < _; omega)
   · cases u with
     | zero => exact Or.inl rfl
-    | succ u => exact Or.inr (Or.inl (blk_enters u))
+    | succ u => exact Liveness.parentReady_of_opens (blk_enters u) hopen
   · rw [blk_epoch, h3, hew]; exact Nat.le_refl _
   · rw [blk_view] at ht
     have := bv_facts u

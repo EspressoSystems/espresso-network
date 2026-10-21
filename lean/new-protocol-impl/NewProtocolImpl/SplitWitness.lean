@@ -1347,7 +1347,7 @@ theorem votes1 (k : PubKey) (u : Nat) (hl : lag k u = 0) : ∃ j, j ≤ at0 2 8 
   · rw [blk_view]; exact recv_phase u 2 (by omega) (by show at0 2 8 u < _; omega)
   · cases u with
     | zero => exact Or.inl rfl
-    | succ u => exact Or.inr (Or.inl (blk_enters u))
+    | succ u => exact Liveness.parentReady_of_opens (blk_enters u) hopen
   · rw [blk_epoch, h3, hew]; exact Nat.le_refl _
   · refine not_timedOut ht (fun h => ?_)
     rw [blk_view] at h

@@ -1525,27 +1525,9 @@ theorem member_ready {δ : Nat} (hex : ∃ T, ReachedBy N T w)
   have hn0c : n0 ≤ cut N hu k hk (firstReach N hex + Δ + 5 * Δ + 2 * δ) :=
     le_cut N hu fun i hi => by have := hn0 i hi; omega
   have hpcg := certJustified_genuine hjust.justified
-  refine ⟨vid, hsm, received_grows _ hn0c _ hrec0, ?_, ?_, ?_⟩
-  · exact by_cut N hu (fun a b hab h => received_grows _ hab _ h)
-      (by_later (show max (N.time k hk j0) GST + Δ ≤ firstReach N hex + Δ + 5 * Δ + 2 * δ by omega)
-        (hs.validated k hk j0 l pw vid hin0 (hs.proposalValid l hl' jp pw hsend hpe) (by rw [hep]; exact hkE)))
-  · by_cases hent : EntersEpoch cfg pw
-    · exact Or.inr (Or.inl hent)
-    have hnl : ¬ IsLastBlock pw.parentCert.data.blockNumber cfg.epochHeight := fun hlast => hent (by
-      show IsLastBlock (pw.blockHeader.blockNumber - 1) cfg.epochHeight
-      rw [← hjust.wellFormed.height]; simpa using hlast)
-    have hpce : pw.parentCert.data.epoch = E := by
-      rw [cert1_epoch_of_height N.toNetwork hcfg hpcg, ← epochOf_next_same hnl, hjust.wellFormed.height,
-        ← hjust.wellFormed.epoch, hep]
-    rcases cert_held hjust.justified with hg | ⟨m, hm, L, hL, hLd⟩ | ⟨hlast, -⟩
-    · exact Or.inr (Or.inr ⟨cfg.anchorBlock, Or.inl rfl, anchor_view_le hcfg hpcg,
-        by rw [hg, hcfg.anchorCertBlock], Or.inl ⟨rfl, rfl⟩⟩)
-    · obtain ⟨b, hb, hbd, hbv, hpay⟩ := block_ready hcfg hcf hs hst hL hLd hpcg hpce
-          (Nat.le_trans (time_mono N l hl' (by omega : m ≤ jp)) hjt) hgstp k hk hmem hkE
-      exact Or.inr (Or.inr ⟨b, hasProposal_grows (received_grows _ hcut) hb, hbv,
-        congrArg Vote1Data.blockHash hbd, hasPayload_grows (received_grows _ hcut) hpay⟩)
-    · exact absurd hlast hnl
-  · intro hent
+  have hopen : OpensEpochJustified cfg
+      ((N.trace k hk).history (cut N hu k hk (firstReach N hex + Δ + 5 * Δ + 2 * δ))) pw := by
+    intro hent
     obtain ⟨⟨q, hq, hqv, hqh⟩, c2, hc2, hc2v, hc2d⟩ := hjust.opens hent
     have hlastpc : IsLastBlock pw.parentCert.data.blockNumber cfg.epochHeight := by
       have h := hent
@@ -1601,6 +1583,26 @@ theorem member_ready {δ : Nat} (hex : ∃ T, ReachedBy N T w)
       le_cut N hu fun i hi => by have := hm i hi; omega
     exact ⟨⟨b, hasProposal_grows (received_grows _ hmc) (Or.inr (Or.inr ⟨c1', c2, htook.1⟩)),
       hqv, hqh⟩, c2, Or.inl (hasCert2_grows (received_grows _ hmc) (Or.inr ⟨c1', b, htook.1⟩)), hc2v, hc2d⟩
+  refine ⟨vid, hsm, received_grows _ hn0c _ hrec0, ?_, ?_, hopen⟩
+  · exact by_cut N hu (fun a b hab h => received_grows _ hab _ h)
+      (by_later (show max (N.time k hk j0) GST + Δ ≤ firstReach N hex + Δ + 5 * Δ + 2 * δ by omega)
+        (hs.validated k hk j0 l pw vid hin0 (hs.proposalValid l hl' jp pw hsend hpe) (by rw [hep]; exact hkE)))
+  · by_cases hent : EntersEpoch cfg pw
+    · exact parentReady_of_opens hent hopen
+    have hnl : ¬ IsLastBlock pw.parentCert.data.blockNumber cfg.epochHeight := fun hlast => hent (by
+      show IsLastBlock (pw.blockHeader.blockNumber - 1) cfg.epochHeight
+      rw [← hjust.wellFormed.height]; simpa using hlast)
+    have hpce : pw.parentCert.data.epoch = E := by
+      rw [cert1_epoch_of_height N.toNetwork hcfg hpcg, ← epochOf_next_same hnl, hjust.wellFormed.height,
+        ← hjust.wellFormed.epoch, hep]
+    rcases cert_held hjust.justified with hg | ⟨m, hm, L, hL, hLd⟩ | ⟨hlast, -⟩
+    · exact Or.inr ⟨cfg.anchorBlock, Or.inl rfl, anchor_view_le hcfg hpcg,
+        by rw [hg, hcfg.anchorCertBlock]⟩
+    · obtain ⟨b, hb, hbd, hbv, -⟩ := block_ready hcfg hcf hs hst hL hLd hpcg hpce
+          (Nat.le_trans (time_mono N l hl' (by omega : m ≤ jp)) hjt) hgstp k hk hmem hkE
+      exact Or.inr ⟨b, hasProposal_grows (received_grows _ hcut) hb, hbv,
+        congrArg Vote1Data.blockHash hbd⟩
+    · exact absurd hlast hnl
 
 /-- Every honest member of `E` votes1 on the honest leader's proposal for `w` within `2Δ + δ` of it. -/
 theorem members_vote1 {δ : Nat} (hp : Prompt N δ) (hex : ∃ T, ReachedBy N T w)
