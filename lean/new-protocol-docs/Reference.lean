@@ -23,8 +23,6 @@ set_option pp.proofs true
 tag := "top"
 %%%
 
-_What an honest consensus node must do, what the network is assumed to do, and what follows._
-
 Consensus runs in numbered views, each with a leader. The leader of a view
 proposes one block on a parent, which it names by the parent's certificate. Every
 member of the committee then votes on the proposal twice.
@@ -33,63 +31,65 @@ A vote1 says the proposal is a fit extension: the block is valid and its parent
 is safe to build on, given what may have been committed. Beyond what safety needs,
 an honest node votes1 only on a proposal from the view's leader, and owes a vote1
 once it holds its own share of the payload and was told the block is valid. A
-quorum of vote1s is a {name NewProtocol.Cert1}`Cert1`. With it, any node may enter the next view, and
-the next leader may build on the block. A node that also has the block's payload
-may lock on it. A node's _lock_ is the latest {name NewProtocol.Cert1}`Cert1` it could lock on
-({name NewProtocol.History.LockedOn}`History.LockedOn`).
+quorum of vote1s is a {name NewProtocol.Cert1}`Cert1`. With it, any node may enter
+the next view, and the next leader may build on the block. A node that also has the
+block's payload may lock on it. A node's _lock_ is the latest {name NewProtocol.Cert1}`Cert1`
+it could lock on ({name NewProtocol.History.LockedOn}`History.LockedOn`).
 
-A vote2 says the node holds the block's {name NewProtocol.Cert1}`Cert1` and has rebuilt its payload from
-the shares, so the payload is available. A quorum of vote2s is a {name NewProtocol.Cert2}`Cert2`, and a
-block with a {name NewProtocol.Cert2}`Cert2` is _committed_. A node that holds the block and both its
-certificates _decides_ it: it delivers the block to the application, and with it may deliver ancestors
-it has not delivered yet, as far back as it holds them. An ancestor it does not hold is skipped;
-{ref "valid-decides"}[Valid decides] says when a skipped block is delivered later.
+A vote2 says the node holds the block's {name NewProtocol.Cert1}`Cert1` and has rebuilt its
+payload from the shares, so the payload is available. A quorum of vote2s is a
+{name NewProtocol.Cert2}`Cert2`, and a block with a {name NewProtocol.Cert2}`Cert2` is _committed_.
+A node that holds the block and both its certificates _decides_ it: it delivers the block to the
+application, and with it may deliver ancestors it has not delivered yet, as far back as it holds
+them. An ancestor it does not hold is skipped; {ref "valid-decides"}[Valid decides] says when a
+skipped block is delivered later.
 
-A view that produces no {name NewProtocol.Cert1}`Cert1` in time is given up. Each node's timer fires, and
-the node sends a timeout vote. The vote names a {name NewProtocol.Cert1}`Cert1` the node held at the timer, no
-earlier than any block it voted2 on up to the vote's view, called the vote's lock. A node that sees
-timeout votes for a view from enough nodes that one of them is honest (the
-_one-honest indication_) times the view out too. A quorum of timeout votes is a
-{name NewProtocol.TimeoutCert}`TimeoutCert`, whose lock is the latest of its votes' locks. The next view starts
-on it, and its leader must build on a block no earlier than the certificate's lock.
-Timeout votes go to every node, so the honest signers of a certificate draw every
-other node's vote through the one-honest indication, and the certificate forms
-everywhere without being sent on
-({name NewProtocol.Synchrony.timeoutOneHonest}`Synchrony.timeoutOneHonest`). Only a node handed a certificate
-without having voted for its view sends it on
-({name NewProtocol.Synchrony.timeoutCertForward}`Synchrony.timeoutCertForward`), and a node that keeps timing a
-view out after others left it is answered with what took them past it
-({name NewProtocol.Synchrony.timeoutCatchUp}`Synchrony.timeoutCatchUp`).
+A view that produces no {name NewProtocol.Cert1}`Cert1` in time is given up. Each node's timer
+fires, and the node sends a timeout vote. The vote names a {name NewProtocol.Cert1}`Cert1` the
+node held at the timer, no earlier than any block it voted2 on up to the vote's view, called
+the vote's lock. A node that sees timeout votes for a view from enough nodes that one of them
+is honest (the _one-honest indication_) times the view out too. A quorum of timeout votes is a
+{name NewProtocol.TimeoutCert}`TimeoutCert`, whose lock is the latest of its votes' locks. The
+next view starts on it, and its leader must build on a block no earlier than the certificate's
+lock. Timeout votes go to every node, so the honest signers of a certificate draw every other
+node's vote through the one-honest indication, and the certificate forms everywhere without
+being sent on. Only a node handed a certificate without having voted for its view sends it on,
+and a node that keeps timing a view out after others left it is answered with what took them past
+it.
 
 Blocks are grouped into epochs of a fixed number of blocks, and each epoch has its
 own committee. The last block of an epoch must be committed by its own committee
-before the next epoch starts. When it has a {name NewProtocol.Cert1}`Cert1` but no {name NewProtocol.Cert2}`Cert2`, the leader
-asks the outgoing committee to vote on it again in a later view (a {name NewProtocol.RevoteRequest}`RevoteRequest`).
+before the next epoch starts. When it has a {name NewProtocol.Cert1}`Cert1` but no
+{name NewProtocol.Cert2}`Cert2`, the leader asks the outgoing committee to vote on it
+again in a later view (a {name NewProtocol.RevoteRequest}`RevoteRequest`).
 {ref "epochs"}[Crossing an epoch boundary] gives an overview.
 
-*What is proved.* {name NewProtocol.NoFork}`NoFork`, {name NewProtocol.DecideAgreement}`DecideAgreement` and {name NewProtocol.DecidesValid}`DecidesValid` hold at all times,
-before GST too, given the signing rules, genuine certificates, quorums of an epoch
-that share an honest member, no hash collisions and a coherent configuration.
-{name NewProtocol.ChainGrows}`ChainGrows` holds eventually after GST, given in addition the whole
-protocol, promptness within `δ`, synchrony with bound `Δ`, a view timer `τ` longer
+*What is proved.* {name NewProtocol.NoFork}`NoFork`,
+{name NewProtocol.DecideAgreement}`DecideAgreement` and
+{name NewProtocol.DecidesValid}`DecidesValid` hold at all times, before GST too, given the
+signing rules, genuine certificates, quorums of an epoch that share an honest member, no
+hash collisions and a coherent configuration.
+{name NewProtocol.ChainGrows}`ChainGrows` holds eventually after GST, given in addition the
+whole protocol, promptness within `δ`, synchrony with bound `Δ`, a view timer `τ` longer
 than `8Δ + 4δ`, honest quorums in every epoch, finitely many honest nodes, and
 leaders honest in each epoch infinitely often. {ref "proved"}[What is proved] is the
 one complete list of each result's premises.
 
-*How the rules are stated.* Every rule is a property of one node's _history_: the inputs it received and the
-outputs it produced, step by step. What a node holds, what it is locked on, and
-which view and epoch it is in are derived from that history, not stored. So the
+*How the rules are stated.* Every rule is a property of one node's _history_: the inputs it
+received and the outputs it produced, step by step. What a node holds, what it is locked on,
+and which view and epoch it is in are derived from that history, not stored. So the
 rules say nothing about how a node keeps state, and a recorded trace of a real node
 can be checked against them directly.
 
 The rules come in layers, each read by a different result:
 
-* {name NewProtocol.SafeHistory}`SafeHistory`: when a node may sign a vote, and what a decide must show. The
-  no-fork result reads nothing else of a node.
-* {name NewProtocol.ProtocolHistory}`ProtocolHistory`: the rest of what a node may do, such as timing out and
-  proposing. Liveness needs these.
-* {name NewProtocol.Owed}`Owed`: what a node must eventually do. With a bound on how long anything stays
-  owed or a timer unanswered ({name NewProtocol.Prompt}`Prompt`), liveness needs this too.
+* {name NewProtocol.SafeHistory}`SafeHistory`: when a node may sign a vote, and what a decide
+  must show. The no-fork result reads nothing else of a node.
+* {name NewProtocol.ProtocolHistory}`ProtocolHistory`: the rest of what a node may do, such as
+  timing out and proposing. Liveness needs these.
+* {name NewProtocol.Owed}`Owed`: what a node must eventually do. With a bound on how long
+  anything stays owed or a timer unanswered ({name NewProtocol.Prompt}`Prompt`), liveness needs
+  this too.
 
 Everything shown here is spliced from the declaration that states it, and every
 reproduced definition is checked against the source when this document is built.
