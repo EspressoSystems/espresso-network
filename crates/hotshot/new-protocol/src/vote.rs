@@ -353,11 +353,21 @@ impl<T: NodeType, Th: Threshold<T> + Send + 'static> Tally<T> for TimeoutTally<T
 }
 
 impl<T: NodeType, Th: Threshold<T>> TimeoutTally<T, Th> {
+    /// The stake of the ballot's signer.
+    ///
+    /// The collector admits only signers in the stake table (`has_signer`),
+    /// so one without stake here is a bug, and counts for nothing.
     fn stake(&self, ballot: &TimeoutBallot<T>) -> U256 {
-        self.membership
-            .stake(&ballot.vote().signing_key())
-            .map(|peer| peer.stake_table_entry.stake())
-            .unwrap_or_default()
+        let signer = ballot.vote().signing_key();
+        let Some(peer) = self.membership.stake(&signer) else {
+            warn!(
+                %signer,
+                view = %ballot.vote().view_number(),
+                "timeout vote signer is not in the stake table"
+            );
+            return U256::ZERO;
+        };
+        peer.stake_table_entry.stake()
     }
 
     /// The certificate of the ballots so far, checked.
