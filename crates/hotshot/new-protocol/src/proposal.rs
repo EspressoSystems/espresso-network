@@ -483,10 +483,8 @@ impl<T: NodeType> Validator<T> {
                     .map_err(ValidationError::InvalidViewChangeEvidence)?;
             }
             let membership = self.membership(tc_epoch).await?;
-            if let Some((lock, _)) = tc.lock()
-                && lock.checked_in(tc_epoch)
-            {
-                self.membership(lock.epoch).await?;
+            if let Some(lock_epoch) = tc.timeout_lock().verified_in() {
+                self.membership(lock_epoch).await?;
             }
             let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
             verify_timeout_evidence(

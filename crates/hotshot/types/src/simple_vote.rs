@@ -138,18 +138,56 @@ impl LockView {
             view: cert.view_number(),
         }
     }
+}
 
-    /// Whether this lock, carried by a timeout vote or certificate of `epoch`,
-    /// is checked: it is of that epoch or the one before.
-    ///
-    /// A proposal after a timeout certificate is of the certificate's epoch, and
-    /// a lock of an earlier epoch admits any parent, so whether an older lock is
-    /// genuine changes nothing. Its certificate is not checked, its committee
-    /// not looked up and the lock not adopted, which keeps a peer from starting
-    /// catchups for old epochs. The vote still counts: an honest node back from
-    /// several epochs away holds such a lock until it adopts a newer one.
-    pub fn checked_in(&self, epoch: EpochNumber) -> bool {
-        self.epoch.saturating_add(1) >= *epoch
+/// The lock a timeout vote or certificate of some epoch carries, by what is
+/// checked of it.
+///
+/// A proposal after a timeout certificate is of the certificate's epoch, and a
+/// lock of an earlier epoch admits any parent, so whether an older lock is
+/// genuine changes nothing. Only a recent lock's certificate is verified, its
+/// committee looked up and the lock adopted, which keeps a peer from starting
+/// catchups for old epochs. A vote with a stale lock still counts: an honest
+/// node back from several epochs away holds such a lock until it adopts a newer
+/// one.
+#[derive(Debug)]
+pub enum TimeoutLock<'a, T: NodeType> {
+    /// Locked on nothing but genesis.
+    None,
+    /// Of an epoch before the one before: only its position is bound.
+    Stale(LockView),
+    /// Of the vote's epoch or the one before: its certificate is verified
+    /// against that epoch's committee.
+    Recent(&'a crate::simple_certificate::QuorumCertificate2<T>),
+}
+
+impl<'a, T: NodeType> TimeoutLock<'a, T> {
+    pub fn of(
+        cert: Option<&'a crate::simple_certificate::QuorumCertificate2<T>>,
+        epoch: EpochNumber,
+    ) -> Self {
+        let Some(cert) = cert else {
+            return Self::None;
+        };
+        let lock = LockView::of(cert);
+        if lock.epoch.saturating_add(1) >= *epoch {
+            Self::Recent(cert)
+        } else {
+            Self::Stale(lock)
+        }
+    }
+
+    /// The certificate of a recent lock.
+    pub fn recent(self) -> Option<&'a crate::simple_certificate::QuorumCertificate2<T>> {
+        match self {
+            Self::Recent(cert) => Some(cert),
+            Self::None | Self::Stale(_) => None,
+        }
+    }
+
+    /// The epoch whose committee verifies a recent lock's certificate.
+    pub fn verified_in(self) -> Option<EpochNumber> {
+        self.recent().map(|cert| LockView::of(cert).epoch)
     }
 }
 

@@ -12,7 +12,7 @@ use super::QuorumCertificate2;
 use crate::{
     data::{EpochNumber, ViewNumber, serialize_signature2},
     message::UpgradeLock,
-    simple_vote::{HasEpoch, LockView, TimeoutData3, VersionedVoteData},
+    simple_vote::{HasEpoch, LockView, TimeoutData3, TimeoutLock, VersionedVoteData},
     traits::{
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
@@ -49,10 +49,10 @@ pub struct LatestTimeoutSignatures<T: NodeType> {
     /// The certificate of their lock; `None` if they are locked on nothing
     /// but genesis.
     ///
-    /// Its signatures are verified only if the lock is checked in the
-    /// certificate's epoch ([`LockView::checked_in`]). Otherwise only its
-    /// [`LockView`] is bound, by the latest group's signatures, and the rest
-    /// of it is whatever the sender put there.
+    /// Its signatures are verified only if the lock is recent
+    /// ([`TimeoutLock::Recent`]). Otherwise only its [`LockView`] is bound, by
+    /// the latest group's signatures, and the rest of it is whatever the
+    /// sender put there.
     pub lock_cert: Option<QuorumCertificate2<T>>,
     /// Their aggregate signature and signer bit vector.
     pub signatures: <T::SignatureKey as SignatureKey>::QcType,
@@ -139,10 +139,15 @@ impl<T: NodeType> TimeoutCertificate3<T> {
 
     /// The certificate of the certificate's lock.
     ///
-    /// Only its [`LockView`] is verified unless the lock is checked (see
+    /// Only its [`LockView`] is verified unless the lock is recent (see
     /// [`LatestTimeoutSignatures::lock_cert`]).
     pub fn lock_cert(&self) -> Option<&QuorumCertificate2<T>> {
         self.latest.lock_cert.as_ref()
+    }
+
+    /// The certificate's lock, by what is checked of it.
+    pub fn timeout_lock(&self) -> TimeoutLock<'_, T> {
+        TimeoutLock::of(self.lock_cert(), self.epoch)
     }
 
     /// The data the signers of the group holding `lock` signed.

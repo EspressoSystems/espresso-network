@@ -16,7 +16,9 @@ use hotshot_types::{
         Certificate1, Certificate2, SimpleCertificate, Threshold, TimeoutCertificate2,
         TimeoutCertificate3,
     },
-    simple_vote::{HasEpoch, LockView, QuorumData2, TimeoutData2, Vote2Data, Voteable},
+    simple_vote::{
+        HasEpoch, LockView, QuorumData2, TimeoutData2, TimeoutLock, Vote2Data, Voteable,
+    },
     stake_table::StakeTableEntries,
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::{Certificate, HasViewNumber},
@@ -223,14 +225,10 @@ impl<T: NodeType> Verifiable<T> for TimeoutCertificate3<T> {
         Some(self.view_number())
     }
 
-    /// Its own epoch, and its lock's if the lock is checked: the lock
+    /// Its own epoch, and its lock's if the lock is recent: the lock
     /// certificate is verified against that epoch's committee.
     fn epochs(&self) -> impl Iterator<Item = EpochNumber> {
-        let lock = self
-            .lock()
-            .filter(|lock| lock.checked_in(self.epoch))
-            .map(|lock| lock.epoch);
-        std::iter::once(self.epoch).chain(lock)
+        std::iter::once(self.epoch).chain(self.timeout_lock().verified_in())
     }
 
     fn check(
@@ -269,19 +267,14 @@ pub(crate) fn verify_timeout3<T: NodeType>(
         "timeout certificate for view {} must not bind its epoch", tc.view_number()
     }
     tc.check_signatures(stake_table, threshold, upgrade_lock)?;
-    let Some(cert) = tc.lock_cert() else {
+    let TimeoutLock::Recent(cert) = tc.timeout_lock() else {
         return Ok(());
     };
-    if !LockView::of(cert).checked_in(tc.epoch) {
-        return Ok(());
-    }
     ensure! {
         cert.data.is_well_formed(epoch_height),
         "timeout certificate lock is not well formed"
     }
-    let epoch = tc
-        .lock_epoch()
-        .expect("a lock certificate is only valid with a lock");
+    let epoch = LockView::of(cert).epoch;
     let membership = memberships.membership_for_epoch(Some(epoch)).wrap()?;
     let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
     verify_signatures(cert, &entries, membership.success_threshold(), upgrade_lock)

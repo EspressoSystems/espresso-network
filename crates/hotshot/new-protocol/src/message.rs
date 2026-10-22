@@ -14,7 +14,7 @@ use hotshot_types::{
     simple_certificate::{TimeoutCertificate2, TimeoutCertificate3, TimeoutEvidence},
     simple_vote::{
         HasEpoch, LightClientStateUpdateVote2, LockView, QuorumVote2, SimpleVote, TimeoutData3,
-        TimeoutVote2, TimeoutVote3, UpgradeVote2, Vote2Data,
+        TimeoutLock, TimeoutVote2, TimeoutVote3, UpgradeVote2, Vote2Data,
     },
     traits::{
         block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
@@ -88,6 +88,11 @@ impl<T: NodeType> TimeoutBallot<T> {
     /// The certificate of the lock the vote signs.
     pub fn lock(&self) -> Option<&Certificate1<T>> {
         self.lock.as_ref()
+    }
+
+    /// The lock the vote signs, by what is checked of it.
+    pub fn timeout_lock(&self) -> TimeoutLock<'_, T> {
+        TimeoutLock::of(self.lock.as_ref(), self.vote.data.epoch)
     }
 }
 

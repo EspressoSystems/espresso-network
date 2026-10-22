@@ -31,7 +31,7 @@ use hotshot_types::{
         TimeoutCertificate3, UpgradeThreshold,
     },
     simple_vote::{
-        HasEpoch, LockView, QuorumVote2, SimpleVote, UpgradeVote2, VersionedVoteData, Voteable,
+        HasEpoch, QuorumVote2, SimpleVote, TimeoutLock, UpgradeVote2, VersionedVoteData, Voteable,
     },
     stake_table::StakeTableEntries,
     traits::{
@@ -263,16 +263,10 @@ impl<T: NodeType> Ballot for TimeoutBallot<T> {
         self.vote().signing_key()
     }
 
-    /// Its own epoch, and its lock's if the lock is checked: the lock
+    /// Its own epoch, and its lock's if the lock is recent: the lock
     /// certificate is verified against that epoch's committee.
     fn epochs(&self) -> impl Iterator<Item = EpochNumber> {
-        let epoch = self.vote().data.epoch;
-        let lock = self
-            .lock()
-            .map(LockView::of)
-            .filter(|lock| lock.checked_in(epoch))
-            .map(|lock| lock.epoch);
-        std::iter::once(epoch).chain(lock)
+        std::iter::once(self.vote().data.epoch).chain(self.timeout_lock().verified_in())
     }
 }
 
@@ -443,12 +437,9 @@ impl<T: NodeType, Th: Threshold<T>> TimeoutTally<T, Th> {
             warn!(view = %vote.view_number(), signer = %vote.signing_key(), "invalid timeout vote");
             return false;
         }
-        let Some(cert) = ballot.lock() else {
+        let TimeoutLock::Recent(cert) = ballot.timeout_lock() else {
             return true;
         };
-        if !LockView::of(cert).checked_in(vote.data.epoch) {
-            return true;
-        }
         if !cert
             .data
             .is_well_formed(*self.membership.coordinator.epoch_height())

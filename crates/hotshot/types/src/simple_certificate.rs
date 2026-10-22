@@ -30,9 +30,10 @@ use crate::{
     message::UpgradeLock,
     simple_vote::{
         DaData, DaData2, HasEpoch, LockView, NextEpochQuorumData2, QuorumData, QuorumData2,
-        QuorumMarker, TimeoutData, TimeoutData2, UpgradeProposalData, UpgradeProposalData2,
-        VersionedVoteData, ViewSyncCommitData, ViewSyncCommitData2, ViewSyncFinalizeData,
-        ViewSyncFinalizeData2, ViewSyncPreCommitData, ViewSyncPreCommitData2, Vote2Data, Voteable,
+        QuorumMarker, TimeoutData, TimeoutData2, TimeoutLock, UpgradeProposalData,
+        UpgradeProposalData2, VersionedVoteData, ViewSyncCommitData, ViewSyncCommitData2,
+        ViewSyncFinalizeData, ViewSyncFinalizeData2, ViewSyncPreCommitData, ViewSyncPreCommitData2,
+        Vote2Data, Voteable,
     },
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
@@ -683,6 +684,15 @@ impl<T: NodeType> TimeoutEvidence<T> {
         match self {
             Self::V2(_) => None,
             Self::V3(cert) => cert.lock_cert().map(|cert| (LockView::of(cert), cert)),
+        }
+    }
+
+    /// The certificate's lock, by what is checked of it; [`TimeoutLock::None`]
+    /// for a certificate whose signers did not sign their locks.
+    pub fn timeout_lock(&self) -> TimeoutLock<'_, T> {
+        match self {
+            Self::V2(_) => TimeoutLock::None,
+            Self::V3(cert) => cert.timeout_lock(),
         }
     }
 
