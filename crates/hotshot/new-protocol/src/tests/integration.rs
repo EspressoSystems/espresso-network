@@ -18,7 +18,6 @@ use hotshot_types::{
 use tokio::time::timeout;
 
 use super::common::{
-    certs::build_cert,
     coordinator_builder::build_genesis_cert1,
     harness::TestHarness,
     utils::{
