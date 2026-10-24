@@ -20,6 +20,7 @@
 //!
 //! - Epochs are always on: `epoch_height > 0`. No pre-epoch chains exist.
 //! - L1 is reachable.
+//! - State peers are configured whenever there is anything to catch up.
 //! - State peers serve the availability and light-client APIs.
 //! - State peers are trusted for liveness and block height during initial sync; everything they
 //!   serve is verified (LC contract proofs, QCs).
@@ -131,9 +132,6 @@ where
     let first_epoch = membership
         .first_epoch()
         .ok_or(StartupCatchupError::FirstEpochUnset)?;
-    if state_peers.is_empty() {
-        return Err(StartupCatchupError::NoStatePeers);
-    }
 
     let held = membership.epochs_with_root();
     let mut highest_held = held.last().copied().unwrap_or(first_epoch + 1);
@@ -294,6 +292,9 @@ impl<'a, C: Client> StartupCatchup<'a, C> {
         &self,
         catchup: &LcContractCatchup,
     ) -> Result<(), StartupCatchupError> {
+        if self.state_peers.is_empty() {
+            return Err(StartupCatchupError::NoStatePeers);
+        }
         retry(
             self.deadline,
             Stage::LcContractCatchup,
@@ -353,6 +354,9 @@ impl<'a, C: Client> StartupCatchup<'a, C> {
         highest_held_epoch: EpochNumber,
         goal_epoch: EpochNumber,
     ) -> Result<(), StartupCatchupError> {
+        if goal_epoch > highest_held_epoch && self.state_peers.is_empty() {
+            return Err(StartupCatchupError::NoStatePeers);
+        }
         for epoch in (*highest_held_epoch + 1..=*goal_epoch).map(EpochNumber::new) {
             let stage = Stage::PeerCatchup {
                 epoch,
@@ -1074,6 +1078,26 @@ mod tests {
             .unwrap();
 
         assert_eq!(current, EpochNumber::new(N));
+    }
+
+    /// A genesis boot has nothing to catch up, so it needs no state peers.
+    #[test_log::test(tokio::test)]
+    async fn genesis_boot_without_state_peers() {
+        let coordinator = coordinator(SeededStore::default());
+        let no_peers: &[(Url, TestClient)] = &[];
+
+        let highest = catch_up_stake_tables(
+            &coordinator,
+            EPOCH_HEIGHT,
+            || async { Ok(None) },
+            no_peers,
+            &PARAMS,
+            PeerCatchupGoal::MedianPeerTip,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(highest, EpochNumber::new(FIRST_EPOCH + 1));
     }
 
     /// A failed peer catchup step is retried until the goal epoch is held, not read as the tip.
