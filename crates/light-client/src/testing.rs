@@ -440,6 +440,8 @@ struct InnerTestClient {
     fail_payload_proof_ranges: bool,
     /// If set, fail header proofs, like a server that pruned the root's merklized state.
     fail_header_proofs: bool,
+    /// If set, fail block height requests, like a peer that does not answer.
+    fail_block_height: bool,
 }
 
 impl InnerTestClient {
@@ -902,6 +904,11 @@ impl TestClient {
         inner.fail_header_proofs = true;
     }
 
+    /// Fail block height requests, like a peer that does not answer.
+    pub async fn fail_block_height(&self) {
+        self.inner.lock().await.fail_block_height = true;
+    }
+
     /// Drop the `Certificate2` finalizing the leaf at `height`, like a server that never stored it.
     pub async fn forget_cert2(&self, height: usize) {
         let mut inner = self.inner.lock().await;
@@ -913,6 +920,7 @@ impl TestClient {
 impl Client for TestClient {
     async fn block_height(&self) -> Result<u64> {
         let inner = self.inner.lock().await;
+        ensure!(!inner.fail_block_height, "block height unavailable");
         Ok(inner
             .mock_block_height
             .unwrap_or_else(|| inner.leaves.len() as u64))
