@@ -185,13 +185,12 @@ where
         let current_epoch = catch_up_cliquenet_stake_tables(
             &membership_coordinator,
             epoch_height,
-            || instance_state.finalized_light_client_state(),
+            || instance_state.lc_contract_state(),
             &state_peer_clients,
             &bootstrap_params,
         )
         .await
-        .context("startup stake-table catchup failed")?
-        .current;
+        .context("startup stake-table catchup failed")?;
 
         // For cliquenet this dials the stake tables of N-1, N and N+1 before consensus starts.
         if let Err(err) = coordinator_network.apply_epoch(current_epoch, &membership_coordinator) {

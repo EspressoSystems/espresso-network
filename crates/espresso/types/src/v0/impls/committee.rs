@@ -1264,6 +1264,18 @@ impl Membership<SeqTypes> for EpochCommittees {
     }
 }
 
+#[cfg(feature = "node")]
+impl EpochCommittees {
+    /// Re-derive from L1 the stake tables of epochs whose epoch root header is stored but whose
+    /// table is not. Storage persists a table one epoch late.
+    pub async fn add_stored_epoch_roots(
+        &self,
+        coordinator: &EpochMembershipCoordinator<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        todo!()
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum EpochCommitteesError {
     #[error("could not lookup leader")]

@@ -155,11 +155,12 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_IS_DA", action)]
     pub is_da: bool,
 
-    /// Peer nodes use to fetch missing state
+    /// Peer nodes used to fetch missing state and to join a running network
     ///
-    /// A node joining a running network needs at least one peer that serves the light-client
-    /// API (query module with SQL storage). Without one, startup fails, unless local storage
-    /// already holds the LC contract epochs.
+    /// Trusted for liveness and block height during initial sync; everything they serve is
+    /// verified. Startup catches up to the median of their reported tips: one bad peer among 3 or
+    /// more cannot move the goal, so configure at least 3 independent peers that serve the
+    /// light-client API (query module with SQL storage).
     #[clap(long, env = "ESPRESSO_NODE_STATE_PEERS", value_delimiter = ',')]
     #[derivative(Debug(format_with = "fmt_urls"))]
     pub state_peers: Vec<Url>,
@@ -197,10 +198,9 @@ pub struct Options {
 
     /// Timeout for each step of the startup stake-table catchup.
     ///
-    /// Bounds a peer catchup step (`wait_for_stake_table`), the LC contract state read, an LC
-    /// contract catchup fetch from one peer, a peer height read, and DRB preparation. A timed-out
-    /// step up to and including the epoch after the median peer tip's is retried until the
-    /// bootstrap deadline. Past that, it ends peer catchup. The timeout does not cancel the catchup task, which is a detached
+    /// Bounds a peer catchup step, the LC contract state read, an LC contract catchup fetch from
+    /// one peer, a peer height read, and DRB preparation. A timed-out step is retried until the
+    /// bootstrap deadline. The timeout does not cancel the catchup task, which is a detached
     /// `tokio::spawn` bounded by its own `DEFAULT_CATCHUP_TIMEOUT` watchdog.
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,

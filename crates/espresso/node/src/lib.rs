@@ -702,6 +702,11 @@ where
 
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(membership, epoch_height, &persistence);
+    coordinator
+        .membership()
+        .add_stored_epoch_roots(&coordinator)
+        .await
+        .context("re-deriving stake tables from stored epoch roots failed")?;
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
 

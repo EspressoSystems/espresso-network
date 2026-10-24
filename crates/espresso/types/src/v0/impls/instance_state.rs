@@ -178,15 +178,14 @@ impl NodeState {
     /// The light client contract's finalized state, read at the L1 finalized block. Not cached: it
     /// advances with every prover update.
     ///
-    /// Height 0 when the chain config has no stake table contract, or the light client has no
-    /// code at the finalized block yet, as on a fresh L1. Fails when L1 finality is not yet known
-    /// or a read fails.
+    /// `None` when the chain config has no stake table contract, or the light client has no code
+    /// at the finalized block yet, as on a fresh L1. Fails when L1 finality is not yet known or a
+    /// read fails.
     #[cfg(feature = "node")]
-    pub async fn finalized_light_client_state(&self) -> anyhow::Result<LightClientStateSol> {
-        let genesis = LightClientStateSol::default();
+    pub async fn lc_contract_state(&self) -> anyhow::Result<Option<LightClientStateSol>> {
         if self.chain_config.stake_table_contract.is_none() {
-            tracing::debug!("no stake table contract in the chain config; LC contract height 0");
-            return Ok(genesis);
+            tracing::debug!("no stake table contract in the chain config; no LC contract state");
+            return Ok(None);
         }
         // The L1 client learns the finalized block asynchronously after start.
         let finalized = self
@@ -210,9 +209,9 @@ impl NodeState {
             tracing::debug!(
                 %address,
                 l1_block = finalized,
-                "light client not deployed at the finalized L1 block; LC contract height 0"
+                "light client not deployed at the finalized L1 block; no LC contract state"
             );
-            return Ok(genesis);
+            return Ok(None);
         }
         let state = light_client_contract
             .finalizedState()
@@ -220,7 +219,7 @@ impl NodeState {
             .call()
             .await
             .context("reading the light client state")?;
-        Ok(state.into())
+        Ok(Some(state.into()))
     }
 
     /// The oldest HotShot block height the light client contract still holds a commitment for, or
