@@ -1715,12 +1715,14 @@ mod tests {
     /// result and an epoch root header for epoch 7 only. `stored_headers`
     /// records headers written via `store_epoch_root`, independent of
     /// `header`. `fail_next_store` makes the next `store_epoch_root` fail
-    /// once, then clears itself.
+    /// once, then clears itself. With `stored_header_loads_table`, `load_stake`
+    /// returns a default table for every epoch with a stored header.
     #[derive(Debug)]
     struct MockStakeStore {
         header: Header,
         stored_headers: std::sync::Mutex<HashMap<EpochNumber, Header>>,
         fail_next_store: Arc<AtomicBool>,
+        stored_header_loads_table: bool,
     }
 
     #[async_trait::async_trait]
@@ -1730,7 +1732,9 @@ mod tests {
             epoch: EpochNumber,
         ) -> anyhow::Result<Option<crate::traits::StakeTuple>> {
             // A stored epoch root header makes the table of its epoch loadable without L1.
-            if self.stored_headers.lock().unwrap().contains_key(&epoch) {
+            if self.stored_header_loads_table
+                && self.stored_headers.lock().unwrap().contains_key(&epoch)
+            {
                 let hash = StakeTableState::default().commit();
                 return Ok(Some((
                     Default::default(),
@@ -1835,6 +1839,7 @@ mod tests {
             header: build_epoch_root_header().await,
             stored_headers: Default::default(),
             fail_next_store: Default::default(),
+            stored_header_loads_table: false,
         };
         let fetcher = Fetcher::new(
             Arc::new(crate::mock::MockStateCatchup::default()),
@@ -1876,6 +1881,7 @@ mod tests {
             header: build_epoch_root_header().await,
             stored_headers: Default::default(),
             fail_next_store: Default::default(),
+            stored_header_loads_table: false,
         };
         let persistence = Arc::new(AsyncMutex::new(store));
         let fetcher = Fetcher::new(
@@ -2421,6 +2427,7 @@ mod tests {
             header: header.clone(),
             stored_headers: Default::default(),
             fail_next_store: fail_next_store.clone(),
+            stored_header_loads_table: false,
         };
         let fetcher = Fetcher::new(
             Arc::new(crate::mock::MockStateCatchup::default()),
@@ -2579,7 +2586,7 @@ mod tests {
     }
 
     /// Run `add_stored_epoch_roots` over a store holding a root header for each of `root_epochs`.
-    /// The membership holds epochs 1 and 2. Returns the membership and the store.
+    /// The membership holds epochs 1 and 2. Returns the membership.
     async fn add_stored_roots(root_epochs: &[u64]) -> EpochCommittees {
         let header = build_epoch_root_header().await;
         let store = MockStakeStore {
@@ -2591,6 +2598,7 @@ mod tests {
                     .collect(),
             ),
             fail_next_store: Default::default(),
+            stored_header_loads_table: true,
         };
         let store = Arc::new(AsyncMutex::new(store));
         let fetcher = Fetcher::new(
@@ -2616,7 +2624,7 @@ mod tests {
     // Storage persists a table one epoch late, so a root header can outlive its table. The
     // header built by `build_epoch_root_header` derives epoch 3.
     #[tokio::test]
-    async fn stored_epoch_roots_rederive_a_missing_table() {
+    async fn stored_epoch_roots_add_the_missing_epoch() {
         let committees = add_stored_roots(&[3]).await;
 
         assert!(committees.epochs_with_root().contains(&EpochNumber::new(3)));
