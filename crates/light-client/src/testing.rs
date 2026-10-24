@@ -440,6 +440,8 @@ struct InnerTestClient {
     fail_payload_proof_ranges: bool,
     /// If set, fail header proofs, like a server that pruned the root's merklized state.
     fail_header_proofs: bool,
+    /// Number of upcoming `block_height` requests to fail, like a peer that does not answer.
+    failing_block_heights: usize,
 }
 
 impl InnerTestClient {
@@ -890,6 +892,11 @@ impl TestClient {
         inner.fail_leaf_ranges = true;
     }
 
+    /// Fail the next `count` `block_height` requests.
+    pub async fn fail_block_heights(&self, count: usize) {
+        self.inner.lock().await.failing_block_heights = count;
+    }
+
     /// Fail payload proof ranges requests, like a server that predates the endpoint.
     pub async fn fail_payload_proof_ranges(&self) {
         let mut inner = self.inner.lock().await;
@@ -912,7 +919,11 @@ impl TestClient {
 
 impl Client for TestClient {
     async fn block_height(&self) -> Result<u64> {
-        let inner = self.inner.lock().await;
+        let mut inner = self.inner.lock().await;
+        if inner.failing_block_heights > 0 {
+            inner.failing_block_heights -= 1;
+            bail!("block height unavailable");
+        }
         Ok(inner
             .mock_block_height
             .unwrap_or_else(|| inner.leaves.len() as u64))
@@ -995,6 +1006,19 @@ impl Client for TestClient {
         }
 
         Ok(proof)
+    }
+
+    async fn header(&self, height: u64) -> Result<Header> {
+        let mut inner = self.inner.lock().await;
+        ensure!(
+            !inner.missing_leaves.contains(&(height as usize)),
+            "missing leaf {height}"
+        );
+        Ok(inner
+            .leaf(height as usize, self.epoch_height, None)
+            .await
+            .header()
+            .clone())
     }
 
     async fn header_proof(&self, root: u64, id: BlockId<SeqTypes>) -> Result<HeaderProof> {

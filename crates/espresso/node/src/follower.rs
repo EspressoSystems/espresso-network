@@ -31,6 +31,7 @@ use espresso_types::{
     v0_1::ChainId,
 };
 use futures::{FutureExt, future::BoxFuture};
+use hotshot_contract_adapter::sol_types::LightClientStateSol;
 use hotshot_query_service::{
     availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
     types::HeightIndexed,
@@ -69,7 +70,10 @@ use crate::{
     apply_genesis_overrides,
     context::TaskList,
     init_node_state, load_or_fetch_network_config,
-    startup_catchup::bootstrap_epoch_window,
+    startup_catchup::{
+        StartupCatchupError, StartupCatchupParams, catch_up_cliquenet_stake_tables,
+        state_peer_clients,
+    },
     state_signature::StateSignatureMemStorage,
 };
 
@@ -106,7 +110,7 @@ pub struct FollowerParams {
     /// The upstreams when unset.
     pub config_peers: Option<Vec<Url>>,
     pub catchup: CatchupParams,
-    pub bootstrap_epoch_catchup_timeout: Duration,
+    pub bootstrap: StartupCatchupParams,
     pub options: FollowerOptions,
 }
 
@@ -259,14 +263,17 @@ where
         genesis.epoch_start_block.unwrap_or_default(),
     )
     .await;
-    let current_epoch = bootstrap_epoch_window(
+    let state_peer_clients = state_peer_clients(&params.upstreams);
+    let lc_contract = replay.is_none().then(|| node_state.clone());
+    catch_up_cliquenet_stake_tables(
         &coordinator,
         epoch_height,
-        params.bootstrap_epoch_catchup_timeout,
+        || l1_lc_contract_state(lc_contract.as_ref()),
+        &state_peer_clients,
+        &params.bootstrap,
     )
     .await
     .context("startup stake-table catchup failed")?;
-    tracing::info!(%current_epoch, "startup catchup complete");
 
     let (source, light_client): (Arc<dyn ChainSource>, _) = match replay {
         Some(source) => (source, None),
@@ -307,6 +314,7 @@ where
         .context("reading the height the query database has reached")?;
     let follower = Follower {
         source,
+        lc_contract_reader: lc_contract,
         sink: Arc::new(sink),
         persistence: persistence.clone(),
         coordinator,
@@ -316,7 +324,13 @@ where
         upgrade_lock,
         epoch_height,
         options: params.options,
-        bootstrap_epoch_catchup_timeout: params.bootstrap_epoch_catchup_timeout,
+        // Mid-run, the poll loop waits for the catchup: its stages together get one step's time
+        // per upstream plus one, not the boot deadline. The next poll retries.
+        bootstrap: StartupCatchupParams {
+            total_timeout: params.bootstrap.step_timeout * (state_peer_clients.len() as u32 + 1),
+            ..params.bootstrap
+        },
+        state_peer_clients,
         next,
     };
     let mut tasks = TaskList::default();
@@ -564,6 +578,7 @@ impl ConsensusSource for FollowerConsensus {
 
 struct Follower<P> {
     source: Arc<dyn ChainSource>,
+    lc_contract_reader: Option<NodeState>,
     sink: Arc<dyn DecideSink>,
     persistence: Arc<P>,
     coordinator: EpochMembershipCoordinator<SeqTypes>,
@@ -573,7 +588,8 @@ struct Follower<P> {
     upgrade_lock: UpgradeLock<SeqTypes>,
     epoch_height: u64,
     options: FollowerOptions,
-    bootstrap_epoch_catchup_timeout: Duration,
+    bootstrap: StartupCatchupParams,
+    state_peer_clients: Vec<(Url, QueryServiceClient)>,
     next: u64,
 }
 
@@ -704,7 +720,7 @@ impl<P: SequencerPersistence> Follower<P> {
 
     /// Awaited, so the transition block finds the stake table it supplies a DRB for, and a
     /// failed derivation fails the block and is retried with it. Nothing is redone when the
-    /// membership already knows the result, as after a restart or a catchup walk.
+    /// membership already knows the result, as after a restart or a peer catchup.
     async fn track_epoch(&self, leaf: &Leaf2) -> anyhow::Result<()> {
         let height = leaf.height();
         let Some(epoch) = leaf.epoch(self.epoch_height) else {
@@ -728,38 +744,29 @@ impl<P: SequencerPersistence> Follower<P> {
     /// Skipping an epoch root skips the stake table it derives, which later roots build on. DRBs
     /// the skipped transition blocks carried are left to the coordinator, which fetches them on
     /// demand.
-    async fn catch_up_skipped_epochs(&self, skipped: Range<u64>) -> anyhow::Result<()> {
-        if skipped.is_empty() {
-            return Ok(());
-        }
+    async fn catch_up_skipped_epochs(&self, skipped: Range<u64>) -> Result<(), SkipAheadError> {
         let Some(first_epoch) = self.coordinator.membership().first_epoch() else {
             return Ok(());
         };
-        let first = max(
-            epoch_from_block_number(skipped.start, self.epoch_height),
-            first_epoch.u64(),
-        );
-        let last = epoch_from_block_number(skipped.end - 1, self.epoch_height);
-        let missing = (first..=last).any(|epoch| {
-            skipped.contains(&root_block_in_epoch(epoch, self.epoch_height))
-                && !self.has_stake_table(EpochNumber::new(epoch + 2))
-        });
-        if !missing {
-            return Ok(());
-        }
-        tracing::warn!(
-            ?skipped,
-            "skipped epoch roots whose stake tables are missing; catching up from peers"
-        );
-        let current_epoch = bootstrap_epoch_window(
-            &self.coordinator,
-            self.epoch_height,
-            self.bootstrap_epoch_catchup_timeout,
-        )
-        .await
-        .context("stake-table catchup after skipping ahead")?;
-        tracing::info!(%current_epoch, "stake-table catchup complete");
-        Ok(())
+        let skipped = SkippedBlocks {
+            skipped,
+            epoch_height: self.epoch_height,
+            first_epoch,
+        };
+        let catch_up = async || {
+            catch_up_cliquenet_stake_tables(
+                &self.coordinator,
+                self.epoch_height,
+                || l1_lc_contract_state(self.lc_contract_reader.as_ref()),
+                &self.state_peer_clients,
+                &self.bootstrap,
+            )
+            .await
+            .map(|outcome| outcome.required)
+        };
+        skipped
+            .catch_up(|epoch| self.has_stake_table(epoch), catch_up)
+            .await
     }
 
     fn has_stake_table(&self, epoch: EpochNumber) -> bool {
@@ -837,6 +844,85 @@ impl ChainSource for NodeLightClient {
     }
 }
 
+/// Why a skip-ahead failed, to be retried by the next poll.
+///
+/// Only the stake tables startup catchup must reach count. Tables above its required bound are
+/// left to on-demand catchup (`membership_for_epoch`), as the table of `e + 2` is.
+#[derive(Debug, thiserror::Error)]
+enum SkipAheadError {
+    #[error("stake-table catchup after skipping ahead failed")]
+    Catchup(#[from] StartupCatchupError),
+
+    /// Catchup returned without a stake table it had to reach and a skipped epoch root derives.
+    #[error("the stake table of epoch {epoch} is still missing after catching up")]
+    MissingStakeTable { epoch: EpochNumber },
+}
+
+/// The blocks a follower skips, with the chain parameters that map them to stake tables.
+struct SkippedBlocks {
+    skipped: Range<u64>,
+    epoch_height: u64,
+    first_epoch: EpochNumber,
+}
+
+impl SkippedBlocks {
+    /// Run `catch_up` when a stake table the skipped epoch roots derive is missing. It returns the
+    /// epoch it had to reach, `None` when it skipped peer catchup.
+    async fn catch_up(
+        &self,
+        has_stake_table: impl Fn(EpochNumber) -> bool,
+        catch_up: impl AsyncFnOnce() -> Result<Option<EpochNumber>, StartupCatchupError>,
+    ) -> Result<(), SkipAheadError> {
+        if self.missing(&has_stake_table).next().is_none() {
+            return Ok(());
+        }
+        tracing::warn!(
+            skipped = ?self.skipped,
+            "skipped epoch roots whose stake tables are missing; catching up from peers"
+        );
+        let required = catch_up().await?;
+        // Peer catchup only has to reach the epoch after the target block's, and `required`, so
+        // tables above them may stay missing without catchup having failed. Without `required`,
+        // peer catchup was skipped and nothing vouches for the tables up to the first bound.
+        let target =
+            EpochNumber::new(epoch_from_block_number(self.skipped.end, self.epoch_height) + 1);
+        let bound = required.map_or(target, |required| required.min(target));
+        match self.missing(&has_stake_table).find(|epoch| *epoch <= bound) {
+            Some(epoch) => Err(SkipAheadError::MissingStakeTable { epoch }),
+            None => Ok(()),
+        }
+    }
+
+    /// Stake tables that roots in the skipped range derive and `has_stake_table` lacks.
+    fn missing<'a>(
+        &'a self,
+        has_stake_table: &'a impl Fn(EpochNumber) -> bool,
+    ) -> impl Iterator<Item = EpochNumber> + 'a {
+        let first = max(
+            epoch_from_block_number(self.skipped.start, self.epoch_height),
+            self.first_epoch.u64(),
+        );
+        let last = epoch_from_block_number(self.skipped.end.saturating_sub(1), self.epoch_height);
+        (first..=last)
+            .filter(|epoch| {
+                let root = root_block_in_epoch(*epoch, self.epoch_height);
+                self.skipped.contains(&root)
+            })
+            .map(|epoch| EpochNumber::new(epoch + 2))
+            .filter(|epoch| !has_stake_table(*epoch))
+    }
+}
+
+/// The LC contract state, or the default when replaying a recorded chain, which has no LC contract.
+async fn l1_lc_contract_state(
+    lc_contract: Option<&NodeState>,
+) -> anyhow::Result<LightClientStateSol> {
+    match lc_contract {
+        Some(node_state) => node_state.finalized_light_client_state().await,
+        None => Ok(LightClientStateSol::default()),
+    }
+}
+
 async fn connect_light_client(
     options: &FollowerOptions,
     upstreams: &[Url],
@@ -875,4 +961,105 @@ async fn connect_light_client(
         genesis,
         options.light_client.clone(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use pretty_assertions::assert_matches;
+
+    use super::*;
+
+    const EPOCH_HEIGHT: u64 = 10;
+
+    /// Skips the roots of epochs 3 and 4, which derive the tables of epochs 5 and 6.
+    fn skipped() -> SkippedBlocks {
+        let root = |epoch| root_block_in_epoch(epoch, EPOCH_HEIGHT);
+        SkippedBlocks {
+            skipped: root(3)..root(4) + 1,
+            epoch_height: EPOCH_HEIGHT,
+            first_epoch: EpochNumber::new(1),
+        }
+    }
+
+    fn epoch(epoch: u64) -> EpochNumber {
+        EpochNumber::new(epoch)
+    }
+
+    /// Catchup that returns without filling the tables, having had to reach `required`.
+    async fn catch_up_nothing(required: Option<u64>) -> Result<(), SkipAheadError> {
+        skipped()
+            .catch_up(|_| false, async || Ok(required.map(epoch)))
+            .await
+    }
+
+    /// Catchup that fills `filled` and had to reach `required`.
+    async fn catch_up_filling(filled: &[u64], required: Option<u64>) -> Result<(), SkipAheadError> {
+        let held = RefCell::new(vec![]);
+        let catch_up = async || {
+            held.borrow_mut().extend(filled.iter().copied().map(epoch));
+            Ok(required.map(epoch))
+        };
+        skipped()
+            .catch_up(|e| held.borrow().contains(&e), catch_up)
+            .await
+    }
+
+    /// With no state peer reporting a height, startup catchup returns without peer catchup. The
+    /// next poll must retry the skipped epochs, not move past them.
+    #[tokio::test]
+    async fn skip_ahead_fails_without_a_required_bound_when_tables_are_missing() {
+        let result = catch_up_nothing(None).await;
+
+        assert_matches!(result, Err(SkipAheadError::MissingStakeTable { .. }));
+    }
+
+    /// A catchup that returns without filling the tables fails the skip-ahead when it had to reach
+    /// them.
+    #[tokio::test]
+    async fn skip_ahead_fails_when_catchup_leaves_tables_missing() {
+        let result = catch_up_nothing(Some(6)).await;
+
+        assert_matches!(
+            result,
+            Err(SkipAheadError::MissingStakeTable { epoch: e }) if e == epoch(5)
+        );
+    }
+
+    #[tokio::test]
+    async fn skip_ahead_succeeds_when_catchup_fills_the_tables() {
+        let result = catch_up_filling(&[5, 6], Some(6)).await;
+
+        assert_matches!(result, Ok(()));
+    }
+
+    /// Skipping to block `root(4) + 1` of epoch 4 bounds the check at epoch 5: the table of 6 is
+    /// left to on-demand catchup.
+    #[tokio::test]
+    async fn skip_ahead_checks_up_to_the_epoch_after_the_target() {
+        let result = catch_up_filling(&[5], None).await;
+
+        assert_matches!(result, Ok(()));
+    }
+
+    /// Tables above the epoch peer catchup had to reach are left to on-demand catchup.
+    #[tokio::test]
+    async fn skip_ahead_ignores_tables_above_the_required_bound() {
+        let result = catch_up_nothing(Some(4)).await;
+
+        assert_matches!(result, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn skip_ahead_skips_catchup_when_tables_are_held() {
+        let result = skipped()
+            .catch_up(
+                |_| true,
+                async || panic!("catchup must not run when the tables are held"),
+            )
+            .await;
+
+        assert_matches!(result, Ok(()));
+    }
 }

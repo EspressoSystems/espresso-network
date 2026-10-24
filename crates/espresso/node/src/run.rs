@@ -233,6 +233,7 @@ where
         },
         _ => None,
     };
+    let bootstrap = opt.bootstrap_params();
     let l1_params = L1Params {
         urls: opt.l1_provider_url,
         options: opt.l1_options,
@@ -275,7 +276,7 @@ where
             local_timeout: opt.local_catchup_timeout,
             http_delay: opt.http_catchup_delay,
         },
-        bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
+        bootstrap,
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;

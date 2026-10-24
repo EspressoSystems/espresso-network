@@ -4,12 +4,12 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use alloy::primitives::Address;
 #[cfg(feature = "node")]
-use alloy::{eips::BlockId, primitives::U256};
+use alloy::{eips::BlockId, primitives::U256, providers::Provider};
 use anyhow::{Context, bail};
 use async_lock::Mutex;
 use async_trait::async_trait;
 #[cfg(feature = "node")]
-use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
+use hotshot_contract_adapter::sol_types::{LightClientStateSol, LightClientV3, StakeTableV3};
 use hotshot_types::{
     HotShotConfig, data::EpochNumber, drb::DrbResult, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
@@ -26,6 +26,8 @@ use super::{
 };
 #[cfg(feature = "node")]
 use crate::v0::L1Client;
+#[cfg(feature = "node")]
+use crate::v0_1::L1Provider;
 use crate::{
     AuthenticatedValidatorMap, Header, PubKey, RegisteredValidatorMap,
     v0::{
@@ -142,19 +144,23 @@ impl NodeState {
         }
     }
 
+    /// The light client contract on the L1 client's provider.
+    #[cfg(feature = "node")]
+    async fn light_client_contract(
+        &self,
+    ) -> anyhow::Result<LightClientV3::LightClientV3Instance<L1Provider>> {
+        let address = self.light_client_contract_address().await?;
+        Ok(LightClientV3::new(address, self.l1_client.provider.clone()))
+    }
+
     #[cfg(feature = "node")]
     pub async fn finalized_hotshot_height(&self) -> anyhow::Result<u64> {
         match self.finalized_hotshot_height.get(&()).await {
             Some(block) => Ok(block),
             None => {
-                let light_client_contract_address = self.light_client_contract_address().await?;
-
-                let light_client_contract = LightClientV3::new(
-                    light_client_contract_address,
-                    self.l1_client.provider.clone(),
-                );
-
-                let finalized_hotshot_height = light_client_contract
+                let finalized_hotshot_height = self
+                    .light_client_contract()
+                    .await?
                     .finalizedState()
                     .call()
                     .await?
@@ -167,6 +173,54 @@ impl NodeState {
                 Ok(finalized_hotshot_height)
             },
         }
+    }
+
+    /// The light client contract's finalized state, read at the L1 finalized block. Not cached: it
+    /// advances with every prover update.
+    ///
+    /// Height 0 when the chain config has no stake table contract, or the light client has no
+    /// code at the finalized block yet, as on a fresh L1. Fails when L1 finality is not yet known
+    /// or a read fails.
+    #[cfg(feature = "node")]
+    pub async fn finalized_light_client_state(&self) -> anyhow::Result<LightClientStateSol> {
+        let genesis = LightClientStateSol::default();
+        if self.chain_config.stake_table_contract.is_none() {
+            tracing::debug!("no stake table contract in the chain config; LC contract height 0");
+            return Ok(genesis);
+        }
+        // The L1 client learns the finalized block asynchronously after start.
+        let finalized = self
+            .l1_client
+            .snapshot()
+            .await
+            .finalized
+            .context("L1 finality is not yet known")?
+            .number;
+        let light_client_contract = self.light_client_contract().await?;
+        let address = *light_client_contract.address();
+        // The address is read at latest, so the contract may not exist at the finalized block.
+        let code = self
+            .l1_client
+            .provider
+            .get_code_at(address)
+            .block_id(BlockId::number(finalized))
+            .await
+            .context("reading the light client code")?;
+        if code.is_empty() {
+            tracing::debug!(
+                %address,
+                l1_block = finalized,
+                "light client not deployed at the finalized L1 block; LC contract height 0"
+            );
+            return Ok(genesis);
+        }
+        let state = light_client_contract
+            .finalizedState()
+            .block(BlockId::number(finalized))
+            .call()
+            .await
+            .context("reading the light client state")?;
+        Ok(state.into())
     }
 
     /// The oldest HotShot block height the light client contract still holds a commitment for, or
@@ -183,10 +237,7 @@ impl NodeState {
         // One block for all three reads. By number, not hash: hash is EIP-1898, which some
         // providers reject, and a finalized block cannot reorg.
         let block = BlockId::number(finalized.number);
-        let light_client_contract = LightClientV3::new(
-            self.light_client_contract_address().await?,
-            self.l1_client.provider.clone(),
-        );
+        let light_client_contract = self.light_client_contract().await?;
         let count = light_client_contract
             .getStateHistoryCount()
             .block(block)

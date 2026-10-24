@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     ops::Bound,
     sync::Arc,
     time::Duration,
@@ -150,6 +150,11 @@ struct EpochCommittee {
 }
 
 impl EpochCommittee {
+    /// Holds the epoch root header and the stake table hash.
+    fn has_root(&self) -> bool {
+        self.header.is_some() && self.stake_table_hash.is_some()
+    }
+
     fn new(
         validators: AuthenticatedValidatorMap,
         block_reward: Option<RewardAmount>,
@@ -195,6 +200,17 @@ impl EpochCommittee {
 }
 
 impl EpochCommittees {
+    /// In-memory epochs whose committee holds the epoch root header and the stake table hash.
+    pub fn epochs_with_root(&self) -> BTreeSet<EpochNumber> {
+        let inner = self.inner.read();
+        inner
+            .snapshots
+            .iter()
+            .filter(|(_, snapshot)| snapshot.inner.committee.has_root())
+            .map(|(epoch, _)| *epoch)
+            .collect()
+    }
+
     pub fn epoch_height(&self) -> BlockNumber {
         self.epoch_height
     }
@@ -551,15 +567,9 @@ impl EpochCommittees {
             },
         }
 
+        let persistence = self.fetcher.persistence.lock().await;
         // Load the `limit` latest stored stake tables
-        let loaded_stake = match self
-            .fetcher
-            .persistence
-            .lock()
-            .await
-            .load_latest_stake(limit)
-            .await
-        {
+        let loaded_stake = match persistence.load_latest_stake(limit).await {
             Ok(Some(loaded)) => loaded,
             Ok(None) => {
                 warn!("No stake table history found in persistence!");
@@ -572,7 +582,14 @@ impl EpochCommittees {
         };
 
         for (epoch, (validators, block_reward), stake_table_hash) in loaded_stake {
-            let committee = EpochCommittee::new(validators, block_reward, stake_table_hash, None);
+            let header = match persistence.load_epoch_root(epoch).await {
+                Ok(header) => header,
+                Err(err) => {
+                    warn!(%err, "failed to load epoch root for epoch {epoch} from persistence");
+                    None
+                },
+            };
+            let committee = EpochCommittee::new(validators, block_reward, stake_table_hash, header);
             self.inner
                 .write()
                 .put_epoch_committee(epoch, Arc::new(committee));
@@ -2466,6 +2483,55 @@ mod tests {
                 .unwrap(),
             Some(header)
         );
+    }
+
+    /// Put a committee for `epoch` that copies the genesis one, with the given root parts.
+    fn put_rooted(
+        committees: &EpochCommittees,
+        epoch: u64,
+        header: Option<Header>,
+        hash: Option<StakeTableHash>,
+        reward: Option<RewardAmount>,
+    ) {
+        let mut inner = committees.inner.write();
+        let template = inner
+            .epoch_committee(EpochNumber::genesis())
+            .expect("genesis committee exists");
+        let committee = EpochCommittee {
+            block_reward: reward,
+            stake_table_hash: hash,
+            header,
+            eligible_leaders: template.eligible_leaders.clone(),
+            stake_table: template.stake_table.clone(),
+            validators: template.validators.clone(),
+            address_mapping: template.address_mapping.clone(),
+        };
+        inner.put_epoch_committee(EpochNumber::new(epoch), Arc::new(committee));
+    }
+
+    #[tokio::test]
+    async fn epochs_with_root_lists_rooted_epochs() {
+        let header = build_epoch_root_header().await;
+        let hash = Some(StakeTableState::default().commit());
+        let reward = Some(RewardAmount::default());
+        let committees = build_committees(4);
+        put_rooted(&committees, 5, Some(header.clone()), hash, reward);
+        put_rooted(&committees, 6, None, hash, reward);
+        put_rooted(&committees, 7, Some(header.clone()), None, reward);
+        put_rooted(&committees, 8, Some(header), hash, reward);
+
+        let expected = [5, 8].map(EpochNumber::new).into();
+        assert_eq!(committees.epochs_with_root(), expected);
+    }
+
+    #[tokio::test]
+    async fn epochs_with_root_ignores_reward() {
+        let header = build_epoch_root_header().await;
+        let hash = Some(StakeTableState::default().commit());
+        let committees = build_committees(4);
+        put_rooted(&committees, 5, Some(header), hash, None);
+
+        assert!(committees.epochs_with_root().contains(&EpochNumber::new(5)));
     }
 
     // `add_da_committee` updates the per-epoch `da_committees` map and
