@@ -31,6 +31,7 @@ use espresso_types::{
     v0_1::ChainId,
 };
 use futures::{FutureExt, future::BoxFuture};
+use hotshot_contract_adapter::sol_types::LightClientStateSol;
 use hotshot_query_service::{
     availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
     types::HeightIndexed,
@@ -294,12 +295,7 @@ where
     catch_up_stake_tables(
         &coordinator,
         epoch_height,
-        || async {
-            match &lc_contract {
-                Some(node_state) => node_state.lc_contract_state().await,
-                None => Ok(None),
-            }
-        },
+        || read_lc_contract_state(lc_contract.as_ref()),
         &state_peer_clients,
         &params.bootstrap,
         PeerCatchupGoal::FollowerEpoch(first_goal),
@@ -750,7 +746,33 @@ impl<P: SequencerPersistence> Follower<P> {
     /// Catch up the stake table of the epoch after `leaf`'s, which `track_epoch` and the API
     /// read, unless held.
     async fn catch_up_next_stake_table(&self, leaf: &Leaf2) -> Result<(), StartupCatchupError> {
-        todo!()
+        let Some(block_epoch) = leaf.epoch(self.epoch_height) else {
+            return Ok(());
+        };
+        let first_epoch = self
+            .coordinator
+            .membership()
+            .first_epoch()
+            .ok_or(StartupCatchupError::FirstEpochUnset)?;
+        let catch_up = async |goal| {
+            catch_up_stake_tables(
+                &self.coordinator,
+                self.epoch_height,
+                || read_lc_contract_state(self.lc_contract_reader.as_ref()),
+                &self.state_peer_clients,
+                &self.bootstrap,
+                PeerCatchupGoal::FollowerEpoch(goal),
+            )
+            .await
+            .map(drop)
+        };
+        catch_up_if_missing(
+            block_epoch,
+            first_epoch,
+            |epoch| self.has_stake_table(epoch),
+            catch_up,
+        )
+        .await
     }
 
     fn has_stake_table(&self, epoch: EpochNumber) -> bool {
@@ -842,7 +864,21 @@ async fn catch_up_if_missing(
     has_stake_table: impl Fn(EpochNumber) -> bool,
     catch_up: impl AsyncFnOnce(EpochNumber) -> Result<(), StartupCatchupError>,
 ) -> Result<(), StartupCatchupError> {
-    todo!()
+    let next = block_epoch + 1;
+    if next <= first_epoch + 1 || has_stake_table(next) {
+        return Ok(());
+    }
+    catch_up(next).await
+}
+
+/// The LC contract state, `None` when replaying a recorded chain without an LC contract.
+async fn read_lc_contract_state(
+    lc_contract: Option<&NodeState>,
+) -> anyhow::Result<Option<LightClientStateSol>> {
+    match lc_contract {
+        Some(node_state) => node_state.lc_contract_state().await,
+        None => Ok(None),
+    }
 }
 
 async fn connect_light_client(
@@ -883,4 +919,65 @@ async fn connect_light_client(
         genesis,
         options.light_client.clone(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use pretty_assertions::assert_matches;
+    use rstest::rstest;
+
+    use super::*;
+
+    const FIRST_EPOCH: u64 = 1;
+
+    /// Run `catch_up_if_missing` with a catchup that fails with `NoStatePeers` when `fails`.
+    /// Returns the result and the goals the catchup was called with.
+    async fn run(
+        block_epoch: u64,
+        held: bool,
+        fails: bool,
+    ) -> (Result<(), StartupCatchupError>, Vec<u64>) {
+        let goals = RefCell::new(vec![]);
+        let result = catch_up_if_missing(
+            EpochNumber::new(block_epoch),
+            EpochNumber::new(FIRST_EPOCH),
+            |_| held,
+            async |goal| {
+                goals.borrow_mut().push(goal.u64());
+                if fails {
+                    return Err(StartupCatchupError::NoStatePeers);
+                }
+                Ok(())
+            },
+        )
+        .await;
+        (result, goals.into_inner())
+    }
+
+    #[rstest]
+    #[case::held(5, true, vec![])]
+    #[case::next_epoch_seeded_from_genesis(FIRST_EPOCH, false, vec![])]
+    #[case::first_unseeded_epoch(FIRST_EPOCH + 1, false, vec![FIRST_EPOCH + 2])]
+    #[case::missing(5, false, vec![6])]
+    #[tokio::test]
+    async fn catch_up_if_missing_calls_once_for_the_next_epoch(
+        #[case] block_epoch: u64,
+        #[case] held: bool,
+        #[case] expected_goals: Vec<u64>,
+    ) {
+        let (result, goals) = run(block_epoch, held, false).await;
+
+        assert_matches!(result, Ok(()));
+        assert_eq!(goals, expected_goals);
+    }
+
+    #[tokio::test]
+    async fn catch_up_if_missing_propagates_the_catchup_error() {
+        let (result, goals) = run(5, false, true).await;
+
+        assert_matches!(result, Err(StartupCatchupError::NoStatePeers));
+        assert_eq!(goals, vec![6]);
+    }
 }
