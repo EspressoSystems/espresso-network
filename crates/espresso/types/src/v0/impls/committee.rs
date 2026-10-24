@@ -1272,7 +1272,30 @@ impl EpochCommittees {
         &self,
         coordinator: &EpochMembershipCoordinator<SeqTypes>,
     ) -> anyhow::Result<()> {
-        todo!()
+        // Without a held table there is nothing to derive the next one from.
+        let Some(highest) = self.highest_known_epoch() else {
+            return Ok(());
+        };
+        let mut epoch = highest + 1;
+        loop {
+            let header = self
+                .fetcher
+                .persistence
+                .lock()
+                .await
+                .load_epoch_root(epoch)
+                .await
+                .with_context(|| format!("loading the stored epoch root of epoch {epoch}"))?;
+            let Some(header) = header else {
+                return Ok(());
+            };
+            info!(%epoch, "re-deriving the stake table from the stored epoch root");
+            coordinator
+                .add_epoch_root(header)
+                .await
+                .with_context(|| format!("adding the stored epoch root of epoch {epoch}"))?;
+            epoch += 1;
+        }
     }
 }
 
@@ -1706,6 +1729,15 @@ mod tests {
             &self,
             epoch: EpochNumber,
         ) -> anyhow::Result<Option<crate::traits::StakeTuple>> {
+            // A stored epoch root header makes the table of its epoch loadable without L1.
+            if self.stored_headers.lock().unwrap().contains_key(&epoch) {
+                let hash = StakeTableState::default().commit();
+                return Ok(Some((
+                    Default::default(),
+                    Some(RewardAmount::default()),
+                    Some(hash),
+                )));
+            }
             Ok((*epoch == 7 || *epoch == 8).then(|| (Default::default(), None, None)))
         }
 
@@ -2544,6 +2576,65 @@ mod tests {
         put_rooted(&committees, 5, Some(header), hash, None);
 
         assert!(committees.epochs_with_root().contains(&EpochNumber::new(5)));
+    }
+
+    /// Run `add_stored_epoch_roots` over a store holding a root header for each of `root_epochs`.
+    /// The membership holds epochs 1 and 2. Returns the membership and the store.
+    async fn add_stored_roots(root_epochs: &[u64]) -> EpochCommittees {
+        let header = build_epoch_root_header().await;
+        let store = MockStakeStore {
+            header: header.clone(),
+            stored_headers: std::sync::Mutex::new(
+                root_epochs
+                    .iter()
+                    .map(|epoch| (EpochNumber::new(*epoch), header.clone()))
+                    .collect(),
+            ),
+            fail_next_store: Default::default(),
+        };
+        let store = Arc::new(AsyncMutex::new(store));
+        let fetcher = Fetcher::new(
+            Arc::new(crate::mock::MockStateCatchup::default()),
+            Arc::clone(&store) as Arc<AsyncMutex<dyn MembershipPersistence>>,
+            crate::L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
+                .expect("Failed to create L1 client"),
+            crate::ChainConfig::default(),
+        );
+        let committees = build_committees_with_fetcher(4, fetcher);
+        let coordinator = EpochMembershipCoordinator::<SeqTypes>::new(
+            committees.clone(),
+            *committees.epoch_height(),
+            &hotshot_example_types::storage_types::TestStorage::default(),
+        );
+        committees
+            .add_stored_epoch_roots(&coordinator)
+            .await
+            .unwrap();
+        committees
+    }
+
+    // Storage persists a table one epoch late, so a root header can outlive its table. The
+    // header built by `build_epoch_root_header` derives epoch 3.
+    #[tokio::test]
+    async fn stored_epoch_roots_rederive_a_missing_table() {
+        let committees = add_stored_roots(&[3]).await;
+
+        assert!(committees.epochs_with_root().contains(&EpochNumber::new(3)));
+    }
+
+    #[tokio::test]
+    async fn stored_epoch_roots_stop_at_the_first_missing_root() {
+        let committees = add_stored_roots(&[3, 5]).await;
+
+        assert!(committees.epochs_with_root().contains(&EpochNumber::new(3)));
+        assert!(committees.snapshot(EpochNumber::new(5)).is_none());
+    }
+
+    #[tokio::test]
+    async fn stored_epoch_roots_none_stored_changes_nothing() {
+        let committees = add_stored_roots(&[]).await;
+
+        assert!(committees.snapshot(EpochNumber::new(3)).is_none());
     }
 
     // `add_da_committee` updates the per-epoch `da_committees` map and
